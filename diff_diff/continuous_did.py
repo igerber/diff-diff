@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
+from diff_diff._deprecation import warn_deprecated_kwarg
 from diff_diff.bootstrap_utils import (
     compute_effect_bootstrap_stats,
     generate_bootstrap_weights_batch,
@@ -178,6 +179,16 @@ class ContinuousDiD(BaseEstimator):
         self.bootstrap_weights = bootstrap_weights
         self.seed = seed
         self.rank_deficient_action = rank_deficient_action
+        # M-084: constructor covariates= is deprecated (removed in 4.0);
+        # the design-matrix column spec moves to fit() per the sklearn
+        # hyperparameter/data split. Raw-keep storage: the value still
+        # routes exactly as before, and get_params round-trips it.
+        if covariates is not None:
+            warn_deprecated_kwarg(
+                type(self).__name__,
+                "covariates",
+                "pass covariates to fit() instead",
+            )
         self.covariates = covariates
         self.estimation_method = estimation_method
         self.pscore_trim = pscore_trim
@@ -249,6 +260,7 @@ class ContinuousDiD(BaseEstimator):
         dose: str,
         aggregate: Optional[str] = None,
         survey_design: Optional["SurveyDesign"] = None,
+        covariates: Optional[List[str]] = None,
     ) -> ContinuousDiDResults:
         """
         Fit the continuous DiD estimator.
@@ -275,6 +287,12 @@ class ContinuousDiD(BaseEstimator):
             Supports weighted estimation and Taylor series linearization
             variance with strata, PSU, and FPC.
 
+        covariates : list of str, optional
+            Covariate column names for the conditional-parallel-trends
+            estimand (the canonical fit-level home - row M-084). The
+            deprecated constructor ``covariates=`` still routes and warns;
+            supplying both raises ``ValueError``.
+
         Returns
         -------
         ContinuousDiDResults
@@ -297,8 +315,26 @@ class ContinuousDiD(BaseEstimator):
 
         # Bootstrap + survey supported via PSU-level multiplier bootstrap.
 
+        # M-084: fit-time covariates= is the canonical home; the deprecated
+        # constructor spec still routes (raw-keep). Supplying both is
+        # ambiguous and fails loudly.
+        if covariates is not None and self.covariates is not None:
+            raise ValueError(
+                "covariates= was supplied both to the constructor "
+                "(deprecated, row M-084) and to fit(); pass it to fit() only."
+            )
+        effective_covariates = covariates if covariates is not None else self.covariates
+        if self.control_group == "lowest_dose" and effective_covariates is not None:
+            # Mirror of the constructor-time guard for the fit-level spec.
+            raise NotImplementedError(
+                "control_group='lowest_dose' does not yet compose with covariates= "
+                "(the conditional-parallel-trends estimand relative to the lowest "
+                "dose d_L is deferred). Use covariates=None for the unconditional "
+                "lowest-dose fit."
+            )
+
         df = data.copy()
-        cov_cols = list(self.covariates) if self.covariates else []
+        cov_cols = list(effective_covariates) if effective_covariates else []
         for col in [outcome, unit, time, first_treat, dose, *cov_cols]:
             if col not in df.columns:
                 raise ValueError(f"Column '{col}' not found in data.")
@@ -584,7 +620,7 @@ class ContinuousDiD(BaseEstimator):
             dose,
             time_periods,
             survey_weights=survey_weights,
-            covariates=self.covariates,
+            covariates=effective_covariates,
         )
         # Thread the lowest-dose reference d_L (Remark 3.1) to the per-cell
         # dose-response so it swaps the control group and shifts the discrete
@@ -1107,7 +1143,7 @@ class ContinuousDiD(BaseEstimator):
             reference_dose=reference_dose_out,
             alpha=self.alpha,
             control_group=self.control_group,
-            covariates=self.covariates,
+            covariates=effective_covariates,
             estimation_method=self.estimation_method,
             pscore_trim=self.pscore_trim,
             epv_threshold=self.epv_threshold,

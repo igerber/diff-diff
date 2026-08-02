@@ -388,7 +388,7 @@ class TestEstimatorIntegration:
             cluster="cluster", inference="wild_bootstrap", n_bootstrap=n_boot, seed=42
         )
 
-        results = did.fit(clustered_did_data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(clustered_did_data, outcome="outcome", treatment="treated", post="post")
 
         assert results.inference_method == "wild_bootstrap"
         assert results.n_bootstrap == n_boot
@@ -406,9 +406,9 @@ class TestEstimatorIntegration:
             cluster="cluster", inference="wild_bootstrap", n_bootstrap=n_boot, seed=42
         )
 
-        results1 = did1.fit(clustered_did_data, outcome="outcome", treatment="treated", time="post")
+        results1 = did1.fit(clustered_did_data, outcome="outcome", treatment="treated", post="post")
 
-        results2 = did2.fit(clustered_did_data, outcome="outcome", treatment="treated", time="post")
+        results2 = did2.fit(clustered_did_data, outcome="outcome", treatment="treated", post="post")
 
         # se = analytical CR1 SE (reproducible up to the cluster-vcov solve's
         # bit-reproducibility, ~1e-13 on threaded BLAS / Rust); p-value is exact.
@@ -424,11 +424,11 @@ class TestEstimatorIntegration:
         )
 
         results_analytical = did_analytical.fit(
-            clustered_did_data, outcome="outcome", treatment="treated", time="post"
+            clustered_did_data, outcome="outcome", treatment="treated", post="post"
         )
 
         results_bootstrap = did_bootstrap.fit(
-            clustered_did_data, outcome="outcome", treatment="treated", time="post"
+            clustered_did_data, outcome="outcome", treatment="treated", post="post"
         )
 
         # ATT should be identical
@@ -445,7 +445,7 @@ class TestEstimatorIntegration:
             seed=42,
         )
 
-        results = did.fit(clustered_did_data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(clustered_did_data, outcome="outcome", treatment="treated", post="post")
 
         assert results.inference_method == "wild_bootstrap"
         assert results.se > 0
@@ -457,7 +457,7 @@ class TestEstimatorIntegration:
             inference="wild_bootstrap", n_bootstrap=n_boot, seed=42  # No cluster specified
         )
 
-        results = did.fit(clustered_did_data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(clustered_did_data, outcome="outcome", treatment="treated", post="post")
 
         # Should fall back to analytical since no cluster specified
         assert results.inference_method == "analytical"
@@ -484,7 +484,7 @@ class TestEstimatorIntegration:
             cluster="cluster", inference="wild_bootstrap", n_bootstrap=n_boot, seed=42
         )
 
-        results = did.fit(clustered_did_data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(clustered_did_data, outcome="outcome", treatment="treated", post="post")
 
         summary = results.summary()
 
@@ -608,7 +608,7 @@ class TestFewClustersEdgeCases:
 
         # Should warn about few clusters but still produce valid results
         with pytest.warns(UserWarning, match="Only 3 clusters"):
-            results = did.fit(df, outcome="outcome", treatment="treated", time="post")
+            results = did.fit(df, outcome="outcome", treatment="treated", post="post")
 
         assert results.se > 0
         assert results.inference_method == "wild_bootstrap"
@@ -659,7 +659,7 @@ class TestFewClustersEdgeCases:
 
         # Should warn about few clusters
         with pytest.warns(UserWarning, match="Only 2 clusters"):
-            results = did.fit(df, outcome="outcome", treatment="treated", time="post")
+            results = did.fit(df, outcome="outcome", treatment="treated", post="post")
 
         # Results should still be valid (though may have high variance)
         assert results.se > 0
@@ -687,12 +687,12 @@ class TestFewClustersEdgeCases:
 
         with pytest.warns(UserWarning):
             results_webb = did_webb.fit(
-                few_cluster_data, outcome="outcome", treatment="treated", time="post"
+                few_cluster_data, outcome="outcome", treatment="treated", post="post"
             )
 
         with pytest.warns(UserWarning):
             results_rademacher = did_rademacher.fit(
-                few_cluster_data, outcome="outcome", treatment="treated", time="post"
+                few_cluster_data, outcome="outcome", treatment="treated", post="post"
             )
 
         # Both should produce valid results
@@ -715,7 +715,7 @@ class TestFewClustersEdgeCases:
         )
 
         with pytest.warns(UserWarning):
-            results = did.fit(few_cluster_data, outcome="outcome", treatment="treated", time="post")
+            results = did.fit(few_cluster_data, outcome="outcome", treatment="treated", post="post")
 
         lower, upper = results.conf_int
         assert lower < upper
@@ -895,7 +895,7 @@ class TestWildBootstrapCorrectness:
         did = DifferenceInDifferences(
             cluster="cluster", inference="wild_bootstrap", n_bootstrap=n_boot, seed=42
         )
-        res = did.fit(clustered_did_data, outcome="outcome", treatment="treated", time="post")
+        res = did.fit(clustered_did_data, outcome="outcome", treatment="treated", post="post")
         lower, upper = res.conf_int
         assert res.p_value < 0.05, f"strong effect should be significant, got p={res.p_value}"
         assert not (lower <= 0.0 <= upper), "CI should exclude 0 for a strong effect"
@@ -909,7 +909,7 @@ class TestWildBootstrapCorrectness:
             did = DifferenceInDifferences(
                 cluster="cluster", inference="wild_bootstrap", n_bootstrap=n_boot, seed=seed
             )
-            res = did.fit(df, outcome="outcome", treatment="treated", time="post")
+            res = did.fit(df, outcome="outcome", treatment="treated", post="post")
             lower, upper = res.conf_int
             zero_in_ci = lower <= 0.0 <= upper
             rejects = res.p_value < did.alpha
@@ -926,7 +926,7 @@ class TestWildBootstrapCorrectness:
         did = DifferenceInDifferences(
             cluster="cluster", inference="wild_bootstrap", n_bootstrap=n_boot, seed=7
         )
-        res = did.fit(df, outcome="outcome", treatment="treated", time="post")
+        res = did.fit(df, outcome="outcome", treatment="treated", post="post")
         lower, upper = res.conf_int
         assert res.p_value > 0.05
         assert lower <= 0.0 <= upper
@@ -938,10 +938,10 @@ class TestWildBootstrapCorrectness:
         df = _make_clustered(6, 2.5, seed=1)  # 6 clusters -> 2**5 = 32 <= 999 -> enumerate
         r1 = DifferenceInDifferences(
             cluster="cluster", inference="wild_bootstrap", n_bootstrap=999, seed=1
-        ).fit(df, outcome="outcome", treatment="treated", time="post")
+        ).fit(df, outcome="outcome", treatment="treated", post="post")
         r2 = DifferenceInDifferences(
             cluster="cluster", inference="wild_bootstrap", n_bootstrap=999, seed=999
-        ).fit(df, outcome="outcome", treatment="treated", time="post")
+        ).fit(df, outcome="outcome", treatment="treated", post="post")
         assert r1.n_bootstrap == 2**6
         assert r1.p_value == r2.p_value
         # CI is reproducible up to the cluster-vcov solve's bit-reproducibility
@@ -953,11 +953,11 @@ class TestWildBootstrapCorrectness:
         SE — identical to the analytical cluster-robust fit."""
         n_boot = ci_params.bootstrap(199, min_n=49)
         analytical = DifferenceInDifferences(cluster="cluster").fit(
-            clustered_did_data, outcome="outcome", treatment="treated", time="post"
+            clustered_did_data, outcome="outcome", treatment="treated", post="post"
         )
         boot = DifferenceInDifferences(
             cluster="cluster", inference="wild_bootstrap", n_bootstrap=n_boot, seed=42
-        ).fit(clustered_did_data, outcome="outcome", treatment="treated", time="post")
+        ).fit(clustered_did_data, outcome="outcome", treatment="treated", post="post")
         assert boot.se == pytest.approx(analytical.se, rel=1e-10)
 
     def test_many_clusters_ci_comparable_to_analytical(self, ci_params):
@@ -967,11 +967,11 @@ class TestWildBootstrapCorrectness:
         n_boot = ci_params.bootstrap(999, min_n=199)
         df = _make_clustered(30, 1.0, seed=11)
         analytical = DifferenceInDifferences(cluster="cluster").fit(
-            df, outcome="outcome", treatment="treated", time="post"
+            df, outcome="outcome", treatment="treated", post="post"
         )
         boot = DifferenceInDifferences(
             cluster="cluster", inference="wild_bootstrap", n_bootstrap=n_boot, seed=11
-        ).fit(df, outcome="outcome", treatment="treated", time="post")
+        ).fit(df, outcome="outcome", treatment="treated", post="post")
         a_half = (analytical.conf_int[1] - analytical.conf_int[0]) / 2
         b_half = (boot.conf_int[1] - boot.conf_int[0]) / 2
         assert 0.7 < (b_half / a_half) < 1.5
@@ -986,7 +986,7 @@ class TestWildBootstrapCorrectness:
             n_bootstrap=n_boot,
             seed=5,
             p_val_type="equal-tailed",
-        ).fit(df, outcome="outcome", treatment="treated", time="post")
+        ).fit(df, outcome="outcome", treatment="treated", post="post")
         lower, upper = res.conf_int
         assert lower < upper
         assert (not (lower <= 0.0 <= upper)) == (res.p_value < 0.05)
@@ -1209,7 +1209,7 @@ def test_low_draw_floor_preserves_consistency(n_clusters, n_bootstrap, att, seed
     )
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")  # few-cluster warning
-        res = did.fit(df, outcome="outcome", treatment="treated", time="post")
+        res = did.fit(df, outcome="outcome", treatment="treated", post="post")
     lower, upper = res.conf_int
     zero_in_ci = lower <= 0.0 <= upper
     rejects = res.p_value < did.alpha
@@ -1227,13 +1227,13 @@ def test_p_val_type_surfaced_on_results():
     for ptype in ("two-tailed", "equal-tailed"):
         res = DifferenceInDifferences(
             cluster="cluster", inference="wild_bootstrap", n_bootstrap=999, seed=5, p_val_type=ptype
-        ).fit(df, outcome="outcome", treatment="treated", time="post")
+        ).fit(df, outcome="outcome", treatment="treated", post="post")
         assert res.p_val_type == ptype
         assert res.to_dict()["p_val_type"] == ptype
         assert "Test type:" in res.summary()
     # Analytical inference does not set p_val_type.
     res_a = DifferenceInDifferences(cluster="cluster").fit(
-        df, outcome="outcome", treatment="treated", time="post"
+        df, outcome="outcome", treatment="treated", post="post"
     )
     assert res_a.p_val_type is None
 
@@ -1321,7 +1321,7 @@ def test_saturated_design_returns_degenerate_not_crash():
         warnings.simplefilter("ignore")
         res = DifferenceInDifferences(
             cluster="cluster", inference="wild_bootstrap", n_bootstrap=99, seed=1
-        ).fit(df, outcome="outcome", treatment="treated", time="post")
+        ).fit(df, outcome="outcome", treatment="treated", post="post")
     # Full inference family is NaN together (no raw exception, no mixed output).
     assert np.isnan(res.se)
     assert np.isnan(res.p_value)
@@ -1386,7 +1386,7 @@ def _make_clustered_g10(n_bootstrap, seed):
     df = pd.DataFrame(rows)
     return DifferenceInDifferences(
         cluster="cluster", inference="wild_bootstrap", n_bootstrap=n_bootstrap, seed=seed
-    ).fit(df, outcome="outcome", treatment="treated", time="post")
+    ).fit(df, outcome="outcome", treatment="treated", post="post")
 
 
 def test_enumeration_trigger_matches_boottest_boundary():
@@ -1470,7 +1470,7 @@ def test_wild_bootstrap_rank_deficient_storage_vcov_does_not_crash():
         warnings.simplefilter("ignore")  # expected rank-deficient drop warning
         res = DifferenceInDifferences(
             cluster="cluster", inference="wild_bootstrap", n_bootstrap=99, seed=1
-        ).fit(df, outcome="outcome", treatment="treated", time="post", fixed_effects=["fe"])
+        ).fit(df, outcome="outcome", treatment="treated", post="post", fixed_effects=["fe"])
     # ATT identified, bootstrap inference finite, no exception.
     assert np.isfinite(res.att)
     assert np.isfinite(res.se) and res.se > 0

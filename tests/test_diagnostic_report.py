@@ -80,7 +80,7 @@ _STATUS_ENUM = {
 def did_fit():
     warnings.filterwarnings("ignore")
     df = generate_did_data(n_units=80, n_periods=4, treatment_effect=1.5, seed=7)
-    did = DifferenceInDifferences().fit(df, outcome="outcome", treatment="treated", time="post")
+    did = DifferenceInDifferences().fit(df, outcome="outcome", treatment="treated", post="post")
     return did, df
 
 

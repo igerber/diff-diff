@@ -291,7 +291,7 @@ class TestLPDiDAPI:
             no_composition=False,
             pmd=None,
         )
-        assert results.to_dataframe(level="event").equals(df)
+        assert results.to_dataframe(level="event_study").equals(df)
         with pytest.raises(ValueError, match="not computed"):
             results.to_dataframe(level="pooled")
         with pytest.raises(ValueError, match="level must be"):

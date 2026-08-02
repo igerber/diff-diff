@@ -2044,8 +2044,10 @@ def effective_cluster_count(cluster_ids: np.ndarray, weights: Optional[np.ndarra
 
 
 def resolve_vcov_type(
-    robust: bool = True,
+    robust: Optional[bool] = None,
     vcov_type: Optional[str] = None,
+    *,
+    legacy_default: bool = True,
 ) -> str:
     """Resolve the effective ``vcov_type`` from the ``robust``/``vcov_type`` pair.
 
@@ -2054,10 +2056,16 @@ def resolve_vcov_type(
     (and any future caller that needs to validate the pair). Keeping the resolution
     in one place prevents ``__init__``/``set_params`` drift.
 
-    Rules (per the Phase 1a plan):
+    Rules (per the Phase 1a plan; ``robust`` is deprecated per rows
+    M-045..M-047/M-115 and dies in 4.0 with this helper's ``robust``
+    handling):
 
-    - If ``vcov_type`` is ``None``: map ``robust=True`` to ``"hc1"`` and
-      ``robust=False`` to ``"classical"``.
+    - ``robust=None`` (the 3.9 not-supplied sentinel) resolves as the
+      caller's ``legacy_default`` (``True`` everywhere except
+      ``HeterogeneousAdoptionDiD``, whose historical default was
+      ``False``).
+    - If ``vcov_type`` is ``None``: map effective ``robust=True`` to
+      ``"hc1"`` and ``robust=False`` to ``"classical"``.
     - If ``vcov_type`` is supplied: it must be one of the values in the
       module-level ``_VALID_VCOV_TYPES`` set, namely
       ``{"classical", "hc1", "hc2", "hc2_bm", "conley"}``.
@@ -2066,10 +2074,14 @@ def resolve_vcov_type(
 
     Parameters
     ----------
-    robust : bool, default True
-        Legacy alias. ``True`` == HC1; ``False`` == classical OLS SEs.
+    robust : bool, optional
+        Deprecated legacy alias (removed in 4.0). ``True`` == HC1;
+        ``False`` == classical OLS SEs; ``None`` == not supplied.
     vcov_type : str, optional
         Explicit variance family. Overrides ``robust`` unless the pair is contradictory.
+    legacy_default : bool, keyword-only, default True
+        What ``robust=None`` resolves to - the calling class's historical
+        ``robust`` default.
 
     Returns
     -------
@@ -2082,6 +2094,8 @@ def resolve_vcov_type(
         If ``vcov_type`` is not one of the allowed values, or if
         ``robust=False`` conflicts with an explicit non-classical ``vcov_type``.
     """
+    if robust is None:
+        robust = legacy_default
     if vcov_type is None:
         return "hc1" if robust else "classical"
     if vcov_type not in _VALID_VCOV_TYPES:
@@ -4434,7 +4448,7 @@ class LinearRegression:
     def __init__(
         self,
         include_intercept: bool = True,
-        robust: bool = True,
+        robust: Optional[bool] = None,
         cluster_ids: Optional[np.ndarray] = None,
         alpha: float = 0.05,
         rank_deficient_action: str = "warn",
@@ -4460,7 +4474,14 @@ class LinearRegression:
                 f"got {df_convention!r}"
             )
         self.include_intercept = include_intercept
-        self.robust = robust
+        # `robust` is deprecated (row M-115; removed in 4.0): None sentinel,
+        # raw arg kept alongside the resolved legacy bool (True).
+        if robust is not None:
+            from diff_diff._deprecation import warn_deprecated_kwarg
+
+            warn_deprecated_kwarg(type(self).__name__, "robust", "use vcov_type= instead")
+        self._robust_arg = robust
+        self.robust = robust if robust is not None else True
         self.cluster_ids = cluster_ids
         self.alpha = alpha
         self.rank_deficient_action = rank_deficient_action

@@ -10,7 +10,7 @@ This module implements ETWFE via a single saturated regression that:
 1. **Estimates ATT(g,t)** for each cohort×time treatment cell simultaneously
 2. **Supports linear (OLS), Poisson QMLE, and logit** link functions
 3. **Uses ASF-based ATT** for nonlinear models: E[f(η₁)] − E[f(η₀)]
-4. **Computes delta-method SEs** for all aggregations (event, group, calendar, simple)
+4. **Computes delta-method SEs** for all aggregations (event_study, group, calendar, simple)
 5. **Supports paper W2025 cohort-share aggregation** via ``aggregate(weights="cohort_share")`` (Eqs. 7.4 + 7.6; default is cell-count matching Stata ``jwdid_estat``)
 6. **Supports paper W2025 Section 8 heterogeneous cohort trends** via ``cohort_trends=True`` (OLS path only; auto-routes to full-dummy mode; requires ``control_group="not_yet_treated"`` — the default — and ``survey_design=None``; the ``never_treated`` and survey paths are fail-closed with ``NotImplementedError`` because the placebo-cell basis remaining collinear with the trend columns through the unit fixed effects / unvalidated survey-TSL composition would make the trend specification unidentified or unverified — see Methodology Registry for the full contract)
 7. **Follows the Stata jwdid specification** for OLS defaults and nonlinear paths (see Methodology Registry for documented SE/aggregation deviations)
@@ -113,10 +113,10 @@ Basic OLS (follows Stata ``jwdid y, ivar(unit) tvar(time) gvar(cohort)``)::
     m = WooldridgeDiD()
     r = m.fit(df, outcome='lemp', unit='countyreal', time='year', first_treat='first_treat')
 
-    r.aggregate('event').aggregate('group').aggregate('simple')
-    print(r.summary('event'))
-    print(r.summary('group'))
-    print(r.summary('simple'))
+    r.aggregate('event_study').aggregate('group').aggregate('simple')
+    print(r.to_dataframe(level='event_study'))
+    print(r.to_dataframe(level='group'))
+    print(r.summary())
 
 .. note::
 
@@ -149,8 +149,8 @@ Poisson QMLE for non-negative outcomes
     m_pois = WooldridgeDiD(method='poisson')
     r_pois = m_pois.fit(df, outcome='emp', unit='countyreal',
                         time='year', first_treat='first_treat')
-    r_pois.aggregate('event').aggregate('group').aggregate('simple')
-    print(r_pois.summary('simple'))
+    r_pois.aggregate('event_study').aggregate('group').aggregate('simple')
+    print(r_pois.summary())
 
 Logit for binary outcomes
 (follows Stata ``jwdid y, method(logit)``)::
@@ -159,12 +159,14 @@ Logit for binary outcomes
     r_logit = m_logit.fit(df, outcome='hi_emp', unit='countyreal',
                           time='year', first_treat='first_treat')
     r_logit.aggregate('group').aggregate('simple')
-    print(r_logit.summary('group'))
+    print(r_logit.to_dataframe(level='group'))
 
 Aggregation Methods
 -------------------
 
-Call ``.aggregate(type, weights=...)`` before ``.summary(type)``:
+Call ``.aggregate(type, weights=...)``, then export with
+``.to_dataframe(level=...)`` (``summary()`` prints the headline simple
+aggregation):
 
 .. list-table::
    :header-rows: 1
@@ -173,7 +175,7 @@ Call ``.aggregate(type, weights=...)`` before ``.summary(type)``:
    * - Type
      - Description
      - Stata equivalent
-   * - ``'event'``
+   * - ``'event_study'``
      - ATT by relative time k = t − g
      - ``estat event``
    * - ``'group'``
@@ -193,7 +195,7 @@ opt-in):
   Stata ``jwdid_estat``. Supported for all four aggregation types.
 - ``weights="cohort_share"`` — paper W2025 Eq. 7.4 (simple) and Eq. 7.6
   (event, restricted to ``k >= 0``) cohort-share weighting. Supported
-  only for ``type="simple"`` and ``type="event"``; raises on
+  only for ``type="simple"`` and ``type="event_study"``; raises on
   ``type ∈ {"group","calendar"}`` (no paper closed-form). Inference
   fields (t-stat / p-value / conf-int) are fail-closed to ``NaN``
   with a ``UserWarning`` documenting the conditional-on-shares

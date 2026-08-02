@@ -1798,7 +1798,6 @@ class SunAbraham(BaseEstimator):
 
         reg = LinearRegression(
             include_intercept=False,  # Full design already built (with or without intercept)
-            robust=True,  # legacy alias; vcov_type below overrides
             cluster_ids=cluster_ids,
             rank_deficient_action=self.rank_deficient_action,
             weights=survey_weights,

@@ -118,7 +118,7 @@ class TestPlaceboRandomizationInference:
             panel,
             outcome="y",
             treatment="treatment",
-            time="t",
+            post="t",
             unit="unit",
             n_permutations=200,
             seed=123,
@@ -154,7 +154,7 @@ class TestPlaceboRandomizationInference:
             panel,
             outcome="y",
             treatment="treatment",
-            time="t",
+            post="t",
             unit="unit",
             n_permutations=50,
             seed=7,
@@ -170,7 +170,7 @@ class TestPlaceboRandomizationInference:
             panel,
             outcome="y",
             treatment="treatment",
-            time="t",
+            post="t",
             unit="unit",
             n_permutations=200,
             seed=1,
@@ -197,7 +197,7 @@ class TestPlaceboRandomizationInference:
             panel,
             outcome="y",
             treatment="treatment",
-            time="t",
+            post="t",
             unit="unit",
             n_permutations=b,
             seed=20240101,
@@ -240,7 +240,7 @@ class TestPlaceboParityR:
         assert p_exact == pytest.approx(golden["permutation"]["p_exact"], abs=1e-12)
 
     def test_leave_one_out_matches_r(self, golden, panel):
-        res = leave_one_out_test(panel, outcome="y", treatment="treatment", time="t", unit="unit")
+        res = leave_one_out_test(panel, outcome="y", treatment="treatment", post="t", unit="unit")
         gl = golden["leave_one_out"]
         assert res.placebo_effect == pytest.approx(gl["mean"], abs=1e-10)
         assert res.se == pytest.approx(gl["se"], abs=1e-10)
@@ -277,7 +277,7 @@ class TestPlaceboParityR:
             panel,
             outcome="y",
             treatment="treatment",
-            time="t",
+            post="t",
             unit="unit",
             n_permutations=b,
             seed=99,
@@ -494,7 +494,7 @@ class TestPlaceboInferenceContracts:
                 panel,
                 outcome="y",
                 treatment="treatment",
-                time="t",
+                post="t",
                 unit="unit",
                 n_permutations=1,
                 seed=5,
@@ -512,4 +512,4 @@ class TestPlaceboInferenceContracts:
         ]
         panel = pd.DataFrame(rows)
         with pytest.raises(RuntimeError, match="leave-one-out"):
-            leave_one_out_test(panel, outcome="y", treatment="treatment", time="t", unit="unit")
+            leave_one_out_test(panel, outcome="y", treatment="treatment", post="t", unit="unit")

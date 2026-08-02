@@ -95,7 +95,7 @@ Example
    did = DifferenceInDifferences(inference='wild_bootstrap', n_bootstrap=999,
                                   cluster='unit')
    results = did.fit(panel, outcome='outcome', treatment='treated',
-                     time='post')
+                     post='post')
 
    print(f"Bootstrap SE: {results.se:.3f}")
    print(f"Bootstrap 95% CI: [{results.conf_int[0]:.3f}, {results.conf_int[1]:.3f}]")

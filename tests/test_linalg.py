@@ -1061,7 +1061,7 @@ class TestLinearRegression:
     def test_robust_standard_errors(self, simple_data):
         """Test that robust=True computes HC1 standard errors."""
         X, y, _ = simple_data
-        reg_robust = LinearRegression(robust=True).fit(X, y)
+        reg_robust = LinearRegression().fit(X, y)
         reg_classical = LinearRegression(robust=False).fit(X, y)
 
         # SEs should differ
@@ -1074,7 +1074,7 @@ class TestLinearRegression:
         """Test cluster-robust standard errors."""
         X, y, cluster_ids, _ = clustered_data
 
-        reg_hc1 = LinearRegression(robust=True).fit(X, y)
+        reg_hc1 = LinearRegression().fit(X, y)
         reg_cluster = LinearRegression(cluster_ids=cluster_ids).fit(X, y)
 
         # Cluster SE should typically be larger with correlated errors
@@ -1148,7 +1148,7 @@ class TestLinearRegression:
         )
 
         # Use LinearRegression
-        reg = LinearRegression(robust=True).fit(X, y)
+        reg = LinearRegression().fit(X, y)
 
         # Should match
         np.testing.assert_allclose(reg.coefficients_, coef, rtol=1e-10)
@@ -1506,7 +1506,7 @@ class TestNumericalStability:
         df["outcome"] = df["outcome"].astype(float) + 3e-8 * df["cov"]
 
         res = DifferenceInDifferences().fit(
-            df, outcome="outcome", treatment="treated", time="post", covariates=["cov"]
+            df, outcome="outcome", treatment="treated", post="post", covariates=["cov"]
         )
         assert np.isfinite(
             res.att
@@ -1520,7 +1520,7 @@ class TestNumericalStability:
             df_small,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             covariates=["cov"],
         )
         np.testing.assert_allclose(res.att, res_small.att, rtol=1e-6)
@@ -1874,8 +1874,8 @@ class TestEstimatorIntegration:
         data["outcome"] = np.random.randn(n) + 2.0 * data["treated"] * data["post"]
 
         # Fit estimator
-        did = DifferenceInDifferences(robust=True)
-        result = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        did = DifferenceInDifferences()
+        result = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         # Coefficient should be close to true effect (within sampling variation)
         assert abs(result.att - 2.0) < 1.0

@@ -35,6 +35,12 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
+from diff_diff._deprecation import (
+    NOT_SUPPLIED,
+    require_arg,
+    resolve_renamed_kwarg,
+    warn_deprecated_kwarg,
+)
 from diff_diff.linalg import _rank_guarded_inv, solve_logit, solve_ols
 from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.results_base import BaseResults
@@ -479,7 +485,7 @@ class TripleDifference(BaseEstimator):
     ...     outcome='outcome',
     ...     group='group',
     ...     partition='partition',
-    ...     time='post'
+    ...     post='post'
     ... )
     >>> print(results.att)  # ATT estimate
 
@@ -490,7 +496,7 @@ class TripleDifference(BaseEstimator):
     ...     outcome='outcome',
     ...     group='group',
     ...     partition='partition',
-    ...     time='post',
+    ...     post='post',
     ...     covariates=['age', 'income']
     ... )
 
@@ -519,10 +525,13 @@ class TripleDifference(BaseEstimator):
            American Economic Review, 84(3), 622-641.
     """
 
+    _PARAM_ATTR_ALIASES = {"robust": "_robust_arg"}
+    _DERIVED_CONFIG_ATTRS = ("robust",)
+
     def __init__(
         self,
         estimation_method: str = "dr",
-        robust: bool = True,
+        robust: Optional[bool] = None,
         cluster: Optional[str] = None,
         vcov_type: str = "hc1",
         alpha: float = 0.05,
@@ -558,7 +567,12 @@ class TripleDifference(BaseEstimator):
         self._validate_vcov_type(vcov_type)
 
         self.estimation_method = estimation_method
-        self.robust = robust
+        # `robust` is deprecated (row M-046; removed in 4.0): None sentinel,
+        # raw arg at `_robust_arg`, resolved legacy bool on the public attr.
+        if robust is not None:
+            warn_deprecated_kwarg(type(self).__name__, "robust", "use vcov_type= instead")
+        self._robust_arg = robust
+        self.robust = robust if robust is not None else True
         self.cluster = cluster
         self.vcov_type = vcov_type
         self.alpha = alpha
@@ -576,9 +590,10 @@ class TripleDifference(BaseEstimator):
         outcome: str,
         group: str,
         partition: str,
-        time: str,
+        post: Any = NOT_SUPPLIED,
         covariates: Optional[List[str]] = None,
         survey_design=None,
+        time: Any = NOT_SUPPLIED,
     ) -> TripleDifferenceResults:
         """
         Fit the Triple Difference model.
@@ -597,8 +612,8 @@ class TripleDifference(BaseEstimator):
             Name of the partition/eligibility indicator column (0/1).
             1 = eligible partition (e.g., women, targeted demographic).
             0 = ineligible partition.
-        time : str
-            Name of the time period indicator column (0/1).
+        post : str
+            Name of the post-period indicator column (0/1).
             1 = post-treatment period.
             0 = pre-treatment period.
         covariates : list of str, optional
@@ -622,7 +637,24 @@ class TripleDifference(BaseEstimator):
             If required columns are missing or data validation fails.
         NotImplementedError
             If survey_design is used with wild_bootstrap inference.
+
+        The keyword-only ``time`` parameter is a deprecated alias for
+        ``post`` (row M-031); it warns with ``FutureWarning``. From 4.0,
+        ``time=`` on the merged staggered interface means the CALENDAR
+        column only (row M-085) - the 2x2x2 post dummy is ``post=``.
         """
+        post = resolve_renamed_kwarg(
+            "TripleDifference.fit",
+            "time",
+            time,
+            "post",
+            post,
+            default=NOT_SUPPLIED,
+            extra="From 4.0, time= means the calendar column only.",
+        )
+        require_arg("TripleDifference.fit", "post", post)
+        # Body-local name; the public parameter is post (M-031).
+        time = post
         # Re-validate vcov_type at fit-time: __init__ and set_params (via
         # the BaseEstimator probe re-init) both validate eagerly, so this
         # second layer only catches DIRECT attribute mutation
@@ -2095,7 +2127,7 @@ def triple_difference(
     time: str,
     covariates: Optional[List[str]] = None,
     estimation_method: str = "dr",
-    robust: bool = True,
+    robust: Optional[bool] = None,
     cluster: Optional[str] = None,
     vcov_type: str = "hc1",
     alpha: float = 0.05,
@@ -2189,7 +2221,7 @@ def triple_difference(
         outcome=outcome,
         group=group,
         partition=partition,
-        time=time,
+        post=time,
         covariates=covariates,
         survey_design=survey_design,
     )

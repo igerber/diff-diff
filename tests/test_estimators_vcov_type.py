@@ -45,7 +45,7 @@ def _make_did_panel(n_units: int = 30, seed: int = 20260420) -> pd.DataFrame:
 
 class TestRobustAliasing:
     def test_robust_true_aliases_hc1(self):
-        est = DifferenceInDifferences(robust=True)
+        est = DifferenceInDifferences()
         assert est.vcov_type == "hc1"
 
     def test_robust_false_aliases_classical(self):
@@ -161,7 +161,6 @@ class TestParamsRoundTrip:
         atomic behavior: on failure, no attribute moves.
         """
         est = DifferenceInDifferences(
-            robust=True,
             vcov_type="hc1",
             cluster=None,
             alpha=0.05,
@@ -216,7 +215,7 @@ class TestFitBehavior:
         data = _make_did_panel(n_units=20)
         est = DifferenceInDifferences(robust=False, cluster="unit")
         with pytest.warns(UserWarning, match="robust=False with cluster"):
-            res = est.fit(data, outcome="y", treatment="treated", time="time")
+            res = est.fit(data, outcome="y", treatment="treated", post="time")
         assert np.isfinite(res.att)
         assert np.isfinite(res.se)
         # The effective vcov_type in the result reflects the remap.
@@ -235,7 +234,7 @@ class TestFitBehavior:
         est = DifferenceInDifferences(vcov_type="classical", cluster="unit")
         assert est._vcov_type_explicit is True
         with pytest.raises(ValueError, match="classical SEs are one-way only"):
-            est.fit(data, outcome="y", treatment="treated", time="time")
+            est.fit(data, outcome="y", treatment="treated", post="time")
 
     def test_twfe_robust_false_preserves_cr1_via_autocluster(self):
         """TWFE auto-clusters at unit; `robust=False` on TWFE historically
@@ -351,7 +350,7 @@ class TestFitBehavior:
         should still produce classical non-robust SEs."""
         data = _make_did_panel(n_units=20)
         est = DifferenceInDifferences(robust=False)
-        res = est.fit(data, outcome="y", treatment="treated", time="time")
+        res = est.fit(data, outcome="y", treatment="treated", post="time")
         assert res.vcov_type == "classical"
         assert "Classical OLS" in res.summary()
 
@@ -376,9 +375,9 @@ class TestFitBehavior:
         # Fit both: should behave identically (CR1 via remap, with warning).
         data = _make_did_panel(n_units=20)
         with pytest.warns(UserWarning, match="robust=False with cluster"):
-            res_orig = orig.fit(data, outcome="y", treatment="treated", time="time")
+            res_orig = orig.fit(data, outcome="y", treatment="treated", post="time")
         with pytest.warns(UserWarning, match="robust=False with cluster"):
-            res_clone = clone.fit(data, outcome="y", treatment="treated", time="time")
+            res_clone = clone.fit(data, outcome="y", treatment="treated", post="time")
         assert res_orig.vcov_type == res_clone.vcov_type == "hc1"
         # Point estimate and SE identical.
         assert res_orig.att == pytest.approx(res_clone.att, abs=1e-12)
@@ -402,13 +401,13 @@ class TestFitBehavior:
         est.set_params(robust=False, cluster="unit")
         assert est._vcov_type_explicit is False  # robust= only, no vcov_type
         with pytest.warns(UserWarning, match="robust=False with cluster"):
-            res = est.fit(data, outcome="y", treatment="treated", time="time")
+            res = est.fit(data, outcome="y", treatment="treated", post="time")
         assert res.vcov_type == "hc1"
 
     def test_hc1_fit_and_summary_contain_expected_fields(self):
         data = _make_did_panel()
         est = DifferenceInDifferences(vcov_type="hc1")
-        res = est.fit(data, outcome="y", treatment="treated", time="time")
+        res = est.fit(data, outcome="y", treatment="treated", post="time")
         assert np.isfinite(res.att)
         assert np.isfinite(res.se)
         assert np.isfinite(res.conf_int[0])
@@ -427,8 +426,8 @@ class TestFitBehavior:
         data = _make_did_panel()
         est_hc1 = DifferenceInDifferences(vcov_type="hc1")
         est_hc2bm = DifferenceInDifferences(vcov_type="hc2_bm")
-        r_hc1 = est_hc1.fit(data, outcome="y", treatment="treated", time="time")
-        r_hc2bm = est_hc2bm.fit(data, outcome="y", treatment="treated", time="time")
+        r_hc1 = est_hc1.fit(data, outcome="y", treatment="treated", post="time")
+        r_hc2bm = est_hc2bm.fit(data, outcome="y", treatment="treated", post="time")
         # Point estimate unaffected by vcov choice.
         assert r_hc1.att == pytest.approx(r_hc2bm.att, abs=1e-10)
         # Both produce finite SEs and CIs.
@@ -440,35 +439,35 @@ class TestFitBehavior:
     def test_classical_via_robust_false(self):
         data = _make_did_panel()
         est = DifferenceInDifferences(robust=False)
-        res = est.fit(data, outcome="y", treatment="treated", time="time")
+        res = est.fit(data, outcome="y", treatment="treated", post="time")
         assert np.isfinite(res.att)
         assert np.isfinite(res.se)
 
     def test_classical_via_explicit_vcov_type(self):
         data = _make_did_panel()
         est = DifferenceInDifferences(vcov_type="classical")
-        res = est.fit(data, outcome="y", treatment="treated", time="time")
+        res = est.fit(data, outcome="y", treatment="treated", post="time")
         assert np.isfinite(res.se)
 
     def test_summary_includes_vcov_label_hc1(self):
         """`summary()` output includes an HC1 label in the Variance line."""
         data = _make_did_panel()
         est = DifferenceInDifferences(vcov_type="hc1")
-        res = est.fit(data, outcome="y", treatment="treated", time="time")
+        res = est.fit(data, outcome="y", treatment="treated", post="time")
         summary = res.summary()
         assert "HC1 heteroskedasticity-robust" in summary
 
     def test_summary_includes_vcov_label_hc2_bm(self):
         data = _make_did_panel()
         est = DifferenceInDifferences(vcov_type="hc2_bm")
-        res = est.fit(data, outcome="y", treatment="treated", time="time")
+        res = est.fit(data, outcome="y", treatment="treated", post="time")
         summary = res.summary()
         assert "HC2 + Bell-McCaffrey" in summary
 
     def test_summary_includes_vcov_label_classical(self):
         data = _make_did_panel()
         est = DifferenceInDifferences(vcov_type="classical")
-        res = est.fit(data, outcome="y", treatment="treated", time="time")
+        res = est.fit(data, outcome="y", treatment="treated", post="time")
         summary = res.summary()
         assert "Classical OLS SEs" in summary
 
@@ -476,7 +475,7 @@ class TestFitBehavior:
         """CR1 cluster-robust (HC1 + cluster) labels with the cluster name."""
         data = _make_did_panel()
         est = DifferenceInDifferences(vcov_type="hc1", cluster="unit")
-        res = est.fit(data, outcome="y", treatment="treated", time="time")
+        res = est.fit(data, outcome="y", treatment="treated", post="time")
         summary = res.summary()
         assert "CR1 cluster-robust at unit" in summary
 
@@ -771,7 +770,7 @@ class TestFitBehavior:
             data,
             outcome="y",
             treatment="treated",
-            time="time",
+            post="time",
             fixed_effects=["unit", "time"],
         )
         np.testing.assert_allclose(res_twfe.att, res_did.att, atol=1e-12)
@@ -792,7 +791,7 @@ class TestFitBehavior:
             data,
             outcome="y",
             treatment="treated",
-            time="time",
+            post="time",
             fixed_effects=["unit", "time"],
         )
         np.testing.assert_allclose(res_twfe.att, res_did.att, atol=1e-12)
@@ -846,7 +845,7 @@ class TestFitBehavior:
             data,
             outcome="y",
             treatment="treated",
-            time="time",
+            post="time",
             fixed_effects=["unit", "time"],
         )
         np.testing.assert_allclose(res_twfe.att, res_did.att, atol=1e-12)
@@ -1092,7 +1091,7 @@ class TestFitBehavior:
             data,
             outcome="y",
             treatment="treated",
-            time="time",
+            post="time",
             fixed_effects=["unit", "time"],
         )
         assert res_twfe.residuals is not None and res_did.residuals is not None
@@ -1145,7 +1144,7 @@ class TestFitBehavior:
             data,
             outcome="y",
             treatment="treated",
-            time="time",
+            post="time",
             fixed_effects=["unit", "time"],
             survey_design=sd,
         )
@@ -1190,7 +1189,7 @@ class TestFitBehavior:
             data,
             outcome="y",
             treatment="treated",
-            time="time",
+            post="time",
             fixed_effects=["unit", "time"],
             survey_design=sd,
         )
@@ -1308,14 +1307,14 @@ class TestFitBehavior:
                 data,
                 outcome="y",
                 treatment="treated",
-                time="post",
+                post="post",
                 absorb=["unit"],
             )
             res_fe = DifferenceInDifferences(vcov_type=vcov).fit(
                 data,
                 outcome="y",
                 treatment="treated",
-                time="post",
+                post="post",
                 fixed_effects=["unit"],
             )
             assert np.isfinite(res_absorb.att)
@@ -1355,7 +1354,7 @@ class TestFitBehavior:
                 data,
                 outcome="y",
                 treatment="treated",
-                time="post",
+                post="post",
                 fixed_effects=["stratum"],
             )
             assert np.isfinite(res.att)
@@ -1384,7 +1383,7 @@ class TestFitBehavior:
             n_bootstrap=50,
             seed=7,
         )
-        res = est.fit(data, outcome="y", treatment="treated", time="time")
+        res = est.fit(data, outcome="y", treatment="treated", post="time")
         summary = res.summary()
         # The bootstrap path substitutes SE/CI from resampling; the Variance:
         # line (which labels the analytical family) must be suppressed so the
@@ -1407,7 +1406,7 @@ class TestFitBehavior:
             n_bootstrap=50,
             seed=42,
         )
-        res = est.fit(data, outcome="y", treatment="treated", time="time")
+        res = est.fit(data, outcome="y", treatment="treated", post="time")
         assert np.isfinite(res.se)
 
 
@@ -1478,7 +1477,7 @@ class TestSummarySurveyLabeling:
             data,
             outcome="y",
             treatment="treated",
-            time="time",
+            post="time",
             survey_design=sd,
         )
         assert res.survey_metadata is not None
@@ -1517,7 +1516,7 @@ class TestSummarySurveyLabeling:
             data,
             outcome="y",
             treatment="treated",
-            time="time",
+            post="time",
             survey_design=sd,
         )
         assert res.survey_metadata is not None
@@ -1561,7 +1560,7 @@ class TestSummarySurveyLabeling:
         """
         data = _make_did_panel(n_units=30)
         est = DifferenceInDifferences(vcov_type="hc1")
-        res = est.fit(data, outcome="y", treatment="treated", time="time")
+        res = est.fit(data, outcome="y", treatment="treated", post="time")
         assert res.survey_metadata is None
         summary = res.summary()
         assert "Variance:" in summary
@@ -1614,7 +1613,7 @@ class TestDiDAbsorbedFERParity:
             data,
             outcome="y",
             treatment="treated",
-            time="post",
+            post="post",
             absorb=["unit", "period"],
             unit="unit",
         )
@@ -1792,7 +1791,7 @@ class TestDiDAbsorbedFERParity:
             data,
             outcome="y",
             treatment="treated",
-            time="post",
+            post="post",
             absorb=["unit", "period"],
             unit="unit",
         )
@@ -1827,7 +1826,7 @@ class TestDiDAbsorbedFERParity:
                     data,
                     outcome="y",
                     treatment="treated",
-                    time="post",
+                    post="post",
                     absorb=["unit"],
                     fixed_effects=["period"],
                     unit="unit",
@@ -1867,7 +1866,7 @@ class TestDiDAbsorbedFERParity:
             data,
             outcome="y",
             treatment="treated",
-            time="post",
+            post="post",
             absorb=["unit", "period"],
             unit="unit",
             survey_design=sd,
@@ -2582,7 +2581,7 @@ class TestAbsorbedFEFullKParity:
             df,
             outcome="y",
             treatment="treated",
-            time="post",
+            post="post",
             absorb=["unit", "time"],
             covariates=["x"],
         )
@@ -2590,7 +2589,7 @@ class TestAbsorbedFEFullKParity:
             df,
             outcome="y",
             treatment="treated",
-            time="post",
+            post="post",
             fixed_effects=["unit", "time"],
             covariates=["x"],
         )
@@ -2624,7 +2623,7 @@ class TestAbsorbedFEFullKParity:
             df, outcome="y", treatment="treated", time="post", unit="unit"
         )
         fe = DifferenceInDifferences(vcov_type="classical").fit(
-            df, outcome="y", treatment="treated", time="post", fixed_effects=["unit", "post"]
+            df, outcome="y", treatment="treated", post="post", fixed_effects=["unit", "post"]
         )
         np.testing.assert_allclose(tw.att, fe.att, rtol=1e-9)
         np.testing.assert_allclose(tw.se, fe.se, rtol=1e-9)
@@ -2644,7 +2643,7 @@ class TestAbsorbedFEFullKParity:
             df,
             outcome="y",
             treatment="treated",
-            time="post",
+            post="post",
             absorb=["unit", "time"],
             covariates=["x"],
         )
@@ -2652,7 +2651,7 @@ class TestAbsorbedFEFullKParity:
             df,
             outcome="y",
             treatment="treated",
-            time="post",
+            post="post",
             fixed_effects=["unit", "time"],
             covariates=["x"],
         )
@@ -2668,7 +2667,7 @@ class TestAbsorbedFEFullKParity:
             df,
             outcome="y",
             treatment="treated",
-            time="post",
+            post="post",
             absorb=["unit", "time"],
             covariates=["x"],
         )
@@ -2676,7 +2675,7 @@ class TestAbsorbedFEFullKParity:
             df,
             outcome="y",
             treatment="treated",
-            time="post",
+            post="post",
             fixed_effects=["unit", "time"],
             covariates=["x"],
         )
@@ -2791,10 +2790,10 @@ class TestDfConvention:
 
         data = self._clustered_panel()
         r0 = DifferenceInDifferences(cluster="unit").fit(
-            data, outcome="y", treatment="group", time="post", unit="unit"
+            data, outcome="y", treatment="group", post="post", unit="unit"
         )
         r1 = DifferenceInDifferences(cluster="unit", df_convention="residual").fit(
-            data, outcome="y", treatment="group", time="post", unit="unit"
+            data, outcome="y", treatment="group", post="post", unit="unit"
         )
         assert (r0.att, r0.se, r0.t_stat, r0.p_value, r0.conf_int) == (
             r1.att,
@@ -2832,8 +2831,8 @@ class TestDfConvention:
         data = self._clustered_panel()
         data["treated"] = data["group"] * data["post"]
         kw = dict(outcome="y", treatment="treated", time="post", unit="unit")
-        r0 = TwoWayFixedEffects(robust=True).fit(data, **kw)
-        r1 = TwoWayFixedEffects(robust=True, df_convention="cluster").fit(data, **kw)
+        r0 = TwoWayFixedEffects().fit(data, **kw)
+        r1 = TwoWayFixedEffects(df_convention="cluster").fit(data, **kw)
         assert r0.se == r1.se and r0.t_stat == r1.t_stat
         G = data["unit"].nunique()
         np.testing.assert_allclose(r1.p_value, 2 * stats.t.sf(abs(r1.t_stat), G - 1), rtol=1e-12)
@@ -2892,7 +2891,7 @@ class TestDfConvention:
         included in to_dict() only when set."""
         data = self._clustered_panel()
         r1 = DifferenceInDifferences(cluster="unit", df_convention="cluster").fit(
-            data, outcome="y", treatment="group", time="post", unit="unit"
+            data, outcome="y", treatment="group", post="post", unit="unit"
         )
         G = data["unit"].nunique()
         assert r1.df_convention == "cluster" and r1.inference_df == G - 1

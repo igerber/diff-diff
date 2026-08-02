@@ -83,7 +83,7 @@ Example
        panel,
        outcome='outcome',
        treatment='treated',
-       time='post',
+       post='post',
        unit='unit',
        n_permutations=1000
    )
@@ -109,7 +109,7 @@ Example
        panel,
        outcome='outcome',
        treatment='treated',
-       time='post',
+       post='post',
        unit='unit'
    )
 

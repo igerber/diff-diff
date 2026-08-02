@@ -9,6 +9,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff._deprecation import (
+    NOT_SUPPLIED,
+    _NotSupplied,
+    resolve_renamed_kwarg,
+    warn_deprecated_kwarg,
+)
 from diff_diff.results_base import BaseResults
 from diff_diff.utils import safe_inference
 
@@ -237,13 +243,21 @@ class WooldridgeDiDResults(BaseResults):
         self.__dict__.pop("_df_one_way", None)
         if "df_convention" not in self.__dict__:
             self.__dict__["df_convention"] = "residual"
+        # M-086: pickles written before the "event" -> "event_study" value
+        # unification carry only the old aggregation_weights key; mirror it
+        # so both spellings resolve during the 3.9 window.
+        aw = self.__dict__.get("aggregation_weights")
+        if isinstance(aw, dict) and "event" in aw and "event_study" not in aw:
+            aw["event_study"] = aw["event"]
 
     def aggregate(self, type: str, weights: str = "cell") -> "WooldridgeDiDResults":  # noqa: A002
         """Compute and store one of the four jwdid_estat aggregation types.
 
         Parameters
         ----------
-        type : "simple" | "group" | "calendar" | "event"
+        type : "simple" | "group" | "calendar" | "event_study"
+            ("event" is a deprecated spelling of "event_study"; warns with
+            ``FutureWarning`` and is rejected in 4.0 - row M-086.)
         weights : "cell" | "cohort_share", default "cell"
             Aggregation weighting scheme. ``"cell"`` (default) uses cell-
             count ``n_{g,t}`` observation counts and matches Stata
@@ -272,7 +286,16 @@ class WooldridgeDiDResults(BaseResults):
         is rebuilt under the active ``weights`` scheme so the BM DOF
         reflects the actual weighting used by ATT + SE.
         """
-        valid = ("simple", "group", "calendar", "event")
+        # M-086: "event_study" is the canonical spelling; the drifted
+        # "event" warns and maps through the 3.9 shim window.
+        if type == "event":
+            warn_deprecated_kwarg(
+                "WooldridgeDiDResults.aggregate",
+                "type='event'",
+                "use type='event_study' instead",
+            )
+            type = "event_study"  # noqa: A001
+        valid = ("simple", "group", "calendar", "event_study")
         if type not in valid:
             raise ValueError(f"type must be one of {valid}, got {type!r}")
 
@@ -282,7 +305,7 @@ class WooldridgeDiDResults(BaseResults):
         if weights == "cohort_share" and type in ("group", "calendar"):
             raise ValueError(
                 f"weights='cohort_share' is only supported for type='simple' "
-                f"(paper W2025 Eq. 7.4) and type='event' (paper W2025 Eq. 7.6). "
+                f"(paper W2025 Eq. 7.4) and type='event_study' (paper W2025 Eq. 7.6). "
                 f"type={type!r} has no explicit paper closed-form cohort-share "
                 f"weighting; use weights='cell' (default) for "
                 f"jwdid_estat-style cell-count weighting."
@@ -617,7 +640,7 @@ class WooldridgeDiDResults(BaseResults):
             self.calendar_effects = result
             self.aggregation_weights["calendar"] = weights
 
-        elif type == "event":
+        elif type == "event_study":
             # Paper W2025 Eq. 7.6 cohort-share-by-exposure weighting is
             # defined for post-treatment exposure times (k >= 0) only;
             # pre-treatment lead effects use a separate Eq. 7.7
@@ -651,17 +674,59 @@ class WooldridgeDiDResults(BaseResults):
                 se = _agg_se(w_vec)
                 result[k] = _build_effect(att, se, dofs.get(k))
             self.event_study_effects = result
+            self.aggregation_weights["event_study"] = weights
+            # Deprecated key mirroring "event_study" through the 3.9 shim
+            # window; dropped in 4.0 (row M-086, section 5 policy).
             self.aggregation_weights["event"] = weights
 
         return self
 
-    def summary(self, aggregation: str = "simple") -> str:
+    def summary(self, aggregation: Any = NOT_SUPPLIED, *, alpha: Optional[float] = None) -> str:
         """Print formatted summary table.
 
         Parameters
         ----------
-        aggregation : which aggregation to display ("simple", "group", "calendar", "event")
+        aggregation : str, optional
+            DEPRECATED (row M-087; retired in 4.0): which aggregation to
+            display ("simple", "group", "calendar", "event_study"). From
+            4.0 ``summary()`` takes the library-uniform ``alpha``-only
+            signature and renders the headline simple row; select other
+            aggregations via ``aggregate(...)`` / ``to_dataframe(level=)``.
+        alpha : float, keyword-only, optional
+            Accepted for signature uniformity (spec section 5). The stored
+            confidence columns were computed at fit time; passing a value
+            different from the stored ``alpha`` raises rather than
+            silently recomputing or mislabeling - refit at the desired
+            level instead. Keyword-only during the 3.9 shim window because
+            ``aggregation`` still holds position 1; it becomes the sole
+            positional parameter in 4.0, matching every other results
+            class.
         """
+        if alpha is not None and alpha != self.alpha:
+            raise ValueError(
+                f"This results object stores intervals computed at "
+                f"alpha={self.alpha}; refit at the desired level to obtain "
+                f"alpha={alpha} intervals (summary() never recomputes "
+                "stored inference)."
+            )
+        if isinstance(aggregation, _NotSupplied):
+            aggregation = "simple"
+        else:
+            if aggregation is None or isinstance(aggregation, float):
+                raise TypeError(
+                    "summary() takes the aggregation selector positionally "
+                    "only through 3.9 (deprecated); alpha= is KEYWORD-ONLY "
+                    "- call summary(alpha=...) instead."
+                )
+            warn_deprecated_kwarg(
+                "WooldridgeDiDResults.summary",
+                "aggregation",
+                "summary() renders the simple row from 4.0; select other "
+                "aggregations via aggregate(...) or to_dataframe(level=)",
+            )
+            if aggregation == "event":
+                aggregation = "event_study"
+        _alpha = self.alpha
         lines = [
             "=" * 70,
             "    Wooldridge Extended Two-Way Fixed Effects (ETWFE) Results",
@@ -709,7 +774,7 @@ class WooldridgeDiDResults(BaseResults):
                 f"{p:>8.4f}{stars}   [{ci_lo}, {ci_hi}]"
             )
 
-        ci_pct = f"{(1 - self.alpha) * 100:.0f}%"
+        ci_pct = f"{(1 - _alpha) * 100:.0f}%"
         header = (
             f"{'Parameter':<22} {'Estimate':>10}  {'Std. Err.':>10}  "
             f"{'t-stat':>8}  {'P>|t|':>8}   [{ci_pct} CI]"
@@ -752,7 +817,7 @@ class WooldridgeDiDResults(BaseResults):
                         eff["conf_int"],
                     )
                 )
-        elif aggregation == "event" and self.event_study_effects:
+        elif aggregation == "event_study" and self.event_study_effects:
             for k, eff in sorted(self.event_study_effects.items()):
                 if k < -self.anticipation:
                     suffix = " [pre]"
@@ -786,7 +851,7 @@ class WooldridgeDiDResults(BaseResults):
         Dict[str, Any]
             Canonical inference row plus scalar metadata. Detailed
             group-time / aggregated tables are available via
-            ``to_dataframe(aggregation=...)``.
+            ``to_dataframe(level=...)``.
         """
         result = {
             "att": self.att,
@@ -814,14 +879,38 @@ class WooldridgeDiDResults(BaseResults):
             result["df_convention"] = self.df_convention
         return result
 
-    def to_dataframe(self, aggregation: str = "event") -> pd.DataFrame:
+    def to_dataframe(
+        self, level: Any = NOT_SUPPLIED, aggregation: Any = NOT_SUPPLIED
+    ) -> pd.DataFrame:
         """Export aggregated effects to a DataFrame.
 
         Parameters
         ----------
-        aggregation : "simple" | "group" | "calendar" | "event" | "gt"
-            Use "gt" to export raw group-time effects.
+        level : "simple" | "group" | "calendar" | "event_study" | "gt"
+            Use "gt" to export raw group-time effects. ("event" is a
+            deprecated spelling of "event_study"; warns and is rejected
+            in 4.0 - row M-086.)
+        aggregation : str, optional
+            Deprecated alias for ``level`` (row M-044); warns with
+            ``FutureWarning`` and will be removed in 4.0.
         """
+        level = resolve_renamed_kwarg(
+            "WooldridgeDiDResults.to_dataframe",
+            "aggregation",
+            aggregation,
+            "level",
+            level,
+            default="event_study",
+        )
+        if level == "event":
+            warn_deprecated_kwarg(
+                "WooldridgeDiDResults.to_dataframe",
+                "level='event'",
+                "use level='event_study' instead",
+            )
+            level = "event_study"
+        # Body-local name; the public parameter is level (M-044).
+        aggregation = level
         if aggregation == "gt":
             rows = []
             for (g, t), eff in sorted(self.group_time_effects.items()):
@@ -873,7 +962,7 @@ class WooldridgeDiDResults(BaseResults):
                 }
                 for t, eff in sorted((self.calendar_effects or {}).items())
             ],
-            "event": [
+            "event_study": [
                 {
                     "relative_period": k,
                     **{kk: vv for kk, vv in eff.items() if kk != "conf_int"},
@@ -889,13 +978,13 @@ class WooldridgeDiDResults(BaseResults):
         return pd.DataFrame(rows)
 
     def plot_event_study(self, weights: str = "cell", **kwargs) -> None:
-        """Event study plot. Always calls ``aggregate('event', weights=weights)``.
+        """Event study plot. Always calls ``aggregate('event_study', weights=weights)``.
 
         Parameters
         ----------
         weights : "cell" | "cohort_share", default "cell"
             Aggregation weighting scheme threaded into the underlying
-            ``aggregate("event", ...)`` call. ``"cohort_share"`` produces
+            ``aggregate("event_study", ...)`` call. ``"cohort_share"`` produces
             paper W2025 Eq. 7.6 cohort-share-by-exposure weights
             (post-treatment ``k >= 0`` only); inference fields are
             fail-closed to NaN per the Section 7.5 conditional-on-shares
@@ -921,7 +1010,7 @@ class WooldridgeDiDResults(BaseResults):
         # aggregate() method replaces ``event_study_effects`` in place
         # per the existing contract, so this is cheap and avoids
         # cohort_share→cell (or any cross-scheme) stale-cache bugs.
-        self.aggregate("event", weights=weights)
+        self.aggregate("event_study", weights=weights)
 
         from diff_diff.visualization import plot_event_study
 

@@ -8,6 +8,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Deprecated
+- **Semantic rename wave** (v4 program 2(c)-ii PR-B, ledger rows [M-030]
+  [M-031] [M-043] [M-044] [M-045]..[M-047] [M-084] [M-086] [M-087] [M-095]
+  [M-115] plus the missed-rename amendments [M-136]..[M-138]): the
+  judgment-heavy renames land with 3.9 `FutureWarning` shims (removal in
+  4.0; positional calls unaffected; deprecated paths route to
+  bit-identical numbers; both-spellings calls raise `ValueError`).
+  - `DifferenceInDifferences.fit`: `time=` -> `post=` [M-030] (the 2x2
+    0/1 post-period indicator - the calendar `time=` vocabulary on every
+    other estimator is unchanged; `TwoWayFixedEffects.fit(time=)` moves
+    in a later phase with [M-082]). `TripleDifference.fit`: `time=` ->
+    `post=` [M-031]; its warning notes that from 4.0 `time=` means the
+    calendar column only ([M-085]). The `permutation_test` /
+    `leave_one_out_test` diagnostics follow with `time=` -> `post=`
+    [M-137] [M-138]; the `run_placebo_test`/`run_all_placebo_tests`
+    wrappers keep their overloaded `time` (redesign tracked in TODO.md).
+  - `robust=` constructor param deprecated everywhere it exists [M-045]
+    [M-046] [M-047] [M-115] (`DifferenceInDifferences` incl. inherited
+    `TwoWayFixedEffects`/`MultiPeriodDiD`, `TripleDifference`,
+    `HeterogeneousAdoptionDiD`, `LinearRegression`): use `vcov_type=`.
+    Through 3.9 the public `.robust` attribute keeps the RESOLVED legacy
+    bool; `get_params()` returns the raw sentinel-era arg (None when not
+    supplied) so clone round-trips stay silent. An instance CONFIGURED
+    via `robust=` re-warns on `set_params` probe re-init.
+  - `StackedDiD(clean_control=)` -> `control_group=` [M-043] with a
+    deprecated warning-property alias on the estimator, and the results
+    field `StackedDiDResults.clean_control` -> `.control_group` [M-095]
+    (alias property + `__setstate__` pickle migration; `to_dict()` and
+    the business-report block emit BOTH keys through 3.9;
+    `summary()` prints "Control group:").
+  - `WooldridgeDiDResults`: `aggregate(type="event")` ->
+    `type="event_study"` [M-086] (`aggregation_weights` carries both
+    keys through 3.9, old pickles are mirrored on load);
+    `to_dataframe(aggregation=)` -> `to_dataframe(level=)` [M-044] with
+    the default resolving to `"event_study"`; `summary(aggregation=)` is
+    deprecated [M-087] - `summary()` renders the simple row and the new
+    KEYWORD-ONLY `summary(alpha=)` controls the CI label (uniform
+    positional `summary(alpha=None)` arrives at 4.0).
+    `LPDiDResults.to_dataframe(level="event")` -> `"event_study"`
+    [M-136] (default flips to the canonical spelling; identical frame).
+  - `ContinuousDiD(covariates=)` constructor -> `fit(..., covariates=)`
+    [M-084] (the sklearn hyperparameter/data split; supplying both
+    raises).
+  - Note: sentinel-defaulted shim parameters are transitionally annotated
+    `Any`; the 4.0 removal restores the narrow annotations.
+
 - **Mechanical rename wave** (v4 program 2(c)-ii, ledger rows [M-032]
   [M-033] [M-034] [M-035]..[M-042] [M-088] [M-089] [M-094] [M-097]..[M-113]
   [M-114]): the following parameters/fields gain their canonical names now,

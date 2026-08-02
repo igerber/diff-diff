@@ -1845,7 +1845,7 @@ class TestReviewFollowupsAbsorbedFE:
         df.loc[df.index[5], "fe"] = np.nan
         with pytest.raises(ValueError, match="'fe' contains NaN"):
             DifferenceInDifferences().fit(
-                df, outcome="y", treatment="treated", time="post", absorb=["fe"]
+                df, outcome="y", treatment="treated", post="post", absorb=["fe"]
             )
 
     def test_weight_aware_snap_zero_weight_domain(self):

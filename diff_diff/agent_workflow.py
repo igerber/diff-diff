@@ -190,7 +190,7 @@ def agent_workflow(
         ]
     else:
         fit_example_kwargs = _join_kwargs(
-            outcome=outcome, unit=unit, time=time, treatment=treatment
+            outcome=outcome, unit=unit, post=time, treatment=treatment
         )
         fit_example_call = (
             f"diff_diff.DifferenceInDifferences().fit({df_name}, {fit_example_kwargs})"

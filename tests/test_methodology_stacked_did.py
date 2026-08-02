@@ -767,7 +767,7 @@ class TestCBWSDIDCovariateBalance:
             kappa_pre=_CB_KP,
             kappa_post=_CB_KPOST,
             weighting="aggregate",
-            clean_control="never_treated",
+            control_group="never_treated",
             cluster="unit",
             balance=balance,
         )
@@ -926,7 +926,7 @@ class TestCBWSDIDEffectiveMass:
             kappa_pre=self.KP,
             kappa_post=self.KPOST,
             weighting="aggregate",
-            clean_control="not_yet_treated",
+            control_group="not_yet_treated",
             cluster="unit",
             balance="entropy",
         )
@@ -999,7 +999,7 @@ class TestCBWSDIDRParity:
             kappa_pre=2,
             kappa_post=2,
             weighting="aggregate",
-            clean_control="not_yet_treated",
+            control_group="not_yet_treated",
             cluster="unit",
             balance="entropy",
         ).fit(

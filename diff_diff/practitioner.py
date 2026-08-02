@@ -532,13 +532,15 @@ def _handle_stacked(results: Any):
             baker_step=6,
             label="Vary clean control definition",
             why=(
-                "StackedDiD uses clean_control parameter (not control_group). "
-                "Compare results with different clean control definitions "
-                "and event window widths as falsification."
+                "StackedDiD's control_group parameter selects the "
+                "clean-control rule (not_yet_treated / strict / "
+                "never_treated). Compare results with different clean "
+                "control definitions and event window widths as "
+                "falsification."
             ),
             code=(
-                "# Re-estimate with different clean_control settings:\n"
-                "# stacked_alt = StackedDiD(clean_control='not_yet_treated')"
+                "# Re-estimate with different control_group settings:\n"
+                "# stacked_alt = StackedDiD(control_group='not_yet_treated')"
             ),
             priority="medium",
             # See note on SA handler: DR completes ``sensitivity`` when
@@ -1508,7 +1510,7 @@ def _did_anchor_snippet(results: Any) -> str:
     two specification changes at once.
     """
     covs = list(getattr(results, "covariates", None) or [])
-    args = "    data, outcome='y', treatment='treated', time='post'"
+    args = "    data, outcome='y', treatment='treated', post='post'"
     if covs:
         args += f",\n    covariates={covs!r}"
     return "did_results = DifferenceInDifferences().fit(\n" + args + ")"

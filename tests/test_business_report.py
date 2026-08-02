@@ -71,7 +71,7 @@ _BR_TOP_LEVEL_KEYS = {
 @pytest.fixture(scope="module")
 def did_fit():
     df = generate_did_data(n_units=80, n_periods=4, treatment_effect=1.5, seed=7)
-    did = DifferenceInDifferences().fit(df, outcome="outcome", treatment="treated", time="post")
+    did = DifferenceInDifferences().fit(df, outcome="outcome", treatment="treated", post="post")
     return did, df
 
 
@@ -1722,7 +1722,7 @@ class TestStackedCleanControlSurfacesInSampleBlock:
         from diff_diff import StackedDiD
 
         sdf = generate_staggered_data(n_units=80, n_periods=8, treatment_effect=1.5, seed=7)
-        st = StackedDiD(clean_control="not_yet_treated").fit(
+        st = StackedDiD(control_group="not_yet_treated").fit(
             sdf, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
         )
         assert getattr(st, "clean_control", None) == "not_yet_treated"
@@ -1750,7 +1750,7 @@ class TestStackedCleanControlSurfacesInSampleBlock:
         from diff_diff import StackedDiD
 
         sdf = generate_staggered_data(n_units=80, n_periods=8, treatment_effect=1.5, seed=7)
-        st = StackedDiD(clean_control="strict").fit(
+        st = StackedDiD(control_group="strict").fit(
             sdf, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
         )
         sample = BusinessReport(st, auto_diagnostics=False).to_dict()["sample"]
@@ -1768,7 +1768,7 @@ class TestStackedCleanControlSurfacesInSampleBlock:
         from diff_diff import StackedDiD
 
         sdf = generate_staggered_data(n_units=80, n_periods=8, treatment_effect=1.5, seed=7)
-        st = StackedDiD(clean_control="never_treated").fit(
+        st = StackedDiD(control_group="never_treated").fit(
             sdf, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
         )
         sample = BusinessReport(st, auto_diagnostics=False).to_dict()["sample"]
@@ -1796,7 +1796,7 @@ class TestStackedCleanControlSurfacesInSampleBlock:
         # Sanity: the fixture has no never-treated units.
         assert sdf[sdf["first_treat"] == 0].empty
 
-        st = StackedDiD(clean_control="not_yet_treated", kappa_pre=1, kappa_post=1).fit(
+        st = StackedDiD(control_group="not_yet_treated", kappa_pre=1, kappa_post=1).fit(
             sdf, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
         )
         sample = BusinessReport(st, auto_diagnostics=False).to_dict()["sample"]
@@ -1832,7 +1832,7 @@ class TestStackedDiDAssumptionBlock:
         stub.n_control_units = 300
         stub.survey_metadata = None
         stub.event_study_effects = None
-        stub.clean_control = clean_control
+        stub.control_group = clean_control
         return stub
 
     def test_not_yet_treated_names_subexperiment_contract(self):
@@ -1845,8 +1845,10 @@ class TestStackedDiDAssumptionBlock:
         assert "IC1" in desc and "IC2" in desc
         assert "A_s > a + kappa_post" in desc
         assert "not_yet_treated" not in desc or "``A_s > a + kappa_post``" in desc
-        # The active clean_control is carried on the block explicitly for
-        # consumers that want structured access.
+        # The active control-group rule is carried on the block explicitly
+        # for consumers that want structured access - under BOTH keys
+        # through the 3.9 shim window (row M-095).
+        assert a["control_group"] == "not_yet_treated"
         assert a["clean_control"] == "not_yet_treated"
 
     def test_strict_names_strict_rule(self):
@@ -1875,7 +1877,7 @@ class TestStackedRenderingNarratesDynamicControl:
         from diff_diff import StackedDiD
 
         sdf = generate_staggered_data(n_units=80, n_periods=8, treatment_effect=1.5, seed=7)
-        st = StackedDiD(clean_control="not_yet_treated").fit(
+        st = StackedDiD(control_group="not_yet_treated").fit(
             sdf, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
         )
         summary = BusinessReport(st, auto_diagnostics=False).summary()
@@ -1889,13 +1891,13 @@ class TestStackedRenderingNarratesDynamicControl:
         )
         # Must narrate the sub-experiment-specific clean-control contract.
         assert "sub-experiment-specific clean-control" in summary
-        assert "clean_control='not_yet_treated'" in summary
+        assert "control_group='not_yet_treated'" in summary
 
     def test_full_report_names_sub_experiment_comparison_for_stacked_strict(self):
         from diff_diff import StackedDiD
 
         sdf = generate_staggered_data(n_units=80, n_periods=8, treatment_effect=1.5, seed=7)
-        st = StackedDiD(clean_control="strict").fit(
+        st = StackedDiD(control_group="strict").fit(
             sdf, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
         )
         md = BusinessReport(st, auto_diagnostics=False).full_report()
@@ -1907,7 +1909,7 @@ class TestStackedRenderingNarratesDynamicControl:
             "'- Control: N' line in the Sample section."
         )
         assert "sub-experiment-specific clean controls" in md
-        assert "clean_control='strict'" in md
+        assert "control_group='strict'" in md
 
 
 class TestDCDHPhase3AssumptionClause:
@@ -2046,7 +2048,7 @@ class TestAnticipationStripsStrictNoAnticipationClause:
         assert "PT-Post" in block["description"]
 
     def test_stacked_did_strips_strict_clause(self):
-        stub = self._stub("StackedDiDResults", clean_control="not_yet_treated")
+        stub = self._stub("StackedDiDResults", control_group="not_yet_treated")
         block = BusinessReport(stub, auto_diagnostics=False).to_dict()["assumption"]
         self._assert_no_strict_contract(block["description"])
         # Stacked sub-experiment identifying content preserved.
@@ -3977,7 +3979,7 @@ class TestAnalyticalFiniteDfAlphaOverride:
         from diff_diff import DifferenceInDifferences, generate_did_data
 
         df = generate_did_data(n_units=80, n_periods=4, treatment_effect=1.5, seed=7)
-        fit = DifferenceInDifferences().fit(df, outcome="outcome", treatment="treated", time="post")
+        fit = DifferenceInDifferences().fit(df, outcome="outcome", treatment="treated", post="post")
         native_lo, native_hi = fit.conf_int
 
         br = BusinessReport(fit, alpha=0.10, auto_diagnostics=False)

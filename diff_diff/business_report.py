@@ -1075,21 +1075,15 @@ def _control_group_choice(results: Any) -> Optional[str]:
     """Return the control-group choice string for a fitted result, normalized
     across estimator-specific attribute names.
 
-    Most anticipation-capable estimators expose the control-group choice as
-    ``results.control_group``. ``StackedDiDResults`` exposes the same choice
-    as ``clean_control`` (the public Wing-Freedman-Hollingsworth-2024 kwarg
-    name). Without this alias, a StackedDiD fit with
-    ``clean_control="not_yet_treated"`` would surface as ``control_group=None``
-    in the business-report schema, and the dynamic-control branch in
-    ``_extract_sample`` would never fire.
+    Every anticipation-capable estimator now exposes the control-group
+    choice as ``results.control_group`` (``StackedDiDResults`` joined via
+    row M-095; its ``__setstate__`` migrates pre-rename pickles, so no
+    ``clean_control`` fallback is needed - reading the deprecated alias
+    here would fire its FutureWarning on every report build).
     """
     cg = getattr(results, "control_group", None)
     if isinstance(cg, str):
         return cg
-    if type(results).__name__ == "StackedDiDResults":
-        clean = getattr(results, "clean_control", None)
-        if isinstance(clean, str):
-            return clean
     return None
 
 
@@ -1418,11 +1412,11 @@ def _describe_assumption(estimator_name: str, results: Any = None) -> Dict[str, 
         # within the data range) and IC2 (clean controls exist for the
         # event) inclusion conditions, NOT the generic "group-time ATT
         # parallel trends" clause used for CS / SA / etc. (round-22 P1
-        # CI review on PR #318). The active ``clean_control`` rule
-        # determines which units qualify as valid controls for each
-        # adoption event. REGISTRY.md §StackedDiD lines 1189-1193
-        # (identification) and 1234-1256 (clean-control rules).
-        clean_control = getattr(results, "clean_control", None)
+        # CI review on PR #318). The active ``control_group`` rule
+        # (pre-M-095 name: ``clean_control``) determines which units
+        # qualify as valid controls for each adoption event. REGISTRY.md
+        # §StackedDiD (identification / clean-control rules).
+        clean_control = getattr(results, "control_group", None)
         if clean_control == "never_treated":
             control_clause = (
                 "controls are restricted to units that are never treated "
@@ -1463,6 +1457,8 @@ def _describe_assumption(estimator_name: str, results: Any = None) -> Dict[str, 
         }
         if isinstance(clean_control, str):
             block["control_group"] = clean_control
+            # Deprecated reporting key kept through the 3.9 shim window;
+            # retired at 4.0 (row M-095, section 5 policy).
             block["clean_control"] = clean_control
         return block
     if estimator_name == "ImputationDiDResults":
@@ -2358,7 +2354,7 @@ def _render_summary(schema: Dict[str, Any]) -> str:
 
     # Sample sentence. For fits with a dynamic comparison set (CS /
     # ContinuousDiD / StaggeredTripleDiff / EfficientDiD /
-    # StackedDiD under ``clean_control in {"not_yet_treated",
+    # StackedDiD under ``control_group in {"not_yet_treated",
     # "strict"}``) the fixed control count is suppressed because the
     # comparison group varies by cohort/sub-experiment; narrate the
     # mode explicitly rather than misreporting a fixed-subset tally as
@@ -2408,7 +2404,7 @@ def _render_summary(schema: Dict[str, Any]) -> str:
                 sentences.append(
                     f"Sample: {n_obs:,} observations ({n_t:,} treated) with a "
                     f"sub-experiment-specific clean-control comparison "
-                    f"(``clean_control='{cc_label}'``): each adoption event is "
+                    f"(``control_group='{cc_label}'``): each adoption event is "
                     f"compared against the units satisfying the rule relative "
                     f"to that event's window, not a single fixed control "
                     f"group{distinct_clause}{subset_clause}."
@@ -2668,7 +2664,7 @@ def _render_full_report(schema: Dict[str, Any]) -> str:
             cc_label = cg if isinstance(cg, str) else "clean_control"
             lines.append(
                 f"- Comparison group: sub-experiment-specific clean controls "
-                f"(``clean_control='{cc_label}'``; each adoption event is "
+                f"(``control_group='{cc_label}'``; each adoption event is "
                 "compared against units satisfying the rule relative to that "
                 "event's window, not a single fixed control group)"
             )

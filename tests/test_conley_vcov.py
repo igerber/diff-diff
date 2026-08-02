@@ -1048,7 +1048,7 @@ class TestConleyEstimatorIntegration:
             conley_coords=("lat", "lon"),
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=1,
-        ).fit(df, outcome="y", treatment="treated", time="time", unit="unit")
+        ).fit(df, outcome="y", treatment="treated", post="time", unit="unit")
         assert np.isfinite(res.att)
         assert np.isfinite(res.se) and res.se > 0
         assert res.vcov_type == "conley"
@@ -1064,7 +1064,7 @@ class TestConleyEstimatorIntegration:
                 conley_coords=("lat", "lon"),
                 conley_cutoff_km=2000.0,
                 conley_lag_cutoff=1,
-            ).fit(two_period_panel, outcome="y", treatment="treated", time="time")
+            ).fit(two_period_panel, outcome="y", treatment="treated", post="time")
 
     def test_did_conley_unknown_unit_column_raises(self, two_period_panel):
         """vcov_type='conley' with `unit=<name>` referring to an absent column
@@ -1083,7 +1083,7 @@ class TestConleyEstimatorIntegration:
                 two_period_panel,
                 outcome="y",
                 treatment="treated",
-                time="time",
+                post="time",
                 unit="missing_unit",
             )
 
@@ -1103,7 +1103,7 @@ class TestConleyEstimatorIntegration:
                 two_period_panel,
                 outcome="y",
                 treatment="treated",
-                time="time",
+                post="time",
                 unit="unit",
             )
 
@@ -1124,7 +1124,7 @@ class TestConleyEstimatorIntegration:
                 two_period_panel,
                 outcome="y",
                 treatment="treated",
-                time="time",
+                post="time",
                 unit="unit",
             )
 
@@ -1277,7 +1277,7 @@ class TestConleyEstimatorIntegration:
                 two_period_panel,
                 outcome="y",
                 treatment="treated",
-                time="time",
+                post="time",
                 unit="unit",
             )
         # Non-string element
@@ -1291,7 +1291,7 @@ class TestConleyEstimatorIntegration:
                 two_period_panel,
                 outcome="y",
                 treatment="treated",
-                time="time",
+                post="time",
                 unit="unit",
             )
 
@@ -1308,7 +1308,7 @@ class TestConleyEstimatorIntegration:
                 two_period_panel,
                 outcome="y",
                 treatment="treated",
-                time="time",
+                post="time",
                 unit="unit",
             )
 
@@ -1326,7 +1326,7 @@ class TestConleyEstimatorIntegration:
             conley_lag_cutoff=1,
         )
         res_did = DifferenceInDifferences(**kwargs).fit(
-            df, outcome="y", treatment="treated", time="time", unit="unit"
+            df, outcome="y", treatment="treated", post="time", unit="unit"
         )
         res_mpd = MultiPeriodDiD(**kwargs).fit(
             df,
@@ -1371,7 +1371,7 @@ class TestConleyEstimatorIntegration:
             df,
             outcome="y",
             treatment="treated",
-            time="time",
+            post="time",
             unit="unit",
             absorb=["unit"],
         )
@@ -2159,14 +2159,14 @@ class TestConleyEstimatorValidation:
                 vcov_type="conley",
                 conley_coords=("lat", "lon"),
                 conley_lag_cutoff=1,
-            ).fit(df, outcome="y", treatment="treated", time="time", unit="unit")
+            ).fit(df, outcome="y", treatment="treated", post="time", unit="unit")
         # missing conley_lag_cutoff
         with pytest.raises(ValueError, match="conley_lag_cutoff"):
             DifferenceInDifferences(
                 vcov_type="conley",
                 conley_coords=("lat", "lon"),
                 conley_cutoff_km=100.0,
-            ).fit(df, outcome="y", treatment="treated", time="time", unit="unit")
+            ).fit(df, outcome="y", treatment="treated", post="time", unit="unit")
         # missing unit
         with pytest.raises(ValueError, match=r"`unit=<column_name>`"):
             DifferenceInDifferences(
@@ -2174,7 +2174,7 @@ class TestConleyEstimatorValidation:
                 conley_coords=("lat", "lon"),
                 conley_cutoff_km=100.0,
                 conley_lag_cutoff=1,
-            ).fit(df, outcome="y", treatment="treated", time="time")
+            ).fit(df, outcome="y", treatment="treated", post="time")
         # Valid full kwarg set does NOT raise (separate fixture in
         # TestConleyEstimatorIntegration covers the finite-SE assertion;
         # this fixture's treated/time correlation triggers rank deficiency).
@@ -2188,7 +2188,7 @@ class TestConleyEstimatorValidation:
             df,
             outcome="y",
             treatment="treated",
-            time="time",
+            post="time",
             unit="unit",
         )
 
@@ -2209,7 +2209,7 @@ class TestConleyEstimatorValidation:
                 df,
                 outcome="y",
                 treatment="treated",
-                time="time",
+                post="time",
                 unit="unit",
                 survey_design=SurveyDesign(strata="stratum"),
             )
@@ -2226,7 +2226,7 @@ class TestConleyEstimatorValidation:
                 conley_coords=("lat", "lon"),
                 conley_cutoff_km=100.0,
                 conley_lag_cutoff=1,
-            ).fit(df, outcome="y", treatment="treated", time="time", unit="unit")
+            ).fit(df, outcome="y", treatment="treated", post="time", unit="unit")
 
     def test_synthetic_did_conley_raises(self):
         from diff_diff import SyntheticDiD
@@ -3046,10 +3046,10 @@ class TestConleyCluster:
             conley_lag_cutoff=1,
         )
         res_combined = DifferenceInDifferences(cluster="region", **kwargs).fit(
-            df, outcome="y", treatment="treated", time="time", unit="unit"
+            df, outcome="y", treatment="treated", post="time", unit="unit"
         )
         res_bare = DifferenceInDifferences(**kwargs).fit(
-            df, outcome="y", treatment="treated", time="time", unit="unit"
+            df, outcome="y", treatment="treated", post="time", unit="unit"
         )
         assert np.isfinite(res_combined.att)
         assert np.isfinite(res_combined.se) and res_combined.se > 0
@@ -3076,7 +3076,7 @@ class TestConleyCluster:
                 conley_coords=("lat", "lon"),
                 conley_cutoff_km=2000.0,
                 conley_lag_cutoff=1,
-            ).fit(df, outcome="y", treatment="treated", time="time", unit="unit")
+            ).fit(df, outcome="y", treatment="treated", post="time", unit="unit")
 
     def test_mpd_combined_kernel_finite_se_and_cluster_name(self):
         """MultiPeriodDiD(vcov_type='conley', cluster='region') on a 4-period

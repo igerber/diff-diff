@@ -83,7 +83,7 @@ class TestCardKruegerCanonicalDirection:
             card_krueger_long,
             outcome="employment",
             treatment="treated",
-            time="post",
+            post="post",
         )
         br = BusinessReport(
             did,
@@ -122,7 +122,7 @@ class TestCardKruegerCanonicalDirection:
             card_krueger_long,
             outcome="employment",
             treatment="treated",
-            time="post",
+            post="post",
         )
         br = BusinessReport(
             did,

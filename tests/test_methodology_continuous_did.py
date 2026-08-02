@@ -935,12 +935,21 @@ def _numpy_reg_dr(dY, D, X):
 
 
 def _fit_cov(df, method, **kw):
-    est = ContinuousDiD(covariates=["x1", "x2"], estimation_method=method, **kw)
+    est = ContinuousDiD(estimation_method=method, **kw)
     import warnings
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        return est.fit(df, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose")
+        return est.fit(
+            df,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "dose",
+            aggregate="dose",
+            covariates=["x1", "x2"],
+        )
 
 
 class TestCovariateReg:

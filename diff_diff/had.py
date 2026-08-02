@@ -72,7 +72,12 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
-from diff_diff._deprecation import NOT_SUPPLIED, require_arg, resolve_renamed_kwarg
+from diff_diff._deprecation import (
+    NOT_SUPPLIED,
+    require_arg,
+    resolve_renamed_kwarg,
+    warn_deprecated_kwarg,
+)
 from diff_diff.bootstrap_chunking import (
     compute_block_size,
     iter_survey_multiplier_weight_blocks,
@@ -2828,6 +2833,9 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
     'continuous_at_zero'
     """
 
+    _PARAM_ATTR_ALIASES = {"robust": "_robust_arg"}
+    _DERIVED_CONFIG_ATTRS = ("robust",)
+
     def __init__(
         self,
         design: str = "auto",
@@ -2835,7 +2843,7 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
         kernel: str = "epanechnikov",
         alpha: float = 0.05,
         vcov_type: Optional[str] = None,
-        robust: bool = False,
+        robust: Optional[bool] = None,
         cluster: Optional[str] = None,
         n_bootstrap: int = 999,
         seed: Optional[int] = None,
@@ -2845,7 +2853,13 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
         self.kernel = kernel
         self.alpha = alpha
         self.vcov_type = vcov_type
-        self.robust = robust
+        # `robust` is deprecated (row M-047; removed in 4.0). HAD's historical
+        # default is False (the third meaning of the knob) - the None sentinel
+        # resolves to that legacy default on the public attr.
+        if robust is not None:
+            warn_deprecated_kwarg(type(self).__name__, "robust", "use vcov_type= instead")
+        self._robust_arg = robust
+        self.robust = robust if robust is not None else False
         self.cluster = cluster
         # Event-study sup-t simultaneous-CI support. ``n_bootstrap`` =
         # number of multiplier-bootstrap replicates for the sup-t band;

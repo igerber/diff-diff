@@ -466,9 +466,10 @@ class TestMassPointSEParity:
     def test_robust_alias_maps_to_hc1(self):
         d, dy = _dgp_mass_point(500, seed=0)
         panel = _make_panel(d, dy)
-        r_robust = HeterogeneousAdoptionDiD(design="mass_point", robust=True).fit(
-            panel, "outcome", "dose", "period", "unit"
-        )
+        with pytest.warns(FutureWarning, match=r"\(robust=\) is deprecated"):
+            r_robust = HeterogeneousAdoptionDiD(design="mass_point", robust=True).fit(
+                panel, "outcome", "dose", "period", "unit"
+            )
         r_hc1 = HeterogeneousAdoptionDiD(design="mass_point", vcov_type="hc1").fit(
             panel, "outcome", "dose", "period", "unit"
         )
@@ -477,9 +478,10 @@ class TestMassPointSEParity:
     def test_robust_false_maps_to_classical(self):
         d, dy = _dgp_mass_point(500, seed=0)
         panel = _make_panel(d, dy)
-        r_robust = HeterogeneousAdoptionDiD(design="mass_point", robust=False).fit(
-            panel, "outcome", "dose", "period", "unit"
-        )
+        with pytest.warns(FutureWarning, match=r"\(robust=\) is deprecated"):
+            r_robust = HeterogeneousAdoptionDiD(design="mass_point", robust=False).fit(
+                panel, "outcome", "dose", "period", "unit"
+            )
         r_classical = HeterogeneousAdoptionDiD(design="mass_point", vcov_type="classical").fit(
             panel, "outcome", "dose", "period", "unit"
         )
@@ -489,9 +491,10 @@ class TestMassPointSEParity:
         """When vcov_type is explicit, robust is ignored."""
         d, dy = _dgp_mass_point(500, seed=0)
         panel = _make_panel(d, dy)
-        r = HeterogeneousAdoptionDiD(design="mass_point", vcov_type="classical", robust=True).fit(
-            panel, "outcome", "dose", "period", "unit"
-        )
+        with pytest.warns(FutureWarning, match=r"\(robust=\) is deprecated"):
+            r = HeterogeneousAdoptionDiD(
+                design="mass_point", vcov_type="classical", robust=True
+            ).fit(panel, "outcome", "dose", "period", "unit")
         assert r.vcov_type == "classical"
 
 
@@ -544,7 +547,8 @@ class TestMassPointUnsupportedVcov:
         """
         d, dy = _dgp_continuous_at_zero(300, seed=0)
         panel = _make_panel(d, dy)
-        est = HeterogeneousAdoptionDiD(design="continuous_at_zero", robust=True)
+        with pytest.warns(FutureWarning, match=r"\(robust=\) is deprecated"):
+            est = HeterogeneousAdoptionDiD(design="continuous_at_zero", robust=True)
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             r = est.fit(panel, "outcome", "dose", "period", "unit")
@@ -556,7 +560,8 @@ class TestMassPointUnsupportedVcov:
         """robust=False (the default) on continuous path emits no robust-warn."""
         d, dy = _dgp_continuous_at_zero(300, seed=0)
         panel = _make_panel(d, dy)
-        est = HeterogeneousAdoptionDiD(design="continuous_at_zero", robust=False)
+        with pytest.warns(FutureWarning, match=r"\(robust=\) is deprecated"):
+            est = HeterogeneousAdoptionDiD(design="continuous_at_zero", robust=False)
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             r = est.fit(panel, "outcome", "dose", "period", "unit")
@@ -812,7 +817,6 @@ class TestSklearnCompat:
             kernel="triangular",
             alpha=0.1,
             vcov_type="hc1",
-            robust=True,
             cluster="state",
             n_bootstrap=500,
             seed=42,
@@ -824,7 +828,7 @@ class TestSklearnCompat:
             "kernel": "triangular",
             "alpha": 0.1,
             "vcov_type": "hc1",
-            "robust": True,
+            "robust": None,
             "cluster": "state",
             "n_bootstrap": 500,
             "seed": 42,
@@ -5633,6 +5637,8 @@ class TestEventStudySurveyCband:
         sd = SurveyDesign(weights="w")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
+            # robust= deliberately exercises the deprecated alias (M-047)
+            warnings.simplefilter("ignore", FutureWarning)
             est = HeterogeneousAdoptionDiD(design="mass_point", robust=True)
             r = est.fit(panel, "outcome", "dose", "period", "unit", survey_design=sd)
         assert r.vcov_type == "hc1"

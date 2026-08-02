@@ -178,7 +178,7 @@ class SyntheticDiD(DifferenceInDifferences):
         zeta: Optional[float] = None,
         # Defensive guard against silently-ignored Conley kwargs. SyntheticDiD
         # inherits __init__ from DifferenceInDifferences but overrides with
-        # literal `super().__init__(robust=True, cluster=None, alpha=alpha)`,
+        # literal `super().__init__(cluster=None, alpha=alpha)`,
         # so any user-passed `vcov_type=` or `conley_*=` would be silently
         # dropped. Per `feedback_no_silent_failures`, raise loudly. Tracked
         # in DEFERRED.md for a follow-up that wires Conley to a non-bootstrap
@@ -229,7 +229,7 @@ class SyntheticDiD(DifferenceInDifferences):
                 stacklevel=2,
             )
 
-        super().__init__(robust=True, cluster=None, alpha=alpha)
+        super().__init__(cluster=None, alpha=alpha)
         self.zeta_omega = zeta_omega
         self.zeta_lambda = zeta_lambda
         self.variance_method = variance_method

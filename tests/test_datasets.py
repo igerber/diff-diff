@@ -719,12 +719,12 @@ class TestLegacyLoaderProvenance:
         # Without the documented dropna the estimator rejects the frame outright.
         with pytest.raises(ValueError, match="missing values"):
             DifferenceInDifferences().fit(
-                ck_long, outcome="employment", treatment="treated", time="post"
+                ck_long, outcome="employment", treatment="treated", post="post"
             )
 
         ck_long = ck_long.dropna(subset=["employment"])
         results = DifferenceInDifferences().fit(
-            ck_long, outcome="employment", treatment="treated", time="post"
+            ck_long, outcome="employment", treatment="treated", post="post"
         )
         assert np.isfinite(results.att)
         assert np.isfinite(results.se)
@@ -1345,7 +1345,7 @@ class TestDatasetIntegration:
 
         # Should be able to fit DiD
         did = DifferenceInDifferences()
-        results = did.fit(df_long, outcome="employment", treatment="treated", time="post")
+        results = did.fit(df_long, outcome="employment", treatment="treated", post="post")
 
         assert hasattr(results, "att")
         assert hasattr(results, "se")
@@ -1401,7 +1401,7 @@ class TestDatasetIntegration:
         df["post"] = (df["year"] >= 1989).astype(int)
 
         did = DifferenceInDifferences()
-        results = did.fit(df, outcome="lcigsale", treatment="treated_state", time="post")
+        results = did.fit(df, outcome="lcigsale", treatment="treated_state", post="post")
 
         assert hasattr(results, "att")
         assert hasattr(results, "se")

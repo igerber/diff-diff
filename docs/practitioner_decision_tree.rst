@@ -81,7 +81,7 @@ change in your test markets to the before/after change in your control markets.
    )
 
    did = DifferenceInDifferences()
-   results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+   results = did.fit(data, outcome="outcome", treatment="treated", post="post")
    print(f"Campaign lift: {results.att:.1f} (p = {results.p_value:.4f})")
 
 .. note::
@@ -427,7 +427,7 @@ See :doc:`practitioner_getting_started` for an end-to-end example.
    did = DifferenceInDifferences()
    results = did.fit(
        data, outcome="outcome", treatment="treated",
-       time="post", survey_design=survey,
+       post="post", survey_design=survey,
    )
 
 .. tip::

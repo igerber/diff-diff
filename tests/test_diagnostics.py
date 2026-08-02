@@ -380,7 +380,7 @@ class TestPermutationTest:
             simple_panel_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
             n_permutations=50,
             seed=42,
@@ -396,7 +396,7 @@ class TestPermutationTest:
             simple_panel_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
             n_permutations=50,
             seed=42,
@@ -410,7 +410,7 @@ class TestPermutationTest:
             simple_panel_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
             n_permutations=100,
             seed=42,
@@ -426,7 +426,7 @@ class TestPermutationTest:
             simple_panel_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
             n_permutations=50,
             seed=42,
@@ -436,7 +436,7 @@ class TestPermutationTest:
             simple_panel_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
             n_permutations=50,
             seed=42,
@@ -453,7 +453,7 @@ class TestPermutationTest:
             simple_panel_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
             n_permutations=100,
             seed=42,
@@ -478,7 +478,7 @@ class TestLeaveOneOutTest:
             simple_panel_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
         )
 
@@ -492,7 +492,7 @@ class TestLeaveOneOutTest:
             simple_panel_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
         )
 
@@ -538,7 +538,7 @@ class TestLeaveOneOutTest:
             df,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
         )
 
@@ -554,7 +554,7 @@ class TestLeaveOneOutTest:
             simple_panel_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
         )
 
@@ -590,7 +590,7 @@ class TestLeaveOneOutTest:
                 df,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 unit="unit",
             )
 
@@ -766,7 +766,7 @@ class TestDiagnosticsTStatNaN:
                 df,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 unit="unit",
                 n_permutations=20,
                 seed=42,
@@ -816,7 +816,7 @@ class TestDiagnosticsTStatNaN:
                 df,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 unit="unit",
             )
 
@@ -836,7 +836,7 @@ class TestDiagnosticsTStatNaN:
             simple_panel_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
             n_permutations=50,
             seed=42,

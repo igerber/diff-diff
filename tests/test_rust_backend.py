@@ -3184,7 +3184,7 @@ class TestDemeanMapKernel:
                     df,
                     outcome="y",
                     treatment="treated",
-                    time="post",
+                    post="post",
                     absorb=["unit", "time"],
                     covariates=["xspan"],
                 )
@@ -3351,7 +3351,7 @@ class TestDemeanMapKernel:
                 df,
                 outcome="y",
                 treatment="treated",
-                time="post",
+                post="post",
                 absorb=["unit", "period"],
                 covariates=["x1", "x2"],
             )
@@ -3989,7 +3989,7 @@ class TestSolveOLSFastpathDispatch:
                 df,
                 outcome="y",
                 treatment="treated",
-                time="post",
+                post="post",
                 absorb=["unit", "time"],
             )
 

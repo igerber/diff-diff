@@ -104,7 +104,7 @@ Basic usage::
         outcome='wages',
         group='policy_state',       # 1=state enacted policy, 0=control state
         partition='female',         # 1=women (affected by policy), 0=men
-        time='post'                 # 1=post-policy, 0=pre-policy
+        post='post'                 # 1=post-policy, 0=pre-policy
     )
     results.print_summary()
 
@@ -115,7 +115,7 @@ With covariates::
         outcome='wages',
         group='policy_state',
         partition='female',
-        time='post',
+        post='post',
         covariates=['age', 'education', 'experience']
     )
 

@@ -75,7 +75,7 @@ def generate_did_data(
 
     >>> from diff_diff import DifferenceInDifferences
     >>> did = DifferenceInDifferences()
-    >>> results = did.fit(data, outcome='outcome', treatment='treated', time='post')
+    >>> results = did.fit(data, outcome='outcome', treatment='treated', post='post')
     >>> abs(results.att - 3.0) < 1.0  # Close to true effect
     True
     """
@@ -758,7 +758,7 @@ def generate_ddd_data(
     >>> from diff_diff import TripleDifference
     >>> ddd = TripleDifference()
     >>> results = ddd.fit(data, outcome='outcome', group='group',
-    ...                   partition='partition', time='time')
+    ...                   partition='partition', post='time')
     >>> abs(results.att - 3.0) < 1.0
     True
     """
@@ -1482,14 +1482,14 @@ def generate_ddd_panel_data(
     >>> data.groupby('unit')['period'].count().eq(8).all()
     True
 
-    Fit with TripleDifference. Note ``time="post"`` (the derived binary
+    Fit with TripleDifference. Note ``post="post"`` (the derived binary
     indicator) and ``cluster="unit"`` (required for valid inference on
     panel-generated data; see the warning above):
 
     >>> from diff_diff import TripleDifference
     >>> result = TripleDifference(cluster="unit").fit(
     ...     data, outcome='outcome', group='group',
-    ...     partition='partition', time='post',
+    ...     partition='partition', post='post',
     ... )
     """
     if not (1 <= treatment_period < n_periods):

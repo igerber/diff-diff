@@ -214,7 +214,7 @@ class TestHandCalculation:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
             )
             np.testing.assert_allclose(
                 results.att,
@@ -255,7 +255,7 @@ class TestHandCalculation:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         np.testing.assert_allclose(
@@ -277,7 +277,7 @@ class TestHandCalculation:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
             )
             atts[method] = results.att
 
@@ -306,7 +306,7 @@ class TestHandCalculation:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
             )
             ses[method] = results.se
 
@@ -333,7 +333,7 @@ class TestHandCalculation:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         # SE should be positive and finite
@@ -358,7 +358,7 @@ class TestHandCalculation:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         # Recompute using safe_inference
@@ -388,7 +388,7 @@ class TestHandCalculation:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         expected_means = {
@@ -447,7 +447,7 @@ class TestRComparisonPrecomputed:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         # Use atol for near-zero ATTs
@@ -479,7 +479,7 @@ class TestRComparisonPrecomputed:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         np.testing.assert_allclose(
@@ -503,7 +503,7 @@ class TestRComparisonPrecomputed:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
             covariates=covariates,
         )
 
@@ -536,7 +536,7 @@ class TestRComparisonPrecomputed:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
             covariates=covariates,
         )
 
@@ -564,7 +564,7 @@ class TestRComparisonPrecomputed:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
                 covariates=cov_list,
             )
 
@@ -648,7 +648,7 @@ class TestRComparisonLive:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         if abs(r_att) < 0.1:
@@ -680,7 +680,7 @@ class TestRComparisonLive:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         np.testing.assert_allclose(
@@ -710,7 +710,7 @@ class TestEdgeCases:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
             )
 
             assert np.isfinite(results.att), f"ATT should be finite ({method})"
@@ -733,7 +733,7 @@ class TestEdgeCases:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         # ATT should be near zero (within ~2 SE)
@@ -783,7 +783,7 @@ class TestEdgeCases:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
         assert np.isfinite(results.att)
         assert np.isfinite(results.se) and results.se > 0
@@ -824,7 +824,7 @@ class TestEdgeCases:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         # With zero within-cell variance, SE should be zero
@@ -854,7 +854,7 @@ class TestEdgeCases:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         np.testing.assert_allclose(
@@ -880,7 +880,7 @@ class TestEdgeCases:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         # With covariates
@@ -890,7 +890,7 @@ class TestEdgeCases:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
             covariates=["age", "education"],
         )
 
@@ -924,7 +924,7 @@ class TestScaleValidation:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         # With n_per_cell >= 200, should be within ~2 SE of true effect
@@ -944,7 +944,7 @@ class TestScaleValidation:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
             )
             ses[n_per_cell] = results.se
 
@@ -984,7 +984,7 @@ class TestAllDGPMethods:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         if abs(r_att) < 0.1:
@@ -1016,7 +1016,7 @@ class TestAllDGPMethods:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         np.testing.assert_allclose(
@@ -1041,7 +1041,7 @@ class TestAllDGPMethods:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
             covariates=covariates,
         )
 
@@ -1075,7 +1075,7 @@ class TestAllDGPMethods:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
             covariates=covariates,
         )
 
@@ -1129,7 +1129,7 @@ class TestParamsAndResults:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         d = results.to_dict()
@@ -1153,7 +1153,7 @@ class TestParamsAndResults:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         summary = results.summary()
@@ -1169,7 +1169,7 @@ class TestParamsAndResults:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
         assert results.n_obs == len(data)
         assert results.n_obs == 400  # 8 cells × 50
@@ -1183,7 +1183,7 @@ class TestParamsAndResults:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
         # Each cell has 50 obs × 2 time periods = 100
         assert results.n_treated_eligible == 100
@@ -1214,7 +1214,7 @@ class TestParameterFunctionality:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
                 covariates=["age", "age_dup"],
             )
         rank_warnings = [
@@ -1243,7 +1243,7 @@ class TestParameterFunctionality:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
                 covariates=["age", "age_dup"],
             )
         rank_warnings = [
@@ -1268,7 +1268,7 @@ class TestParameterFunctionality:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         ddd_cluster = TripleDifference(estimation_method="dr", cluster="cluster_id")
@@ -1277,7 +1277,7 @@ class TestParameterFunctionality:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         # ATT should be identical (clustering affects SE only)
@@ -1299,7 +1299,7 @@ class TestParameterFunctionality:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
             )
         low_count_warnings = [x for x in w if "low observation" in str(x.message).lower()]
         assert (
@@ -1311,19 +1311,19 @@ class TestParameterFunctionality:
         """robust param has no effect on IF-based SEs."""
         data = generate_ddd_data(n_per_cell=50, seed=42)
 
-        result_robust = TripleDifference(robust=True).fit(
+        result_robust = TripleDifference().fit(
             data,
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
         result_not_robust = TripleDifference(robust=False).fit(
             data,
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         assert result_robust.att == result_not_robust.att
@@ -1336,7 +1336,7 @@ class TestParameterFunctionality:
 
         ddd = TripleDifference(estimation_method="dr", cluster="cluster_id")
         with pytest.raises(ValueError, match="at least 2 clusters"):
-            ddd.fit(data, outcome="outcome", group="group", partition="partition", time="time")
+            ddd.fit(data, outcome="outcome", group="group", partition="partition", post="time")
 
     def test_cluster_nan_ids_raises(self):
         """NaN cluster IDs raise ValueError."""
@@ -1346,7 +1346,7 @@ class TestParameterFunctionality:
 
         ddd = TripleDifference(estimation_method="dr", cluster="cluster_id")
         with pytest.raises(ValueError, match="missing values"):
-            ddd.fit(data, outcome="outcome", group="group", partition="partition", time="time")
+            ddd.fit(data, outcome="outcome", group="group", partition="partition", post="time")
 
     def test_overlap_warning_on_imbalanced_data(self):
         """Poor overlap triggers warning for IPW/DR."""
@@ -1382,7 +1382,7 @@ class TestParameterFunctionality:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
                 covariates=["cov1"],
             )
         overlap_warnings = [
@@ -1426,7 +1426,7 @@ class TestParameterFunctionality:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
                 covariates=["cov1"],
             )
         overlap_warnings = [x for x in w if "overlap" in str(x.message).lower()]
@@ -1452,7 +1452,7 @@ class TestParameterFunctionality:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
                 covariates=["age"],
             )
         ps_warnings = [
@@ -1490,7 +1490,7 @@ class TestParameterFunctionality:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
                 covariates=["age"],
             )
         nonfinite_warnings = [x for x in w if "non-finite" in str(x.message).lower()]
@@ -1522,7 +1522,7 @@ class TestParameterFunctionality:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
                 covariates=["age", "age_dup"],
             )
         rank_silent = [
@@ -1543,7 +1543,7 @@ class TestParameterFunctionality:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
                 covariates=["age", "age_dup"],
             )
         rank_warn = [
@@ -1575,7 +1575,7 @@ class TestParameterFunctionality:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
                 covariates=["age", "age_dup"],
             )
 
@@ -1603,7 +1603,7 @@ class TestRankGuardedAnalyticalSE:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
                 covariates=["age"],
             )
             with_const = TripleDifference(estimation_method=method).fit(
@@ -1611,7 +1611,7 @@ class TestRankGuardedAnalyticalSE:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
                 covariates=["age", "xc"],
             )
 
@@ -1630,7 +1630,7 @@ class TestRankGuardedAnalyticalSE:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
                 covariates=["age", "xc"],
             )
         rank_guard = [w for w in caught if "rank-guarded inverse" in str(w.message)]
@@ -1646,7 +1646,7 @@ class TestRankGuardedAnalyticalSE:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
                 covariates=["age", "education"],
             )
         assert not any("rank-guarded inverse" in str(w.message) for w in caught)
@@ -1670,7 +1670,7 @@ class TestRankGuardedAnalyticalSE:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
                 covariates=["age"],
                 survey_design=sd,
             )
@@ -1679,7 +1679,7 @@ class TestRankGuardedAnalyticalSE:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
                 covariates=["age", "xc"],
                 survey_design=sd,
             )
@@ -1704,7 +1704,7 @@ class TestRankGuardedAnalyticalSE:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
                 covariates=["age", "agec"],
             )
 
@@ -1736,7 +1736,7 @@ class TestRankGuardedAnalyticalSE:
                     outcome="outcome",
                     group="group",
                     partition="partition",
-                    time="time",
+                    post="time",
                     covariates=["age"],
                 )
                 with_deg = TripleDifference(estimation_method=method).fit(
@@ -1744,7 +1744,7 @@ class TestRankGuardedAnalyticalSE:
                     outcome="outcome",
                     group="group",
                     partition="partition",
-                    time="time",
+                    post="time",
                     covariates=["age", "aged"],
                 )
             assert np.isfinite(with_deg.se) and with_deg.se > 0
@@ -1765,7 +1765,7 @@ class TestRankGuardedAnalyticalSE:
                     outcome="outcome",
                     group="group",
                     partition="partition",
-                    time="time",
+                    post="time",
                     covariates=["age", "aged_exact"],
                 )
                 r_full = TripleDifference(estimation_method=method).fit(
@@ -1773,7 +1773,7 @@ class TestRankGuardedAnalyticalSE:
                     outcome="outcome",
                     group="group",
                     partition="partition",
-                    time="time",
+                    post="time",
                     covariates=["age", "aged_near"],
                 )
             assert np.isfinite(r_guard.se) and r_guard.se > 0  # not 1e17 garbage

@@ -375,7 +375,7 @@ Basic DiD
    from diff_diff import DifferenceInDifferences
 
    did = DifferenceInDifferences()
-   results = did.fit(data, outcome='y', treatment='treated', time='post')
+   results = did.fit(data, outcome='y', treatment='treated', post='post')
    print(results.summary())
 
 .. code-block:: python

@@ -363,7 +363,7 @@ Example
    # panel["post"] = (panel["year"] >= treatment_year).astype(int)
    # result = DifferenceInDifferences().fit(
    #     panel, outcome="smoking_rate_mean",
-   #     treatment="treated", time="post", survey_design=stage2,
+   #     treatment="treated", post="post", survey_design=stage2,
    # )
 
 Weight calibration with balance

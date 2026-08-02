@@ -79,7 +79,7 @@ class TestWooldridgeDiDResults:
 
     def test_to_dataframe_event(self):
         r = _make_minimal_results()
-        r.aggregate("event")
+        r.aggregate("event_study")
         df = r.to_dataframe("event")
         assert isinstance(df, pd.DataFrame)
         assert "att" in df.columns
@@ -104,7 +104,7 @@ class TestWooldridgeDiDResults:
 
     def test_aggregate_event(self):
         r = _make_minimal_results()
-        r.aggregate("event")
+        r.aggregate("event_study")
         assert r.event_study_effects is not None
         # relative period 0 (treatment period itself) should be present
         assert 0 in r.event_study_effects or 1 in r.event_study_effects
@@ -372,7 +372,7 @@ class TestAggregations:
         assert set(fitted.group_effects.keys()) == set(fitted.groups)
 
     def test_aggregate_event_relative_periods(self, fitted):
-        fitted.aggregate("event")
+        fitted.aggregate("event_study")
         for k in fitted.event_study_effects:
             assert isinstance(k, (int, np.integer))
 
@@ -382,11 +382,11 @@ class TestAggregations:
             assert np.isfinite(eff["att"])
 
     def test_summary_runs(self, fitted):
-        s = fitted.summary("simple")
+        s = fitted.summary()
         assert "ETWFE" in s or "Wooldridge" in s
 
     def test_to_dataframe_event(self, fitted):
-        fitted.aggregate("event")
+        fitted.aggregate("event_study")
         df = fitted.to_dataframe("event")
         assert "relative_period" in df.columns
         assert "att" in df.columns
@@ -516,7 +516,7 @@ class TestMethodologyCorrectness:
         df = load_mpdta()
         est = WooldridgeDiD(control_group="never_treated")
         r = est.fit(df, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat")
-        r.aggregate("event")
+        r.aggregate("event_study")
         assert r.event_study_effects is not None
         assert len(r.event_study_effects) > 0
         # never_treated includes pre-treatment interaction indicators,
@@ -653,7 +653,7 @@ class TestAnticipation:
         df = pd.DataFrame(rows)
         est = WooldridgeDiD(anticipation=1)
         r = est.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
-        r.aggregate("event").aggregate("group").aggregate("simple")
+        r.aggregate("event_study").aggregate("group").aggregate("simple")
         assert np.isfinite(r.overall_att)
         assert r.event_study_effects is not None
         assert r.group_effects is not None
@@ -797,7 +797,7 @@ class TestEmptyCells:
         est = WooldridgeDiD()
         r = est.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
         assert np.isfinite(r.overall_att)
-        r.aggregate("event")
+        r.aggregate("event_study")
         assert r.event_study_effects is not None
 
 
@@ -819,7 +819,7 @@ class TestMpdtaLogitPoisson:
         assert np.isfinite(r.overall_att)
         assert np.isfinite(r.overall_se)
         assert r.overall_se > 0
-        r.aggregate("event")
+        r.aggregate("event_study")
         assert r.event_study_effects is not None
 
     def test_poisson_on_mpdta(self, mpdta):
@@ -1071,7 +1071,7 @@ class TestAnticipationEventLabels:
         df = pd.DataFrame(rows)
         est = WooldridgeDiD(anticipation=1)
         r = est.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
-        r.aggregate("event")
+        r.aggregate("event_study")
         summary = r.summary("event")
         # k=-1 should be labeled [antic] (within anticipation window)
         assert "[antic]" in summary, f"Expected [antic] label in summary, got:\n{summary}"
@@ -2092,7 +2092,7 @@ class TestWooldridgeVcovType:
                 res_analytical.group_time_effects[k]["att"], abs=1e-10
             )
         # Event-study aggregate also produces finite inference under bootstrap
-        res_boot.aggregate("event")
+        res_boot.aggregate("event_study")
         assert res_boot.event_study_effects is not None
         for k, eff in res_boot.event_study_effects.items():
             assert np.isfinite(eff["att"])
@@ -2324,7 +2324,7 @@ class TestWooldridgeVcovType:
         res = WooldridgeDiD(method="ols", vcov_type="hc2_bm").fit(
             df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
-        res.aggregate("event")
+        res.aggregate("event_study")
         assert res.event_study_effects is not None
         for k, eff in res.event_study_effects.items():
             assert np.isfinite(eff["att"])

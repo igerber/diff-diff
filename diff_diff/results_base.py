@@ -550,7 +550,7 @@ _ABSENT_SURFACE_HINTS: Dict[str, str] = {
     "StaggeredTripleDiffResults": "refit with aggregate='event_study' (or 'all')",
     "EfficientDiDResults": "refit with aggregate='event_study' (or 'all')",
     "ContinuousDiDResults": "refit with aggregate='eventstudy' (or 'all')",
-    "WooldridgeDiDResults": "call results.aggregate('event') first",
+    "WooldridgeDiDResults": "call results.aggregate('event_study') first",
     "SpilloverDiDResults": "refit with event_study=True",
     "ChaisemartinDHaultfoeuilleResults": "refit with L_max >= 1",
     "LPDiDResults": "refit with only_pooled=False",

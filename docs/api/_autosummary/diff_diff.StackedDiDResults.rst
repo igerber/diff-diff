@@ -29,10 +29,10 @@
       ~StackedDiDResults.att
       ~StackedDiDResults.balance
       ~StackedDiDResults.balance_diagnostics
-      ~StackedDiDResults.clean_control
       ~StackedDiDResults.cluster_name
       ~StackedDiDResults.coef_var
       ~StackedDiDResults.conf_int
+      ~StackedDiDResults.control_group
       ~StackedDiDResults.covariates
       ~StackedDiDResults.df_convention
       ~StackedDiDResults.event_study_df

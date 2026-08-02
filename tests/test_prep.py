@@ -352,7 +352,7 @@ class TestGenerateDidData:
         )
 
         did = DifferenceInDifferences()
-        results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         # Effect should be within 1 unit of true effect
         assert abs(results.att - true_effect) < 1.0
@@ -1460,7 +1460,7 @@ class TestGenerateDddPanelData:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="post",
+            post="post",
         )
 
     def test_recommended_clustered_panel_path(self):
@@ -1487,7 +1487,7 @@ class TestGenerateDddPanelData:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="post",
+            post="post",
         )
         assert np.isfinite(result.att)
         assert np.isfinite(result.se)
@@ -1500,7 +1500,7 @@ class TestGenerateDddPanelData:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="post",
+            post="post",
         )
         # Point estimate is invariant to clustering.
         np.testing.assert_allclose(unclustered.att, result.att, atol=1e-10)
@@ -1534,7 +1534,7 @@ class TestGenerateDddPanelData:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="post",
+            post="post",
         )
         assert abs(result.att - true_effect) < 1e-6
 
@@ -1556,7 +1556,7 @@ class TestGenerateDddPanelData:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="post",
+            post="post",
         )
         assert abs(result.att - true_effect) < 0.7
 
@@ -2078,12 +2078,12 @@ class TestGenerateSurveyDidData:
         c3["post"] = (c3["period"] == 3).astype(int)
         c3["treat"] = (c3["first_treat"] == 3).astype(int)
         did = DifferenceInDifferences()
-        r_naive = did.fit(c3, outcome="outcome", treatment="treat", time="post")
+        r_naive = did.fit(c3, outcome="outcome", treatment="treat", post="post")
         r_survey = did.fit(
             c3,
             outcome="outcome",
             treatment="treat",
-            time="post",
+            post="post",
             survey_design=sd,
         )
         assert (
@@ -3259,7 +3259,7 @@ class TestAggregateSurvey:
             panel,
             outcome="outcome_mean",
             treatment="treated_bin",
-            time="period",
+            post="period",
             survey_design=stage2,
         )
         assert result.att is not None
@@ -3437,7 +3437,7 @@ class TestAggregateSurvey:
             panel,
             outcome="outcome_mean",
             treatment="treated_bin",
-            time="period",
+            post="period",
             survey_design=stage2,
         )
         assert np.isfinite(result.att)

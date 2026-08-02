@@ -209,7 +209,7 @@ class TestSurveyEstimatorValidation:
             kappa_pre=1,
             kappa_post=1,
             weighting="sample_share",
-            clean_control="never_treated",
+            control_group="never_treated",
         )
         result = est.fit(
             data,
@@ -306,7 +306,7 @@ class TestSurveyEstimatorValidation:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
             survey_design=sd,
         )
 

@@ -844,7 +844,7 @@ def load_card_krueger(force_download: bool = False) -> pd.DataFrame:
     >>>
     >>> # Estimate DiD
     >>> did = DifferenceInDifferences()
-    >>> results = did.fit(ck_long, outcome='employment', treatment='treated', time='post')
+    >>> results = did.fit(ck_long, outcome='employment', treatment='treated', post='post')
     """
     return _load_verified_dataset(
         cache_name="card_krueger",
@@ -1506,7 +1506,7 @@ def load_prop99(force_download: bool = False) -> pd.DataFrame:
     >>>
     >>> did = DifferenceInDifferences()
     >>> results = did.fit(
-    ...     prop99, outcome="lcigsale", treatment="treated_state", time="post"
+    ...     prop99, outcome="lcigsale", treatment="treated_state", post="post"
     ... )
     """
     url = "http://fmwww.bc.edu/repec/bocode/l/lw_smoking.dta"

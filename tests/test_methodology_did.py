@@ -293,7 +293,7 @@ class TestATTFormula:
         data, expected_att = generate_hand_calculable_data()
 
         did = DifferenceInDifferences()
-        results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         # ATT should match hand calculation exactly (to numerical precision)
         assert np.isclose(
@@ -309,7 +309,7 @@ class TestATTFormula:
         data, expected_att = generate_hand_calculable_data()
 
         did = DifferenceInDifferences()
-        results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         # Check that the interaction coefficient matches ATT
         assert results.coefficients is not None, "coefficients should not be None"
@@ -334,7 +334,7 @@ class TestATTFormula:
 
         did = DifferenceInDifferences()
         results = did.fit(
-            data, outcome="outcome", treatment="treated", time="post", covariates=["x1"]
+            data, outcome="outcome", treatment="treated", post="post", covariates=["x1"]
         )
 
         # Should recover approximately 2.5 treatment effect
@@ -363,7 +363,7 @@ class TestATTFormula:
         )
 
         did = DifferenceInDifferences()
-        results_pos = did.fit(data_pos, outcome="outcome", treatment="treated", time="post")
+        results_pos = did.fit(data_pos, outcome="outcome", treatment="treated", post="post")
         assert np.isclose(
             results_pos.att, 10.0, rtol=1e-10
         ), f"Expected ATT=10.0, got {results_pos.att}"
@@ -386,7 +386,7 @@ class TestATTFormula:
             }
         )
 
-        results_neg = did.fit(data_neg, outcome="outcome", treatment="treated", time="post")
+        results_neg = did.fit(data_neg, outcome="outcome", treatment="treated", post="post")
         assert np.isclose(
             results_neg.att, -10.0, rtol=1e-10
         ), f"Expected ATT=-10.0, got {results_neg.att}"
@@ -548,8 +548,8 @@ class TestRBenchmarkDiD:
         data, csv_path = benchmark_data
 
         # Python estimation
-        did = DifferenceInDifferences(robust=True)
-        py_results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        did = DifferenceInDifferences()
+        py_results = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         # R estimation
         r_results = self._run_r_estimation(csv_path, robust=True)
@@ -564,8 +564,8 @@ class TestRBenchmarkDiD:
         """Test HC1 standard errors match R within 5%."""
         data, csv_path = benchmark_data
 
-        did = DifferenceInDifferences(robust=True)
-        py_results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        did = DifferenceInDifferences()
+        py_results = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         r_results = self._run_r_estimation(csv_path, robust=True)
 
@@ -579,8 +579,8 @@ class TestRBenchmarkDiD:
         """Test p-value matches R within 0.01."""
         data, csv_path = benchmark_data
 
-        did = DifferenceInDifferences(robust=True)
-        py_results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        did = DifferenceInDifferences()
+        py_results = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         r_results = self._run_r_estimation(csv_path, robust=True)
 
@@ -593,8 +593,8 @@ class TestRBenchmarkDiD:
         """Test confidence intervals overlap with R."""
         data, csv_path = benchmark_data
 
-        did = DifferenceInDifferences(robust=True, alpha=0.05)
-        py_results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        did = DifferenceInDifferences(alpha=0.05)
+        py_results = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         r_results = self._run_r_estimation(csv_path, robust=True)
 
@@ -611,9 +611,9 @@ class TestRBenchmarkDiD:
         """Test ATT matches R when covariates are included."""
         data, csv_path = benchmark_data_with_covariate
 
-        did = DifferenceInDifferences(robust=True)
+        did = DifferenceInDifferences()
         py_results = did.fit(
-            data, outcome="outcome", treatment="treated", time="post", covariates=["x1"]
+            data, outcome="outcome", treatment="treated", post="post", covariates=["x1"]
         )
 
         r_results = self._run_r_estimation(csv_path, covariates=["x1"], robust=True)
@@ -629,7 +629,7 @@ class TestRBenchmarkDiD:
         data, csv_path = benchmark_data_clustered
 
         did = DifferenceInDifferences(cluster="cluster_id")
-        py_results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        py_results = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         r_results = self._run_r_estimation(csv_path, cluster="cluster_id")
 
@@ -663,12 +663,12 @@ class TestSEVerification:
         """
         data = generate_heteroskedastic_did_data(n_units=200, treatment_effect=3.0, seed=42)
 
-        did_hc1 = DifferenceInDifferences(robust=True)
+        did_hc1 = DifferenceInDifferences()
         did_classical = DifferenceInDifferences(robust=False)
 
-        results_hc1 = did_hc1.fit(data, outcome="outcome", treatment="treated", time="post")
+        results_hc1 = did_hc1.fit(data, outcome="outcome", treatment="treated", post="post")
         results_classical = did_classical.fit(
-            data, outcome="outcome", treatment="treated", time="post"
+            data, outcome="outcome", treatment="treated", post="post"
         )
 
         # SE methods should produce both valid and positive SEs
@@ -690,11 +690,11 @@ class TestSEVerification:
             n_clusters=20, cluster_size=10, treatment_effect=3.0, icc=0.3, seed=42
         )
 
-        did_robust = DifferenceInDifferences(robust=True)
+        did_robust = DifferenceInDifferences()
         did_cluster = DifferenceInDifferences(cluster="cluster_id")
 
-        results_robust = did_robust.fit(data, outcome="outcome", treatment="treated", time="post")
-        results_cluster = did_cluster.fit(data, outcome="outcome", treatment="treated", time="post")
+        results_robust = did_robust.fit(data, outcome="outcome", treatment="treated", post="post")
+        results_cluster = did_cluster.fit(data, outcome="outcome", treatment="treated", post="post")
 
         # Both SE methods should produce valid positive SEs
         assert results_robust.se > 0, "Robust SE should be positive"
@@ -727,9 +727,9 @@ class TestSEVerification:
                         }
                     )
 
-            did = DifferenceInDifferences(robust=True)
+            did = DifferenceInDifferences()
             results = did.fit(
-                pd.DataFrame(data), outcome="outcome", treatment="treated", time="post"
+                pd.DataFrame(data), outcome="outcome", treatment="treated", post="post"
             )
             ses.append(results.se)
 
@@ -745,8 +745,8 @@ class TestSEVerification:
         """Verify variance-covariance matrix is positive semi-definite."""
         data, _ = generate_hand_calculable_data()
 
-        did = DifferenceInDifferences(robust=True)
-        results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        did = DifferenceInDifferences()
+        results = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         assert results.vcov is not None, "vcov should not be None"
 
@@ -780,7 +780,7 @@ class TestWildBootstrapInference:
             bootstrap_weights="rademacher",
             seed=42,
         )
-        results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         assert np.isfinite(results.se), "Bootstrap SE should be finite"
         assert results.se > 0, "Bootstrap SE should be positive"
@@ -796,7 +796,7 @@ class TestWildBootstrapInference:
         did = DifferenceInDifferences(
             inference="wild_bootstrap", cluster="cluster_id", n_bootstrap=n_boot, seed=42
         )
-        results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         assert 0 <= results.p_value <= 1, f"P-value {results.p_value} not in [0, 1]"
 
@@ -810,7 +810,7 @@ class TestWildBootstrapInference:
         did = DifferenceInDifferences(
             inference="wild_bootstrap", cluster="cluster_id", n_bootstrap=n_boot, seed=42
         )
-        results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         lower, upper = results.conf_int
         # CI should contain point estimate or be very close
@@ -834,7 +834,7 @@ class TestWildBootstrapInference:
             bootstrap_weights=weight_type,
             seed=42,
         )
-        results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         assert np.isfinite(results.se), f"SE should be finite for {weight_type}"
         assert results.se > 0, f"SE should be positive for {weight_type}"
@@ -868,7 +868,7 @@ class TestEdgeCases:
         did = DifferenceInDifferences(rank_deficient_action="warn")
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+            results = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
             # Should have rank deficiency warning due to empty cell
             # causing collinearity between treated and post columns
@@ -899,7 +899,7 @@ class TestEdgeCases:
 
         did = DifferenceInDifferences(cluster="cluster")
         # Should run without error (warning may be emitted)
-        results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(data, outcome="outcome", treatment="treated", post="post")
         assert results is not None
 
     def test_rank_deficient_warn_mode(self):
@@ -922,7 +922,7 @@ class TestEdgeCases:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             results = did.fit(
-                data, outcome="outcome", treatment="treated", time="post", covariates=["collinear"]
+                data, outcome="outcome", treatment="treated", post="post", covariates=["collinear"]
             )
 
             # Should have warning about rank deficiency
@@ -951,7 +951,7 @@ class TestEdgeCases:
 
         with pytest.raises(ValueError, match="rank-deficient"):
             did.fit(
-                data, outcome="outcome", treatment="treated", time="post", covariates=["collinear"]
+                data, outcome="outcome", treatment="treated", post="post", covariates=["collinear"]
             )
 
     def test_rank_deficient_silent_mode(self):
@@ -972,7 +972,7 @@ class TestEdgeCases:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             results = did.fit(
-                data, outcome="outcome", treatment="treated", time="post", covariates=["collinear"]
+                data, outcome="outcome", treatment="treated", post="post", covariates=["collinear"]
             )
 
             rank_warnings = [x for x in w if "rank" in str(x.message).lower()]
@@ -997,7 +997,7 @@ class TestEdgeCases:
 
         did = DifferenceInDifferences()
         with pytest.raises(ValueError, match="binary"):
-            did.fit(data, outcome="outcome", treatment="treated", time="post")
+            did.fit(data, outcome="outcome", treatment="treated", post="post")
 
     def test_non_binary_time_raises_error(self):
         """
@@ -1013,7 +1013,7 @@ class TestEdgeCases:
 
         did = DifferenceInDifferences()
         with pytest.raises(ValueError, match="binary"):
-            did.fit(data, outcome="outcome", treatment="treated", time="post")
+            did.fit(data, outcome="outcome", treatment="treated", post="post")
 
     def test_no_treatment_variation_raises_error(self):
         """Test error when treatment has no variation."""
@@ -1027,7 +1027,7 @@ class TestEdgeCases:
 
         did = DifferenceInDifferences()
         with pytest.raises(ValueError):
-            did.fit(data, outcome="outcome", treatment="treated", time="post")
+            did.fit(data, outcome="outcome", treatment="treated", post="post")
 
     def test_no_time_variation_raises_error(self):
         """Test error when time has no variation."""
@@ -1041,7 +1041,7 @@ class TestEdgeCases:
 
         did = DifferenceInDifferences()
         with pytest.raises(ValueError):
-            did.fit(data, outcome="outcome", treatment="treated", time="post")
+            did.fit(data, outcome="outcome", treatment="treated", post="post")
 
     def test_missing_values_raise_error(self):
         """Test error when data contains missing values."""
@@ -1055,7 +1055,7 @@ class TestEdgeCases:
 
         did = DifferenceInDifferences()
         with pytest.raises(ValueError, match="missing"):
-            did.fit(data, outcome="outcome", treatment="treated", time="post")
+            did.fit(data, outcome="outcome", treatment="treated", post="post")
 
 
 # =============================================================================
@@ -1131,7 +1131,7 @@ class TestFormulaInterface:
             formula="outcome ~ treated * post",
             outcome="wrong",  # Would fail if used
             treatment="wrong",
-            time="wrong",
+            post="wrong",
         )
 
         assert np.isclose(results.att, expected_att, rtol=1e-10)
@@ -1182,7 +1182,7 @@ class TestFixedEffectsEquivalence:
         """Test that absorb option produces valid ATT estimate."""
         did = DifferenceInDifferences()
         results = did.fit(
-            panel_data, outcome="outcome", treatment="treated", time="post", absorb=["unit"]
+            panel_data, outcome="outcome", treatment="treated", post="post", absorb=["unit"]
         )
 
         # ATT should be close to 3.0
@@ -1192,7 +1192,7 @@ class TestFixedEffectsEquivalence:
         """Test that fixed_effects option produces valid ATT estimate."""
         did = DifferenceInDifferences()
         results = did.fit(
-            panel_data, outcome="outcome", treatment="treated", time="post", fixed_effects=["unit"]
+            panel_data, outcome="outcome", treatment="treated", post="post", fixed_effects=["unit"]
         )
 
         # ATT should be close to 3.0
@@ -1206,7 +1206,7 @@ class TestFixedEffectsEquivalence:
         """
         did = DifferenceInDifferences()
         results = did.fit(
-            panel_data, outcome="outcome", treatment="treated", time="post", absorb=["unit"]
+            panel_data, outcome="outcome", treatment="treated", post="post", absorb=["unit"]
         )
 
         # Verify ATT is estimated (not NaN)
@@ -1311,9 +1311,9 @@ class TestRFixedEffectsComparison:
         data, csv_path = panel_data_csv
 
         # Python with absorb
-        did = DifferenceInDifferences(robust=True)
+        did = DifferenceInDifferences()
         py_results = did.fit(
-            data, outcome="outcome", treatment="treated", time="post", absorb=["unit"]
+            data, outcome="outcome", treatment="treated", post="post", absorb=["unit"]
         )
 
         # R with | unit syntax
@@ -1386,9 +1386,9 @@ class TestGetSetParams:
         did_classical = DifferenceInDifferences()
         did_classical.set_params(robust=False)
 
-        results_default = did_default.fit(data, outcome="outcome", treatment="treated", time="post")
+        results_default = did_default.fit(data, outcome="outcome", treatment="treated", post="post")
         results_classical = did_classical.fit(
-            data, outcome="outcome", treatment="treated", time="post"
+            data, outcome="outcome", treatment="treated", post="post"
         )
 
         # VCoV should differ (robust vs classical)
@@ -1410,7 +1410,7 @@ class TestResultsObject:
         data, _ = generate_hand_calculable_data()
 
         did = DifferenceInDifferences()
-        results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         summary = results.summary()
 
@@ -1422,7 +1422,7 @@ class TestResultsObject:
         data, _ = generate_hand_calculable_data()
 
         did = DifferenceInDifferences()
-        results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         result_dict = results.to_dict()
 
@@ -1439,7 +1439,7 @@ class TestResultsObject:
         data, _ = generate_hand_calculable_data()
 
         did = DifferenceInDifferences()
-        results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         df = results.to_dataframe()
 
@@ -1451,7 +1451,7 @@ class TestResultsObject:
         data, _ = generate_hand_calculable_data()
 
         did = DifferenceInDifferences(alpha=0.05)
-        results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         assert isinstance(results.is_significant, bool)
 
@@ -1460,7 +1460,7 @@ class TestResultsObject:
         data, _ = generate_hand_calculable_data()
 
         did = DifferenceInDifferences()
-        results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         assert results.significance_stars in ["", ".", "*", "**", "***"]
 
@@ -1469,7 +1469,7 @@ class TestResultsObject:
         data, _ = generate_hand_calculable_data()
 
         did = DifferenceInDifferences()
-        results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         assert results.coefficients is not None, "coefficients should not be None"
         assert "const" in results.coefficients
@@ -1482,7 +1482,7 @@ class TestResultsObject:
         data, _ = generate_hand_calculable_data()
 
         did = DifferenceInDifferences()
-        results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         assert results.residuals is not None, "residuals should not be None"
         assert results.fitted_values is not None, "fitted_values should not be None"
@@ -1500,7 +1500,7 @@ class TestResultsObject:
         data, _ = generate_hand_calculable_data()
 
         did = DifferenceInDifferences()
-        did.fit(data, outcome="outcome", treatment="treated", time="post")
+        did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         with pytest.raises(
             NotImplementedError,
@@ -1556,7 +1556,7 @@ class TestMultiAbsorbIterativeDemean:
                 df,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 absorb=["a", "b"],
                 **kw,
             )
@@ -1564,7 +1564,7 @@ class TestMultiAbsorbIterativeDemean:
                 df,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 fixed_effects=["a", "b"],
                 **kw,
             )
@@ -1584,7 +1584,7 @@ class TestMultiAbsorbIterativeDemean:
                 df,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 absorb=["a", "b"],
             )
         # 'treated' is constant within 'a' (treated = a>=3) -> absorbed -> NaN coef.
@@ -1677,7 +1677,7 @@ class TestMultiAbsorbIterativeDemean:
                 df,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 absorb=["a", "b"],
                 survey_design=sd,
             )
@@ -1685,7 +1685,7 @@ class TestMultiAbsorbIterativeDemean:
                 df,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 fixed_effects=["a", "b"],
                 survey_design=sd,
             )

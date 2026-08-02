@@ -164,7 +164,7 @@ Use :class:`~diff_diff.DifferenceInDifferences` when:
    from diff_diff import DifferenceInDifferences
 
    did = DifferenceInDifferences()
-   results = did.fit(data, outcome='y', treatment='treated', time='post')
+   results = did.fit(data, outcome='y', treatment='treated', post='post')
 
 Two-Way Fixed Effects
 ~~~~~~~~~~~~~~~~~~~~~
@@ -703,7 +703,7 @@ differences helps interpret results and choose appropriate inference.
      - Uses influence-function-based SEs by default. Use ``n_bootstrap=199`` (or higher) for multiplier bootstrap inference with proper CIs.
    * - ``HeterogeneousAdoptionDiD``
      - Path-dependent (CCT-2014 / 2SLS / Binder TSL)
-     - Two SE regimes per :doc:`api/had`. **Unweighted**: continuous-dose paths use the CCT-2014 robust SE from the in-house ``lprobust`` port; mass-point uses a 2SLS sandwich. **``survey_design=SurveyDesign(weights="col", ...)``** (the sole weighting entry as of the 3.7.0 ``survey=`` / ``weights=`` removal): both paths compose Binder (1983) Taylor-series linearization (``variance_formula="survey_binder_tsl"`` / ``"survey_binder_tsl_2sls"``); the mass-point survey path rejects ``vcov_type="classical"`` (requires ``hc1`` / ``robust=True``), and ``survey_design=`` + ``cluster=`` is rejected outright (route weighted clustering via ``SurveyDesign(weights=, psu=)``; a bare ``cluster=`` gives unweighted CR1). Per-horizon CIs are pointwise; sup-t bands available on the event-study path via ``cband=True`` whenever ``survey_design=`` or ``cluster=`` is supplied.
+     - Two SE regimes per :doc:`api/had`. **Unweighted**: continuous-dose paths use the CCT-2014 robust SE from the in-house ``lprobust`` port; mass-point uses a 2SLS sandwich. **``survey_design=SurveyDesign(weights="col", ...)``** (the sole weighting entry as of the 3.7.0 ``survey=`` / ``weights=`` removal): both paths compose Binder (1983) Taylor-series linearization (``variance_formula="survey_binder_tsl"`` / ``"survey_binder_tsl_2sls"``); the mass-point survey path rejects ``vcov_type="classical"`` (requires ``vcov_type="hc1"``), and ``survey_design=`` + ``cluster=`` is rejected outright (route weighted clustering via ``SurveyDesign(weights=, psu=)``; a bare ``cluster=`` gives unweighted CR1). Per-horizon CIs are pointwise; sup-t bands available on the event-study path via ``cband=True`` whenever ``survey_design=`` or ``cluster=`` is supplied.
    * - ``RegressionDiscontinuity``
      - Robust bias-corrected (CCT 2014, NN variance)
      - Sharp, fuzzy, and covariate-adjusted RD with rdrobust-4.0.0-parity inference (fuzzy via ``fit(..., takeup=...)``: local Wald ratio with a linearized bias correction, first-stage block, and a weak-first-stage warning; covariates via ``fit(..., covariates=[...])``: same estimand, precision only, covariate-aware bandwidths). Canonical ``att``/``se``/``conf_int`` are the ROBUST bias-corrected row (``att`` = bias-corrected estimate, CI centered on it); the conventional estimate rdrobust prints as its headline is ``att_conventional`` with its own inference row. Only ``vcov_type="nn"`` in this release; cluster-robust RD variance is a documented follow-up.
@@ -751,12 +751,12 @@ For panel data, always cluster at the unit level unless you have a strong reason
    # Good: Cluster at unit level for panel data
    did = DifferenceInDifferences(cluster='unit')
    results = did.fit(panel, outcome='outcome', treatment='treated',
-                     time='post')
+                     post='post')
 
    # Better for few clusters: Wild bootstrap
    did = DifferenceInDifferences(inference='wild_bootstrap', cluster='unit')
    results = did.fit(panel, outcome='outcome', treatment='treated',
-                     time='post')
+                     post='post')
 
 When in Doubt
 -------------

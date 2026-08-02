@@ -297,8 +297,8 @@ print(results.summary())
 ```python
 from diff_diff import DifferenceInDifferences
 
-did = DifferenceInDifferences(robust=True, cluster='state_id')
-results = did.fit(data, outcome='y', treatment='treated', time='post')
+did = DifferenceInDifferences(cluster='state_id')
+results = did.fit(data, outcome='y', treatment='treated', post='post')
 print(results.summary())
 ```
 
@@ -380,7 +380,7 @@ designs but NOT for staggered, synthetic control, or other advanced estimators.
 **For non-2x2 estimators**, use specification-based falsification appropriate
 to your estimator's API. Examples:
 - **CS/SA**: compare `control_group='never_treated'` vs `'not_yet_treated'`
-- **StackedDiD**: vary `clean_control` definition
+- **StackedDiD**: vary `control_group` definition
 - **EfficientDiD**: compare `control_group='never_treated'` vs `'last_cohort'`
 - **ImputationDiD/TwoStageDiD**: leave-one-cohort-out, cross-estimator comparison
 - **SyntheticDiD**: built-in diagnostics on the results object - `results.in_time_placebo()`, `results.get_loo_effects_df()` (requires `variance_method="jackknife"` at fit time), `results.sensitivity_to_zeta_omega()`, and `results.get_weight_concentration()`

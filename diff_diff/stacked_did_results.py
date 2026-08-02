@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff._deprecation import deprecated_field_property
 from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.results_base import BaseResults
 
@@ -67,8 +68,10 @@ class StackedDiDResults(BaseResults):
         Post-treatment event-time window size.
     weighting : str
         Weighting scheme used.
-    clean_control : str
-        Clean control definition used.
+    control_group : str
+        Control-group (clean-control) definition used. (The deprecated
+        read-only alias ``clean_control`` warns and returns this value;
+        removed in 4.0 - row M-095.)
     alpha : float
         Significance level used.
     event_study_vcov : np.ndarray, optional
@@ -124,7 +127,7 @@ class StackedDiDResults(BaseResults):
     kappa_pre: int = 1
     kappa_post: int = 1
     weighting: str = "aggregate"
-    clean_control: str = "not_yet_treated"
+    control_group: str = "not_yet_treated"
     alpha: float = 0.05
     anticipation: int = 0
     # Analytical variance family configured at fit time (Phase 1b 2/8). When
@@ -159,6 +162,20 @@ class StackedDiDResults(BaseResults):
     # Appended LAST (generated __init__ positional indexes are public API).
     df_convention: Optional[str] = None
     inference_df: Optional[float] = None
+
+    # Deprecated read-only alias for ``control_group`` (row M-095; removed
+    # in 4.0). No annotation, so it stays a descriptor and never becomes a
+    # __dataclass_fields__ entry.
+    clean_control = deprecated_field_property("StackedDiDResults", "clean_control", "control_group")
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        """Migrate pickles created before the ``clean_control`` ->
+        ``control_group`` rename (row M-095): rewrite the key on load so
+        both the new field and the deprecated alias work on old pickles."""
+        if "clean_control" in state and "control_group" not in state:
+            state = dict(state)
+            state["control_group"] = state.pop("clean_control")
+        self.__dict__.update(state)
 
     # --- Inference-field aliases (balance/external-adapter compatibility) ---
     @property
@@ -231,7 +248,7 @@ class StackedDiDResults(BaseResults):
             f"{'Trimmed cohorts:':<30} {len(self.trimmed_groups):>10}",
             f"{'Event window:':<30} {'[' + str(-self.kappa_pre) + ', ' + str(self.kappa_post) + ']':>10}",
             f"{'Weighting:':<30} {self.weighting:>10}",
-            f"{'Clean control:':<30} {self.clean_control:>10}",
+            f"{'Control group:':<30} {self.control_group:>10}",
             "",
         ]
 
@@ -409,7 +426,10 @@ class StackedDiDResults(BaseResults):
             "kappa_pre": self.kappa_pre,
             "kappa_post": self.kappa_post,
             "weighting": self.weighting,
-            "clean_control": self.clean_control,
+            "control_group": self.control_group,
+            # Deprecated key mirroring ``control_group`` through the 3.9
+            # shim window; dropped in 4.0 (row M-095, section 5 policy).
+            "clean_control": self.control_group,
             "anticipation": self.anticipation,
             "alpha": self.alpha,
             "vcov_type": self.vcov_type,

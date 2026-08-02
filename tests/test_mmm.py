@@ -425,7 +425,7 @@ class TestRealisticWorkflow:
             n_units=60, n_periods=2, treatment_effect=5.0, treatment_period=1, seed=7
         )
         result = DifferenceInDifferences().fit(
-            data, outcome="outcome", treatment="treated", time="post"
+            data, outcome="outcome", treatment="treated", post="post"
         )
         df = to_pymc_marketing_lift_test(
             channel="tv",

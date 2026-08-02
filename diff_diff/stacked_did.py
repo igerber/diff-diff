@@ -25,6 +25,11 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
+from diff_diff._deprecation import (
+    NOT_SUPPLIED,
+    deprecated_field_property,
+    resolve_renamed_kwarg,
+)
 from diff_diff.balancing import BalanceError, entropy_balance
 from diff_diff.linalg import effective_cluster_count, solve_ols
 from diff_diff.stacked_did_results import StackedDiDResults  # noqa: F401 (re-export)
@@ -58,11 +63,13 @@ class StackedDiD(BaseEstimator):
         - "aggregate": Equal weight per adoption event (trimmed aggregate ATT)
         - "population": Weight by population size of treated cohort
         - "sample_share": Weight by sample share of each sub-experiment
-    clean_control : str, default="not_yet_treated"
+    control_group : str, default="not_yet_treated"
         How to define clean controls per Appendix A of the paper:
         - "not_yet_treated": Units with A_s > a + kappa_post
         - "strict": Units with A_s > a + kappa_post + kappa_pre
         - "never_treated": Only units with A_s = infinity
+        (``clean_control=`` remains accepted as a deprecated alias, row
+        M-043; FutureWarning, removed in 4.0.)
     cluster : str, default="unit"
         Clustering level for standard errors:
         - "unit": Cluster on original unit identifier
@@ -188,12 +195,38 @@ class StackedDiD(BaseEstimator):
         Difference-in-Differences. NBER Working Paper 32054.
     """
 
+    _PARAM_ATTR_ALIASES = {
+        "control_group": "_control_group_arg",
+        "clean_control": "_clean_control_arg",
+    }
+    _DERIVED_CONFIG_ATTRS = ("control_group",)
+
+    # Deprecated read-only alias for the resolved ``control_group`` config
+    # (row M-043; removed in 4.0). External attribute readers get
+    # warn+value instead of a silent AttributeError.
+    clean_control = deprecated_field_property("StackedDiD", "clean_control", "control_group")
+
+    @classmethod
+    def _normalize_set_params(cls, params: Dict[str, Any]) -> Dict[str, Any]:
+        # During the M-043 shim window `control_group`/`clean_control` are a
+        # renamed pair resolved at __init__. get_params() returns the RAW
+        # sentinel-era args, so a user migrating in place -
+        # StackedDiD(clean_control="strict").set_params(control_group=...) -
+        # would merge two supplied values and trip the both-supplied gate.
+        # Whichever of the pair the user passes wins; the other resets to
+        # its not-supplied sentinel in the merge.
+        if "control_group" in params and "clean_control" not in params:
+            params["clean_control"] = NOT_SUPPLIED
+        elif "clean_control" in params and "control_group" not in params:
+            params["control_group"] = NOT_SUPPLIED
+        return params
+
     def __init__(
         self,
         kappa_pre: int = 1,
         kappa_post: int = 1,
         weighting: str = "aggregate",
-        clean_control: str = "not_yet_treated",
+        control_group: Any = NOT_SUPPLIED,
         cluster: str = "unit",
         alpha: float = 0.05,
         anticipation: int = 0,
@@ -201,16 +234,30 @@ class StackedDiD(BaseEstimator):
         vcov_type: str = "hc1",
         balance: str = "none",
         df_convention: str = "residual",
+        clean_control: Any = NOT_SUPPLIED,
     ):
         if weighting not in ("aggregate", "population", "sample_share"):
             raise ValueError(
                 f"weighting must be 'aggregate', 'population', or 'sample_share', "
                 f"got '{weighting}'"
             )
-        if clean_control not in ("not_yet_treated", "strict", "never_treated"):
+        # M-043: clean_control= is the deprecated alias for control_group=.
+        # Raw args are stored for get_params (aliases above); the resolved
+        # value lives on self.control_group.
+        _control_group_arg = control_group
+        _clean_control_arg = clean_control
+        control_group = resolve_renamed_kwarg(
+            type(self).__name__,
+            "clean_control",
+            clean_control,
+            "control_group",
+            control_group,
+            default="not_yet_treated",
+        )
+        if control_group not in ("not_yet_treated", "strict", "never_treated"):
             raise ValueError(
-                f"clean_control must be 'not_yet_treated', 'strict', or "
-                f"'never_treated', got '{clean_control}'"
+                f"control_group must be 'not_yet_treated', 'strict', or "
+                f"'never_treated', got '{control_group}'"
             )
         if cluster not in ("unit", "unit_subexp"):
             raise ValueError(f"cluster must be 'unit' or 'unit_subexp', got '{cluster}'")
@@ -228,7 +275,9 @@ class StackedDiD(BaseEstimator):
         self.kappa_pre = kappa_pre
         self.kappa_post = kappa_post
         self.weighting = weighting
-        self.clean_control = clean_control
+        self._control_group_arg = _control_group_arg
+        self._clean_control_arg = _clean_control_arg
+        self.control_group = control_group
         self.cluster = cluster
         self.alpha = alpha
         self.anticipation = anticipation
@@ -1018,7 +1067,7 @@ class StackedDiD(BaseEstimator):
             kappa_pre=self.kappa_pre,
             kappa_post=self.kappa_post,
             weighting=self.weighting,
-            clean_control=self.clean_control,
+            control_group=self.control_group,
             alpha=self.alpha,
             anticipation=self.anticipation,
             vcov_type=self.vcov_type,
@@ -1122,9 +1171,9 @@ class StackedDiD(BaseEstimator):
     def _check_clean_controls_exist(self, a: int, unit_info: pd.DataFrame) -> bool:
         """Check IC2: whether clean control units exist for adoption event a."""
         ft = unit_info["_first_treat"].values
-        if self.clean_control == "not_yet_treated":
+        if self.control_group == "not_yet_treated":
             return bool(np.any(ft > a + self.kappa_post))
-        elif self.clean_control == "strict":
+        elif self.control_group == "strict":
             return bool(np.any(ft > a + self.kappa_post + self.kappa_pre))
         else:  # never_treated
             return bool(np.any(np.isinf(ft)))
@@ -1176,9 +1225,9 @@ class StackedDiD(BaseEstimator):
         treated_units = set(unit_ids[treated_mask])
 
         # Clean control units
-        if self.clean_control == "not_yet_treated":
+        if self.control_group == "not_yet_treated":
             control_mask = ft > a_int + self.kappa_post
-        elif self.clean_control == "strict":
+        elif self.control_group == "strict":
             control_mask = ft > a_int + self.kappa_post + self.kappa_pre
         else:  # never_treated
             control_mask = np.isinf(ft)
@@ -1434,9 +1483,9 @@ class StackedDiD(BaseEstimator):
 
         def _expected_units(a_val: Any) -> set:
             treated = set(ft_by_unit[ft_by_unit == a_val].index)
-            if self.clean_control == "not_yet_treated":
+            if self.control_group == "not_yet_treated":
                 controls = set(ft_by_unit[ft_by_unit > a_val + self.kappa_post].index)
-            elif self.clean_control == "strict":
+            elif self.control_group == "strict":
                 controls = set(
                     ft_by_unit[ft_by_unit > a_val + self.kappa_post + self.kappa_pre].index
                 )

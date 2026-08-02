@@ -193,7 +193,7 @@ class TestWithinTransformationAlgebra:
         data = generate_hand_calculable_panel()
 
         # Run TWFE
-        twfe = TwoWayFixedEffects(robust=True)
+        twfe = TwoWayFixedEffects()
         results = twfe.fit(data, outcome="outcome", treatment="treated", time="post", unit="unit")
 
         # Manual demeaned OLS: demean both y and the interaction term
@@ -215,14 +215,14 @@ class TestWithinTransformationAlgebra:
         data = generate_hand_calculable_panel()
 
         # TWFE
-        twfe = TwoWayFixedEffects(robust=True)
+        twfe = TwoWayFixedEffects()
         twfe_results = twfe.fit(
             data, outcome="outcome", treatment="treated", time="post", unit="unit"
         )
 
         # Basic DiD
-        did = DifferenceInDifferences(robust=True, cluster="unit")
-        did_results = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        did = DifferenceInDifferences(cluster="unit")
+        did_results = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         np.testing.assert_allclose(twfe_results.att, did_results.att, rtol=1e-10)
 
@@ -439,7 +439,7 @@ class TestRBenchmarkTWFE:
 
     def _run_python_twfe(self, data, covariates=None):
         """Run Python TWFE estimator."""
-        twfe = TwoWayFixedEffects(robust=True)
+        twfe = TwoWayFixedEffects()
         results = twfe.fit(
             data,
             outcome="outcome",
@@ -675,7 +675,7 @@ class TestTWFEEdgeCases:
                 )
         df = pd.DataFrame(data)
 
-        twfe = TwoWayFixedEffects(robust=True)
+        twfe = TwoWayFixedEffects()
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             # Use time="period" so staggered detection sees different first-treat times
@@ -725,7 +725,7 @@ class TestTWFEEdgeCases:
                 )
         df = pd.DataFrame(data)
 
-        twfe = TwoWayFixedEffects(robust=True)
+        twfe = TwoWayFixedEffects()
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             # With binary time="post", staggering is undetectable
@@ -740,7 +740,7 @@ class TestTWFEEdgeCases:
         """Multi-period time column triggers UserWarning advising binary post indicator."""
         data = generate_twfe_panel(n_units=20, n_periods=4, seed=42)
 
-        twfe = TwoWayFixedEffects(robust=True)
+        twfe = TwoWayFixedEffects()
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             twfe.fit(data, outcome="outcome", treatment="treated", time="period", unit="unit")
@@ -757,7 +757,7 @@ class TestTWFEEdgeCases:
         """Binary time column does NOT trigger multi-period time warning."""
         data = generate_hand_calculable_panel()
 
-        twfe = TwoWayFixedEffects(robust=True)
+        twfe = TwoWayFixedEffects()
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             twfe.fit(data, outcome="outcome", treatment="treated", time="post", unit="unit")
@@ -772,7 +772,7 @@ class TestTWFEEdgeCases:
         data = generate_hand_calculable_panel()
         data["year"] = data["post"].map({0: 2020, 1: 2021})
 
-        twfe = TwoWayFixedEffects(robust=True)
+        twfe = TwoWayFixedEffects()
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             results = twfe.fit(
@@ -789,7 +789,7 @@ class TestTWFEEdgeCases:
         data = generate_hand_calculable_panel()
         data["post_bool"] = data["post"].astype(bool)
 
-        twfe = TwoWayFixedEffects(robust=True)
+        twfe = TwoWayFixedEffects()
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             twfe.fit(
@@ -810,7 +810,7 @@ class TestTWFEEdgeCases:
         data = generate_hand_calculable_panel()
 
         # Fit with binary {0,1}
-        twfe = TwoWayFixedEffects(robust=True)
+        twfe = TwoWayFixedEffects()
         results_binary = twfe.fit(
             data, outcome="outcome", treatment="treated", time="post", unit="unit"
         )
@@ -847,13 +847,13 @@ class TestTWFEEdgeCases:
         data = generate_twfe_panel(n_units=20, n_periods=4, seed=42)
 
         # Default (auto-clusters at unit)
-        twfe_default = TwoWayFixedEffects(robust=True)
+        twfe_default = TwoWayFixedEffects()
         results_default = twfe_default.fit(
             data, outcome="outcome", treatment="treated", time="post", unit="unit"
         )
 
         # Explicit cluster at unit
-        twfe_explicit = TwoWayFixedEffects(robust=True, cluster="unit")
+        twfe_explicit = TwoWayFixedEffects(cluster="unit")
         results_explicit = twfe_explicit.fit(
             data, outcome="outcome", treatment="treated", time="post", unit="unit"
         )
@@ -877,7 +877,7 @@ class TestTWFEEdgeCases:
         data = generate_twfe_panel(n_units=20, n_periods=2, noise_sd=0.5, seed=42)
 
         # Run TWFE
-        twfe = TwoWayFixedEffects(robust=True)
+        twfe = TwoWayFixedEffects()
         results = twfe.fit(data, outcome="outcome", treatment="treated", time="post", unit="unit")
 
         # Manual: demean both y and the interaction, then run LinearRegression
@@ -899,7 +899,6 @@ class TestTWFEEdgeCases:
         # its conditional rank n_times - 1.
         reg = LinearRegression(
             include_intercept=False,
-            robust=True,
             cluster_ids=cluster_ids,
             rank_deficient_action="silent",
         ).fit(X, y, df_adjustment=df_adjustment, cluster_k_adjustment=n_times - 1)
@@ -931,7 +930,7 @@ class TestTWFEEdgeCases:
         # bad_cov = treated * post duplicates the internal _treatment_post column
         data["bad_cov"] = data["treated"] * data["post"]
 
-        twfe = TwoWayFixedEffects(robust=True, rank_deficient_action="error")
+        twfe = TwoWayFixedEffects(rank_deficient_action="error")
         with pytest.raises(ValueError):
             twfe.fit(
                 data,
@@ -948,7 +947,7 @@ class TestTWFEEdgeCases:
         # Add a covariate that's collinear with treatment*post
         data["bad_cov"] = data["treated"] * data["post"]
 
-        twfe = TwoWayFixedEffects(robust=True, rank_deficient_action="warn")
+        twfe = TwoWayFixedEffects(rank_deficient_action="warn")
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             results = twfe.fit(
@@ -971,7 +970,7 @@ class TestTWFEEdgeCases:
         data = generate_twfe_panel(n_units=20, n_periods=2, seed=42)
         data["bad_cov"] = data["treated"] * data["post"]
 
-        twfe = TwoWayFixedEffects(robust=True, rank_deficient_action="error")
+        twfe = TwoWayFixedEffects(rank_deficient_action="error")
         with pytest.raises(ValueError):
             twfe.fit(
                 data,
@@ -987,7 +986,7 @@ class TestTWFEEdgeCases:
         data = generate_twfe_panel(n_units=20, n_periods=2, seed=42)
         data["bad_cov"] = data["treated"] * data["post"]
 
-        twfe = TwoWayFixedEffects(robust=True, rank_deficient_action="silent")
+        twfe = TwoWayFixedEffects(rank_deficient_action="silent")
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             results = twfe.fit(
@@ -1011,7 +1010,7 @@ class TestTWFEEdgeCases:
         drop_indices = [3, 7, 15, 22, 45, 60]
         data = data.drop(index=drop_indices).reset_index(drop=True)
 
-        twfe = TwoWayFixedEffects(robust=True)
+        twfe = TwoWayFixedEffects()
         results = twfe.fit(data, outcome="outcome", treatment="treated", time="post", unit="unit")
 
         assert np.isfinite(results.att), "ATT should be finite for unbalanced panel"
@@ -1022,7 +1021,7 @@ class TestTWFEEdgeCases:
         """Missing unit column raises ValueError."""
         data = generate_hand_calculable_panel()
 
-        twfe = TwoWayFixedEffects(robust=True)
+        twfe = TwoWayFixedEffects()
         with pytest.raises(ValueError, match="not found"):
             twfe.fit(
                 data,
@@ -1060,7 +1059,7 @@ class TestTWFEEdgeCases:
 
         df = pd.DataFrame(data)
 
-        twfe = TwoWayFixedEffects(robust=True)
+        twfe = TwoWayFixedEffects()
         decomp = twfe.decompose(
             df, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
         )
@@ -1088,7 +1087,7 @@ class TestTWFESEVerification:
         data = generate_twfe_panel(n_units=20, n_periods=4, seed=42)
 
         # TWFE: cluster-robust at unit (automatic)
-        twfe = TwoWayFixedEffects(robust=True)
+        twfe = TwoWayFixedEffects()
         twfe_results = twfe.fit(
             data, outcome="outcome", treatment="treated", time="post", unit="unit"
         )
@@ -1107,7 +1106,6 @@ class TestTWFESEVerification:
 
         hc1_reg = LinearRegression(
             include_intercept=False,
-            robust=True,
             cluster_ids=None,  # HC1, no clustering
             rank_deficient_action="silent",
         ).fit(X, y, df_adjustment=df_adjustment)
@@ -1125,7 +1123,6 @@ class TestTWFESEVerification:
         # time FE contributes its conditional rank n_times - 1.
         cluster_reg = LinearRegression(
             include_intercept=False,
-            robust=True,
             cluster_ids=data["unit"].values,
             rank_deficient_action="silent",
         ).fit(X, y, df_adjustment=df_adjustment, cluster_k_adjustment=n_times - 1)
@@ -1142,7 +1139,7 @@ class TestTWFESEVerification:
         """VCoV matrix should be positive semi-definite."""
         data = generate_twfe_panel(n_units=20, n_periods=4, seed=42)
 
-        twfe = TwoWayFixedEffects(robust=True)
+        twfe = TwoWayFixedEffects()
         results = twfe.fit(data, outcome="outcome", treatment="treated", time="post", unit="unit")
 
         eigenvalues = np.linalg.eigvalsh(results.vcov)
@@ -1164,9 +1161,7 @@ class TestTWFEWildBootstrap:
         data = generate_twfe_panel(n_units=20, n_periods=2, seed=42)
         n_boot = ci_params.bootstrap(999, min_n=199)
 
-        twfe = TwoWayFixedEffects(
-            robust=True, inference="wild_bootstrap", n_bootstrap=n_boot, seed=42
-        )
+        twfe = TwoWayFixedEffects(inference="wild_bootstrap", n_bootstrap=n_boot, seed=42)
         results = twfe.fit(data, outcome="outcome", treatment="treated", time="post", unit="unit")
 
         assert np.isfinite(results.se) and results.se > 0
@@ -1180,7 +1175,6 @@ class TestTWFEWildBootstrap:
         n_boot = ci_params.bootstrap(199, min_n=99)
 
         twfe = TwoWayFixedEffects(
-            robust=True,
             inference="wild_bootstrap",
             n_bootstrap=n_boot,
             bootstrap_weights=weight_type,
@@ -1195,7 +1189,7 @@ class TestTWFEWildBootstrap:
         """inference='wild_bootstrap' routes to wild bootstrap method."""
         data = generate_twfe_panel(n_units=20, n_periods=2, seed=42)
 
-        twfe = TwoWayFixedEffects(robust=True, inference="wild_bootstrap", n_bootstrap=99, seed=42)
+        twfe = TwoWayFixedEffects(inference="wild_bootstrap", n_bootstrap=99, seed=42)
         results = twfe.fit(data, outcome="outcome", treatment="treated", time="post", unit="unit")
 
         assert results.inference_method == "wild_bootstrap"
@@ -1211,7 +1205,7 @@ class TestTWFEParamsAndResults:
 
     def test_get_params_returns_all_parameters(self):
         """All inherited constructor params present in get_params()."""
-        twfe = TwoWayFixedEffects(robust=True)
+        twfe = TwoWayFixedEffects()
         params = twfe.get_params()
 
         expected_keys = {
@@ -1230,7 +1224,7 @@ class TestTWFEParamsAndResults:
 
     def test_set_params_modifies_attributes(self):
         """set_params() modifies estimator attributes."""
-        twfe = TwoWayFixedEffects(robust=True)
+        twfe = TwoWayFixedEffects()
         twfe.set_params(alpha=0.10, robust=False)
 
         assert twfe.alpha == 0.10
@@ -1239,7 +1233,7 @@ class TestTWFEParamsAndResults:
     def test_summary_contains_key_info(self):
         """summary() output contains ATT."""
         data = generate_hand_calculable_panel()
-        twfe = TwoWayFixedEffects(robust=True)
+        twfe = TwoWayFixedEffects()
         results = twfe.fit(data, outcome="outcome", treatment="treated", time="post", unit="unit")
 
         summary = results.summary()
@@ -1248,7 +1242,7 @@ class TestTWFEParamsAndResults:
     def test_to_dict_contains_all_fields(self):
         """to_dict() contains required fields."""
         data = generate_hand_calculable_panel()
-        twfe = TwoWayFixedEffects(robust=True)
+        twfe = TwoWayFixedEffects()
         results = twfe.fit(data, outcome="outcome", treatment="treated", time="post", unit="unit")
 
         d = results.to_dict()
@@ -1263,7 +1257,7 @@ class TestTWFEParamsAndResults:
         """
         data = generate_twfe_panel(n_units=20, n_periods=4, seed=42)
 
-        twfe = TwoWayFixedEffects(robust=True)
+        twfe = TwoWayFixedEffects()
         results = twfe.fit(data, outcome="outcome", treatment="treated", time="post", unit="unit")
 
         # Within-transform by unit + post (same as TWFE internally does)

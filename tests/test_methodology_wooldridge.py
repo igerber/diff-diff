@@ -549,7 +549,7 @@ class TestW2025Proposition51ImputationPOLSEquivalence:
         res = WooldridgeDiD(method="ols").fit(
             panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
-        res.aggregate("event")
+        res.aggregate("event_study")
         assert res.event_study_effects is not None
         # Manually compute event-time aggregates from per-cell ATTs and weights
         gt = res.group_time_effects
@@ -657,7 +657,7 @@ class TestW2025Section6EventStudy:
         res = WooldridgeDiD(method="ols").fit(
             panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
-        res.aggregate("event")
+        res.aggregate("event_study")
         assert res.event_study_effects is not None
         # All event-time keys should be derivable from (g, t) cells in
         # group_time_effects as t - g.
@@ -691,7 +691,7 @@ class TestW2025Section6EventStudy:
         res = WooldridgeDiD(method="ols").fit(
             panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
-        res.aggregate("event")
+        res.aggregate("event_study")
         assert res.event_study_effects is not None
         expected_by_k = {0: 0.5, 1: 1.0, 2: 1.5}
         for k, expected in expected_by_k.items():
@@ -710,7 +710,7 @@ class TestW2025Section6EventStudy:
         res = WooldridgeDiD(method="ols").fit(
             panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
-        res.aggregate("event")
+        res.aggregate("event_study")
         assert res.event_study_effects is not None
         for k, eff in res.event_study_effects.items():
             assert (
@@ -729,7 +729,7 @@ class TestW2025Section6EventStudy:
         res = WooldridgeDiD(method="ols").fit(
             panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
-        res.aggregate("event")
+        res.aggregate("event_study")
         assert res.event_study_effects is not None
         for k, eff in res.event_study_effects.items():
             if not np.isfinite(eff["se"]):
@@ -858,7 +858,7 @@ class TestW2025Section7AggregationPaths:
         res = WooldridgeDiD(method="ols").fit(
             panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
-        res.aggregate("event", weights="cohort_share")
+        res.aggregate("event_study", weights="cohort_share")
         assert res.event_study_effects is not None
         n_g = res._n_g_per_cohort
         gt = res.group_time_effects
@@ -960,14 +960,14 @@ class TestW2025Section7AggregationPaths:
         # cohort_share path filters out k < 0
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
-            res.aggregate("event", weights="cohort_share")
+            res.aggregate("event_study", weights="cohort_share")
         assert res.event_study_effects is not None
         event_keys = sorted(res.event_study_effects.keys())
         assert all(k >= 0 for k in event_keys), (
             f"cohort_share event aggregation should restrict to k>=0; " f"got {event_keys}"
         )
         # cell path still exposes all k including negative
-        res.aggregate("event", weights="cell")
+        res.aggregate("event_study", weights="cell")
         assert res.event_study_effects is not None
         event_keys_cell = sorted(res.event_study_effects.keys())
         assert any(k < 0 for k in event_keys_cell), (
@@ -1002,7 +1002,7 @@ class TestW2025Section7AggregationPaths:
         with pytest.raises(ValueError, match=r"cohort_share.*not yet supported on survey-weighted"):
             res.aggregate("simple", weights="cohort_share")
         with pytest.raises(ValueError, match=r"cohort_share.*not yet supported on survey-weighted"):
-            res.aggregate("event", weights="cohort_share")
+            res.aggregate("event_study", weights="cohort_share")
 
     def test_aggregate_weights_invalid_value_raises(self) -> None:
         """``weights="invalid"`` raises ValueError at the aggregate() boundary."""
@@ -1065,7 +1065,7 @@ class TestW2025Section7AggregationPaths:
         assert np.isnan(res.overall_conf_int[1])
         # event aggregation: k >= 0 only
         with pytest.warns(UserWarning, match=r"cohort_share.*conditional-on-shares"):
-            res.aggregate("event", weights="cohort_share")
+            res.aggregate("event_study", weights="cohort_share")
         assert res.event_study_effects is not None
         event_keys = sorted(res.event_study_effects.keys())
         assert all(
@@ -1133,7 +1133,7 @@ class TestW2025Section7AggregationPaths:
         assert np.isnan(res.overall_conf_int[1])
         # event aggregation: k >= 0 only
         with pytest.warns(UserWarning, match=r"cohort_share.*conditional-on-shares"):
-            res.aggregate("event", weights="cohort_share")
+            res.aggregate("event_study", weights="cohort_share")
         assert res.event_study_effects is not None
         event_keys = sorted(res.event_study_effects.keys())
         assert all(
@@ -1457,7 +1457,7 @@ class TestW2025Section8HeterogeneousTrends:
         res = WooldridgeDiD(method="ols", cohort_trends=True).fit(
             panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
-        res.aggregate("event")
+        res.aggregate("event_study")
         assert res.event_study_effects is not None
         for k, eff in res.event_study_effects.items():
             if np.isfinite(eff["att"]):
@@ -1642,7 +1642,7 @@ class TestW2025Section8HeterogeneousTrends:
             warnings.filterwarnings("ignore", category=UserWarning)
             res_trends.aggregate("simple", weights="cohort_share")
         assert res_trends.aggregation_weights["simple"] == "cohort_share"
-        summary_text = res_trends.summary("simple")
+        summary_text = res_trends.summary()
         assert "Cohort trends:   True" in summary_text
         assert "Aggregation w:   cohort_share" in summary_text
 
@@ -1663,13 +1663,13 @@ class TestW2025Section8HeterogeneousTrends:
         )
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
-            res.aggregate("event", weights="cohort_share")
+            res.aggregate("event_study", weights="cohort_share")
         assert res.aggregation_weights["event"] == "cohort_share"
         assert res.aggregation_weights["simple"] == "cell", (
             "simple weight must remain 'cell' after event aggregation — "
             "overall_* is still fit-time cell-weighted"
         )
-        assert "Aggregation w:   cell" in res.summary("simple")
+        assert "Aggregation w:   cell" in res.summary()
         assert "Aggregation w:   cohort_share" in res.summary("event")
 
     def test_aggregation_weights_failed_cohort_share_leaves_metadata_unchanged(
@@ -1922,7 +1922,7 @@ class TestW2025Section8HeterogeneousTrends:
         res = WooldridgeDiD(method="ols", cohort_trends=True).fit(
             panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
-        res.aggregate("event", weights="cohort_share")
+        res.aggregate("event_study", weights="cohort_share")
         assert res.event_study_effects is not None
         finite = [k for k, eff in res.event_study_effects.items() if np.isfinite(eff["att"])]
         assert len(finite) >= 1, "no finite event-time ATTs under cohort_share + cohort_trends"
@@ -2671,7 +2671,7 @@ class TestWooldridgeParityR:
         res = WooldridgeDiD(method="ols", vcov_type="hc2_bm").fit(
             panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
-        res.aggregate("event")
+        res.aggregate("event_study")
         r_dofs = golden["hc2_bm"]["aggregate_event_dof"]
         assert res.event_study_effects is not None
         for k, eff in res.event_study_effects.items():

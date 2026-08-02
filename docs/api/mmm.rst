@@ -82,7 +82,7 @@ Example
    from diff_diff import DifferenceInDifferences, to_meridian_roi_prior
 
    result = DifferenceInDifferences().fit(panel, outcome='revenue',
-                                          treatment='treated', time='post')
+                                          treatment='treated', post='post')
 
    # Caller aggregates the ATT to a total incremental outcome over the treated
    # population and window (e.g. att x treated units x post periods) and supplies

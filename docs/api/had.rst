@@ -92,9 +92,9 @@ Unit Remains Untreated" (arXiv:2405.04465v6), which:
    ``compute_survey_if_variance`` and the sup-t bootstrap target
    ``V_HC1`` consistently; mixing it with a classical analytical SE
    would silently report a ``V_HC1``-targeted variance under a
-   ``classical`` label. Use ``vcov_type="hc1"`` or set ``robust=True``
-   explicitly (the constructor default ``robust=False`` maps to
-   ``vcov_type="classical"``, which triggers the guard); a
+   ``classical`` label. Use ``vcov_type="hc1"``
+   explicitly (the constructor default ``vcov_type="classical"``
+   triggers the guard); a
    classical-aligned IF derivation is queued for a follow-up PR.
 
    **``cluster=`` + ``survey_design=`` deviation.** On both designs,

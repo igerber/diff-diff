@@ -328,10 +328,11 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
-    code_refs: [diff_diff/estimators.py, diff_diff/diagnostics.py, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, docs/methodology/REGISTRY.md, diff_diff/power.py]
+    test_ref: tests/test_v4_rename_semantic.py
+    code_refs: [diff_diff/estimators.py, diff_diff/diagnostics.py, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, docs/methodology/REGISTRY.md, diff_diff/power.py, diff_diff/datasets.py, diff_diff/prep_dgp.py, diff_diff/practitioner.py, diff_diff/agent_workflow.py, README.md, docs/index.rst, docs/quickstart.rst, docs/python_comparison.rst, docs/practitioner_decision_tree.rst, docs/practitioner_getting_started.rst]
     notes: "2x2 'time' is a 0/1 post dummy - same name as the calendar column everywhere else with a different meaning (the library's worst overload)."
   - id: M-031
     kind: param
@@ -341,10 +342,11 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: null
-    status: planned
+    status: shimmed
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/triple_diff.py]
+    test_ref: tests/test_v4_rename_semantic.py
+    code_refs: [diff_diff/triple_diff.py, diff_diff/power.py, diff_diff/prep_dgp.py]
     notes: "Same post-dummy overload as [M-030], but the NAME 'time' persists as the merged class's staggered calendar column, so removed_in is null - the 4.0 semantic enforcement is [M-085] (mirrors the TWFE pair [M-082]/[M-083])."
   - id: M-032
     kind: param
@@ -522,9 +524,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/stacked_did.py, diff_diff/power.py, diff_diff/practitioner.py, diff_diff/guides/llms-practitioner.txt, docs/methodology/REGISTRY.md]
     notes: "Same concept as control_group elsewhere; underscored value spellings win library-wide (spec section 8). CONSUMER MIGRATION: two sites read the ESTIMATOR attribute via getattr(estimator, 'clean_control', ...) and gate on it - power.py (a 'strict' survey_config rejection and a cross-check against control_group) and practitioner.py (guidance text naming the param). Same getattr-returns-None-after-removal failure mode as [M-095]'s results-side consumers, so both rows migrate their consumers in the shared Phase 2c diff; [M-095] covers results.clean_control readers, this row covers estimator.clean_control readers."
   - id: M-095
@@ -535,9 +538,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/stacked_did_results.py, diff_diff/_reporting_helpers.py, diff_diff/business_report.py, docs/methodology/REPORTING.md]
     notes: "Results-side mirror of [M-043]: a public dataclass field carrying the constructor param's name, emitted by to_dict() and rendered by summary() ('Clean control:'). Renaming the param alone would leave the results metadata contradicting the param it reports. The VALUE spellings are already canonical ('not_yet_treated'); only the field name moves. Flips WITH [M-043] in the same Phase 2c diff; the summary() label follows. CONSUMER MIGRATION IS PART OF THIS ROW - two reporting sites read results.clean_control via getattr(..., None) and branch on 'never_treated'/'strict' (_reporting_helpers.py, business_report.py). A getattr default silently returns None after removal, so BOTH would fall through to the default 'not_yet_treated' description and misreport the identifying comparison group - a wrong-answer regression, not a crash. business_report.py also EMITS block['clean_control'] as a serialized reporting key, which section 5's canonical-names-only policy retires at 4.0 (the block keeps 'control_group'). REPORTING.md documents the field and updates with it. Tests must cover a results object exposing ONLY control_group, across all three values."
   - id: M-044
@@ -548,9 +552,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/wooldridge_results.py, docs/methodology/REPORTING.md, diff_diff/guides/llms-autonomous.txt, diff_diff/guides/llms-full.txt]
     notes: "Every other to_dataframe selector is level=. Covers ONLY the to_dataframe param rename; the 'event' value vocabulary across Wooldridge's aggregation surfaces is [M-086], and the summary(aggregation=) surface is [M-087]."
   - id: M-045
@@ -560,9 +565,10 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/estimators.py, docs/methodology/REGISTRY.md, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, diff_diff/synthetic_did.py]
     notes: "Redundant with vcov_type; inherited by TwoWayFixedEffects (and MultiPeriodDiD until [M-010])."
   - id: M-046
@@ -572,9 +578,10 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/triple_diff.py]
     notes: ""
   - id: M-047
@@ -584,9 +591,10 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/had.py]
     notes: "Only estimator where robust defaults False - a third meaning for the same knob."
 
@@ -890,9 +898,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/wooldridge_results.py, docs/methodology/REGISTRY.md, docs/methodology/papers/wooldridge-2025-review.md]
     notes: "Wooldridge's EXISTING post-fit aggregate() (emfx-style prior art for spec section 6) accepts the drifted 'event' spelling; unifies to 'event_study' across aggregate/summary/to_dataframe value vocabularies. 'gt' stays as a documented estimator extra (group-time table), like ContinuousDiD's 'dose'."
   - id: M-087
@@ -903,9 +912,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/wooldridge_results.py]
     notes: "summary() unifies to the library-wide summary(alpha=None) signature (spec section 5); aggregation selection lives on aggregate(). The alpha param arrives additively in the same PR."
 
@@ -1065,9 +1075,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/continuous_did.py]
     notes: "The one estimator with a design-matrix column in the constructor; moves to fit() per the sklearn split (spec section 7)."
 
@@ -1336,9 +1347,10 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/linalg.py, diff_diff/sun_abraham.py]
     notes: "Fourth site of the 'robust' drop - spec section 7 says the flag dies 'everywhere it exists' but [M-045]..[M-047] enumerated only three. LinearRegression is a top-level export with its OWN __init__ (the TWFE/MultiPeriodDiD hits inherit DifferenceInDifferences.__init__ and ride [M-045]). Redundant with vcov_type, same as its siblings."
 
@@ -1543,3 +1555,45 @@ rows:
     phase: 2
     code_refs: [diff_diff/__init__.py]
     notes: "Alias-diet warning mechanism: CDiD/Stacked/Gardner served via a PEP 562 module __getattr__ emitting FutureWarning naming the surviving class. Names stay in __all__ through 3.9 but leave module globals: dir()/vars() shrink symmetrically (test_dir_returns_full_module_namespace unaffected) and star-import fires the three warnings - accepted diet behavior, documented in v4-design section 3.2. Ships in phase 2d; test_due_rows_are_terminal forces it terminal before any 3.9 bump. Removals are [M-132]..[M-134]."
+  - id: M-136
+    kind: param-value
+    group: renames-level
+    old: "diff_diff:LPDiDResults.to_dataframe[level]=event"
+    new: "diff_diff:LPDiDResults.to_dataframe[level]=event_study"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: shimmed
+    phase: 5
+    warning: FutureWarning
+    test_ref: tests/test_v4_rename_semantic.py
+    code_refs: [diff_diff/lpdid_results.py]
+    notes: "Missed-rename amendment (section 8 rule 10, 2026-08-02): LPDiD shipped the drifted 'event' level spelling after the ledger froze; every sibling to_dataframe(level=) uses 'event_study' (two_stage/stacked/staggered/imputation). Same value unification as [M-086]; the default flips to the canonical spelling (identical frame), only an explicit 'event' warns."
+  - id: M-137
+    kind: param
+    group: renames-post
+    old: "diff_diff:permutation_test[time]"
+    new: "diff_diff:permutation_test[post]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: shimmed
+    phase: 5
+    warning: FutureWarning
+    test_ref: tests/test_v4_rename_semantic.py
+    code_refs: [diff_diff/diagnostics.py, docs/api/diagnostics.rst, docs/tutorials/04_parallel_trends.ipynb]
+    notes: "Missed-rename amendment (section 8 rules 1+10, 2026-08-02): the public time param forwards verbatim into DifferenceInDifferences.fit's 0/1 post dummy (validate_binary at the callee) - a rule-1 overload the phase-1 inventory missed because the surface is a diagnostic function. Companion to [M-030]; [M-138] is the leave_one_out_test twin. The run_placebo_test/run_all_placebo_tests WRAPPERS keep their overloaded time (calendar for timing/group tests, post dummy for these two callees) - a rename cannot fix that; redesign tracked in TODO.md."
+  - id: M-138
+    kind: param
+    group: renames-post
+    old: "diff_diff:leave_one_out_test[time]"
+    new: "diff_diff:leave_one_out_test[post]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: shimmed
+    phase: 5
+    warning: FutureWarning
+    test_ref: tests/test_v4_rename_semantic.py
+    code_refs: [diff_diff/diagnostics.py, docs/api/diagnostics.rst, docs/tutorials/04_parallel_trends.ipynb]
+    notes: "Twin of [M-137] - see its notes for the missed-rename rationale and the wrapper-overload deferral."

@@ -1184,7 +1184,7 @@ class TestEstimatorCoverage:
                     outcome="outcome",
                     group="group",
                     partition="partition",
-                    time="time",
+                    post="time",
                 ),
                 n_simulations=2,
                 seed=42,
@@ -1810,7 +1810,7 @@ class TestEstimatorCoverage:
         """Auto DGP warns when StackedDiD has clean_control='strict'."""
         with pytest.warns(UserWarning, match="strict"):
             simulate_power(
-                StackedDiD(clean_control="strict"),
+                StackedDiD(control_group="strict"),
                 n_simulations=3,
                 seed=42,
                 progress=False,
@@ -1889,7 +1889,7 @@ class TestEstimatorCoverage:
     def test_stacked_did_strict_with_matching_dgp(self):
         """StackedDiD with clean_control='strict' and multi-cohort DGP."""
         result = simulate_power(
-            StackedDiD(clean_control="strict", kappa_pre=1, kappa_post=1),
+            StackedDiD(control_group="strict", kappa_pre=1, kappa_post=1),
             n_units=80,
             n_periods=8,
             treatment_period=4,
@@ -2363,7 +2363,7 @@ class TestStaggeredSingleCohort:
         """StackedDiD clean_control='strict' with cohort_periods=[2] warns."""
         with pytest.warns(UserWarning, match="DGP mismatch"):
             simulate_power(
-                StackedDiD(clean_control="strict"),
+                StackedDiD(control_group="strict"),
                 n_units=60,
                 n_periods=6,
                 treatment_period=3,
@@ -2957,10 +2957,10 @@ class TestSurveyPower:
             )
 
     def test_survey_rejects_clean_control_strict(self):
-        """clean_control='strict' rejected (needs multi-cohort DGP)."""
-        with pytest.raises(ValueError, match="clean_control.*strict"):
+        """control_group='strict' rejected (needs multi-cohort DGP)."""
+        with pytest.raises(ValueError, match="control_group='strict'"):
             simulate_power(
-                StackedDiD(clean_control="strict"),
+                StackedDiD(control_group="strict"),
                 survey_config=_SURVEY_CFG,
                 n_simulations=1,
                 seed=42,

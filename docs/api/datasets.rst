@@ -60,7 +60,7 @@ Example
    ck_long = ck_long.dropna(subset=['employment'])
 
    did = DifferenceInDifferences()
-   results = did.fit(ck_long, outcome='employment', treatment='treated', time='post')
+   results = did.fit(ck_long, outcome='employment', treatment='treated', post='post')
 
 load_castle_doctrine
 ~~~~~~~~~~~~~~~~~~~~
@@ -169,7 +169,7 @@ Example
 
    did = DifferenceInDifferences()
    results = did.fit(
-       prop99, outcome="lcigsale", treatment="treated_state", time="post"
+       prop99, outcome="lcigsale", treatment="treated_state", post="post"
    )
 
 load_walmart

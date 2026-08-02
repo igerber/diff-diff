@@ -212,7 +212,7 @@ class TestTrimming:
 
     def test_ic2_no_controls_trimming(self, no_never_treated_data):
         """Events without clean controls are trimmed with never_treated mode."""
-        est = StackedDiD(kappa_pre=1, kappa_post=1, clean_control="never_treated")
+        est = StackedDiD(kappa_pre=1, kappa_post=1, control_group="never_treated")
         # No never-treated units exist → all events should be trimmed
         with pytest.raises(ValueError, match="All.*adoption events were trimmed"):
             est.fit(
@@ -368,7 +368,7 @@ class TestCleanControl:
 
     def test_not_yet_treated_default(self, staggered_data):
         """Default includes not-yet-treated and never-treated as controls."""
-        est = StackedDiD(kappa_pre=1, kappa_post=1, clean_control="not_yet_treated")
+        est = StackedDiD(kappa_pre=1, kappa_post=1, control_group="not_yet_treated")
         results = est.fit(
             staggered_data,
             outcome="outcome",
@@ -380,7 +380,7 @@ class TestCleanControl:
 
     def test_strict_excludes_more(self, staggered_data):
         """Strict mode should have fewer (or equal) controls than not_yet_treated."""
-        est_nyt = StackedDiD(kappa_pre=2, kappa_post=2, clean_control="not_yet_treated")
+        est_nyt = StackedDiD(kappa_pre=2, kappa_post=2, control_group="not_yet_treated")
         results_nyt = est_nyt.fit(
             staggered_data,
             outcome="outcome",
@@ -389,7 +389,7 @@ class TestCleanControl:
             first_treat="first_treat",
         )
 
-        est_strict = StackedDiD(kappa_pre=2, kappa_post=2, clean_control="strict")
+        est_strict = StackedDiD(kappa_pre=2, kappa_post=2, control_group="strict")
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
             try:
@@ -408,7 +408,7 @@ class TestCleanControl:
 
     def test_never_treated_only(self, staggered_data):
         """never_treated mode only uses never-treated as controls."""
-        est = StackedDiD(kappa_pre=2, kappa_post=2, clean_control="never_treated")
+        est = StackedDiD(kappa_pre=2, kappa_post=2, control_group="never_treated")
         results = est.fit(
             staggered_data,
             outcome="outcome",
@@ -423,7 +423,7 @@ class TestCleanControl:
 
     def test_never_treated_no_nevertreated_raises(self, no_never_treated_data):
         """Error when no never-treated units exist with never_treated mode."""
-        est = StackedDiD(kappa_pre=1, kappa_post=1, clean_control="never_treated")
+        est = StackedDiD(kappa_pre=1, kappa_post=1, control_group="never_treated")
         with pytest.raises(ValueError, match="All.*adoption events were trimmed"):
             est.fit(
                 no_never_treated_data,
@@ -698,7 +698,7 @@ class TestSklearnInterface:
             kappa_pre=3,
             kappa_post=2,
             weighting="population",
-            clean_control="strict",
+            control_group="strict",
             cluster="unit_subexp",
             alpha=0.10,
             anticipation=1,
@@ -708,7 +708,9 @@ class TestSklearnInterface:
         assert params["kappa_pre"] == 3
         assert params["kappa_post"] == 2
         assert params["weighting"] == "population"
-        assert params["clean_control"] == "strict"
+        # get_params returns the RAW args; control_group was passed
+        # explicitly (M-043), clean_control stays at its sentinel.
+        assert params["control_group"] == "strict"
         assert params["cluster"] == "unit_subexp"
         assert params["alpha"] == 0.10
         assert params["anticipation"] == 1
@@ -872,9 +874,13 @@ class TestValidation:
             StackedDiD(weighting="invalid")
 
     def test_invalid_clean_control(self):
-        """Raises on invalid clean_control parameter."""
-        with pytest.raises(ValueError, match="clean_control"):
-            StackedDiD(clean_control="invalid")
+        """Raises on an invalid control-group value - canonical name and
+        via the deprecated clean_control alias (M-043)."""
+        with pytest.raises(ValueError, match="control_group"):
+            StackedDiD(control_group="invalid")
+        with pytest.warns(FutureWarning, match="clean_control"):
+            with pytest.raises(ValueError, match="control_group"):
+                StackedDiD(clean_control="invalid")
 
     def test_invalid_cluster(self):
         """Raises on invalid cluster parameter."""
@@ -1765,7 +1771,7 @@ def _cb_fit(df, **kw):
         kappa_pre=2,
         kappa_post=2,
         weighting="aggregate",
-        clean_control="never_treated",
+        control_group="never_treated",
         cluster="unit",
     )
     params.update(

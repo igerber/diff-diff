@@ -51,7 +51,7 @@ The simplest DiD design has two groups (treated/control) and two periods (pre/po
        data,
        outcome='outcome',
        treatment='treated',
-       time='post'
+       post='post'
    )
 
    # View results
@@ -90,7 +90,7 @@ Control for confounders with the ``covariates`` parameter:
        data,
        outcome='outcome',
        treatment='treated',
-       time='post',
+       post='post',
        covariates=['age', 'income']
    )
 
@@ -102,7 +102,7 @@ For panel data, cluster standard errors at the unit level:
 .. code-block:: python
 
    did = DifferenceInDifferences(cluster='unit_id')
-   results = did.fit(data, outcome='y', treatment='treated', time='post')
+   results = did.fit(data, outcome='y', treatment='treated', post='post')
 
 Two-Way Fixed Effects
 ---------------------

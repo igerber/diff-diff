@@ -157,7 +157,7 @@ class TestTripleDifferenceBasic:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         assert ddd.is_fitted_ is True
@@ -172,7 +172,7 @@ class TestTripleDifferenceBasic:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         # Check results attributes
@@ -190,7 +190,7 @@ class TestTripleDifferenceBasic:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         # True ATT is 2.0, should be within reasonable range
@@ -204,7 +204,7 @@ class TestTripleDifferenceBasic:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         assert results.se > 0
@@ -217,7 +217,7 @@ class TestTripleDifferenceBasic:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         assert results.conf_int[0] < results.conf_int[1]
@@ -240,7 +240,7 @@ class TestEstimationMethods:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         assert results.estimation_method == "reg"
@@ -256,7 +256,7 @@ class TestEstimationMethods:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         assert results.estimation_method == "ipw"
@@ -270,7 +270,7 @@ class TestEstimationMethods:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         assert results.estimation_method == "dr"
@@ -283,7 +283,7 @@ class TestEstimationMethods:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         results_ipw = TripleDifference(estimation_method="ipw").fit(
@@ -291,7 +291,7 @@ class TestEstimationMethods:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         results_dr = TripleDifference(estimation_method="dr").fit(
@@ -299,7 +299,7 @@ class TestEstimationMethods:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         # All methods should give similar point estimates
@@ -324,7 +324,7 @@ class TestCovariates:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
             covariates=["x1"],
         )
 
@@ -340,7 +340,7 @@ class TestCovariates:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
             covariates=["x1", "x2"],
         )
 
@@ -356,7 +356,7 @@ class TestCovariates:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         # With covariates
@@ -365,7 +365,7 @@ class TestCovariates:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
             covariates=["x1", "x2"],
         )
 
@@ -380,7 +380,7 @@ class TestCovariates:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
             covariates=["x1", "x2"],
         )
 
@@ -405,7 +405,7 @@ class TestInputValidation:
                 outcome="nonexistent",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
             )
 
     def test_missing_cluster_column(self, simple_ddd_data):
@@ -417,7 +417,7 @@ class TestInputValidation:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
             )
 
     def test_missing_group_column(self, simple_ddd_data):
@@ -429,7 +429,7 @@ class TestInputValidation:
                 outcome="outcome",
                 group="nonexistent",
                 partition="partition",
-                time="time",
+                post="time",
             )
 
     def test_non_binary_group(self, simple_ddd_data):
@@ -444,7 +444,7 @@ class TestInputValidation:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
             )
 
     def test_non_binary_partition(self, simple_ddd_data):
@@ -459,7 +459,7 @@ class TestInputValidation:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
             )
 
     def test_missing_cell(self, simple_ddd_data):
@@ -480,7 +480,7 @@ class TestInputValidation:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
             )
 
     def test_missing_values_in_outcome(self, simple_ddd_data):
@@ -495,7 +495,7 @@ class TestInputValidation:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
             )
 
     def test_non_dataframe_input(self):
@@ -507,7 +507,7 @@ class TestInputValidation:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
             )
 
 
@@ -527,7 +527,7 @@ class TestTripleDifferenceResults:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         summary = results.summary()
@@ -543,7 +543,7 @@ class TestTripleDifferenceResults:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         result_dict = results.to_dict()
@@ -560,7 +560,7 @@ class TestTripleDifferenceResults:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         result_df = results.to_dataframe()
@@ -576,7 +576,7 @@ class TestTripleDifferenceResults:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         # With true ATT of 2.0 and reasonable sample size, should be significant
@@ -590,7 +590,7 @@ class TestTripleDifferenceResults:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         stars = results.significance_stars
@@ -605,7 +605,7 @@ class TestTripleDifferenceResults:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         assert results.group_means is not None
@@ -619,7 +619,7 @@ class TestTripleDifferenceResults:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         total = (
@@ -734,7 +734,7 @@ class TestEdgeCases:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         # Should still produce results
@@ -752,7 +752,7 @@ class TestEdgeCases:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         # ATT should be close to zero
@@ -768,7 +768,7 @@ class TestEdgeCases:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         assert abs(results.att - 10.0) < 1.0
@@ -783,7 +783,7 @@ class TestEdgeCases:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         # Should recover ATT very precisely
@@ -801,7 +801,7 @@ class TestEdgeCases:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         # Should still run, but with wider confidence intervals
@@ -826,7 +826,7 @@ class TestRegression:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         ddd2 = TripleDifference()
@@ -835,7 +835,7 @@ class TestRegression:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         assert results1.att == results2.att
@@ -849,7 +849,7 @@ class TestRegression:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         # Should not raise
@@ -864,7 +864,7 @@ class TestRegression:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         # Should not raise
@@ -922,7 +922,7 @@ class TestRankDeficientAction:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
                 covariates=["x1", "x1_dup"],
             )
 
@@ -945,7 +945,7 @@ class TestRankDeficientAction:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
                 covariates=["x1", "x1_dup"],
             )
 
@@ -996,7 +996,7 @@ class TestTripleDifferenceTStatNaN:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         se = results.se
@@ -1031,7 +1031,7 @@ class TestTripleDifferenceTStatNaN:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
                 covariates=["x1"],
             )
 
@@ -1120,7 +1120,7 @@ class TestTripleDifferenceClusterDefensive:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         td_cluster = TripleDifference(cluster="state")
@@ -1129,7 +1129,7 @@ class TestTripleDifferenceClusterDefensive:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
         )
 
         assert np.isfinite(res_unit.se) and res_unit.se > 0
@@ -1232,10 +1232,10 @@ class TestTripleDifferenceVcovType:
         data = generate_ddd_data(n_per_cell=80, true_att=2.0, seed=11)
 
         r_default = TripleDifference(estimation_method=method).fit(
-            data, outcome="outcome", group="group", partition="partition", time="time"
+            data, outcome="outcome", group="group", partition="partition", post="time"
         )
         r_explicit = TripleDifference(estimation_method=method, vcov_type="hc1").fit(
-            data, outcome="outcome", group="group", partition="partition", time="time"
+            data, outcome="outcome", group="group", partition="partition", post="time"
         )
         assert r_default.att == r_explicit.att, f"[{method}] ATT not bit-equal"
         assert r_default.se == r_explicit.se, f"[{method}] SE not bit-equal"
@@ -1247,10 +1247,10 @@ class TestTripleDifferenceVcovType:
         data = _generate_ddd_data_with_state_clusters(seed=23)
 
         r_default = TripleDifference(cluster="state").fit(
-            data, outcome="outcome", group="group", partition="partition", time="time"
+            data, outcome="outcome", group="group", partition="partition", post="time"
         )
         r_explicit = TripleDifference(cluster="state", vcov_type="hc1").fit(
-            data, outcome="outcome", group="group", partition="partition", time="time"
+            data, outcome="outcome", group="group", partition="partition", post="time"
         )
         assert r_default.att == r_explicit.att
         assert r_default.se == r_explicit.se
@@ -1272,7 +1272,7 @@ class TestTripleDifferenceVcovType:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
             survey_design=sd,
         )
         r_explicit = TripleDifference(estimation_method=method, vcov_type="hc1").fit(
@@ -1280,7 +1280,7 @@ class TestTripleDifferenceVcovType:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
             survey_design=sd,
         )
         assert r_default.att == r_explicit.att, f"[{method}] survey ATT not bit-equal"
@@ -1309,7 +1309,7 @@ class TestTripleDifferenceVcovType:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
             survey_design=sd,
         )
         r_explicit = TripleDifference(estimation_method=method, vcov_type="hc1").fit(
@@ -1317,7 +1317,7 @@ class TestTripleDifferenceVcovType:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
             survey_design=sd,
         )
         assert r_default.att == r_explicit.att, f"[{method}] replicate ATT not bit-equal"
@@ -1358,7 +1358,7 @@ class TestTripleDifferenceVcovType:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
                 survey_design=sd,
             )
 
@@ -1429,7 +1429,7 @@ class TestTripleDifferenceVcovType:
     def test_results_carries_vcov_type(self):
         data = generate_ddd_data(n_per_cell=40, true_att=2.0, seed=43)
         res = TripleDifference().fit(
-            data, outcome="outcome", group="group", partition="partition", time="time"
+            data, outcome="outcome", group="group", partition="partition", post="time"
         )
         assert res.vcov_type == "hc1"
 
@@ -1437,7 +1437,7 @@ class TestTripleDifferenceVcovType:
         """CS R7 caught the same Results-introspection gap on the dict surface."""
         data = generate_ddd_data(n_per_cell=40, true_att=2.0, seed=47)
         res = TripleDifference().fit(
-            data, outcome="outcome", group="group", partition="partition", time="time"
+            data, outcome="outcome", group="group", partition="partition", post="time"
         )
         d = res.to_dict()
         assert "vcov_type" in d
@@ -1448,7 +1448,7 @@ class TestTripleDifferenceVcovType:
         via the shared _format_vcov_label, not the raw vcov_type string."""
         data = generate_ddd_data(n_per_cell=40, true_att=2.0, seed=51)
         res = TripleDifference().fit(
-            data, outcome="outcome", group="group", partition="partition", time="time"
+            data, outcome="outcome", group="group", partition="partition", post="time"
         )
         out = res.summary()
         assert "Variance estimator" in out
@@ -1460,7 +1460,7 @@ class TestTripleDifferenceVcovType:
         Addresses codex local-review P2 — raw 'hc1' line was misleading."""
         data = _generate_ddd_data_with_state_clusters(seed=53)
         res = TripleDifference(cluster="state").fit(
-            data, outcome="outcome", group="group", partition="partition", time="time"
+            data, outcome="outcome", group="group", partition="partition", post="time"
         )
         out = res.summary()
         assert "CR1 cluster-robust at state" in out
@@ -1480,7 +1480,7 @@ class TestTripleDifferenceVcovType:
             outcome="outcome",
             group="group",
             partition="partition",
-            time="time",
+            post="time",
             survey_design=sd,
         )
         out = res.summary()
@@ -1494,13 +1494,13 @@ class TestTripleDifferenceVcovType:
         Mirrors CS PR #487 pattern; consumed by _format_vcov_label in summary()."""
         data = generate_ddd_data(n_per_cell=40, true_att=2.0, seed=63)
         r_none = TripleDifference().fit(
-            data, outcome="outcome", group="group", partition="partition", time="time"
+            data, outcome="outcome", group="group", partition="partition", post="time"
         )
         assert r_none.cluster_name is None
 
         data2 = _generate_ddd_data_with_state_clusters(seed=67)
         r_cluster = TripleDifference(cluster="state").fit(
-            data2, outcome="outcome", group="group", partition="partition", time="time"
+            data2, outcome="outcome", group="group", partition="partition", post="time"
         )
         assert r_cluster.cluster_name == "state"
         # And it flows through to_dict
@@ -1534,7 +1534,7 @@ class TestTripleDifferenceVcovType:
                 outcome="outcome",
                 group="group",
                 partition="partition",
-                time="time",
+                post="time",
                 survey_design=sd,
             )
         # cluster_name + n_clusters suppressed under survey-backed fit
@@ -1560,9 +1560,9 @@ class TestTripleDifferenceVcovType:
         Results construction (sklearn clone() pattern)."""
         data = generate_ddd_data(n_per_cell=40, true_att=2.0, seed=57)
         td1 = TripleDifference(vcov_type="hc1")
-        r1 = td1.fit(data, outcome="outcome", group="group", partition="partition", time="time")
+        r1 = td1.fit(data, outcome="outcome", group="group", partition="partition", post="time")
         td2 = TripleDifference(**td1.get_params())
-        r2 = td2.fit(data, outcome="outcome", group="group", partition="partition", time="time")
+        r2 = td2.fit(data, outcome="outcome", group="group", partition="partition", post="time")
         assert r1.att == r2.att
         assert r1.se == r2.se
         assert r2.vcov_type == "hc1"

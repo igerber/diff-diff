@@ -114,7 +114,7 @@ Step 3: Measure the Campaign Lift
        data,
        outcome="outcome",
        treatment="treated",
-       time="post",
+       post="post",
    )
 
    print(results.summary())
@@ -194,7 +194,7 @@ or data.
        pre_data,
        outcome="outcome",
        treatment="treated",
-       time="placebo_post",
+       post="placebo_post",
    )
 
    print(f"Placebo lift: {placebo_results.att:.2f} (p = {placebo_results.p_value:.3f})")

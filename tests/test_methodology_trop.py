@@ -323,7 +323,7 @@ def _fit_did(df: pd.DataFrame) -> float:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         est = DifferenceInDifferences()
-        r = est.fit(df2, formula="outcome ~ treat * post_flag", unit="unit", time="period")
+        r = est.fit(df2, formula="outcome ~ treat * post_flag", unit="unit", post="period")
     coefs = r.coefficients or {}
     return float(coefs.get("treat:post_flag", np.nan))
 

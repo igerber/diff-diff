@@ -41,7 +41,7 @@ data = pd.DataFrame({
 })
 
 did = DifferenceInDifferences()
-results = did.fit(data, outcome='outcome', treatment='treated', time='post')
+results = did.fit(data, outcome='outcome', treatment='treated', post='post')
 print(results)              # DiDResults(ATT=3.0000, SE=1.7321, p=0.1583)
 results.print_summary()     # full statsmodels-style table
 ```

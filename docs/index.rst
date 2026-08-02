@@ -14,7 +14,7 @@ It provides sklearn-like estimators with statsmodels-style output for econometri
 
    # Fit a basic DiD model
    did = DifferenceInDifferences()
-   results = did.fit(data, outcome='y', treatment='treated', time='post')
+   results = did.fit(data, outcome='y', treatment='treated', post='post')
    print(results.summary())
 
 Key Features

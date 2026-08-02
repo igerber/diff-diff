@@ -71,7 +71,7 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
       ETWFE (``method="logit"`` / ``"poisson"``) it is the
       average-structural-function (ASF) contrast across cohort x
       time cells. Both paths preserve ``overall_att`` across
-      ``.aggregate("event")`` calls (which only populate additional
+      ``.aggregate("event_study")`` calls (which only populate additional
       event-study tables).
     """
     name = type(results).__name__
@@ -197,7 +197,11 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
         }
 
     if name == "StackedDiDResults":
-        clean_control = getattr(results, "clean_control", None)
+        # M-095: the field is control_group; __setstate__ migration
+        # guarantees it exists even on pre-rename pickles, so no
+        # clean_control fallback (a getattr default would silently
+        # misreport the comparison group after the 4.0 removal).
+        clean_control = getattr(results, "control_group", None)
         if clean_control == "never_treated":
             control_clause = "Controls are the never-treated units (``A_s = infinity``)."
         elif clean_control == "strict":
@@ -253,7 +257,7 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                     "saturated regression fits cohort x time ATT(g, t) "
                     "coefficients, and ``overall_att`` is their "
                     "observation-count-weighted average across post-"
-                    'treatment cells. Calling ``.aggregate("event")`` '
+                    'treatment cells. Calling ``.aggregate("event_study")`` '
                     "populates additional event-study tables but does NOT "
                     "change the ``overall_att`` scalar."
                 ),
@@ -273,7 +277,7 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                 f"outcomes averaged across cohort x time cells with "
                 f"observation-count weights. The ASF handles the "
                 f"nonlinearity; OLS ETWFE uses the saturated-regression "
-                f'coefficient path instead. Calling ``.aggregate("event")`` '
+                f'coefficient path instead. Calling ``.aggregate("event_study")`` '
                 f"populates additional event-study tables but does NOT "
                 f"change the ``overall_att`` scalar."
             ),

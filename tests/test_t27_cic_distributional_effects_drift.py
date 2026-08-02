@@ -165,7 +165,7 @@ def cic(df):
 
 @pytest.fixture(scope="module")
 def did(df):
-    return DifferenceInDifferences().fit(df, outcome="spend", treatment="treated", time="post")
+    return DifferenceInDifferences().fit(df, outcome="spend", treatment="treated", post="post")
 
 
 class TestMainStory:
@@ -187,7 +187,7 @@ class TestMainStory:
         # BOTH scales - the prose claims it stays monotone).
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            DifferenceInDifferences().fit(df, outcome="spend", treatment="treated", time="post")
+            DifferenceInDifferences().fit(df, outcome="spend", treatment="treated", post="post")
             ChangesInChanges(n_bootstrap=0).fit(
                 df_log, outcome="log_spend", treatment="treated", time="post"
             )

@@ -133,16 +133,16 @@ Standard Error Issues
 
    # For panel data, always cluster at unit level
    did = DifferenceInDifferences(cluster='unit_id')
-   results = did.fit(data, outcome='y', treatment='treated', time='post')
+   results = did.fit(data, outcome='y', treatment='treated', post='post')
 
    # Compare SE methods
    did_robust = DifferenceInDifferences()
    did_cluster = DifferenceInDifferences(cluster='unit_id')
    did_wild = DifferenceInDifferences(inference='wild_bootstrap', cluster='unit_id')
 
-   r1 = did_robust.fit(data, outcome='y', treatment='treated', time='post')
-   r2 = did_cluster.fit(data, outcome='y', treatment='treated', time='post')
-   r3 = did_wild.fit(data, outcome='y', treatment='treated', time='post')
+   r1 = did_robust.fit(data, outcome='y', treatment='treated', post='post')
+   r2 = did_cluster.fit(data, outcome='y', treatment='treated', post='post')
+   r3 = did_wild.fit(data, outcome='y', treatment='treated', post='post')
 
    print(f"Robust SE: {r1.se:.4f}")
    print(f"Cluster SE: {r2.se:.4f}")
@@ -444,7 +444,7 @@ only integer or discrete values.
    # If treatment is truly binary, use standard DiD instead
    from diff_diff import DifferenceInDifferences
    did = DifferenceInDifferences()
-   results = did.fit(data, outcome='y', treatment='treatment', time='post')
+   results = did.fit(data, outcome='y', treatment='treatment', post='post')
 
    # If dose is continuous but stored as int, convert
    data['dose'] = data['dose'].astype(float)
@@ -621,15 +621,13 @@ silently report a ``V_HC1``-targeted variance under a ``classical`` label.
 
 .. code-block:: python
 
-   # The constructor default `robust=False` maps to `vcov_type='classical'`
-   # and triggers the guard on the mass-point survey path - so plain
-   # `HeterogeneousAdoptionDiD()` is NOT a workaround. Pick one of:
+   # The constructor default (`vcov_type='classical'`) triggers the guard
+   # on the mass-point survey path - so plain
+   # `HeterogeneousAdoptionDiD()` is NOT a workaround. Use:
    est = HeterogeneousAdoptionDiD(vcov_type='hc1')
-   # Or equivalently:
-   est = HeterogeneousAdoptionDiD(robust=True)  # maps to vcov_type='hc1'
 
 A classical-aligned IF derivation is queued for a follow-up release; until
-then, ``vcov_type='hc1'`` (or the equivalent ``robust=True``) is the
+then, ``vcov_type='hc1'`` is the
 recommended path for survey + mass-point fits. See :doc:`api/had` for the
 full SE-regime contract.
 
@@ -818,7 +816,7 @@ If you encounter issues not covered here:
 
    data = generate_did_data(n_units=100, n_periods=10, treatment_effect=2.0)
    did = DifferenceInDifferences()
-   results = did.fit(data, outcome='outcome', treatment='treated', time='post')
+   results = did.fit(data, outcome='outcome', treatment='treated', post='post')
    print(f"True effect: 2.0, Estimated: {results.att:.3f}")
 
 For bugs or feature requests, please open an issue on

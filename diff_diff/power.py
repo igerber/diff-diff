@@ -299,7 +299,7 @@ def _basic_fit_kwargs(
     n_periods: int,
     treatment_period: int,
 ) -> Dict[str, Any]:
-    return dict(outcome="outcome", treatment="treated", time="post")
+    return dict(outcome="outcome", treatment="treated", post="post")
 
 
 def _twfe_fit_kwargs(
@@ -340,7 +340,7 @@ def _ddd_fit_kwargs(
     n_periods: int,
     treatment_period: int,
 ) -> Dict[str, Any]:
-    return dict(outcome="outcome", group="group", partition="partition", time="time")
+    return dict(outcome="outcome", group="group", partition="partition", post="time")
 
 
 def _ddd_panel_fit_kwargs(
@@ -353,7 +353,7 @@ def _ddd_panel_fit_kwargs(
     # pre/post indicator (vs the cross-sectional "time"). Clustering is NOT a
     # fit kwarg — it resolves from the estimator's cluster="unit" attribute
     # against the DGP's "unit" column.
-    return dict(outcome="outcome", group="group", partition="partition", time="post")
+    return dict(outcome="outcome", group="group", partition="partition", post="post")
 
 
 def _trop_fit_kwargs(
@@ -433,13 +433,13 @@ def _survey_basic_fit_kwargs(
 
     Uses ``ever_treated`` (time-invariant group indicator) rather than the
     survey DGP's ``treated`` column (which is post-only: 1{g>0, t>=g}).
-    DifferenceInDifferences internally constructs ``treatment * time``,
+    DifferenceInDifferences internally constructs ``treatment * post``,
     so passing the post-only flag would make that interaction rank-deficient.
     """
     return dict(
         outcome="outcome",
         treatment="ever_treated",
-        time="post",
+        post="post",
         survey_design=survey_config._build_survey_design(),
     )
 
@@ -638,12 +638,12 @@ def _check_staggered_dgp_compat(
             f"effect onset."
         )
 
-    # Check clean_control on StackedDiD
+    # Check control_group (pre-M-095: clean_control) on StackedDiD
     if name == "StackedDiD":
-        cc = getattr(estimator, "clean_control", "not_yet_treated")
+        cc = getattr(estimator, "control_group", "not_yet_treated")
         if cc == "strict" and not has_multi_cohort:
             issues.append(
-                '  - StackedDiD has clean_control="strict" but the default '
+                '  - StackedDiD has control_group="strict" but the default '
                 "single-cohort DGP makes strict controls equivalent to "
                 "never-treated controls.\n"
                 "    Fix: pass data_generator_kwargs="
@@ -2261,21 +2261,28 @@ def simulate_power(
             )
         # Reject estimator settings that require a multi-cohort DGP.
         # survey_config hard-codes a single-cohort DGP and blocks
-        # cohort_periods/never_treated_frac overrides.
-        control_group = getattr(estimator, "control_group", "never_treated")
-        clean_control = getattr(estimator, "clean_control", None)
-        if control_group in ("not_yet_treated", "last_cohort"):
-            raise ValueError(
-                f"survey_config does not support control_group='{control_group}' "
-                "(requires multi-cohort DGP). Use the custom data_generator "
-                "path for survey power with this control-group design."
-            )
-        if clean_control == "strict":
-            raise ValueError(
-                "survey_config does not support clean_control='strict' "
-                "(requires multi-cohort DGP). Use the custom data_generator "
-                "path for survey power with strict clean controls."
-            )
+        # cohort_periods/never_treated_frac overrides. StackedDiD is gated
+        # separately: post-M-095 it exposes `control_group`, but its
+        # vocabulary {"not_yet_treated","strict","never_treated"} maps onto
+        # the single-cohort DGP for everything except "strict" - matching
+        # the pre-rename gate bit-for-bit (which rejected only
+        # clean_control="strict" and allowed the not_yet_treated default).
+        if type(estimator).__name__ == "StackedDiD":
+            if getattr(estimator, "control_group", None) == "strict":
+                raise ValueError(
+                    "survey_config does not support control_group='strict' "
+                    "(requires multi-cohort DGP). Use the custom "
+                    "data_generator path for survey power with strict "
+                    "clean controls."
+                )
+        else:
+            control_group = getattr(estimator, "control_group", "never_treated")
+            if control_group in ("not_yet_treated", "last_cohort"):
+                raise ValueError(
+                    f"survey_config does not support control_group='{control_group}' "
+                    "(requires multi-cohort DGP). Use the custom data_generator "
+                    "path for survey power with this control-group design."
+                )
 
     # SyntheticDiD placebo variance requires n_control > n_treated.
     # Check after merging data_generator_kwargs so overrides of n_treated

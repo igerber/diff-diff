@@ -160,7 +160,12 @@ signatures. Lifecycle facts live in the cited rows.
 - `WooldridgeDiDResults.to_dataframe(level=...)` - `aggregation` -> `level`
   [M-044]; the `"event"` value spelling unifies across its existing
   `aggregate(type=)` surface [M-086] and `summary(aggregation=)` is retired
-  for the uniform `summary(alpha=None)` [M-087].
+  for the uniform `summary(alpha=None)` [M-087]. Transitional 3.9 shape
+  (shipped by the 2(c)-ii PR-B): `summary(aggregation=SENTINEL, *,
+  alpha=None)` - `alpha` is KEYWORD-ONLY while the deprecated `aggregation`
+  still holds position 1 (a positional float raises a pointed TypeError);
+  the uniform positional `summary(alpha=None)` arrives with the 4.0
+  removal.
 - `robust` constructor param dropped everywhere it exists
   [M-045]..[M-047] [M-115] - fully redundant with `vcov_type`, and its default
   even differed across estimators (True/True/False). Four sites, not three:
@@ -592,6 +597,18 @@ missed.**
    `code_refs` UNION, and the pre-terminal repo-wide grep above remains the
    per-row safety net (decided 2026-08-01 over per-row duplication).
 
+**Missed-rename amendments (2026-08-02, the 2(c)-ii PR-B sweep):** [M-136]
+(LPDiD `to_dataframe(level="event")` - the drifted value spelling every
+sibling already writes as `"event_study"`; same unification as [M-086]) and
+[M-137]/[M-138] (`permutation_test[time]` / `leave_one_out_test[time]` -
+public diagnostics params that forward verbatim into
+`DifferenceInDifferences.fit`'s 0/1 post dummy, a rule-1 overload the
+phase-1 estimator-roster inventory missed). The `run_placebo_test` /
+`run_all_placebo_tests` WRAPPERS keep their single overloaded `time`
+(calendar for the timing/group tests, post dummy for the two renamed
+callees): a rename cannot express dual semantics - the signature redesign is
+tracked in TODO.md and the guard carries honest allowlist reasons.
+
 **Domain vocabulary that is NOT a violation** (recorded so the sweep is not
 re-litigated): the staggered family's `group`/`groups` on results containers
 and `GroupTimeEffect.group` name the ATT(g,t) COHORT in Callaway-Sant'Anna's
@@ -633,10 +650,10 @@ above; anything only one PR cares about stays in that PR's plan.**
 | Phase | Ships in | PRs (each: dedicated shim/removal tests + matrix flips + CHANGELOG naming flipped row ids) |
 |---|---|---|
 | 1 (this PR) | - | Spec + matrix + enforcement test + support edits |
-| 2: contract foundations | 3.9 | (a) results base + unified event-study representation [M-092] + to_dict completion + the Diagnostic marker base on the diagnostic result roster [M-091] (section 3.5); (b) `aggregate()` + fit(aggregate=) shims [M-020..M-027] (M-020's shim already shipped); (c) param renames [M-030..M-047] [M-084] [M-086..M-089] + their results-field mirrors [M-094] [M-095] (section 8 rule 9) + the public-function completeness sweep [M-097..M-113] (section 8 rule 10) + the dCDH results mirror [M-114] + the fourth `robust` site [M-115] + BaseEstimator mixin + ContinuousDiD covariates move; (d) alias introduction [M-062] (the Spillover introduction is cancelled [M-063]) + the alias-diet `__getattr__` warning shim [M-135] + wrapper deprecations [M-070..M-077] + the two inference-surface policies: `n_bootstrap` semantic unification [M-081] and the wild-cluster-bootstrap roster guard [M-096]; shipped insertions (all done): the aggregate contract [M-122], the ETWFE reference-period family [M-123] [M-124] [M-125], and the variance-consolidation program [M-126] [M-127] |
+| 2: contract foundations | 3.9 | (a) results base + unified event-study representation [M-092] + to_dict completion + the Diagnostic marker base on the diagnostic result roster [M-091] (section 3.5); (b) `aggregate()` + fit(aggregate=) shims [M-020..M-027] (M-020's shim already shipped); (c) param renames [M-030..M-047] [M-084] [M-086..M-089] + their results-field mirrors [M-094] [M-095] (section 8 rule 9) + the public-function completeness sweep [M-097..M-113] (section 8 rule 10) + the dCDH results mirror [M-114] + the fourth `robust` site [M-115] + the 2(c)-ii missed-rename amendments [M-136..M-138] (LPDiD `level` value; the two post-dummy diagnostics params) + BaseEstimator mixin + ContinuousDiD covariates move; (d) alias introduction [M-062] (the Spillover introduction is cancelled [M-063]) + the alias-diet `__getattr__` warning shim [M-135] + wrapper deprecations [M-070..M-077] + the two inference-surface policies: `n_bootstrap` semantic unification [M-081] and the wild-cluster-bootstrap roster guard [M-096]; shipped insertions (all done): the aggregate contract [M-122], the ETWFE reference-period family [M-123] [M-124] [M-125], and the variance-consolidation program [M-126] [M-127] |
 | 3: merges | 3.9 | (a) TWFE event-study mode [M-010] + EventStudy warn [M-060] + the fit `time`->`post` rename [M-082] (gates: section 4.1's equivalence/divergence/pooled-parity test triple); (b) TripleDifference facade [M-013] + the SDDD alias [M-064]; (c) CiC method= [M-015] |
 | 4: release + soak | 3.9 cut | Migration guide written (skeleton: section 10); maintainer cuts 3.9; maint/3.8 rule active |
-| 5: enforcement | 4.0 | Removals [M-010..M-015, M-020..M-027, M-030, M-032..M-047 old names, M-060, M-061, M-064, M-070..M-077, M-084, M-086..M-089, M-001..M-003, M-117] + the alias diet [M-132]..[M-134] + the amendment's old names [M-094] [M-095] [M-097..M-115] (incl. their consumer migrations and the `clean_control` serialized reporting key); M-031's old `time` name persists as the merged class's calendar column, so it is deliberately absent from the removal roster (its 4.0 enforcement is the M-085 behavior entry below); property window: [M-016] property-flips at 4.0 (removal at 5.0); storage flips [M-050..M-058]; default policies [M-004..M-006, M-128..M-131, M-080]; merged-class behavior enforcements [M-083] [M-085]; warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; docs/llms.txt/README refresh |
+| 5: enforcement | 4.0 | Removals [M-010..M-015, M-020..M-027, M-030, M-032..M-047 old names, M-060, M-061, M-064, M-070..M-077, M-084, M-086..M-089, M-001..M-003, M-117] + the alias diet [M-132]..[M-134] + the amendment's old names [M-094] [M-095] [M-097..M-115] [M-136..M-138] (incl. their consumer migrations and the `clean_control` serialized reporting key); M-031's old `time` name persists as the merged class's calendar column, so it is deliberately absent from the removal roster (its 4.0 enforcement is the M-085 behavior entry below); property window: [M-016] property-flips at 4.0 (removal at 5.0); storage flips [M-050..M-058]; default policies [M-004..M-006, M-128..M-131, M-080]; merged-class behavior enforcements [M-083] [M-085]; warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; docs/llms.txt/README refresh |
 | 6: front door | 4.1 | `event_study(data, outcome, unit, time, first_treat, estimator=...)` comparison entry point over the staggered family (sketch only; specified in its own plan) |
 
 Citation semantic for the table: a cell may cite a row whose current `phase`

@@ -148,8 +148,8 @@ serves a different purpose: R-parity accuracy). They complement it.
 - **Estimator + params.** Two variants in the same script:
   ```python
   # (a) Analytical TSL path
-  DifferenceInDifferences(robust=True).fit(
-      data, outcome="awareness", treatment="treated", time="post",
+  DifferenceInDifferences().fit(
+      data, outcome="awareness", treatment="treated", post="post",
       survey_design=SurveyDesign(weights="w", strata="stratum",
                                  psu="cluster", fpc="fpc"),
   )

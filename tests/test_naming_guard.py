@@ -486,14 +486,10 @@ _RULE1_TIME_SURFACES = (
     "equivalence_test_trends[time]",
     "joint_homogeneity_test[time]",
     "joint_pretrends_test[time]",
-    "leave_one_out_test[time]",
-    "permutation_test[time]",
     "placebo_group_test[time]",
     "placebo_timing_test[time]",
     "plot_staircase[time]",
     "profile_panel[time]",
-    "run_all_placebo_tests[time]",
-    "run_placebo_test[time]",
     "summarize_did_data[time]",
     "twowayfeweights[time]",
     "validate_did_data[time]",
@@ -505,6 +501,21 @@ SURFACE_ALLOWLIST = {
     "plot_group_effects[groups]": _CS_COHORT + " - cohort selector on the plotting surface",
     "TripleDifference.fit[group]": (
         "rule-3 reserved treated-group 0/1 indicator (v4-design section 8 rule 3)"
+    ),
+    "run_placebo_test[time]": (
+        "OVERLOADED pass-through, redesign pending (TODO.md): forwarded as "
+        "the calendar column to placebo_timing_test/placebo_group_test AND "
+        "as the 0/1 post dummy to permutation_test/leave_one_out_test "
+        "(M-137/M-138) - workable only because a two-period 0/1 calendar "
+        "column is both; a rename cannot fix the dual semantics"
+    ),
+    "run_all_placebo_tests[time]": (
+        "OVERLOADED pass-through, redesign pending (TODO.md) - see " "run_placebo_test[time]"
+    ),
+    "StackedDiD.clean_control": (
+        "M-043's deprecated estimator-attribute alias PROPERTY (warns and "
+        "returns control_group; dies with the param at 4.0) - the param row "
+        "covers the __init__ surface, this entry covers the property lane"
     ),
     **{key: _RULE1_TIME for key in _RULE1_TIME_SURFACES},
     "rank_control_units[lambda_reg]": (

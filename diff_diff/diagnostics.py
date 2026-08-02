@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 
+from diff_diff._deprecation import NOT_SUPPLIED, require_arg, resolve_renamed_kwarg
 from diff_diff.estimators import DifferenceInDifferences
 from diff_diff.results import _get_significance_stars
 from diff_diff.results_base import Diagnostic
@@ -325,7 +326,7 @@ def run_placebo_test(
             data=data,
             outcome=outcome,
             treatment=treatment,
-            time=time,
+            post=time,
             unit=unit,
             n_permutations=n_permutations,
             alpha=alpha,
@@ -340,7 +341,7 @@ def run_placebo_test(
             data=data,
             outcome=outcome,
             treatment=treatment,
-            time=time,
+            post=time,
             unit=unit,
             alpha=alpha,
             **estimator_kwargs,
@@ -415,13 +416,13 @@ def placebo_timing_test(
 
     # Fit DiD on pre-treatment data with fake post
     did = DifferenceInDifferences(**estimator_kwargs)
-    results = did.fit(pre_data, outcome=outcome, treatment=treatment, time="_fake_post")
+    results = did.fit(pre_data, outcome=outcome, treatment=treatment, post="_fake_post")
 
     # Also fit on full data for comparison
     data_with_post = data.copy()
     data_with_post["_post"] = data_with_post[time].isin(post_periods).astype(int)
     did_full = DifferenceInDifferences(**estimator_kwargs)
-    results_full = did_full.fit(data_with_post, outcome=outcome, treatment=treatment, time="_post")
+    results_full = did_full.fit(data_with_post, outcome=outcome, treatment=treatment, post="_post")
 
     return PlaceboTestResults(
         test_type="fake_timing",
@@ -547,7 +548,7 @@ def placebo_group_test(
 
     # Fit DiD
     did = DifferenceInDifferences(**estimator_kwargs)
-    results = did.fit(fake_data, outcome=outcome, treatment="_fake_treated", time="_post")
+    results = did.fit(fake_data, outcome=outcome, treatment="_fake_treated", post="_post")
 
     # Record the fake-treated units actually used (after any never-treated
     # filtering), not just the originally requested list, to avoid metadata drift.
@@ -573,11 +574,12 @@ def permutation_test(
     data: pd.DataFrame,
     outcome: str,
     treatment: str,
-    time: str,
-    unit: str,
+    post: Any = NOT_SUPPLIED,
+    unit: Any = NOT_SUPPLIED,
     n_permutations: int = 1000,
     alpha: float = 0.05,
     seed: Optional[int] = None,
+    time: Any = NOT_SUPPLIED,
     **estimator_kwargs,
 ) -> PlaceboTestResults:
     """
@@ -599,8 +601,9 @@ def permutation_test(
         Outcome variable column.
     treatment : str
         Treatment indicator column.
-    time : str
-        Time period column.
+    post : str
+        Post-period indicator column (0/1). (``time`` is a deprecated
+        alias; warns with ``FutureWarning`` and will be removed in 4.0.)
     unit : str
         Unit identifier column.
     n_permutations : int, default=1000
@@ -635,7 +638,13 @@ def permutation_test(
 
     # First, fit original model
     did = DifferenceInDifferences(**estimator_kwargs)
-    original_results = did.fit(data, outcome=outcome, treatment=treatment, time=time)
+    post = resolve_renamed_kwarg(
+        "permutation_test", "time", time, "post", post, default=NOT_SUPPLIED
+    )
+    require_arg("permutation_test", "post", post)
+    require_arg("permutation_test", "unit", unit)
+    time = post  # body-local name; the public parameter is post
+    original_results = did.fit(data, outcome=outcome, treatment=treatment, post=time)
     original_att = original_results.att
 
     # Get unit-level treatment assignment
@@ -658,7 +667,7 @@ def permutation_test(
         try:
             perm_did = DifferenceInDifferences(**estimator_kwargs)
             perm_results = perm_did.fit(
-                perm_data, outcome=outcome, treatment="_perm_treatment", time=time
+                perm_data, outcome=outcome, treatment="_perm_treatment", post=time
             )
             permuted_effects[i] = perm_results.att
         except (ValueError, KeyError, np.linalg.LinAlgError):
@@ -727,9 +736,10 @@ def leave_one_out_test(
     data: pd.DataFrame,
     outcome: str,
     treatment: str,
-    time: str,
-    unit: str,
+    post: Any = NOT_SUPPLIED,
+    unit: Any = NOT_SUPPLIED,
     alpha: float = 0.05,
+    time: Any = NOT_SUPPLIED,
     **estimator_kwargs,
 ) -> PlaceboTestResults:
     """
@@ -746,8 +756,9 @@ def leave_one_out_test(
         Outcome variable column.
     treatment : str
         Treatment indicator column.
-    time : str
-        Time period column.
+    post : str
+        Post-period indicator column (0/1). (``time`` is a deprecated
+        alias; warns with ``FutureWarning`` and will be removed in 4.0.)
     unit : str
         Unit identifier column.
     alpha : float, default=0.05
@@ -762,7 +773,13 @@ def leave_one_out_test(
     """
     # Fit original model
     did = DifferenceInDifferences(**estimator_kwargs)
-    original_results = did.fit(data, outcome=outcome, treatment=treatment, time=time)
+    post = resolve_renamed_kwarg(
+        "leave_one_out_test", "time", time, "post", post, default=NOT_SUPPLIED
+    )
+    require_arg("leave_one_out_test", "post", post)
+    require_arg("leave_one_out_test", "unit", unit)
+    time = post  # body-local name; the public parameter is post
+    original_results = did.fit(data, outcome=outcome, treatment=treatment, post=time)
     original_att = original_results.att
 
     # Get treated units
@@ -781,7 +798,7 @@ def leave_one_out_test(
 
         try:
             loo_did = DifferenceInDifferences(**estimator_kwargs)
-            loo_results = loo_did.fit(loo_data, outcome=outcome, treatment=treatment, time=time)
+            loo_results = loo_did.fit(loo_data, outcome=outcome, treatment=treatment, post=time)
             loo_effects[u] = loo_results.att
         except (ValueError, KeyError, np.linalg.LinAlgError):
             # Skip units that cause fitting issues
@@ -917,7 +934,7 @@ def run_all_placebo_tests(
             data=data,
             outcome=outcome,
             treatment=treatment,
-            time=time,
+            post=time,
             unit=unit,
             n_permutations=n_permutations,
             alpha=alpha,
@@ -938,7 +955,7 @@ def run_all_placebo_tests(
             data=data,
             outcome=outcome,
             treatment=treatment,
-            time=time,
+            post=time,
             unit=unit,
             alpha=alpha,
             **estimator_kwargs,

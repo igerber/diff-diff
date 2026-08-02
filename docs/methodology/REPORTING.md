@@ -151,7 +151,7 @@ A few branches read fit-time config from the result object:
   combined) vs `"post"` (just-identified single-baseline) branches
   `aggregation` between `"pt_all_combined"` and
   `"pt_post_single_baseline"`.
-- `StackedDiDResults.clean_control`: `"never_treated"` /
+- `StackedDiDResults.control_group`: `"never_treated"` /
   `"strict"` / `"not_yet_treated"` varies the `definition` clause
   describing which units qualify as controls.
 - `ChaisemartinDHaultfoeuilleResults.L_max` +

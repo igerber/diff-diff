@@ -111,7 +111,7 @@ class TestSubpopulationAnalysis:
             new_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             survey_design=new_sd,
         )
         assert np.isfinite(result.att)
@@ -563,7 +563,7 @@ class TestReplicateWeightVariance:
             data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             survey_design=sd,
         )
         assert np.isfinite(result.att)
@@ -1462,7 +1462,7 @@ class TestEstimatorReplicateWeights:
             outcome="y",
             group="d1",
             partition="d2",
-            time="post",
+            post="post",
             survey_design=sd,
         )
         assert np.isfinite(result.att)
@@ -1930,7 +1930,7 @@ class TestEffectiveSampleAndDfConsistency:
             outcome="y",
             group="d1",
             partition="d2",
-            time="post",
+            post="post",
             covariates=["x1", "x2", "x3"],
             survey_design=sd,
         )
@@ -2009,7 +2009,7 @@ class TestEffectiveSampleAndDfConsistency:
             outcome="y",
             group="d1",
             partition="d2",
-            time="post",
+            post="post",
             survey_design=sd,
         )
         sm = result.survey_metadata

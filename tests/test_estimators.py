@@ -80,7 +80,7 @@ class TestDifferenceInDifferences:
     def test_basic_fit(self, simple_2x2_data):
         """Test basic model fitting."""
         did = DifferenceInDifferences()
-        results = did.fit(simple_2x2_data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(simple_2x2_data, outcome="outcome", treatment="treated", post="post")
 
         assert isinstance(results, DiDResults)
         assert did.is_fitted_
@@ -91,7 +91,7 @@ class TestDifferenceInDifferences:
     def test_att_direction(self, simple_did_data):
         """Test that ATT is estimated in correct direction."""
         did = DifferenceInDifferences()
-        results = did.fit(simple_did_data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(simple_did_data, outcome="outcome", treatment="treated", post="post")
 
         # True ATT is 3.0, estimate should be close
         assert results.att > 0
@@ -114,14 +114,14 @@ class TestDifferenceInDifferences:
 
     def test_robust_vs_classical_se(self, simple_did_data):
         """Test that robust and classical SEs differ."""
-        did_robust = DifferenceInDifferences(robust=True)
-        did_classical = DifferenceInDifferences(robust=False)
+        did_robust = DifferenceInDifferences()
+        did_classical = DifferenceInDifferences(vcov_type="classical")
 
         results_robust = did_robust.fit(
-            simple_did_data, outcome="outcome", treatment="treated", time="post"
+            simple_did_data, outcome="outcome", treatment="treated", post="post"
         )
         results_classical = did_classical.fit(
-            simple_did_data, outcome="outcome", treatment="treated", time="post"
+            simple_did_data, outcome="outcome", treatment="treated", post="post"
         )
 
         # The vcov matrices should differ (HC1 vs classical)
@@ -134,7 +134,7 @@ class TestDifferenceInDifferences:
     def test_confidence_interval(self, simple_did_data):
         """Test confidence interval properties."""
         did = DifferenceInDifferences(alpha=0.05)
-        results = did.fit(simple_did_data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(simple_did_data, outcome="outcome", treatment="treated", post="post")
 
         lower, upper = results.conf_int
         assert lower < results.att < upper
@@ -142,10 +142,13 @@ class TestDifferenceInDifferences:
 
     def test_get_set_params(self):
         """Test sklearn-compatible get_params and set_params."""
-        did = DifferenceInDifferences(robust=True, alpha=0.05)
+        did = DifferenceInDifferences(alpha=0.05)
 
         params = did.get_params()
-        assert params["robust"] is True
+        # get_params returns the RAW sentinel-era robust arg (None when not
+        # supplied - row M-045); the resolved legacy bool stays on the attr.
+        assert params["robust"] is None
+        assert did.robust is True
         assert params["alpha"] == 0.05
 
         did.set_params(alpha=0.10)
@@ -154,7 +157,7 @@ class TestDifferenceInDifferences:
     def test_summary_output(self, simple_2x2_data):
         """Test that summary produces string output."""
         did = DifferenceInDifferences()
-        did.fit(simple_2x2_data, outcome="outcome", treatment="treated", time="post")
+        did.fit(simple_2x2_data, outcome="outcome", treatment="treated", post="post")
 
         summary = did.summary()
         assert isinstance(summary, str)
@@ -173,7 +176,7 @@ class TestDifferenceInDifferences:
 
         did = DifferenceInDifferences()
         with pytest.raises(ValueError, match="binary"):
-            did.fit(data, outcome="outcome", treatment="treated", time="post")
+            did.fit(data, outcome="outcome", treatment="treated", post="post")
 
     def test_missing_column_error(self):
         """Test error when column is missing."""
@@ -186,7 +189,7 @@ class TestDifferenceInDifferences:
 
         did = DifferenceInDifferences()
         with pytest.raises(ValueError, match="Missing columns"):
-            did.fit(data, outcome="outcome", treatment="treated", time="post")
+            did.fit(data, outcome="outcome", treatment="treated", post="post")
 
     def test_unfitted_model_error(self):
         """Test error when accessing results before fitting."""
@@ -207,7 +210,7 @@ class TestDifferenceInDifferences:
                 data,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 covariates=["collinear_cov"],
             )
 
@@ -227,7 +230,7 @@ class TestDifferenceInDifferences:
                 data,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 covariates=["collinear_cov"],
             )
 
@@ -263,7 +266,7 @@ class TestDifferenceInDifferences:
                 data,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 covariates=["collinear_cov"],
             )
 
@@ -282,7 +285,7 @@ class TestDiDResults:
     def test_repr(self, simple_2x2_data):
         """Test string representation."""
         did = DifferenceInDifferences()
-        results = did.fit(simple_2x2_data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(simple_2x2_data, outcome="outcome", treatment="treated", post="post")
 
         repr_str = repr(results)
         assert "DiDResults" in repr_str
@@ -291,7 +294,7 @@ class TestDiDResults:
     def test_to_dict(self, simple_2x2_data):
         """Test conversion to dictionary."""
         did = DifferenceInDifferences()
-        results = did.fit(simple_2x2_data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(simple_2x2_data, outcome="outcome", treatment="treated", post="post")
 
         result_dict = results.to_dict()
         assert "att" in result_dict
@@ -301,7 +304,7 @@ class TestDiDResults:
     def test_to_dataframe(self, simple_2x2_data):
         """Test conversion to DataFrame."""
         did = DifferenceInDifferences()
-        results = did.fit(simple_2x2_data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(simple_2x2_data, outcome="outcome", treatment="treated", post="post")
 
         df = results.to_dataframe()
         assert isinstance(df, pd.DataFrame)
@@ -311,7 +314,7 @@ class TestDiDResults:
     def test_significance_stars(self, simple_did_data):
         """Test significance star notation."""
         did = DifferenceInDifferences()
-        results = did.fit(simple_did_data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(simple_did_data, outcome="outcome", treatment="treated", post="post")
 
         # With true effect of 3.0 and n=200, should be significant
         assert results.significance_stars in ["*", "**", "***"]
@@ -319,7 +322,7 @@ class TestDiDResults:
     def test_is_significant_property(self, simple_did_data):
         """Test is_significant property."""
         did = DifferenceInDifferences(alpha=0.05)
-        results = did.fit(simple_did_data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(simple_did_data, outcome="outcome", treatment="treated", post="post")
 
         # Boolean check
         assert isinstance(results.is_significant, bool)
@@ -374,7 +377,7 @@ class TestFixedEffects:
             panel_data_with_fe,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             fixed_effects=["state"],
         )
 
@@ -390,7 +393,7 @@ class TestFixedEffects:
             panel_data_with_fe,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             fixed_effects=["state"],
         )
 
@@ -402,7 +405,7 @@ class TestFixedEffects:
         """Test absorbed (within-transformed) fixed effects."""
         did = DifferenceInDifferences()
         results = did.fit(
-            panel_data_with_fe, outcome="outcome", treatment="treated", time="post", absorb=["unit"]
+            panel_data_with_fe, outcome="outcome", treatment="treated", post="post", absorb=["unit"]
         )
 
         assert results is not None
@@ -416,14 +419,14 @@ class TestFixedEffects:
         did_with_fe = DifferenceInDifferences()
 
         results_no_fe = did_no_fe.fit(
-            panel_data_with_fe, outcome="outcome", treatment="treated", time="post"
+            panel_data_with_fe, outcome="outcome", treatment="treated", post="post"
         )
 
         results_with_fe = did_with_fe.fit(
             panel_data_with_fe,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             fixed_effects=["state"],
         )
 
@@ -442,7 +445,7 @@ class TestFixedEffects:
                 panel_data_with_fe,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 fixed_effects=["nonexistent_column"],
             )
 
@@ -454,7 +457,7 @@ class TestFixedEffects:
                 panel_data_with_fe,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 absorb=["nonexistent_column"],
             )
 
@@ -468,7 +471,7 @@ class TestFixedEffects:
             panel_data_with_fe,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             fixed_effects=["state", "industry"],
         )
 
@@ -489,7 +492,7 @@ class TestFixedEffects:
             panel_data_with_fe,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             covariates=["size"],
             fixed_effects=["state"],
         )
@@ -764,7 +767,7 @@ class TestEdgeCases:
                 data,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 covariates=["duplicate_treated"],
             )
             # Should emit a warning about rank deficiency
@@ -1106,12 +1109,12 @@ class TestClusterRobustSE:
 
         # With clustering
         did_cluster = DifferenceInDifferences(cluster="cluster")
-        results_cluster = did_cluster.fit(df, outcome="outcome", treatment="treated", time="post")
+        results_cluster = did_cluster.fit(df, outcome="outcome", treatment="treated", post="post")
 
         # Without clustering
-        did_no_cluster = DifferenceInDifferences(robust=True)
+        did_no_cluster = DifferenceInDifferences()
         results_no_cluster = did_no_cluster.fit(
-            df, outcome="outcome", treatment="treated", time="post"
+            df, outcome="outcome", treatment="treated", post="post"
         )
 
         # ATT should be similar
@@ -1432,7 +1435,7 @@ class TestMultiPeriodDiD:
     def test_cluster_robust_se(self, multi_period_data):
         """Test cluster-robust standard errors."""
         did_cluster = MultiPeriodDiD(cluster="unit")
-        did_robust = MultiPeriodDiD(robust=True)
+        did_robust = MultiPeriodDiD()
 
         results_cluster = did_cluster.fit(
             multi_period_data,
@@ -3220,7 +3223,7 @@ class TestUnbalancedPanels:
         df = pd.DataFrame(data)
 
         did = DifferenceInDifferences()
-        results = did.fit(df, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(df, outcome="outcome", treatment="treated", post="post")
 
         # Should still produce valid results
         assert np.isfinite(results.att)
@@ -3361,7 +3364,7 @@ class TestSingleTreatedUnit:
         df = pd.DataFrame(data)
 
         did = DifferenceInDifferences()
-        results = did.fit(df, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(df, outcome="outcome", treatment="treated", post="post")
 
         # Should produce valid results
         assert np.isfinite(results.att)
@@ -3458,7 +3461,7 @@ class TestCollinearityDetection:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             result = did.fit(
-                data, outcome="outcome", treatment="treated", time="post", covariates=["x1", "x2"]
+                data, outcome="outcome", treatment="treated", post="post", covariates=["x1", "x2"]
             )
             # Should emit a warning about rank deficiency
             rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)]
@@ -3493,7 +3496,7 @@ class TestCollinearityDetection:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             result = did.fit(
-                data, outcome="outcome", treatment="treated", time="post", covariates=["constant_x"]
+                data, outcome="outcome", treatment="treated", post="post", covariates=["constant_x"]
             )
             # Should emit a warning about rank deficiency
             rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)]
@@ -3520,7 +3523,7 @@ class TestCollinearityDetection:
 
         # Near-collinear should work (not perfectly rank-deficient)
         results = did.fit(
-            data, outcome="outcome", treatment="treated", time="post", covariates=["x1", "x2"]
+            data, outcome="outcome", treatment="treated", post="post", covariates=["x1", "x2"]
         )
 
         assert np.isfinite(results.att)
@@ -3777,7 +3780,7 @@ class TestAbsorbedRegressorSnap:
                 df,
                 outcome="y",
                 treatment="treated",
-                time="post",
+                post="post",
                 absorb=["state", "month"],
             )
         assert np.isnan(res.coefficients["treated"])
@@ -3796,7 +3799,7 @@ class TestAbsorbedRegressorSnap:
                 df,
                 outcome="y",
                 treatment="treated",
-                time="post",
+                post="post",
                 absorb=["state", "month"],
             )
         d = df.copy()
@@ -3908,7 +3911,7 @@ class TestReplicateRefitSnap:
                 df,
                 outcome="y",
                 treatment="treated",
-                time="post",
+                post="post",
                 absorb=["state", "month"],
                 covariates=["xc"],
                 survey_design=design,
@@ -3958,7 +3961,7 @@ class TestJointSpanCovariateSnap:
                 df,
                 outcome="y",
                 treatment="treated",
-                time="post",
+                post="post",
                 absorb=["unit", "time"],
             )
         with pytest.warns(UserWarning, match=r"xspan.*collinear with the absorbed"):
@@ -3966,7 +3969,7 @@ class TestJointSpanCovariateSnap:
                 df,
                 outcome="y",
                 treatment="treated",
-                time="post",
+                post="post",
                 absorb=["unit", "time"],
                 covariates=["xspan"],
             )

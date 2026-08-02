@@ -59,7 +59,7 @@ class TestFixestDiDTWFEParity:
         golden = _load_golden()
         df = _build_df(golden["did"])
         res = DifferenceInDifferences(vcov_type="classical").fit(
-            df, outcome="outcome", treatment="treated", time="post", unit="unit"
+            df, outcome="outcome", treatment="treated", post="post", unit="unit"
         )
         exp = golden["did"]["iid"]
         np.testing.assert_allclose(res.att, exp["att"], atol=1e-10, rtol=0)
@@ -88,7 +88,7 @@ class TestFixestDiDTWFEParity:
             assert key in golden, f"required golden block {key!r} missing — regenerate the fixture"
             df = _build_df(golden[key])
             res = DifferenceInDifferences(vcov_type="hc1", cluster="unit").fit(
-                df, outcome="outcome", treatment="treated", time="post", unit="unit"
+                df, outcome="outcome", treatment="treated", post="post", unit="unit"
             )
             exp = golden[key]["cluster_unit"]
             np.testing.assert_allclose(res.att, exp["att"], atol=1e-10, rtol=0)
@@ -138,7 +138,7 @@ class TestFixestHeteroskedasticParity:
         ), "required golden block 'did_hetero' missing — regenerate the fixture"
         df = _build_df(golden["did_hetero"])
         res = DifferenceInDifferences(vcov_type="hc1").fit(
-            df, outcome="outcome", treatment="treated", time="post", unit="unit"
+            df, outcome="outcome", treatment="treated", post="post", unit="unit"
         )
         exp = golden["did_hetero"]["hetero"]
         np.testing.assert_allclose(res.att, exp["att"], atol=1e-10, rtol=0)
@@ -153,7 +153,7 @@ class TestFixestHeteroskedasticParity:
         ), "required golden block 'did_hetero' missing — regenerate the fixture"
         df = _build_df(golden["did_hetero"])
         res = DifferenceInDifferences(vcov_type="classical").fit(
-            df, outcome="outcome", treatment="treated", time="post", unit="unit"
+            df, outcome="outcome", treatment="treated", post="post", unit="unit"
         )
         exp = golden["did_hetero"]["iid"]
         np.testing.assert_allclose(res.att, exp["att"], atol=1e-10, rtol=0)

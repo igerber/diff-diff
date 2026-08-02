@@ -45,7 +45,7 @@ def staggered_data():
 @pytest.fixture(scope="session")
 def did_results(did_data):
     did = DifferenceInDifferences()
-    return did.fit(did_data, outcome="outcome", treatment="treated", time="post")
+    return did.fit(did_data, outcome="outcome", treatment="treated", post="post")
 
 
 @pytest.fixture(scope="session")
@@ -328,7 +328,7 @@ class TestResultTypeDispatch:
         assert len(output["next_steps"]) > 0
         # StackedDiD uses clean_control, not control_group
         all_text = " ".join(s.get("code", "") + s.get("why", "") for s in output["next_steps"])
-        assert "not_yet_treated" not in all_text or "clean_control" in all_text
+        assert "not_yet_treated" not in all_text or "control_group" in all_text
 
     def test_synth_results(self, mock_synth_results):
         output = practitioner_next_steps(mock_synth_results, verbose=False)

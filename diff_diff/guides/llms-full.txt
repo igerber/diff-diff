@@ -19,7 +19,7 @@ data = generate_did_data(n_units=200, treatment_effect=5.0, seed=42)
 
 # Fit basic 2x2 DiD
 did = DifferenceInDifferences()
-results = did.fit(data, outcome='outcome', treatment='treated', time='post')
+results = did.fit(data, outcome='outcome', treatment='treated', post='post')
 print(results.summary())
 print(f"ATT: {results.att:.3f} (SE: {results.se:.3f})")
 ```
@@ -52,7 +52,7 @@ Basic 2x2 Difference-in-Differences estimator.
 
 ```python
 DifferenceInDifferences(
-    robust: bool = True,                    # HC1 robust standard errors
+    vcov_type: str | None = None,           # Variance family: "hc1" (default), "classical", "hc2", "hc2_bm", "conley"
     cluster: str | None = None,             # Column for cluster-robust SEs
     alpha: float = 0.05,                    # Significance level
     inference: str = "analytical",          # "analytical" or "wild_bootstrap"
@@ -73,7 +73,7 @@ did.fit(
     data: pd.DataFrame,
     outcome: str = None,                   # Outcome variable column
     treatment: str = None,                 # Treatment indicator column (0/1)
-    time: str = None,                      # Post-treatment indicator column (0/1)
+    post: str = None,                      # Post-treatment indicator column (0/1)
     formula: str = None,                   # R-style formula (e.g., "y ~ treated * post")
     covariates: list[str] = None,          # Linear control variables
     fixed_effects: list[str] = None,       # Low-dimensional FE (dummy variables)
@@ -81,20 +81,22 @@ did.fit(
 ) -> DiDResults
 ```
 
+`time=` remains accepted as a deprecated alias for `post=` (FutureWarning; removed in 4.0), and the `robust=` constructor flag as a deprecated alias for `vcov_type=`.
+
 **Usage:**
 
 ```python
 from diff_diff import DifferenceInDifferences
 
-did = DifferenceInDifferences(robust=True)
-results = did.fit(data, outcome='y', treatment='treated', time='post')
+did = DifferenceInDifferences()
+results = did.fit(data, outcome='y', treatment='treated', post='post')
 results.print_summary()
 
 # Formula interface
 results = did.fit(data, formula='y ~ treated * post')
 
 # With covariates and fixed effects
-results = did.fit(data, outcome='y', treatment='treated', time='post',
+results = did.fit(data, outcome='y', treatment='treated', post='post',
                   covariates=['age', 'income'], absorb=['firm_id'])
 ```
 
@@ -673,7 +675,6 @@ Triple Difference (DDD) estimator following Ortiz-Villavicencio & Sant'Anna (202
 ```python
 TripleDifference(
     estimation_method: str = "dr",            # "dr", "reg", or "ipw"
-    robust: bool = True,
     cluster: str | None = None,
     vcov_type: str = "hc1",                   # {"hc1"} only — IF-based variance per Ortiz-Villavicencio & Sant'Anna (2025). Analytical-sandwich {classical, hc2, hc2_bm} and conley REJECTED at __init__ (see REGISTRY.md IF-vs-sandwich subsection).
     alpha: float = 0.05,
@@ -692,7 +693,7 @@ ddd.fit(
     outcome: str,
     group: str,                # Treated group indicator (0/1)
     partition: str,            # Eligible partition indicator (0/1)
-    time: str,                 # Post-treatment indicator (0/1)
+    post: str,                 # Post-treatment indicator (0/1)
     covariates: list[str] = None,
 ) -> TripleDifferenceResults
 ```
@@ -704,7 +705,7 @@ from diff_diff import TripleDifference
 
 ddd = TripleDifference(estimation_method="dr")
 results = ddd.fit(data, outcome='outcome', group='group',
-                  partition='partition', time='post')
+                  partition='partition', post='post')
 results.print_summary()
 ```
 
@@ -725,7 +726,7 @@ ContinuousDiD(
     bootstrap_weights: str = "rademacher",
     seed: int | None = None,
     rank_deficient_action: str = "warn",
-    covariates: list[str] | None = None,      # Conditional parallel trends (X). None = unconditional
+    covariates: list[str] | None = None,      # DEPRECATED here (M-084; removed in 4.0) — pass covariates= to fit() instead
     estimation_method: str = "dr",            # "reg" or "dr" (used only with covariates); "ipw" not
                                               #   supported on the dose curve (raises NotImplementedError)
     pscore_trim: float = 0.01,                # dr propensity trimming
@@ -762,6 +763,7 @@ cdid.fit(
     first_treat: str,
     dose: str,                     # Column with continuous treatment dose
     aggregate: str = None,         # None, "dose", "eventstudy"
+    covariates: list[str] = None,  # Conditional parallel trends (X). None = unconditional
 ) -> ContinuousDiDResults
 ```
 
@@ -787,7 +789,7 @@ HeterogeneousAdoptionDiD(
     kernel: str = "epanechnikov",      # Local-linear kernel
     alpha: float = 0.05,
     vcov_type: str | None = None,      # Mass-point only: "classical" (default) or "hc1"
-    robust: bool = False,              # Mass-point only: HC1 robust SE shorthand
+    robust: bool | None = None,        # DEPRECATED alias for vcov_type= (M-047; FutureWarning, removed in 4.0)
     cluster: str | None = None,        # Cluster column for cluster-robust SEs (all designs; event-study adds a cluster-robust sup-t band). cluster= + survey_design= rejected
     n_bootstrap: int = 999,            # Multiplier-bootstrap iterations for sup-t bands (event-study, when weighted/survey OR clustered)
     seed: int | None = None,
@@ -848,7 +850,7 @@ es = est.fit(data_mp, outcome='y', unit='unit',
 
 **Staggered panels.** On multi-cohort panels with `aggregate="event_study"`, `fit()` auto-filters to the last treatment cohort plus never-treated units (paper Appendix B.2) and emits a `UserWarning` naming kept/dropped counts. The estimand is then a **last-cohort-only WAS**, not a multi-cohort average. For full multi-cohort staggered support, see `ChaisemartinDHaultfoeuille`.
 
-**Mass-point + survey constraint.** When fitting `design="mass_point"` with `survey_design=SurveyDesign(...)`, `vcov_type="hc1"` (or `robust=True`) is required: the survey path composes the standard error via Binder-TSL on the HC1-scale influence function, so the default classical sandwich path raises `NotImplementedError` — on both the static path and the event-study path (the event-study rejection fires regardless of `cband`, since the Binder-TSL analytical SE consumes the HC1-scaled IF either way). The one exception is `cluster=`: a clustered mass-point fit resolves to the CR1 sandwich regardless of `vcov_type` (and uses the clustered sup-t band), so there is no classical-vs-HC1 mismatch. Passing `vcov_type="hc1"` is a safe default on weighted survey + sup-t examples since `vcov_type` is unused on the continuous designs (CCT-2014 robust SE is the only formula there).
+**Mass-point + survey constraint.** When fitting `design="mass_point"` with `survey_design=SurveyDesign(...)`, `vcov_type="hc1"` is required: the survey path composes the standard error via Binder-TSL on the HC1-scale influence function, so the default classical sandwich path raises `NotImplementedError` — on both the static path and the event-study path (the event-study rejection fires regardless of `cband`, since the Binder-TSL analytical SE consumes the HC1-scaled IF either way). The one exception is `cluster=`: a clustered mass-point fit resolves to the CR1 sandwich regardless of `vcov_type` (and uses the clustered sup-t band), so there is no classical-vs-HC1 mismatch. Passing `vcov_type="hc1"` is a safe default on weighted survey + sup-t examples since `vcov_type` is unused on the continuous designs (CCT-2014 robust SE is the only formula there).
 
 ### RegressionDiscontinuity
 
@@ -1003,7 +1005,8 @@ StackedDiD(
     kappa_pre: int = 1,                       # Pre-treatment event-time periods
     kappa_post: int = 1,                      # Post-treatment event-time periods
     weighting: str = "aggregate",             # "aggregate", "population", or "sample_share"
-    clean_control: str = "not_yet_treated",   # "not_yet_treated", "strict", or "never_treated"
+    control_group: str = "not_yet_treated",   # "not_yet_treated", "strict", or "never_treated"
+    clean_control: str | None = None,         # DEPRECATED alias for control_group= (M-043; FutureWarning, removed in 4.0)
     cluster: str = "unit",                    # "unit" or "unit_subexp"
     alpha: float = 0.05,
     anticipation: int = 0,
@@ -1428,7 +1431,7 @@ The 3.8 name `cohort=` remains accepted as a deprecated alias for `first_treat=`
 results.aggregate("simple")    # Overall ATT
 results.aggregate("group")     # ATT by cohort
 results.aggregate("calendar")  # ATT by calendar period
-results.aggregate("event")     # ATT by event time (relative to treatment)
+results.aggregate("event_study")  # ATT by event time (relative to treatment)
 ```
 
 **Usage:**
@@ -1839,7 +1842,7 @@ Single-period results container for `HeterogeneousAdoptionDiD`. The table below 
 | `survey_metadata` | `SurveyMetadata | None` | Repo-standard survey metadata when `survey_design=` is supplied |
 | `bandwidth_diagnostics` | `BandwidthResult | None` | MSE-DPI selector output (continuous designs); `None` on `mass_point` |
 | `bias_corrected_fit` | `BiasCorrectedFit | None` | Phase 1c bias-corrected local-linear fit object (continuous designs); `None` on `mass_point` |
-| `variance_formula` | `str | None` | HAD-specific SE label on weighted fits, populated on BOTH continuous and mass-point designs: `"survey_binder_tsl"` (continuous, Binder 1983 TSL on the `survey_design=` path) or `"survey_binder_tsl_2sls"` (mass-point, Binder 1983 TSL on the `survey_design=` path; requires `vcov_type="hc1"` / `robust=True` — the mass-point survey path rejects `vcov_type="classical"`, and `cluster=` + `survey_design=` is rejected, so PSU clustering is expressed via `SurveyDesign(weights='<weight_col>', psu='<cluster_col>')`). `None` on unweighted fits |
+| `variance_formula` | `str | None` | HAD-specific SE label on weighted fits, populated on BOTH continuous and mass-point designs: `"survey_binder_tsl"` (continuous, Binder 1983 TSL on the `survey_design=` path) or `"survey_binder_tsl_2sls"` (mass-point, Binder 1983 TSL on the `survey_design=` path; requires `vcov_type="hc1"` — the mass-point survey path rejects `vcov_type="classical"`, and `cluster=` + `survey_design=` is rejected, so PSU clustering is expressed via `SurveyDesign(weights='<weight_col>', psu='<cluster_col>')`). `None` on unweighted fits |
 | `effective_dose_mean` | `float | None` | Weighted denominator used by the β̂-scale rescaling, populated on weighted fits across all designs: weighted `mean(d)` (`continuous_at_zero`), weighted `mean(d − d_lower)` (`continuous_near_d_lower`), or weighted Wald-IV dose gap `mean(d | Z=1, w) − mean(d | Z=0, w)` (`mass_point`). `None` on unweighted fits |
 
 **Methods:** `summary()`, `print_summary()`, `to_dict()`, `to_dataframe()`
@@ -1872,7 +1875,7 @@ Per-horizon event-study results container for `HeterogeneousAdoptionDiD` with `a
 | `bandwidth_diagnostics` | `list[BandwidthResult | None] | None` | Per-horizon MSE-DPI selector output (continuous designs); `None` on `mass_point`; entries can be `None` on degenerate horizons |
 | `bias_corrected_fit` | `list[BiasCorrectedFit | None] | None` | Per-horizon Phase 1c bias-corrected local-linear fit objects; `None` on `mass_point`; entries can be `None` on degenerate horizons |
 | `filter_info` | `dict | None` | Staggered last-cohort auto-filter metadata (`F_last`, `n_kept`, `n_dropped`, `dropped_cohorts`); `None` when no filter applied |
-| `variance_formula` | `str | None` | HAD-specific SE label applied UNIFORMLY across all horizons, populated on BOTH continuous and mass-point designs: `"survey_binder_tsl"` (continuous, Binder 1983 TSL on the `survey_design=` path) or `"survey_binder_tsl_2sls"` (mass-point, Binder 1983 TSL on the `survey_design=` path; requires `vcov_type="hc1"` / `robust=True` — the mass-point survey path rejects `vcov_type="classical"`, and `cluster=` + `survey_design=` is rejected, so PSU clustering is expressed via `SurveyDesign(weights='<weight_col>', psu='<cluster_col>')`). `None` on unweighted fits |
+| `variance_formula` | `str | None` | HAD-specific SE label applied UNIFORMLY across all horizons, populated on BOTH continuous and mass-point designs: `"survey_binder_tsl"` (continuous, Binder 1983 TSL on the `survey_design=` path) or `"survey_binder_tsl_2sls"` (mass-point, Binder 1983 TSL on the `survey_design=` path; requires `vcov_type="hc1"` — the mass-point survey path rejects `vcov_type="classical"`, and `cluster=` + `survey_design=` is rejected, so PSU clustering is expressed via `SurveyDesign(weights='<weight_col>', psu='<cluster_col>')`). `None` on unweighted fits |
 | `effective_dose_mean` | `float | None` | Weighted denominator used by the β̂-scale rescaling, populated on weighted fits across all designs: weighted `sum(w·d)/sum(w)` (`continuous_at_zero`), weighted `sum(w·(d − d_lower))/sum(w)` (`continuous_near_d_lower`), or weighted Wald-IV dose gap (`mass_point`). Scalar (not per-horizon) because the β̂-scale denominator is computed once on the fit sample. `None` on unweighted fits |
 | `cband_low` | `np.ndarray | None` | Simultaneous (sup-t) band lower bounds; `None` when `cband=False` or on unweighted, unclustered fits (a clustered fit produces the band even when unweighted) |
 | `cband_high` | `np.ndarray | None` | Simultaneous (sup-t) band upper bounds |
@@ -1948,12 +1951,14 @@ placebo_group_test(data, outcome, time, unit,
                    fake_treated_units, post_periods=None, alpha=0.05)
 
 # Permutation test
-permutation_test(data, outcome, treatment, time, unit,
+permutation_test(data, outcome, treatment, post, unit,
                  n_permutations=1000, alpha=0.05, seed=None)
 
 # Leave-one-out test
-leave_one_out_test(data, outcome, treatment, time, unit, alpha=0.05)
+leave_one_out_test(data, outcome, treatment, post, unit, alpha=0.05)
 ```
+
+`permutation_test` / `leave_one_out_test` accept `time=` as a deprecated alias for `post=` (FutureWarning; removed in 4.0). The `run_placebo_test` / `run_all_placebo_tests` wrappers keep their `time` parameter.
 
 All return `PlaceboTestResults` with attributes: `test_type`, `placebo_effect`, `se`, `t_stat`, `p_value`, `conf_int`, `n_obs`, `is_significant`.
 
@@ -1991,7 +1996,7 @@ from diff_diff import wild_bootstrap_se, WildBootstrapResults
 # Directly via estimator
 did = DifferenceInDifferences(inference="wild_bootstrap", n_bootstrap=999,
                               bootstrap_weights="webb", cluster="state")
-results = did.fit(data, outcome='y', treatment='treated', time='post')
+results = did.fit(data, outcome='y', treatment='treated', post='post')
 ```
 
 ## HAD Pretests
@@ -2463,7 +2468,6 @@ from diff_diff import LinearRegression, InferenceResult
 # Low-level regression helper
 reg = LinearRegression(
     include_intercept=True,
-    robust=True,
     cluster_ids=cluster_array,
 )
 reg.fit(X, y)
@@ -2551,7 +2555,7 @@ did_res = DifferenceInDifferences(
     conley_coords=("lat", "lon"),
     conley_cutoff_km=200.0,
     conley_lag_cutoff=1,
-).fit(data, outcome="y", treatment="treated", time="post", unit="unit_id")
+).fit(data, outcome="y", treatment="treated", post="post", unit="unit_id")
 
 # Combined spatial + cluster product kernel: pass cluster=<col> alongside
 # Conley to apply K_total[i,j] = K_space(d_ij/h) · 1{c_i = c_j}. On the

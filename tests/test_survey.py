@@ -235,8 +235,8 @@ class TestAnalyticalVerification:
         did = DifferenceInDifferences()
         sd1 = SurveyDesign(weights="w1", weight_type="pweight")
         sd2 = SurveyDesign(weights="w2", weight_type="pweight")
-        r1 = did.fit(df, outcome="outcome", treatment="treated", time="post", survey_design=sd1)
-        r2 = did.fit(df, outcome="outcome", treatment="treated", time="post", survey_design=sd2)
+        r1 = did.fit(df, outcome="outcome", treatment="treated", post="post", survey_design=sd1)
+        r2 = did.fit(df, outcome="outcome", treatment="treated", post="post", survey_design=sd2)
 
         np.testing.assert_allclose(r1.att, r2.att, atol=1e-10)
         np.testing.assert_allclose(r1.se, r2.se, atol=1e-10)
@@ -593,7 +593,7 @@ class TestIntegration:
             survey_2x2_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             survey_design=sd,
         )
 
@@ -628,7 +628,7 @@ class TestIntegration:
                 survey_2x2_data,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 survey_design=sd,
             )
             psu_warnings = [
@@ -649,7 +649,7 @@ class TestIntegration:
             survey_2x2_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             absorb=["stratum"],
             survey_design=sd,
         )
@@ -659,7 +659,7 @@ class TestIntegration:
             survey_2x2_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             absorb=["stratum"],
         )
 
@@ -682,7 +682,7 @@ class TestIntegration:
             survey_2x2_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             survey_design=sd,
         )
         summary_text = result.summary()
@@ -707,7 +707,7 @@ class TestIntegration:
             survey_2x2_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             survey_design=sd,
         )
         d = result.to_dict()
@@ -735,7 +735,7 @@ class TestIntegration:
                 survey_2x2_data,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 survey_design=sd,
             )
 
@@ -859,7 +859,7 @@ class TestIntegration:
                 survey_2x2_data,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 survey_design={"weights": "weight"},  # dict instead of SurveyDesign
             )
 
@@ -1133,7 +1133,7 @@ class TestMonteCarlo:
                     df,
                     outcome="outcome",
                     treatment="treated",
-                    time="post",
+                    post="post",
                     survey_design=sd,
                 )
                 if result.conf_int[0] <= true_att <= result.conf_int[1]:
@@ -1443,7 +1443,6 @@ class TestWeightedRankDeficiency:
         model = LinearRegression(
             weights=pw,
             weight_type="pweight",
-            robust=True,
             include_intercept=False,
             rank_deficient_action="warn",
         )
@@ -1790,7 +1789,6 @@ class TestRound5Fixes:
         model_explicit = LinearRegression(
             weights=weights_norm,
             weight_type="pweight",
-            robust=True,
             survey_design=resolved,
         )
         X = np.column_stack([np.ones(n), x1])
@@ -1798,7 +1796,6 @@ class TestRound5Fixes:
 
         # Auto-derive path: no explicit weights
         model_auto = LinearRegression(
-            robust=True,
             survey_design=resolved,
         )
         model_auto.fit(X, y)
@@ -2188,7 +2185,7 @@ class TestZeroWeightPsuConventionWaiver:
     def _fit(self, df):
         sd = SurveyDesign(weights="w", strata="stratum", psu="psu")
         res = DifferenceInDifferences().fit(
-            df, outcome="outcome", treatment="treated", time="post", survey_design=sd
+            df, outcome="outcome", treatment="treated", post="post", survey_design=sd
         )
         return res.att, res.se
 
@@ -2453,7 +2450,7 @@ class TestRound9Fixes:
                 df,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 absorb=["region"],
                 survey_design=sd,
             )
@@ -2464,7 +2461,7 @@ class TestRound9Fixes:
             df,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             fixed_effects=["region"],
             survey_design=sd,
         )
@@ -2670,7 +2667,7 @@ class TestRound10Fixes:
                 df,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 survey_design=sd,
             )
         # SE should be 0 (all certainty strata), inference should be NaN
@@ -2762,7 +2759,7 @@ class TestRound10Fixes:
                 df,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 absorb=["region"],
             )
 
@@ -2795,7 +2792,7 @@ class TestRound11Fixes:
             lonely_psu="remove",
         )
 
-        lr = LinearRegression(survey_design=resolved, robust=True)
+        lr = LinearRegression(survey_design=resolved)
 
         # First fit: 2 clusters → survey_df = 2 - 1 = 1
         cluster_1 = np.array([0] * 10 + [1] * 10)
@@ -2839,7 +2836,7 @@ class TestRound11Fixes:
                 df,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 absorb=["a", "b"],
                 survey_design=sd,
             )
@@ -2847,7 +2844,7 @@ class TestRound11Fixes:
                 df,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 fixed_effects=["a", "b"],
                 survey_design=sd,
             )
@@ -2921,7 +2918,7 @@ class TestRound11Fixes:
                 df,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 absorb=["region"],
                 survey_design=sd,
             )
@@ -3367,7 +3364,7 @@ class TestRound18Fixes:
                 df,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 survey_design=sd,
             )
         assert np.isfinite(result.att)

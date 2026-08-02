@@ -85,7 +85,7 @@ BAD_VALUES = {
     "TwoStageDiD": {"vcov_type": "hc4"},
     "TripleDifference": {"vcov_type": "hc4"},
     "EfficientDiD": {"vcov_type": "hc4"},
-    "StackedDiD": {"clean_control": "not_a_mode"},
+    "StackedDiD": {"control_group": "not_a_mode"},
     "LPDiD": {"alpha": 5.0},
     "ChangesInChanges": {"alpha": 5.0},
     "QDiD": {"alpha": 5.0},
