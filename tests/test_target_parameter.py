@@ -8,7 +8,7 @@ Covers:
 - Fit-time config reads are honored:
   - ``EfficientDiDResults.pt_assumption`` branches the tag between
     ``pt_all_combined`` and ``pt_post_single_baseline``.
-  - ``StackedDiDResults.clean_control`` varies the ``definition``
+  - ``StackedDiDResults.control_group`` varies the ``definition``
     clause (never_treated vs strict vs not_yet_treated).
   - ``ChaisemartinDHaultfoeuilleResults.L_max`` + ``covariate_residuals``
     + ``linear_trends_effects`` branches the dCDH estimand tag.
@@ -93,7 +93,7 @@ class TestTargetParameterPerEstimator:
 
     def test_stacked(self):
         tp = describe_target_parameter(
-            _minimal_result("StackedDiDResults", clean_control="not_yet_treated")
+            _minimal_result("StackedDiDResults", control_group="not_yet_treated")
         )
         assert tp["aggregation"] == "stacked"
         assert tp["headline_attribute"] == "overall_att"
@@ -380,16 +380,16 @@ class TestTargetParameterFitConfigReads:
     """Parameterized fit-config-branching tests."""
 
     @pytest.mark.parametrize(
-        "clean_control, expected_clause",
+        "control_group, expected_clause",
         [
             ("never_treated", "never-treated"),
             ("strict", "strictly untreated"),
             ("not_yet_treated", "not yet treated"),
         ],
     )
-    def test_stacked_clean_control_branches_definition(self, clean_control, expected_clause):
+    def test_stacked_control_group_branches_definition(self, control_group, expected_clause):
         tp = describe_target_parameter(
-            _minimal_result("StackedDiDResults", clean_control=clean_control)
+            _minimal_result("StackedDiDResults", control_group=control_group)
         )
         assert tp["aggregation"] == "stacked"
         assert expected_clause in tp["definition"]
