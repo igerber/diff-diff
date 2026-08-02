@@ -674,6 +674,24 @@ class TestValidationMessagesRecommendCanonicalNames:
         assert "first_treat_col" not in message
 
 
+class TestPretestValidationMessagesUseCanonicalNames:
+    """CI review R3 on PR #742: invalid-period errors from the renamed
+    pretest APIs must describe the canonical ``time`` parameter, never the
+    deprecated ``time_col`` spelling."""
+
+    def test_invalid_period_messages_exclude_time_col(self, had_multi_panel):
+        from diff_diff import joint_homogeneity_test, joint_pretrends_test
+
+        for func, kw in (
+            (joint_pretrends_test, {"pre_periods": [99], "base_period": 1}),
+            (joint_homogeneity_test, {"post_periods": [99], "base_period": 1}),
+        ):
+            with pytest.raises(ValueError) as exc:
+                func(had_multi_panel, "y", "dose", "t", "u", n_bootstrap=9, **kw)
+            message = str(exc.value)
+            assert "time_col" not in message, message
+
+
 class TestFirstTreatOptionalAliasPerSurface:
     """M-039 / M-102 / M-107 / M-112: the OPTIONAL first_treat_col alias,
     pinned per surface (warn + routing parity + both-supplied rejection)."""

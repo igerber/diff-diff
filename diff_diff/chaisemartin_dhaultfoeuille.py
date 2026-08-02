@@ -1361,7 +1361,7 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
             missing_controls = [c for c in controls if c not in data.columns]
             if missing_controls:
                 raise ValueError(
-                    f"Control column(s) {missing_controls!r} not found in "
+                    f"Covariate column(s) {missing_controls!r} not found in "
                     f"data. Available columns: {list(data.columns)}"
                 )
             # SurveyDesign.subpopulation() contract: zero-weight rows are

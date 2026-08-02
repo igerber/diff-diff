@@ -2565,7 +2565,7 @@ def _aggregate_for_joint_test(
     missing_periods = [t for t in needed_periods if t not in data_periods]
     if missing_periods:
         raise ValueError(
-            f"Period(s) {missing_periods} not found in time_col "
+            f"Period(s) {missing_periods} not found in the time column "
             f"{time_col!r}. Available periods: "
             f"{sorted(data_periods, key=lambda x: (x is None, x))}."
         )
@@ -3520,7 +3520,7 @@ def joint_pretrends_test(
     period_rank = _build_period_rank(data, time_col)
     if base_period not in period_rank:
         raise ValueError(
-            f"base_period={base_period!r} not found in time_col "
+            f"base_period={base_period!r} not found in the time column "
             f"{time_col!r}. Available: "
             f"{sorted(period_rank.keys(), key=lambda t: period_rank[t])!r}."
         )
@@ -3528,7 +3528,7 @@ def joint_pretrends_test(
     if missing_pre_in_data:
         raise ValueError(
             f"pre_periods entries {missing_pre_in_data!r} not found in "
-            f"time_col {time_col!r}. Available: "
+            f"the time column {time_col!r}. Available: "
             f"{sorted(period_rank.keys(), key=lambda t: period_rank[t])!r}."
         )
     base_rank = period_rank[base_period]
@@ -3917,7 +3917,7 @@ def joint_homogeneity_test(
     period_rank = _build_period_rank(data, time_col)
     if base_period not in period_rank:
         raise ValueError(
-            f"base_period={base_period!r} not found in time_col "
+            f"base_period={base_period!r} not found in the time column "
             f"{time_col!r}. Available: "
             f"{sorted(period_rank.keys(), key=lambda t: period_rank[t])!r}."
         )
@@ -3925,7 +3925,7 @@ def joint_homogeneity_test(
     if missing_post_in_data:
         raise ValueError(
             f"post_periods entries {missing_post_in_data!r} not found in "
-            f"time_col {time_col!r}. Available: "
+            f"the time column {time_col!r}. Available: "
             f"{sorted(period_rank.keys(), key=lambda t: period_rank[t])!r}."
         )
     base_rank = period_rank[base_period]
