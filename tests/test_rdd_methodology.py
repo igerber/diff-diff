@@ -231,7 +231,7 @@ class TestFuzzy:
         df["t"] = (df["x"] >= 0).astype(float)
         with warnings.catch_warnings(record=True) as rec:
             warnings.simplefilter("always")
-            fz = RegressionDiscontinuity().fit(df, "y", "x", treatment_col="t")
+            fz = RegressionDiscontinuity().fit(df, "y", "x", takeup="t")
         sharp = RegressionDiscontinuity().fit(df, "y", "x")
         # Bandwidths are BIT-identical (perf_comp nulls T, so selection is
         # the same sharp arithmetic); the estimates agree to the ULP - the
@@ -264,7 +264,7 @@ class TestFuzzy:
         # estimation stays fuzzy.
         df = _fuzzy_df(1200, seed=12)
         df.loc[df["x"] < 0, "t"] = 0.0
-        fz = RegressionDiscontinuity().fit(df, "y", "x", treatment_col="t")
+        fz = RegressionDiscontinuity().fit(df, "y", "x", takeup="t")
         sharp = RegressionDiscontinuity().fit(df, "y", "x")
         assert fz.h_left == sharp.h_left and fz.b_right == sharp.b_right
         assert fz.first_stage is not None and fz.first_stage > 0
@@ -272,8 +272,8 @@ class TestFuzzy:
 
     def test_sharpbw_true_selects_sharp_bandwidths(self):
         df = _fuzzy_df(1200, seed=14)
-        fz_sbw = RegressionDiscontinuity(sharpbw=True).fit(df, "y", "x", treatment_col="t")
-        fz_def = RegressionDiscontinuity().fit(df, "y", "x", treatment_col="t")
+        fz_sbw = RegressionDiscontinuity(sharpbw=True).fit(df, "y", "x", takeup="t")
+        fz_def = RegressionDiscontinuity().fit(df, "y", "x", takeup="t")
         sharp = RegressionDiscontinuity().fit(df, "y", "x")
         assert fz_sbw.h_left == sharp.h_left
         assert fz_sbw.h_left != fz_def.h_left  # fuzzy objective differs
@@ -281,8 +281,8 @@ class TestFuzzy:
     def test_outcome_scaling_scales_ratio_not_first_stage(self):
         df = _fuzzy_df(900, seed=15)
         scaled = df.assign(y=df.y * 7.0)
-        a = RegressionDiscontinuity(h=0.3).fit(df, "y", "x", treatment_col="t")
-        b = RegressionDiscontinuity(h=0.3).fit(scaled, "y", "x", treatment_col="t")
+        a = RegressionDiscontinuity(h=0.3).fit(df, "y", "x", takeup="t")
+        b = RegressionDiscontinuity(h=0.3).fit(scaled, "y", "x", takeup="t")
         assert b.att == pytest.approx(7.0 * a.att, rel=1e-12)
         assert b.se == pytest.approx(7.0 * a.se, rel=1e-12)
         # The take-up fits never see y: bit-identical first stage.
@@ -299,7 +299,7 @@ class TestFuzzy:
         with warnings.catch_warnings(record=True) as rec:
             warnings.simplefilter("always")
             with pytest.raises(ValueError, match="no variation and no jump"):
-                RegressionDiscontinuity(masspoints="check").fit(df, "y", "x", treatment_col="t")
+                RegressionDiscontinuity(masspoints="check").fit(df, "y", "x", takeup="t")
         assert not any("Mass points detected" in str(w.message) for w in rec)
 
     def test_weak_first_stage_warns(self):
@@ -310,13 +310,13 @@ class TestFuzzy:
         df = _fuzzy_df(800, seed=17)
         df["t"] = (rng.uniform(size=800) < 0.4).astype(float)
         with pytest.warns(UserWarning, match="Weak first stage"):
-            RegressionDiscontinuity().fit(df, "y", "x", treatment_col="t")
+            RegressionDiscontinuity().fit(df, "y", "x", takeup="t")
 
     def test_strong_first_stage_no_warning(self):
         df = _fuzzy_df(1500, seed=18)
         with warnings.catch_warnings(record=True) as rec:
             warnings.simplefilter("always")
-            RegressionDiscontinuity().fit(df, "y", "x", treatment_col="t")
+            RegressionDiscontinuity().fit(df, "y", "x", takeup="t")
         assert not any("Weak first stage" in str(w.message) for w in rec)
 
     def test_degenerate_pilot_first_stage_fails_closed(self):
@@ -333,7 +333,7 @@ class TestFuzzy:
         with pytest.raises(ValueError, match="non-finite pilot bandwidth"):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                RegressionDiscontinuity().fit(df, "y", "x", treatment_col="t")
+                RegressionDiscontinuity().fit(df, "y", "x", takeup="t")
 
     def test_manual_h_zero_first_stage_nan_gates(self):
         # Same construction with a manual h: estimation-time tau_T == 0
@@ -348,7 +348,7 @@ class TestFuzzy:
         df = pd.DataFrame({"x": x, "y": y, "t": t})
         with warnings.catch_warnings(record=True) as rec:
             warnings.simplefilter("always")
-            r = RegressionDiscontinuity(h=0.3).fit(df, "y", "x", treatment_col="t")
+            r = RegressionDiscontinuity(h=0.3).fit(df, "y", "x", takeup="t")
         assert np.isnan(r.att)
         assert_nan_inference(
             {"se": r.se, "t_stat": r.t_stat, "p_value": r.p_value, "conf_int": r.conf_int}
@@ -365,7 +365,7 @@ class TestFuzzy:
         y = 0.5 * x + 1.0 * t + rng.standard_normal(15) * 0.1
         df = pd.DataFrame({"x": x, "y": y, "t": t})
         with pytest.warns(UserWarning, match="entire sample"):
-            r = RegressionDiscontinuity().fit(df, "y", "x", treatment_col="t")
+            r = RegressionDiscontinuity().fit(df, "y", "x", takeup="t")
         assert r.bwselect == "Manual"
         assert r.first_stage is not None
         assert r.estimand.startswith("fuzzy")
@@ -377,8 +377,8 @@ class TestFuzzy:
         df = _fuzzy_df(900, seed=20)
         with warnings.catch_warnings(record=True) as rec:
             warnings.simplefilter("always")
-            a = RegressionDiscontinuity(h=0.3, sharpbw=True).fit(df, "y", "x", treatment_col="t")
-        b = RegressionDiscontinuity(h=0.3).fit(df, "y", "x", treatment_col="t")
+            a = RegressionDiscontinuity(h=0.3, sharpbw=True).fit(df, "y", "x", takeup="t")
+        b = RegressionDiscontinuity(h=0.3).fit(df, "y", "x", takeup="t")
         assert a.att == b.att and a.se == b.se
         assert not any("sharpbw" in str(w.message) for w in rec)
 
@@ -397,7 +397,7 @@ class TestFuzzy:
         df = pd.DataFrame({"x": x, "y": np.ones(n), "t": t})
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            r = RegressionDiscontinuity(h=0.5).fit(df, "y", "x", treatment_col="t")
+            r = RegressionDiscontinuity(h=0.5).fit(df, "y", "x", takeup="t")
         assert r.att == pytest.approx(0.0, abs=1e-12)
         assert abs(r.se) < 1e-12  # O(eps) scale, may not be exactly zero
         assert np.isfinite(r.first_stage) and np.isfinite(r.first_stage_se)
@@ -563,9 +563,7 @@ class TestCovariates:
         df = self._cov_df()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            r = RegressionDiscontinuity().fit(
-                df, "y", "x", treatment_col="t", covariates=["zlong", "zb"]
-            )
+            r = RegressionDiscontinuity().fit(df, "y", "x", takeup="t", covariates=["zlong", "zb"])
         assert r.t_stat == pytest.approx(r.att / r.se, rel=1e-14)
         mid = 0.5 * (r.conf_int[0] + r.conf_int[1])
         assert mid == pytest.approx(r.att, rel=1e-12)
@@ -584,7 +582,7 @@ class TestCovariates:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             fz = RegressionDiscontinuity().fit(
-                df, "y", "x", treatment_col="t_det", covariates=["zlong", "zb"]
+                df, "y", "x", takeup="t_det", covariates=["zlong", "zb"]
             )
             sh = RegressionDiscontinuity().fit(df, "y", "x", covariates=["zlong", "zb"])
         assert fz.h_left == sh.h_left and fz.b_left == sh.b_left
@@ -601,7 +599,7 @@ class TestCovariates:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             fz = RegressionDiscontinuity(sharpbw=True).fit(
-                df, "y", "x", treatment_col="t", covariates=["zlong", "zb"]
+                df, "y", "x", takeup="t", covariates=["zlong", "zb"]
             )
             sh_adj = RegressionDiscontinuity().fit(df, "y", "x", covariates=["zlong", "zb"])
             sh_plain = RegressionDiscontinuity().fit(df, "y", "x")

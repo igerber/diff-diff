@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
+from diff_diff._deprecation import NOT_SUPPLIED, require_arg, resolve_renamed_kwarg
 from diff_diff.linalg import (
     compute_robust_vcov,
     effective_cluster_count,
@@ -1102,11 +1103,12 @@ class WooldridgeDiD(BaseEstimator):
         outcome: str,
         unit: str,
         time: str,
-        cohort: str,
+        first_treat: Any = NOT_SUPPLIED,
         exovar: Optional[List[str]] = None,
         xtvar: Optional[List[str]] = None,
         xgvar: Optional[List[str]] = None,
         survey_design=None,
+        cohort: Any = NOT_SUPPLIED,
     ) -> WooldridgeDiDResults:
         """Fit the ETWFE model.  See class docstring for parameter details.
 
@@ -1116,7 +1118,7 @@ class WooldridgeDiD(BaseEstimator):
         outcome : outcome column name
         unit : unit identifier column
         time : time period column
-        cohort : first treatment period (0 or NaN = never treated)
+        first_treat : first treatment period column (0 or NaN = never treated)
         exovar : time-invariant covariates added without interaction/demeaning
         xtvar : time-varying covariates (demeaned within cohort×period cells
                 when ``demean_covariates=True``)
@@ -1126,7 +1128,21 @@ class WooldridgeDiD(BaseEstimator):
             stratified, clustered, and weighted designs via Taylor Series
             Linearization (TSL).  Replicate-weight designs raise
             ``NotImplementedError``.
+        cohort : str, optional
+            Deprecated alias for ``first_treat`` (row M-032); warns with
+            ``FutureWarning`` and will be removed in 4.0.
         """
+        first_treat = resolve_renamed_kwarg(
+            "WooldridgeDiD.fit",
+            "cohort",
+            cohort,
+            "first_treat",
+            first_treat,
+            default=NOT_SUPPLIED,
+        )
+        require_arg("WooldridgeDiD.fit", "first_treat", first_treat)
+        # Body-local name; the public parameter is first_treat (M-032).
+        cohort = first_treat
         df = data.copy()
         df = _warn_and_fill_nan_cohort(df, cohort, stacklevel=2)
 

@@ -100,7 +100,7 @@ def _fit(golden, dgp_name, cfg, cfg_name=None):
             df,
             "y",
             "x",
-            treatment_col=treatment_col,
+            takeup=treatment_col,
             covariates=covariates,
         )
 

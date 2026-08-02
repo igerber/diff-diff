@@ -218,10 +218,10 @@ def naive_overall_result(panel_2p: pd.DataFrame):
         warnings.filterwarnings("ignore", category=UserWarning)
         return HAD(design="auto").fit(
             panel_2p,
-            outcome_col="screening_uptake",
-            dose_col="spend_k",
-            time_col="period",
-            unit_col="state_id",
+            outcome="screening_uptake",
+            dose="spend_k",
+            time="period",
+            unit="state_id",
         )
 
 
@@ -231,10 +231,10 @@ def survey_overall_result(panel_2p: pd.DataFrame, survey_design: SurveyDesign):
         warnings.filterwarnings("ignore", category=UserWarning)
         return HAD(design="auto").fit(
             panel_2p,
-            outcome_col="screening_uptake",
-            dose_col="spend_k",
-            time_col="period",
-            unit_col="state_id",
+            outcome="screening_uptake",
+            dose="spend_k",
+            time="period",
+            unit="state_id",
             survey_design=survey_design,
         )
 
@@ -245,11 +245,11 @@ def survey_event_study_result(panel: pd.DataFrame, survey_design: SurveyDesign):
         warnings.filterwarnings("ignore", category=UserWarning)
         return HAD(design="auto").fit(
             panel,
-            outcome_col="screening_uptake",
-            dose_col="spend_k",
-            time_col="week",
-            unit_col="state_id",
-            first_treat_col="first_treat",
+            outcome="screening_uptake",
+            dose="spend_k",
+            time="week",
+            unit="state_id",
+            first_treat="first_treat",
             aggregate="event_study",
             survey_design=survey_design,
             cband=True,
@@ -262,10 +262,10 @@ def overall_report(panel_2p: pd.DataFrame, survey_design: SurveyDesign):
         warnings.filterwarnings("ignore", category=UserWarning)
         return did_had_pretest_workflow(
             panel_2p,
-            outcome_col="screening_uptake",
-            dose_col="spend_k",
-            time_col="period",
-            unit_col="state_id",
+            outcome="screening_uptake",
+            dose="spend_k",
+            time="period",
+            unit="state_id",
             survey_design=survey_design,
             aggregate="overall",
             n_bootstrap=N_BOOTSTRAP,
@@ -279,11 +279,11 @@ def event_study_report(panel: pd.DataFrame, survey_design: SurveyDesign):
         warnings.filterwarnings("ignore", category=UserWarning)
         return did_had_pretest_workflow(
             panel,
-            outcome_col="screening_uptake",
-            dose_col="spend_k",
-            time_col="week",
-            unit_col="state_id",
-            first_treat_col="first_treat",
+            outcome="screening_uptake",
+            dose="spend_k",
+            time="week",
+            unit="state_id",
+            first_treat="first_treat",
             survey_design=survey_design,
             aggregate="event_study",
             n_bootstrap=N_BOOTSTRAP,

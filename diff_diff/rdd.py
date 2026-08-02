@@ -7,7 +7,7 @@ Implements the local-polynomial RD estimators of Calonico, Cattaneo &
 Titiunik (2014). SHARP (default): treatment is assigned by
 ``running >= cutoff``; the effect is the jump in the conditional
 expectation of the outcome at the cutoff. FUZZY (pass
-``fit(..., treatment_col=...)`` with the OBSERVED take-up column):
+``fit(..., takeup=...)`` with the OBSERVED take-up column):
 crossing the cutoff shifts take-up rather than determining it, and the
 estimand is the local Wald ratio - the outcome jump divided by the
 take-up jump - which for BINARY take-up under monotonicity is the LATE
@@ -34,8 +34,8 @@ covariate); imbalanced covariates make the adjusted estimator
 inconsistent, and adjusting "for" imbalance cannot restore
 identification. Balance is testable with the estimator itself::
 
-    balance = RegressionDiscontinuity().fit(df, outcome_col="z1",
-                                            running_col="x")
+    balance = RegressionDiscontinuity().fit(df, outcome="z1",
+                                            running="x")
     balance.p_value  # small p = imbalance; do not adjust for z1
 
 Bandwidths are covariate-AWARE (covariates propagate into selection, not
@@ -75,7 +75,7 @@ diff-diff                R rdrobust
 ``kernel``               ``kernel`` (accepts "tri"/"epa"/"uni" too)
 ``masspoints``           ``masspoints`` ("adjust"/"check"/"off")
 ``nnmatch``              ``nnmatch``
-``treatment_col`` (fit)  ``fuzzy`` (observed take-up variable)
+``takeup`` (fit)         ``fuzzy`` (observed take-up variable)
 ``sharpbw``              ``sharpbw`` (same default and semantics)
 ``covariates`` (fit)     ``covs`` (column names instead of a matrix)
 ``covs_drop``            ``covs_drop`` (same default and semantics)
@@ -112,6 +112,12 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
+from diff_diff._deprecation import (
+    NOT_SUPPLIED,
+    deprecated_field_property,
+    require_arg,
+    resolve_renamed_kwarg,
+)
 from diff_diff._rdrobust_port import (
     BWSELECT_OPTIONS,
     _fuzzy_identification_stop,
@@ -225,15 +231,17 @@ class RegressionDiscontinuityResults(BaseResults):
     # cutoff)" for BINARY take-up; or "fuzzy (local Wald ratio at the
     # cutoff; non-binary take-up)" when the take-up column is not {0, 1}
     # (the complier-LATE reading does not apply to dose take-up).
-    # ``treatment_col`` is the fit-time take-up column name
+    # ``takeup`` is the fit-time take-up column name
     # (None on sharp fits; no ``_input`` suffix - that convention is
     # reserved for constructor arguments); ``sharpbw`` and ``covs_drop``
     # echo the constructor flags. The estimand label deliberately does NOT
     # change under covariate adjustment: CCFT 2019 covariates target the
     # SAME estimand (precision only) - see ``covariates`` below.
+    # (The deprecated read-only alias ``treatment_col`` warns and returns
+    # ``takeup``; removed in 4.0 - row M-094.)
     estimand: str
     sharpbw: bool
-    treatment_col: Optional[str]
+    takeup: Optional[str]
     covs_drop: bool
 
     # First-stage (take-up jump) three-row mirror - fuzzy fits only, all
@@ -280,6 +288,22 @@ class RegressionDiscontinuityResults(BaseResults):
     beta_p_right: np.ndarray = field(repr=False, default=None)
     beta_t_p_left: Optional[np.ndarray] = field(repr=False, default=None)
     beta_t_p_right: Optional[np.ndarray] = field(repr=False, default=None)
+
+    # Deprecated read-only alias for ``takeup`` (row M-094; removed in 4.0).
+    # No annotation, so it stays a descriptor and never becomes a
+    # __dataclass_fields__ entry.
+    treatment_col = deprecated_field_property(
+        "RegressionDiscontinuityResults", "treatment_col", "takeup"
+    )
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        """Migrate pickles created before the ``treatment_col`` -> ``takeup``
+        rename (row M-094): rewrite the key on load so both the new field
+        and the deprecated alias work on old pickles."""
+        if "treatment_col" in state and "takeup" not in state:
+            state = dict(state)
+            state["takeup"] = state.pop("treatment_col")
+        self.__dict__.update(state)
 
     def summary(self) -> str:
         """Human-readable summary with the three-row rdrobust table."""
@@ -456,7 +480,10 @@ class RegressionDiscontinuityResults(BaseResults):
             "rho_input": self.rho_input,
             "estimand": self.estimand,
             "sharpbw": self.sharpbw,
-            "treatment_col": self.treatment_col,
+            "takeup": self.takeup,
+            # Deprecated key mirroring ``takeup`` through the 3.9 shim
+            # window; dropped in 4.0 (row M-094, section 5 policy).
+            "treatment_col": self.takeup,
             "covs_drop": self.covs_drop,
             # List/dict-valued covariate echoes (None on unadjusted fits;
             # the lpdid/continuous_did echo convention).
@@ -496,7 +523,7 @@ class RegressionDiscontinuity(BaseEstimator):
     SHARP (default): treatment is defined by the running variable crossing
     a known cutoff (``running >= cutoff`` treated, matching rdrobust:
     units exactly at the cutoff are treated). FUZZY: pass the observed
-    take-up column via ``fit(..., treatment_col=...)`` - the estimand
+    take-up column via ``fit(..., takeup=...)`` - the estimand
     becomes the local Wald ratio (complier LATE at the cutoff for binary
     take-up under monotonicity; the ``estimand`` results field says which
     reading applies) and the results gain a first-stage block.
@@ -558,7 +585,7 @@ class RegressionDiscontinuity(BaseEstimator):
         Scale of the IK-style regularization in bandwidth selection
         (0 removes it).
     sharpbw : bool, default False
-        Fuzzy fits only (``fit(..., treatment_col=...)``): when True,
+        Fuzzy fits only (``fit(..., takeup=...)``): when True,
         bandwidths are selected for the SHARP reduced-form estimator on
         the outcome (rdrobust's "approach 1") instead of the default
         fuzzy-ratio objective. Automatically in effect - regardless of
@@ -582,9 +609,9 @@ class RegressionDiscontinuity(BaseEstimator):
     Examples
     --------
     >>> rd = RegressionDiscontinuity(cutoff=0.0)
-    >>> results = rd.fit(df, outcome_col="y", running_col="x")
+    >>> results = rd.fit(df, outcome="y", running="x")
     >>> results.att, results.conf_int  # robust bias-corrected inference
-    >>> fuzzy = rd.fit(df, "y", "x", treatment_col="takeup")  # fuzzy RD
+    >>> fuzzy = rd.fit(df, "y", "x", takeup="takeup")  # fuzzy RD
     >>> fuzzy.att, fuzzy.first_stage  # local Wald ratio + take-up jump
     """
 
@@ -702,10 +729,13 @@ class RegressionDiscontinuity(BaseEstimator):
     def fit(
         self,
         data: pd.DataFrame,
-        outcome_col: str,
-        running_col: str,
-        treatment_col: Optional[str] = None,
+        outcome: Any = NOT_SUPPLIED,
+        running: Any = NOT_SUPPLIED,
+        takeup: Any = NOT_SUPPLIED,
         covariates: Optional[List[str]] = None,
+        outcome_col: Any = NOT_SUPPLIED,
+        running_col: Any = NOT_SUPPLIED,
+        treatment_col: Any = NOT_SUPPLIED,
     ) -> RegressionDiscontinuityResults:
         """Estimate the RD effect at the cutoff (sharp or fuzzy, optionally
         covariate-adjusted).
@@ -714,9 +744,9 @@ class RegressionDiscontinuity(BaseEstimator):
         ----------
         data : pd.DataFrame
             Cross-sectional data.
-        outcome_col, running_col : str
+        outcome, running : str
             Column names of the outcome and the running variable.
-        treatment_col : str or None, default None
+        takeup : str or None, default None
             ``None`` (sharp design): treatment is derived as
             ``running >= cutoff``; no treatment column is needed. A column
             name activates the FUZZY design: the column holds the OBSERVED
@@ -745,7 +775,43 @@ class RegressionDiscontinuity(BaseEstimator):
             dropped with a warning under ``covs_drop=True``; see the
             ``covariates*`` results fields for the echo and the fitted
             projection coefficients.
+        outcome_col, running_col, treatment_col : str, optional
+            Deprecated aliases for ``outcome`` / ``running`` / ``takeup``
+            (rows M-040..M-042); each warns with ``FutureWarning`` and
+            will be removed in 4.0.
         """
+        qualname = "RegressionDiscontinuity.fit"
+        outcome = resolve_renamed_kwarg(
+            qualname,
+            "outcome_col",
+            outcome_col,
+            "outcome",
+            outcome,
+            default=NOT_SUPPLIED,
+        )
+        require_arg(qualname, "outcome", outcome)
+        running = resolve_renamed_kwarg(
+            qualname,
+            "running_col",
+            running_col,
+            "running",
+            running,
+            default=NOT_SUPPLIED,
+        )
+        require_arg(qualname, "running", running)
+        takeup = resolve_renamed_kwarg(
+            qualname,
+            "treatment_col",
+            treatment_col,
+            "takeup",
+            takeup,
+            default=None,
+        )
+        # Body-local names; the public parameters are outcome/running/takeup
+        # (M-040..M-042).
+        outcome_col = outcome
+        running_col = running
+        treatment_col = takeup
         cols = [outcome_col, running_col]
         if treatment_col is not None:
             cols.append(treatment_col)
@@ -778,7 +844,7 @@ class RegressionDiscontinuity(BaseEstimator):
             # Deviation from R, which silently ignores sharpbw on sharp
             # fits (no-silent-failures policy; same pattern as b-without-h).
             warnings.warn(
-                "sharpbw has no effect without treatment_col (sharp design) " "and is ignored.",
+                "sharpbw has no effect without takeup (sharp design) " "and is ignored.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -1166,7 +1232,7 @@ class RegressionDiscontinuity(BaseEstimator):
             rho_input=None if self.rho is None else float(self.rho),
             estimand=estimand,
             sharpbw=bool(self.sharpbw),
-            treatment_col=treatment_col,
+            takeup=treatment_col,
             covs_drop=bool(self.covs_drop),
             covariates=None if covariates is None else list(covariates),
             covariates_dropped=covariates_dropped,

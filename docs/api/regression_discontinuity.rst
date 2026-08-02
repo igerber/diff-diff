@@ -9,7 +9,7 @@ parity-targeting R ``rdrobust`` 4.0.0.
 observed running variable (``running >= cutoff``; units exactly at the
 cutoff are treated, matching rdrobust). The effect is the jump in the
 conditional expectation of the outcome at the cutoff. **Fuzzy** (pass the
-observed take-up column via ``fit(..., treatment_col=...)``): crossing
+observed take-up column via ``fit(..., takeup=...)``): crossing
 the cutoff shifts take-up instead of determining it, and the estimand is
 the local Wald ratio - for binary take-up under monotonicity, the LATE
 for compliers at the cutoff; for non-binary take-up, the ratio of jumps

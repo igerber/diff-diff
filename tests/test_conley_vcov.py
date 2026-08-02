@@ -3412,7 +3412,7 @@ class TestConleyWooldridge:
             conley_coords=("lat", "lon"),
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=1,
-        ).fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+        ).fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
         assert np.isfinite(res.overall_att)
         assert np.isfinite(res.overall_se) and res.overall_se > 0
         assert res.vcov_type == "conley"
@@ -3428,7 +3428,7 @@ class TestConleyWooldridge:
             conley_coords=("lat", "lon"),
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=0,
-        ).fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+        ).fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
         assert np.isfinite(res.overall_se) and res.overall_se > 0
         assert res.conley_lag_cutoff == 0
 
@@ -3442,7 +3442,7 @@ class TestConleyWooldridge:
             conley_coords=("lat", "lon"),
             conley_cutoff_km=2500.0,
             conley_lag_cutoff=1,
-        ).fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+        ).fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
         ref_coef, ref_se = _full_dummy_conley_treatment(df, 2500.0, 1)
         assert res.overall_att == pytest.approx(ref_coef, abs=1e-8)
         assert res.overall_se == pytest.approx(ref_se, abs=1e-7)
@@ -3451,7 +3451,7 @@ class TestConleyWooldridge:
         from diff_diff import WooldridgeDiD
 
         df = _two_group_panel(seed=34)
-        kw = dict(outcome="y", unit="unit", time="time", cohort="cohort")
+        kw = dict(outcome="y", unit="unit", time="time", first_treat="cohort")
         r_conley = WooldridgeDiD(
             vcov_type="conley",
             conley_coords=("lat", "lon"),
@@ -3465,7 +3465,7 @@ class TestConleyWooldridge:
         from diff_diff import WooldridgeDiD
 
         df = _two_group_panel(seed=35)
-        kw = dict(outcome="y", unit="unit", time="time", cohort="cohort")
+        kw = dict(outcome="y", unit="unit", time="time", first_treat="cohort")
         plain = WooldridgeDiD(
             vcov_type="conley",
             conley_coords=("lat", "lon"),
@@ -3500,7 +3500,7 @@ class TestConleyWooldridge:
                 outcome="y",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
                 survey_design=SurveyDesign(weights="w"),
             )
 
@@ -3515,7 +3515,7 @@ class TestConleyWooldridge:
                 conley_cutoff_km=2000.0,
                 conley_lag_cutoff=1,
                 n_bootstrap=20,
-            ).fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+            ).fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
 
     def test_reject_logit_plus_conley_at_init(self):
         from diff_diff import WooldridgeDiD
@@ -3530,7 +3530,7 @@ class TestConleyWooldridge:
         with pytest.raises(ValueError):
             WooldridgeDiD(
                 vcov_type="conley", conley_coords=("lat", "lon"), conley_lag_cutoff=1
-            ).fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+            ).fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
 
     def test_unbalanced_panel_alignment(self):
         from diff_diff import WooldridgeDiD
@@ -3543,7 +3543,7 @@ class TestConleyWooldridge:
             conley_coords=("lat", "lon"),
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=1,
-        ).fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+        ).fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
         assert np.isfinite(res.overall_se) and res.overall_se > 0
 
     def test_atomic_set_params_round_trip(self):
@@ -3570,7 +3570,7 @@ class TestConleyWooldridge:
         from diff_diff import WooldridgeDiD
 
         df = _staggered_panel(seed=51)
-        kw = dict(outcome="y", unit="unit", time="time", cohort="cohort")
+        kw = dict(outcome="y", unit="unit", time="time", first_treat="cohort")
         ck = dict(conley_coords=("lat", "lon"), conley_cutoff_km=3000.0, conley_lag_cutoff=1)
         r_conley = WooldridgeDiD(vcov_type="conley", cohort_trends=True, **ck).fit(df, **kw)
         r_hc1 = WooldridgeDiD(vcov_type="hc1", cohort_trends=True).fit(df, **kw)
@@ -3585,7 +3585,7 @@ class TestConleyWooldridge:
         finite overall + per-key SEs (no NaN/crash on the conley path)."""
         from diff_diff import WooldridgeDiD
 
-        kw = dict(outcome="y", unit="unit", time="time", cohort="cohort")
+        kw = dict(outcome="y", unit="unit", time="time", first_treat="cohort")
         ck = dict(conley_coords=("lat", "lon"), conley_cutoff_km=3000.0, conley_lag_cutoff=1)
         for agg, field in (
             ("group", "group_effects"),
@@ -3607,7 +3607,7 @@ class TestConleyWooldridge:
         per-key SEs."""
         from diff_diff import WooldridgeDiD
 
-        kw = dict(outcome="y", unit="unit", time="time", cohort="cohort")
+        kw = dict(outcome="y", unit="unit", time="time", first_treat="cohort")
         ck = dict(conley_coords=("lat", "lon"), conley_cutoff_km=3000.0, conley_lag_cutoff=1)
         for agg, field in (
             ("group", "group_effects"),
@@ -3631,7 +3631,7 @@ class TestConleyWooldridge:
         from diff_diff import WooldridgeDiD
 
         df = _staggered_panel(seed=62)
-        kw = dict(outcome="y", unit="unit", time="time", cohort="cohort")
+        kw = dict(outcome="y", unit="unit", time="time", first_treat="cohort")
         ck = dict(conley_coords=("lat", "lon"), conley_cutoff_km=3000.0, conley_lag_cutoff=1)
         r_conley = WooldridgeDiD(vcov_type="conley", control_group="never_treated", **ck).fit(
             df, **kw

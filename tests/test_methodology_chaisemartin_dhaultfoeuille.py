@@ -63,7 +63,7 @@ class TestMethodologyWorkedExample:
             results = est.fit(
                 panel,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -98,7 +98,7 @@ class TestMethodologyWorkedExample:
             results = est.fit(
                 panel,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -121,7 +121,7 @@ class TestMethodologyWorkedExample:
         results = est.fit(
             panel,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -148,7 +148,7 @@ class TestMethodologyWorkedExample:
         results = est.fit(
             panel,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -194,7 +194,7 @@ class TestMethodologyWorkedExample:
         results = est.fit(
             df,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -298,7 +298,7 @@ class TestCohortRecenteringCritical:
             results = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -401,7 +401,7 @@ class TestCohortRecenteringCritical:
             results = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -430,7 +430,7 @@ class TestTWFEDiagnostic:
             results = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -486,7 +486,7 @@ class TestTWFEDiagnostic:
         result = twowayfeweights(
             df,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -505,7 +505,7 @@ class TestTWFEDiagnostic:
             results = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -536,7 +536,7 @@ class TestLargeNRecovery:
             results = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -559,7 +559,7 @@ class TestLargeNRecovery:
             results = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )

@@ -533,8 +533,8 @@ exceeding 2% routes to ``mass_point``; otherwise
 
    # Check the resolved estimand after fitting
    est = HeterogeneousAdoptionDiD()
-   results = est.fit(had_data, outcome_col='y', unit_col='unit',
-                     time_col='period', dose_col='dose',
+   results = est.fit(had_data, outcome='y', unit='unit',
+                     time='period', dose='dose',
                      aggregate='event_study')
    print(f"Resolved: {results.target_parameter}")
 
@@ -590,8 +590,8 @@ SE path is not used here).
    had_data = pd.DataFrame(rows)
 
    est = HeterogeneousAdoptionDiD()
-   results = est.fit(had_data, outcome_col='y', unit_col='unit',
-                     time_col='period', dose_col='dose',
+   results = est.fit(had_data, outcome='y', unit='unit',
+                     time='period', dose='dose',
                      aggregate='event_study')
 
    # Inspect the resolved design
@@ -640,12 +640,12 @@ full SE-regime contract.
 raises on a staggered panel.
 
 **Cause:** The Appendix B.2 event-study extension requires either a
-common-adoption panel (single first-treat period; ``first_treat_col`` is
+common-adoption panel (single first-treat period; ``first_treat`` is
 then optional and the period is inferred from the dose invariant) or a
-staggered panel with ``first_treat_col`` provided so the estimator can
+staggered panel with ``first_treat`` provided so the estimator can
 auto-filter to the last-treatment cohort plus never-treated units (with
 a ``UserWarning``). The fit raises only when the panel is staggered
-**and** ``first_treat_col`` is missing.
+**and** ``first_treat`` is missing.
 
 **Solutions:**
 
@@ -675,12 +675,12 @@ a ``UserWarning``). The fit raises only when the panel is staggered
            rows.append((u, t, d_ut, ft, y_ut))
    data = pd.DataFrame(rows, columns=["unit", "period", "dose", "first_treat", "y"])
 
-   # Primary remedy: pass `first_treat_col` so the estimator auto-filters
+   # Primary remedy: pass `first_treat` so the estimator auto-filters
    # to the last-treatment cohort + never-treated and emits a UserWarning.
    est = HeterogeneousAdoptionDiD()
-   results = est.fit(data, outcome_col='y', unit_col='unit',
-                     time_col='period', dose_col='dose',
-                     first_treat_col='first_treat',
+   results = est.fit(data, outcome='y', unit='unit',
+                     time='period', dose='dose',
+                     first_treat='first_treat',
                      aggregate='event_study')
 
    # Equivalent: subset to the last-treatment cohort + never-treated
@@ -688,8 +688,8 @@ a ``UserWarning``). The fit raises only when the panel is staggered
    last_cohort = data['first_treat'].max()
    subset = data[(data['first_treat'] == last_cohort) |
                  (data['first_treat'] == 0)]
-   results = est.fit(subset, outcome_col='y', unit_col='unit',
-                     time_col='period', dose_col='dose',
+   results = est.fit(subset, outcome='y', unit='unit',
+                     time='period', dose='dose',
                      aggregate='event_study')
 
 Imputation / Two-Stage DiD Issues

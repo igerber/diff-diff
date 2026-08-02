@@ -116,7 +116,7 @@ def fitted_results():
         ).fit(cd_data, "outcome", "unit", "period", "first_treat", "dose")
 
         out["WooldridgeDiDResults"] = WooldridgeDiD().fit(
-            load_mpdta(), outcome="lemp", unit="countyreal", time="year", cohort="first_treat"
+            load_mpdta(), outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
         )
 
         out["ChaisemartinDHaultfoeuilleResults"] = _dcdh_fit()
@@ -280,5 +280,5 @@ def _dcdh_fit():
 
     data = generate_reversible_did_data(n_groups=50, n_periods=8, pattern="joiners_only", seed=42)
     return ChaisemartinDHaultfoeuille(twfe_diagnostic=False).fit(
-        data, outcome="outcome", group="group", time="period", treatment="treatment", L_max=1
+        data, outcome="outcome", unit="group", time="period", treatment="treatment", L_max=1
     )

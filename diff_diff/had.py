@@ -72,6 +72,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
+from diff_diff._deprecation import NOT_SUPPLIED, require_arg, resolve_renamed_kwarg
 from diff_diff.bootstrap_chunking import (
     compute_block_size,
     iter_survey_multiplier_weight_blocks,
@@ -1104,7 +1105,7 @@ def _validate_had_panel(
         if bool(ft_raw.isna().any()):
             n_nan = int(ft_raw.isna().sum())
             raise ValueError(
-                f"first_treat_col={first_treat_col!r} contains "
+                f"first_treat={first_treat_col!r} contains "
                 f"{n_nan} NaN value(s) at the row level. Use 0 for "
                 f"never-treated units and t_post for treated, and drop "
                 f"or impute any NaN rows before calling fit()."
@@ -1117,7 +1118,7 @@ def _validate_had_panel(
         bad = sorted(observed_raw - valid_values, key=lambda x: str(x))
         if bad:
             raise ValueError(
-                f"first_treat_col={first_treat_col!r} contains value(s) "
+                f"first_treat={first_treat_col!r} contains value(s) "
                 f"{bad} outside the allowed set {{0, {t_post!r}}} for a "
                 f"two-period HAD panel. Staggered timing with multiple "
                 f"cohorts is Phase 2b."
@@ -1130,7 +1131,7 @@ def _validate_had_panel(
         if (ft_per_unit_nunique > 1).any():
             n_bad = int((ft_per_unit_nunique > 1).sum())
             raise ValueError(
-                f"first_treat_col={first_treat_col!r} is not constant "
+                f"first_treat={first_treat_col!r} is not constant "
                 f"within unit for {n_bad} unit(s). Each unit must have "
                 f"a single first_treat value across both observed periods."
             )
@@ -1228,12 +1229,12 @@ def _validate_had_panel_event_study(
     ):
         raise ValueError(
             f"HAD aggregate='event_study' requires an ordered time "
-            f"column. time_col={time_col!r} has dtype={time_dtype!r}, "
+            f"column. time={time_col!r} has dtype={time_dtype!r}, "
             f"which has no defined chronological order; raw sort would "
             f"fall back to lexicographic ordering and silently misindex "
             f"event-time horizons (e.g., 'pre1'/'pre2'/'post1'/'post2' "
             f"sorts lexicographically but not chronologically). "
-            f"Convert time_col to numeric (e.g., integer year), "
+            f"Convert the time column to numeric (e.g., integer year), "
             f"datetime, or ordered categorical "
             f"(``pd.Categorical(..., ordered=True, categories=[...])``) "
             f"before calling fit() with aggregate='event_study'."
@@ -1276,7 +1277,7 @@ def _validate_had_panel_event_study(
         if bool(ft_raw.isna().any()):
             n_nan = int(ft_raw.isna().sum())
             raise ValueError(
-                f"first_treat_col={first_treat_col!r} contains "
+                f"first_treat={first_treat_col!r} contains "
                 f"{n_nan} NaN value(s) at the row level. Use 0 for "
                 f"never-treated units and the treatment-start period "
                 f"for treated units. Drop or impute any NaN rows "
@@ -1287,7 +1288,7 @@ def _validate_had_panel_event_study(
         if (ft_per_unit_nunique > 1).any():
             n_bad = int((ft_per_unit_nunique > 1).sum())
             raise ValueError(
-                f"first_treat_col={first_treat_col!r} is not constant "
+                f"first_treat={first_treat_col!r} is not constant "
                 f"within unit for {n_bad} unit(s). Each unit must have "
                 f"a single first_treat value across all observed periods."
             )
@@ -1320,13 +1321,13 @@ def _validate_had_panel_event_study(
         if n_mismatch > 0:
             u, declared, actual = example_mismatch  # type: ignore[misc]
             raise ValueError(
-                f"first_treat_col={first_treat_col!r} disagrees with the "
+                f"first_treat={first_treat_col!r} disagrees with the "
                 f"observed dose path for {n_mismatch} unit(s). Example: "
                 f"unit={u!r} declares first_treat={declared!r} but the "
                 f"unit's first period with D>0 is {actual!r} "
                 f"(None means never-treated). A mislabeled cohort column "
                 f"would silently select the wrong cohort as F_last in the "
-                f"last-cohort auto-filter. Fix the first_treat_col values "
+                f"last-cohort auto-filter. Fix the first_treat values "
                 f"to equal each unit's first positive-dose period (or 0 "
                 f"for never-treated) before calling fit()."
             )
@@ -1529,12 +1530,12 @@ def _validate_had_panel_event_study(
             # Sort chronologically via the validated time-column order.
             distinct_cohorts = sorted(cohort_labels, key=_sort_key)
             raise ValueError(
-                f"Staggered-timing panel detected (first_treat_col is "
+                f"Staggered-timing panel detected (first_treat= is "
                 f"None): {len(distinct_cohorts)} distinct first-positive-"
                 f"dose periods {distinct_cohorts!r} across units. HAD's "
                 f"last-cohort auto-filter (paper Appendix B.2) only runs "
-                f"when first_treat_col is supplied so the estimator can "
-                f"identify cohorts. Pass first_treat_col=<column> to "
+                f"when first_treat= is supplied so the estimator can "
+                f"identify cohorts. Pass first_treat=<column> to "
                 f"enable the auto-filter to the last cohort, or use "
                 f"ChaisemartinDHaultfoeuille (did_multiplegt_dyn) for "
                 f"full staggered support."
@@ -2820,8 +2821,8 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
     ... })
     >>> est = HeterogeneousAdoptionDiD(design="auto")  # doctest: +SKIP
     >>> result = est.fit(  # doctest: +SKIP
-    ...     data, outcome_col="outcome", dose_col="dose",
-    ...     time_col="period", unit_col="unit",
+    ...     data, outcome="outcome", dose="dose",
+    ...     time="period", unit="unit",
     ... )
     >>> result.design  # doctest: +SKIP
     'continuous_at_zero'
@@ -2918,17 +2919,22 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
     def fit(
         self,
         data: pd.DataFrame,
-        outcome_col: str,
-        dose_col: str,
-        time_col: str,
-        unit_col: str,
-        first_treat_col: Optional[str] = None,
+        outcome: Any = NOT_SUPPLIED,
+        dose: Any = NOT_SUPPLIED,
+        time: Any = NOT_SUPPLIED,
+        unit: Any = NOT_SUPPLIED,
+        first_treat: Any = NOT_SUPPLIED,
         aggregate: str = "overall",
         *,
         cband: bool = True,
         survey_design: Any = None,
         trends_lin: bool = False,
         covariates: Any = None,
+        outcome_col: Any = NOT_SUPPLIED,
+        dose_col: Any = NOT_SUPPLIED,
+        time_col: Any = NOT_SUPPLIED,
+        unit_col: Any = NOT_SUPPLIED,
+        first_treat_col: Any = NOT_SUPPLIED,
     ) -> Union[HeterogeneousAdoptionDiDResults, HeterogeneousAdoptionDiDEventStudyResults]:
         """Fit the HAD estimator.
 
@@ -2955,9 +2961,9 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
         Parameters
         ----------
         data : pd.DataFrame
-        outcome_col, dose_col, time_col, unit_col : str
+        outcome, dose, time, unit : str
             Column names.
-        first_treat_col : str or None
+        first_treat : str or None
             Optional first-treatment column (the period at which each
             unit first receives treatment; ``0`` for never-treated).
             For common-adoption panels the column is optional; when
@@ -2965,13 +2971,13 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
             period ``F`` from the dose invariant. **Staggered-timing
             contract (HAD Appendix B.2):**
 
-            - **`first_treat_col` supplied + multiple cohorts detected**:
+            - **`first_treat` supplied + multiple cohorts detected**:
               auto-filter to the last-treatment cohort + never-treated
               units with a ``UserWarning`` naming kept / dropped counts.
-            - **`first_treat_col` omitted + multiple distinct first-
+            - **`first_treat` omitted + multiple distinct first-
               positive-dose cohorts inferred from the dose path**: the
               estimator FAIL-CLOSES with ``ValueError`` directing the
-              user to either pass ``first_treat_col`` (activates the
+              user to either pass ``first_treat`` (activates the
               auto-filter) or use :class:`ChaisemartinDHaultfoeuille`
               (``did_multiplegt_dyn``) for full staggered support. See
               REGISTRY § "Library extension: Staggered-timing fail-
@@ -2986,7 +2992,7 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
             Appendix B.2). Requires more than two time periods. Pointwise
             CIs per horizon; joint cross-horizon covariance is deferred
             to a follow-up PR. Staggered-timing panels: see the
-            ``first_treat_col`` contract above (auto-filter to last
+            ``first_treat`` contract above (auto-filter to last
             cohort + never-treated with ``UserWarning`` when supplied;
             fail-closed ``ValueError`` when omitted on a staggered
             panel).
@@ -3072,7 +3078,49 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
         for which a standard DiD may be more appropriate (de Chaisemartin
         et al. 2026, Section 2). The event-study path does not warn: it
         *requires* never-treated units per Appendix B.2.
+
+        The keyword-only ``outcome_col`` / ``dose_col`` / ``time_col`` /
+        ``unit_col`` / ``first_treat_col`` parameters are deprecated
+        aliases for the bare names (rows M-035..M-039); each warns with
+        ``FutureWarning`` and will be removed in 4.0.
         """
+        qualname = "HeterogeneousAdoptionDiD.fit"
+        outcome = resolve_renamed_kwarg(
+            qualname,
+            "outcome_col",
+            outcome_col,
+            "outcome",
+            outcome,
+            default=NOT_SUPPLIED,
+        )
+        require_arg(qualname, "outcome", outcome)
+        dose = resolve_renamed_kwarg(
+            qualname, "dose_col", dose_col, "dose", dose, default=NOT_SUPPLIED
+        )
+        require_arg(qualname, "dose", dose)
+        time = resolve_renamed_kwarg(
+            qualname, "time_col", time_col, "time", time, default=NOT_SUPPLIED
+        )
+        require_arg(qualname, "time", time)
+        unit = resolve_renamed_kwarg(
+            qualname, "unit_col", unit_col, "unit", unit, default=NOT_SUPPLIED
+        )
+        require_arg(qualname, "unit", unit)
+        first_treat = resolve_renamed_kwarg(
+            qualname,
+            "first_treat_col",
+            first_treat_col,
+            "first_treat",
+            first_treat,
+            default=None,
+        )
+        # Body-local names; the public parameters are the bare names
+        # (M-035..M-039).
+        outcome_col = outcome
+        dose_col = dose
+        time_col = time
+        unit_col = unit
+        first_treat_col = first_treat
         # ---- aggregate / survey_design validation ----
         if aggregate not in _VALID_AGGREGATES:
             raise ValueError(

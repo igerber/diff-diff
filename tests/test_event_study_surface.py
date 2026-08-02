@@ -298,7 +298,7 @@ def surfaces():
         # 9. WooldridgeDiD (post-fit aggregate)
         mp = load_mpdta()
         wd = WooldridgeDiD(control_group="never_treated").fit(
-            mp, outcome="lemp", unit="countyreal", time="year", cohort="first_treat"
+            mp, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
         )
         wd.aggregate("event")
         out["WooldridgeDiD"] = (wd, build_event_study_surface(wd))
@@ -342,7 +342,7 @@ def surfaces():
         dcdh = ChaisemartinDHaultfoeuille(twfe_diagnostic=False).fit(
             dcdh_data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             L_max=3,

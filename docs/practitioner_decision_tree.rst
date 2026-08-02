@@ -178,7 +178,7 @@ assumption — also handle non-absorbing treatment, under stronger assumptions.)
 
    est = ChaisemartinDHaultfoeuille()
    results = est.fit(
-       data, outcome="outcome", group="group",
+       data, outcome="outcome", unit="group",
        time="period", treatment="treatment",
    )
    results.print_summary()
@@ -304,15 +304,15 @@ identification rests on stronger structural assumptions (Design 1).
    # identification assumptions (it does NOT pick the design path; the
    # estimator does that internally from the dose support).
    pretests = did_had_pretest_workflow(
-       data, outcome_col="y", unit_col="unit",
-       time_col="period", dose_col="dose",
+       data, outcome="y", unit="unit",
+       time="period", dose="dose",
    )
    print(pretests)
 
    est = HeterogeneousAdoptionDiD()
    results = est.fit(
-       data, outcome_col="y", unit_col="unit",
-       time_col="period", dose_col="dose",
+       data, outcome="y", unit="unit",
+       time="period", dose="dose",
    )
    print(f"Resolved estimand: {results.target_parameter}")
    print(f"Average lift per unit of dose: {results.att:.2f}")

@@ -291,25 +291,29 @@ class TestWooldridgeDiDFitOLS:
     def test_fit_returns_results(self, mpdta):
         est = WooldridgeDiD()
         results = est.fit(
-            mpdta, outcome="lemp", unit="countyreal", time="year", cohort="first_treat"
+            mpdta, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
         )
         assert isinstance(results, WooldridgeDiDResults)
 
     def test_fit_sets_is_fitted(self, mpdta):
         est = WooldridgeDiD()
-        est.fit(mpdta, outcome="lemp", unit="countyreal", time="year", cohort="first_treat")
+        est.fit(mpdta, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat")
         assert est.is_fitted_
 
     def test_overall_att_finite(self, mpdta):
         est = WooldridgeDiD()
-        r = est.fit(mpdta, outcome="lemp", unit="countyreal", time="year", cohort="first_treat")
+        r = est.fit(
+            mpdta, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
+        )
         assert np.isfinite(r.overall_att)
         assert np.isfinite(r.overall_se)
         assert r.overall_se > 0
 
     def test_group_time_effects_populated(self, mpdta):
         est = WooldridgeDiD()
-        r = est.fit(mpdta, outcome="lemp", unit="countyreal", time="year", cohort="first_treat")
+        r = est.fit(
+            mpdta, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
+        )
         assert len(r.group_time_effects) > 0
         for (g, t), eff in r.group_time_effects.items():
             assert t >= g
@@ -318,19 +322,25 @@ class TestWooldridgeDiDFitOLS:
     def test_all_inference_fields_finite(self, mpdta):
         """No inference field should be NaN in normal data."""
         est = WooldridgeDiD()
-        r = est.fit(mpdta, outcome="lemp", unit="countyreal", time="year", cohort="first_treat")
+        r = est.fit(
+            mpdta, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
+        )
         assert np.isfinite(r.overall_t_stat)
         assert np.isfinite(r.overall_p_value)
         assert all(np.isfinite(c) for c in r.overall_conf_int)
 
     def test_never_treated_control_group(self, mpdta):
         est = WooldridgeDiD(control_group="never_treated")
-        r = est.fit(mpdta, outcome="lemp", unit="countyreal", time="year", cohort="first_treat")
+        r = est.fit(
+            mpdta, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
+        )
         assert len(r.group_time_effects) > 0
 
     def test_metadata_correct(self, mpdta):
         est = WooldridgeDiD()
-        r = est.fit(mpdta, outcome="lemp", unit="countyreal", time="year", cohort="first_treat")
+        r = est.fit(
+            mpdta, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
+        )
         assert r.method == "ols"
         assert r.n_obs > 0
         assert r.n_treated_units > 0
@@ -344,7 +354,9 @@ class TestAggregations:
 
         df = load_mpdta()
         est = WooldridgeDiD()
-        return est.fit(df, outcome="lemp", unit="countyreal", time="year", cohort="first_treat")
+        return est.fit(
+            df, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
+        )
 
     def test_simple_matches_manual_weighted_average(self, fitted):
         """simple ATT must equal manually computed weighted average of ATT(g,t)."""
@@ -404,23 +416,23 @@ class TestWooldridgeDiDLogit:
 
     def test_logit_fit_runs(self, binary_panel):
         est = WooldridgeDiD(method="logit")
-        r = est.fit(binary_panel, outcome="y", unit="unit", time="time", cohort="cohort")
+        r = est.fit(binary_panel, outcome="y", unit="unit", time="time", first_treat="cohort")
         assert isinstance(r, WooldridgeDiDResults)
 
     def test_logit_att_sign(self, binary_panel):
         """ATT should be positive (treatment increases binary outcome)."""
         est = WooldridgeDiD(method="logit")
-        r = est.fit(binary_panel, outcome="y", unit="unit", time="time", cohort="cohort")
+        r = est.fit(binary_panel, outcome="y", unit="unit", time="time", first_treat="cohort")
         assert r.overall_att > 0
 
     def test_logit_se_positive(self, binary_panel):
         est = WooldridgeDiD(method="logit")
-        r = est.fit(binary_panel, outcome="y", unit="unit", time="time", cohort="cohort")
+        r = est.fit(binary_panel, outcome="y", unit="unit", time="time", first_treat="cohort")
         assert r.overall_se > 0
 
     def test_logit_method_stored(self, binary_panel):
         est = WooldridgeDiD(method="logit")
-        r = est.fit(binary_panel, outcome="y", unit="unit", time="time", cohort="cohort")
+        r = est.fit(binary_panel, outcome="y", unit="unit", time="time", first_treat="cohort")
         assert r.method == "logit"
 
 
@@ -441,17 +453,17 @@ class TestWooldridgeDiDPoisson:
 
     def test_poisson_fit_runs(self, count_panel):
         est = WooldridgeDiD(method="poisson")
-        r = est.fit(count_panel, outcome="y", unit="unit", time="time", cohort="cohort")
+        r = est.fit(count_panel, outcome="y", unit="unit", time="time", first_treat="cohort")
         assert isinstance(r, WooldridgeDiDResults)
 
     def test_poisson_att_sign(self, count_panel):
         est = WooldridgeDiD(method="poisson")
-        r = est.fit(count_panel, outcome="y", unit="unit", time="time", cohort="cohort")
+        r = est.fit(count_panel, outcome="y", unit="unit", time="time", first_treat="cohort")
         assert r.overall_att > 0
 
     def test_poisson_se_positive(self, count_panel):
         est = WooldridgeDiD(method="poisson")
-        r = est.fit(count_panel, outcome="y", unit="unit", time="time", cohort="cohort")
+        r = est.fit(count_panel, outcome="y", unit="unit", time="time", first_treat="cohort")
         assert r.overall_se > 0
 
 
@@ -464,7 +476,7 @@ class TestBootstrap:
         df = load_mpdta()
         n_boot = ci_params.bootstrap(50, min_n=19)
         est = WooldridgeDiD(n_bootstrap=n_boot, seed=42)
-        r = est.fit(df, outcome="lemp", unit="countyreal", time="year", cohort="first_treat")
+        r = est.fit(df, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat")
         assert abs(r.overall_se - r.overall_att) / max(abs(r.overall_att), 1e-8) < 10
 
     def test_bootstrap_zero_disables(self):
@@ -472,7 +484,7 @@ class TestBootstrap:
 
         df = load_mpdta()
         est = WooldridgeDiD(n_bootstrap=0)
-        r = est.fit(df, outcome="lemp", unit="countyreal", time="year", cohort="first_treat")
+        r = est.fit(df, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat")
         assert np.isfinite(r.overall_se)
 
 
@@ -489,7 +501,9 @@ class TestMethodologyCorrectness:
         est = WooldridgeDiD(control_group="never_treated")
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            r = est.fit(df, outcome="lemp", unit="countyreal", time="year", cohort="first_treat")
+            r = est.fit(
+                df, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
+            )
         assert np.isfinite(r.overall_att)
         rank = [w for w in caught if "Rank-deficient" in str(w.message)]
         assert rank == [], f"unexpected rank deficiency: {[str(w.message)[:100] for w in rank]}"
@@ -501,7 +515,7 @@ class TestMethodologyCorrectness:
 
         df = load_mpdta()
         est = WooldridgeDiD(control_group="never_treated")
-        r = est.fit(df, outcome="lemp", unit="countyreal", time="year", cohort="first_treat")
+        r = est.fit(df, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat")
         r.aggregate("event")
         assert r.event_study_effects is not None
         assert len(r.event_study_effects) > 0
@@ -525,7 +539,7 @@ class TestMethodologyCorrectness:
                 y = 1.0 * treated + rng.standard_normal()
                 rows.append({"unit": u, "time": t, "cohort": cohort, "y": y})
         df = pd.DataFrame(rows)
-        r = WooldridgeDiD().fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+        r = WooldridgeDiD().fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
         assert len(r.group_time_effects) == 1
         assert abs(r.overall_att - 1.0) < 0.5
 
@@ -535,7 +549,7 @@ class TestMethodologyCorrectness:
 
         df = load_mpdta()
         r = WooldridgeDiD().fit(
-            df, outcome="lemp", unit="countyreal", time="year", cohort="first_treat"
+            df, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
         )
         w = r._gt_weights
         post_keys = [(g, t) for (g, t) in w if t >= g]
@@ -552,7 +566,7 @@ class TestMethodologyCorrectness:
 
         est = WooldridgeDiD(method="logit")
         results = est.fit(
-            df, outcome="lemp_bin", unit="countyreal", time="year", cohort="first_treat"
+            df, outcome="lemp_bin", unit="countyreal", time="year", first_treat="first_treat"
         )
 
         assert len(results.group_time_effects) > 0
@@ -569,7 +583,7 @@ class TestMethodologyCorrectness:
 
         est = WooldridgeDiD(method="poisson")
         results = est.fit(
-            df, outcome="emp_count", unit="countyreal", time="year", cohort="first_treat"
+            df, outcome="emp_count", unit="countyreal", time="year", first_treat="first_treat"
         )
 
         assert len(results.group_time_effects) > 0
@@ -603,7 +617,7 @@ class TestAnticipation:
                 rows.append({"unit": u, "time": t, "cohort": cohort, "y": y})
         df = pd.DataFrame(rows)
         est = WooldridgeDiD(anticipation=1)
-        r = est.fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+        r = est.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
         # With anticipation=1, should have cells for t >= g-1 = 2
         keys = list(r.group_time_effects.keys())
         min_t = min(t for (g, t) in keys)
@@ -622,7 +636,7 @@ class TestAnticipation:
         df = pd.DataFrame(rows)
         with pytest.raises(ValueError, match="no untreated comparison"):
             WooldridgeDiD(anticipation=1, control_group="not_yet_treated").fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
 
     def test_anticipation_aggregate_semantics(self):
@@ -638,7 +652,7 @@ class TestAnticipation:
                 rows.append({"unit": u, "time": t, "cohort": cohort, "y": y})
         df = pd.DataFrame(rows)
         est = WooldridgeDiD(anticipation=1)
-        r = est.fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+        r = est.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
         r.aggregate("event").aggregate("group").aggregate("simple")
         assert np.isfinite(r.overall_att)
         assert r.event_study_effects is not None
@@ -671,7 +685,7 @@ class TestXgvarCovariates:
                 rows.append({"unit": u, "time": t, "cohort": cohort, "y": y, "x1": x1})
         df = pd.DataFrame(rows)
         est = WooldridgeDiD()
-        r = est.fit(df, outcome="y", unit="unit", time="time", cohort="cohort", xgvar=["x1"])
+        r = est.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort", xgvar=["x1"])
         assert np.isfinite(r.overall_att)
         assert np.isfinite(r.overall_se)
         assert r.overall_se > 0
@@ -715,7 +729,7 @@ class TestAllEventuallyTreated:
         df = pd.DataFrame(rows)
         est = WooldridgeDiD(control_group="not_yet_treated")
         with pytest.warns(UserWarning, match="no eligible comparison group"):
-            res = est.fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+            res = est.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
 
         # Eq. 5.15 on a balanced panel: cells {(g, t) : g <= G_max - 1,
         # g <= t <= G_max - 1}. G_max = 8, so periods 8 and 9 are dropped and
@@ -765,7 +779,7 @@ class TestAllEventuallyTreated:
         df = pd.DataFrame(rows)
         with pytest.warns(UserWarning, match=r"Cohort\(s\) 6 have NO estimated cells"):
             WooldridgeDiD(control_group="not_yet_treated").fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
 
 
@@ -781,7 +795,7 @@ class TestEmptyCells:
                 rows.append({"unit": u, "time": t, "cohort": cohort, "y": y})
         df = pd.DataFrame(rows)
         est = WooldridgeDiD()
-        r = est.fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+        r = est.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
         assert np.isfinite(r.overall_att)
         r.aggregate("event")
         assert r.event_study_effects is not None
@@ -799,7 +813,9 @@ class TestMpdtaLogitPoisson:
         df = mpdta.copy()
         df["lemp_bin"] = (df["lemp"] > df["lemp"].median()).astype(int)
         est = WooldridgeDiD(method="logit")
-        r = est.fit(df, outcome="lemp_bin", unit="countyreal", time="year", cohort="first_treat")
+        r = est.fit(
+            df, outcome="lemp_bin", unit="countyreal", time="year", first_treat="first_treat"
+        )
         assert np.isfinite(r.overall_att)
         assert np.isfinite(r.overall_se)
         assert r.overall_se > 0
@@ -811,7 +827,7 @@ class TestMpdtaLogitPoisson:
         df = mpdta.copy()
         df["emp"] = np.exp(df["lemp"])
         est = WooldridgeDiD(method="poisson")
-        r = est.fit(df, outcome="emp", unit="countyreal", time="year", cohort="first_treat")
+        r = est.fit(df, outcome="emp", unit="countyreal", time="year", first_treat="first_treat")
         assert np.isfinite(r.overall_att)
         assert np.isfinite(r.overall_se)
         assert r.overall_se > 0
@@ -829,10 +845,10 @@ class TestControlGroupDistinction:
 
         df = load_mpdta()
         r_nyt = WooldridgeDiD(control_group="not_yet_treated").fit(
-            df, outcome="lemp", unit="countyreal", time="year", cohort="first_treat"
+            df, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
         )
         r_nt = WooldridgeDiD(control_group="never_treated").fit(
-            df, outcome="lemp", unit="countyreal", time="year", cohort="first_treat"
+            df, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
         )
         assert np.isfinite(r_nyt.overall_att)
         assert np.isfinite(r_nt.overall_att)
@@ -849,10 +865,10 @@ class TestControlGroupDistinction:
 
         df = load_mpdta()
         r_nyt = WooldridgeDiD(control_group="not_yet_treated").fit(
-            df, outcome="lemp", unit="countyreal", time="year", cohort="first_treat"
+            df, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
         )
         r_nt = WooldridgeDiD(control_group="never_treated").fit(
-            df, outcome="lemp", unit="countyreal", time="year", cohort="first_treat"
+            df, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
         )
         # Same sample (all obs kept), but more (g,t) cells for never_treated
         assert r_nt.n_obs == r_nyt.n_obs
@@ -866,7 +882,7 @@ class TestIdentificationChecks:
             {"unit": [1, 1, 2, 2], "time": [1, 2, 1, 2], "cohort": [0, 0, 0, 0], "y": [1, 2, 3, 4]}
         )
         with pytest.raises(ValueError, match="No treated cohorts"):
-            WooldridgeDiD().fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+            WooldridgeDiD().fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
 
     def test_never_treated_no_controls_raises(self):
         """never_treated with no cohort==0 units should raise ValueError."""
@@ -875,7 +891,7 @@ class TestIdentificationChecks:
         )
         with pytest.raises(ValueError, match="no never-treated"):
             WooldridgeDiD(control_group="never_treated").fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
 
 
@@ -895,11 +911,11 @@ class TestBootstrapValidation:
         df = pd.DataFrame(rows)
         with pytest.raises(ValueError, match="Bootstrap inference is only supported"):
             WooldridgeDiD(method="logit", n_bootstrap=50).fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         with pytest.raises(ValueError, match="Bootstrap inference is only supported"):
             WooldridgeDiD(method="poisson", n_bootstrap=50).fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
 
 
@@ -920,11 +936,11 @@ class TestBootstrapClusterLevel:
 
         # Bootstrap at unit level (default)
         r_unit = WooldridgeDiD(n_bootstrap=99, seed=0).fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort"
+            df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # Bootstrap at region level (coarser)
         r_region = WooldridgeDiD(n_bootstrap=99, seed=0, cluster="region").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort"
+            df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         assert np.isfinite(r_unit.overall_se)
         assert np.isfinite(r_region.overall_se)
@@ -950,7 +966,7 @@ class TestNonlinearRankDeficiency:
                 rows.append({"unit": u, "time": t, "cohort": cohort, "y": y})
         df = pd.DataFrame(rows)
         est = WooldridgeDiD(method="logit", rank_deficient_action="silent")
-        r = est.fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+        r = est.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
         assert len(r.group_time_effects) > 0
         for cell in r.group_time_effects.values():
             assert np.isfinite(cell["se"]), "SE should be finite for estimable cells"
@@ -970,7 +986,7 @@ class TestNonlinearRankDeficiency:
                 rows.append({"unit": u, "time": t, "cohort": cohort, "y": float(y)})
         df = pd.DataFrame(rows)
         est = WooldridgeDiD(method="poisson", rank_deficient_action="silent")
-        r = est.fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+        r = est.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
         assert len(r.group_time_effects) > 0
         for cell in r.group_time_effects.values():
             assert np.isfinite(cell["se"]), "SE should be finite for estimable cells"
@@ -991,10 +1007,10 @@ class TestNonlinearRankDeficiency:
                 rows.append({"unit": u, "time": t, "cohort": cohort, "y": y, "x1": x1})
         df = pd.DataFrame(rows)
         r_cov = WooldridgeDiD(method="logit").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort", exovar=["x1"]
+            df, outcome="y", unit="unit", time="time", first_treat="cohort", exovar=["x1"]
         )
         r_nocov = WooldridgeDiD(method="logit").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort"
+            df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         assert np.isfinite(r_cov.overall_att)
         assert np.isfinite(r_cov.overall_se)
@@ -1016,10 +1032,10 @@ class TestNonlinearRankDeficiency:
                 rows.append({"unit": u, "time": t, "cohort": cohort, "y": float(y), "x1": x1})
         df = pd.DataFrame(rows)
         r_cov = WooldridgeDiD(method="poisson").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort", exovar=["x1"]
+            df, outcome="y", unit="unit", time="time", first_treat="cohort", exovar=["x1"]
         )
         r_nocov = WooldridgeDiD(method="poisson").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort"
+            df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         assert np.isfinite(r_cov.overall_att)
         assert np.isfinite(r_cov.overall_se)
@@ -1039,7 +1055,7 @@ class TestCohortTimeInvariance:
             }
         )
         with pytest.raises(ValueError, match="not time-invariant"):
-            WooldridgeDiD().fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+            WooldridgeDiD().fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
 
 
 class TestAnticipationEventLabels:
@@ -1054,7 +1070,7 @@ class TestAnticipationEventLabels:
                 rows.append({"unit": u, "time": t, "cohort": cohort, "y": y})
         df = pd.DataFrame(rows)
         est = WooldridgeDiD(anticipation=1)
-        r = est.fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+        r = est.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
         r.aggregate("event")
         summary = r.summary("event")
         # k=-1 should be labeled [antic] (within anticipation window)
@@ -1074,7 +1090,7 @@ class TestOutcomeValidation:
         )
         with pytest.raises(ValueError, match="outcomes in \\[0, 1\\]"):
             WooldridgeDiD(method="logit").fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
 
     def test_poisson_rejects_negative(self):
@@ -1089,7 +1105,7 @@ class TestOutcomeValidation:
         )
         with pytest.raises(ValueError, match="non-negative"):
             WooldridgeDiD(method="poisson").fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
 
 
@@ -1120,7 +1136,7 @@ class TestUnbalancedOLS:
 
         df = unbalanced_data
         r = WooldridgeDiD(control_group="not_yet_treated").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort"
+            df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
 
         # Build explicit dummy regression on same sample
@@ -1159,7 +1175,7 @@ class TestUnbalancedOLS:
         """
         df = unbalanced_data
         r = WooldridgeDiD(control_group="never_treated").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort"
+            df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         assert np.isfinite(r.overall_att)
         assert np.isfinite(r.overall_se)
@@ -1202,7 +1218,7 @@ class TestNonlinearNeverTreated:
 
     def test_logit_never_treated_post_treatment_only(self, binary_data):
         r = WooldridgeDiD(method="logit", control_group="never_treated").fit(
-            binary_data, outcome="y", unit="unit", time="time", cohort="cohort"
+            binary_data, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # All cells should be post-treatment
         for g, t in r.group_time_effects:
@@ -1214,7 +1230,7 @@ class TestNonlinearNeverTreated:
 
     def test_poisson_never_treated_post_treatment_only(self, count_data):
         r = WooldridgeDiD(method="poisson", control_group="never_treated").fit(
-            count_data, outcome="y", unit="unit", time="time", cohort="cohort"
+            count_data, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         for g, t in r.group_time_effects:
             assert t >= g, f"Pre-treatment cell ({g},{t}) in nonlinear never_treated"
@@ -1249,7 +1265,7 @@ class TestNonlinearNeverTreated:
 
         df = load_mpdta()
         r = WooldridgeDiD(control_group="never_treated").fit(
-            df, outcome="lemp", unit="countyreal", time="year", cohort="first_treat"
+            df, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
         )
         # OLS never_treated should have pre-treatment cells
         pre_treatment = [(g, t) for (g, t) in r.group_time_effects if t < g]
@@ -1279,7 +1295,7 @@ class TestFullCovariateBasis:
 
         df = cov_data
         r = WooldridgeDiD(control_group="not_yet_treated").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort", exovar=["x1"]
+            df, outcome="y", unit="unit", time="time", first_treat="cohort", exovar=["x1"]
         )
 
         # Build explicit-dummy regression with full basis
@@ -1343,9 +1359,11 @@ class TestFullCovariateBasis:
         """OLS with covariates should produce different ATT than without."""
         df = cov_data
         r_cov = WooldridgeDiD().fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort", exovar=["x1"]
+            df, outcome="y", unit="unit", time="time", first_treat="cohort", exovar=["x1"]
         )
-        r_nocov = WooldridgeDiD().fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+        r_nocov = WooldridgeDiD().fit(
+            df, outcome="y", unit="unit", time="time", first_treat="cohort"
+        )
         assert (
             r_cov.overall_att != r_nocov.overall_att
         ), "Covariate-adjusted ATT should differ from unadjusted"
@@ -1397,7 +1415,7 @@ class TestWooldridgeSurvey:
             outcome="y",
             unit="unit",
             time="time",
-            cohort="cohort",
+            first_treat="cohort",
             survey_design=sd,
         )
         assert np.isfinite(r.overall_att)
@@ -1414,7 +1432,7 @@ class TestWooldridgeSurvey:
             outcome="y",
             unit="unit",
             time="time",
-            cohort="cohort",
+            first_treat="cohort",
             survey_design=sd,
         )
         r_naive = WooldridgeDiD().fit(
@@ -1422,7 +1440,7 @@ class TestWooldridgeSurvey:
             outcome="y",
             unit="unit",
             time="time",
-            cohort="cohort",
+            first_treat="cohort",
         )
         assert r_survey.overall_se != r_naive.overall_se
 
@@ -1436,7 +1454,7 @@ class TestWooldridgeSurvey:
             outcome="y_bin",
             unit="unit",
             time="time",
-            cohort="cohort",
+            first_treat="cohort",
             survey_design=sd,
         )
         assert np.isfinite(r.overall_att)
@@ -1453,7 +1471,7 @@ class TestWooldridgeSurvey:
             outcome="y_count",
             unit="unit",
             time="time",
-            cohort="cohort",
+            first_treat="cohort",
             survey_design=sd,
         )
         assert np.isfinite(r.overall_att)
@@ -1473,7 +1491,7 @@ class TestWooldridgeSurvey:
                 outcome="y",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
                 survey_design=sd,
             )
 
@@ -1487,7 +1505,7 @@ class TestWooldridgeSurvey:
             outcome="y",
             unit="unit",
             time="time",
-            cohort="cohort",
+            first_treat="cohort",
             survey_design=sd,
         )
         assert np.isfinite(r.overall_att)
@@ -1504,7 +1522,7 @@ class TestWooldridgeSurvey:
             outcome="y",
             unit="unit",
             time="time",
-            cohort="cohort",
+            first_treat="cohort",
             survey_design=sd,
         )
         sm = r.survey_metadata
@@ -1534,7 +1552,7 @@ class TestWooldridgeSurvey:
                 outcome="y",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
                 survey_design=sd,
             )
 
@@ -1548,7 +1566,7 @@ class TestWooldridgeSurvey:
             outcome="y",
             unit="unit",
             time="time",
-            cohort="cohort",
+            first_treat="cohort",
             survey_design=sd,
         )
         # Cluster should have been injected as PSU
@@ -1562,7 +1580,7 @@ class TestWooldridgeSurvey:
             outcome="y",
             unit="unit",
             time="time",
-            cohort="cohort",
+            first_treat="cohort",
             survey_design=sd,
         )
         assert r.overall_se != r_no_cluster.overall_se
@@ -1577,7 +1595,7 @@ class TestWooldridgeSurvey:
             outcome="y_bin",
             unit="unit",
             time="time",
-            cohort="cohort",
+            first_treat="cohort",
             survey_design=sd,
         )
         for k, w in r._gt_weights.items():
@@ -1596,7 +1614,7 @@ class TestWooldridgeSurvey:
             outcome="y",
             unit="unit",
             time="time",
-            cohort="cohort",
+            first_treat="cohort",
             survey_design=sd,
         )
         # n_psu should equal n_obs in the filtered sample (not n_units)
@@ -1626,7 +1644,7 @@ class TestWooldridgeSurvey:
                 outcome="y",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
                 survey_design=sd,
             )
 
@@ -1648,7 +1666,7 @@ class TestWooldridgeSurvey:
             outcome="y_count",
             unit="unit",
             time="time",
-            cohort="cohort",
+            first_treat="cohort",
             survey_design=sd,
         )
         assert np.isfinite(r.overall_att)
@@ -1681,7 +1699,7 @@ class TestWooldridgeSurvey:
                 outcome="y",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
                 survey_design=sd,
             )
 
@@ -1700,7 +1718,7 @@ class TestWooldridgeSurvey:
             outcome="y",
             unit="unit",
             time="time",
-            cohort="cohort",
+            first_treat="cohort",
             survey_design=sd,
         )
         assert np.isfinite(res.overall_att)
@@ -1719,7 +1737,7 @@ class TestWooldridgeSurvey:
                 outcome="y",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
                 survey_design=sd,
             )
 
@@ -1741,7 +1759,7 @@ class TestWooldridgeSurvey:
             outcome="y_bin",
             unit="unit",
             time="time",
-            cohort="cohort",
+            first_treat="cohort",
             survey_design=sd,
         )
         assert np.isfinite(r.overall_att)
@@ -1761,7 +1779,7 @@ class TestWooldridgeSurvey:
                 outcome="y",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
                 survey_design=sd,
             )
 
@@ -1775,7 +1793,7 @@ class TestWooldridgeSurvey:
             outcome="y",
             unit="unit",
             time="time",
-            cohort="cohort",
+            first_treat="cohort",
             survey_design=sd,
         )
         # aggregate() should use t-distribution with survey df
@@ -1815,7 +1833,7 @@ class TestCohortNaNWarning:
         est = WooldridgeDiD(method="ols")
         with pytest.warns(UserWarning, match=r"8 row\(s\) have NaN cohort values"):
             try:
-                est.fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+                est.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
             except Exception:
                 pass
 
@@ -1828,7 +1846,7 @@ class TestCohortNaNWarning:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             try:
-                est.fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+                est.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
             except Exception:
                 pass
         nan_warnings = [x for x in w if "NaN cohort values" in str(x.message)]
@@ -1896,7 +1914,7 @@ class TestWooldridgeVcovType:
         """
         df = _make_vcov_panel()
         res = WooldridgeDiD(method="ols", vcov_type="hc1").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort"
+            df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         assert res.overall_att == pytest.approx(0.9178849934516233, abs=1e-14)
         assert res.overall_se == pytest.approx(0.031906603167527435, abs=1e-14)
@@ -1904,10 +1922,10 @@ class TestWooldridgeVcovType:
     def test_hc2_bm_finite_and_inflates_over_hc1(self):
         df = _make_vcov_panel()
         res_hc1 = WooldridgeDiD(method="ols", vcov_type="hc1").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort"
+            df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         res_bm = WooldridgeDiD(method="ols", vcov_type="hc2_bm").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort"
+            df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         for k, eff in res_bm.group_time_effects.items():
             assert np.isfinite(eff["se"])
@@ -1923,7 +1941,7 @@ class TestWooldridgeVcovType:
         results = {}
         for vt in ("hc1", "hc2_bm", "hc2", "classical"):
             results[vt] = WooldridgeDiD(method="ols", vcov_type=vt).fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         ref = results["hc1"]
         for vt in ("hc2_bm", "hc2", "classical"):
@@ -1937,12 +1955,12 @@ class TestWooldridgeVcovType:
         df = _make_vcov_panel()
         est = WooldridgeDiD(method="ols", vcov_type="classical", cluster="unit")
         with pytest.raises(ValueError):
-            est.fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+            est.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
 
     def test_classical_drops_auto_cluster(self):
         df = _make_vcov_panel()
         res = WooldridgeDiD(method="ols", vcov_type="classical").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort"
+            df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         assert np.isfinite(res.overall_se)
         assert res.cluster_name is None
@@ -1951,7 +1969,7 @@ class TestWooldridgeVcovType:
     def test_hc2_drops_auto_cluster(self):
         df = _make_vcov_panel()
         res = WooldridgeDiD(method="ols", vcov_type="hc2").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort"
+            df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         assert np.isfinite(res.overall_se)
         assert res.cluster_name is None
@@ -1998,7 +2016,7 @@ class TestWooldridgeVcovType:
                 outcome="y",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
                 survey_design=design,
             )
 
@@ -2015,7 +2033,7 @@ class TestWooldridgeVcovType:
                 outcome="y",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
                 survey_design=design,
             )
 
@@ -2030,14 +2048,14 @@ class TestWooldridgeVcovType:
         # Case 1: cluster=None (default) — bootstrap reject fires
         est = WooldridgeDiD(method="ols", vcov_type="classical", n_bootstrap=10, seed=0)
         with pytest.raises(ValueError, match=r"multiplier bootstrap"):
-            est.fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+            est.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
         # Case 2: cluster=X — also rejected at the estimator boundary (would
         # otherwise hit the linalg validator with a less-informative message)
         est_cl = WooldridgeDiD(
             method="ols", vcov_type="hc2", n_bootstrap=10, cluster="unit", seed=0
         )
         with pytest.raises(ValueError, match=r"multiplier bootstrap"):
-            est_cl.fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+            est_cl.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
 
     def test_hc2_bm_plus_bootstrap_finite_inference(self):
         """Positive regression: ``vcov_type='hc2_bm'`` + ``n_bootstrap > 0``
@@ -2050,11 +2068,11 @@ class TestWooldridgeVcovType:
         df = _make_vcov_panel()
         # Analytical hc2_bm fit for ATT reference.
         res_analytical = WooldridgeDiD(method="ols", vcov_type="hc2_bm").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort"
+            df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # Bootstrap fit on the same data + seed.
         res_boot = WooldridgeDiD(method="ols", vcov_type="hc2_bm", n_bootstrap=50, seed=0).fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort"
+            df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # ATT is unchanged by the bootstrap (only SE is overridden)
         assert res_boot.overall_att == pytest.approx(res_analytical.overall_att, abs=1e-10)
@@ -2123,7 +2141,7 @@ class TestWooldridgeVcovType:
                 outcome="y",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
                 exovar=["xc", "xc_dup"],
             )
         assert np.isfinite(res.overall_att)
@@ -2197,7 +2215,7 @@ class TestWooldridgeVcovType:
             outcome="y",
             unit="unit",
             time="time",
-            cohort="cohort",
+            first_treat="cohort",
             survey_design=design,
         )
         assert res.survey_metadata is not None
@@ -2215,14 +2233,14 @@ class TestWooldridgeVcovType:
     def test_results_carries_vcov_type(self):
         df = _make_vcov_panel()
         res = WooldridgeDiD(method="ols", vcov_type="hc2_bm").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort"
+            df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         assert res.vcov_type == "hc2_bm"
 
     def test_results_carries_cluster_name_for_clustered_fit(self):
         df = _make_vcov_panel()
         res = WooldridgeDiD(method="ols", vcov_type="hc1").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort"
+            df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         assert res.cluster_name == "unit"
         assert res.n_clusters is not None
@@ -2234,7 +2252,7 @@ class TestWooldridgeVcovType:
         # 40-unit panel
         df["state"] = (df["unit"] // 10).astype(int)
         res = WooldridgeDiD(method="ols", vcov_type="hc1", cluster="state").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort"
+            df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         assert res.cluster_name == "state"
         assert res.n_clusters == 4
@@ -2243,9 +2261,9 @@ class TestWooldridgeVcovType:
         """fit, clone via get_params, refit — SE must be bit-equal."""
         df = _make_vcov_panel()
         est = WooldridgeDiD(method="ols", vcov_type="hc2_bm")
-        res1 = est.fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+        res1 = est.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
         est2 = WooldridgeDiD(**est.get_params())
-        res2 = est2.fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+        res2 = est2.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
         assert res1.overall_se == pytest.approx(res2.overall_se, abs=1e-14)
         assert res1.overall_att == pytest.approx(res2.overall_att, abs=1e-14)
 
@@ -2263,7 +2281,7 @@ class TestWooldridgeVcovType:
 
         monkeypatch.setattr(linalg_mod, "_compute_cr2_bm_contrast_dof", _fake_dof)
         res = WooldridgeDiD(method="ols", vcov_type="hc2_bm").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort"
+            df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # Overall: att + se preserved (sandwich is finite); inference NaN
         assert np.isfinite(res.overall_att)
@@ -2287,7 +2305,7 @@ class TestWooldridgeVcovType:
         induced fail-closed."""
         df = _make_vcov_panel()
         res = WooldridgeDiD(method="ols", vcov_type="hc2_bm").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort"
+            df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         res.aggregate("group")
         assert res.group_effects is not None
@@ -2304,7 +2322,7 @@ class TestWooldridgeVcovType:
         Bell-McCaffrey contrast DOFs."""
         df = _make_vcov_panel()
         res = WooldridgeDiD(method="ols", vcov_type="hc2_bm").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort"
+            df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         res.aggregate("event")
         assert res.event_study_effects is not None
@@ -2323,7 +2341,7 @@ class TestWooldridgeVcovType:
         Bell-McCaffrey contrast DOFs."""
         df = _make_vcov_panel()
         res = WooldridgeDiD(method="ols", vcov_type="hc2_bm").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort"
+            df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         res.aggregate("calendar")
         assert res.calendar_effects is not None
@@ -2376,7 +2394,7 @@ class TestWooldridgeVcovType:
                 outcome="y",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
                 exovar=["xc", "xc_dup"],
             )
         # Per-cell inference: all identified cells finite (att + se + p +
@@ -2435,7 +2453,7 @@ class TestWooldridgeVcovType:
                 outcome="y",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
                 exovar=["x_unit"],
             )
         # Per-cell + overall inference finite on identified cells
@@ -2468,7 +2486,7 @@ class TestWooldridgeVcovType:
         att + se preserved."""
         df = _make_vcov_panel()
         res = WooldridgeDiD(method="ols", vcov_type="hc2_bm").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort"
+            df, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # Patch the helper AFTER fit so that aggregate() retry fails.
         import diff_diff.linalg as linalg_mod
@@ -2644,7 +2662,7 @@ class TestAbsorbedCovariateSnap:
                 outcome="y",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
                 exovar=["xc"],
             )
         assert np.isfinite(res.overall_att)
@@ -2698,7 +2716,7 @@ class TestReferencePeriodNormalization:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         post = {k for k in res.group_time_effects if k[1] >= k[0]}
         assert post == {(4, 4), (4, 5)}
@@ -2710,7 +2728,7 @@ class TestReferencePeriodNormalization:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             WooldridgeDiD(method="ols", control_group="never_treated").fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         skipped = [w for w in caught if "no observations" in str(w.message)]
         assert len(skipped) == 1
@@ -2724,7 +2742,7 @@ class TestReferencePeriodNormalization:
             warnings.simplefilter("always")
             WooldridgeDiD(
                 method="ols", control_group="never_treated", rank_deficient_action="silent"
-            ).fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+            ).fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
         assert [w for w in caught if "no observations" in str(w.message)] == []
 
     def test_cohort_without_a_reference_is_excluded_not_silently_rebaselined(self):
@@ -2737,7 +2755,7 @@ class TestReferencePeriodNormalization:
         was removed by hand -- asserting only the warning would not catch this.
         """
         df = self._panel([0, 3, 5], [1, 2, 3, 4, 5, 6])
-        kw = dict(outcome="y", unit="unit", time="time", cohort="cohort")
+        kw = dict(outcome="y", unit="unit", time="time", first_treat="cohort")
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             auto = WooldridgeDiD(method="ols", control_group="never_treated", anticipation=2).fit(
@@ -2775,7 +2793,7 @@ class TestReferencePeriodNormalization:
             warnings.simplefilter("ignore")
             with pytest.raises(ValueError, match="no comparison observations remain"):
                 WooldridgeDiD(method="ols", control_group="not_yet_treated").fit(
-                    df, outcome="y", unit="unit", time="time", cohort="cohort"
+                    df, outcome="y", unit="unit", time="time", first_treat="cohort"
                 )
 
     def test_no_post_treatment_cell_fails_closed(self):
@@ -2802,7 +2820,7 @@ class TestReferencePeriodNormalization:
             warnings.simplefilter("ignore")
             with pytest.raises(ValueError, match="No estimable post-treatment cells"):
                 WooldridgeDiD(method="ols", control_group="never_treated").fit(
-                    df, outcome="y", unit="unit", time="time", cohort="cohort"
+                    df, outcome="y", unit="unit", time="time", first_treat="cohort"
                 )
 
     def test_not_yet_treated_is_also_fixed(self):
@@ -2813,7 +2831,7 @@ class TestReferencePeriodNormalization:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             res = WooldridgeDiD(method="ols", control_group="not_yet_treated").fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         assert [w for w in caught if "Rank-deficient" in str(w.message)] == []
         assert {k for k in res.group_time_effects if k[1] >= k[0]}
@@ -2826,7 +2844,7 @@ class TestReferencePeriodNormalization:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             res = WooldridgeDiD(method="ols", control_group=control_group).fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort", exovar=["x1"]
+                df, outcome="y", unit="unit", time="time", first_treat="cohort", exovar=["x1"]
             )
         assert [w for w in caught if "Rank-deficient" in str(w.message)] == []
         assert {k for k in res.group_time_effects if k[1] >= k[0]}
@@ -2841,7 +2859,7 @@ class TestReferencePeriodNormalization:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             res = WooldridgeDiD(method=method, control_group="never_treated").fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         assert {k for k in res.group_time_effects if k[1] >= k[0]}
 
@@ -2885,7 +2903,7 @@ class TestReferencePeriodNormalization:
                     outcome="y",
                     unit="unit",
                     time="time",
-                    cohort="cohort",
+                    first_treat="cohort",
                     survey_design=SurveyDesign(weights="w"),
                 )
             post = {k for k in res.group_time_effects if k[1] >= k[0]}
@@ -2916,7 +2934,7 @@ class TestReferencePeriodNormalization:
                     )
                 uid += 1
         df = pd.DataFrame(rows)
-        kw = dict(outcome="y", unit="unit", time="time", cohort="cohort")
+        kw = dict(outcome="y", unit="unit", time="time", first_treat="cohort")
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -2986,7 +3004,7 @@ class TestOverallAttFailsClosed:
             warnings.simplefilter("ignore")
             with pytest.raises(ValueError, match="No estimable post-treatment cells found"):
                 WooldridgeDiD(method="ols", control_group="not_yet_treated").fit(
-                    df, outcome="y", unit="unit", time="time", cohort="cohort"
+                    df, outcome="y", unit="unit", time="time", first_treat="cohort"
                 )
 
     def test_two_cohorts_without_same_period_controls_fail_closed(self):
@@ -3002,7 +3020,7 @@ class TestOverallAttFailsClosed:
             warnings.simplefilter("ignore")
             with pytest.raises(ValueError, match="not identified and were removed"):
                 WooldridgeDiD(method="ols", control_group="not_yet_treated").fit(
-                    df, outcome="y", unit="unit", time="time", cohort="cohort"
+                    df, outcome="y", unit="unit", time="time", first_treat="cohort"
                 )
 
     def test_only_anticipation_window_cells_fails_closed(self):
@@ -3027,7 +3045,7 @@ class TestOverallAttFailsClosed:
             warnings.simplefilter("ignore")
             with pytest.raises(ValueError, match="No cohort-time cell contributes"):
                 WooldridgeDiD(method="ols", control_group="never_treated", anticipation=2).fit(
-                    df, outcome="y", unit="unit", time="time", cohort="cohort"
+                    df, outcome="y", unit="unit", time="time", first_treat="cohort"
                 )
 
     def test_valid_fit_is_unaffected(self):
@@ -3036,7 +3054,7 @@ class TestOverallAttFailsClosed:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         assert np.isfinite(res.overall_att)
         assert np.isfinite(res.overall_se)
@@ -3106,7 +3124,7 @@ class TestInvalidWeightsCannotHideBehindExclusion:
                     outcome="y",
                     unit="unit",
                     time="time",
-                    cohort="cohort",
+                    first_treat="cohort",
                     survey_design=SurveyDesign(weights="w"),
                 )
 
@@ -3125,7 +3143,7 @@ class TestInvalidWeightsCannotHideBehindExclusion:
                     outcome="y",
                     unit="unit",
                     time="time",
-                    cohort="cohort",
+                    first_treat="cohort",
                     survey_design=SurveyDesign(weights="w"),
                 )
         assert [w for w in caught if "no pre-treatment period" in str(w.message)] == []
@@ -3142,7 +3160,7 @@ class TestInvalidWeightsCannotHideBehindExclusion:
                 outcome="y",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
                 survey_design=SurveyDesign(weights="w"),
             )
         assert np.isfinite(res.overall_att)
@@ -3187,7 +3205,7 @@ class TestInvalidWeightsCannotHideBehindExclusion:
                 outcome="y",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
                 survey_design=SurveyDesign(weights="w"),
             )
         assert np.isfinite(res.overall_att)
@@ -3241,7 +3259,7 @@ class TestInvalidWeightsCannotHideBehindExclusion:
                     outcome="y",
                     unit="unit",
                     time="time",
-                    cohort="cohort",
+                    first_treat="cohort",
                     survey_design=sd,
                 )
 
@@ -3305,7 +3323,7 @@ class TestInvalidWeightsCannotHideBehindExclusion:
                     outcome="y",
                     unit="unit",
                     time="time",
-                    cohort="cohort",
+                    first_treat="cohort",
                     survey_design=sd,
                 )
 
@@ -3350,7 +3368,7 @@ class TestInvalidWeightsCannotHideBehindExclusion:
                     outcome="y",
                     unit="unit",
                     time="time",
-                    cohort="cohort",
+                    first_treat="cohort",
                     survey_design=SurveyDesign(weights="w", weight_type="fweight"),
                 )
         assert [w for w in caught if "no pre-treatment period" in str(w.message)] == []
@@ -3402,7 +3420,7 @@ class TestInvalidWeightsCannotHideBehindExclusion:
                     outcome="y",
                     unit="unit",
                     time="time",
-                    cohort="cohort",
+                    first_treat="cohort",
                     survey_design=sub_design,
                 )
         assert [w for w in caught if "no pre-treatment period" in str(w.message)] == []
@@ -3438,14 +3456,14 @@ class TestRankDeficientActionHonoredOnSkippedCells:
         with pytest.raises(ValueError, match=r"Skipped 1 cohort-time cell\(s\).*\(4, 3\)"):
             WooldridgeDiD(
                 method="ols", control_group="never_treated", rank_deficient_action="error"
-            ).fit(self._gapped(), outcome="y", unit="unit", time="time", cohort="cohort")
+            ).fit(self._gapped(), outcome="y", unit="unit", time="time", first_treat="cohort")
 
     def test_warn_still_fits_and_warns(self):
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             res = WooldridgeDiD(
                 method="ols", control_group="never_treated", rank_deficient_action="warn"
-            ).fit(self._gapped(), outcome="y", unit="unit", time="time", cohort="cohort")
+            ).fit(self._gapped(), outcome="y", unit="unit", time="time", first_treat="cohort")
         assert np.isfinite(res.overall_att)
         assert [w for w in caught if "Skipped 1 cohort-time" in str(w.message)] != []
 
@@ -3454,7 +3472,7 @@ class TestRankDeficientActionHonoredOnSkippedCells:
             warnings.simplefilter("always")
             res = WooldridgeDiD(
                 method="ols", control_group="never_treated", rank_deficient_action="silent"
-            ).fit(self._gapped(), outcome="y", unit="unit", time="time", cohort="cohort")
+            ).fit(self._gapped(), outcome="y", unit="unit", time="time", first_treat="cohort")
         assert np.isfinite(res.overall_att)
         assert [w for w in caught if "Skipped" in str(w.message)] == []
 
@@ -3488,7 +3506,7 @@ class TestRankDeficientActionHonoredOnSkippedCells:
         with pytest.raises(ValueError, match=r"Skipped 1 cohort-time cell\(s\).*\(4, 5\)"):
             WooldridgeDiD(
                 method=method, control_group="never_treated", rank_deficient_action="error"
-            ).fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+            ).fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
 
 
 class TestWithinCohortSupportConnectivity:
@@ -3534,7 +3552,7 @@ class TestWithinCohortSupportConnectivity:
         returned overall_att=0.0589 from the single surviving post cell."""
         with pytest.raises(ValueError, match="observed but NOT identified"):
             WooldridgeDiD(method="ols", control_group="never_treated").fit(
-                self._split_support(), outcome="y", unit="unit", time="time", cohort="cohort"
+                self._split_support(), outcome="y", unit="unit", time="time", first_treat="cohort"
             )
 
     def test_the_builder_names_the_unidentified_cells(self):
@@ -3577,7 +3595,7 @@ class TestWithinCohortSupportConnectivity:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         assert np.isfinite(res.overall_att)
         assert (4, 5) in res.group_time_effects
@@ -3613,7 +3631,7 @@ class TestWithinCohortSupportConnectivity:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             res = WooldridgeDiD(method=method, control_group="never_treated").fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         assert {k for k in res.group_time_effects if k[1] >= k[0]} == {(4, 4), (4, 5)}
         assert np.isfinite(res.overall_att)
@@ -3639,7 +3657,7 @@ class TestWithinCohortSupportConnectivity:
                 uid += 1
         with pytest.raises(ValueError, match="observed but NOT identified"):
             WooldridgeDiD(method="ols", control_group="never_treated").fit(
-                pd.DataFrame(rows), outcome="y", unit="unit", time="time", cohort="cohort"
+                pd.DataFrame(rows), outcome="y", unit="unit", time="time", first_treat="cohort"
             )
 
 
@@ -3702,7 +3720,7 @@ class TestPartialRankLossFailsClosed:
                 outcome="y",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
             )
         assert sorted((int(g), int(t)) for g, t in res.group_time_effects) == [
             (3, 1),
@@ -3731,7 +3749,7 @@ class TestPartialRankLossFailsClosed:
                 outcome="y",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
             )
         msgs = [str(w.message) for w in rec]
         drop = [m for m in msgs if "no eligible comparison group" in m]
@@ -3750,7 +3768,7 @@ class TestPartialRankLossFailsClosed:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         assert np.isfinite(res.overall_att)
         # True ATT(3,3)=ATT(3,4)=1.0, ATT(4,4)=3.0 -- recovered, not contrasts.
@@ -3852,7 +3870,7 @@ class TestComparisonSupportFiltering:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             res = WooldridgeDiD(control_group="not_yet_treated", anticipation=anticipation).fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
 
         kept = sorted({int(t) for (_g, t) in res.group_time_effects})
@@ -3896,7 +3914,7 @@ class TestComparisonSupportFiltering:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             res = WooldridgeDiD(control_group="not_yet_treated").fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         assert not [m for m in w if "no eligible comparison group" in str(m.message)]
         assert res.n_obs == len(df)
@@ -3933,7 +3951,7 @@ class TestComparisonSupportFiltering:
         df = pd.DataFrame(rows)
         with pytest.warns(UserWarning, match=r"reference period moved from 5 to 4"):
             res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         assert res.overall_att == pytest.approx(1.0171, abs=5e-3)
 
@@ -3971,7 +3989,7 @@ class TestComparisonSupportFiltering:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         assert not [m for m in w if "reference period moved" in str(m.message)]
         assert res.overall_att == pytest.approx(0.9951, abs=5e-3)
@@ -3987,7 +4005,7 @@ class TestComparisonSupportFiltering:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             WooldridgeDiD(control_group="not_yet_treated").fit(
-                self._all_treated(), outcome="y", unit="unit", time="time", cohort="cohort"
+                self._all_treated(), outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         assert not [m for m in w if "reference period moved" in str(m.message)]
 
@@ -4024,7 +4042,7 @@ class TestComparisonSupportFiltering:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             res = WooldridgeDiD(method=kind, control_group="not_yet_treated").fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         # Same cell set as the OLS path: cohorts 3 and 5 over t <= 7, none for 8.
         assert sorted((int(g), int(t)) for g, t in res.group_time_effects) == [
@@ -4063,7 +4081,7 @@ class TestComparisonSupportFiltering:
                 outcome="y",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
                 survey_design=design,
             )
 
@@ -4087,7 +4105,7 @@ class TestComparisonSupportFiltering:
         with pytest.warns(UserWarning, match="no eligible comparison group"):
             with pytest.raises(ValueError):
                 WooldridgeDiD(control_group="not_yet_treated").fit(
-                    df, outcome="y", unit="unit", time="time", cohort="cohort"
+                    df, outcome="y", unit="unit", time="time", first_treat="cohort"
                 )
 
     def test_zero_cell_cohort_is_reported_once_not_twice(self):
@@ -4102,7 +4120,7 @@ class TestComparisonSupportFiltering:
             warnings.simplefilter("always")
             try:
                 WooldridgeDiD(control_group="not_yet_treated", anticipation=2).fit(
-                    df, outcome="y", unit="unit", time="time", cohort="cohort"
+                    df, outcome="y", unit="unit", time="time", first_treat="cohort"
                 )
             except ValueError:
                 pass
@@ -4144,7 +4162,7 @@ class TestComparisonSupportFiltering:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             res = WooldridgeDiD(control_group="not_yet_treated").fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         assert 7 not in res.groups
         zero = [m for m in w if "have NO estimated cells" in str(m.message)]
@@ -4158,7 +4176,7 @@ class TestComparisonSupportFiltering:
         with warnings.catch_warnings(record=True) as w2:
             warnings.simplefilter("always")
             WooldridgeDiD(control_group="not_yet_treated").fit(
-                self._all_treated(), outcome="y", unit="unit", time="time", cohort="cohort"
+                self._all_treated(), outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         sec54 = [m for m in w2 if "have NO estimated cells" in str(m.message)]
         assert len(sec54) == 1
@@ -4213,7 +4231,7 @@ class TestComparisonSupportFiltering:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             res = WooldridgeDiD(control_group="not_yet_treated").fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         # 90 of cohort 2's 100 units lived only in the dropped period.
         assert res._cohort_units_dropped == {2: 90}
@@ -4239,7 +4257,7 @@ class TestComparisonSupportFiltering:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             res = WooldridgeDiD(control_group="not_yet_treated").fit(
-                self._all_treated(), outcome="y", unit="unit", time="time", cohort="cohort"
+                self._all_treated(), outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         assert res.time_periods == [1, 2, 3, 4, 5, 6, 7], "dropped periods leaked into metadata"
 
@@ -4271,7 +4289,7 @@ class TestComparisonSupportFiltering:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             res = WooldridgeDiD(control_group="not_yet_treated").fit(
-                self._all_treated(), outcome="y", unit="unit", time="time", cohort="cohort"
+                self._all_treated(), outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         assert res._cohort_units_dropped == {}
         agg = res.aggregate(type="simple", weights="cohort_share")
@@ -4298,12 +4316,12 @@ class TestComparisonSupportFiltering:
 
         with pytest.raises(ValueError, match="rank-deficient"):
             WooldridgeDiD(control_group="not_yet_treated", rank_deficient_action="error").fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort", exovar=["x"]
+                df, outcome="y", unit="unit", time="time", first_treat="cohort", exovar=["x"]
             )
 
         # xtvar is full rank under the default demeaning and must stay that way.
         res = WooldridgeDiD(control_group="not_yet_treated").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort", xtvar=["x"]
+            df, outcome="y", unit="unit", time="time", first_treat="cohort", xtvar=["x"]
         )
         assert np.isfinite(res.overall_att)
 
@@ -4317,7 +4335,7 @@ class TestComparisonSupportFiltering:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             res = WooldridgeDiD(control_group="not_yet_treated", n_bootstrap=49, seed=42).fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         assert np.isfinite(res.overall_att)
         assert np.isfinite(res.overall_se)
@@ -4344,7 +4362,7 @@ class TestWooldridgeDfConvention:
                 )
         return pd.DataFrame(rows)
 
-    _kw = dict(outcome="outcome", unit="unit", time="time", cohort="cohort")
+    _kw = dict(outcome="outcome", unit="unit", time="time", first_treat="cohort")
 
     @staticmethod
     def _t_p(t_stat, df):
@@ -4458,7 +4476,7 @@ class TestWooldridgeDfConvention:
     def test_glm_warns_on_explicit_nondefault_only(self):
         data = self._panel()
         data["bin"] = (data["outcome"] > data["outcome"].median()).astype(int)
-        kw = dict(outcome="bin", unit="unit", time="time", cohort="cohort")
+        kw = dict(outcome="bin", unit="unit", time="time", first_treat="cohort")
         with pytest.warns(UserWarning, match="no effect on the logit/poisson"):
             WooldridgeDiD(method="logit", df_convention="cluster").fit(data, **kw)
         with warnings.catch_warnings(record=True) as caught:

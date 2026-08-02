@@ -40,7 +40,7 @@ class TestChaisemartinDHaultfoeuilleBasicAPI:
         results = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -60,7 +60,7 @@ class TestChaisemartinDHaultfoeuilleBasicAPI:
         results = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -84,7 +84,7 @@ class TestChaisemartinDHaultfoeuilleBasicAPI:
         results = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -112,7 +112,7 @@ class TestChaisemartinDHaultfoeuilleBasicAPI:
         results = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -127,7 +127,7 @@ class TestChaisemartinDHaultfoeuilleBasicAPI:
             est.fit(
                 data,
                 outcome="bogus",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -147,7 +147,7 @@ class TestChaisemartinDHaultfoeuilleBasicAPI:
             est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -172,7 +172,7 @@ class TestChaisemartinDHaultfoeuilleBasicAPI:
             results = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=1,
@@ -206,7 +206,7 @@ class TestChaisemartinDHaultfoeuilleBasicAPI:
         results_class = ChaisemartinDHaultfoeuille(seed=1).fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -239,7 +239,7 @@ class TestChaisemartinDHaultfoeuilleBasicAPI:
             r_class = results_class.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -275,7 +275,7 @@ class TestChaisemartinDHaultfoeuilleBasicAPI:
         results = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -312,7 +312,7 @@ class TestForwardCompatGates:
             self._est().fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 aggregate="simple",
@@ -323,7 +323,7 @@ class TestForwardCompatGates:
             self._est().fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 aggregate="event_study",
@@ -337,7 +337,7 @@ class TestForwardCompatGates:
             self._est().fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=0,
@@ -346,7 +346,7 @@ class TestForwardCompatGates:
             self._est().fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=-1,
@@ -356,7 +356,7 @@ class TestForwardCompatGates:
             self._est().fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max="5",
@@ -366,7 +366,7 @@ class TestForwardCompatGates:
             self._est().fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=100,
@@ -375,7 +375,7 @@ class TestForwardCompatGates:
         results = self._est().fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             L_max=1,
@@ -388,10 +388,10 @@ class TestForwardCompatGates:
             self._est().fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
-                controls=["outcome"],  # reuse existing column as dummy covariate
+                covariates=["outcome"],  # reuse existing column as dummy covariate
             )
 
     def test_trends_linear_requires_lmax(self, data):
@@ -400,7 +400,7 @@ class TestForwardCompatGates:
             self._est().fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -412,7 +412,7 @@ class TestForwardCompatGates:
             self._est().fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_nonparam="state",
@@ -423,7 +423,7 @@ class TestForwardCompatGates:
             self._est().fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 honest_did=True,
@@ -440,7 +440,7 @@ class TestForwardCompatGates:
             self._est().fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 survey_design=sd,
@@ -523,7 +523,7 @@ class TestForwardCompatGates:
             est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -536,7 +536,7 @@ class TestForwardCompatGates:
                 est_warn.fit(
                     df,
                     outcome="outcome",
-                    group="group",
+                    unit="group",
                     time="period",
                     treatment="treatment",
                 )
@@ -582,13 +582,13 @@ class TestDropLargerLower:
             results = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
         # The multi-switch group should be dropped
         assert results.n_groups_dropped_crossers >= 1
-        assert 9999 not in results.groups
+        assert 9999 not in results.units
         # A drop_larger_lower warning should fire
         assert any("drop_larger_lower" in str(wi.message) for wi in w)
 
@@ -605,7 +605,7 @@ class TestDropLargerLower:
             est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -623,7 +623,7 @@ class TestDropLargerLower:
         results = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -665,7 +665,7 @@ class TestDropLargerLower:
             results = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -673,8 +673,8 @@ class TestDropLargerLower:
         assert results.n_groups_dropped_singleton_baseline >= 1
         # Per the variance-only filter, the group is RETAINED in the
         # point-estimate sample (it can serve as a period-based stable
-        # control), so it appears in results.groups.
-        assert 9999 in results.groups
+        # control), so it appears in results.units.
+        assert 9999 in results.units
         # The warning text mentions the variance-only scope.
         assert any("Singleton-baseline" in str(wi.message) for wi in w)
         assert any(
@@ -695,7 +695,7 @@ class TestDropLargerLower:
             est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -717,16 +717,16 @@ class TestDropLargerLower:
             results = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
         # Group 3 was dropped from the post-filter sample
-        assert 3 not in results.groups
+        assert 3 not in results.units
         # The interior-gap warning fired
         assert any("interior period gaps" in str(wi.message) for wi in w)
         # Other groups still present
-        assert len(results.groups) == 9
+        assert len(results.units) == 9
 
     def test_terminal_missingness_retained(self):
         """
@@ -756,14 +756,14 @@ class TestDropLargerLower:
         results = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
         # Group 5 is RETAINED in the post-filter sample (NOT dropped)
-        assert 5 in results.groups
+        assert 5 in results.units
         # All 10 groups remain
-        assert len(results.groups) == 10
+        assert len(results.units) == 10
         # The point estimate is well-defined (not NaN)
         assert np.isfinite(results.overall_att)
         # Per-period DIDs were computed (the structure of per_period_effects
@@ -813,12 +813,12 @@ class TestDropLargerLower:
         results = est.fit(
             df,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
         # All 4 groups present
-        assert len(results.groups) == 4
+        assert len(results.units) == 4
         # Point estimate is finite
         assert np.isfinite(results.overall_att)
         # Per-period effects include the transition at t=3 (treated as
@@ -891,7 +891,7 @@ class TestDropLargerLower:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             results = est.fit(
-                df, outcome="outcome", group="group", time="period", treatment="treatment"
+                df, outcome="outcome", unit="group", time="period", treatment="treatment"
             )
 
         # Expected under CELL weighting:
@@ -941,7 +941,7 @@ class TestA11Handling:
             results = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -997,7 +997,7 @@ class TestA11Handling:
             results = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -1026,7 +1026,7 @@ class TestA11Handling:
         results = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -1049,7 +1049,7 @@ class TestNaNHandling:
             est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -1071,7 +1071,7 @@ class TestNaNHandling:
             est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -1092,7 +1092,7 @@ class TestBootstrap:
         results = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -1109,7 +1109,7 @@ class TestBootstrap:
         results = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -1130,7 +1130,7 @@ class TestBootstrap:
         results = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -1147,7 +1147,7 @@ class TestBootstrap:
         results = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -1172,7 +1172,7 @@ class TestBootstrap:
             results = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -1230,7 +1230,7 @@ class TestBootstrap:
         results = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -1285,14 +1285,14 @@ class TestBootstrap:
         r1 = ChaisemartinDHaultfoeuille(n_bootstrap=n_boot, seed=42).fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
         r2 = ChaisemartinDHaultfoeuille(n_bootstrap=n_boot, seed=42).fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -1311,7 +1311,7 @@ class TestResultsDataclass:
         return ChaisemartinDHaultfoeuille().fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -1436,7 +1436,7 @@ class TestResultsDataclass:
             placebo_conf_int=(float("nan"), float("nan")),
             placebo_available=False,
             per_period_effects={},
-            groups=[1],
+            units=[1],
             time_periods=[0, 1],
             n_obs=2,
             n_treated_obs=1,
@@ -1478,7 +1478,7 @@ class TestResultsDataclass:
             placebo_conf_int=(float("nan"), float("nan")),
             placebo_available=False,
             per_period_effects={},
-            groups=[1],
+            units=[1],
             time_periods=[0, 1],
             n_obs=2,
             n_treated_obs=1,
@@ -1502,7 +1502,7 @@ class TestTwowayFeweightsHelper:
         result = twowayfeweights(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -1519,7 +1519,7 @@ class TestTwowayFeweightsHelper:
         standalone = twowayfeweights(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -1527,7 +1527,7 @@ class TestTwowayFeweightsHelper:
         results = ChaisemartinDHaultfoeuille().fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -1563,7 +1563,7 @@ class TestTwowayFeweightsHelper:
         standalone = twowayfeweights(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -1575,7 +1575,7 @@ class TestTwowayFeweightsHelper:
             results = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -1585,8 +1585,8 @@ class TestTwowayFeweightsHelper:
         assert results.twfe_fraction_negative == pytest.approx(standalone.fraction_negative)
 
         # The estimation sample is smaller (group 3 was dropped)
-        assert 3 not in results.groups
-        assert len(results.groups) == 9
+        assert 3 not in results.units
+        assert len(results.units) == 9
 
         # The divergence warning fired with the expected counts
         div_warnings = [
@@ -1631,7 +1631,7 @@ class TestTwowayFeweightsHelper:
         standalone = twowayfeweights(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -1643,7 +1643,7 @@ class TestTwowayFeweightsHelper:
             results = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -1654,7 +1654,7 @@ class TestTwowayFeweightsHelper:
         assert results.twfe_fraction_negative == pytest.approx(standalone.fraction_negative)
 
         # The estimation sample dropped the crosser
-        assert 9999 not in results.groups
+        assert 9999 not in results.units
         assert results.n_groups_dropped_crossers >= 1
 
         # The divergence warning fired with the expected counts
@@ -1685,14 +1685,14 @@ class TestTwowayFeweightsHelper:
             results = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
 
         # No filter drops on a clean panel
         assert results.n_groups_dropped_crossers == 0
-        assert len(results.groups) == 20
+        assert len(results.units) == 20
 
         # The divergence warning did NOT fire
         div_warnings = [
@@ -1716,7 +1716,7 @@ class TestTwowayFeweightsHelper:
             twowayfeweights(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -1728,7 +1728,7 @@ class TestTwowayFeweightsHelper:
             twowayfeweights(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -1741,7 +1741,7 @@ class TestTwowayFeweightsHelper:
             twowayfeweights(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -1753,7 +1753,7 @@ class TestTwowayFeweightsHelper:
             twowayfeweights(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -1765,7 +1765,7 @@ class TestTwowayFeweightsHelper:
             twowayfeweights(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -1778,7 +1778,7 @@ class TestTwowayFeweightsHelper:
             est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -1791,7 +1791,7 @@ class TestTwowayFeweightsHelper:
             est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -1802,7 +1802,7 @@ class TestTwowayFeweightsHelper:
             twowayfeweights(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -1827,7 +1827,7 @@ class TestTwowayFeweightsHelper:
             twowayfeweights(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -1850,7 +1850,7 @@ class TestTwowayFeweightsHelper:
             est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
             )
@@ -1873,7 +1873,7 @@ class TestMultiHorizon:
     def test_L_max_none_preserves_phase1_behavior(self, data):
         """L_max=None must produce identical results to Phase 1."""
         est = ChaisemartinDHaultfoeuille(placebo=False, twfe_diagnostic=False)
-        r = est.fit(data, outcome="outcome", group="group", time="period", treatment="treatment")
+        r = est.fit(data, outcome="outcome", unit="group", time="period", treatment="treatment")
         assert len(r.event_study_effects) == 1
         assert 1 in r.event_study_effects
         assert r.L_max is None
@@ -1893,7 +1893,7 @@ class TestMultiHorizon:
             r = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=1,
@@ -1916,7 +1916,7 @@ class TestMultiHorizon:
             r = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=1,
@@ -1946,7 +1946,7 @@ class TestMultiHorizon:
             r = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=1,
@@ -1970,7 +1970,7 @@ class TestMultiHorizon:
             r_one = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=1,
@@ -1988,7 +1988,7 @@ class TestMultiHorizon:
         r = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             L_max=3,
@@ -2010,7 +2010,7 @@ class TestMultiHorizon:
         r_multi = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             L_max=3,
@@ -2025,7 +2025,7 @@ class TestMultiHorizon:
         r = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             L_max=5,
@@ -2044,7 +2044,7 @@ class TestMultiHorizon:
         r = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             L_max=2,
@@ -2065,7 +2065,7 @@ class TestMultiHorizon:
             est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=4,
@@ -2079,7 +2079,7 @@ class TestMultiHorizon:
         r = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             L_max=3,
@@ -2104,7 +2104,7 @@ class TestMultiHorizonPlacebos:
         r = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             L_max=3,
@@ -2119,7 +2119,7 @@ class TestMultiHorizonPlacebos:
         r = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             L_max=3,
@@ -2137,7 +2137,7 @@ class TestMultiHorizonPlacebos:
         r = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             L_max=3,
@@ -2165,7 +2165,7 @@ class TestMultiHorizonPlacebos:
             r = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -2192,7 +2192,7 @@ class TestNormalizedEffects:
         r = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             L_max=3,
@@ -2212,7 +2212,7 @@ class TestNormalizedEffects:
         r = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             L_max=3,
@@ -2240,7 +2240,7 @@ class TestCostBenefitDelta:
         r = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             L_max=3,
@@ -2255,7 +2255,7 @@ class TestCostBenefitDelta:
         r = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             L_max=3,
@@ -2283,7 +2283,7 @@ class TestSupTBands:
         r = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             L_max=3,
@@ -2297,7 +2297,7 @@ class TestSupTBands:
         r = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             L_max=3,
@@ -2327,7 +2327,7 @@ class TestMultiHorizonToDataframe:
         r = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             L_max=3,
@@ -2344,7 +2344,7 @@ class TestMultiHorizonToDataframe:
         r = est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             L_max=3,
@@ -2383,7 +2383,7 @@ class TestCovariateAdjustment:
         df = self._make_panel_with_covariates()
         with pytest.raises(ValueError, match="requires L_max >= 1"):
             ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment", controls=["X1"]
+                df, "outcome", "group", "period", "treatment", covariates=["X1"]
             )
 
     def test_controls_missing_column(self):
@@ -2396,7 +2396,7 @@ class TestCovariateAdjustment:
                 "group",
                 "period",
                 "treatment",
-                controls=["nonexistent"],
+                covariates=["nonexistent"],
                 L_max=1,
             )
 
@@ -2414,7 +2414,7 @@ class TestCovariateAdjustment:
             "group",
             "period",
             "treatment",
-            controls=["X1"],
+            covariates=["X1"],
             L_max=1,
         )
 
@@ -2439,7 +2439,7 @@ class TestCovariateAdjustment:
             "group",
             "period",
             "treatment",
-            controls=["X1", "X2"],
+            covariates=["X1", "X2"],
             L_max=1,
         )
         assert r.covariate_residuals is not None
@@ -2455,7 +2455,7 @@ class TestCovariateAdjustment:
             "group",
             "period",
             "treatment",
-            controls=["X1"],
+            covariates=["X1"],
             L_max=2,
         )
         diag = r.covariate_residuals
@@ -2492,7 +2492,7 @@ class TestCovariateAdjustment:
             "group",
             "period",
             "treatment",
-            controls=["X1"],
+            covariates=["X1"],
             L_max=1,
         )
         assert np.isfinite(r.overall_att)
@@ -2507,7 +2507,7 @@ class TestCovariateAdjustment:
             "group",
             "period",
             "treatment",
-            controls=["X1"],
+            covariates=["X1"],
             L_max=2,
         )
         assert r.event_study_effects is not None
@@ -2532,7 +2532,7 @@ class TestCovariateAdjustment:
             "group",
             "period",
             "treatment",
-            controls=["X1"],
+            covariates=["X1"],
             L_max=1,
         )
 
@@ -2667,7 +2667,7 @@ class TestLinearTrends:
             "group",
             "period",
             "treatment",
-            controls=["X1"],
+            covariates=["X1"],
             L_max=2,
             trends_linear=True,
         )
@@ -2872,7 +2872,7 @@ class TestStateSetTrends:
             "group",
             "period",
             "treatment",
-            controls=["X1"],
+            covariates=["X1"],
             L_max=1,
             trends_nonparam="state",
         )
@@ -3093,7 +3093,7 @@ class TestHeterogeneityTesting:
         """heterogeneity + controls raises ValueError (matching R predict_het)."""
         df = self._make_panel_with_het()
         df["X1"] = np.random.RandomState(42).normal(0, 1, len(df))
-        with pytest.raises(ValueError, match="cannot be combined with controls"):
+        with pytest.raises(ValueError, match="cannot be combined with covariates"):
             ChaisemartinDHaultfoeuille(seed=1).fit(
                 df,
                 "outcome",
@@ -3102,7 +3102,7 @@ class TestHeterogeneityTesting:
                 "treatment",
                 L_max=1,
                 heterogeneity="het_x",
-                controls=["X1"],
+                covariates=["X1"],
             )
 
     def test_heterogeneity_requires_lmax(self):
@@ -3267,7 +3267,7 @@ class TestNonBinaryTreatment:
             r = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=2,
@@ -3286,7 +3286,7 @@ class TestNonBinaryTreatment:
         )
         est = ChaisemartinDHaultfoeuille()
         with pytest.raises(ValueError, match="Within-cell-varying treatment"):
-            est.fit(df, outcome="outcome", group="group", time="period", treatment="treatment")
+            est.fit(df, outcome="outcome", unit="group", time="period", treatment="treatment")
 
     def test_single_large_dose_not_flagged_multi_switch(self):
         """A single jump 0->3 should NOT be flagged as multi-switch."""
@@ -3310,7 +3310,7 @@ class TestNonBinaryTreatment:
             r = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=1,
@@ -3340,7 +3340,7 @@ class TestNonBinaryTreatment:
             warnings.simplefilter("ignore")
             # Binary groups work at L_max=None; the multi-switch group
             # (0->2->1) should be detected and dropped.
-            r = est.fit(df, outcome="outcome", group="group", time="period", treatment="treatment")
+            r = est.fit(df, outcome="outcome", unit="group", time="period", treatment="treatment")
         assert r.n_groups_dropped_crossers >= 1
 
     def test_monotone_multi_step_dropped(self):
@@ -3364,7 +3364,7 @@ class TestNonBinaryTreatment:
         est = ChaisemartinDHaultfoeuille(twfe_diagnostic=False)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            r = est.fit(df, outcome="outcome", group="group", time="period", treatment="treatment")
+            r = est.fit(df, outcome="outcome", unit="group", time="period", treatment="treatment")
         # Group 0 (0->1->2, 2 change periods) should be dropped
         assert r.n_groups_dropped_crossers >= 1
 
@@ -3398,7 +3398,7 @@ class TestNonBinaryTreatment:
             r = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=1,
@@ -3425,7 +3425,7 @@ class TestNonBinaryTreatment:
                 est.fit(
                     df,
                     outcome="outcome",
-                    group="group",
+                    unit="group",
                     time="period",
                     treatment="treatment",
                     L_max=1,
@@ -3453,7 +3453,7 @@ class TestNonBinaryTreatment:
             r = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=1,
@@ -3489,7 +3489,7 @@ class TestNonBinaryTreatment:
             r = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=1,
@@ -3533,7 +3533,7 @@ class TestNonBinaryTreatment:
             r = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=1,
@@ -3564,7 +3564,7 @@ class TestNonBinaryTreatment:
             r = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -3676,7 +3676,7 @@ class TestHonestDiDIntegration:
                 "group",
                 "period",
                 "treatment",
-                controls=["X1"],
+                covariates=["X1"],
                 L_max=2,
                 honest_did=True,
             )
@@ -4000,7 +4000,7 @@ class TestSummaryPhase3:
                 "group",
                 "period",
                 "treatment",
-                controls=["X1"],
+                covariates=["X1"],
                 L_max=1,
             )
         text = r.summary()
@@ -4166,7 +4166,7 @@ def _fit_by_path(data: pd.DataFrame, by_path: int, L_max: int = 3):
         return est, est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             L_max=L_max,
@@ -4180,7 +4180,7 @@ class TestByPathGates:
         data = generate_reversible_did_data(n_groups=40, n_periods=5, seed=1)
         est = ChaisemartinDHaultfoeuille()
         results = est.fit(
-            data, outcome="outcome", group="group", time="period", treatment="treatment"
+            data, outcome="outcome", unit="group", time="period", treatment="treatment"
         )
         assert results.path_effects is None
 
@@ -4209,7 +4209,7 @@ class TestByPathGates:
             est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=2,
@@ -4224,7 +4224,7 @@ class TestByPathGates:
                 est.fit(
                     data,
                     outcome="outcome",
-                    group="group",
+                    unit="group",
                     time="period",
                     treatment="treatment",
                 )
@@ -4256,7 +4256,7 @@ class TestByPathGates:
                 est.fit(
                     data,
                     outcome="outcome",
-                    group="group",
+                    unit="group",
                     time="period",
                     treatment="treatment",
                     L_max=2,
@@ -4296,7 +4296,7 @@ class TestByPathBehavior:
             results = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -4431,7 +4431,7 @@ class TestByPathBehavior:
         data = generate_reversible_did_data(n_groups=40, n_periods=5, seed=1)
         est = ChaisemartinDHaultfoeuille()
         results = est.fit(
-            data, outcome="outcome", group="group", time="period", treatment="treatment"
+            data, outcome="outcome", unit="group", time="period", treatment="treatment"
         )
         with pytest.raises(ValueError, match="by_path"):
             results.to_dataframe(level="by_path")
@@ -4495,7 +4495,7 @@ class TestByPathEdgeCases:
             results = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -4586,7 +4586,7 @@ class TestByPathEdgeCases:
             results = est.fit(
                 panel,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=1,
@@ -4660,7 +4660,7 @@ class TestByPathBootstrap:
             results = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=L_max,
@@ -5034,7 +5034,7 @@ class TestByPathBootstrap:
             est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -5174,7 +5174,7 @@ class TestByPathBootstrap:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=2,
@@ -5308,7 +5308,7 @@ class TestByPathBootstrap:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -5391,7 +5391,7 @@ class TestByPathBootstrap:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -5504,7 +5504,7 @@ def _fit_by_path_with_placebo(
         return est, est.fit(
             data,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             L_max=L_max,
@@ -5776,7 +5776,7 @@ class TestByPathPlacebo:
             results = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -5981,7 +5981,7 @@ class TestByPathSupTBands:
             results = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=L_max,
@@ -6010,7 +6010,7 @@ class TestByPathSupTBands:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -6307,7 +6307,7 @@ class TestByPathSupTBands:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -6388,7 +6388,7 @@ class TestByPathSupTBands:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -6453,7 +6453,7 @@ class TestByPathSupTBands:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -6576,10 +6576,10 @@ class TestByPathControls:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
-                controls=["X1"],
+                covariates=["X1"],
                 L_max=3,
             )
         assert res.path_effects is not None
@@ -6597,7 +6597,7 @@ class TestByPathControls:
             res_no = est_no.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -6606,10 +6606,10 @@ class TestByPathControls:
             res_yes = est_yes.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
-                controls=["X1"],
+                covariates=["X1"],
                 L_max=3,
             )
 
@@ -6640,10 +6640,10 @@ class TestByPathControls:
             res_yes = est_yes.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
-                controls=["X1"],
+                covariates=["X1"],
                 L_max=3,
             )
 
@@ -6671,10 +6671,10 @@ class TestByPathControls:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
-                controls=["X1", "X2"],
+                covariates=["X1", "X2"],
                 L_max=3,
             )
         assert res.path_effects is not None
@@ -6699,10 +6699,10 @@ class TestByPathControls:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
-                controls=["X1"],
+                covariates=["X1"],
                 L_max=3,
             )
         any_finite = False
@@ -6724,10 +6724,10 @@ class TestByPathControls:
             res_a = est_a.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
-                controls=["X1"],
+                covariates=["X1"],
                 L_max=3,
             )
             est_b = ChaisemartinDHaultfoeuille(
@@ -6736,10 +6736,10 @@ class TestByPathControls:
             res_b = est_b.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
-                controls=["X1"],
+                covariates=["X1"],
                 L_max=3,
             )
         for path, entry_a in res_a.path_effects.items():
@@ -6769,10 +6769,10 @@ class TestByPathControls:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
-                controls=["X1"],
+                covariates=["X1"],
                 L_max=3,
             )
         assert res.path_placebo_event_study is not None
@@ -6803,10 +6803,10 @@ class TestByPathControls:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
-                controls=["X1"],
+                covariates=["X1"],
                 L_max=3,
             )
         assert res.path_placebo_event_study is not None
@@ -6835,10 +6835,10 @@ class TestByPathControls:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
-                controls=["X1"],
+                covariates=["X1"],
                 L_max=3,
             )
         assert res.path_sup_t_bands is not None
@@ -6869,10 +6869,10 @@ class TestByPathControls:
             res_yes = est_yes.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
-                controls=["X1"],
+                covariates=["X1"],
                 L_max=3,
             )
         # Per-period DID is unaffected by controls residualization
@@ -6913,10 +6913,10 @@ class TestByPathControls:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
-                controls=["X1"],
+                covariates=["X1"],
                 L_max=3,
             )
         assert res.covariate_residuals is not None
@@ -6939,10 +6939,10 @@ class TestByPathControls:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
-                controls=["X1"],
+                covariates=["X1"],
                 L_max=3,
             )
         df_long = res.to_dataframe(level="by_path")
@@ -7001,10 +7001,10 @@ class TestByPathControls:
             est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
-                controls=["X1"],
+                covariates=["X1"],
                 L_max=3,
             )
 
@@ -7034,10 +7034,10 @@ class TestByPathControls:
             est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
-                controls=["X1"],
+                covariates=["X1"],
                 L_max=3,
             )
         deviation_msgs = [
@@ -7110,10 +7110,10 @@ class TestByPathControls:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
-                controls=["X1"],
+                covariates=["X1"],
                 L_max=3,
             )
 
@@ -7339,7 +7339,7 @@ class TestByPathTrendsLinear:
             est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -7355,7 +7355,7 @@ class TestByPathTrendsLinear:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -7375,7 +7375,7 @@ class TestByPathTrendsLinear:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -7403,7 +7403,7 @@ class TestByPathTrendsLinear:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -7419,7 +7419,7 @@ class TestByPathTrendsLinear:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -7448,7 +7448,7 @@ class TestByPathTrendsLinear:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -7477,7 +7477,7 @@ class TestByPathTrendsLinear:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -7499,7 +7499,7 @@ class TestByPathTrendsLinear:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -7519,7 +7519,7 @@ class TestByPathTrendsLinear:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -7546,7 +7546,7 @@ class TestByPathTrendsLinear:
             res_no_bp = est_no_bp.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -7556,7 +7556,7 @@ class TestByPathTrendsLinear:
             res_bp = est_bp.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -7608,7 +7608,7 @@ class TestByPathTrendsLinear:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -7635,7 +7635,7 @@ class TestByPathTrendsLinear:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -7685,7 +7685,7 @@ class TestByPathTrendsLinear:
             res_a = est_a.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -7701,7 +7701,7 @@ class TestByPathTrendsLinear:
             res_b = est_b.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -7755,7 +7755,7 @@ class TestByPathTrendsLinear:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -7792,7 +7792,7 @@ class TestByPathTrendsLinear:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -7833,7 +7833,7 @@ class TestByPathTrendsLinear:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -7909,7 +7909,7 @@ class TestByPathTrendsLinear:
             est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -7940,7 +7940,7 @@ class TestByPathTrendsLinear:
             est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -7995,7 +7995,7 @@ class TestByPathTrendsLinear:
             est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -8042,7 +8042,7 @@ class TestByPathTrendsLinear:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -8079,7 +8079,7 @@ class TestByPathTrendsLinear:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -8130,7 +8130,7 @@ class TestByPathTrendsNonparam:
             est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_nonparam="state",
@@ -8146,7 +8146,7 @@ class TestByPathTrendsNonparam:
             res_no = est_no_set.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -8155,7 +8155,7 @@ class TestByPathTrendsNonparam:
             res_set = est_set.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_nonparam="state",
@@ -8191,7 +8191,7 @@ class TestByPathTrendsNonparam:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_nonparam="state",
@@ -8215,7 +8215,7 @@ class TestByPathTrendsNonparam:
                 est.fit(
                     data,
                     outcome="outcome",
-                    group="group",
+                    unit="group",
                     time="period",
                     treatment="treatment",
                     trends_nonparam="state",
@@ -8232,7 +8232,7 @@ class TestByPathTrendsNonparam:
                 est.fit(
                     data,
                     outcome="outcome",
-                    group="group",
+                    unit="group",
                     time="period",
                     treatment="treatment",
                     trends_nonparam="missing_column",
@@ -8251,7 +8251,7 @@ class TestByPathTrendsNonparam:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_nonparam="state",
@@ -8274,7 +8274,7 @@ class TestByPathTrendsNonparam:
             res_no_bp = est_no_bp.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_nonparam="state",
@@ -8284,7 +8284,7 @@ class TestByPathTrendsNonparam:
             res_bp = est_bp.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_nonparam="state",
@@ -8334,7 +8334,7 @@ class TestByPathTrendsNonparam:
             res = est.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_nonparam="state",
@@ -8393,7 +8393,7 @@ class TestByPathTrendsNonparam:
             res_no = est_no_set.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -8408,7 +8408,7 @@ class TestByPathTrendsNonparam:
             res_set = est_set.fit(
                 data,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_nonparam="state",
@@ -8529,7 +8529,7 @@ class TestByPathNonBinary:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -8557,7 +8557,7 @@ class TestByPathNonBinary:
                 est.fit(
                     df,
                     outcome="outcome",
-                    group="group",
+                    unit="group",
                     time="period",
                     treatment="treatment",
                     L_max=3,
@@ -8598,7 +8598,7 @@ class TestByPathNonBinary:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -8662,7 +8662,7 @@ class TestByPathNonBinary:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -8695,7 +8695,7 @@ class TestByPathNonBinary:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -8726,7 +8726,7 @@ class TestByPathNonBinary:
             res_no = est_no.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -8734,7 +8734,7 @@ class TestByPathNonBinary:
             res_bp = est_bp.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -8761,7 +8761,7 @@ class TestByPathNonBinary:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -8799,7 +8799,7 @@ class TestByPathNonBinary:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=2,
@@ -8822,7 +8822,7 @@ class TestByPathNonBinary:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -8847,7 +8847,7 @@ class TestByPathNonBinary:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -8881,7 +8881,7 @@ class TestByPathNonBinary:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9011,7 +9011,7 @@ class TestPathsOfInterest:
                 est.fit(
                     df,
                     outcome="outcome",
-                    group="group",
+                    unit="group",
                     time="period",
                     treatment="treatment",
                     L_max=3,
@@ -9033,7 +9033,7 @@ class TestPathsOfInterest:
                 est.fit(
                     df,
                     outcome="outcome",
-                    group="group",
+                    unit="group",
                     time="period",
                     treatment="treatment",
                     L_max=3,
@@ -9053,7 +9053,7 @@ class TestPathsOfInterest:
                 est.fit(
                     df,
                     outcome="outcome",
-                    group="group",
+                    unit="group",
                     time="period",
                     treatment="treatment",
                 )
@@ -9071,7 +9071,7 @@ class TestPathsOfInterest:
                 est.fit(
                     df,
                     outcome="outcome",
-                    group="group",
+                    unit="group",
                     time="period",
                     treatment="treatment",
                     L_max=3,
@@ -9092,7 +9092,7 @@ class TestPathsOfInterest:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9114,7 +9114,7 @@ class TestPathsOfInterest:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9141,7 +9141,7 @@ class TestPathsOfInterest:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9173,7 +9173,7 @@ class TestPathsOfInterest:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9208,7 +9208,7 @@ class TestPathsOfInterest:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9236,7 +9236,7 @@ class TestPathsOfInterest:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9266,7 +9266,7 @@ class TestPathsOfInterest:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9301,7 +9301,7 @@ class TestPathsOfInterest:
                 res = est.fit(
                     df,
                     outcome="outcome",
-                    group="group",
+                    unit="group",
                     time="period",
                     treatment="treatment",
                     L_max=3,
@@ -9323,7 +9323,7 @@ class TestPathsOfInterest:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9350,11 +9350,11 @@ class TestPathsOfInterest:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
-                controls=["X1"],
+                covariates=["X1"],
             )
         assert len(res.path_effects) == 2
         for path, entry in res.path_effects.items():
@@ -9375,7 +9375,7 @@ class TestPathsOfInterest:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9400,7 +9400,7 @@ class TestPathsOfInterest:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9433,7 +9433,7 @@ class TestPathsOfInterest:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9496,7 +9496,7 @@ class TestPathsOfInterest:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9548,7 +9548,7 @@ class TestPathsOfInterest:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9596,7 +9596,7 @@ class TestPathsOfInterest:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9620,7 +9620,7 @@ class TestPathsOfInterest:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9765,7 +9765,7 @@ class TestByPathSurveyDesignAnalytical:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9788,7 +9788,7 @@ class TestByPathSurveyDesignAnalytical:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9812,7 +9812,7 @@ class TestByPathSurveyDesignAnalytical:
                 est.fit(
                     df,
                     outcome="outcome",
-                    group="group",
+                    unit="group",
                     time="period",
                     treatment="treatment",
                     L_max=3,
@@ -9836,7 +9836,7 @@ class TestByPathSurveyDesignAnalytical:
                 est.fit(
                     df,
                     outcome="outcome",
-                    group="group",
+                    unit="group",
                     time="period",
                     treatment="treatment",
                     L_max=3,
@@ -9865,7 +9865,7 @@ class TestByPathSurveyDesignAnalytical:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9887,7 +9887,7 @@ class TestByPathSurveyDesignAnalytical:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9921,7 +9921,7 @@ class TestByPathSurveyDesignAnalytical:
             res_g = est_g.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9930,7 +9930,7 @@ class TestByPathSurveyDesignAnalytical:
             res_p = est_p.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9981,7 +9981,7 @@ class TestByPathSurveyDesignAnalytical:
             res_survey = est_p.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -9990,7 +9990,7 @@ class TestByPathSurveyDesignAnalytical:
             res_plain = est_p_no_survey.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -10052,7 +10052,7 @@ class TestByPathSurveyDesignAnalytical:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -10146,7 +10146,7 @@ class TestByPathSurveyDesignAnalytical:
                 res = est.fit(
                     df,
                     outcome="outcome",
-                    group="group",
+                    unit="group",
                     time="period",
                     treatment="treatment",
                     L_max=3,
@@ -10268,7 +10268,7 @@ class TestByPathSurveyDesignAnalytical:
                 res = est.fit(
                     df,
                     outcome="outcome",
-                    group="group",
+                    unit="group",
                     time="period",
                     treatment="treatment",
                     L_max=3,
@@ -10336,7 +10336,7 @@ class TestByPathSurveyDesignAnalytical:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -10422,7 +10422,7 @@ class TestByPathSurveyDesignAnalytical:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -10447,7 +10447,7 @@ class TestByPathSurveyDesignAnalytical:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -10520,7 +10520,7 @@ class TestByPathSurveyDesignAnalytical:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -10547,7 +10547,7 @@ class TestByPathSurveyDesignAnalytical:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -10599,7 +10599,7 @@ class TestByPathSurveyDesignAnalytical:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -10686,7 +10686,7 @@ class TestByPathSurveyDesignAnalytical:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -10741,7 +10741,7 @@ class TestByPathSurveyDesignTelescope:
             res_g = est_g.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -10750,7 +10750,7 @@ class TestByPathSurveyDesignTelescope:
             res_p = est_p.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -10847,7 +10847,7 @@ class TestByPathHeterogeneity:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -10867,7 +10867,7 @@ class TestByPathHeterogeneity:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -10879,16 +10879,16 @@ class TestByPathHeterogeneity:
         """``heterogeneity + controls`` mutex still fires under by_path."""
         df = _by_path_het_data()
         df["X1"] = np.random.RandomState(42).normal(0, 1, len(df))
-        with pytest.raises(ValueError, match="cannot be combined with controls"):
+        with pytest.raises(ValueError, match="cannot be combined with covariates"):
             ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=2).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
                 heterogeneity="het_x",
-                controls=["X1"],
+                covariates=["X1"],
             )
 
     def test_heterogeneity_still_rejects_trends_linear_under_by_path(self):
@@ -10898,7 +10898,7 @@ class TestByPathHeterogeneity:
             ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=2).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -10914,7 +10914,7 @@ class TestByPathHeterogeneity:
             ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=2).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -10934,7 +10934,7 @@ class TestByPathHeterogeneity:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -10972,7 +10972,7 @@ class TestByPathHeterogeneity:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -11049,7 +11049,7 @@ class TestByPathHeterogeneity:
             res_p = est_p.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -11062,7 +11062,7 @@ class TestByPathHeterogeneity:
             res_g = est_g.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -11141,7 +11141,7 @@ class TestByPathHeterogeneity:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -11229,7 +11229,7 @@ class TestByPathHeterogeneity:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -11325,7 +11325,7 @@ class TestByPathHeterogeneity:
             ).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -11464,7 +11464,7 @@ class TestByPathHeterogeneity:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -11512,7 +11512,7 @@ class TestByPathHeterogeneity:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -11604,7 +11604,7 @@ class TestByPathHeterogeneity:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -11654,7 +11654,7 @@ class TestByPathHeterogeneity:
                 est.fit(
                     df,
                     outcome="outcome",
-                    group="group",
+                    unit="group",
                     time="period",
                     treatment="treatment",
                     L_max=3,
@@ -11683,7 +11683,7 @@ class TestByPathHeterogeneity:
                 est.fit(
                     df,
                     outcome="outcome",
-                    group="group",
+                    unit="group",
                     time="period",
                     treatment="treatment",
                     L_max=3,
@@ -11705,7 +11705,7 @@ class TestByPathHeterogeneity:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -11746,7 +11746,7 @@ class TestByPathHeterogeneity:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -11793,7 +11793,7 @@ class TestByPathHeterogeneity:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -11884,7 +11884,7 @@ class TestByPathPredictHetPlacebo:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -11932,7 +11932,7 @@ class TestByPathPredictHetPlacebo:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -12046,7 +12046,7 @@ class TestByPathPredictHetPlacebo:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -12121,7 +12121,7 @@ class TestByPathPredictHetPlacebo:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -12161,7 +12161,7 @@ class TestByPathPredictHetPlacebo:
             res_g = est_g.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -12177,7 +12177,7 @@ class TestByPathPredictHetPlacebo:
             res_p = est_p.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -12218,7 +12218,7 @@ class TestByPathPredictHetPlacebo:
             res = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,

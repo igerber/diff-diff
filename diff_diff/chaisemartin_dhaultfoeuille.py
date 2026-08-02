@@ -37,6 +37,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
+from diff_diff._deprecation import NOT_SUPPLIED, require_arg, resolve_renamed_kwarg
 from diff_diff.chaisemartin_dhaultfoeuille_bootstrap import (
     ChaisemartinDHaultfoeuilleBootstrapMixin,
 )
@@ -385,7 +386,7 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
     - Normalized estimator ``DID^n_l``, cost-benefit aggregate ``delta``,
       and sup-t simultaneous confidence bands
     - Residualization-style covariate adjustment (``DID^X``) via
-      ``controls=``, group-specific linear trends (``DID^{fd}``) via
+      ``covariates=``, group-specific linear trends (``DID^{fd}``) via
       ``trends_linear=True``, state-set-specific trends via
       ``trends_nonparam=``, heterogeneity testing, non-binary treatment,
       HonestDiD sensitivity integration on placebos via ``honest_did=True``
@@ -871,13 +872,13 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
         self,
         data: pd.DataFrame,
         outcome: str,
-        group: str,
-        time: str,
-        treatment: str,
+        unit: Any = NOT_SUPPLIED,
+        time: Any = NOT_SUPPLIED,
+        treatment: Any = NOT_SUPPLIED,
         # ---------- forward-compat parameters ----------
         aggregate: Optional[str] = None,
         L_max: Optional[int] = None,
-        controls: Optional[List[str]] = None,
+        covariates: Any = NOT_SUPPLIED,
         trends_linear: Optional[bool] = None,
         trends_nonparam: Optional[Any] = None,
         honest_did: bool = False,
@@ -886,6 +887,9 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
         design2: bool = False,
         # ---------- deferred (separate effort) ----------
         survey_design: Any = None,
+        # ---------- deprecated aliases (removed in 4.0) ----------
+        group: Any = NOT_SUPPLIED,
+        controls: Any = NOT_SUPPLIED,
     ) -> ChaisemartinDHaultfoeuilleResults:
         """
         Fit the dCDH estimator on individual-level panel data.
@@ -894,21 +898,21 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
         ----------
         data : pd.DataFrame
             Individual-level panel. Must contain columns for ``outcome``,
-            ``group``, ``time``, and ``treatment``. The estimator
-            internally aggregates to ``(group, time)`` cells.
+            ``unit``, ``time``, and ``treatment``. The estimator
+            internally aggregates to ``(unit, time)`` cells.
         outcome : str
             Outcome variable column name.
-        group : str
-            Group identifier column name. Treatment must be constant
-            within each ``(group, time)`` cell after aggregation;
-            ``ValueError`` is raised if any cell has fractional
-            treatment after grouping (within-cell-varying treatment
-            indicates a fuzzy design not supported in Phase 1).
+        unit : str
+            Unit identifier column name (the R ``DIDmultiplegt`` "group").
+            Treatment must be constant within each ``(unit, time)`` cell
+            after aggregation; ``ValueError`` is raised if any cell has
+            fractional treatment after grouping (within-cell-varying
+            treatment indicates a fuzzy design not supported in Phase 1).
         time : str
             Time period column name. Must be sortable.
         treatment : str
             Per-observation treatment column. Must be numeric and constant
-            within each ``(group, time)`` cell. Both binary ``{0, 1}`` and
+            within each ``(unit, time)`` cell. Both binary ``{0, 1}`` and
             non-binary (ordinal or continuous) treatment are supported.
             Non-binary treatment requires ``L_max >= 1``.
         aggregate : str, optional
@@ -922,7 +926,7 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
             switch estimator ``DID_M`` is computed (Phase 1 behavior).
             Must be a positive integer not exceeding the number of
             post-baseline periods in the panel.
-        controls : list of str, optional
+        covariates : list of str, optional
             Column names for covariate adjustment via residualization-style
             ``DID^X`` (Web Appendix Section 1.2). Requires ``L_max >= 1``.
             One ``theta_hat`` per baseline treatment value, estimated by
@@ -955,7 +959,7 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
             against ``did_multiplegt_dyn(by_path, predict_het, placebo)``).
             Joint Wald F-test across rows is NOT computed
             (per-horizon inference only). Cannot be combined with
-            ``controls``, ``trends_linear``, or ``trends_nonparam``.
+            ``covariates``, ``trends_linear``, or ``trends_nonparam``.
             Requires ``L_max >= 1``. Under ``by_path`` /
             ``paths_of_interest``, per-path heterogeneity coefficients
             also surface on ``results.path_heterogeneity_effects`` and
@@ -1025,6 +1029,12 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
             closed-form; bootstrap would double-count variance). See
             REGISTRY.md ``ChaisemartinDHaultfoeuille`` Notes for the
             full contract.
+        group : str, optional
+            Deprecated alias for ``unit`` (row M-033); warns with
+            ``FutureWarning`` and will be removed in 4.0.
+        controls : list of str, optional
+            Deprecated alias for ``covariates`` (row M-034); warns with
+            ``FutureWarning`` and will be removed in 4.0.
 
         Returns
         -------
@@ -1039,6 +1049,29 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
             If any forward-compat parameter is set to a non-default
             value, with a clear pointer to the relevant ROADMAP phase.
         """
+        unit = resolve_renamed_kwarg(
+            "ChaisemartinDHaultfoeuille.fit",
+            "group",
+            group,
+            "unit",
+            unit,
+            default=NOT_SUPPLIED,
+        )
+        require_arg("ChaisemartinDHaultfoeuille.fit", "unit", unit)
+        require_arg("ChaisemartinDHaultfoeuille.fit", "time", time)
+        require_arg("ChaisemartinDHaultfoeuille.fit", "treatment", treatment)
+        covariates = resolve_renamed_kwarg(
+            "ChaisemartinDHaultfoeuille.fit",
+            "controls",
+            controls,
+            "covariates",
+            covariates,
+            default=None,
+        )
+        # Body-local names; the public parameters are unit/covariates
+        # (M-033 / M-034).
+        group = unit
+        controls = covariates
         # ------------------------------------------------------------------
         # Step 1: Column validation
         # ------------------------------------------------------------------
@@ -1314,8 +1347,8 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
         if controls is not None:
             if not controls:
                 raise ValueError(
-                    "controls must be a non-empty list of column names, "
-                    "got an empty list. Pass controls=None to disable "
+                    "covariates must be a non-empty list of column names, "
+                    "got an empty list. Pass covariates=None to disable "
                     "covariate adjustment."
                 )
             if L_max is None:
@@ -1557,7 +1590,7 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
         if self.twfe_diagnostic and (n_groups_dropped_interior_gap + n_groups_dropped_crossers) > 0:
             warnings.warn(
                 f"TWFE diagnostic sample-contract notice: the dCDH point "
-                f"estimate, results.groups, and inference fields use a "
+                f"estimate, results.units, and inference fields use a "
                 f"POST-FILTER sample after Step 5b dropped "
                 f"{n_groups_dropped_interior_gap} interior-gap group(s) "
                 f"and Step 6 dropped {n_groups_dropped_crossers} multi-"
@@ -3815,7 +3848,7 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
             # follows this restriction to avoid inconsistent behavior.
             if controls is not None:
                 raise ValueError(
-                    "heterogeneity cannot be combined with controls. "
+                    "heterogeneity cannot be combined with covariates. "
                     "R's did_multiplegt_dyn disallows predict_het with "
                     "controls; remove one of the two options."
                 )
@@ -4212,7 +4245,7 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
             placebo_conf_int=placebo_ci,
             placebo_available=placebo_available,
             per_period_effects=per_period_effects,
-            groups=all_groups,
+            units=all_groups,
             time_periods=all_periods,
             n_obs=n_obs_post,
             n_treated_obs=effective_n_treated,
@@ -8710,7 +8743,7 @@ def chaisemartin_dhaultfoeuille(
     return est.fit(
         data,
         outcome=outcome,
-        group=group,
+        unit=group,
         time=time,
         treatment=treatment,
         **fit_kwargs,
@@ -8720,11 +8753,12 @@ def chaisemartin_dhaultfoeuille(
 def twowayfeweights(
     data: pd.DataFrame,
     outcome: str,
-    group: str,
-    time: str,
-    treatment: str,
+    unit: Any = NOT_SUPPLIED,
+    time: Any = NOT_SUPPLIED,
+    treatment: Any = NOT_SUPPLIED,
     rank_deficient_action: str = "warn",
     survey_design: Any = None,
+    group: Any = NOT_SUPPLIED,
 ) -> TWFEWeightsResult:
     """
     Standalone TWFE decomposition diagnostic.
@@ -8739,7 +8773,8 @@ def twowayfeweights(
     data : pd.DataFrame
         Individual-level panel.
     outcome : str
-    group : str
+    unit : str
+        Unit identifier column (the R/Stata ``twowayfeweights`` "group").
     time : str
     treatment : str
     rank_deficient_action : str, default="warn"
@@ -8755,12 +8790,24 @@ def twowayfeweights(
         (aggregated numbers are identical to
         ``fit(..., survey_design=sd).twfe_*`` under the same input).
 
+    group : str, optional
+        Deprecated alias for ``unit`` (row M-097); warns with
+        ``FutureWarning`` and will be removed in 4.0.
+
     Returns
     -------
     TWFEWeightsResult
         Object with attributes ``weights`` (DataFrame), ``fraction_negative``
         (float), ``sigma_fe`` (float), and ``beta_fe`` (float).
     """
+    unit = resolve_renamed_kwarg(
+        "twowayfeweights", "group", group, "unit", unit, default=NOT_SUPPLIED
+    )
+    require_arg("twowayfeweights", "unit", unit)
+    require_arg("twowayfeweights", "time", time)
+    require_arg("twowayfeweights", "treatment", treatment)
+    # Body-local name; the public parameter is unit (M-097).
+    group = unit
     # Survey resolution (optional): mirrors the fit() path so that the
     # standalone helper produces identical numbers to fit(..., survey_design=sd).
     survey_weights = None

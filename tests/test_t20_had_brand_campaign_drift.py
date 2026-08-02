@@ -92,10 +92,10 @@ def overall_result(panel_2pd):
         est = HAD(design="auto")
         return est.fit(
             panel_2pd,
-            outcome_col="weekly_visits",
-            dose_col="regional_spend_k",
-            time_col="period",
-            unit_col="dma_id",
+            outcome="weekly_visits",
+            dose="regional_spend_k",
+            time="period",
+            unit="dma_id",
         )
 
 
@@ -111,11 +111,11 @@ def event_study_result(panel):
         est = HAD(design="auto")
         return est.fit(
             panel,
-            outcome_col="weekly_visits",
-            dose_col="regional_spend_k",
-            time_col="week",
-            unit_col="dma_id",
-            first_treat_col="first_treat",
+            outcome="weekly_visits",
+            dose="regional_spend_k",
+            time="week",
+            unit="dma_id",
+            first_treat="first_treat",
             aggregate="event_study",
         )
 

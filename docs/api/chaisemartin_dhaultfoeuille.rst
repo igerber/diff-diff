@@ -210,7 +210,7 @@ Basic usage with reversible treatment::
     results = est.fit(
         data,
         outcome="outcome",
-        group="group",
+        unit="group",
         time="period",
         treatment="treatment",
     )
@@ -237,7 +237,7 @@ Multiplier bootstrap inference::
         n_bootstrap=999, bootstrap_weights="rademacher", seed=42,
     )
     results = est.fit(
-        data, outcome="outcome", group="group",
+        data, outcome="outcome", unit="group",
         time="period", treatment="treatment",
     )
     # When n_bootstrap > 0, the top-level overall_*/joiners_*/leavers_*
@@ -255,7 +255,7 @@ Standalone TWFE diagnostic (without fitting the full estimator)::
     from diff_diff import twowayfeweights
 
     diagnostic = twowayfeweights(
-        data, outcome="outcome", group="group", time="period", treatment="treatment",
+        data, outcome="outcome", unit="group", time="period", treatment="treatment",
     )
     print(f"Plain TWFE coefficient: {diagnostic.beta_fe:.3f}")
     print(f"Fraction of negative weights: {diagnostic.fraction_negative:.3f}")

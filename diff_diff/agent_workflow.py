@@ -163,7 +163,7 @@ def agent_workflow(
     #   `first_treat` does not by itself identify which estimator to use:
     #   CallawaySantAnna (binary staggered), ContinuousDiD (continuous-
     #   dose with first_treat), and HeterogeneousAdoptionDiD event-study
-    #   (heterogeneous intensity with first_treat_col) all accept it.
+    #   (heterogeneous intensity with first_treat) all accept it.
     #   Show CallawaySantAnna as the binary-staggered canonical example
     #   and list the alternatives for continuous / heterogeneous designs
     #   so an agent isn't steered to the wrong estimator.
@@ -185,7 +185,8 @@ def agent_workflow(
             "  - Continuous dose   : ContinuousDiD (also takes first_treat=)",
             "  - Heterogeneous adoption intensity:",
             "                        HeterogeneousAdoptionDiD (event study,",
-            "                        takes first_treat_col=, NOT first_treat=)",
+            "                        takes first_treat=; first_treat_col= is a",
+            "                        deprecated alias slated for 4.0 removal)",
         ]
     else:
         fit_example_kwargs = _join_kwargs(

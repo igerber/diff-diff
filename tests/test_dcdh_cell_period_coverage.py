@@ -108,7 +108,7 @@ def test_cell_period_allocator_coverage_within_group_varying_psu():
                 res = ChaisemartinDHaultfoeuille(seed=r + 1).fit(
                     df,
                     outcome="outcome",
-                    group="group",
+                    unit="group",
                     time="period",
                     treatment="treatment",
                     survey_design=sd,

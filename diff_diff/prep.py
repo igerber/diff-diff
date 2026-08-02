@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 # Re-export data generation functions from prep_dgp for backward compatibility
+from diff_diff._deprecation import NOT_SUPPLIED, require_arg, resolve_renamed_kwarg
 from diff_diff.prep_dgp import (  # noqa: F401
     generate_continuous_did_data,
     generate_ddd_data,
@@ -1312,10 +1313,11 @@ def _suggest_treatment_candidates(
 
 def trim_weights(
     data: pd.DataFrame,
-    weight_col: str,
+    weights: Any = NOT_SUPPLIED,
     upper: Optional[float] = None,
     quantile: Optional[float] = None,
     lower: Optional[float] = None,
+    weight_col: Any = NOT_SUPPLIED,
 ) -> pd.DataFrame:
     """Trim (winsorize) survey weights to reduce influence of extreme values.
 
@@ -1327,7 +1329,7 @@ def trim_weights(
     ----------
     data : pd.DataFrame
         Input DataFrame.
-    weight_col : str
+    weights : str
         Name of the weight column.
     upper : float, optional
         Absolute upper cap. Weights above this value are set to it.
@@ -1338,6 +1340,9 @@ def trim_weights(
     lower : float, optional
         Absolute lower floor. Weights below this value are set to it.
         Can be combined with either ``upper`` or ``quantile``.
+    weight_col : str, optional
+        Deprecated alias for ``weights`` (row M-113); warns with
+        ``FutureWarning`` and will be removed in 4.0.
 
     Returns
     -------
@@ -1347,9 +1352,20 @@ def trim_weights(
     Raises
     ------
     ValueError
-        If both ``upper`` and ``quantile`` are provided, or if ``weight_col``
+        If both ``upper`` and ``quantile`` are provided, or if ``weights``
         is not in the DataFrame.
     """
+    weights = resolve_renamed_kwarg(
+        "trim_weights",
+        "weight_col",
+        weight_col,
+        "weights",
+        weights,
+        default=NOT_SUPPLIED,
+    )
+    require_arg("trim_weights", "weights", weights)
+    # Body-local name; the public parameter is weights (M-113).
+    weight_col = weights
     if upper is not None and quantile is not None:
         raise ValueError("Specify either 'upper' or 'quantile', not both.")
     if weight_col not in data.columns:

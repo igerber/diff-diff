@@ -635,7 +635,7 @@ class TestPanelContract:
                 "dose",
                 "period",
                 "unit",
-                first_treat_col="ft",
+                first_treat="ft",
             )
 
     def test_single_period_raises(self):
@@ -684,14 +684,14 @@ class TestPanelContract:
         ft_unit = np.where(np.arange(200) % 2 == 0, 0, 5)
         panel["ft"] = np.repeat(ft_unit, 2)
         est = HeterogeneousAdoptionDiD()
-        with pytest.raises(ValueError, match=r"first_treat_col"):
+        with pytest.raises(ValueError, match=r"first_treat"):
             est.fit(
                 panel,
                 "outcome",
                 "dose",
                 "period",
                 "unit",
-                first_treat_col="ft",
+                first_treat="ft",
             )
 
     def test_first_treat_col_mixed_row_nan_raises(self):
@@ -710,7 +710,7 @@ class TestPanelContract:
         panel.loc[unit0_post_idx, "ft"] = np.nan
         est = HeterogeneousAdoptionDiD()
         with pytest.raises(ValueError, match="NaN"):
-            est.fit(panel, "outcome", "dose", "period", "unit", first_treat_col="ft")
+            est.fit(panel, "outcome", "dose", "period", "unit", first_treat="ft")
 
     def test_first_treat_col_mixed_row_invalid_value_raises(self):
         """Per-unit rows like [valid, invalid_value] must be rejected."""
@@ -721,8 +721,8 @@ class TestPanelContract:
         unit0_post_idx = panel[(panel["unit"] == 0) & (panel["period"] == 2)].index[0]
         panel.loc[unit0_post_idx, "ft"] = 999.0
         est = HeterogeneousAdoptionDiD()
-        with pytest.raises(ValueError, match=r"first_treat_col.*999"):
-            est.fit(panel, "outcome", "dose", "period", "unit", first_treat_col="ft")
+        with pytest.raises(ValueError, match=r"first_treat.*999"):
+            est.fit(panel, "outcome", "dose", "period", "unit", first_treat="ft")
 
 
 # =============================================================================
@@ -1884,7 +1884,7 @@ class TestValidateHadPanel:
         # Invalid: "Z" is neither 0 nor "B"
         ft_unit = np.array([0 if i % 2 == 0 else "Z" for i in range(100)], dtype=object)
         panel["ft"] = np.repeat(ft_unit, 2)
-        with pytest.raises(ValueError, match="first_treat_col"):
+        with pytest.raises(ValueError, match="first_treat"):
             _validate_had_panel(panel, "outcome", "dose", "period", "unit", "ft")
 
     def test_semantic_pre_post_labels_not_lexicographic(self):
@@ -2414,7 +2414,7 @@ class TestEventStudyStaggeredFilter:
                 "dose",
                 "period",
                 "unit",
-                first_treat_col="first_treat",
+                first_treat="first_treat",
                 aggregate="event_study",
             )
         filter_warnings = [msg for msg in w if "Staggered" in str(msg.message)]
@@ -2430,7 +2430,7 @@ class TestEventStudyStaggeredFilter:
                 "dose",
                 "period",
                 "unit",
-                first_treat_col="first_treat",
+                first_treat="first_treat",
                 aggregate="event_study",
             )
         assert result.filter_info is not None
@@ -2455,7 +2455,7 @@ class TestEventStudyStaggeredFilter:
                 "dose",
                 "period",
                 "unit",
-                first_treat_col="first_treat",
+                first_treat="first_treat",
                 aggregate="event_study",
             )
         # Paper Appendix B.2: staggered HAD applies to last cohort + keeps
@@ -2483,7 +2483,7 @@ class TestEventStudyStaggeredFilter:
                 "dose",
                 "period",
                 "unit",
-                first_treat_col="first_treat",
+                first_treat="first_treat",
                 aggregate="event_study",
             )
         # The fit ran successfully with never-treated retained. Verify
@@ -2511,7 +2511,7 @@ class TestEventStudyStaggeredFilter:
                 "dose",
                 "period",
                 "unit",
-                first_treat_col="first_treat",
+                first_treat="first_treat",
                 aggregate="event_study",
             )
         filter_warnings = [msg for msg in w if "Staggered" in str(msg.message)]
@@ -2807,7 +2807,7 @@ class TestEventStudyPanelContract:
                 "dose",
                 "period",
                 "unit",
-                first_treat_col="first_treat",
+                first_treat="first_treat",
                 aggregate="event_study",
             )
 
@@ -2918,7 +2918,7 @@ class TestEventStudyPanelContract:
                 "dose",
                 "period",
                 "unit",
-                first_treat_col="first_treat",
+                first_treat="first_treat",
                 aggregate="event_study",
             )
 
@@ -2971,7 +2971,7 @@ class TestEventStudyPanelContract:
                 "dose",
                 "period",
                 "unit",
-                first_treat_col="first_treat",
+                first_treat="first_treat",
                 aggregate="event_study",
             )
 
@@ -5079,7 +5079,7 @@ class TestEventStudySurveyCband:
                 "period",
                 "unit",
                 aggregate="event_study",
-                first_treat_col="first_treat",
+                first_treat="first_treat",
             )
             r_uni = est.fit(
                 panel.assign(w=1.0),
@@ -5088,7 +5088,7 @@ class TestEventStudySurveyCband:
                 "period",
                 "unit",
                 aggregate="event_study",
-                first_treat_col="first_treat",
+                first_treat="first_treat",
                 survey_design=SurveyDesign(weights="w"),
                 cband=False,
             )
@@ -5103,7 +5103,7 @@ class TestEventStudySurveyCband:
                 "period",
                 "unit",
                 aggregate="event_study",
-                first_treat_col="first_treat",
+                first_treat="first_treat",
                 survey_design=SurveyDesign(weights="w"),
                 cband=False,
             )

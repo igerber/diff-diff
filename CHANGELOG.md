@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Deprecated
+- **Mechanical rename wave** (v4 program 2(c)-ii, ledger rows [M-032]
+  [M-033] [M-034] [M-035]..[M-042] [M-088] [M-089] [M-094] [M-097]..[M-113]
+  [M-114]): the following parameters/fields gain their canonical names now,
+  with the old spellings kept as deprecated aliases that emit
+  `FutureWarning` and will be REMOVED in 4.0. The new name takes the old
+  name's signature position, so positional calls are unaffected, and the
+  deprecated path routes to bit-identical results. Passing both spellings
+  raises `ValueError`.
+  - `WooldridgeDiD.fit`: `cohort=` -> `first_treat=` [M-032].
+  - `ChaisemartinDHaultfoeuille.fit`: `group=` -> `unit=` [M-033],
+    `controls=` -> `covariates=` [M-034]; `twowayfeweights()`:
+    `group=` -> `unit=` [M-097].
+  - `ChaisemartinDHaultfoeuilleResults.groups` -> `.units` [M-114]
+    (deprecated read-only alias property; `repr` reports `n_units=`,
+    `summary()` prints "Units (post-filter):"; old pickles migrate via
+    `__setstate__`; the `n_groups_dropped_*` counters are unchanged, and
+    CS-family `groups` cohort vocabulary is NOT affected).
+  - `HeterogeneousAdoptionDiD.fit` and the `joint_pretrends_test` /
+    `joint_homogeneity_test` / `did_had_pretest_workflow` functions:
+    `outcome_col`/`dose_col`/`time_col`/`unit_col`/`first_treat_col` ->
+    bare `outcome`/`dose`/`time`/`unit`/`first_treat`
+    [M-035]..[M-039], [M-098]..[M-112].
+  - `RegressionDiscontinuity.fit`: `outcome_col`/`running_col`/
+    `treatment_col` -> `outcome`/`running`/`takeup` [M-040]..[M-042];
+    `RegressionDiscontinuityResults.treatment_col` -> `.takeup` [M-094]
+    (alias property + `__setstate__`; `to_dict()` emits BOTH `"takeup"`
+    and the deprecated `"treatment_col"` key through 3.9, the old key is
+    dropped in 4.0). `RDPlot.fit`: `outcome_col`/`running_col` ->
+    `outcome`/`running` [M-088] [M-089].
+  - `trim_weights()`: `weight_col=` -> `weights=` [M-113].
+  - Note: sentinel-defaulted shim parameters are transitionally annotated
+    `Any`; the 4.0 removal restores the narrow annotations.
+
 ### Changed
 - **Shared `BaseEstimator` mixin** (`diff_diff/_base.py`, v4 program 2(c)-i):
   the 25 hand-rolled `get_params`/`set_params` pairs (6 divergent

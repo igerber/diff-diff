@@ -370,7 +370,7 @@ class TestW2025Theorem31MundlakTWFEEquivalence:
             rng, n_per_cohort=200, tau_constant=1.0, sigma=0.05
         )
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # With n_per_cohort=200 + sigma=0.05, expected std error per cell ≈
         # sigma / sqrt(200) ≈ 0.0035; 3-sigma band ≈ 0.011.
@@ -394,7 +394,7 @@ class TestW2025Theorem31MundlakTWFEEquivalence:
             rng, n_per_cohort=300, tau_by_gt=tau_by_gt, sigma=0.05
         )
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         for (g, t), expected_tau in tau_by_gt.items():
             assert (g, t) in res.group_time_effects
@@ -422,7 +422,7 @@ class TestW2025Theorem31MundlakTWFEEquivalence:
             rng, n_per_cohort=200, tau_by_gt=tau_by_gt, sigma=0.05
         )
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # Manual cell-count-weighted average using the populated _gt_weights
         # field (per Eq. 5.16 weighting). Filter to treated cells only
@@ -455,7 +455,7 @@ class TestW2025Theorem31MundlakTWFEEquivalence:
             warnings.filterwarnings("ignore", category=RuntimeWarning)
             try:
                 res = WooldridgeDiD(method="ols").fit(
-                    panel, outcome="y", unit="unit", time="time", cohort="cohort"
+                    panel, outcome="y", unit="unit", time="time", first_treat="cohort"
                 )
             except (ValueError, np.linalg.LinAlgError):
                 # Acceptable: library may reject degenerate fit at the
@@ -526,7 +526,7 @@ class TestW2025Proposition51ImputationPOLSEquivalence:
             rng, n_per_cohort=150, tau_by_gt=tau_by_gt, sigma=0.05
         )
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         for (g, t), expected in tau_by_gt.items():
             est = res.group_time_effects[(g, t)]["att"]
@@ -547,7 +547,7 @@ class TestW2025Proposition51ImputationPOLSEquivalence:
         rng = np.random.default_rng(_BASE_SEED_PROP51 + 2)
         panel = _make_three_cohort_four_period_panel(rng, n_per_cohort=120, sigma=0.08)
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         res.aggregate("event")
         assert res.event_study_effects is not None
@@ -591,7 +591,7 @@ class TestW2025Proposition51ImputationPOLSEquivalence:
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
             res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
-                panel, outcome="y", unit="unit", time="time", cohort="cohort"
+                panel, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         # Surface-level invariants: fit completed cleanly + the result
         # object is well-formed.
@@ -619,7 +619,7 @@ class TestW2025Proposition51ImputationPOLSEquivalence:
         rng = np.random.default_rng(_BASE_SEED_PROP51 + 4)
         panel = _make_three_cohort_four_period_panel(rng, n_per_cohort=80, sigma=0.05)
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         before_att = res.overall_att
         before_se = res.overall_se
@@ -655,7 +655,7 @@ class TestW2025Section6EventStudy:
         rng = np.random.default_rng(_BASE_SEED_SECTION6 + 1)
         panel = _make_three_cohort_four_period_panel(rng, n_per_cohort=80, sigma=0.08)
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         res.aggregate("event")
         assert res.event_study_effects is not None
@@ -689,7 +689,7 @@ class TestW2025Section6EventStudy:
             rng, n_per_cohort=200, tau_by_gt=tau_by_gt, sigma=0.05
         )
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         res.aggregate("event")
         assert res.event_study_effects is not None
@@ -708,7 +708,7 @@ class TestW2025Section6EventStudy:
         rng = np.random.default_rng(_BASE_SEED_SECTION6 + 3)
         panel = _make_three_cohort_four_period_panel(rng, n_per_cohort=100, sigma=0.1)
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         res.aggregate("event")
         assert res.event_study_effects is not None
@@ -727,7 +727,7 @@ class TestW2025Section6EventStudy:
         rng = np.random.default_rng(_BASE_SEED_SECTION6 + 4)
         panel = _make_three_cohort_four_period_panel(rng, n_per_cohort=100, sigma=0.1)
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         res.aggregate("event")
         assert res.event_study_effects is not None
@@ -779,7 +779,7 @@ class TestW2025Section7AggregationPaths:
             cohort_unit_counts={0: 100, 2: 50, 3: 200},
         )
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # Manual cell-count weighted overall ATT
         gt = {k: v for k, v in res.group_time_effects.items() if k[0] > 0 and k[1] >= k[0]}
@@ -813,7 +813,7 @@ class TestW2025Section7AggregationPaths:
             cohort_unit_counts={0: 100, 2: 50, 3: 200},
         )
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # Hand-calc paper Eq. 7.4: ATT_simple = Σ_{(g,t):t≥g} N_g · τ_{g,t} / Σ_{(g,t):t≥g} N_g
         # = (50·1 + 50·1 + 50·1 + 200·2 + 200·2) / (50·3 + 200·2)
@@ -856,7 +856,7 @@ class TestW2025Section7AggregationPaths:
             cohort_unit_counts={0: 100, 2: 50, 3: 200},
         )
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         res.aggregate("event", weights="cohort_share")
         assert res.event_study_effects is not None
@@ -903,7 +903,7 @@ class TestW2025Section7AggregationPaths:
             sigma=0.05,
         )  # No cohort_unit_counts override → uniform 80 per cohort
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         cell_att = res.overall_att
         res.aggregate("simple", weights="cohort_share")
@@ -918,7 +918,7 @@ class TestW2025Section7AggregationPaths:
         rng = np.random.default_rng(_BASE_SEED_SECTION7 + 5)
         panel = _make_three_cohort_four_period_panel(rng, n_per_cohort=50, sigma=0.05)
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         with pytest.raises(ValueError, match=r"cohort_share.*group|simple.*event"):
             res.aggregate("group", weights="cohort_share")
@@ -928,7 +928,7 @@ class TestW2025Section7AggregationPaths:
         rng = np.random.default_rng(_BASE_SEED_SECTION7 + 6)
         panel = _make_three_cohort_four_period_panel(rng, n_per_cohort=50, sigma=0.05)
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         with pytest.raises(ValueError, match=r"cohort_share.*calendar|simple.*event"):
             res.aggregate("calendar", weights="cohort_share")
@@ -950,7 +950,7 @@ class TestW2025Section7AggregationPaths:
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
             res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
-                panel, outcome="y", unit="unit", time="time", cohort="cohort"
+                panel, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         # DGP precondition: never_treated + OLS exposes k<0 placebo cells
         all_k_cells = sorted({t - g for (g, t) in res.group_time_effects.keys()})
@@ -995,7 +995,7 @@ class TestW2025Section7AggregationPaths:
                 outcome="y",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
                 survey_design=survey,
             )
         assert res.survey_metadata is not None
@@ -1009,7 +1009,7 @@ class TestW2025Section7AggregationPaths:
         rng = np.random.default_rng(_BASE_SEED_SECTION7 + 7)
         panel = _make_three_cohort_four_period_panel(rng, n_per_cohort=50, sigma=0.05)
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         with pytest.raises(ValueError, match=r"weights must be one of"):
             res.aggregate("simple", weights="random_string")
@@ -1052,7 +1052,7 @@ class TestW2025Section7AggregationPaths:
                 outcome="y_count",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
             )
         # simple aggregation
         with pytest.warns(UserWarning, match=r"cohort_share.*conditional-on-shares"):
@@ -1114,7 +1114,7 @@ class TestW2025Section7AggregationPaths:
                     outcome="y_binary",
                     unit="unit",
                     time="time",
-                    cohort="cohort",
+                    first_treat="cohort",
                 )
             except (ValueError, np.linalg.LinAlgError):
                 pytest.skip(
@@ -1174,7 +1174,7 @@ class TestW2025Section7AggregationPaths:
             cohort_unit_counts={0: 100, 2: 50, 3: 200},
         )
         res = WooldridgeDiD(method="ols", vcov_type="hc2_bm").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         with pytest.warns(UserWarning, match=r"cohort_share.*conditional-on-shares"):
             res.aggregate("simple", weights="cohort_share")
@@ -1209,7 +1209,7 @@ class TestW2025Section7AggregationPaths:
             cohort_unit_counts={0: 80, 2: 40, 3: 200},
         )
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         fit_time_att = res.overall_att
         fit_time_se = res.overall_se
@@ -1238,7 +1238,7 @@ class TestW2025Section7AggregationPaths:
             sigma=0.05,
         )
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         res.aggregate("group")
         assert res.group_effects is not None
@@ -1298,10 +1298,10 @@ class TestW2025Section8HeterogeneousTrends:
             sigma=0.05,
         )
         res_default = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         res_explicit_off = WooldridgeDiD(method="ols", cohort_trends=False).fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # Bit-equal across both invocations (tolerance handles sub-ULP
         # float-aggregation-order noise from the Python-level
@@ -1321,7 +1321,7 @@ class TestW2025Section8HeterogeneousTrends:
         rng = np.random.default_rng(_BASE_SEED_SECTION8 + 1)
         panel = _make_heterogeneous_trends_panel(rng, n_per_cohort=80, sigma=0.05)
         res = WooldridgeDiD(method="ols", cohort_trends=True).fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # Treated cohorts in the heterogeneous-trends DGP are g=3 and g=4
         assert set(res.cohort_trend_coefs.keys()) == {3, 4}
@@ -1349,11 +1349,11 @@ class TestW2025Section8HeterogeneousTrends:
         )
         # Without cohort_trends → cells deviate from tau=1.0
         res_off = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # With cohort_trends → each post-treatment cell ≈ tau
         res_on = WooldridgeDiD(method="ols", cohort_trends=True).fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # On the heterogeneous-trends DGP, cohort 3's cells (positive trend)
         # under cohort_trends=False are biased upward; under
@@ -1414,7 +1414,7 @@ class TestW2025Section8HeterogeneousTrends:
         rng = np.random.default_rng(_BASE_SEED_SECTION8 + 3)
         panel = _make_heterogeneous_trends_panel(rng, n_per_cohort=80, sigma=0.05)
         res = WooldridgeDiD(method="ols", cohort_trends=True, vcov_type="hc2_bm").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # All identified treated cells have finite ATT + SE
         finite_count = 0
@@ -1438,7 +1438,7 @@ class TestW2025Section8HeterogeneousTrends:
         panel = _make_heterogeneous_trends_panel(rng, n_per_cohort=80, sigma=0.05)
         # vcov_type='hc1' is the default; cohort_trends=True should not raise
         res = WooldridgeDiD(method="ols", cohort_trends=True).fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         assert res.vcov_type == "hc1"
         assert any(np.isfinite(s) for s in res.cohort_trend_coefs.values())
@@ -1455,7 +1455,7 @@ class TestW2025Section8HeterogeneousTrends:
         rng = np.random.default_rng(_BASE_SEED_SECTION8 + 5)
         panel = _make_heterogeneous_trends_panel(rng, n_per_cohort=80, sigma=0.05)
         res = WooldridgeDiD(method="ols", cohort_trends=True).fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         res.aggregate("event")
         assert res.event_study_effects is not None
@@ -1479,7 +1479,7 @@ class TestW2025Section8HeterogeneousTrends:
         rng = np.random.default_rng(_BASE_SEED_SECTION8 + 6)
         panel = _make_heterogeneous_trends_panel(rng, n_per_cohort=80, sigma=0.05)
         res = WooldridgeDiD(method="ols", cohort_trends=True).fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         res.aggregate("simple", weights="cohort_share")
         assert np.isfinite(res.overall_att)
@@ -1511,7 +1511,7 @@ class TestW2025Section8HeterogeneousTrends:
                 outcome="y",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
             )
 
     def test_cohort_trends_true_rejects_survey_design(self) -> None:
@@ -1536,7 +1536,7 @@ class TestW2025Section8HeterogeneousTrends:
                 outcome="y",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
                 survey_design=survey,
             )
 
@@ -1551,7 +1551,7 @@ class TestW2025Section8HeterogeneousTrends:
         rng = np.random.default_rng(_BASE_SEED_SECTION8 + 13)
         panel = _make_heterogeneous_trends_panel(rng, n_per_cohort=80, sigma=0.05)
         res = WooldridgeDiD(method="ols", cohort_trends=True).fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         res.aggregate("group")
         assert res.group_effects is not None
@@ -1567,7 +1567,7 @@ class TestW2025Section8HeterogeneousTrends:
         rng = np.random.default_rng(_BASE_SEED_SECTION8 + 14)
         panel = _make_heterogeneous_trends_panel(rng, n_per_cohort=80, sigma=0.05)
         res = WooldridgeDiD(method="ols", cohort_trends=True).fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         res.aggregate("calendar")
         assert res.calendar_effects is not None
@@ -1592,7 +1592,7 @@ class TestW2025Section8HeterogeneousTrends:
         rng = np.random.default_rng(_BASE_SEED_SECTION8 + 19)
         panel = _make_three_cohort_four_period_panel(rng, n_per_cohort=80, sigma=0.05)
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # cohort_share path: plot helper must receive NaN SEs
         with warnings.catch_warnings():
@@ -1629,12 +1629,12 @@ class TestW2025Section8HeterogeneousTrends:
         rng = np.random.default_rng(_BASE_SEED_SECTION8 + 20)
         panel = _make_heterogeneous_trends_panel(rng, n_per_cohort=80, sigma=0.05)
         res_default = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         assert res_default.cohort_trends is False
         assert res_default.aggregation_weights == {"simple": "cell"}
         res_trends = WooldridgeDiD(method="ols", cohort_trends=True).fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         assert res_trends.cohort_trends is True
         assert res_trends.aggregation_weights == {"simple": "cell"}
@@ -1659,7 +1659,7 @@ class TestW2025Section8HeterogeneousTrends:
         rng = np.random.default_rng(_BASE_SEED_SECTION8 + 21)
         panel = _make_three_cohort_four_period_panel(rng, n_per_cohort=80, sigma=0.05)
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
@@ -1684,7 +1684,7 @@ class TestW2025Section8HeterogeneousTrends:
         rng = np.random.default_rng(_BASE_SEED_SECTION8 + 22)
         panel = _make_three_cohort_four_period_panel(rng, n_per_cohort=80, sigma=0.05)
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         snap = dict(res.aggregation_weights)
         with pytest.raises(ValueError, match=r"cohort_share.*simple.*event"):
@@ -1716,7 +1716,7 @@ class TestW2025Section8HeterogeneousTrends:
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
             res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
-                panel, outcome="y", unit="unit", time="time", cohort="cohort"
+                panel, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         # Default plot — uses weights="cell"
         with patch("diff_diff.visualization.plot_event_study") as mock_plot:
@@ -1796,7 +1796,7 @@ class TestW2025Section8HeterogeneousTrends:
                 outcome="y",
                 unit="unit",
                 time="time",
-                cohort="cohort",
+                first_treat="cohort",
             )
 
         # G - 1 = 1 trend coefficient, the last cohort deliberately absent.
@@ -1824,7 +1824,7 @@ class TestW2025Section8HeterogeneousTrends:
             0 in panel["cohort"].unique()
         ), "DGP precondition: panel must include cohort=0 (never-treated)"
         res = WooldridgeDiD(method="ols", cohort_trends=True).fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # All treated cohorts (g=3 and g=4) keep their trend columns
         assert set(res.cohort_trend_coefs.keys()) == {3, 4}, (
@@ -1862,7 +1862,7 @@ class TestW2025Section8HeterogeneousTrends:
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
             res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
-                panel, outcome="y", unit="unit", time="time", cohort="cohort"
+                panel, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         # Step 1: plot under cohort_share — caches k>=0 keys
         with warnings.catch_warnings():
@@ -1900,7 +1900,7 @@ class TestW2025Section8HeterogeneousTrends:
         rng = np.random.default_rng(_BASE_SEED_SECTION8 + 12)
         panel = _make_heterogeneous_trends_panel(rng, n_per_cohort=80, sigma=0.05)
         res = WooldridgeDiD(method="ols", cohort_trends=True, n_bootstrap=20, seed=42).fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         assert res._bootstrap_used is True
         boot_se = res.overall_se
@@ -1920,7 +1920,7 @@ class TestW2025Section8HeterogeneousTrends:
         rng = np.random.default_rng(_BASE_SEED_SECTION8 + 7)
         panel = _make_heterogeneous_trends_panel(rng, n_per_cohort=80, sigma=0.05)
         res = WooldridgeDiD(method="ols", cohort_trends=True).fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         res.aggregate("event", weights="cohort_share")
         assert res.event_study_effects is not None
@@ -1943,7 +1943,7 @@ class TestW2025Section8HeterogeneousTrends:
             match=r"cohort_trends=True requires at least 2 pre-treatment periods",
         ):
             WooldridgeDiD(method="ols", cohort_trends=True).fit(
-                panel, outcome="y", unit="unit", time="time", cohort="cohort"
+                panel, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
 
     def test_cohort_trends_true_rejects_unbalanced_cohort_with_one_observed_pre_period(
@@ -1998,7 +1998,7 @@ class TestW2025Section8HeterogeneousTrends:
             match=r"OBSERVED FOR EACH TREATED COHORT.*Cohort g=4 has only 1",
         ):
             WooldridgeDiD(method="ols", cohort_trends=True).fit(
-                panel, outcome="y", unit="unit", time="time", cohort="cohort"
+                panel, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
 
     def test_cohort_trends_true_hc1_uses_full_dummy_finite_sample_factor(self) -> None:
@@ -2019,10 +2019,10 @@ class TestW2025Section8HeterogeneousTrends:
         rng = np.random.default_rng(_BASE_SEED_SECTION8 + 9)
         panel = _make_heterogeneous_trends_panel(rng, n_per_cohort=80, sigma=0.05)
         res_off = WooldridgeDiD(method="ols", vcov_type="hc1").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         res_on = WooldridgeDiD(method="ols", vcov_type="hc1", cohort_trends=True).fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         for (g, t), eff in res_off.group_time_effects.items():
             if g > 0 and t >= g and np.isfinite(eff["se"]):
@@ -2065,7 +2065,7 @@ class TestW2025Section10UnbalancedPanels:
             # smoke test.
             warnings.filterwarnings("ignore", category=UserWarning)
             res = WooldridgeDiD(method="ols").fit(
-                panel, outcome="y", unit="unit", time="time", cohort="cohort"
+                panel, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         # Sanity: at least one treated cell estimated; overall_att finite.
         assert any(g > 0 for (g, _t) in res.group_time_effects)
@@ -2085,7 +2085,7 @@ class TestW2025Section10UnbalancedPanels:
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
             res = WooldridgeDiD(method="ols").fit(
-                panel, outcome="y", unit="unit", time="time", cohort="cohort"
+                panel, outcome="y", unit="unit", time="time", first_treat="cohort"
             )
         # All treated cells should estimate τ̂ close to 1.0 (relaxed MC
         # band due to unbalanced panel + smaller effective N per cell).
@@ -2119,7 +2119,7 @@ class TestW2025Section10UnbalancedPanels:
             outcome="y",
             unit="unit",
             time="time",
-            cohort="cohort",
+            first_treat="cohort",
             xtvar=["xvar"],
         )
         # τ̂ should still be ≈ 1.0 (the covariate is uncorrelated with treatment).
@@ -2176,13 +2176,13 @@ class TestW2025LibraryDeviations:
         rng = np.random.default_rng(_BASE_SEED_DEVIATIONS + 1)
         panel = _make_three_cohort_four_period_panel(rng, n_per_cohort=40, sigma=0.1)
         res_hc1 = WooldridgeDiD(method="ols", vcov_type="hc1").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # vcov_type='classical' uses the full-dummy design with no
         # robust adjustment (R lm() summary equivalent). On the same
         # panel, the SEs differ from hc1 in a documented way.
         res_classical = WooldridgeDiD(method="ols", vcov_type="classical").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # Pick a representative treated cell present in both
         sample_key = next(
@@ -2239,7 +2239,7 @@ class TestW2025LibraryDeviations:
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
             res_poisson = WooldridgeDiD(method="poisson").fit(
-                panel, outcome="y_count", unit="unit", time="time", cohort="cohort"
+                panel, outcome="y_count", unit="unit", time="time", first_treat="cohort"
             )
         # All treated cells should have finite + positive SEs
         for (g, t), eff in res_poisson.group_time_effects.items():
@@ -2273,7 +2273,7 @@ class TestW2025LibraryDeviations:
             warnings.filterwarnings("ignore", category=UserWarning)
             try:
                 res_logit = WooldridgeDiD(method="logit").fit(
-                    panel, outcome="y_binary", unit="unit", time="time", cohort="cohort"
+                    panel, outcome="y_binary", unit="unit", time="time", first_treat="cohort"
                 )
             except (np.linalg.LinAlgError, ValueError):
                 # Logit may not converge on every random panel; treat as
@@ -2310,7 +2310,7 @@ class TestW2025LibraryDeviations:
             warnings.filterwarnings("ignore", category=UserWarning)
             try:
                 res_logit = WooldridgeDiD(method="logit").fit(
-                    panel, outcome="y_binary", unit="unit", time="time", cohort="cohort"
+                    panel, outcome="y_binary", unit="unit", time="time", first_treat="cohort"
                 )
             except (np.linalg.LinAlgError, ValueError):
                 # Small-N logit may fail to converge — acceptable as long
@@ -2349,7 +2349,7 @@ class TestW2025LibraryDeviations:
         )
         # Fit with anticipation=1: lead cells (g-1, g) get estimated
         res = WooldridgeDiD(method="ols", anticipation=1).fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # The overall_att should be cell-count-weighted average of cells
         # with t >= g ONLY (anticipation lead cells excluded).
@@ -2392,7 +2392,7 @@ class TestW2025LibraryDeviations:
             sigma=0.05,
         )
         res = WooldridgeDiD(method="ols", n_bootstrap=20, seed=42).fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # _bootstrap_used was set
         assert res._bootstrap_used is True
@@ -2424,7 +2424,7 @@ class TestW2025LibraryDeviations:
             cohort_unit_counts={0: 100, 2: 50, 3: 200},
         )
         res = WooldridgeDiD(method="ols", n_bootstrap=20, seed=42).fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         with pytest.raises(
             ValueError,
@@ -2443,7 +2443,7 @@ class TestW2025LibraryDeviations:
         rng = np.random.default_rng(_BASE_SEED_DEVIATIONS + 6)
         panel = _make_two_cohort_three_period_panel(rng, n_per_cohort=50)
         res = WooldridgeDiD(method="ols").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         # Verify every cell satisfies the joint invariant
         for (g, t), eff in res.group_time_effects.items():
@@ -2479,7 +2479,7 @@ class TestWooldridgeParityR:
         `vcov_type='hc2_bm'` (full-dummy branch).
         """
         res = WooldridgeDiD(method="ols", vcov_type="hc2_bm").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         r_keys = [(d["g"], d["t"]) for d in golden["point_estimates"]["gt_keys"]]
         r_coefs = golden["point_estimates"]["interaction_coefs"]
@@ -2494,7 +2494,7 @@ class TestWooldridgeParityR:
     ) -> None:
         """Per-treatment-cell CR2-BM SE matches `clubSandwich::vcovCR(..., type="CR2")` at atol=1e-10."""
         res = WooldridgeDiD(method="ols", vcov_type="hc2_bm").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         r_keys = [(d["g"], d["t"]) for d in golden["point_estimates"]["gt_keys"]]
         r_ses = golden["hc2_bm"]["per_coef_se"]
@@ -2516,7 +2516,7 @@ class TestWooldridgeParityR:
         SE); brentq inversion adds the only material tolerance.
         """
         res = WooldridgeDiD(method="ols", vcov_type="hc2_bm").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         r_keys = [(d["g"], d["t"]) for d in golden["point_estimates"]["gt_keys"]]
         r_dfs = golden["hc2_bm"]["per_coef_df_satt"]
@@ -2532,7 +2532,7 @@ class TestWooldridgeParityR:
     ) -> None:
         """Overall ATT SE matches the linear-combination SE from `clubSandwich::vcovCR(..., type="CR2")`."""
         res = WooldridgeDiD(method="ols", vcov_type="hc2_bm").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         r_se = golden["hc2_bm"]["overall_att_se"]
         assert res.overall_se == pytest.approx(r_se, abs=1e-10)
@@ -2548,7 +2548,7 @@ class TestWooldridgeParityR:
         StackedDiD PR #479).
         """
         res = WooldridgeDiD(method="ols", vcov_type="hc2_bm").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         py_dof = _recover_dof_from_ci(
             res.overall_att, res.overall_se, res.overall_conf_int[1], res.alpha
@@ -2562,7 +2562,7 @@ class TestWooldridgeParityR:
     def test_classical_se_matches_lm_summary(self, golden: dict, panel: pd.DataFrame) -> None:
         """`vcov_type='classical'` (drops auto-cluster) matches `summary(lm(...))$coefficients` SE."""
         res = WooldridgeDiD(method="ols", vcov_type="classical").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         r_keys = [(d["g"], d["t"]) for d in golden["point_estimates"]["gt_keys"]]
         r_ses = golden["classical"]["per_coef_se"]
@@ -2574,7 +2574,7 @@ class TestWooldridgeParityR:
     def test_hc2_se_matches_sandwich_vcovhc(self, golden: dict, panel: pd.DataFrame) -> None:
         """`vcov_type='hc2'` (drops auto-cluster) matches `sandwich::vcovHC(type="HC2")` SE."""
         res = WooldridgeDiD(method="ols", vcov_type="hc2").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         r_keys = [(d["g"], d["t"]) for d in golden["point_estimates"]["gt_keys"]]
         r_ses = golden["hc2"]["per_coef_se"]
@@ -2595,7 +2595,7 @@ class TestWooldridgeParityR:
         = 51 columns, all kept (full rank). Residual df = 240 - 51 = 189.
         """
         res = WooldridgeDiD(method="ols", vcov_type="classical").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         expected_df = float(panel.shape[0] - 51)  # 189
         for (g, t), eff in res.group_time_effects.items():
@@ -2613,7 +2613,7 @@ class TestWooldridgeParityR:
         DOF (matches R ``coef_test(fit, vcov=vcovHC(type="HC2"))`` t-distribution
         default) rather than normal-theory."""
         res = WooldridgeDiD(method="ols", vcov_type="hc2").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         expected_df = float(panel.shape[0] - 51)
         for (g, t), eff in res.group_time_effects.items():
@@ -2629,7 +2629,7 @@ class TestWooldridgeParityR:
         ``clubSandwich::Wald_test(test="HTZ")$df_denom`` at atol=1e-6 (CI
         inversion tolerance)."""
         res = WooldridgeDiD(method="ols", vcov_type="hc2_bm").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         res.aggregate("group")
         r_dofs = golden["hc2_bm"]["aggregate_group_dof"]
@@ -2649,7 +2649,7 @@ class TestWooldridgeParityR:
         """``aggregate('calendar')`` BM contrast DOF per treated time period
         matches R `Wald_test(test="HTZ")$df_denom` at atol=1e-6."""
         res = WooldridgeDiD(method="ols", vcov_type="hc2_bm").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         res.aggregate("calendar")
         r_dofs = golden["hc2_bm"]["aggregate_calendar_dof"]
@@ -2669,7 +2669,7 @@ class TestWooldridgeParityR:
         """``aggregate('event')`` BM contrast DOF per relative-period k
         matches R `Wald_test(test="HTZ")$df_denom` at atol=1e-6."""
         res = WooldridgeDiD(method="ols", vcov_type="hc2_bm").fit(
-            panel, outcome="y", unit="unit", time="time", cohort="cohort"
+            panel, outcome="y", unit="unit", time="time", first_treat="cohort"
         )
         res.aggregate("event")
         r_dofs = golden["hc2_bm"]["aggregate_event_dof"]
@@ -2745,7 +2745,7 @@ class TestWooldridgeParityRPoisson:
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
             res = WooldridgeDiD(method="poisson").fit(
-                panel, outcome="y_pois", unit="unit", time="time", cohort="cohort"
+                panel, outcome="y_pois", unit="unit", time="time", first_treat="cohort"
             )
         finite_atts = [
             res.group_time_effects[k]["att"]
@@ -2810,7 +2810,7 @@ class TestWooldridgeParityRLogit:
                     outcome="y_logit",
                     unit="unit",
                     time="time",
-                    cohort="cohort",
+                    first_treat="cohort",
                 )
             except (ValueError, np.linalg.LinAlgError):
                 pytest.skip(

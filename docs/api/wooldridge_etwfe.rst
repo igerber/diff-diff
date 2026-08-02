@@ -111,7 +111,7 @@ Basic OLS (follows Stata ``jwdid y, ivar(unit) tvar(time) gvar(cohort)``)::
     df['first_treat'] = df['first_treat'].astype(int)
 
     m = WooldridgeDiD()
-    r = m.fit(df, outcome='lemp', unit='countyreal', time='year', cohort='first_treat')
+    r = m.fit(df, outcome='lemp', unit='countyreal', time='year', first_treat='first_treat')
 
     r.aggregate('event').aggregate('group').aggregate('simple')
     print(r.summary('event'))
@@ -148,7 +148,7 @@ Poisson QMLE for non-negative outcomes
 
     m_pois = WooldridgeDiD(method='poisson')
     r_pois = m_pois.fit(df, outcome='emp', unit='countyreal',
-                        time='year', cohort='first_treat')
+                        time='year', first_treat='first_treat')
     r_pois.aggregate('event').aggregate('group').aggregate('simple')
     print(r_pois.summary('simple'))
 
@@ -157,7 +157,7 @@ Logit for binary outcomes
 
     m_logit = WooldridgeDiD(method='logit')
     r_logit = m_logit.fit(df, outcome='hi_emp', unit='countyreal',
-                          time='year', cohort='first_treat')
+                          time='year', first_treat='first_treat')
     r_logit.aggregate('group').aggregate('simple')
     print(r_logit.summary('group'))
 

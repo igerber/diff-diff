@@ -381,25 +381,25 @@ def _fuzzy_df(n=1200, seed=5):
 class TestFuzzyAPI:
     def test_missing_treatment_col_raises(self):
         with pytest.raises(ValueError, match="not found"):
-            RegressionDiscontinuity().fit(_fuzzy_df(), "y", "x", treatment_col="takeup")
+            RegressionDiscontinuity().fit(_fuzzy_df(), "y", "x", takeup="takeup")
 
     def test_nan_in_treatment_counted_in_drop(self):
         df = _fuzzy_df(200)
         df.loc[3, "t"] = np.nan
         df.loc[7, "y"] = np.nan
         with pytest.warns(UserWarning, match="Dropping 2 row"):
-            r = RegressionDiscontinuity().fit(df, "y", "x", treatment_col="t")
+            r = RegressionDiscontinuity().fit(df, "y", "x", takeup="t")
         assert r.n_obs == 198
         assert r.n_dropped == 2
 
     def test_estimand_echo(self):
         df = _fuzzy_df()
         sharp = RegressionDiscontinuity().fit(df, "y", "x")
-        fz = RegressionDiscontinuity().fit(df, "y", "x", treatment_col="t")
+        fz = RegressionDiscontinuity().fit(df, "y", "x", takeup="t")
         assert sharp.estimand == "sharp (ATE at the cutoff)"
         assert fz.estimand == "fuzzy (LATE for compliers at the cutoff)"
-        assert sharp.treatment_col is None
-        assert fz.treatment_col == "t"
+        assert sharp.takeup is None
+        assert fz.takeup == "t"
 
     def test_estimand_label_non_binary_takeup(self):
         # Dose take-up is accepted (R's fuzzy= semantics) but must NOT be
@@ -410,7 +410,7 @@ class TestFuzzyAPI:
         df["dose"] = df["t"] * rng.uniform(0.5, 2.0, size=len(df))
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            r = RegressionDiscontinuity().fit(df, "y", "x", treatment_col="dose")
+            r = RegressionDiscontinuity().fit(df, "y", "x", takeup="dose")
         assert r.estimand == "fuzzy (local Wald ratio at the cutoff; non-binary take-up)"
         assert r.first_stage is not None
 
@@ -439,7 +439,7 @@ class TestFuzzyAPI:
         assert d["first_stage_conf_int_lower"] is None  # None-safe CI split
 
     def test_first_stage_populated_and_coherent_on_fuzzy(self):
-        r = RegressionDiscontinuity().fit(_fuzzy_df(), "y", "x", treatment_col="t")
+        r = RegressionDiscontinuity().fit(_fuzzy_df(), "y", "x", takeup="t")
         assert r.first_stage is not None and r.first_stage_se is not None
         assert r.first_stage_t_stat == pytest.approx(r.first_stage / r.first_stage_se, rel=1e-14)
         lo, hi = r.first_stage_conf_int
@@ -456,7 +456,7 @@ class TestFuzzyAPI:
 
     def test_summary_first_stage_block_fuzzy_only(self):
         df = _fuzzy_df()
-        fz = RegressionDiscontinuity().fit(df, "y", "x", treatment_col="t")
+        fz = RegressionDiscontinuity().fit(df, "y", "x", takeup="t")
         sharp = RegressionDiscontinuity().fit(df, "y", "x")
         assert "First-stage estimates" in fz.summary()
         assert "Fuzzy Regression Discontinuity" in fz.summary()
@@ -465,7 +465,7 @@ class TestFuzzyAPI:
         assert "Estimand:" in sharp.summary()
 
     def test_canonical_identities_hold_on_fuzzy(self):
-        r = RegressionDiscontinuity().fit(_fuzzy_df(), "y", "x", treatment_col="t")
+        r = RegressionDiscontinuity().fit(_fuzzy_df(), "y", "x", takeup="t")
         assert r.t_stat == pytest.approx(r.att / r.se, rel=1e-14)
         lo, hi = r.conf_int
         assert (lo + hi) / 2 == pytest.approx(r.att, rel=1e-12)
@@ -525,7 +525,7 @@ class TestCovariatesAPI:
             with pytest.raises(ValueError, match="collide"):
                 RegressionDiscontinuity().fit(df, "y", "x", covariates=[clash])
         with pytest.raises(ValueError, match="collide"):
-            RegressionDiscontinuity().fit(df, "y", "x", treatment_col="t", covariates=["t"])
+            RegressionDiscontinuity().fit(df, "y", "x", takeup="t", covariates=["t"])
 
     def test_echo_fields_adjusted_fit(self):
         df = _covs_df()

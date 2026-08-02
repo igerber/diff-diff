@@ -325,7 +325,7 @@ from diff_diff import ChaisemartinDHaultfoeuille, SurveyDesign
 
 sd = SurveyDesign(weights='pw', strata='stratum', psu='cluster', nest=True)
 results = ChaisemartinDHaultfoeuille().fit(
-    data, outcome='y', group='unit_id', time='period',
+    data, outcome='y', unit='unit_id', time='period',
     treatment='treated',
     L_max=3,                  # multi-horizon event study
     survey_design=sd,         # survey-aware analytical SE (TSL)

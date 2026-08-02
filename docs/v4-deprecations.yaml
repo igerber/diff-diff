@@ -354,9 +354,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/wooldridge.py, docs/methodology/REGISTRY.md, docs/methodology/papers/wooldridge-2023-review.md, docs/methodology/papers/wooldridge-2025-review.md, diff_diff/guides/llms-full.txt]
     notes: "Only estimator using 'cohort' for the first-treatment column; 12 others use first_treat."
   - id: M-033
@@ -367,10 +368,11 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
-    code_refs: [diff_diff/chaisemartin_dhaultfoeuille.py, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt]
+    test_ref: tests/test_v4_rename_mechanical.py
+    code_refs: [diff_diff/chaisemartin_dhaultfoeuille.py, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, docs/api/chaisemartin_dhaultfoeuille.rst]
     notes: "'group' here means the unit id (R DIDmultiplegt vocabulary) but means the treated-group 0/1 indicator in TripleDifference - name-carries-altered-meaning violation."
   - id: M-034
     kind: param
@@ -380,9 +382,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/chaisemartin_dhaultfoeuille.py, docs/methodology/REGISTRY.md, diff_diff/guides/llms-full.txt]
     notes: "Majority spelling is covariates."
   - id: M-035
@@ -393,9 +396,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had.py, diff_diff/practitioner.py, diff_diff/guides/llms-full.txt, docs/methodology/REGISTRY.md, docs/methodology/papers/calonico-cattaneo-farrell-titiunik-2019-review.md]
     notes: "_col suffix used only by HAD and RDD; 22 other estimators use bare names."
   - id: M-036
@@ -406,9 +410,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had.py, diff_diff/practitioner.py, diff_diff/guides/llms-full.txt]
     notes: "Matches ContinuousDiD's bare 'dose'."
   - id: M-037
@@ -419,9 +424,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had.py, diff_diff/practitioner.py, diff_diff/guides/llms-full.txt]
     notes: ""
   - id: M-038
@@ -432,9 +438,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had.py, diff_diff/practitioner.py, diff_diff/guides/llms-full.txt]
     notes: ""
   - id: M-039
@@ -445,9 +452,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had.py, diff_diff/practitioner.py, diff_diff/agent_workflow.py, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-autonomous.txt, docs/methodology/REGISTRY.md, docs/methodology/papers/dechaisemartin-2026-review.md]
     notes: ""
   - id: M-040
@@ -458,9 +466,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/rdd.py]
     notes: ""
   - id: M-041
@@ -471,9 +480,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/rdd.py, diff_diff/guides/llms-full.txt]
     notes: ""
   - id: M-042
@@ -484,9 +494,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/rdd.py, docs/methodology/REGISTRY.md, diff_diff/guides/llms-autonomous.txt, diff_diff/guides/llms-full.txt, diff_diff/guides/llms.txt]
     notes: "Observed take-up column for fuzzy RD. Target RETARGETED from 'treatment' to 'takeup' by the gating-completeness amendment: the column accepts NON-BINARY (dose) take-up, matching R's fuzzy= (REGISTRY 'Estimand and estimator (fuzzy RD)'; the estimand label is data-dependent - complier LATE only when values are in {0,1}, otherwise a bare local Wald ratio). Section 8 rule 7 reserves 'treatment' for a 0/1 indicator and never a treatment level, so 'treatment' would have carried altered meaning here. 'takeup' is already the library's own vocabulary for it (the RD docstring example passes treatment_col='takeup'). No shim had shipped, so the retarget costs nothing."
   - id: M-094
@@ -497,9 +508,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/rdd.py]
     notes: "Results-side mirror of [M-042]: a public dataclass field carrying the fit param's name, emitted by to_dict(). Renaming the param alone would leave the _col spelling on the serialized surface, which spec section 5 forbids from 4.0 (canonical names only). Target is 'takeup', not 'treatment', for the reason recorded on [M-042] (non-binary take-up is accepted, so 'treatment' would violate section 8 rule 7). Flips WITH [M-042] in the same Phase 2c diff."
   - id: M-043
@@ -905,9 +917,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/rdplot.py]
     notes: "RDPlot shipped post-ledger-freeze with _col suffixes; the spec section 8 missed-rename clause applies (matches RegressionDiscontinuity [M-040])."
   - id: M-089
@@ -918,9 +931,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/rdplot.py]
     notes: "Companion to [M-088]; matches [M-041]."
   - id: M-090
@@ -1071,9 +1085,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/chaisemartin_dhaultfoeuille.py]
     notes: "Companion to [M-033] on the RETAINED diagnostic function (spec section 3.3 keeps twowayfeweights past 4.0 - it is not a class duplicate, so no wrapper removal mitigates this). Same meaning as dCDH's fit[group]: a unit identifier, which section 8 rule 3 reserves 'group' against. Unlike the chaisemartin_dhaultfoeuille() wrapper hit, which dies with [M-077]."
   - id: M-098
@@ -1084,9 +1099,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
     notes: "Public retained HAD diagnostic; section 8 rule 5. Mirrors the estimator-side [M-035]. The three exported HAD pretest entry points share one 5-param block ([M-098]..[M-112]) and shim together."
   - id: M-099
@@ -1097,9 +1113,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
     notes: "Mirrors [M-036]; see [M-098]."
   - id: M-100
@@ -1110,9 +1127,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
     notes: "Mirrors [M-037]; see [M-098]."
   - id: M-101
@@ -1123,9 +1141,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
     notes: "Mirrors [M-038]; see [M-098]."
   - id: M-102
@@ -1136,9 +1155,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
     notes: "Mirrors [M-039]; see [M-098]."
   - id: M-103
@@ -1149,9 +1169,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
     notes: "Mirrors [M-035]; see [M-098]."
   - id: M-104
@@ -1162,9 +1183,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
     notes: "Mirrors [M-036]; see [M-098]."
   - id: M-105
@@ -1175,9 +1197,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
     notes: "Mirrors [M-037]; see [M-098]."
   - id: M-106
@@ -1188,9 +1211,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
     notes: "Mirrors [M-038]; see [M-098]."
   - id: M-107
@@ -1201,9 +1225,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
     notes: "Mirrors [M-039]; see [M-098]."
   - id: M-108
@@ -1214,9 +1239,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
     notes: "Mirrors [M-035]; see [M-098]."
   - id: M-109
@@ -1227,9 +1253,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
     notes: "Mirrors [M-036]; see [M-098]."
   - id: M-110
@@ -1240,9 +1267,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
     notes: "Mirrors [M-037]; see [M-098]."
   - id: M-111
@@ -1253,9 +1281,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
     notes: "Mirrors [M-038]; see [M-098]."
   - id: M-112
@@ -1266,9 +1295,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
     notes: "Mirrors [M-039]; see [M-098]."
   - id: M-113
@@ -1279,9 +1309,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/prep.py]
     notes: "Public prep helper; section 8 rule 5. Target spelling is 'weights', the established library name for a weight column (5 public class surfaces use it) - NOT bare 'weight'."
   - id: M-114
@@ -1292,9 +1323,10 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
+    test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/chaisemartin_dhaultfoeuille_results.py, diff_diff/chaisemartin_dhaultfoeuille.py, docs/methodology/REGISTRY.md]
     notes: "Results-side mirror of [M-033] under section 8 rule 9. dCDH's 'groups' are UNIT identifiers ('Group identifiers in the post-filter sample'), the same column fit[group] renames to unit - distinct from the CS-family 'groups', which are ATT(g,t) cohorts and stay as domain vocabulary. summary()/repr() labels follow; needs __setstate__ pickle migration per spec section 5. The n_groups_dropped_* counters are NOT renamed by this row (they count dropped units but read as diagnostics; re-audit at 4.0 if the vocabulary drifts)."
   - id: M-115

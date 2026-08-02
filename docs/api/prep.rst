@@ -124,7 +124,7 @@ Example
 
    est = ChaisemartinDHaultfoeuille()
    results = est.fit(
-       data, outcome="outcome", group="group",
+       data, outcome="outcome", unit="group",
        time="period", treatment="treatment",
    )
 

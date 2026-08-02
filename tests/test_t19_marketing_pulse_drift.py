@@ -68,7 +68,7 @@ def phase1_results(panel):
     return model.fit(
         panel,
         outcome="sessions",
-        group="market_id",
+        unit="market_id",
         time="week",
         treatment="promo_on",
     )
@@ -96,7 +96,7 @@ def event_study_results(panel):
         return model.fit(
             panel,
             outcome="sessions",
-            group="market_id",
+            unit="market_id",
             time="week",
             treatment="promo_on",
             L_max=2,
@@ -199,7 +199,7 @@ def test_assumption7_warning_fires_as_expected(panel):
             model.fit(
                 panel,
                 outcome="sessions",
-                group="market_id",
+                unit="market_id",
                 time="week",
                 treatment="promo_on",
                 L_max=2,
@@ -236,7 +236,7 @@ def test_event_study_warning_policy_matches_notebook(panel):
         model.fit(
             panel,
             outcome="sessions",
-            group="market_id",
+            unit="market_id",
             time="week",
             treatment="promo_on",
             L_max=2,
@@ -286,7 +286,7 @@ def test_a11_warning_does_not_fire():
             DCDH(twfe_diagnostic=False, placebo=False, seed=42).fit(
                 df,
                 outcome="sessions",
-                group="market_id",
+                unit="market_id",
                 time="week",
                 treatment="promo_on",
             )

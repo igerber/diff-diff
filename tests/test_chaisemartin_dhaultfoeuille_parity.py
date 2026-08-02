@@ -95,7 +95,7 @@ def _fit_dcdh_l1(df: pd.DataFrame):
     return est.fit(
         df,
         outcome="outcome",
-        group="group",
+        unit="group",
         time="period",
         treatment="treatment",
     )
@@ -236,7 +236,7 @@ def _fit_dcdh_multi(df: pd.DataFrame, L_max: int):
     return est.fit(
         df,
         outcome="outcome",
-        group="group",
+        unit="group",
         time="period",
         treatment="treatment",
         L_max=L_max,
@@ -443,11 +443,11 @@ class TestDCDHDynRParityPhase3:
         results = est.fit(
             df,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             L_max=L_max,
-            controls=controls,
+            covariates=controls,
             trends_linear=trends_linear,
         )
         r_results = scenario["results"]
@@ -584,7 +584,7 @@ class TestDCDHDynRParityByPath:
             results = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=L_max,
@@ -741,7 +741,7 @@ class TestDCDHDynRParityByPathPlacebo:
             results = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -862,10 +862,10 @@ class TestDCDHDynRParityByPathControls:
             results = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
-                controls=["X1"],
+                covariates=["X1"],
                 L_max=3,
             )
 
@@ -1002,7 +1002,7 @@ class TestDCDHDynRParityByPathTrendsLinear:
             results = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_linear=True,
@@ -1117,7 +1117,7 @@ class TestDCDHDynRParityByPathTrendsNonparam:
             results = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 trends_nonparam="state",
@@ -1239,7 +1239,7 @@ class TestDCDHDynRParityByPathNonBinary:
             results = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -1342,7 +1342,7 @@ class TestDCDHDynRParityHeterogeneity:
             results = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -1434,7 +1434,7 @@ class TestDCDHDynRParityByPathHeterogeneity:
             results = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -1550,7 +1550,7 @@ class TestDCDHDynRParityByPathHeterogeneityWithPlacebo:
             results = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,
@@ -1665,7 +1665,7 @@ class TestDCDHDynRParityHeterogeneityWithPlacebo:
             results = est.fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 L_max=3,

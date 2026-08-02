@@ -139,18 +139,18 @@ def _python_fit(
         panel_2p = panel[panel["t"].isin([F - 1, F])].copy()
         return est.fit(
             panel_2p,
-            outcome_col="y",
-            dose_col="d",
-            time_col="t",
-            unit_col="g",
+            outcome="y",
+            dose="d",
+            time="t",
+            unit="g",
             aggregate="overall",
         )
     return est.fit(
         panel,
-        outcome_col="y",
-        dose_col="d",
-        time_col="t",
-        unit_col="g",
+        outcome="y",
+        dose="d",
+        time="t",
+        unit="g",
         aggregate="event_study",
         trends_lin=trends_lin,
     )

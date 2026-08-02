@@ -121,7 +121,7 @@ def test_heterogeneity_cell_period_null_coverage_varying_psu():
                 res = ChaisemartinDHaultfoeuille(seed=r + 1).fit(
                     df,
                     outcome="outcome",
-                    group="group",
+                    unit="group",
                     time="period",
                     treatment="treatment",
                     heterogeneity="x_het",

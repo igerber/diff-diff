@@ -651,7 +651,7 @@ class TestTargetParameterRealFitIntegration:
         fit = ChaisemartinDHaultfoeuille().fit(
             df,
             outcome="outcome",
-            group="unit",
+            unit="unit",
             time="period",
             treatment="treated",
         )
@@ -680,7 +680,7 @@ class TestTargetParameterRealFitIntegration:
         fit = ChaisemartinDHaultfoeuille().fit(
             df,
             outcome="outcome",
-            group="unit",
+            unit="unit",
             time="period",
             treatment="treated",
             L_max=1,
@@ -704,7 +704,7 @@ class TestTargetParameterRealFitIntegration:
         fit = ChaisemartinDHaultfoeuille().fit(
             df,
             outcome="outcome",
-            group="unit",
+            unit="unit",
             time="period",
             treatment="treated",
             L_max=2,
@@ -732,7 +732,7 @@ class TestTargetParameterRealFitIntegration:
         fit = ChaisemartinDHaultfoeuille().fit(
             df,
             outcome="outcome",
-            group="unit",
+            unit="unit",
             time="period",
             treatment="treated",
             L_max=2,
@@ -767,7 +767,7 @@ class TestTargetParameterRealFitIntegration:
         fit = ChaisemartinDHaultfoeuille().fit(
             df,
             outcome="outcome",
-            group="unit",
+            unit="unit",
             time="period",
             treatment="treated",
             L_max=2,
@@ -859,7 +859,7 @@ class TestTargetParameterRealFitIntegration:
             placebo_conf_int=(float("nan"), float("nan")),
             placebo_available=False,
             per_period_effects={},
-            groups=[1, 2, 3],
+            units=[1, 2, 3],
             time_periods=[1, 2, 3, 4],
             n_obs=100,
             n_treated_obs=50,
@@ -997,7 +997,7 @@ class TestTargetParameterRealFitIntegration:
             placebo_conf_int=(float("nan"), float("nan")),
             placebo_available=False,
             per_period_effects={},
-            groups=[1, 2, 3],
+            units=[1, 2, 3],
             time_periods=[1, 2, 3, 4],
             n_obs=100,
             n_treated_obs=50,
@@ -1167,7 +1167,7 @@ class TestTargetParameterRealFitIntegration:
             placebo_conf_int=(float("nan"), float("nan")),
             placebo_available=False,
             per_period_effects={},
-            groups=[1, 2, 3],
+            units=[1, 2, 3],
             time_periods=[1, 2, 3, 4],
             n_obs=100,
             n_treated_obs=50,
@@ -1231,7 +1231,7 @@ class TestTargetParameterRealFitIntegration:
         fit = ChaisemartinDHaultfoeuille().fit(
             df,
             outcome="outcome",
-            group="unit",
+            unit="unit",
             time="period",
             treatment="treated",
             L_max=2,

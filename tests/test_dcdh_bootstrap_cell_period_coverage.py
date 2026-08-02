@@ -141,7 +141,7 @@ def test_bootstrap_cell_period_coverage_varying_psu():
                 ).fit(
                     df,
                     outcome="outcome",
-                    group="group",
+                    unit="group",
                     time="period",
                     treatment="treatment",
                     survey_design=sd,

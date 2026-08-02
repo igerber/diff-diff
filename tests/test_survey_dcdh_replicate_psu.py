@@ -160,7 +160,7 @@ class TestReplicateClassA:
         res = ChaisemartinDHaultfoeuille(seed=1).fit(
             df,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             survey_design=sd,
@@ -222,7 +222,7 @@ class TestReplicateClassA:
                 ChaisemartinDHaultfoeuille(seed=1).fit(
                     df_,
                     outcome="outcome",
-                    group="group",
+                    unit="group",
                     time="period",
                     treatment="treatment",
                     survey_design=sd,
@@ -278,7 +278,7 @@ class TestReplicateClassA:
         res = ChaisemartinDHaultfoeuille(seed=1).fit(
             df,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             survey_design=sd,
@@ -360,7 +360,7 @@ class TestReplicateClassA:
         res = ChaisemartinDHaultfoeuille(seed=1).fit(
             df,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             survey_design=sd,
@@ -377,7 +377,7 @@ class TestReplicateClassA:
         res = ChaisemartinDHaultfoeuille(seed=1).fit(
             df,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             survey_design=sd,
@@ -401,7 +401,7 @@ class TestReplicateClassA:
         res_rep = ChaisemartinDHaultfoeuille(seed=1).fit(
             df_rep,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             survey_design=sd_rep,
@@ -409,7 +409,7 @@ class TestReplicateClassA:
         res_tsl = ChaisemartinDHaultfoeuille(seed=1).fit(
             df,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             survey_design=sd_tsl,
@@ -435,7 +435,7 @@ class TestReplicateClassA:
         res = ChaisemartinDHaultfoeuille(seed=1).fit(
             df,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             survey_design=sd,
@@ -459,7 +459,7 @@ class TestReplicateClassA:
         res = ChaisemartinDHaultfoeuille(seed=1).fit(
             df,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             survey_design=sd,
@@ -491,11 +491,11 @@ class TestReplicateClassA:
         res = ChaisemartinDHaultfoeuille(seed=1).fit(
             df,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             survey_design=sd,
-            controls=["cov1"],
+            covariates=["cov1"],
             L_max=1,
         )
         assert np.isfinite(res.overall_att)
@@ -518,7 +518,7 @@ class TestReplicateClassB:
         res = ChaisemartinDHaultfoeuille(seed=1).fit(
             df,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             survey_design=sd,
@@ -543,7 +543,7 @@ class TestReplicateClassB:
         res_rep = twowayfeweights(
             df,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             survey_design=sd_rep,
@@ -551,7 +551,7 @@ class TestReplicateClassB:
         res_plain = twowayfeweights(
             df,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
             survey_design=sd_plain,
@@ -581,7 +581,7 @@ class TestPSUBootstrap:
             r_auto = ChaisemartinDHaultfoeuille(n_bootstrap=200, seed=1).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 survey_design=sd_auto,
@@ -589,7 +589,7 @@ class TestPSUBootstrap:
             r_explicit = ChaisemartinDHaultfoeuille(n_bootstrap=200, seed=1).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 survey_design=sd_explicit,
@@ -607,7 +607,7 @@ class TestPSUBootstrap:
             res = ChaisemartinDHaultfoeuille(n_bootstrap=500, seed=1).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 survey_design=sd,
@@ -625,7 +625,7 @@ class TestPSUBootstrap:
             ChaisemartinDHaultfoeuille(n_bootstrap=100, seed=1).fit(
                 base_panel,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 survey_design=sd,
@@ -647,7 +647,7 @@ class TestPSUBootstrap:
             ChaisemartinDHaultfoeuille(n_bootstrap=100, seed=1).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 survey_design=sd,
@@ -666,7 +666,7 @@ class TestPSUBootstrap:
             ).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 survey_design=sd,
@@ -682,7 +682,7 @@ class TestPSUBootstrap:
             res = ChaisemartinDHaultfoeuille(n_bootstrap=300, seed=1).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 survey_design=sd,
@@ -704,7 +704,7 @@ class TestPSUBootstrap:
             res = ChaisemartinDHaultfoeuille(n_bootstrap=500, seed=1).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 survey_design=sd,
@@ -727,7 +727,7 @@ class TestPSUBootstrap:
             res = ChaisemartinDHaultfoeuille(n_bootstrap=500, seed=1).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 survey_design=sd,
@@ -755,7 +755,7 @@ class TestInvariants:
             ChaisemartinDHaultfoeuille(n_bootstrap=50, seed=1).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 survey_design=sd,
@@ -767,14 +767,14 @@ class TestInvariants:
         r1 = ChaisemartinDHaultfoeuille(n_bootstrap=200, seed=1).fit(
             base_panel,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
         r2 = ChaisemartinDHaultfoeuille(n_bootstrap=200, seed=1).fit(
             base_panel,
             outcome="outcome",
-            group="group",
+            unit="group",
             time="period",
             treatment="treatment",
         )
@@ -887,7 +887,7 @@ class TestInvariants:
             res = ChaisemartinDHaultfoeuille(seed=1).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 survey_design=sd,
@@ -931,7 +931,7 @@ class TestInvariants:
             res = ChaisemartinDHaultfoeuille(seed=1).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 survey_design=sd,
@@ -976,7 +976,7 @@ class TestInvariants:
             res = ChaisemartinDHaultfoeuille(seed=1).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 survey_design=sd,
@@ -1021,7 +1021,7 @@ class TestInvariants:
             res = ChaisemartinDHaultfoeuille(seed=1).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 survey_design=sd,
@@ -1075,7 +1075,7 @@ class TestInvariants:
             res = ChaisemartinDHaultfoeuille(seed=1).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 survey_design=sd,
@@ -1153,7 +1153,7 @@ class TestInvariants:
             ChaisemartinDHaultfoeuille(seed=1).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 survey_design=sd,
@@ -1183,7 +1183,7 @@ class TestInvariants:
             res = ChaisemartinDHaultfoeuille(seed=1).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 survey_design=sd,
@@ -1319,7 +1319,7 @@ class TestInvariants:
             ChaisemartinDHaultfoeuille(seed=1).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 survey_design=sd,
@@ -1345,7 +1345,7 @@ class TestInvariants:
             res = ChaisemartinDHaultfoeuille(seed=1).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 survey_design=sd,
@@ -1404,7 +1404,7 @@ class TestPhase1FinalDfSync:
             res = ChaisemartinDHaultfoeuille(seed=1).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 survey_design=sd,
@@ -1435,7 +1435,7 @@ class TestPhase1FinalDfSync:
             res = ChaisemartinDHaultfoeuille(seed=1).fit(
                 df,
                 outcome="outcome",
-                group="group",
+                unit="group",
                 time="period",
                 treatment="treatment",
                 survey_design=sd,

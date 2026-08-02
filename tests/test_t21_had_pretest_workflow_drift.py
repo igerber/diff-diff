@@ -103,11 +103,11 @@ def two_period(panel):
 def overall_report(two_period):
     return did_had_pretest_workflow(
         data=two_period,
-        outcome_col="weekly_visits",
-        dose_col="regional_spend_k",
-        time_col="period",
-        unit_col="dma_id",
-        first_treat_col="first_treat",
+        outcome="weekly_visits",
+        dose="regional_spend_k",
+        time="period",
+        unit="dma_id",
+        first_treat="first_treat",
         alpha=0.05,
         n_bootstrap=999,
         seed=WORKFLOW_SEED,
@@ -119,11 +119,11 @@ def overall_report(two_period):
 def event_study_report(panel):
     return did_had_pretest_workflow(
         data=panel,
-        outcome_col="weekly_visits",
-        dose_col="regional_spend_k",
-        time_col="week",
-        unit_col="dma_id",
-        first_treat_col="first_treat",
+        outcome="weekly_visits",
+        dose="regional_spend_k",
+        time="week",
+        unit="dma_id",
+        first_treat="first_treat",
         alpha=0.05,
         n_bootstrap=999,
         seed=WORKFLOW_SEED,
@@ -323,10 +323,10 @@ def test_had_design_auto_lands_on_continuous_at_zero(two_period):
         est = HAD(design="auto")
         result = est.fit(
             two_period,
-            outcome_col="weekly_visits",
-            dose_col="regional_spend_k",
-            time_col="period",
-            unit_col="dma_id",
+            outcome="weekly_visits",
+            dose="regional_spend_k",
+            time="period",
+            unit="dma_id",
         )
     assert result.design == "continuous_at_zero", result.design
     assert result.target_parameter == "WAS", result.target_parameter

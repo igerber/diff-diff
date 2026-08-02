@@ -85,7 +85,7 @@
       ~ChaisemartinDHaultfoeuilleResults.placebo_conf_int
       ~ChaisemartinDHaultfoeuilleResults.placebo_available
       ~ChaisemartinDHaultfoeuilleResults.per_period_effects
-      ~ChaisemartinDHaultfoeuilleResults.groups
+      ~ChaisemartinDHaultfoeuilleResults.units
       ~ChaisemartinDHaultfoeuilleResults.time_periods
       ~ChaisemartinDHaultfoeuilleResults.n_obs
       ~ChaisemartinDHaultfoeuilleResults.n_treated_obs

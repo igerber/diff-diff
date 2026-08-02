@@ -90,6 +90,6 @@
       ~RegressionDiscontinuityResults.rho_input
       ~RegressionDiscontinuityResults.estimand
       ~RegressionDiscontinuityResults.sharpbw
-      ~RegressionDiscontinuityResults.treatment_col
+      ~RegressionDiscontinuityResults.takeup
       ~RegressionDiscontinuityResults.covs_drop
 

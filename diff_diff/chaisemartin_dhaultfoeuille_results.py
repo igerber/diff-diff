@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 import numpy as np
 import pandas as pd
 
+from diff_diff._deprecation import deprecated_field_property
 from diff_diff.results import _get_significance_stars
 from diff_diff.results_base import BaseResults
 
@@ -298,7 +299,7 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults):
         sample** passed by the user (the same input the standalone
         :func:`twowayfeweights` function uses) — NOT the post-filter
         estimation sample described by ``overall_att`` and
-        ``groups``. When ``fit()`` drops groups via the ragged-panel
+        ``units``. When ``fit()`` drops groups via the ragged-panel
         or ``drop_larger_lower`` filters, ``results.twfe_*`` and
         ``results.overall_att`` describe different samples and a
         ``UserWarning`` is emitted; see REGISTRY.md
@@ -322,8 +323,10 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults):
         the two are computed on different samples when ``fit()``
         filters drop groups — see the ``twfe_weights`` docstring above
         for the sample contract.
-    groups : list
-        Group identifiers in the post-filter sample.
+    units : list
+        Unit identifiers in the post-filter sample. (The deprecated
+        read-only alias ``groups`` warns and returns this list; removed
+        in 4.0 — row M-114.)
     time_periods : list
         Time periods in the panel.
     n_obs : int
@@ -398,7 +401,7 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults):
         ``did_multiplegt_dyn`` provides no joint / sup-t bands.
     covariate_residuals : pd.DataFrame, optional
         ``DID^X`` first-stage diagnostics: per-baseline ``theta_hat``,
-        ``n_obs``, and ``r_squared``. Populated when ``controls`` is set.
+        ``n_obs``, and ``r_squared``. Populated when ``covariates`` is set.
     linear_trends_effects : dict, optional
         Cumulated ``DID^{fd}`` level effects ``delta^{fd}_l``. Keyed by
         horizon. Populated when ``trends_linear=True``.
@@ -557,7 +560,7 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults):
     per_period_effects: Dict[Any, Dict[str, Any]]
 
     # --- Metadata ---
-    groups: List[Any]
+    units: List[Any]
     time_periods: List[Any]
     n_obs: int
     n_treated_obs: int
@@ -680,6 +683,23 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults):
     # in the generated __init__ (the constructor signature is public API).
     event_study_df: Optional[float] = field(default=None, repr=False)
 
+    # Deprecated read-only alias for ``units`` (row M-114; removed in 4.0).
+    # No annotation, so it stays a descriptor and never becomes a
+    # __dataclass_fields__ entry.
+    groups = deprecated_field_property("ChaisemartinDHaultfoeuilleResults", "groups", "units")
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        """Migrate pickles created before the ``groups`` -> ``units`` rename.
+
+        Results pickled before row M-114 stored the list under ``groups``;
+        rewriting the key on load keeps both ``units`` and the deprecated
+        ``groups`` alias working on old pickles.
+        """
+        if "groups" in state and "units" not in state:
+            state = dict(state)
+            state["units"] = state.pop("groups")
+        self.__dict__.update(state)
+
     # ------------------------------------------------------------------
     # Repr / properties
     # ------------------------------------------------------------------
@@ -784,7 +804,7 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults):
             f"ChaisemartinDHaultfoeuilleResults("
             f"{label}={self.overall_att:.4f}{sig}, "
             f"SE={self.overall_se:.4f}, "
-            f"n_groups={len(self.groups)}, "
+            f"n_units={len(self.units)}, "
             f"n_switcher_cells={self.n_switcher_cells})"
         )
 
@@ -850,7 +870,7 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults):
                 if self.L_max is not None and self.L_max >= 1
                 else f"{'Switcher cells (N_S):':<35} {self.n_switcher_cells:>10}"
             ),
-            f"{'Groups (post-filter):':<35} {len(self.groups):>10}",
+            f"{'Units (post-filter):':<35} {len(self.units):>10}",
             f"{'Cohorts:':<35} {self.n_cohorts:>10}",
             f"{'Time periods:':<35} {len(self.time_periods):>10}",
             "",

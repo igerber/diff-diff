@@ -355,7 +355,7 @@ supported / out of scope; `warn` supported but with documented caveats;
 | `StaggeredTripleDifference` | ✓ | ✓ | ✗ | ✓ | ✗ | ✓ | ✗ | ✗ | ✓ |
 | `ContinuousDiD` | ✗ | ✓ | ✓ | ✗ | ✓ | ✗ | ✗ | ✗ | ✓ |
 | `HeterogeneousAdoptionDiD` | ✗ | partial | partial | ✗ | ✗ | ✗ | ✗ | ✓ | warn |
-| `RegressionDiscontinuity` | ✗ (cross-sectional; sharp: treatment = running >= cutoff; fuzzy: observed take-up via `treatment_col=`) | ✗ | ✗ | ✗ | ✗ | ✓ (precision only - estimand unchanged, unlike the DiD conditional-PT role; `covariates=`) | ✗ | ✗ | ✗ (follow-up) |
+| `RegressionDiscontinuity` | ✗ (cross-sectional; sharp: treatment = running >= cutoff; fuzzy: observed take-up via `takeup=`) | ✗ | ✗ | ✗ | ✗ | ✓ (precision only - estimand unchanged, unlike the DiD conditional-PT role; `covariates=`) | ✗ | ✗ | ✗ (follow-up) |
 
 **Footnotes.**
 - `TwoWayFixedEffects` + staggered: fits but mixes positive and negative
@@ -400,10 +400,10 @@ supported / out of scope; `warn` supported but with documented caveats;
 - `HeterogeneousAdoptionDiD` staggered support is `partial`, not
   general. Paper Appendix B.2 restricts staggered use to the
   **last treatment cohort plus never-treated units**. With
-  `aggregate="event_study"` and a `first_treat_col` kwarg,
+  `aggregate="event_study"` and a `first_treat` kwarg,
   `fit()` auto-filters to `F_last = max(cohorts)` and emits a
   `UserWarning` naming kept/dropped counts; earlier-cohort units
-  are dropped. Without `first_treat_col`, a multi-cohort panel
+  are dropped. Without `first_treat`, a multi-cohort panel
   raises `ValueError`. For full staggered support that retains
   every cohort, use `ChaisemartinDHaultfoeuille` instead.
 
@@ -689,7 +689,7 @@ intensity of exposure differs):
   auto-filters to the last treatment cohort (`F_last =
   max(cohorts)`) plus never-treated units and emits a
   `UserWarning` naming kept/dropped counts; earlier treated
-  cohorts are dropped. The `first_treat_col` kwarg is
+  cohorts are dropped. The `first_treat` kwarg is
   **required** for the auto-filter to activate; without it a
   multi-cohort panel raises `ValueError` pointing the caller at
   `ChaisemartinDHaultfoeuille` for full staggered support. The
@@ -1320,7 +1320,7 @@ This guide does **not**:
   libraries. Regression discontinuity IS in scope - sharp, fuzzy, AND
   covariate-adjusted: route running-variable/threshold designs to
   `RegressionDiscontinuity` (alias `RDD`); imperfect compliance at the
-  threshold is the fuzzy design (`fit(..., treatment_col=...)`, local
+  threshold is the fuzzy design (`fit(..., takeup=...)`, local
   Wald ratio with a first-stage block); precision covariates go in via
   `fit(..., covariates=[...])` (same estimand - check covariate balance
   first by fitting each covariate as the outcome). Cluster-robust RD

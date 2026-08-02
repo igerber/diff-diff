@@ -283,14 +283,14 @@ ChaisemartinDHaultfoeuille(
 est.fit(
     data: pd.DataFrame,
     outcome: str,
-    group: str,                                  # Group identifier
+    unit: str,                                   # Unit (group) identifier
     time: str,
     treatment: str,                              # Per-observation binary treatment or non-binary intensity
     # ---- multi-horizon ----
     L_max: int | None = None,                    # Max horizon; None = l=1 only
     # ---- covariates and extensions ----
     aggregate: str | None = None,                # Reserved; raises NotImplementedError
-    controls: list[str] | None = None,           # DID^X residualization-style covariates
+    covariates: list[str] | None = None,         # DID^X residualization-style covariates
     trends_linear: bool | None = None,           # DID^{fd} group-specific linear trends
     trends_nonparam: Any | None = None,          # DID^s state-set-specific trends
     honest_did: bool = False,                    # HonestDiD sensitivity on placebos
@@ -299,7 +299,7 @@ est.fit(
 ) -> ChaisemartinDHaultfoeuilleResults
 ```
 
-`L_max` controls multi-horizon computation. `controls`, `trends_linear`, `trends_nonparam`, `honest_did`, `heterogeneity`, `design2`, and `survey_design` are all supported; only `aggregate` still raises `NotImplementedError`.
+`L_max` controls multi-horizon computation. `covariates`, `trends_linear`, `trends_nonparam`, `honest_did`, `heterogeneity`, `design2`, and `survey_design` are all supported; only `aggregate` still raises `NotImplementedError`. The 3.8 names `group=` and `controls=` remain accepted as deprecated aliases (FutureWarning; removed in 4.0).
 
 **Usage:**
 
@@ -313,7 +313,7 @@ data = generate_reversible_did_data(
 
 est = ChaisemartinDHaultfoeuille()
 results = est.fit(
-    data, outcome="outcome", group="group",
+    data, outcome="outcome", unit="group",
     time="period", treatment="treatment",
 )
 results.print_summary()
@@ -325,7 +325,7 @@ print(f"DID_- (leavers):  {results.leavers_att:.3f}")
 print(f"Placebo (DID^pl): {results.placebo_effect:.3f}")
 
 # Multi-horizon event study
-results = est.fit(data, outcome="outcome", group="group",
+results = est.fit(data, outcome="outcome", unit="group",
                   time="period", treatment="treatment", L_max=3)
 for h in sorted(results.event_study_effects):
     e = results.event_study_effects[h]
@@ -340,7 +340,7 @@ df = results.to_dataframe("event_study")  # includes placebos as negative horizo
 from diff_diff import twowayfeweights
 
 diagnostic = twowayfeweights(
-    data, outcome="outcome", group="group", time="period", treatment="treatment",
+    data, outcome="outcome", unit="group", time="period", treatment="treatment",
 )
 print(f"Plain TWFE coefficient: {diagnostic.beta_fe:.3f}")
 print(f"Fraction of negative weights: {diagnostic.fraction_negative:.3f}")
@@ -801,17 +801,18 @@ HeterogeneousAdoptionDiD(
 ```python
 had.fit(
     data: pd.DataFrame,
-    outcome_col: str,
-    dose_col: str,
-    time_col: str,
-    unit_col: str,
-    first_treat_col: str | None = None,        # Required on staggered panels (last-cohort auto-filter trigger)
+    outcome: str,
+    dose: str,
+    time: str,
+    unit: str,
+    first_treat: str | None = None,            # Required on staggered panels (last-cohort auto-filter trigger)
     aggregate: str = "overall",                # "overall" (single scalar WAS) or "event_study" (per-horizon WAS)
     *,
     cband: bool = True,                        # Simultaneous (sup-t) confidence bands on event-study fits that are survey-weighted OR clustered (keyword-only)
     survey_design: SurveyDesign | None = None, # Survey-design kwarg (weights, strata, PSU, FPC) — the sole weighting entry
     trends_lin: bool = False,                  # Eq 17 linear-trend detrending. Requires aggregate="event_study"; needs F>=3 (pre-period depth) for the regression; rejects survey_design= (raises NotImplementedError under trends_lin).
     covariates: Any | None = None,             # NOT IMPLEMENTED — non-None raises NotImplementedError (deferred Appendix B.1 / Theorem 6 covariate-adjusted extension; pre-residualize the outcome on covariates as a workaround)
+    outcome_col: str = ..., dose_col: str = ..., time_col: str = ..., unit_col: str = ..., first_treat_col: str = ...,  # deprecated aliases for the five column params (FutureWarning; removed in 4.0)
 ) -> HeterogeneousAdoptionDiDResults | HeterogeneousAdoptionDiDEventStudyResults
 ```
 
@@ -827,21 +828,21 @@ from diff_diff import HeterogeneousAdoptionDiD, did_had_pretest_workflow
 
 # Vet the testable identifying assumptions on the two-period panel first:
 report = did_had_pretest_workflow(
-    data_2p, outcome_col='y', unit_col='unit', time_col='t',
-    dose_col='d', first_treat_col='first_treat')
+    data_2p, outcome='y', unit='unit', time='t',
+    dose='d', first_treat='first_treat')
 print(report.summary())
 
 # Single-period scalar WAS (aggregate="overall" default) on the two-period panel:
 est = HeterogeneousAdoptionDiD()
-results = est.fit(data_2p, outcome_col='y', unit_col='unit',
-                  time_col='t', dose_col='d',
-                  first_treat_col='first_treat')
+results = est.fit(data_2p, outcome='y', unit='unit',
+                  time='t', dose='d',
+                  first_treat='first_treat')
 print(results.summary())
 
 # Multi-period per-horizon WAS on the multi-period panel:
-es = est.fit(data_mp, outcome_col='y', unit_col='unit',
-             time_col='t', dose_col='d',
-             first_treat_col='first_treat',
+es = est.fit(data_mp, outcome='y', unit='unit',
+             time='t', dose='d',
+             first_treat='first_treat',
              aggregate='event_study')
 ```
 
@@ -851,7 +852,7 @@ es = est.fit(data_mp, outcome_col='y', unit_col='unit',
 
 ### RegressionDiscontinuity
 
-Regression discontinuity estimator - sharp and fuzzy, with optional covariate adjustment (Calonico, Cattaneo & Titiunik 2014; covariates per Calonico, Cattaneo, Farrell & Titiunik 2019), parity-targeting R rdrobust 4.0.0. SHARP (default): treatment is assigned by a known threshold of an observed running variable (`running >= cutoff`; units exactly at the cutoff are treated); no treatment column. FUZZY: pass the OBSERVED take-up column via `fit(..., treatment_col=...)` (R's `fuzzy=`) - the estimand becomes the local Wald ratio (complier LATE at the cutoff for BINARY take-up under monotonicity; ratio-of-jumps otherwise - the `estimand` field says which) with a linearized bias correction, and the results gain a full `first_stage*` three-row block. Point estimation via kernel-weighted local polynomials on each side; data-driven MSE/CER-optimal bandwidths (all 10 rdrobust selectors; fuzzy selects on the ratio objective by default, with a sharp-on-Y switch under one-sided perfect compliance or `sharpbw=True`); robust bias-corrected inference. COVARIATE ADJUSTMENT: pass `fit(..., covariates=[...])` (R's `covs=`) for the CCFT 2019 additive common-coefficient adjustment - the estimand is UNCHANGED (precision only, unlike the DiD estimators' conditional-parallel-trends role); requires covariate BALANCE at the cutoff (testable: fit each covariate as the outcome and inspect its RD p-value); bandwidths are covariate-aware. Cross-sectional - no panel/time dimension.
+Regression discontinuity estimator - sharp and fuzzy, with optional covariate adjustment (Calonico, Cattaneo & Titiunik 2014; covariates per Calonico, Cattaneo, Farrell & Titiunik 2019), parity-targeting R rdrobust 4.0.0. SHARP (default): treatment is assigned by a known threshold of an observed running variable (`running >= cutoff`; units exactly at the cutoff are treated); no treatment column. FUZZY: pass the OBSERVED take-up column via `fit(..., takeup=...)` (R's `fuzzy=`) - the estimand becomes the local Wald ratio (complier LATE at the cutoff for BINARY take-up under monotonicity; ratio-of-jumps otherwise - the `estimand` field says which) with a linearized bias correction, and the results gain a full `first_stage*` three-row block. Point estimation via kernel-weighted local polynomials on each side; data-driven MSE/CER-optimal bandwidths (all 10 rdrobust selectors; fuzzy selects on the ratio objective by default, with a sharp-on-Y switch under one-sided perfect compliance or `sharpbw=True`); robust bias-corrected inference. COVARIATE ADJUSTMENT: pass `fit(..., covariates=[...])` (R's `covs=`) for the CCFT 2019 additive common-coefficient adjustment - the estimand is UNCHANGED (precision only, unlike the DiD estimators' conditional-parallel-trends role); requires covariate BALANCE at the cutoff (testable: fit each covariate as the outcome and inspect its RD p-value); bandwidths are covariate-aware. Cross-sectional - no panel/time dimension.
 
 ```python
 RegressionDiscontinuity(
@@ -882,25 +883,27 @@ RegressionDiscontinuity(
 ```python
 rd.fit(
     data: pd.DataFrame,
-    outcome_col: str,
-    running_col: str,
-    treatment_col: str | None = None,  # None = sharp; a column name = fuzzy (observed take-up; any numeric, typically binary)
+    outcome: str,
+    running: str,
+    takeup: str | None = None,         # None = sharp; a column name = fuzzy (observed take-up; any numeric, typically binary)
     covariates: list[str] | None = None,  # Pre-determined covariate columns (R's covs=); additive common-coefficient adjustment, SAME estimand
 ) -> RegressionDiscontinuityResults
 ```
+
+The 3.8 names `outcome_col=`, `running_col=`, and `treatment_col=` remain accepted as deprecated aliases (FutureWarning; removed in 4.0).
 
 ```python
 from diff_diff import RegressionDiscontinuity
 
 rd = RegressionDiscontinuity(cutoff=0.0)
-results = rd.fit(df, outcome_col="y", running_col="score")
+results = rd.fit(df, outcome="y", running="score")
 results.att        # ROBUST bias-corrected estimate (canonical binding: t_stat == att/se, conf_int centered on att)
 results.att_conventional  # rdrobust's printed headline coefficient (conventional local-polynomial estimate)
 results.conf_int   # robust bias-corrected CI
 results.h_left, results.b_left  # selected bandwidths
 print(results.summary())  # three-row Conventional / Bias-Corrected / Robust table, as in rdrobust
 
-fuzzy = rd.fit(df, "y", "score", treatment_col="takeup")  # fuzzy RD
+fuzzy = rd.fit(df, "y", "score", takeup="takeup")  # fuzzy RD
 fuzzy.att          # linearized bias-corrected local Wald ratio, robust row (complier LATE for binary take-up)
 fuzzy.first_stage  # take-up jump (bias-corrected; full three-row first_stage* mirror available)
 fuzzy.estimand     # "fuzzy (LATE for compliers at the cutoff)" (binary take-up) / "fuzzy (local Wald ratio at the cutoff; non-binary take-up)" / "sharp (ATE at the cutoff)"
@@ -960,17 +963,19 @@ RDPlot(
 ```python
 rp.fit(
     data: pd.DataFrame,
-    outcome_col: str,
-    running_col: str,
+    outcome: str,
+    running: str,
     covariates: list[str] | None = None,  # Covariate-adjusted plot (R's covs=, covs_eval="mean"); gammas exposed as covariate_coefficients
 ) -> RDPlotResult
 ```
+
+The 3.8 names `outcome_col=` and `running_col=` remain accepted as deprecated aliases (FutureWarning; removed in 4.0).
 
 ```python
 from diff_diff import RDPlot
 
 rp = RDPlot(cutoff=0.0)
-res = rp.fit(df, outcome_col="y", running_col="score")
+res = rp.fit(df, outcome="y", running="score")
 res.J, res.J_IMSE, res.J_MV     # selected / IMSE-optimal / mimicking-variance bins per side
 res.rscale                       # implied scale; WIMSE weights via res.wimse_variance_weight / res.wimse_bias_weight
 res.to_dataframe()               # vars_bins: R-named per-bin columns (rdplot_mean_bin/mean_x/mean_y/min_bin/max_bin/se_y/N/ci_l/ci_r)
@@ -1408,12 +1413,14 @@ etwfe.fit(
     outcome: str,
     unit: str,
     time: str,
-    cohort: str,                    # First treatment period (0 or NaN = never treated)
+    first_treat: str,               # First treatment period (0 or NaN = never treated)
     exovar: list[str] | None = None,  # Time-invariant covariates (no interaction/demeaning)
     xtvar: list[str] | None = None,   # Time-varying covariates (demeaned within cohort*period)
     xgvar: list[str] | None = None,   # Covariates interacted with each cohort indicator
 ) -> WooldridgeDiDResults
 ```
+
+The 3.8 name `cohort=` remains accepted as a deprecated alias for `first_treat=` (FutureWarning; removed in 4.0).
 
 **Aggregation types:**
 
@@ -1434,16 +1441,16 @@ from diff_diff import WooldridgeDiD
 # level) parallel trends, and less biased/more precise in Wooldridge (2023) sims;
 # a different identifying assumption, so a recommended comparison not a free switch.
 etwfe = WooldridgeDiD(method='ols')
-results = etwfe.fit(data, outcome='y', unit='id', time='t', cohort='first_treat')
+results = etwfe.fit(data, outcome='y', unit='id', time='t', first_treat='first_treat')
 print(results.aggregate("simple"))
 
 # Logit (binary outcomes)
 etwfe_logit = WooldridgeDiD(method='logit')
-results = etwfe_logit.fit(data, outcome='y_bin', unit='id', time='t', cohort='first_treat')
+results = etwfe_logit.fit(data, outcome='y_bin', unit='id', time='t', first_treat='first_treat')
 
 # Poisson (count outcomes)
 etwfe_pois = WooldridgeDiD(method='poisson')
-results = etwfe_pois.fit(data, outcome='y_count', unit='id', time='t', cohort='first_treat')
+results = etwfe_pois.fit(data, outcome='y_count', unit='id', time='t', first_treat='first_treat')
 ```
 
 ### Convenience Functions
@@ -2005,8 +2012,8 @@ from diff_diff import (
 #   aggregate="event_study"  -> steps 1 + 2 + 3 (QUG + joint Stute pre-trends +
 #                               joint homogeneity-linearity Stute) on multi-period panels.
 report = did_had_pretest_workflow(
-    data, outcome_col='y', unit_col='unit', time_col='t',
-    dose_col='d', first_treat_col='first_treat',
+    data, outcome='y', unit='unit', time='t',
+    dose='d', first_treat='first_treat',
     aggregate='overall',
     survey_design=None)   # SurveyDesign for survey-aware pretests (Phase 4.5 C)
 print(report.summary())

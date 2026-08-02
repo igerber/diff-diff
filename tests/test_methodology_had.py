@@ -171,10 +171,10 @@ def _fit_overall(panel: pd.DataFrame, **kwargs) -> HeterogeneousAdoptionDiDResul
         )
         result = est.fit(
             panel,
-            outcome_col="outcome",
-            dose_col="dose",
-            time_col="period",
-            unit_col="unit",
+            outcome="outcome",
+            dose="dose",
+            time="period",
+            unit="unit",
         )
     assert isinstance(result, HeterogeneousAdoptionDiDResults)
     return result
@@ -422,10 +422,10 @@ class TestHADTheorem3MassPoint:
         with pytest.raises(ValueError, match=r"(mass[_-]point|d_lower|modal)"):
             est.fit(
                 panel,
-                outcome_col="outcome",
-                dose_col="dose",
-                time_col="period",
-                unit_col="unit",
+                outcome="outcome",
+                dose="dose",
+                time="period",
+                unit="unit",
             )
 
     def test_mass_point_n_at_d_lower_and_above_populated(self) -> None:
@@ -824,10 +824,10 @@ class TestHADJointStute:
         )
         res = joint_pretrends_test(
             data=panel,
-            outcome_col="outcome",
-            dose_col="dose",
-            time_col="period",
-            unit_col="unit",
+            outcome="outcome",
+            dose="dose",
+            time="period",
+            unit="unit",
             pre_periods=[1, 2],
             base_period=3,
             n_bootstrap=199,
@@ -852,10 +852,10 @@ class TestHADJointStute:
         )
         res = joint_homogeneity_test(
             data=panel,
-            outcome_col="outcome",
-            dose_col="dose",
-            time_col="period",
-            unit_col="unit",
+            outcome="outcome",
+            dose="dose",
+            time="period",
+            unit="unit",
             post_periods=[4, 5],
             base_period=3,
             n_bootstrap=199,
@@ -879,10 +879,10 @@ class TestHADJointStute:
         )
         res = joint_homogeneity_test(
             data=panel,
-            outcome_col="outcome",
-            dose_col="dose",
-            time_col="period",
-            unit_col="unit",
+            outcome="outcome",
+            dose="dose",
+            time="period",
+            unit="unit",
             post_periods=[4, 5],
             base_period=3,
             n_bootstrap=199,
@@ -906,10 +906,10 @@ class TestHADJointStute:
         with pytest.raises(ValueError, match=r"n_bootstrap.*99"):
             joint_pretrends_test(
                 data=panel,
-                outcome_col="outcome",
-                dose_col="dose",
-                time_col="period",
-                unit_col="unit",
+                outcome="outcome",
+                dose="dose",
+                time="period",
+                unit="unit",
                 pre_periods=[1, 2],
                 base_period=3,
                 n_bootstrap=49,
@@ -929,10 +929,10 @@ class TestHADJointStute:
         )
         res = joint_pretrends_test(
             data=panel,
-            outcome_col="outcome",
-            dose_col="dose",
-            time_col="period",
-            unit_col="unit",
+            outcome="outcome",
+            dose="dose",
+            time="period",
+            unit="unit",
             pre_periods=[1, 2],
             base_period=3,
             n_bootstrap=199,
@@ -1049,10 +1049,10 @@ class TestHADDeviations:
             warnings.filterwarnings("ignore", category=DeprecationWarning)
             result = est.fit(
                 panel,
-                outcome_col="outcome",
-                dose_col="dose",
-                time_col="period",
-                unit_col="unit",
+                outcome="outcome",
+                dose="dose",
+                time="period",
+                unit="unit",
                 aggregate="event_study",
                 survey_design=SurveyDesign(weights="w"),
                 cband=False,
@@ -1076,10 +1076,10 @@ class TestHADDeviations:
                 warnings.filterwarnings("ignore", category=DeprecationWarning)
                 _ = est.fit(
                     panel,
-                    outcome_col="outcome",
-                    dose_col="dose",
-                    time_col="period",
-                    unit_col="unit",
+                    outcome="outcome",
+                    dose="dose",
+                    time="period",
+                    unit="unit",
                     aggregate="overall",
                     survey_design=SurveyDesign(weights="w"),
                     cband=True,  # request cband on overall — should be ignored
@@ -1118,15 +1118,15 @@ class TestHADDeviations:
         with pytest.raises(ValueError, match=r"(staggered|cohort|first_treat_col|HAD)"):
             est.fit(
                 panel,
-                outcome_col="outcome",
-                dose_col="dose",
-                time_col="period",
-                unit_col="unit",
+                outcome="outcome",
+                dose="dose",
+                time="period",
+                unit="unit",
                 aggregate="event_study",
             )
 
     def test_first_treat_col_activates_last_cohort_auto_filter(self) -> None:
-        """``first_treat_col=`` activates last-cohort + never-treated auto-filter."""
+        """``first_treat=`` activates last-cohort + never-treated auto-filter."""
         rng = np.random.default_rng(_BASE_SEED_DEVIATIONS + 4)
         # G large enough that the surviving (last-cohort + never-treated)
         # subset of ~2/3 of G has enough distinct dose values for the
@@ -1163,11 +1163,11 @@ class TestHADDeviations:
             warnings.filterwarnings("ignore", category=UserWarning)
             result = est.fit(
                 panel,
-                outcome_col="outcome",
-                dose_col="dose",
-                time_col="period",
-                unit_col="unit",
-                first_treat_col="first_treat",
+                outcome="outcome",
+                dose="dose",
+                time="period",
+                unit="unit",
+                first_treat="first_treat",
                 aggregate="event_study",
             )
         # Should produce a valid event-study result (no raise).
@@ -1212,10 +1212,10 @@ class TestHADDeviations:
         with pytest.warns(UserWarning, match=r"Assumption [56]"):
             est.fit(
                 panel,
-                outcome_col="outcome",
-                dose_col="dose",
-                time_col="period",
-                unit_col="unit",
+                outcome="outcome",
+                dose="dose",
+                time="period",
+                unit="unit",
             )
 
     def test_safe_inference_no_partial_nan_on_degenerate_panel(self) -> None:

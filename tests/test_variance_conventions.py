@@ -239,7 +239,7 @@ ROWS = [
     dict(
         key="wooldridge_hc1_within",
         fit=lambda df: diff_diff.WooldridgeDiD(method="ols").fit(
-            df, outcome="y", unit="unit", time="time", cohort="first_treat"
+            df, outcome="y", unit="unit", time="time", first_treat="first_treat"
         ),
         cr1_k=(15,),
         tail_df=(286.0,) * 10,

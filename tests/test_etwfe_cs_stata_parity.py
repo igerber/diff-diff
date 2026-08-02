@@ -102,7 +102,7 @@ def fits():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         etwfe = WooldridgeDiD(method="ols", control_group="not_yet_treated").fit(
-            df, outcome="lemp", unit="countyreal", time="year", cohort="first_treat"
+            df, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
         )
         cs = CallawaySantAnna(control_group="not_yet_treated").fit(
             df, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
@@ -158,7 +158,7 @@ def never_fit():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         return WooldridgeDiD(method="ols", control_group="never_treated").fit(
-            _panel(), outcome="lemp", unit="countyreal", time="year", cohort="first_treat"
+            _panel(), outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
         )
 
 
@@ -202,7 +202,7 @@ class TestNeverTreatedVsStataJwdid:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             WooldridgeDiD(method="ols", control_group="never_treated").fit(
-                _panel(), outcome="lemp", unit="countyreal", time="year", cohort="first_treat"
+                _panel(), outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
             )
         rank = [w for w in caught if "Rank-deficient" in str(w.message)]
         assert rank == [], f"unexpected rank deficiency: {[str(w.message)[:120] for w in rank]}"
@@ -359,7 +359,7 @@ def alltreated_fit():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         return WooldridgeDiD(method="ols", control_group="not_yet_treated").fit(
-            sub, outcome="lemp", unit="countyreal", time="year", cohort="first_treat"
+            sub, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
         )
 
 
@@ -479,7 +479,7 @@ class TestSubsampleLadderVsStataJwdid:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             fit = WooldridgeDiD(method="ols", control_group="not_yet_treated").fit(
-                sub, outcome="lemp", unit="countyreal", time="year", cohort="first_treat"
+                sub, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
             )
         stata = _stata_jwdid_cells({"rung": rung["cells"]}, "rung")
         assert len(stata) == 7, f"expected 7 cells at G={rung['G']}, got {len(stata)}"
