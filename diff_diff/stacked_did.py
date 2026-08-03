@@ -648,39 +648,6 @@ class StackedDiD(BaseEstimator):
         et_vals = stacked_df["_event_time"].values
         d_vals = stacked_df["_D_sa"].values
 
-        # ---- Reference-support guard (row M-024 follow-up) ----
-        # The omitted reference event time e = -1 - anticipation is the
-        # regression's baseline category: every reported delta_h (and the
-        # synthesized reference row, and the container's
-        # reference_event_times / base_period="universal" provenance) is
-        # defined relative to its cells. On a gapped panel where NO
-        # retained sub-experiment observes that calendar period, the ref
-        # cell is empty, the design goes rank-deficient, and QR pivoting
-        # silently re-normalizes against an arbitrary surviving column -
-        # the surface would then certify a delta_0 = 0 normalization that
-        # never happened (and HonestDiD / PreTrendsPower would trust it).
-        # Both cells are required: without TREATED ref rows, D_sa is
-        # collinear with the delta block (same silent re-normalization);
-        # without CONTROL ref rows, the baseline time profile is. Fail
-        # closed - a fabricated reference must never reach consumers.
-        _ref_mask = et_vals == ref_period
-        if not np.any(_ref_mask & (d_vals == 1)) or not np.any(_ref_mask & (d_vals == 0)):
-            _missing_cell = "treated" if not np.any(_ref_mask & (d_vals == 1)) else "control"
-            raise ValueError(
-                f"The omitted reference event time e={ref_period} has no "
-                f"{_missing_cell} observations in the stacked data, so the "
-                "event-study normalization (delta_0 = 0 at the reference) "
-                "would be fabricated: the regression's baseline cell is "
-                "empty and rank handling would silently re-normalize "
-                "against an arbitrary horizon. This happens on gapped "
-                "panels where every retained cohort's calendar period "
-                "a - 1 - anticipation is absent (the IC1 window check "
-                "only inspects the panel's min/max periods, not interior "
-                "gaps). Fill the gap, adjust anticipation/kappa_pre so "
-                "the reference falls on an observed period, or drop the "
-                "affected cohorts."
-            )
-
         # Build design matrix
         X = np.zeros((n, 2 + 2 * n_event_dummies))
         X[:, 0] = 1.0  # intercept
@@ -713,6 +680,51 @@ class StackedDiD(BaseEstimator):
             composed_weights = composed_weights * (n_stacked / np.sum(composed_weights))
         else:
             composed_weights = Q_weights
+
+        # ---- Reference-support guard (row M-024 follow-up, CI R1+R2) ----
+        # The omitted reference event time e = -1 - anticipation is the
+        # regression's baseline category: every reported delta_h (and the
+        # synthesized reference row, and the container's
+        # reference_event_times / base_period="universal" provenance) is
+        # defined relative to its cells. Equation 3 is a Q-WEIGHTED WLS,
+        # so the check runs on the COMPOSED weights, not raw row
+        # presence: a cell whose rows all carry zero effective weight
+        # (aggregate Q-weights zero a sub-experiment's controls at any
+        # event time where that sub-experiment has no treated rows;
+        # survey pweights can zero a cell outright) is as empty as a
+        # missing one. An effectively-empty cell makes the design
+        # rank-deficient and QR pivoting silently re-normalizes against
+        # an arbitrary surviving column - the surface would then certify
+        # a delta_0 = 0 normalization that never happened (and
+        # HonestDiD / PreTrendsPower would trust it). Both cells are
+        # load-bearing: without effective TREATED ref weight, D_sa is
+        # collinear with the delta block; without effective CONTROL ref
+        # weight, the baseline time profile is. Fail closed - a
+        # fabricated reference must never reach consumers.
+        _ref_mask = et_vals == ref_period
+        _w_arr = np.asarray(composed_weights, dtype=float)
+        _treated_ref_w = float(np.sum(_w_arr[_ref_mask & (d_vals == 1)]))
+        _control_ref_w = float(np.sum(_w_arr[_ref_mask & (d_vals == 0)]))
+        if not (_treated_ref_w > 0) or not (_control_ref_w > 0):
+            _missing_cell = "treated" if not (_treated_ref_w > 0) else "control"
+            raise ValueError(
+                f"The omitted reference event time e={ref_period} has no "
+                f"{_missing_cell} observations with positive weight in the "
+                "stacked WLS, so the event-study normalization "
+                "(delta_0 = 0 at the reference) would be fabricated: the "
+                "regression's effective baseline cell is empty and rank "
+                "handling would silently re-normalize against an "
+                "arbitrary horizon. Causes: a gapped panel where every "
+                "retained cohort's calendar period a - 1 - anticipation "
+                "is absent (the IC1 window check only inspects the "
+                "panel's min/max periods, not interior gaps); ragged "
+                "panels where the only reference-period control rows sit "
+                "in sub-experiments without treated reference rows "
+                "(aggregate Q-weights zero those controls); or survey "
+                "weights that zero out a reference cell. Fill the gap, "
+                "adjust anticipation/kappa_pre so the reference falls on "
+                "an observed period, or drop the affected cohorts."
+            )
 
         Y = stacked_df[outcome].values
 

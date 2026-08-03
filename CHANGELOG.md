@@ -62,10 +62,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     its FLCI CI endpoints are NaN). The seven producer-derived guard
     messages in both container branches now derive the producer from
     `surface.source` with producer-conditional remedies. A new
-    reference-support guard fails `fit()` closed when the omitted
-    reference cell has no treated or control rows stack-wide (gapped
-    panel at every cohort's `a - 1 - anticipation`) - previously this
-    rank-dropped and silently re-normalized while the surface
+    reference-support guard fails `fit()` closed when either omitted-
+    reference cell (treated / control) carries no positive COMPOSED
+    WLS weight - raw row presence is not support in a Q-weighted
+    regression: gapped panels empty the cell outright, aggregate
+    Q-weights zero a sub-experiment's controls wherever it has no
+    treated rows, and survey pweights can zero a cell. Previously
+    these rank-dropped and silently re-normalized while the surface
     certified a `delta_0 = 0` reference that never existed.
   - Cross-producer container hardening: `EventStudyResults`'s
     `__post_init__` now COPIES `vcov`/`vcov_index` like every other

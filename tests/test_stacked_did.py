@@ -2182,3 +2182,82 @@ class TestReferenceSupportGuard:
         surf = res.aggregate("event_study")
         assert surf.reference_event_times == (-1,)
         assert np.isfinite(res.overall_att)
+
+
+class TestReferenceSupportGuardEffectiveWeights:
+    """CI review R2: Equation 3 is Q-WEIGHTED WLS, so reference support
+    means positive COMPOSED weight in both baseline cells - raw row
+    presence is not enough."""
+
+    def test_zero_q_weight_control_reference_cell_fails_closed(self):
+        # Raw rows exist in both reference cells, but the only control
+        # rows at e=-1 sit in sub-experiments whose treated rows are
+        # absent at that event time - aggregate Q-weights zero them, the
+        # effective control baseline is empty, and (pre-guard, verified
+        # by execution) the design rank-dropped and re-normalized while
+        # the container still certified reference_event_times=(-1,).
+        rng = np.random.default_rng(3)
+        rows = []
+        for u in range(120):
+            kind = ["treatA", "ctrlX", "treatB", "ctrlY"][u % 4]
+            g = {"treatA": 5, "ctrlX": 0, "treatB": 7, "ctrlY": 0}[kind]
+            for t in range(1, 11):
+                if kind == "ctrlX" and t == 4:
+                    continue  # A's controls gapped at A's ref (cal 4)
+                if kind == "treatB" and t == 6:
+                    continue  # B's treated gapped at B's ref (cal 6)
+                if kind == "ctrlY" and t == 4:
+                    continue  # Y gapped at cal 4 too
+                d = 1 if (g and t >= g) else 0
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "y": u * 0.01 + 0.2 * t + 1.5 * d + rng.normal(0, 0.3),
+                        "first_treat": g,
+                    }
+                )
+        est = StackedDiD(kappa_pre=2, kappa_post=2)
+        with pytest.raises(ValueError, match="positive weight.*fabricated"):
+            est.fit(
+                pd.DataFrame(rows),
+                outcome="y",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+
+    def test_survey_zeroed_reference_cell_fails_closed(self):
+        from diff_diff.survey import SurveyDesign
+
+        rng = np.random.default_rng(3)
+        rows = []
+        for u in range(90):
+            g = [0, 5, 7][u % 3]
+            for t in range(1, 11):
+                d = 1 if (g and t >= g) else 0
+                # controls carry zero pweight at both cohorts' reference
+                # calendar periods -> the control baseline cell has rows
+                # but no effective WLS mass
+                w = 0.0 if (g == 0 and t in (4, 6)) else 1.0
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "y": u * 0.01 + 0.2 * t + 1.5 * d + rng.normal(0, 0.3),
+                        "first_treat": g,
+                        "w": w,
+                    }
+                )
+        est = StackedDiD(kappa_pre=2, kappa_post=2)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            with pytest.raises(ValueError, match="positive weight.*fabricated"):
+                est.fit(
+                    pd.DataFrame(rows),
+                    outcome="y",
+                    unit="unit",
+                    time="time",
+                    first_treat="first_treat",
+                    survey_design=SurveyDesign(weights="w"),
+                )
