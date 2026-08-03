@@ -1106,6 +1106,355 @@ class TestDcdhAggregate:
                 for hook in hooks:
                     assert hook not in fields, f"{name}.{hook} leaked into fields"
                     assert hook not in params, f"{name}.{hook} leaked into __init__"
-        # The roster must at least cover the two shipped mixin adopters.
+        # The roster must at least cover the shipped mixin adopters.
         assert "CallawaySantAnnaResults" in checked
         assert "ChaisemartinDHaultfoeuilleResults" in checked
+        assert "StackedDiDResults" in checked
+
+
+# --------------------------------------------------------------------------- #
+# StackedDiD (row M-024): fit(aggregate=) shim + the VIEW-based aggregate()
+# --------------------------------------------------------------------------- #
+
+STACKED_KW = dict(outcome="outcome", unit="unit", time="period", first_treat="first_treat")
+
+
+def _stacked_panel(seed=42, n_units=120, n_periods=12):
+    from diff_diff.prep_dgp import generate_staggered_data
+
+    return generate_staggered_data(
+        n_units=n_units, n_periods=n_periods, cohort_periods=[4, 6, 8], seed=seed
+    )
+
+
+def _fit_stacked(data, *, est_kw=None, **fit_kw):
+    from diff_diff import StackedDiD
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return StackedDiD(**(est_kw or {"kappa_pre": 2, "kappa_post": 2})).fit(
+            data, **STACKED_KW, **fit_kw
+        )
+
+
+@pytest.fixture(scope="module")
+def stacked_panel():
+    return _stacked_panel()
+
+
+@pytest.fixture(scope="module")
+def stacked_fitted(stacked_panel):
+    """Plain hc1 fit - the surface is always materialized (M-024)."""
+    return _fit_stacked(stacked_panel)
+
+
+class TestStackedShim:
+    def test_plain_fit_does_not_warn(self, stacked_panel):
+        from diff_diff import StackedDiD
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            StackedDiD(kappa_pre=2, kappa_post=2).fit(stacked_panel, **STACKED_KW)
+        assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
+
+    def test_aggregate_kwarg_warns_even_at_none(self, stacked_panel):
+        from diff_diff import StackedDiD
+
+        with pytest.warns(FutureWarning, match=r"fit\(aggregate=\) is deprecated"):
+            StackedDiD(kappa_pre=2, kappa_post=2).fit(stacked_panel, aggregate=None, **STACKED_KW)
+
+    def test_deprecated_value_warns_and_still_works(self, stacked_panel, stacked_fitted):
+        # CS-style warn-and-still-work (the param genuinely worked here,
+        # unlike dCDH's raise): the deprecated path returns an object whose
+        # surface equals a plain fit's - the surface is always computed.
+        from diff_diff import StackedDiD
+
+        with pytest.warns(FutureWarning, match=r"fit\(aggregate=\) is deprecated"):
+            res = StackedDiD(kappa_pre=2, kappa_post=2).fit(
+                stacked_panel, aggregate="event_study", **STACKED_KW
+            )
+        assert res.overall_att == stacked_fitted.overall_att
+        assert res.event_study_effects is not None
+        assert sorted(res.event_study_effects) == sorted(stacked_fitted.event_study_effects)
+        np.testing.assert_array_equal(res.event_study_vcov, stacked_fitted.event_study_vcov)
+
+    def test_wrapper_forwarded_aggregate_warns(self, stacked_panel):
+        # stacked_did() declares aggregate explicitly with its own sentinel
+        # default and forwards verbatim into fit().
+        from diff_diff.stacked_did import stacked_did
+
+        with pytest.warns(FutureWarning, match=r"fit\(aggregate=\) is deprecated"):
+            stacked_did(
+                stacked_panel,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                kappa_pre=2,
+                kappa_post=2,
+                aggregate="simple",
+            )
+
+    def test_plain_wrapper_call_does_not_warn(self, stacked_panel):
+        from diff_diff.stacked_did import stacked_did
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = stacked_did(
+                stacked_panel,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                kappa_pre=2,
+                kappa_post=2,
+            )
+        assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
+        assert res.event_study_effects is not None
+
+    def test_group_warns_then_raises_educational_error(self, stacked_panel):
+        from diff_diff import StackedDiD
+
+        with pytest.warns(FutureWarning, match=r"fit\(aggregate=\) is deprecated"):
+            with pytest.raises(ValueError, match="not supported by StackedDiD"):
+                StackedDiD(kappa_pre=2, kappa_post=2).fit(
+                    stacked_panel, aggregate="group", **STACKED_KW
+                )
+
+
+class TestStackedAggregate:
+    def _assert_surface_matches_builder(self, res):
+        from diff_diff.results_base import build_event_study_surface
+
+        es = res.aggregate("event_study")
+        assert isinstance(es, EventStudyResults)
+        built = build_event_study_surface(res)
+        a, b = es.to_dataframe(), built.to_dataframe()
+        assert list(a.columns) == list(b.columns)
+        assert a.shape == b.shape
+        for col in a.columns:
+            av, bv = a[col].to_numpy(), b[col].to_numpy()
+            if av.dtype.kind in "fc":
+                assert np.allclose(av.astype(float), bv.astype(float), equal_nan=True)
+            else:
+                assert list(av) == list(bv)
+        return es
+
+    def test_event_study_view_matches_builder(self, stacked_fitted):
+        es = self._assert_surface_matches_builder(stacked_fitted)
+        # kappa 2/2 grid: {-2, ref -1, 0, 1, 2}; n_kind from n_obs cells.
+        assert sorted(es.event_time.tolist()) == [-2, -1, 0, 1, 2]
+        assert es.n_kind == "obs"
+        assert es.base_period == "universal"
+        assert es.reference_event_times == (-1,)
+
+    def test_event_study_view_does_not_alias_fit_vcov(self, stacked_fitted):
+        es = stacked_fitted.aggregate("event_study")
+        assert not np.shares_memory(es.vcov, stacked_fitted.event_study_vcov)
+        # int labels survive to_dict (no float coercion of the index)
+        assert es.to_dict()["vcov_index"] == [-2, 0, 1, 2]
+
+    def test_simple_bit_exact_relay_hc1(self, stacked_fitted):
+        agg = stacked_fitted.aggregate("simple")
+        assert isinstance(agg, AggregationResult)
+        assert agg.level == "simple"
+        assert list(agg.label) == ["overall"]
+        # target is "att": overall_att is the equally-weighted post-period
+        # average, NOT the per-event trimmed aggregate ATT (M-024 Note).
+        assert list(agg.target) == ["att"]
+        assert float(agg.att[0]) == stacked_fitted.overall_att
+        assert float(agg.se[0]) == stacked_fitted.overall_se
+        assert float(agg.t_stat[0]) == stacked_fitted.overall_t_stat
+        assert float(agg.p_value[0]) == stacked_fitted.overall_p_value
+        assert (float(agg.conf_int_lower[0]), float(agg.conf_int_upper[0])) == tuple(
+            stacked_fitted.overall_conf_int
+        )
+        # Treated-unit count: control units OVERLAP treated across
+        # sub-experiments, so no disjoint total exists (M-024 Note).
+        assert float(agg.n[0]) == float(stacked_fitted.n_treated_units)
+        assert agg.n_kind == "units"
+        assert float(agg.df[0]) == float(stacked_fitted.inference_df)
+        assert agg.estimator == "StackedDiD"
+
+    @pytest.mark.parametrize("weighting", ["aggregate", "population", "sample_share"])
+    def test_simple_target_att_on_all_weighting_schemes(self, stacked_panel, weighting):
+        fit_kw = {}
+        panel = stacked_panel
+        if weighting == "population":
+            panel = stacked_panel.copy()
+            panel["pop"] = 100.0 + (panel["unit"] % 7)
+            fit_kw["population"] = "pop"
+        res = _fit_stacked(
+            panel,
+            est_kw={"kappa_pre": 2, "kappa_post": 2, "weighting": weighting},
+            **fit_kw,
+        )
+        agg = res.aggregate("simple")
+        assert list(agg.target) == ["att"]
+        assert agg.n_kind == "units"
+
+    def test_simple_relay_hc2_bm_df_is_overall_bm_dof(self, stacked_panel):
+        res = _fit_stacked(
+            stacked_panel,
+            est_kw={
+                "kappa_pre": 2,
+                "kappa_post": 2,
+                "vcov_type": "hc2_bm",
+                "cluster": "unit",
+            },
+        )
+        agg = res.aggregate("simple")
+        assert np.isfinite(agg.df[0])
+        assert float(agg.df[0]) == float(res.inference_df)
+        # per-row BM dfs are present WITHOUT fit-time aggregate (M-024)
+        assert res.event_study_df is not None
+        assert all(np.isfinite(v) for v in res.event_study_df.values())
+
+    def test_simple_relay_bm_failure_nan_inference(self, stacked_panel, monkeypatch):
+        # The hc2_bm fail-closed state (finite att/se, jointly-NaN t/p/CI,
+        # inference_df None) must RELAY through the simple view - the df
+        # comparison is np.isnan, never df == inference_df (nan == None).
+        import diff_diff.linalg as dl
+
+        def _nan_dof(X, cluster_ids, bread_matrix, contrasts, weights=None):
+            return np.full(contrasts.shape[1], np.nan)
+
+        monkeypatch.setattr(dl, "_compute_cr2_bm_contrast_dof", _nan_dof)
+        res = _fit_stacked(
+            stacked_panel,
+            est_kw={
+                "kappa_pre": 2,
+                "kappa_post": 2,
+                "vcov_type": "hc2_bm",
+                "cluster": "unit",
+            },
+        )
+        assert res.inference_df is None
+        agg = res.aggregate("simple")
+        assert np.isfinite(agg.att[0]) and np.isfinite(agg.se[0])
+        assert np.isnan(agg.t_stat[0])
+        assert np.isnan(agg.p_value[0])
+        assert np.isnan(agg.conf_int_lower[0]) and np.isnan(agg.conf_int_upper[0])
+        assert np.isnan(agg.df[0])
+
+    def test_simple_relay_survey_tsl_df(self, stacked_panel):
+        from diff_diff.survey import SurveyDesign
+
+        panel = stacked_panel.copy()
+        panel["w"] = 1.0 + 0.1 * (panel["unit"] % 5)
+        panel["strata"] = panel["unit"] % 4
+        panel["psu"] = panel["unit"]
+        res = _fit_stacked(
+            panel,
+            survey_design=SurveyDesign(weights="w", strata="strata", psu="psu"),
+        )
+        agg = res.aggregate("simple")
+        assert float(agg.att[0]) == res.overall_att
+        # The stored overall inference used the survey df; the relay
+        # carries exactly that provenance.
+        assert float(agg.df[0]) == float(res.inference_df)
+
+    def test_bm_dof_batch_parity_and_overall_reconstruction(self, stacked_panel, monkeypatch):
+        # Pin (a): per-contrast Satterthwaite dof is column-independent in
+        # VALUE on a well-conditioned design - the m=1 evaluation of each
+        # contrast equals its column in the batched call (the batch-relative
+        # noise floor changes only the DEGENERACY GUARD's scale, documented
+        # in the REGISTRY M-024 Note).
+        # Pin (b): the pre-change PLAIN-fit overall inference (m=1 batch) is
+        # reconstructed in-process from the spy-captured fit-time locals and
+        # must match the post-change stored overall inference at 1e-14.
+        import diff_diff.linalg as dl
+        from diff_diff.utils import safe_inference
+
+        real = dl._compute_cr2_bm_contrast_dof
+        captured = {}
+
+        def spy(X, cluster_ids, bread_matrix, contrasts, weights=None):
+            captured.update(
+                X=X,
+                cluster_ids=cluster_ids,
+                bread=bread_matrix,
+                contrasts=contrasts,
+                weights=weights,
+            )
+            return real(X, cluster_ids, bread_matrix, contrasts, weights=weights)
+
+        monkeypatch.setattr(dl, "_compute_cr2_bm_contrast_dof", spy)
+        res = _fit_stacked(
+            stacked_panel,
+            est_kw={
+                "kappa_pre": 2,
+                "kappa_post": 2,
+                "vcov_type": "hc2_bm",
+                "cluster": "unit",
+            },
+        )
+        assert captured, "spy never fired"
+        contrasts = captured["contrasts"]
+        batched = real(
+            captured["X"],
+            captured["cluster_ids"],
+            captured["bread"],
+            contrasts,
+            weights=captured["weights"],
+        )
+        for j in range(contrasts.shape[1]):
+            single = real(
+                captured["X"],
+                captured["cluster_ids"],
+                captured["bread"],
+                contrasts[:, [j]],
+                weights=captured["weights"],
+            )
+            np.testing.assert_allclose(single[0], batched[j], rtol=1e-14)
+        # (b) overall contrast is appended LAST at the fit site; its m=1
+        # dof + safe_inference reproduce the stored overall inference.
+        overall_dof_m1 = float(
+            real(
+                captured["X"],
+                captured["cluster_ids"],
+                captured["bread"],
+                contrasts[:, [-1]],
+                weights=captured["weights"],
+            )[0]
+        )
+        np.testing.assert_allclose(res.inference_df, overall_dof_m1, rtol=1e-14)
+        t, p, ci = safe_inference(
+            res.overall_att, res.overall_se, alpha=res.alpha, df=overall_dof_m1
+        )
+        np.testing.assert_allclose(
+            [t, p, ci[0], ci[1]],
+            [
+                res.overall_t_stat,
+                res.overall_p_value,
+                res.overall_conf_int[0],
+                res.overall_conf_int[1],
+            ],
+            rtol=1e-14,
+        )
+
+    def test_legacy_pickle_absent_surface_hint(self, stacked_fitted):
+        import dataclasses
+
+        legacy = dataclasses.replace(
+            stacked_fitted,
+            event_study_effects=None,
+            event_study_vcov=None,
+            event_study_vcov_index=None,
+            event_study_df=None,
+        )
+        with pytest.raises(ValueError, match=r"diff-diff >= 3\.9"):
+            legacy.aggregate("event_study")
+
+    def test_balance_e_rejected_empty_vocabulary(self, stacked_fitted):
+        with pytest.raises(ValueError, match="no aggregation type on this estimator"):
+            stacked_fitted.aggregate("event_study", balance_e=1)
+
+    def test_weights_rejected(self, stacked_fitted):
+        with pytest.raises(ValueError, match="does not accept a weights selector"):
+            stacked_fitted.aggregate("simple", weights="cell")
+
+    @pytest.mark.parametrize("bad", ["group", "calendar", "all", "nonsense"])
+    def test_unsupported_types_fail_closed(self, stacked_fitted, bad):
+        with pytest.raises(ValueError, match="Unsupported aggregation type"):
+            stacked_fitted.aggregate(bad)

@@ -217,7 +217,6 @@ class TestSurveyEstimatorValidation:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
             survey_design=sd,
         )
 

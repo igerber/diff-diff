@@ -353,7 +353,6 @@ def surfaces():
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         out["StackedDiD"] = (st, build_event_study_surface(st))
 
@@ -1366,7 +1365,6 @@ def test_stacked_hc2_bm_per_row_df():
         unit="unit",
         time="time",
         first_treat="first_treat",
-        aggregate="event_study",
     )
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -1409,7 +1407,6 @@ def test_stacked_survey_df_broadcast():
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
             survey_design=design,
         )
     assert res.survey_metadata is not None and res.survey_metadata.df_survey is not None
@@ -1481,7 +1478,6 @@ def test_stacked_replicate_weight_vcov_diag_matches_ses():
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
             survey_design=design,
         )
     assert res.event_study_vcov is not None

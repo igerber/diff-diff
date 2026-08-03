@@ -436,8 +436,17 @@ class EventStudyResults(BaseResults):
                 "(explicit ordering) or neither."
             )
         if self.vcov is not None:
-            self.vcov = np.asarray(self.vcov, dtype=float)
-            self.vcov_index = np.asarray(self.vcov_index)
+            # COPY, not asarray (matching the _ARRAY_FIELDS convention
+            # above): np.asarray is a no-op view when the dtype already
+            # matches, which would alias the PRODUCER's stored matrix -
+            # e.g. StackedDiDResults.event_study_vcov reaches this
+            # constructor unmodified via the post-fit aggregate() view
+            # (row M-024), and a caller mutating the container would
+            # silently corrupt the fitted result. vcov_index keeps its
+            # native dtype (int labels must not become floats in
+            # to_dict()) but is copied for the same isolation.
+            self.vcov = np.array(self.vcov, dtype=float)
+            self.vcov_index = np.array(self.vcov_index)
             k = self.vcov_index.shape[0]
             if self.vcov.shape != (k, k):
                 raise ValueError(
@@ -606,7 +615,9 @@ _ABSENT_SURFACE_HINTS: Dict[str, str] = {
     "CallawaySantAnnaResults": "call results.aggregate('event_study')",
     "ImputationDiDResults": "refit with aggregate='event_study' (or 'all')",
     "TwoStageDiDResults": "refit with aggregate='event_study' (or 'all')",
-    "StackedDiDResults": "refit with aggregate='event_study'",
+    # Absence only possible on pre-3.9 pickles: 3.9+ fits always
+    # materialize the surface (row M-024).
+    "StackedDiDResults": "re-fit with diff-diff >= 3.9, which always computes the surface",
     "StaggeredTripleDiffResults": "refit with aggregate='event_study' (or 'all')",
     "EfficientDiDResults": "refit with aggregate='event_study' (or 'all')",
     "ContinuousDiDResults": "refit with aggregate='eventstudy' (or 'all')",

@@ -771,6 +771,20 @@ class DiagnosticReport:
                             "SpilloverDiD(..., event_study=True) to populate the "
                             "per-event-time direct-effect output."
                         )
+                    # StackedDiD (3.9, row M-024): the event-study surface
+                    # is ALWAYS computed, so ``aggregate='event_study'`` is
+                    # inert (and deprecated - it now warns). Zero estimated
+                    # pre-periods here means the event window has none:
+                    # the default ``kappa_pre=1`` grid minus the reference
+                    # leaves no pre-period columns. Estimator-accurate
+                    # remediation, per the SpilloverDiD precedent above.
+                    if name == "StackedDiDResults":
+                        return (
+                            "No pre-period event-study coefficients exist on "
+                            "this fit: the event window has no estimated "
+                            "pre-periods. Re-fit with kappa_pre >= 2 so "
+                            "pre-treatment event-study coefficients exist."
+                        )
                     return (
                         "No pre-period event-study coefficients are exposed on "
                         "this fit. For staggered estimators, re-fit with "
@@ -1774,8 +1788,10 @@ class DiagnosticReport:
           ``event_study_vcov is None`` (bootstrap or replicate-weight
           CS / SA / TwoStageDiD fits, plus ImputationDiD / EfficientDiD /
           etc. which don't yet expose ``event_study_vcov``; StackedDiD
-          persists its VCV in every inference mode, so it reaches this
-          fallback only when no event study was requested);
+          persists its VCV in every inference mode and, since 3.9
+          (row M-024), always materializes the event-study surface, so
+          post-3.9 StackedDiD fits never reach this fallback - only
+          pre-3.9 pickles can);
           OR ``MultiPeriodDiDResults`` without ``interaction_indices``
           (genuine diag-only path inside ``pretrends.py:_extract_pre_period_params``,
           no "available but unused" concern, so no downgrade applies).

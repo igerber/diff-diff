@@ -1047,8 +1047,10 @@ class PreTrendsPower(BaseEstimator):
         results : MultiPeriodDiDResults, CallawaySantAnnaResults, SunAbrahamResults, or EventStudyResults
             Results object from event study estimation, or the unified
             event-study container from
-            ``CallawaySantAnnaResults.aggregate('event_study')``
-            (CS-sourced containers only).
+            ``CallawaySantAnnaResults.aggregate('event_study')`` or
+            ``StackedDiDResults.aggregate('event_study')`` (CS- and
+            Stacked-sourced containers only; Stacked containers require
+            ``kappa_pre >= 2`` so estimated pre-periods exist).
         pre_periods : list of int, optional
             Explicit list of pre-treatment periods. If None, uses results.pre_periods.
 
@@ -1071,8 +1073,11 @@ class PreTrendsPower(BaseEstimator):
 
             - ``"full_pre_period_vcov"`` when a full pre-period
               covariance sub-block was used (MPD with
-              ``interaction_indices``, or CS/SA with populated
-              ``event_study_vcov``).
+              ``interaction_indices``, CS/SA with populated
+              ``event_study_vcov``, or an admitted CS-/Stacked-sourced
+              container carrying ``vcov`` - StackedDiD persists its
+              event-study VCV in every inference mode, so Stacked
+              containers always take this tier).
             - ``"diag_fallback"`` when only the per-period standard
               errors were available (bootstrap / replicate-weight CS or
               SA fits, MPD without ``interaction_indices``).
@@ -1407,7 +1412,8 @@ class PreTrendsPower(BaseEstimator):
             f"Unsupported results type: {type(results)}. "
             "Expected MultiPeriodDiDResults, CallawaySantAnnaResults, "
             "SunAbrahamResults, or an EventStudyResults container from "
-            "CallawaySantAnnaResults.aggregate('event_study')."
+            "CallawaySantAnnaResults.aggregate('event_study') or "
+            "StackedDiDResults.aggregate('event_study')."
         )
 
     def _extract_container_pre_period_params(
@@ -1418,7 +1424,10 @@ class PreTrendsPower(BaseEstimator):
         """Container branch of ``_extract_pre_period_params``.
 
         Consumes the unified ``EventStudyResults`` surface produced by
-        ``CallawaySantAnnaResults.aggregate('event_study')``. Admission is
+        ``CallawaySantAnnaResults.aggregate('event_study')`` or
+        ``StackedDiDResults.aggregate('event_study')`` (row M-024;
+        Stacked containers require ``kappa_pre >= 2`` so estimated
+        pre-periods exist). Admission is
         SOURCE-SCOPED: containers from other producers are rejected rather
         than silently admitted - widening is a per-estimator methodology
         decision in each estimator's own ``aggregate()`` migration (row
@@ -1427,10 +1436,11 @@ class PreTrendsPower(BaseEstimator):
         from pre-trend coefficients, and PreTrendsPower has no native dCDH
         branch either.
         """
-        if surface.source != "CallawaySantAnnaResults":
+        if surface.source not in ("CallawaySantAnnaResults", "StackedDiDResults"):
             raise TypeError(
                 "PreTrendsPower accepts EventStudyResults containers "
                 "produced by CallawaySantAnnaResults.aggregate("
+                "'event_study') or StackedDiDResults.aggregate("
                 "'event_study') only "
                 f"(got source={surface.source!r}). For other estimators "
                 "pass the native results object where supported "
@@ -1438,6 +1448,7 @@ class PreTrendsPower(BaseEstimator):
                 "SunAbrahamResults); container admission for further "
                 "producers arrives with their own aggregate() migrations."
             )
+        _producer = surface.source.replace("Results", "")
         if surface.time_scale != "relative":
             raise TypeError(
                 "PreTrendsPower requires a relative-time event-study "
@@ -1462,10 +1473,10 @@ class PreTrendsPower(BaseEstimator):
         _ref_e = surface.reference_event_times
         if _ref_e is None and surface.base_period == "universal":
             warnings.warn(
-                "This CallawaySantAnna event-study container carries no "
+                f"This {_producer} event-study container carries no "
                 "reference_event_times provenance, so a common reference "
-                "period cannot be verified (universal base on a gapped "
-                "time grid may mix cohort-specific bases). CS-produced "
+                "period cannot be verified (a universal base on a gapped "
+                "time grid may mix cohort-specific bases). Producer-built "
                 "containers record it - re-aggregate from the fitted "
                 "results object.",
                 UserWarning,
@@ -1475,14 +1486,16 @@ class PreTrendsPower(BaseEstimator):
             raise ValueError(
                 "PreTrendsPower requires pre-period coefficients "
                 "normalized against one common reference period, but "
-                "this CallawaySantAnna base_period='universal' fit "
-                "selected cohort-specific positional bases at event "
-                f"times {sorted(set(_ref_e))} (gapped time grid). The "
-                "hypothesized violation delta is defined relative to "
-                "one reference, so power/MDV over mixed-base "
-                "coefficients target an ill-defined alternative. "
-                "Re-estimate on a consecutive (ungapped) time grid so "
-                "every cohort's base falls at the same event time."
+                f"this {_producer} container records DISTINCT "
+                "normalization bases at event times "
+                f"{sorted(set(_ref_e))}. The hypothesized violation "
+                "delta is defined relative to one reference, so "
+                "power/MDV over mixed-base coefficients target an "
+                "ill-defined alternative. For CallawaySantAnna this "
+                "arises from base_period='universal' on a gapped time "
+                "grid - re-estimate on a consecutive (ungapped) time "
+                "grid so every cohort's base falls at the same event "
+                "time."
             )
 
         # Varying-base interpretation warning, mirroring the fit-time CS
@@ -1506,12 +1519,19 @@ class PreTrendsPower(BaseEstimator):
                 "against a common reference period, so linear power/MDV "
                 "target a different violation shape. "
             )
+            remedy_clause = (
+                "Re-run with CallawaySantAnna(base_period='universal') "
+                "for Roth-faithful linear benchmarks."
+                if surface.source == "CallawaySantAnnaResults"
+                else "Rebuild the container from the fitted results "
+                "object (producer-built containers record the true "
+                "regime)."
+            )
             warnings.warn(
-                "PreTrendsPower on a CallawaySantAnna event-study "
-                "container without base_period='universal'. "
+                f"PreTrendsPower on a {_producer} event-study "
+                "container without a universal (common-reference) base. "
                 + provenance_clause
-                + "Re-run with CallawaySantAnna(base_period='universal') "
-                "for Roth-faithful linear benchmarks.",
+                + remedy_clause,
                 UserWarning,
                 stacklevel=4,
             )
@@ -1528,6 +1548,32 @@ class PreTrendsPower(BaseEstimator):
             & (surface.se > 0)
             & (surface.event_time < _pre_cutoff)
         )
+
+        # Withheld-inference transparency (row M-024, StackedDiD
+        # admission; sibling of the HonestDiD container branch): a
+        # retained row with finite se but non-finite p_value means the
+        # producer withheld/never computed its per-row inference
+        # (StackedDiD's hc2_bm BM-DOF fail-close and replicate-undefined
+        # designs both emit this shape). Power/MDV consume only the
+        # coefficients and covariance - both valid - so the rows are
+        # ADMITTED with a warning (no-silent-failures). Deliberately NO
+        # df_survey conjunct: pretrends never reads df_survey, so its
+        # output is finite in every df state. Shape-descriptive by
+        # design; source-scoped so no CS-path behavior changes.
+        if surface.source == "StackedDiDResults":
+            _withheld = keep & ~np.isfinite(surface.p_value)
+            if bool(np.any(_withheld)):
+                warnings.warn(
+                    "This container carries non-reference rows whose "
+                    "stored per-row inference is withheld/undefined "
+                    "(finite se, non-finite p_value) at event times "
+                    f"{surface.event_time[_withheld].tolist()}; results "
+                    "are computed from the point estimates and "
+                    "covariance alone, using this consumer's own "
+                    "reference distribution.",
+                    UserWarning,
+                    stacklevel=4,
+                )
 
         if not keep.any():
             raise ValueError("No pre-treatment periods found in event study.")
@@ -1891,7 +1937,11 @@ class PreTrendsPower(BaseEstimator):
         Parameters
         ----------
         results : MultiPeriodDiDResults, CallawaySantAnnaResults, SunAbrahamResults, or EventStudyResults
-            Results from an event study estimation.
+            Results from an event study estimation, or the unified
+            event-study container from
+            ``CallawaySantAnnaResults.aggregate('event_study')`` or
+            ``StackedDiDResults.aggregate('event_study')`` (Stacked
+            containers require ``kappa_pre >= 2``).
         M : float, optional
             Specific violation magnitude to evaluate. If None, evaluates at
             a default magnitude based on the data.
@@ -2146,7 +2196,10 @@ def compute_pretrends_power(
     Parameters
     ----------
     results : results object
-        Event study results.
+        Event study results (MPD / CS / SA), or the unified event-study
+        container from ``CallawaySantAnnaResults.aggregate('event_study')``
+        or ``StackedDiDResults.aggregate('event_study')`` (Stacked
+        containers require ``kappa_pre >= 2``).
     M : float, optional
         Violation magnitude to evaluate.
     alpha : float, default=0.05
@@ -2210,7 +2263,10 @@ def compute_mdv(
     Parameters
     ----------
     results : results object
-        Event study results.
+        Event study results (MPD / CS / SA), or the unified event-study
+        container from ``CallawaySantAnnaResults.aggregate('event_study')``
+        or ``StackedDiDResults.aggregate('event_study')`` (Stacked
+        containers require ``kappa_pre >= 2``).
     alpha : float, default=0.05
         Significance level.
     target_power : float, default=0.80

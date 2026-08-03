@@ -583,21 +583,27 @@ def _extract_container_params(
     """Container branch of ``_extract_event_study_params``.
 
     Consumes the unified ``EventStudyResults`` surface produced by
-    ``CallawaySantAnnaResults.aggregate('event_study')``. Admission is
-    SOURCE-SCOPED: containers from other producers are rejected rather
-    than silently admitted - widening is a per-estimator methodology
-    decision in each estimator's own ``aggregate()`` migration (row
-    M-093), not a side effect of the container existing. dCDH containers
-    in particular are rejected BY DESIGN: their ``l1_first_switch``
-    placebo rows need the native dCDH branch's mandatory reinterpretation
-    warning and consecutive-horizon trimming.
+    ``CallawaySantAnnaResults.aggregate('event_study')`` or
+    ``StackedDiDResults.aggregate('event_study')`` (row M-024; Stacked
+    containers require ``kappa_pre >= 2`` so estimated pre-periods
+    exist, and a pre-period covariance that is not singular - honest
+    validates with ``allow_singular=False``, so keep ``kappa_pre`` small
+    relative to the cluster count). Admission is SOURCE-SCOPED:
+    containers from other producers are rejected rather than silently
+    admitted - widening is a per-estimator methodology decision in each
+    estimator's own ``aggregate()`` migration (row M-093), not a side
+    effect of the container existing. dCDH containers in particular are
+    rejected BY DESIGN: their ``l1_first_switch`` placebo rows need the
+    native dCDH branch's mandatory reinterpretation warning and
+    consecutive-horizon trimming.
     """
     import warnings
 
-    if surface.source != "CallawaySantAnnaResults":
+    if surface.source not in ("CallawaySantAnnaResults", "StackedDiDResults"):
         raise TypeError(
             "HonestDiD accepts EventStudyResults containers produced by "
-            "CallawaySantAnnaResults.aggregate('event_study') only "
+            "CallawaySantAnnaResults.aggregate('event_study') or "
+            "StackedDiDResults.aggregate('event_study') only "
             f"(got source={surface.source!r}). For other estimators pass "
             "the native results object where supported "
             "(MultiPeriodDiDResults, CallawaySantAnnaResults, or "
@@ -605,6 +611,7 @@ def _extract_container_params(
             "further producers arrives with their own aggregate() "
             "migrations."
         )
+    _producer = surface.source.replace("Results", "")
     if surface.time_scale != "relative":
         raise TypeError(
             "HonestDiD requires a relative-time event-study container; "
@@ -623,11 +630,12 @@ def _extract_container_params(
     _ref_e = surface.reference_event_times
     if _ref_e is None and surface.base_period == "universal":
         warnings.warn(
-            "This CallawaySantAnna event-study container carries no "
+            f"This {_producer} event-study container carries no "
             "reference_event_times provenance, so a common reference "
-            "period cannot be verified (universal base on a gapped time "
-            "grid may mix cohort-specific bases). CS-produced containers "
-            "record it - re-aggregate from the fitted results object.",
+            "period cannot be verified (a universal base on a gapped "
+            "time grid may mix cohort-specific bases). Producer-built "
+            "containers record it - re-aggregate from the fitted "
+            "results object.",
             UserWarning,
             stacklevel=4,
         )
@@ -635,15 +643,14 @@ def _extract_container_params(
         raise ValueError(
             "HonestDiD requires event-study coefficients normalized "
             "against one common reference period, but this "
-            "CallawaySantAnna base_period='universal' fit selected "
-            "cohort-specific positional bases at event times "
-            f"{sorted(set(_ref_e))} (gapped time grid). On such grids a "
-            "cohort's base can overlap another cohort's estimated "
-            "horizon, so the coefficients are normalized against "
-            "different bases and are not jointly interpretable under "
-            "Rambachan-Roth's delta_0 = 0 normalization. Re-estimate on "
-            "a consecutive (ungapped) time grid so every cohort's base "
-            "falls at the same event time."
+            f"{_producer} container records DISTINCT normalization bases "
+            f"at event times {sorted(set(_ref_e))}. Coefficients "
+            "normalized against different bases are not jointly "
+            "interpretable under Rambachan-Roth's delta_0 = 0 "
+            "normalization. For CallawaySantAnna this arises from "
+            "base_period='universal' on a gapped time grid - "
+            "re-estimate on a consecutive (ungapped) time grid so every "
+            "cohort's base falls at the same event time."
         )
 
     # Universal-base interpretation warning. Fail-safe: a container with
@@ -659,12 +666,21 @@ def _extract_container_params(
             "use consecutive comparisons (not a common reference period), "
             "which changes the meaning of the parallel trends restriction. "
         )
+        # Remedy is producer-conditional: only CallawaySantAnna exposes a
+        # base_period knob (StackedDiD is single-reference by construction
+        # and always records "universal", so a Stacked-sourced container
+        # can only land here hand-built/modified).
+        remedy_clause = (
+            "Re-run with CallawaySantAnna(base_period='universal') for "
+            "methodologically valid HonestDiD bounds."
+            if surface.source == "CallawaySantAnnaResults"
+            else "Rebuild the container from the fitted results object "
+            "(producer-built containers record the true regime)."
+        )
         warnings.warn(
-            "HonestDiD sensitivity analysis on CallawaySantAnna results "
-            "requires base_period='universal' for valid interpretation. "
-            + provenance_clause
-            + "Re-run with CallawaySantAnna(base_period='universal') for "
-            "methodologically valid HonestDiD bounds.",
+            f"HonestDiD sensitivity analysis on {_producer} results "
+            "requires a universal (common-reference) base for valid "
+            "interpretation. " + provenance_clause + remedy_clause,
             UserWarning,
             stacklevel=4,
         )
@@ -686,6 +702,32 @@ def _extract_container_params(
         )
 
     keep = (~surface.is_reference) & np.isfinite(surface.se) & (surface.se > 0)
+
+    # Withheld-inference transparency (row M-024, StackedDiD admission):
+    # a retained row with finite se but non-finite p_value means the
+    # producer withheld/never computed its per-row inference (StackedDiD's
+    # hc2_bm BM-DOF fail-close and replicate-undefined designs both emit
+    # this shape; a hand-built container can too). The bounds below
+    # consume only the point estimates and covariance - both valid - so
+    # the row is ADMITTED, with a warning so the withheld state is never
+    # silently laundered. Shape-descriptive by design: the container
+    # cannot prove WHY the producer withheld it. Source-scoped to Stacked
+    # so no CS-path behavior changes (CS replicate-undefined containers
+    # keep their pinned silent fail-close via df_survey=0.0).
+    if surface.source == "StackedDiDResults":
+        _withheld = keep & ~np.isfinite(surface.p_value)
+        if bool(np.any(_withheld)):
+            warnings.warn(
+                "This container carries non-reference rows whose stored "
+                "per-row inference is withheld/undefined (finite se, "
+                "non-finite p_value) at event times "
+                f"{surface.event_time[_withheld].tolist()}; results are "
+                "computed from the point estimates and covariance alone, "
+                "using this consumer's own reference distribution.",
+                UserWarning,
+                stacklevel=4,
+            )
+
     rel_times = [t for t, k in zip(surface.event_time.tolist(), keep) if k]
 
     ref_rows = surface.event_time[surface.is_reference].tolist()
@@ -698,11 +740,11 @@ def _extract_container_params(
             "HonestDiD cannot consume an event-study container with "
             f"multiple reference rows ({sorted(ref_rows)}): its "
             "consecutive-grid contract is defined around a single omitted "
-            "reference. Multiple references arise for CallawaySantAnna "
-            "base_period='universal' on a gapped time grid, where each "
-            "cohort's positional base is its own reference-only horizon. "
-            "Re-estimate on a consecutive (ungapped) time grid so a "
-            "single common reference is materialized."
+            "reference. For CallawaySantAnna, multiple references arise "
+            "from base_period='universal' on a gapped time grid, where "
+            "each cohort's positional base is its own reference-only "
+            "horizon - re-estimate on a consecutive (ungapped) time grid "
+            "so a single common reference is materialized."
         )
     ref_period = ref_rows[0] if ref_rows else None
 
@@ -742,14 +784,25 @@ def _extract_container_params(
                     has_gap = True
                     break
     if has_gap:
+        # Remedy is producer-conditional: balance_e is CS aggregation
+        # machinery; StackedDiD's aggregate() has no balance_e level
+        # (its kappa trimming already balances retained windows), so
+        # recommending it there would point at a non-existent recovery.
+        _gap_remedy = (
+            "Ensure all event-study periods have valid estimates, "
+            "or use balance_e to restrict to a balanced subset."
+            if surface.source == "CallawaySantAnnaResults"
+            else "Ensure all event-study periods have valid estimates "
+            "(for StackedDiD, an interior horizon with a non-finite SE "
+            "indicates a rank-dropped event-time column - inspect the "
+            "fit's rank_deficient_action warnings)."
+        )
         raise ValueError(
             "HonestDiD requires a consecutive event-time grid "
             "around the omitted reference period. Retained "
             f"pre-periods {pre_times} and post-periods "
             f"{post_times} have gaps. This can happen when "
-            "some event-study horizons have non-finite SEs. "
-            "Ensure all event-study periods have valid estimates, "
-            "or use balance_e to restrict to a balanced subset."
+            "some event-study horizons have non-finite SEs. " + _gap_remedy
         )
 
     # beta_hat/sigma are subset in EXPLICIT [sorted pre; sorted post]
@@ -827,8 +880,11 @@ def _extract_event_study_params(
     results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
         Estimation results with event study structure, or the unified
         event-study container produced by
-        ``CallawaySantAnnaResults.aggregate('event_study')`` (CS-sourced
-        containers only; see ``_extract_container_params``).
+        ``CallawaySantAnnaResults.aggregate('event_study')`` or
+        ``StackedDiDResults.aggregate('event_study')`` (CS- and
+        Stacked-sourced containers only; see
+        ``_extract_container_params``. Stacked containers need
+        ``kappa_pre >= 2`` so estimated pre-periods exist).
 
     Returns
     -------
@@ -1393,7 +1449,8 @@ def _extract_event_study_params(
             f"Unsupported results type: {type(results)}. "
             "Expected MultiPeriodDiDResults, CallawaySantAnnaResults, "
             "ChaisemartinDHaultfoeuilleResults, or an EventStudyResults "
-            "container from CallawaySantAnnaResults.aggregate('event_study')."
+            "container from CallawaySantAnnaResults.aggregate('event_study') "
+            "or StackedDiDResults.aggregate('event_study')."
         )
 
 
@@ -2823,13 +2880,20 @@ class HonestDiD(BaseEstimator):
         results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
             Results from event study estimation, or the unified event-study
             container from
-            ``CallawaySantAnnaResults.aggregate('event_study')``. On the
-            container route the scalar inference df arrives via the
-            container's ``df_survey`` provenance field (bounds and CIs match
-            the native route exactly), while the stored
-            ``HonestDiDResults.survey_metadata`` is None - the container
-            carries no survey-metadata object. That field's only inferential
-            consumer is the df extraction, so no number diverges.
+            ``CallawaySantAnnaResults.aggregate('event_study')`` or
+            ``StackedDiDResults.aggregate('event_study')`` (Stacked
+            containers require ``kappa_pre >= 2`` so estimated
+            pre-periods exist, and a non-singular pre-period covariance -
+            keep ``kappa_pre`` small relative to the cluster count). On
+            the container route the scalar inference df arrives via the
+            container's ``df_survey`` provenance field (for CS-sourced
+            containers, bounds and CIs match the native route exactly;
+            StackedDiD has no native HonestDiD route - the container IS
+            its route, with normal-theory critical values on analytical
+            fits), while the stored ``HonestDiDResults.survey_metadata``
+            is None - the container carries no survey-metadata object.
+            That field's only inferential consumer is the df extraction,
+            so no number diverges.
         M : float, optional
             Override the M parameter for this fit.
 
@@ -3201,7 +3265,11 @@ class HonestDiD(BaseEstimator):
         Parameters
         ----------
         results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
-            Results from event study estimation.
+            Results from event study estimation, or the unified
+            event-study container from
+            ``CallawaySantAnnaResults.aggregate('event_study')`` or
+            ``StackedDiDResults.aggregate('event_study')`` (Stacked
+            containers require ``kappa_pre >= 2``).
         M_grid : list of float, optional
             Grid of M values to evaluate. If None, uses default grid
             based on method.
@@ -3303,7 +3371,11 @@ class HonestDiD(BaseEstimator):
         Parameters
         ----------
         results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
-            Results from event study estimation.
+            Results from event study estimation, or the unified
+            event-study container from
+            ``CallawaySantAnnaResults.aggregate('event_study')`` or
+            ``StackedDiDResults.aggregate('event_study')`` (Stacked
+            containers require ``kappa_pre >= 2``).
         tol : float
             Tolerance for binary search.
 
@@ -3360,7 +3432,10 @@ def compute_honest_did(
     Parameters
     ----------
     results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
-        Results from event study estimation.
+        Results from event study estimation, or the unified event-study
+        container from ``CallawaySantAnnaResults.aggregate('event_study')``
+        or ``StackedDiDResults.aggregate('event_study')`` (Stacked
+        containers require ``kappa_pre >= 2``).
     method : str
         Type of restriction ("smoothness", "relative_magnitude", "combined").
     M : float
@@ -3402,7 +3477,10 @@ def sensitivity_plot(
     Parameters
     ----------
     results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
-        Results from event study estimation.
+        Results from event study estimation, or the unified event-study
+        container from ``CallawaySantAnnaResults.aggregate('event_study')``
+        or ``StackedDiDResults.aggregate('event_study')`` (Stacked
+        containers require ``kappa_pre >= 2``).
     method : str
         Type of restriction.
     M_grid : list of float, optional

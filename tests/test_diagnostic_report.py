@@ -3001,7 +3001,6 @@ class TestStackedTwoStageJointWaldUpgrade:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
             rep = DiagnosticReport(res).run_all()
         pt = rep.to_dict()["parallel_trends"]
@@ -3091,7 +3090,6 @@ class TestStackedTwoStageJointWaldUpgrade:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
 
     def test_stacked_hc2_bm_fail_closed_pt_is_inconclusive(self, monkeypatch):
@@ -3222,7 +3220,6 @@ class TestStackedTwoStageJointWaldUpgrade:
                 unit="unit",
                 time="time",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
         # Precondition: the retained pre-period block is genuinely singular.
         V = res.event_study_vcov
@@ -3335,3 +3332,66 @@ class TestStackedTwoStageJointWaldUpgrade:
         assert pt["method"] == "bonferroni"
         stat = pt["test_statistic"]
         assert stat is None or stat >= 0.0
+
+
+class TestStackedAlwaysComputedSurfaceCheckFlips:
+    """M-024: the always-materialized ES surface flips two DR checks on
+    PLAIN StackedDiD fits (executed-verified during the plan review):
+    heterogeneity always, parallel_trends at kappa_pre >= 2."""
+
+    @staticmethod
+    def _panel(seed=42):
+        rng = np.random.default_rng(seed)
+        rows = []
+        for u in range(60):
+            g = [4, 6, 0][u % 3]
+            for t in range(1, 11):
+                y = 1.0 + 0.1 * t + u * 0.01 + (1.5 if g and t >= g else 0.0) + rng.normal(0, 0.3)
+                rows.append({"unit": u, "time": t, "outcome": y, "first_treat": g})
+        return pd.DataFrame(rows)
+
+    def _fit(self, kappa_pre):
+        from diff_diff import StackedDiD
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return StackedDiD(kappa_pre=kappa_pre, kappa_post=2).fit(
+                self._panel(),
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+
+    def _report(self, res):
+        from diff_diff.diagnostic_report import DiagnosticReport
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return DiagnosticReport(
+                res,
+                data=self._panel(),
+                unit="unit",
+                time="time",
+                outcome="outcome",
+                first_treat="first_treat",
+            ).to_dict()
+
+    def test_kappa_pre_2_runs_heterogeneity_and_parallel_trends(self):
+        d = self._report(self._fit(kappa_pre=2))
+        assert d["parallel_trends"]["status"] == "ran"
+        assert d["heterogeneity"]["status"] == "ran"
+        assert d["heterogeneity"]["source"] == "event_study_effects_post"
+
+    def test_kappa_pre_1_default_heterogeneity_only(self):
+        # The default kappa_pre=1 grid minus the reference has ZERO
+        # estimated pre-periods, so PT stays skipped - with the M-024
+        # per-type remediation, NOT the generic (now-inert for Stacked)
+        # aggregate='event_study' advice.
+        d = self._report(self._fit(kappa_pre=1))
+        assert d["heterogeneity"]["status"] == "ran"
+        pt = d["parallel_trends"]
+        assert pt["status"] == "skipped"
+        reason = pt.get("reason", "") + " ".join(str(v) for v in pt.values() if isinstance(v, str))
+        assert "kappa_pre >= 2" in reason
+        assert "aggregate='event_study'" not in reason

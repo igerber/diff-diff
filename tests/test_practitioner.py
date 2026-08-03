@@ -330,6 +330,29 @@ class TestResultTypeDispatch:
         all_text = " ".join(s.get("code", "") + s.get("why", "") for s in output["next_steps"])
         assert "not_yet_treated" not in all_text or "control_group" in all_text
 
+    def test_stacked_balance_step_uses_distinct_step_name(self, mock_stacked_results):
+        # M-024: "Check sub-experiment balance" must NOT reuse
+        # step_name="heterogeneity" - since the ES surface is always
+        # populated, DiagnosticReport's heterogeneity check runs on every
+        # plain fit and a shared key silently dropped this unrelated
+        # advice from next_steps via _filter_steps.
+        from diff_diff.practitioner import STEPS, _handle_stacked
+
+        steps, _ = _handle_stacked(mock_stacked_results)
+        balance = [s for s in steps if s["label"] == "Check sub-experiment balance"]
+        assert len(balance) == 1
+        assert balance[0]["_step_name"] == "sub_experiment_balance"
+        # SURVIVAL: completing heterogeneity (what DiagnosticReport does on
+        # every surface-populated fit) must no longer drop the balance step.
+        completed = practitioner_next_steps(
+            mock_stacked_results, verbose=False, completed_steps=["heterogeneity"]
+        )
+        labels = [s["label"] for s in completed["next_steps"]]
+        assert "Check sub-experiment balance" in labels
+        # Like "loo_jackknife", the key deliberately stays OUT of the STEPS
+        # completion vocabulary: no diagnostic ever completes it.
+        assert "sub_experiment_balance" not in STEPS
+
     def test_synth_results(self, mock_synth_results):
         output = practitioner_next_steps(mock_synth_results, verbose=False)
         assert len(output["next_steps"]) > 0

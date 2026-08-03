@@ -92,7 +92,6 @@ class TestStackedDiDBasic:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         assert results.event_study_effects is not None
         assert -1 in results.event_study_effects  # reference period
@@ -107,33 +106,35 @@ class TestStackedDiDBasic:
                 assert results.event_study_effects[h]["n_obs"] > 0
 
     def test_group_aggregate_raises(self, staggered_data):
-        """aggregate='group' raises ValueError."""
+        """aggregate='group' warns (M-024 shim) then raises ValueError."""
         est = StackedDiD(kappa_pre=2, kappa_post=2)
-        with pytest.raises(ValueError, match="group.*not supported"):
-            est.fit(
-                staggered_data,
-                outcome="outcome",
-                unit="unit",
-                time="period",
-                first_treat="first_treat",
-                aggregate="group",
-            )
+        with pytest.warns(FutureWarning, match=r"fit\(aggregate=\) is deprecated"):
+            with pytest.raises(ValueError, match="group.*not supported"):
+                est.fit(
+                    staggered_data,
+                    outcome="outcome",
+                    unit="unit",
+                    time="period",
+                    first_treat="first_treat",
+                    aggregate="group",
+                )
 
     def test_all_aggregate_raises(self, staggered_data):
-        """aggregate='all' raises ValueError."""
+        """aggregate='all' warns (M-024 shim) then raises ValueError."""
         est = StackedDiD(kappa_pre=2, kappa_post=2)
-        with pytest.raises(ValueError, match="all.*not supported"):
-            est.fit(
-                staggered_data,
-                outcome="outcome",
-                unit="unit",
-                time="period",
-                first_treat="first_treat",
-                aggregate="all",
-            )
+        with pytest.warns(FutureWarning, match=r"fit\(aggregate=\) is deprecated"):
+            with pytest.raises(ValueError, match="all.*not supported"):
+                est.fit(
+                    staggered_data,
+                    outcome="outcome",
+                    unit="unit",
+                    time="period",
+                    first_treat="first_treat",
+                    aggregate="all",
+                )
 
     def test_simple_att(self, staggered_data):
-        """aggregate='simple' produces overall ATT only."""
+        """Plain fit: overall ATT plus the always-computed surface (M-024)."""
         est = StackedDiD(kappa_pre=2, kappa_post=2)
         results = est.fit(
             staggered_data,
@@ -141,10 +142,10 @@ class TestStackedDiDBasic:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="simple",
         )
         assert np.isfinite(results.overall_att)
-        assert results.event_study_effects is None
+        # The event-study surface is ALWAYS materialized on 3.9+ fits.
+        assert results.event_study_effects is not None
         assert results.group_effects is None
 
     def test_known_constant_effect(self, constant_effect_data):
@@ -171,7 +172,6 @@ class TestStackedDiDBasic:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         assert results.event_study_effects is not None
         # Post-treatment effects should generally increase
@@ -566,7 +566,6 @@ class TestEdgeCases:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
         # Reference period is -2 (not -1)
@@ -761,7 +760,6 @@ class TestResultsMethods:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         summary = results.summary()
         assert "Stacked DiD" in summary
@@ -776,7 +774,6 @@ class TestResultsMethods:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         df = results.to_dataframe(level="event_study")
         assert isinstance(df, pd.DataFrame)
@@ -796,8 +793,8 @@ class TestResultsMethods:
         with pytest.raises(ValueError, match="Group aggregation is not supported"):
             results.to_dataframe(level="group")
 
-    def test_to_dataframe_no_event_study_raises(self, staggered_data):
-        """to_dataframe raises when event_study not computed."""
+    def test_to_dataframe_event_study_total_on_plain_fit(self, staggered_data):
+        """Plain fits carry the surface (M-024): to_dataframe is total."""
         est = StackedDiD(kappa_pre=2, kappa_post=2)
         results = est.fit(
             staggered_data,
@@ -806,8 +803,36 @@ class TestResultsMethods:
             time="period",
             first_treat="first_treat",
         )
-        with pytest.raises(ValueError, match="Event study effects not computed"):
-            results.to_dataframe(level="event_study")
+        df = results.to_dataframe(level="event_study")
+        assert sorted(df["relative_period"].tolist()) == [-2, -1, 0, 1, 2]
+
+    def test_to_dataframe_legacy_pickle_none_branch(self, staggered_data):
+        """The effects-None branch survives for pre-3.9 pickles only."""
+        import dataclasses
+
+        est = StackedDiD(kappa_pre=2, kappa_post=2)
+        results = est.fit(
+            staggered_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+        )
+        legacy = dataclasses.replace(results, event_study_effects=None)
+        with pytest.raises(ValueError, match=r"diff-diff >= 3\.9"):
+            legacy.to_dataframe(level="event_study")
+
+    def test_summary_prints_event_study_table_on_plain_fit(self, staggered_data):
+        """summary() renders the ES block on every 3.9+ fit (M-024)."""
+        est = StackedDiD(kappa_pre=2, kappa_post=2)
+        results = est.fit(
+            staggered_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+        )
+        assert "Event Study (Dynamic) Effects" in results.summary()
 
     def test_is_significant(self, staggered_data):
         """is_significant property works."""
@@ -888,17 +913,18 @@ class TestValidation:
             StackedDiD(cluster="invalid")
 
     def test_invalid_aggregate(self, staggered_data):
-        """Raises on invalid aggregate parameter."""
+        """Warns (M-024 shim) then raises on invalid aggregate parameter."""
         est = StackedDiD()
-        with pytest.raises(ValueError, match="aggregate"):
-            est.fit(
-                staggered_data,
-                outcome="outcome",
-                unit="unit",
-                time="period",
-                first_treat="first_treat",
-                aggregate="invalid",
-            )
+        with pytest.warns(FutureWarning, match=r"fit\(aggregate=\) is deprecated"):
+            with pytest.raises(ValueError, match="aggregate"):
+                est.fit(
+                    staggered_data,
+                    outcome="outcome",
+                    unit="unit",
+                    time="period",
+                    first_treat="first_treat",
+                    aggregate="invalid",
+                )
 
     def test_population_required_for_population_weighting(self, staggered_data):
         """Raises when population col not specified with weighting='population'."""
@@ -1030,7 +1056,6 @@ class TestStackedDiDVcovType:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         res_hc1 = StackedDiD(kappa_pre=2, kappa_post=2, vcov_type="hc1").fit(
             staggered_data, **kwargs
@@ -1319,7 +1344,6 @@ class TestStackedDiDVcovType:
                 unit="unit",
                 time="period",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
         # No fallback warning on a well-conditioned design.
         fallback_warns = [w for w in caught if "Bell-McCaffrey contrast DOF" in str(w.message)]
@@ -1414,7 +1438,6 @@ class TestStackedDiDVcovType:
                 unit="unit",
                 time="period",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
         # The reduced-design code path should fire without emitting the
         # fallback warning (the helper succeeds on the kept-column subset).
@@ -1480,7 +1503,6 @@ class TestStackedDiDVcovType:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         # All event_study_effects (except the ref period) should have NaN
         # inference but finite effect+se.
@@ -1528,7 +1550,6 @@ class TestStackedDiDVcovType:
                 unit="unit",
                 time="period",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
         # Warning fired (informational that DOF was unavailable)
         warning_msgs = [str(w.message) for w in caught]
@@ -1565,7 +1586,6 @@ class TestStackedDiDVcovType:
                 unit="unit",
                 time="period",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
         fallback_warns = [w for w in caught if "Bell-McCaffrey contrast DOF" in str(w.message)]
         assert (
@@ -1618,7 +1638,6 @@ class TestStackedDiDVcovType:
             time="period",
             first_treat="first_treat",
             population="pop",
-            aggregate="event_study",
         )
         assert np.isfinite(res.overall_att) and np.isfinite(res.overall_se)
         assert res.overall_se > 0
@@ -1644,7 +1663,6 @@ class TestStackedDiDVcovType:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         assert np.isfinite(res.overall_att) and np.isfinite(res.overall_se)
         assert res.overall_se > 0
@@ -1663,7 +1681,6 @@ class TestStackedDiDVcovType:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         res_hc1 = StackedDiD(kappa_pre=2, kappa_post=2, vcov_type="hc1", anticipation=1).fit(
             staggered_data, **kwargs
@@ -1784,7 +1801,6 @@ def _cb_fit(df, **kw):
         unit="unit",
         time="time",
         first_treat="first_treat",
-        aggregate=kw.get("aggregate", "event_study"),
         covariates=kw.get("covariates"),
         survey_design=kw.get("survey_design"),
         population=kw.get("population"),
@@ -1869,13 +1885,15 @@ class TestStackedDiDCovariateBalance:
         b = _cb_fit(df, balance="entropy", covariates=["x2"])
         assert abs(a.overall_att - b.overall_att) < 1e-8
 
-    def test_balance_on_default_aggregate_mode(self):
-        # balancing must work on the overall-ATT (aggregate=None) path, not only
-        # event_study (the BM-DOF machinery branches on aggregate).
+    def test_balance_on_plain_fit(self):
+        # balancing works on a plain fit; since M-024 the surface (and the
+        # hc2_bm BM-DOF machinery) no longer branches on fit-time
+        # aggregate, so this is the same code path as every _cb_fit case.
         df = _balance_panel(seed=8)
-        res = _cb_fit(df, balance="entropy", covariates=["x"], aggregate=None)
+        res = _cb_fit(df, balance="entropy", covariates=["x"])
         assert np.isfinite(res.overall_att)
         assert res.balance == "entropy"
+        assert res.event_study_effects is not None
 
     # ---- sklearn surface ----
     def test_get_params_includes_balance_and_clone(self):
@@ -1894,8 +1912,7 @@ class TestStackedDiDCovariateBalance:
             "first_treat",
             kappa_pre=2,
             kappa_post=2,
-            aggregate="event_study",
-            clean_control="never_treated",
+            control_group="never_treated",
             balance="entropy",
             covariates=["x"],
         )
@@ -1958,7 +1975,6 @@ class TestStackedDfConvention:
         unit="unit",
         time="period",
         first_treat="first_treat",
-        aggregate="event_study",
     )
 
     @staticmethod
@@ -2073,3 +2089,28 @@ class TestStackedDfConvention:
             est.set_params(df_convention="normal", nonexistent_param=1)
         assert est.get_params() == before
         assert StackedDiD(df_convention="normal").get_params()["df_convention"] == "normal"
+
+
+class TestPlainFitPlotting:
+    def test_plot_event_study_renders_on_plain_fit(self, staggered_data):
+        """M-024: plot_event_study flips from TypeError to rendering on a
+        plain fit - the duck-typed effects branch now matches because the
+        surface is always populated."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        from diff_diff import plot_event_study
+
+        est = StackedDiD(kappa_pre=2, kappa_post=2)
+        results = est.fit(
+            staggered_data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+        )
+        ax = plot_event_study(results, show=False)
+        assert ax is not None
+        plt.close("all")

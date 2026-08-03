@@ -154,7 +154,6 @@ def _fit(panel, vcov_type, cluster):
         unit="unit",
         time="period",
         first_treat="first_treat",
-        aggregate="event_study",
     )
 
 
@@ -431,7 +430,6 @@ class TestStackedDiDParityRVariants:
             time="period",
             first_treat="first_treat",
             population="pop",
-            aggregate="event_study",
         )
         py_se = _es_se_vector(res, event_times)
         np.testing.assert_allclose(
@@ -462,7 +460,6 @@ class TestStackedDiDParityRVariants:
             time="period",
             first_treat="first_treat",
             population="pop",
-            aggregate="event_study",
         )
         py_se = _es_se_vector(res, event_times)
         np.testing.assert_allclose(
@@ -520,7 +517,6 @@ class TestStackedDiDParityRVariants:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         py_se = _es_se_vector(res, event_times)
         np.testing.assert_allclose(
@@ -550,7 +546,6 @@ class TestStackedDiDParityRVariants:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         py_se = _es_se_vector(res, event_times)
         np.testing.assert_allclose(
@@ -609,7 +604,6 @@ class TestStackedDiDParityRVariants:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         py_se = _es_se_vector(res, event_times)
         np.testing.assert_allclose(
@@ -642,7 +636,6 @@ class TestStackedDiDParityRVariants:
             unit="unit",
             time="period",
             first_treat="first_treat",
-            aggregate="event_study",
         )
         py_se = _es_se_vector(res, event_times)
         np.testing.assert_allclose(
@@ -777,7 +770,6 @@ class TestCBWSDIDCovariateBalance:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
             covariates=["x"] if balance != "none" else None,
         )
 
@@ -936,7 +928,6 @@ class TestCBWSDIDEffectiveMass:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
             covariates=["x"],
         )
 
@@ -1008,7 +999,6 @@ class TestCBWSDIDRParity:
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
             covariates=["x"],
         )
         for et, r_est, r_se in zip(

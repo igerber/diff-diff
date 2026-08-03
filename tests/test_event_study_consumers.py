@@ -14,10 +14,11 @@ by ``CallawaySantAnnaResults.aggregate('event_study')``. The gates:
   multivariate-normal CDF is internally randomized (two native calls on
   identical inputs differ at ~1e-5), so power equality at 1e-14 is not a
   property even of the native route.
-- SOURCE-SCOPED ADMISSION: honest/pretrends accept CS-sourced containers
-  only; dCDH l1 containers, calendar containers, non-CS/e0 containers and
-  hand-built source=None containers fail closed. The plotters take no
-  source guard (label-faithful rendering).
+- SOURCE-SCOPED ADMISSION: honest/pretrends accept CS- and Stacked-sourced
+  containers (the latter widened with row M-024; ``kappa_pre >= 2``
+  required); dCDH l1 containers, calendar containers, other-producer/e0
+  containers and hand-built source=None containers fail closed. The
+  plotters take no source guard (label-faithful rendering).
 """
 
 import warnings
@@ -960,7 +961,7 @@ class TestSourceScopedAdmission:
         # consecutive grid instead.
         msg = str(exc_info.value)
         assert "native" not in msg
-        assert "consecutive" in msg and "Re-estimate" in msg
+        assert "consecutive" in msg and "re-estimate" in msg
 
 
 # --------------------------------------------------------------------------- #
@@ -1537,3 +1538,382 @@ class TestPlotting:
         # z-reconstruction for period 0 (~1.665..2.135) does not
         assert (1.2, 2.2) in drawn, drawn
         assert not any(abs(lo - 1.665) < 0.01 for lo, _ in drawn)
+
+
+# --------------------------------------------------------------------------- #
+# StackedDiD-sourced container admission (row M-024, second M-093 pre-cut)
+# --------------------------------------------------------------------------- #
+
+STACKED_FIT_KW = dict(outcome="outcome", unit="unit", time="period", first_treat="first_treat")
+
+
+def _stacked_panel(seed=42, n_units=120, n_periods=12, cohorts=(4, 6, 8)):
+    from diff_diff.prep_dgp import generate_staggered_data
+
+    return generate_staggered_data(
+        n_units=n_units, n_periods=n_periods, cohort_periods=list(cohorts), seed=seed
+    )
+
+
+def _fit_stacked(data, **est_kw):
+    from diff_diff import StackedDiD
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return StackedDiD(**est_kw).fit(data, **STACKED_FIT_KW)
+
+
+@pytest.fixture(scope="module")
+def stacked_surface():
+    """kappa_pre=3 surface: two estimated pre-periods for honest/pretrends."""
+    res = _fit_stacked(_stacked_panel(), kappa_pre=3, kappa_post=2)
+    return res.aggregate("event_study")
+
+
+class TestStackedContainerAdmission:
+    def test_honest_end_to_end(self, stacked_surface):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            h = compute_honest_did(stacked_surface, M=0.5)
+        assert np.isfinite(h.lb) and np.isfinite(h.ub)
+        assert np.isfinite(h.ci_lb) and np.isfinite(h.ci_ub)
+        assert h.ci_lb <= h.lb <= h.ub <= h.ci_ub
+
+    def test_honest_anticipation_fit_behavior(self):
+        # Behavior pin, not a threading-mechanism test: honest's container
+        # split runs through the MATERIALIZED reference row (numerically the
+        # same partition as the anticipation cutoff since ref = -1 - k).
+        res = _fit_stacked(_stacked_panel(), kappa_pre=3, kappa_post=2, anticipation=1)
+        surf = res.aggregate("event_study")
+        assert surf.reference_event_times == (-2,)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            h = compute_honest_did(surf, M=0.5)
+        assert np.isfinite(h.lb) and np.isfinite(h.ub)
+
+    def test_pretrends_end_to_end_full_vcov(self, stacked_surface):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            p = compute_pretrends_power(stacked_surface)
+        assert np.isfinite(p.power) and 0.0 < p.power <= 1.0
+        assert np.isfinite(p.mdv) and p.mdv > 0
+        # StackedDiD persists its ES VCV in every inference mode, so the
+        # container always takes the full-covariance tier.
+        assert p.covariance_source == "full_pre_period_vcov"
+
+    def test_pretrends_anticipation_threading_mechanism(self):
+        # THIS is where the surface.anticipation channel is exercised:
+        # pretrends reads it directly for the pre cutoff (t < -k), so with
+        # anticipation=1 the e=-1 anticipation row must be excluded from
+        # the pre set while e=-4,-3 stay.
+        res = _fit_stacked(_stacked_panel(), kappa_pre=3, kappa_post=2, anticipation=1)
+        surf = res.aggregate("event_study")
+        assert surf.anticipation == 1
+        pt = PreTrendsPower()
+        effects, ses, vcov, n_pre, rel_times, cov_src = pt._extract_pre_period_params(surf)
+        # n_pre == 2 proves the e=-1 anticipation row was excluded by the
+        # t < -k cutoff (with cutoff 0 it would be 3). rel_times are the
+        # ROTH-ANCHORED offsets t - t_ref (#744 convention): raw pre labels
+        # {-4, -3} anchored at the ref -2 give [-2, -1].
+        assert n_pre == 2
+        assert sorted(rel_times.tolist()) == [-2.0, -1.0]
+        assert cov_src == "full_pre_period_vcov"
+
+    def test_pretrends_last_period_positional_selection(self):
+        # kappa_pre >= 3 so the eligible pre set has TWO horizons and the
+        # last_period pattern actually selects one (at kappa_pre=2 the
+        # weight vector degenerates to [1.] and the test would be vacuous).
+        res = _fit_stacked(_stacked_panel(), kappa_pre=3, kappa_post=2)
+        surf = res.aggregate("event_study")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            p_last = compute_pretrends_power(surf, violation_type="last_period")
+        pt = PreTrendsPower(violation_type="last_period")
+        effects, ses, vcov, n_pre, rel_times, _ = pt._extract_pre_period_params(surf)
+        assert n_pre == 2
+        w = pt._get_violation_weights(n_pre, rel_times)
+        # chronologically sorted pre rows [-3, -2]: the LAST pre-period
+        # (closest to treatment, e=-2) carries the violation mass.
+        assert w.tolist() == [0.0, 1.0]
+        assert np.isfinite(p_last.power)
+
+    def test_kappa_pre_1_default_rejected(self):
+        res = _fit_stacked(_stacked_panel(), kappa_pre=1, kappa_post=2)
+        surf = res.aggregate("event_study")
+        with pytest.raises(ValueError, match="No pre-period effects"):
+            compute_honest_did(surf, M=0.5)
+        with pytest.raises(ValueError, match="No pre-treatment periods"):
+            compute_pretrends_power(surf)
+
+    # ---- withheld-inference warning (uniform shape-based predicate) ---- #
+
+    def test_bm_failure_fit_warns_in_both_consumers(self, monkeypatch):
+        # MANDATORY real-shape fixture: monkeypatched BM-DOF failure on an
+        # hc2_bm fit produces the joint-NaN rows (t/p/CI all NaN, finite
+        # se) the estimator actually emits - not a hand-mutated container.
+        import diff_diff.linalg as dl
+
+        monkeypatch.setattr(
+            dl,
+            "_compute_cr2_bm_contrast_dof",
+            lambda X, cluster_ids, bread_matrix, contrasts, weights=None: np.full(
+                contrasts.shape[1], np.nan
+            ),
+        )
+        res = _fit_stacked(
+            _stacked_panel(),
+            kappa_pre=3,
+            kappa_post=2,
+            vcov_type="hc2_bm",
+            cluster="unit",
+        )
+        eff = res.event_study_effects
+        assert any(
+            np.isnan(v["t_stat"])
+            and np.isnan(v["p_value"])
+            and np.isfinite(v["se"])
+            and np.isnan(v["conf_int"][0])
+            and np.isnan(v["conf_int"][1])
+            for h, v in eff.items()
+            if v["n_obs"] > 0
+        )
+        surf = res.aggregate("event_study")
+        with pytest.warns(UserWarning, match="withheld/undefined"):
+            h = compute_honest_did(surf, M=0.5)
+        assert np.isfinite(h.lb) and np.isfinite(h.ub)
+        with pytest.warns(UserWarning, match="withheld/undefined"):
+            p = compute_pretrends_power(surf)
+        assert np.isfinite(p.power)
+
+    def test_replicate_undefined_state_warns_in_both(self, stacked_surface):
+        # df_survey=0.0 (replicate-undefined sentinel) + withheld rows:
+        # BOTH consumers warn (uniform predicate - no df conjunct), and
+        # honest's identified-set bounds stay FINITE while its FLCI CI
+        # endpoints are NaN (the executed-verified output split).
+        import dataclasses
+
+        pv = stacked_surface.p_value.copy()
+        pv[~stacked_surface.is_reference] = np.nan
+        ts = stacked_surface.t_stat.copy()
+        ts[~stacked_surface.is_reference] = np.nan
+        cl = stacked_surface.conf_int_lower.copy()
+        cu = stacked_surface.conf_int_upper.copy()
+        cl[~stacked_surface.is_reference] = np.nan
+        cu[~stacked_surface.is_reference] = np.nan
+        surf = dataclasses.replace(
+            stacked_surface,
+            p_value=pv,
+            t_stat=ts,
+            conf_int_lower=cl,
+            conf_int_upper=cu,
+            df_survey=0.0,
+        )
+        with pytest.warns(UserWarning, match="withheld/undefined"):
+            h = compute_honest_did(surf, M=0.5)
+        assert np.isfinite(h.lb) and np.isfinite(h.ub)
+        assert np.isnan(h.ci_lb) and np.isnan(h.ci_ub)
+        with pytest.warns(UserWarning, match="withheld/undefined"):
+            p = compute_pretrends_power(surf)
+        assert np.isfinite(p.power)
+
+    def test_positive_finite_df_survey_still_warns(self, stacked_surface):
+        # Third state of the "every df_survey state warns" contract - a
+        # regression guard against re-introducing a df-conditioned
+        # predicate (superseded round-5 draft).
+        import dataclasses
+
+        pv = stacked_surface.p_value.copy()
+        pv[1] = np.nan
+        surf = dataclasses.replace(stacked_surface, p_value=pv, df_survey=25.0)
+        with pytest.warns(UserWarning, match="withheld/undefined"):
+            compute_honest_did(surf, M=0.5)
+        with pytest.warns(UserWarning, match="withheld/undefined"):
+            compute_pretrends_power(surf)
+
+    def test_cs_twin_does_not_get_withheld_warning(self, stacked_surface):
+        import dataclasses
+
+        pv = stacked_surface.p_value.copy()
+        pv[1] = np.nan
+        surf = dataclasses.replace(stacked_surface, p_value=pv, source="CallawaySantAnnaResults")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            compute_honest_did(surf, M=0.5)
+            compute_pretrends_power(surf)
+        assert not any("withheld" in str(w.message) for w in caught)
+
+    # ---- source-flip parity (admission is a pure gate) ---- #
+
+    def test_source_flip_parity(self, stacked_surface):
+        import dataclasses
+
+        cs_surface = dataclasses.replace(stacked_surface, source="CallawaySantAnnaResults")
+        h_st = compute_honest_did(stacked_surface, M=0.5)
+        h_cs = compute_honest_did(cs_surface, M=0.5)
+        np.testing.assert_allclose(
+            [h_st.lb, h_st.ub, h_st.ci_lb, h_st.ci_ub],
+            [h_cs.lb, h_cs.ub, h_cs.ci_lb, h_cs.ci_ub],
+            rtol=1e-12,
+        )
+        pt = PreTrendsPower()
+        ext_st = pt._extract_pre_period_params(stacked_surface)
+        ext_cs = pt._extract_pre_period_params(cs_surface)
+        for a, b in zip(ext_st[:5], ext_cs[:5]):
+            np.testing.assert_array_equal(np.asarray(a), np.asarray(b))
+        assert ext_st[5] == ext_cs[5]
+        # end-to-end power at the suite's stochastic tolerance (module
+        # docstring: scipy's Genz MVN CDF is internally randomized)
+        p_st = compute_pretrends_power(stacked_surface, M=0.1)
+        p_cs = compute_pretrends_power(cs_surface, M=0.1)
+        assert abs(p_st.power - p_cs.power) < 1e-3
+
+    # ---- guard-message reach tests (seven producer-derived sites) ---- #
+
+    def test_honest_missing_provenance_warning_names_producer(self, stacked_surface):
+        import dataclasses
+
+        surf = dataclasses.replace(stacked_surface, reference_event_times=None)
+        assert surf.base_period == "universal"
+        with pytest.warns(UserWarning, match="StackedDiD event-study container carries no"):
+            compute_honest_did(surf, M=0.5)
+
+    def test_honest_multi_reference_times_error_names_producer(self, stacked_surface):
+        import dataclasses
+
+        surf = dataclasses.replace(stacked_surface, reference_event_times=(-3, -1))
+        with pytest.raises(ValueError, match="StackedDiD container records DISTINCT"):
+            compute_honest_did(surf, M=0.5)
+
+    def test_honest_varying_base_warning_producer_conditional_remedy(self, stacked_surface):
+        import dataclasses
+
+        surf = dataclasses.replace(
+            stacked_surface, base_period="varying", reference_event_times=None
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            compute_honest_did(surf, M=0.5)
+        msgs = " ".join(str(w.message) for w in caught)
+        assert "Rebuild the container" in msgs
+        assert "StackedDiD results" in msgs
+        assert "CallawaySantAnna(base_period='universal')" not in msgs
+
+    def test_honest_multi_reference_rows_error(self, stacked_surface):
+        import dataclasses
+
+        is_ref = stacked_surface.is_reference.copy()
+        # mark the earliest pre row as a second reference (att 0, se 0 so
+        # the zero-count reference convention holds shape-wise)
+        att = stacked_surface.att.copy()
+        se = stacked_surface.se.copy()
+        att[0], se[0] = 0.0, 0.0
+        is_ref[0] = True
+        surf = dataclasses.replace(
+            stacked_surface,
+            is_reference=is_ref,
+            att=att,
+            se=se,
+            reference_event_times=(-1,),
+        )
+        with pytest.raises(ValueError, match="multiple reference rows"):
+            compute_honest_did(surf, M=0.5)
+
+    def test_pretrends_missing_provenance_warning_names_producer(self, stacked_surface):
+        import dataclasses
+
+        surf = dataclasses.replace(stacked_surface, reference_event_times=None)
+        with pytest.warns(UserWarning, match="StackedDiD event-study container carries no"):
+            compute_pretrends_power(surf)
+
+    def test_pretrends_multi_reference_times_error_names_producer(self, stacked_surface):
+        import dataclasses
+
+        surf = dataclasses.replace(stacked_surface, reference_event_times=(-3, -1))
+        with pytest.raises(ValueError, match="StackedDiD container records DISTINCT"):
+            compute_pretrends_power(surf)
+
+    def test_pretrends_varying_base_warning_producer_conditional_remedy(self, stacked_surface):
+        import dataclasses
+
+        surf = dataclasses.replace(
+            stacked_surface, base_period="varying", reference_event_times=None
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            compute_pretrends_power(surf)
+        msgs = " ".join(str(w.message) for w in caught)
+        assert "Rebuild the container" in msgs
+        assert "PreTrendsPower on a StackedDiD event-study container" in msgs
+
+    # ---- fail-closed structural paths ---- #
+
+    def test_rank_drop_shape_gap_fail_closed_producer_neutral(self, stacked_surface):
+        # FIRST pin of honest's retained-grid gap ValueError anywhere in
+        # the suite: a NaN-se INTERIOR pre row (the rank-drop shape) drops
+        # from the retained set and the grid gains a hole. The message must
+        # carry the producer-neutral Stacked remedy, not balance_e (which
+        # Stacked's aggregate() does not have).
+        import dataclasses
+
+        se = stacked_surface.se.copy()
+        # interior pre row (e=-2 on the kappa_pre=3 grid [-3..-2] pre set
+        # around ref -1): NaN it so pre keeps only -3 next to post 0..2 -
+        # wait, the gap forms between -3 and the reference split; the
+        # retained PRE block {-3} is contiguous, so NaN a POST interior
+        # row (e=1) instead: post block {0, 2} has a gap.
+        idx = stacked_surface.event_time.tolist().index(1)
+        se[idx] = np.nan
+        surf = dataclasses.replace(stacked_surface, se=se)
+        with pytest.raises(ValueError, match="rank-dropped event-time column"):
+            compute_honest_did(surf, M=0.5)
+
+    def test_singular_pre_covariance_honest_rejects_pretrends_accepts(self):
+        # Low-G / high-kappa_pre: the pre-period covariance sub-block is
+        # singular (vcov rank <= G). Honest validates with
+        # allow_singular=False (Rambachan-Roth eigenvalues bounded away
+        # from zero) and REJECTS; pretrends keeps its documented singular
+        # support and succeeds.
+        panel = _stacked_panel(n_units=12, n_periods=30, cohorts=(17, 19))
+        res = _fit_stacked(panel, kappa_pre=12, kappa_post=2, cluster="unit")
+        surf = res.aggregate("event_study")
+        with pytest.raises(ValueError, match="singular"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                compute_honest_did(surf, M=0.5)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            p = compute_pretrends_power(surf)
+        assert np.isfinite(p.power)
+
+    # ---- provenance pins ---- #
+
+    def test_provenance_ladder(self, stacked_surface):
+        from diff_diff.survey import SurveyDesign
+
+        # analytical -> df_survey None (deliberate: the resolver reads
+        # df_inference, a name Stacked does not use - decision 3; the
+        # TODO adapter-naming row must preserve this)
+        assert stacked_surface.base_period == "universal"
+        assert stacked_surface.reference_event_times == (-1,)
+        assert stacked_surface.df_survey is None
+        from diff_diff.results_base import _resolve_scalar_df_survey
+
+        panel = _stacked_panel()
+        res = _fit_stacked(panel, kappa_pre=3, kappa_post=2)
+        assert _resolve_scalar_df_survey(res) is None
+        # survey TSL -> the survey df threads
+        spanel = panel.copy()
+        spanel["w"] = 1.0 + 0.1 * (spanel["unit"] % 5)
+        spanel["strata"] = spanel["unit"] % 4
+        spanel["psu"] = spanel["unit"]
+        from diff_diff import StackedDiD
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            sres = StackedDiD(kappa_pre=3, kappa_post=2).fit(
+                spanel,
+                survey_design=SurveyDesign(weights="w", strata="strata", psu="psu"),
+                **STACKED_FIT_KW,
+            )
+        ssurf = sres.aggregate("event_study")
+        assert ssurf.df_survey == float(sres.survey_metadata.df_survey)

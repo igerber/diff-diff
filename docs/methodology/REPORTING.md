@@ -349,8 +349,11 @@ a library setting.
   As of the PR-B PreTrendsPower implementation audit (Roth 2022),
   `compute_pretrends_power()` consumes the full `event_study_vcov`
   sub-block when it is available — non-bootstrap CS fits
-  (`staggered_results.py` populates the matrix) and non-bootstrap SA
-  fits (`sun_abraham.py` builds it via `W @ vcov_cohort @ W.T`). The
+  (`staggered_results.py` populates the matrix), non-bootstrap SA
+  fits (`sun_abraham.py` builds it via `W @ vcov_cohort @ W.T`), and
+  admitted CS-/Stacked-sourced `aggregate('event_study')` containers
+  carrying `vcov` (row M-024; StackedDiD persists its ES VCV in every
+  inference mode, so Stacked containers always take this tier). The
   `PreTrendsPowerResults.covariance_source` field records the actual
   extraction path (`"full_pre_period_vcov"` vs `"diag_fallback"`), and
   the `DiagnosticReport.pretrends_power` block surfaces that label
@@ -389,12 +392,14 @@ a library setting.
   diagonal), TwoStageDiD on the analytical paths only (bootstrap and
   replicate-weight modes clear it). Where the covariance is present,
   the PT check takes the joint-Wald path (subject to the hc2_bm
-  policy and rank guard below). Pretrends POWER is unaffected:
-  `compute_pretrends_power()` supports only MPD / CS / SunAbraham
-  fits, and Stacked/TwoStage remain outside DR's power applicability
-  - their new covariance is consumed by the PT check and by the
-  PRECOMPUTED-power provenance classifier only (a stored power result
-  on a fit that now exposes a full VCV is labelled
+  policy and rank guard below). Pretrends POWER: natively
+  `compute_pretrends_power()` supports MPD / CS / SunAbraham fits;
+  since row M-024 a Stacked `results.aggregate('event_study')`
+  CONTAINER also admits (kappa_pre >= 2). Stacked/TwoStage NATIVE
+  results remain outside DR's power applicability - within
+  DiagnosticReport their covariance is consumed by the PT check and
+  by the PRECOMPUTED-power provenance classifier only (a stored power
+  result on a fit that now exposes a full VCV is labelled
   `"diag_fallback_available_full_vcov_unused"`).
 
 - **Note:** hc2_bm parallel-trends policy (deviation by omission,

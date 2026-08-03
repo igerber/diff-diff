@@ -586,7 +586,15 @@ def _handle_stacked(results: Any):
             ),
             code="# Check results.n_sub_experiments and inspect results.stacked_data",
             priority="medium",
-            step_name="heterogeneity",
+            # 3.9 (row M-024): a DISTINCT key, deliberately not
+            # "heterogeneity". Since the StackedDiD event-study surface is
+            # always populated, DiagnosticReport's heterogeneity check now
+            # runs on every plain fit and marks that step completed - which
+            # used to silently drop this UNRELATED balance advice from
+            # next_steps (the step_name collision). Like "loo_jackknife",
+            # this key stays OUT of the STEPS completion vocabulary: no
+            # diagnostic ever completes it, so the advice always survives.
+            step_name="sub_experiment_balance",
         ),
         _robustness_compare_step("CS, SA, or BJS"),
     ]

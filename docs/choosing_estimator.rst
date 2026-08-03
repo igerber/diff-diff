@@ -573,9 +573,11 @@ with clean controls and apply Q-weights to reweight the stacked regression.
 
    stk = StackedDiD(kappa_pre=2, kappa_post=3)
    results = stk.fit(data, outcome='y', unit='unit_id',
-                     time='period', first_treat='first_treat',
-                     aggregate='event_study')
+                     time='period', first_treat='first_treat')
    results.print_summary()
+
+   # The event-study surface is always computed (3.9); view it post-fit:
+   es = results.aggregate('event_study')
 
 .. note::
 

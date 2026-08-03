@@ -342,7 +342,9 @@ This step is CRITICAL and most often skipped. Run at least one of:
 ### HonestDiD (Rambachan & Roth 2023) - recommended
 Bounds on the treatment effect under violations of parallel trends.
 Works with MultiPeriodDiD, CallawaySantAnna, and ChaisemartinDHaultfoeuille
-(dCDH) results.
+(dCDH) results, plus StackedDiD via the post-fit
+`results.aggregate('event_study')` container (needs `kappa_pre >= 2` so
+estimated pre-periods exist).
 
 - For CS: pass the post-fit container - `compute_honest_did(
   results.aggregate('event_study'))` - no refit needed (the fit-time

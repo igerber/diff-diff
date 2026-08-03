@@ -274,7 +274,11 @@ ROWS = [
             df, outcome="y", unit="unit", time="time", first_treat="first_treat"
         ),
         cr1_k=(6,),
-        tail_df=(309.0,) * 1,
+        # 3 safe_inference calls since M-024: the event-study surface is
+        # ALWAYS materialized (2 estimated event times at the default
+        # kappa 1/1 grid) alongside the overall ATT, all at the same
+        # pooled residual df.
+        tail_df=(309.0,) * 3,
         status="legitimate",
         reason=(
             "L1: k_total is clubSandwich CR1S by construction (stacked_did.py "

@@ -794,6 +794,21 @@ class TestLLMsFullStackedDiDCoverage:
             "StackedDiD.fit() exposes covariates= but the llms-full.txt fit() block "
             "does not document it."
         )
+
+    def test_llms_full_stacked_fit_aggregate_line_documents_shim(self):
+        # M-024: the documented fit signature must carry the sentinel
+        # default + deprecation marker (the dCDH precedent's form), not
+        # the stale `aggregate: str = None` - no other pin covers this
+        # line, so it could silently go stale.
+        section = self._stacked_section()
+        fit_start = section.index("stacked.fit(")
+        fit_block = section[fit_start : section.index("\n)", fit_start)]
+        agg_line = next(
+            line for line in fit_block.splitlines() if line.strip().startswith("aggregate")
+        )
+        assert "NOT_SUPPLIED" in agg_line
+        assert "DEPRECATED (M-024)" in agg_line
+        assert "results.aggregate()" in agg_line
         # balance= must be documented somewhere in the section (constructor param)
         assert "balance" in section
 

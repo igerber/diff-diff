@@ -58,6 +58,7 @@ Results container for Stacked DiD estimation.
 
    .. autosummary::
 
+      ~StackedDiDResults.aggregate
       ~StackedDiDResults.summary
       ~StackedDiDResults.print_summary
       ~StackedDiDResults.to_dataframe
@@ -79,9 +80,13 @@ Basic usage::
 
     est = StackedDiD(kappa_pre=2, kappa_post=2)
     results = est.fit(data, outcome='outcome', unit='unit',
-                      time='period', first_treat='first_treat',
-                      aggregate='event_study')
+                      time='period', first_treat='first_treat')
     results.print_summary()
+
+    # The event-study surface is always computed (3.9, row M-024);
+    # view it post-fit as the unified container:
+    es = results.aggregate('event_study')
+    simple = results.aggregate('simple')
 
 Accessing the stacked dataset::
 

@@ -12,6 +12,7 @@
    .. autosummary::
 
       ~StackedDiDResults.__init__
+      ~StackedDiDResults.aggregate
       ~StackedDiDResults.print_summary
       ~StackedDiDResults.summary
       ~StackedDiDResults.to_dataframe
@@ -28,6 +29,7 @@
       ~StackedDiDResults.anticipation
       ~StackedDiDResults.att
       ~StackedDiDResults.balance
+      ~StackedDiDResults.base_period
       ~StackedDiDResults.balance_diagnostics
       ~StackedDiDResults.cluster_name
       ~StackedDiDResults.coef_var
@@ -49,6 +51,7 @@
       ~StackedDiDResults.n_sub_experiments
       ~StackedDiDResults.n_treated_units
       ~StackedDiDResults.p_value
+      ~StackedDiDResults.reference_event_times
       ~StackedDiDResults.se
       ~StackedDiDResults.significance_stars
       ~StackedDiDResults.survey_metadata

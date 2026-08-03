@@ -91,10 +91,13 @@ def main():
         kappa_pre=kappa_pre,
         kappa_post=kappa_post,
         weighting="aggregate",
-        clean_control="not_yet_treated",
+        control_group="not_yet_treated",
         cluster="unit",
     )
 
+    # The event-study surface is always computed at fit (3.9, row M-024);
+    # the deprecated aggregate= kwarg would emit a FutureWarning inside
+    # the timed block and contaminate the measurement.
     with Timer() as estimation_timer:
         results = est.fit(
             df,
@@ -102,7 +105,6 @@ def main():
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
     estimation_time = estimation_timer.elapsed

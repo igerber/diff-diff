@@ -6,14 +6,15 @@ Hollingsworth (2024) stacked difference-in-differences estimation.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
 from diff_diff._deprecation import deprecated_field_property
+from diff_diff.aggregation import AggregationMixin, AggregationResult
 from diff_diff.results import _format_survey_block, _get_significance_stars
-from diff_diff.results_base import BaseResults
+from diff_diff.results_base import BaseResults, build_event_study_surface
 
 __all__ = [
     "StackedDiDResults",
@@ -21,7 +22,7 @@ __all__ = [
 
 
 @dataclass
-class StackedDiDResults(BaseResults):
+class StackedDiDResults(BaseResults, AggregationMixin):
     """
     Results from Stacked DiD estimation (Wing, Freedman & Hollingsworth 2024).
 
@@ -41,6 +42,10 @@ class StackedDiDResults(BaseResults):
     event_study_effects : dict, optional
         Dictionary mapping event time h to effect dict with keys:
         'effect', 'se', 't_stat', 'p_value', 'conf_int', 'n_obs'.
+        Always populated on 3.9+ fits (the pooled regression always
+        includes the event-time interactions and the surface is always
+        extracted - row M-024); None only on pre-3.9 pickles. View it as
+        the unified container via ``aggregate('event_study')``.
     group_effects : dict, optional
         Dictionary mapping cohort g to effect dict.
     stacked_data : pd.DataFrame
@@ -83,7 +88,9 @@ class StackedDiDResults(BaseResults):
         (analytical hc1/hc2_bm sandwich, survey replicate refit, and survey
         TSL all produce the coefficient covariance the SEs are read from).
         The reference period is synthesized, never a regression column, so
-        it is absent from the index. None when no event study was requested.
+        it is absent from the index. Always populated on 3.9+ fits (the
+        event-study surface is always materialized - row M-024); None
+        only on pre-3.9 pickles.
     event_study_vcov_index : list of int, optional
         Event-time labels ordering ``event_study_vcov``'s rows/columns
         (the estimated event times, reference excluded).
@@ -96,7 +103,8 @@ class StackedDiDResults(BaseResults):
         fallback otherwise — finite residual df under the 3.9 default,
         ``G − 1`` under "cluster"), or NaN when the row used normal theory
         (``df_convention="normal"``), the df was undefined, or hc2_bm
-        failed closed. None when no event study was requested.
+        failed closed. Always populated on 3.9+ fits (row M-024); None
+        only on pre-3.9 pickles.
     df_convention : str, optional
         The estimator's ``df_convention`` configuration echoed onto the
         results ("residual" | "cluster" | "normal"; added 3.9).
@@ -176,6 +184,88 @@ class StackedDiDResults(BaseResults):
             state = dict(state)
             state["control_group"] = state.pop("clean_control")
         self.__dict__.update(state)
+
+    # ------------------------------------------------------------------
+    # Container-consumer provenance (rows M-024 / M-093). Class-level
+    # attrs, deliberately NOT dataclass fields: the generated __init__'s
+    # positional indexes are public API, and both values are derivable.
+    # ------------------------------------------------------------------
+    #: Every sub-experiment normalizes against the single omitted
+    #: reference ``e = -1 - anticipation`` - universal-base semantics in
+    #: the CallawaySantAnna vocabulary. Read by ``_provenance_kwargs``
+    #: so honest_did's cannot-verify-universal-base fail-safe stays
+    #: silent on StackedDiD containers.
+    base_period: ClassVar[str] = "universal"
+
+    @property
+    def reference_event_times(self) -> Tuple[int, ...]:
+        """The singleton common reference event time, ``(-1 - anticipation,)``.
+
+        StackedDiD has exactly one omitted reference shared by every
+        sub-experiment, so the container consumers' common-reference
+        guard always sees a single entry (rows M-024 / M-093).
+        """
+        return (-1 - int(self.anticipation),)
+
+    # ------------------------------------------------------------------
+    # Post-fit aggregation (row M-024, on the M-122 contract). Both
+    # levels are pure VIEWS over stored fields - the event-study surface
+    # is always materialized at fit since 3.9, and "simple" relays the
+    # stored overall inference bit-exactly. Nothing is recomputed, so
+    # every inference mode (survey TSL, replicate refit, hc2_bm) relays
+    # faithfully.
+    # ------------------------------------------------------------------
+    # ClassVar: on a dataclass a bare annotation would turn this routing
+    # configuration into an ``__init__`` field.
+    _AGGREGATE_SUPPORTED: ClassVar[Tuple[str, ...]] = ("simple", "event_study")
+    # StackedDiD has no balance_e machinery on any aggregation level
+    # (kappa trimming already balances every retained cohort's window).
+    _AGGREGATE_BALANCE_E_TYPES: ClassVar[Tuple[str, ...]] = ()
+
+    def _aggregate_compute(
+        self, level: str, *, weights: Optional[str], balance_e: Optional[int]
+    ) -> Any:
+        if level == "event_study":
+            # The unified container over ``event_study_effects`` (always
+            # populated on 3.9+ fits; pre-3.9 pickles raise the absent-
+            # surface error with a re-fit hint).
+            return build_event_study_surface(self)
+
+        # level == "simple": one-row view relaying the stored overall
+        # inference. ``n`` is the TREATED-unit count: StackedDiD's treated
+        # and control sets OVERLAP (a later-treated unit is treated in its
+        # own sub-experiment and a clean control in earlier ones), so a
+        # disjoint total does not exist as a stored scalar and summing the
+        # two counts would double-count - deliberately narrower in scope
+        # than CallawaySantAnna's treated+control "units" (REGISTRY
+        # StackedDiD M-024 Note; cross-container ``n`` comparisons are out
+        # of contract for this estimator). ``target`` is "att" per the CS
+        # precedent: ``overall_att`` is the equally-weighted average of
+        # post-treatment event-study coefficients, NOT the per-event-time
+        # trimmed aggregate ATT, so weighting-specific target strings
+        # would misstate the scalar (``describe_target_parameter`` is the
+        # estimand's prose source of truth).
+        ci = self.overall_conf_int if self.overall_conf_int is not None else (np.nan, np.nan)
+        return AggregationResult(
+            level="simple",
+            label=np.array(["overall"], dtype=object),
+            target=np.array(["att"], dtype=object),
+            att=np.array([self.overall_att], dtype=float),
+            se=np.array([self.overall_se], dtype=float),
+            t_stat=np.array([self.overall_t_stat], dtype=float),
+            p_value=np.array([self.overall_p_value], dtype=float),
+            conf_int_lower=np.array([ci[0]], dtype=float),
+            conf_int_upper=np.array([ci[1]], dtype=float),
+            n=np.array([float(self.n_treated_units)], dtype=float),
+            df=np.array(
+                [float(self.inference_df) if self.inference_df is not None else float("nan")],
+                dtype=float,
+            ),
+            alpha=self.alpha,
+            n_kind="units",
+            weight=np.array([1.0], dtype=float),
+            estimator=type(self).__name__.replace("Results", ""),
+        )
 
     # --- Inference-field aliases (balance/external-adapter compatibility) ---
     @property
@@ -462,8 +552,12 @@ class StackedDiDResults(BaseResults):
         """
         if level == "event_study":
             if self.event_study_effects is None:
+                # Only reachable on pre-3.9 pickles: 3.9+ fits always
+                # materialize the surface (row M-024).
                 raise ValueError(
-                    "Event study effects not computed. " "Use aggregate='event_study'."
+                    "Event study effects not present on this results object. "
+                    "Re-fit with diff-diff >= 3.9, which always computes the "
+                    "event-study surface."
                 )
             rows = []
             for h, data in sorted(self.event_study_effects.items()):

@@ -415,7 +415,12 @@ distinct per-cohort positional-base event times whose multi-entry case
 fails the HonestDiD/PreTrendsPower common-reference guard on gapped
 universal grids; amended into [M-092] pre-cut with the
 2(b) consumer delivery), and `to_dataframe(level="event_study")`
-emitting identical column schemas from every estimator.
+emitting identical column schemas from every estimator. The container
+OWNS its arrays: `__post_init__` copies every array field including the
+`vcov`/`vcov_index` pair (amended with [M-024] - `np.asarray` aliased the
+producer's stored matrix on the post-fit view route, so mutating a
+container could corrupt the fitted result; `vcov_index` keeps its native
+dtype, int labels never become floats).
 
 **Pickle migration.** Renamed-field classes ship `__setstate__` migration
 following the existing `SyntheticDiDResults.__setstate__` precedent
@@ -457,7 +462,16 @@ canonical 0..n-1 codes, keeping a shared results artifact free of names, emails
 or administrative IDs. Analytical-vs-bootstrap inference of the aggregated
 estimand follows the fit's inference method; where bootstrap draws are not
 retained, `aggregate()` on a bootstrapped fit RAISES rather than silently
-returning analytical inference. Estimators whose
+returning analytical inference. **View-relay exception (Phase 2b PRs 1-2):**
+estimators whose `aggregate()` RELAYS stored fields without recomputation
+need no influence-function kit - there is nothing to re-weight. The
+retention requirement binds RECOMPUTING estimators (the CallawaySantAnna
+class); dCDH [M-026] relays its stored overall/event-study surfaces
+verbatim, and StackedDiD [M-024] always materializes its event-study
+surface at fit (the pooled regression always includes the interactions)
+so both its levels are pure views - which is also why bootstrap-style
+fail-closing does not apply to them: every stored inference mode relays
+faithfully. Estimators whose
 estimand is already a single aggregation (SunAbraham's saturated event study,
 LPDiD's per-horizon design) expose `aggregate()` where meaningful as additive
 surface; their native params (`only_event`/`only_pooled` etc.) are documented

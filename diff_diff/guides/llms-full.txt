@@ -1032,7 +1032,7 @@ stacked.fit(
     unit: str,
     time: str,
     first_treat: str,
-    aggregate: str = None,         # None, "simple", or "event_study"
+    aggregate: Any = NOT_SUPPLIED, # DEPRECATED (M-024): warns; surface always computed - use results.aggregate() post-fit
     population: str = None,        # Required when weighting="population"
     covariates: list[str] = None,  # Columns to balance (requires balance="entropy"); values read at t=a-1-anticipation; balanced windows only
 ) -> StackedDiDResults
@@ -1045,10 +1045,11 @@ from diff_diff import StackedDiD, plot_event_study
 
 est = StackedDiD(kappa_pre=2, kappa_post=2)
 results = est.fit(data, outcome='outcome', unit='unit',
-                  time='period', first_treat='first_treat',
-                  aggregate='event_study')
+                  time='period', first_treat='first_treat')
 results.print_summary()
 plot_event_study(results)
+es = results.aggregate('event_study')  # unified container (M-024)
+simple = results.aggregate('simple')   # one-row overall relay
 ```
 
 ### EfficientDiD
@@ -1760,7 +1761,7 @@ ImputationDiDResults, TwoStageDiDResults, StackedDiDResults, and EfficientDiDRes
 | `overall_t_stat` | `float` | T-statistic |
 | `overall_p_value` | `float` | P-value |
 | `overall_conf_int` | `tuple[float, float]` | CI |
-| `event_study_effects` | `dict[int, dict]` | Event study effects (if aggregate includes event_study) |
+| `event_study_effects` | `dict[int, dict]` | Event study effects (if aggregate includes event_study; ALWAYS populated for StackedDiD since 3.9 - row M-024) |
 | `group_effects` | `dict` | Group-level effects (if aggregate includes group) |
 | `groups` | `list` | Treatment cohorts |
 | `time_periods` | `list` | All time periods |

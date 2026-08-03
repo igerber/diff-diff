@@ -8,6 +8,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **StackedDiD post-fit `aggregate()` + honest/pretrends container
+  admission** (v4 program 2(b) PR-2; ledger row [M-024] flips to
+  shimmed, row [M-093] amended a second time).
+  - The StackedDiD event-study surface is now ALWAYS computed at fit:
+    the pooled regression always included the event-time interactions,
+    so only the extraction and (under `hc2_bm`) the per-event
+    Bell-McCaffrey contrast DOFs were gated on fit-time `aggregate=` -
+    both gates are gone. Consequences on plain fits: `summary()`
+    renders the event-study table, `to_dataframe('event_study')` is
+    total, `plot_event_study` renders (previously a `TypeError`),
+    `event_study_effects`/`event_study_vcov`/`event_study_df` are
+    always populated, and DiagnosticReport's `heterogeneity` (always)
+    and `parallel_trends` (`kappa_pre >= 2`) checks now run - which
+    `BusinessReport(auto_diagnostics=True)` surfaces too. The `hc2_bm`
+    overall-ATT contrast now shares the multi-contrast DOF batch,
+    whose degeneracy guard is batch-relative: the noise-floor
+    carve-out on the R `Wald_test` HTZ parity claim widens
+    quantitatively (fail-closed NaN + a loud warning when tripped -
+    behavior unchanged, trigger condition wider; REGISTRY M-024 Note).
+  - `StackedDiD.fit(aggregate=)` is DEPRECATED ([M-024]): supplying it
+    (any value, `None` included) warns; the parameter is behaviorally
+    inert (CS-style warn-and-still-work - results are identical to a
+    plain fit's), and the `group`/`all`/unknown-value `ValueError`s
+    persist after the warning. The `stacked_did()` convenience wrapper
+    forwards the shim. `StackedDiDResults.aggregate()` ships as a pure
+    VIEW: `'event_study'` returns the unified container (with
+    `base_period='universal'` and singleton `reference_event_times`
+    provenance - one omitted reference per fit by construction);
+    `'simple'` relays `overall_att/se/t/p/CI` bit-exactly with
+    `target='att'` (the post-period average, not the per-event trimmed
+    aggregate ATT), `n = n_treated_units` (`'units'`; treated-only
+    scope - the treated and clean-control unit sets overlap across
+    sub-experiments, so no disjoint total exists) and
+    `df = inference_df`. Every stored inference mode relays (survey
+    TSL, replicate refit, `hc2_bm` fail-close); `group`/`calendar`
+    fail closed, `balance_e` applies to no level, `weights=` rejected.
+  - `compute_honest_did` and `compute_pretrends_power` now ADMIT
+    Stacked-sourced containers ([M-093] second pre-cut amendment):
+    requires `kappa_pre >= 2` (the default grid has no estimated
+    pre-periods) and, for HonestDiD, a non-singular pre-period
+    covariance (keep `kappa_pre` small relative to the cluster count).
+    Analytical Stacked containers carry `df_survey=None` - honest FLCI
+    critical values are normal-theory there (deliberate; REGISTRY
+    Note). Rows whose per-row inference the producer withheld (finite
+    `se`, non-finite `p_value` - the `hc2_bm` BM-DOF fail-close and
+    replicate-undefined designs) are admitted with a source-scoped
+    warning in BOTH consumers: bounds/power consume only the point
+    estimates and covariance, which remain valid (at the replicate
+    `0.0` sentinel, honest's identified-set bounds stay finite while
+    its FLCI CI endpoints are NaN). The seven producer-derived guard
+    messages in both container branches now derive the producer from
+    `surface.source` with producer-conditional remedies.
+  - Cross-producer container hardening: `EventStudyResults`'s
+    `__post_init__` now COPIES `vcov`/`vcov_index` like every other
+    array field (`np.asarray` aliased the producer's stored matrix on
+    the post-fit view route, so mutating a container could corrupt the
+    fitted result; `vcov_index` keeps its native dtype - int labels
+    never become floats).
+  - The practitioner "Check sub-experiment balance" step moved off the
+    shared `step_name='heterogeneity'` key (now
+    `'sub_experiment_balance'`): with the heterogeneity check running
+    on every plain fit, the collision silently dropped that unrelated
+    advice from `next_steps`. Sibling producer-side collisions on
+    other estimators are recorded in TODO.md.
 - **Event-study container consumers + dCDH post-fit `aggregate()`** (v4
   program 2(b) PR-1; ledger row [M-026] flips to shimmed, rows [M-092] /
   [M-093] amended).
@@ -20,11 +84,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     bounds are identical across routes (route-parity gated at 1e-14);
     PreTrendsPower's extraction is bit-exact (its Monte-Carlo power
     carries scipy's inherent MVN-CDF jitter either way). Admission in
-    HonestDiD/PreTrendsPower is SOURCE-SCOPED to CS-produced containers:
-    dCDH l1 containers are rejected BY DESIGN (their placebo semantics
-    need HonestDiD's native dCDH branch), other producers arrive with
-    their own `aggregate()` migrations; the plotters take no source
-    guard. Inputs whose coefficients mix reference normalizations fail
+    HonestDiD/PreTrendsPower is SOURCE-SCOPED (initially CS-only;
+    widened to Stacked-sourced containers with [M-024] below): dCDH l1
+    containers are rejected BY DESIGN (their placebo semantics need
+    HonestDiD's native dCDH branch), other producers arrive with their
+    own `aggregate()` migrations; the plotters take no source guard. Inputs whose coefficients mix reference normalizations fail
     closed in HonestDiD and PreTrendsPower on BOTH routes - a container
     with multiple marked reference rows, and any universal-base fit
     whose cohorts carry more than one positional-base event time (the

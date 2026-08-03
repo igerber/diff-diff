@@ -174,11 +174,10 @@ class StackedDiD(BaseEstimator):
     ...                   time='period', first_treat='first_treat')
     >>> results.print_summary()
 
-    With event study:
+    The event-study surface is always computed (3.9, row M-024) - view
+    it post-fit:
 
-    >>> results = est.fit(data, outcome='outcome', unit='unit',
-    ...                   time='period', first_treat='first_treat',
-    ...                   aggregate='event_study')
+    >>> es = results.aggregate('event_study')
     >>> from diff_diff import plot_event_study
     >>> plot_event_study(results)
 
@@ -345,7 +344,7 @@ class StackedDiD(BaseEstimator):
         unit: str,
         time: str,
         first_treat: str,
-        aggregate: Optional[str] = None,
+        aggregate: Any = NOT_SUPPLIED,
         population: Optional[str] = None,
         survey_design=None,
         covariates: Optional[List[str]] = None,
@@ -367,11 +366,16 @@ class StackedDiD(BaseEstimator):
             Name of column indicating when unit was first treated.
             Use 0 or np.inf for never-treated units.
         aggregate : str, optional
-            Aggregation mode: None/"simple" (overall ATT only) or
-            "event_study". Group aggregation is not supported because
-            the pooled stacked regression cannot produce cohort-specific
-            effects. Use CallawaySantAnna or ImputationDiD for
-            cohort-level estimates.
+            DEPRECATED (3.9, removed in 4.0; ledger row M-024): the
+            event-study surface is now always computed at fit, so this
+            parameter is behaviorally inert - passing it (any value,
+            ``None`` included) emits a ``FutureWarning``. Aggregate as a
+            post-fit step instead: ``results.aggregate('event_study')`` /
+            ``results.aggregate('simple')``. Value validation is
+            unchanged: ``"group"``/``"all"`` raise ``ValueError``
+            (the pooled stacked regression cannot produce
+            cohort-specific effects - use CallawaySantAnna or
+            ImputationDiD), as do unknown values.
         population : str, optional
             Column name for population weights. Required only when
             weighting="population".
@@ -398,6 +402,28 @@ class StackedDiD(BaseEstimator):
         ValueError
             If required columns are missing or data validation fails.
         """
+        # ---- fit(aggregate=) shim (row M-024) ----
+        # Deprecated in 3.9, removed at 4.0: the event-study surface is now
+        # ALWAYS computed at fit (see the extraction block below), so the
+        # param is behaviorally inert and aggregation moves to the post-fit
+        # results.aggregate(type=...). The sentinel default means the
+        # warning fires ONLY when the caller supplies the argument (None
+        # included), never on a plain fit(). Value validation below is
+        # unchanged, so the deprecated path returns exactly what a plain
+        # fit does - or raises exactly as it always did.
+        if aggregate is not NOT_SUPPLIED:
+            warnings.warn(
+                "StackedDiD.fit(aggregate=) is deprecated and will be "
+                "removed in 4.0. The event-study surface is now always "
+                "computed; aggregate as a post-fit step: "
+                "results.aggregate('event_study') / "
+                "results.aggregate('simple').",
+                FutureWarning,
+                stacklevel=2,
+            )
+        else:
+            aggregate = None
+
         # ---- Validate inputs ----
         if aggregate in ("group", "all"):
             raise ValueError(
@@ -741,18 +767,24 @@ class StackedDiD(BaseEstimator):
             # Only build contrasts whose target column is identified; if a
             # delta_h column itself was dropped, that event-time will get
             # NaN inference (left to safe_inference's df=None path).
-            # Per CI codex R1 P3: skip per-event contrast DOFs when the
-            # event-study surface is not user-visible (aggregate != "event_study").
-            # The overall ATT contrast still gets computed below.
+            # 3.9 (row M-024): the per-event contrasts are ALWAYS built -
+            # the event-study surface is always materialized so the
+            # post-fit results.aggregate("event_study") view is total.
+            # (The pre-M-024 gate skipped them when aggregate !=
+            # "event_study"; that gate's premise died with the post-fit
+            # surface.) NB: the dof helper's degeneracy guard is
+            # batch-relative for m > 1 (linalg.py), so the overall-ATT
+            # contrast now shares a batch with the per-event contrasts;
+            # the widened noise-floor carve-out is documented in the
+            # REGISTRY M-024 Note and pinned in test_aggregate_contract.
             es_keys: List[int] = []
             es_cols_full: List[np.ndarray] = []
-            if aggregate == "event_study":
-                for h in event_times:
-                    if h in interaction_indices and _identified[interaction_indices[h]]:
-                        c = np.zeros(k_design)
-                        c[interaction_indices[h]] = 1.0
-                        es_keys.append(h)
-                        es_cols_full.append(c)
+            for h in event_times:
+                if h in interaction_indices and _identified[interaction_indices[h]]:
+                    c = np.zeros(k_design)
+                    c[interaction_indices[h]] = 1.0
+                    es_keys.append(h)
+                    es_cols_full.append(c)
             # Overall ATT contrast: average of post-period delta_h columns
             # (the same 1/K * ones contrast used for overall_se below). Only
             # construct if ALL post-period delta_h are identified — otherwise
@@ -895,96 +927,95 @@ class StackedDiD(BaseEstimator):
             survey_metadata = compute_survey_metadata(resolved_composed, raw_w_stacked)
 
         # ---- Extract event study effects ----
-        event_study_effects: Optional[Dict[int, Dict[str, Any]]] = None
+        # 3.9 (row M-024): the surface is ALWAYS materialized - the
+        # regression always includes the event-time interactions, and the
+        # post-fit results.aggregate("event_study") view must be total.
+        # fit(aggregate=) no longer affects what is computed or stored.
+        event_study_effects: Dict[int, Dict[str, Any]] = {}
         es_vcov: Optional[np.ndarray] = None
         es_vcov_index: Optional[List[int]] = None
-        es_df_used: Optional[Dict[int, float]] = None
-        if aggregate == "event_study":
-            event_study_effects = {}
-            es_df_used = {}
-            # Reference period (e = -1 - anticipation)
-            event_study_effects[ref_period] = {
-                "effect": 0.0,
-                "se": 0.0,
-                "t_stat": np.nan,
-                "p_value": np.nan,
-                "conf_int": (np.nan, np.nan),
-                "n_obs": 0,
-            }
-            for h in event_times:
-                idx = interaction_indices[h]
-                effect = float(coef[idx])
-                se = float(np.sqrt(max(vcov[idx, idx], 0.0)))
-                _survey_df = (
-                    max(survey_metadata.df_survey, 1)
-                    if survey_metadata is not None and survey_metadata.df_survey is not None
-                    else (0 if _uses_replicate_sd else None)
+        es_df_used: Dict[int, float] = {}
+        # Reference period (e = -1 - anticipation)
+        event_study_effects[ref_period] = {
+            "effect": 0.0,
+            "se": 0.0,
+            "t_stat": np.nan,
+            "p_value": np.nan,
+            "conf_int": (np.nan, np.nan),
+            "n_obs": 0,
+        }
+        for h in event_times:
+            idx = interaction_indices[h]
+            effect = float(coef[idx])
+            se = float(np.sqrt(max(vcov[idx, idx], 0.0)))
+            _survey_df = (
+                max(survey_metadata.df_survey, 1)
+                if survey_metadata is not None and survey_metadata.df_survey is not None
+                else (0 if _uses_replicate_sd else None)
+            )
+            # Override df when replicate replicates were dropped
+            if _n_valid_rep_sd is not None and resolved_stacked is not None:
+                if _n_valid_rep_sd < resolved_stacked.n_replicates:
+                    _survey_df = _n_valid_rep_sd - 1 if _n_valid_rep_sd > 1 else 0
+                    if survey_metadata is not None:
+                        survey_metadata.df_survey = _survey_df if _survey_df > 0 else None
+            # Use BM contrast DOF for hc2_bm. Fail-closed: when the
+            # hc2_bm contract is in effect but BM DOF is unavailable (helper
+            # failed OR noise-floor NaN guard fired), emit all-NaN inference
+            # rather than fall back to normal-theory CIs/p-values. Mirrors
+            # the fix in LinearRegression.get_inference() from PR #475 R7
+            # (linalg.py:3689-3706). `safe_inference` itself has guarded
+            # non-finite / <= 0 df since PR #620 (utils.py) with the same
+            # all-NaN result; this explicit branch predates that guard and
+            # is kept for explicitness (it also skips the call entirely).
+            _is_hc2bm_path = self.vcov_type == "hc2_bm" and not _uses_replicate_sd
+            _bm_df = _bm_contrast_dof_per_event.get(h)
+            if _is_hc2bm_path and (_bm_df is None or not np.isfinite(_bm_df)):
+                # BM DOF unavailable on hc2_bm path: NaN-out inference.
+                t_stat = float("nan")
+                p_value = float("nan")
+                conf_int = (float("nan"), float("nan"))
+                # No safe_inference call happened -> no df provenance.
+                es_df_used[h] = float("nan")
+            else:
+                # BM DOF > survey/replicate df > the knob-resolved
+                # analytical fallback (residual t by default; the
+                # replicate 0-sentinel is not None, so it keeps
+                # precedence over the fallback).
+                _df_eff = (
+                    _bm_df
+                    if _bm_df is not None
+                    else (_survey_df if _survey_df is not None else _analytic_fallback_df)
                 )
-                # Override df when replicate replicates were dropped
-                if _n_valid_rep_sd is not None and resolved_stacked is not None:
-                    if _n_valid_rep_sd < resolved_stacked.n_replicates:
-                        _survey_df = _n_valid_rep_sd - 1 if _n_valid_rep_sd > 1 else 0
-                        if survey_metadata is not None:
-                            survey_metadata.df_survey = _survey_df if _survey_df > 0 else None
-                # Use BM contrast DOF for hc2_bm. Fail-closed: when the
-                # hc2_bm contract is in effect but BM DOF is unavailable (helper
-                # failed OR noise-floor NaN guard fired), emit all-NaN inference
-                # rather than fall back to normal-theory CIs/p-values. Mirrors
-                # the fix in LinearRegression.get_inference() from PR #475 R7
-                # (linalg.py:3689-3706). `safe_inference` itself has guarded
-                # non-finite / <= 0 df since PR #620 (utils.py) with the same
-                # all-NaN result; this explicit branch predates that guard and
-                # is kept for explicitness (it also skips the call entirely).
-                _is_hc2bm_path = self.vcov_type == "hc2_bm" and not _uses_replicate_sd
-                _bm_df = _bm_contrast_dof_per_event.get(h)
-                if _is_hc2bm_path and (_bm_df is None or not np.isfinite(_bm_df)):
-                    # BM DOF unavailable on hc2_bm path: NaN-out inference.
-                    t_stat = float("nan")
-                    p_value = float("nan")
-                    conf_int = (float("nan"), float("nan"))
-                    # No safe_inference call happened -> no df provenance.
-                    es_df_used[h] = float("nan")
-                else:
-                    # BM DOF > survey/replicate df > the knob-resolved
-                    # analytical fallback (residual t by default; the
-                    # replicate 0-sentinel is not None, so it keeps
-                    # precedence over the fallback).
-                    _df_eff = (
-                        _bm_df
-                        if _bm_df is not None
-                        else (_survey_df if _survey_df is not None else _analytic_fallback_df)
-                    )
-                    t_stat, p_value, conf_int = safe_inference(
-                        effect, se, alpha=self.alpha, df=_df_eff
-                    )
-                    # Record the df actually handed to safe_inference iff it
-                    # governed a t-reference (finite, > 0); None (normal
-                    # theory) and the df<=0 sentinels record NaN.
-                    es_df_used[h] = (
-                        float(_df_eff)
-                        if _df_eff is not None and np.isfinite(_df_eff) and _df_eff > 0
-                        else float("nan")
-                    )
-                n_obs_h = int(np.sum((et_vals == h) & (d_vals == 1)))
-                event_study_effects[h] = {
-                    "effect": effect,
-                    "se": se,
-                    "t_stat": t_stat,
-                    "p_value": p_value,
-                    "conf_int": conf_int,
-                    "n_obs": n_obs_h,
-                }
+                t_stat, p_value, conf_int = safe_inference(effect, se, alpha=self.alpha, df=_df_eff)
+                # Record the df actually handed to safe_inference iff it
+                # governed a t-reference (finite, > 0); None (normal
+                # theory) and the df<=0 sentinels record NaN.
+                es_df_used[h] = (
+                    float(_df_eff)
+                    if _df_eff is not None and np.isfinite(_df_eff) and _df_eff > 0
+                    else float("nan")
+                )
+            n_obs_h = int(np.sum((et_vals == h) & (d_vals == 1)))
+            event_study_effects[h] = {
+                "effect": effect,
+                "se": se,
+                "t_stat": t_stat,
+                "p_value": p_value,
+                "conf_int": conf_int,
+                "n_obs": n_obs_h,
+            }
 
-            # Persist the event-time sub-block of the pooled-regression VCV
-            # (the reported ES SEs are exactly its diagonal in every
-            # inference mode - analytical sandwich, replicate refit, and
-            # survey TSL all reassign `vcov` before this block). The
-            # reference period is synthesized, never a regression column, so
-            # the index is the ESTIMATED event times only.
-            if event_times:
-                _delta_cols = [interaction_indices[h] for h in event_times]
-                es_vcov = vcov[np.ix_(_delta_cols, _delta_cols)]
-                es_vcov_index = [int(h) for h in event_times]
+        # Persist the event-time sub-block of the pooled-regression VCV
+        # (the reported ES SEs are exactly its diagonal in every
+        # inference mode - analytical sandwich, replicate refit, and
+        # survey TSL all reassign `vcov` before this block). The
+        # reference period is synthesized, never a regression column, so
+        # the index is the ESTIMATED event times only.
+        if event_times:
+            _delta_cols = [interaction_indices[h] for h in event_times]
+            es_vcov = vcov[np.ix_(_delta_cols, _delta_cols)]
+            es_vcov_index = [int(h) for h in event_times]
 
         # ---- Compute overall ATT ----
         # Average of post-treatment delta_h coefficients with delta-method SE
@@ -1623,7 +1654,7 @@ def stacked_did(
     first_treat: str,
     kappa_pre: int = 1,
     kappa_post: int = 1,
-    aggregate: Optional[str] = None,
+    aggregate: Any = NOT_SUPPLIED,
     population: Optional[str] = None,
     survey_design=None,
     covariates: Optional[List[str]] = None,
@@ -1651,7 +1682,10 @@ def stacked_did(
     kappa_post : int, default=1
         Post-treatment event-time periods.
     aggregate : str, optional
-        Aggregation mode: None, "simple", or "event_study".
+        DEPRECATED (3.9, removed in 4.0; row M-024) - the event-study
+        surface is always computed; passing this warns and changes
+        nothing. Use ``results.aggregate('event_study')`` /
+        ``results.aggregate('simple')`` post-fit.
     population : str, optional
         Population column for weighting="population".
     survey_design : SurveyDesign, optional
@@ -1674,9 +1708,9 @@ def stacked_did(
     >>> from diff_diff import stacked_did, generate_staggered_data
     >>> data = generate_staggered_data(seed=42)
     >>> results = stacked_did(data, 'outcome', 'unit', 'period',
-    ...                       'first_treat', kappa_pre=2, kappa_post=2,
-    ...                       aggregate='event_study')
+    ...                       'first_treat', kappa_pre=2, kappa_post=2)
     >>> results.print_summary()
+    >>> es = results.aggregate('event_study')  # post-fit view (M-024)
     """
     est = StackedDiD(kappa_pre=kappa_pre, kappa_post=kappa_post, **kwargs)
     return est.fit(

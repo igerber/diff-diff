@@ -4958,3 +4958,50 @@ class TestSyntheticDiDBootstrapInferenceLabel:
             f"allow-list regression: bootstrap fits must not fall through to the "
             f"analytical label. caveat message: {message!r}"
         )
+
+
+class TestStackedAlwaysComputedSurfaceBusinessReport:
+    """M-024 ripple: BusinessReport(auto_diagnostics=True) lifts DR's
+    schema, so plain-fit BR output gains the PT/heterogeneity narrative -
+    and the renamed practitioner step key keeps the sub-experiment
+    balance advice in next_steps (the step_name collision fix)."""
+
+    @staticmethod
+    def _panel(seed=42):
+        rng = np.random.default_rng(seed)
+        rows = []
+        for u in range(60):
+            g = [4, 6, 0][u % 3]
+            for t in range(1, 11):
+                y = 1.0 + 0.1 * t + u * 0.01 + (1.5 if g and t >= g else 0.0) + rng.normal(0, 0.3)
+                rows.append({"unit": u, "time": t, "outcome": y, "first_treat": g})
+        return pd.DataFrame(rows)
+
+    def test_plain_fit_br_runs_checks_and_keeps_balance_step(self):
+        from diff_diff import StackedDiD
+        from diff_diff.business_report import BusinessReport
+
+        df = self._panel()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = StackedDiD(kappa_pre=2, kappa_post=2).fit(
+                df,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+            d = BusinessReport(
+                res,
+                data=df,
+                unit="unit",
+                time="time",
+                outcome="outcome",
+                first_treat="first_treat",
+                auto_diagnostics=True,
+            ).to_dict()
+        schema = d["diagnostics"]["schema"]
+        assert schema["parallel_trends"]["status"] == "ran"
+        assert schema["heterogeneity"]["status"] == "ran"
+        labels = [s["label"] for s in d["next_steps"]]
+        assert "Check sub-experiment balance" in labels
