@@ -592,6 +592,23 @@ class TestContainerIntegrity:
             p_perm = compute_pretrends_power(self._container([-3, 0, -2, -1, 1]), M=0.1)
         assert abs(p_sorted.power - p_perm.power) < 1e-3  # MVN-CDF jitter
 
+    def test_reversed_rows_last_period_violation_invariant(self):
+        # Positional violation patterns (last_period assigns weights[-1]
+        # to the FINAL entry) require chronological pre-period order, not
+        # row order: a reversed hand-built container must produce the
+        # same power as the sorted one.
+        pt_kwargs = dict(M=0.5, violation_type="last_period")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            p_sorted = compute_pretrends_power(self._container([-3, -2, -1, 0, 1]), **pt_kwargs)
+            p_rev = compute_pretrends_power(self._container([-2, -3, -1, 0, 1]), **pt_kwargs)
+        assert abs(p_sorted.power - p_rev.power) < 1e-3  # MVN-CDF jitter
+        # Extraction-level exactness: chronological labels either way.
+        pt = PreTrendsPower()
+        rel_sorted = pt._extract_pre_period_params(self._container([-3, -2, -1, 0, 1]))[4]
+        rel_rev = pt._extract_pre_period_params(self._container([-2, -3, -1, 0, 1]))[4]
+        np.testing.assert_array_equal(rel_sorted, rel_rev)
+
     def test_duplicate_event_time_labels_rejected(self):
         surface = self._container([-3, -2, -1, 0, 0])
         for consumer in (compute_honest_did, compute_pretrends_power):

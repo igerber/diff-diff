@@ -1863,7 +1863,11 @@ class CallawaySantAnna(
             ``compute_honest_did``, ``compute_pretrends_power`` and
             ``plot_event_study`` all accept the post-fit container from
             ``results.aggregate('event_study')`` directly, so no consumer
-            requires the fit-time surface anymore; it remains only as the
+            requires the fit-time surface anymore - EXCEPT on bootstrapped
+            fits (``n_bootstrap > 0``), where post-fit ``aggregate()``
+            raises (percentile inference cannot be reproduced from the
+            retained analytical state) and fit-time aggregation remains
+            the supported route. Otherwise it remains only as the
             deprecated compatibility path through 3.9.
         balance_e : int, optional
             DEPRECATED since 3.9, removed in 4.0 (ledger row M-117). Passing

@@ -1532,7 +1532,12 @@ class PreTrendsPower(BaseEstimator):
         if not keep.any():
             raise ValueError("No pre-treatment periods found in event study.")
 
+        # CHRONOLOGICAL order, not row order: positional violation
+        # patterns (last_period assigns weights[-1] to the final entry;
+        # user-supplied custom weights are positional too) silently
+        # mis-map on a hand-built container whose rows arrive unsorted.
         keep_idx = np.where(keep)[0]
+        keep_idx = keep_idx[np.argsort(surface.event_time[keep_idx])]
         pre_list = list(surface.event_time[keep_idx].tolist())
         effects = np.asarray(surface.att[keep_idx], dtype=float)
         ses = np.asarray(surface.se[keep_idx], dtype=float)
