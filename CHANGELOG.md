@@ -47,8 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `compute_honest_did` and `compute_pretrends_power` now ADMIT
     Stacked-sourced containers ([M-093] second pre-cut amendment):
     requires `kappa_pre >= 2` (the default grid has no estimated
-    pre-periods) and, for HonestDiD, a non-singular pre-period
-    covariance (keep `kappa_pre` small relative to the cluster count).
+    pre-periods) and, for HonestDiD, a non-singular FULL retained
+    event-study covariance - the pre+post sub-block, per
+    Rambachan-Roth Assumption 3 (keep `kappa_pre` small relative to
+    the cluster count).
     Analytical Stacked containers carry `df_survey=None` - honest FLCI
     critical values are normal-theory there (deliberate; REGISTRY
     Note). Rows whose per-row inference the producer withheld (finite
@@ -59,7 +61,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `0.0` sentinel, honest's identified-set bounds stay finite while
     its FLCI CI endpoints are NaN). The seven producer-derived guard
     messages in both container branches now derive the producer from
-    `surface.source` with producer-conditional remedies.
+    `surface.source` with producer-conditional remedies. A new
+    reference-support guard fails `fit()` closed when the omitted
+    reference cell has no treated or control rows stack-wide (gapped
+    panel at every cohort's `a - 1 - anticipation`) - previously this
+    rank-dropped and silently re-normalized while the surface
+    certified a `delta_0 = 0` reference that never existed.
   - Cross-producer container hardening: `EventStudyResults`'s
     `__post_init__` now COPIES `vcov`/`vcov_index` like every other
     array field (`np.asarray` aliased the producer's stored matrix on

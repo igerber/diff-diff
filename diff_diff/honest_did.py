@@ -586,7 +586,8 @@ def _extract_container_params(
     ``CallawaySantAnnaResults.aggregate('event_study')`` or
     ``StackedDiDResults.aggregate('event_study')`` (row M-024; Stacked
     containers require ``kappa_pre >= 2`` so estimated pre-periods
-    exist, and a pre-period covariance that is not singular - honest
+    exist, and a non-singular FULL retained event-study covariance
+    (the pre+post sub-block, per Rambachan-Roth's Assumption 3) - honest
     validates with ``allow_singular=False``, so keep ``kappa_pre`` small
     relative to the cluster count). Admission is SOURCE-SCOPED:
     containers from other producers are rejected rather than silently
@@ -2883,7 +2884,8 @@ class HonestDiD(BaseEstimator):
             ``CallawaySantAnnaResults.aggregate('event_study')`` or
             ``StackedDiDResults.aggregate('event_study')`` (Stacked
             containers require ``kappa_pre >= 2`` so estimated
-            pre-periods exist, and a non-singular pre-period covariance -
+            pre-periods exist, and a non-singular FULL retained event-study
+            covariance (the pre+post sub-block) -
             keep ``kappa_pre`` small relative to the cluster count). On
             the container route the scalar inference df arrives via the
             container's ``df_survey`` provenance field (for CS-sourced

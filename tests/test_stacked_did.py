@@ -2114,3 +2114,71 @@ class TestPlainFitPlotting:
         ax = plot_event_study(results, show=False)
         assert ax is not None
         plt.close("all")
+
+
+class TestReferenceSupportGuard:
+    """M-024 follow-up (CI review): the omitted reference cell must be
+    populated - a gapped panel where every retained cohort's calendar
+    period a-1-anticipation is absent would otherwise rank-drop and
+    silently re-normalize while the surface certifies delta_0 = 0 at the
+    reference (and the container's reference_event_times provenance
+    would then mislead HonestDiD/PreTrendsPower)."""
+
+    @staticmethod
+    def _gapped_panel(periods, cohorts, n_units=90, seed=0):
+        rng = np.random.default_rng(seed)
+        rows = []
+        for u in range(n_units):
+            g = cohorts[u % len(cohorts)]
+            for t in periods:
+                d = 1 if (g and t >= g) else 0
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "y": u * 0.01 + 0.2 * t + 1.5 * d + rng.normal(0, 0.3),
+                        "first_treat": g,
+                    }
+                )
+        return pd.DataFrame(rows)
+
+    def test_stack_wide_missing_reference_fails_closed(self):
+        # Calendar period 4 absent; sole cohort a=5 has ref a-1=4 -> the
+        # reference cell is empty stack-wide. IC1 passes (min/max only),
+        # so without the guard this rank-drops and re-normalizes against
+        # an arbitrary horizon while synthesizing a fake e=-1 row.
+        panel = self._gapped_panel([1, 2, 3, 5, 6, 7], [0, 5])
+        est = StackedDiD(kappa_pre=2, kappa_post=2)
+        with pytest.raises(ValueError, match="would be fabricated"):
+            est.fit(
+                panel,
+                outcome="y",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+
+    def test_partial_reference_support_still_fits(self):
+        # Cohort 5's own ref period (4) is absent but cohort 7's (6) is
+        # present, so the POOLED omitted category is populated: the
+        # coefficient-vector normalization at e=-1 is real (verified by
+        # execution during the CI-review triage - no rank drop, sane
+        # surface). Ragged per-cohort baseline support affects estimand
+        # composition (documented ragged-window behavior), not the
+        # normalization the container certifies.
+        panel = self._gapped_panel([1, 2, 3, 5, 6, 7, 8, 9], [0, 5, 7])
+        est = StackedDiD(kappa_pre=2, kappa_post=2)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = est.fit(
+                panel,
+                outcome="y",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+        assert not [w for w in caught if "Rank-deficient" in str(w.message)]
+        assert res.event_study_effects is not None
+        surf = res.aggregate("event_study")
+        assert surf.reference_event_times == (-1,)
+        assert np.isfinite(res.overall_att)

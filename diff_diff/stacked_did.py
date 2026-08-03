@@ -645,13 +645,46 @@ class StackedDiD(BaseEstimator):
         # [K+2..2K+1] D_sa * event-time interactions
         interaction_indices: Dict[int, int] = {}
 
+        et_vals = stacked_df["_event_time"].values
+        d_vals = stacked_df["_D_sa"].values
+
+        # ---- Reference-support guard (row M-024 follow-up) ----
+        # The omitted reference event time e = -1 - anticipation is the
+        # regression's baseline category: every reported delta_h (and the
+        # synthesized reference row, and the container's
+        # reference_event_times / base_period="universal" provenance) is
+        # defined relative to its cells. On a gapped panel where NO
+        # retained sub-experiment observes that calendar period, the ref
+        # cell is empty, the design goes rank-deficient, and QR pivoting
+        # silently re-normalizes against an arbitrary surviving column -
+        # the surface would then certify a delta_0 = 0 normalization that
+        # never happened (and HonestDiD / PreTrendsPower would trust it).
+        # Both cells are required: without TREATED ref rows, D_sa is
+        # collinear with the delta block (same silent re-normalization);
+        # without CONTROL ref rows, the baseline time profile is. Fail
+        # closed - a fabricated reference must never reach consumers.
+        _ref_mask = et_vals == ref_period
+        if not np.any(_ref_mask & (d_vals == 1)) or not np.any(_ref_mask & (d_vals == 0)):
+            _missing_cell = "treated" if not np.any(_ref_mask & (d_vals == 1)) else "control"
+            raise ValueError(
+                f"The omitted reference event time e={ref_period} has no "
+                f"{_missing_cell} observations in the stacked data, so the "
+                "event-study normalization (delta_0 = 0 at the reference) "
+                "would be fabricated: the regression's baseline cell is "
+                "empty and rank handling would silently re-normalize "
+                "against an arbitrary horizon. This happens on gapped "
+                "panels where every retained cohort's calendar period "
+                "a - 1 - anticipation is absent (the IC1 window check "
+                "only inspects the panel's min/max periods, not interior "
+                "gaps). Fill the gap, adjust anticipation/kappa_pre so "
+                "the reference falls on an observed period, or drop the "
+                "affected cohorts."
+            )
+
         # Build design matrix
         X = np.zeros((n, 2 + 2 * n_event_dummies))
         X[:, 0] = 1.0  # intercept
         X[:, 1] = stacked_df["_D_sa"].values  # treatment indicator
-
-        et_vals = stacked_df["_event_time"].values
-        d_vals = stacked_df["_D_sa"].values
 
         for j, h in enumerate(event_times):
             col_lambda = 2 + j  # event-time dummy
