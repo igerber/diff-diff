@@ -2605,9 +2605,11 @@ class TestDiagFallbackDowngradeAppliedCentrally:
         assert block.get("status") == "ran", "pretrends_power should run on cs_fit"
 
         # Deterministic fixture pins (cs_fit at seed=7, treatment_effect=1.5):
-        # cov_source = full_pre_period_vcov; max_abs_pre_violation ≈ 0.375
-        # (γ * max(|t|) where pre-periods are [-4, -3, -2]); |att| ≈ 1.779;
-        # mdv_share_of_att ≈ 0.211, well under 0.25 → tier = well_powered.
+        # cov_source = full_pre_period_vcov; max_abs_pre_violation ≈ 0.401
+        # (γ * max(|t - t_ref|): the linear violation is REFERENCE-ANCHORED
+        # per Roth's normalization, so pre-periods [-4, -3, -2] around the
+        # universal e=-1 reference carry offsets [-3, -2, -1]); |att| ≈
+        # 1.779; mdv_share_of_att ≈ 0.225, under 0.25 → tier = well_powered.
         # Codex R12 P1: this ratio is now `max_abs_pre_violation / |att|`,
         # the level-scale max pre-period violation under the MDV (post-PR-B
         # Step 4 linear MDV is in Roth's γ units, a slope; the level-scale
@@ -2616,11 +2618,12 @@ class TestDiagFallbackDowngradeAppliedCentrally:
             "cs_fit is analytical CS with event_study_vcov populated — "
             "PR-B routing must report full_pre_period_vcov"
         )
-        # max_abs_pre_violation = mdv * max(|t|) = 0.0937 * 4 ≈ 0.375
+        # max_abs_pre_violation = mdv * max(|t - t_ref|) = 0.1337 * 3 ≈ 0.401
         assert block.get("max_abs_pre_violation") is not None
-        assert 0.35 < block["max_abs_pre_violation"] < 0.40, (
+        assert 0.38 < block["max_abs_pre_violation"] < 0.42, (
             f"cs_fit max_abs_pre_violation={block['max_abs_pre_violation']} "
-            "should be ≈ 0.375 (γ ≈ 0.094 × max|t|=4)"
+            "should be ≈ 0.401 (γ ≈ 0.134 × max|t - t_ref|=3, "
+            "reference-anchored)"
         )
         ratio = block["mdv_share_of_att"]
         assert ratio is not None and ratio < 0.25, (
