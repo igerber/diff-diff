@@ -1423,15 +1423,20 @@ class TestStackedAggregate:
             res.overall_att, res.overall_se, alpha=res.alpha, df=overall_dof_m1
         )
         np.testing.assert_allclose(
-            [t, p, ci[0], ci[1]],
+            [t, ci[0], ci[1]],
             [
                 res.overall_t_stat,
-                res.overall_p_value,
                 res.overall_conf_int[0],
                 res.overall_conf_int[1],
             ],
             rtol=1e-14,
         )
+        # The p-value gets a looser rtol: batched-vs-m=1 BLAS kernels differ
+        # at ~1 ULP in the dof (platform-dependent - observed on Linux
+        # x86 OpenBLAS), and the deep tail amplifies that relative noise by
+        # ~t^2 (d ln p ~ -t dt; t ~ 29 here => ~1e3x), so p carries ~1e-13
+        # relative noise while t/CI stay at 1e-14.
+        np.testing.assert_allclose(p, res.overall_p_value, rtol=1e-12)
 
     def test_legacy_pickle_absent_surface_hint(self, stacked_fitted):
         import dataclasses

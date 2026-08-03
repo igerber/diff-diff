@@ -2096,7 +2096,7 @@ class TestPlainFitPlotting:
         """M-024: plot_event_study flips from TypeError to rendering on a
         plain fit - the duck-typed effects branch now matches because the
         surface is always populated."""
-        import matplotlib
+        matplotlib = pytest.importorskip("matplotlib")
 
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
