@@ -783,7 +783,12 @@ def _extract_container_params(
                 f"covariance sub-block. Available index: {vcov_labels}."
             )
         idx = [vcov_labels.index(t) for t in ordered_times]
-        sigma = _validate_vcov_subblock(surface.vcov[np.ix_(idx, idx)], ses, "HonestDiD")
+        # allow_singular=False: Rambachan-Roth inference assumes covariance
+        # eigenvalues bounded away from zero (PreTrendsPower keeps its
+        # documented singular handling and passes the default True).
+        sigma = _validate_vcov_subblock(
+            surface.vcov[np.ix_(idx, idx)], ses, "HonestDiD", allow_singular=False
+        )
     else:
         # Container-specific message: a vcov-less container has several
         # documented causes (bootstrap/replicate overrides, producers that

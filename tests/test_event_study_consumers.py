@@ -638,6 +638,43 @@ class TestContainerIntegrity:
                 with pytest.raises(ValueError, match=match):
                     consumer(surface, M=0.5)
 
+    def test_low_scale_indefinite_rejected(self):
+        # Tolerances are RELATIVE to the matrix scale: a uniformly tiny
+        # indefinite matrix (diag 1e-10, eigenvalues [-1e-10, 3e-10])
+        # must not slip under an absolute floor.
+        vcov = np.diag(np.full(4, 1e-10))
+        vcov[0, 1] = vcov[1, 0] = 2e-10
+        se_override = np.array([1e-5, 1e-5, np.nan, 1e-5, 1e-5])
+        surface = self._container(
+            [-3, -2, -1, 0, 1],
+            vcov=vcov,
+            vcov_index=np.array([-3, -2, 0, 1]),
+            se_override=se_override,
+        )
+        for consumer in (compute_honest_did, compute_pretrends_power):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                with pytest.raises(ValueError, match="indefinite"):
+                    consumer(surface, M=0.5)
+
+    def test_singular_covariance_honest_rejects_pretrends_accepts(self):
+        # Perfectly-correlated pre-rows: PSD but SINGULAR. HonestDiD
+        # rejects (Rambachan-Roth assumes covariance eigenvalues bounded
+        # away from zero); PreTrendsPower keeps its documented
+        # singular-covariance handling.
+        ses = np.array([0.1, 0.1, 0.12, 0.13])
+        vcov = np.diag(ses**2)
+        vcov[0, 1] = vcov[1, 0] = 0.01  # corr = 1 between the pre rows
+        surface = self._container(
+            [-3, -2, -1, 0, 1], vcov=vcov, vcov_index=np.array([-3, -2, 0, 1])
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match="singular"):
+                compute_honest_did(surface, M=0.5)
+            p = compute_pretrends_power(surface, M=0.1)
+        assert p is not None
+
     def test_valid_covariance_still_accepted(self):
         ses = np.array([0.10, 0.10, 0.12, 0.13])
         vcov = np.diag(ses**2)
