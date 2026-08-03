@@ -23,7 +23,7 @@ References
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:
     from diff_diff.honest_did import HonestDiDResults
@@ -32,8 +32,9 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._deprecation import deprecated_field_property
+from diff_diff.aggregation import AggregationMixin, AggregationResult
 from diff_diff.results import _get_significance_stars
-from diff_diff.results_base import BaseResults
+from diff_diff.results_base import BaseResults, build_event_study_surface
 
 __all__ = [
     "ChaisemartinDHaultfoeuilleResults",
@@ -182,7 +183,7 @@ class DCDHBootstrapResults:
 
 
 @dataclass
-class ChaisemartinDHaultfoeuilleResults(BaseResults):
+class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
     """
     Results from de Chaisemartin-D'Haultfoeuille (dCDH) Phase 1 estimation.
 
@@ -699,6 +700,87 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults):
             state = dict(state)
             state["units"] = state.pop("groups")
         self.__dict__.update(state)
+
+    # ------------------------------------------------------------------
+    # Post-fit aggregation (row M-026, on the M-122 contract): dCDH's
+    # aggregate() is a pure VIEW over stored fields - nothing is
+    # recomputed - so bootstrap fits are PERMITTED (unlike
+    # CallawaySantAnna's kit-based recompute, which fails closed): each
+    # row relays whatever inference the fit stored.
+    # ------------------------------------------------------------------
+    # ClassVar: on a dataclass a bare annotation would turn this routing
+    # configuration into an ``__init__`` field.
+    _AGGREGATE_SUPPORTED: ClassVar[Tuple[str, ...]] = ("simple", "event_study")
+    # dCDH has no balance_e machinery on any aggregation level.
+    _AGGREGATE_BALANCE_E_TYPES: ClassVar[Tuple[str, ...]] = ()
+
+    def _overall_inference_df(self) -> float:
+        """The df the STORED overall p-value/CI actually used (NaN = none).
+
+        Deliberately NOT the ``event_study_df`` channel alone: that
+        provenance is cleared under bootstrap, while the ``L_max >= 2``
+        cost-benefit delta keeps analytical ``safe_inference`` with a
+        (possibly finite survey) df even when ``n_bootstrap > 0`` -
+        REGISTRY ``Note (Phase 2 cost-benefit delta SE)``. Resolution:
+
+        - percentile-bootstrap ``DID_M`` / ``DID_1`` -> NaN (no df);
+        - analytical paths (including the delta under bootstrap) ->
+          ``event_study_df`` when recorded, else the post-fit-refreshed
+          ``survey_metadata.df_survey``, else NaN (z-inference).
+        """
+        is_delta = self.L_max is not None and self.L_max >= 2
+        if self.bootstrap_results is not None and not is_delta:
+            return float("nan")
+        if self.event_study_df is not None:
+            return float(self.event_study_df)
+        sm = self.survey_metadata
+        if sm is not None and getattr(sm, "df_survey", None) is not None:
+            return float(sm.df_survey)
+        return float("nan")
+
+    def _aggregate_compute(
+        self, level: str, *, weights: Optional[str], balance_e: Optional[int]
+    ) -> Any:
+        if level == "event_study":
+            # The unified container over ``event_study_effects``: Phase-1
+            # fits (``L_max=None``) return the 2-row l=1 view; ``L_max >= 1``
+            # fits the multi-horizon surface (``l1_first_switch``
+            # convention, ``n_kind`` per ``results_base._from_dcdh``).
+            return build_event_study_surface(self)
+
+        # level == "simple": one-row view of the stored overall estimand -
+        # DID_M (L_max=None), DID_1 (L_max==1), or the cost-benefit delta
+        # (L_max>=2; all-NaN by design under trends_linear, where the
+        # estimand label points at linear_trends_effects instead).
+        if self.L_max is None:
+            # N_S: switching (g, t) CELLS (one group may contribute several).
+            n_val, n_kind = float(self.n_switcher_cells), "switcher_cells"
+        elif self.L_max == 1:
+            # n_switcher_cells is repurposed to the eligible-switcher GROUP
+            # count N_1 once L_max >= 1 (class docstring).
+            n_val, n_kind = float(self.n_switcher_cells), "groups"
+        else:
+            # The delta is weighted over horizon-specific N_l - no truthful
+            # scalar count exists.
+            n_val, n_kind = float("nan"), None
+        ci = self.overall_conf_int if self.overall_conf_int is not None else (np.nan, np.nan)
+        return AggregationResult(
+            level="simple",
+            label=np.array(["overall"], dtype=object),
+            target=np.array([self._estimand_label()], dtype=object),
+            att=np.array([self.overall_att], dtype=float),
+            se=np.array([self.overall_se], dtype=float),
+            t_stat=np.array([self.overall_t_stat], dtype=float),
+            p_value=np.array([self.overall_p_value], dtype=float),
+            conf_int_lower=np.array([ci[0]], dtype=float),
+            conf_int_upper=np.array([ci[1]], dtype=float),
+            n=np.array([n_val], dtype=float),
+            df=np.array([self._overall_inference_df()], dtype=float),
+            alpha=self.alpha,
+            n_kind=n_kind,
+            weight=np.array([1.0], dtype=float),
+            estimator=type(self).__name__.replace("Results", ""),
+        )
 
     # ------------------------------------------------------------------
     # Repr / properties

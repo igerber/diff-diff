@@ -240,17 +240,21 @@ by_cohort   = results.aggregate('group')         # -> AggregationResult
 ```
 
 Fit-time `aggregate=` / `balance_e=` are DEPRECATED since 3.9 (removed in 4.0,
-ledger rows M-020 / M-117) and emit a `FutureWarning`. They remain the required
-path in two cases:
-
-1. **Bootstrap inference.** `aggregate()` raises on a bootstrapped fit rather
-   than substituting analytical inference for percentile-bootstrap statistics.
-2. **Downstream consumers.** `plot_event_study`, `compute_honest_did` and
-   `compute_pretrends_power` still read the fit-time surface and do not yet
-   accept the post-fit container.
+ledger rows M-020 / M-117) and emit a `FutureWarning`. The downstream consumers
+all accept the post-fit container directly - `plot_event_study`,
+`compute_honest_did` and `compute_pretrends_power` each take
+`results.aggregate('event_study')` - so the only case still requiring the
+fit-time path is **bootstrap inference**: CallawaySantAnna's `aggregate()`
+raises on a bootstrapped fit rather than substituting analytical inference for
+percentile-bootstrap statistics.
 
 ```python
-# Both cases: aggregate at fit time.
+# Post-fit route (recommended): aggregate once, feed any consumer.
+es = results.aggregate('event_study')
+plot_event_study(es)
+honest = compute_honest_did(es, M=1.0)
+
+# Bootstrap fits only: aggregate at fit time.
 boot = CallawaySantAnna(estimation_method="dr", n_bootstrap=999, seed=42)
 plotted = boot.fit(data, outcome='outcome', unit='unit', time='period',
                    first_treat='first_treat', aggregate='event_study')
@@ -291,7 +295,7 @@ est.fit(
     # ---- multi-horizon ----
     L_max: int | None = None,                    # Max horizon; None = l=1 only
     # ---- covariates and extensions ----
-    aggregate: str | None = None,                # Reserved; raises NotImplementedError
+    aggregate: Any = NOT_SUPPLIED,               # DEPRECATED (M-026): warns; non-None raises - use results.aggregate() post-fit
     covariates: list[str] | None = None,         # DID^X residualization-style covariates
     trends_linear: bool | None = None,           # DID^{fd} group-specific linear trends
     trends_nonparam: Any | None = None,          # DID^s state-set-specific trends
@@ -301,7 +305,7 @@ est.fit(
 ) -> ChaisemartinDHaultfoeuilleResults
 ```
 
-`L_max` controls multi-horizon computation. `covariates`, `trends_linear`, `trends_nonparam`, `honest_did`, `heterogeneity`, `design2`, and `survey_design` are all supported; only `aggregate` still raises `NotImplementedError`. The 3.8 names `group=` and `controls=` remain accepted as deprecated aliases (FutureWarning; removed in 4.0).
+`L_max` controls multi-horizon computation. `covariates`, `trends_linear`, `trends_nonparam`, `honest_did`, `heterogeneity`, `design2`, and `survey_design` are all supported. Fit-time `aggregate=` is DEPRECATED (row M-026: it never computed anything here; supplying it warns and any non-None value raises) - aggregation is post-fit: `results.aggregate('event_study')` returns the unified `EventStudyResults` view (Phase-1 fits the 2-row l=1 view, `L_max>=1` the multi-horizon surface) and `results.aggregate('simple')` a one-row `AggregationResult` relaying the overall estimand (DID_M / DID_1 / delta) bit-exactly; both are pure views, so bootstrap fits are permitted. The dCDH container is deliberately NOT accepted by `compute_honest_did`/`compute_pretrends_power` (their l1 placebo semantics need the native dCDH branch - pass the results object itself). The 3.8 names `group=` and `controls=` remain accepted as deprecated aliases (FutureWarning; removed in 4.0).
 
 **Usage:**
 

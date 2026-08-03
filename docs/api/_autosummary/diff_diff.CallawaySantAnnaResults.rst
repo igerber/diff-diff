@@ -52,6 +52,7 @@
       ~CallawaySantAnnaResults.panel
       ~CallawaySantAnnaResults.pscore_fallback
       ~CallawaySantAnnaResults.pscore_trim
+      ~CallawaySantAnnaResults.reference_event_times
       ~CallawaySantAnnaResults.se
       ~CallawaySantAnnaResults.significance_stars
       ~CallawaySantAnnaResults.survey_metadata

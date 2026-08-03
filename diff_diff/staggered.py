@@ -1860,10 +1860,11 @@ class CallawaySantAnna(
             - "group": Aggregate by treatment cohort
             - "all": Compute all aggregations
 
-            Fit-time aggregation remains ONLY as the temporary compatibility
-            surface for consumers that still read it (``compute_honest_did``,
-            ``compute_pretrends_power`` and ``plot_event_study``, tracked in
-            ``TODO.md``); it is not the recommended path for new code.
+            ``compute_honest_did``, ``compute_pretrends_power`` and
+            ``plot_event_study`` all accept the post-fit container from
+            ``results.aggregate('event_study')`` directly, so no consumer
+            requires the fit-time surface anymore; it remains only as the
+            deprecated compatibility path through 3.9.
         balance_e : int, optional
             DEPRECATED since 3.9, removed in 4.0 (ledger row M-117). Passing
             it emits a ``FutureWarning``; it moves onto the post-fit call as
@@ -2687,6 +2688,25 @@ class CallawaySantAnna(
                     "control_inf": np.array([]),
                 }
 
+        # Common-reference provenance (universal base only): the DISTINCT
+        # per-cohort base EVENT TIMES (base - g). On gapped grids the
+        # positional bases land at different event times - and a cohort's
+        # base can OVERLAP another cohort's estimated horizon, where NO
+        # reference-only row marks it - so consumers that require one
+        # common reference (HonestDiD / PreTrendsPower) read this field,
+        # not the marker rows. Computed for every cohort with a valid
+        # base, independent of the materialization conditions above.
+        # Varying base has no constant per-cohort reference -> None.
+        reference_event_times: Optional[Tuple[Any, ...]] = None
+        if self.base_period == "universal":
+            _ref_event_times = set()
+            for _g in treatment_groups:
+                _b = self._select_base_period(_g, _g, precomputed["observed_sorted"])
+                if _b is not None:
+                    _ref_event_times.add(_b - _g)
+            if _ref_event_times:
+                reference_event_times = tuple(sorted(_ref_event_times))
+
         # Compute overall ATT (simple aggregation)
         overall_att, overall_se, overall_effective_df = self._aggregate_simple(
             group_time_effects, influence_func_info, df, unit, precomputed
@@ -2732,6 +2752,14 @@ class CallawaySantAnna(
                 precomputed,
             )
             event_study_effects = es_aggregation.effects
+            # The stored fit-time surface is THIS aggregation's (possibly
+            # balance_e-restricted): its common-reference provenance must
+            # describe the RETAINED cohorts, not the fit-wide set, or the
+            # native consumer route would disagree with the equivalent
+            # post-fit container (route parity). The fit-wide tuple
+            # computed above stands only when no event-study surface was
+            # produced.
+            reference_event_times = es_aggregation.reference_event_times
 
         if aggregate in ["group", "all"]:
             group_effects = self._aggregate_by_group(
@@ -2981,6 +3009,7 @@ class CallawaySantAnna(
             cluster_name=cluster_name_for_results,
             n_clusters=n_clusters_for_results,
             df_inference=df_inference_for_results,
+            reference_event_times=reference_event_times,
         )
 
         # Attach the post-fit aggregation kit (spec section 6, rows M-020/M-117).

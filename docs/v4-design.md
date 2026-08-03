@@ -407,7 +407,14 @@ an `is_reference` column - no sentinel-value conventions; the
 n_groups==0 / n_obs==0 sentinels are retired at 4.0 [M-093]), the event-study
 vcov exposed uniformly where computed, per-row inference-df provenance (the
 df each stored p-value/CI actually used, threaded via the producers'
-`event_study_df` channels), and `to_dataframe(level="event_study")`
+`event_study_df` channels), producer-provenance fields for the container
+consumers (`base_period`, `anticipation`, the scalar `df_survey`
+channel beside the per-row one - the per-row column cannot encode the
+replicate-undefined 0.0 sentinel - and `reference_event_times`, the
+distinct per-cohort positional-base event times whose multi-entry case
+fails the HonestDiD/PreTrendsPower common-reference guard on gapped
+universal grids; amended into [M-092] pre-cut with the
+2(b) consumer delivery), and `to_dataframe(level="event_study")`
 emitting identical column schemas from every estimator.
 
 **Pickle migration.** Renamed-field classes ship `__setstate__` migration

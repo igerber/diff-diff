@@ -209,7 +209,7 @@ class HonestDiDResults(Diagnostic):
     event_study_bounds: Optional[Dict[Any, Dict[str, float]]] = field(default=None, repr=False)
     # Survey design metadata (Phase 7d)
     survey_metadata: Optional[Any] = field(default=None, repr=False)
-    df_survey: Optional[int] = field(default=None, repr=False)
+    df_survey: Optional[float] = field(default=None, repr=False)
 
     def _ci_is_finite(self) -> bool:
         """Check if CI endpoints are finite (not NaN/inf)."""
@@ -577,16 +577,230 @@ class SensitivityResults(Diagnostic):
 # =============================================================================
 
 
+def _extract_container_params(
+    surface: Any,
+) -> Tuple[np.ndarray, np.ndarray, int, int, List[Any], List[Any], Optional[float]]:
+    """Container branch of ``_extract_event_study_params``.
+
+    Consumes the unified ``EventStudyResults`` surface produced by
+    ``CallawaySantAnnaResults.aggregate('event_study')``. Admission is
+    SOURCE-SCOPED: containers from other producers are rejected rather
+    than silently admitted - widening is a per-estimator methodology
+    decision in each estimator's own ``aggregate()`` migration (row
+    M-093), not a side effect of the container existing. dCDH containers
+    in particular are rejected BY DESIGN: their ``l1_first_switch``
+    placebo rows need the native dCDH branch's mandatory reinterpretation
+    warning and consecutive-horizon trimming.
+    """
+    import warnings
+
+    if surface.source != "CallawaySantAnnaResults":
+        raise TypeError(
+            "HonestDiD accepts EventStudyResults containers produced by "
+            "CallawaySantAnnaResults.aggregate('event_study') only "
+            f"(got source={surface.source!r}). For other estimators pass "
+            "the native results object where supported "
+            "(MultiPeriodDiDResults, CallawaySantAnnaResults, or "
+            "ChaisemartinDHaultfoeuilleResults); container admission for "
+            "further producers arrives with their own aggregate() "
+            "migrations."
+        )
+    if surface.time_scale != "relative":
+        raise TypeError(
+            "HonestDiD requires a relative-time event-study container; "
+            f"got time_scale={surface.time_scale!r}."
+        )
+
+    # Common-reference guard: reference_event_times is the producer's
+    # cohort-level normalization-base provenance. More than one entry
+    # means the coefficients were normalized against DIFFERENT bases
+    # (CS universal on a gapped grid) - including the layout where one
+    # cohort's base OVERLAPS another cohort's estimated horizon, which
+    # no is_reference row marks. Mirrors the native CS branch. A
+    # universal container WITHOUT the field (hand-built - CS-produced
+    # containers always record it) cannot be verified: warn fail-safe
+    # rather than fail open silently.
+    _ref_e = surface.reference_event_times
+    if _ref_e is None and surface.base_period == "universal":
+        warnings.warn(
+            "This CallawaySantAnna event-study container carries no "
+            "reference_event_times provenance, so a common reference "
+            "period cannot be verified (universal base on a gapped time "
+            "grid may mix cohort-specific bases). CS-produced containers "
+            "record it - re-aggregate from the fitted results object.",
+            UserWarning,
+            stacklevel=4,
+        )
+    if _ref_e is not None and len(set(_ref_e)) > 1:
+        raise ValueError(
+            "HonestDiD requires event-study coefficients normalized "
+            "against one common reference period, but this "
+            "CallawaySantAnna base_period='universal' fit selected "
+            "cohort-specific positional bases at event times "
+            f"{sorted(set(_ref_e))} (gapped time grid). On such grids a "
+            "cohort's base can overlap another cohort's estimated "
+            "horizon, so the coefficients are normalized against "
+            "different bases and are not jointly interpretable under "
+            "Rambachan-Roth's delta_0 = 0 normalization. Re-estimate on "
+            "a consecutive (ungapped) time grid so every cohort's base "
+            "falls at the same event time."
+        )
+
+    # Universal-base interpretation warning. Fail-safe: a container with
+    # base_period=None (unknown provenance, e.g. hand-built) cannot be
+    # verified, so it warns too. CS-produced containers always carry the
+    # real value.
+    if surface.base_period != "universal":
+        provenance_clause = (
+            "This container carries no base_period provenance, so the "
+            "base-period regime cannot be verified. "
+            if surface.base_period is None
+            else "With base_period='varying', pre-treatment coefficients "
+            "use consecutive comparisons (not a common reference period), "
+            "which changes the meaning of the parallel trends restriction. "
+        )
+        warnings.warn(
+            "HonestDiD sensitivity analysis on CallawaySantAnna results "
+            "requires base_period='universal' for valid interpretation. "
+            + provenance_clause
+            + "Re-run with CallawaySantAnna(base_period='universal') for "
+            "methodologically valid HonestDiD bounds.",
+            UserWarning,
+            stacklevel=4,
+        )
+
+    # Row filter: is_reference supersedes the fit-time n_groups==0 sniff;
+    # non-finite-SE rows (genuinely non-estimable horizons) drop exactly as
+    # the fit-time branch drops them. se == 0 rows drop too: safe_inference
+    # treats a zero SE as undefined inference (NaN t/p/CI), and admitting
+    # such a row here would launder undefined source inference into finite
+    # sensitivity bounds (mirrors the native CS branch and pretrends).
+    keep = (~surface.is_reference) & np.isfinite(surface.se) & (surface.se > 0)
+    rel_times = [t for t, k in zip(surface.event_time.tolist(), keep) if k]
+
+    ref_rows = surface.event_time[surface.is_reference].tolist()
+    if len(ref_rows) > 1:
+        # No route recommendation here: the native-results path picks the
+        # first n_groups==0 marker and then fails its own consecutive-grid
+        # validation on the same gapped layout, so pointing users there
+        # would be a dead end.
+        raise ValueError(
+            "HonestDiD cannot consume an event-study container with "
+            f"multiple reference rows ({sorted(ref_rows)}): its "
+            "consecutive-grid contract is defined around a single omitted "
+            "reference. Multiple references arise for CallawaySantAnna "
+            "base_period='universal' on a gapped time grid, where each "
+            "cohort's positional base is its own reference-only horizon. "
+            "Re-estimate on a consecutive (ungapped) time grid so a "
+            "single common reference is materialized."
+        )
+    ref_period = ref_rows[0] if ref_rows else None
+
+    if ref_period is not None:
+        pre_times = [t for t in rel_times if t < ref_period]
+        post_times = [t for t in rel_times if t > ref_period]
+    else:
+        # No reference row (varying base): the anticipation window
+        # [e = -k, -1] carries anticipated TREATMENT effects (REGISTRY
+        # anticipation contract; pretrends applies the same cutoff), so
+        # the clean pre-period set is e < -k and beta_post starts at -k.
+        # Splitting at 0 would misclassify anticipated effects as
+        # pre-trend coefficients. Mirrors the native CS branch.
+        _post_start = -int(surface.anticipation or 0)
+        pre_times = [t for t in rel_times if t < _post_start]
+        post_times = [t for t in rel_times if t >= _post_start]
+
+    if len(pre_times) == 0:
+        raise ValueError(
+            "No pre-period effects with finite estimates found in the "
+            "event-study container. HonestDiD requires at least one "
+            "identified pre-period coefficient."
+        )
+
+    # Consecutive-grid validation, mirroring the fit-time branch: for a
+    # universal base pre[-1]+1 = ref and ref+1 = post[0] (gap of 2); for a
+    # varying base pre ends at -1 and post starts at 0 (gap of 1).
+    if pre_times and post_times:
+        ref_gap = post_times[0] - pre_times[-1]
+        has_gap = ref_gap != (2 if ref_period is not None else 1)
+    else:
+        has_gap = False
+    for block in [pre_times, post_times]:
+        if len(block) >= 2:
+            for i in range(len(block) - 1):
+                if block[i + 1] - block[i] != 1:
+                    has_gap = True
+                    break
+    if has_gap:
+        raise ValueError(
+            "HonestDiD requires a consecutive event-time grid "
+            "around the omitted reference period. Retained "
+            f"pre-periods {pre_times} and post-periods "
+            f"{post_times} have gaps. This can happen when "
+            "some event-study horizons have non-finite SEs. "
+            "Ensure all event-study periods have valid estimates, "
+            "or use balance_e to restrict to a balanced subset."
+        )
+
+    keep_idx = np.where(keep)[0]
+    beta_hat = np.asarray(surface.att[keep_idx], dtype=float)
+    ses = np.asarray(surface.se[keep_idx], dtype=float)
+
+    if surface.vcov is not None and surface.vcov_index is not None:
+        vcov_labels = list(surface.vcov_index.tolist())
+        missing = [t for t in rel_times if t not in vcov_labels]
+        if missing:
+            # A SUPPLIED covariance whose index omits a retained horizon is
+            # inconsistent - fail loud rather than silently degrading to a
+            # diagonal approximation (the pretrends helper's convention;
+            # diagonal fallback is reserved for vcov is None).
+            raise ValueError(
+                f"The event-study container's vcov_index is missing "
+                f"retained horizon(s) {missing}; cannot extract the "
+                f"covariance sub-block. Available index: {vcov_labels}."
+            )
+        idx = [vcov_labels.index(t) for t in rel_times]
+        sigma = surface.vcov[np.ix_(idx, idx)]
+    else:
+        # Container-specific message: a vcov-less container has several
+        # documented causes (bootstrap/replicate overrides, producers that
+        # record no matrix) - do not attribute it to bootstrap.
+        warnings.warn(
+            "Event-study container carries no full covariance matrix; "
+            "using a diagonal approximation from the stored standard "
+            "errors. Cross-event-time covariance is unavailable on this "
+            "surface.",
+            UserWarning,
+            stacklevel=4,
+        )
+        sigma = np.diag(ses**2)
+
+    # Scalar df provenance threaded by the builder - exact fit-time parity,
+    # including the replicate-undefined 0.0 sentinel.
+    return (
+        beta_hat,
+        sigma,
+        len(pre_times),
+        len(post_times),
+        pre_times,
+        post_times,
+        surface.df_survey,
+    )
+
+
 def _extract_event_study_params(
     results: Union[MultiPeriodDiDResults, Any],
-) -> Tuple[np.ndarray, np.ndarray, int, int, List[Any], List[Any], Optional[int]]:
+) -> Tuple[np.ndarray, np.ndarray, int, int, List[Any], List[Any], Optional[float]]:
     """
     Extract event study parameters from results objects.
 
     Parameters
     ----------
-    results : MultiPeriodDiDResults, CallawaySantAnnaResults, or ChaisemartinDHaultfoeuilleResults
-        Estimation results with event study structure.
+    results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
+        Estimation results with event study structure, or the unified
+        event-study container produced by
+        ``CallawaySantAnnaResults.aggregate('event_study')`` (CS-sourced
+        containers only; see ``_extract_container_params``).
 
     Returns
     -------
@@ -602,24 +816,66 @@ def _extract_event_study_params(
         Pre-period identifiers.
     post_periods : list
         Post-period identifiers.
-    df_survey : int or None
-        Survey degrees of freedom for t-distribution inference.
+    df_survey : float or None
+        Survey degrees of freedom for t-distribution inference
+        (``0.0`` = replicate design with undefined df).
     """
+    from diff_diff.results_base import EventStudyResults
+
+    if isinstance(results, EventStudyResults):
+        return _extract_container_params(results)
+
     if isinstance(results, MultiPeriodDiDResults):
         # Extract from MultiPeriodDiD
         pre_periods = results.pre_periods
         post_periods = results.post_periods
 
-        # Filter periods with finite effects/SEs, maintaining pre-then-post order
+        # Filter periods with finite effects/SEs, maintaining pre-then-post
+        # order. se <= 0 drops too: safe_inference treats it as undefined
+        # inference, and admitting such a row would launder NaN source
+        # inference into finite sensitivity bounds (mirrors the CS and
+        # container branches and pretrends).
         finite_periods = {
             p
             for p in results.period_effects.keys()
             if np.isfinite(results.period_effects[p].effect)
             and np.isfinite(results.period_effects[p].se)
+            and results.period_effects[p].se > 0
         }
 
         pre_estimated = [p for p in pre_periods if p in finite_periods]
         post_estimated = [p for p in post_periods if p in finite_periods]
+
+        # The RR constraint builders treat retained coefficients as
+        # CONSECUTIVE around the reference (they index by position, not
+        # label), so a dropped interior or reference-adjacent horizon
+        # would silently change the smoothness / first-difference
+        # geometry and return wrong bounds. Require the retained
+        # pre-periods to be a contiguous SUFFIX of the estimable pre grid
+        # (ending adjacent to the reference) and the retained
+        # post-periods a contiguous PREFIX (starting immediately after
+        # it). Leading-pre / trailing-post drops keep valid geometry;
+        # anything else fails closed (mirrors the CS branch's
+        # consecutive-grid validation).
+        _pre_grid = [p for p in pre_periods if p in results.period_effects]
+        _post_grid = [p for p in post_periods if p in results.period_effects]
+        _pre_ok = pre_estimated == _pre_grid[len(_pre_grid) - len(pre_estimated) :]
+        _post_ok = post_estimated == _post_grid[: len(post_estimated)]
+        if not (_pre_ok and _post_ok):
+            _dropped_pre = [p for p in _pre_grid if p not in finite_periods]
+            _dropped_post = [p for p in _post_grid if p not in finite_periods]
+            raise ValueError(
+                "HonestDiD requires consecutive estimated horizons around "
+                "the reference period: retained pre-periods must end "
+                "immediately before it and retained post-periods must "
+                "start immediately after it, with no interior gaps (the "
+                "Rambachan-Roth restrictions are built positionally). "
+                "Horizons with undefined inference (non-finite or zero "
+                f"SE) break that grid here: dropped pre {_dropped_pre}, "
+                f"dropped post {_dropped_post}. Only leading pre-periods "
+                "and trailing post-periods can be dropped safely."
+            )
+
         all_estimated = pre_estimated + post_estimated
 
         if not all_estimated:
@@ -674,13 +930,19 @@ def _extract_event_study_params(
             if df_inference is not None:
                 df_survey = int(df_inference)
 
+        # Return the ESTIMATED label lists - the ones beta_hat/sigma were
+        # built from - not the declared results.pre_periods/post_periods
+        # (which include the reference period and any dropped
+        # zero/non-finite-SE horizons). HonestDiDResults.pre_periods_used /
+        # post_periods_used relay these verbatim, so misaligned labels
+        # would claim excluded horizons entered the estimand.
         return (
             beta_hat,
             sigma,
             num_pre_periods,
             num_post_periods,
-            pre_periods,
-            post_periods,
+            pre_estimated,
+            post_estimated,
             df_survey,
         )
 
@@ -692,10 +954,57 @@ def _extract_event_study_params(
             if isinstance(results, CallawaySantAnnaResults):
                 if results.event_study_effects is None:
                     raise ValueError(
-                        "CallawaySantAnnaResults must have event_study_effects for HonestDiD. "
-                        "Fit with aggregate='event_study'. HonestDiD reads the fit-time "
-                        "surface and does not yet accept the post-fit container returned "
-                        "by results.aggregate('event_study')."
+                        "CallawaySantAnnaResults must have event_study_effects for "
+                        "HonestDiD. Either pass the post-fit container "
+                        "(compute_honest_did(results.aggregate('event_study'))) or "
+                        "fit with the deprecated aggregate='event_study' to "
+                        "populate the fit-time surface."
+                    )
+
+                # Common-reference guard, mirroring the container branch:
+                # multiple distinct cohort base event times = coefficients
+                # normalized against different bases (gapped universal
+                # grid, including the overlapped-base layout no
+                # reference-only row marks). Provenance-less universal
+                # results (pre-3.9 pickles, replace()-stripped copies)
+                # must not FAIL OPEN: derive the bases from the
+                # materialized reference cells; warn fail-safe when even
+                # those are absent.
+                _ref_e = getattr(results, "reference_event_times", None)
+                if _ref_e is None and getattr(results, "base_period", None) == "universal":
+                    _gte = getattr(results, "group_time_effects", None) or {}
+                    _derived = {t - g for (g, t), _d in _gte.items() if _d.get("is_reference")}
+                    if _derived:
+                        _ref_e = tuple(sorted(_derived))
+                    else:
+                        import warnings
+
+                        warnings.warn(
+                            "This CallawaySantAnna base_period='universal' "
+                            "result carries no reference_event_times "
+                            "provenance and no materialized reference "
+                            "cells, so a common reference period cannot "
+                            "be verified (a gapped time grid may mix "
+                            "cohort-specific bases). Re-fit with the "
+                            "current version to record provenance.",
+                            UserWarning,
+                            stacklevel=4,
+                        )
+                if _ref_e is not None and len(set(_ref_e)) > 1:
+                    raise ValueError(
+                        "HonestDiD requires event-study coefficients "
+                        "normalized against one common reference period, "
+                        "but this CallawaySantAnna base_period='universal' "
+                        "fit selected cohort-specific positional bases at "
+                        f"event times {sorted(set(_ref_e))} (gapped time "
+                        "grid). On such grids a cohort's base can overlap "
+                        "another cohort's estimated horizon, so the "
+                        "coefficients are normalized against different "
+                        "bases and are not jointly interpretable under "
+                        "Rambachan-Roth's delta_0 = 0 normalization. "
+                        "Re-estimate on a consecutive (ungapped) time grid "
+                        "so every cohort's base falls at the same event "
+                        "time."
                     )
 
                 # Warn if not using universal base period (R's HonestDiD requires it)
@@ -715,11 +1024,16 @@ def _extract_event_study_params(
                     )
 
                 # Extract event study effects by relative time
-                # Filter out normalization constraints (n_groups=0) and non-finite SEs
+                # Filter out normalization constraints (n_groups=0), non-finite
+                # SEs, and zero SEs (safe_inference treats se <= 0 as undefined
+                # inference - admitting such a row would launder NaN source
+                # inference into finite sensitivity bounds; mirrors pretrends).
                 event_effects = {
                     t: data
                     for t, data in results.event_study_effects.items()
-                    if data.get("n_groups", 1) > 0 and np.isfinite(data.get("se", np.nan))
+                    if data.get("n_groups", 1) > 0
+                    and np.isfinite(data.get("se", np.nan))
+                    and float(data.get("se", 0.0)) > 0
                 }
                 rel_times = sorted(event_effects.keys())
 
@@ -742,9 +1056,16 @@ def _extract_event_study_params(
                     pre_times = [t for t in rel_times if t < ref_period]
                     post_times = [t for t in rel_times if t > ref_period]
                 else:
-                    # Varying base or no reference marker: split at t < 0 / t >= 0
-                    pre_times = [t for t in rel_times if t < 0]
-                    post_times = [t for t in rel_times if t >= 0]
+                    # Varying base or no reference marker: the anticipation
+                    # window [e = -k, -1] carries anticipated TREATMENT
+                    # effects (REGISTRY anticipation contract; pretrends
+                    # applies the same cutoff), so the clean pre-period set
+                    # is e < -k and beta_post starts at -k. Splitting at 0
+                    # would misclassify anticipated effects as pre-trend
+                    # coefficients. Mirrors the container branch.
+                    _post_start = -int(getattr(results, "anticipation", 0) or 0)
+                    pre_times = [t for t in rel_times if t < _post_start]
+                    post_times = [t for t in rel_times if t >= _post_start]
 
                 if len(pre_times) == 0:
                     raise ValueError(
@@ -901,16 +1222,20 @@ def _extract_event_study_params(
                         "for HonestDiD."
                     )
 
-                # Filter for finite SEs in both surfaces
+                # Filter for finite, strictly positive SEs in both surfaces
+                # (se <= 0 = undefined inference per safe_inference; a zero
+                # row would enter Sigma with zero variance and launder NaN
+                # source inference into finite bounds - mirrors the MPD, CS
+                # and container branches and pretrends).
                 placebo_finite = {
                     h: data
                     for h, data in results.placebo_event_study.items()
-                    if np.isfinite(data.get("se", np.nan))
+                    if np.isfinite(data.get("se", np.nan)) and float(data.get("se", 0.0)) > 0
                 }
                 effects_finite = {
                     h: data
                     for h, data in results.event_study_effects.items()
-                    if np.isfinite(data.get("se", np.nan))
+                    if np.isfinite(data.get("se", np.nan)) and float(data.get("se", 0.0)) > 0
                 }
 
                 pre_times = sorted(placebo_finite.keys())  # -P, ..., -1
@@ -1039,7 +1364,8 @@ def _extract_event_study_params(
         raise TypeError(
             f"Unsupported results type: {type(results)}. "
             "Expected MultiPeriodDiDResults, CallawaySantAnnaResults, "
-            "or ChaisemartinDHaultfoeuilleResults."
+            "ChaisemartinDHaultfoeuilleResults, or an EventStudyResults "
+            "container from CallawaySantAnnaResults.aggregate('event_study')."
         )
 
 
@@ -1440,7 +1766,7 @@ def _compute_flci(
     ub: float,
     se: float,
     alpha: float = 0.05,
-    df: Optional[int] = None,
+    df: Optional[float] = None,
 ) -> Tuple[float, float]:
     """
     Compute Fixed Length Confidence Interval (FLCI).
@@ -1485,7 +1811,7 @@ def _compute_flci(
     return ci_lb, ci_ub
 
 
-def _cv_alpha(t: float, alpha: float, df: Optional[int] = None) -> float:
+def _cv_alpha(t: float, alpha: float, df: Optional[float] = None) -> float:
     """
     Compute the (1-alpha) quantile of the folded distribution |X|.
 
@@ -1511,6 +1837,14 @@ def _cv_alpha(t: float, alpha: float, df: Optional[int] = None) -> float:
 
     target = 1 - alpha
     t = abs(t)
+
+    if df is not None and (not np.isfinite(df) or df <= 0):
+        # A PROVIDED nonpositive/non-finite df is the replicate-undefined
+        # sentinel (df_survey=0): inference is undefined and must fail
+        # closed to NaN - matching utils._get_critical_value's
+        # t.ppf(., 0) = NaN on the naive path - never silently fall
+        # through to normal theory (that path is reserved for df=None).
+        return float("nan")
 
     if df is not None and df > 0:
         # Folded non-central t: P(|nct(df,t)| <= x) = F(x;df,t) - F(-x;df,t)
@@ -1845,7 +2179,7 @@ def _flci_optimal_h(
     h0: float,
     M: float,
     alpha: float,
-    df: Optional[int],
+    df: Optional[float],
     levels=(40, 120, 120),
 ) -> float:
     """Argmin over the estimator SD ``h`` of the half-length
@@ -1894,7 +2228,7 @@ def _flci_solve(
     num_post: int,
     M: float,
     alpha: float = 0.05,
-    df: Optional[int] = None,
+    df: Optional[float] = None,
 ) -> Tuple[float, float, Optional[np.ndarray]]:
     """
     Compute the optimal Fixed Length Confidence Interval for Delta^SD.
@@ -1996,7 +2330,7 @@ def _compute_optimal_flci(
     num_post: int,
     M: float,
     alpha: float = 0.05,
-    df: Optional[int] = None,
+    df: Optional[float] = None,
 ) -> Tuple[float, float]:
     """Optimal Delta^SD FLCI ``(ci_lb, ci_ub)`` (Rambachan & Roth 2023 §4.1).
     Thin wrapper over :func:`_flci_solve` (which also returns the optimal affine
@@ -2458,8 +2792,16 @@ class HonestDiD(BaseEstimator):
 
         Parameters
         ----------
-        results : MultiPeriodDiDResults, CallawaySantAnnaResults, or ChaisemartinDHaultfoeuilleResults
-            Results from event study estimation.
+        results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
+            Results from event study estimation, or the unified event-study
+            container from
+            ``CallawaySantAnnaResults.aggregate('event_study')``. On the
+            container route the scalar inference df arrives via the
+            container's ``df_survey`` provenance field (bounds and CIs match
+            the native route exactly), while the stored
+            ``HonestDiDResults.survey_metadata`` is None - the container
+            carries no survey-metadata object. That field's only inferential
+            consumer is the df extraction, so no number diverges.
         M : float, optional
             Override the M parameter for this fit.
 
@@ -2612,7 +2954,7 @@ class HonestDiD(BaseEstimator):
         num_pre: int,
         num_post: int,
         M: float,
-        df: Optional[int] = None,
+        df: Optional[float] = None,
     ) -> Tuple[float, float, float, float]:
         """Compute bounds under smoothness restriction (Delta^SD).
 
@@ -2674,7 +3016,7 @@ class HonestDiD(BaseEstimator):
         Mbar: float,
         pre_periods: List,
         results: Any,
-        df: Optional[int] = None,
+        df: Optional[float] = None,
     ) -> Tuple[float, float, float, float]:
         """Compute bounds under relative magnitudes restriction (Delta^RM).
 
@@ -2718,7 +3060,7 @@ class HonestDiD(BaseEstimator):
         M: float,
         pre_periods: List,
         results: Any,
-        df: Optional[int] = None,
+        df: Optional[float] = None,
     ) -> Tuple[float, float, float, float]:
         """Compute bounds under combined smoothness + RM restriction."""
         import warnings
@@ -2830,7 +3172,7 @@ class HonestDiD(BaseEstimator):
 
         Parameters
         ----------
-        results : MultiPeriodDiDResults, CallawaySantAnnaResults, or ChaisemartinDHaultfoeuilleResults
+        results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
             Results from event study estimation.
         M_grid : list of float, optional
             Grid of M values to evaluate. If None, uses default grid
@@ -2932,7 +3274,7 @@ class HonestDiD(BaseEstimator):
 
         Parameters
         ----------
-        results : MultiPeriodDiDResults, CallawaySantAnnaResults, or ChaisemartinDHaultfoeuilleResults
+        results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
             Results from event study estimation.
         tol : float
             Tolerance for binary search.
@@ -2989,7 +3331,7 @@ def compute_honest_did(
 
     Parameters
     ----------
-    results : MultiPeriodDiDResults, CallawaySantAnnaResults, or ChaisemartinDHaultfoeuilleResults
+    results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
         Results from event study estimation.
     method : str
         Type of restriction ("smoothness", "relative_magnitude", "combined").
@@ -3031,7 +3373,7 @@ def sensitivity_plot(
 
     Parameters
     ----------
-    results : MultiPeriodDiDResults, CallawaySantAnnaResults, or ChaisemartinDHaultfoeuilleResults
+    results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
         Results from event study estimation.
     method : str
         Type of restriction.

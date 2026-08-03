@@ -315,10 +315,92 @@ class TestParameterExtraction:
             pe = mock_multiperiod_results.period_effects[period]
             assert sigma[i, i] == pytest.approx(pe.se**2, abs=1e-10)
 
+    def test_zero_se_period_dropped_from_multiperiod(self, mock_multiperiod_results):
+        """se == 0 rows drop on the MPD branch (undefined inference).
+
+        safe_inference treats se <= 0 as undefined inference; admitting
+        such a row would enter Sigma with zero variance and launder NaN
+        source inference into finite sensitivity bounds. Mirrors the CS,
+        dCDH and container branches and pretrends.
+        """
+        import dataclasses
+
+        pe0 = mock_multiperiod_results.period_effects[0]
+        mock_multiperiod_results.period_effects[0] = dataclasses.replace(pe0, se=0.0)
+        beta_hat, sigma, num_pre, num_post, pre_periods, post_periods, _df = (
+            _extract_event_study_params(mock_multiperiod_results)
+        )
+        assert num_pre == 2 and num_post == 4
+        assert len(beta_hat) == 6
+        assert sigma.shape == (6, 6)
+        # First retained row is period 1 (period 0 dropped): its variance
+        # leads the sub-VCV diagonal.
+        assert sigma[0, 0] == pytest.approx(0.35**2, abs=1e-12)
+        # Label/index contract: the returned lists are the ESTIMATED
+        # horizons beta_hat/sigma were built from - the dropped zero-SE
+        # period and the reference are absent, and lengths match the
+        # counts.
+        assert pre_periods == [1, 2]
+        assert post_periods == [4, 5, 6, 7]
+        assert len(pre_periods) == num_pre and len(post_periods) == num_post
+        # End to end: the metadata a user sees relays the same lists.
+        h = compute_honest_did(mock_multiperiod_results, M=0.5)
+        assert h.pre_periods_used == [1, 2]
+        assert h.post_periods_used == [4, 5, 6, 7]
+
+    @pytest.mark.parametrize(
+        "bad_period",
+        [1, 2, 4, 5],
+        ids=["interior-pre", "ref-adjacent-pre", "first-post", "interior-post"],
+    )
+    def test_zero_se_breaking_grid_geometry_fails_closed(
+        self, mock_multiperiod_results, bad_period
+    ):
+        """Interior / reference-adjacent zero-SE drops fail closed.
+
+        The RR constraint builders index retained coefficients
+        positionally, so dropping an interior or reference-adjacent
+        horizon would silently treat non-adjacent periods as consecutive
+        and return wrong bounds. Only leading-pre / trailing-post drops
+        keep valid geometry (previous test).
+        """
+        import dataclasses
+
+        pe = mock_multiperiod_results.period_effects[bad_period]
+        mock_multiperiod_results.period_effects[bad_period] = dataclasses.replace(pe, se=0.0)
+        with pytest.raises(ValueError, match="consecutive estimated horizons"):
+            _extract_event_study_params(mock_multiperiod_results)
+
+    def test_all_pre_periods_zero_se_fails_closed(self, mock_multiperiod_results):
+        """Pin: an all-invalid pre block is rejected with a clear message
+        (never a zero-dimensional restriction build)."""
+        import dataclasses
+
+        for p in (0, 1, 2):
+            pe = mock_multiperiod_results.period_effects[p]
+            mock_multiperiod_results.period_effects[p] = dataclasses.replace(pe, se=0.0)
+        with pytest.raises(ValueError, match="No pre-period effects"):
+            _extract_event_study_params(mock_multiperiod_results)
+
+    def test_zero_se_trailing_post_dropped_ok(self, mock_multiperiod_results):
+        """A trailing post-period drop keeps valid positional geometry."""
+        import dataclasses
+
+        pe = mock_multiperiod_results.period_effects[7]
+        mock_multiperiod_results.period_effects[7] = dataclasses.replace(pe, se=0.0)
+        beta_hat, sigma, num_pre, num_post, pre_p, post_p, _df = _extract_event_study_params(
+            mock_multiperiod_results
+        )
+        assert num_pre == 3 and num_post == 3
+        assert pre_p == [0, 1, 2] and post_p == [4, 5, 6]
+        assert len(beta_hat) == 6 and sigma.shape == (6, 6)
+
     def test_extract_unsupported_type_raises(self):
-        """Test that unsupported types raise TypeError."""
-        with pytest.raises(TypeError, match="Unsupported results type"):
+        """Test that unsupported types raise TypeError, naming the container route."""
+        with pytest.raises(TypeError, match="Unsupported results type") as exc_info:
             _extract_event_study_params("not a results object")
+        # The expected-types list names the post-fit container route too.
+        assert "EventStudyResults" in str(exc_info.value)
 
 
 # =============================================================================
@@ -1479,6 +1561,22 @@ class TestDCDHIntegration:
         trim_warns = [x for x in w if "dropping non-consecutive" in str(x.message).lower()]
         assert len(trim_warns) >= 1, "Expected a warning about dropping non-consecutive horizons"
         # Retained pre should be [-1] only (h=-3 dropped due to gap at -2)
+        assert bounds.pre_periods_used == [-1]
+
+    def test_dcdh_zero_se_treated_like_nan(self):
+        """se == 0 placebo rows drop exactly like NaN-SE rows (undefined
+        inference; a zero row would enter Sigma with zero variance)."""
+        import warnings
+
+        results = self._fit_dcdh(n_periods=8, L_max=3)
+        results.placebo_event_study[-2]["se"] = 0.0
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            bounds = compute_honest_did(results)
+        trim_warns = [x for x in w if "dropping non-consecutive" in str(x.message).lower()]
+        assert len(trim_warns) >= 1
+        # Same outcome as the NaN-SE interior-gap test: only [-1] retained.
         assert bounds.pre_periods_used == [-1]
 
     def test_dcdh_missing_boundary_minus1_raises(self):

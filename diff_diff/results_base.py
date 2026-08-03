@@ -240,6 +240,40 @@ class EventStudyResults(BaseResults):
         NaN on any row means normal-theory inference, an undefined df,
         bootstrap-overridden inference, or a producer that records none;
         reference rows and rows with NaN p-values are always NaN.
+    base_period : str or None
+        Producer provenance: the fit's base-period regime where the
+        producer has one (CallawaySantAnna vocabulary: ``"varying"`` or
+        ``"universal"``). None when the producer has no such notion.
+        HonestDiD reads this for its universal-base interpretation
+        warning.
+    anticipation : int or None
+        Producer provenance: the fit's anticipation window in periods,
+        where the producer has one. None when the producer has no such
+        notion. PreTrendsPower reads this to exclude anticipation-window
+        rows (``event_time >= -anticipation``) from the pre-trend set.
+    df_survey : float or None
+        Producer provenance: the fit's resolved SCALAR inference df,
+        with the established semantics of the fit-time consumers -
+        ``survey_metadata.df_survey`` where present (``0.0`` = replicate
+        design with an undefined df, which fails closed to NaN critical
+        values downstream), else ``df_inference`` (the bare-``cluster=``
+        carrier), else None (no scalar df notion). Exists beside the
+        per-row ``df`` column because that column CANNOT encode the
+        replicate-undefined sentinel: ``__post_init__`` forces per-row
+        df to NaN wherever the p-value is non-finite.
+    reference_event_times : tuple or None
+        Producer provenance: the DISTINCT per-cohort normalization-base
+        event times (CallawaySantAnna ``base_period="universal"``: each
+        cohort's positional base period minus its cohort, deduplicated,
+        sorted). More than one entry means the coefficients were
+        normalized against DIFFERENT bases (gapped time grid) - and on
+        such grids a cohort's base can OVERLAP another cohort's
+        estimated horizon, where NO reference-only row exists to mark
+        it, so this field (not ``is_reference``) is the authoritative
+        common-reference signal. HonestDiD and PreTrendsPower fail
+        closed when it carries more than one entry. None when the
+        producer records no such notion (varying base, non-CS
+        producers, hand-built surfaces).
     """
 
     event_time: np.ndarray
@@ -263,6 +297,22 @@ class EventStudyResults(BaseResults):
     alpha: float = 0.05
     source: Optional[str] = None
     df: Optional[Union[float, np.ndarray]] = None
+    # Provenance fields declared LAST so every pre-existing field keeps its
+    # positional index in the generated __init__ (the constructor signature
+    # is public API).
+    base_period: Optional[str] = None
+    anticipation: Optional[int] = None
+    df_survey: Optional[float] = None
+    # Distinct per-cohort normalization-base EVENT TIMES (CallawaySantAnna
+    # base_period="universal": each cohort's positional base minus its
+    # cohort, deduplicated and sorted). NOT the same thing as the
+    # ``reference_periods`` property (the is_reference-marked rows): on a
+    # gapped grid a cohort's base can OVERLAP another cohort's estimated
+    # horizon, where no reference-only row exists to mark it - this field
+    # is the consumer-facing signal that coefficients were normalized
+    # against more than one base. None when the producer records no such
+    # notion (varying base, non-CS producers, hand-built surfaces).
+    reference_event_times: Optional[Tuple[Any, ...]] = None
 
     _ARRAY_FIELDS = (
         "att",
@@ -482,6 +532,16 @@ class EventStudyResults(BaseResults):
             "alpha": self.alpha,
             "source": self.source,
             "df": cast(np.ndarray, self.df).tolist(),
+            "base_period": self.base_period,
+            "anticipation": self.anticipation,
+            "df_survey": self.df_survey,
+            "reference_event_times": (
+                # _json_safe_label per element: CS period arithmetic yields
+                # numpy scalars, which json.dumps cannot serialize.
+                [_json_safe_label(v) for v in self.reference_event_times]
+                if self.reference_event_times is not None
+                else None
+            ),
         }
         return out
 
@@ -563,6 +623,48 @@ def _absent(results: Any) -> ValueError:
     return ValueError(f"{name} carries no event-study surface - {hint}.")
 
 
+def _resolve_scalar_df_survey(results: Any) -> Optional[float]:
+    """Resolve the producer's SCALAR inference df for container provenance.
+
+    Mirrors the fit-time consumers' preference order (honest_did):
+    ``survey_metadata.df_survey`` where present, with a replicate design
+    whose df is undefined mapping to the ``0.0`` sentinel (fails closed to
+    NaN critical values downstream); else the bare-``cluster=``
+    ``df_inference`` carrier; else None. Deliberate local sibling of
+    ``aggregation.resolve_inference_df``: this module cannot import it
+    (aggregation.py imports results_base - the dependency is one-way);
+    folding the copies together is tracked in TODO.md (df-resolution /
+    adapter-naming consolidation row).
+    """
+    sm = getattr(results, "survey_metadata", None)
+    if sm is not None:
+        df_survey = getattr(sm, "df_survey", None)
+        if df_survey is not None:
+            return float(df_survey)
+        if getattr(sm, "replicate_method", None) is not None:
+            return 0.0
+    df_inference = getattr(results, "df_inference", None)
+    if df_inference is not None:
+        return float(df_inference)
+    return None
+
+
+def _provenance_kwargs(results: Any) -> Dict[str, Any]:
+    """Producer-provenance fields threaded onto the container.
+
+    ``getattr`` with a None default: producers that declare no
+    ``base_period``/``anticipation`` notion yield None - values are never
+    invented.
+    """
+    ref_e = getattr(results, "reference_event_times", None)
+    return {
+        "base_period": getattr(results, "base_period", None),
+        "anticipation": getattr(results, "anticipation", None),
+        "df_survey": _resolve_scalar_df_survey(results),
+        "reference_event_times": tuple(ref_e) if ref_e is not None else None,
+    }
+
+
 def _empty_surface(results: Any) -> EventStudyResults:
     """Zero-row surface for a requested-but-empty event study."""
     empty_f = np.empty(0, dtype=float)
@@ -579,6 +681,7 @@ def _empty_surface(results: Any) -> EventStudyResults:
         time_scale="relative",
         alpha=getattr(results, "alpha", 0.05),
         source=type(results).__name__,
+        **_provenance_kwargs(results),
     )
 
 
@@ -761,6 +864,7 @@ def _from_relative_dict(results: Any) -> EventStudyResults:
         alpha=getattr(results, "alpha", 0.05),
         source=type(results).__name__,
         df=df_arg,
+        **_provenance_kwargs(results),
     )
 
 
@@ -842,6 +946,7 @@ def _from_mpd(results: Any) -> EventStudyResults:
         alpha=getattr(results, "alpha", 0.05),
         source=type(results).__name__,
         df=df_arg,
+        **_provenance_kwargs(results),
     )
 
 
@@ -897,6 +1002,7 @@ def _from_lpdid(results: Any) -> EventStudyResults:
         alpha=getattr(results, "alpha", 0.05),
         source=type(results).__name__,
         df=df_arg,
+        **_provenance_kwargs(results),
     )
 
 
@@ -985,6 +1091,7 @@ def _from_dcdh(results: Any) -> EventStudyResults:
         # so a scalar is faithful - the container broadcasts it and NaN-masks
         # the synthesized reference row at 0 plus any NaN-p rows.
         df=getattr(results, "event_study_df", None),
+        **_provenance_kwargs(results),
     )
 
 
@@ -1022,6 +1129,7 @@ def _from_had(results: Any) -> EventStudyResults:
         cband_crit_value=getattr(results, "cband_crit_value", None),
         alpha=getattr(results, "alpha", 0.05),
         source=type(results).__name__,
+        **_provenance_kwargs(results),
     )
 
 

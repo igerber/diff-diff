@@ -863,8 +863,10 @@ class TestEdgeCases:
         """Test that unsupported results type raises TypeError."""
         pt = PreTrendsPower()
 
-        with pytest.raises(TypeError, match="Unsupported results type"):
+        with pytest.raises(TypeError, match="Unsupported results type") as exc_info:
             pt.fit("not a results object")
+        # The expected-types list names the post-fit container route too.
+        assert "EventStudyResults" in str(exc_info.value)
 
     def test_callaway_santanna_universal_base_period(self):
         """Test that reference period (e=-1) is correctly filtered out with universal base period.

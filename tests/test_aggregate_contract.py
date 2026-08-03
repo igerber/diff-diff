@@ -835,3 +835,277 @@ def test_staggered_triple_diff_overall_att_es_still_works():
         )
     assert res.overall_att_es is not None
     assert np.isfinite(res.overall_att_es)
+
+
+# --------------------------------------------------------------------------- #
+# dCDH (row M-026): fit(aggregate=) shim + the VIEW-based aggregate()
+# --------------------------------------------------------------------------- #
+
+DCDH_KW = dict(outcome="outcome", unit="unit", time="period", treatment="treat")
+
+
+def _dcdh_panel(seed=5, n_units=40, n_periods=6, switch_t=4):
+    rng = np.random.RandomState(seed)
+    rows = []
+    for u in range(n_units):
+        s_t = switch_t if u < n_units // 2 else 10**6
+        for t in range(1, n_periods + 1):
+            d = 1 if t >= s_t else 0
+            rows.append(
+                {
+                    "unit": u,
+                    "period": t,
+                    "outcome": u / 10 + 0.2 * t + 1.5 * d + rng.randn() * 0.3,
+                    "treat": d,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _dcdh_survey_panel(seed=7, n_units=60, n_periods=6, switch_t=4):
+    df = _dcdh_panel(seed=seed, n_units=n_units, n_periods=n_periods, switch_t=switch_t)
+    df["survey_weights"] = 1.0 + 0.1 * (df["unit"] % 5)
+    df["strata"] = df["unit"] % 4
+    df["psu"] = df["unit"]
+    return df
+
+
+def _fit_dcdh(data, *, est_kw=None, **fit_kw):
+    from diff_diff.chaisemartin_dhaultfoeuille import ChaisemartinDHaultfoeuille
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return ChaisemartinDHaultfoeuille(**(est_kw or {})).fit(data, **DCDH_KW, **fit_kw)
+
+
+@pytest.fixture(scope="module")
+def dcdh_panel():
+    return _dcdh_panel()
+
+
+@pytest.fixture(scope="module")
+def dcdh_fitted(dcdh_panel):
+    """Phase-1 fit (L_max=None)."""
+    return _fit_dcdh(dcdh_panel)
+
+
+class TestDcdhShim:
+    def test_plain_fit_does_not_warn(self, dcdh_panel):
+        from diff_diff.chaisemartin_dhaultfoeuille import ChaisemartinDHaultfoeuille
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            ChaisemartinDHaultfoeuille().fit(dcdh_panel, **DCDH_KW)
+        assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
+
+    def test_aggregate_kwarg_warns_even_at_none(self, dcdh_panel):
+        from diff_diff.chaisemartin_dhaultfoeuille import ChaisemartinDHaultfoeuille
+
+        with pytest.warns(FutureWarning, match=r"fit\(aggregate=\) is deprecated"):
+            ChaisemartinDHaultfoeuille().fit(dcdh_panel, aggregate=None, **DCDH_KW)
+
+    def test_non_none_value_warns_then_raises(self, dcdh_panel):
+        from diff_diff.chaisemartin_dhaultfoeuille import ChaisemartinDHaultfoeuille
+
+        with pytest.warns(FutureWarning, match="aggregate"):
+            with pytest.raises(ValueError, match=r"results\.aggregate"):
+                ChaisemartinDHaultfoeuille().fit(dcdh_panel, aggregate="event_study", **DCDH_KW)
+
+    def test_wrapper_forwarded_aggregate_warns(self, dcdh_panel):
+        # chaisemartin_dhaultfoeuille() splits **kwargs by signature and
+        # forwards non-__init__ names into fit(), so the shim is reachable
+        # through the wrapper too.
+        from diff_diff.chaisemartin_dhaultfoeuille import chaisemartin_dhaultfoeuille
+
+        with pytest.warns(FutureWarning, match=r"fit\(aggregate=\) is deprecated"):
+            chaisemartin_dhaultfoeuille(
+                dcdh_panel,
+                outcome="outcome",
+                group="unit",
+                time="period",
+                treatment="treat",
+                aggregate=None,
+            )
+
+
+class TestDcdhAggregate:
+    def _assert_surface_matches_builder(self, res):
+        from diff_diff.results_base import build_event_study_surface
+
+        es = res.aggregate("event_study")
+        assert isinstance(es, EventStudyResults)
+        built = build_event_study_surface(res)
+        # The dataclass's generated == raises on ndarray fields; compare
+        # to_dataframe rows per the file's precedent.
+        a, b = es.to_dataframe(), built.to_dataframe()
+        assert list(a.columns) == list(b.columns)
+        assert a.shape == b.shape
+        for col in a.columns:
+            av, bv = a[col].to_numpy(), b[col].to_numpy()
+            if av.dtype.kind in "fc":
+                assert np.allclose(av.astype(float), bv.astype(float), equal_nan=True)
+            else:
+                assert list(av) == list(bv)
+        return es
+
+    def test_simple_view_bit_exact_phase1(self, dcdh_fitted):
+        agg = dcdh_fitted.aggregate("simple")
+        assert isinstance(agg, AggregationResult)
+        assert agg.level == "simple"
+        assert list(agg.label) == ["overall"]
+        assert list(agg.target) == ["DID_M"]
+        assert float(agg.att[0]) == dcdh_fitted.overall_att
+        assert float(agg.se[0]) == dcdh_fitted.overall_se
+        assert float(agg.t_stat[0]) == dcdh_fitted.overall_t_stat
+        assert float(agg.p_value[0]) == dcdh_fitted.overall_p_value
+        assert float(agg.conf_int_lower[0]) == dcdh_fitted.overall_conf_int[0]
+        assert float(agg.conf_int_upper[0]) == dcdh_fitted.overall_conf_int[1]
+        assert float(agg.n[0]) == float(dcdh_fitted.n_switcher_cells)
+        assert agg.n_kind == "switcher_cells"
+        # Non-survey analytical inference is z-based: no df.
+        assert np.isnan(agg.df[0])
+        assert agg.estimator == "ChaisemartinDHaultfoeuille"
+
+    def test_simple_view_lmax1_groups(self, dcdh_panel):
+        res = _fit_dcdh(dcdh_panel, L_max=1)
+        agg = res.aggregate("simple")
+        assert list(agg.target) == ["DID_1"]
+        assert agg.n_kind == "groups"
+        assert float(agg.n[0]) == float(res.n_switcher_cells)
+
+    def test_simple_view_lmax2_delta(self, dcdh_panel):
+        res = _fit_dcdh(dcdh_panel, L_max=2)
+        agg = res.aggregate("simple")
+        assert list(agg.target) == ["delta"]
+        # The delta averages horizon-specific N_l: no truthful scalar count.
+        assert np.isnan(agg.n[0])
+        assert agg.n_kind is None
+        assert float(agg.att[0]) == res.overall_att
+
+    def test_simple_view_trends_linear_all_nan_relay(self, dcdh_panel):
+        # trends_linear + L_max>=2 suppresses the delta by design: every
+        # overall_* field is NaN and the estimand label points at
+        # linear_trends_effects. The view relays the all-NaN row honestly.
+        res = _fit_dcdh(dcdh_panel, L_max=2, trends_linear=True)
+        agg = res.aggregate("simple")
+        assert "fd" in str(agg.target[0])
+        assert np.isnan(agg.att[0])
+        assert np.isnan(agg.se[0])
+        assert np.isnan(agg.p_value[0])
+        assert np.isnan(agg.conf_int_lower[0]) and np.isnan(agg.conf_int_upper[0])
+        assert np.isnan(agg.df[0])
+
+    def test_simple_view_bootstrap_percentile_relay(self, dcdh_panel):
+        # Bootstrap fits are PERMITTED (pure view): the row relays the
+        # stored percentile-bootstrap inference; df is NaN (no df used).
+        res = _fit_dcdh(dcdh_panel, est_kw=dict(n_bootstrap=49, seed=3))
+        agg = res.aggregate("simple")
+        assert float(agg.att[0]) == res.overall_att
+        assert float(agg.se[0]) == res.overall_se
+        assert np.isnan(agg.df[0])
+
+    def test_event_study_container_threads_survey_df(self):
+        # CQ1 (local review R3): the dCDH builder threads the scalar
+        # df_survey provenance too - a survey fit's container must carry
+        # survey_metadata.df_survey, not None.
+        from diff_diff.survey import SurveyDesign
+
+        df = _dcdh_survey_panel()
+        sd = SurveyDesign(weights="survey_weights", strata="strata", psu="psu")
+        res = _fit_dcdh(df, L_max=2, survey_design=sd)
+        surface = res.aggregate("event_study")
+        assert res.survey_metadata is not None
+        assert surface.df_survey == float(res.survey_metadata.df_survey)
+
+    def test_simple_view_survey_analytical_df(self):
+        # Analytical survey fit: the stored p/CI used the survey df; the
+        # view relays it (event_study_df carries it here).
+        from diff_diff.survey import SurveyDesign
+
+        df = _dcdh_survey_panel()
+        sd = SurveyDesign(weights="survey_weights", strata="strata", psu="psu")
+        res = _fit_dcdh(df, L_max=2, survey_design=sd)
+        agg = res.aggregate("simple")
+        assert res.survey_metadata is not None
+        expected = res.survey_metadata.df_survey
+        assert expected is not None and np.isfinite(agg.df[0])
+        assert float(agg.df[0]) == float(expected)
+
+    def test_simple_view_lmax2_survey_bootstrap_finite_df(self):
+        # THE df-provenance pin: under n_bootstrap>0 the event_study_df
+        # channel is cleared, but the L_max>=2 delta's stored p/CI still
+        # came from analytical safe_inference with the survey df (REGISTRY
+        # Note, Phase 2 cost-benefit delta SE). The view must report that
+        # finite df, not NaN.
+        from diff_diff.survey import SurveyDesign
+
+        df = _dcdh_survey_panel()
+        sd = SurveyDesign(weights="survey_weights", strata="strata", psu="psu")
+        res = _fit_dcdh(df, L_max=2, survey_design=sd, est_kw=dict(n_bootstrap=49, seed=3))
+        assert res.event_study_df is None  # cleared under bootstrap
+        assert np.isfinite(res.overall_p_value)  # delta stayed analytical
+        agg = res.aggregate("simple")
+        assert res.survey_metadata is not None
+        assert float(agg.df[0]) == float(res.survey_metadata.df_survey)
+
+    def test_event_study_view_phase1_two_rows(self, dcdh_fitted):
+        es = self._assert_surface_matches_builder(dcdh_fitted)
+        # Phase-1 (L_max=None): the 2-row l=1 view, l1 convention - NOT an
+        # error (fit populates event_study_effects={1: ...} on this path).
+        assert es.event_time.tolist() == [0, 1]
+        assert es.event_time_convention == "l1_first_switch"
+        assert es.n_kind == "switcher_cells"
+
+    def test_event_study_view_multi_horizon(self, dcdh_panel):
+        res = _fit_dcdh(dcdh_panel, L_max=2)
+        es = self._assert_surface_matches_builder(res)
+        assert 2 in es.event_time.tolist()
+        assert es.n_kind == "groups"
+
+    def test_balance_e_rejected_empty_vocabulary(self, dcdh_fitted):
+        with pytest.raises(ValueError, match="no aggregation type on this estimator"):
+            dcdh_fitted.aggregate("event_study", balance_e=1)
+
+    def test_weights_rejected(self, dcdh_fitted):
+        with pytest.raises(ValueError, match="does not accept a weights selector"):
+            dcdh_fitted.aggregate("simple", weights="cell")
+
+    @pytest.mark.parametrize("bad", ["group", "calendar", "all", "nonsense"])
+    def test_unsupported_types_fail_closed(self, dcdh_fitted, bad):
+        with pytest.raises(ValueError, match="Unsupported aggregation type"):
+            dcdh_fitted.aggregate(bad)
+
+    def test_mixin_hooks_are_not_dataclass_fields(self):
+        # Regression: on a dataclass results class, annotating the mixin
+        # routing hooks without ClassVar turns them into __init__ fields,
+        # widening the public constructor/repr/equality surface. Enforced
+        # dynamically for EVERY dataclass that mixes AggregationMixin in,
+        # so later 2(b) waves are enrolled automatically.
+        import dataclasses
+        import inspect
+
+        import diff_diff
+        from diff_diff.aggregation import AggregationMixin
+
+        hooks = ("_AGGREGATE_SUPPORTED", "_AGGREGATE_BALANCE_E_TYPES")
+        checked = []
+        for name in dir(diff_diff):
+            obj = getattr(diff_diff, name)
+            if (
+                inspect.isclass(obj)
+                and issubclass(obj, AggregationMixin)
+                and obj is not AggregationMixin
+                and dataclasses.is_dataclass(obj)
+            ):
+                checked.append(name)
+                # dataclasses.fields() (not __dataclass_fields__, which
+                # also lists ClassVar pseudo-fields) = the real
+                # init/repr/eq surface.
+                fields = {f.name for f in dataclasses.fields(obj)}
+                params = inspect.signature(obj.__init__).parameters
+                for hook in hooks:
+                    assert hook not in fields, f"{name}.{hook} leaked into fields"
+                    assert hook not in params, f"{name}.{hook} leaked into __init__"
+        # The roster must at least cover the two shipped mixin adopters.
+        assert "CallawaySantAnnaResults" in checked
+        assert "ChaisemartinDHaultfoeuilleResults" in checked

@@ -306,28 +306,32 @@ class TestForwardCompatGates:
     def _est(self):
         return ChaisemartinDHaultfoeuille()
 
-    def test_aggregate_simple_raises_not_implemented(self, data):
-        # aggregate is reserved for Phase 3; require aggregate=None exactly
-        with pytest.raises(NotImplementedError, match="Phase 3"):
-            self._est().fit(
-                data,
-                outcome="outcome",
-                unit="group",
-                time="period",
-                treatment="treatment",
-                aggregate="simple",
-            )
+    def test_aggregate_simple_raises_value_error(self, data):
+        # M-026: fit(aggregate=) is deprecated and never computed anything;
+        # a non-None value warns then raises ValueError pointing at the
+        # post-fit results.aggregate() route.
+        with pytest.warns(FutureWarning, match="aggregate"):
+            with pytest.raises(ValueError, match="results.aggregate"):
+                self._est().fit(
+                    data,
+                    outcome="outcome",
+                    unit="group",
+                    time="period",
+                    treatment="treatment",
+                    aggregate="simple",
+                )
 
-    def test_aggregate_event_study_raises_not_implemented(self, data):
-        with pytest.raises(NotImplementedError, match="Phase 3"):
-            self._est().fit(
-                data,
-                outcome="outcome",
-                unit="group",
-                time="period",
-                treatment="treatment",
-                aggregate="event_study",
-            )
+    def test_aggregate_event_study_raises_value_error(self, data):
+        with pytest.warns(FutureWarning, match="aggregate"):
+            with pytest.raises(ValueError, match="results.aggregate"):
+                self._est().fit(
+                    data,
+                    outcome="outcome",
+                    unit="group",
+                    time="period",
+                    treatment="treatment",
+                    aggregate="event_study",
+                )
 
     def test_L_max_validation(self, data):
         """L_max is now a Phase 2 feature: positive int or None accepted,

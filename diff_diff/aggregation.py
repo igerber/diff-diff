@@ -25,7 +25,7 @@ gains the mixin in the same diff that flips its row.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, ClassVar, Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -134,9 +134,13 @@ class AggregationResult(BaseResults):
         aligned estimands over the same labels (ContinuousDiD's ATT(d) and
         ACRT(d) become 2N rows). ``"att"`` where an estimator has one.
     att, se, t_stat, p_value : np.ndarray
-        The canonical quintet, per row. On a bootstrapped fit ``t_stat`` /
-        ``p_value`` / the interval are the producer's percentile-bootstrap
-        statistics carried through unchanged - NOT recomputed analytically.
+        The canonical quintet, per row, carrying WHATEVER inference the fit
+        stored - never recomputed. On a bootstrapped fit that usually means
+        the producer's percentile-bootstrap statistics carried through
+        unchanged; view-relay producers can mix regimes per row where the
+        fit itself did (dCDH's ``L_max >= 2`` cost-benefit delta keeps
+        analytical ``safe_inference`` even under ``n_bootstrap > 0`` - see
+        the REGISTRY Phase 2 cost-benefit delta SE note).
     conf_int_lower, conf_int_upper : np.ndarray
         Interval bounds at the fit's ``alpha``.
     n : np.ndarray
@@ -156,8 +160,10 @@ class AggregationResult(BaseResults):
         one would be a fabricated number.
     df : np.ndarray
         Per-row inference degrees of freedom, NaN where none governed the
-        stored p-value. Entirely NaN on bootstrap fits, whose percentile
-        inference uses no df.
+        stored p-value. NaN on percentile-bootstrap rows (no df governs
+        them); a bootstrapped fit's rows can still carry a finite df where
+        the fit kept analytical inference for that row (the dCDH delta
+        case above).
     alpha : float
         Significance level the interval was computed at.
     estimator : str or None
@@ -460,12 +466,14 @@ class AggregationMixin:
 
     #: Aggregation types this results class implements. A subset of
     #: :data:`AGGREGATION_VOCABULARY` plus any documented per-estimator extra.
-    _AGGREGATE_SUPPORTED: Tuple[str, ...] = ()
+    #: ClassVar so that dataclass results classes overriding these hooks with
+    #: an annotation do not grow a spurious ``__init__`` field.
+    _AGGREGATE_SUPPORTED: ClassVar[Tuple[str, ...]] = ()
 
     #: Types for which ``balance_e`` is meaningful. CallawaySantAnna threads it
     #: only through event-study aggregation, so accepting it elsewhere would
     #: silently ignore a user's argument.
-    _AGGREGATE_BALANCE_E_TYPES: Tuple[str, ...] = ("event_study",)
+    _AGGREGATE_BALANCE_E_TYPES: ClassVar[Tuple[str, ...]] = ("event_study",)
 
     def aggregate(
         self,
@@ -505,10 +513,14 @@ class AggregationMixin:
                 )
             raise ValueError(f"Unsupported aggregation type {type!r}. Supported: {known}.{extra}")
         if balance_e is not None and type not in self._AGGREGATE_BALANCE_E_TYPES:
-            usable = ", ".join(repr(t) for t in self._AGGREGATE_BALANCE_E_TYPES)
+            if self._AGGREGATE_BALANCE_E_TYPES:
+                usable = ", ".join(repr(t) for t in self._AGGREGATE_BALANCE_E_TYPES)
+                applies = f"It applies to: {usable}."
+            else:
+                applies = "It applies to no aggregation type on this estimator."
             raise ValueError(
                 f"balance_e is not used by aggregate(type={type!r}) and would be "
-                f"silently ignored. It applies to: {usable}."
+                f"silently ignored. {applies}"
             )
         self._aggregate_validate_weights(weights)
         return self._aggregate_compute(type, weights=weights, balance_e=balance_e)

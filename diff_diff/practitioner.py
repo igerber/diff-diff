@@ -378,23 +378,57 @@ def _handle_multi_period(results: Any):
 
 
 def _handle_cs(results: Any):
+    # Post-fit aggregate() RAISES on a bootstrapped fit (percentile
+    # statistics are not retained for re-aggregation), so the guidance
+    # must route those fits through the retained fit-time aggregation
+    # instead of advice that cannot run.
+    is_bootstrap = getattr(results, "bootstrap_results", None) is not None
+    if is_bootstrap:
+        sensitivity_why = (
+            "Bounds the treatment effect under plausible violations of "
+            "parallel trends. This fit is BOOTSTRAPPED, and post-fit "
+            "aggregate() raises on bootstrap fits - refit with the "
+            "fit-time aggregation to populate the event-study surface."
+        )
+        sensitivity_code = (
+            "from diff_diff import compute_honest_did\n"
+            "# Bootstrap fit: post-fit aggregate() raises - use the\n"
+            "# fit-time aggregation:\n"
+            "results = cs.fit(data, ..., aggregate='event_study')\n"
+            "honest = compute_honest_did(results, method='relative_magnitude', M=1.0)\n"
+            "print(honest.summary())"
+        )
+        heterogeneity_code = (
+            "# Bootstrap fit: aggregate at fit time:\n"
+            "results = cs.fit(data, ..., aggregate='all')\n"
+            "print(results.group_effects)        # Per-cohort ATTs\n"
+            "print(results.event_study_effects)  # Dynamic effects"
+        )
+    else:
+        sensitivity_why = (
+            "Bounds the treatment effect under plausible violations of "
+            "parallel trends. Aggregate the event study post-fit — no "
+            "refit needed."
+        )
+        sensitivity_code = (
+            "from diff_diff import compute_honest_did\n"
+            "# Aggregate post-fit; the container feeds HonestDiD directly:\n"
+            "es = results.aggregate('event_study')\n"
+            "honest = compute_honest_did(es, method='relative_magnitude', M=1.0)\n"
+            "print(honest.summary())"
+        )
+        heterogeneity_code = (
+            "# Aggregate post-fit - no refit needed:\n"
+            "print(results.aggregate('group').to_dataframe())        # Per-cohort ATTs\n"
+            "print(results.aggregate('event_study').to_dataframe())  # Dynamic effects"
+        )
     steps = [
         _parallel_trends_step(staggered=True),
         _step(
             baker_step=6,
             label="Run HonestDiD sensitivity analysis",
-            why=(
-                "Bounds the treatment effect under plausible violations of "
-                "parallel trends. Requires event study effects — refit with "
-                "aggregate='event_study' or 'all' if not already done."
-            ),
-            code=(
-                "from diff_diff import compute_honest_did\n"
-                "# CS results must have event_study_effects:\n"
-                "results = cs.fit(data, ..., aggregate='event_study')\n"
-                "honest = compute_honest_did(results, method='relative_magnitude', M=1.0)\n"
-                "print(honest.summary())"
-            ),
+            why=sensitivity_why,
+            code=sensitivity_code,
             step_name="sensitivity",
         ),
         _step(
@@ -405,12 +439,7 @@ def _handle_cs(results: Any):
                 "dynamic effects over time. Inspect group and event study "
                 "aggregations."
             ),
-            code=(
-                "# Re-fit with aggregate='all' to get all aggregations:\n"
-                "results = cs.fit(data, ..., aggregate='all')\n"
-                "print(results.group_effects)       # Per-cohort ATTs\n"
-                "print(results.event_study_effects)  # Dynamic effects"
-            ),
+            code=heterogeneity_code,
             step_name="heterogeneity",
         ),
         _robustness_compare_step("SA, BJS, or Gardner"),

@@ -50,6 +50,14 @@ class EventStudyAggregation:
     df_used: Optional[float] = None
     vcov: Optional[np.ndarray] = None
     vcov_index: Optional[List[Any]] = None
+    #: Distinct base EVENT TIMES of the cohorts RETAINED by this
+    #: aggregation (derived from the materialized universal-base
+    #: is_reference cells; None when there are none, e.g. varying base).
+    #: Surface-faithful, unlike the fit-level fit-wide tuple: balance_e
+    #: can drop the cohort responsible for a second base, and the
+    #: container's common-reference guard must reflect the cohorts that
+    #: actually entered the reported estimand.
+    reference_event_times: Optional[Tuple[Any, ...]] = None
 
 
 def fixed_cohort_agg_weights(
@@ -956,6 +964,23 @@ class CallawaySantAnnaAggregationMixin:
                     )
             effects_by_e = balanced_effects
 
+        # Common-reference provenance for THIS aggregation's surface: the
+        # distinct base event times of the RETAINED cohorts, read off the
+        # materialized universal-base is_reference cells (varying-base
+        # fits have none -> None). Surface-faithful by construction:
+        # balance_e can drop the cohort responsible for a second base, in
+        # which case the fit-level fit-wide tuple would over-restrict the
+        # balanced container.
+        _retained_cohorts = {g for cells in effects_by_e.values() for (g, _t), _eff, _w in cells}
+        _ref_es = {
+            t - g
+            for (g, t), data in group_time_effects.items()
+            if data.get("is_reference") and g in _retained_cohorts
+        }
+        es_reference_event_times: Optional[Tuple[Any, ...]] = (
+            tuple(sorted(_ref_es)) if _ref_es else None
+        )
+
         # Universal base period: each cohort's positional base is materialized in
         # `group_time_effects` / `influence_func_info` (with a zero effect and a
         # zero influence function) by `fit()` before aggregation, so it is already
@@ -1202,6 +1227,7 @@ class CallawaySantAnnaAggregationMixin:
             df_used=es_df_used,
             vcov=event_study_vcov,
             vcov_index=event_study_vcov_index,
+            reference_event_times=es_reference_event_times,
         )
 
     def _aggregate_by_group(

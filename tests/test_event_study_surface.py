@@ -161,6 +161,102 @@ def test_to_dict_json_safe_period_labels():
 
 
 # ===========================================================================
+# Provenance fields (base_period / anticipation / df_survey)
+# ===========================================================================
+
+
+def test_provenance_fields_default_none():
+    surface = _tiny_surface()
+    assert surface.base_period is None
+    assert surface.anticipation is None
+    assert surface.df_survey is None
+
+
+def test_provenance_round_trips_through_to_dict():
+    d = _tiny_surface(base_period="universal", anticipation=1, df_survey=7.0).to_dict()
+    assert d["base_period"] == "universal"
+    assert d["anticipation"] == 1
+    assert d["df_survey"] == 7.0
+
+
+def test_builder_threads_cs_provenance():
+    # The relative-dict builder reads base_period/anticipation off the
+    # producer and resolves the scalar df_survey (None here: no survey
+    # design and no bare-cluster df carrier).
+    class _FakeCS:
+        alpha = 0.05
+        base_period = "universal"
+        anticipation = 1
+        event_study_effects = {
+            -2: {"effect": 0.0, "se": np.nan, "n_groups": 0},
+            0: {"effect": 1.0, "se": 0.1, "n_groups": 5},
+        }
+
+    surface = build_event_study_surface(_FakeCS())
+    assert surface.base_period == "universal"
+    assert surface.anticipation == 1
+    assert surface.df_survey is None
+
+
+def test_empty_surface_threads_provenance():
+    # The requested-but-empty early return must carry provenance too - a
+    # balance_e-emptied aggregation would otherwise read as provenance-free.
+    class _EmptyCS:
+        alpha = 0.05
+        base_period = "universal"
+        anticipation = 1
+        event_study_effects: dict = {}
+
+    surface = build_event_study_surface(_EmptyCS())
+    assert surface.event_time.shape[0] == 0
+    assert surface.base_period == "universal"
+    assert surface.anticipation == 1
+    assert surface.df_survey is None
+
+
+def test_df_survey_replicate_undefined_maps_to_zero_sentinel():
+    # survey_metadata present, df_survey undefined, replicate design ->
+    # the 0.0 sentinel (fails closed to NaN critical values downstream).
+    class _SM:
+        df_survey = None
+        replicate_method = "brr"
+
+    class _Fake:
+        alpha = 0.05
+        survey_metadata = _SM()
+        event_study_effects = {0: {"effect": 1.0, "se": 0.1, "n_groups": 5}}
+
+    surface = build_event_study_surface(_Fake())
+    assert surface.df_survey == 0.0
+
+
+def test_df_survey_prefers_survey_metadata_over_df_inference():
+    class _SM:
+        df_survey = 12
+        replicate_method = None
+
+    class _Fake:
+        alpha = 0.05
+        survey_metadata = _SM()
+        df_inference = 30
+        event_study_effects = {0: {"effect": 1.0, "se": 0.1, "n_groups": 5}}
+
+    surface = build_event_study_surface(_Fake())
+    assert surface.df_survey == 12.0
+
+
+def test_df_survey_bare_cluster_falls_back_to_df_inference():
+    class _Fake:
+        alpha = 0.05
+        survey_metadata = None
+        df_inference = 19
+        event_study_effects = {0: {"effect": 1.0, "se": 0.1, "n_groups": 5}}
+
+    surface = build_event_study_surface(_Fake())
+    assert surface.df_survey == 19.0
+
+
+# ===========================================================================
 # Producer builders (small analytical fits)
 # ===========================================================================
 

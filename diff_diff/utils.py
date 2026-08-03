@@ -33,10 +33,10 @@ _OPTIMIZATION_TOL = 1e-8  # Convergence tolerance for optimization
 _NUMERICAL_EPS = 1e-10  # Small constant to prevent division by zero
 
 # Cache for critical values to avoid repeated scipy calls
-_critical_value_cache: Dict[Tuple[float, Optional[int]], float] = {}
+_critical_value_cache: Dict[Tuple[float, Optional[float]], float] = {}
 
 
-def _get_critical_value(alpha: float, df: Optional[int] = None) -> float:
+def _get_critical_value(alpha: float, df: Optional[float] = None) -> float:
     """Return cached critical value for (alpha, df) pair."""
     key = (alpha, df)
     if key not in _critical_value_cache:

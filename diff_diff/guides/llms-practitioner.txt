@@ -344,8 +344,11 @@ Bounds on the treatment effect under violations of parallel trends.
 Works with MultiPeriodDiD, CallawaySantAnna, and ChaisemartinDHaultfoeuille
 (dCDH) results.
 
-- For CS: requires `aggregate='event_study'` or `aggregate='all'` so that
-  event study effects are available.
+- For CS: pass the post-fit container - `compute_honest_did(
+  results.aggregate('event_study'))` - no refit needed (the fit-time
+  `aggregate=` route is deprecated since 3.9). EXCEPTION: on a
+  BOOTSTRAPPED fit (`n_bootstrap > 0`) post-fit `aggregate()` raises;
+  use the retained fit-time `aggregate='event_study'` there.
 - For dCDH: requires `L_max >= 1` (multi-horizon mode). Bounds use placebo
   estimates `DID^{pl}_l` as pre-period coefficients rather than standard
   event-study pre-treatment coefficients, and use diagonal variance (no

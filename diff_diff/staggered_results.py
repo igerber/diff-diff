@@ -239,6 +239,15 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
     # here rather than set dynamically so it is a typed part of the contract.
     # Excluded from repr and equality: it is internal bookkeeping, not a
     # reportable result, and its arrays would make `==` raise.
+    # Distinct per-cohort normalization-base EVENT TIMES under
+    # base_period="universal" (each cohort's positional base minus its
+    # cohort, deduplicated, sorted): the common-reference provenance
+    # HonestDiD / PreTrendsPower need on gapped grids, where a cohort's
+    # base can overlap another cohort's estimated horizon and no
+    # reference-only event-study row marks it. None on varying-base fits
+    # (no constant per-cohort reference exists). Declared last among the
+    # public fields (positional-compat convention).
+    reference_event_times: Optional[Tuple[Any, ...]] = None
     _aggregation_kit: Optional[Any] = field(default=None, repr=False, compare=False)
 
     # --- Inference-field aliases (balance/external-adapter compatibility) ---
@@ -352,6 +361,11 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
             event_study_vcov=es.vcov,
             event_study_vcov_index=es.vcov_index,
             event_study_df=es.df_used,
+            # Surface-faithful common-reference provenance: the aggregation
+            # recomputes it over the RETAINED cohorts (balance_e can drop
+            # the cohort responsible for a second base; the fit-level
+            # fit-wide tuple would over-restrict the balanced container).
+            reference_event_times=es.reference_event_times,
         )
         return build_event_study_surface(carrier)
 

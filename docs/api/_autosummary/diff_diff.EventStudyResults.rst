@@ -24,12 +24,16 @@
    .. autosummary::
 
       ~EventStudyResults.alpha
+      ~EventStudyResults.anticipation
+      ~EventStudyResults.base_period
       ~EventStudyResults.cband_crit_value
       ~EventStudyResults.cband_lower
       ~EventStudyResults.cband_upper
       ~EventStudyResults.df
+      ~EventStudyResults.df_survey
       ~EventStudyResults.event_time_convention
       ~EventStudyResults.n_kind
+      ~EventStudyResults.reference_event_times
       ~EventStudyResults.reference_period
       ~EventStudyResults.reference_periods
       ~EventStudyResults.source

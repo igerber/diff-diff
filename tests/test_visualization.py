@@ -280,8 +280,10 @@ class TestPlotEventStudy:
     def test_error_invalid_results_type(self):
         """Test error with invalid results type."""
         pytest.importorskip("matplotlib")
-        with pytest.raises(TypeError, match="Cannot extract plot data"):
+        with pytest.raises(TypeError, match="Cannot extract plot data") as exc_info:
             plot_event_study("invalid")
+        # The expected-types list names the unified container too.
+        assert "EventStudyResults" in str(exc_info.value)
 
     def test_plot_with_nan_se_reference_period(self):
         """Test that reference period with NaN SE is plotted without error bars.
@@ -671,7 +673,7 @@ class TestPlotEventStudyCband:
         assert ax is not None
 
         # Verify cband CIs are extracted
-        _, _, _, _, _, _, _, ci_lower_override, ci_upper_override = _extract_plot_data(
+        _, _, _, _, _, _, _, ci_lower_override, ci_upper_override, _, _, _ = _extract_plot_data(
             cs_cband_results, None, None, None, None
         )
         assert ci_lower_override is not None

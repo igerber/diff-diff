@@ -7,6 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Event-study container consumers + dCDH post-fit `aggregate()`** (v4
+  program 2(b) PR-1; ledger row [M-026] flips to shimmed, rows [M-092] /
+  [M-093] amended).
+  - `compute_honest_did`, `compute_pretrends_power` and
+    `plot_event_study` now accept the unified `EventStudyResults`
+    container from `CallawaySantAnnaResults.aggregate('event_study')`
+    directly, and `plot_honest_event_study` renders an
+    `HonestDiDResults` whose `original_results` is such a container -
+    the post-fit route no longer dead-ends at the consumers. HonestDiD
+    bounds are identical across routes (route-parity gated at 1e-14);
+    PreTrendsPower's extraction is bit-exact (its Monte-Carlo power
+    carries scipy's inherent MVN-CDF jitter either way). Admission in
+    HonestDiD/PreTrendsPower is SOURCE-SCOPED to CS-produced containers:
+    dCDH l1 containers are rejected BY DESIGN (their placebo semantics
+    need HonestDiD's native dCDH branch), other producers arrive with
+    their own `aggregate()` migrations; the plotters take no source
+    guard. Inputs whose coefficients mix reference normalizations fail
+    closed in HonestDiD and PreTrendsPower on BOTH routes - a container
+    with multiple marked reference rows, and any universal-base fit
+    whose cohorts carry more than one positional-base event time (the
+    `reference_event_times` guard below).
+  - `EventStudyResults` gains four optional provenance fields (declared
+    last - positional compatibility preserved): `base_period`,
+    `anticipation`, `df_survey` (the fit's resolved scalar inference
+    df; `0.0` = replicate design with undefined df, which the per-row
+    `df` column cannot encode), and `reference_event_times` (the
+    common-reference provenance described below). Threaded by the
+    builders, including the
+    requested-but-empty path; `to_dict()` gains the four keys. The
+    `df_survey` typing widened `Optional[int]` -> `Optional[float]`
+    through the HonestDiD call path.
+  - `ChaisemartinDHaultfoeuille.fit(aggregate=)` is DEPRECATED
+    ([M-026]): it never computed anything (every non-None value raised
+    "reserved for Phase 3"), so supplying it warns and a non-None value
+    raises `ValueError` pointing at the new post-fit route.
+    `ChaisemartinDHaultfoeuilleResults.aggregate()` ships as a pure
+    VIEW: `'event_study'` returns the unified container (Phase-1 fits
+    the 2-row l=1 view), `'simple'` a one-row `AggregationResult`
+    relaying the overall estimand bit-exactly with estimand-aware
+    `target`/`n`/`n_kind` (DID_M/switcher-cells, DID_1/groups,
+    delta/no-scalar-count) and a `df` column resolved from the ACTUAL
+    inference path (the `L_max>=2` delta keeps its analytical survey df
+    even under bootstrap, per the REGISTRY delta-SE note). Because
+    nothing is recomputed, bootstrap fits are permitted - unlike
+    CallawaySantAnna's kit-based `aggregate()`, which stays fail-closed.
+  - Consumer hardening that landed with the wave: `plot_event_study`
+    renders MULTI-reference containers via row-aligned hollow anchors
+    (never dropped, never filled estimates; explicit `reference_period=`
+    re-basing of such a surface around a non-anchor fails closed), and
+    warns when a container's stored intervals sit at a different level
+    than the requested `alpha` (stored bootstrap/t intervals cannot be
+    re-leveled from the SE) - `plot_honest_event_study` names the same
+    mismatch against the HonestDiD level. HonestDiD's MPD and dCDH
+    branches now drop `se == 0` rows exactly like the CS/container
+    branches (undefined inference is never laundered into finite
+    bounds). PreTrendsPower warns on CS `base_period='varying'` input on
+    BOTH routes: its `linear` violation benchmark assumes level
+    coefficients against a common reference, while varying-base
+    pre-treatment effects are consecutive-period comparisons (REGISTRY
+    PreTrendsPower note; violation-vector transformation tracked in
+    TODO.md).
+  - Common-reference guard: CS `base_period='universal'` fits (and
+    their containers) record `reference_event_times` - the distinct
+    per-cohort positional-base event times. On gapped time grids the
+    bases land at different event times, and a cohort's base can
+    OVERLAP another cohort's estimated horizon where no reference-only
+    row marks it; HonestDiD and PreTrendsPower now FAIL CLOSED on both
+    input routes instead of silently returning bounds/power over
+    coefficients normalized against different bases (REGISTRY HonestDiD
+    common-reference-guard note). Regular (ungapped) grids carry a
+    single entry and are unaffected; varying-base fits carry None.
+  - HonestDiD's no-reference (varying-base) pre/post split is now
+    anticipation-aware on both routes: with `anticipation=k` the window
+    `[e=-k, -1]` carries anticipated treatment effects (the REGISTRY
+    contract PreTrendsPower already applied), so the clean pre-trend
+    set is `e < -k` and `beta_post` starts at `-k` - previously the
+    split at 0 misclassified anticipated effects as pre-trend
+    coefficients. The pretrends varying-base warning is scoped to the
+    `linear` violation benchmark it concerns.
+  - PreTrendsPower's `linear` violation weights are REFERENCE-ANCHORED
+    on the CS-universal, SunAbraham and container routes (`|t - t_ref|`;
+    Roth's violation is normalized like the coefficients and vanishes at
+    the omitted period - MPD already anchored via its reference helper):
+    raw treatment-relative labels overstated each pre-period's
+    hypothesized violation by the reference offset and correspondingly
+    understated the γ-unit MDV. Universal-base CS/SA linear
+    pretrends power and MDV numbers CHANGE to the Roth-correct values
+    (e.g. weights `[3, 2]` -> `[2, 1]` for pre `[-3, -2]` around
+    `t_ref = -1`); varying-base input keeps raw labels under its
+    existing warning (REGISTRY linear-convention note records the
+    correction).
+
 ### Deprecated
 - **Semantic rename wave** (v4 program 2(c)-ii PR-B, ledger rows [M-030]
   [M-031] [M-043] [M-044] [M-045]..[M-047] [M-084] [M-086] [M-087] [M-095]

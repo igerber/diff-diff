@@ -239,6 +239,35 @@ def _extract_event_study_vcov_subblock(
     return np.asarray(es_vcov)[np.ix_(indices, indices)], "full_pre_period_vcov"
 
 
+def _extract_container_vcov_subblock(
+    surface: Any,
+    pre_periods: List[int],
+    ses: np.ndarray,
+) -> Tuple[np.ndarray, str]:
+    """Container sibling of ``_extract_event_study_vcov_subblock``.
+
+    Reads the unified ``EventStudyResults`` container's ``vcov`` /
+    ``vcov_index`` fields instead of the fit-time ``event_study_vcov``
+    channel. Deliberately a SEPARATE helper: the fit-time one is shared by
+    both the CS and SA branches, and generalizing it would put those paths
+    in the blast radius of a container-only change.
+    """
+    if surface.vcov is None or surface.vcov_index is None:
+        return np.diag(ses**2), "diag_fallback"
+
+    index_labels = list(surface.vcov_index.tolist())
+    try:
+        indices = [index_labels.index(t) for t in pre_periods]
+    except ValueError as e:
+        raise ValueError(
+            f"The event-study container's vcov_index is missing one of the "
+            f"pre-period labels {pre_periods}; cannot extract sub-block. "
+            f"Available index: {index_labels}. Original error: {e}"
+        ) from e
+
+    return np.asarray(surface.vcov)[np.ix_(indices, indices)], "full_pre_period_vcov"
+
+
 # =============================================================================
 # Results Classes
 # =============================================================================
@@ -1006,8 +1035,11 @@ class PreTrendsPower(BaseEstimator):
 
         Parameters
         ----------
-        results : MultiPeriodDiDResults or similar
-            Results object from event study estimation.
+        results : MultiPeriodDiDResults, CallawaySantAnnaResults, SunAbrahamResults, or EventStudyResults
+            Results object from event study estimation, or the unified
+            event-study container from
+            ``CallawaySantAnnaResults.aggregate('event_study')``
+            (CS-sourced containers only).
         pre_periods : list of int, optional
             Explicit list of pre-treatment periods. If None, uses results.pre_periods.
 
@@ -1043,6 +1075,11 @@ class PreTrendsPower(BaseEstimator):
             result type (which would diverge from the actual extraction
             path the moment the routing changes — see PR-B Step 3).
         """
+        from diff_diff.results_base import EventStudyResults
+
+        if isinstance(results, EventStudyResults):
+            return self._extract_container_pre_period_params(results, pre_periods)
+
         if isinstance(results, MultiPeriodDiDResults):
             # Get pre-period information - use explicit pre_periods if provided
             if pre_periods is not None:
@@ -1123,9 +1160,82 @@ class PreTrendsPower(BaseEstimator):
                 if results.event_study_effects is None:
                     raise ValueError(
                         "CallawaySantAnnaResults must have event_study_effects. "
-                        "Fit with aggregate='event_study'. PreTrendsPower reads the "
-                        "fit-time surface and does not yet accept the post-fit container "
-                        "returned by results.aggregate('event_study')."
+                        "Either pass the post-fit container "
+                        "(compute_pretrends_power(results.aggregate("
+                        "'event_study'), ...)) or fit with the deprecated "
+                        "aggregate='event_study' to populate the fit-time "
+                        "surface."
+                    )
+
+                # Common-reference guard, mirroring the container branch
+                # and HonestDiD: multiple distinct cohort base event
+                # times = pre-period coefficients normalized against
+                # DIFFERENT bases (gapped universal grid, including the
+                # overlapped-base layout no reference-only row marks).
+                # Provenance-less universal results (pre-3.9 pickles)
+                # must not FAIL OPEN: derive from the materialized
+                # reference cells; warn fail-safe when absent.
+                _ref_e = getattr(results, "reference_event_times", None)
+                if _ref_e is None and getattr(results, "base_period", None) == "universal":
+                    _gte = getattr(results, "group_time_effects", None) or {}
+                    _derived = {t - g for (g, t), _d in _gte.items() if _d.get("is_reference")}
+                    if _derived:
+                        _ref_e = tuple(sorted(_derived))
+                    else:
+                        warnings.warn(
+                            "This CallawaySantAnna base_period='universal' "
+                            "result carries no reference_event_times "
+                            "provenance and no materialized reference "
+                            "cells, so a common reference period cannot "
+                            "be verified (a gapped time grid may mix "
+                            "cohort-specific bases). Re-fit with the "
+                            "current version to record provenance.",
+                            UserWarning,
+                            stacklevel=4,
+                        )
+                if _ref_e is not None and len(set(_ref_e)) > 1:
+                    raise ValueError(
+                        "PreTrendsPower requires pre-period coefficients "
+                        "normalized against one common reference period, "
+                        "but this CallawaySantAnna base_period='universal' "
+                        "fit selected cohort-specific positional bases at "
+                        f"event times {sorted(set(_ref_e))} (gapped time "
+                        "grid). The hypothesized violation delta is "
+                        "defined relative to one reference, so power/MDV "
+                        "over mixed-base coefficients target an "
+                        "ill-defined alternative. Re-estimate on a "
+                        "consecutive (ungapped) time grid so every "
+                        "cohort's base falls at the same event time."
+                    )
+
+                # Varying-base interpretation warning (twin of HonestDiD's
+                # universal-base warning): the built-in ``linear``
+                # violation constructs delta as a slope on RELATIVE TIME,
+                # which assumes pre-treatment coefficients are LEVELS
+                # against one common reference. With base_period="varying"
+                # (the CS default), pre-treatment effects are
+                # consecutive-period comparisons - under a linear trend
+                # they are constant increments, not values proportional to
+                # |event_time| - so linear power/MDV target a different
+                # violation shape. Scoped to the LINEAR benchmark: the
+                # constant/last_period/custom vectors are user-specified
+                # in coefficient space.
+                if (
+                    getattr(results, "base_period", None) != "universal"
+                    and getattr(self, "violation_type", "linear") == "linear"
+                ):
+                    warnings.warn(
+                        "PreTrendsPower on CallawaySantAnna results with "
+                        "base_period='varying': pre-treatment coefficients "
+                        "are consecutive-period comparisons, but the "
+                        "'linear' violation benchmark assumes level "
+                        "coefficients against a common reference period, "
+                        "so linear power/MDV target a different violation "
+                        "shape. Re-run with CallawaySantAnna("
+                        "base_period='universal') for Roth-faithful linear "
+                        "benchmarks.",
+                        UserWarning,
+                        stacklevel=4,
                     )
 
                 # Get pre-period effects. Anticipation-aware cutoff per
@@ -1157,6 +1267,25 @@ class PreTrendsPower(BaseEstimator):
                 if not pre_effects:
                     raise ValueError("No pre-treatment periods found in event study.")
 
+                # An explicitly requested pre-period subset is honored,
+                # never silently ignored (mirrors the MPD branch and the
+                # container branch).
+                if pre_periods is not None:
+                    _missing = [t for t in sorted(pre_periods) if t not in pre_effects]
+                    if _missing:
+                        raise ValueError(
+                            f"Requested pre_periods {_missing} are not "
+                            f"eligible pre-treatment periods in this event "
+                            f"study (eligible: {sorted(pre_effects)})."
+                        )
+                    pre_effects = {t: pre_effects[t] for t in sorted(pre_periods)}
+                    if not pre_effects:
+                        raise ValueError(
+                            "Pre-trends power analysis requires at least "
+                            "one pre-period; the requested pre_periods "
+                            "subset is empty."
+                        )
+
                 pre_periods = sorted(pre_effects.keys())
                 n_pre = len(pre_periods)
 
@@ -1171,7 +1300,23 @@ class PreTrendsPower(BaseEstimator):
                     results, pre_periods, ses
                 )
 
-                relative_times = np.asarray(pre_periods, dtype=float)
+                # Roth's linear violation is defined relative to the
+                # NORMALIZED ZERO (his omitted period is labeled t=0):
+                # delta must vanish at the omitted reference, so relative
+                # times are measured FROM it - |t - t_ref| - not from
+                # treatment (the MPD branch's
+                # _coerce_relative_times_from_reference precedent).
+                # Universal fits carry the anchor as the singleton
+                # reference_event_times; varying fits have no common
+                # reference (raw labels retained under the varying-base
+                # warning; transformation tracked in TODO.md).
+                if _ref_e is not None and len(set(_ref_e)) == 1:
+                    _anchor = float(next(iter(set(_ref_e))))
+                    relative_times = np.asarray(
+                        [float(t) - _anchor for t in pre_periods], dtype=float
+                    )
+                else:
+                    relative_times = np.asarray(pre_periods, dtype=float)
                 return effects, ses, vcov, n_pre, relative_times, covariance_source
         except ImportError:
             pass
@@ -1202,6 +1347,24 @@ class PreTrendsPower(BaseEstimator):
                 if not pre_effects:
                     raise ValueError("No pre-treatment periods found in event study.")
 
+                # Honor an explicitly requested pre-period subset (mirrors
+                # the CS branch above).
+                if pre_periods is not None:
+                    _missing = [t for t in sorted(pre_periods) if t not in pre_effects]
+                    if _missing:
+                        raise ValueError(
+                            f"Requested pre_periods {_missing} are not "
+                            f"eligible pre-treatment periods in this event "
+                            f"study (eligible: {sorted(pre_effects)})."
+                        )
+                    pre_effects = {t: pre_effects[t] for t in sorted(pre_periods)}
+                    if not pre_effects:
+                        raise ValueError(
+                            "Pre-trends power analysis requires at least "
+                            "one pre-period; the requested pre_periods "
+                            "subset is empty."
+                        )
+
                 pre_periods = sorted(pre_effects.keys())
                 n_pre = len(pre_periods)
 
@@ -1217,15 +1380,188 @@ class PreTrendsPower(BaseEstimator):
                     results, pre_periods, ses
                 )
 
-                relative_times = np.asarray(pre_periods, dtype=float)
+                # SunAbraham omits e = -1 - anticipation as its COMMON
+                # reference (saturated-regression omitted category):
+                # anchor Roth's linear violation there (see the CS
+                # branch for the normalization rationale).
+                _sa_ref = getattr(results, "reference_period", None)
+                if _sa_ref is None:
+                    _sa_ref = -1 - int(getattr(results, "anticipation", 0) or 0)
+                relative_times = np.asarray(
+                    [float(t) - float(_sa_ref) for t in pre_periods], dtype=float
+                )
                 return effects, ses, vcov, n_pre, relative_times, covariance_source
         except ImportError:
             pass
 
         raise TypeError(
             f"Unsupported results type: {type(results)}. "
-            "Expected MultiPeriodDiDResults, CallawaySantAnnaResults, or SunAbrahamResults."
+            "Expected MultiPeriodDiDResults, CallawaySantAnnaResults, "
+            "SunAbrahamResults, or an EventStudyResults container from "
+            "CallawaySantAnnaResults.aggregate('event_study')."
         )
+
+    def _extract_container_pre_period_params(
+        self,
+        surface: Any,
+        pre_periods: Optional[List[int]] = None,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int, Optional[np.ndarray], str]:
+        """Container branch of ``_extract_pre_period_params``.
+
+        Consumes the unified ``EventStudyResults`` surface produced by
+        ``CallawaySantAnnaResults.aggregate('event_study')``. Admission is
+        SOURCE-SCOPED: containers from other producers are rejected rather
+        than silently admitted - widening is a per-estimator methodology
+        decision in each estimator's own ``aggregate()`` migration (row
+        M-093). dCDH containers in particular are rejected BY DESIGN:
+        their ``l1_first_switch`` placebo rows are a different estimand
+        from pre-trend coefficients, and PreTrendsPower has no native dCDH
+        branch either.
+        """
+        if surface.source != "CallawaySantAnnaResults":
+            raise TypeError(
+                "PreTrendsPower accepts EventStudyResults containers "
+                "produced by CallawaySantAnnaResults.aggregate("
+                "'event_study') only "
+                f"(got source={surface.source!r}). For other estimators "
+                "pass the native results object where supported "
+                "(MultiPeriodDiDResults, CallawaySantAnnaResults, or "
+                "SunAbrahamResults); container admission for further "
+                "producers arrives with their own aggregate() migrations."
+            )
+        if surface.time_scale != "relative":
+            raise TypeError(
+                "PreTrendsPower requires a relative-time event-study "
+                f"container; got time_scale={surface.time_scale!r}."
+            )
+
+        # Common-reference guard: cohort-level normalization-base
+        # provenance (mirrors the fit-time CS branch and HonestDiD). A
+        # universal container WITHOUT the field (hand-built - CS-produced
+        # containers always record it) cannot be verified: warn
+        # fail-safe rather than fail open silently.
+        _ref_e = surface.reference_event_times
+        if _ref_e is None and surface.base_period == "universal":
+            warnings.warn(
+                "This CallawaySantAnna event-study container carries no "
+                "reference_event_times provenance, so a common reference "
+                "period cannot be verified (universal base on a gapped "
+                "time grid may mix cohort-specific bases). CS-produced "
+                "containers record it - re-aggregate from the fitted "
+                "results object.",
+                UserWarning,
+                stacklevel=4,
+            )
+        if _ref_e is not None and len(set(_ref_e)) > 1:
+            raise ValueError(
+                "PreTrendsPower requires pre-period coefficients "
+                "normalized against one common reference period, but "
+                "this CallawaySantAnna base_period='universal' fit "
+                "selected cohort-specific positional bases at event "
+                f"times {sorted(set(_ref_e))} (gapped time grid). The "
+                "hypothesized violation delta is defined relative to "
+                "one reference, so power/MDV over mixed-base "
+                "coefficients target an ill-defined alternative. "
+                "Re-estimate on a consecutive (ungapped) time grid so "
+                "every cohort's base falls at the same event time."
+            )
+
+        # Varying-base interpretation warning, mirroring the fit-time CS
+        # branch (and HonestDiD's container fail-safe): base_period=None
+        # (unknown provenance, e.g. hand-built) cannot be verified, so it
+        # warns too. CS-produced containers always carry the real value.
+        # Scoped to the LINEAR benchmark (the built-in construction the
+        # warning is about); other violation vectors are user-specified
+        # in coefficient space.
+        if (
+            surface.base_period != "universal"
+            and getattr(self, "violation_type", "linear") == "linear"
+        ):
+            provenance_clause = (
+                "This container carries no base_period provenance, so the "
+                "base-period regime cannot be verified. "
+                if surface.base_period is None
+                else "With base_period='varying', pre-treatment "
+                "coefficients are consecutive-period comparisons, but the "
+                "'linear' violation benchmark assumes level coefficients "
+                "against a common reference period, so linear power/MDV "
+                "target a different violation shape. "
+            )
+            warnings.warn(
+                "PreTrendsPower on a CallawaySantAnna event-study "
+                "container without base_period='universal'. "
+                + provenance_clause
+                + "Re-run with CallawaySantAnna(base_period='universal') "
+                "for Roth-faithful linear benchmarks.",
+                UserWarning,
+                stacklevel=4,
+            )
+
+        # Anticipation-aware cutoff, mirroring the fit-time CS branch: with
+        # anticipation=k, true pre-periods are t < -k. The container's
+        # anticipation provenance field carries the fit's value (None on a
+        # hand-built container -> 0).
+        _ant = int(surface.anticipation or 0)
+        _pre_cutoff = -_ant
+        keep = (
+            (~surface.is_reference)
+            & np.isfinite(surface.se)
+            & (surface.se > 0)
+            & (surface.event_time < _pre_cutoff)
+        )
+
+        if not keep.any():
+            raise ValueError("No pre-treatment periods found in event study.")
+
+        keep_idx = np.where(keep)[0]
+        pre_list = list(surface.event_time[keep_idx].tolist())
+        effects = np.asarray(surface.att[keep_idx], dtype=float)
+        ses = np.asarray(surface.se[keep_idx], dtype=float)
+
+        # An explicitly requested pre-period subset is honored, never
+        # silently ignored: every requested label must be an eligible
+        # pre-period on this surface, and effects/SEs/VCV subset to
+        # exactly that (sorted) set.
+        if pre_periods is not None:
+            requested = sorted(pre_periods)
+            missing = [t for t in requested if t not in pre_list]
+            if missing:
+                raise ValueError(
+                    f"Requested pre_periods {missing} are not eligible "
+                    f"pre-treatment periods on this event-study surface "
+                    f"(eligible: {pre_list})."
+                )
+            sel = [i for i, t in enumerate(pre_list) if t in set(requested)]
+            pre_list = [pre_list[i] for i in sel]
+            effects = effects[sel]
+            ses = ses[sel]
+            if not pre_list:
+                raise ValueError(
+                    "Pre-trends power analysis requires at least one "
+                    "pre-period; the requested pre_periods subset is empty."
+                )
+
+        vcov, covariance_source = _extract_container_vcov_subblock(surface, pre_list, ses)
+
+        # Anchor Roth's linear violation at the omitted reference (see the
+        # native CS branch for the normalization rationale): the single
+        # marked reference row, else the singleton reference_event_times
+        # provenance (a universal fit whose base row was trimmed), else no
+        # common reference exists (varying) and raw labels are retained
+        # under the varying-base warning.
+        _ref_rows = surface.event_time[surface.is_reference].tolist()
+        _anchor: Optional[float]
+        if len(_ref_rows) == 1:
+            _anchor = float(_ref_rows[0])
+        elif _ref_e is not None and len(set(_ref_e)) == 1:
+            _anchor = float(next(iter(set(_ref_e))))
+        else:
+            _anchor = None
+        if _anchor is not None:
+            relative_times = np.asarray([float(t) - _anchor for t in pre_list], dtype=float)
+        else:
+            relative_times = np.asarray(pre_list, dtype=float)
+        return effects, ses, np.asarray(vcov), len(pre_list), relative_times, covariance_source
 
     def _compute_power(
         self,
@@ -1530,7 +1866,7 @@ class PreTrendsPower(BaseEstimator):
 
         Parameters
         ----------
-        results : MultiPeriodDiDResults, CallawaySantAnnaResults, or SunAbrahamResults
+        results : MultiPeriodDiDResults, CallawaySantAnnaResults, SunAbrahamResults, or EventStudyResults
             Results from an event study estimation.
         M : float, optional
             Specific violation magnitude to evaluate. If None, evaluates at
