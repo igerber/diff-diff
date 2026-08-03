@@ -535,6 +535,123 @@ class TestCommonReferenceGuard:
         json.dumps(d)  # must not raise on numpy-labeled provenance
 
 
+class TestContainerIntegrity:
+    """Hand-built containers with malformed rows/covariance fail closed.
+
+    Containers are publicly constructible: consumers subset by explicit
+    [sorted pre; sorted post] label order (row order is not trusted) and
+    validate covariance integrity at the boundary.
+    """
+
+    @staticmethod
+    def _container(order, vcov=None, vcov_index=None, se_override=None):
+        data = {
+            -3: (0.10, 0.10, -0.10, 0.30),
+            -2: (0.05, 0.10, -0.15, 0.25),
+            -1: (0.0, np.nan, np.nan, np.nan),
+            0: (1.9, 0.12, 1.66, 2.14),
+            1: (2.1, 0.13, 1.85, 2.35),
+        }
+        rows = [data[t] for t in order]
+        se = np.array([r[1] for r in rows])
+        if se_override is not None:
+            se = se_override
+        return EventStudyResults(
+            event_time=np.array(order),
+            att=np.array([r[0] for r in rows]),
+            se=se,
+            t_stat=np.array([np.nan] * len(order)),
+            p_value=np.array([np.nan] * len(order)),
+            conf_int_lower=np.array([r[2] for r in rows]),
+            conf_int_upper=np.array([r[3] for r in rows]),
+            is_reference=np.array([t == -1 for t in order]),
+            n=np.array([10.0] * len(order)),
+            source="CallawaySantAnnaResults",
+            base_period="universal",
+            reference_event_times=(-1,),
+            vcov=vcov,
+            vcov_index=vcov_index,
+        )
+
+    def test_permuted_rows_produce_identical_bounds(self):
+        # Interleaved rows must yield the SAME bounds as the sorted
+        # container: beta_hat/sigma are subset in [sorted pre; sorted
+        # post] order, never row order (the fit-side split takes the
+        # first num_pre entries as beta_pre).
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            h_sorted = compute_honest_did(self._container([-3, -2, -1, 0, 1]), M=0.5)
+            h_perm = compute_honest_did(self._container([-3, 0, -2, -1, 1]), M=0.5)
+        assert h_perm.lb == h_sorted.lb and h_perm.ub == h_sorted.ub
+        assert h_perm.pre_periods_used == h_sorted.pre_periods_used == [-3, -2]
+        assert h_perm.post_periods_used == h_sorted.post_periods_used == [0, 1]
+        # Pretrends is label-aligned elementwise: power invariant too.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            p_sorted = compute_pretrends_power(self._container([-3, -2, -1, 0, 1]), M=0.1)
+            p_perm = compute_pretrends_power(self._container([-3, 0, -2, -1, 1]), M=0.1)
+        assert abs(p_sorted.power - p_perm.power) < 1e-3  # MVN-CDF jitter
+
+    def test_duplicate_event_time_labels_rejected(self):
+        surface = self._container([-3, -2, -1, 0, 0])
+        for consumer in (compute_honest_did, compute_pretrends_power):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                with pytest.raises(ValueError, match="duplicate event_time"):
+                    consumer(surface, M=0.5)
+
+    @pytest.mark.parametrize(
+        "corruption, match",
+        [
+            ("nonfinite", "non-finite"),
+            ("asymmetric", "not symmetric"),
+            ("indefinite", "indefinite"),
+            ("diag_mismatch", "inconsistent with the stored standard errors"),
+            ("dup_index", "duplicate\\s+labels|carries duplicate"),
+        ],
+    )
+    def test_malformed_covariance_rejected(self, corruption, match):
+        order = [-3, -2, -1, 0, 1]
+        ses = np.array([0.10, 0.10, 0.12, 0.13])  # retained rows, sorted
+        vcov = np.diag(ses**2)
+        vcov_index = np.array([-3, -2, 0, 1])
+        if corruption == "nonfinite":
+            vcov = vcov.copy()
+            vcov[0, 1] = np.nan
+            vcov[1, 0] = np.nan
+        elif corruption == "asymmetric":
+            vcov = vcov.copy()
+            vcov[0, 1] = 0.005  # not mirrored
+        elif corruption == "indefinite":
+            vcov = vcov.copy()
+            # off-diagonal larger than the diagonal product -> negative eig
+            vcov[0, 1] = vcov[1, 0] = 0.02
+        elif corruption == "diag_mismatch":
+            vcov = vcov.copy()
+            vcov[0, 0] = 0.5  # != se**2
+        elif corruption == "dup_index":
+            vcov_index = np.array([-3, -3, 0, 1])
+        surface = self._container(order, vcov=vcov, vcov_index=vcov_index)
+        for consumer in (compute_honest_did, compute_pretrends_power):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                with pytest.raises(ValueError, match=match):
+                    consumer(surface, M=0.5)
+
+    def test_valid_covariance_still_accepted(self):
+        ses = np.array([0.10, 0.10, 0.12, 0.13])
+        vcov = np.diag(ses**2)
+        surface = self._container(
+            [-3, -2, -1, 0, 1], vcov=vcov, vcov_index=np.array([-3, -2, 0, 1])
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            h = compute_honest_did(surface, M=0.5)
+            p = compute_pretrends_power(surface, M=0.1)
+        assert np.isfinite(h.lb) and np.isfinite(h.ub)
+        assert np.isfinite(p.power)
+
+
 class TestLinearViolationAnchoring:
     """Roth's linear violation is anchored at the omitted reference.
 

@@ -623,6 +623,49 @@ def _absent(results: Any) -> ValueError:
     return ValueError(f"{name} carries no event-study surface - {hint}.")
 
 
+def _validate_vcov_subblock(sigma: np.ndarray, ses: np.ndarray, consumer: str) -> np.ndarray:
+    """Integrity checks for a consumer-bound covariance sub-block.
+
+    Containers are publicly constructible, so the consumer boundary
+    validates what the producers guarantee by construction: finite
+    entries, symmetry, a diagonal equal to the stored ``se**2`` (the
+    container contract clears ``vcov`` rather than ship a matrix whose
+    diagonal disagrees with the stored SEs), and no material
+    indefiniteness. SINGULAR (rank-deficient) covariance passes - the
+    consumers document their own singular handling - indefiniteness
+    does not.
+    """
+    sigma = np.asarray(sigma, dtype=float)
+    if not np.all(np.isfinite(sigma)):
+        raise ValueError(
+            f"{consumer}: the event-study container's covariance "
+            "sub-block contains non-finite entries."
+        )
+    if not np.allclose(sigma, sigma.T, rtol=1e-8, atol=1e-12):
+        raise ValueError(
+            f"{consumer}: the event-study container's covariance " "sub-block is not symmetric."
+        )
+    ses_arr = np.asarray(ses, dtype=float)
+    if not np.allclose(np.diag(sigma), ses_arr**2, rtol=1e-6, atol=1e-12):
+        raise ValueError(
+            f"{consumer}: the event-study container's covariance diagonal "
+            "is inconsistent with the stored standard errors (the "
+            "container contract clears vcov rather than ship a matrix "
+            "whose diagonal disagrees with se**2)."
+        )
+    if sigma.size:
+        eigs = np.linalg.eigvalsh((sigma + sigma.T) / 2.0)
+        if float(eigs.min()) < -1e-8 * max(float(eigs.max()), 1.0):
+            raise ValueError(
+                f"{consumer}: the event-study container's covariance "
+                "sub-block is indefinite (most negative eigenvalue "
+                f"{float(eigs.min()):.3e}). Positive semi-definiteness is "
+                "required; singular covariance is handled downstream, "
+                "indefiniteness is not."
+            )
+    return sigma
+
+
 def _resolve_scalar_df_survey(results: Any) -> Optional[float]:
     """Resolve the producer's SCALAR inference df for container provenance.
 

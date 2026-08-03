@@ -35,7 +35,7 @@ from scipy import optimize, stats
 
 from diff_diff._base import BaseEstimator
 from diff_diff.results import MultiPeriodDiDResults
-from diff_diff.results_base import Diagnostic
+from diff_diff.results_base import Diagnostic, _validate_vcov_subblock
 
 
 def _compute_nis_acceptance_prob(
@@ -256,6 +256,12 @@ def _extract_container_vcov_subblock(
         return np.diag(ses**2), "diag_fallback"
 
     index_labels = list(surface.vcov_index.tolist())
+    if len(set(index_labels)) != len(index_labels):
+        raise ValueError(
+            "The event-study container's vcov_index carries duplicate "
+            f"labels ({index_labels}); the covariance sub-block is "
+            "ambiguous."
+        )
     try:
         indices = [index_labels.index(t) for t in pre_periods]
     except ValueError as e:
@@ -265,7 +271,10 @@ def _extract_container_vcov_subblock(
             f"Available index: {index_labels}. Original error: {e}"
         ) from e
 
-    return np.asarray(surface.vcov)[np.ix_(indices, indices)], "full_pre_period_vcov"
+    sub = _validate_vcov_subblock(
+        np.asarray(surface.vcov)[np.ix_(indices, indices)], ses, "PreTrendsPower"
+    )
+    return sub, "full_pre_period_vcov"
 
 
 # =============================================================================
@@ -1433,6 +1442,16 @@ class PreTrendsPower(BaseEstimator):
             raise TypeError(
                 "PreTrendsPower requires a relative-time event-study "
                 f"container; got time_scale={surface.time_scale!r}."
+            )
+
+        # Containers are publicly constructible: duplicate event-time
+        # labels would make every label-keyed subset below ambiguous.
+        _all_labels = surface.event_time.tolist()
+        if len(set(_all_labels)) != len(_all_labels):
+            raise ValueError(
+                "The event-study container carries duplicate event_time "
+                f"labels ({_all_labels}); each horizon must appear "
+                "exactly once."
             )
 
         # Common-reference guard: cohort-level normalization-base

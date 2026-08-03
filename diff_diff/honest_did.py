@@ -29,7 +29,7 @@ from diff_diff._base import BaseEstimator
 from diff_diff.results import (
     MultiPeriodDiDResults,
 )
-from diff_diff.results_base import Diagnostic
+from diff_diff.results_base import Diagnostic, _validate_vcov_subblock
 from diff_diff.utils import _get_critical_value
 
 # =============================================================================
@@ -675,6 +675,16 @@ def _extract_container_params(
     # treats a zero SE as undefined inference (NaN t/p/CI), and admitting
     # such a row here would launder undefined source inference into finite
     # sensitivity bounds (mirrors the native CS branch and pretrends).
+    # Containers are publicly constructible: duplicate event-time labels
+    # would make every label-keyed subset below ambiguous.
+    _all_labels = surface.event_time.tolist()
+    if len(set(_all_labels)) != len(_all_labels):
+        raise ValueError(
+            "The event-study container carries duplicate event_time "
+            f"labels ({_all_labels}); each horizon must appear exactly "
+            "once."
+        )
+
     keep = (~surface.is_reference) & np.isfinite(surface.se) & (surface.se > 0)
     rel_times = [t for t, k in zip(surface.event_time.tolist(), keep) if k]
 
@@ -697,8 +707,8 @@ def _extract_container_params(
     ref_period = ref_rows[0] if ref_rows else None
 
     if ref_period is not None:
-        pre_times = [t for t in rel_times if t < ref_period]
-        post_times = [t for t in rel_times if t > ref_period]
+        pre_times = sorted(t for t in rel_times if t < ref_period)
+        post_times = sorted(t for t in rel_times if t > ref_period)
     else:
         # No reference row (varying base): the anticipation window
         # [e = -k, -1] carries anticipated TREATMENT effects (REGISTRY
@@ -707,8 +717,8 @@ def _extract_container_params(
         # Splitting at 0 would misclassify anticipated effects as
         # pre-trend coefficients. Mirrors the native CS branch.
         _post_start = -int(surface.anticipation or 0)
-        pre_times = [t for t in rel_times if t < _post_start]
-        post_times = [t for t in rel_times if t >= _post_start]
+        pre_times = sorted(t for t in rel_times if t < _post_start)
+        post_times = sorted(t for t in rel_times if t >= _post_start)
 
     if len(pre_times) == 0:
         raise ValueError(
@@ -742,13 +752,26 @@ def _extract_container_params(
             "or use balance_e to restrict to a balanced subset."
         )
 
-    keep_idx = np.where(keep)[0]
-    beta_hat = np.asarray(surface.att[keep_idx], dtype=float)
-    ses = np.asarray(surface.se[keep_idx], dtype=float)
+    # beta_hat/sigma are subset in EXPLICIT [sorted pre; sorted post]
+    # order: the fit-side Rambachan-Roth split takes the first num_pre
+    # entries as beta_pre, and a hand-built container's rows need not
+    # arrive sorted - row-order subsetting would silently misalign the
+    # coefficient blocks and the covariance.
+    _row_of = {t: i for i, t in enumerate(surface.event_time.tolist())}
+    ordered_times = list(pre_times) + list(post_times)
+    idx_ordered = np.asarray([_row_of[t] for t in ordered_times], dtype=int)
+    beta_hat = np.asarray(surface.att[idx_ordered], dtype=float)
+    ses = np.asarray(surface.se[idx_ordered], dtype=float)
 
     if surface.vcov is not None and surface.vcov_index is not None:
         vcov_labels = list(surface.vcov_index.tolist())
-        missing = [t for t in rel_times if t not in vcov_labels]
+        if len(set(vcov_labels)) != len(vcov_labels):
+            raise ValueError(
+                "The event-study container's vcov_index carries duplicate "
+                f"labels ({vcov_labels}); the covariance sub-block is "
+                "ambiguous."
+            )
+        missing = [t for t in ordered_times if t not in vcov_labels]
         if missing:
             # A SUPPLIED covariance whose index omits a retained horizon is
             # inconsistent - fail loud rather than silently degrading to a
@@ -759,8 +782,8 @@ def _extract_container_params(
                 f"retained horizon(s) {missing}; cannot extract the "
                 f"covariance sub-block. Available index: {vcov_labels}."
             )
-        idx = [vcov_labels.index(t) for t in rel_times]
-        sigma = surface.vcov[np.ix_(idx, idx)]
+        idx = [vcov_labels.index(t) for t in ordered_times]
+        sigma = _validate_vcov_subblock(surface.vcov[np.ix_(idx, idx)], ses, "HonestDiD")
     else:
         # Container-specific message: a vcov-less container has several
         # documented causes (bootstrap/replicate overrides, producers that
