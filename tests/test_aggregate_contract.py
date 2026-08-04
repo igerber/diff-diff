@@ -1899,13 +1899,25 @@ class TestEfficientAggregate:
         res.group_time_effects[post_gt]["effect"] = 999.0
         res.groups.pop()
         res.time_periods.pop()
+        # Provenance mutations (CI review R2): a flipped pt_assumption must
+        # not turn the genuine e=-1 estimate into a zeroed reference row,
+        # and alpha/anticipation edits must not relabel the containers.
+        res.pt_assumption = "post"
+        res.anticipation = 3
+        res.alpha = 0.5
         g_after = res.aggregate("group")
         es_after = res.aggregate("event_study")
+        s_after = res.aggregate("simple")
         np.testing.assert_array_equal(g_before.att, g_after.att)
         np.testing.assert_array_equal(g_before.se, g_after.se)
         assert list(g_before.label) == list(g_after.label)
         np.testing.assert_array_equal(es_before.att, es_after.att)
         np.testing.assert_array_equal(es_before.se, es_after.se)
+        assert not es_after.is_reference.any()
+        assert es_after.alpha == es_before.alpha
+        assert s_after.alpha == 0.05 and float(s_after.n[0]) == float(
+            res.n_treated_units + res.n_control_units
+        )
 
     def test_zero_row_balance_e_surface(self, efficient_fitted):
         # An anchor no cohort reaches: warns, returns a LEGAL 0-row surface.

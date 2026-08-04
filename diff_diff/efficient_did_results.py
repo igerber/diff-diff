@@ -351,7 +351,20 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
         meta = self.survey_metadata
         if meta is not None:
             meta = dataclasses.replace(meta, df_survey=bk["df_survey"])
-        carrier = dataclasses.replace(self, event_study_effects=es, survey_metadata=meta)
+        # The carrier's PROVENANCE fields also come from the kit snapshots
+        # (CI review R2): the reference_period property and the container's
+        # alpha/anticipation must reflect the FIT's regime, not a possibly
+        # mutated public field - a PT-All fit whose public pt_assumption
+        # was flipped to "post" would otherwise mark the genuine e=-1
+        # estimate as a reference row and zero it.
+        carrier = dataclasses.replace(
+            self,
+            event_study_effects=es,
+            survey_metadata=meta,
+            pt_assumption=bk["pt_assumption"],
+            anticipation=kit.anticipation,
+            alpha=kit.alpha,
+        )
         return build_event_study_surface(carrier)
 
     def _aggregate_simple_result(self, kit: Any) -> AggregationResult:
@@ -383,9 +396,9 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
             p_value=np.array([self.overall_p_value], dtype=float),
             conf_int_lower=np.array([self.overall_conf_int[0]], dtype=float),
             conf_int_upper=np.array([self.overall_conf_int[1]], dtype=float),
-            n=np.array([self.n_treated_units + self.n_control_units], dtype=float),
+            n=np.array([kit.bookkeeping["n_units_total"]], dtype=float),
             df=df_val,
-            alpha=self.alpha,
+            alpha=kit.alpha,
             n_kind="units",
             weight=np.array([1.0], dtype=float),
             estimator=type(self).__name__.replace("Results", ""),
