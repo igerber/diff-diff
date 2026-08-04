@@ -5547,7 +5547,7 @@ class TestSpilloverDiDWaveE1SurveyDesignEventStudy:
 
         Wave E.3 (shipped): warn-and-dropped rows are RETAINED in the
         resolved survey design as zero-score padding (matches R
-        `survey::svyrecvar(subset())` + `imputation.py:2175-2183`
+        `survey::svyrecvar(subset())` + `imputation_aggregation.py (_compute_lead_coefficients)`
         precedent). `n_psu` / `n_strata` / `df_survey` reflect the FULL
         domain (all 10 PSUs across 2 strata) rather than the post-drop
         fit sample (the prior Wave E.1 behavior of 8 PSUs / df_survey=6).
@@ -7562,7 +7562,7 @@ class TestSpilloverDiDWaveE3SubpopulationFullDesign:
     Methodology anchor: R `survey::svyrecvar(subset(design, mask))` (Lumley 2010
     §2.5) — zero-pad scores at the meat-helper boundary; resolved survey design
     retains full-panel `n_psu` / `n_strata` / `df_survey` / Binder centering.
-    Library precedent at `imputation.py:2175-2183` and `prep.py:1401-1432`.
+    Library precedent at `imputation_aggregation.py (_compute_lead_coefficients)` and `prep.py:1401-1432`.
 
     A2 invariant (locked in `_scratch/wave_e3_smoke.py`): warn-and-drop and
     `SurveyDesign.subpopulation()` apply the same zero-pad mechanism — both

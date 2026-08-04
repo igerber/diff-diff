@@ -376,6 +376,19 @@ class AggregationKit:
     ``covariate_matrix``, ``obs_outcome``, ``obs_covariates``): re-aggregation
     reads only unit-level bookkeeping, so the source panel is never retained.
 
+    PANEL-BACKED EXCEPTION (ImputationDiD [M-021] and TwoStageDiD [M-022]):
+    their recompute is target-specific - a different ``balance_e`` re-masks
+    which observations enter each estimand and re-solves the variance from
+    the panel + FE model - so no compact influence payload can replace the
+    frame, and their kits' ``bookkeeping`` DOES retain panel objects.
+    ImputationDiD references the SAME per-fit objects ``_fit_data`` already
+    retains for ``pretrend_test()`` (zero marginal memory; pickles unchanged
+    via memoization). TwoStageDiD retains a column-subset copy of its
+    working frame - the first new panel retention, O(n_obs), documented in
+    its ledger row and REGISTRY Note. For those two, ``influence`` is empty
+    by design and the exclusion above applies to everything OUTSIDE the
+    enumerated bookkeeping payload.
+
     Attributes
     ----------
     bookkeeping : dict

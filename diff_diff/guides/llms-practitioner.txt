@@ -417,16 +417,19 @@ estimate is contaminated by forbidden comparisons (see Step 4).
 
 Aggregate treatment effects may mask important variation.
 
-### For CallawaySantAnna and EfficientDiD (post-fit `aggregate()`)
+### For CallawaySantAnna, EfficientDiD, ImputationDiD, TwoStageDiD (post-fit `aggregate()`)
 ```python
 # Post-fit, no refit needed (fit-time aggregate= is deprecated since 3.9
-# for CS/StackedDiD/EfficientDiD; removed in 4.0):
+# for CS/StackedDiD/EfficientDiD/ImputationDiD/TwoStageDiD; removed in 4.0):
 results = cs.fit(data, ...)
 print(results.overall_att)                              # Overall ATT
 print(results.aggregate('group').to_dataframe())        # Per-cohort ATTs
 print(results.aggregate('event_study').to_dataframe())  # Dynamic effects
-# EXCEPTION: a BOOTSTRAPPED CS or EfficientDiD fit's aggregate() raises —
-# use the deprecated fit-time aggregation there:
+# balance_e moves onto aggregate() too:
+print(results.aggregate('event_study', balance_e=2).to_dataframe())
+# EXCEPTION: a BOOTSTRAPPED fit's aggregate() raises on the recomputing
+# adopters (CS/EfficientDiD/ImputationDiD/TwoStageDiD) — use the
+# deprecated fit-time aggregation there:
 results = cs.fit(data, ..., aggregate='all')
 ```
 

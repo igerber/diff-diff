@@ -123,11 +123,12 @@ _MD_TOKEN_RE = re.compile(r"\[(M-\d{3})\]")
 # paper's own estimator label) = 114, plus the 2(c)-ii missed-rename
 # amendments (M-136 LPDiD level value; M-137/M-138 diagnostics time->post)
 # = 117, plus 2b PR-3a's EfficientDiD balance_e row (M-120, claimed from the
-# reserved pool) = 118.
-# Ids are never reused and terminal rows are never
-# deleted, so the ledger only grows - raise the floor when rows are added; a
-# lower parse count means scanner/format drift or an illegal row deletion.
-ROW_COUNT_FLOOR = 118
+# reserved pool) = 118, plus 2b PR-3b's Imputation/TwoStage balance_e rows
+# (M-118, M-119, claimed from the reserved pool) = 120.
+# Ids are never reused and terminal rows are never deleted, so the ledger
+# only grows - raise the floor when rows are added; a lower parse count
+# means scanner/format drift or an illegal row deletion.
+ROW_COUNT_FLOOR = 120
 
 # Committed snapshot of the shipped id set ("ids are never deleted or reused"
 # contract - a delete-one-add-one edit keeps the count above the floor but trips
@@ -152,9 +153,11 @@ ROW_COUNT_FLOOR = 118
 # 3.9 warning, since the surviving target classes have no shim; EDiD was
 # initially slated but retained - the CSX paper's own estimator label).
 # (120,120) =
-# 2b PR-3a's EfficientDiD balance_e move (claimed from the reserved pool).
-# M-116, M-118, M-119 and M-121 remain reserved for the later 2b PRs, not
-# deleted - ids are never reused, so a gap here is intentional.
+# 2b PR-3a's EfficientDiD balance_e move (claimed from the reserved pool);
+# (118,119) = 2b PR-3b's Imputation/TwoStage balance_e moves (the first and
+# second reserved slots, claimed with M-021/M-022).
+# M-116 and M-121 remain reserved for the later 2b PRs, not deleted - ids
+# are never reused, so a gap here is intentional.
 _INITIAL_ID_RANGES = [
     (1, 8),
     (10, 16),
@@ -175,6 +178,7 @@ _INITIAL_ID_RANGES = [
     (127, 131),
     (132, 135),
     (136, 138),
+    (118, 119),
 ]
 EXPECTED_INITIAL_IDS = frozenset(
     f"M-{n:03d}" for lo, hi in _INITIAL_ID_RANGES for n in range(lo, hi + 1)
@@ -573,13 +577,14 @@ def test_initial_ids_never_deleted():
     """The shipped id set is immutable: ids are never deleted or reused (spec section 11).
 
     ROW_COUNT_FLOOR alone would let a delete-one-add-one edit pass; this snapshot cannot.
-    Extends as rows ship (118 as of 2b PR-3a's EfficientDiD balance_e row:
-    Phase 1 + diagnostic-family + M-092/M-093 + M-094..M-096 + the M-097..M-115
-    public-function completeness sweep + M-117/M-120/M-122 + M-123/M-124 +
-    M-125 + M-126 + M-127..M-131 + M-132..M-135 + M-136..M-138)."""
+    Extends as rows ship (120 as of 2b PR-3b's Imputation/TwoStage balance_e
+    rows: Phase 1 + diagnostic-family + M-092/M-093 + M-094..M-096 + the
+    M-097..M-115 public-function completeness sweep + M-117..M-120/M-122 +
+    M-123/M-124 + M-125 + M-126 + M-127..M-131 + M-132..M-135 +
+    M-136..M-138)."""
     missing = sorted(EXPECTED_INITIAL_IDS - set(_ROW_IDS))
     assert not missing, f"ledger rows deleted (ids are permanent): {missing}"
-    assert len(EXPECTED_INITIAL_IDS) == 118
+    assert len(EXPECTED_INITIAL_IDS) == 120
 
 
 def test_version_tuple_pads_to_three_components():

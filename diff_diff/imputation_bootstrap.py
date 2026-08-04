@@ -20,44 +20,12 @@ from diff_diff.bootstrap_utils import (
 from diff_diff.bootstrap_utils import (
     generate_survey_multiplier_weights_batch as _generate_survey_multiplier_weights_batch,
 )
+from diff_diff.imputation_aggregation import _compute_target_weights  # noqa: F401 (shared helper)
 from diff_diff.imputation_results import ImputationBootstrapResults
 
 __all__ = [
     "ImputationDiDBootstrapMixin",
 ]
-
-
-def _compute_target_weights(
-    tau_hat: np.ndarray,
-    target_mask: np.ndarray,
-) -> "tuple[np.ndarray, int]":
-    """
-    Equal weights for finite tau_hat observations within target_mask.
-
-    Used by both aggregation and bootstrap paths to avoid weight logic
-    duplication.
-
-    Parameters
-    ----------
-    tau_hat : np.ndarray
-        Per-observation treatment effects (may contain NaN).
-    target_mask : np.ndarray
-        Boolean mask selecting the target subset within tau_hat.
-
-    Returns
-    -------
-    weights : np.ndarray
-        Weight array (same length as tau_hat). 1/n_valid for finite
-        observations in target_mask, 0 elsewhere.
-    n_valid : int
-        Number of finite observations in the target subset.
-    """
-    finite_target = np.isfinite(tau_hat) & target_mask
-    n_valid = int(finite_target.sum())
-    weights = np.zeros(len(tau_hat))
-    if n_valid > 0:
-        weights[np.where(finite_target)[0]] = 1.0 / n_valid
-    return weights, n_valid
 
 
 class ImputationDiDBootstrapMixin:

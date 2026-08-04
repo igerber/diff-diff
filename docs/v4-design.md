@@ -674,7 +674,7 @@ above; anything only one PR cares about stays in that PR's plan.**
 | 2: contract foundations | 3.9 | (a) results base + unified event-study representation [M-092] + to_dict completion + the Diagnostic marker base on the diagnostic result roster [M-091] (section 3.5); (b) `aggregate()` + fit(aggregate=) shims [M-020..M-027] (M-020's shim already shipped); (c) param renames [M-030..M-047] [M-084] [M-086..M-089] + their results-field mirrors [M-094] [M-095] (section 8 rule 9) + the public-function completeness sweep [M-097..M-113] (section 8 rule 10) + the dCDH results mirror [M-114] + the fourth `robust` site [M-115] + the 2(c)-ii missed-rename amendments [M-136..M-138] (LPDiD `level` value; the two post-dummy diagnostics params) + BaseEstimator mixin + ContinuousDiD covariates move; (d) alias introduction [M-062] (the Spillover introduction is cancelled [M-063]) + the alias-diet `__getattr__` warning shim [M-135] + wrapper deprecations [M-070..M-077] + the two inference-surface policies: `n_bootstrap` semantic unification [M-081] and the wild-cluster-bootstrap roster guard [M-096]; shipped insertions (all done): the aggregate contract [M-122], the ETWFE reference-period family [M-123] [M-124] [M-125], and the variance-consolidation program [M-126] [M-127] |
 | 3: merges | 3.9 | (a) TWFE event-study mode [M-010] + EventStudy warn [M-060] + the fit `time`->`post` rename [M-082] (gates: section 4.1's equivalence/divergence/pooled-parity test triple); (b) TripleDifference facade [M-013] + the SDDD alias [M-064]; (c) CiC method= [M-015] |
 | 4: release + soak | 3.9 cut | Migration guide written (skeleton: section 10); maintainer cuts 3.9; maint/3.8 rule active |
-| 5: enforcement | 4.0 | Removals [M-010..M-015, M-020..M-027, M-030, M-032..M-047 old names, M-060, M-061, M-064, M-070..M-077, M-084, M-086..M-089, M-001..M-003, M-117, M-120] + the alias diet [M-132]..[M-134] + the amendment's old names [M-094] [M-095] [M-097..M-115] [M-136..M-138] (incl. their consumer migrations and the `clean_control` serialized reporting key); M-031's old `time` name persists as the merged class's calendar column, so it is deliberately absent from the removal roster (its 4.0 enforcement is the M-085 behavior entry below); property window: [M-016] property-flips at 4.0 (removal at 5.0); storage flips [M-050..M-058]; default policies [M-004..M-006, M-128..M-131, M-080]; merged-class behavior enforcements [M-083] [M-085]; warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; docs/llms.txt/README refresh |
+| 5: enforcement | 4.0 | Removals [M-010..M-015, M-020..M-027, M-030, M-032..M-047 old names, M-060, M-061, M-064, M-070..M-077, M-084, M-086..M-089, M-001..M-003, M-117, M-118, M-119, M-120] + the alias diet [M-132]..[M-134] + the amendment's old names [M-094] [M-095] [M-097..M-115] [M-136..M-138] (incl. their consumer migrations and the `clean_control` serialized reporting key); M-031's old `time` name persists as the merged class's calendar column, so it is deliberately absent from the removal roster (its 4.0 enforcement is the M-085 behavior entry below); property window: [M-016] property-flips at 4.0 (removal at 5.0); storage flips [M-050..M-058]; default policies [M-004..M-006, M-128..M-131, M-080]; merged-class behavior enforcements [M-083] [M-085]; warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; docs/llms.txt/README refresh |
 | 6: front door | 4.1 | `event_study(data, outcome, unit, time, first_treat, estimator=...)` comparison entry point over the staggered family (sketch only; specified in its own plan) |
 
 Citation semantic for the table: a cell may cite a row whose current `phase`
@@ -869,12 +869,14 @@ forever - a removed symbol resurrecting is a test failure.
   class/function rows
   and alias rows also assert `__all__` membership consistent with their
   status (stale `import *` entries fail). The shipped row ids are a
-  committed snapshot in the enforcement test (114 as of the alias-diet
-  family: Phase 1 + the diagnostic-family amendment +
+  committed snapshot in the enforcement test (120 as of 2(b) PR-3b's
+  Imputation/TwoStage balance_e rows: Phase 1 + the diagnostic-family
+  amendment +
   the M-092/M-093 results-contract rows + the M-094..M-096 amendment rows +
-  the M-097..M-115 completeness sweep + M-117/M-122 + the ETWFE
+  the M-097..M-115 completeness sweep + M-117..M-120/M-122 + the ETWFE
   reference-period pair M-123/M-124 + M-125 + M-126 + M-127..M-131 +
-  the alias-diet family M-132..M-135;
+  the alias-diet family M-132..M-135 + the 2(c)-ii amendments
+  M-136..M-138;
   the snapshot extends by a new id range in the same diff that appends
   rows): ids are never deleted or reused, and the test fails if any
   snapshot id disappears.

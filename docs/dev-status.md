@@ -19,12 +19,14 @@ Target: ideally < 1000 lines per module; modules ≥3000 lines are candidates fo
 | `had_pretests.py` | 4664 | Consider splitting (Stute / Yatchew / QUG / joint pretests) |
 | `diagnostic_report.py` | 4135 | Consider splitting (per-method renderers + provenance) |
 | `spillover.py` | 3655 | Consider splitting |
-| `two_stage.py` | 3512 | Consider splitting |
+| `two_stage.py` | 2430 | Monitor — exited the splitting band when the M-022 aggregate() migration extracted the Stage-2/GMM engine into `two_stage_aggregation.py` |
 | `power.py` | 3488 | Consider splitting (power analysis + MDE + sample size) |
 | `utils.py` | 3483 | Consider splitting |
 | `synthetic_control_results.py` | 3294 | Consider splitting |
 | `honest_did.py` | 3068 | Consider splitting |
-| `imputation.py` | 2898 | Monitor |
+| `imputation.py` | 1491 | Acceptable — dropped below 2000 when the M-021 aggregate() migration extracted the Theorem-3 engine into `imputation_aggregation.py` |
+| `imputation_aggregation.py` | 1858 | Acceptable — verbatim-moved Theorem-3 aggregation/variance engine (M-021/M-118) |
+| `two_stage_aggregation.py` | 1555 | Acceptable — verbatim-moved Stage-2/GMM aggregation engine (M-022/M-119) |
 | `synthetic_did.py` | 2826 | Monitor — variance methods + survey paths |
 | `business_report.py` | 2728 | Monitor — per-method narrative renderers |
 | `survey.py` | 2681 | Monitor — grew with Phase 6 features |

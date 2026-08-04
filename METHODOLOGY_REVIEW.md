@@ -580,7 +580,7 @@ and covariate-adjusted specifications.)
 
 | Field | Value |
 |-------|-------|
-| Module | `two_stage.py`, `two_stage_bootstrap.py` |
+| Module | `two_stage.py`, `two_stage_aggregation.py`, `two_stage_bootstrap.py` |
 | Primary Reference | Gardner (2022), *Two-stage differences in differences*, arXiv:2207.05943 |
 | R Reference | `did2s` |
 | Status | **Complete** |

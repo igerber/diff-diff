@@ -1445,11 +1445,16 @@ class PreTrendsPower(BaseEstimator):
                 f"(got source={surface.source!r}). For other estimators "
                 "pass the native results object where supported "
                 "(MultiPeriodDiDResults, CallawaySantAnnaResults, or "
-                "SunAbrahamResults); EfficientDiDResults containers "
-                "are rejected BY DESIGN (their surface carries no joint "
-                "event-study covariance - see the REGISTRY EfficientDiD "
-                "Note); container admission for further producers "
-                "arrives with their own aggregate() migrations."
+                "SunAbrahamResults); EfficientDiDResults and "
+                "ImputationDiDResults containers are rejected BY DESIGN "
+                "(their surfaces carry no joint event-study covariance - "
+                "per-horizon SEs only; see the REGISTRY EfficientDiD and "
+                "ImputationDiD Notes); TwoStageDiDResults container "
+                "admission is DEFERRED pending a normalization derivation "
+                "- analytical fits carry the joint Gardner-GMM covariance, "
+                "but the pre-period coefficients are stage-1 residual "
+                "means, not contrasts against a reference period (see the "
+                "REGISTRY TwoStageDiD Note and DEFERRED.md)."
             )
         _producer = surface.source.replace("Results", "")
         if surface.time_scale != "relative":

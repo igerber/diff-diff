@@ -12,6 +12,7 @@
    .. autosummary::
 
       ~ImputationDiDResults.__init__
+      ~ImputationDiDResults.aggregate
       ~ImputationDiDResults.pretrend_test
       ~ImputationDiDResults.print_summary
       ~ImputationDiDResults.summary

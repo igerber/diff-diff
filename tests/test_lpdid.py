@@ -729,6 +729,12 @@ class TestLPDiDCrossEstimator:
                 cs.event_study_effects[h]["effect"], abs=1e-9
             )
 
+    # The BJS cross-check reads `bjs.event_study_effects` (the native fit-time
+    # dict) so it keeps the deprecated `fit(aggregate=)` route (rows M-021);
+    # scoped by message to the ImputationDiD shim only.
+    @pytest.mark.filterwarnings(
+        r"ignore:ImputationDiD\.fit\((aggregate=|balance_e=|aggregate= / balance_e=)\):FutureWarning"
+    )
     def test_ce3_pmd_single_cohort_equals_bjs_imputation(self):
         # PMD LP-DiD (k=t-1, "max") with a SINGLE treated cohort == BJS
         # imputation [paper Section 3.4, footnotes 10-11; only single-cohort

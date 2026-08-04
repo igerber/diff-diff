@@ -5,14 +5,51 @@ This module contains ImputationBootstrapResults and ImputationDiDResults
 dataclasses. Extracted from imputation.py for module size management.
 """
 
+import dataclasses
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
+from diff_diff.aggregation import AggregationMixin, AggregationResult
+from diff_diff.imputation_aggregation import _ImputationAggregationMixin
 from diff_diff.results import _format_survey_block, _get_significance_stars
-from diff_diff.results_base import BaseResults
+from diff_diff.results_base import BaseResults, build_event_study_surface
+
+
+class _ImputationKitAggregator(_ImputationAggregationMixin):
+    """Throwaway per-call host for the post-fit recompute (M-021/M-118).
+
+    Hosts the moved aggregation methods with exactly the mixin's declared
+    host-attribute contract, populated from KIT SNAPSHOTS — never from the
+    live estimator (whose config may have been mutated since the fit) and
+    never from mutable public results fields. A fresh instance per
+    ``aggregate()`` call; the moved methods write nothing to ``self``, so
+    the kit stays immutable either way.
+    """
+
+    def __init__(
+        self,
+        *,
+        alpha: float,
+        anticipation: int,
+        horizon_max: Optional[int],
+        pretrends: bool,
+        aux_partition: str,
+        leave_one_out: bool,
+        rank_deficient_action: str,
+        df_convention: str,
+    ) -> None:
+        self.alpha = alpha
+        self.anticipation = anticipation
+        self.horizon_max = horizon_max
+        self.pretrends = pretrends
+        self.aux_partition = aux_partition
+        self.leave_one_out = leave_one_out
+        self.rank_deficient_action = rank_deficient_action
+        self.df_convention = df_convention
+
 
 __all__ = [
     "ImputationBootstrapResults",
@@ -75,7 +112,7 @@ class ImputationBootstrapResults:
 
 
 @dataclass
-class ImputationDiDResults(BaseResults):
+class ImputationDiDResults(BaseResults, AggregationMixin):
     """
     Results from Borusyak-Jaravel-Spiess (2024) imputation DiD estimation.
 
@@ -157,9 +194,18 @@ class ImputationDiDResults(BaseResults):
     # The estimator's df_convention configuration echoed onto the results
     # ("residual" | "cluster" | "normal"; added 3.9). It governs only the
     # pretrends lead regression's per-lead t/p/CI - the BJS overall /
-    # post-treatment inference is knob-independent. Appended LAST (the
-    # generated __init__ positional indexes are public API).
+    # post-treatment inference is knob-independent.
     df_convention: Optional[str] = None
+    # Private panel-backed post-fit aggregation kit (rows M-021/M-118),
+    # attached by ImputationDiD.fit(). None on results unpickled from a
+    # pre-3.9 release (aggregate() then fails with the re-fit message).
+    # Appended LAST (the generated __init__ positional indexes are public
+    # API).
+    _aggregation_kit: Optional[Any] = field(default=None, repr=False, compare=False)
+
+    # Post-fit aggregation vocabulary (M-021). balance_e keeps the mixin
+    # default ("event_study",) - CS precedent, do not redeclare.
+    _AGGREGATE_SUPPORTED = ("simple", "event_study", "group")
 
     # --- Inference-field aliases (balance/external-adapter compatibility) ---
     @property
@@ -181,6 +227,223 @@ class ImputationDiDResults(BaseResults):
     @property
     def t_stat(self) -> float:
         return self.overall_t_stat
+
+    # --- Post-fit aggregation (M-021/M-118) ------------------------------
+
+    def _aggregate_compute(
+        self, level: str, *, weights: Optional[str], balance_e: Optional[int]
+    ) -> Any:
+        kit = self._aggregation_kit
+        if kit is None:
+            raise ValueError(
+                "This ImputationDiDResults carries no aggregation kit - it is "
+                "attached by ImputationDiD.fit(), so a result unpickled from "
+                "an older release will not have one. Re-fit with "
+                "diff-diff >= 3.9 to aggregate post-fit."
+            )
+        if self.bootstrap_results is not None:
+            raise NotImplementedError(
+                "aggregate() is not yet available on a bootstrapped fit "
+                "(n_bootstrap > 0): the per-target bootstrap draws are not "
+                "retained, so post-fit re-aggregation cannot replay "
+                "percentile inference and analytical inference would "
+                "misrepresent the fit. Re-fit with the aggregation you "
+                "need, or use n_bootstrap=0."
+            )
+        bk = dict(kit.bookkeeping)
+        if level == "simple":
+            return self._aggregate_simple_result(kit)
+        if level == "event_study" and bk["uses_replicate"] and bk["pretrends"]:
+            # The same unsupported combination fit(aggregate='event_study')
+            # rejects: the pre-period lead regression's per-replicate refits
+            # are not implemented, and the replicate replay re-estimates
+            # post-treatment targets only.
+            raise NotImplementedError(
+                "aggregate('event_study') is not available on this fit: it "
+                "used pretrends=True with a replicate-weight survey design, "
+                "and the pre-period lead regression's per-replicate refits "
+                "are not yet implemented (fit(aggregate='event_study') "
+                "rejects the same combination). Re-fit with pretrends=False, "
+                "or use an analytical (strata/PSU/FPC) survey design."
+            )
+        # Fresh throwaway host per call, populated from KIT snapshots only
+        # (estimator/config mutation after fit() must not leak in), and a
+        # call-local projection cache (the id()-keyed cache keys are the
+        # kit's own mask objects, so reuse within the call is exact).
+        agg = _ImputationKitAggregator(
+            alpha=kit.alpha,
+            anticipation=kit.anticipation,
+            horizon_max=bk["horizon_max"],
+            pretrends=bk["pretrends"],
+            aux_partition=bk["aux_partition"],
+            leave_one_out=bk["leave_one_out"],
+            rank_deficient_action=bk["rank_deficient_action"],
+            df_convention=bk["df_convention"],
+        )
+        proj_cache: Dict[Any, Any] = {}
+        common: Dict[str, Any] = dict(
+            df=bk["df"],
+            outcome=bk["outcome"],
+            unit=bk["unit"],
+            time=bk["time"],
+            first_treat=bk["first_treat"],
+            covariates=bk["covariates"],
+            omega_0_mask=bk["omega_0_mask"],
+            omega_1_mask=bk["omega_1_mask"],
+            unit_fe=bk["unit_fe"],
+            time_fe=bk["time_fe"],
+            grand_mean=bk["grand_mean"],
+            delta_hat=bk["delta_hat"],
+            cluster_var=bk["cluster_var"],
+            treatment_groups=bk["treatment_groups"],
+            kept_cov_mask=bk["kept_cov_mask"],
+            survey_weights=bk["survey_weights"],
+            survey_df=bk["survey_df_seed"],
+            resolved_survey=(None if bk["uses_replicate"] else bk["resolved_survey"]),
+            proj_cache=proj_cache,
+        )
+        if level == "group":
+            effects = agg._aggregate_group(**common)
+            if bk["uses_replicate"]:
+                # LEVEL-MATCHED replay: [overall, groups] - reproduces
+                # fit(aggregate='group') exactly (see the replay docstring).
+                agg._replicate_override_aggregates(
+                    df=bk["df"],
+                    outcome=bk["outcome"],
+                    unit=bk["unit"],
+                    time=bk["time"],
+                    first_treat=bk["first_treat"],
+                    covariates=bk["covariates"],
+                    omega_0_mask=bk["omega_0_mask"],
+                    omega_1_mask=bk["omega_1_mask"],
+                    resolved_survey=bk["resolved_survey"],
+                    overall_att=bk["overall_att"],
+                    event_study_effects=None,
+                    group_effects=effects,
+                    balance_e=None,
+                    survey_df_seed=bk["survey_df_seed"],
+                )
+            return self._group_effects_to_aggregation(effects, kit)
+        # level == "event_study" (the mixin validated the vocabulary)
+        es = agg._aggregate_event_study(**common, balance_e=balance_e)
+        replay_df: Optional[int] = None
+        if bk["uses_replicate"]:
+            _, _, replay_df = agg._replicate_override_aggregates(
+                df=bk["df"],
+                outcome=bk["outcome"],
+                unit=bk["unit"],
+                time=bk["time"],
+                first_treat=bk["first_treat"],
+                covariates=bk["covariates"],
+                omega_0_mask=bk["omega_0_mask"],
+                omega_1_mask=bk["omega_1_mask"],
+                resolved_survey=bk["resolved_survey"],
+                overall_att=bk["overall_att"],
+                event_study_effects=es,
+                group_effects=None,
+                balance_e=balance_e,
+                survey_df_seed=bk["survey_df_seed"],
+            )
+        # Carrier + shared builder: ImputationDiD is a _from_relative_dict
+        # producer, so the recomputed dict rides the same route as the
+        # fit-time surface (zero-count-sentinel reference marking,
+        # n_kind="obs", all-NaN per-row df - identical to fit-time output).
+        # The carrier's metadata is a copy-on-use of the KIT's fit-final
+        # metadata copy (never the mutable public field); on a replicate
+        # replay its df_survey is the REPLAYED level-matched value,
+        # normalized by the same rule fit applies.
+        meta = bk["survey_metadata"]
+        if meta is not None:
+            if bk["uses_replicate"]:
+                meta = dataclasses.replace(
+                    meta, df_survey=(replay_df if replay_df and replay_df > 0 else None)
+                )
+            else:
+                meta = dataclasses.replace(meta)
+        carrier = dataclasses.replace(
+            self,
+            event_study_effects=es,
+            survey_metadata=meta,
+            anticipation=kit.anticipation,
+            alpha=kit.alpha,
+        )
+        return build_event_study_surface(carrier)
+
+    def _aggregate_simple_result(self, kit: Any) -> AggregationResult:
+        """One-row relay of the stored overall inference (bit-exact).
+
+        ``n = n_treated_obs`` (|Omega_1|) with ``n_kind="obs"``:
+        ImputationDiD's ``n_treated_units``/``n_control_units`` unit sets
+        OVERLAP (a treated unit with pre-periods counts in both), so the
+        CS/EDiD disjoint-units convention cannot apply (the StackedDiD
+        carve-out class); the treated-observation count is the population
+        the overall ATT averages over and matches every other Imputation
+        row's n semantics.
+
+        ``df`` is the kit's ``survey_df_final`` snapshot - the exact value
+        the STORED overall ``safe_inference`` received (on a replicate fit
+        that value came from the ``[overall]``-only joint stack, which is
+        precisely why it must be snapshotted rather than re-derived).
+        None → all-NaN df column; the replicate-undefined 0 sentinel NaNs
+        out via post_init.
+        """
+        return AggregationResult(
+            level="simple",
+            label=np.array(["overall"], dtype=object),
+            target=np.array(["att"], dtype=object),
+            att=np.array([self.overall_att], dtype=float),
+            se=np.array([self.overall_se], dtype=float),
+            t_stat=np.array([self.overall_t_stat], dtype=float),
+            p_value=np.array([self.overall_p_value], dtype=float),
+            conf_int_lower=np.array([self.overall_conf_int[0]], dtype=float),
+            conf_int_upper=np.array([self.overall_conf_int[1]], dtype=float),
+            n=np.array([kit.bookkeeping["n_treated_obs"]], dtype=float),
+            df=kit.bookkeeping["survey_df_final"],
+            alpha=kit.alpha,
+            n_kind="obs",
+            weight=np.array([1.0], dtype=float),
+            estimator=type(self).__name__.replace("Results", ""),
+        )
+
+    def _group_effects_to_aggregation(
+        self, effects: Dict[Any, Dict[str, Any]], kit: Any
+    ) -> AggregationResult:
+        """Per-cohort AggregationResult from the recomputed group dict.
+
+        ``df`` relays the PER-ROW ``df_used`` key each row's
+        ``safe_inference`` recorded (capture-at-use: the analytical writer
+        and the replicate override genuinely use different values on
+        replicate fits; the all-NaN cohort branch writes no key, read via
+        ``.get`` → NaN). ``weight=None``: cohort means over their own
+        observations carry no cross-cohort mass (the CS rationale).
+        ``n_kind="obs"``: ``n_obs`` counts the cohort's treated
+        observations, matching the ES surface's n semantics.
+        """
+        labels = list(effects.keys())
+        df_arr = np.array(
+            [
+                (np.nan if effects[g].get("df_used") is None else float(effects[g]["df_used"]))
+                for g in labels
+            ],
+            dtype=float,
+        )
+        return AggregationResult(
+            level="group",
+            label=np.array(labels, dtype=object),
+            target=np.array(["att"] * len(labels), dtype=object),
+            att=np.array([effects[g]["effect"] for g in labels], dtype=float),
+            se=np.array([effects[g]["se"] for g in labels], dtype=float),
+            t_stat=np.array([effects[g]["t_stat"] for g in labels], dtype=float),
+            p_value=np.array([effects[g]["p_value"] for g in labels], dtype=float),
+            conf_int_lower=np.array([effects[g]["conf_int"][0] for g in labels], dtype=float),
+            conf_int_upper=np.array([effects[g]["conf_int"][1] for g in labels], dtype=float),
+            n=np.array([effects[g]["n_obs"] for g in labels], dtype=float),
+            df=df_arr,
+            alpha=kit.alpha,
+            n_kind="obs",
+            weight=None,
+            estimator=type(self).__name__.replace("Results", ""),
+        )
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -440,8 +703,12 @@ class ImputationDiDResults(BaseResults):
         elif level == "event_study":
             if self.event_study_effects is None:
                 raise ValueError(
-                    "Event study effects not computed. "
-                    "Use aggregate='event_study' or aggregate='all'."
+                    "Event study effects not computed. Aggregate post-fit "
+                    "instead - results.aggregate('event_study') returns the "
+                    "EventStudyResults container (on a bootstrapped fit, "
+                    "re-fit with n_bootstrap=0 or use the deprecated "
+                    "fit-time aggregate=; a result unpickled from a pre-3.9 "
+                    "release carries no kit and must be re-fit)."
                 )
             rows = []
             for h, data in sorted(self.event_study_effects.items()):
@@ -462,7 +729,12 @@ class ImputationDiDResults(BaseResults):
         elif level == "group":
             if self.group_effects is None:
                 raise ValueError(
-                    "Group effects not computed. " "Use aggregate='group' or aggregate='all'."
+                    "Group effects not computed. Aggregate post-fit instead "
+                    "- results.aggregate('group') returns the "
+                    "AggregationResult container (on a bootstrapped fit, "
+                    "re-fit with n_bootstrap=0 or use the deprecated "
+                    "fit-time aggregate=; a result unpickled from a pre-3.9 "
+                    "release carries no kit and must be re-fit)."
                 )
             rows = []
             for g, data in sorted(self.group_effects.items()):

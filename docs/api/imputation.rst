@@ -65,6 +65,7 @@ Results container for imputation DiD estimation.
 
    .. autosummary::
 
+      ~ImputationDiDResults.aggregate
       ~ImputationDiDResults.summary
       ~ImputationDiDResults.print_summary
       ~ImputationDiDResults.to_dataframe
@@ -105,9 +106,9 @@ Event study with visualization::
 
     est = ImputationDiD()
     results = est.fit(data, outcome='outcome', unit='unit',
-                      time='period', first_treat='first_treat',
-                      aggregate='event_study')
-    plot_event_study(results)
+                      time='period', first_treat='first_treat')
+    es = results.aggregate('event_study')   # post-fit (M-021)
+    plot_event_study(es)
 
 Pre-trend test::
 

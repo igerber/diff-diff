@@ -38,10 +38,12 @@ groups:
     - diff_diff/imputation.py
     - diff_diff/imputation_bootstrap.py
     - diff_diff/imputation_results.py
+    - diff_diff/imputation_aggregation.py
   two_stage:
     - diff_diff/two_stage.py
     - diff_diff/two_stage_bootstrap.py
     - diff_diff/two_stage_results.py
+    - diff_diff/two_stage_aggregation.py
   efficient_did:
     - diff_diff/efficient_did.py
     - diff_diff/efficient_did_aggregation.py

@@ -850,7 +850,7 @@ def test_zero_count_finite_nonzero_effect_raises():
 
 def test_zero_count_nan_horizon_is_not_a_reference():
     # TwoStageDiD emits effect=NaN, n_obs=0 for an estimated horizon whose
-    # observations are all filtered (two_stage.py:2669-2681) - distinct from
+    # observations are all filtered (two_stage_aggregation.py::_stage2_event_study) - distinct from
     # its effect=0.0, n_obs=0 reference. The count-sentinel adapter path must
     # mark ONLY the finite-effect (0.0) row as reference and preserve the
     # NaN-effect horizon as a non-reference NaN row (never normalize it to 0).

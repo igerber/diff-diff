@@ -1951,3 +1951,67 @@ class TestEfficientContainerRejection:
             compute_honest_did(surface, M=1.0)
         with pytest.raises(TypeError, match="rejected BY DESIGN"):
             compute_pretrends_power(surface, M=1.0)
+
+
+class TestImputationContainerRejection:
+    """A REAL ImputationDiD post-fit container is rejected BY DESIGN.
+
+    The match string pins the NEW clause text, not the class name (the
+    got source={...!r} interpolation would match "ImputationDiDResults"
+    even without the message edit).
+    """
+
+    def test_real_imputation_container_rejected_by_design(self):
+        from diff_diff import ImputationDiD
+        from diff_diff.prep_dgp import generate_staggered_data
+
+        d = generate_staggered_data(n_units=80, n_periods=8, cohort_periods=[4, 6], seed=9)
+        res = ImputationDiD().fit(
+            d,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+        )
+        surface = res.aggregate("event_study")
+        assert surface.source == "ImputationDiDResults"
+        with pytest.raises(TypeError, match="rejected BY DESIGN"):
+            compute_honest_did(surface, M=1.0)
+        with pytest.raises(TypeError, match="rejected BY DESIGN"):
+            compute_pretrends_power(surface, M=1.0)
+
+
+class TestTwoStageContainerRejection:
+    """A REAL TwoStageDiD post-fit container is rejected with the DEFERRED
+    clause (not the by-design clause: analytical fits DO carry the joint
+    Gardner-GMM covariance, but the pre-period coefficients are stage-1
+    residual means, not reference-normalized contrasts - admission awaits a
+    normalization derivation; see the REGISTRY TwoStageDiD Note and the
+    DEFERRED.md paper-gated row). A pretrends=True fit - the strongest
+    admission candidate (estimated pre-periods + joint vcov) - is still
+    rejected.
+    """
+
+    def test_real_twostage_container_rejected_deferred(self):
+        import warnings as _warnings
+
+        from diff_diff import TwoStageDiD
+        from diff_diff.prep_dgp import generate_staggered_data
+
+        d = generate_staggered_data(n_units=80, n_periods=8, cohort_periods=[4, 6], seed=9)
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("ignore")
+            res = TwoStageDiD(pretrends=True).fit(
+                d,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+            )
+        surface = res.aggregate("event_study")
+        assert surface.source == "TwoStageDiDResults"
+        assert surface.vcov is not None  # the joint GMM covariance IS present
+        with pytest.raises(TypeError, match="DEFERRED pending a normalization"):
+            compute_honest_did(surface, M=1.0)
+        with pytest.raises(TypeError, match="DEFERRED pending a normalization"):
+            compute_pretrends_power(surface, M=1.0)

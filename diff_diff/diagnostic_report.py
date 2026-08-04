@@ -788,7 +788,10 @@ class DiagnosticReport:
                     return (
                         "No pre-period event-study coefficients are exposed on "
                         "this fit. For staggered estimators, re-fit with "
-                        "aggregate='event_study' to populate event-study output."
+                        "aggregate='event_study' to populate event-study "
+                        "output (deprecated but functional until 4.0 - these "
+                        "checks read the raw event_study_effects field, which "
+                        "post-fit results.aggregate() does not populate)."
                     )
                 # vcov is optional for the Bonferroni fallback.
             if method == "hausman":
@@ -846,7 +849,10 @@ class DiagnosticReport:
                 return (
                     "Pre-trends power needs either results.vcov or "
                     "event_study_effects (from aggregate='event_study' on "
-                    "staggered estimators); neither available."
+                    "staggered estimators - deprecated but functional until "
+                    "4.0; these checks read the raw field, which post-fit "
+                    "results.aggregate() does not populate); neither "
+                    "available."
                 )
             pre_coefs, _ = _collect_pre_period_coefs(r)
             if len(pre_coefs) < 2:

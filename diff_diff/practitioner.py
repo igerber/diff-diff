@@ -500,6 +500,35 @@ def _handle_imputation(results: Any):
     steps = [
         _parallel_trends_step(staggered=True),
         _step(
+            baker_step=7,
+            label="Aggregate treatment-effect heterogeneity post-fit",
+            why=(
+                "ImputationDiD aggregates post-fit from its panel-backed kit "
+                "(M-021) - no refit needed."
+                if getattr(results, "bootstrap_results", None) is None
+                else "This fit is BOOTSTRAPPED, and post-fit aggregate() "
+                "raises on bootstrap fits - refit with the deprecated "
+                "fit-time aggregation (or n_bootstrap=0) to obtain the "
+                "aggregated surfaces."
+            ),
+            code=(
+                "# Aggregate post-fit - no refit needed:\n"
+                "print(results.aggregate('group').to_dataframe())        # Per-cohort ATTs\n"
+                "print(results.aggregate('event_study').to_dataframe())  # Dynamic effects"
+                if getattr(results, "bootstrap_results", None) is None
+                else "# Bootstrap fit: aggregate at fit time (deprecated kwarg):\n"
+                "results = imp.fit(data, ..., aggregate='all')\n"
+                "print(results.group_effects)        # Per-cohort ATTs\n"
+                "print(results.event_study_effects)  # Dynamic effects"
+            ),
+            priority="medium",
+            # NON-STEPS key (the M-024 "sub_experiment_balance" lesson):
+            # a STEPS-vocabulary name would let _filter_steps suppress
+            # this guidance whenever a same-named DiagnosticReport check
+            # completes, which never runs this aggregation.
+            step_name="aggregation",
+        ),
+        _step(
             baker_step=6,
             label="Specification-based falsification",
             why=(
@@ -527,6 +556,35 @@ def _handle_imputation(results: Any):
 
 def _handle_two_stage(results: Any):
     steps = [
+        _step(
+            baker_step=7,
+            label="Aggregate treatment-effect heterogeneity post-fit",
+            why=(
+                "TwoStageDiD aggregates post-fit from its panel-backed kit "
+                "(M-022) - no refit needed."
+                if getattr(results, "bootstrap_results", None) is None
+                else "This fit is BOOTSTRAPPED, and post-fit aggregate() "
+                "raises on bootstrap fits - refit with the deprecated "
+                "fit-time aggregation (or n_bootstrap=0) to obtain the "
+                "aggregated surfaces."
+            ),
+            code=(
+                "# Aggregate post-fit - no refit needed:\n"
+                "print(results.aggregate('group').to_dataframe())        # Per-cohort ATTs\n"
+                "print(results.aggregate('event_study').to_dataframe())  # Dynamic effects"
+                if getattr(results, "bootstrap_results", None) is None
+                else "# Bootstrap fit: aggregate at fit time (deprecated kwarg):\n"
+                "results = ts.fit(data, ..., aggregate='all')\n"
+                "print(results.group_effects)        # Per-cohort ATTs\n"
+                "print(results.event_study_effects)  # Dynamic effects"
+            ),
+            priority="medium",
+            # NON-STEPS key (the M-024 "sub_experiment_balance" lesson):
+            # a STEPS-vocabulary name would let _filter_steps suppress
+            # this guidance whenever a same-named DiagnosticReport check
+            # completes, which never runs this aggregation.
+            step_name="aggregation",
+        ),
         _parallel_trends_step(staggered=True),
         _step(
             baker_step=6,

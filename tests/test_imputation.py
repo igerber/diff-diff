@@ -16,6 +16,21 @@ from diff_diff.imputation import (
 )
 from diff_diff.survey import SurveyDesign
 
+# ---------------------------------------------------------------------------
+# Rows M-021/M-022 (+ M-118/M-119): ImputationDiD / TwoStageDiD
+# ``fit(aggregate=, balance_e=)`` is deprecated (3.9, removed 4.0) and warns on
+# ANY supplied value. The deprecated fit-time route is kept DELIBERATELY here:
+# these tests pin FIT-TIME surface behaviour (bit-equality grids, bootstrap
+# aggregation, R/Stata parity, replicate overrides, native effect dicts) that
+# the post-fit ``results.aggregate(...)`` container route does not reproduce
+# shape-for-shape. The shim warning is therefore filtered BY MESSAGE, scoped to
+# these two estimators only - every other FutureWarning (including the other
+# estimators' aggregate() shims) still surfaces.
+# ---------------------------------------------------------------------------
+pytestmark = pytest.mark.filterwarnings(
+    r"ignore:(ImputationDiD|TwoStageDiD)\.fit\((aggregate=|balance_e=|aggregate= / balance_e=)\):FutureWarning"
+)
+
 # =============================================================================
 # Shared test data generation
 # =============================================================================
@@ -877,7 +892,8 @@ class TestImputationVariance:
 
         # Monkey-patch the sparse factorization to force the LSMR fallback.
         with unittest.mock.patch(
-            "diff_diff.imputation.sparse_factorized", side_effect=RuntimeError("test failure")
+            "diff_diff.imputation_aggregation.sparse_factorized",
+            side_effect=RuntimeError("test failure"),
         ):
             results = est.fit(
                 data,
@@ -904,7 +920,8 @@ class TestImputationVariance:
         est = ImputationDiD()
 
         with unittest.mock.patch(
-            "diff_diff.imputation.sparse_factorized", side_effect=RuntimeError("test failure")
+            "diff_diff.imputation_aggregation.sparse_factorized",
+            side_effect=RuntimeError("test failure"),
         ):
             with pytest.warns(
                 UserWarning, match="sparse factorization.*falling back to a sparse LSMR"
@@ -2513,7 +2530,7 @@ class TestImputationDiDVcovType:
             == r_explicit.bootstrap_results.overall_att_se
         )
         # Per-horizon / per-group bootstrap SE override branches at
-        # diff_diff/imputation.py:854-887 must also agree.
+        # imputation_aggregation.py::_replicate_override_aggregates must also agree.
         if aggregate == "event_study":
             assert r_default.bootstrap_results.event_study_ses is not None
             assert r_explicit.bootstrap_results.event_study_ses is not None
@@ -3165,12 +3182,12 @@ class TestLSMRFallbackParity:
         normal matrix (the O((U+T+K)^2) OOM risk this closes)."""
         import unittest.mock
 
-        import diff_diff.imputation as imp
+        import diff_diff.imputation_aggregation as imp
 
         data = generate_test_data(n_units=60, n_periods=6, seed=7)
 
         with unittest.mock.patch(
-            "diff_diff.imputation.sparse_factorized", side_effect=RuntimeError("forced")
+            "diff_diff.imputation_aggregation.sparse_factorized", side_effect=RuntimeError("forced")
         ):
             with warnings.catch_warnings(record=True) as w:
                 warnings.simplefilter("always")
@@ -3221,7 +3238,7 @@ class TestLSMRFallbackParity:
         data = generate_test_data(n_units=60, n_periods=6, seed=7)
         monkeypatch.setattr("scipy.sparse.linalg.lsmr", _fake_lsmr)
         with unittest.mock.patch(
-            "diff_diff.imputation.sparse_factorized", side_effect=RuntimeError("forced")
+            "diff_diff.imputation_aggregation.sparse_factorized", side_effect=RuntimeError("forced")
         ):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
@@ -3363,17 +3380,45 @@ class TestImputationDfConvention:
             assert e["conf_int"] == e0["conf_int"]
 
     def test_inert_config_warns_on_explicit_nondefault(self):
+        """M-127 REACHABILITY predicate (revised with the M-021 post-fit
+        migration): warn iff the per-lead inference is unreachable on every
+        route for this fit config — pretrends=False always warns;
+        pretrends=True analytical fits never warn (post-fit
+        results.aggregate('event_study') reaches the leads regardless of
+        the deprecated fit-time aggregate value); pretrends=True with
+        n_bootstrap>0 and aggregate unset warns (no ES surface is built
+        and post-fit aggregate() fails closed); pretrends=True with the
+        deprecated fit-time ES supplied never warns, bootstrap included
+        (fit-time leads use analytical inference)."""
         data = self._panel()
         base = dict(outcome="outcome", unit="unit", time="time", first_treat="first_treat")
         with pytest.warns(UserWarning, match="affects only the pretrends"):
             ImputationDiD(df_convention="cluster").fit(data, **base)
-        with pytest.warns(UserWarning, match="affects only the pretrends"):
+        # pretrends=True + deprecated aggregate='group': the knob is NO
+        # LONGER inert (post-fit ES reaches the leads) — no inert-config
+        # warning (the FutureWarning from aggregate= is separate).
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
             ImputationDiD(pretrends=True, df_convention="cluster").fit(
                 data, aggregate="group", **base
             )
+        assert not any("affects only the pretrends" in str(w.message) for w in caught)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             ImputationDiD(pretrends=True, df_convention="cluster").fit(data, **self._kw)
+        assert not any("affects only the pretrends" in str(w.message) for w in caught)
+        # pretrends=True + bootstrap, aggregate unset: unreachable → warns.
+        with pytest.warns(UserWarning, match="affects only the pretrends"):
+            ImputationDiD(pretrends=True, df_convention="cluster", n_bootstrap=9, seed=1).fit(
+                data, **base
+            )
+        # pretrends=True + bootstrap + deprecated fit-time ES: reachable
+        # (analytical lead inference rides the fit-time surface) → no warn.
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            ImputationDiD(pretrends=True, df_convention="cluster", n_bootstrap=9, seed=1).fit(
+                data, aggregate="event_study", **base
+            )
         assert not any("affects only the pretrends" in str(w.message) for w in caught)
 
     def test_validation_and_transactional_set_params(self):

@@ -260,7 +260,7 @@ Multi-Period and Staggered Adoption
 
 - **Lumley, T. (2010).** *Complex Surveys: A Guide to Analysis Using R.* Hoboken, NJ: John Wiley & Sons. https://doi.org/10.1002/9780470580066
 
-  Authoritative reference for the R ``survey`` package. §2.5 "Domains and subpopulations" documents the ``svyrecvar(subset(design, mask))`` zero-pad convention: subpopulation analyses preserve the full survey design (strata / PSU / FPC) and treat out-of-domain observations as zero-score padding rows rather than physically subsetting the design. SpilloverDiD's Wave E.3 adopts this convention at the ``_compute_gmm_corrected_meat`` boundary, matching the existing in-library precedents at ``diff_diff/imputation.py:2175-2183`` (PreTrendsImputation lead regression) and ``diff_diff/prep.py:1401-1432`` (DCDH cell variance); see REGISTRY section "Variance (Wave E.3)".
+  Authoritative reference for the R ``survey`` package. §2.5 "Domains and subpopulations" documents the ``svyrecvar(subset(design, mask))`` zero-pad convention: subpopulation analyses preserve the full survey design (strata / PSU / FPC) and treat out-of-domain observations as zero-score padding rows rather than physically subsetting the design. SpilloverDiD's Wave E.3 adopts this convention at the ``_compute_gmm_corrected_meat`` boundary, matching the existing in-library precedents at ``diff_diff/imputation_aggregation.py::_compute_lead_coefficients`` (PreTrendsImputation lead regression) and ``diff_diff/prep.py:1401-1432`` (DCDH cell variance); see REGISTRY section "Variance (Wave E.3)".
 
 - **Wing, C., Freedman, S. M., & Hollingsworth, A. (2024).** "Stacked Difference-in-Differences." *NBER Working Paper* 32054. https://www.nber.org/papers/w32054
 

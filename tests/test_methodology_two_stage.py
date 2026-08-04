@@ -56,6 +56,21 @@ import pytest
 
 from diff_diff import ImputationDiD, TwoStageDiD
 
+# ---------------------------------------------------------------------------
+# Rows M-021/M-022 (+ M-118/M-119): ImputationDiD / TwoStageDiD
+# ``fit(aggregate=, balance_e=)`` is deprecated (3.9, removed 4.0) and warns on
+# ANY supplied value. The deprecated fit-time route is kept DELIBERATELY here:
+# these tests pin FIT-TIME surface behaviour (bit-equality grids, bootstrap
+# aggregation, R/Stata parity, replicate overrides, native effect dicts) that
+# the post-fit ``results.aggregate(...)`` container route does not reproduce
+# shape-for-shape. The shim warning is therefore filtered BY MESSAGE, scoped to
+# these two estimators only - every other FutureWarning (including the other
+# estimators' aggregate() shims) still surfaces.
+# ---------------------------------------------------------------------------
+pytestmark = pytest.mark.filterwarnings(
+    r"ignore:(ImputationDiD|TwoStageDiD)\.fit\((aggregate=|balance_e=|aggregate= / balance_e=)\):FutureWarning"
+)
+
 # =============================================================================
 # Module-level R-fixture availability + per-class seed decorrelation
 # =============================================================================
@@ -589,7 +604,7 @@ class TestGardner2022Identification:
         """Proposition 5 (Borusyak et al. 2024): with no never-treated units and
         h_bar = max(groups) - min(groups), horizons h >= h_bar are not identified
         -> NaN effect with n_obs > 0 and a warning. Regression-pins the behavior
-        implemented at two_stage.py:2531-2674 (mirror of ImputationDiD)."""
+        implemented in two_stage_aggregation.py::_stage2_event_study (mirror of ImputationDiD)."""
         rng = np.random.default_rng(_BASE_SEED_IDENT + 2)
         # Cohorts 3 and 5, NO never-treated => h_bar = 5 - 3 = 2.
         panel = _make_staggered_panel(

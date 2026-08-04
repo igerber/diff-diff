@@ -18,6 +18,21 @@ from diff_diff import (
 )
 from diff_diff.linalg import solve_logit
 
+# ---------------------------------------------------------------------------
+# Rows M-021/M-022 (+ M-118/M-119): ImputationDiD / TwoStageDiD
+# ``fit(aggregate=, balance_e=)`` is deprecated (3.9, removed 4.0) and warns on
+# ANY supplied value. The deprecated fit-time route is kept DELIBERATELY here:
+# these tests pin FIT-TIME surface behaviour (bit-equality grids, bootstrap
+# aggregation, R/Stata parity, replicate overrides, native effect dicts) that
+# the post-fit ``results.aggregate(...)`` container route does not reproduce
+# shape-for-shape. The shim warning is therefore filtered BY MESSAGE, scoped to
+# these two estimators only - every other FutureWarning (including the other
+# estimators' aggregate() shims) still surfaces.
+# ---------------------------------------------------------------------------
+pytestmark = pytest.mark.filterwarnings(
+    r"ignore:(ImputationDiD|TwoStageDiD)\.fit\((aggregate=|balance_e=|aggregate= / balance_e=)\):FutureWarning"
+)
+
 # =============================================================================
 # Shared Fixtures
 # =============================================================================

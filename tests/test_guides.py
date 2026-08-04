@@ -890,3 +890,32 @@ class TestLLMsFullEfficientDiDShimLine:
         )
         assert "NOT_SUPPLIED" in bal_line
         assert "DEPRECATED (M-120)" in bal_line
+
+    def _section(self, header):
+        text = get_llm_guide("full")
+        start = text.index(header)
+        nxt = text.index("\n### ", start + 1)
+        return text[start:nxt]
+
+    def _assert_shim_lines(self, section, fit_call, agg_row, bal_row):
+        fit_start = section.index(fit_call)
+        fit_block = section[fit_start : section.index("\n)", fit_start)]
+        agg_line = next(
+            line for line in fit_block.splitlines() if line.strip().startswith("aggregate")
+        )
+        assert "NOT_SUPPLIED" in agg_line
+        assert f"DEPRECATED ({agg_row})" in agg_line
+        assert "results.aggregate()" in agg_line
+        bal_line = next(
+            line for line in fit_block.splitlines() if line.strip().startswith("balance_e")
+        )
+        assert "NOT_SUPPLIED" in bal_line
+        assert f"DEPRECATED ({bal_row})" in bal_line
+
+    def test_llms_full_imputation_fit_aggregate_line_documents_shim(self):
+        # The M-021/M-118 twin of the EfficientDiD pin above - no other
+        # test covers the ImputationDiD signature block's shim comments.
+        self._assert_shim_lines(self._section("### ImputationDiD"), "imp.fit(", "M-021", "M-118")
+
+    def test_llms_full_two_stage_fit_aggregate_line_documents_shim(self):
+        self._assert_shim_lines(self._section("### TwoStageDiD"), ".fit(", "M-022", "M-119")

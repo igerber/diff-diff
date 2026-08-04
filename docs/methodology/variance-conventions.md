@@ -131,9 +131,11 @@ output).
 - **L3 — CallawaySantAnna / TwoStageDiD / ImputationDiD (default)**: different
   variance theory (influence functions / two-stage / BJS imputation), never the
   shared CR1 sandwich. CS is anchored to Stata csdid outright.
-  **ImputationDiD is conditional**: its pretrends=True +
-  aggregate="event_study" lead regression DOES run the shared clustered CR1
-  and carries the K_reference increment there (+6, the [time, unit] no-intercept
+  **ImputationDiD is conditional**: its pretrends=True lead regression DOES
+  run the shared clustered CR1 — surfaced fit-time via the deprecated
+  aggregate="event_study" or post-fit via results.aggregate('event_study')
+  since the M-021 migration — and carries the K_reference increment there
+  (+6, the [time, unit] no-intercept
   increment on df_0 — pinned via expected_adjustment on its matrix row).
 - **L4 — hc2/hc2_bm** (leverage / Satterthwaite DOF — no CR1 factor),
   **survey TSL** (n_PSU - n_strata over the full design), and **Wooldridge

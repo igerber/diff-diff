@@ -64,65 +64,22 @@ class TwoStageDiDBootstrapMixin:
             s2_by_cluster: np.ndarray,
         ) -> np.ndarray: ...
 
-    @staticmethod
-    def _exact_gmm_residuals(
-        X_1_sparse,
-        theta_exact: np.ndarray,
-        y_vals_clean: np.ndarray,
-        identified: np.ndarray,
-        omega_0: np.ndarray,
-        y_tilde: np.ndarray,
-        X_2: np.ndarray,
-        survey_weights: Optional[np.ndarray],
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """Exact Stage-1 / Stage-2 residuals for the GMM influence function.
+        # Provided by _TwoStageAggregationMixin on the estimator MRO
+        # (moved there with the M-022 aggregate() migration).
+        @staticmethod
+        def _exact_gmm_residuals(
+            X_1_sparse: Any,
+            theta_exact: np.ndarray,
+            y_vals_clean: np.ndarray,
+            identified: np.ndarray,
+            omega_0: np.ndarray,
+            y_tilde: np.ndarray,
+            X_2: np.ndarray,
+            survey_weights: Optional[np.ndarray],
+        ) -> Tuple[np.ndarray, np.ndarray]: ...
 
-        Given the EXACT Stage-1 FE coefficients ``theta_exact`` (solved from the
-        same ``(X'_{10} W X_{10})`` factorization used for ``gamma_hat``), return the
-        exact Stage-1 residual ``eps_10`` (untreated rows) and the exact Stage-2
-        residual ``eps_2``. **Shared** by the analytical GMM variance
-        (``TwoStageDiD._compute_gmm_variance``) and the multiplier bootstrap
-        (``_compute_cluster_S_scores``) so both build the per-cluster influence
-        score ``S_g = gamma_hat' c_g - X'_{2g} eps_{2g}`` from the same exact
-        residuals. The iterative alternating-projection FE used for the point
-        estimate is only ~1e-7-accurate on unbalanced untreated panels, which
-        perturbs the variance ~1% relative to the analytical sandwich; obs whose FE
-        are unidentified (rank-deficient / Proposition-5) fall back to the iterative
-        residual ``y_tilde`` so those edge cases are unchanged.
-        """
-        n = X_1_sparse.shape[0]
-        fitted_exact = np.asarray(X_1_sparse @ theta_exact).ravel()
-        y_tilde_exact = y_vals_clean - fitted_exact
-        use_exact = identified & np.isfinite(y_tilde_exact)
-        y_tilde_use = np.where(use_exact, y_tilde_exact, y_tilde)
-        eps_10 = np.empty(n)
-        eps_10[omega_0] = y_tilde_use[omega_0]  # exact Stage-1 residual (untreated)
-        eps_10[~omega_0] = y_vals_clean[~omega_0]  # x_{10i} = 0, so value is inert
-        # Exact Stage-2 residual: re-solve delta on the exact residualized outcome
-        # (X_2 already has NaN-y_tilde rows zeroed by the caller, so masked obs
-        # contribute nothing to the normal equations).
-        y_tilde_s2 = np.where(np.isfinite(y_tilde_use), y_tilde_use, 0.0)
-        if survey_weights is not None:
-            XtWX2 = X_2.T @ (X_2 * survey_weights[:, None])
-            XtWy2 = X_2.T @ (survey_weights * y_tilde_s2)
-        else:
-            XtWX2 = X_2.T @ X_2
-            XtWy2 = X_2.T @ y_tilde_s2
-        try:
-            delta_2 = np.linalg.solve(XtWX2, XtWy2)
-        except np.linalg.LinAlgError:
-            # Silent-failure audit convention: warn before the dense fallback.
-            warnings.warn(
-                "TwoStageDiD GMM sandwich: Stage-2 design (X'_2 W X_2) is "
-                "singular; falling back to dense lstsq for the exact-residual "
-                "re-solve. This may indicate collinear treatment/horizon "
-                "indicators and SE estimates may be less reliable.",
-                UserWarning,
-                stacklevel=2,
-            )
-            delta_2 = np.linalg.lstsq(XtWX2, XtWy2, rcond=None)[0]
-        eps_2 = y_tilde_s2 - X_2 @ delta_2
-        return eps_10, eps_2
+        @staticmethod
+        def _build_cohort_rel_times(df: pd.DataFrame, first_treat: str) -> Dict[Any, Set[int]]: ...
 
     def _compute_cluster_S_scores(
         self,
@@ -707,20 +664,3 @@ class TwoStageDiDBootstrapMixin:
     # =========================================================================
     # Utility
     # =========================================================================
-
-    @staticmethod
-    def _build_cohort_rel_times(
-        df: pd.DataFrame,
-        first_treat: str,
-    ) -> Dict[Any, Set[int]]:
-        """Build mapping of cohort -> set of observed relative times."""
-        treated_mask = ~df["_never_treated"]
-        treated_df = df.loc[treated_mask]
-        result: Dict[Any, Set[int]] = {}
-        ft_vals = treated_df[first_treat].values
-        rt_vals = treated_df["_rel_time"].values
-        for i in range(len(treated_df)):
-            h = rt_vals[i]
-            if np.isfinite(h):
-                result.setdefault(ft_vals[i], set()).add(int(h))
-        return result

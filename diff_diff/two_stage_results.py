@@ -5,14 +5,43 @@ This module contains TwoStageBootstrapResults and TwoStageDiDResults
 dataclasses. Extracted from two_stage.py for module size management.
 """
 
+import dataclasses
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
+from diff_diff.aggregation import AggregationMixin, AggregationResult
 from diff_diff.results import _format_survey_block, _get_significance_stars
-from diff_diff.results_base import BaseResults
+from diff_diff.results_base import BaseResults, build_event_study_surface
+from diff_diff.two_stage_aggregation import _TwoStageAggregationMixin
+
+
+class _TwoStageKitAggregator(_TwoStageAggregationMixin):
+    """Throwaway per-call host for the post-fit recompute (M-022/M-119).
+
+    Hosts the moved Stage-2/GMM methods with exactly the mixin's declared
+    host-attribute contract, populated from KIT SNAPSHOTS — never from the
+    live estimator (whose config may have been mutated since the fit) and
+    never from mutable public results fields. A fresh instance per
+    ``aggregate()`` call; the moved methods write nothing to ``self``, so
+    the kit stays immutable either way.
+    """
+
+    def __init__(
+        self,
+        *,
+        alpha: float,
+        pretrends: bool,
+        horizon_max: Optional[int],
+        rank_deficient_action: str,
+    ) -> None:
+        self.alpha = alpha
+        self.pretrends = pretrends
+        self.horizon_max = horizon_max
+        self.rank_deficient_action = rank_deficient_action
+
 
 __all__ = [
     "TwoStageBootstrapResults",
@@ -77,7 +106,7 @@ class TwoStageBootstrapResults:
 
 
 @dataclass
-class TwoStageDiDResults(BaseResults):
+class TwoStageDiDResults(BaseResults, AggregationMixin):
     """
     Results from Gardner (2022) two-stage DiD estimation.
 
@@ -168,6 +197,16 @@ class TwoStageDiDResults(BaseResults):
     event_study_vcov: Optional[np.ndarray] = field(default=None, repr=False)
     event_study_vcov_index: Optional[List[int]] = field(default=None, repr=False)
     event_study_df: Optional[float] = field(default=None, repr=False)
+    # Private panel-backed post-fit aggregation kit (rows M-022/M-119),
+    # attached by TwoStageDiD.fit(). None on results unpickled from a
+    # pre-3.9 release (aggregate() then fails with the re-fit message).
+    # Appended LAST (the generated __init__ positional indexes are public
+    # API).
+    _aggregation_kit: Optional[Any] = field(default=None, repr=False, compare=False)
+
+    # Post-fit aggregation vocabulary (M-022). balance_e keeps the mixin
+    # default ("event_study",) - CS precedent, do not redeclare.
+    _AGGREGATE_SUPPORTED = ("simple", "event_study", "group")
 
     # --- Inference-field aliases (balance/external-adapter compatibility) ---
     @property
@@ -189,6 +228,223 @@ class TwoStageDiDResults(BaseResults):
     @property
     def t_stat(self) -> float:
         return self.overall_t_stat
+
+    # --- Post-fit aggregation (M-022/M-119) ------------------------------
+
+    def _aggregate_compute(
+        self, level: str, *, weights: Optional[str], balance_e: Optional[int]
+    ) -> Any:
+        kit = self._aggregation_kit
+        if kit is None:
+            raise ValueError(
+                "This TwoStageDiDResults carries no aggregation kit - it is "
+                "attached by TwoStageDiD.fit(), so a result unpickled from "
+                "an older release will not have one. Re-fit with "
+                "diff-diff >= 3.9 to aggregate post-fit."
+            )
+        if self.bootstrap_results is not None:
+            raise NotImplementedError(
+                "aggregate() is not yet available on a bootstrapped fit "
+                "(n_bootstrap > 0): the per-target bootstrap draws are not "
+                "retained, so post-fit re-aggregation cannot replay "
+                "percentile inference and analytical inference would "
+                "misrepresent the fit. Re-fit with the aggregation you "
+                "need, or use n_bootstrap=0."
+            )
+        bk = dict(kit.bookkeeping)
+        if level == "simple":
+            return self._aggregate_simple_result(kit)
+        # Fresh throwaway host per call, populated from KIT snapshots only
+        # (estimator/config mutation after fit() must not leak in).
+        agg = _TwoStageKitAggregator(
+            alpha=kit.alpha,
+            pretrends=bk["pretrends"],
+            horizon_max=bk["horizon_max"],
+            rank_deficient_action=bk["rank_deficient_action"],
+        )
+        common: Dict[str, Any] = dict(
+            df=bk["df"],
+            unit=bk["unit"],
+            time=bk["time"],
+            first_treat=bk["first_treat"],
+            covariates=bk["covariates"],
+            omega_0_mask=bk["omega_0_mask"],
+            omega_1_mask=bk["omega_1_mask"],
+            unit_fe=bk["unit_fe"],
+            time_fe=bk["time_fe"],
+            grand_mean=bk["grand_mean"],
+            delta_hat=bk["delta_hat"],
+            cluster_var=bk["cluster_var"],
+            treatment_groups=bk["treatment_groups"],
+            kept_cov_mask=bk["kept_cov_mask"],
+            survey_weights=bk["survey_weights"],
+            survey_weight_type=bk["survey_weight_type"],
+            survey_df=bk["survey_df_stage2"],
+            resolved_survey=(None if bk["uses_replicate"] else bk["resolved_survey"]),
+            score_pad_mask=bk["score_pad_mask"],
+            cluster_ids_full=bk["cluster_ids_full"],
+        )
+        if level == "group":
+            effects = agg._stage2_group(**common)
+            replay_df_g: Optional[int] = bk["survey_df_stage2"]
+            if bk["uses_replicate"]:
+                # LEVEL-MATCHED replay: [overall, groups] - reproduces
+                # fit(aggregate='group') exactly (see the replay docstring).
+                _, _, replay_df_g = agg._replay_replicate_inference(
+                    df=bk["df"],
+                    outcome=bk["outcome"],
+                    unit=bk["unit"],
+                    time=bk["time"],
+                    first_treat=bk["first_treat"],
+                    covariates=bk["covariates"],
+                    omega_0_mask=bk["omega_0_mask"],
+                    omega_1_mask=bk["omega_1_mask"],
+                    cluster_var=bk["cluster_var"],
+                    treatment_groups=bk["treatment_groups"],
+                    ref_period=bk["ref_period"],
+                    balance_e=None,
+                    keep_mask=bk["keep_mask"],
+                    resolved_survey=bk["resolved_survey"],
+                    overall_att=bk["overall_att"],
+                    event_study_effects=None,
+                    group_effects=effects,
+                    survey_df_seed=bk["survey_df_stage2"],
+                )
+            return self._group_effects_to_aggregation(effects, kit, group_df=replay_df_g)
+        # level == "event_study" (the mixin validated the vocabulary)
+        es, es_vcov, es_vcov_index = agg._stage2_event_study(
+            ref_period=bk["ref_period"], balance_e=balance_e, **common
+        )
+        replay_df: Optional[int] = None
+        if bk["uses_replicate"]:
+            _, _, replay_df = agg._replay_replicate_inference(
+                df=bk["df"],
+                outcome=bk["outcome"],
+                unit=bk["unit"],
+                time=bk["time"],
+                first_treat=bk["first_treat"],
+                covariates=bk["covariates"],
+                omega_0_mask=bk["omega_0_mask"],
+                omega_1_mask=bk["omega_1_mask"],
+                cluster_var=bk["cluster_var"],
+                treatment_groups=bk["treatment_groups"],
+                ref_period=bk["ref_period"],
+                balance_e=balance_e,
+                keep_mask=bk["keep_mask"],
+                resolved_survey=bk["resolved_survey"],
+                overall_att=bk["overall_att"],
+                event_study_effects=es,
+                group_effects=None,
+                survey_df_seed=bk["survey_df_stage2"],
+            )
+        # Carrier + shared builder, reproducing fit's M-092 mode gates
+        # exactly (two_stage.py): analytical -> recomputed V + index + the
+        # finite-and->0 df scalar; replicate -> vcov/index None with the
+        # REPLAYED level-matched df; bootstrap unreachable (failed closed
+        # above). The carrier's metadata is a copy-on-use of the KIT's
+        # fit-final metadata copy (never the mutable public field).
+        if bk["uses_replicate"]:
+            vcov_final = None
+            index_final = None
+            df_gate = replay_df
+        else:
+            vcov_final = es_vcov
+            index_final = es_vcov_index
+            df_gate = bk["survey_df_stage2"]
+        es_df_final: Optional[float] = (
+            float(df_gate) if df_gate is not None and np.isfinite(df_gate) and df_gate > 0 else None
+        )
+        meta = bk["survey_metadata"]
+        if meta is not None:
+            if bk["uses_replicate"]:
+                meta = dataclasses.replace(
+                    meta, df_survey=(replay_df if replay_df and replay_df > 0 else None)
+                )
+            else:
+                meta = dataclasses.replace(meta)
+        carrier = dataclasses.replace(
+            self,
+            event_study_effects=es,
+            event_study_vcov=vcov_final,
+            event_study_vcov_index=index_final,
+            event_study_df=es_df_final,
+            survey_metadata=meta,
+            anticipation=kit.anticipation,
+            alpha=kit.alpha,
+        )
+        return build_event_study_surface(carrier)
+
+    def _aggregate_simple_result(self, kit: Any) -> AggregationResult:
+        """One-row relay of the stored overall inference (bit-exact).
+
+        ``n = n_treated_obs`` (|Omega_1|, the D-column support the ATT
+        averages over) with ``n_kind="obs"``: TwoStageDiD's
+        ``n_treated_units``/``n_control_units`` unit sets OVERLAP (an
+        eventually-treated unit contributes untreated observations), so
+        the CS/EDiD disjoint-units convention cannot apply (the StackedDiD
+        carve-out class).
+
+        ``df`` is the kit's ``survey_df_final`` snapshot - the exact value
+        the STORED overall ``safe_inference`` received (on a replicate fit
+        that value came from the ``[overall]``-only joint stack, which is
+        precisely why it must be snapshotted rather than re-derived: a
+        post-fit level-matched replay produces a different n_valid).
+        None → all-NaN df column; the replicate-undefined 0 sentinel NaNs
+        out via post_init.
+        """
+        return AggregationResult(
+            level="simple",
+            label=np.array(["overall"], dtype=object),
+            target=np.array(["att"], dtype=object),
+            att=np.array([self.overall_att], dtype=float),
+            se=np.array([self.overall_se], dtype=float),
+            t_stat=np.array([self.overall_t_stat], dtype=float),
+            p_value=np.array([self.overall_p_value], dtype=float),
+            conf_int_lower=np.array([self.overall_conf_int[0]], dtype=float),
+            conf_int_upper=np.array([self.overall_conf_int[1]], dtype=float),
+            n=np.array([kit.bookkeeping["n_treated_obs"]], dtype=float),
+            df=kit.bookkeeping["survey_df_final"],
+            alpha=kit.alpha,
+            n_kind="obs",
+            weight=np.array([1.0], dtype=float),
+            estimator=type(self).__name__.replace("Results", ""),
+        )
+
+    def _group_effects_to_aggregation(
+        self, effects: Dict[Any, Dict[str, Any]], kit: Any, *, group_df: Optional[int]
+    ) -> AggregationResult:
+        """Per-cohort AggregationResult from the recomputed group dict.
+
+        ``df`` is a SCALAR relay (a deliberate divergence from
+        ImputationDiD's per-row ``df_used`` capture, documented in the
+        REGISTRY note): ``_stage2_group`` passes ONE immutable
+        ``survey_df`` parameter to every row's ``safe_inference``, so a
+        scalar broadcast is provenance-exact by construction and keeps the
+        moved method verbatim. Analytical fits relay the stage-2 seed;
+        replicate fits relay the REPLAYED level-matched value (the replay
+        rewrote every row's inference under it). ``weight=None``: Stage-2
+        cohort dummies carry no cross-cohort mass (the CS rationale).
+        ``n_kind="obs"``: ``n_obs`` counts the cohort's treated
+        observations backing its indicator column.
+        """
+        labels = list(effects.keys())
+        return AggregationResult(
+            level="group",
+            label=np.array(labels, dtype=object),
+            target=np.array(["att"] * len(labels), dtype=object),
+            att=np.array([effects[g]["effect"] for g in labels], dtype=float),
+            se=np.array([effects[g]["se"] for g in labels], dtype=float),
+            t_stat=np.array([effects[g]["t_stat"] for g in labels], dtype=float),
+            p_value=np.array([effects[g]["p_value"] for g in labels], dtype=float),
+            conf_int_lower=np.array([effects[g]["conf_int"][0] for g in labels], dtype=float),
+            conf_int_upper=np.array([effects[g]["conf_int"][1] for g in labels], dtype=float),
+            n=np.array([effects[g]["n_obs"] for g in labels], dtype=float),
+            df=(float(group_df) if group_df is not None else None),
+            alpha=kit.alpha,
+            n_kind="obs",
+            weight=None,
+            estimator=type(self).__name__.replace("Results", ""),
+        )
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -426,8 +682,12 @@ class TwoStageDiDResults(BaseResults):
         elif level == "event_study":
             if self.event_study_effects is None:
                 raise ValueError(
-                    "Event study effects not computed. "
-                    "Use aggregate='event_study' or aggregate='all'."
+                    "Event study effects not computed. Aggregate post-fit "
+                    "instead - results.aggregate('event_study') returns the "
+                    "EventStudyResults container (on a bootstrapped fit, "
+                    "re-fit with n_bootstrap=0 or use the deprecated "
+                    "fit-time aggregate=; a result unpickled from a pre-3.9 "
+                    "release carries no kit and must be re-fit)."
                 )
             rows = []
             for h, data in sorted(self.event_study_effects.items()):
@@ -448,7 +708,12 @@ class TwoStageDiDResults(BaseResults):
         elif level == "group":
             if self.group_effects is None:
                 raise ValueError(
-                    "Group effects not computed. " "Use aggregate='group' or aggregate='all'."
+                    "Group effects not computed. Aggregate post-fit instead "
+                    "- results.aggregate('group') returns the "
+                    "AggregationResult container (on a bootstrapped fit, "
+                    "re-fit with n_bootstrap=0 or use the deprecated "
+                    "fit-time aggregate=; a result unpickled from a pre-3.9 "
+                    "release carries no kit and must be re-fit)."
                 )
             rows = []
             for g, data in sorted(self.group_effects.items()):

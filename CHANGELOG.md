@@ -8,6 +8,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **ImputationDiD + TwoStageDiD post-fit `aggregate()` via panel-backed
+  recompute kits** (v4 program 2(b) PR-3b; ledger rows [M-021]/[M-022]
+  flip to shimmed, new rows [M-118]/[M-119] claim the reserved balance_e
+  slots, rows [M-092]/[M-093]/[M-127] amended).
+  - `ImputationDiDResults.aggregate('event_study'/'group'/'simple',
+    balance_e=)` and `TwoStageDiDResults.aggregate(...)` RECOMPUTE the
+    aggregations post-fit from panel-backed kits - no main-estimator
+    refit, no live estimator reference (replicate-weight fits are the
+    exception in COST, not correctness: their inference replay re-runs
+    the per-replicate refits each call, the same work fit-time paid);
+    post-fit results match the fit-time surfaces at
+    1e-14 across plain/covariate/cluster/survey-TSL/replicate/pretrends
+    fits and every `balance_e` (`balance_e` keeps each estimator's
+    BALANCED-WINDOW rule, divergent from CS/EfficientDiD's
+    anchor-horizon rule).
+  - `fit(aggregate=, balance_e=)` deprecates on both estimators (3.9,
+    removed 4.0) with the shared CS-style joint FutureWarning: a plain
+    `fit()` never warns; supplying ANY value (None included) warns once;
+    the deprecated path still returns exactly the numbers it always did.
+    The `imputation_did`/`two_stage_did` wrappers forward the sentinel,
+    so plain wrapper calls never warn. Unknown `aggregate` strings keep
+    silently acting like None on the deprecated path; the post-fit
+    successor fails closed on unknown types - a behavior improvement.
+  - MEMORY CONTRACT: ImputationDiD's kit references the SAME per-fit
+    objects `_fit_data` already retains for `pretrend_test()` - zero
+    marginal memory, pickles unchanged via memoization. TwoStageDiD's
+    kit is the FIRST panel retention on its results: a column-subset
+    copy of the working frame (O(n_obs); replicate designs additionally
+    retain the O(n_obs x R) replicate matrix). A `store_kit` opt-out is
+    tracked in DEFERRED.md.
+  - Bootstrapped fits fail closed for ALL aggregate() levels including
+    'simple' (uniform CS/EfficientDiD parity; replay wiring is tracked
+    in TODO.md); a fit whose bootstrap FAILED aggregates normally.
+    TwoStage post-fit event-study containers reproduce the M-092
+    contract exactly (joint GMM vcov + index + df on analytical fits;
+    vcov=None with the replayed df on replicate fits).
+  - Replicate-weight fits replay the extracted override helpers with a
+    LEVEL-MATCHED joint stack: `aggregate(L)` reproduces
+    `fit(aggregate=L)` exactly. Documented migration delta: on
+    degenerate replicate designs (a replicate NaNs one family's targets)
+    the deprecated `fit(aggregate=)` coupled the public OVERALL row to
+    the joint stack, so plain-fit overall se/CI/df can differ there -
+    each surface is self-consistent (pinned in the contract tests).
+  - ImputationDiD's M-127 df_convention inert-config warning predicate
+    is now REACHABILITY-based (post-fit `aggregate('event_study')`
+    reaches the pretrends lead inference on analytical fits, so
+    `pretrends=True` fits no longer warn on the deprecated
+    `aggregate='group'` shape; bootstrapped/replicate pretrends fits
+    with no reachable lead inference now do).
+  - honest/pretrends container admission NOT widened: ImputationDiD
+    rejected BY DESIGN (no joint event-study covariance); TwoStageDiD
+    DEFERRED pending a normalization derivation (its pre-period
+    coefficients are stage-1 residual means, not reference-normalized
+    contrasts, while HonestDiD's Delta arithmetic hard-codes
+    delta_0=0) - both terminal TypeErrors state the grounds; the
+    paper-gated derivation is tracked in DEFERRED.md.
+  - `imputation.py`/`two_stage.py` shed their aggregation + variance
+    engines into new `imputation_aggregation.py` /
+    `two_stage_aggregation.py` modules (verbatim moves; two_stage.py
+    exits the "consider splitting" band).
+  - Fixed (TwoStageDiD, pre-existing corner surfaced by the migration
+    review): an event study where EVERY non-reference horizon is
+    Proposition-5-unidentified now retains the all-NaN Prop-5 rows
+    (`n_obs > 0`) and emits the consolidated warning instead of
+    returning a reference-only surface.
 - **EfficientDiD post-fit `aggregate()` via a lazy recompute kit**
   (v4 program 2(b) PR-3a; ledger row [M-023] flips to shimmed, new row
   [M-120] claims the reserved balance_e slot, rows [M-092]/[M-093]

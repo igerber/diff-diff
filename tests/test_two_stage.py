@@ -15,6 +15,21 @@ from diff_diff.two_stage import (
     two_stage_did,
 )
 
+# ---------------------------------------------------------------------------
+# Rows M-021/M-022 (+ M-118/M-119): ImputationDiD / TwoStageDiD
+# ``fit(aggregate=, balance_e=)`` is deprecated (3.9, removed 4.0) and warns on
+# ANY supplied value. The deprecated fit-time route is kept DELIBERATELY here:
+# these tests pin FIT-TIME surface behaviour (bit-equality grids, bootstrap
+# aggregation, R/Stata parity, replicate overrides, native effect dicts) that
+# the post-fit ``results.aggregate(...)`` container route does not reproduce
+# shape-for-shape. The shim warning is therefore filtered BY MESSAGE, scoped to
+# these two estimators only - every other FutureWarning (including the other
+# estimators' aggregate() shims) still surfaces.
+# ---------------------------------------------------------------------------
+pytestmark = pytest.mark.filterwarnings(
+    r"ignore:(ImputationDiD|TwoStageDiD)\.fit\((aggregate=|balance_e=|aggregate= / balance_e=)\):FutureWarning"
+)
+
 # =============================================================================
 # Shared test data generation
 # =============================================================================
@@ -504,7 +519,7 @@ class TestTwoStageDiDVariance:
         data = generate_test_data()
 
         with unittest.mock.patch(
-            "diff_diff.two_stage.sparse_factorized",
+            "diff_diff.two_stage_aggregation.sparse_factorized",
             side_effect=RuntimeError("test failure"),
         ):
             with pytest.warns(
@@ -565,7 +580,7 @@ class TestTwoStageDiDVariance:
             )
 
         with unittest.mock.patch(
-            "diff_diff.two_stage.sparse_factorized",
+            "diff_diff.two_stage_aggregation.sparse_factorized",
             side_effect=RuntimeError("test failure"),
         ):
             with unittest.mock.patch("numpy.linalg.lstsq", _no_lstsq):
@@ -594,7 +609,7 @@ class TestTwoStageDiDVariance:
             return (x, 7, 0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
         with unittest.mock.patch(
-            "diff_diff.two_stage.sparse_factorized",
+            "diff_diff.two_stage_aggregation.sparse_factorized",
             side_effect=RuntimeError("test failure"),
         ):
             with unittest.mock.patch("scipy.sparse.linalg.lsmr", _fake_lsmr):
@@ -633,7 +648,7 @@ class TestTwoStageDiDVariance:
             )
 
         with unittest.mock.patch(
-            "diff_diff.two_stage.sparse_factorized",
+            "diff_diff.two_stage_aggregation.sparse_factorized",
             side_effect=RuntimeError("test failure"),
         ):
             with unittest.mock.patch("numpy.linalg.lstsq", _no_lstsq):
@@ -661,7 +676,7 @@ class TestTwoStageDiDVariance:
         singular-Omega_0 regression."""
         import unittest.mock
 
-        import diff_diff.two_stage as ts
+        import diff_diff.two_stage_aggregation as ts
 
         data = generate_test_data()
 
@@ -675,7 +690,7 @@ class TestTwoStageDiDVariance:
             )
 
         with unittest.mock.patch(
-            "diff_diff.two_stage.sparse_factorized",
+            "diff_diff.two_stage_aggregation.sparse_factorized",
             side_effect=RuntimeError("test failure"),
         ):
             with warnings.catch_warnings():
@@ -1439,7 +1454,7 @@ class TestTwoStageDiDConvenience:
 
     def test_sparse_fallback_path(self):
         """Size guard falls back to per-column path and produces same results."""
-        import diff_diff.two_stage as ts_mod
+        import diff_diff.two_stage_aggregation as ts_mod
 
         data = generate_test_data(n_units=50, n_periods=6, seed=42)
 
@@ -1648,7 +1663,7 @@ class TestTwoStageStage2BreadWarning:
         variance."""
         from unittest.mock import patch
 
-        import diff_diff.two_stage as ts_mod
+        import diff_diff.two_stage_aggregation as ts_mod
 
         data = generate_test_data(n_units=80, n_periods=6, seed=77)
         est = TwoStageDiD()
@@ -1756,7 +1771,7 @@ class TestTwoStageStage2BreadWarning:
         Covers the analytical event-study AND group surfaces."""
         from unittest.mock import patch
 
-        import diff_diff.two_stage as ts_mod
+        import diff_diff.two_stage_aggregation as ts_mod
 
         data = generate_test_data(n_units=80, n_periods=6, seed=77)
         with patch.object(
@@ -1894,7 +1909,7 @@ class TestTwoStageDiDWaveE3ParityAlwaysTreated:
     Mirrors PR #482 SpilloverDiD Wave E.3 (merge 24de9062) which established
     the same invariant for SpilloverDiD's finite_mask / subpopulation drops.
     Adopts the R `survey::svyrecvar(subset())` convention (Lumley 2010 §2.5)
-    and the in-library precedents at `imputation.py:2175-2183`
+    and the in-library precedents at `imputation_aggregation.py (_compute_lead_coefficients)`
     (PreTrendsImputation) and `prep.py:1401-1432` (DCDH cell variance).
 
     Scope: this PR tests only `vcov_type` paths reachable from TwoStageDiD's

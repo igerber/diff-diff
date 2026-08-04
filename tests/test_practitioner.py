@@ -577,6 +577,71 @@ class TestEfficientDiDHandler:
         assert len(self._agg_step(output)) == 1
 
 
+class _AggregationStepMixin:
+    """Shared pins for the post-fit aggregation guidance (M-021/M-022,
+    mirroring the EfficientDiD M-023 pins above)."""
+
+    row_id = ""
+    fit_var = ""
+
+    @staticmethod
+    def _agg_step(output):
+        return [
+            s
+            for s in output["next_steps"]
+            if "Aggregate treatment-effect heterogeneity" in s["label"]
+        ]
+
+    def _results(self):  # pragma: no cover - overridden
+        raise NotImplementedError
+
+    def test_aggregation_step_post_fit_branch(self):
+        output = practitioner_next_steps(self._results(), verbose=False)
+        steps = self._agg_step(output)
+        assert len(steps) == 1
+        assert "results.aggregate('group')" in steps[0]["code"]
+        assert "no refit needed" in steps[0]["why"]
+        assert self.row_id in steps[0]["why"]
+
+    def test_aggregation_step_bootstrap_branch(self):
+        r = self._results()
+        r.bootstrap_results = object()
+        output = practitioner_next_steps(r, verbose=False)
+        steps = self._agg_step(output)
+        assert len(steps) == 1
+        assert "BOOTSTRAPPED" in steps[0]["why"]
+        assert "aggregate='all'" in steps[0]["code"]
+
+    def test_aggregation_step_name_is_non_steps_key(self):
+        from diff_diff.practitioner import STEPS
+
+        assert "aggregation" not in STEPS
+        output = practitioner_next_steps(
+            self._results(), completed_steps=["heterogeneity"], verbose=False
+        )
+        assert len(self._agg_step(output)) == 1
+
+
+class TestImputationAggregationStep(_AggregationStepMixin):
+    row_id = "M-021"
+
+    def _results(self):
+        r = ImputationDiDResults.__new__(ImputationDiDResults)
+        r.overall_att = 0.6
+        r.overall_se = 0.15
+        return r
+
+
+class TestTwoStageAggregationStep(_AggregationStepMixin):
+    row_id = "M-022"
+
+    def _results(self):
+        r = TwoStageDiDResults.__new__(TwoStageDiDResults)
+        r.overall_att = 0.6
+        r.overall_se = 0.15
+        return r
+
+
 # ---------------------------------------------------------------------------
 # Tests: unknown result type fallback
 # ---------------------------------------------------------------------------

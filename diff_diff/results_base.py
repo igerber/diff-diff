@@ -613,8 +613,14 @@ class EventStudyResults(BaseResults):
 _ABSENT_SURFACE_HINTS: Dict[str, str] = {
     # Migrated to the post-fit surface (row M-020): no refit needed.
     "CallawaySantAnnaResults": "call results.aggregate('event_study')",
-    "ImputationDiDResults": "refit with aggregate='event_study' (or 'all')",
-    "TwoStageDiDResults": "refit with aggregate='event_study' (or 'all')",
+    "ImputationDiDResults": (
+        "call results.aggregate('event_study') (on a bootstrapped fit, "
+        "re-fit with n_bootstrap=0 or the deprecated fit-time aggregate=)"
+    ),
+    "TwoStageDiDResults": (
+        "call results.aggregate('event_study') (on a bootstrapped fit, "
+        "re-fit with n_bootstrap=0 or the deprecated fit-time aggregate=)"
+    ),
     # Absence only possible on pre-3.9 pickles: 3.9+ fits always
     # materialize the surface (row M-024).
     "StackedDiDResults": "re-fit with diff-diff >= 3.9, which always computes the surface",

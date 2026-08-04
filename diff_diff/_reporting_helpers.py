@@ -48,12 +48,13 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
     ``feedback_verify_claims.md``). All wording choices are
     deliberate:
 
-    - ``ImputationDiD`` / ``TwoStageDiD``: the ``aggregate`` fit-time
-      kwarg controls which horizon / group tables get populated but
-      does NOT change ``overall_att``. The headline is always the
-      sample-mean overall ATT (per BJS 2024 Step 3 with
-      ``w_it = 1/N_1``); disambiguate via the event-study or group
-      aggregate if you need the horizon / group target.
+    - ``ImputationDiD`` / ``TwoStageDiD``: horizon / group tables come
+      from post-fit ``results.aggregate('event_study'/'group')`` since
+      3.9 (the fit-time ``aggregate`` kwarg is deprecated) and never
+      change ``overall_att``. The headline is always the sample-mean
+      overall ATT (per BJS 2024 Step 3 with ``w_it = 1/N_1``);
+      disambiguate via the event-study or group aggregate if you need
+      the horizon / group target.
     - ``CallawaySantAnna``: ``overall_att`` is cohort-size-weighted
       across post-treatment ``ATT(g, t)`` cells regardless of the
       fit-time ``aggregate`` kwarg. The event-study / group
@@ -167,11 +168,12 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                 "tau_hat_it`` across treated observations, where "
                 "``tau_hat_it = Y_it - Y_hat_it(0)`` and ``Y_hat_it(0)`` is "
                 "imputed from a unit+time fixed-effects model fitted on "
-                "untreated observations only (BJS 2024 Step 3). The fit-time "
-                "``aggregate`` kwarg populates additional horizon / group "
-                "tables but does NOT change ``overall_att`` — for the "
-                "horizon or group estimand, consult the event-study or group "
-                "aggregate directly."
+                "untreated observations only (BJS 2024 Step 3). Post-fit "
+                "``results.aggregate('event_study'/'group')`` (3.9; the "
+                "fit-time ``aggregate`` kwarg is deprecated) yields the "
+                "horizon / group tables and does NOT change ``overall_att`` "
+                "— for the horizon or group estimand, consult the "
+                "event-study or group aggregate directly."
             ),
             "aggregation": "simple",
             "headline_attribute": "overall_att",
@@ -188,8 +190,9 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                 "the residualized outcome on the treatment indicator across "
                 "treated observations. Point estimate is algebraically "
                 "equivalent to Borusyak-Jaravel-Spiess imputation. As with "
-                "ImputationDiD, the fit-time ``aggregate`` kwarg populates "
-                "additional tables but does NOT change ``overall_att``."
+                "ImputationDiD, post-fit ``results.aggregate(...)`` (3.9) "
+                "yields the additional tables and does NOT change "
+                "``overall_att``."
             ),
             "aggregation": "simple",
             "headline_attribute": "overall_att",

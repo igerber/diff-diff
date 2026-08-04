@@ -518,9 +518,9 @@ impute counterfactual Y(0) for treated observations, then aggregate.
 
    imp = ImputationDiD()
    results = imp.fit(data, outcome='y', unit='unit_id',
-                     time='period', first_treat='first_treat',
-                     aggregate='event_study')
+                     time='period', first_treat='first_treat')
    results.print_summary()
+   results.aggregate('event_study').summary()  # post-fit aggregation
 
 .. note::
 
@@ -545,9 +545,9 @@ then regresses residuals on treatment indicators (stage 2).
 
    ts = TwoStageDiD()
    results = ts.fit(data, outcome='y', unit='unit_id',
-                    time='period', first_treat='first_treat',
-                    aggregate='event_study')
+                    time='period', first_treat='first_treat')
    results.print_summary()
+   results.aggregate('event_study').summary()  # post-fit aggregation
 
 .. note::
 

@@ -12,6 +12,7 @@
    .. autosummary::
 
       ~TwoStageDiDResults.__init__
+      ~TwoStageDiDResults.aggregate
       ~TwoStageDiDResults.print_summary
       ~TwoStageDiDResults.summary
       ~TwoStageDiDResults.to_dataframe

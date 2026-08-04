@@ -1,7 +1,10 @@
 """Behavioral contract for post-fit ``results.aggregate()`` (spec section 6).
 
-The ``test_ref`` for ledger rows M-020 (``fit(aggregate=)`` shim), M-117
-(``balance_e`` moves onto ``aggregate()``) and M-122 (``AggregationResult``).
+The ``test_ref`` for every aggregate-postfit ledger row this file pins:
+M-020/M-023/M-021/M-022 (the CS / EfficientDiD / Imputation / TwoStage
+``fit(aggregate=)`` shims), M-024/M-026 (the Stacked / dCDH shims + view
+relays), M-117/M-120/M-118/M-119 (``balance_e`` moves onto ``aggregate()``)
+and M-122 (``AggregationResult``).
 
 The headline gate is NUMERICAL INERTNESS: for every supported type,
 ``fit(aggregate=T)`` and ``fit(); .aggregate(T)`` must agree to 1e-14. The
@@ -1111,6 +1114,8 @@ class TestDcdhAggregate:
         assert "ChaisemartinDHaultfoeuilleResults" in checked
         assert "StackedDiDResults" in checked
         assert "EfficientDiDResults" in checked
+        assert "ImputationDiDResults" in checked
+        assert "TwoStageDiDResults" in checked
 
 
 # --------------------------------------------------------------------------- #
@@ -1945,3 +1950,867 @@ class TestEfficientInternalCallers:
                 first_treat="first_treat",
             )
         assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
+
+
+# --------------------------------------------------------------------------- #
+# ImputationDiD (rows M-021/M-118): fit(aggregate=/balance_e=) shim + the
+# PANEL-BACKED recompute aggregate() (kit refs = the _fit_data objects)
+# --------------------------------------------------------------------------- #
+
+IMPUTATION_KW = dict(outcome="outcome", unit="unit", time="period", first_treat="first_treat")
+
+
+def _imputation_panel(seed=42, n_units=120, n_periods=8):
+    from diff_diff.prep_dgp import generate_staggered_data
+
+    return generate_staggered_data(
+        n_units=n_units, n_periods=n_periods, cohort_periods=[4, 6], seed=seed
+    )
+
+
+def _imputation_clustered_panel(seed=11):
+    d = _imputation_panel(seed=seed).copy()
+    d["cl"] = (d["unit"] // 3).astype(int)
+    return d
+
+
+def _imputation_survey_panel(seed=5, replicate=False, degenerate=None):
+    """Unit-constant pweights; optionally a JK replicate design.
+
+    degenerate: None | "dropped" (2 all-zero replicate columns) |
+    "undefined" (all but one column all-zero -> n_valid <= 1) |
+    "cohort_zero" (replicate rw0 zeroes EVERY row of one cohort -> that
+    replicate NaNs the cohort's GROUP target while overall stays finite,
+    so the joint [overall, groups] stack drops a replicate the
+    [overall]-only stack keeps - the deterministic overall-row
+    migration-delta shape).
+    """
+    d = _imputation_panel(seed=seed).copy()
+    rng = np.random.default_rng(seed)
+    wmap = {u: rng.uniform(0.5, 2.0) for u in d["unit"].unique()}
+    d["w"] = d["unit"].map(wmap)
+    rep_cols = []
+    if replicate:
+        n_rep = 8
+        cohort4_units = set(d.loc[d["first_treat"] == 4, "unit"].unique())
+        for r in range(n_rep):
+            col = f"rw{r}"
+            rep_cols.append(col)
+            if degenerate == "dropped" and r >= n_rep - 2:
+                d[col] = 0.0
+            elif degenerate == "undefined" and r >= 1:
+                d[col] = 0.0
+            else:
+                jitter = {u: rng.uniform(0.1, 2.0) for u in d["unit"].unique()}
+                d[col] = d["unit"].map(jitter) * d["w"]
+                if degenerate == "cohort_zero" and r == 0:
+                    d.loc[d["unit"].isin(cohort4_units), col] = 0.0
+    return d, rep_cols
+
+
+def _imputation_survey_design(rep_cols=None):
+    from diff_diff import SurveyDesign
+
+    if rep_cols:
+        return SurveyDesign(weights="w", replicate_weights=rep_cols, replicate_method="JK1")
+    return SurveyDesign(weights="w")
+
+
+def _fit_imputation(data, *, est_kw=None, **fit_kw):
+    from diff_diff import ImputationDiD
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return ImputationDiD(**(est_kw or {})).fit(data, **IMPUTATION_KW, **fit_kw)
+
+
+def _assert_es_container_matches_fit_time(container, fit_time_results, name=""):
+    """Post-fit EventStudyResults must equal the fit-time-built surface
+    column-for-column at 1e-14 (incl. reference marking and df provenance)."""
+    from diff_diff.results_base import build_event_study_surface
+
+    ref = build_event_study_surface(fit_time_results)
+    da, db = container.to_dataframe(), ref.to_dataframe()
+    assert list(da.columns) == list(db.columns)
+    for c in da.columns:
+        x, y = da[c].to_numpy(), db[c].to_numpy()
+        if x.dtype.kind in "fc":
+            np.testing.assert_allclose(
+                x, y, rtol=0, atol=1e-14, equal_nan=True, err_msg=f"{name}/{c}"
+            )
+        else:
+            assert (x == y).all(), (name, c)
+    for attr in ("df_survey", "anticipation", "alpha"):
+        va, vb = getattr(container, attr), getattr(ref, attr)
+        same = va == vb or (va is None and vb is None)
+        try:
+            same = same or (np.isnan(va) and np.isnan(vb))
+        except TypeError:
+            pass
+        assert same, (name, attr, va, vb)
+
+
+def _assert_group_matches_fit_time(agg, fit_time_results, name=""):
+    for i, g in enumerate(agg.label):
+        row = fit_time_results.group_effects[g]
+        for field_, key in (
+            ("att", "effect"),
+            ("se", "se"),
+            ("t_stat", "t_stat"),
+            ("p_value", "p_value"),
+        ):
+            np.testing.assert_allclose(
+                getattr(agg, field_)[i],
+                row[key],
+                rtol=0,
+                atol=1e-14,
+                equal_nan=True,
+                err_msg=f"{name}/{g}/{field_}",
+            )
+
+
+@pytest.fixture(scope="module")
+def imputation_panel():
+    return _imputation_panel()
+
+
+@pytest.fixture(scope="module")
+def imputation_fitted(imputation_panel):
+    """Plain fit - the kit (refs to _fit_data) powers aggregate()."""
+    return _fit_imputation(imputation_panel)
+
+
+@pytest.fixture(scope="module")
+def imputation_fit_time(imputation_panel):
+    """Deprecated fit-time aggregate="all" - the analytical inertness reference."""
+    return _fit_imputation(imputation_panel, aggregate="all")
+
+
+class TestImputationShim:
+    def test_plain_fit_does_not_warn(self, imputation_panel):
+        from diff_diff import ImputationDiD
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            ImputationDiD().fit(imputation_panel, **IMPUTATION_KW)
+        assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
+
+    def test_aggregate_kwarg_warns_even_at_none(self, imputation_panel):
+        from diff_diff import ImputationDiD
+
+        with pytest.warns(FutureWarning, match=r"ImputationDiD\.fit\(aggregate=\)"):
+            ImputationDiD().fit(imputation_panel, **IMPUTATION_KW, aggregate=None)
+
+    def test_balance_e_kwarg_warns_alone(self, imputation_panel):
+        from diff_diff import ImputationDiD
+
+        with pytest.warns(FutureWarning, match=r"ImputationDiD\.fit\(balance_e=\)"):
+            ImputationDiD().fit(imputation_panel, **IMPUTATION_KW, balance_e=None)
+
+    def test_joint_supply_warns_once_naming_both(self, imputation_panel):
+        from diff_diff import ImputationDiD
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            ImputationDiD().fit(
+                imputation_panel, **IMPUTATION_KW, aggregate="event_study", balance_e=0
+            )
+        fw = [w for w in caught if issubclass(w.category, FutureWarning)]
+        assert len(fw) == 1
+        msg = str(fw[0].message)
+        assert "aggregate=" in msg and "balance_e=" in msg
+
+    def test_unknown_string_still_acts_like_none(self, imputation_panel):
+        res = _fit_imputation(imputation_panel, aggregate="nonsense")
+        plain = _fit_imputation(imputation_panel)
+        assert res.event_study_effects is None and res.group_effects is None
+        assert res.overall_att == plain.overall_att
+
+    def test_warn_and_still_work(self, imputation_fitted, imputation_fit_time):
+        assert imputation_fit_time.event_study_effects is not None
+        assert imputation_fit_time.group_effects is not None
+        es = imputation_fitted.aggregate("event_study")
+        for e, row in imputation_fit_time.event_study_effects.items():
+            i = list(es.event_time).index(e)
+            if np.isfinite(row["effect"]) and not es.is_reference[i]:
+                np.testing.assert_allclose(row["effect"], es.att[i], rtol=1e-14)
+
+    def test_wrapper_forwarded_aggregate_warns(self, imputation_panel):
+        from diff_diff import imputation_did
+
+        with pytest.warns(FutureWarning, match=r"ImputationDiD\.fit\(aggregate=\)"):
+            imputation_did(
+                imputation_panel,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                aggregate="event_study",
+            )
+
+    def test_wrapper_forwarded_balance_e_warns(self, imputation_panel):
+        from diff_diff import imputation_did
+
+        with pytest.warns(FutureWarning, match=r"ImputationDiD\.fit\(balance_e=\)"):
+            imputation_did(
+                imputation_panel, "outcome", "unit", "period", "first_treat", balance_e=1
+            )
+
+    def test_plain_wrapper_call_does_not_warn(self, imputation_panel):
+        from diff_diff import imputation_did
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            imputation_did(imputation_panel, "outcome", "unit", "period", "first_treat")
+        assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
+
+
+class TestImputationAggregate:
+    def test_event_study_inert(self, imputation_fitted, imputation_fit_time):
+        es = imputation_fitted.aggregate("event_study")
+        _assert_es_container_matches_fit_time(es, imputation_fit_time, "imp/es")
+
+    @pytest.mark.parametrize("balance_e", [0, 1, 2])
+    def test_balance_e_inert(self, imputation_panel, imputation_fitted, balance_e):
+        ref = _fit_imputation(imputation_panel, aggregate="event_study", balance_e=balance_e)
+        es = imputation_fitted.aggregate("event_study", balance_e=balance_e)
+        _assert_es_container_matches_fit_time(es, ref, f"imp/es/be{balance_e}")
+
+    def test_group_inert(self, imputation_fitted, imputation_fit_time):
+        _assert_group_matches_fit_time(
+            imputation_fitted.aggregate("group"), imputation_fit_time, "imp/gr"
+        )
+
+    def test_simple_relay_bit_exact(self, imputation_fitted):
+        sm = imputation_fitted.aggregate("simple")
+        assert sm.att[0] == imputation_fitted.overall_att
+        assert sm.se[0] == imputation_fitted.overall_se
+        assert sm.t_stat[0] == imputation_fitted.overall_t_stat
+        assert sm.p_value[0] == imputation_fitted.overall_p_value
+        assert sm.n_kind == "obs"
+        assert sm.n[0] == imputation_fitted.n_treated_obs
+        assert np.isnan(sm.to_dataframe()["df"].to_numpy()).all()  # non-survey fit
+
+    def test_cluster_arm_inert(self):
+        d = _imputation_clustered_panel()
+        ref = _fit_imputation(d, est_kw={"cluster": "cl"}, aggregate="all")
+        plain = _fit_imputation(d, est_kw={"cluster": "cl"})
+        _assert_es_container_matches_fit_time(plain.aggregate("event_study"), ref, "imp/cluster")
+        _assert_group_matches_fit_time(plain.aggregate("group"), ref, "imp/cluster")
+
+    def test_covariate_arm_inert(self):
+        # Time-varying covariate: the kit must carry delta_hat /
+        # kept_cov_mask / the covariate columns; an omission escapes every
+        # covariate-free arm (local-review P2).
+        d = _imputation_panel(seed=23).copy()
+        rng = np.random.default_rng(23)
+        d["x1"] = rng.normal(size=len(d)) + 0.1 * d["period"]
+        ref = _fit_imputation(d, aggregate="all", covariates=["x1"])
+        plain = _fit_imputation(d, covariates=["x1"])
+        _assert_es_container_matches_fit_time(plain.aggregate("event_study"), ref, "imp/cov")
+        _assert_group_matches_fit_time(plain.aggregate("group"), ref, "imp/cov")
+
+    def test_survey_tsl_arm_inert(self):
+        d, _ = _imputation_survey_panel()
+        sd = _imputation_survey_design()
+        ref = _fit_imputation(d, aggregate="all", survey_design=sd)
+        plain = _fit_imputation(d, survey_design=sd)
+        _assert_es_container_matches_fit_time(plain.aggregate("event_study"), ref, "imp/tsl")
+        _assert_group_matches_fit_time(plain.aggregate("group"), ref, "imp/tsl")
+        sm = plain.aggregate("simple")
+        df_col = sm.to_dataframe()["df"].to_numpy()
+        assert np.isfinite(df_col).all()  # survey df threads the simple row
+
+    @pytest.mark.parametrize("degenerate", [None, "dropped", "undefined"])
+    def test_replicate_arms_level_matched(self, degenerate):
+        # LEVEL-MATCHED references: aggregate(L) reproduces fit(aggregate=L),
+        # not fit(aggregate='all') (the joint replicate stack couples rows).
+        d, rep_cols = _imputation_survey_panel(replicate=True, degenerate=degenerate)
+        sd = _imputation_survey_design(rep_cols)
+        ref_es = _fit_imputation(d, aggregate="event_study", survey_design=sd)
+        ref_gr = _fit_imputation(d, aggregate="group", survey_design=sd)
+        plain = _fit_imputation(d, survey_design=sd)
+        _assert_es_container_matches_fit_time(
+            plain.aggregate("event_study"), ref_es, f"imp/rep/{degenerate}"
+        )
+        _assert_group_matches_fit_time(plain.aggregate("group"), ref_gr, f"imp/rep/{degenerate}")
+        sm = plain.aggregate("simple")
+        np.testing.assert_allclose(sm.se[0], plain.overall_se, rtol=0, atol=0, equal_nan=True)
+
+    def test_replicate_undefined_df_sentinel(self):
+        # n_valid <= 1: the working df degenerates; the ES container's
+        # df_survey resolves to the 0.0 replicate-undefined sentinel on
+        # BOTH routes (the metadata-copy discriminator).
+        d, rep_cols = _imputation_survey_panel(replicate=True, degenerate="undefined")
+        sd = _imputation_survey_design(rep_cols)
+        plain = _fit_imputation(d, survey_design=sd)
+        es = plain.aggregate("event_study")
+        ref = _fit_imputation(d, aggregate="event_study", survey_design=sd)
+        from diff_diff.results_base import build_event_study_surface
+
+        assert es.df_survey == build_event_study_surface(ref).df_survey == 0.0
+
+    def test_replicate_overall_row_migration_delta(self):
+        # The documented migration consequence: the deprecated fit(aggregate=)
+        # coupled the OVERALL row to the joint replicate stack. On the
+        # cohort-zero design (one replicate NaNs one cohort's group target
+        # while overall stays finite) the joint [overall, groups] stack drops
+        # a replicate the [overall]-only stack keeps -> plain-fit overall_se
+        # differs from fit(aggregate='group') overall_se; each surface is
+        # self-consistent, and post-fit aggregate('group') level-matches the
+        # deprecated fit(aggregate='group') rows exactly.
+        d, rep_cols = _imputation_survey_panel(replicate=True, degenerate="cohort_zero")
+        sd = _imputation_survey_design(rep_cols)
+        plain = _fit_imputation(d, survey_design=sd)
+        ref_gr = _fit_imputation(d, aggregate="group", survey_design=sd)
+        assert plain.overall_se != ref_gr.overall_se
+        _assert_group_matches_fit_time(plain.aggregate("group"), ref_gr, "imp/delta")
+        # healthy design: no coupling -> equality
+        dh, rep_h = _imputation_survey_panel(replicate=True)
+        sdh = _imputation_survey_design(rep_h)
+        np.testing.assert_allclose(
+            _fit_imputation(dh, survey_design=sdh).overall_se,
+            _fit_imputation(dh, aggregate="group", survey_design=sdh).overall_se,
+            rtol=0,
+            atol=0,
+        )
+
+    def test_pretrends_arm_inert(self, imputation_panel):
+        ref = _fit_imputation(imputation_panel, est_kw={"pretrends": True}, aggregate="event_study")
+        plain = _fit_imputation(imputation_panel, est_kw={"pretrends": True})
+        _assert_es_container_matches_fit_time(plain.aggregate("event_study"), ref, "imp/pretrends")
+
+    def test_isolation_under_public_field_mutation(self, imputation_panel):
+        res = _fit_imputation(imputation_panel)
+        base_es = res.aggregate("event_study").to_dataframe()
+        base_gr = res.aggregate("group").to_dataframe()
+        base_sm = res.aggregate("simple").to_dataframe()
+        res.groups.pop()
+        res.time_periods.pop()
+        object.__setattr__(res, "alpha", 0.5)
+        object.__setattr__(res, "anticipation", 3)
+        # Imputation-only public config fields the kit snapshots:
+        object.__setattr__(res, "leave_one_out", True)
+        object.__setattr__(res, "df_convention", "cluster")
+        pd.testing.assert_frame_equal(res.aggregate("event_study").to_dataframe(), base_es)
+        pd.testing.assert_frame_equal(res.aggregate("group").to_dataframe(), base_gr)
+        pd.testing.assert_frame_equal(res.aggregate("simple").to_dataframe(), base_sm)
+
+    def test_metadata_never_mutated_and_isolated(self):
+        d, rep_cols = _imputation_survey_panel(replicate=True)
+        sd = _imputation_survey_design(rep_cols)
+        res = _fit_imputation(d, survey_design=sd)
+        base = res.aggregate("event_study").to_dataframe()
+        base_df_survey = res.aggregate("event_study").df_survey
+        res.survey_metadata.df_survey = 999.0
+        res.survey_metadata.replicate_method = None  # the 0.0-sentinel discriminator
+        after = res.aggregate("event_study")
+        pd.testing.assert_frame_equal(after.to_dataframe(), base)
+        assert after.df_survey == base_df_survey
+        assert res.survey_metadata.df_survey == 999.0  # aggregate() never writes back
+
+    def test_repeated_and_order_independent(self, imputation_fitted):
+        a = imputation_fitted.aggregate("group").to_dataframe()
+        imputation_fitted.aggregate("event_study")
+        imputation_fitted.aggregate("simple")
+        b = imputation_fitted.aggregate("group").to_dataframe()
+        pd.testing.assert_frame_equal(a, b)
+
+    def test_bootstrap_fails_closed_all_levels(self, imputation_panel):
+        res = _fit_imputation(imputation_panel, est_kw={"n_bootstrap": 19, "seed": 1})
+        for level in ("simple", "event_study", "group"):
+            with pytest.raises(NotImplementedError, match="bootstrap"):
+                res.aggregate(level)
+
+    def test_pretrends_replicate_es_fails_closed(self):
+        d, rep_cols = _imputation_survey_panel(replicate=True)
+        sd = _imputation_survey_design(rep_cols)
+        res = _fit_imputation(d, est_kw={"pretrends": True}, survey_design=sd)
+        with pytest.raises(NotImplementedError, match="per-replicate"):
+            res.aggregate("event_study")
+        res.aggregate("group")
+        res.aggregate("simple")
+
+    def test_fail_closed_vocabulary(self, imputation_fitted):
+        with pytest.raises(ValueError, match="Unsupported aggregation type"):
+            imputation_fitted.aggregate("calendar")
+        with pytest.raises(ValueError, match="Unsupported aggregation type"):
+            imputation_fitted.aggregate("all")
+        with pytest.raises(ValueError, match="Unsupported aggregation type"):
+            imputation_fitted.aggregate("nonsense")
+        with pytest.raises(ValueError, match="balance_e"):
+            imputation_fitted.aggregate("group", balance_e=1)
+        with pytest.raises(ValueError, match="balance_e"):
+            imputation_fitted.aggregate("simple", balance_e=1)
+        with pytest.raises(ValueError):
+            imputation_fitted.aggregate("group", weights="cell")
+
+    def test_legacy_pickle_without_kit(self, imputation_fitted):
+        import copy
+
+        legacy = copy.copy(imputation_fitted)
+        object.__setattr__(legacy, "_aggregation_kit", None)
+        with pytest.raises(ValueError, match="aggregation kit"):
+            legacy.aggregate("group")
+
+    def test_pickle_roundtrip(self, imputation_panel):
+        import pickle
+
+        res = _fit_imputation(imputation_panel)
+        clone = pickle.loads(pickle.dumps(res))
+        pd.testing.assert_frame_equal(
+            clone.aggregate("group").to_dataframe(), res.aggregate("group").to_dataframe()
+        )
+
+    def test_group_df_used_relay(self):
+        # Survey fit: every group row's df equals the survey df its
+        # safe_inference received (per-row df_used capture).
+        d, _ = _imputation_survey_panel()
+        sd = _imputation_survey_design()
+        plain = _fit_imputation(d, survey_design=sd)
+        gr = plain.aggregate("group")
+        df_col = gr.to_dataframe()["df"].to_numpy()
+        finite_p = np.isfinite(gr.p_value)
+        assert np.isfinite(df_col[finite_p]).all()
+        # Plain fit: normal theory -> all-NaN df column.
+        plain2 = _fit_imputation(_imputation_panel())
+        assert np.isnan(plain2.aggregate("group").to_dataframe()["df"].to_numpy()).all()
+
+    def test_bootstrap_group_rows_clear_df_used(self, imputation_panel):
+        # Fit-time bootstrap override must never publish an analytical df
+        # beside percentile inference (public group_effects row dicts).
+        res = _fit_imputation(
+            imputation_panel, est_kw={"n_bootstrap": 19, "seed": 1}, aggregate="group"
+        )
+        for row in res.group_effects.values():
+            if np.isfinite(row["effect"]):
+                assert row.get("df_used") is None
+
+    def test_empty_balance_window(self, imputation_fitted):
+        with pytest.warns(UserWarning, match="no horizons"):
+            es = imputation_fitted.aggregate("event_study", balance_e=100)
+        df_ = es.to_dataframe()
+        assert (df_["is_reference"] | ~np.isfinite(df_["att"])).all()
+
+
+# --------------------------------------------------------------------------- #
+# TwoStageDiD (rows M-022/M-119): fit(aggregate=/balance_e=) shim + the
+# PANEL-BACKED recompute aggregate() (column-subset working-frame kit)
+# --------------------------------------------------------------------------- #
+
+TWOSTAGE_KW = dict(outcome="outcome", unit="unit", time="period", first_treat="first_treat")
+
+
+def _twostage_panel(seed=42, n_units=120, n_periods=8):
+    from diff_diff.prep_dgp import generate_staggered_data
+
+    return generate_staggered_data(
+        n_units=n_units, n_periods=n_periods, cohort_periods=[4, 6], seed=seed
+    )
+
+
+def _twostage_prop5_panel(seed=13):
+    """No never-treated units, multiple cohorts -> Proposition-5 NaN rows."""
+    d = _twostage_panel(seed=seed)
+    return d[d["first_treat"] > 0].copy()
+
+
+def _twostage_survey_panel(seed=5, replicate=False, degenerate=None):
+    d = _twostage_panel(seed=seed).copy()
+    rng = np.random.default_rng(seed)
+    wmap = {u: rng.uniform(0.5, 2.0) for u in d["unit"].unique()}
+    d["w"] = d["unit"].map(wmap)
+    rep_cols = []
+    if replicate:
+        n_rep = 8
+        cohort4_units = set(d.loc[d["first_treat"] == 4, "unit"].unique())
+        for r in range(n_rep):
+            col = f"rw{r}"
+            rep_cols.append(col)
+            if degenerate == "dropped" and r >= n_rep - 2:
+                d[col] = 0.0
+            elif degenerate == "undefined" and r >= 1:
+                d[col] = 0.0
+            else:
+                jitter = {u: rng.uniform(0.1, 2.0) for u in d["unit"].unique()}
+                d[col] = d["unit"].map(jitter) * d["w"]
+                if degenerate == "cohort_zero" and r == 0:
+                    d.loc[d["unit"].isin(cohort4_units), col] = 0.0
+    return d, rep_cols
+
+
+def _twostage_always_treated_panel(seed=7):
+    """Adds always-treated units so the survey Wave-E.3 pad activates
+    (the only shape where the kit's score_pad_mask/cluster_ids_full
+    snapshots are non-None)."""
+    d, _ = _twostage_survey_panel(seed=seed)
+    rng = np.random.default_rng(seed)
+    extra = []
+    base_unit = int(d["unit"].max()) + 1
+    for k in range(8):
+        u = base_unit + k
+        for t in sorted(d["period"].unique()):
+            extra.append((u, t, rng.normal() + 2.0, 1, 1.0))
+    extra_df = pd.DataFrame(extra, columns=["unit", "period", "outcome", "first_treat", "w"])
+    return pd.concat([d, extra_df], ignore_index=True)
+
+
+def _twostage_survey_design(rep_cols=None, psu=False):
+    from diff_diff import SurveyDesign
+
+    if rep_cols:
+        return SurveyDesign(weights="w", replicate_weights=rep_cols, replicate_method="JK1")
+    if psu:
+        return SurveyDesign(weights="w", psu="unit")
+    return SurveyDesign(weights="w")
+
+
+def _fit_twostage(data, *, est_kw=None, **fit_kw):
+    from diff_diff import TwoStageDiD
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return TwoStageDiD(**(est_kw or {})).fit(data, **TWOSTAGE_KW, **fit_kw)
+
+
+@pytest.fixture(scope="module")
+def twostage_panel():
+    return _twostage_panel()
+
+
+@pytest.fixture(scope="module")
+def twostage_fitted(twostage_panel):
+    return _fit_twostage(twostage_panel)
+
+
+@pytest.fixture(scope="module")
+def twostage_fit_time(twostage_panel):
+    return _fit_twostage(twostage_panel, aggregate="all")
+
+
+class TestTwoStageShim:
+    def test_plain_fit_does_not_warn(self, twostage_panel):
+        from diff_diff import TwoStageDiD
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            TwoStageDiD().fit(twostage_panel, **TWOSTAGE_KW)
+        assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
+
+    def test_aggregate_kwarg_warns_even_at_none(self, twostage_panel):
+        from diff_diff import TwoStageDiD
+
+        with pytest.warns(FutureWarning, match=r"TwoStageDiD\.fit\(aggregate=\)"):
+            TwoStageDiD().fit(twostage_panel, **TWOSTAGE_KW, aggregate=None)
+
+    def test_balance_e_kwarg_warns_alone(self, twostage_panel):
+        from diff_diff import TwoStageDiD
+
+        with pytest.warns(FutureWarning, match=r"TwoStageDiD\.fit\(balance_e=\)"):
+            TwoStageDiD().fit(twostage_panel, **TWOSTAGE_KW, balance_e=None)
+
+    def test_joint_supply_warns_once_naming_both(self, twostage_panel):
+        from diff_diff import TwoStageDiD
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            TwoStageDiD().fit(twostage_panel, **TWOSTAGE_KW, aggregate="event_study", balance_e=0)
+        fw = [w for w in caught if issubclass(w.category, FutureWarning)]
+        assert len(fw) == 1
+        msg = str(fw[0].message)
+        assert "aggregate=" in msg and "balance_e=" in msg
+
+    def test_unknown_string_still_acts_like_none(self, twostage_panel):
+        res = _fit_twostage(twostage_panel, aggregate="nonsense")
+        plain = _fit_twostage(twostage_panel)
+        assert res.event_study_effects is None and res.group_effects is None
+        assert res.overall_att == plain.overall_att
+
+    def test_warn_and_still_work(self, twostage_fitted, twostage_fit_time):
+        assert twostage_fit_time.event_study_effects is not None
+        assert twostage_fit_time.group_effects is not None
+        es = twostage_fitted.aggregate("event_study")
+        for e, row in twostage_fit_time.event_study_effects.items():
+            i = list(es.event_time).index(e)
+            if np.isfinite(row["effect"]) and not es.is_reference[i]:
+                np.testing.assert_allclose(row["effect"], es.att[i], rtol=1e-14)
+
+    def test_wrapper_forwarded_aggregate_warns(self, twostage_panel):
+        from diff_diff import two_stage_did
+
+        with pytest.warns(FutureWarning, match=r"TwoStageDiD\.fit\(aggregate=\)"):
+            two_stage_did(
+                twostage_panel,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                aggregate="event_study",
+            )
+
+    def test_wrapper_forwarded_balance_e_warns(self, twostage_panel):
+        from diff_diff import two_stage_did
+
+        with pytest.warns(FutureWarning, match=r"TwoStageDiD\.fit\(balance_e=\)"):
+            two_stage_did(twostage_panel, "outcome", "unit", "period", "first_treat", balance_e=1)
+
+    def test_plain_wrapper_call_does_not_warn(self, twostage_panel):
+        from diff_diff import two_stage_did
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            two_stage_did(twostage_panel, "outcome", "unit", "period", "first_treat")
+        assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
+
+
+class TestTwoStageAggregate:
+    def test_event_study_inert(self, twostage_fitted, twostage_fit_time):
+        es = twostage_fitted.aggregate("event_study")
+        _assert_es_container_matches_fit_time(es, twostage_fit_time, "ts/es")
+
+    @pytest.mark.parametrize("balance_e", [0, 1, 2])
+    def test_balance_e_inert(self, twostage_panel, twostage_fitted, balance_e):
+        ref = _fit_twostage(twostage_panel, aggregate="event_study", balance_e=balance_e)
+        es = twostage_fitted.aggregate("event_study", balance_e=balance_e)
+        _assert_es_container_matches_fit_time(es, ref, f"ts/es/be{balance_e}")
+
+    def test_group_inert(self, twostage_fitted, twostage_fit_time):
+        _assert_group_matches_fit_time(
+            twostage_fitted.aggregate("group"), twostage_fit_time, "ts/gr"
+        )
+
+    def test_simple_relay_bit_exact(self, twostage_fitted):
+        sm = twostage_fitted.aggregate("simple")
+        assert sm.att[0] == twostage_fitted.overall_att
+        assert sm.se[0] == twostage_fitted.overall_se
+        assert sm.n_kind == "obs"
+        assert sm.n[0] == twostage_fitted.n_treated_obs
+        assert np.isnan(sm.to_dataframe()["df"].to_numpy()).all()
+
+    def test_m092_vcov_parity_analytical(self, twostage_fitted, twostage_panel):
+        # The post-fit container threads the recomputed joint GMM vcov +
+        # index + df exactly as the level-matched fit-time container does.
+        from diff_diff.results_base import build_event_study_surface
+
+        ref = build_event_study_surface(_fit_twostage(twostage_panel, aggregate="event_study"))
+        es = twostage_fitted.aggregate("event_study")
+        assert es.vcov is not None and ref.vcov is not None
+        np.testing.assert_allclose(es.vcov, ref.vcov, rtol=0, atol=1e-14, equal_nan=True)
+        assert list(es.vcov_index) == list(ref.vcov_index)
+
+    def test_m092_vcov_cleared_on_replicate(self):
+        d, rep_cols = _twostage_survey_panel(replicate=True)
+        sd = _twostage_survey_design(rep_cols)
+        plain = _fit_twostage(d, survey_design=sd)
+        es = plain.aggregate("event_study")
+        assert es.vcov is None and es.vcov_index is None
+        # df provenance still threads (level-matched replayed value)
+        ref = _fit_twostage(d, aggregate="event_study", survey_design=sd)
+        from diff_diff.results_base import build_event_study_surface
+
+        ref_surface = build_event_study_surface(ref)
+        assert (es.df_survey == ref_surface.df_survey) or (
+            es.df_survey is None and ref_surface.df_survey is None
+        )
+
+    def test_cluster_arm_inert(self):
+        d = _twostage_panel(seed=11).copy()
+        d["cl"] = (d["unit"] // 3).astype(int)
+        ref = _fit_twostage(d, est_kw={"cluster": "cl"}, aggregate="all")
+        plain = _fit_twostage(d, est_kw={"cluster": "cl"})
+        _assert_es_container_matches_fit_time(plain.aggregate("event_study"), ref, "ts/cl")
+        _assert_group_matches_fit_time(plain.aggregate("group"), ref, "ts/cl")
+
+    def test_cluster_naming_unit_column_inert(self, twostage_panel):
+        # cluster= legally names the unit column - the kit's column-subset
+        # dedup must keep the frame single-labeled (a duplicated column
+        # would break df[unit].map in the moved Stage-1 helpers).
+        ref = _fit_twostage(twostage_panel, est_kw={"cluster": "unit"}, aggregate="all")
+        plain = _fit_twostage(twostage_panel, est_kw={"cluster": "unit"})
+        _assert_es_container_matches_fit_time(plain.aggregate("event_study"), ref, "ts/cl-unit")
+        _assert_group_matches_fit_time(plain.aggregate("group"), ref, "ts/cl-unit")
+
+    def test_covariate_arm_inert(self):
+        d = _twostage_panel(seed=23).copy()
+        rng = np.random.default_rng(23)
+        d["x1"] = rng.normal(size=len(d)) + 0.1 * d["period"]
+        ref = _fit_twostage(d, aggregate="all", covariates=["x1"])
+        plain = _fit_twostage(d, covariates=["x1"])
+        _assert_es_container_matches_fit_time(plain.aggregate("event_study"), ref, "ts/cov")
+        _assert_group_matches_fit_time(plain.aggregate("group"), ref, "ts/cov")
+
+    def test_prop5_arm_inert(self):
+        d = _twostage_prop5_panel()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ref = _fit_twostage(d, aggregate="event_study")
+            plain = _fit_twostage(d)
+            es = plain.aggregate("event_study")
+        _assert_es_container_matches_fit_time(es, ref, "ts/prop5")
+
+    def test_survey_tsl_arm_inert(self):
+        d, _ = _twostage_survey_panel()
+        sd = _twostage_survey_design(psu=True)
+        ref = _fit_twostage(d, aggregate="all", survey_design=sd)
+        plain = _fit_twostage(d, survey_design=sd)
+        _assert_es_container_matches_fit_time(plain.aggregate("event_study"), ref, "ts/tsl")
+        _assert_group_matches_fit_time(plain.aggregate("group"), ref, "ts/tsl")
+        gr = plain.aggregate("group")
+        df_col = gr.to_dataframe()["df"].to_numpy()
+        finite_p = np.isfinite(gr.p_value)
+        assert np.isfinite(df_col[finite_p]).all()  # scalar survey-df broadcast
+
+    def test_always_treated_pad_arm_inert(self):
+        # The only arm where score_pad_mask/cluster_ids_full are non-None:
+        # an implementation storing None unconditionally passes every other
+        # arm but breaks inertness here.
+        d = _twostage_always_treated_panel()
+        sd = _twostage_survey_design(psu=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ref = _fit_twostage(d, aggregate="all", survey_design=sd)
+            plain = _fit_twostage(d, survey_design=sd)
+            es = plain.aggregate("event_study")
+            gr = plain.aggregate("group")
+        _assert_es_container_matches_fit_time(es, ref, "ts/pad")
+        _assert_group_matches_fit_time(gr, ref, "ts/pad")
+
+    @pytest.mark.parametrize("degenerate", [None, "dropped", "undefined"])
+    def test_replicate_arms_level_matched(self, degenerate):
+        d, rep_cols = _twostage_survey_panel(replicate=True, degenerate=degenerate)
+        sd = _twostage_survey_design(rep_cols)
+        ref_es = _fit_twostage(d, aggregate="event_study", survey_design=sd)
+        ref_gr = _fit_twostage(d, aggregate="group", survey_design=sd)
+        plain = _fit_twostage(d, survey_design=sd)
+        _assert_es_container_matches_fit_time(
+            plain.aggregate("event_study"), ref_es, f"ts/rep/{degenerate}"
+        )
+        _assert_group_matches_fit_time(plain.aggregate("group"), ref_gr, f"ts/rep/{degenerate}")
+
+    def test_all_prop5_horizons_survive_early_return(self):
+        # Local-review P1 (pre-existing corner in the verbatim-moved code,
+        # fixed in this PR): when EVERY non-reference horizon is
+        # Proposition-5-unidentified, est_horizons empties and the early
+        # return used to DROP the built prop5 rows - real treated horizons
+        # reported as absent instead of unidentified. Both the fit-time
+        # and post-fit surfaces must keep them as all-NaN rows with
+        # n_obs > 0, plus the consolidated Prop-5 warning.
+        rng = np.random.default_rng(5)
+        rows = []
+        for u in range(12):  # cohort 2: pre at t=1, post only at h >= h_bar
+            for t in (1, 8, 9, 10):
+                rows.append((u, t, rng.normal() + (2.0 if t >= 2 else 0.0), 2))
+        for u in range(20, 32):  # cohort 8: pre-periods only
+            for t in range(1, 8):
+                rows.append((u, t, rng.normal(), 8))
+        d = pd.DataFrame(rows, columns=["unit", "period", "outcome", "first_treat"])
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            ref = _fit_twostage(d.copy(), aggregate="event_study")
+            plain = _fit_twostage(d.copy())
+            es = plain.aggregate("event_study")
+        assert any("Proposition 5" in str(w.message) for w in caught)
+        for surface_dict in (ref.event_study_effects,):
+            prop5 = {h: r for h, r in surface_dict.items() if h != -1}
+            assert prop5, "Prop-5 rows must survive the early return"
+            for h, r in prop5.items():
+                assert h >= 6 and r["n_obs"] > 0
+                assert np.isnan(r["effect"]) and np.isnan(r["se"])
+        df_ = es.to_dataframe()
+        prop5_rows = df_[(df_["event_time"] >= 6)]
+        assert len(prop5_rows) > 0
+        assert np.isnan(prop5_rows["att"]).all()
+        assert (prop5_rows["n"] > 0).all()
+        _assert_es_container_matches_fit_time(es, ref, "ts/all-prop5")
+
+    def test_replicate_overall_row_migration_delta(self):
+        d, rep_cols = _twostage_survey_panel(replicate=True, degenerate="cohort_zero")
+        sd = _twostage_survey_design(rep_cols)
+        plain = _fit_twostage(d, survey_design=sd)
+        ref_gr = _fit_twostage(d, aggregate="group", survey_design=sd)
+        assert plain.overall_se != ref_gr.overall_se
+        _assert_group_matches_fit_time(plain.aggregate("group"), ref_gr, "ts/delta")
+        dh, rep_h = _twostage_survey_panel(replicate=True)
+        sdh = _twostage_survey_design(rep_h)
+        np.testing.assert_allclose(
+            _fit_twostage(dh, survey_design=sdh).overall_se,
+            _fit_twostage(dh, aggregate="group", survey_design=sdh).overall_se,
+            rtol=0,
+            atol=0,
+        )
+
+    def test_pretrends_arm_inert(self, twostage_panel):
+        ref = _fit_twostage(twostage_panel, est_kw={"pretrends": True}, aggregate="event_study")
+        plain = _fit_twostage(twostage_panel, est_kw={"pretrends": True})
+        _assert_es_container_matches_fit_time(plain.aggregate("event_study"), ref, "ts/pretrends")
+
+    def test_isolation_under_public_field_mutation(self, twostage_panel):
+        res = _fit_twostage(twostage_panel)
+        base_es = res.aggregate("event_study").to_dataframe()
+        base_gr = res.aggregate("group").to_dataframe()
+        base_sm = res.aggregate("simple").to_dataframe()
+        res.groups.pop()
+        res.time_periods.pop()
+        object.__setattr__(res, "alpha", 0.5)
+        object.__setattr__(res, "anticipation", 3)
+        pd.testing.assert_frame_equal(res.aggregate("event_study").to_dataframe(), base_es)
+        pd.testing.assert_frame_equal(res.aggregate("group").to_dataframe(), base_gr)
+        pd.testing.assert_frame_equal(res.aggregate("simple").to_dataframe(), base_sm)
+
+    def test_metadata_never_mutated_and_isolated(self):
+        d, rep_cols = _twostage_survey_panel(replicate=True)
+        sd = _twostage_survey_design(rep_cols)
+        res = _fit_twostage(d, survey_design=sd)
+        base = res.aggregate("event_study").to_dataframe()
+        base_df_survey = res.aggregate("event_study").df_survey
+        res.survey_metadata.df_survey = 999.0
+        res.survey_metadata.replicate_method = None
+        after = res.aggregate("event_study")
+        pd.testing.assert_frame_equal(after.to_dataframe(), base)
+        assert after.df_survey == base_df_survey
+        assert res.survey_metadata.df_survey == 999.0
+
+    def test_repeated_and_order_independent(self, twostage_fitted):
+        a = twostage_fitted.aggregate("group").to_dataframe()
+        twostage_fitted.aggregate("event_study")
+        twostage_fitted.aggregate("simple")
+        b = twostage_fitted.aggregate("group").to_dataframe()
+        pd.testing.assert_frame_equal(a, b)
+
+    def test_bootstrap_fails_closed_all_levels(self, twostage_panel):
+        res = _fit_twostage(twostage_panel, est_kw={"n_bootstrap": 19, "seed": 1})
+        for level in ("simple", "event_study", "group"):
+            with pytest.raises(NotImplementedError, match="bootstrap"):
+                res.aggregate(level)
+
+    def test_fail_closed_vocabulary(self, twostage_fitted):
+        for bad in ("calendar", "all", "nonsense"):
+            with pytest.raises(ValueError, match="Unsupported aggregation type"):
+                twostage_fitted.aggregate(bad)
+        with pytest.raises(ValueError, match="balance_e"):
+            twostage_fitted.aggregate("group", balance_e=1)
+        with pytest.raises(ValueError):
+            twostage_fitted.aggregate("group", weights="cell")
+
+    def test_legacy_pickle_without_kit(self, twostage_fitted):
+        import copy
+
+        legacy = copy.copy(twostage_fitted)
+        object.__setattr__(legacy, "_aggregation_kit", None)
+        with pytest.raises(ValueError, match="aggregation kit"):
+            legacy.aggregate("group")
+
+    def test_pickle_roundtrip(self, twostage_panel):
+        import pickle
+
+        res = _fit_twostage(twostage_panel)
+        clone = pickle.loads(pickle.dumps(res))
+        pd.testing.assert_frame_equal(
+            clone.aggregate("group").to_dataframe(), res.aggregate("group").to_dataframe()
+        )
+
+    def test_empty_balance_window(self, twostage_fitted):
+        with pytest.warns(UserWarning, match="balance_e"):
+            es = twostage_fitted.aggregate("event_study", balance_e=100)
+        df_ = es.to_dataframe()
+        assert (df_["is_reference"] | ~np.isfinite(df_["att"])).all()
