@@ -316,11 +316,11 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
             return self._aggregate_simple_result(kit)
         if level == "group":
             effects = agg._aggregate_by_group(
-                self.group_time_effects,
+                bk["group_time_effects"],
                 kit.influence,
                 bk["n_units"],
                 bk["cohort_fractions"],
-                self.groups,
+                bk["treatment_groups"],
                 unit_cohorts=bk["unit_cohorts"],
                 cluster_indices=bk["cluster_indices"],
                 n_clusters=bk["n_clusters"],
@@ -328,12 +328,12 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
             return self._group_effects_to_aggregation(effects, kit)
         # level == "event_study" (the mixin validated the vocabulary)
         es = agg._aggregate_event_study(
-            self.group_time_effects,
+            bk["group_time_effects"],
             kit.influence,
             bk["n_units"],
             bk["cohort_fractions"],
-            self.groups,
-            self.time_periods,
+            bk["treatment_groups"],
+            bk["time_periods"],
             balance_e,
             unit_cohorts=bk["unit_cohorts"],
             cluster_indices=bk["cluster_indices"],

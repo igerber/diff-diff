@@ -1885,6 +1885,28 @@ class TestEfficientAggregate:
         after = res.aggregate("event_study").se
         np.testing.assert_array_equal(before, after)
 
+    def test_public_aggregation_inputs_isolated_from_kit(self, efficient_panel):
+        # CI review P0: aggregate() must recompute exclusively from the
+        # kit's PRIVATE snapshots - mutating the public group_time_effects
+        # rows or the groups/time_periods lists after fit must not change
+        # post-fit aggregation output (else altered point estimates mix
+        # with retained fit-time EIF variance: plausible-but-invalid
+        # inference).
+        res = _fit_efficient(efficient_panel)
+        g_before = res.aggregate("group")
+        es_before = res.aggregate("event_study")
+        post_gt = next(gt for gt in res.group_time_effects if gt[1] >= gt[0])
+        res.group_time_effects[post_gt]["effect"] = 999.0
+        res.groups.pop()
+        res.time_periods.pop()
+        g_after = res.aggregate("group")
+        es_after = res.aggregate("event_study")
+        np.testing.assert_array_equal(g_before.att, g_after.att)
+        np.testing.assert_array_equal(g_before.se, g_after.se)
+        assert list(g_before.label) == list(g_after.label)
+        np.testing.assert_array_equal(es_before.att, es_after.att)
+        np.testing.assert_array_equal(es_before.se, es_after.se)
+
     def test_zero_row_balance_e_surface(self, efficient_fitted):
         # An anchor no cohort reaches: warns, returns a LEGAL 0-row surface.
         with pytest.warns(UserWarning, match="anchor horizon"):

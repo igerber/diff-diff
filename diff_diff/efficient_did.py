@@ -103,6 +103,9 @@ def _validate_and_build_cluster_mapping(
 
 def _build_edid_aggregation_kit(
     eif_by_gt: Dict[Tuple[Any, Any], np.ndarray],
+    group_time_effects: Dict[Tuple[Any, Any], Dict[str, Any]],
+    treatment_groups: List[Any],
+    time_periods: List[Any],
     n_units: int,
     cohort_fractions: Dict[float, float],
     unit_cohorts: np.ndarray,
@@ -135,6 +138,16 @@ def _build_edid_aggregation_kit(
         return None
     return AggregationKit(
         bookkeeping={
+            # PRIVATE SNAPSHOTS of the aggregation inputs (CI review P0):
+            # aggregate() must never read the MUTABLE public result fields -
+            # a user edit of results.group_time_effects/groups would
+            # otherwise mix altered point estimates with the retained
+            # fit-time EIF variance, yielding plausible-but-invalid
+            # inference. Row values are scalars/tuples, so per-row dict
+            # copies suffice. alpha/anticipation are already kit fields.
+            "group_time_effects": {gt: dict(row) for gt, row in group_time_effects.items()},
+            "treatment_groups": list(treatment_groups),
+            "time_periods": list(time_periods),
             "n_units": n_units,
             "cohort_fractions": cohort_fractions,
             "unit_cohorts": unit_cohorts,
@@ -1442,6 +1455,9 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
         # recomputes from this retained payload without an estimator ref.
         self.results_._aggregation_kit = _build_edid_aggregation_kit(
             eif_by_gt=eif_by_gt,
+            group_time_effects=group_time_effects,
+            treatment_groups=treatment_groups,
+            time_periods=time_periods,
             n_units=n_units,
             cohort_fractions=cohort_fractions,
             unit_cohorts=unit_cohorts,
