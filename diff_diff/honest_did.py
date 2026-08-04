@@ -608,8 +608,11 @@ def _extract_container_params(
             f"(got source={surface.source!r}). For other estimators pass "
             "the native results object where supported "
             "(MultiPeriodDiDResults, CallawaySantAnnaResults, or "
-            "ChaisemartinDHaultfoeuilleResults); container admission for "
-            "further producers arrives with their own aggregate() "
+            "ChaisemartinDHaultfoeuilleResults); "
+            "EfficientDiDResults containers are rejected BY DESIGN "
+            "(their surface carries no joint event-study covariance - "
+            "see the REGISTRY EfficientDiD Note); container admission "
+            "for further producers arrives with their own aggregate() "
             "migrations."
         )
     _producer = surface.source.replace("Results", "")

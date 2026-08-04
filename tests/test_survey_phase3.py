@@ -822,14 +822,14 @@ class TestEfficientDiDSurvey:
             "unit",
             "time",
             "first_treat",
-            aggregate="event_study",
             survey_design=sd,
         )
-        assert result.event_study_effects is not None
-        for e, eff in result.event_study_effects.items():
-            assert np.isfinite(eff["effect"])
-            assert np.isfinite(eff["se"])
-            assert eff["se"] > 0
+        es = result.aggregate("event_study")
+        assert es is not None
+        for att, se in zip(es.att, es.se):
+            assert np.isfinite(att)
+            assert np.isfinite(se)
+            assert se > 0
 
     def test_survey_group_aggregation(self, staggered_survey_data):
         """EfficientDiD survey with aggregate='group' produces finite results."""
@@ -842,13 +842,13 @@ class TestEfficientDiDSurvey:
             "unit",
             "time",
             "first_treat",
-            aggregate="group",
             survey_design=sd,
         )
-        assert result.group_effects is not None
-        for g, eff in result.group_effects.items():
-            assert np.isfinite(eff["effect"])
-            assert np.isfinite(eff["se"])
+        grp = result.aggregate("group")
+        assert grp is not None
+        for att, se in zip(grp.att, grp.se):
+            assert np.isfinite(att)
+            assert np.isfinite(se)
 
     def test_survey_all_aggregation(self, staggered_survey_data):
         """EfficientDiD survey with aggregate='all' produces finite results."""
@@ -861,11 +861,10 @@ class TestEfficientDiDSurvey:
             "unit",
             "time",
             "first_treat",
-            aggregate="all",
             survey_design=sd,
         )
-        assert result.event_study_effects is not None
-        assert result.group_effects is not None
+        assert result.aggregate("event_study") is not None
+        assert result.aggregate("group") is not None
         assert np.isfinite(result.overall_att)
         assert np.isfinite(result.overall_se)
 
@@ -1040,17 +1039,18 @@ class TestEfficientDiDCovSurvey:
             "time",
             "first_treat",
             covariates=["x1"],
-            aggregate="all",
             survey_design=sd,
         )
-        assert result.event_study_effects is not None
-        assert result.group_effects is not None
-        for _, eff in result.event_study_effects.items():
-            assert np.isfinite(eff["effect"])
-            assert np.isfinite(eff["se"])
-        for _, eff in result.group_effects.items():
-            assert np.isfinite(eff["effect"])
-            assert np.isfinite(eff["se"])
+        es = result.aggregate("event_study")
+        grp = result.aggregate("group")
+        assert es is not None
+        assert grp is not None
+        for att, se in zip(es.att, es.se):
+            assert np.isfinite(att)
+            assert np.isfinite(se)
+        for att, se in zip(grp.att, grp.se):
+            assert np.isfinite(att)
+            assert np.isfinite(se)
 
     def test_bootstrap_covariates_survey(self, cov_survey_data):
         """Bootstrap + covariates + survey produces finite results."""
@@ -1230,17 +1230,17 @@ class TestEfficientDiDCovSurvey:
             "time",
             "first_treat",
             covariates=["x1"],
-            aggregate="event_study",
             survey_design=sd,
         )
         assert np.isfinite(result.overall_att)
         assert np.isfinite(result.overall_se)
         assert result.overall_se > 0
-        assert result.event_study_effects is not None
-        for _, eff in result.event_study_effects.items():
-            assert np.isfinite(eff["effect"])
-            assert np.isfinite(eff["se"])
-            assert eff["se"] > 0
+        es = result.aggregate("event_study")
+        assert es is not None
+        for att, se in zip(es.att, es.se):
+            assert np.isfinite(att)
+            assert np.isfinite(se)
+            assert se > 0
 
 
 # =============================================================================

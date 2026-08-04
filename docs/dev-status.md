@@ -36,7 +36,7 @@ Target: ideally < 1000 lines per module; modules ≥3000 lines are candidates fo
 | `triple_diff.py` | 2231 | Monitor |
 | `wooldridge.py` | 2192 | Monitor |
 | `practitioner.py` | 2113 | Monitor — grew with per-estimator handlers (was 1511 on 2026-07-13) |
-| `efficient_did.py` | 2083 | Monitor |
+| `efficient_did.py` | 1729 | Acceptable — dropped below 2000 when the M-023 aggregate() migration extracted the aggregation mixin into `efficient_did_aggregation.py` (~520 lines, below this table's floor) |
 | `chaisemartin_dhaultfoeuille_results.py` | 2004 | Monitor |
 | `results.py` | 1948 | Acceptable |
 | `_rdrobust_port.py` | 1913 | Acceptable |

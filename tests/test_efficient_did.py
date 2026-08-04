@@ -212,25 +212,28 @@ class TestAggregation:
 
     def test_event_study_aggregation(self):
         df = _make_simple_panel()
-        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="event_study")
-        assert result.event_study_effects is not None
+        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        es = result.aggregate("event_study")
+        assert es is not None
         # Should have pre and post-treatment event times
-        keys = sorted(result.event_study_effects.keys())
+        keys = sorted(int(e) for e in es.event_time)
         assert any(e < 0 for e in keys), "Should have pre-treatment event times"
         assert any(e >= 0 for e in keys), "Should have post-treatment event times"
 
     def test_group_aggregation(self):
         df = _make_staggered_panel()
-        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="group")
-        assert result.group_effects is not None
-        assert 3.0 in result.group_effects
-        assert 5.0 in result.group_effects
+        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        grp = result.aggregate("group")
+        assert grp is not None
+        labels = [float(g) for g in grp.label]
+        assert 3.0 in labels
+        assert 5.0 in labels
 
     def test_aggregate_all(self):
         df = _make_staggered_panel()
-        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="all")
-        assert result.event_study_effects is not None
-        assert result.group_effects is not None
+        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        assert result.aggregate("event_study") is not None
+        assert result.aggregate("group") is not None
 
 
 class TestValidation:
@@ -320,23 +323,24 @@ class TestOutputFormats:
 
     def test_summary_and_dataframe(self):
         df = _make_simple_panel()
-        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="all")
+        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
 
         # summary() returns a string
         s = result.summary()
         assert isinstance(s, str)
         assert "Efficient DiD" in s
 
-        # to_dataframe at different levels
+        # to_dataframe at the native group-time level
         df_gt = result.to_dataframe("group_time")
         assert isinstance(df_gt, pd.DataFrame)
         assert "effect" in df_gt.columns
 
-        df_es = result.to_dataframe("event_study")
-        assert "relative_period" in df_es.columns
+        # aggregated tables come from the post-fit containers
+        df_es = result.aggregate("event_study").to_dataframe()
+        assert "event_time" in df_es.columns
 
-        df_g = result.to_dataframe("group")
-        assert "group" in df_g.columns
+        df_g = result.aggregate("group").to_dataframe()
+        assert "label" in df_g.columns
 
     def test_to_dataframe_raises_without_aggregation(self):
         df = _make_simple_panel()
@@ -383,20 +387,20 @@ class TestPretreatment:
     def test_pretreatment_placebo_near_zero(self):
         """Under correct PT, pre-treatment ATT(g,t) for t < g should be near 0."""
         df = _make_simple_panel(n_units=200, effect=2.0, sigma=0.3)
-        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="event_study")
+        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        es = result.aggregate("event_study")
         # Check pre-treatment effects are near zero
-        for e, d in result.event_study_effects.items():
+        for e, a in zip(es.event_time, es.att):
             if e < 0:
-                assert (
-                    abs(d["effect"]) < 1.0
-                ), f"Pre-treatment effect at e={e} is {d['effect']:.4f}, expected ~0"
+                assert abs(a) < 1.0, f"Pre-treatment effect at e={e} is {a:.4f}, expected ~0"
 
     def test_pretreatment_in_event_study(self):
         """Placebo effects should appear with negative event-time keys."""
         df = _make_simple_panel(n_periods=6, treat_period=3)
-        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="event_study")
-        assert result.event_study_effects is not None
-        neg_keys = [e for e in result.event_study_effects if e < 0]
+        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        es = result.aggregate("event_study")
+        assert es is not None
+        neg_keys = [e for e in es.event_time if e < 0]
         assert len(neg_keys) > 0, "Should have negative event-time keys"
 
     def test_pretreatment_detects_violation(self):
@@ -422,9 +426,10 @@ class TestPretreatment:
                 "y": y,
             }
         )
-        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="event_study")
+        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        es = result.aggregate("event_study")
         # Pre-treatment effects should be significantly non-zero
-        pre_effects = [d["effect"] for e, d in result.event_study_effects.items() if e < 0]
+        pre_effects = [a for e, a in zip(es.event_time, es.att) if e < 0]
         assert any(
             abs(e) > 0.1 for e in pre_effects
         ), f"Pre-trend should be detected; pre effects: {pre_effects}"
@@ -1460,23 +1465,20 @@ class TestClusterRobustSE:
     def test_clustered_aggregate_event_study(self):
         """Clustered SE with aggregate='event_study' should produce finite results."""
         df = self._make_clustered_panel(n_clusters=60, units_per_cluster=3)
-        result = EfficientDiD(cluster="cluster_id").fit(
-            df, "y", "unit", "time", "first_treat", aggregate="event_study"
-        )
-        assert result.event_study_effects is not None
-        for e, d in result.event_study_effects.items():
-            assert np.isfinite(d["se"])
+        result = EfficientDiD(cluster="cluster_id").fit(df, "y", "unit", "time", "first_treat")
+        es = result.aggregate("event_study")
+        assert es is not None
+        assert np.isfinite(es.se[~es.is_reference]).all()
 
     def test_clustered_aggregate_all(self):
         """Clustered SE with aggregate='all' should produce finite results."""
         df = self._make_clustered_panel(n_clusters=60, units_per_cluster=3)
-        result = EfficientDiD(cluster="cluster_id").fit(
-            df, "y", "unit", "time", "first_treat", aggregate="all"
-        )
-        assert result.event_study_effects is not None
-        assert result.group_effects is not None
-        for g, d in result.group_effects.items():
-            assert np.isfinite(d["se"])
+        result = EfficientDiD(cluster="cluster_id").fit(df, "y", "unit", "time", "first_treat")
+        es = result.aggregate("event_study")
+        grp = result.aggregate("group")
+        assert es is not None
+        assert grp is not None
+        assert np.isfinite(grp.se).all()
 
     def test_cluster_bootstrap(self, ci_params):
         """Cluster bootstrap should produce finite inference."""
@@ -1561,9 +1563,12 @@ class TestClusterRobustSE:
         """Clustered bootstrap with aggregate='all' should produce finite results."""
         n_boot = ci_params.bootstrap(99)
         df = self._make_clustered_panel(n_clusters=60, units_per_cluster=3)
-        result = EfficientDiD(cluster="cluster_id", n_bootstrap=n_boot, seed=42).fit(
-            df, "y", "unit", "time", "first_treat", aggregate="all"
-        )
+        # Bootstrapped fits keep the fit-time kwarg: post-fit aggregate()
+        # fails closed on n_bootstrap > 0.
+        with pytest.warns(FutureWarning):
+            result = EfficientDiD(cluster="cluster_id", n_bootstrap=n_boot, seed=42).fit(
+                df, "y", "unit", "time", "first_treat", aggregate="all"
+            )
         assert result.event_study_effects is not None
         assert result.group_effects is not None
         for e, d in result.event_study_effects.items():
@@ -1773,12 +1778,12 @@ class TestLastCohortControl:
             effects={3: 2.0, 5: 1.5, 7: 1.0},
         )
         result = EfficientDiD(control_group="last_cohort").fit(
-            df, "y", "unit", "time", "first_treat", aggregate="event_study"
+            df, "y", "unit", "time", "first_treat"
         )
-        assert result.event_study_effects is not None
+        es = result.aggregate("event_study")
+        assert es is not None
         assert 7 not in result.groups
-        for e, d in result.event_study_effects.items():
-            assert np.isfinite(d["effect"])
+        assert np.isfinite(es.att).all()
 
     def test_last_cohort_aggregate_all(self):
         """last_cohort with aggregate='all' should produce finite results."""
@@ -1789,14 +1794,16 @@ class TestLastCohortControl:
             effects={3: 2.0, 5: 1.5, 7: 1.0},
         )
         result = EfficientDiD(control_group="last_cohort").fit(
-            df, "y", "unit", "time", "first_treat", aggregate="all"
+            df, "y", "unit", "time", "first_treat"
         )
-        assert result.event_study_effects is not None
-        assert result.group_effects is not None
+        es = result.aggregate("event_study")
+        grp = result.aggregate("group")
+        assert es is not None
+        assert grp is not None
         assert 7 not in result.groups
-        for g, d in result.group_effects.items():
+        for g, a in zip(grp.label, grp.att):
             assert g != 7
-            assert np.isfinite(d["effect"])
+            assert np.isfinite(a)
 
     def test_last_cohort_bootstrap(self, ci_params):
         """last_cohort with bootstrap should produce finite inference."""
@@ -1821,32 +1828,27 @@ class TestBalanceE:
     def test_balance_e_basic(self):
         """balance_e restricts event study to cohorts present at anchor horizon."""
         df = _make_staggered_panel(n_per_group=80, n_control=80, groups=(3, 5))
-        result = EfficientDiD().fit(
-            df,
-            "y",
-            "unit",
-            "time",
-            "first_treat",
-            aggregate="event_study",
-            balance_e=0,
-        )
-        assert result.event_study_effects is not None
-        for e, d in result.event_study_effects.items():
-            assert np.isfinite(d["effect"])
+        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        es = result.aggregate("event_study", balance_e=0)
+        assert es is not None
+        assert np.isfinite(es.att).all()
 
     def test_balance_e_with_bootstrap(self, ci_params):
         """Bootstrap balance_e should produce finite SEs."""
         n_boot = ci_params.bootstrap(99)
         df = _make_staggered_panel(n_per_group=80, n_control=80, groups=(3, 5))
-        result = EfficientDiD(n_bootstrap=n_boot, seed=42).fit(
-            df,
-            "y",
-            "unit",
-            "time",
-            "first_treat",
-            aggregate="event_study",
-            balance_e=0,
-        )
+        # Bootstrapped fits keep the fit-time kwargs: post-fit aggregate()
+        # fails closed on n_bootstrap > 0.
+        with pytest.warns(FutureWarning):
+            result = EfficientDiD(n_bootstrap=n_boot, seed=42).fit(
+                df,
+                "y",
+                "unit",
+                "time",
+                "first_treat",
+                aggregate="event_study",
+                balance_e=0,
+            )
         assert result.event_study_effects is not None
         for e, d in result.event_study_effects.items():
             if np.isfinite(d["effect"]):
@@ -1914,9 +1916,12 @@ class TestBootstrap:
     def test_bootstrap_with_aggregation(self, ci_params):
         n_boot = ci_params.bootstrap(99)
         df = _make_simple_panel()
-        result = EfficientDiD(n_bootstrap=n_boot, seed=42).fit(
-            df, "y", "unit", "time", "first_treat", aggregate="all"
-        )
+        # Bootstrapped fits keep the fit-time kwarg: post-fit aggregate()
+        # fails closed on n_bootstrap > 0.
+        with pytest.warns(FutureWarning):
+            result = EfficientDiD(n_bootstrap=n_boot, seed=42).fit(
+                df, "y", "unit", "time", "first_treat", aggregate="all"
+            )
         assert result.bootstrap_results is not None
         if result.event_study_effects:
             for e, d in result.event_study_effects.items():
@@ -1948,7 +1953,7 @@ class TestSimulationValidation:
     def test_synthetic_staggered_unbiased(self):
         """Single run at rho=0, verify ATT estimates near true values."""
         df = _make_compustat_dgp(rho=0.0, seed=42)
-        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="all")
+        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
 
         # Check individual ATT(g,t) estimates
         # ATT(5,5) should be near 0.154
@@ -2479,12 +2484,11 @@ class TestCovariatesPTAssumptions:
             "time",
             "first_treat",
             covariates=["x1"],
-            aggregate="event_study",
         )
-        assert result.event_study_effects is not None
-        assert len(result.event_study_effects) > 0
-        for e, eff in result.event_study_effects.items():
-            assert np.isfinite(eff["effect"])
+        es = result.aggregate("event_study")
+        assert es is not None
+        assert len(es.event_time) > 0
+        assert np.isfinite(es.att).all()
 
     def test_covariates_aggregate_group(self):
         df = _make_covariate_panel()
@@ -2495,10 +2499,10 @@ class TestCovariatesPTAssumptions:
             "time",
             "first_treat",
             covariates=["x1"],
-            aggregate="group",
         )
-        assert result.group_effects is not None
-        assert len(result.group_effects) > 0
+        grp = result.aggregate("group")
+        assert grp is not None
+        assert len(grp.label) > 0
 
     def test_covariates_aggregate_all(self):
         df = _make_covariate_panel()
@@ -2509,10 +2513,9 @@ class TestCovariatesPTAssumptions:
             "time",
             "first_treat",
             covariates=["x1"],
-            aggregate="all",
         )
-        assert result.event_study_effects is not None
-        assert result.group_effects is not None
+        assert result.aggregate("event_study") is not None
+        assert result.aggregate("group") is not None
         assert np.isfinite(result.overall_att)
 
 
@@ -2639,15 +2642,18 @@ class TestCovariatesBootstrap:
     def test_covariates_pt_all_bootstrap(self):
         """PT-All + bootstrap + covariates end-to-end."""
         df = _make_covariate_panel(n_units=300)
-        result = EfficientDiD(pt_assumption="all", n_bootstrap=99, seed=42).fit(
-            df,
-            "y",
-            "unit",
-            "time",
-            "first_treat",
-            covariates=["x1"],
-            aggregate="all",
-        )
+        # Bootstrapped fits keep the fit-time kwarg: post-fit aggregate()
+        # fails closed on n_bootstrap > 0.
+        with pytest.warns(FutureWarning):
+            result = EfficientDiD(pt_assumption="all", n_bootstrap=99, seed=42).fit(
+                df,
+                "y",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1"],
+                aggregate="all",
+            )
         assert result.bootstrap_results is not None
         assert result.event_study_effects is not None
         assert result.group_effects is not None
@@ -2971,8 +2977,12 @@ class TestEfficientDiDVcovType:
             first_treat="first_treat",
             aggregate=aggregate,
         )
-        r_default = EfficientDiD().fit(**common)
-        r_explicit = EfficientDiD(vcov_type="hc1").fit(**common)
+        # Subject is bit equality, not the deprecated fit-time shim - keep
+        # all four aggregate arms and silence the FutureWarning.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            r_default = EfficientDiD().fit(**common)
+            r_explicit = EfficientDiD(vcov_type="hc1").fit(**common)
         assert r_default.overall_att == r_explicit.overall_att
         assert r_default.overall_se == r_explicit.overall_se
 
@@ -2989,8 +2999,10 @@ class TestEfficientDiDVcovType:
             first_treat="first_treat",
             aggregate=aggregate,
         )
-        r_default = EfficientDiD(cluster="state").fit(**common)
-        r_explicit = EfficientDiD(cluster="state", vcov_type="hc1").fit(**common)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            r_default = EfficientDiD(cluster="state").fit(**common)
+            r_explicit = EfficientDiD(cluster="state", vcov_type="hc1").fit(**common)
         assert r_default.overall_att == r_explicit.overall_att
         assert r_default.overall_se == r_explicit.overall_se
 
@@ -3009,8 +3021,10 @@ class TestEfficientDiDVcovType:
             aggregate=aggregate,
             survey_design=design,
         )
-        r_default = EfficientDiD().fit(**common)
-        r_explicit = EfficientDiD(vcov_type="hc1").fit(**common)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            r_default = EfficientDiD().fit(**common)
+            r_explicit = EfficientDiD(vcov_type="hc1").fit(**common)
         assert r_default.overall_att == r_explicit.overall_att
         assert r_default.overall_se == r_explicit.overall_se
 
@@ -3034,8 +3048,10 @@ class TestEfficientDiDVcovType:
             survey_design=design,
             aggregate=aggregate,
         )
-        r_default = EfficientDiD().fit(**common)
-        r_explicit = EfficientDiD(vcov_type="hc1").fit(**common)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            r_default = EfficientDiD().fit(**common)
+            r_explicit = EfficientDiD(vcov_type="hc1").fit(**common)
         assert r_default.overall_att == r_explicit.overall_att
         assert r_default.overall_se == r_explicit.overall_se
         # Per-horizon / per-group SE override branches must also agree under
@@ -3067,10 +3083,12 @@ class TestEfficientDiDVcovType:
             first_treat="first_treat",
             aggregate="all",
         )
-        r_default = EfficientDiD(cluster="state", n_bootstrap=n_boot, seed=11).fit(**common)
-        r_explicit = EfficientDiD(
-            cluster="state", n_bootstrap=n_boot, seed=11, vcov_type="hc1"
-        ).fit(**common)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            r_default = EfficientDiD(cluster="state", n_bootstrap=n_boot, seed=11).fit(**common)
+            r_explicit = EfficientDiD(
+                cluster="state", n_bootstrap=n_boot, seed=11, vcov_type="hc1"
+            ).fit(**common)
         assert r_default.bootstrap_results is not None
         assert r_explicit.bootstrap_results is not None
         assert (
@@ -3101,8 +3119,10 @@ class TestEfficientDiDVcovType:
             survey_design=design,
             aggregate="all",
         )
-        r_default = EfficientDiD(n_bootstrap=n_boot, seed=23).fit(**common)
-        r_explicit = EfficientDiD(n_bootstrap=n_boot, seed=23, vcov_type="hc1").fit(**common)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            r_default = EfficientDiD(n_bootstrap=n_boot, seed=23).fit(**common)
+            r_explicit = EfficientDiD(n_bootstrap=n_boot, seed=23, vcov_type="hc1").fit(**common)
         assert r_default.bootstrap_results is not None
         assert r_explicit.bootstrap_results is not None
         assert (
@@ -3196,7 +3216,6 @@ class TestEfficientDiDVcovType:
             time="time",
             first_treat="first_treat",
             covariates=["x1"],
-            aggregate="event_study",
         )
         r_default = EfficientDiD().fit(**common)
         r_explicit = EfficientDiD(vcov_type="hc1").fit(**common)

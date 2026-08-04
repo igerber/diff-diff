@@ -1082,8 +1082,8 @@ edid.fit(
     time: str,
     first_treat: str,
     covariates: list[str] = None,  # Time-invariant unit-level covariates; uses doubly-robust sieve path when non-None
-    aggregate: str = None,         # None, "simple", "event_study", "group", or "all"
-    balance_e: int = None,
+    aggregate: Any = NOT_SUPPLIED, # DEPRECATED (M-023): warns, still works - use results.aggregate() post-fit
+    balance_e: Any = NOT_SUPPLIED, # DEPRECATED (M-120): moves onto results.aggregate(balance_e=)
 ) -> EfficientDiDResults
 ```
 
@@ -1094,8 +1094,12 @@ from diff_diff import EfficientDiD
 
 edid = EfficientDiD(pt_assumption="all")
 results = edid.fit(data, outcome='y', unit='id', time='t',
-                   first_treat='first_treat', aggregate='all')
+                   first_treat='first_treat')
 results.print_summary()
+# Aggregate post-fit (recomputed from retained EIFs; bootstrapped fits raise):
+es = results.aggregate('event_study')       # EventStudyResults container
+grp = results.aggregate('group')            # per-cohort AggregationResult
+print(grp.to_dataframe())
 ```
 
 ### LPDiD
@@ -1761,8 +1765,8 @@ ImputationDiDResults, TwoStageDiDResults, StackedDiDResults, and EfficientDiDRes
 | `overall_t_stat` | `float` | T-statistic |
 | `overall_p_value` | `float` | P-value |
 | `overall_conf_int` | `tuple[float, float]` | CI |
-| `event_study_effects` | `dict[int, dict]` | Event study effects (if aggregate includes event_study; ALWAYS populated for StackedDiD since 3.9 - row M-024) |
-| `group_effects` | `dict` | Group-level effects (if aggregate includes group) |
+| `event_study_effects` | `dict[int, dict]` | Event study effects (if the DEPRECATED fit-time aggregate included event_study; ALWAYS populated for StackedDiD since 3.9 - row M-024; post-fit `aggregate('event_study')` returns a CONTAINER, it does not populate this field) |
+| `group_effects` | `dict` | Group-level effects (if the deprecated fit-time aggregate included group; post-fit `aggregate('group')` returns an AggregationResult container) |
 | `groups` | `list` | Treatment cohorts |
 | `time_periods` | `list` | All time periods |
 | `n_obs` | `int` | Number of observations |
@@ -1780,7 +1784,7 @@ Each event study effect dict contains: `effect`, `se`, `t_stat`, `p_value`, `con
 | `n_clusters` | `int | None` | Number of effective clusters; `None` under survey designs and `None` under EfficientDiD's default unclustered fit |
 | `df_convention` | `str | None` | On the knob-carrying containers (`StackedDiDResults`, `ImputationDiDResults`, `WooldridgeDiDResults`, `LPDiDResults`, `SunAbrahamResults`): the configured df convention (3.9 / M-127); `StackedDiDResults` additionally carries `inference_df` (the overall-ATT df actually used) |
 
-**Methods:** `summary()`, `print_summary()`, `to_dataframe()`, `to_dict()` (flat dict of headline aliases + `vcov_type` + conditional `cluster_name`/`n_clusters`/`n_bootstrap`/`inference_method`)
+**Methods:** `summary()`, `print_summary()`, `to_dataframe()`, `to_dict()` (flat dict of headline aliases + `vcov_type` + conditional `cluster_name`/`n_clusters`/`n_bootstrap`/`inference_method`); `aggregate(type, weights=None, *, balance_e=None)` on the shipped post-fit adopters (`StackedDiDResults` views since 3.9/M-024; `EfficientDiDResults` recomputes from retained EIFs since 3.9/M-023 - bootstrapped EDiD fits raise)
 
 ### ContinuousDiDResults
 

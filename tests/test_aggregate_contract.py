@@ -1110,6 +1110,7 @@ class TestDcdhAggregate:
         assert "CallawaySantAnnaResults" in checked
         assert "ChaisemartinDHaultfoeuilleResults" in checked
         assert "StackedDiDResults" in checked
+        assert "EfficientDiDResults" in checked
 
 
 # --------------------------------------------------------------------------- #
@@ -1463,3 +1464,450 @@ class TestStackedAggregate:
     def test_unsupported_types_fail_closed(self, stacked_fitted, bad):
         with pytest.raises(ValueError, match="Unsupported aggregation type"):
             stacked_fitted.aggregate(bad)
+
+
+# --------------------------------------------------------------------------- #
+# EfficientDiD (rows M-023/M-120): fit(aggregate=/balance_e=) shim + the
+# lazy-KIT recompute aggregate() (the CallawaySantAnna class)
+# --------------------------------------------------------------------------- #
+
+EFFICIENT_KW = dict(outcome="outcome", unit="unit", time="period", first_treat="first_treat")
+
+
+def _efficient_panel(seed=42, n_units=120, n_periods=8):
+    from diff_diff.prep_dgp import generate_staggered_data
+
+    return generate_staggered_data(
+        n_units=n_units, n_periods=n_periods, cohort_periods=[4, 6], seed=seed
+    )
+
+
+def _efficient_clustered_panel(seed=11):
+    # Units nested 3-per-cluster (the sibling test_efficient_did.py shape).
+    d = _efficient_panel(seed=seed)
+    d = d.copy()
+    d["cl"] = (d["unit"] // 3).astype(int)
+    return d
+
+
+def _efficient_survey_panel(seed=5, replicate=False, degenerate=None):
+    """Unit-constant pweights; optionally a JK replicate design.
+
+    degenerate: None | "dropped" (2 all-zero replicate columns ->
+    n_valid = n_replicates - 2) | "undefined" (all but one column all-zero
+    -> n_valid <= 1 -> working df None, the load-bearing degenerate state).
+    """
+    import numpy as np
+
+    d = _efficient_panel(seed=seed).copy()
+    rng = np.random.default_rng(seed)
+    wmap = {u: rng.uniform(0.5, 2.0) for u in d["unit"].unique()}
+    d["w"] = d["unit"].map(wmap)
+    rep_cols = []
+    if replicate:
+        n_rep = 8
+        for r in range(n_rep):
+            col = f"rw{r}"
+            rep_cols.append(col)
+            if degenerate == "dropped" and r >= n_rep - 2:
+                d[col] = 0.0
+            elif degenerate == "undefined" and r >= 1:
+                d[col] = 0.0
+            else:
+                jitter = {u: rng.uniform(0.0, 2.0) for u in d["unit"].unique()}
+                d[col] = d["unit"].map(jitter) * d["w"]
+    return d, rep_cols
+
+
+def _efficient_survey_design(rep_cols=None):
+    from diff_diff import SurveyDesign
+
+    if rep_cols:
+        return SurveyDesign(weights="w", replicate_weights=rep_cols, replicate_method="JK1")
+    return SurveyDesign(weights="w")
+
+
+def _fit_efficient(data, *, est_kw=None, **fit_kw):
+    from diff_diff import EfficientDiD
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return EfficientDiD(**(est_kw or {})).fit(data, **EFFICIENT_KW, **fit_kw)
+
+
+@pytest.fixture(scope="module")
+def efficient_panel():
+    return _efficient_panel()
+
+
+@pytest.fixture(scope="module")
+def efficient_fitted(efficient_panel):
+    """Plain fit - computes NOTHING extra; the kit powers aggregate()."""
+    return _fit_efficient(efficient_panel)
+
+
+@pytest.fixture(scope="module")
+def efficient_fit_time(efficient_panel):
+    """Deprecated fit-time aggregate="all" - the inertness reference."""
+    return _fit_efficient(efficient_panel, aggregate="all")
+
+
+class TestEfficientShim:
+    def test_plain_fit_does_not_warn(self, efficient_panel):
+        from diff_diff import EfficientDiD
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            EfficientDiD().fit(efficient_panel, **EFFICIENT_KW)
+        assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
+
+    def test_aggregate_kwarg_warns_even_at_none(self, efficient_panel):
+        from diff_diff import EfficientDiD
+
+        with pytest.warns(FutureWarning, match=r"EfficientDiD\.fit\(aggregate=\)"):
+            EfficientDiD().fit(efficient_panel, **EFFICIENT_KW, aggregate=None)
+
+    def test_balance_e_kwarg_warns_alone(self, efficient_panel):
+        from diff_diff import EfficientDiD
+
+        with pytest.warns(FutureWarning, match=r"EfficientDiD\.fit\(balance_e=\)"):
+            EfficientDiD().fit(efficient_panel, **EFFICIENT_KW, balance_e=None)
+
+    def test_joint_supply_warns_once_naming_both(self, efficient_panel):
+        from diff_diff import EfficientDiD
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            EfficientDiD().fit(
+                efficient_panel, **EFFICIENT_KW, aggregate="event_study", balance_e=0
+            )
+        fw = [w for w in caught if issubclass(w.category, FutureWarning)]
+        assert len(fw) == 1
+        msg = str(fw[0].message)
+        assert "aggregate=" in msg and "balance_e=" in msg
+
+    def test_unknown_string_still_acts_like_none(self, efficient_panel):
+        # The legacy path performs NO value validation - an unknown string
+        # behaves exactly like a plain fit (documented unchanged behavior;
+        # the post-fit mixin is what fails closed on unknown types).
+        res = _fit_efficient(efficient_panel, aggregate="nonsense")
+        plain = _fit_efficient(efficient_panel)
+        assert res.event_study_effects is None and res.group_effects is None
+        assert res.overall_att == plain.overall_att
+
+    def test_warn_and_still_work(self, efficient_panel, efficient_fitted, efficient_fit_time):
+        # The deprecated path still populates the fit-time surfaces AND
+        # equals the plain fit's post-fit recompute.
+        assert efficient_fit_time.event_study_effects is not None
+        assert efficient_fit_time.group_effects is not None
+        es = efficient_fitted.aggregate("event_study")
+        for e, row in efficient_fit_time.event_study_effects.items():
+            i = list(es.event_time).index(e)
+            np.testing.assert_allclose(row["effect"], es.att[i], rtol=1e-14)
+
+
+class TestEfficientAggregate:
+    def _assert_es_matches_fit_time(self, res, fit_time, balance_e=None, skip_reference=False):
+        es = res.aggregate("event_study", balance_e=balance_e)
+        native = fit_time.event_study_effects
+        ref_marked = set()
+        if skip_reference:
+            ref_marked = {int(e) for e, m in zip(es.event_time, es.is_reference) if m}
+        assert sorted(int(e) for e in es.event_time) == sorted(native)
+        for e, row in native.items():
+            i = list(es.event_time).index(e)
+            if int(e) in ref_marked:
+                # The container's reference normalization NaNs se/t/p/CI/n
+                # and forces att 0.0 on the marked row - compare the NATIVE
+                # dict instead (its anchor must be an exact mechanical zero).
+                assert row["effect"] == 0.0 and row["se"] == 0.0
+                assert es.att[i] == 0.0
+                assert np.isnan(es.se[i]) and np.isnan(es.n[i])
+                continue
+            np.testing.assert_allclose(row["effect"], es.att[i], rtol=1e-14)
+            np.testing.assert_allclose(row["se"], es.se[i], rtol=1e-14)
+            if np.isfinite(row["p_value"]):
+                np.testing.assert_allclose(row["p_value"], es.p_value[i], rtol=1e-14)
+        return es
+
+    def test_event_study_inertness(self, efficient_fitted, efficient_fit_time):
+        self._assert_es_matches_fit_time(efficient_fitted, efficient_fit_time)
+
+    def test_group_inertness(self, efficient_fitted, efficient_fit_time):
+        grp = efficient_fitted.aggregate("group")
+        for i, g in enumerate(grp.label):
+            row = efficient_fit_time.group_effects[g]
+            np.testing.assert_allclose(row["effect"], grp.att[i], rtol=1e-14)
+            np.testing.assert_allclose(row["se"], grp.se[i], rtol=1e-14)
+        assert grp.n_kind == "cells"
+        assert grp.weight is None
+
+    def test_simple_relay_bit_exact(self, efficient_fitted):
+        simple = efficient_fitted.aggregate("simple")
+        assert simple.att[0] == efficient_fitted.overall_att
+        assert simple.se[0] == efficient_fitted.overall_se
+        assert simple.t_stat[0] == efficient_fitted.overall_t_stat
+        assert simple.p_value[0] == efficient_fitted.overall_p_value
+        assert simple.conf_int_lower[0] == efficient_fitted.overall_conf_int[0]
+        assert simple.conf_int_upper[0] == efficient_fitted.overall_conf_int[1]
+        assert simple.target[0] == "att"
+        # Disjoint treated+control total (last_cohort trimming reassigns
+        # BEFORE the counts, so a true total exists - unlike StackedDiD).
+        assert simple.n[0] == float(
+            efficient_fitted.n_treated_units + efficient_fitted.n_control_units
+        )
+        assert simple.n_kind == "units"
+        # Plain fit: the kit's post-overall df snapshot is None -> NaN df.
+        assert np.isnan(simple.df[0])
+
+    @pytest.mark.parametrize("balance_e", [0, 1, 2])
+    def test_balance_e_inertness(self, efficient_panel, efficient_fitted, balance_e):
+        fit_time = _fit_efficient(efficient_panel, aggregate="event_study", balance_e=balance_e)
+        self._assert_es_matches_fit_time(efficient_fitted, fit_time, balance_e=balance_e)
+
+    def test_cluster_inertness(self):
+        d = _efficient_clustered_panel()
+        plain = _fit_efficient(d, est_kw={"cluster": "cl"})
+        fit_time = _fit_efficient(d, est_kw={"cluster": "cl"}, aggregate="all")
+        self._assert_es_matches_fit_time(plain, fit_time)
+        grp = plain.aggregate("group")
+        for i, g in enumerate(grp.label):
+            np.testing.assert_allclose(fit_time.group_effects[g]["se"], grp.se[i], rtol=1e-14)
+
+    def test_survey_tsl_inertness_and_df(self):
+        d, _ = _efficient_survey_panel()
+        sd = _efficient_survey_design()
+        plain = _fit_efficient(d, survey_design=sd)
+        fit_time = _fit_efficient(d, survey_design=sd, aggregate="all")
+        es = self._assert_es_matches_fit_time(plain, fit_time)
+        # TSL survey: the post-overall snapshot is the finite survey df and
+        # is provenance-exact on every row.
+        assert es.df_survey == plain._aggregation_kit.bookkeeping["df_survey"]
+        simple = plain.aggregate("simple")
+        assert simple.df[0] == plain._aggregation_kit.bookkeeping["df_survey"]
+        grp = plain.aggregate("group")
+        # Non-circular oracle: safe_inference(att, se, df=row.df) reproduces
+        # each stored group row's inference (a stale df would mismatch p).
+        from diff_diff.utils import safe_inference
+
+        for i in range(len(grp.label)):
+            t, p, ci = safe_inference(
+                float(grp.att[i]),
+                float(grp.se[i]),
+                alpha=plain.alpha,
+                df=float(grp.df[i]),
+            )
+            np.testing.assert_allclose(t, grp.t_stat[i], rtol=1e-12)
+            np.testing.assert_allclose(p, grp.p_value[i], rtol=1e-12)
+
+    def test_replicate_inertness_healthy_and_dropped(self):
+        from diff_diff.utils import safe_inference
+
+        for degenerate, expected_df in ((None, 7.0), ("dropped", 5.0)):
+            d, rep_cols = _efficient_survey_panel(replicate=True, degenerate=degenerate)
+            sd = _efficient_survey_design(rep_cols)
+            plain = _fit_efficient(d, survey_design=sd)
+            fit_time = _fit_efficient(d, survey_design=sd, aggregate="all")
+            # Inertness against the SAME object's stored fit-time surface.
+            self._assert_es_matches_fit_time(plain, fit_time)
+            grp = plain.aggregate("group")
+            # Cross-FIT df contrast: all group rows share n_valid - 1.
+            assert set(np.unique(grp.df[np.isfinite(grp.df)])) <= {expected_df}
+            for i in range(len(grp.label)):
+                if not np.isfinite(grp.df[i]):
+                    continue
+                t, p, ci = safe_inference(
+                    float(grp.att[i]),
+                    float(grp.se[i]),
+                    alpha=plain.alpha,
+                    df=float(grp.df[i]),
+                )
+                np.testing.assert_allclose(p, grp.p_value[i], rtol=1e-12)
+
+    def test_replicate_undefined_df_degenerate(self):
+        # n_valid <= 1: the working df degenerates to None mid-fit. The
+        # post-overall snapshot carries that state; the container's scalar
+        # df_survey resolves to the 0.0 replicate-undefined sentinel (the
+        # shared resolver ladder), NOT the raw survey_metadata value the
+        # is-not-None guard leaves finite - this arm is the discriminator
+        # for the carrier's metadata copy.
+        d, rep_cols = _efficient_survey_panel(replicate=True, degenerate="undefined")
+        sd = _efficient_survey_design(rep_cols)
+        plain = _fit_efficient(d, survey_design=sd)
+        assert plain._aggregation_kit.bookkeeping["df_survey"] is None
+        es = plain.aggregate("event_study")
+        assert es.df_survey == 0.0
+        fit_time = _fit_efficient(d, survey_design=sd, aggregate="all")
+        self._assert_es_matches_fit_time(plain, fit_time)
+
+    def test_pt_post_inertness_and_reference(self, efficient_panel):
+        plain = _fit_efficient(efficient_panel, est_kw={"pt_assumption": "post"})
+        fit_time = _fit_efficient(
+            efficient_panel, est_kw={"pt_assumption": "post"}, aggregate="all"
+        )
+        es = self._assert_es_matches_fit_time(plain, fit_time, skip_reference=True)
+        # Exactly one is_reference row, at the materialized mechanical anchor.
+        marked = [int(e) for e, m in zip(es.event_time, es.is_reference) if m]
+        assert marked == [-1]
+        # The NATIVE anchor is an exact mechanical zero BEFORE marking (the
+        # explicit-reference branch has no value check; post_init would
+        # silently rewrite a nonzero anchor, so the native pin is the guard).
+        assert fit_time.event_study_effects[-1]["effect"] == 0.0
+        assert fit_time.event_study_effects[-1]["se"] == 0.0
+        assert fit_time.event_study_effects[-1]["n_groups"] > 0
+
+    def test_pt_post_absent_anchor_not_synthesized(self):
+        # Single cohort baselined at the panel's first period: the anchor
+        # cell is never estimated, the membership gate returns None, and the
+        # container has NO reference row - nothing synthesized (the
+        # no-fabrication rule; results_base synthesis branch NOT taken).
+        import pandas as pd
+
+        rng = np.random.default_rng(3)
+        rows = []
+        for u in range(40):
+            coh = 1 if u < 20 else 0
+            for t in range(6):
+                rows.append(
+                    {
+                        "unit": u,
+                        "period": t,
+                        "first_treat": coh,
+                        "outcome": rng.normal() + (1.5 if coh == 1 and t >= 1 else 0.0),
+                    }
+                )
+        d = pd.DataFrame(rows)
+        plain = _fit_efficient(d, est_kw={"pt_assumption": "post"})
+        assert plain.reference_period is None
+        es = plain.aggregate("event_study")
+        assert not es.is_reference.any()
+        assert -1 not in {int(e) for e in es.event_time}
+
+    def test_pt_all_no_reference_row(self, efficient_fitted):
+        assert efficient_fitted.reference_period is None
+        es = efficient_fitted.aggregate("event_study")
+        assert not es.is_reference.any()
+
+    def test_retention_no_dataframe_no_unit_labels(self, efficient_panel):
+        import pickle
+
+        import pandas as pd
+
+        d = efficient_panel.copy()
+        sentinel = {u: f"SENTINEL-ID-{u}@example.invalid" for u in d["unit"].unique()}
+        d["unit"] = d["unit"].map(sentinel)
+        res = _fit_efficient(d)
+        kit = res._aggregation_kit
+        assert kit is not None
+        for v in kit.bookkeeping.values():
+            assert not isinstance(v, pd.DataFrame)
+        assert not isinstance(kit.influence, pd.DataFrame)
+        blob = pickle.dumps(res)
+        assert b"SENTINEL-ID" not in blob
+        # Pickle round-trip: aggregate() still works and matches.
+        res2 = pickle.loads(blob)
+        np.testing.assert_allclose(
+            res.aggregate("group").att, res2.aggregate("group").att, rtol=1e-15
+        )
+
+    def test_immutability(self, efficient_fitted):
+        MUTATED = ("event_study_effects", "group_effects")
+        before = {f: getattr(efficient_fitted, f) for f in MUTATED}
+        for level in ("event_study", "group", "simple", "event_study", "group"):
+            efficient_fitted.aggregate(level)
+        for f in MUTATED:
+            assert getattr(efficient_fitted, f) is before[f]
+        # Repeated calls agree (no kit mutation between calls).
+        a = efficient_fitted.aggregate("group")
+        b = efficient_fitted.aggregate("group")
+        np.testing.assert_array_equal(a.att, b.att)
+        np.testing.assert_array_equal(a.df, b.df)
+
+    def test_survey_metadata_not_mutated(self):
+        d, rep_cols = _efficient_survey_panel(replicate=True)
+        sd = _efficient_survey_design(rep_cols)
+        res = _fit_efficient(d, survey_design=sd)
+        before = res.survey_metadata.df_survey
+        res.aggregate("event_study")
+        res.aggregate("group")
+        assert res.survey_metadata.df_survey == before
+
+    def test_bootstrap_fails_closed_all_levels(self, efficient_panel):
+        res = _fit_efficient(efficient_panel, est_kw={"n_bootstrap": 20, "seed": 1})
+        for level in ("simple", "event_study", "group"):
+            with pytest.raises(NotImplementedError, match="bootstrap"):
+                res.aggregate(level)
+
+    def test_bootstrap_fit_time_group_rows_clear_df_used(self, efficient_panel):
+        res = _fit_efficient(
+            efficient_panel,
+            est_kw={"n_bootstrap": 20, "seed": 1},
+            aggregate="group",
+        )
+        for row in res.group_effects.values():
+            assert row.get("df_used") is None
+
+    def test_weights_rejected(self, efficient_fitted):
+        with pytest.raises(ValueError, match="does not accept a weights selector"):
+            efficient_fitted.aggregate("event_study", weights="cell")
+
+    @pytest.mark.parametrize("level", ["simple", "group"])
+    def test_balance_e_rejected_on_non_event_study(self, efficient_fitted, level):
+        with pytest.raises(ValueError, match="balance_e is not used"):
+            efficient_fitted.aggregate(level, balance_e=1)
+
+    @pytest.mark.parametrize("bad", ["calendar", "all", "nonsense"])
+    def test_unsupported_types_fail_closed(self, efficient_fitted, bad):
+        with pytest.raises(ValueError, match="Unsupported aggregation type"):
+            efficient_fitted.aggregate(bad)
+
+    def test_legacy_no_kit_raises(self, efficient_fitted):
+        import copy
+
+        legacy = copy.copy(efficient_fitted)
+        object.__setattr__(legacy, "_aggregation_kit", None)
+        with pytest.raises(ValueError, match="aggregation kit"):
+            legacy.aggregate("event_study")
+
+    def test_public_influence_functions_isolated_from_kit(self, efficient_panel):
+        # store_eif=True exposes the PUBLIC influence_functions diagnostic;
+        # it must be an independent COPY of the kit's canonical EIF payload,
+        # else a user mutation of the public field silently corrupts
+        # recomputed post-fit SEs/p-values/CIs (review pin, M-023).
+        res = _fit_efficient(efficient_panel, store_eif=True)
+        kit = res._aggregation_kit
+        assert res.influence_functions is not kit.influence
+        for gt, arr in res.influence_functions.items():
+            assert not np.shares_memory(arr, kit.influence[gt])
+        before = res.aggregate("event_study").se.copy()
+        first = next(iter(res.influence_functions))
+        res.influence_functions[first][:] = 0.0
+        after = res.aggregate("event_study").se
+        np.testing.assert_array_equal(before, after)
+
+    def test_zero_row_balance_e_surface(self, efficient_fitted):
+        # An anchor no cohort reaches: warns, returns a LEGAL 0-row surface.
+        with pytest.warns(UserWarning, match="anchor horizon"):
+            es = efficient_fitted.aggregate("event_study", balance_e=99)
+        assert len(es.event_time) == 0
+
+
+class TestEfficientInternalCallers:
+    def test_hausman_pretest_emits_no_future_warning(self, efficient_panel):
+        # hausman_pretest refits internally; its fit_kwargs no longer pass
+        # aggregate=, so the shim must not fire (regression pin for the
+        # internal-caller cleanup - without it a re-added kwarg would warn
+        # spuriously from every hausman_pretest / DiagnosticReport._pt_hausman
+        # call with no test failing).
+        from diff_diff import EfficientDiD
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            EfficientDiD.hausman_pretest(
+                efficient_panel,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+            )
+        assert [w for w in caught if issubclass(w.category, FutureWarning)] == []

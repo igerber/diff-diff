@@ -8,6 +8,7 @@ These tests validate the estimator against published results from
 "Efficient Difference-in-Differences and Event Study Estimators."
 """
 
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -95,6 +96,21 @@ def _compute_es_avg(result):
     return np.mean(list(es.values()))
 
 
+def _attach_post_fit_event_study(res):
+    """Recompute the event-study surface post-fit and hand it to the
+    mapping-consuming helpers/assertions in this module (``_compute_es_avg``
+    and the dict-iterating tests). Post-fit ``aggregate()`` recomputes from
+    the retained kit and relays the same numbers as the deprecated fit-time
+    ``aggregate=`` surface.
+    """
+    es = res.aggregate("event_study")
+    res.event_study_effects = {
+        int(e): {"effect": float(a), "se": float(s)}
+        for e, a, s in zip(es.event_time, es.att, es.se)
+    }
+    return res
+
+
 _TRUE_ES_AVG_COMPUSTAT = true_es_avg()
 
 
@@ -116,8 +132,8 @@ def _run_mc_simulation(n_sims, rho, seed=1000, also_cs=False):
             unit="unit",
             time="time",
             first_treat="first_treat",
-            aggregate="all",
         )
+        _attach_post_fit_event_study(res)
         edid_estimates.append(_compute_es_avg(res))
         edid_overall_att.append(res.overall_att)
         edid_overall_se.append(res.overall_se)
@@ -125,14 +141,18 @@ def _run_mc_simulation(n_sims, rho, seed=1000, also_cs=False):
 
         if also_cs:
             cs = CallawaySantAnna(control_group="never_treated")
-            cs_res = cs.fit(
-                data,
-                outcome="y",
-                unit="unit",
-                time="time",
-                first_treat="first_treat",
-                aggregate="event_study",
-            )
+            # CS fit-time aggregate= is deprecated too; migrating CS is out
+            # of scope here, so silence its shim warning.
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", FutureWarning)
+                cs_res = cs.fit(
+                    data,
+                    outcome="y",
+                    unit="unit",
+                    time="time",
+                    first_treat="first_treat",
+                    aggregate="event_study",
+                )
             cs_estimates_list.append(_compute_es_avg(cs_res))
 
     return {
@@ -161,14 +181,14 @@ def hrs_data():
 def edid_hrs_result(hrs_data):
     """Fit EDiD on HRS data (shared across tests)."""
     edid = EfficientDiD(pt_assumption="all")
-    return edid.fit(
+    res = edid.fit(
         hrs_data,
         outcome="outcome",
         unit="unit",
         time="time",
         first_treat="first_treat",
-        aggregate="all",
     )
+    return _attach_post_fit_event_study(res)
 
 
 class TestHRSReplication:

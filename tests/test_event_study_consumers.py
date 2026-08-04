@@ -1917,3 +1917,37 @@ class TestStackedContainerAdmission:
             )
         ssurf = sres.aggregate("event_study")
         assert ssurf.df_survey == float(sres.survey_metadata.df_survey)
+
+
+# --------------------------------------------------------------------------- #
+# EfficientDiD containers (rows M-023/M-093): REJECTED BY DESIGN
+# --------------------------------------------------------------------------- #
+
+
+class TestEfficientContainerRejection:
+    """A REAL EfficientDiD post-fit container is rejected by both consumers.
+
+    The pinned hand-built rejection (test_non_cs_e0_source_rejected) cannot
+    detect a missing message edit - "EfficientDiDResults" already matches
+    today's messages via the got source={...!r} interpolation - so this test
+    pins the NEW by-design clause text on a genuine aggregate() container.
+    """
+
+    def test_real_efficient_container_rejected_by_design(self):
+        from diff_diff import EfficientDiD
+        from diff_diff.prep_dgp import generate_staggered_data
+
+        d = generate_staggered_data(n_units=80, n_periods=8, cohort_periods=[4, 6], seed=9)
+        res = EfficientDiD().fit(
+            d,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+        )
+        surface = res.aggregate("event_study")
+        assert surface.source == "EfficientDiDResults"
+        with pytest.raises(TypeError, match="rejected BY DESIGN"):
+            compute_honest_did(surface, M=1.0)
+        with pytest.raises(TypeError, match="rejected BY DESIGN"):
+            compute_pretrends_power(surface, M=1.0)

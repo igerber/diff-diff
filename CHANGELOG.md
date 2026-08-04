@@ -8,6 +8,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **EfficientDiD post-fit `aggregate()` via a lazy recompute kit**
+  (v4 program 2(b) PR-3a; ledger row [M-023] flips to shimmed, new row
+  [M-120] claims the reserved balance_e slot, rows [M-092]/[M-093]
+  amended).
+  - `EfficientDiDResults.aggregate('event_study'/'group'/'simple',
+    balance_e=)` RECOMPUTES the aggregations post-fit from a retained
+    `AggregationKit` (per-(g,t) EIF dict + O(n_units) bookkeeping +
+    the post-overall `df_survey` snapshot) - no refit, no estimator
+    ref; post-fit results match the fit-time surfaces at 1e-14 across
+    plain/cluster/survey-TSL/replicate fits and every `balance_e`.
+    `aggregate('simple')` relays the stored overall row bit-exact
+    (`target="att"`, `n` = disjoint treated+control units, `df` = the
+    provenance-exact snapshot); `aggregate('group')` relays per-row
+    `df_used` provenance captured at each row's `safe_inference` call.
+  - `fit(aggregate=, balance_e=)` is DEPRECATED (3.9, removed in 4.0):
+    supplying either (any value, `None` included) emits one joint
+    FutureWarning; the deprecated path still computes and stores the
+    requested surfaces exactly as before. Unknown `aggregate` strings
+    keep their silent legacy no-op on the deprecated path; the post-fit
+    successor fails closed on unknown types (behavior improvement).
+    `EfficientDiD`'s balance rule is the anchor-horizon rule - the
+    same rule CallawaySantAnna uses.
+  - Bootstrapped fits (`n_bootstrap > 0`) fail closed on `aggregate()`
+    at every level (CS parity); the deprecated fit-time aggregation
+    remains the supported bootstrapped route, and its group rows now
+    clear the analytical `df_used` provenance under the bootstrap
+    override. Exact post-fit bootstrap replay is a tracked TODO row.
+  - The aggregation methods moved verbatim to the new
+    `diff_diff/efficient_did_aggregation.py` (importable by both the
+    estimator and the results module); `efficient_did.py` drops below
+    the 2000-line monitoring band. The kit always retains the EIF dict:
+    `store_eif` now governs only the public `influence_functions` field
+    (memory-contract change; a kit opt-out knob is a DEFERRED row).
+  - PT-Post reference provenance: the new membership-gated
+    `EfficientDiDResults.reference_period` property (SunAbraham rule -
+    never synthesized when the anchor cell was not estimated) marks the
+    materialized mechanical zero anchor `is_reference` in the
+    `aggregate('event_study')` container and corrects
+    `plot_event_study`'s inferred reference (previously the `-1`
+    fallback) on PT-Post `anticipation>0` fits. PT-All containers stay
+    reference-free (every row is a genuine estimate).
+  - honest/pretrends container admission is NOT widened to
+    EfficientDiD-sourced containers BY DESIGN (no joint event-study
+    covariance; both terminal TypeErrors now state the rejection
+    explicitly - see the REGISTRY EfficientDiD Note and row [M-093]).
+  - `hausman_pretest` no longer passes the deprecated `aggregate=`
+    internally (zero FutureWarnings), and the practitioner guidance for
+    EfficientDiD gains a post-fit aggregation step with a bootstrap
+    carve-out.
 - **StackedDiD post-fit `aggregate()` + honest/pretrends container
   admission** (v4 program 2(b) PR-2; ledger row [M-024] flips to
   shimmed, row [M-093] amended a second time).

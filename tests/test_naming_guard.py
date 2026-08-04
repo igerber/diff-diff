@@ -48,7 +48,7 @@ C. CONSUMER COVERAGE (section 8 rule 11) - for each enforceable rename row,
    FUNCTION rows additionally get a bare-call AST lane (an unqualified
    ``bacon_decompose(...)`` call has no dot, no quotes, no ``=``).
    Accepted limitations: rows whose old token equals the new token (the
-   API-move family M-020..M-027, M-084, M-117) are skipped - token lanes
+   API-move family M-020..M-027, M-084, M-117, M-120) are skipped - token lanes
    cannot distinguish old surface from new; their known readers are recorded
    in ``code_refs`` anyway. ``param-value`` rows (M-086) are excluded the same
    way. Rows whose ``deprecated_in`` window has not opened defer via the

@@ -745,3 +745,39 @@ class TestPlotEventStudyIntegration:
 
         assert ax is not None
         plt.close()
+
+
+class TestEfficientDiDPlotReference:
+    """M-023: the membership-gated ``reference_period`` property corrects the
+    plotted reference on PT-Post EfficientDiD fits.
+
+    Before M-023 the native extraction fell back to ``-1`` for EDiD; under
+    ``pt_assumption="post"`` with ``anticipation=1`` the materialized
+    mechanical anchor sits at ``e = -2``, and the property now feeds the
+    extractor the true value.  PT-All fits have no anchor (the property is
+    None) and keep the legacy ``-1`` fallback unchanged.
+    """
+
+    def test_pt_post_anticipation_reference_shifts(self):
+        pytest.importorskip("matplotlib")
+        import warnings
+
+        from diff_diff import EfficientDiD
+        from diff_diff.prep_dgp import generate_staggered_data
+        from diff_diff.visualization._event_study import _extract_plot_data
+
+        d = generate_staggered_data(n_units=80, n_periods=8, cohort_periods=[4, 6], seed=9)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            res = EfficientDiD(pt_assumption="post", anticipation=1).fit(
+                d,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                aggregate="event_study",
+            )
+        assert res.reference_period == -2
+        extracted = _extract_plot_data(res, None, None, None, None)
+        assert extracted[5] == -2  # reference_period slot
+        assert extracted[6] is True  # inferred, not caller-supplied

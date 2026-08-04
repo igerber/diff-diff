@@ -862,3 +862,31 @@ class TestLLMsFullLPDiDCoverage:
                 f"LPDiD.fit() block in llms-full.txt is missing the real public "
                 f"parameter {param!r} (adding a public param requires updating the guide)."
             )
+
+
+class TestLLMsFullEfficientDiDShimLine:
+    """M-023/M-120: the documented EfficientDiD fit signature must carry the
+    sentinel defaults + deprecation markers (the M-024 precedent) - no other
+    pin covers these lines, so they could silently go stale."""
+
+    def _efficient_section(self):
+        text = get_llm_guide("full")
+        start = text.index("### EfficientDiD")
+        nxt = text.index("\n### ", start + 1)
+        return text[start:nxt]
+
+    def test_llms_full_efficient_fit_aggregate_line_documents_shim(self):
+        section = self._efficient_section()
+        fit_start = section.index("edid.fit(")
+        fit_block = section[fit_start : section.index("\n)", fit_start)]
+        agg_line = next(
+            line for line in fit_block.splitlines() if line.strip().startswith("aggregate")
+        )
+        assert "NOT_SUPPLIED" in agg_line
+        assert "DEPRECATED (M-023)" in agg_line
+        assert "results.aggregate()" in agg_line
+        bal_line = next(
+            line for line in fit_block.splitlines() if line.strip().startswith("balance_e")
+        )
+        assert "NOT_SUPPLIED" in bal_line
+        assert "DEPRECATED (M-120)" in bal_line

@@ -12,6 +12,7 @@
    .. autosummary::
 
       ~EfficientDiDResults.__init__
+      ~EfficientDiDResults.aggregate
       ~EfficientDiDResults.print_summary
       ~EfficientDiDResults.summary
       ~EfficientDiDResults.to_dataframe
@@ -47,6 +48,7 @@
       ~EfficientDiDResults.p_value
       ~EfficientDiDResults.pt_assumption
       ~EfficientDiDResults.ratio_clip
+      ~EfficientDiDResults.reference_period
       ~EfficientDiDResults.se
       ~EfficientDiDResults.seed
       ~EfficientDiDResults.sieve_criterion

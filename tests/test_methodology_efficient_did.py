@@ -407,13 +407,13 @@ class TestNoCovOmegaGram:
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            r_gram = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="all")
+            r_gram = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
         orig = ed_mod._omega_star_nocov_gram
         ed_mod._omega_star_nocov_gram = compute_omega_star_nocov
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                r_loop = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="all")
+                r_loop = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
         finally:
             ed_mod._omega_star_nocov_gram = orig
         assert r_gram.overall_att == pytest.approx(r_loop.overall_att, rel=1e-10)
@@ -1114,7 +1114,7 @@ class TestCovariateSieveOutcomeRegression:
             warnings.simplefilter("ignore")
             res = EfficientDiD(
                 pt_assumption="all", control_group="last_cohort", anticipation=1
-            ).fit(df, "y", "unit", "time", "first_treat", covariates=["x1"], aggregate="all")
+            ).fit(df, "y", "unit", "time", "first_treat", covariates=["x1"])
         # anticipation=1, last_g=7 -> effective last cohort at 6 -> time_periods 1..5
         assert max(res.time_periods) == 5
         assert 7 not in res.groups  # last cohort reclassified as pseudo-control
@@ -1153,12 +1153,12 @@ class TestCovariateSieveOutcomeRegression:
                 warnings.simplefilter("ignore")
                 a_sieve = (
                     EfficientDiD(pt_assumption="all")
-                    .fit(df, "y", "unit", "time", "first_treat", covariates=["x1"], aggregate="all")
+                    .fit(df, "y", "unit", "time", "first_treat", covariates=["x1"])
                     .overall_att
                 )
                 a_linear = (
                     EfficientDiD(pt_assumption="all", sieve_k_max=1)
-                    .fit(df, "y", "unit", "time", "first_treat", covariates=["x1"], aggregate="all")
+                    .fit(df, "y", "unit", "time", "first_treat", covariates=["x1"])
                     .overall_att
                 )
             if np.isfinite(a_sieve):
@@ -1386,7 +1386,6 @@ class TestSurveyZeroWeightInvariance:
                     "first_treat",
                     covariates=["x1"],
                     survey_design=SurveyDesign(weights="w"),
-                    aggregate="all",
                 )
 
         r_filtered = fit(base)
@@ -1467,7 +1466,6 @@ class TestSurveyZeroWeightInvariance:
                     "first_treat",
                     covariates=["x1"],
                     survey_design=SurveyDesign(weights="w"),
-                    aggregate="all",
                 )
 
         r_filtered = fit(base)

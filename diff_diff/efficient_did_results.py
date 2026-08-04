@@ -5,14 +5,17 @@ Follows the CallawaySantAnnaResults pattern: dataclass with summary(),
 to_dataframe(), and significance properties.
 """
 
+import dataclasses
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
+from diff_diff.aggregation import AggregationMixin, AggregationResult
+from diff_diff.efficient_did_aggregation import _EfficientAggregationMixin
 from diff_diff.results import _format_survey_block, _get_significance_stars
-from diff_diff.results_base import BaseResults
+from diff_diff.results_base import BaseResults, build_event_study_surface
 
 if TYPE_CHECKING:
     from diff_diff.efficient_did_bootstrap import EDiDBootstrapResults
@@ -52,8 +55,38 @@ class HausmanPretestResult:
         )
 
 
+class _EDiDKitAggregator(_EfficientAggregationMixin):
+    """Throwaway host for post-fit EIF re-aggregation (M-023).
+
+    Exposes exactly the five attributes the extracted
+    ``_EfficientAggregationMixin`` methods read (its typed host contract):
+    ``alpha``, ``anticipation``, ``_survey_df``, ``_unit_resolved_survey``,
+    ``_unit_level_weights``.  A FRESH instance is built per ``aggregate()``
+    call, which is what contains the one mutation the mixin performs -
+    ``_compute_survey_eif_se`` writes ``self._survey_df`` when a degenerate
+    replicate design drops replicates - on the throwaway rather than the
+    retained kit, preserving the aggregate() immutability contract.  This
+    is also what keeps ``aggregate()`` off an ``_estimator_ref`` (the CS
+    ``_KitAggregator`` precedent).
+    """
+
+    def __init__(
+        self,
+        alpha: float,
+        anticipation: int,
+        survey_df: Optional[float],
+        resolved_survey_unit: Optional[Any],
+        unit_level_weights: Optional["np.ndarray"],
+    ) -> None:
+        self.alpha = alpha
+        self.anticipation = anticipation
+        self._survey_df = survey_df
+        self._unit_resolved_survey = resolved_survey_unit
+        self._unit_level_weights = unit_level_weights
+
+
 @dataclass
-class EfficientDiDResults(BaseResults):
+class EfficientDiDResults(BaseResults, AggregationMixin):
     """
     Results from Efficient DiD (Chen, Sant'Anna & Xie 2025) estimation.
 
@@ -120,6 +153,9 @@ class EfficientDiDResults(BaseResults):
         ``{(g, t): ndarray(n_units,)}`` — per-unit EIF values for each
         group-time cell.  Only populated when ``store_eif=True`` in
         :meth:`~EfficientDiD.fit` (used internally by ``hausman_pretest``).
+        Since 3.9 (row M-023) the private aggregation kit ALWAYS retains
+        the same per-(g,t) EIF dict to power post-fit
+        :meth:`aggregate` — ``store_eif`` governs only this public field.
     bootstrap_results : EDiDBootstrapResults, optional
         Bootstrap inference results.
     estimation_path : str
@@ -191,6 +227,15 @@ class EfficientDiDResults(BaseResults):
     omega_ridge: float = 0.0
     # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
     survey_metadata: Optional[Any] = field(default=None)
+    # Post-fit aggregation kit (M-023) - declared LAST: the generated
+    # __init__'s positional indexes are public API (CS precedent).
+    _aggregation_kit: Optional[Any] = field(default=None, repr=False, compare=False)
+
+    # Post-fit aggregate() hooks (M-023). Plain class attributes (no
+    # annotation) so they never enter dataclasses.fields; the mixin's
+    # ClassVar-annotated defaults document the contract. balance_e keeps
+    # the mixin default ("event_study",) - CS precedent, do not redeclare.
+    _AGGREGATE_SUPPORTED = ("simple", "event_study", "group")
 
     # --- Inference-field aliases (balance/external-adapter compatibility) ---
     @property
@@ -212,6 +257,178 @@ class EfficientDiDResults(BaseResults):
     @property
     def t_stat(self) -> float:
         return self.overall_t_stat
+
+    # --- Post-fit aggregation (M-023) -----------------------------------
+
+    @property
+    def reference_period(self) -> Optional[int]:
+        """Reference event time of the materialized PT-Post anchor, or None.
+
+        MEMBERSHIP-GATED (the SunAbraham rule): returns
+        ``-1 - anticipation`` only when this fit ran under
+        ``pt_assumption="post"`` AND that event time is actually present in
+        ``event_study_effects`` — under PT-Post the per-cohort baseline
+        cell ``(g, g-1-anticipation)`` is estimated as a mechanical zero
+        whenever it is not the panel's first period, and the builder marks
+        that materialized row ``is_reference``.  When the anchor cell was
+        never estimated (every surviving cohort baselined at the first
+        period) the property is None, so no reference row is ever
+        synthesized.  Under ``pt_assumption="all"`` there is no reference
+        row (universal first-period baseline; every row is a genuine
+        estimate) and the property is None.
+        """
+        if self.pt_assumption != "post":
+            return None
+        if not self.event_study_effects:
+            return None
+        ref = -1 - int(self.anticipation)
+        return ref if ref in self.event_study_effects else None
+
+    def _aggregate_compute(
+        self, level: str, *, weights: Optional[str], balance_e: Optional[int]
+    ) -> Any:
+        kit = self._aggregation_kit
+        if kit is None:
+            raise ValueError(
+                "This EfficientDiDResults carries no aggregation kit - it is "
+                "attached by EfficientDiD.fit(), so a result unpickled from "
+                "an older release will not have one. Re-fit with "
+                "diff-diff >= 3.9 to aggregate post-fit."
+            )
+        if self.bootstrap_results is not None:
+            raise NotImplementedError(
+                "aggregate() is not yet available on a bootstrapped fit "
+                "(n_bootstrap > 0): the per-horizon bootstrap draws are not "
+                "retained, so post-fit re-aggregation cannot replay "
+                "percentile inference and analytical inference would "
+                "misrepresent the fit. Re-fit with the aggregation you "
+                "need, or use n_bootstrap=0."
+            )
+        bk = dict(kit.bookkeeping)
+        agg = _EDiDKitAggregator(
+            alpha=kit.alpha,
+            anticipation=kit.anticipation,
+            survey_df=bk["df_survey"],
+            resolved_survey_unit=bk["resolved_survey_unit"],
+            unit_level_weights=bk["unit_level_weights"],
+        )
+        if level == "simple":
+            return self._aggregate_simple_result(kit)
+        if level == "group":
+            effects = agg._aggregate_by_group(
+                self.group_time_effects,
+                kit.influence,
+                bk["n_units"],
+                bk["cohort_fractions"],
+                self.groups,
+                unit_cohorts=bk["unit_cohorts"],
+                cluster_indices=bk["cluster_indices"],
+                n_clusters=bk["n_clusters"],
+            )
+            return self._group_effects_to_aggregation(effects, kit)
+        # level == "event_study" (the mixin validated the vocabulary)
+        es = agg._aggregate_event_study(
+            self.group_time_effects,
+            kit.influence,
+            bk["n_units"],
+            bk["cohort_fractions"],
+            self.groups,
+            self.time_periods,
+            balance_e,
+            unit_cohorts=bk["unit_cohorts"],
+            cluster_indices=bk["cluster_indices"],
+            n_clusters=bk["n_clusters"],
+        )
+        # Carrier + shared builder: EDiD is a _from_relative_dict producer,
+        # so the recomputed dict rides the same route as the fit-time
+        # surface. The carrier's survey_metadata is a COPY whose df_survey
+        # is the kit's post-overall snapshot - _recompute_unit_survey_
+        # metadata's is-not-None guard can leave the raw metadata at the
+        # resolved design's finite value when the governing df degenerated
+        # to None (n_valid <= 1), and the copy keeps the container honest
+        # there (in non-degenerate fits the two agree and the copy is
+        # inert). Copying also keeps the parent's metadata unmutated.
+        meta = self.survey_metadata
+        if meta is not None:
+            meta = dataclasses.replace(meta, df_survey=bk["df_survey"])
+        carrier = dataclasses.replace(self, event_study_effects=es, survey_metadata=meta)
+        return build_event_study_surface(carrier)
+
+    def _aggregate_simple_result(self, kit: Any) -> AggregationResult:
+        """One-row relay of the stored overall inference (bit-exact).
+
+        ``n = n_treated_units + n_control_units`` with ``n_kind="units"``:
+        EDiD's treated and control unit sets are DISJOINT by construction
+        (``last_cohort`` trimming reassigns the last cohort to control
+        BEFORE the counts), so a true disjoint total exists - the CS
+        convention applies, unlike StackedDiD's overlapping-sets carve-out.
+
+        ``df`` is the kit's post-overall ``df_survey`` snapshot - the very
+        value fit passed to ``safe_inference`` for the overall row - NOT
+        ``resolve_inference_df(self)``: ``survey_metadata.df_survey`` can
+        diverge from the governing df in the degenerate replicate case
+        (``n_valid <= 1`` sets the working df to None while the metadata
+        keeps the resolved design's finite value), and the snapshot is
+        provenance-exact in every state. None → all-NaN df column;
+        the replicate-undefined 0-sentinel row NaNs out via post_init.
+        """
+        df_val = kit.bookkeeping["df_survey"]
+        return AggregationResult(
+            level="simple",
+            label=np.array(["overall"], dtype=object),
+            target=np.array(["att"], dtype=object),
+            att=np.array([self.overall_att], dtype=float),
+            se=np.array([self.overall_se], dtype=float),
+            t_stat=np.array([self.overall_t_stat], dtype=float),
+            p_value=np.array([self.overall_p_value], dtype=float),
+            conf_int_lower=np.array([self.overall_conf_int[0]], dtype=float),
+            conf_int_upper=np.array([self.overall_conf_int[1]], dtype=float),
+            n=np.array([self.n_treated_units + self.n_control_units], dtype=float),
+            df=df_val,
+            alpha=self.alpha,
+            n_kind="units",
+            weight=np.array([1.0], dtype=float),
+            estimator=type(self).__name__.replace("Results", ""),
+        )
+
+    def _group_effects_to_aggregation(
+        self, effects: Dict[Any, Dict[str, Any]], kit: Any
+    ) -> AggregationResult:
+        """Per-cohort AggregationResult from the recomputed group dict.
+
+        ``df`` relays the PER-ROW ``df_used`` array the aggregation
+        recorded at each row's ``safe_inference`` call - exact by
+        construction (in every constructible fit all rows share one value;
+        capture-at-use is robust regardless). ``weight=None``: rows use
+        equal within-cohort weights and carry no cross-cohort mass, so a
+        weight column would fabricate one (the CS rationale).
+        ``n_kind="cells"``: ``n_periods`` counts contributing (g,t) cells.
+        """
+        labels = list(effects.keys())
+        df_arr = np.array(
+            [
+                (np.nan if effects[g].get("df_used") is None else float(effects[g]["df_used"]))
+                for g in labels
+            ],
+            dtype=float,
+        )
+        return AggregationResult(
+            level="group",
+            label=np.array(labels, dtype=object),
+            target=np.array(["att"] * len(labels), dtype=object),
+            att=np.array([effects[g]["effect"] for g in labels], dtype=float),
+            se=np.array([effects[g]["se"] for g in labels], dtype=float),
+            t_stat=np.array([effects[g]["t_stat"] for g in labels], dtype=float),
+            p_value=np.array([effects[g]["p_value"] for g in labels], dtype=float),
+            conf_int_lower=np.array([effects[g]["conf_int"][0] for g in labels], dtype=float),
+            conf_int_upper=np.array([effects[g]["conf_int"][1] for g in labels], dtype=float),
+            n=np.array([effects[g]["n_periods"] for g in labels], dtype=float),
+            df=df_arr,
+            alpha=kit.alpha,
+            n_kind="cells",
+            weight=None,
+            estimator=type(self).__name__.replace("Results", ""),
+        )
 
     def __repr__(self) -> str:
         sig = _get_significance_stars(self.overall_p_value)
@@ -398,7 +615,14 @@ class EfficientDiDResults(BaseResults):
 
         elif level == "event_study":
             if self.event_study_effects is None:
-                raise ValueError("Event study effects not computed. Use aggregate='event_study'.")
+                raise ValueError(
+                    "Event study effects not computed at fit time. Use "
+                    "results.aggregate('event_study') for the post-fit "
+                    "event-study container (on bootstrapped fits, re-fit "
+                    "with n_bootstrap=0 or use the deprecated fit-time "
+                    "aggregate=); a result unpickled from a pre-3.9 "
+                    "release carries no aggregation kit and must be refit."
+                )
             rows = []
             for rel_t, data in sorted(self.event_study_effects.items()):
                 rows.append(
@@ -416,7 +640,14 @@ class EfficientDiDResults(BaseResults):
 
         elif level == "group":
             if self.group_effects is None:
-                raise ValueError("Group effects not computed. Use aggregate='group'.")
+                raise ValueError(
+                    "Group effects not computed at fit time. Use "
+                    "results.aggregate('group') for the post-fit group "
+                    "container (on bootstrapped fits, re-fit with "
+                    "n_bootstrap=0 or use the deprecated fit-time "
+                    "aggregate=); a result unpickled from a pre-3.9 "
+                    "release carries no aggregation kit and must be refit."
+                )
             rows = []
             for group, data in sorted(self.group_effects.items()):
                 rows.append(

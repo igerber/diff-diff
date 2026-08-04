@@ -82,9 +82,16 @@ Results container for Efficient DiD estimation.
 
    .. autosummary::
 
+      ~EfficientDiDResults.aggregate
       ~EfficientDiDResults.summary
       ~EfficientDiDResults.print_summary
       ~EfficientDiDResults.to_dataframe
+
+   .. rubric:: Attributes
+
+   .. autosummary::
+
+      ~EfficientDiDResults.reference_period
 
 EDiDBootstrapResults
 --------------------
@@ -109,16 +116,18 @@ Basic usage::
 
     edid = EfficientDiD(pt_assumption="all")
     results = edid.fit(data, outcome='outcome', unit='unit',
-                       time='period', first_treat='first_treat',
-                       aggregate='all')
+                       time='period', first_treat='first_treat')
     results.print_summary()
+
+    # Aggregate post-fit - recomputed from retained EIFs, no refit:
+    print(results.aggregate('event_study').to_dataframe())
+    print(results.aggregate('group').to_dataframe())
 
 PT-Post mode (matches CS for post-treatment ATT)::
 
     edid_post = EfficientDiD(pt_assumption="post")
     results_post = edid_post.fit(data, outcome='outcome', unit='unit',
-                                  time='period', first_treat='first_treat',
-                                  aggregate='all')
+                                  time='period', first_treat='first_treat')
     print(f"PT-All ATT:  {results.overall_att:.4f} (SE={results.overall_se:.4f})")
     print(f"PT-Post ATT: {results_post.overall_att:.4f} (SE={results_post.overall_se:.4f})")
 
@@ -126,8 +135,7 @@ Bootstrap inference::
 
     edid_boot = EfficientDiD(pt_assumption="all", n_bootstrap=999, seed=42)
     results_boot = edid_boot.fit(data, outcome='outcome', unit='unit',
-                                  time='period', first_treat='first_treat',
-                                  aggregate='all')
+                                  time='period', first_treat='first_treat')
     print(f"Bootstrap SE: {results_boot.overall_se:.4f}")
     print(f"Bootstrap CI: [{results_boot.overall_conf_int[0]:.4f}, "
           f"{results_boot.overall_conf_int[1]:.4f}]")
