@@ -3845,6 +3845,50 @@ class TestHadAggregate:
             else:
                 assert list(av) == list(bv)
 
+    def test_event_study_view_estimand_labels(self, had_fitted_multi, had_panel_multi):
+        # CI review R1 P1: the container must carry the WAS estimand label -
+        # summary() previously rendered HAD's numbers under a hardcoded ATT
+        # heading with no estimand metadata anywhere on the surface.
+        es = had_fitted_multi.aggregate("event_study")
+        assert es.estimand == had_fitted_multi.target_parameter
+        assert es.estimand in ("WAS", "WAS_d_lower")
+        s = es.summary()
+        heading = next(line for line in s.splitlines() if "Event time" in line)
+        assert es.estimand in heading and "ATT" not in heading
+        assert f"estimand: {es.estimand}" in s
+        assert es.to_dict()["estimand"] == es.estimand
+
+    def test_event_study_view_estimand_was_at_zero(self):
+        # The continuous_at_zero design labels the estimand "WAS" (vs the
+        # near-d_lower fixture's "WAS_d_lower") - both must relay.
+        rng = np.random.default_rng(31)
+        n = 150
+        d = rng.uniform(0.0, 2.0, n)
+        d[0] = 0.0
+        rows = []
+        for i in range(n):
+            ft = 0 if d[i] == 0.0 else 2
+            for t in range(5):
+                di = d[i] if t >= 2 else 0.0
+                rows.append((i, t, di, 1.5 * di + rng.normal(), ft))
+        pm = pd.DataFrame(rows, columns=["unit", "period", "dose", "outcome", "ft"])
+        res = _fit_had(pm, first_treat="ft")
+        assert res.target_parameter == "WAS"
+        es = res.aggregate("event_study")
+        assert es.estimand == "WAS"
+        heading = next(line for line in es.summary().splitlines() if "Event time" in line)
+        assert " WAS " in heading and "ATT" not in heading
+
+    def test_event_study_view_non_had_estimand_none_att_stable(self, fitted):
+        # Byte-stability: every other producer's estimand stays None and the
+        # ATT heading is unchanged (no estimand metadata line).
+        es = fitted.aggregate("event_study")
+        assert es.estimand is None
+        s = es.summary()
+        heading = next(line for line in s.splitlines() if "Event time" in line)
+        assert " ATT " in heading
+        assert "estimand:" not in s
+
     def test_event_study_view_cband_relays(self, had_panel_multi):
         # cluster= fires the clustered sup-t band even on an unweighted fit;
         # the view must carry the cband fields through _from_had.
