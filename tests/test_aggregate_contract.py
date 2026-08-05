@@ -2268,11 +2268,16 @@ class TestImputationAggregate:
         # healthy design: no coupling -> equality
         dh, rep_h = _imputation_survey_panel(replicate=True)
         sdh = _imputation_survey_design(rep_h)
+        # Healthy design: no replicate-drop coupling, so the two stacks
+        # agree - but NOT bit-identically: the [overall] vs
+        # [overall, groups] layouts route the replicate-variance matmul
+        # through different BLAS kernel shapes (~1 ULP reassociation;
+        # bit-identical on Accelerate, not on OpenBLAS-ARM/Windows).
+        # A REAL coupling delta is O(se) itself, far above this band.
         np.testing.assert_allclose(
             _fit_imputation(dh, survey_design=sdh).overall_se,
             _fit_imputation(dh, aggregate="group", survey_design=sdh).overall_se,
-            rtol=0,
-            atol=0,
+            rtol=1e-12,
         )
 
     def test_pretrends_arm_inert(self, imputation_panel):
@@ -2732,11 +2737,11 @@ class TestTwoStageAggregate:
         _assert_group_matches_fit_time(plain.aggregate("group"), ref_gr, "ts/delta")
         dh, rep_h = _twostage_survey_panel(replicate=True)
         sdh = _twostage_survey_design(rep_h)
+        # Same BLAS-shape caveat as the Imputation twin above.
         np.testing.assert_allclose(
             _fit_twostage(dh, survey_design=sdh).overall_se,
             _fit_twostage(dh, aggregate="group", survey_design=sdh).overall_se,
-            rtol=0,
-            atol=0,
+            rtol=1e-12,
         )
 
     def test_pretrends_arm_inert(self, twostage_panel):
