@@ -12,6 +12,7 @@
    .. autosummary::
 
       ~ContinuousDiDResults.__init__
+      ~ContinuousDiDResults.aggregate
       ~ContinuousDiDResults.print_summary
       ~ContinuousDiDResults.summary
       ~ContinuousDiDResults.to_dataframe

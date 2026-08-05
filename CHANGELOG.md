@@ -8,6 +8,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **ContinuousDiD post-fit `aggregate()` - a MIXED view/recompute adopter**
+  (v4 program 2(b) PR-3c; ledger row [M-025]). `ContinuousDiD.fit(aggregate=)`
+  is deprecated (`FutureWarning`; removed in 4.0, and the no-underscore
+  `"eventstudy"` spelling dies with it) in favor of post-fit
+  `ContinuousDiDResults.aggregate(type)` with the unified vocabulary plus
+  `"dose"` as this estimator's documented extra level. Unlike every prior
+  adopter the architecture is MIXED: the dose-response curves, the overall
+  binarized ATT (`ATT^{loc}` under PT; equals `ATT^{glob}` under SPT) and
+  `ACRT^{glob}` are ALWAYS computed by `fit()` (`aggregate="dose"` was
+  a fit-time no-op), so `aggregate('simple')` (2 rows, targets `att`/`acrt`
+  - the dual-estimand case; `n` = the disjoint treated+control unit total,
+  `n_kind='units'`) and `aggregate('dose')` (2N target-discriminated rows
+  over the dose grid) are pure VIEWS relaying stored inference verbatim and
+  work on ANY fit including bootstrapped ones (the stored FINITE overall
+  t-stat beside percentile p/CI relays through; the dose rows reproduce
+  `DoseResponseCurve.to_dataframe` exactly; only the df column is NaN under
+  bootstrap), while `aggregate('event_study')` RECOMPUTES the binarized
+  event study from a pruned per-cell influence payload retained on the
+  fit-built kit (per-(g,t) O(n_treated+n_control) IF-ingredient arrays +
+  unit-level arrays + the panel-level resolved survey design - on
+  replicate-weight designs the (n_obs x R) replicate matrix rides along;
+  the K-dimensional spline machinery is NOT retained, and no panel data
+  columns or raw unit identifiers are). Replicate-weight designs are
+  supported post-fit (IF-based replicate variance - no refit replay);
+  bootstrapped fits carry a scalars-only kit and the event-study route
+  fails closed (`NotImplementedError` - use the deprecated fit-time route
+  or re-fit with `n_bootstrap=0`; a seeded replay is a tracked follow-up).
+  The pre-existing fit-time value validation is retained (unknown strings
+  still raise `ValueError` after the warning). Post-fit-vs-fit-time
+  inertness is pinned at 1e-14 across plain/multi-cohort/anticipation/
+  covariates/survey-TSL/zero-dose-drop/replicate(healthy,dropped,
+  undefined-df)/discrete/lowest-dose/not-yet-treated/universal-base
+  designs. This ships the FIRST heterogeneous-`target`
+  `AggregationResult`, with a rendering amendment: `summary()` gains a
+  `target` column and a neutral `estimate` heading when targets are mixed,
+  and `to_dataframe()` orders heterogeneous-target rows by
+  first-appearance target blocks (att before acrt) with labels ascending
+  within each block under the existing sortability guard - uniform-target
+  producers render byte-identically (normative rule added to
+  `docs/v4-design.md` section 6). `compute_honest_did` /
+  `compute_pretrends_power` continue to reject ContinuousDiD containers BY
+  DESIGN (no joint event-study covariance; the binarized bins carry no
+  reference-period normalization) - both terminal messages now say so.
+  The event-study machinery moved verbatim to the new leaf module
+  `diff_diff/continuous_did_aggregation.py` (shared by fit and the
+  post-fit kit route); the M-092 per-row-df completion row now names
+  ContinuousDiD alongside EfficientDiD/ImputationDiD.
 - **ImputationDiD + TwoStageDiD post-fit `aggregate()` via panel-backed
   recompute kits** (v4 program 2(b) PR-3b; ledger rows [M-021]/[M-022]
   flip to shimmed, new rows [M-118]/[M-119] claim the reserved balance_e

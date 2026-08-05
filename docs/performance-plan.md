@@ -835,12 +835,15 @@ scenario development. None are silent-failures and none belong in this PR
 or in the silent-failures audit; logging here for awareness.
 
 1. **`aggregate` / `level` parameter naming is inconsistent.** CS accepts
-   `aggregate="event_study"`; ContinuousDiD requires
+   `aggregate="event_study"`; ContinuousDiD historically required
    `aggregate="eventstudy"` on `fit()` **but** `level="event_study"` on
    `to_dataframe()`. Two different spellings within one estimator plus a
    third cross-estimator spelling. Surfaced when the P1 exit-propagation
    fix stopped silently swallowing the resulting `ValueError` in the
-   dose-response benchmark. Route: API-consistency cleanup, minor.
+   dose-response benchmark. RESOLVED by row M-025: the fit-time kwarg is
+   deprecated (removed in 4.0, its `"eventstudy"` spelling with it) and
+   the post-fit successor `results.aggregate("event_study")` uses the
+   unified underscored vocabulary.
 2. **`generate_survey_did_data(panel=True)` `treated` column.** Row-level
    active-treatment indicator that is zero in pre-periods, which makes it
    quietly incompatible with `check_parallel_trends` (expects unit-level

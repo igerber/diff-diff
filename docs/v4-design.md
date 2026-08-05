@@ -443,6 +443,19 @@ EXISTING post-fit `aggregate(type=)` - the emfx-style prior art for this
 section's pattern - plus `summary(aggregation=)` and
 `to_dataframe(aggregation=)` [M-044] [M-086] [M-087].
 
+**Heterogeneous-`target` rendering** (added with [M-025], the first
+producer of a mixed-target `AggregationResult` - ContinuousDiD's att/acrt
+dual estimand): when a container carries more than one distinct `target`,
+`summary()` renders a `target` column and a neutral `estimate` heading
+(the uniform-target `ATT` heading would mislabel the other estimand's
+rows), and `to_dataframe()` orders rows by FIRST-APPEARANCE target blocks
+(producer order - NOT lexicographic, which would invert att/acrt) with
+labels ascending within each block under the same `_sortable` guard as
+the uniform path (mixed-type labels keep producer order, never raise).
+Uniform-target containers render byte-identically to the pre-[M-025]
+output; the machine surfaces (`to_dataframe` columns, `to_dict`) carried
+`target` from birth and are unchanged.
+
 **Semantics.** `aggregate()` re-aggregates WITHOUT refitting, from influence
 functions retained on the results object. **Correction (Phase 2b PR 1):** this
 section previously said "CallawaySantAnna already stores them". It does not -

@@ -274,7 +274,12 @@ class AggregationResult(BaseResults):
 
         Rows are ordered by ``label`` when the labels are homogeneously
         sortable, and in producer order otherwise (mixed-type cohort labels
-        cannot be ordered without raising).
+        cannot be ordered without raising). Heterogeneous-``target``
+        containers (ContinuousDiD's att/acrt, row M-025) order by
+        FIRST-APPEARANCE target blocks instead - producer order, NOT
+        lexicographic, which would put ``"acrt"`` before ``"att"`` - with
+        labels ascending within each block under the same sortability
+        guard.
         """
         data: Dict[str, Any] = {
             "level": self.level,
@@ -291,7 +296,18 @@ class AggregationResult(BaseResults):
             "df": self.df,
         }
         frame = pd.DataFrame(data, columns=list(AGGREGATION_SCHEMA))
-        if len(frame) > 1 and _sortable(self.label):
+        distinct_targets = list(dict.fromkeys(self.target))
+        if len(distinct_targets) > 1 and len(frame) > 1:
+            rank = {t: i for i, t in enumerate(distinct_targets)}
+            target_rank = np.array([rank[t] for t in self.target])
+            if _sortable(self.label):
+                # lexsort: LAST key is primary - target blocks first,
+                # labels ascending within each block.
+                order = np.lexsort((self.label, target_rank))
+            else:
+                order = np.argsort(target_rank, kind="stable")
+            frame = frame.iloc[order].reset_index(drop=True)
+        elif len(frame) > 1 and _sortable(self.label):
             order = np.argsort(self.label, kind="stable")
             frame = frame.iloc[order].reset_index(drop=True)
         return frame
@@ -348,16 +364,36 @@ class AggregationResult(BaseResults):
             return "\n".join(lines)
 
         n_label = "n" if self.n_kind is None else f"n[{self.n_kind}]"
-        lines.append(f"{'label':>14} {'ATT':>11} {'SE':>10} {'t':>8} {'p':>8} {n_label:>10}")
-        lines.append("-" * 64)
         frame = self.to_dataframe()
-        for _, row in frame.iterrows():
-            n_disp = "" if not np.isfinite(row["n"]) else f"{row['n']:.0f}"
+        if len(dict.fromkeys(self.target)) > 1:
+            # Heterogeneous targets (ContinuousDiD's att/acrt, row M-025):
+            # a target column disambiguates the duplicate labels and the
+            # estimate heading goes neutral - the hard-coded 'ATT' would
+            # mislabel every acrt row. Uniform-target containers render
+            # exactly as before (byte-stable).
             lines.append(
-                f"{str(row['label']):>14} {row['att']:>11.4f} {row['se']:>10.4f} "
-                f"{row['t_stat']:>8.3f} {row['p_value']:>8.4f} {n_disp:>10}"
+                f"{'label':>14} {'target':>8} {'estimate':>11} {'SE':>10} "
+                f"{'t':>8} {'p':>8} {n_label:>10}"
             )
-        lines.append("-" * 64)
+            lines.append("-" * 73)
+            for _, row in frame.iterrows():
+                n_disp = "" if not np.isfinite(row["n"]) else f"{row['n']:.0f}"
+                lines.append(
+                    f"{str(row['label']):>14} {str(row['target']):>8} "
+                    f"{row['att']:>11.4f} {row['se']:>10.4f} "
+                    f"{row['t_stat']:>8.3f} {row['p_value']:>8.4f} {n_disp:>10}"
+                )
+            lines.append("-" * 73)
+        else:
+            lines.append(f"{'label':>14} {'ATT':>11} {'SE':>10} {'t':>8} {'p':>8} {n_label:>10}")
+            lines.append("-" * 64)
+            for _, row in frame.iterrows():
+                n_disp = "" if not np.isfinite(row["n"]) else f"{row['n']:.0f}"
+                lines.append(
+                    f"{str(row['label']):>14} {row['att']:>11.4f} {row['se']:>10.4f} "
+                    f"{row['t_stat']:>8.3f} {row['p_value']:>8.4f} {n_disp:>10}"
+                )
+            lines.append("-" * 64)
         lines.append(f"Confidence intervals at alpha={self.alpha}.")
         if self.weight is None:
             lines.append("Per-row aggregation weights are not defined for this level.")
@@ -388,6 +424,21 @@ class AggregationKit:
     its ledger row and REGISTRY Note. For those two, ``influence`` is empty
     by design and the exclusion above applies to everything OUTSIDE the
     enumerated bookkeeping payload.
+
+    PRUNED-PAYLOAD VARIANT (ContinuousDiD [M-025]): its event-study
+    recompute needs per-(g, t) IF INGREDIENTS rather than a per-unit EIF
+    dict or the panel - ``bookkeeping`` retains a pruned
+    ``_bootstrap_info`` subset (treated/control indices, ``delta_y_treated``,
+    ``ee_control``, masses, the covariate-path ``if_att_glob``), O(n_treated
+    + n_control) per cell, plus unit-level arrays and - on survey fits -
+    the PANEL-LEVEL ``ResolvedSurveyDesign`` (the recompute performs the
+    unit collapse itself; on replicate designs this carries the
+    (n_obs x R) replicate matrix). The K-dimensional spline machinery
+    (bread, ``ee_treated``, ``Psi_eval``, ``dPsi_*``) is NOT retained;
+    bootstrap fits retain scalars only (their event-study route fails
+    closed). ``influence`` is empty by design here too. The ``simple`` /
+    ``dose`` levels are pure views over stored public results fields and
+    read no kit at all.
 
     Attributes
     ----------

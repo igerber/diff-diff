@@ -642,6 +642,49 @@ class TestTwoStageAggregationStep(_AggregationStepMixin):
         return r
 
 
+class TestContinuousAggregationStep:
+    """M-025 post-fit aggregation guidance for ContinuousDiD.
+
+    Deliberately NOT on ``_AggregationStepMixin``: that mixin pins
+    ``aggregate('group')`` (not in ContinuousDiD's supported set),
+    simulates bootstrap via a ``bootstrap_results`` field
+    (ContinuousDiDResults keys on ``n_bootstrap`` and has no such field),
+    and expects an ``aggregate='all'`` fallback (never a valid
+    ContinuousDiD value). ContinuousDiD's step is a single unconditional
+    step whose wording carries the bootstrap carve-out.
+    """
+
+    @staticmethod
+    def _agg_step(output):
+        return [s for s in output["next_steps"] if "Aggregate post-fit" in s["label"]]
+
+    def _results(self):
+        r = ContinuousDiDResults.__new__(ContinuousDiDResults)
+        r.overall_att = 0.6
+        r.overall_att_se = 0.15
+        return r
+
+    def test_aggregation_step_present_with_all_routes(self):
+        output = practitioner_next_steps(self._results(), verbose=False)
+        steps = self._agg_step(output)
+        assert len(steps) == 1
+        assert "M-025" in steps[0]["why"]
+        assert "results.aggregate('event_study')" in steps[0]["code"]
+        assert "results.aggregate('dose')" in steps[0]["code"]
+        assert "results.aggregate('simple')" in steps[0]["code"]
+        # The bootstrap carve-out is carried in the wording.
+        assert "n_bootstrap=0" in steps[0]["why"]
+
+    def test_aggregation_step_name_is_non_steps_key(self):
+        from diff_diff.practitioner import STEPS
+
+        assert "aggregation" not in STEPS
+        output = practitioner_next_steps(
+            self._results(), completed_steps=["heterogeneity"], verbose=False
+        )
+        assert len(self._agg_step(output)) == 1
+
+
 # ---------------------------------------------------------------------------
 # Tests: unknown result type fallback
 # ---------------------------------------------------------------------------

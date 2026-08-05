@@ -433,6 +433,19 @@ print(results.aggregate('event_study', balance_e=2).to_dataframe())
 results = cs.fit(data, ..., aggregate='all')
 ```
 
+### For ContinuousDiD (MIXED post-fit `aggregate()`, row M-025)
+```python
+# Dose-response curves + overall ATT/ACRT are ALWAYS computed by fit();
+# 'dose' and 'simple' are views that work on ANY fit (bootstrapped too):
+results = cdid.fit(data, ...)          # no aggregate= kwarg (deprecated)
+print(results.aggregate('dose').to_dataframe())    # ATT(d) + ACRT(d) rows
+print(results.aggregate('simple').to_dataframe())  # att + acrt overall rows
+# The binarized event study RECOMPUTES from the retained kit - analytical
+# fits only (a bootstrapped fit raises; re-fit with n_bootstrap=0 or use
+# the deprecated fit-time aggregate='eventstudy' until 4.0):
+print(results.aggregate('event_study').to_dataframe())
+```
+
 ### For SunAbraham (no `aggregate` parameter)
 SA computes event-study and cohort effects automatically during `fit()`:
 ```python

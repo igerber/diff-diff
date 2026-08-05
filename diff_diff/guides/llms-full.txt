@@ -767,7 +767,10 @@ cdid.fit(
     time: str,
     first_treat: str,
     dose: str,                     # Column with continuous treatment dose
-    aggregate: str = None,         # None, "dose", "eventstudy"
+    aggregate: Any = NOT_SUPPLIED, # DEPRECATED (M-025) - removed in 4.0; use post-fit results.aggregate();
+                                   #   legacy values None/"dose"/"eventstudy" still route until 4.0 (any
+                                   #   supplied value warns; "dose" was always a no-op - the curves are
+                                   #   always computed)
     covariates: list[str] = None,  # Conditional parallel trends (X). None = unconditional
 ) -> ContinuousDiDResults
 ```
@@ -779,8 +782,16 @@ from diff_diff import ContinuousDiD
 
 est = ContinuousDiD(n_bootstrap=199, seed=42)
 results = est.fit(data, outcome='outcome', unit='unit', time='period',
-                  first_treat='first_treat', dose='dose', aggregate='dose')
+                  first_treat='first_treat', dose='dose')
 results.print_summary()
+dose_table = results.aggregate('dose')      # ATT(d) + ACRT(d) rows (view; any fit)
+overall = results.aggregate('simple')       # att + acrt rows (view; any fit)
+# Binarized event study: analytical fits only (bootstrapped fits raise -
+# re-fit with n_bootstrap=0, or the deprecated fit-time aggregate='eventstudy'
+# until 4.0):
+es = ContinuousDiD(seed=42).fit(data, outcome='outcome', unit='unit',
+                                time='period', first_treat='first_treat',
+                                dose='dose').aggregate('event_study')
 ```
 
 ### HeterogeneousAdoptionDiD
@@ -1785,7 +1796,7 @@ Each event study effect dict contains: `effect`, `se`, `t_stat`, `p_value`, `con
 | `n_clusters` | `int | None` | Number of effective clusters; `None` under survey designs and `None` under EfficientDiD's default unclustered fit |
 | `df_convention` | `str | None` | On the knob-carrying containers (`StackedDiDResults`, `ImputationDiDResults`, `WooldridgeDiDResults`, `LPDiDResults`, `SunAbrahamResults`): the configured df convention (3.9 / M-127); `StackedDiDResults` additionally carries `inference_df` (the overall-ATT df actually used) |
 
-**Methods:** `summary()`, `print_summary()`, `to_dataframe()`, `to_dict()` (flat dict of headline aliases + `vcov_type` + conditional `cluster_name`/`n_clusters`/`n_bootstrap`/`inference_method`); `aggregate(type, weights=None, *, balance_e=None)` on the shipped post-fit adopters (`StackedDiDResults` views since 3.9/M-024; `EfficientDiDResults` recomputes from retained EIFs since 3.9/M-023; `ImputationDiDResults` and `TwoStageDiDResults` recompute from their PANEL-BACKED kits since 3.9/M-021/M-022 - bootstrapped fits raise on all three recomputing adopters)
+**Methods:** `summary()`, `print_summary()`, `to_dataframe()`, `to_dict()` (flat dict of headline aliases + `vcov_type` + conditional `cluster_name`/`n_clusters`/`n_bootstrap`/`inference_method`); `aggregate(type, weights=None, *, balance_e=None)` on the shipped post-fit adopters (`StackedDiDResults` views since 3.9/M-024; `EfficientDiDResults` recomputes from retained EIFs since 3.9/M-023; `ImputationDiDResults` and `TwoStageDiDResults` recompute from their PANEL-BACKED kits since 3.9/M-021/M-022 - bootstrapped fits raise on all three recomputing adopters; `ContinuousDiDResults` is MIXED since 3.9/M-025 - `'simple'`/`'dose'` are views over stored fields that work on any fit incl. bootstrapped, `'event_study'` recomputes from a pruned per-cell IF kit and raises on bootstrapped fits)
 
 ### ContinuousDiDResults
 
@@ -1810,7 +1821,7 @@ Each event study effect dict contains: `effect`, `se`, `t_stat`, `p_value`, `con
 | `n_obs` | `int` | Number of observations |
 | `n_treated_units` | `int` | Treated units |
 | `n_control_units` | `int` | Control units |
-| `event_study_effects` | `dict[int, dict] or None` | Event study effects (if `aggregate="eventstudy"`) |
+| `event_study_effects` | `dict[int, dict] or None` | Event study effects (populated only by the DEPRECATED fit-time `aggregate="eventstudy"`; the post-fit successor `results.aggregate('event_study')` returns a unified `EventStudyResults` container instead of populating this field) |
 
 **DoseResponseCurve** sub-dataclass:
 
@@ -1823,7 +1834,7 @@ Each event study effect dict contains: `effect`, `se`, `t_stat`, `p_value`, `con
 | `conf_int_upper` | `np.ndarray` | Upper CI bound |
 | `target` | `str` | `"att"` or `"acrt"` |
 
-**Methods:** `summary()`, `print_summary()`, `to_dataframe()`
+**Methods:** `summary()`, `print_summary()`, `to_dataframe()`, `aggregate(type, ...)` (M-025 MIXED adopter: `'simple'` = 2-row att+acrt view, `'dose'` = 2N-row target-discriminated curve view - both work on any fit; `'event_study'` = kit recompute, analytical fits only)
 
 ### HeterogeneousAdoptionDiDResults
 

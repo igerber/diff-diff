@@ -1421,8 +1421,11 @@ class TestReviewRegressions:
         assert r.overall_se > 0
         assert r.overall_se > 0.01  # Not artificially tiny
 
+    @pytest.mark.filterwarnings(r"ignore:ContinuousDiD\.fit\(aggregate=\):FutureWarning")
     def test_continuous_did_eventstudy_survey(self, continuous_survey_data):
-        """ContinuousDiD aggregate=eventstudy should work with survey design."""
+        """The deprecated fit-time aggregate=eventstudy still works with a
+        survey design (M-025 legacy routing; the post-fit successor's
+        survey arms are pinned in tests/test_aggregate_contract.py)."""
         from diff_diff import ContinuousDiD
 
         sd = SurveyDesign(weights="weight", strata="stratum")

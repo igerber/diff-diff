@@ -9,6 +9,7 @@ parameters ATT^{glob} and ACRT^{glob}, with optional multiplier bootstrap
 inference.
 """
 
+import dataclasses
 import warnings
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
@@ -16,11 +17,13 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
-from diff_diff._deprecation import warn_deprecated_kwarg
+from diff_diff._deprecation import NOT_SUPPLIED, warn_deprecated_kwarg
+from diff_diff.aggregation import AggregationKit
 from diff_diff.bootstrap_utils import (
     compute_effect_bootstrap_stats,
     generate_bootstrap_weights_batch,
 )
+from diff_diff.continuous_did_aggregation import _ContinuousDiDAggregationMixin
 from diff_diff.continuous_did_bspline import (
     SATURATED_TOL,
     bspline_derivative_design_matrix,
@@ -51,7 +54,111 @@ if TYPE_CHECKING:
 __all__ = ["ContinuousDiD", "ContinuousDiDResults", "DoseResponseCurve"]
 
 
-class ContinuousDiD(BaseEstimator):
+#: Pruned per-cell payload keys the post-fit event-study recompute reads
+#: (row M-025). Exactly the ``_bootstrap_info`` subset
+#: ``_compute_event_study_inference`` consumes - the K-dimensional spline
+#: machinery (bread, ee_treated, Psi_eval, dPsi_*, beta_pred) is
+#: deliberately NOT retained and dies with fit(). ``w_treated``/
+#: ``w_control``/``w_treated_arr`` are copied only when present because
+#: the consumer's survey-mass branch keys on ``"w_treated" in b_info``.
+_ES_PAYLOAD_KEYS = (
+    "treated_indices",
+    "control_indices",
+    "n_treated",
+    "n_control",
+    "att_glob",
+    "mu_0",
+    "delta_y_treated",
+    "ee_control",
+    "w_treated",
+    "w_control",
+    "w_treated_arr",
+)
+
+
+def _build_continuous_aggregation_kit(
+    estimator: "ContinuousDiD",
+    gt_results: Dict[Tuple, Dict],
+    gt_bootstrap_info: Dict[Tuple, Dict],
+    precomp: Dict[str, Any],
+    resolved_survey: Optional["ResolvedSurveyDesign"],
+    has_post_cells: bool,
+    survey_df: Optional[int],
+    survey_metadata: Optional[Any],
+) -> AggregationKit:
+    """Build the post-fit aggregation kit for ContinuousDiD (row M-025).
+
+    ``influence`` is empty BY DESIGN: the event-study recompute reads the
+    pruned per-cell payload + unit-level arrays in ``bookkeeping``, not a
+    per-unit EIF dict on the kit's influence contract; the ``simple`` /
+    ``dose`` levels are pure views over stored public results fields and
+    never read the kit at all.
+
+    On bootstrap fits (``n_bootstrap > 0``) the kit is SCALARS-ONLY:
+    ``aggregate('event_study')`` fails closed before reading any payload
+    and the views never read the kit, so a populated payload there would
+    be pure dead retention. The scalars still distinguish the
+    bootstrap-NotImplementedError gate from the legacy-pickle no-kit
+    ValueError.
+    """
+    is_bootstrap = estimator.n_bootstrap > 0
+    gt_summary: Dict[Tuple, Dict[str, Any]] = {}
+    gt_es_payload: Dict[Tuple, Dict[str, Any]] = {}
+    if not is_bootstrap:
+        for gt, r in gt_results.items():
+            gt_summary[gt] = {
+                "att_glob": float(r["att_glob"]),
+                "n_treated": int(r["n_treated"]),
+            }
+            b_info = gt_bootstrap_info.get(gt, {})
+            if not b_info:
+                gt_es_payload[gt] = {}
+                continue
+            pruned = {k: b_info[k] for k in _ES_PAYLOAD_KEYS if k in b_info}
+            cov_if = b_info.get("cov_if")
+            pruned["cov_if"] = (
+                {
+                    "cell_indices": cov_if["cell_indices"],
+                    "if_att_glob": cov_if["if_att_glob"],
+                }
+                if cov_if is not None
+                else None
+            )
+            gt_es_payload[gt] = pruned
+    bookkeeping: Dict[str, Any] = {
+        "gt_summary": gt_summary,
+        "gt_es_payload": gt_es_payload,
+        "n_units": None if is_bootstrap else precomp["n_units"],
+        "unit_cohorts": None if is_bootstrap else precomp["unit_cohorts"],
+        "unit_survey_weights": (None if is_bootstrap else precomp.get("unit_survey_weights")),
+        "unit_first_panel_row": (None if is_bootstrap else precomp["unit_first_panel_row"]),
+        # PANEL-LEVEL design ref (locked decision: the unit-level collapse
+        # stays inside the verbatim recompute body; on replicate designs
+        # this carries the (n_obs x R) replicate matrix - documented in
+        # the REGISTRY memory contract).
+        "resolved_survey": None if is_bootstrap else resolved_survey,
+        "has_post_cells": has_post_cells,
+        "survey_df": survey_df,
+        "n_bootstrap": estimator.n_bootstrap,
+        "base_period": estimator.base_period,
+        # Fit-final COPY - the ES carrier metadata source; never the
+        # mutable public field (post-fit mutation of replicate_method /
+        # df_survey must not reach post-fit provenance).
+        "survey_metadata": (
+            dataclasses.replace(survey_metadata) if survey_metadata is not None else None
+        ),
+    }
+    return AggregationKit(
+        bookkeeping=bookkeeping,
+        influence={},
+        alpha=estimator.alpha,
+        anticipation=estimator.anticipation,
+        cband=False,
+        bootstrap=None,
+    )
+
+
+class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
     """
     Continuous Difference-in-Differences estimator.
 
@@ -142,8 +249,9 @@ class ContinuousDiD(BaseEstimator):
     >>> est = ContinuousDiD(n_bootstrap=199, seed=42)
     >>> results = est.fit(data, outcome="outcome", unit="unit",
     ...                   time="period", first_treat="first_treat",
-    ...                   dose="dose", aggregate="dose")
+    ...                   dose="dose")
     >>> results.overall_att  # doctest: +SKIP
+    >>> results.aggregate("dose")  # doctest: +SKIP
     """
 
     _VALID_CONTROL_GROUPS = {"never_treated", "not_yet_treated", "lowest_dose"}
@@ -261,7 +369,7 @@ class ContinuousDiD(BaseEstimator):
         time: str,
         first_treat: str,
         dose: str,
-        aggregate: Optional[str] = None,
+        aggregate: Any = NOT_SUPPLIED,
         survey_design: Optional["SurveyDesign"] = None,
         covariates: Optional[List[str]] = None,
     ) -> ContinuousDiDResults:
@@ -283,8 +391,16 @@ class ContinuousDiD(BaseEstimator):
         dose : str
             Continuous dose column.
         aggregate : str, optional
-            ``"dose"`` for dose-response aggregation, ``"eventstudy"`` for
-            binarized event study.
+            DEPRECATED (row M-025, removed in 4.0) - aggregate as a
+            post-fit step instead: ``results.aggregate('event_study')``
+            for the binarized event study (underscored - the
+            ``"eventstudy"`` spelling dies with this parameter), or
+            ``results.aggregate('dose')`` / ``results.aggregate('simple')``
+            views. The dose-response curves and overall ATT/ACRT are
+            always computed by ``fit()``, so ``aggregate="dose"`` was
+            already a no-op. Supplying ANY value (including ``None``)
+            warns ``FutureWarning``; supplied values still run the legacy
+            routing unchanged until 4.0.
         survey_design : SurveyDesign, optional
             Survey design specification for design-based inference.
             Supports weighted estimation and Taylor series linearization
@@ -300,6 +416,31 @@ class ContinuousDiD(BaseEstimator):
         -------
         ContinuousDiDResults
         """
+        # M-025 deprecation shim: a plain fit() never warns; supplying
+        # aggregate= with ANY value (None included) warns once, then the
+        # legacy routing below runs unchanged - "eventstudy" still
+        # computes the fit-time surface and invalid strings still reach
+        # the pre-existing ValueError. Only the SENTINEL normalizes to
+        # None (it would otherwise fail the _VALID_AGGREGATES check on
+        # every plain fit). The post-fit successor validates its own
+        # (unified) vocabulary.
+        if aggregate is not NOT_SUPPLIED:
+            warnings.warn(
+                "ContinuousDiD.fit(aggregate=) is deprecated and will be "
+                "removed in 4.0. Fit once, then aggregate as a post-fit "
+                "step: results = ContinuousDiD().fit(...); "
+                "results.aggregate('event_study') (note the underscore - "
+                "the 'eventstudy' spelling dies with this parameter) / "
+                ".aggregate('dose') / .aggregate('simple'). The "
+                "dose-response curves and overall ATT/ACRT are always "
+                "computed by fit(), so aggregate='dose' was already "
+                "redundant.",
+                FutureWarning,
+                stacklevel=2,
+            )
+        else:
+            aggregate = None
+
         # 1. Validate & prepare
         _VALID_AGGREGATES = (None, "dose", "eventstudy")
         if aggregate not in _VALID_AGGREGATES:
@@ -969,116 +1110,24 @@ class ContinuousDiD(BaseEstimator):
                     acrt_d_ci_lower[idx] = ci[0]
                     acrt_d_ci_upper[idx] = ci[1]
 
-                # Event study analytical SEs
+                # Event study analytical SEs - the body lives in
+                # continuous_did_aggregation._compute_event_study_inference,
+                # shared verbatim with the post-fit aggregate('event_study')
+                # recompute (row M-025). fit passes its full gt_results /
+                # gt_bootstrap_info locals; the method reads only the
+                # kit-compatible key subset.
                 if event_study_effects is not None:
-                    n_units = precomp["n_units"]
-                    unit_sw = precomp.get("unit_survey_weights")
-
-                    # Build unit-level ResolvedSurveyDesign once (reused per bin)
-                    unit_resolved_es = None
-                    if resolved_survey is not None:
-                        row_idx = precomp["unit_first_panel_row"]
-                        unit_resolved_es = resolved_survey.subset_to_units_by_row_idx(
-                            row_idx, unit_weights=precomp.get("unit_survey_weights")
-                        )
-
-                    for e_val, info_e in event_study_effects.items():
-                        # Collect (g,t) cells for this event-time bin
-                        e_gts = [gt for gt in gt_results if gt[1] - gt[0] == e_val]
-                        if not e_gts:
-                            continue
-                        # Weights within this bin: survey-weighted mass or n_treated
-                        if unit_sw is not None:
-                            unit_cohorts = precomp["unit_cohorts"]
-                            ns = np.array(
-                                [float(np.sum(unit_sw[unit_cohorts == gt[0]])) for gt in e_gts],
-                                dtype=float,
-                            )
-                        else:
-                            ns = np.array(
-                                [gt_results[gt]["n_treated"] for gt in e_gts],
-                                dtype=float,
-                            )
-                        total_n = ns.sum()
-                        if total_n == 0:
-                            continue
-                        ws = ns / total_n
-
-                        # Build per-unit IF for this event-time bin
-                        if_es = np.zeros(n_units)
-                        for idx_cell, gt in enumerate(e_gts):
-                            b_info = gt_bootstrap_info.get(gt, {})
-                            if not b_info:
-                                continue
-                            w = ws[idx_cell]
-                            # Covariate path: the binarized event-study effect is
-                            # att_glob, whose per-unit cell IF is precomputed.
-                            cov_if = b_info.get("cov_if")
-                            if cov_if is not None:
-                                np.add.at(
-                                    if_es,
-                                    cov_if["cell_indices"],
-                                    w * cov_if["if_att_glob"],
-                                )
-                                continue
-                            treated_idx = b_info["treated_indices"]
-                            control_idx = b_info["control_indices"]
-                            n_t = b_info["n_treated"]
-                            n_c = b_info["n_control"]
-                            # Use survey-weighted masses when available
-                            if "w_treated" in b_info:
-                                n_t = b_info["w_treated"]
-                                n_c = b_info["w_control"]
-                            n_total_gt = n_t + n_c
-                            p_1 = n_t / n_total_gt
-                            p_0 = n_c / n_total_gt
-                            att_glob_gt = b_info["att_glob"]
-                            mu_0 = b_info["mu_0"]
-                            delta_y_treated = b_info["delta_y_treated"]
-                            ee_control = b_info["ee_control"]
-                            sw_treated = b_info.get("w_treated_arr")
-
-                            for k, uid in enumerate(treated_idx):
-                                score_k = delta_y_treated[k] - att_glob_gt - mu_0
-                                if sw_treated is not None:
-                                    score_k = sw_treated[k] * score_k
-                                if_es[uid] += w * score_k / p_1 / n_total_gt
-                            for k, uid in enumerate(control_idx):
-                                if_es[uid] -= w * ee_control[k] / p_0 / n_total_gt
-
-                        # Compute SE: survey-aware TSL or standard sqrt(sum(IF^2))
-                        if unit_resolved_es is not None:
-                            if unit_resolved_es.uses_replicate_variance:
-                                from diff_diff.survey import compute_replicate_if_variance
-
-                                # Score-scale: psi = w * if_es (matches TSL bread)
-                                psi_es = unit_resolved_es.weights * if_es
-                                variance, _nv = compute_replicate_if_variance(
-                                    psi_es, unit_resolved_es
-                                )
-                                es_se = (
-                                    float(np.sqrt(max(variance, 0.0)))
-                                    if np.isfinite(variance)
-                                    else np.nan
-                                )
-                            else:
-                                X_ones_es = np.ones((n_units, 1))
-                                tsl_scale_es = float(unit_resolved_es.weights.sum())
-                                if_es_tsl = if_es * tsl_scale_es
-                                vcov_es = compute_survey_vcov(
-                                    X_ones_es, if_es_tsl, unit_resolved_es
-                                )
-                                es_se = float(np.sqrt(np.abs(vcov_es[0, 0])))
-                        else:
-                            es_se = float(np.sqrt(np.sum(if_es**2)))
-
-                        t_stat, p_val, ci_es = safe_inference(
-                            info_e["effect"], es_se, self.alpha, df=_survey_df
-                        )
-                        info_e["se"] = es_se
-                        info_e["t_stat"] = t_stat
-                        info_e["p_value"] = p_val
-                        info_e["conf_int"] = ci_es
+                    self._compute_event_study_inference(
+                        event_study_effects,
+                        gt_summary=gt_results,
+                        gt_es_payload=gt_bootstrap_info,
+                        n_units=precomp["n_units"],
+                        unit_cohorts=precomp["unit_cohorts"],
+                        unit_survey_weights=precomp.get("unit_survey_weights"),
+                        unit_first_panel_row=precomp["unit_first_panel_row"],
+                        resolved_survey=resolved_survey,
+                        survey_df=_survey_df,
+                    )
 
         # 6. Assemble results
         dose_response_att = DoseResponseCurve(
@@ -1123,7 +1172,7 @@ class ContinuousDiD(BaseEstimator):
             n_control_units_out = n_control
             reference_dose_out = None
 
-        return ContinuousDiDResults(
+        results = ContinuousDiDResults(
             dose_response_att=dose_response_att,
             dose_response_acrt=dose_response_acrt,
             overall_att=overall_att,
@@ -1163,6 +1212,19 @@ class ContinuousDiD(BaseEstimator):
             event_study_effects=event_study_effects,
             survey_metadata=survey_metadata,
         )
+        # Post-fit aggregation kit (row M-025): attached on EVERY fit;
+        # scalars-only on bootstrap fits (the ES route fails closed there).
+        results._aggregation_kit = _build_continuous_aggregation_kit(
+            self,
+            gt_results=gt_results,
+            gt_bootstrap_info=gt_bootstrap_info,
+            precomp=precomp,
+            resolved_survey=resolved_survey,
+            has_post_cells=len(post_gt) > 0,
+            survey_df=_survey_df,
+            survey_metadata=survey_metadata,
+        )
+        return results
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -1880,49 +1942,9 @@ class ContinuousDiD(BaseEstimator):
             "_bootstrap_info": bootstrap_info,
         }
 
-    def _aggregate_event_study(
-        self,
-        gt_results: Dict[Tuple, Dict],
-        gt_bootstrap_info: Dict[Tuple, Dict] = None,
-        unit_survey_weights: Optional[np.ndarray] = None,
-        unit_cohorts: Optional[np.ndarray] = None,
-        anticipation: int = 0,
-    ) -> Dict[int, Dict[str, Any]]:
-        """Aggregate binarized ATT_glob by relative period."""
-        effects_by_e: Dict[int, List[Tuple[float, float, Tuple]]] = {}
-
-        for (g, t), r in gt_results.items():
-            e = t - g
-            if anticipation > 0 and e < -anticipation:
-                continue
-            if e not in effects_by_e:
-                effects_by_e[e] = []
-            # Compute weight for this (g,t) cell
-            if unit_survey_weights is not None and unit_cohorts is not None:
-                # Survey-weighted: sum of survey weights for treated units in group g
-                g_mask = unit_cohorts == g
-                cell_weight = float(np.sum(unit_survey_weights[g_mask]))
-            else:
-                cell_weight = float(r["n_treated"])
-            effects_by_e[e].append((r["att_glob"], cell_weight, (g, t)))
-
-        result = {}
-        for e, entries in sorted(effects_by_e.items()):
-            effects = np.array([x[0] for x in entries])
-            weights = np.array([x[1] for x in entries])
-            if np.sum(weights) > 0:
-                w = weights / np.sum(weights)
-                agg = float(np.sum(w * effects))
-            else:
-                agg = np.nan
-            result[e] = {
-                "effect": agg,
-                "se": np.nan,
-                "t_stat": np.nan,
-                "p_value": np.nan,
-                "conf_int": (np.nan, np.nan),
-            }
-        return result
+    # _aggregate_event_study moved verbatim to
+    # continuous_did_aggregation._ContinuousDiDAggregationMixin (row M-025);
+    # fit-time call sites resolve via the mixin base.
 
     def _compute_analytical_se(
         self,

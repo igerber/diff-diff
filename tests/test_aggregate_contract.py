@@ -3,7 +3,9 @@
 The ``test_ref`` for every aggregate-postfit ledger row this file pins:
 M-020/M-023/M-021/M-022 (the CS / EfficientDiD / Imputation / TwoStage
 ``fit(aggregate=)`` shims), M-024/M-026 (the Stacked / dCDH shims + view
-relays), M-117/M-120/M-118/M-119 (``balance_e`` moves onto ``aggregate()``)
+relays), M-025 (the ContinuousDiD shim + MIXED view/recompute aggregate() -
+'simple'/'dose' views, 'event_study' pruned-IF-payload kit),
+M-117/M-120/M-118/M-119 (``balance_e`` moves onto ``aggregate()``)
 and M-122 (``AggregationResult``).
 
 The headline gate is NUMERICAL INERTNESS: for every supported type,
@@ -1116,6 +1118,7 @@ class TestDcdhAggregate:
         assert "EfficientDiDResults" in checked
         assert "ImputationDiDResults" in checked
         assert "TwoStageDiDResults" in checked
+        assert "ContinuousDiDResults" in checked
 
 
 # --------------------------------------------------------------------------- #
@@ -2819,3 +2822,565 @@ class TestTwoStageAggregate:
             es = twostage_fitted.aggregate("event_study", balance_e=100)
         df_ = es.to_dataframe()
         assert (df_["is_reference"] | ~np.isfinite(df_["att"])).all()
+
+
+# --------------------------------------------------------------------------- #
+# ContinuousDiD (row M-025): fit(aggregate=) shim + the MIXED view/recompute
+# aggregate() - 'simple'/'dose' are pure VIEWS over stored fields (permitted
+# on bootstrap fits), 'event_study' is a pruned-IF-payload kit recompute
+# (bootstrap fails closed; replicate designs supported, no refit replay)
+# --------------------------------------------------------------------------- #
+
+CONT_KW = dict(
+    outcome="outcome", unit="unit", time="period", first_treat="first_treat", dose="dose"
+)
+
+
+def _cont_panel(seed=19, n_units=110, n_periods=6, cohort_periods=None):
+    from diff_diff import generate_continuous_did_data
+
+    return generate_continuous_did_data(
+        n_units=n_units,
+        n_periods=n_periods,
+        cohort_periods=cohort_periods or [3, 4],
+        seed=seed,
+    )
+
+
+def _cont_covariate_panel(seed=23):
+    d = _cont_panel(seed=seed)
+    rng = np.random.default_rng(seed)
+    xmap = {u: rng.normal() for u in d["unit"].unique()}
+    d["x1"] = d["unit"].map(xmap)
+    return d
+
+
+def _cont_survey_panel(seed=29, replicate=False, degenerate=None, zero_dose_treated=False):
+    d = _cont_panel(seed=seed)
+    rng = np.random.default_rng(seed)
+    wmap = {u: rng.uniform(0.5, 2.0) for u in d["unit"].unique()}
+    d["w"] = d["unit"].map(wmap)
+    d["strata"] = d["unit"] % 4
+    d["psu"] = d["unit"]
+    rep_cols = []
+    if replicate:
+        n_rep = 8
+        for r in range(n_rep):
+            col = f"rw{r}"
+            rep_cols.append(col)
+            if degenerate == "dropped" and r >= n_rep - 2:
+                d[col] = 0.0
+            elif degenerate == "undefined" and r >= 1:
+                d[col] = 0.0
+            else:
+                jitter = {u: rng.uniform(0.1, 2.0) for u in d["unit"].unique()}
+                d[col] = d["unit"].map(jitter) * d["w"]
+    if zero_dose_treated:
+        # Treated units with dose == 0: fires the fit-time drop (with
+        # UserWarning) AND the post-drop survey re-resolution - the exact
+        # resolved_survey object the kit snapshots.
+        treated_units = sorted(d.loc[d["first_treat"] > 0, "unit"].unique())[:4]
+        d.loc[d["unit"].isin(treated_units), "dose"] = 0.0
+    return d, rep_cols
+
+
+def _cont_survey_design(rep_cols=None, tsl=True):
+    from diff_diff import SurveyDesign
+
+    if rep_cols:
+        return SurveyDesign(weights="w", replicate_weights=rep_cols, replicate_method="JK1")
+    if tsl:
+        return SurveyDesign(weights="w", strata="strata", psu="psu")
+    return SurveyDesign(weights="w")
+
+
+def _cont_discrete_panel(seed=31):
+    d = _cont_panel(seed=seed, cohort_periods=[3])
+    rng = np.random.default_rng(seed)
+    treated = d["first_treat"] > 0
+    level_map = {u: float(rng.choice([1.0, 2.0, 3.0])) for u in d.loc[treated, "unit"].unique()}
+    d.loc[treated, "dose"] = d.loc[treated, "unit"].map(level_map)
+    return d
+
+
+def _cont_lowest_dose_panel(seed=37, n_units=60):
+    """Single cohort, no never-treated units, mass point at d_L."""
+    rng = np.random.default_rng(seed)
+    rows = []
+    for u in range(n_units):
+        d_u = 0.5 if u < 10 else float(rng.uniform(1.0, 3.0))
+        g = 3
+        for t in range(1, 6):
+            treated = t >= g
+            rows.append(
+                {
+                    "unit": u,
+                    "period": t,
+                    "first_treat": g,
+                    "dose": d_u,
+                    "outcome": u / 25
+                    + 0.3 * t
+                    + (1.0 + 0.8 * d_u if treated else 0.0)
+                    + rng.normal(0, 0.3),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _cont_empty_post_panel(seed=41, n_units=50):
+    """All treatment starts AFTER the last observed period: pre-period
+    (g,t) cells exist but post_gt is empty (the fit-time warning path;
+    overall/dose fields are all-NaN and ES rows keep NaN inference)."""
+    rng = np.random.default_rng(seed)
+    rows = []
+    for u in range(n_units):
+        g = 0 if u % 3 == 0 else 5
+        d_u = 0.0 if g == 0 else float(rng.uniform(0.5, 2.0))
+        for t in range(1, 5):
+            rows.append(
+                {
+                    "unit": u,
+                    "period": t,
+                    "first_treat": g,
+                    "dose": d_u,
+                    "outcome": u / 20 + 0.4 * t + rng.normal(0, 0.3),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _fit_cont(data, *, est_kw=None, **fit_kw):
+    from diff_diff import ContinuousDiD
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return ContinuousDiD(**(est_kw or {})).fit(data, **CONT_KW, **fit_kw)
+
+
+@pytest.fixture(scope="module")
+def cont_panel():
+    return _cont_panel()
+
+
+@pytest.fixture(scope="module")
+def cont_fitted(cont_panel):
+    """Plain fit - the pruned-payload kit powers aggregate('event_study')."""
+    return _fit_cont(cont_panel)
+
+
+@pytest.fixture(scope="module")
+def cont_fit_time(cont_panel):
+    """Deprecated fit-time aggregate='eventstudy' - the inertness reference."""
+    return _fit_cont(cont_panel, aggregate="eventstudy")
+
+
+@pytest.fixture(scope="module")
+def cont_bootstrap(cont_panel):
+    return _fit_cont(cont_panel, est_kw=dict(n_bootstrap=30, seed=3))
+
+
+class TestContinuousShim:
+    def test_plain_fit_does_not_warn(self, cont_panel):
+        from diff_diff import ContinuousDiD
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            ContinuousDiD().fit(cont_panel, **CONT_KW)
+        assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
+
+    def test_aggregate_kwarg_warns_even_at_none(self, cont_panel):
+        from diff_diff import ContinuousDiD
+
+        with pytest.warns(FutureWarning, match=r"ContinuousDiD\.fit\(aggregate=\)"):
+            ContinuousDiD().fit(cont_panel, **CONT_KW, aggregate=None)
+
+    def test_dose_value_warns_and_is_inert(self, cont_panel, cont_fitted):
+        """aggregate='dose' was always a fit-time no-op - the deprecated
+        call warns (the message says so) and produces the identical fit."""
+        from diff_diff import ContinuousDiD
+
+        with pytest.warns(FutureWarning, match="already[\\s\\n ]*redundant"):
+            res = ContinuousDiD().fit(cont_panel, **CONT_KW, aggregate="dose")
+        assert res.overall_att == cont_fitted.overall_att
+        assert res.overall_acrt_se == cont_fitted.overall_acrt_se
+        np.testing.assert_array_equal(
+            res.dose_response_att.effects, cont_fitted.dose_response_att.effects
+        )
+        assert res.event_study_effects is None
+
+    def test_warn_and_still_work(self, cont_fit_time):
+        """The deprecated 'eventstudy' value still computes the fit-time
+        surface (legacy routing unchanged until 4.0)."""
+        assert cont_fit_time.event_study_effects is not None
+        assert any(np.isfinite(v["se"]) for v in cont_fit_time.event_study_effects.values())
+
+    def test_invalid_value_warns_then_raises(self, cont_panel):
+        """The PRE-EXISTING fit-time value validation survives the shim
+        (a delta vs the EfficientDiD/Imputation no-validation shims):
+        unknown strings still raise ValueError - after the warning."""
+        from diff_diff import ContinuousDiD
+
+        with pytest.warns(FutureWarning):
+            with pytest.raises(ValueError, match="Invalid aggregate"):
+                ContinuousDiD().fit(cont_panel, **CONT_KW, aggregate="event_study")
+
+
+class TestContinuousAggregate:
+    # ---------------- event_study: kit-recompute inertness ----------------
+
+    def test_event_study_inert(self, cont_fitted, cont_fit_time):
+        es = cont_fitted.aggregate("event_study")
+        _assert_es_container_matches_fit_time(es, cont_fit_time, "cont/es")
+        # n_kind is a container ATTRIBUTE (not an EVENT_STUDY_SCHEMA
+        # column): ContinuousDiD's ES dict carries no count key.
+        assert es.n_kind is None
+
+    @pytest.mark.parametrize(
+        "arm",
+        [
+            "multi_cohort",
+            "anticipation",
+            "covariates",
+            "survey_tsl",
+            "survey_zero_dose_drop",
+            "replicate_healthy",
+            "replicate_dropped",
+            "replicate_undefined",
+            "discrete",
+            "lowest_dose",
+            "not_yet_treated",
+            "nondefault_config",
+        ],
+    )
+    def test_event_study_inert_across_designs(self, arm):
+        est_kw, fit_kw = {}, {}
+        if arm == "multi_cohort":
+            data = _cont_panel(seed=43, cohort_periods=[3, 4, 5])
+        elif arm == "anticipation":
+            data = _cont_panel(seed=47)
+            est_kw = dict(anticipation=1)
+        elif arm == "covariates":
+            data = _cont_covariate_panel()
+            fit_kw = dict(covariates=["x1"])
+        elif arm == "survey_tsl":
+            data, _ = _cont_survey_panel()
+            fit_kw = dict(survey_design=_cont_survey_design())
+        elif arm == "survey_zero_dose_drop":
+            data, _ = _cont_survey_panel(zero_dose_treated=True)
+            fit_kw = dict(survey_design=_cont_survey_design())
+        elif arm == "replicate_healthy":
+            data, rep = _cont_survey_panel(replicate=True)
+            fit_kw = dict(survey_design=_cont_survey_design(rep_cols=rep))
+        elif arm == "replicate_dropped":
+            data, rep = _cont_survey_panel(replicate=True, degenerate="dropped")
+            fit_kw = dict(survey_design=_cont_survey_design(rep_cols=rep))
+        elif arm == "replicate_undefined":
+            data, rep = _cont_survey_panel(replicate=True, degenerate="undefined")
+            fit_kw = dict(survey_design=_cont_survey_design(rep_cols=rep))
+        elif arm == "discrete":
+            data = _cont_discrete_panel()
+            est_kw = dict(treatment_type="discrete")
+        elif arm == "lowest_dose":
+            data = _cont_lowest_dose_panel()
+            est_kw = dict(control_group="lowest_dose")
+        elif arm == "not_yet_treated":
+            data = _cont_panel(seed=53, cohort_periods=[3, 5])
+            est_kw = dict(control_group="not_yet_treated")
+        else:  # nondefault_config
+            data = _cont_panel(seed=59)
+            est_kw = dict(alpha=0.10, base_period="universal")
+        plain = _fit_cont(data, est_kw=est_kw, **fit_kw)
+        ref = _fit_cont(data, est_kw=est_kw, aggregate="eventstudy", **fit_kw)
+        es = plain.aggregate("event_study")
+        _assert_es_container_matches_fit_time(es, ref, f"cont/{arm}")
+
+    def test_nondefault_provenance_discriminates_defaults(self):
+        """alpha=0.10 / base_period='universal' must SURFACE - a kit that
+        hard-codes the defaults would pass mutation-isolation alone."""
+        data = _cont_panel(seed=59)
+        res = _fit_cont(data, est_kw=dict(alpha=0.10, base_period="universal"))
+        es = res.aggregate("event_study")
+        assert es.alpha == 0.10
+        assert es.base_period == "universal"
+        s = res.aggregate("simple")
+        assert s.alpha == 0.10
+
+    def test_empty_post_gt_all_levels(self):
+        """Fit-faithful empty-post_gt quirk: ES rows keep NaN inference on
+        BOTH routes; the views relay the stored all-NaN fields."""
+        data = _cont_empty_post_panel()
+        plain = _fit_cont(data)
+        ref = _fit_cont(data, aggregate="eventstudy")
+        es = plain.aggregate("event_study")
+        _assert_es_container_matches_fit_time(es, ref, "cont/empty_post")
+        frame = es.to_dataframe()
+        assert not np.isfinite(frame["se"]).any()
+        s = plain.aggregate("simple")
+        assert np.isnan(s.att).all() and np.isnan(s.se).all()
+        d = plain.aggregate("dose")
+        assert np.isnan(d.att).all() and np.isnan(d.se).all()
+
+    # ---------------- dose view: per-curve to_dataframe parity ----------------
+
+    def test_dose_view_per_curve_parity(self, cont_fitted):
+        agg = cont_fitted.aggregate("dose")
+        n = len(cont_fitted.dose_grid)
+        assert list(agg.target) == ["att"] * n + ["acrt"] * n
+        for block, curve in (
+            (slice(0, n), cont_fitted.dose_response_att),
+            (slice(n, 2 * n), cont_fitted.dose_response_acrt),
+        ):
+            frame = curve.to_dataframe()
+            np.testing.assert_array_equal(agg.att[block], frame["effect"].to_numpy())
+            np.testing.assert_array_equal(agg.se[block], frame["se"].to_numpy())
+            np.testing.assert_array_equal(
+                agg.conf_int_lower[block], frame["conf_int_lower"].to_numpy()
+            )
+            np.testing.assert_allclose(
+                agg.t_stat[block], frame["t_stat"].to_numpy(), rtol=0, atol=0, equal_nan=True
+            )
+            np.testing.assert_allclose(
+                agg.p_value[block], frame["p_value"].to_numpy(), rtol=0, atol=0, equal_nan=True
+            )
+        assert agg.n_kind is None and agg.weight is None
+        assert np.isnan(agg.n).all()
+
+    def test_dose_view_survey_df(self):
+        """Survey fits: finite df threads into the derived t/p AND the df
+        column; the per-curve to_dataframe oracle still holds."""
+        data, _ = _cont_survey_panel()
+        res = _fit_cont(data, survey_design=_cont_survey_design())
+        assert res.dose_response_att.df_survey is not None
+        agg = res.aggregate("dose")
+        n = len(res.dose_grid)
+        frame = res.dose_response_att.to_dataframe()
+        np.testing.assert_allclose(
+            agg.p_value[:n], frame["p_value"].to_numpy(), rtol=0, atol=0, equal_nan=True
+        )
+        finite = np.isfinite(agg.p_value)
+        assert np.isfinite(agg.df[finite]).all()
+
+    def test_dose_view_replicate_undefined_sentinel(self):
+        """The replicate-undefined 0-sentinel: NaN t/p via safe_inference
+        (the raw stored value feeds the derivation) and NaN df column."""
+        data, rep = _cont_survey_panel(replicate=True, degenerate="undefined")
+        res = _fit_cont(data, survey_design=_cont_survey_design(rep_cols=rep))
+        assert res.dose_response_att.df_survey == 0
+        agg = res.aggregate("dose")
+        assert np.isnan(agg.t_stat).all() and np.isnan(agg.p_value).all()
+        assert np.isnan(agg.df).all()
+
+    def test_dose_view_bootstrap_relays_stored_p(self, cont_bootstrap):
+        agg = cont_bootstrap.aggregate("dose")
+        n = len(cont_bootstrap.dose_grid)
+        assert np.isnan(agg.t_stat).all()
+        np.testing.assert_array_equal(
+            agg.p_value[:n], np.asarray(cont_bootstrap.dose_response_att.p_value, dtype=float)
+        )
+        assert np.isnan(agg.df).all()
+
+    # ---------------- simple view ----------------
+
+    def test_simple_view_bit_exact(self, cont_fitted):
+        s = cont_fitted.aggregate("simple")
+        assert list(s.label) == ["overall", "overall"]
+        assert list(s.target) == ["att", "acrt"]
+        assert s.att[0] == cont_fitted.overall_att
+        assert s.att[1] == cont_fitted.overall_acrt
+        assert s.se[0] == cont_fitted.overall_att_se
+        assert s.se[1] == cont_fitted.overall_acrt_se
+        assert s.t_stat[0] == cont_fitted.overall_att_t_stat
+        assert s.p_value[1] == cont_fitted.overall_acrt_p_value
+        assert s.conf_int_lower[0] == cont_fitted.overall_att_conf_int[0]
+        assert s.conf_int_upper[1] == cont_fitted.overall_acrt_conf_int[1]
+        # Disjoint treated/control unit sets -> the CS total convention.
+        assert s.n_kind == "units"
+        expected_n = float(cont_fitted.n_treated_units + cont_fitted.n_control_units)
+        assert (s.n == expected_n).all()
+        np.testing.assert_array_equal(s.weight, [1.0, 1.0])
+
+    def test_simple_view_bootstrap_finite_t_relays(self, cont_bootstrap):
+        """fit() stores a FINITE safe_inference t beside the percentile
+        p/CI on bootstrap fits - the relay carries it through verbatim
+        (bit-exact relay, NOT NaN); only the df column is NaN."""
+        s = cont_bootstrap.aggregate("simple")
+        assert s.t_stat[0] == cont_bootstrap.overall_att_t_stat
+        assert np.isfinite(s.t_stat[0])
+        assert s.p_value[0] == cont_bootstrap.overall_att_p_value
+        assert np.isnan(s.df).all()
+
+    def test_simple_view_survey_df(self):
+        data, _ = _cont_survey_panel()
+        res = _fit_cont(data, survey_design=_cont_survey_design())
+        s = res.aggregate("simple")
+        assert np.isfinite(s.df[0])
+        assert s.df[0] == float(res.dose_response_att.df_survey)
+
+    # ---------------- heterogeneous-target rendering ----------------
+
+    def test_summary_renders_target_column(self, cont_fitted):
+        s_text = cont_fitted.aggregate("simple").summary()
+        assert "target" in s_text and "estimate" in s_text
+        assert "acrt" in s_text
+        # The uniform-target 'ATT' heading must NOT appear as a column head.
+        header_line = [ln for ln in s_text.splitlines() if "estimate" in ln][0]
+        assert "ATT" not in header_line
+
+    def test_uniform_target_summary_byte_stable(self, fitted):
+        """A uniform-target producer's summary() renders EXACTLY as before
+        the heterogeneous-target amendment (no target column, ATT head)."""
+        s_text = fitted.aggregate("simple").summary()
+        assert "target" not in s_text
+        assert "ATT" in s_text
+
+    def test_dose_ordering_att_block_first_with_unsorted_dvals(self):
+        """FIRST-APPEARANCE target blocks (att then acrt - NOT lexicographic,
+        which would invert) with labels ascending WITHIN each block; the
+        custom dvals grid is unsorted so within-block sorting is actually
+        exercised (the default grid is ascending by construction)."""
+        data = _cont_panel(seed=61)
+        dvals = np.array([2.0, 1.0, 1.5])
+        res = _fit_cont(data, est_kw=dict(dvals=dvals))
+        frame = res.aggregate("dose").to_dataframe()
+        n = len(dvals)
+        assert list(frame["target"]) == ["att"] * n + ["acrt"] * n
+        att_labels = frame["label"][:n].astype(float).to_numpy()
+        acrt_labels = frame["label"][n:].astype(float).to_numpy()
+        np.testing.assert_array_equal(att_labels, np.sort(dvals))
+        np.testing.assert_array_equal(acrt_labels, np.sort(dvals))
+
+    def test_mixed_type_labels_preserve_producer_order(self):
+        """The _sortable fallback survives the heterogeneous-target branch:
+        mixed-type labels keep producer order per block, never raise."""
+        agg = AggregationResult(
+            level="dose",
+            label=np.array(["b", 2, "a", 1], dtype=object),
+            target=np.array(["att", "att", "acrt", "acrt"], dtype=object),
+            att=np.zeros(4),
+            se=np.ones(4),
+            t_stat=np.zeros(4),
+            p_value=np.ones(4),
+            conf_int_lower=np.zeros(4),
+            conf_int_upper=np.zeros(4),
+            n=np.full(4, np.nan),
+            df=np.full(4, np.nan),
+        )
+        frame = agg.to_dataframe()
+        assert list(frame["label"]) == ["b", 2, "a", 1]
+        assert list(frame["target"]) == ["att", "att", "acrt", "acrt"]
+        assert "target" in agg.summary()
+
+    # ---------------- bootstrap gating + kit shape ----------------
+
+    def test_bootstrap_event_study_fails_closed(self, cont_bootstrap):
+        with pytest.raises(NotImplementedError, match="bootstrap"):
+            cont_bootstrap.aggregate("event_study")
+
+    def test_bootstrap_views_still_work(self, cont_bootstrap):
+        assert cont_bootstrap.aggregate("simple") is not None
+        assert cont_bootstrap.aggregate("dose") is not None
+
+    def test_bootstrap_kit_is_scalars_only(self, cont_bootstrap):
+        """Dead-retention guarantee: the ES payload can never be consumed
+        on a bootstrap fit, so it is not retained."""
+        bk = cont_bootstrap._aggregation_kit.bookkeeping
+        assert bk["gt_es_payload"] == {}
+        assert bk["gt_summary"] == {}
+        assert bk["n_units"] is None
+        assert bk["unit_cohorts"] is None
+        assert bk["resolved_survey"] is None
+        assert bk["n_bootstrap"] == 30
+
+    # ---------------- isolation (ES route only - views are views) ----------------
+
+    def test_es_isolation_from_public_field_mutation(self, cont_panel):
+        res = _fit_cont(cont_panel)
+        baseline = res.aggregate("event_study").to_dataframe()
+        res.event_study_effects = {99: {"effect": 1.0}}
+        res.group_time_effects = {}
+        res.groups = []
+        res.alpha = 0.5
+        res.anticipation = 7
+        res.base_period = "mutated"
+        if res.survey_metadata is not None:
+            res.survey_metadata.df_survey = -1
+        again = res.aggregate("event_study").to_dataframe()
+        pd.testing.assert_frame_equal(baseline, again)
+
+    def test_bootstrap_gate_reads_kit_not_field(self, cont_panel):
+        """The sharpest isolation arm: mutating res.n_bootstrap = 0 must
+        NOT bypass the fail-closed gate (it reads the kit)."""
+        res = _fit_cont(cont_panel, est_kw=dict(n_bootstrap=30, seed=3))
+        res.n_bootstrap = 0
+        with pytest.raises(NotImplementedError, match="bootstrap"):
+            res.aggregate("event_study")
+
+    def test_repeated_calls_idempotent(self, cont_fitted):
+        a = cont_fitted.aggregate("event_study").to_dataframe()
+        b = cont_fitted.aggregate("event_study").to_dataframe()
+        pd.testing.assert_frame_equal(a, b)
+
+    def test_aggregate_does_not_mutate_survey_metadata(self):
+        data, rep = _cont_survey_panel(replicate=True)
+        res = _fit_cont(data, survey_design=_cont_survey_design(rep_cols=rep))
+        before = copy.deepcopy(res.survey_metadata.__dict__)
+        res.aggregate("event_study")
+        res.aggregate("simple")
+        res.aggregate("dose")
+        assert res.survey_metadata.__dict__ == before
+
+    # ---------------- no-kit legacy + vocabulary ----------------
+
+    def test_no_kit_es_raises_views_work(self, cont_panel):
+        res = _fit_cont(cont_panel)
+        object.__setattr__(res, "_aggregation_kit", None)
+        with pytest.raises(ValueError, match="aggregation kit"):
+            res.aggregate("event_study")
+        # Views need no kit - deliberately still work on legacy pickles.
+        assert res.aggregate("simple") is not None
+        assert res.aggregate("dose") is not None
+
+    @pytest.mark.parametrize("bad", ["group", "calendar", "all", "nonsense"])
+    def test_unsupported_types_fail_closed(self, cont_fitted, bad):
+        with pytest.raises(ValueError, match="Unsupported aggregation type"):
+            cont_fitted.aggregate(bad)
+
+    @pytest.mark.parametrize("level", ["simple", "event_study", "dose"])
+    def test_balance_e_rejected_empty_vocabulary(self, cont_fitted, level):
+        with pytest.raises(ValueError, match="no aggregation type on this estimator"):
+            cont_fitted.aggregate(level, balance_e=1)
+
+    def test_weights_rejected(self, cont_fitted):
+        with pytest.raises(ValueError, match="does not accept a weights selector"):
+            cont_fitted.aggregate("simple", weights="cell")
+
+    # ---------------- pickle + retention ----------------
+
+    def test_pickle_round_trip(self, cont_fitted):
+        clone = pickle.loads(pickle.dumps(cont_fitted))
+        a = cont_fitted.aggregate("event_study").to_dataframe()
+        b = clone.aggregate("event_study").to_dataframe()
+        pd.testing.assert_frame_equal(a, b)
+        pd.testing.assert_frame_equal(
+            cont_fitted.aggregate("dose").to_dataframe(),
+            clone.aggregate("dose").to_dataframe(),
+        )
+
+    def test_no_raw_unit_identifiers_are_retained(self, cont_fitted):
+        """The kit stores positional indices and first_treat cohort values
+        only - never the raw unit identifier column."""
+        bk = cont_fitted._aggregation_kit.bookkeeping
+
+        def _walk(obj):
+            if isinstance(obj, dict):
+                for v in obj.values():
+                    yield from _walk(v)
+            elif isinstance(obj, (list, tuple)):
+                for v in obj:
+                    yield from _walk(v)
+            else:
+                yield obj
+
+        for leaf in _walk({k: v for k, v in bk.items() if k != "survey_metadata"}):
+            assert not isinstance(leaf, pd.DataFrame), "kit retains a DataFrame"
+            assert not isinstance(leaf, pd.Series), "kit retains a Series"

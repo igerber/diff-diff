@@ -2015,3 +2015,35 @@ class TestTwoStageContainerRejection:
             compute_honest_did(surface, M=1.0)
         with pytest.raises(TypeError, match="DEFERRED pending a normalization"):
             compute_pretrends_power(surface, M=1.0)
+
+
+class TestContinuousContainerRejection:
+    """A REAL ContinuousDiD post-fit container is rejected BY DESIGN.
+
+    Two independent grounds, both named in the clause: no joint event-study
+    covariance (per-bin IF SEs only), and the binarized bins carry NO
+    reference-period normalization at all (no reference row exists). The
+    match strings pin the NEW clause text, not the class name (the
+    got source={...!r} interpolation would match "ContinuousDiDResults"
+    even without the message edit).
+    """
+
+    def test_real_continuous_container_rejected_by_design(self):
+        from diff_diff import ContinuousDiD, generate_continuous_did_data
+
+        d = generate_continuous_did_data(n_units=90, n_periods=6, cohort_periods=[3, 4], seed=17)
+        res = ContinuousDiD().fit(
+            d,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            dose="dose",
+        )
+        surface = res.aggregate("event_study")
+        assert surface.source == "ContinuousDiDResults"
+        assert surface.vcov is None  # no joint ES covariance exists
+        with pytest.raises(TypeError, match="no reference-period[\\s\\n ]*normalization"):
+            compute_honest_did(surface, M=1.0)
+        with pytest.raises(TypeError, match="no reference-period[\\s\\n ]*normalization"):
+            compute_pretrends_power(surface, M=1.0)

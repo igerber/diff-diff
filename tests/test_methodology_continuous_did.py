@@ -433,14 +433,10 @@ class TestRBenchmark:
             staggered=staggered,
         )
 
-        # Map R aggregation names to Python aggregate parameter
-        py_aggregate = None
-        if aggregation == "dose":
-            py_aggregate = "dose"
-        elif aggregation == "eventstudy":
-            py_aggregate = "eventstudy"
-
-        # Python estimation using R's dvals for exact grid match
+        # Python estimation using R's dvals for exact grid match. M-025:
+        # the dose curves are always computed by fit(); the event-study
+        # route (R aggregation "eventstudy") is exercised POST-FIT so the
+        # benchmark keeps validating that code path.
         dvals = np.array(r_out["dvals"])
         est = ContinuousDiD(
             degree=degree,
@@ -455,8 +451,9 @@ class TestRBenchmark:
             "period",
             "first_treat",
             "dose",
-            aggregate=py_aggregate,
         )
+        if aggregation == "eventstudy":
+            results.aggregate("event_study")
 
         # Compare overall ATT
         r_overall_att = r_out["overall_att"]
@@ -607,7 +604,6 @@ class TestRBenchmark:
                 "period",
                 "first_treat",
                 "dose",
-                aggregate="dose",
             )
 
             # Overall ATT
@@ -705,7 +701,6 @@ class TestRBenchmark:
                 "period",
                 "first_treat",
                 "dose",
-                aggregate="dose",
             )
 
             att_diff = abs(results.overall_att - r_out["overall_att"]) / (
@@ -795,8 +790,11 @@ class TestRBenchmark:
                 "period",
                 "first_treat",
                 "dose",
-                aggregate="eventstudy",
             )
+            # M-025: keep validating the event-study code path (this
+            # benchmark's documented purpose) via the post-fit route -
+            # overall_att itself is aggregate-independent.
+            results.aggregate("event_study")
 
             # Compare overall ATT (binarized)
             att_diff = abs(results.overall_att - r_out["overall_att"]) / (
@@ -947,7 +945,6 @@ def _fit_cov(df, method, **kw):
             "period",
             "first_treat",
             "dose",
-            aggregate="dose",
             covariates=["x1", "x2"],
         )
 
@@ -1077,9 +1074,7 @@ class TestCovariateReg:
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            uncond = ContinuousDiD().fit(
-                df, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose"
-            )
+            uncond = ContinuousDiD().fit(df, "outcome", "unit", "period", "first_treat", "dose")
         assert abs(float(uncond.overall_att) - tau) > 0.5  # unconditional biased
         for method in ("reg", "dr"):
             res = _fit_cov(df, method)
@@ -1268,7 +1263,6 @@ class TestDiscreteSaturated:
         time="period",
         first_treat="first_treat",
         dose="dose",
-        aggregate="dose",
     )
 
     def test_hand_calc_att_acrt_overall(self):
@@ -1388,7 +1382,6 @@ class TestLowestDose:
         time="period",
         first_treat="first_treat",
         dose="dose",
-        aggregate="dose",
     )
 
     def test_dL_to_zero_exact_equivalence(self):

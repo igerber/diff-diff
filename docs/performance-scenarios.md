@@ -300,18 +300,19 @@ serves a different purpose: R-parity accuracy). They complement it.
   ```python
   ContinuousDiD(degree=3, num_knots=1, n_bootstrap=199).fit(
       data, outcome="y", unit="unit", time="period", first_treat="first_treat",
-      dose="dose", aggregate="dose",
+      dose="dose",
   )
   ```
-- **Operation chain.** (1) CDiD fit with `aggregate="dose"` - produces
-  overall ATT, overall ACRT, and the dose-response curves; (2) extract
+- **Operation chain.** (1) CDiD fit - produces
+  overall ATT, overall ACRT, and the dose-response curves
+  unconditionally (the fit-time `aggregate=` kwarg is deprecated, row
+  M-025); (2) extract
   `results.to_dataframe(level="dose_response")` and
-  `level="group_time"` (event-study is not populated by a dose-only
-  fit, so it is extracted in a separate step); (3) a second CDiD fit
-  with `aggregate="eventstudy"` for pre-trend diagnostics (note the
-  spelling: `fit(aggregate="eventstudy")` with no underscore, but
-  `to_dataframe(level="event_study")` with underscore - see the
-  correctness-adjacent observations in `performance-plan.md`);
+  `level="group_time"`; (3) a second analytical CDiD fit followed by
+  post-fit `results.aggregate("event_study")` for pre-trend
+  diagnostics (the unified underscored spelling - the fit-time
+  no-underscore `"eventstudy"` value dies with the deprecated kwarg in
+  4.0);
   (4) compare to a binarized DiD fit on the same data to quantify
   information loss from binarizing; (5) alternate `degree=1` (linear)
   and (6) `num_knots=2` refits for spline-sensitivity. The dose-curve

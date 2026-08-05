@@ -1079,6 +1079,27 @@ def _handle_continuous(results: Any):
             priority="medium",
             step_name="sensitivity",
         ),
+        _step(
+            baker_step=7,
+            label="Aggregate post-fit (event study / dose / simple)",
+            why=(
+                "The fit-time aggregate= kwarg is deprecated (row M-025; "
+                "removed in 4.0). Aggregate as a post-fit step instead: "
+                "aggregate('event_study') recomputes the binarized event "
+                "study from the retained kit (analytical fits only - on a "
+                "bootstrapped fit it raises; re-fit with n_bootstrap=0 or "
+                "use the deprecated fit-time aggregate='eventstudy' until "
+                "4.0), while aggregate('dose') and aggregate('simple') are "
+                "views over the always-computed curves and overall "
+                "ATT/ACRT, available on any fit."
+            ),
+            code=(
+                "es = results.aggregate('event_study')  # analytical fits\n"
+                "dose_table = results.aggregate('dose')\n"
+                "overall = results.aggregate('simple')  # att + acrt rows"
+            ),
+            step_name="aggregation",
+        ),
     ]
     warnings = _check_nan_att(results)
     return steps, warnings
@@ -1259,8 +1280,9 @@ def _handle_had(results: Any):
                 "cdid = ContinuousDiD()\n"
                 "cdid_results = cdid.fit(\n"
                 "    data_cdid, outcome='y', unit='unit', time='t',\n"
-                "    first_treat='first_treat', dose='d',\n"
-                "    aggregate='dose')"
+                "    first_treat='first_treat', dose='d')\n"
+                "# Dose-response curves are always computed:\n"
+                "#   cdid_results.dose_response_att / .aggregate('dose')"
             ),
             step_name="estimator_selection",
         ),
@@ -1412,12 +1434,13 @@ def _handle_had_event_study(results: Any):
                 "uses never-treated by default (or "
                 "control_group='lowest_dose' for Remark 3.1 when "
                 "P(D=0)=0). Two ContinuousDiD aggregation "
-                "surfaces are relevant and distinct: `aggregate='dose'` "
-                "(the default) produces the per-dose ATT(d) / ACRT(d) "
-                "curves on `results.dose_response_att` / "
-                "`results.dose_response_acrt`; `aggregate='eventstudy'` "
-                "produces a binarized event-study of `att_glob` on "
-                "`results.event_study_effects` (NOT per-dose by horizon). "
+                "surfaces are relevant and distinct: the per-dose ATT(d) / "
+                "ACRT(d) curves are ALWAYS computed by fit() (on "
+                "`results.dose_response_att` / `results.dose_response_acrt`, "
+                "or as a table via `results.aggregate('dose')`); the "
+                "binarized event-study of `att_glob` comes from post-fit "
+                "`results.aggregate('event_study')` (NOT per-dose by "
+                "horizon). "
                 "Pick the aggregation that matches the estimand you "
                 "actually want. HAD itself remains valid even with a "
                 "small share of never-treated units (paper compatibility); "
@@ -1433,9 +1456,10 @@ def _handle_had_event_study(results: Any):
             ),
             code=(
                 "# HAD reports per-event-time WAS at the dose boundary.\n"
-                "# For per-dose ATT(d)/ACRT(d) curves, use ContinuousDiD with\n"
-                "# the DEFAULT aggregate='dose' (NOT 'eventstudy' - that gives\n"
-                "# binarized event-study of att_glob, not per-dose curves).\n"
+                "# For per-dose ATT(d)/ACRT(d) curves, use ContinuousDiD -\n"
+                "# fit() always computes them (post-fit aggregate('event_study')\n"
+                "# gives the binarized event-study of att_glob instead, which\n"
+                "# is NOT per-dose).\n"
                 "from diff_diff import ContinuousDiD\n"
                 "# ContinuousDiD requires a TIME-INVARIANT per-unit dose.\n"
                 "# Re-prepare the panel (e.g. collapse each unit's positive\n"
@@ -1443,10 +1467,10 @@ def _handle_had_event_study(results: Any):
                 "cdid = ContinuousDiD()\n"
                 "cdid_res = cdid.fit(\n"
                 "    data_cdid, outcome='y', unit='unit', time='t',\n"
-                "    first_treat='first_treat', dose='d',\n"
-                "    aggregate='dose')\n"
+                "    first_treat='first_treat', dose='d')\n"
                 "# Per-dose curves live here:\n"
-                "#   cdid_res.dose_response_att / .dose_response_acrt"
+                "#   cdid_res.dose_response_att / .dose_response_acrt\n"
+                "#   (tabular: cdid_res.aggregate('dose'))"
             ),
             step_name="estimator_selection",
         ),

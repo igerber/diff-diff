@@ -57,6 +57,7 @@ groups:
     - diff_diff/chaisemartin_dhaultfoeuille_results.py
   continuous_did:
     - diff_diff/continuous_did.py
+    - diff_diff/continuous_did_aggregation.py
     - diff_diff/continuous_did_bspline.py
     - diff_diff/continuous_did_results.py
   stacked_did:

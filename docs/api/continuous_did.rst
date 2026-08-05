@@ -78,6 +78,7 @@ Results container for Continuous DiD estimation.
       ~ContinuousDiDResults.summary
       ~ContinuousDiDResults.print_summary
       ~ContinuousDiDResults.to_dataframe
+      ~ContinuousDiDResults.aggregate
 
 DoseResponseCurve
 -----------------
@@ -108,10 +109,10 @@ Basic usage::
     est = ContinuousDiD(n_bootstrap=199, seed=42)
     results = est.fit(data, outcome='outcome', unit='unit',
                       time='period', first_treat='first_treat',
-                      dose='dose', aggregate='dose')
+                      dose='dose')
     results.print_summary()
 
-Accessing dose-response curves::
+Accessing dose-response curves (always computed by ``fit()``)::
 
     # ATT(d) dose-response curve as DataFrame
     att_df = results.dose_response_att.to_dataframe()
@@ -124,13 +125,22 @@ Accessing dose-response curves::
     print(f"Overall ATT: {results.overall_att:.3f} (SE: {results.overall_att_se:.3f})")
     print(f"Overall ACRT: {results.overall_acrt:.3f} (SE: {results.overall_acrt_se:.3f})")
 
-Event study aggregation::
+    # Or as post-fit aggregation tables (views - work on any fit):
+    dose_table = results.aggregate('dose')      # ATT(d) + ACRT(d) rows
+    overall = results.aggregate('simple')       # att + acrt overall rows
 
-    # Dynamic effects (binarized ATT by relative period)
-    results_es = est.fit(data, outcome='outcome', unit='unit',
-                         time='period', first_treat='first_treat',
-                         dose='dose', aggregate='eventstudy')
-    es_df = results_es.to_dataframe(level='event_study')
+Event study aggregation (post-fit, row M-025)::
+
+    # Dynamic effects (binarized ATT by relative period). The event-study
+    # recompute needs an ANALYTICAL fit - on a bootstrapped fit
+    # aggregate('event_study') raises; the deprecated fit-time
+    # aggregate='eventstudy' remains available for that case until 4.0.
+    est_es = ContinuousDiD(seed=42)
+    results_es = est_es.fit(data, outcome='outcome', unit='unit',
+                            time='period', first_treat='first_treat',
+                            dose='dose')
+    es = results_es.aggregate('event_study')
+    es_df = es.to_dataframe()
 
 Comparison with CallawaySantAnna
 --------------------------------

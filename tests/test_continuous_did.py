@@ -18,6 +18,13 @@ from diff_diff.continuous_did_bspline import (
 from diff_diff.continuous_did_results import ContinuousDiDResults
 from diff_diff.prep_dgp import generate_continuous_did_data
 
+# M-025: sites deliberately kept on the deprecated fit-time aggregate=
+# (bootstrap event studies - the aggregated bootstrap surface is
+# fit-time-only until replay ships - and legacy-surface pins) run under
+# this module-scoped suppression; the shim behavior itself is pinned in
+# tests/test_aggregate_contract.py::TestContinuousShim.
+pytestmark = pytest.mark.filterwarnings(r"ignore:ContinuousDiD\.fit\(aggregate=\):FutureWarning")
+
 # =============================================================================
 # B-Spline Basis Tests
 # =============================================================================
@@ -375,10 +382,19 @@ class TestContinuousDiDDataValidation:
             }
         )
         est = ContinuousDiD()
-        with pytest.raises(ValueError, match="Invalid aggregate"):
-            est.fit(
-                data, "outcome", "unit", "period", "first_treat", "dose", aggregate="event_study"
-            )
+        # M-025: the shim warns on ANY supplied value BEFORE the surviving
+        # value validation raises - both must fire, in that order.
+        with pytest.warns(FutureWarning, match=r"ContinuousDiD\.fit\(aggregate=\)"):
+            with pytest.raises(ValueError, match="Invalid aggregate"):
+                est.fit(
+                    data,
+                    "outcome",
+                    "unit",
+                    "period",
+                    "first_treat",
+                    "dose",
+                    aggregate="event_study",
+                )
 
     def test_no_never_treated_error(self):
         data = pd.DataFrame(
@@ -529,7 +545,6 @@ class TestDoseAggregation:
             "period",
             "first_treat",
             "dose",
-            aggregate="dose",
         )
         # With linear DGP (ATT(d) = 1 + 2d) and degree=1, should recover well
         # ACRT should be close to 2.0
@@ -550,7 +565,6 @@ class TestDoseAggregation:
             "period",
             "first_treat",
             "dose",
-            aggregate="dose",
         )
         assert len(results.groups) == 1
         assert np.isfinite(results.overall_att)
@@ -615,22 +629,13 @@ class TestEventStudyAggregation:
             noise_sd=0.5,
         )
         est = ContinuousDiD(control_group="not_yet_treated", n_bootstrap=0)
-        results = est.fit(
-            data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "dose",
-            aggregate="eventstudy",
-        )
-        assert results.event_study_effects is not None
-        rel_periods = sorted(results.event_study_effects.keys())
+        results = est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
+        es = results.aggregate("event_study").to_dataframe()
+        rel_periods = sorted(es["event_time"])
         assert min(rel_periods) < 0  # Pre-treatment
         assert max(rel_periods) >= 0  # Post-treatment
-        for e, info in results.event_study_effects.items():
-            assert np.isfinite(info["effect"]), f"effect is NaN for e={e}"
-            assert np.isfinite(info["se"]), f"SE is NaN for e={e}"
+        assert np.isfinite(es["att"]).all(), "effect is NaN for some bin"
+        assert np.isfinite(es["se"]).all(), "SE is NaN for some bin"
 
     def test_event_study_universal_base_period(self):
         """Event study with base_period='universal' and analytic SE."""
@@ -642,22 +647,13 @@ class TestEventStudyAggregation:
             noise_sd=0.5,
         )
         est = ContinuousDiD(base_period="universal", n_bootstrap=0)
-        results = est.fit(
-            data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "dose",
-            aggregate="eventstudy",
-        )
-        assert results.event_study_effects is not None
-        rel_periods = sorted(results.event_study_effects.keys())
+        results = est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
+        es = results.aggregate("event_study").to_dataframe()
+        rel_periods = sorted(es["event_time"])
         assert min(rel_periods) < 0  # Pre-treatment
         assert max(rel_periods) >= 0  # Post-treatment
-        for e, info in results.event_study_effects.items():
-            assert np.isfinite(info["effect"]), f"effect is NaN for e={e}"
-            assert np.isfinite(info["se"]), f"SE is NaN for e={e}"
+        assert np.isfinite(es["att"]).all(), "effect is NaN for some bin"
+        assert np.isfinite(es["se"]).all(), "SE is NaN for some bin"
 
     def test_event_study_not_yet_treated_bootstrap(self, ci_params):
         """Event study with not_yet_treated control group and bootstrap SE."""
@@ -1260,23 +1256,15 @@ class TestAnticipationEventStudy:
             seed=42,
         )
         est = ContinuousDiD(anticipation=1, n_bootstrap=0)
-        results = est.fit(
-            data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "dose",
-            aggregate="eventstudy",
-        )
-        assert results.event_study_effects is not None
+        results = est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
+        es = results.aggregate("event_study").to_dataframe()
         # With anticipation=1 and g=3, post-treatment starts at t=2 (g - anticipation).
         # Relative times e = t - g, so t=2 → e=-1 (the anticipation period).
-        rel_times = sorted(results.event_study_effects.keys())
+        rel_times = sorted(es["event_time"])
         assert (
             -1 in rel_times
         ), f"Anticipation period e=-1 missing from event study; got {rel_times}"
-        assert np.isfinite(results.event_study_effects[-1]["effect"])
+        assert np.isfinite(es.loc[es["event_time"] == -1, "att"]).all()
 
     def test_anticipation_event_study_excludes_contaminated_periods(self):
         """With anticipation=2, event study should not contain e < -2."""
@@ -1315,17 +1303,9 @@ class TestAnticipationEventStudy:
 
         data = pd.DataFrame(rows)
         est = ContinuousDiD(anticipation=2, n_bootstrap=0)
-        results = est.fit(
-            data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "dose",
-            aggregate="eventstudy",
-        )
-        assert results.event_study_effects is not None
-        for e in results.event_study_effects.keys():
+        results = est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
+        es = results.aggregate("event_study").to_dataframe()
+        for e in es["event_time"]:
             assert e >= -2, f"Found relative period e={e} with anticipation=2; " f"expected e >= -2"
 
     def test_anticipation_not_yet_treated_excludes_anticipation_window(self):
@@ -1512,23 +1492,17 @@ class TestEventStudyAnalyticalSE:
             noise_sd=0.5,
         )
         est = ContinuousDiD(n_bootstrap=0)
-        results = est.fit(
-            data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            "dose",
-            aggregate="eventstudy",
-        )
-        assert results.event_study_effects is not None
-        for e, info in results.event_study_effects.items():
-            assert np.isfinite(info["se"]), f"SE is NaN for e={e}"
-            assert info["se"] > 0, f"SE is non-positive for e={e}"
-            assert np.isfinite(info["t_stat"]), f"t_stat is NaN for e={e}"
-            assert np.isfinite(info["p_value"]), f"p_value is NaN for e={e}"
-            assert 0 <= info["p_value"] <= 1, f"p_value out of range for e={e}"
-            lo, hi = info["conf_int"]
+        results = est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
+        es = results.aggregate("event_study").to_dataframe()
+        assert len(es) > 0
+        for _, row in es.iterrows():
+            e = row["event_time"]
+            assert np.isfinite(row["se"]), f"SE is NaN for e={e}"
+            assert row["se"] > 0, f"SE is non-positive for e={e}"
+            assert np.isfinite(row["t_stat"]), f"t_stat is NaN for e={e}"
+            assert np.isfinite(row["p_value"]), f"p_value is NaN for e={e}"
+            assert 0 <= row["p_value"] <= 1, f"p_value out of range for e={e}"
+            lo, hi = row["conf_int_lower"], row["conf_int_upper"]
             assert np.isfinite(lo) and np.isfinite(hi), f"conf_int contains NaN for e={e}"
 
 
@@ -1619,7 +1593,6 @@ class TestCovariateAPI:
                 "period",
                 "first_treat",
                 "dose",
-                aggregate="dose",
                 covariates=["x1"],
             )
 
@@ -1628,7 +1601,7 @@ class TestCovariateAPI:
         # break the unconditional path.
         data = _cov_data()
         est = ContinuousDiD(estimation_method="ipw")
-        res = est.fit(data, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose")
+        res = est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
         assert np.isfinite(res.overall_att)
 
     def test_survey_with_covariates_raises(self):
@@ -1645,7 +1618,6 @@ class TestCovariateAPI:
                 "period",
                 "first_treat",
                 "dose",
-                aggregate="dose",
                 covariates=["x1"],
                 survey_design=SurveyDesign(weights="w"),
             )
@@ -1661,7 +1633,6 @@ class TestCovariateAPI:
                 "period",
                 "first_treat",
                 "dose",
-                aggregate="dose",
                 covariates=["not_a_col"],
             )
 
@@ -1679,7 +1650,6 @@ class TestCovariateAPI:
                 "period",
                 "first_treat",
                 "dose",
-                aggregate="dose",
                 covariates=["x1"],
             )
 
@@ -1711,7 +1681,6 @@ class TestCovariateAPI:
             "period",
             "first_treat",
             "dose",
-            aggregate="dose",
             covariates=["x1"],
         )
         assert res.covariates == ["x1"]
@@ -1744,7 +1713,6 @@ class TestCovariateAPI:
                 "period",
                 "first_treat",
                 "dose",
-                aggregate="dose",
                 covariates=["x1"],
             )
             boot = ContinuousDiD(estimation_method=method, n_bootstrap=199, seed=3).fit(
@@ -1754,7 +1722,6 @@ class TestCovariateAPI:
                 "period",
                 "first_treat",
                 "dose",
-                aggregate="dose",
                 covariates=["x1"],
             )
             assert np.isfinite(boot.overall_att_se)
@@ -1765,24 +1732,22 @@ class TestCovariateAPI:
         data = _cov_data()
         with pytest.warns(FutureWarning, match=r"\(covariates=\) is deprecated"):
             est = ContinuousDiD(covariates=["x1"], estimation_method="dr", seed=1)
-        r1 = est.fit(data, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose")
+        r1 = est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
         # raw-keep: the clone re-warns because the config still carries the
         # deprecated ctor covariates (M-084, documented).
         with pytest.warns(FutureWarning, match=r"\(covariates=\) is deprecated"):
             clone = ContinuousDiD(**est.get_params())
-        r2 = clone.fit(data, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose")
+        r2 = clone.fit(data, "outcome", "unit", "period", "first_treat", "dose")
         assert abs(float(r1.overall_att) - float(r2.overall_att)) < 1e-12
         assert abs(float(r1.overall_att_se) - float(r2.overall_att_se)) < 1e-12
 
     def test_no_covariate_path_unchanged(self):
         """Passing covariates=None runs the unchanged unconditional path."""
         data = _cov_data()
-        base = ContinuousDiD(seed=1).fit(
-            data, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose"
-        )
+        base = ContinuousDiD(seed=1).fit(data, "outcome", "unit", "period", "first_treat", "dose")
         # estimation_method has no effect without covariates
         alt = ContinuousDiD(estimation_method="reg", seed=1).fit(
-            data, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose"
+            data, "outcome", "unit", "period", "first_treat", "dose"
         )
         assert float(base.overall_att) == float(alt.overall_att)
         assert float(base.overall_att_se) == float(alt.overall_att_se)
@@ -1830,7 +1795,6 @@ _DKW = dict(
     time="period",
     first_treat="first_treat",
     dose="dose",
-    aggregate="dose",
 )
 
 
@@ -2008,10 +1972,10 @@ class TestDiscreteSaturatedAPI:
         """Default treatment_type is 'continuous'; explicit value gives identical output."""
         data = generate_continuous_did_data(n_units=120, n_periods=3, seed=13)
         r_default = ContinuousDiD(n_bootstrap=0).fit(
-            data, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose"
+            data, "outcome", "unit", "period", "first_treat", "dose"
         )
         r_explicit = ContinuousDiD(treatment_type="continuous", n_bootstrap=0).fit(
-            data, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose"
+            data, "outcome", "unit", "period", "first_treat", "dose"
         )
         np.testing.assert_allclose(
             r_default.dose_response_att.effects, r_explicit.dose_response_att.effects
@@ -2098,7 +2062,6 @@ class TestLowestDoseAPI:
                 time="period",
                 first_treat="first_treat",
                 dose="dose",
-                aggregate="dose",
             )
 
     def test_continuous_one_dose_above_warns(self):
@@ -2121,7 +2084,6 @@ class TestLowestDoseAPI:
                 time="period",
                 first_treat="first_treat",
                 dose="dose",
-                aggregate="dose",
             )
         assert np.all(np.isfinite(res.dose_response_att.se))
         assert np.allclose(res.dose_response_acrt.effects, 0.0)
@@ -2168,12 +2130,12 @@ class TestLowestDoseAPI:
             {1.0: 0.5, 2.0: 1.5}, n_control=0, cohorts=(2,), n_periods=4, noise=0.0, seed=6
         )
         res = ContinuousDiD(control_group="lowest_dose", treatment_type="discrete").fit(
-            df, "outcome", "unit", "period", "first_treat", "dose", aggregate="eventstudy"
+            df, "outcome", "unit", "period", "first_treat", "dose"
         )
-        assert res.event_study_effects is not None
+        es = res.aggregate("event_study").to_dataframe()
         # Pre-period event bins (e < 0) difference out to ~0 (both groups untreated).
-        pre = {e: v for e, v in res.event_study_effects.items() if e < 0}
-        assert pre and all(abs(v["effect"]) < 1e-9 for v in pre.values())
+        pre = es[es["event_time"] < 0]
+        assert len(pre) > 0 and (pre["att"].abs() < 1e-9).all()
 
     def test_survey_zeroed_dL_group_raises(self):
         """A survey design zeroing the entire d_L reference group fails closed."""

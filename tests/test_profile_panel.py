@@ -1235,7 +1235,7 @@ def test_treatment_dose_min_flags_negative_dose_continuous_panels():
     consistent with the dose column on per-unit treated/untreated
     status (negative-dose units labeled `first_treat > 0`),
     `ContinuousDiD.fit()` would raise `ValueError` at
-    `continuous_did.py:287-294` ("Dose must be strictly positive for
+    `continuous_did.py:586-593` ("Dose must be strictly positive for
     treated units (D > 0)"). `ContinuousDiD` as currently
     implemented does not apply on this panel. `HeterogeneousAdoptionDiD`
     is also NOT a routing alternative here: HAD requires non-negative

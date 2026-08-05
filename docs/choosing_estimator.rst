@@ -373,9 +373,9 @@ Use :class:`~diff_diff.ContinuousDiD` when:
    est = ContinuousDiD(n_bootstrap=199, seed=42)
    results = est.fit(data, outcome='outcome', unit='unit',
                      time='period', first_treat='first_treat',
-                     dose='dose', aggregate='dose')
+                     dose='dose')
 
-   # Overall effect and dose-response curve
+   # Overall effect and dose-response curve (always computed by fit)
    print(f"Overall ATT: {results.overall_att:.3f}")
    att_curve = results.dose_response_att.to_dataframe()
 

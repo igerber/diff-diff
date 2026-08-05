@@ -626,7 +626,10 @@ _ABSENT_SURFACE_HINTS: Dict[str, str] = {
     "StackedDiDResults": "re-fit with diff-diff >= 3.9, which always computes the surface",
     "StaggeredTripleDiffResults": "refit with aggregate='event_study' (or 'all')",
     "EfficientDiDResults": "call results.aggregate('event_study') (on a bootstrapped fit, re-fit with n_bootstrap=0 or the deprecated fit-time aggregate=)",
-    "ContinuousDiDResults": "refit with aggregate='eventstudy' (or 'all')",
+    "ContinuousDiDResults": (
+        "call results.aggregate('event_study') (on a bootstrapped fit, "
+        "re-fit with n_bootstrap=0 or the deprecated fit-time aggregate=)"
+    ),
     "WooldridgeDiDResults": "call results.aggregate('event_study') first",
     "SpilloverDiDResults": "refit with event_study=True",
     "ChaisemartinDHaultfoeuilleResults": "refit with L_max >= 1",

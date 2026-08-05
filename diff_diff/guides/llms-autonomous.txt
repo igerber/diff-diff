@@ -219,8 +219,8 @@ view. Every field below appears as a top-level key in that dict.
   `first_treat == 0`, force-zeroes nonzero `dose` on those rows
   with a `UserWarning`, drops units where `first_treat > 0` AND
   `dose == 0`, and rejects negative dose only among treated units
-  where `first_treat > 0`; see `continuous_did.py:276-327` and
-  `:348-360`).
+  where `first_treat > 0`; see `continuous_did.py:528-593` and
+  `:632-651`).
 
   In the canonical `ContinuousDiD` setup (Callaway, Goodman-Bacon,
   Sant'Anna 2024), the dose `D_i` is **time-invariant per unit**
@@ -297,7 +297,7 @@ view. Every field below appears as a top-level key in that dict.
       treated-dose requirement. A continuous panel with negative
       non-zero doses (e.g. `dose_min == -1.5`) labeled as
       `first_treat > 0` would be rejected at fit time
-      (``continuous_did.py:287-294``); the same negative-dose units
+      (``continuous_did.py:586-593``); the same negative-dose units
       labeled as `first_treat == 0` would be coerced to dose=0 with
       a `UserWarning` instead. See §5.2 for the standard-workflow
       walkthrough.

@@ -98,17 +98,17 @@ class TreatmentDoseShape:
        ``ContinuousDiD`` out — for graded-adoption panels with
        dose changes use ``HeterogeneousAdoptionDiD``.
     3. ``PanelProfile.is_balanced == True``. Actual fit-time gate
-       (``continuous_did.py:329-338``); not ``first_treat``-dependent.
+       (``continuous_did.py:653-661``); not ``first_treat``-dependent.
     4. Absence of the ``duplicate_unit_time_rows`` alert. The
        precompute path silently resolves duplicate ``(unit, time)``
-       cells via last-row-wins (``continuous_did.py:818-823``);
+       cells via last-row-wins (``continuous_did.py:1256-1261``);
        **not** a fit-time raise. The agent must deduplicate before
        fit because ``ContinuousDiD`` will otherwise overwrite
        silently.
     5. ``treatment_dose.dose_min > 0`` (over non-zero doses).
        Predicts ``ContinuousDiD.fit()``'s strictly-positive-treated-
        dose requirement (raises ``ValueError`` on negative dose for
-       ``first_treat > 0`` units, ``continuous_did.py:287-294``).
+       ``first_treat > 0`` units, ``continuous_did.py:586-593``).
        Failure means some treated units have negative dose; see
        routing notes below.
 

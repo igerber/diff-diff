@@ -1,9 +1,10 @@
 """
 Scenario 6: Pricing dose-response with ContinuousDiD cubic spline.
 
-Chains: CDiD fit with aggregate='dose' (overall ATT + ACRT + dose-response
-curves + bootstrap 199) -> dataframe extraction -> event-study pre-trend ->
-binarized-DiD comparison -> spline sensitivity (degree=1, num_knots=2).
+Chains: CDiD fit (overall ATT + ACRT + dose-response curves are always
+computed; bootstrap 199) -> dataframe extraction -> post-fit event-study
+pre-trend (results.aggregate('event_study'), row M-025) -> binarized-DiD
+comparison -> spline sensitivity (degree=1, num_knots=2).
 
 Data shape: 500 stores x 6 quarterly periods, 1 cohort at period 3,
 log-normal dose. Matches Tutorial 14 scaled from 200 to 500 units.
@@ -50,15 +51,14 @@ def main():
         cdid = ContinuousDiD(
             degree=3, num_knots=1, n_bootstrap=199, seed=123,
         )
-        results["cubic"] = cdid.fit(**fit_kwargs, aggregate="dose")
+        results["cubic"] = cdid.fit(**fit_kwargs)
 
     def extract_curves():
-        # The cubic fit used aggregate="dose", so only dose-response and
-        # group-time levels are available on the result. Event-study is
-        # extracted separately in the dedicated pretrend phase below.
-        # NB: ContinuousDiD uses 'eventstudy' for fit(aggregate=...) but
-        # 'event_study' for to_dataframe(level=...). Two different
-        # spellings within one estimator - flagged in performance-plan.md.
+        # Dose-response and group-time levels are always available on the
+        # result (fit computes them unconditionally). The event study is
+        # produced post-fit in the dedicated pretrend phase below via
+        # results.aggregate('event_study') - the unified spelling; the
+        # fit-time 'eventstudy' kwarg is deprecated (row M-025).
         r = results["cubic"]
         out = {}
         for level in ("dose_response", "group_time"):
@@ -66,12 +66,13 @@ def main():
         results["curves"] = out
 
     def cdid_event_study():
+        # Post-fit route (M-025): the phase still times the event-study
+        # computation - the analytical fit plus the kit recompute.
         cdid = ContinuousDiD(
             degree=3, num_knots=1, n_bootstrap=0, seed=123,
         )
-        results["event_study"] = cdid.fit(
-            **fit_kwargs, aggregate="eventstudy",
-        )
+        res = cdid.fit(**fit_kwargs)
+        results["event_study"] = res.aggregate("event_study")
 
     def binarized_comparison():
         # Derive post from the actual first_treat cohort in the data so
@@ -92,13 +93,13 @@ def main():
         cdid = ContinuousDiD(
             degree=1, num_knots=0, n_bootstrap=199, seed=123,
         )
-        results["linear"] = cdid.fit(**fit_kwargs, aggregate="dose")
+        results["linear"] = cdid.fit(**fit_kwargs)
 
     def spline_sensitivity_more_knots():
         cdid = ContinuousDiD(
             degree=3, num_knots=2, n_bootstrap=199, seed=123,
         )
-        results["many_knots"] = cdid.fit(**fit_kwargs, aggregate="dose")
+        results["many_knots"] = cdid.fit(**fit_kwargs)
 
     phases = [
         ("1_cdid_cubic_spline_bootstrap199", cdid_cubic_fit),

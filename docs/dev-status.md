@@ -33,7 +33,7 @@ Target: ideally < 1000 lines per module; modules ≥3000 lines are candidates fo
 | `synthetic_control.py` | 2526 | Monitor |
 | `prep_dgp.py` | 2524 | Monitor |
 | `estimators.py` | 2441 | Monitor |
-| `continuous_did.py` | 2431 | Monitor |
+| `continuous_did.py` | 2459 | Monitor |
 | `sun_abraham.py` | 2314 | Monitor |
 | `triple_diff.py` | 2231 | Monitor |
 | `wooldridge.py` | 2192 | Monitor |

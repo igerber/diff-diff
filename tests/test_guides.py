@@ -67,7 +67,7 @@ def test_content_stability_autonomous_fingerprints():
         "must be removed before fitting."
     )
     # ContinuousDiD also requires strictly positive treated doses
-    # (`continuous_did.py:287-294` raises on negative dose support).
+    # (`continuous_did.py:586-593` raises on negative dose support).
     # The autonomous guide must list `dose_min > 0` so an agent reading
     # `treatment_dose.dose_min == -1.5` knows to route the panel away
     # from ContinuousDiD before paying for the failed fit.
@@ -897,7 +897,10 @@ class TestLLMsFullEfficientDiDShimLine:
         nxt = text.index("\n### ", start + 1)
         return text[start:nxt]
 
-    def _assert_shim_lines(self, section, fit_call, agg_row, bal_row):
+    def _assert_shim_lines(self, section, fit_call, agg_row, bal_row=None):
+        """``bal_row=None`` skips the balance_e-line lookup - required for
+        estimators without a balance_e param (ContinuousDiD, M-025), where
+        the unconditional ``next(...)`` would raise StopIteration."""
         fit_start = section.index(fit_call)
         fit_block = section[fit_start : section.index("\n)", fit_start)]
         agg_line = next(
@@ -906,11 +909,12 @@ class TestLLMsFullEfficientDiDShimLine:
         assert "NOT_SUPPLIED" in agg_line
         assert f"DEPRECATED ({agg_row})" in agg_line
         assert "results.aggregate()" in agg_line
-        bal_line = next(
-            line for line in fit_block.splitlines() if line.strip().startswith("balance_e")
-        )
-        assert "NOT_SUPPLIED" in bal_line
-        assert f"DEPRECATED ({bal_row})" in bal_line
+        if bal_row is not None:
+            bal_line = next(
+                line for line in fit_block.splitlines() if line.strip().startswith("balance_e")
+            )
+            assert "NOT_SUPPLIED" in bal_line
+            assert f"DEPRECATED ({bal_row})" in bal_line
 
     def test_llms_full_imputation_fit_aggregate_line_documents_shim(self):
         # The M-021/M-118 twin of the EfficientDiD pin above - no other
@@ -919,3 +923,7 @@ class TestLLMsFullEfficientDiDShimLine:
 
     def test_llms_full_two_stage_fit_aggregate_line_documents_shim(self):
         self._assert_shim_lines(self._section("### TwoStageDiD"), ".fit(", "M-022", "M-119")
+
+    def test_llms_full_continuous_fit_aggregate_line_documents_shim(self):
+        # M-025: no balance_e twin exists - bal_row stays None.
+        self._assert_shim_lines(self._section("### ContinuousDiD"), "cdid.fit(", "M-025")
