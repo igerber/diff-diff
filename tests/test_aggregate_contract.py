@@ -3857,6 +3857,10 @@ class TestHadAggregate:
         assert es.estimand in heading and "ATT" not in heading
         assert f"estimand: {es.estimand}" in s
         assert es.to_dict()["estimand"] == es.estimand
+        # The detached frame carries the discriminator too (CI review R2):
+        # a bare att column would be indistinguishable from an ATT.
+        frame = es.to_dataframe()
+        assert list(frame["estimand"].unique()) == [es.estimand]
 
     def test_event_study_view_estimand_was_at_zero(self):
         # The continuous_at_zero design labels the estimand "WAS" (vs the
@@ -3888,6 +3892,7 @@ class TestHadAggregate:
         heading = next(line for line in s.splitlines() if "Event time" in line)
         assert " ATT " in heading
         assert "estimand:" not in s
+        assert list(es.to_dataframe()["estimand"].unique()) == ["att"]
 
     def test_event_study_view_cband_relays(self, had_panel_multi):
         # cluster= fires the clustered sup-t band even on an unweighted fit;

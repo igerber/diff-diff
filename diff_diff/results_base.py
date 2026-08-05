@@ -127,6 +127,11 @@ EVENT_STUDY_SCHEMA: Tuple[str, ...] = (
     "n",
     "df",
     "is_reference",
+    # The per-row estimand discriminator (appended with row M-027, the
+    # AggregationResult.target precedent): "att" for every ATT producer,
+    # the estimand label ("WAS"/"WAS_d_lower") where the att column is
+    # NOT an ATT - so a detached frame never mislabels its numbers.
+    "estimand",
 )
 
 #: Closed vocabulary for the ``n_kind`` field, SHARED by every container that
@@ -509,6 +514,9 @@ class EventStudyResults(BaseResults):
                 # scalar-accepting field type for mypy.
                 "df": cast(np.ndarray, self.df),
                 "is_reference": self.is_reference,
+                # Per-row estimand discriminator: a detached frame must not
+                # mislabel WAS-family numbers as ATT (row M-027).
+                "estimand": np.full(n_rows, self.estimand or "att", dtype=object),
             },
             columns=list(EVENT_STUDY_SCHEMA),
         )

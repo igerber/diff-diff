@@ -29,7 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   provenance-exact df; `aggregate('event_study')` on event-study fits is a
   `build_event_study_surface` passthrough (cband fields included). The
   `_from_had` adapter's `n_kind` is corrected `"obs"` -> `"units"`
-  (`n_obs_per_horizon` counts units), and `AggregationResult.summary()` now
+  (`n_obs_per_horizon` counts units); `EventStudyResults` gains an
+  `estimand` provenance field plus a per-row `estimand` column in the
+  pinned `to_dataframe()` schema (`"att"` for every ATT producer, the
+  WAS-family label for HAD, relayed from `target_parameter`) so the
+  container heading, `to_dict()` serialization, and detached frames never
+  mislabel the estimand; and `AggregationResult.summary()` now
   renders the target column + neutral `estimate` heading whenever the single
   distinct target is not `"att"` (sized to the longest label) - previously a
   WAS or dCDH estimand row rendered under a hard-coded `ATT` heading;
