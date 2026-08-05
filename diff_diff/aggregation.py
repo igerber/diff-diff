@@ -365,25 +365,35 @@ class AggregationResult(BaseResults):
 
         n_label = "n" if self.n_kind is None else f"n[{self.n_kind}]"
         frame = self.to_dataframe()
-        if len(dict.fromkeys(self.target)) > 1:
-            # Heterogeneous targets (ContinuousDiD's att/acrt, row M-025):
-            # a target column disambiguates the duplicate labels and the
-            # estimate heading goes neutral - the hard-coded 'ATT' would
-            # mislabel every acrt row. Uniform-target containers render
-            # exactly as before (byte-stable).
+        distinct_targets = list(dict.fromkeys(self.target))
+        if len(distinct_targets) > 1 or (
+            len(distinct_targets) == 1 and distinct_targets[0] != "att"
+        ):
+            # Heterogeneous targets (ContinuousDiD's att/acrt, row M-025)
+            # OR a single non-'att' estimand (HAD's WAS/WAS_d_lower and
+            # dCDH's DID_M/DID_1/delta relays, row M-027 widening): a
+            # target column names the estimand and the estimate heading
+            # goes neutral - the hard-coded 'ATT' would mislabel those
+            # rows. Uniform-'att' containers render exactly as before
+            # (byte-stable). The target column widens to the longest
+            # label (dCDH's parenthetical estimand labels exceed 8
+            # chars); ContinuousDiD's att/acrt keep the original 8-char
+            # width, so its output is byte-stable too.
+            t_w = max(8, max(len(str(t)) for t in distinct_targets))
+            rule = 64 + t_w + 1
             lines.append(
-                f"{'label':>14} {'target':>8} {'estimate':>11} {'SE':>10} "
+                f"{'label':>14} {'target':>{t_w}} {'estimate':>11} {'SE':>10} "
                 f"{'t':>8} {'p':>8} {n_label:>10}"
             )
-            lines.append("-" * 73)
+            lines.append("-" * rule)
             for _, row in frame.iterrows():
                 n_disp = "" if not np.isfinite(row["n"]) else f"{row['n']:.0f}"
                 lines.append(
-                    f"{str(row['label']):>14} {str(row['target']):>8} "
+                    f"{str(row['label']):>14} {str(row['target']):>{t_w}} "
                     f"{row['att']:>11.4f} {row['se']:>10.4f} "
                     f"{row['t_stat']:>8.3f} {row['p_value']:>8.4f} {n_disp:>10}"
                 )
-            lines.append("-" * 73)
+            lines.append("-" * rule)
         else:
             lines.append(f"{'label':>14} {'ATT':>11} {'SE':>10} {'t':>8} {'p':>8} {n_label:>10}")
             lines.append("-" * 64)

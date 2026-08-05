@@ -625,7 +625,6 @@ class TestPretestFunctionRenames:
                 "u",
                 n_bootstrap=99,
                 seed=7,
-                aggregate="event_study",
             )
         _assert_no_future_warning(record)
         with pytest.warns(
@@ -640,7 +639,6 @@ class TestPretestFunctionRenames:
                 unit_col="u",
                 n_bootstrap=99,
                 seed=7,
-                aggregate="event_study",
             )
         assert r_new.homogeneity_joint.cvm_stat_joint == r_old.homogeneity_joint.cvm_stat_joint
         with pytest.raises(ValueError, match=r"pass only time="):
@@ -666,9 +664,7 @@ class TestValidationMessagesRecommendCanonicalNames:
                 rows.append((u, t, dose, 0.3 * t + 0.8 * dose + rng.normal(0, 0.2)))
         staggered = pd.DataFrame(rows, columns=["u", "t", "dose", "y"])
         with pytest.raises(ValueError) as exc:
-            HeterogeneousAdoptionDiD().fit(
-                staggered, "y", "dose", "t", "u", aggregate="event_study"
-            )
+            HeterogeneousAdoptionDiD().fit(staggered, "y", "dose", "t", "u")
         message = str(exc.value)
         assert "Pass first_treat=" in message
         assert "first_treat_col" not in message
@@ -707,9 +703,7 @@ class TestFirstTreatOptionalAliasPerSurface:
         df = self._with_ft(had_multi_panel)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            r_new = HeterogeneousAdoptionDiD().fit(
-                df, "y", "dose", "t", "u", first_treat="ft", aggregate="event_study"
-            )
+            r_new = HeterogeneousAdoptionDiD().fit(df, "y", "dose", "t", "u", first_treat="ft")
         with pytest.warns(
             FutureWarning,
             match=r"HeterogeneousAdoptionDiD\.fit\(first_treat_col=\) is deprecated",
@@ -721,7 +715,6 @@ class TestFirstTreatOptionalAliasPerSurface:
                 "t",
                 "u",
                 first_treat_col="ft",
-                aggregate="event_study",
             )
         np.testing.assert_array_equal(r_old.att, r_new.att)
         with pytest.raises(ValueError, match=r"pass only first_treat="):
@@ -733,7 +726,6 @@ class TestFirstTreatOptionalAliasPerSurface:
                 "u",
                 first_treat="ft",
                 first_treat_col="ft",
-                aggregate="event_study",
             )
 
     @pytest.mark.parametrize(
@@ -741,7 +733,7 @@ class TestFirstTreatOptionalAliasPerSurface:
         [
             ("joint_pretrends_test", {"pre_periods": [0], "base_period": 1}),
             ("joint_homogeneity_test", {"post_periods": [2, 3], "base_period": 1}),
-            ("did_had_pretest_workflow", {"aggregate": "event_study"}),
+            ("did_had_pretest_workflow", {}),
         ],
     )
     def test_pretest_functions_first_treat_col(self, had_multi_panel, func_name, extra):

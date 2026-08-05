@@ -1239,7 +1239,7 @@ def test_treatment_dose_min_flags_negative_dose_continuous_panels():
     treated units (D > 0)"). `ContinuousDiD` as currently
     implemented does not apply on this panel. `HeterogeneousAdoptionDiD`
     is also NOT a routing alternative here: HAD requires non-negative
-    dose support (`had.py:1450-1459`, paper Section 2). The applicable
+    dose support (`had.py:1563-1572`, paper Section 2). The applicable
     alternative on the negative-dose branch is linear DiD with the
     treatment as a signed continuous covariate. Re-encoding the
     treatment to a non-negative scale is an agent-side preprocessing

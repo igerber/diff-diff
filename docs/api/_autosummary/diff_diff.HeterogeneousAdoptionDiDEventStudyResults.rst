@@ -12,6 +12,7 @@
    .. autosummary::
 
       ~HeterogeneousAdoptionDiDEventStudyResults.__init__
+      ~HeterogeneousAdoptionDiDEventStudyResults.aggregate
       ~HeterogeneousAdoptionDiDEventStudyResults.print_summary
       ~HeterogeneousAdoptionDiDEventStudyResults.summary
       ~HeterogeneousAdoptionDiDEventStudyResults.to_dataframe

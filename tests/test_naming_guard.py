@@ -114,6 +114,7 @@ _PATTERN_TOKENS = {
     "controls",
     "cohort",
     "aggregation",
+    "aggregate",
     "robust",
     "clean_control",
     "group",
@@ -136,6 +137,11 @@ _AMBIGUOUS_TOKENS = {
     "controls",
     "robust",
     "aggregation",
+    # M-139's old token: `.aggregate` is ALSO the canonical post-fit method
+    # name library-wide, so only the precise lanes may match it - never a
+    # bare grep (docs/guides-lane hits on canonical successor vocabulary
+    # are covered by CONSUMER_ALLOWLIST entries below).
+    "aggregate",
 }
 
 
@@ -498,6 +504,12 @@ _RULE1_TIME_SURFACES = (
 SURFACE_ALLOWLIST = {
     **{f"{cls}.groups": _CS_COHORT for cls in _CS_GROUPS_CLASSES},
     "GroupTimeEffect.group": _CS_COHORT,
+    "HADPretestReport.aggregate": (
+        "honest OUTPUT metadata, not the deprecated param (M-139 kills only "
+        "did_had_pretest_workflow's aggregate= INPUT): the field records "
+        "which pretest battery the workflow RAN, and the overall/event_study "
+        "modes survive 4.0 - only the routing param dies"
+    ),
     "plot_group_effects[groups]": _CS_COHORT + " - cohort selector on the plotting surface",
     "TripleDifference.fit[group]": (
         "rule-3 reserved treated-group 0/1 indicator (v4-design section 8 rule 3)"
@@ -896,6 +908,43 @@ CONSUMER_ALLOWLIST = {
     ("lambda_reg", "diff_diff/prep.py"): (
         "rank_control_units' own independent regularization param - not the "
         "removed SyntheticDiD kwarg (M-001)"
+    ),
+    # M-139's `aggregate` token doubles as the library's canonical post-fit
+    # METHOD name, so every doc that teaches `results.aggregate(...)` hits
+    # the docs/guides attr lane. Each entry below was verified clean of
+    # stale fit-time `aggregate=` teaching before allowlisting (the
+    # migrate-first rule; stale sites were migrated in the same diff that
+    # added these entries). Dated phase-closure records in the paper-review
+    # doc describe the API as-shipped at closure time (the released-record
+    # convention) and are not regenerated for a deprecation sweep.
+    ("aggregate", "diff_diff/guides/llms-autonomous.txt"): (
+        "canonical post-fit results.aggregate() vocabulary; the HAD "
+        "mode-kwarg teachings were migrated to panel-shape wording with "
+        "M-027/M-139"
+    ),
+    ("aggregate", "docs/methodology/REGISTRY.md"): (
+        "the aggregate-postfit register Notes (M-020..M-027) teach the "
+        "canonical successor method; HAD-section fit-time mode mentions "
+        "were migrated with M-027"
+    ),
+    ("aggregate", "docs/methodology/REPORTING.md"): (
+        "canonical post-fit aggregate() mention only (zero fit-time "
+        "kwarg sites; the fit-time-population clause was reworded with "
+        "M-027)"
+    ),
+    ("aggregate", "docs/methodology/papers/dechaisemartin-2026-review.md"): (
+        "dated phase-closure records describing the API as-shipped at "
+        "closure time (paper-review docs source from the paper + the "
+        "then-current implementation; the live surface is the REGISTRY "
+        "HAD Note)"
+    ),
+    ("aggregate", "docs/methodology/papers/roth-2022-review.md"): (
+        "canonical post-fit results.aggregate('event_study') pointer "
+        "(the invalid `aggregate=event` recommendation was corrected "
+        "with M-027)"
+    ),
+    ("aggregate", "docs/methodology/variance-conventions.md"): (
+        "canonical post-fit aggregate() vocabulary only (zero fit-time " "kwarg sites)"
     ),
     **{
         (

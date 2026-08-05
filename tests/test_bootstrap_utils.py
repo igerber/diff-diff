@@ -501,7 +501,7 @@ class TestApplyStratumCentering:
         np.testing.assert_array_equal(tensor_a, tensor_b)
 
     def test_bit_parity_vs_pre_refactor_inline_block(self):
-        """Regression for the HAD sup-t refactor at ``had.py:2151-2204``.
+        """Regression for the HAD sup-t refactor at ``had.py:2264-2317``.
         Locks ``apply_stratum_centering(psu_axis=0)`` bit-exactly against
         the pre-refactor inline implementation on a 200-row × 4-horizon
         fixture spanning balanced + unbalanced + singleton strata under

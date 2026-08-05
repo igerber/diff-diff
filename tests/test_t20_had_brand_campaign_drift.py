@@ -116,7 +116,6 @@ def event_study_result(panel):
             time="week",
             unit="dma_id",
             first_treat="first_treat",
-            aggregate="event_study",
         )
 
 

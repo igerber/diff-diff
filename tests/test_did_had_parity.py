@@ -143,7 +143,6 @@ def _python_fit(
             dose="d",
             time="t",
             unit="g",
-            aggregate="overall",
         )
     return est.fit(
         panel,
@@ -151,7 +150,6 @@ def _python_fit(
         dose="d",
         time="t",
         unit="g",
-        aggregate="event_study",
         trends_lin=trends_lin,
     )
 

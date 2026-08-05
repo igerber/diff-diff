@@ -12,6 +12,7 @@
    .. autosummary::
 
       ~HeterogeneousAdoptionDiDResults.__init__
+      ~HeterogeneousAdoptionDiDResults.aggregate
       ~HeterogeneousAdoptionDiDResults.print_summary
       ~HeterogeneousAdoptionDiDResults.summary
       ~HeterogeneousAdoptionDiDResults.to_dataframe

@@ -64,8 +64,10 @@ results.conf_int     # Confidence interval
 # CallawaySantAnna (with aggregate parameter):
 results.overall_att       # Overall ATT
 results.overall_se        # Standard error
-results.group_effects     # Per-cohort ATTs (aggregate='group' or 'all')
-results.event_study_effects  # Dynamic effects (aggregate='event_study' or 'all')
+results.group_effects     # Per-cohort ATTs (deprecated fit-time route only;
+                          # post-fit: results.aggregate('group'))
+results.event_study_effects  # Dynamic effects (deprecated fit-time route only;
+                             # post-fit: results.aggregate('event_study'))
 
 # SunAbraham (no aggregate parameter — effects computed automatically):
 results.overall_att           # Overall ATT
@@ -145,15 +147,14 @@ universal pre-periods, which is invalid when cohorts adopt at different times
 (some "pre-periods" are post-treatment for early cohorts). Instead, use the
 CS event-study pre-period coefficients as the pre-trends diagnostic:
 ```python
-# Fit CS with event_study aggregation, then inspect pre-periods
+# Fit CS, then inspect the post-fit event-study pre-periods
 cs = CallawaySantAnna(control_group='never_treated', cluster='unit_id')
-results = cs.fit(data, ..., aggregate='event_study')
+results = cs.fit(data, ...)
 
 # Pre-treatment relative-time ATTs should be near zero
-if results.event_study_effects:
-    for rel_t, eff in sorted(results.event_study_effects.items()):
-        if rel_t < 0:
-            print(f"Pre-period {rel_t}: ATT={eff['effect']:.4f}, SE={eff['se']:.4f}")
+es = results.aggregate('event_study').to_dataframe()
+for _, row in es[es['event_time'] < 0].iterrows():
+    print(f"Pre-period {row['event_time']:.0f}: ATT={row['att']:.4f}, SE={row['se']:.4f}")
 # Significant pre-treatment effects → parallel trends may be violated
 ```
 
@@ -191,9 +192,10 @@ see REGISTRY HeterogeneousAdoptionDiD edge cases):
 |        never-treated share — the never-treated units are retained
 |        as controls and do not break HAD's identification (paper
 |        Appendix B.2; REGISTRY edge cases). Panel-shape contract
-|        is load-bearing on HAD: aggregate='overall' (the default)
-|        is two-period only and hard-rejects multi-period panels;
-|        multi-period panels MUST set aggregate='event_study'. On
+|        is load-bearing on HAD, and fit() selects the mode from
+|        it (M-027): two-period panels run the overall (single-
+|        period WAS) estimator; multi-period panels run the per-
+|        horizon event-study estimator. On
 |        STAGGERED multi-cohort panels HAD's event-study path auto-
 |        filters to the last cohort + never-treated (Appendix B.2)
 |        and the estimand becomes last-cohort-only WAS — use
@@ -288,9 +290,11 @@ results = cs.fit(
     time='year',
     first_treat='first_treat',
     covariates=['lpop'],
-    aggregate='all',  # computes simple, event_study, and group aggregations
 )
 print(results.summary())
+# Aggregations are post-fit views/recomputes - no refit:
+print(results.aggregate('event_study').to_dataframe())
+print(results.aggregate('group').to_dataframe())
 ```
 
 ### Simple 2x2
@@ -349,8 +353,10 @@ estimated pre-periods exist).
 - For CS: pass the post-fit container - `compute_honest_did(
   results.aggregate('event_study'))` - no refit needed (the fit-time
   `aggregate=` route is deprecated since 3.9). EXCEPTION: on a
-  BOOTSTRAPPED fit (`n_bootstrap > 0`) post-fit `aggregate()` raises;
-  use the retained fit-time `aggregate='event_study'` there.
+  BOOTSTRAPPED fit (`n_bootstrap > 0`) the post-fit recompute levels
+  (`'event_study'`/`'group'`) raise, while `aggregate('simple')`
+  relays the stored bootstrap inference; use the retained fit-time
+  `aggregate='event_study'` for a bootstrapped event-study surface.
 - For dCDH: requires `L_max >= 1` (multi-horizon mode). Bounds use placebo
   estimates `DID^{pl}_l` as pre-period coefficients rather than standard
   event-study pre-treatment coefficients, and use diagonal variance (no
@@ -427,9 +433,10 @@ print(results.aggregate('group').to_dataframe())        # Per-cohort ATTs
 print(results.aggregate('event_study').to_dataframe())  # Dynamic effects
 # balance_e moves onto aggregate() too:
 print(results.aggregate('event_study', balance_e=2).to_dataframe())
-# EXCEPTION: a BOOTSTRAPPED fit's aggregate() raises on the recomputing
-# adopters (CS/EfficientDiD/ImputationDiD/TwoStageDiD) — use the
-# deprecated fit-time aggregation there:
+# EXCEPTION: on a BOOTSTRAPPED fit the RECOMPUTE levels
+# (event_study/group) raise on CS/EfficientDiD/ImputationDiD/TwoStageDiD
+# — aggregate('simple') relays the stored bootstrap inference; use the
+# deprecated fit-time aggregation for a bootstrapped ES/group surface:
 results = cs.fit(data, ..., aggregate='all')
 ```
 
@@ -633,25 +640,26 @@ cs = CallawaySantAnna(
     cluster='countyreal',
 )
 results = cs.fit(data, outcome='lemp', unit='countyreal', time='year',
-                 first_treat='first_treat', covariates=['lpop'],
-                 aggregate='all')
+                 first_treat='first_treat', covariates=['lpop'])
 print(results.summary())
 
 # Step 3 (continued): Inspect CS event-study pre-period coefficients
-# Pre-treatment relative-time ATTs should be near zero and insignificant.
-if results.event_study_effects:
-    for rel_t, eff in sorted(results.event_study_effects.items()):
-        if rel_t < 0:
-            print(f"  Pre-period {rel_t}: ATT={eff['effect']:.4f}, "
-                  f"SE={eff['se']:.4f}")
+# (post-fit container; pre-treatment ATTs should be near zero and
+# insignificant).
+es_df = results.aggregate('event_study').to_dataframe()
+for _, row in es_df[es_df['event_time'] < 0].iterrows():
+    print(f"  Pre-period {row['event_time']:.0f}: ATT={row['att']:.4f}, "
+          f"SE={row['se']:.4f}")
 
 # Step 6: Sensitivity — HonestDiD bounds
 honest = compute_honest_did(results, method='relative_magnitude', M=1.0)
 print(honest.summary())
 
-# Step 7: Heterogeneity — group and event study (already computed via aggregate='all')
-print("Group effects:", results.group_effects)
-print("Event study:", results.event_study_effects)
+# Step 7: Heterogeneity — group and event study, post-fit (no refit)
+print("Group effects:")
+print(results.aggregate('group').to_dataframe())
+print("Event study:")
+print(results.aggregate('event_study').to_dataframe())
 
 # Step 8: Robustness — compare estimators
 sa = SunAbraham(cluster='countyreal')
@@ -668,7 +676,7 @@ print(f"BJS ATT: {bjs_result.overall_att:.4f} (SE: {bjs_result.overall_se:.4f})"
 
 # Step 8 (continued): REQUIRED with/without covariates comparison
 results_no_cov = cs.fit(data, outcome='lemp', unit='countyreal', time='year',
-                        first_treat='first_treat', aggregate='all')
+                        first_treat='first_treat')
 print(f"Without covariates: ATT={results_no_cov.overall_att:.4f}")
 print(f"With covariates:    ATT={results.overall_att:.4f}")
 

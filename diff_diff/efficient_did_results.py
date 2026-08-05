@@ -295,14 +295,25 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
                 "an older release will not have one. Re-fit with "
                 "diff-diff >= 3.9 to aggregate post-fit."
             )
+        # Per-level bootstrap policy (v4-design section 6, converged with row
+        # M-027): 'simple' is a bit-exact RELAY of the stored overall row -
+        # faithful under any inference regime, bootstrap included - so it
+        # dispatches BEFORE the bootstrap gate. Only the RECOMPUTE levels
+        # below fail closed on bootstrapped fits. (This supersedes the
+        # uniform-conservatism decision recorded with M-023; its rationale -
+        # never publish analytical provenance beside percentile inference -
+        # is honored by the relay's NaN df column.)
+        if level == "simple":
+            return self._aggregate_simple_result(kit)
         if self.bootstrap_results is not None:
             raise NotImplementedError(
-                "aggregate() is not yet available on a bootstrapped fit "
-                "(n_bootstrap > 0): the per-horizon bootstrap draws are not "
-                "retained, so post-fit re-aggregation cannot replay "
+                f"aggregate({level!r}) is not yet available on a bootstrapped "
+                "fit (n_bootstrap > 0): the per-horizon bootstrap draws are "
+                "not retained, so post-fit re-aggregation cannot replay "
                 "percentile inference and analytical inference would "
-                "misrepresent the fit. Re-fit with the aggregation you "
-                "need, or use n_bootstrap=0."
+                "misrepresent the fit. aggregate('simple') relays the stored "
+                "bootstrap inference and remains available; otherwise re-fit "
+                "with the aggregation you need, or use n_bootstrap=0."
             )
         bk = dict(kit.bookkeeping)
         agg = _EDiDKitAggregator(
@@ -312,8 +323,6 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
             resolved_survey_unit=bk["resolved_survey_unit"],
             unit_level_weights=bk["unit_level_weights"],
         )
-        if level == "simple":
-            return self._aggregate_simple_result(kit)
         if level == "group":
             effects = agg._aggregate_by_group(
                 bk["group_time_effects"],
@@ -384,8 +393,12 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
         keeps the resolved design's finite value), and the snapshot is
         provenance-exact in every state. None → all-NaN df column;
         the replicate-undefined 0-sentinel row NaNs out via post_init.
+        Bootstrapped fits relay the stored quintet verbatim (percentile
+        se/p/CI beside the finite ``safe_inference`` t) with a NaN df
+        column - no df governs percentile inference (the per-level policy
+        converged with row M-027).
         """
-        df_val = kit.bookkeeping["df_survey"]
+        df_val = np.nan if self.bootstrap_results is not None else kit.bookkeeping["df_survey"]
         return AggregationResult(
             level="simple",
             label=np.array(["overall"], dtype=object),

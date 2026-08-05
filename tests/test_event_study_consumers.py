@@ -2047,3 +2047,52 @@ class TestContinuousContainerRejection:
             compute_honest_did(surface, M=1.0)
         with pytest.raises(TypeError, match="no reference-period[\\s\\n ]*normalization"):
             compute_pretrends_power(surface, M=1.0)
+
+
+class TestHADContainerRejection:
+    """A REAL HAD post-fit container is rejected - DEFERRED, not by-design.
+
+    Two independent grounds, both named in the clause with the corrected
+    wording: no joint cross-horizon covariance (per-horizon independent
+    sandwiches; the DEFERRED.md row), and the anchor ROW e = -1 is omitted
+    from the container - a metadata gap, NOT missing normalization (the
+    coefficients ARE reference-normalized against the F-1 anchor). The
+    match strings pin the clause text, not the class name (the
+    got source={...!r} interpolation would match the class name even
+    without the message edit).
+    """
+
+    def test_real_had_container_rejected_deferred(self):
+        import warnings
+
+        import numpy as np
+        import pandas as pd
+
+        from diff_diff import HeterogeneousAdoptionDiD
+
+        rng = np.random.default_rng(29)
+        rows = []
+        for i in range(150):
+            dose = rng.uniform(0.1, 2.0)
+            for t in range(5):
+                d_it = dose if t >= 2 else 0.0
+                rows.append((i, t, d_it, 1.2 * d_it + rng.normal(), 2))
+        panel = pd.DataFrame(rows, columns=["unit", "period", "dose", "outcome", "ft"])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = HeterogeneousAdoptionDiD().fit(
+                panel,
+                outcome="outcome",
+                dose="dose",
+                time="period",
+                unit="unit",
+                first_treat="ft",
+            )
+        surface = res.aggregate("event_study")
+        assert surface.source == "HeterogeneousAdoptionDiDEventStudyResults"
+        assert surface.vcov is None  # per-horizon independent sandwiches only
+        assert not surface.is_reference.any()  # the anchor row is omitted
+        with pytest.raises(TypeError, match="coefficients ARE reference-normalized"):
+            compute_honest_did(surface, M=1.0)
+        with pytest.raises(TypeError, match="coefficients ARE reference-normalized"):
+            compute_pretrends_power(surface, M=1.0)

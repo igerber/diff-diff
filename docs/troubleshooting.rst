@@ -534,8 +534,7 @@ exceeding 2% routes to ``mass_point``; otherwise
    # Check the resolved estimand after fitting
    est = HeterogeneousAdoptionDiD()
    results = est.fit(had_data, outcome='y', unit='unit',
-                     time='period', dose='dose',
-                     aggregate='event_study')
+                     time='period', dose='dose')
    print(f"Resolved: {results.target_parameter}")
 
    # If you intend Design 1' but `D_{g,F}.min()` exceeds the threshold,
@@ -591,8 +590,7 @@ SE path is not used here).
 
    est = HeterogeneousAdoptionDiD()
    results = est.fit(had_data, outcome='y', unit='unit',
-                     time='period', dose='dose',
-                     aggregate='event_study')
+                     time='period', dose='dose')
 
    # Inspect the resolved design
    print(f"Design: {results.design}")  # 'mass_point' here
@@ -634,8 +632,8 @@ full SE-regime contract.
 "Panel-only event-study restriction"
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-**Problem:** ``HeterogeneousAdoptionDiD.fit(..., aggregate="event_study")``
-raises on a staggered panel.
+**Problem:** ``HeterogeneousAdoptionDiD.fit()`` on a multi-period
+(event-study mode) staggered panel raises.
 
 **Cause:** The Appendix B.2 event-study extension requires either a
 common-adoption panel (single first-treat period; ``first_treat`` is
@@ -678,8 +676,7 @@ a ``UserWarning``). The fit raises only when the panel is staggered
    est = HeterogeneousAdoptionDiD()
    results = est.fit(data, outcome='y', unit='unit',
                      time='period', dose='dose',
-                     first_treat='first_treat',
-                     aggregate='event_study')
+                     first_treat='first_treat')
 
    # Equivalent: subset to the last-treatment cohort + never-treated
    # before fitting (skips the UserWarning).
@@ -687,8 +684,7 @@ a ``UserWarning``). The fit raises only when the panel is staggered
    subset = data[(data['first_treat'] == last_cohort) |
                  (data['first_treat'] == 0)]
    results = est.fit(subset, outcome='y', unit='unit',
-                     time='period', dose='dose',
-                     aggregate='event_study')
+                     time='period', dose='dose')
 
 Imputation / Two-Stage DiD Issues
 ----------------------------------

@@ -504,7 +504,6 @@ class TestHADFitDeprecation:
                 "d",
                 "time",
                 "unit",
-                aggregate="event_study",
                 survey_design=make_pweight_design(np.ones(200)),
             )
 
@@ -641,7 +640,6 @@ class TestHADFitEventStudySurveyDesign:
             "d",
             "time",
             "unit",
-            aggregate="event_study",
             survey_design=SurveyDesign(weights="w"),
             cband=True,
         )
@@ -666,7 +664,6 @@ class TestDidHadPretestWorkflowEventStudySurveyDesign:
                 "d",
                 "time",
                 "unit",
-                aggregate="event_study",
                 survey_design=SurveyDesign(weights="w"),
                 n_bootstrap=199,
                 seed=0,

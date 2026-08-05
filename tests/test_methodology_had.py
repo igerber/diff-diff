@@ -1053,7 +1053,6 @@ class TestHADDeviations:
                 dose="dose",
                 time="period",
                 unit="unit",
-                aggregate="event_study",
                 survey_design=SurveyDesign(weights="w"),
                 cband=False,
             )
@@ -1080,7 +1079,6 @@ class TestHADDeviations:
                     dose="dose",
                     time="period",
                     unit="unit",
-                    aggregate="overall",
                     survey_design=SurveyDesign(weights="w"),
                     cband=True,  # request cband on overall — should be ignored
                 )
@@ -1122,7 +1120,6 @@ class TestHADDeviations:
                 dose="dose",
                 time="period",
                 unit="unit",
-                aggregate="event_study",
             )
 
     def test_first_treat_col_activates_last_cohort_auto_filter(self) -> None:
@@ -1168,7 +1165,6 @@ class TestHADDeviations:
                 time="period",
                 unit="unit",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
         # Should produce a valid event-study result (no raise).
         assert isinstance(result, HeterogeneousAdoptionDiDEventStudyResults)

@@ -250,7 +250,6 @@ def survey_event_study_result(panel: pd.DataFrame, survey_design: SurveyDesign):
             time="week",
             unit="state_id",
             first_treat="first_treat",
-            aggregate="event_study",
             survey_design=survey_design,
             cband=True,
         )
@@ -267,7 +266,6 @@ def overall_report(panel_2p: pd.DataFrame, survey_design: SurveyDesign):
             time="period",
             unit="state_id",
             survey_design=survey_design,
-            aggregate="overall",
             n_bootstrap=N_BOOTSTRAP,
             seed=WORKFLOW_SEED,
         )
@@ -285,7 +283,6 @@ def event_study_report(panel: pd.DataFrame, survey_design: SurveyDesign):
             unit="state_id",
             first_treat="first_treat",
             survey_design=survey_design,
-            aggregate="event_study",
             n_bootstrap=N_BOOTSTRAP,
             seed=WORKFLOW_SEED,
         )
@@ -665,7 +662,7 @@ def test_overall_and_event_study_verdict_prefixes_distinct(overall_report, event
 # ============================================================================
 # Per CI AI review R1 P1 #1: §3 prose previously claimed "the analytical
 # local-linear at d_lower does not consume the survey weights". That is
-# false — `_fit_continuous` (`diff_diff/had.py:3744-3810`) consumes
+# false — `_fit_continuous` (`diff_diff/had.py:3895-3961`) consumes
 # `weights_arr` in (a) the local-linear `tau_bc` boundary fit, (b) the
 # numerator `np.average(dy_arr, weights=weights_arr)`, AND (c) the
 # denominator `np.average(d_reg, weights=weights_arr)`. The two ATTs are

@@ -184,9 +184,9 @@ A few branches emit a fixed tag regardless of fit-time config —
 notably `CallawaySantAnna`, `ImputationDiD`, `TwoStageDiD`, and
 `WooldridgeDiD`. For these estimators the `overall_att`
 (or `att` / `avg_att`) scalar is ALWAYS the simple weighted
-aggregation; the fit-time `aggregate` kwarg populates additional
-horizon / group tables on the result object but does not change
-the headline scalar. Disambiguating those tables in prose is
+aggregation; post-fit `results.aggregate()` (the successor to the
+deprecated fit-time `aggregate` kwarg, rows M-020..M-027) returns
+the horizon / group tables without changing the headline scalar. Disambiguating those tables in prose is
 tracked under BR/DR gap #9 (per-cohort narrative rendering).
 
 `ContinuousDiDResults` emits a single `"dose_overall"` tag with a

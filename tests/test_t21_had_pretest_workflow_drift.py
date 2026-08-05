@@ -111,7 +111,6 @@ def overall_report(two_period):
         alpha=0.05,
         n_bootstrap=999,
         seed=WORKFLOW_SEED,
-        aggregate="overall",
     )
 
 
@@ -127,7 +126,6 @@ def event_study_report(panel):
         alpha=0.05,
         n_bootstrap=999,
         seed=WORKFLOW_SEED,
-        aggregate="event_study",
     )
 
 
@@ -448,3 +446,24 @@ def test_notebook_quotes_match_pinned_constants():
         "7.0076",
     ]
     assert_quotes_in_rendered(T21_NOTEBOOK, expected_quotes, surface="rendered")
+
+
+def test_notebook_prose_has_no_malformed_mode_phrases():
+    """Regression guard for the M-027/M-139 prose migration (local review
+    R2 P2): the mechanical kwarg->mode rewording must never leave doubled
+    phrases like "two-period (the overall (two-period) mode)" or a
+    pseudo-call like ``did_had_pretest_workflow(the event-study ...)`` in
+    any HAD tutorial's markdown."""
+    import json
+
+    for nb in (
+        "docs/tutorials/20_had_brand_campaign.ipynb",
+        "docs/tutorials/21_had_pretest_workflow.ipynb",
+        "docs/tutorials/22_had_survey_design.ipynb",
+    ):
+        with open(nb) as fh:
+            cells = json.load(fh)["cells"]
+        text = "\n".join("".join(c["source"]) for c in cells)
+        assert "did_had_pretest_workflow(the" not in text, nb
+        assert "the overall (two-period) mode)" not in text, nb
+        assert "the event-study (multi-period) mode)" not in text, nb

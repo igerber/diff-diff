@@ -34,15 +34,16 @@ Joint / multi-period tests (Phase 3 follow-up):
 
 Composite workflow:
 
-:func:`did_had_pretest_workflow` has two dispatch modes:
+:func:`did_had_pretest_workflow` has two dispatch modes, selected from
+the panel shape (the deprecated ``aggregate=`` override is row M-139):
 
-- ``aggregate="overall"`` (default, two-period panel): runs steps 1 + 3
+- The "overall" battery (two-period panel): runs steps 1 + 3
   via :func:`qug_test` + :func:`stute_test` + :func:`yatchew_hr_test`.
   Paper step 2 is NOT run on this path (a two-period panel has no pre-
   period placebo); the verdict explicitly flags the Assumption 7 gap
   via the ``"paper step 2 deferred"`` caveat so callers do not get an
   unconditional "TWFE safe" signal.
-- ``aggregate="event_study"`` (multi-period panel, >= 3 periods): runs
+- The "event_study" battery (multi-period panel, >= 3 periods): runs
   QUG at ``F`` + joint pre-trends Stute across earlier pre-periods +
   joint homogeneity-linearity Stute across post-periods. Closes the
   paper step-2 gap and does NOT emit the step-2-deferred caveat in the
@@ -85,6 +86,7 @@ from diff_diff.had import (
     _aggregate_first_difference,
     _aggregate_unit_resolved_survey,
     _aggregate_unit_weights,
+    _infer_aggregate_mode,
     _json_safe_scalar,
     _validate_had_panel,
     _validate_had_panel_event_study,
@@ -1170,7 +1172,7 @@ def _has_lonely_psu_adjust_singletons(resolved: Any) -> bool:
     while the analytical variance target requires a pseudo-stratum
     centering transform that is not derived for the Stute CvM
     (Phase 4.5 C R5 P1; mirrors the explicit lonely-PSU reject on
-    HeterogeneousAdoptionDiD's sup-t bootstrap at ``had.py:2081-2118``).
+    HeterogeneousAdoptionDiD's sup-t bootstrap at ``had.py:2194-2231``).
     """
     if getattr(resolved, "lonely_psu", "remove") != "adjust":
         return False
@@ -1898,7 +1900,7 @@ def stute_test(
         # § "Note (Stute stratified survey-bootstrap calibration)" and
         # ``apply_stratum_centering`` (bootstrap_utils.py) for the
         # derivation; the same helper backs the HAD sup-t event-study
-        # bootstrap at had.py:2151+.
+        # bootstrap at had.py:2264+.
         # R5 P1: reject lonely_psu='adjust' singleton-strata designs.
         # This pseudo-stratum centering transform has not been derived
         # for the Stute CvM (same gap as the HAD sup-t deviation at
@@ -1951,7 +1953,7 @@ def stute_test(
         )
         # Stratum centering + Bessel rescale on the PSU multipliers
         # before broadcast. Same algebra as the HAD sup-t bootstrap at
-        # had.py:2151+ (applied to the influence tensor there), but
+        # had.py:2264+ (applied to the influence tensor there), but
         # applied here to ``psu_mults`` because the Stute bootstrap is a
         # wild-residual / refit-in-loop bootstrap (no precomputed
         # influence tensor exists). See REGISTRY § "Note (Stute
@@ -3346,7 +3348,7 @@ def _resolve_pretest_unit_weights(
         )
     # R1 P1: pweight-only guard. aweight/fweight slip through pweight-only
     # formulas silently otherwise (mirrors HeterogeneousAdoptionDiD.fit() at
-    # had.py:2976+ and survey._resolve_pweight_only at survey.py:914).
+    # had.py:3098+ and survey._resolve_pweight_only at survey.py:914).
     if getattr(resolved_full, "weight_type", "pweight") != "pweight":
         raise ValueError(
             f"{caller_name}: HAD pretests require weight_type='pweight'. "
@@ -4256,7 +4258,7 @@ def did_had_pretest_workflow(
     n_bootstrap: int = 999,
     seed: Optional[int] = None,
     *,
-    aggregate: str = "overall",
+    aggregate: Any = NOT_SUPPLIED,
     survey_design: Any = None,
     trends_lin: bool = False,
     outcome_col: Any = NOT_SUPPLIED,
@@ -4267,18 +4269,19 @@ def did_had_pretest_workflow(
 ) -> HADPretestReport:
     """Run the HAD pre-test workflow (paper Section 4.2-4.3).
 
-    Two dispatch modes via ``aggregate``:
+    Two dispatch modes, selected from the panel shape (row M-139; the
+    deprecated ``aggregate=`` override warns and dies in 4.0):
 
-    ``aggregate="overall"`` (default, two-period panel): runs paper
+    The overall battery (two-period panel): runs paper
     steps 1 (:func:`qug_test`) and 3 (:func:`stute_test` +
     :func:`yatchew_hr_test`). Step 2 (Assumption 7 pre-trends) is NOT
     implemented on this path because a single-pre-period panel cannot
     support the joint Stute variant; the returned verdict flags the
     Assumption 7 gap explicitly so callers do not receive a misleading
-    "TWFE safe" signal. For multi-period panels, pass
-    ``aggregate="event_study"`` to close the step-2 gap.
+    "TWFE safe" signal. Supplying a multi-period panel closes the
+    step-2 gap.
 
-    ``aggregate="event_study"`` (multi-period panel, >= 3 periods): runs
+    The event-study battery (multi-period panel, >= 3 periods): runs
     QUG + joint pre-trends Stute + joint homogeneity-linearity Stute,
     covering paper Section 4 steps 1-3 together. The step-3 Yatchew-HR
     alternative (a single-horizon swap-in for Stute) is subsumed by joint
@@ -4325,8 +4328,13 @@ def did_had_pretest_workflow(
     seed : int or None, default None
         Seed forwarded to the Stute bootstrap. QUG / Yatchew are
         deterministic.
-    aggregate : str, keyword-only, default ``"overall"``
-        Dispatch mode. Invalid values raise ``ValueError``.
+    aggregate : {"overall", "event_study"}, optional, keyword-only
+        DEPRECATED dispatch override (row M-139; ``FutureWarning``,
+        removed in 4.0). When omitted, the workflow selects the battery
+        from the panel shape - the same rule
+        :meth:`HeterogeneousAdoptionDiD.fit` uses. Supplying ANY value
+        warns and then runs the legacy routing unchanged; invalid
+        values still raise ``ValueError``.
     survey_design : SurveyDesign or None, keyword-only, default None
         Survey design for design-based pretest inference. Linearity-family
         pretests use PSU-level Mammen multiplier bootstrap (Stute family)
@@ -4338,10 +4346,9 @@ def did_had_pretest_workflow(
         Forwards into :func:`joint_pretrends_test` and
         :func:`joint_homogeneity_test` on the event-study dispatch
         path. Mirrors R ``DIDHAD::did_had(..., trends_lin=TRUE)``.
-        Requires ``aggregate="event_study"``; raises
-        ``NotImplementedError`` on ``aggregate="overall"`` (the
-        overall path's qug + stute + yatchew block has no
-        joint-pretest surface). Mutually exclusive with survey
+        Requires a multi-period panel (the event-study battery); raises
+        ``NotImplementedError`` on the two-period overall path (its
+        qug + stute + yatchew block has no joint-pretest surface). Mutually exclusive with survey
         weighting at the joint-pretest layer; the joint wrappers
         raise ``NotImplementedError`` if combined. **Effective step-2
         rule under trends_lin**: the consumed placebo at
@@ -4439,6 +4446,23 @@ def did_had_pretest_workflow(
     D, Theorem 7.
     """
     _q = "did_had_pretest_workflow"
+    # M-139 deprecation shim (the fit-side twin is row M-027): a plain
+    # workflow call never warns; supplying aggregate= with ANY value
+    # warns once, then the legacy routing runs unchanged. The SENTINEL
+    # resolves to the same panel-inferred mode fit() uses - AFTER the
+    # time/time_col alias reconciliation below - at the
+    # _VALID_AGGREGATES check site.
+    if aggregate is not NOT_SUPPLIED:
+        warnings.warn(
+            "did_had_pretest_workflow(aggregate=) is deprecated and "
+            "will be removed in 4.0. The workflow now selects its "
+            "dispatch from the panel shape (two distinct periods -> "
+            "the two-period pretest battery; more -> the multi-period "
+            "event-study battery), the same rule "
+            "HeterogeneousAdoptionDiD.fit() uses.",
+            FutureWarning,
+            stacklevel=2,
+        )
     outcome = resolve_renamed_kwarg(
         _q, "outcome_col", outcome_col, "outcome", outcome, default=NOT_SUPPLIED
     )
@@ -4458,7 +4482,12 @@ def did_had_pretest_workflow(
     time_col = time
     unit_col = unit
     first_treat_col = first_treat
-    if aggregate not in _VALID_AGGREGATES:
+    # Sentinel resolution runs HERE - after the alias reconciliation
+    # above, so both time= and legacy time_col= spellings reach the
+    # inference helper resolved (M-139, mirroring fit's M-027 shim).
+    if aggregate is NOT_SUPPLIED:
+        aggregate = _infer_aggregate_mode(data, time_col)
+    elif aggregate not in _VALID_AGGREGATES:
         raise ValueError(
             f"aggregate must be one of {list(_VALID_AGGREGATES)!r}; " f"got {aggregate!r}."
         )
@@ -4471,12 +4500,12 @@ def did_had_pretest_workflow(
     # rather than silently ignore.
     if trends_lin and aggregate != "event_study":
         raise NotImplementedError(
-            "did_had_pretest_workflow(trends_lin=True) requires "
-            "aggregate='event_study' (the trends_lin kwarg forwards "
-            "into the joint pretests, which only run on the event-"
-            "study path). The overall path's qug + stute + yatchew "
-            "block has no per-group slope surface; pass a multi-"
-            "period panel and aggregate='event_study'."
+            "did_had_pretest_workflow(trends_lin=True) requires a "
+            "multi-period panel (the trends_lin kwarg forwards into "
+            "the joint pretests, which only run on the event-study "
+            "path selected for panels with more than two periods). "
+            "The overall path's qug + stute + yatchew block has no "
+            "per-group slope surface; pass a multi-period panel."
         )
 
     # R6 P1 fix: do NOT call _resolve_pretest_unit_weights on the FULL panel

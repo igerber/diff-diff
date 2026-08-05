@@ -2300,13 +2300,13 @@ class TestMultiPeriodWorkflow:
         # Phase 3 step-2 gap string STILL present on the overall path
         assert "paper step 2 deferred" in report.verdict
 
-    def test_overall_aggregate_rejects_multi_period(self):
-        """Registry/docstring contract: aggregate='overall' is two-period only.
+    def test_overall_battery_rejects_multi_period_on_supplied_path(self):
+        """Registry/docstring contract: the overall battery is two-period only.
 
-        REGISTRY claims `aggregate="overall"` requires a balanced two-period
-        panel and that multi-period panels are rejected with a pointer to
-        `aggregate="event_study"`. This test pins the front-door rejection
-        so the registry text and the validator stay in lock-step.
+        A PLAIN multi-period workflow call now selects the event-study
+        battery (M-139 panel-shape inference); the two-period requirement
+        still binds when the legacy aggregate='overall' override is
+        supplied, so the registry text and the validator stay in lock-step.
         """
         df = _make_multi_period_panel(
             G=40,
@@ -2314,8 +2314,11 @@ class TestMultiPeriodWorkflow:
             first_treat_period=1999,
             seed=313,
         )
-        with pytest.raises(ValueError, match=r"aggregate='event_study'"):
-            did_had_pretest_workflow(df, "y", "d", "period", "unit", n_bootstrap=199, seed=0)
+        with pytest.warns(FutureWarning, match="aggregate"):
+            with pytest.raises(ValueError, match=r"exactly two time periods"):
+                did_had_pretest_workflow(
+                    df, "y", "d", "period", "unit", n_bootstrap=199, seed=0, aggregate="overall"
+                )
 
     def test_event_study_linear_dgp_all_pass(self):
         df = self._linear_panel(seed=101)
@@ -2325,7 +2328,6 @@ class TestMultiPeriodWorkflow:
             "d",
             "period",
             "unit",
-            aggregate="event_study",
             n_bootstrap=299,
             seed=17,
         )
@@ -2369,7 +2371,6 @@ class TestMultiPeriodWorkflow:
             "d",
             "period",
             "unit",
-            aggregate="event_study",
             n_bootstrap=499,
             seed=29,
         )
@@ -2392,7 +2393,6 @@ class TestMultiPeriodWorkflow:
             "d",
             "period",
             "unit",
-            aggregate="event_study",
             n_bootstrap=999,
             seed=31,
         )
@@ -2420,7 +2420,6 @@ class TestMultiPeriodWorkflow:
             "d",
             "period",
             "unit",
-            aggregate="event_study",
             n_bootstrap=299,
             seed=42,
         )
@@ -2430,16 +2429,17 @@ class TestMultiPeriodWorkflow:
 
     def test_invalid_aggregate_raises(self):
         df = self._linear_panel(seed=102)
-        with pytest.raises(ValueError, match="aggregate must be one of"):
-            did_had_pretest_workflow(
-                df,
-                "y",
-                "d",
-                "period",
-                "unit",
-                aggregate="bogus",
-                n_bootstrap=199,
-            )
+        with pytest.warns(FutureWarning, match="aggregate"):
+            with pytest.raises(ValueError, match="aggregate must be one of"):
+                did_had_pretest_workflow(
+                    df,
+                    "y",
+                    "d",
+                    "period",
+                    "unit",
+                    aggregate="bogus",
+                    n_bootstrap=199,
+                )
 
     def test_single_pre_period_yields_pretrends_skipped(self):
         """If t_pre_list has only the base pre-period, no earlier placebos
@@ -2456,7 +2456,6 @@ class TestMultiPeriodWorkflow:
             "d",
             "period",
             "unit",
-            aggregate="event_study",
             n_bootstrap=299,
             seed=52,
         )
@@ -2477,7 +2476,6 @@ class TestMultiPeriodWorkflow:
             "d",
             "period",
             "unit",
-            aggregate="event_study",
             n_bootstrap=299,
             seed=61,
         )
@@ -2509,7 +2507,6 @@ class TestMultiPeriodWorkflow:
                 "d",
                 "period",
                 "unit",
-                aggregate="event_study",
                 n_bootstrap=199,
                 seed=0,
             )
@@ -2540,7 +2537,6 @@ class TestMultiPeriodWorkflow:
                 "period",
                 "unit",
                 first_treat="first_treat",
-                aggregate="event_study",
                 n_bootstrap=199,
                 seed=0,
             )
@@ -2650,7 +2646,6 @@ class TestMultiPeriodWorkflow:
                 "period",
                 "unit",
                 first_treat="first_treat",
-                aggregate="event_study",
                 n_bootstrap=199,
                 seed=0,
             )
@@ -2775,7 +2770,6 @@ class TestOrderedCategoricalChronology:
             "d",
             "period",
             "unit",
-            aggregate="event_study",
             n_bootstrap=199,
             seed=13,
         )
@@ -2823,7 +2817,6 @@ class TestHADPretestReportSerialization:
             "d",
             "period",
             "unit",
-            aggregate="event_study",
             n_bootstrap=199,
             seed=0,
         )
@@ -2858,7 +2851,6 @@ class TestHADPretestReportSerialization:
             "d",
             "period",
             "unit",
-            aggregate="event_study",
             n_bootstrap=199,
             seed=0,
         )
@@ -2881,7 +2873,6 @@ class TestHADPretestReportSerialization:
             "d",
             "period",
             "unit",
-            aggregate="event_study",
             n_bootstrap=199,
             seed=0,
         )
@@ -2901,7 +2892,6 @@ class TestHADPretestReportSerialization:
             "d",
             "period",
             "unit",
-            aggregate="event_study",
             n_bootstrap=199,
             seed=0,
         )
@@ -3904,7 +3894,6 @@ class TestPhase45CR1Regressions:
                 "time",
                 "unit",
                 first_treat="F",
-                aggregate="event_study",
                 survey_design=SurveyDesign(weights="_wcol"),
                 n_bootstrap=199,
                 seed=0,
@@ -4377,7 +4366,6 @@ class TestPhase45CR1Regressions:
                 "d",
                 "time",
                 "unit",
-                aggregate="event_study",
                 survey_design=SurveyDesign(weights="w", psu="psu"),
                 n_bootstrap=199,
                 seed=0,
@@ -4410,7 +4398,6 @@ class TestPhase45CR1Regressions:
                 "time",
                 "unit",
                 first_treat="F",
-                aggregate="event_study",
                 survey_design=SurveyDesign(weights="_wcol"),
                 n_bootstrap=199,
                 seed=0,
@@ -4496,7 +4483,6 @@ class TestPhase45CR1Regressions:
                 "d",
                 "time",
                 "unit",
-                aggregate="event_study",
                 survey_design=SurveyDesign(weights="w", psu="psu"),
                 n_bootstrap=199,
                 seed=0,
@@ -4940,7 +4926,6 @@ class TestJointPretestsTrendsLin:
                 "d",
                 "time",
                 "unit",
-                aggregate="event_study",
                 n_bootstrap=99,
                 seed=42,
                 trends_lin=True,
@@ -5014,7 +4999,6 @@ class TestJointPretestsTrendsLin:
                 "d",
                 "time",
                 "unit",
-                aggregate="event_study",
                 n_bootstrap=99,
                 seed=42,
                 trends_lin=True,
@@ -5232,14 +5216,13 @@ class TestJointPretestsTrendsLin:
         """trends_lin=True only valid on event_study aggregate."""
         df = self._panel(rng_seed=34)
         df_2p = df[df["time"].isin([3, 4])].copy()
-        with pytest.raises(NotImplementedError, match="trends_lin=True.*event_study"):
+        with pytest.raises(NotImplementedError, match="trends_lin=True.*multi-period panel"):
             did_had_pretest_workflow(
                 df_2p,
                 "y",
                 "d",
                 "time",
                 "unit",
-                aggregate="overall",
                 n_bootstrap=99,
                 seed=42,
                 trends_lin=True,
@@ -5259,7 +5242,6 @@ class TestJointPretestsTrendsLin:
             dose="d",
             time="time",
             unit="unit",
-            aggregate="event_study",
         )
         est_yes = HeterogeneousAdoptionDiD().fit(
             df,
@@ -5267,7 +5249,6 @@ class TestJointPretestsTrendsLin:
             dose="d",
             time="time",
             unit="unit",
-            aggregate="event_study",
             trends_lin=True,
         )
         assert -2 in est_no.event_times.tolist()
@@ -5310,7 +5291,6 @@ class TestHADFitTrendsLin:
             dose="d",
             time="time",
             unit="unit",
-            aggregate="event_study",
         )
         r2 = HeterogeneousAdoptionDiD().fit(
             df,
@@ -5318,7 +5298,6 @@ class TestHADFitTrendsLin:
             dose="d",
             time="time",
             unit="unit",
-            aggregate="event_study",
             trends_lin=False,
         )
         np.testing.assert_array_equal(r1.event_times, r2.event_times)
@@ -5328,14 +5307,13 @@ class TestHADFitTrendsLin:
         from diff_diff import HeterogeneousAdoptionDiD
 
         df = self._panel(F=2, T=2, rng_seed=23)
-        with pytest.raises(NotImplementedError, match="aggregate='event_study'"):
+        with pytest.raises(NotImplementedError, match="requires a multi-period panel"):
             HeterogeneousAdoptionDiD().fit(
                 df,
                 outcome="y",
                 dose="d",
                 time="time",
                 unit="unit",
-                aggregate="overall",
                 trends_lin=True,
             )
 
@@ -5352,7 +5330,6 @@ class TestHADFitTrendsLin:
                 dose="d",
                 time="time",
                 unit="unit",
-                aggregate="event_study",
                 trends_lin=True,
             )
 
@@ -5368,7 +5345,6 @@ class TestHADFitTrendsLin:
                 dose="d",
                 time="time",
                 unit="unit",
-                aggregate="event_study",
                 trends_lin=True,
                 survey_design=SurveyDesign(weights="w"),
             )
@@ -5386,7 +5362,6 @@ class TestHADFitTrendsLin:
             dose="d",
             time="time",
             unit="unit",
-            aggregate="event_study",
             trends_lin=True,
         )
         r2 = est.fit(
@@ -5395,7 +5370,6 @@ class TestHADFitTrendsLin:
             dose="d",
             time="time",
             unit="unit",
-            aggregate="event_study",
             trends_lin=True,
         )
         np.testing.assert_array_equal(r1.event_times, r2.event_times)
@@ -5547,7 +5521,6 @@ class TestStuteStratifiedSurveyBootstrap:
                 unit="unit",
                 first_treat="F",
                 survey_design=sd,
-                aggregate="event_study",
                 n_bootstrap=199,
                 seed=0,
                 alpha=0.05,

@@ -177,7 +177,7 @@ def test_autonomous_negative_dose_path_does_not_route_to_had():
     `HeterogeneousAdoptionDiD` as a direct routing alternative
     when `dose_min < 0`. HAD's contract requires non-negative
     dose support and raises on negative post-period dose
-    (`had.py:1450-1459`, paper Section 2). Routing to HAD on a
+    (`had.py:1563-1572`, paper Section 2). Routing to HAD on a
     negative-dose panel without re-encoding would steer the agent
     into an unsupported estimator path. Guards against the wording
     regressing back to a too-broad "HAD as fallback" framing on
@@ -196,8 +196,8 @@ def test_autonomous_negative_dose_path_does_not_route_to_had():
         "§5.2 must mention HAD by name on the negative-dose branch "
         "so its non-applicability can be explicitly called out."
     )
-    assert "had.py:1450-1459" in sec_5_2, (
-        "§5.2 must cite `had.py:1450-1459` on the negative-dose "
+    assert "had.py:1563-1572" in sec_5_2, (
+        "§5.2 must cite `had.py:1563-1572` on the negative-dose "
         "branch to anchor HAD's non-negative-dose contract (HAD "
         "raises on negative post-period dose, paper Section 2). "
         "Without this citation, the agent could route a "
@@ -463,7 +463,7 @@ class TestLLMsFullHADCoverage:
             )
 
     def test_llms_full_had_section_documents_mass_point_survey_vcov_requirement(self):
-        # Per had.py:3495-3507 the mass-point design rejects the default
+        # Per had.py:3646-3658 the mass-point design rejects the default
         # classical vcov family on the survey_design= path
         # (NotImplementedError). The HAD section must surface this
         # requirement so an agent reading llms-full.txt and writing a
@@ -482,7 +482,7 @@ class TestLLMsFullHADCoverage:
             "HAD section must document the mass-point + survey vcov "
             "requirement: passing vcov_type='hc1' (or robust=True) is "
             "required on design='mass_point' under survey_design= "
-            "(per had.py:3495-3507). Without this caveat the documented "
+            "(per had.py:3646-3658). Without this caveat the documented "
             "weighted fit example can raise NotImplementedError."
         )
         # 3.7.0: the mass-point guidance must not reference the removed
@@ -532,7 +532,7 @@ class TestLLMsFullHADCoverage:
                 assert "mass_point" in line or "Wald-IV" in line or "mass-point" in line, (
                     f"effective_dose_mean row must mention mass-point "
                     f"semantics - weighted mass-point fits populate the "
-                    f"weighted Wald-IV dose gap per had.py:3642-3660. "
+                    f"weighted Wald-IV dose gap per had.py:3793-3811. "
                     f"Line: {line!r}"
                 )
                 break
@@ -584,7 +584,7 @@ class TestLLMsFullHADCoverage:
                 assert "mass_point" in line or "Wald-IV" in line or "mass-point" in line, (
                     f"event-study effective_dose_mean row must mention "
                     f"mass-point Wald-IV semantics (event-study path "
-                    f"populates the same denominator per had.py:721-734). "
+                    f"populates the same denominator per had.py:804-817). "
                     f"Line: {line!r}"
                 )
                 break
@@ -927,3 +927,35 @@ class TestLLMsFullEfficientDiDShimLine:
     def test_llms_full_continuous_fit_aggregate_line_documents_shim(self):
         # M-025: no balance_e twin exists - bal_row stays None.
         self._assert_shim_lines(self._section("### ContinuousDiD"), "cdid.fit(", "M-025")
+
+    def test_llms_full_had_fit_aggregate_line_documents_shim(self):
+        # M-027: the mode-selector shim (panel-shape inference successor);
+        # no balance_e twin exists - bal_row stays None.
+        self._assert_shim_lines(self._section("### HeterogeneousAdoptionDiD"), "had.fit(", "M-027")
+
+    def test_llms_full_had_examples_do_not_teach_mode_kwarg(self):
+        # M-027/M-139 regression guard (local review R1 P2): outside the
+        # deprecated-signature line itself, the HAD estimator and pretest
+        # sections must not teach an explicit aggregate= mode value - the
+        # mode is panel-inferred and every example shows a plain call.
+        text = get_llm_guide("full")
+        for header in ("### HeterogeneousAdoptionDiD", "## HAD Pretests"):
+            start = text.index(header)
+            ends = [
+                p
+                for p in (text.find("\n### ", start + 1), text.find("\n## ", start + 1))
+                if p != -1
+            ]
+            section = text[start : min(ends) if ends else len(text)]
+            offending = [
+                line
+                for line in section.splitlines()
+                if (
+                    "aggregate='overall'" in line
+                    or 'aggregate="overall"' in line
+                    or "aggregate='event_study'" in line
+                    or 'aggregate="event_study"' in line
+                )
+                and "DEPRECATED" not in line
+            ]
+            assert offending == [], offending

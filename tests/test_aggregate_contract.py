@@ -5,7 +5,9 @@ M-020/M-023/M-021/M-022 (the CS / EfficientDiD / Imputation / TwoStage
 ``fit(aggregate=)`` shims), M-024/M-026 (the Stacked / dCDH shims + view
 relays), M-025 (the ContinuousDiD shim + MIXED view/recompute aggregate() -
 'simple'/'dose' views, 'event_study' pruned-IF-payload kit),
-M-117/M-120/M-118/M-119 (``balance_e`` moves onto ``aggregate()``)
+M-117/M-120/M-118/M-119 (``balance_e`` moves onto ``aggregate()``),
+M-027/M-139 (the HAD fit + pretest-workflow mode-selector shims with
+panel-shape inference, and the two PURE-VIEW results classes)
 and M-122 (``AggregationResult``).
 
 The headline gate is NUMERICAL INERTNESS: for every supported type,
@@ -252,6 +254,25 @@ class TestRetentionKit:
 # --------------------------------------------------------------------------- #
 
 
+def _assert_bootstrap_simple_relay(res, n_expected=None):
+    """Shared per-level-policy pin (converged with M-027): on a bootstrapped
+    fit, aggregate('simple') relays the STORED overall quintet verbatim -
+    percentile se/p/CI beside the finite ``safe_inference`` t - and only the
+    df COLUMN is NaN (no df governs percentile inference)."""
+    agg = res.aggregate("simple")
+    assert float(agg.att[0]) == res.overall_att
+    assert float(agg.se[0]) == res.overall_se
+    assert float(agg.t_stat[0]) == res.overall_t_stat
+    assert np.isfinite(agg.t_stat[0])
+    assert float(agg.p_value[0]) == res.overall_p_value
+    assert float(agg.conf_int_lower[0]) == res.overall_conf_int[0]
+    assert float(agg.conf_int_upper[0]) == res.overall_conf_int[1]
+    assert np.isnan(agg.df[0])
+    if n_expected is not None:
+        assert float(agg.n[0]) == float(n_expected)
+    return agg
+
+
 class TestFailClosed:
     def test_calendar_unsupported_by_cs(self, fitted):
         with pytest.raises(ValueError, match="calendar"):
@@ -279,15 +300,49 @@ class TestFailClosed:
         with pytest.raises(ValueError, match="balance_e"):
             fitted.aggregate(level, balance_e=2)
 
-    def test_bootstrap_fit_raises(self, panel):
+    def test_bootstrap_recompute_levels_fail_closed(self, panel):
         """Percentile-bootstrap inference cannot be reproduced from the
-        analytical state retained here, so aggregate() must not substitute
-        analytical numbers silently."""
+        analytical state retained here, so the RECOMPUTE levels must not
+        substitute analytical numbers silently."""
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             boot = CallawaySantAnna(n_bootstrap=49, seed=42).fit(panel, **FIT_KW)
-        with pytest.raises(NotImplementedError, match="bootstrap"):
-            boot.aggregate("group")
+        for level in ("event_study", "group"):
+            with pytest.raises(NotImplementedError, match="bootstrap") as exc:
+                boot.aggregate(level)
+            assert "aggregate('simple') relays" in str(exc.value)
+
+    def test_bootstrap_simple_relays_stored_quintet(self, panel):
+        """Per-level policy (converged with M-027): 'simple' is a bit-exact
+        relay of the stored overall row, faithful under the bootstrap regime,
+        so it stays available with a NaN df column."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            boot = CallawaySantAnna(n_bootstrap=49, seed=42).fit(panel, **FIT_KW)
+        _assert_bootstrap_simple_relay(boot, n_expected=boot.n_treated_units + boot.n_control_units)
+
+    def test_bootstrap_survey_simple_relay_df_nan(self, panel):
+        """Survey-PSU multiplier bootstrap: the finite survey metadata rides
+        the fit, but the relay's df column is still NaN - percentile p is not
+        governed by a t-reference, so publishing the survey df beside it
+        would misstate provenance."""
+        d = panel.copy()
+        rng = np.random.default_rng(7)
+        wmap = {u: rng.uniform(0.5, 2.0) for u in d["unit"].unique()}
+        d["w"] = d["unit"].map(wmap)
+        d["psu"] = d["unit"] % 7
+        from diff_diff import SurveyDesign
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            boot = CallawaySantAnna(n_bootstrap=49, seed=42).fit(
+                d,
+                **FIT_KW,
+                survey_design=SurveyDesign(weights="w", psu="psu"),
+            )
+        assert boot.survey_metadata is not None
+        assert boot.survey_metadata.df_survey is not None
+        _assert_bootstrap_simple_relay(boot)
 
 
 # --------------------------------------------------------------------------- #
@@ -1119,6 +1174,8 @@ class TestDcdhAggregate:
         assert "ImputationDiDResults" in checked
         assert "TwoStageDiDResults" in checked
         assert "ContinuousDiDResults" in checked
+        assert "HeterogeneousAdoptionDiDResults" in checked
+        assert "HeterogeneousAdoptionDiDEventStudyResults" in checked
 
 
 # --------------------------------------------------------------------------- #
@@ -1840,11 +1897,28 @@ class TestEfficientAggregate:
         res.aggregate("group")
         assert res.survey_metadata.df_survey == before
 
-    def test_bootstrap_fails_closed_all_levels(self, efficient_panel):
+    def test_bootstrap_recompute_levels_fail_closed(self, efficient_panel):
         res = _fit_efficient(efficient_panel, est_kw={"n_bootstrap": 20, "seed": 1})
-        for level in ("simple", "event_study", "group"):
-            with pytest.raises(NotImplementedError, match="bootstrap"):
+        for level in ("event_study", "group"):
+            with pytest.raises(NotImplementedError, match="bootstrap") as exc:
                 res.aggregate(level)
+            assert "aggregate('simple') relays" in str(exc.value)
+
+    def test_bootstrap_simple_relays_stored_quintet(self, efficient_panel):
+        res = _fit_efficient(efficient_panel, est_kw={"n_bootstrap": 20, "seed": 1})
+        _assert_bootstrap_simple_relay(
+            res, n_expected=res._aggregation_kit.bookkeeping["n_units_total"]
+        )
+
+    def test_bootstrap_survey_simple_relay_df_nan(self):
+        # EDiD supports full TSL survey designs under bootstrap (only
+        # REPLICATE designs are rejected); the relay must NaN the df column
+        # beside the finite survey metadata.
+        d, _ = _efficient_survey_panel()
+        sd = _efficient_survey_design()
+        res = _fit_efficient(d, est_kw={"n_bootstrap": 20, "seed": 1}, survey_design=sd)
+        assert res.survey_metadata is not None
+        _assert_bootstrap_simple_relay(res)
 
     def test_bootstrap_fit_time_group_rows_clear_df_used(self, efficient_panel):
         res = _fit_efficient(
@@ -2324,11 +2398,28 @@ class TestImputationAggregate:
         b = imputation_fitted.aggregate("group").to_dataframe()
         pd.testing.assert_frame_equal(a, b)
 
-    def test_bootstrap_fails_closed_all_levels(self, imputation_panel):
+    def test_bootstrap_recompute_levels_fail_closed(self, imputation_panel):
         res = _fit_imputation(imputation_panel, est_kw={"n_bootstrap": 19, "seed": 1})
-        for level in ("simple", "event_study", "group"):
-            with pytest.raises(NotImplementedError, match="bootstrap"):
+        for level in ("event_study", "group"):
+            with pytest.raises(NotImplementedError, match="bootstrap") as exc:
                 res.aggregate(level)
+            assert "aggregate('simple') relays" in str(exc.value)
+
+    def test_bootstrap_simple_relays_stored_quintet(self, imputation_panel):
+        res = _fit_imputation(imputation_panel, est_kw={"n_bootstrap": 19, "seed": 1})
+        _assert_bootstrap_simple_relay(
+            res, n_expected=res._aggregation_kit.bookkeeping["n_treated_obs"]
+        )
+
+    def test_bootstrap_survey_simple_relay_df_nan(self):
+        # TSL survey + bootstrap is a supported combination (only replicate
+        # designs are rejected under bootstrap); the relay NaNs the df column
+        # beside the finite survey metadata.
+        d, _ = _imputation_survey_panel()
+        sd = _imputation_survey_design()
+        res = _fit_imputation(d, est_kw={"n_bootstrap": 19, "seed": 1}, survey_design=sd)
+        assert res.survey_metadata is not None
+        _assert_bootstrap_simple_relay(res)
 
     def test_pretrends_replicate_es_fails_closed(self):
         d, rep_cols = _imputation_survey_panel(replicate=True)
@@ -2785,11 +2876,28 @@ class TestTwoStageAggregate:
         b = twostage_fitted.aggregate("group").to_dataframe()
         pd.testing.assert_frame_equal(a, b)
 
-    def test_bootstrap_fails_closed_all_levels(self, twostage_panel):
+    def test_bootstrap_recompute_levels_fail_closed(self, twostage_panel):
         res = _fit_twostage(twostage_panel, est_kw={"n_bootstrap": 19, "seed": 1})
-        for level in ("simple", "event_study", "group"):
-            with pytest.raises(NotImplementedError, match="bootstrap"):
+        for level in ("event_study", "group"):
+            with pytest.raises(NotImplementedError, match="bootstrap") as exc:
                 res.aggregate(level)
+            assert "aggregate('simple') relays" in str(exc.value)
+
+    def test_bootstrap_simple_relays_stored_quintet(self, twostage_panel):
+        res = _fit_twostage(twostage_panel, est_kw={"n_bootstrap": 19, "seed": 1})
+        _assert_bootstrap_simple_relay(
+            res, n_expected=res._aggregation_kit.bookkeeping["n_treated_obs"]
+        )
+
+    def test_bootstrap_survey_simple_relay_df_nan(self):
+        # TSL survey + bootstrap is a supported combination (only replicate
+        # designs are rejected under bootstrap); the relay NaNs the df column
+        # beside the finite survey metadata.
+        d, _ = _twostage_survey_panel()
+        sd = _twostage_survey_design()
+        res = _fit_twostage(d, est_kw={"n_bootstrap": 19, "seed": 1}, survey_design=sd)
+        assert res.survey_metadata is not None
+        _assert_bootstrap_simple_relay(res)
 
     def test_fail_closed_vocabulary(self, twostage_fitted):
         for bad in ("calendar", "all", "nonsense"):
@@ -3384,3 +3492,419 @@ class TestContinuousAggregate:
         for leaf in _walk({k: v for k, v in bk.items() if k != "survey_metadata"}):
             assert not isinstance(leaf, pd.DataFrame), "kit retains a DataFrame"
             assert not isinstance(leaf, pd.Series), "kit retains a Series"
+
+
+# --------------------------------------------------------------------------- #
+# HeterogeneousAdoptionDiD (rows M-027/M-139): the fit + workflow MODE-SELECTOR
+# shims (panel-shape inference) and the two PURE-VIEW results classes.
+# --------------------------------------------------------------------------- #
+
+HAD_KW = dict(outcome="outcome", dose="dose", time="period", unit="unit")
+
+
+def _had_panel_2p(seed=11, n_units=200, mass_point=False, constant_outcome=False):
+    """Two-period HAD panel (the 'overall' mode shape)."""
+    rng = np.random.default_rng(seed)
+    if mass_point:
+        d = np.where(rng.uniform(size=n_units) < 0.5, 0.5, rng.uniform(1.0, 2.0, n_units))
+    else:
+        d = rng.uniform(0.1, 2.0, n_units)
+    rows = []
+    for i in range(n_units):
+        y0 = 0.0 if constant_outcome else rng.normal()
+        y1 = 0.0 if constant_outcome else 1.5 * d[i] + rng.normal()
+        rows.append((i, 0, 0.0, y0, i % 5))
+        rows.append((i, 1, d[i], y1, i % 5))
+    return pd.DataFrame(rows, columns=["unit", "period", "dose", "outcome", "grp"])
+
+
+def _had_panel_multi(seed=13, n_units=200, n_periods=5, F=2):
+    """Multi-period common-adoption HAD panel (the 'event_study' mode shape)."""
+    rng = np.random.default_rng(seed)
+    d = rng.uniform(0.1, 2.0, n_units)
+    rows = []
+    for i in range(n_units):
+        for t in range(n_periods):
+            dose_it = d[i] if t >= F else 0.0
+            rows.append((i, t, dose_it, 1.5 * dose_it + rng.normal(), F))
+    return pd.DataFrame(rows, columns=["unit", "period", "dose", "outcome", "ft"])
+
+
+def _had_panel_post_filter_too_small(seed=17, n_units=120):
+    """Staggered T>2 panel whose last-cohort auto-filter leaves < 3 periods.
+
+    Earlier-cohort units (first_treat=2) span periods 1-4; last-cohort
+    (first_treat=4) and never-treated units are observed ONLY at periods
+    3-4. Raw distinct periods = 4 -> the sentinel infers event_study; the
+    Appendix-B.2 filter keeps only the last cohort + never-treated, whose
+    observed periods are {3, 4} -> the post-filter shape error fires on a
+    PLAIN fit (no FutureWarning).
+    """
+    rng = np.random.default_rng(seed)
+    rows = []
+    for i in range(n_units):
+        kind = i % 3  # 0: early cohort, 1: last cohort, 2: never-treated
+        if kind == 0:
+            periods, ft, dose = range(1, 5), 2, rng.uniform(0.5, 2.0)
+        elif kind == 1:
+            periods, ft, dose = (3, 4), 4, rng.uniform(0.5, 2.0)
+        else:
+            periods, ft, dose = (3, 4), 0, 0.0
+        for t in periods:
+            treated = ft > 0 and t >= ft
+            d_it = dose if treated else 0.0
+            rows.append((i, t, d_it, 0.5 * d_it + rng.normal(), ft))
+    return pd.DataFrame(rows, columns=["unit", "period", "dose", "outcome", "ft"])
+
+
+def _fit_had(data, *, est_kw=None, **fit_kw):
+    from diff_diff import HeterogeneousAdoptionDiD
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return HeterogeneousAdoptionDiD(**(est_kw or {})).fit(data, **HAD_KW, **fit_kw)
+
+
+@pytest.fixture(scope="module")
+def had_panel_2p():
+    return _had_panel_2p()
+
+
+@pytest.fixture(scope="module")
+def had_panel_multi():
+    return _had_panel_multi()
+
+
+@pytest.fixture(scope="module")
+def had_fitted_2p(had_panel_2p):
+    return _fit_had(had_panel_2p)
+
+
+@pytest.fixture(scope="module")
+def had_fitted_multi(had_panel_multi):
+    return _fit_had(had_panel_multi, first_treat="ft")
+
+
+class TestHadShim:
+    def test_plain_fit_2p_infers_overall_without_warning(self, had_panel_2p):
+        from diff_diff import HeterogeneousAdoptionDiD, HeterogeneousAdoptionDiDResults
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = HeterogeneousAdoptionDiD().fit(had_panel_2p, **HAD_KW)
+        assert isinstance(res, HeterogeneousAdoptionDiDResults)
+        assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
+
+    def test_plain_fit_multi_infers_event_study_without_warning(self, had_panel_multi):
+        # The headline M-027 behavior delta: a plain multi-period fit()
+        # previously raised the two-period shape error; the sentinel now
+        # infers the event-study mode (error -> works).
+        from diff_diff import (
+            HeterogeneousAdoptionDiD,
+            HeterogeneousAdoptionDiDEventStudyResults,
+        )
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = HeterogeneousAdoptionDiD().fit(had_panel_multi, **HAD_KW, first_treat="ft")
+        assert isinstance(res, HeterogeneousAdoptionDiDEventStudyResults)
+        assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
+
+    @pytest.mark.parametrize("mode", ["overall", "event_study"])
+    def test_supplied_mode_warns_and_still_works(self, had_panel_2p, had_panel_multi, mode):
+        from diff_diff import HeterogeneousAdoptionDiD
+
+        data = had_panel_2p if mode == "overall" else had_panel_multi
+        kw = {} if mode == "overall" else {"first_treat": "ft"}
+        with pytest.warns(FutureWarning, match=r"fit\(aggregate=\) is deprecated"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                HeterogeneousAdoptionDiD().fit(data, **HAD_KW, aggregate=mode, **kw)
+
+    def test_aggregate_none_warns_then_raises(self, had_panel_2p):
+        # Unlike ContinuousDiD, None is NOT in HAD's _VALID_AGGREGATES: an
+        # explicit None is a supplied INVALID value - a third distinct
+        # behavior beside omitted (infers) and supplied-valid (legacy).
+        from diff_diff import HeterogeneousAdoptionDiD
+
+        with pytest.warns(FutureWarning, match="aggregate"):
+            with pytest.raises(ValueError, match="Invalid aggregate=None"):
+                HeterogeneousAdoptionDiD().fit(had_panel_2p, **HAD_KW, aggregate=None)
+
+    def test_invalid_value_warns_then_raises(self, had_panel_2p):
+        from diff_diff import HeterogeneousAdoptionDiD
+
+        with pytest.warns(FutureWarning, match="aggregate"):
+            with pytest.raises(ValueError, match="Invalid aggregate='bogus'"):
+                HeterogeneousAdoptionDiD().fit(had_panel_2p, **HAD_KW, aggregate="bogus")
+
+    def test_supplied_overall_on_multi_warns_then_shape_error(self, had_panel_multi):
+        from diff_diff import HeterogeneousAdoptionDiD
+
+        with pytest.warns(FutureWarning, match="aggregate"):
+            with pytest.raises(ValueError, match="exactly two time periods"):
+                HeterogeneousAdoptionDiD().fit(
+                    had_panel_multi, **HAD_KW, aggregate="overall", first_treat="ft"
+                )
+
+    def test_sentinel_post_filter_shape_error_no_warning(self):
+        # Sentinel-reachable shape error: T>2 raw panel infers event_study,
+        # then the last-cohort auto-filter drops it below three periods.
+        # The message must read correctly on a plain fit (no kwarg
+        # teaching) and no FutureWarning fires.
+        from diff_diff import HeterogeneousAdoptionDiD
+
+        data = _had_panel_post_filter_too_small()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with pytest.raises(ValueError, match="staggered auto-filter"):
+                HeterogeneousAdoptionDiD().fit(data, **HAD_KW, first_treat="ft")
+        assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
+
+    def test_missing_time_column_still_value_error(self, had_panel_2p):
+        # The inference helper must not regress the tested ValueError to a
+        # raw KeyError (it dereferences the time column first).
+        from diff_diff import HeterogeneousAdoptionDiD
+
+        with pytest.raises(ValueError, match="column"):
+            HeterogeneousAdoptionDiD().fit(
+                had_panel_2p, outcome="outcome", dose="dose", time="missing", unit="unit"
+            )
+
+    @pytest.mark.parametrize("shape", ["2p", "multi"])
+    def test_inference_equivalence_bit_identical(self, had_panel_2p, had_panel_multi, shape):
+        """Plain fit ≡ fit(aggregate=<mode>) field-for-field per shape."""
+        if shape == "2p":
+            plain = _fit_had(had_panel_2p)
+            legacy = _fit_had(had_panel_2p, aggregate="overall")
+        else:
+            plain = _fit_had(had_panel_multi, first_treat="ft")
+            legacy = _fit_had(had_panel_multi, first_treat="ft", aggregate="event_study")
+        import dataclasses
+
+        assert type(plain) is type(legacy)
+        for f in dataclasses.fields(plain):
+            a, b = getattr(plain, f.name), getattr(legacy, f.name)
+            if isinstance(a, np.ndarray):
+                np.testing.assert_array_equal(a, b)
+            elif isinstance(a, float):
+                assert (a == b) or (np.isnan(a) and np.isnan(b)), f.name
+            elif isinstance(a, (list, tuple)) and a and isinstance(a[0], float):
+                np.testing.assert_array_equal(np.asarray(a), np.asarray(b))
+            elif f.name in (
+                "bandwidth_diagnostics",
+                "bias_corrected_fit",
+                "survey_metadata",
+                "filter_info",
+            ):
+                assert (a is None) == (b is None), f.name
+            else:
+                assert a == b, f.name
+
+    def test_workflow_plain_call_infers_without_warning(self, had_panel_2p):
+        from diff_diff import did_had_pretest_workflow
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            rep = did_had_pretest_workflow(had_panel_2p, **HAD_KW, n_bootstrap=99, seed=3)
+        assert rep.aggregate == "overall"
+        assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
+
+    def test_workflow_supplied_mode_warns(self, had_panel_2p):
+        from diff_diff import did_had_pretest_workflow
+
+        with pytest.warns(FutureWarning, match=r"workflow\(aggregate=\) is deprecated"):
+            did_had_pretest_workflow(
+                had_panel_2p, **HAD_KW, n_bootstrap=99, seed=3, aggregate="overall"
+            )
+
+    def test_workflow_invalid_value_warns_then_raises(self, had_panel_2p):
+        from diff_diff import did_had_pretest_workflow
+
+        with pytest.warns(FutureWarning, match="aggregate"):
+            with pytest.raises(ValueError, match="aggregate must be one of"):
+                did_had_pretest_workflow(had_panel_2p, **HAD_KW, aggregate="junk")
+
+
+class TestHadAggregate:
+    def _assert_simple_relay(self, res):
+        agg = res.aggregate("simple")
+        assert isinstance(agg, AggregationResult)
+        assert agg.level == "simple"
+        assert list(agg.label) == ["overall"]
+        assert list(agg.target) == [res.target_parameter]
+        for got, want in (
+            (agg.att[0], res.att),
+            (agg.se[0], res.se),
+            (agg.t_stat[0], res.t_stat),
+            (agg.p_value[0], res.p_value),
+            (agg.conf_int_lower[0], res.conf_int[0]),
+            (agg.conf_int_upper[0], res.conf_int[1]),
+        ):
+            assert (float(got) == want) or (np.isnan(got) and np.isnan(want))
+        assert float(agg.n[0]) == float(res.n_obs)
+        assert agg.n_kind == "units"
+        assert agg.estimator == "HeterogeneousAdoptionDiD"
+        return agg
+
+    def test_simple_view_bit_exact_continuous(self, had_fitted_2p):
+        agg = self._assert_simple_relay(had_fitted_2p)
+        assert had_fitted_2p.target_parameter in ("WAS", "WAS_d_lower")
+        # Continuous designs: disjoint treated/control split.
+        assert had_fitted_2p.n_treated + had_fitted_2p.n_control == had_fitted_2p.n_obs
+        # Plain fit passed df=None into safe_inference: NaN df column.
+        assert np.isnan(agg.df[0])
+
+    def test_simple_view_bit_exact_mass_point(self):
+        res = _fit_had(_had_panel_2p(mass_point=True))
+        assert res.design == "mass_point"
+        # NO n identity assert here: the mass-point control mask uses a
+        # tolerance while treated is strict, so the sets can overlap in a
+        # ~1-ULP band; n_obs is the single authoritative count.
+        self._assert_simple_relay(res)
+
+    def test_simple_view_clustered(self, had_panel_2p):
+        res = _fit_had(had_panel_2p, est_kw={"cluster": "grp"})
+        agg = self._assert_simple_relay(res)
+        assert np.isnan(agg.df[0])
+
+    def test_simple_view_survey_tsl_df_provenance(self, had_panel_2p):
+        from diff_diff import SurveyDesign
+
+        d = had_panel_2p.copy()
+        rng = np.random.default_rng(23)
+        wmap = {u: rng.uniform(0.5, 2.0) for u in d["unit"].unique()}
+        d["w"] = d["unit"].map(wmap)
+        d["psu"] = d["unit"] % 9
+        res = _fit_had(d, survey_design=SurveyDesign(weights="w", psu="psu"))
+        agg = self._assert_simple_relay(res)
+        # The survey path passed resolved.df_survey into safe_inference and
+        # mirrors it on survey_metadata: the relay is provenance-exact.
+        assert res.survey_metadata is not None
+        assert float(agg.df[0]) == float(res.survey_metadata.df_survey)
+
+    def test_simple_view_constant_outcome_all_nan_relay(self):
+        # Degenerate fit contract (had.py class docstring): constant outcome
+        # on the continuous paths returns (att=nan, se=nan) and the
+        # safe_inference gate NaNs the downstream triple. The relay carries
+        # the NaN quintet honestly and __post_init__ NaNs the df column
+        # wherever p is non-finite.
+        res = _fit_had(_had_panel_2p(constant_outcome=True))
+        agg = self._assert_simple_relay(res)
+        assert np.isnan(agg.att[0]) and np.isnan(agg.se[0])
+        assert np.isnan(agg.t_stat[0]) and np.isnan(agg.p_value[0])
+        assert np.isnan(agg.df[0])
+
+    def test_simple_view_single_cluster_finite_att_nan_inference(self):
+        # Mass-point single-cluster: att stays finite (the Wald-IV ratio is
+        # well defined) while the CR1 SE is NaN, so the downstream triple is
+        # NaN via the safe_inference gate - the relay is bit-exact on that
+        # mixed state too.
+        d = _had_panel_2p(mass_point=True).copy()
+        d["one"] = 0
+        res = _fit_had(d, est_kw={"cluster": "one"})
+        assert np.isfinite(res.att) and np.isnan(res.se)
+        agg = self._assert_simple_relay(res)
+        assert np.isfinite(agg.att[0]) and np.isnan(agg.se[0])
+        assert np.isnan(agg.t_stat[0]) and np.isnan(agg.p_value[0])
+        assert np.isnan(agg.df[0])
+
+    def test_simple_summary_estimand_heading(self, had_fitted_2p):
+        # The M-027 heading widening: a single non-'att' target renders the
+        # target column + neutral 'estimate' heading (never the hard-coded
+        # ATT heading, which would mislabel a WAS).
+        s = had_fitted_2p.aggregate("simple").summary()
+        assert "estimate" in s
+        assert had_fitted_2p.target_parameter in s
+        assert not any("ATT" in line and "label" in line for line in s.splitlines())
+
+    def test_dcdh_simple_summary_estimand_heading(self, dcdh_fitted):
+        # The widening also fixes dCDH's shipped mislabel: its estimand-
+        # labelled single-row relay previously rendered under 'ATT'.
+        s = dcdh_fitted.aggregate("simple").summary()
+        assert "estimate" in s
+        assert "DID_M" in s
+        assert not any("ATT" in line and "label" in line for line in s.splitlines())
+
+    def test_event_study_view_matches_builder(self, had_fitted_multi):
+        from diff_diff.results_base import build_event_study_surface
+
+        es = had_fitted_multi.aggregate("event_study")
+        assert isinstance(es, EventStudyResults)
+        assert es.n_kind == "units"  # the corrected _from_had kind
+        built = build_event_study_surface(had_fitted_multi)
+        a, b = es.to_dataframe(), built.to_dataframe()
+        assert list(a.columns) == list(b.columns)
+        assert a.shape == b.shape
+        for col in a.columns:
+            av, bv = a[col].to_numpy(), b[col].to_numpy()
+            if av.dtype.kind in "fc":
+                np.testing.assert_allclose(
+                    av.astype(float), bv.astype(float), rtol=0, atol=0, equal_nan=True
+                )
+            else:
+                assert list(av) == list(bv)
+
+    def test_event_study_view_cband_relays(self, had_panel_multi):
+        # cluster= fires the clustered sup-t band even on an unweighted fit;
+        # the view must carry the cband fields through _from_had.
+        d = had_panel_multi.copy()
+        d["grp"] = d["unit"] % 6
+        res = _fit_had(
+            d, first_treat="ft", est_kw={"cluster": "grp", "n_bootstrap": 199, "seed": 5}
+        )
+        assert res.cband_low is not None
+        es = res.aggregate("event_study")
+        np.testing.assert_array_equal(es.cband_lower, np.asarray(res.cband_low))
+        np.testing.assert_array_equal(es.cband_upper, np.asarray(res.cband_high))
+        assert es.cband_crit_value == res.cband_crit_value
+
+    def test_cross_level_fail_closed_overall_class(self, had_fitted_2p):
+        for bad in ("event_study", "group", "calendar", "dose", "all"):
+            with pytest.raises(ValueError, match="Unsupported aggregation type"):
+                had_fitted_2p.aggregate(bad)
+
+    def test_cross_level_fail_closed_es_class(self, had_fitted_multi):
+        for bad in ("simple", "group", "calendar", "all"):
+            with pytest.raises(ValueError, match="Unsupported aggregation type"):
+                had_fitted_multi.aggregate(bad)
+
+    def test_balance_e_and_weights_rejected(self, had_fitted_2p, had_fitted_multi):
+        with pytest.raises(ValueError, match="balance_e"):
+            had_fitted_2p.aggregate("simple", balance_e=1)
+        with pytest.raises(ValueError, match="balance_e"):
+            had_fitted_multi.aggregate("event_study", balance_e=1)
+        with pytest.raises(ValueError, match="weights"):
+            had_fitted_2p.aggregate("simple", weights="cell")
+
+    def test_idempotent_and_isolated(self, had_fitted_2p, had_fitted_multi):
+        a1 = had_fitted_2p.aggregate("simple")
+        a2 = had_fitted_2p.aggregate("simple")
+        np.testing.assert_array_equal(a1.att, a2.att)
+        e1 = had_fitted_multi.aggregate("event_study").to_dataframe()
+        e2 = had_fitted_multi.aggregate("event_study").to_dataframe()
+        assert e1.equals(e2)
+
+    def test_pickle_round_trip_no_kit(self, had_fitted_2p, had_fitted_multi):
+        # PURE VIEWS: no kit is attached, so results unpickled from ANY
+        # release aggregate identically - there is no no-kit error path.
+        import pickle
+
+        assert not hasattr(had_fitted_2p, "_aggregation_kit")
+        rt2 = pickle.loads(pickle.dumps(had_fitted_2p))
+        np.testing.assert_array_equal(
+            rt2.aggregate("simple").att, had_fitted_2p.aggregate("simple").att
+        )
+        rtm = pickle.loads(pickle.dumps(had_fitted_multi))
+        assert (
+            rtm.aggregate("event_study")
+            .to_dataframe()
+            .equals(had_fitted_multi.aggregate("event_study").to_dataframe())
+        )
+
+    def test_no_future_warning_from_post_fit_routes(self, had_fitted_2p, had_fitted_multi):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            had_fitted_2p.aggregate("simple")
+            had_fitted_multi.aggregate("event_study")
+        assert [w for w in caught if issubclass(w.category, FutureWarning)] == []

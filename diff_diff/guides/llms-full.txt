@@ -228,7 +228,8 @@ cs.fit(
 from diff_diff import CallawaySantAnna, plot_event_study
 
 # NOTE: no n_bootstrap here - post-fit aggregate() is ANALYTICAL-ONLY and
-# raises NotImplementedError on a bootstrapped fit (see below).
+# recompute levels raise NotImplementedError on a bootstrapped fit
+# ('simple' relays the stored bootstrap inference - see below).
 cs = CallawaySantAnna(estimation_method="dr")
 results = cs.fit(data, outcome='outcome', unit='unit', time='period',
                  first_treat='first_treat')
@@ -245,7 +246,7 @@ all accept the post-fit container directly - `plot_event_study`,
 `compute_honest_did` and `compute_pretrends_power` each take
 `results.aggregate('event_study')` - so the only case still requiring the
 fit-time path is **bootstrap inference**: CallawaySantAnna's `aggregate()`
-raises on a bootstrapped fit rather than substituting analytical inference for
+fails closed on a bootstrapped fit's RECOMPUTE levels ('event_study'/'group') rather than substituting analytical inference for
 percentile-bootstrap statistics.
 
 ```python
@@ -824,11 +825,11 @@ had.fit(
     time: str,
     unit: str,
     first_treat: str | None = None,            # Required on staggered panels (last-cohort auto-filter trigger)
-    aggregate: str = "overall",                # "overall" (single scalar WAS) or "event_study" (per-horizon WAS)
+    aggregate: Any = NOT_SUPPLIED,             # DEPRECATED (M-027) - removed in 4.0; fit() selects the mode from the panel shape (2 distinct periods -> overall scalar WAS; more -> per-horizon event-study WAS) and post-fit results.aggregate() is the aggregation surface; supplying a value warns then runs the legacy routing
     *,
     cband: bool = True,                        # Simultaneous (sup-t) confidence bands on event-study fits that are survey-weighted OR clustered (keyword-only)
     survey_design: SurveyDesign | None = None, # Survey-design kwarg (weights, strata, PSU, FPC) — the sole weighting entry
-    trends_lin: bool = False,                  # Eq 17 linear-trend detrending. Requires aggregate="event_study"; needs F>=3 (pre-period depth) for the regression; rejects survey_design= (raises NotImplementedError under trends_lin).
+    trends_lin: bool = False,                  # Eq 17 linear-trend detrending. Requires a multi-period panel (the event-study mode); needs F>=3 (pre-period depth) for the regression; rejects survey_design= (raises NotImplementedError under trends_lin).
     covariates: Any | None = None,             # NOT IMPLEMENTED — non-None raises NotImplementedError (deferred Appendix B.1 / Theorem 6 covariate-adjusted extension; pre-residualize the outcome on covariates as a workaround)
     outcome_col: str = ..., dose_col: str = ..., time_col: str = ..., unit_col: str = ..., first_treat_col: str = ...,  # deprecated aliases for the five column params (FutureWarning; removed in 4.0)
 ) -> HeterogeneousAdoptionDiDResults | HeterogeneousAdoptionDiDEventStudyResults
@@ -839,10 +840,10 @@ had.fit(
 ```python
 from diff_diff import HeterogeneousAdoptionDiD, did_had_pretest_workflow
 
-# `aggregate="overall"` (the default) is two-period-only: did_had_pretest_workflow
-# reduces to a single first-difference and HeterogeneousAdoptionDiD.fit hard-rejects
-# panels with more than two periods. `aggregate="event_study"` requires a
-# multi-period panel. Use distinct data objects for the two regimes.
+# Both surfaces select their mode from the panel shape (M-027/M-139): a
+# two-period panel runs the overall (single-period WAS) estimator / pretest
+# battery, a multi-period panel runs the event-study ones. Use distinct data
+# objects for the two regimes.
 
 # Vet the testable identifying assumptions on the two-period panel first:
 report = did_had_pretest_workflow(
@@ -850,21 +851,24 @@ report = did_had_pretest_workflow(
     dose='d', first_treat='first_treat')
 print(report.summary())
 
-# Single-period scalar WAS (aggregate="overall" default) on the two-period panel:
+# Single-period scalar WAS (the overall mode) on the two-period panel:
 est = HeterogeneousAdoptionDiD()
 results = est.fit(data_2p, outcome='y', unit='unit',
                   time='t', dose='d',
                   first_treat='first_treat')
 print(results.summary())
 
-# Multi-period per-horizon WAS on the multi-period panel:
+# Multi-period per-horizon WAS (the event-study mode) on the multi-period panel:
 es = est.fit(data_mp, outcome='y', unit='unit',
              time='t', dose='d',
-             first_treat='first_treat',
-             aggregate='event_study')
+             first_treat='first_treat')
+
+# Post-fit aggregation (rows M-027/M-122) - pure views, no kit:
+print(results.aggregate('simple').to_dataframe())   # 1-row WAS relay (target = the estimand label)
+print(es.aggregate('event_study').to_dataframe())   # unified EventStudyResults container
 ```
 
-**Staggered panels.** On multi-cohort panels with `aggregate="event_study"`, `fit()` auto-filters to the last treatment cohort plus never-treated units (paper Appendix B.2) and emits a `UserWarning` naming kept/dropped counts. The estimand is then a **last-cohort-only WAS**, not a multi-cohort average. For full multi-cohort staggered support, see `ChaisemartinDHaultfoeuille`.
+**Staggered panels.** On multi-cohort multi-period panels (the event-study mode), `fit()` auto-filters to the last treatment cohort plus never-treated units (paper Appendix B.2) and emits a `UserWarning` naming kept/dropped counts. The estimand is then a **last-cohort-only WAS**, not a multi-cohort average. For full multi-cohort staggered support, see `ChaisemartinDHaultfoeuille`.
 
 **Mass-point + survey constraint.** When fitting `design="mass_point"` with `survey_design=SurveyDesign(...)`, `vcov_type="hc1"` is required: the survey path composes the standard error via Binder-TSL on the HC1-scale influence function, so the default classical sandwich path raises `NotImplementedError` — on both the static path and the event-study path (the event-study rejection fires regardless of `cband`, since the Binder-TSL analytical SE consumes the HC1-scaled IF either way). The one exception is `cluster=`: a clustered mass-point fit resolves to the CR1 sandwich regardless of `vcov_type` (and uses the clustered sup-t band), so there is no classical-vs-HC1 mismatch. Passing `vcov_type="hc1"` is a safe default on weighted survey + sup-t examples since `vcov_type` is unused on the continuous designs (CCT-2014 robust SE is the only formula there).
 
@@ -1108,7 +1112,8 @@ edid = EfficientDiD(pt_assumption="all")
 results = edid.fit(data, outcome='y', unit='id', time='t',
                    first_treat='first_treat')
 results.print_summary()
-# Aggregate post-fit (recomputed from retained EIFs; bootstrapped fits raise):
+# Aggregate post-fit (recomputed from retained EIFs; on bootstrapped fits
+# the recompute levels raise while 'simple' relays the stored inference):
 es = results.aggregate('event_study')       # EventStudyResults container
 grp = results.aggregate('group')            # per-cohort AggregationResult
 print(grp.to_dataframe())
@@ -1616,8 +1621,10 @@ Returned by `CallawaySantAnna.fit()`.
 refit, returning a NEW object and leaving the result unchanged.
 `"event_study"` returns `EventStudyResults`; the others return
 `AggregationResult`. `balance_e=` applies to `"event_study"` only. Raises on
-`"calendar"` (CS has no calendar aggregator) and on a bootstrapped fit, rather
-than substituting analytical inference for percentile-bootstrap statistics.
+`"calendar"` (CS has no calendar aggregator) and, on a bootstrapped fit, on
+the recompute levels (`"event_study"`/`"group"`) rather than substituting
+analytical inference for percentile-bootstrap statistics - `"simple"` relays
+the stored bootstrap inference with a NaN df column (the per-level rule).
 
 ### SunAbrahamResults
 
@@ -1796,7 +1803,7 @@ Each event study effect dict contains: `effect`, `se`, `t_stat`, `p_value`, `con
 | `n_clusters` | `int | None` | Number of effective clusters; `None` under survey designs and `None` under EfficientDiD's default unclustered fit |
 | `df_convention` | `str | None` | On the knob-carrying containers (`StackedDiDResults`, `ImputationDiDResults`, `WooldridgeDiDResults`, `LPDiDResults`, `SunAbrahamResults`): the configured df convention (3.9 / M-127); `StackedDiDResults` additionally carries `inference_df` (the overall-ATT df actually used) |
 
-**Methods:** `summary()`, `print_summary()`, `to_dataframe()`, `to_dict()` (flat dict of headline aliases + `vcov_type` + conditional `cluster_name`/`n_clusters`/`n_bootstrap`/`inference_method`); `aggregate(type, weights=None, *, balance_e=None)` on the shipped post-fit adopters (`StackedDiDResults` views since 3.9/M-024; `EfficientDiDResults` recomputes from retained EIFs since 3.9/M-023; `ImputationDiDResults` and `TwoStageDiDResults` recompute from their PANEL-BACKED kits since 3.9/M-021/M-022 - bootstrapped fits raise on all three recomputing adopters; `ContinuousDiDResults` is MIXED since 3.9/M-025 - `'simple'`/`'dose'` are views over stored fields that work on any fit incl. bootstrapped, `'event_study'` recomputes from a pruned per-cell IF kit and raises on bootstrapped fits)
+**Methods:** `summary()`, `print_summary()`, `to_dataframe()`, `to_dict()` (flat dict of headline aliases + `vcov_type` + conditional `cluster_name`/`n_clusters`/`n_bootstrap`/`inference_method`); `aggregate(type, weights=None, *, balance_e=None)` on the shipped post-fit adopters (`StackedDiDResults` views since 3.9/M-024; `EfficientDiDResults` recomputes from retained EIFs since 3.9/M-023; `ImputationDiDResults` and `TwoStageDiDResults` recompute from their PANEL-BACKED kits since 3.9/M-021/M-022 - on bootstrapped fits their recompute levels raise while `'simple'` relays the stored bootstrap inference with a NaN df column (the per-level rule, converged with M-027); `ContinuousDiDResults` is MIXED since 3.9/M-025 - `'simple'`/`'dose'` are views over stored fields that work on any fit incl. bootstrapped, `'event_study'` recomputes from a pruned per-cell IF kit and raises on bootstrapped fits; `HeterogeneousAdoptionDiDResults` and `HeterogeneousAdoptionDiDEventStudyResults` are pure views since 3.9/M-027 - `'simple'` on the overall class, `'event_study'` on the event-study class, no kit, work on pickles from any release)
 
 ### ContinuousDiDResults
 
@@ -1866,11 +1873,11 @@ Single-period results container for `HeterogeneousAdoptionDiD`. The table below 
 | `variance_formula` | `str | None` | HAD-specific SE label on weighted fits, populated on BOTH continuous and mass-point designs: `"survey_binder_tsl"` (continuous, Binder 1983 TSL on the `survey_design=` path) or `"survey_binder_tsl_2sls"` (mass-point, Binder 1983 TSL on the `survey_design=` path; requires `vcov_type="hc1"` — the mass-point survey path rejects `vcov_type="classical"`, and `cluster=` + `survey_design=` is rejected, so PSU clustering is expressed via `SurveyDesign(weights='<weight_col>', psu='<cluster_col>')`). `None` on unweighted fits |
 | `effective_dose_mean` | `float | None` | Weighted denominator used by the β̂-scale rescaling, populated on weighted fits across all designs: weighted `mean(d)` (`continuous_at_zero`), weighted `mean(d − d_lower)` (`continuous_near_d_lower`), or weighted Wald-IV dose gap `mean(d | Z=1, w) − mean(d | Z=0, w)` (`mass_point`). `None` on unweighted fits |
 
-**Methods:** `summary()`, `print_summary()`, `to_dict()`, `to_dataframe()`
+**Methods:** `summary()`, `print_summary()`, `to_dict()`, `to_dataframe()`, `aggregate(type, ...)` (M-027 pure view: `'simple'` only - a one-row bit-exact relay whose `target` is the estimand label `WAS`/`WAS_d_lower`; no kit, works on pickles from any release; `'event_study'` needs a multi-period fit)
 
 ### HeterogeneousAdoptionDiDEventStudyResults
 
-Per-horizon event-study results container for `HeterogeneousAdoptionDiD` with `aggregate="event_study"`. The anchor horizon `e = -1` is excluded by construction. The table below enumerates every public dataclass field; a regression test (`test_llms_full_had_results_class_field_lists_match_real_dataclass`) compares this list against the real `dataclasses.fields()`.
+Per-horizon event-study results container for `HeterogeneousAdoptionDiD`'s event-study mode (multi-period panels; M-027). The anchor horizon `e = -1` is excluded by construction. The table below enumerates every public dataclass field; a regression test (`test_llms_full_had_results_class_field_lists_match_real_dataclass`) compares this list against the real `dataclasses.fields()`.
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
@@ -1904,7 +1911,7 @@ Per-horizon event-study results container for `HeterogeneousAdoptionDiD` with `a
 | `cband_method` | `str | None` | `"multiplier_bootstrap"` (weighted/survey band) or `"cluster_multiplier_bootstrap"` (clustered band) when populated |
 | `cband_n_bootstrap` | `int | None` | Bootstrap iterations used for the band |
 
-**Methods:** `summary()`, `print_summary()`, `to_dict()`, `to_dataframe()`
+**Methods:** `summary()`, `print_summary()`, `to_dict()`, `to_dataframe()`, `aggregate(type, ...)` (M-027 pure view: `'event_study'` only - the unified `EventStudyResults` container via the `_from_had` passthrough, cband fields included; no kit; `'simple'` needs a two-period fit - no overall WAS is stored here)
 
 ### ChangesInChangesResults
 
@@ -2022,7 +2029,7 @@ results = did.fit(data, outcome='y', treatment='treated', post='post')
 
 ## HAD Pretests
 
-Diagnostic pretests for the `HeterogeneousAdoptionDiD` identifying assumptions (de Chaisemartin, Ciccia, D'Haultfœuille & Knau 2026). The composite workflow `did_had_pretest_workflow` is the recommended entry point — call it before reporting WAS as causal. The workflow follows paper Section 4.2's three-step battery: **step 1** is the QUG support-infimum test (decides whether Design 1' or Design 1 applies); **step 2** is the Assumption 7 pre-trends test (joint Stute on the event-study path; explicitly NOT covered on the overall path because a single-pre-period panel cannot support the joint variant); **step 3** is the Assumption 8 linearity test (`stute_test` or `yatchew_hr_test`). On the default `aggregate="overall"` path the workflow runs steps 1 + 3 only and the returned `verdict` flags the Assumption 7 gap; pass `aggregate="event_study"` on a multi-period panel **with at least one earlier placebo pre-period beyond the base `F-1`** to close that gap. With only the base `F-1` pre-period available (minimal 3-period event-study, or 4-period under `trends_lin=True` where the consumed `F-2` placebo is dropped), the workflow still sets `pretrends_joint=None`, `all_pass=False`, and appends `joint pre-trends skipped (no earlier pre-period)` to the verdict — step 2 stays uncovered.
+Diagnostic pretests for the `HeterogeneousAdoptionDiD` identifying assumptions (de Chaisemartin, Ciccia, D'Haultfœuille & Knau 2026). The composite workflow `did_had_pretest_workflow` is the recommended entry point — call it before reporting WAS as causal. The workflow follows paper Section 4.2's three-step battery: **step 1** is the QUG support-infimum test (decides whether Design 1' or Design 1 applies); **step 2** is the Assumption 7 pre-trends test (joint Stute on the event-study path; explicitly NOT covered on the overall path because a single-pre-period panel cannot support the joint variant); **step 3** is the Assumption 8 linearity test (`stute_test` or `yatchew_hr_test`). On a two-period panel the workflow runs the overall battery (steps 1 + 3 only) and the returned `verdict` flags the Assumption 7 gap; a multi-period panel selects the event-study battery (M-139 - the mode is panel-inferred, like `fit()`), which closes that gap **when at least one earlier placebo pre-period beyond the base `F-1` exists**. With only the base `F-1` pre-period available (minimal 3-period event-study, or 4-period under `trends_lin=True` where the consumed `F-2` placebo is dropped), the workflow still sets `pretrends_joint=None`, `all_pass=False`, and appends `joint pre-trends skipped (no earlier pre-period)` to the verdict — step 2 stays uncovered.
 
 ```python
 from diff_diff import (
@@ -2031,16 +2038,15 @@ from diff_diff import (
     stute_joint_pretest, joint_pretrends_test, joint_homogeneity_test,
 )
 
-# Composite workflow:
-#   aggregate="overall"      -> steps 1 + 3 (QUG + Assumption 8 linearity)
-#                               step 2 (Assumption 7 pre-trends) NOT covered;
-#                               verdict explicitly flags this gap.
-#   aggregate="event_study"  -> steps 1 + 2 + 3 (QUG + joint Stute pre-trends +
-#                               joint homogeneity-linearity Stute) on multi-period panels.
+# Composite workflow - the battery is selected from the panel shape (M-139):
+#   two-period panel   -> steps 1 + 3 (QUG + Assumption 8 linearity)
+#                         step 2 (Assumption 7 pre-trends) NOT covered;
+#                         verdict explicitly flags this gap.
+#   multi-period panel -> steps 1 + 2 + 3 (QUG + joint Stute pre-trends +
+#                         joint homogeneity-linearity Stute).
 report = did_had_pretest_workflow(
     data, outcome='y', unit='unit', time='t',
     dose='d', first_treat='first_treat',
-    aggregate='overall',
     survey_design=None)   # SurveyDesign for survey-aware pretests (Phase 4.5 C)
 print(report.summary())
 print(report.all_pass, report.verdict)

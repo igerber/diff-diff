@@ -125,7 +125,7 @@ class TreatmentDoseShape:
       continuous covariate is another.
     - When (5) fails (negative treated doses):
       ``HeterogeneousAdoptionDiD`` is **not** a fallback either —
-      HAD raises on negative post-period dose (``had.py:1450-1459``,
+      HAD raises on negative post-period dose (``had.py:1563-1572``,
       paper Section 2). Linear DiD with the treatment as a signed
       continuous covariate is the applicable routing alternative.
     - Re-encoding the treatment column (shifting, absolute value,

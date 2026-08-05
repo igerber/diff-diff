@@ -722,7 +722,10 @@ class TestHADDispatch:
         output = practitioner_next_steps(mock_had_event_study_results, verbose=False)
         all_code = " ".join(s.get("code", "") for s in output["next_steps"])
         assert "did_had_pretest_workflow" in all_code
-        assert "aggregate='event_study'" in all_code
+        # M-027/M-139: the guidance must NOT teach the deprecated mode kwarg
+        # - the workflow selects the event-study battery from the panel
+        # shape, and the snippet shows a plain call.
+        assert "aggregate=" not in all_code
 
     def test_had_bandwidth_diagnostics_referenced(self, mock_had_results):
         output = practitioner_next_steps(mock_had_results, verbose=False)
@@ -799,7 +802,7 @@ class TestHADDispatch:
         # Per REGISTRY: HAD is compatible with a small share of
         # never-treated units (paper edge case), and on staggered
         # event-study panels never-treated units are explicitly RETAINED
-        # (Appendix B.2 / had.py:1325). The Step-4 routing must NOT
+        # (Appendix B.2 / had.py:1432). The Step-4 routing must NOT
         # carry the wrong "if untreated → not HAD" framing.
         for fixture in (mock_had_results, mock_had_event_study_results):
             output = practitioner_next_steps(fixture, verbose=False)
@@ -942,11 +945,14 @@ class TestHADDispatch:
         )
         assert had_step is not None, "Step 4 must include a HAD handoff snippet for ContinuousDiD"
         text = (had_step.get("why", "") + " " + had_step.get("code", "")).lower()
-        # Snippet or rationale must call out the multi-period event-study path.
-        assert "aggregate='event_study'" in text or 'aggregate="event_study"' in text, (
-            "ContinuousDiD -> HAD handoff must show aggregate='event_study' "
-            "for multi-period panels; otherwise copy-paste on a multi-period "
-            "ContinuousDiD result raises at HAD fit time."
+        # Snippet or rationale must call out the multi-period event-study
+        # path in the POST-M-027 vocabulary: fit() selects the mode from the
+        # panel shape, so the handoff must NOT teach the deprecated kwarg
+        # (copy-paste on a multi-period panel now just works).
+        assert "event-study" in text or "event_study" in text
+        assert "aggregate=" not in text, (
+            "ContinuousDiD -> HAD handoff must not teach the deprecated "
+            "fit(aggregate=) kwarg (M-027: the mode is panel-inferred)."
         )
         # And the staggered last-cohort-only caveat must be surfaced.
         assert "last-cohort" in text or "last cohort" in text, (
@@ -994,7 +1000,7 @@ class TestHADDispatch:
         an explicit `first_treat=inf -> 0` recode in the emitted code
         snippet. ContinuousDiD silently normalizes `inf` to `0`, but
         HAD's _validate_had_panel rejects any first_treat value outside
-        {0, t_post} at the front door (had.py:1096-1102). Without the
+        {0, t_post} at the front door (had.py:1208-1214). Without the
         recode, a copy-paste of the advertised handoff on a valid
         inf-encoded ContinuousDiD panel raises
         `ValueError: first_treat='first_treat' contains value(s)
@@ -1032,7 +1038,7 @@ class TestHADDispatch:
     def test_had_event_study_sup_t_snippet_uses_hc1_for_mass_point_survey_compatibility(
         self, mock_had_event_study_results
     ):
-        # Per had.py:3495-3507 the mass-point design rejects the
+        # Per had.py:3646-3658 the mass-point design rejects the
         # default classical vcov family on the survey_design= path
         # (NotImplementedError). The Step-6 sup-t snippet shows a
         # generic weighted event-study fit; if it uses the default
@@ -1063,7 +1069,7 @@ class TestHADDispatch:
         assert ok, (
             "Sup-t / cband snippet must either use vcov_type='hc1' / "
             "robust=True or surface the mass-point + survey vcov "
-            "requirement inline. Per had.py:3495-3507 the default "
+            "requirement inline. Per had.py:3646-3658 the default "
             "classical sandwich raises NotImplementedError on the "
             "mass-point + survey path; the example as written would "
             "fail at fit time on a mass-point panel."
@@ -1102,7 +1108,7 @@ class TestHADDispatch:
             "HeterogeneousAdoptionDiDResults.to_dict() docstring must "
             "describe the mass-point effective_dose_mean semantics; "
             "weighted mass-point fits populate it as the weighted "
-            "Wald-IV dose gap per had.py:3642-3660."
+            "Wald-IV dose gap per had.py:3793-3811."
         )
         assert "Wald-IV" in doc or "Z=1" in doc, (
             "HeterogeneousAdoptionDiDResults.to_dict() docstring must "
@@ -1115,7 +1121,7 @@ class TestHADDispatch:
         # acknowledge that weighted mass-point fits populate
         # variance_formula in {"pweight_2sls", "survey_binder_tsl_2sls"}
         # and effective_dose_mean as the weighted Wald-IV dose gap (per
-        # had.py:3585-3660). PR #402 R5 P3 caught that the dataclass
+        # had.py:3736-3811). PR #402 R5 P3 caught that the dataclass
         # field docstrings still said those fields were continuous-only
         # / None on mass-point - leaving two source-of-truth surfaces
         # disagreeing about the same public result object. Lock the
@@ -1150,7 +1156,7 @@ class TestHADDispatch:
             "HeterogeneousAdoptionDiDResults.effective_dose_mean "
             "docstring must mention mass-point semantics; weighted "
             "mass-point fits populate it as the weighted Wald-IV dose "
-            "gap per had.py:3642-3660."
+            "gap per had.py:3793-3811."
         )
         assert "Wald-IV" in src or "Z=1" in src, (
             "HeterogeneousAdoptionDiDResults.effective_dose_mean "

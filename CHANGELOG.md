@@ -8,6 +8,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **HeterogeneousAdoptionDiD post-fit `aggregate()` + panel-shape mode
+  inference, and the per-level bootstrap-gate convergence** (v4 program 2(b)
+  PR-4; ledger rows [M-027] + new row [M-139], amendments to [M-020]..[M-023],
+  [M-092], [M-093]). `HeterogeneousAdoptionDiD.fit(aggregate=)` and
+  `did_had_pretest_workflow(aggregate=)` are deprecated (`FutureWarning`;
+  removed in 4.0). Unlike every prior adopter the param was a MODE SELECTOR
+  over mutually exclusive panel shapes, so the successor is inference: both
+  surfaces now select the mode from the panel (two distinct periods -> the
+  overall single-period WAS estimator / pretest battery; more -> the
+  event-study ones), and a plain multi-period `fit()` - which previously
+  raised the two-period shape error - now just works (no numbers change on
+  any previously-working call; supplied legacy values warn and run the
+  legacy routing unchanged, invalid values still raise). Post-fit
+  `aggregate()` lands on both results classes as PURE VIEWS with per-class
+  supported subsets and NO retained kit (results unpickled from any release
+  aggregate identically): `aggregate('simple')` on overall fits is a one-row
+  bit-exact relay whose `target` carries the estimand label
+  (`WAS`/`WAS_d_lower`), with `n = n_obs` contributing units and
+  provenance-exact df; `aggregate('event_study')` on event-study fits is a
+  `build_event_study_surface` passthrough (cband fields included). The
+  `_from_had` adapter's `n_kind` is corrected `"obs"` -> `"units"`
+  (`n_obs_per_horizon` counts units), and `AggregationResult.summary()` now
+  renders the target column + neutral `estimate` heading whenever the single
+  distinct target is not `"att"` (sized to the longest label) - previously a
+  WAS or dCDH estimand row rendered under a hard-coded `ATT` heading;
+  uniform-`att` and ContinuousDiD att/acrt output are byte-stable. HAD
+  event-study containers stay outside `compute_honest_did` /
+  `compute_pretrends_power` - DEFERRED, not by-design: the coefficients ARE
+  reference-normalized against the F-1 anchor, but the anchor row is omitted
+  (identically zero and the WAS is not identified there) and no joint
+  cross-horizon covariance exists; both terminal TypeErrors say so.
+  **Per-level bootstrap-gate convergence:** CallawaySantAnna, EfficientDiD,
+  ImputationDiD and TwoStageDiD previously failed closed on EVERY
+  `aggregate()` level of a bootstrapped fit; their `aggregate('simple')` is
+  a bit-exact relay of the stored overall quintet (percentile se/p/CI beside
+  the finite `safe_inference` t), so it now dispatches before the bootstrap
+  gate and stays available - with a NaN df column, because no df governs
+  percentile inference - while the recompute levels keep failing closed
+  (this supersedes the uniform-conservatism decision recorded with
+  [M-021]..[M-023]; the normative per-level rule lives in v4-design
+  section 6). The `HADPretestReport.aggregate` FIELD survives as output
+  metadata recording which battery ran; only the params die.
 - **ContinuousDiD post-fit `aggregate()` - a MIXED view/recompute adopter**
   (v4 program 2(b) PR-3c; ledger row [M-025]). `ContinuousDiD.fit(aggregate=)`
   is deprecated (`FutureWarning`; removed in 4.0, and the no-underscore
@@ -85,9 +127,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     copy of the working frame (O(n_obs); replicate designs additionally
     retain the O(n_obs x R) replicate matrix). A `store_kit` opt-out is
     tracked in DEFERRED.md.
-  - Bootstrapped fits fail closed for ALL aggregate() levels including
-    'simple' (uniform CS/EfficientDiD parity; replay wiring is tracked
-    in TODO.md); a fit whose bootstrap FAILED aggregates normally.
+  - Bootstrapped fits: `aggregate('simple')` relays the stored quintet
+    verbatim with a NaN df column, while the recompute levels fail
+    closed (replay wiring is tracked in TODO.md; the per-level policy
+    converged with [M-027] later in the same cycle); a fit whose
+    bootstrap FAILED aggregates normally.
     TwoStage post-fit event-study containers reproduce the M-092
     contract exactly (joint GMM vcov + index + df on analytical fits;
     vcov=None with the replayed df on replicate fits).
@@ -142,11 +186,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     successor fails closed on unknown types (behavior improvement).
     `EfficientDiD`'s balance rule is the anchor-horizon rule - the
     same rule CallawaySantAnna uses.
-  - Bootstrapped fits (`n_bootstrap > 0`) fail closed on `aggregate()`
-    at every level (CS parity); the deprecated fit-time aggregation
-    remains the supported bootstrapped route, and its group rows now
-    clear the analytical `df_used` provenance under the bootstrap
-    override. Exact post-fit bootstrap replay is a tracked TODO row.
+  - Bootstrapped fits (`n_bootstrap > 0`): `aggregate('simple')` relays
+    the stored quintet verbatim with a NaN df column, while the
+    recompute levels fail closed (the per-level policy converged with
+    [M-027] later in the same cycle); the deprecated fit-time
+    aggregation remains the supported bootstrapped route for those
+    levels, and its group rows still clear the analytical `df_used`
+    provenance under the bootstrap override. Exact post-fit bootstrap
+    replay is a tracked TODO row.
   - The aggregation methods moved verbatim to the new
     `diff_diff/efficient_did_aggregation.py` (importable by both the
     estimator and the results module); `efficient_did.py` drops below
@@ -286,8 +333,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     delta/no-scalar-count) and a `df` column resolved from the ACTUAL
     inference path (the `L_max>=2` delta keeps its analytical survey df
     even under bootstrap, per the REGISTRY delta-SE note). Because
-    nothing is recomputed, bootstrap fits are permitted - unlike
-    CallawaySantAnna's kit-based `aggregate()`, which stays fail-closed.
+    nothing is recomputed, bootstrap fits are permitted (since [M-027]
+    the kit-based adopters' `'simple'` relays are permitted on
+    bootstrapped fits too - only their recompute levels stay closed).
   - Consumer hardening that landed with the wave: `plot_event_study`
     renders MULTI-reference containers via row-aligned hollow anchors
     (never dropped, never filled estimates; explicit `reference_period=`
@@ -760,9 +808,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and forms no cross-cohort mass — reporting one would be fabricated.
   Fail-closed elsewhere too: `aggregate("calendar")` raises (CS has no
   calendar aggregator; the DEFERRED row stands), a non-`None` `weights`
-  raises, and `aggregate()` on a **bootstrapped** fit raises rather than
-  substituting analytical inference for percentile-bootstrap statistics —
-  bootstrap replay is tracked in `TODO.md`.
+  raises, and the recompute levels of `aggregate()` on a **bootstrapped**
+  fit raise rather than substituting analytical inference for
+  percentile-bootstrap statistics (`aggregate('simple')` relays the stored
+  bootstrap inference with a NaN df column since [M-027]'s per-level
+  convergence) — bootstrap replay is tracked in `TODO.md`.
   `AggregationResult.df` is per-row provenance: the degrees of freedom that
   actually produced that row's stored p-value and interval, read from the
   carrier the fit used (`survey_metadata.df_survey` on explicit survey

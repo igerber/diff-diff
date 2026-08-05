@@ -436,7 +436,9 @@ strongest norm (`did::aggte`, `etwfe::emfx`, Stata `estat aggregation`).
 **Vocabulary.** Closed set: `"simple"`, `"event_study"`, `"group"`,
 `"calendar"`, plus per-estimator documented extras where the estimand demands
 them (ContinuousDiD adds `"dose"` [M-025]; HAD's `"overall"` maps to
-`"simple"` [M-027]; Wooldridge's `"gt"` group-time table stays as a
+`"simple"` [M-027] - its fit-time mode selector, and the workflow twin
+`did_had_pretest_workflow(aggregate=)` [M-139], both resolve by
+panel-shape inference; Wooldridge's `"gt"` group-time table stays as a
 documented extra). The drifted spellings die across ALL their surfaces:
 `"eventstudy"` (ContinuousDiD [M-025]); Wooldridge's `"event"` on its
 EXISTING post-fit `aggregate(type=)` - the emfx-style prior art for this
@@ -445,7 +447,13 @@ section's pattern - plus `summary(aggregation=)` and
 
 **Heterogeneous-`target` rendering** (added with [M-025], the first
 producer of a mixed-target `AggregationResult` - ContinuousDiD's att/acrt
-dual estimand): when a container carries more than one distinct `target`,
+dual estimand; widened with [M-027]: the same target-column + neutral
+`estimate`-heading rendering also fires when the SINGLE distinct target
+is not `"att"` - HAD's WAS/WAS_d_lower and dCDH's estimand-labelled
+relays previously rendered under the hard-coded `ATT` heading, a
+mislabel; the target column sizes to the longest label so
+uniform-`att` and att/acrt producers stay byte-stable): when a
+container carries more than one distinct `target`,
 `summary()` renders a `target` column and a neutral `estimate` heading
 (the uniform-target `ATT` heading would mislabel the other estimand's
 rows), and `to_dataframe()` orders rows by FIRST-APPEARANCE target blocks
@@ -473,9 +481,16 @@ rather than unit-length, so the O(n_units) figure is a panel-only bound. Raw
 unit identifiers are NOT retained - the kit needs only position, so it stores
 canonical 0..n-1 codes, keeping a shared results artifact free of names, emails
 or administrative IDs. Analytical-vs-bootstrap inference of the aggregated
-estimand follows the fit's inference method; where bootstrap draws are not
-retained, `aggregate()` on a bootstrapped fit RAISES rather than silently
-returning analytical inference. **View-relay exception (Phase 2b PRs 1-2):**
+estimand follows the fit's inference method, and the bootstrap gate is
+PER-LEVEL (converged with [M-027] across CS/EDiD/Imputation/TwoStage,
+which previously failed closed on every level): a level that RELAYS the
+fit's stored inference verbatim (`'simple'` on every adopter; all of
+dCDH/StackedDiD/HAD) is faithful under any inference regime and stays
+available on bootstrapped fits, with the df COLUMN NaN'd there - no df
+governs percentile inference, so a relay never publishes analytical
+provenance beside percentile statistics; where bootstrap draws are not
+retained, a RECOMPUTE level on a bootstrapped fit RAISES rather than
+silently returning analytical inference. **View-relay exception (Phase 2b PRs 1-2):**
 estimators whose `aggregate()` RELAYS stored fields without recomputation
 need no influence-function kit - there is nothing to re-weight. The
 retention requirement binds RECOMPUTING estimators (the CallawaySantAnna
@@ -684,10 +699,10 @@ above; anything only one PR cares about stays in that PR's plan.**
 | Phase | Ships in | PRs (each: dedicated shim/removal tests + matrix flips + CHANGELOG naming flipped row ids) |
 |---|---|---|
 | 1 (this PR) | - | Spec + matrix + enforcement test + support edits |
-| 2: contract foundations | 3.9 | (a) results base + unified event-study representation [M-092] + to_dict completion + the Diagnostic marker base on the diagnostic result roster [M-091] (section 3.5); (b) `aggregate()` + fit(aggregate=) shims [M-020..M-027] (M-020's shim already shipped); (c) param renames [M-030..M-047] [M-084] [M-086..M-089] + their results-field mirrors [M-094] [M-095] (section 8 rule 9) + the public-function completeness sweep [M-097..M-113] (section 8 rule 10) + the dCDH results mirror [M-114] + the fourth `robust` site [M-115] + the 2(c)-ii missed-rename amendments [M-136..M-138] (LPDiD `level` value; the two post-dummy diagnostics params) + BaseEstimator mixin + ContinuousDiD covariates move; (d) alias introduction [M-062] (the Spillover introduction is cancelled [M-063]) + the alias-diet `__getattr__` warning shim [M-135] + wrapper deprecations [M-070..M-077] + the two inference-surface policies: `n_bootstrap` semantic unification [M-081] and the wild-cluster-bootstrap roster guard [M-096]; shipped insertions (all done): the aggregate contract [M-122], the ETWFE reference-period family [M-123] [M-124] [M-125], and the variance-consolidation program [M-126] [M-127] |
+| 2: contract foundations | 3.9 | (a) results base + unified event-study representation [M-092] + to_dict completion + the Diagnostic marker base on the diagnostic result roster [M-091] (section 3.5); (b) `aggregate()` + fit(aggregate=) shims [M-020..M-027] [M-139] (M-020's shim already shipped; M-139 is the HAD workflow twin, a pre-cut amendment); (c) param renames [M-030..M-047] [M-084] [M-086..M-089] + their results-field mirrors [M-094] [M-095] (section 8 rule 9) + the public-function completeness sweep [M-097..M-113] (section 8 rule 10) + the dCDH results mirror [M-114] + the fourth `robust` site [M-115] + the 2(c)-ii missed-rename amendments [M-136..M-138] (LPDiD `level` value; the two post-dummy diagnostics params) + BaseEstimator mixin + ContinuousDiD covariates move; (d) alias introduction [M-062] (the Spillover introduction is cancelled [M-063]) + the alias-diet `__getattr__` warning shim [M-135] + wrapper deprecations [M-070..M-077] + the two inference-surface policies: `n_bootstrap` semantic unification [M-081] and the wild-cluster-bootstrap roster guard [M-096]; shipped insertions (all done): the aggregate contract [M-122], the ETWFE reference-period family [M-123] [M-124] [M-125], and the variance-consolidation program [M-126] [M-127] |
 | 3: merges | 3.9 | (a) TWFE event-study mode [M-010] + EventStudy warn [M-060] + the fit `time`->`post` rename [M-082] (gates: section 4.1's equivalence/divergence/pooled-parity test triple); (b) TripleDifference facade [M-013] + the SDDD alias [M-064]; (c) CiC method= [M-015] |
 | 4: release + soak | 3.9 cut | Migration guide written (skeleton: section 10); maintainer cuts 3.9; maint/3.8 rule active |
-| 5: enforcement | 4.0 | Removals [M-010..M-015, M-020..M-027, M-030, M-032..M-047 old names, M-060, M-061, M-064, M-070..M-077, M-084, M-086..M-089, M-001..M-003, M-117, M-118, M-119, M-120] + the alias diet [M-132]..[M-134] + the amendment's old names [M-094] [M-095] [M-097..M-115] [M-136..M-138] (incl. their consumer migrations and the `clean_control` serialized reporting key); M-031's old `time` name persists as the merged class's calendar column, so it is deliberately absent from the removal roster (its 4.0 enforcement is the M-085 behavior entry below); property window: [M-016] property-flips at 4.0 (removal at 5.0); storage flips [M-050..M-058]; default policies [M-004..M-006, M-128..M-131, M-080]; merged-class behavior enforcements [M-083] [M-085]; warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; docs/llms.txt/README refresh |
+| 5: enforcement | 4.0 | Removals [M-010..M-015, M-020..M-027, M-139, M-030, M-032..M-047 old names, M-060, M-061, M-064, M-070..M-077, M-084, M-086..M-089, M-001..M-003, M-117, M-118, M-119, M-120] + the alias diet [M-132]..[M-134] + the amendment's old names [M-094] [M-095] [M-097..M-115] [M-136..M-138] (incl. their consumer migrations and the `clean_control` serialized reporting key); M-031's old `time` name persists as the merged class's calendar column, so it is deliberately absent from the removal roster (its 4.0 enforcement is the M-085 behavior entry below); property window: [M-016] property-flips at 4.0 (removal at 5.0); storage flips [M-050..M-058]; default policies [M-004..M-006, M-128..M-131, M-080]; merged-class behavior enforcements [M-083] [M-085]; warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; docs/llms.txt/README refresh |
 | 6: front door | 4.1 | `event_study(data, outcome, unit, time, first_treat, estimator=...)` comparison entry point over the staggered family (sketch only; specified in its own plan) |
 
 Citation semantic for the table: a cell may cite a row whose current `phase`
@@ -717,8 +732,11 @@ re-enumerate the cells' M-id lists:
    re-init - `type(self)(**merged)` validates before any mutation - so the
    renames build on a contract that can never drift from `__init__`.
 4. 2(c)-ii: the rename sweep (the phase-2(c) cell); may split by rename group.
-5. 2(b): post-fit `aggregate()` + `fit(aggregate=)` shims (the (b) cell),
-   claiming reserved ids M-116/M-118..M-121 for any new rows; the
+5. 2(b): post-fit `aggregate()` + `fit(aggregate=)` shims (the (b) cell).
+   The reserved-id pool is spent for this wave (M-118..M-120 claimed;
+   M-116/M-121 stay earmarked for the HAD rename and Wooldridge), so any
+   further new row takes the next free id (M-139, the HAD workflow twin,
+   was the first); the
    `EventStudyResults` downstream-consumability work (TODO.md row: the three
    consumers currently reject the unified container) lands before or inside
    this wave so the shims do not steer users into a dead end.
@@ -751,7 +769,7 @@ not expressible as ledger rows, so the 3.9 release PR asserts them by hand:
 
 Everything else queued for 3.9 is row-gated, by one of two mechanisms. Symbol
 rows that declare a `warning` gate on `deprecated_in` - the shim must have
-shipped ([M-010] [M-013] [M-015], [M-020]..[M-027], [M-030]..[M-047],
+shipped ([M-010] [M-013] [M-015], [M-020]..[M-027], [M-139], [M-030]..[M-047],
 [M-070]..[M-077], [M-082],
 [M-084], [M-086]..[M-089], [M-094] [M-095], [M-097]..[M-115]). Rows with no
 shim to assert gate
@@ -882,14 +900,14 @@ forever - a removed symbol resurrecting is a test failure.
   class/function rows
   and alias rows also assert `__all__` membership consistent with their
   status (stale `import *` entries fail). The shipped row ids are a
-  committed snapshot in the enforcement test (120 as of 2(b) PR-3b's
-  Imputation/TwoStage balance_e rows: Phase 1 + the diagnostic-family
+  committed snapshot in the enforcement test (121 as of 2(b) PR-4's
+  HAD workflow-aggregate row: Phase 1 + the diagnostic-family
   amendment +
   the M-092/M-093 results-contract rows + the M-094..M-096 amendment rows +
   the M-097..M-115 completeness sweep + M-117..M-120/M-122 + the ETWFE
   reference-period pair M-123/M-124 + M-125 + M-126 + M-127..M-131 +
   the alias-diet family M-132..M-135 + the 2(c)-ii amendments
-  M-136..M-138;
+  M-136..M-138 + M-139;
   the snapshot extends by a new id range in the same diff that appends
   rows): ids are never deleted or reused, and the test fails if any
   snapshot id disappears.

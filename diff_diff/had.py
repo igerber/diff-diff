@@ -38,9 +38,10 @@ family) or the Wald-IV ratio (mass-point), then route inference through
    error via the structural-residual 2SLS sandwich
    (see ``_fit_mass_point_2sls``).
 
-Phase 2a ships the single-period WAS estimator (``aggregate="overall"``).
-Phase 2b adds the multi-period event-study extension (paper Appendix B.2)
-via ``aggregate="event_study"``: per-horizon WAS estimates with pointwise
+Phase 2a ships the single-period WAS estimator (the two-period "overall"
+mode). Phase 2b adds the multi-period event-study extension (paper
+Appendix B.2) - the "event_study" mode, selected automatically from the
+panel shape (rows M-027/M-139): per-horizon WAS estimates with pointwise
 CIs, including pre-period placebos, reusing the three Phase 2a design
 paths on per-horizon first differences anchored at ``Y_{g, F-1}``.
 Staggered-timing panels are auto-filtered to the last-treatment cohort
@@ -66,7 +67,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union, overload
+from typing import Any, ClassVar, Dict, List, Literal, Optional, Tuple, Union, overload
 
 import numpy as np
 import pandas as pd
@@ -78,6 +79,7 @@ from diff_diff._deprecation import (
     resolve_renamed_kwarg,
     warn_deprecated_kwarg,
 )
+from diff_diff.aggregation import AggregationMixin, AggregationResult, resolve_inference_df
 from diff_diff.bootstrap_chunking import (
     compute_block_size,
     iter_survey_multiplier_weight_blocks,
@@ -88,7 +90,7 @@ from diff_diff.local_linear import (
     BiasCorrectedFit,
     bias_corrected_local_linear,
 )
-from diff_diff.results_base import BaseResults
+from diff_diff.results_base import BaseResults, build_event_study_surface
 from diff_diff.survey import (
     SurveyMetadata,
     compute_survey_metadata,
@@ -125,6 +127,30 @@ _VALID_DESIGNS = (
     "mass_point",
 )
 _VALID_AGGREGATES = ("overall", "event_study")
+
+
+def _infer_aggregate_mode(data: pd.DataFrame, time_col: str) -> str:
+    """Select the estimation mode from the panel shape (rows M-027/M-139).
+
+    ``fit(aggregate=)`` and ``did_had_pretest_workflow(aggregate=)`` are
+    deprecated; when the caller does not supply a mode, both surfaces
+    resolve it HERE from the same rule so they cannot drift: two distinct
+    time values -> the two-period ``"overall"`` estimator, more than two
+    -> the multi-period ``"event_study"`` estimator. Fewer than two
+    distinct values routes to the overall branch, whose panel validator
+    raises the existing two-period message.
+
+    The column check mirrors ``_validate_had_panel`` so a missing time
+    column stays a ``ValueError`` naming the column (never a raw
+    ``KeyError`` from the indexing below - the shared validators run
+    downstream of mode selection).
+    """
+    if time_col not in data.columns:
+        raise ValueError(f"Missing column(s) in data: [{time_col!r}].")
+    n_periods = int(data[time_col].nunique(dropna=True))
+    return "overall" if n_periods <= 2 else "event_study"
+
+
 # Mass-point 2SLS supports: classical, hc1 (HC0 is an unscaled variant not
 # publicly exposed; hc2 and hc2_bm raise NotImplementedError pending a
 # 2SLS-specific leverage derivation and R parity anchor).
@@ -205,7 +231,7 @@ def _json_safe_filter_info(
 
 
 @dataclass
-class HeterogeneousAdoptionDiDResults(BaseResults):
+class HeterogeneousAdoptionDiDResults(BaseResults, AggregationMixin):
     """Estimator output for :class:`HeterogeneousAdoptionDiD`.
 
     NaN-safe inference: the three downstream fields ``t_stat``,
@@ -553,9 +579,68 @@ class HeterogeneousAdoptionDiDResults(BaseResults):
         """Return a one-row DataFrame of the result dict."""
         return pd.DataFrame([self.to_dict()])
 
+    # ------------------------------------------------------------------
+    # Post-fit aggregation (rows M-027/M-122): PURE VIEW, no kit.
+    # ------------------------------------------------------------------
+    #: The overall (two-period) fit supports only the 'simple' relay -
+    #: the event-study estimand needs a multi-period panel and is not
+    #: recomputable from this container (the two modes share no
+    #: computable estimand; joint cross-horizon covariance is deferred).
+    _AGGREGATE_SUPPORTED: ClassVar[Tuple[str, ...]] = ("simple",)
+    #: balance_e applies to no aggregation type on this estimator.
+    _AGGREGATE_BALANCE_E_TYPES: ClassVar[Tuple[str, ...]] = ()
+
+    def _aggregate_compute(
+        self, level: str, *, weights: Optional[str], balance_e: Optional[int]
+    ) -> Any:
+        """One-row relay of the stored overall inference (bit-exact).
+
+        A pure VIEW over stored public fields (the dCDH class): nothing
+        is recomputed, no kit is retained, and results unpickled from
+        any release aggregate identically. ``target`` relays
+        ``target_parameter`` ("WAS" / "WAS_d_lower") - the estimand is
+        a Weighted Average Slope, not an ATT, so the label column
+        carries the estimand name (the dCDH estimand-label precedent).
+
+        ``n = n_obs`` with ``n_kind="units"``: the estimator's own
+        contributing-unit count (post panel-aggregation to unit-level
+        first differences). On the continuous designs this equals the
+        disjoint ``n_treated + n_control`` total by construction; the
+        mass-point masks can overlap in a ~1-ULP tolerance band at the
+        ``d_lower`` boundary, which is why ``n_obs`` (the single
+        authoritative source) is relayed rather than the sum.
+
+        ``df`` relays :func:`resolve_inference_df`: the survey path
+        passes ``resolved_survey_unit.df_survey`` into the stored
+        ``safe_inference`` call and mirrors it on
+        ``survey_metadata.df_survey``, so the relay is
+        provenance-exact; plain fits passed ``df=None`` (normal
+        theory) and report a NaN df column. HAD rejects
+        replicate-weight designs at fit, so the replicate-undefined
+        0-sentinel branch is unreachable here.
+        """
+        # The mixin has already validated level/'weights'/'balance_e'.
+        return AggregationResult(
+            level="simple",
+            label=np.array(["overall"], dtype=object),
+            target=np.array([self.target_parameter], dtype=object),
+            att=np.array([self.att], dtype=float),
+            se=np.array([self.se], dtype=float),
+            t_stat=np.array([self.t_stat], dtype=float),
+            p_value=np.array([self.p_value], dtype=float),
+            conf_int_lower=np.array([self.conf_int[0]], dtype=float),
+            conf_int_upper=np.array([self.conf_int[1]], dtype=float),
+            n=np.array([float(self.n_obs)], dtype=float),
+            df=resolve_inference_df(self),
+            alpha=self.alpha,
+            n_kind="units",
+            weight=np.array([1.0], dtype=float),
+            estimator="HeterogeneousAdoptionDiD",
+        )
+
 
 @dataclass
-class HeterogeneousAdoptionDiDEventStudyResults(BaseResults):
+class HeterogeneousAdoptionDiDEventStudyResults(BaseResults, AggregationMixin):
     """Event-study results for :class:`HeterogeneousAdoptionDiD` (Phase 2b).
 
     Per-horizon arrays align with ``event_times`` by index; all per-horizon
@@ -945,6 +1030,35 @@ class HeterogeneousAdoptionDiDEventStudyResults(BaseResults):
             data["cband_high"] = self.cband_high
         return pd.DataFrame(data)
 
+    # ------------------------------------------------------------------
+    # Post-fit aggregation (rows M-027/M-122): PURE VIEW, no kit.
+    # ------------------------------------------------------------------
+    #: The event-study fit supports only the 'event_study' view - the
+    #: overall WAS is a different estimand on a different panel shape
+    #: (no pooled scalar is stored, and averaging per-horizon estimates
+    #: would need the deferred joint cross-horizon covariance for a
+    #: valid SE).
+    _AGGREGATE_SUPPORTED: ClassVar[Tuple[str, ...]] = ("event_study",)
+    #: balance_e applies to no aggregation type on this estimator.
+    _AGGREGATE_BALANCE_E_TYPES: ClassVar[Tuple[str, ...]] = ()
+
+    def _aggregate_compute(
+        self, level: str, *, weights: Optional[str], balance_e: Optional[int]
+    ) -> Any:
+        """The unified event-study surface as a pure view (bit-exact).
+
+        Delegates to :func:`build_event_study_surface`, whose
+        ``_from_had`` adapter copies the stored per-horizon arrays -
+        including the simultaneous cband fields - verbatim. Nothing is
+        recomputed and no kit is retained, so results unpickled from
+        any release aggregate identically. The anchor horizon ``e = -1``
+        is absent by design (its coefficient is identically zero and
+        the WAS is not identified there), so the container legitimately
+        has no reference row.
+        """
+        # The mixin has already validated level/'weights'/'balance_e'.
+        return build_event_study_surface(self)
+
 
 # =============================================================================
 # Panel validation and aggregation
@@ -1007,11 +1121,11 @@ def _validate_had_panel(
         )
     if len(periods_list) > 2:
         raise ValueError(
-            f"HAD with aggregate='overall' requires exactly two time "
-            f"periods (got {len(periods_list)} in {time_col!r}). For "
-            f"multi-period panels, pass aggregate='event_study' (paper "
-            f"Appendix B.2 multi-period event-study extension) which "
-            f"produces per-event-time WAS estimates."
+            f"HAD's overall (two-period WAS) estimator requires exactly "
+            f"two time periods (got {len(periods_list)} in {time_col!r}). "
+            f"On a multi-period panel, a plain fit() selects the "
+            f"event-study mode automatically (paper Appendix B.2, "
+            f"per-event-time WAS estimates)."
         )
 
     # Balanced-panel check: every unit appears exactly once per period.
@@ -1209,10 +1323,10 @@ def _validate_had_panel_event_study(
     periods_list = list(data[time_col].unique())
     if len(periods_list) < 3:
         raise ValueError(
-            f"HAD with aggregate='event_study' requires more than two "
-            f"time periods (got {len(periods_list)} in {time_col!r}). "
-            f"For two-period panels, pass aggregate='overall' (Phase 2a "
-            f"single-period WAS)."
+            f"HAD's event-study estimator requires more than two time "
+            f"periods (got {len(periods_list)} in {time_col!r}). On a "
+            f"two-period panel, a plain fit() selects the overall "
+            f"(single-period WAS) mode automatically."
         )
 
     # Ordered-time-type check. Paper Appendix B.2 event-time horizons
@@ -1233,7 +1347,7 @@ def _validate_had_panel_event_study(
         or (isinstance(time_dtype, pd.CategoricalDtype) and bool(time_dtype.ordered))
     ):
         raise ValueError(
-            f"HAD aggregate='event_study' requires an ordered time "
+            f"HAD's event-study estimator requires an ordered time "
             f"column. time={time_col!r} has dtype={time_dtype!r}, "
             f"which has no defined chronological order; raw sort would "
             f"fall back to lexicographic ordering and silently misindex "
@@ -1242,7 +1356,7 @@ def _validate_had_panel_event_study(
             f"Convert the time column to numeric (e.g., integer year), "
             f"datetime, or ordered categorical "
             f"(``pd.Categorical(..., ordered=True, categories=[...])``) "
-            f"before calling fit() with aggregate='event_study'."
+            f"before calling fit() on the multi-period panel."
         )
 
     # Construct the chronological sort key once, shared across every
@@ -1414,9 +1528,10 @@ def _validate_had_panel_event_study(
                     f"(F_last={F_last!r}), only {len(periods_list)} "
                     f"distinct time periods remain in {time_col!r}. "
                     f"Event-study requires >2 periods; the filtered "
-                    f"panel is too small. Pass aggregate='overall' on "
-                    f"a two-period subset, or supply data with more "
-                    f"pre- or post-periods for the last cohort."
+                    f"panel is too small. Subset the data to two "
+                    f"periods for the overall (single-period WAS) "
+                    f"estimator, or supply data with more pre- or "
+                    f"post-periods for the last cohort."
                 )
 
     # Balanced panel on the (possibly-filtered) data: every unit appears
@@ -2660,14 +2775,21 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
     d_lower, and Design 1 mass-point (2SLS sample-average per paper
     Section 3.2.4). Two aggregation modes:
 
-    - ``aggregate="overall"`` (Phase 2a, default) returns a single-period
-      :class:`HeterogeneousAdoptionDiDResults` on a two-period panel.
-    - ``aggregate="event_study"`` (Phase 2b, paper Appendix B.2) returns
-      a :class:`HeterogeneousAdoptionDiDEventStudyResults` with per-
-      event-time WAS estimates on a multi-period panel, using a uniform
-      ``F-1`` anchor and pointwise CIs per horizon. Staggered-timing
-      panels auto-filter to the last-treatment cohort plus never-treated
-      units (paper Appendix B.2 prescription).
+    - The "overall" mode (Phase 2a; selected on two-period panels)
+      returns a single-period :class:`HeterogeneousAdoptionDiDResults`.
+    - The "event_study" mode (Phase 2b, paper Appendix B.2; selected on
+      multi-period panels) returns a
+      :class:`HeterogeneousAdoptionDiDEventStudyResults` with per-
+      event-time WAS estimates, using a uniform ``F-1`` anchor and
+      pointwise CIs per horizon. Staggered-timing panels auto-filter to
+      the last-treatment cohort plus never-treated units (paper
+      Appendix B.2 prescription).
+
+    ``fit()`` selects the mode from the panel shape; the deprecated
+    ``fit(aggregate=)`` override warns and dies in 4.0 (row M-027).
+    Post-fit, ``results.aggregate('simple')`` (overall fits) and
+    ``results.aggregate('event_study')`` (event-study fits) expose the
+    unified aggregation vocabulary.
 
     Parameters
     ----------
@@ -2938,7 +3060,7 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
         time: Any = NOT_SUPPLIED,
         unit: Any = NOT_SUPPLIED,
         first_treat: Any = NOT_SUPPLIED,
-        aggregate: str = "overall",
+        aggregate: Any = NOT_SUPPLIED,
         *,
         cband: bool = True,
         survey_design: Any = None,
@@ -2952,13 +3074,15 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
     ) -> Union[HeterogeneousAdoptionDiDResults, HeterogeneousAdoptionDiDEventStudyResults]:
         """Fit the HAD estimator.
 
-        ``aggregate="overall"`` (default) fits on a two-period panel and
-        returns a :class:`HeterogeneousAdoptionDiDResults` with the
-        single-period WAS estimate. ``aggregate="event_study"`` fits on
-        a multi-period panel (``T > 2``) and returns a
+        The estimation mode follows the panel shape: a two-period panel
+        fits the "overall" mode and returns a
+        :class:`HeterogeneousAdoptionDiDResults` with the single-period
+        WAS estimate; a multi-period panel (``T > 2``) fits the
+        "event_study" mode and returns a
         :class:`HeterogeneousAdoptionDiDEventStudyResults` with per-
         event-time WAS estimates using a uniform ``F-1`` anchor (paper
-        Appendix B.2).
+        Appendix B.2). The deprecated ``aggregate=`` override (row
+        M-027) warns and is removed in 4.0.
 
         Both the overall and event-study paths are **panel-only**: the paper
         (Section 2) defines HAD on panel or repeated-cross-section data,
@@ -2996,20 +3120,23 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
               (``did_multiplegt_dyn``) for full staggered support. See
               REGISTRY § "Library extension: Staggered-timing fail-
               closed" for the rationale on raising vs. warning.
-        aggregate : {"overall", "event_study"}
-            ``"overall"`` (default): returns a single-period
-            :class:`HeterogeneousAdoptionDiDResults` (Phase 2a). Requires
-            exactly two time periods.
-            ``"event_study"`` (Phase 2b): returns a
-            :class:`HeterogeneousAdoptionDiDEventStudyResults` with per-
-            event-time WAS estimates on the multi-period panel (paper
-            Appendix B.2). Requires more than two time periods. Pointwise
-            CIs per horizon; joint cross-horizon covariance is deferred
-            to a follow-up PR. Staggered-timing panels: see the
-            ``first_treat`` contract above (auto-filter to last
-            cohort + never-treated with ``UserWarning`` when supplied;
-            fail-closed ``ValueError`` when omitted on a staggered
-            panel).
+        aggregate : {"overall", "event_study"}, optional
+            DEPRECATED mode override (row M-027; ``FutureWarning``,
+            removed in 4.0). When omitted, ``fit()`` selects the mode
+            from the panel shape: two distinct periods -> "overall"
+            (Phase 2a, single-period WAS,
+            :class:`HeterogeneousAdoptionDiDResults`); more ->
+            "event_study" (Phase 2b, paper Appendix B.2, per-event-time
+            WAS, :class:`HeterogeneousAdoptionDiDEventStudyResults`;
+            pointwise CIs per horizon - joint cross-horizon covariance
+            is deferred). Supplying ANY value warns and then runs the
+            legacy routing unchanged (invalid values still raise
+            ``ValueError``; a supplied mode that mismatches the panel
+            shape still raises the shape error). Staggered-timing
+            panels: see the ``first_treat`` contract above (auto-filter
+            to last cohort + never-treated with ``UserWarning`` when
+            supplied; fail-closed ``ValueError`` when omitted on a
+            staggered panel).
         survey_design : SurveyDesign or None, keyword-only
             Survey design (sampling weights + optional strata / PSU / FPC)
             for design-based inference. Supported on ALL design × aggregate
@@ -3076,13 +3203,12 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
         Returns
         -------
         HeterogeneousAdoptionDiDResults
-            When ``aggregate="overall"`` (the default; two-period only):
-            single-period WAS estimate plus shared metadata.
+            On a two-period panel (the overall mode): single-period WAS
+            estimate plus shared metadata.
         HeterogeneousAdoptionDiDEventStudyResults
-            When ``aggregate="event_study"`` (multi-period panel; on
-            staggered panels auto-filters to the last cohort plus
-            never-treated): per-event-time WAS estimates with per-
-            horizon arrays.
+            On a multi-period panel (the event-study mode; staggered
+            panels auto-filter to the last cohort plus never-treated):
+            per-event-time WAS estimates with per-horizon arrays.
 
         Notes
         -----
@@ -3099,6 +3225,26 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
         ``FutureWarning`` and will be removed in 4.0.
         """
         qualname = "HeterogeneousAdoptionDiD.fit"
+        # M-027 deprecation shim: a plain fit() never warns; supplying
+        # aggregate= with ANY value (None included) warns once, then the
+        # legacy routing below runs unchanged - invalid values still
+        # reach the pre-existing _VALID_AGGREGATES ValueError. The
+        # SENTINEL resolves to a panel-inferred mode, but only AFTER the
+        # time/time_col alias reconciliation below (both spellings are
+        # NOT_SUPPLIED twins until then - rows M-035..M-039), at the
+        # _VALID_AGGREGATES check site.
+        if aggregate is not NOT_SUPPLIED:
+            warnings.warn(
+                "HeterogeneousAdoptionDiD.fit(aggregate=) is deprecated "
+                "and will be removed in 4.0. fit() now selects the mode "
+                "from the panel shape (two distinct periods -> the "
+                "overall WAS estimator; more -> the event-study "
+                "estimator), and aggregation is a post-fit step: "
+                "results.aggregate('simple') on a two-period fit / "
+                "results.aggregate('event_study') on a multi-period fit.",
+                FutureWarning,
+                stacklevel=2,
+            )
         outcome = resolve_renamed_kwarg(
             qualname,
             "outcome_col",
@@ -3136,7 +3282,13 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
         unit_col = unit
         first_treat_col = first_treat
         # ---- aggregate / survey_design validation ----
-        if aggregate not in _VALID_AGGREGATES:
+        # Sentinel resolution runs HERE - after the alias reconciliation
+        # above (time_col is now the resolved column name) - so both the
+        # canonical time= and legacy time_col= spellings reach the
+        # inference helper resolved (M-027).
+        if aggregate is NOT_SUPPLIED:
+            aggregate = _infer_aggregate_mode(data, time_col)
+        elif aggregate not in _VALID_AGGREGATES:
             raise ValueError(
                 f"Invalid aggregate={aggregate!r}. Must be one of " f"{_VALID_AGGREGATES}."
             )
@@ -3170,12 +3322,12 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
         if trends_lin:
             if aggregate != "event_study":
                 raise NotImplementedError(
-                    "HAD.fit(trends_lin=True) requires "
-                    "aggregate='event_study' (the linear-trend slope "
-                    "estimator needs Y at F-2, which a 2-period panel "
-                    "does not contain). Pass a panel with at least 3 "
-                    "periods and aggregate='event_study'; the per-"
-                    "horizon arrays in the resulting "
+                    "HAD.fit(trends_lin=True) requires a multi-period "
+                    "panel (the linear-trend slope estimator needs Y at "
+                    "F-2, which a 2-period panel does not contain). "
+                    "Pass a panel with at least 3 periods - fit() then "
+                    "selects the event-study mode - and the per-horizon "
+                    "arrays in the resulting "
                     "HeterogeneousAdoptionDiDEventStudyResults provide "
                     "the same single-effect / per-effect estimates as "
                     "the overall path."
@@ -4333,7 +4485,7 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
         # survey path composes Binder-TSL variance and would silently override
         # the cluster-robust sandwich while metadata still reports the
         # cluster-robust vcov. Reject it BEFORE extracting the column (mirrors
-        # the static-path guard had.py:3361) so the error is predictable even
+        # the static-path guard had.py:3371) so the error is predictable even
         # for a malformed cluster column. The clustered band reconciles the
         # variance family (raw cluster Rademacher; mass-point sqrt(G/(G-1))
         # CR1 scaling).
@@ -4438,7 +4590,7 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
             vcov_requested = ""
             inference_method = "analytical_nonparametric"
             # cluster-robust CCT SE when cluster= is set (Phase 2a static-path
-            # parity, had.py:3615); labelled "cr1" for surface consistency
+            # parity, had.py:3766); labelled "cr1" for surface consistency
             # with the mass-point CR1 path.
             vcov_label = "cr1" if cluster_arg is not None else None
             cluster_label = cluster_arg if cluster_arg is not None else None

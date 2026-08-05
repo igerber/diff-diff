@@ -1207,8 +1207,13 @@ def _from_had(results: Any) -> EventStudyResults:
         conf_int_lower=np.array(results.conf_int_low, dtype=float),
         conf_int_upper=np.array(results.conf_int_high, dtype=float),
         is_reference=np.zeros(n_rows, dtype=bool),
+        # "units", not "obs": ``n_obs_per_horizon`` counts the UNITS
+        # contributing at each event time (it equals ``n_units`` at every
+        # horizon under the no-NaN validator) - the field docstring says
+        # so, and N_KIND_VOCABULARY forbids conflating the two kinds.
+        # Corrected with row M-027 (the value previously read "obs").
         n=(np.asarray(n_obs, dtype=float) if n_obs is not None else np.full(n_rows, np.nan)),
-        n_kind="obs" if n_obs is not None else None,
+        n_kind="units" if n_obs is not None else None,
         time_scale="relative",
         event_time_convention="e0_first_treated",
         cband_lower=np.asarray(cband_lo, dtype=float) if cband_lo is not None else None,

@@ -309,16 +309,25 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
                 "re-aggregated. Kits are attached by CallawaySantAnna.fit(); a "
                 "result unpickled from an older release will not have one."
             )
+        # Per-level bootstrap policy (v4-design section 6, converged with row
+        # M-027): 'simple' is a bit-exact RELAY of the stored overall
+        # inference - faithful under any inference regime, bootstrap included
+        # - so it dispatches BEFORE the bootstrap gate. Only the RECOMPUTE
+        # levels below fail closed on bootstrapped fits.
+        if level == "simple":
+            return self._aggregate_simple_result(kit)
         if self.bootstrap_results is not None:
             # Fail closed rather than silently handing back analytical numbers:
             # a bootstrapped fit's se/p/CI are percentile statistics, and
             # reproducing them post-fit needs retained draws (BootstrapReplaySpec).
             raise NotImplementedError(
-                "aggregate() is not yet available on a bootstrapped fit "
-                "(n_bootstrap > 0): its inference is percentile-bootstrap based "
-                "and cannot be reproduced from the analytical state retained "
-                "here. Re-fit with the aggregation you need, or use "
-                "n_bootstrap=0 for analytical inference."
+                f"aggregate({level!r}) is not yet available on a bootstrapped "
+                "fit (n_bootstrap > 0): its inference is percentile-bootstrap "
+                "based and cannot be reproduced from the analytical state "
+                "retained here. aggregate('simple') relays the stored "
+                "bootstrap inference and remains available; otherwise re-fit "
+                "with the aggregation you need, or use n_bootstrap=0 for "
+                "analytical inference."
             )
 
         # Shallow copy: shares every array (no data is duplicated) but gives the
@@ -328,8 +337,6 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
         precomputed = dict(kit.bookkeeping)
         agg = _KitAggregator(kit.alpha, kit.anticipation)
 
-        if level == "simple":
-            return self._aggregate_simple_result(kit)
         if level == "group":
             effects = agg._aggregate_by_group(
                 self.group_time_effects,
@@ -374,7 +381,12 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
 
         ``_aggregate_simple`` runs unconditionally in ``fit()``, so the numbers
         are already stored - this is a view, not a recomputation, and is
-        therefore bit-identical to the fit by construction.
+        therefore bit-identical to the fit by construction. That is also why
+        it is PERMITTED on bootstrapped fits (the per-level policy converged
+        with row M-027): the stored quintet - percentile se/p/CI beside the
+        finite ``safe_inference`` t - relays verbatim, and only the df COLUMN
+        is NaN'd there (no df governs percentile inference, so reporting the
+        analytical df beside percentile p would misstate provenance).
         """
         # n_treated_units / n_control_units are UNITS on a panel fit but
         # OBSERVATIONS on a declared repeated cross-section, where fit() counts
@@ -399,8 +411,9 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
             # explicit ``survey_design=`` fits, where the df that actually
             # governed ``overall_p_value`` lives on ``survey_metadata``.
             # Reading it directly reported df=NaN for survey fits whose CI
-            # was built on a finite t-reference.
-            df=resolve_inference_df(self),
+            # was built on a finite t-reference. Bootstrapped fits report a
+            # NaN df column: no df governs percentile inference.
+            df=(np.nan if self.bootstrap_results is not None else resolve_inference_df(self)),
             alpha=self.alpha,
             n_kind=n_kind,
             weight=np.array([1.0], dtype=float),

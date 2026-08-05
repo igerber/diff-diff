@@ -106,8 +106,8 @@ Practitioner walkthrough for measuring per-dollar lift when every market is trea
 ### 21. HAD Pre-test Workflow (`21_had_pretest_workflow.ipynb`)
 Composite pre-test walkthrough for `HeterogeneousAdoptionDiD`, building on Tutorial 20's brand-campaign framing on a panel where the dose distribution has a strictly positive but very near-zero lower bound (so the QUG step fails-to-reject `H0: d_lower = 0`):
 - Paper Section 4.2 step taxonomy (QUG support-infimum, parallel pre-trends, linearity)
-- `did_had_pretest_workflow(aggregate="overall")` on a two-period collapse: Step 1 + Step 3 only, verdict explicitly flags Step 2 as deferred
-- Upgrade to `did_had_pretest_workflow(aggregate="event_study")` on the multi-week panel: adds the joint pre-trends Stute and joint homogeneity Stute diagnostics (none of the three testable steps reject)
+- `did_had_pretest_workflow` on a two-period collapse (the overall battery, selected from the panel shape): Step 1 + Step 3 only, verdict explicitly flags Step 2 as deferred
+- Upgrade to the multi-week panel (the event-study battery): adds the joint pre-trends Stute and joint homogeneity Stute diagnostics (none of the three testable steps reject)
 - Side panel comparing `yatchew_hr_test` `null="linearity"` (default, paper Theorem 7) vs `null="mean_independence"` (Phase 4 R-parity with R `YatchewTest::yatchew_test(order=0)`)
 - Companion drift-test file (`tests/test_t21_had_pretest_workflow_drift.py`)
 

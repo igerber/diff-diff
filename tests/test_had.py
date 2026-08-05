@@ -619,29 +619,39 @@ class TestPanelContract:
         with pytest.raises(ValueError, match=r"[Uu]nbalanced|[Bb]alanced"):
             est.fit(panel, "outcome", "dose", "period", "unit")
 
-    def test_three_periods_without_first_treat_raises(self):
+    def test_three_periods_supplied_overall_raises(self):
+        # M-027: a PLAIN 3-period fit now infers the event-study mode (the
+        # error->works behavior delta, pinned in test_aggregate_contract);
+        # the overall estimator's two-period requirement still binds on the
+        # supplied legacy path.
         d, dy = _dgp_continuous_at_zero(200, seed=0)
         panel2 = _make_panel(d, dy)
         panel3 = pd.concat([panel2, panel2.assign(period=3)])
         est = HeterogeneousAdoptionDiD()
-        with pytest.raises(ValueError, match=r"two time periods|Phase 2b"):
-            est.fit(panel3, "outcome", "dose", "period", "unit")
+        with pytest.warns(FutureWarning, match="aggregate"):
+            with pytest.raises(ValueError, match=r"exactly two time periods"):
+                est.fit(panel3, "outcome", "dose", "period", "unit", aggregate="overall")
 
-    def test_three_periods_with_first_treat_raises(self):
+    def test_three_periods_with_first_treat_supplied_overall_raises(self):
+        # See test_three_periods_supplied_overall_raises: the plain-fit
+        # routing changed with M-027; the supplied legacy path keeps the
+        # overall estimator's two-period requirement.
         d, dy = _dgp_continuous_at_zero(200, seed=0)
         panel2 = _make_panel(d, dy)
         panel3 = pd.concat([panel2, panel2.assign(period=3)])
         panel3["ft"] = 2  # arbitrary first_treat
         est = HeterogeneousAdoptionDiD()
-        with pytest.raises(ValueError, match=r"two time periods|Phase 2b"):
-            est.fit(
-                panel3,
-                "outcome",
-                "dose",
-                "period",
-                "unit",
-                first_treat="ft",
-            )
+        with pytest.warns(FutureWarning, match="aggregate"):
+            with pytest.raises(ValueError, match=r"exactly two time periods"):
+                est.fit(
+                    panel3,
+                    "outcome",
+                    "dose",
+                    "period",
+                    "unit",
+                    first_treat="ft",
+                    aggregate="overall",
+                )
 
     def test_single_period_raises(self):
         d, _ = _dgp_continuous_at_zero(200, seed=0)
@@ -946,34 +956,37 @@ class TestSklearnCompat:
 
 class TestScaffoldingRejections:
     def test_aggregate_event_study_on_two_period_panel_raises(self):
-        """Event-study mode requires T > 2 (Phase 2b). A T=2 panel should
-        raise a helpful ValueError pointing to ``aggregate='overall'``."""
+        """Event-study mode requires T > 2 (Phase 2b). Reaching it on a T=2
+        panel now takes the deprecated supplied path (a plain T=2 fit infers
+        the overall mode, M-027); the shape error still binds there."""
         d, dy = _dgp_continuous_at_zero(200, seed=0)
         panel = _make_panel(d, dy)
         est = HeterogeneousAdoptionDiD()
-        with pytest.raises(ValueError, match="more than two"):
-            est.fit(
-                panel,
-                "outcome",
-                "dose",
-                "period",
-                "unit",
-                aggregate="event_study",
-            )
+        with pytest.warns(FutureWarning, match="aggregate"):
+            with pytest.raises(ValueError, match="more than two"):
+                est.fit(
+                    panel,
+                    "outcome",
+                    "dose",
+                    "period",
+                    "unit",
+                    aggregate="event_study",
+                )
 
     def test_aggregate_invalid_raises(self):
         d, dy = _dgp_continuous_at_zero(200, seed=0)
         panel = _make_panel(d, dy)
         est = HeterogeneousAdoptionDiD()
-        with pytest.raises(ValueError, match="Invalid aggregate"):
-            est.fit(
-                panel,
-                "outcome",
-                "dose",
-                "period",
-                "unit",
-                aggregate="garbage",
-            )
+        with pytest.warns(FutureWarning, match="aggregate"):
+            with pytest.raises(ValueError, match="Invalid aggregate"):
+                est.fit(
+                    panel,
+                    "outcome",
+                    "dose",
+                    "period",
+                    "unit",
+                    aggregate="garbage",
+                )
 
     def test_survey_design_bad_type_raises(self):
         """survey_design= must be a SurveyDesign-like object with a
@@ -2283,9 +2296,7 @@ class TestEventStudySmoke:
         panel = _make_multi_period_panel(d, n_periods=5, F=3, seed=1)
         result = cast(
             HeterogeneousAdoptionDiDEventStudyResults,
-            HeterogeneousAdoptionDiD(design="auto").fit(
-                panel, "outcome", "dose", "period", "unit", aggregate="event_study"
-            ),
+            HeterogeneousAdoptionDiD(design="auto").fit(panel, "outcome", "dose", "period", "unit"),
         )
         assert isinstance(result, HeterogeneousAdoptionDiDEventStudyResults)
         assert result.design == "continuous_at_zero"
@@ -2308,7 +2319,7 @@ class TestEventStudySmoke:
             result = cast(
                 HeterogeneousAdoptionDiDEventStudyResults,
                 HeterogeneousAdoptionDiD(design="auto").fit(
-                    panel, "outcome", "dose", "period", "unit", aggregate="event_study"
+                    panel, "outcome", "dose", "period", "unit"
                 ),
             )
         assert result.design == "continuous_near_d_lower"
@@ -2327,7 +2338,7 @@ class TestEventStudySmoke:
             result = cast(
                 HeterogeneousAdoptionDiDEventStudyResults,
                 HeterogeneousAdoptionDiD(design="auto").fit(
-                    panel, "outcome", "dose", "period", "unit", aggregate="event_study"
+                    panel, "outcome", "dose", "period", "unit"
                 ),
             )
         assert result.design == "mass_point"
@@ -2350,9 +2361,7 @@ class TestEventStudyBaselineConvention:
         panel = _make_multi_period_panel(d, n_periods=5, F=3, seed=1)
         result = cast(
             HeterogeneousAdoptionDiDEventStudyResults,
-            HeterogeneousAdoptionDiD(design="auto").fit(
-                panel, "outcome", "dose", "period", "unit", aggregate="event_study"
-            ),
+            HeterogeneousAdoptionDiD(design="auto").fit(panel, "outcome", "dose", "period", "unit"),
         )
         assert -1 not in result.event_times.tolist()
 
@@ -2364,9 +2373,7 @@ class TestEventStudyBaselineConvention:
         panel = _make_multi_period_panel(d, n_periods=5, F=3, seed=1)
         result = cast(
             HeterogeneousAdoptionDiDEventStudyResults,
-            HeterogeneousAdoptionDiD(design="auto").fit(
-                panel, "outcome", "dose", "period", "unit", aggregate="event_study"
-            ),
+            HeterogeneousAdoptionDiD(design="auto").fit(panel, "outcome", "dose", "period", "unit"),
         )
         # F=3, n_periods=5 -> periods 1..5, F-1=2 is anchor.
         # e = t-F for t in {1,2,3,4,5} -> {-2,-1,0,1,2}; -1 skipped.
@@ -2384,9 +2391,7 @@ class TestEventStudyDesignResolution:
         panel = _make_multi_period_panel(d, n_periods=5, F=3, seed=1)
         result = cast(
             HeterogeneousAdoptionDiDEventStudyResults,
-            HeterogeneousAdoptionDiD(design="auto").fit(
-                panel, "outcome", "dose", "period", "unit", aggregate="event_study"
-            ),
+            HeterogeneousAdoptionDiD(design="auto").fit(panel, "outcome", "dose", "period", "unit"),
         )
         assert isinstance(result.design, str)
         assert isinstance(result.d_lower, float)
@@ -2419,7 +2424,6 @@ class TestEventStudyStaggeredFilter:
                 "period",
                 "unit",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
         filter_warnings = [msg for msg in w if "Staggered" in str(msg.message)]
         assert len(filter_warnings) == 1
@@ -2435,7 +2439,6 @@ class TestEventStudyStaggeredFilter:
                 "period",
                 "unit",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
         assert result.filter_info is not None
         assert result.filter_info["F_last"] == 5
@@ -2460,7 +2463,6 @@ class TestEventStudyStaggeredFilter:
                 "period",
                 "unit",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
         # Paper Appendix B.2: staggered HAD applies to last cohort + keeps
         # never-treated as the "untreated group" comparison. Earlier cohorts
@@ -2488,7 +2490,6 @@ class TestEventStudyStaggeredFilter:
                 "period",
                 "unit",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
         # The fit ran successfully with never-treated retained. Verify
         # directly: the validator returns data_filtered with expected
@@ -2516,7 +2517,6 @@ class TestEventStudyStaggeredFilter:
                 "period",
                 "unit",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
         filter_warnings = [msg for msg in w if "Staggered" in str(msg.message)]
         assert len(filter_warnings) == 0
@@ -2541,7 +2541,7 @@ class TestEventStudyPerHorizonSEIndependence:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             es_result = HeterogeneousAdoptionDiD(design="mass_point").fit(
-                panel, "outcome", "dose", "period", "unit", aggregate="event_study"
+                panel, "outcome", "dose", "period", "unit"
             )
         assert isinstance(es_result, HeterogeneousAdoptionDiDEventStudyResults)
         # Phase 2a fit on each post-period (F-1, t) two-period subset.
@@ -2570,7 +2570,7 @@ class TestEventStudyPerHorizonSEIndependence:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             es_result = HeterogeneousAdoptionDiD(design="continuous_at_zero").fit(
-                panel, "outcome", "dose", "period", "unit", aggregate="event_study"
+                panel, "outcome", "dose", "period", "unit"
             )
         assert isinstance(es_result, HeterogeneousAdoptionDiDEventStudyResults)
         # Skip pre-period horizons since Phase 2a would reject the pre-pre
@@ -2607,10 +2607,11 @@ class TestEventStudyAggregateMatrix:
         d = np.linspace(0.0, 1.0, 100)
         dy = 0.3 * d + 0.01 * np.random.default_rng(0).standard_normal(100)
         panel = _make_panel(d, dy)
-        with pytest.raises(ValueError, match="more than two"):
-            HeterogeneousAdoptionDiD(design="auto").fit(
-                panel, "outcome", "dose", "period", "unit", aggregate="event_study"
-            )
+        with pytest.warns(FutureWarning, match="aggregate"):
+            with pytest.raises(ValueError, match="more than two"):
+                HeterogeneousAdoptionDiD(design="auto").fit(
+                    panel, "outcome", "dose", "period", "unit", aggregate="event_study"
+                )
 
     def test_T_gt_2_overall_raises(self):
         rng = np.random.default_rng(0)
@@ -2618,19 +2619,21 @@ class TestEventStudyAggregateMatrix:
         d = rng.uniform(0.0, 1.0, G)
         d[0] = 0.0
         panel = _make_multi_period_panel(d, n_periods=5, F=3, seed=1)
-        with pytest.raises(ValueError, match="aggregate='event_study'"):
-            HeterogeneousAdoptionDiD(design="auto").fit(
-                panel, "outcome", "dose", "period", "unit", aggregate="overall"
-            )
+        with pytest.warns(FutureWarning, match="aggregate"):
+            with pytest.raises(ValueError, match="exactly two time periods"):
+                HeterogeneousAdoptionDiD(design="auto").fit(
+                    panel, "outcome", "dose", "period", "unit", aggregate="overall"
+                )
 
     def test_invalid_aggregate_raises(self):
         d = np.linspace(0.0, 1.0, 100)
         dy = 0.3 * d
         panel = _make_panel(d, dy)
-        with pytest.raises(ValueError, match="Invalid aggregate"):
-            HeterogeneousAdoptionDiD(design="auto").fit(
-                panel, "outcome", "dose", "period", "unit", aggregate="garbage"
-            )
+        with pytest.warns(FutureWarning, match="aggregate"):
+            with pytest.raises(ValueError, match="Invalid aggregate"):
+                HeterogeneousAdoptionDiD(design="auto").fit(
+                    panel, "outcome", "dose", "period", "unit", aggregate="garbage"
+                )
 
 
 class TestEventStudyPlacebos:
@@ -2649,7 +2652,7 @@ class TestEventStudyPlacebos:
             result = cast(
                 HeterogeneousAdoptionDiDEventStudyResults,
                 HeterogeneousAdoptionDiD(design="auto").fit(
-                    panel, "outcome", "dose", "period", "unit", aggregate="event_study"
+                    panel, "outcome", "dose", "period", "unit"
                 ),
             )
         pre_mask = result.event_times <= -2
@@ -2674,7 +2677,7 @@ class TestEventStudyResultMethods:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             return HeterogeneousAdoptionDiD(design="auto").fit(
-                panel, "outcome", "dose", "period", "unit", aggregate="event_study"
+                panel, "outcome", "dose", "period", "unit"
             )
 
     def test_to_dataframe_shape(self):
@@ -2758,9 +2761,7 @@ class TestEventStudyPanelContract:
                 )
         panel = pd.DataFrame(rows)
         with pytest.raises(ValueError, match="Unbalanced panel"):
-            HeterogeneousAdoptionDiD(design="auto").fit(
-                panel, "outcome", "dose", "period", "unit", aggregate="event_study"
-            )
+            HeterogeneousAdoptionDiD(design="auto").fit(panel, "outcome", "dose", "period", "unit")
 
     def test_non_contiguous_dose_rejected(self):
         """Pre/post periods interleaved (dose reversal) raises."""
@@ -2781,9 +2782,7 @@ class TestEventStudyPanelContract:
                 )
         panel = pd.DataFrame(rows)
         with pytest.raises(ValueError, match="not contiguous"):
-            HeterogeneousAdoptionDiD(design="auto").fit(
-                panel, "outcome", "dose", "period", "unit", aggregate="event_study"
-            )
+            HeterogeneousAdoptionDiD(design="auto").fit(panel, "outcome", "dose", "period", "unit")
 
     def test_nan_in_outcome_rejected(self):
         rng = np.random.default_rng(0)
@@ -2793,9 +2792,7 @@ class TestEventStudyPanelContract:
         panel = _make_multi_period_panel(d, n_periods=5, F=3, seed=1)
         panel.loc[0, "outcome"] = np.nan
         with pytest.raises(ValueError, match="NaN"):
-            HeterogeneousAdoptionDiD(design="auto").fit(
-                panel, "outcome", "dose", "period", "unit", aggregate="event_study"
-            )
+            HeterogeneousAdoptionDiD(design="auto").fit(panel, "outcome", "dose", "period", "unit")
 
     def test_nan_in_first_treat_col_rejected(self):
         rng = np.random.default_rng(0)
@@ -2812,7 +2809,6 @@ class TestEventStudyPanelContract:
                 "period",
                 "unit",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
 
     def test_no_pre_period_rejected(self):
@@ -2833,9 +2829,7 @@ class TestEventStudyPanelContract:
                 )
         panel = pd.DataFrame(rows)
         with pytest.raises(ValueError, match="all-zero dose|pre-period"):
-            HeterogeneousAdoptionDiD(design="auto").fit(
-                panel, "outcome", "dose", "period", "unit", aggregate="event_study"
-            )
+            HeterogeneousAdoptionDiD(design="auto").fit(panel, "outcome", "dose", "period", "unit")
 
     def test_time_varying_post_F_dose_rejected(self):
         """Within-unit dose variation across post-periods raises.
@@ -2870,9 +2864,7 @@ class TestEventStudyPanelContract:
                 )
         panel = pd.DataFrame(rows)
         with pytest.raises(ValueError, match="constant dose|time-varying"):
-            HeterogeneousAdoptionDiD(design="auto").fit(
-                panel, "outcome", "dose", "period", "unit", aggregate="event_study"
-            )
+            HeterogeneousAdoptionDiD(design="auto").fit(panel, "outcome", "dose", "period", "unit")
 
     def test_staggered_ordered_categorical_chooses_chronological_last(self):
         """Staggered filter uses chronological (not lexicographic) last.
@@ -2923,7 +2915,6 @@ class TestEventStudyPanelContract:
                 "period",
                 "unit",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
 
         # Chronological last cohort = "q10", not lexicographic last ("q3"
@@ -2976,7 +2967,6 @@ class TestEventStudyPanelContract:
                 "period",
                 "unit",
                 first_treat="first_treat",
-                aggregate="event_study",
             )
 
     def test_unordered_string_time_col_rejected(self):
@@ -3008,9 +2998,7 @@ class TestEventStudyPanelContract:
                 )
         panel = pd.DataFrame(rows)
         with pytest.raises(ValueError, match="ordered time column|dtype"):
-            HeterogeneousAdoptionDiD(design="auto").fit(
-                panel, "outcome", "dose", "period", "unit", aggregate="event_study"
-            )
+            HeterogeneousAdoptionDiD(design="auto").fit(panel, "outcome", "dose", "period", "unit")
 
     def test_ordered_categorical_with_unused_levels_accepted(self):
         """Ordered categorical with extra unused category levels fits.
@@ -3046,7 +3034,7 @@ class TestEventStudyPanelContract:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             result = HeterogeneousAdoptionDiD(design="auto").fit(
-                panel, "outcome", "dose", "period", "unit", aggregate="event_study"
+                panel, "outcome", "dose", "period", "unit"
             )
         # F should be post1 (first observed post-period); event_times
         # should be [-2, 0, 1] (e=-1 for anchor pre2 is skipped).
@@ -3084,7 +3072,7 @@ class TestEventStudyPanelContract:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             result = HeterogeneousAdoptionDiD(design="auto").fit(
-                panel, "outcome", "dose", "period", "unit", aggregate="event_study"
+                panel, "outcome", "dose", "period", "unit"
             )
         # post1 is F; e=-2 (pre1) and e=0 (post1), e=1 (post2) expected.
         assert result.F == "post1"
@@ -3116,9 +3104,7 @@ class TestEventStudyPanelContract:
                 )
         panel = pd.DataFrame(rows)
         with pytest.raises(ValueError, match="Staggered-timing|first_treat_col"):
-            HeterogeneousAdoptionDiD(design="auto").fit(
-                panel, "outcome", "dose", "period", "unit", aggregate="event_study"
-            )
+            HeterogeneousAdoptionDiD(design="auto").fit(panel, "outcome", "dose", "period", "unit")
 
 
 class TestEventStudyGuardsPreserved:
@@ -3132,7 +3118,7 @@ class TestEventStudyGuardsPreserved:
         panel = _make_multi_period_panel(d, n_periods=5, F=3, seed=1)
         est = HeterogeneousAdoptionDiD(design="continuous_at_zero", d_lower=0.3)
         with pytest.raises(ValueError, match="d_lower == 0"):
-            est.fit(panel, "outcome", "dose", "period", "unit", aggregate="event_study")
+            est.fit(panel, "outcome", "dose", "period", "unit")
 
     def test_mass_point_d_lower_zero_raises(self):
         rng = np.random.default_rng(0)
@@ -3144,7 +3130,7 @@ class TestEventStudyGuardsPreserved:
         with pytest.raises(ValueError, match="d_lower > 0"):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
-                est.fit(panel, "outcome", "dose", "period", "unit", aggregate="event_study")
+                est.fit(panel, "outcome", "dose", "period", "unit")
 
     def test_continuous_near_rejects_mass_point_sample(self):
         rng = np.random.default_rng(0)
@@ -3156,7 +3142,7 @@ class TestEventStudyGuardsPreserved:
         with pytest.raises(ValueError, match="mass-point sample"):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
-                est.fit(panel, "outcome", "dose", "period", "unit", aggregate="event_study")
+                est.fit(panel, "outcome", "dose", "period", "unit")
 
     def test_mass_point_rejects_continuous_sample(self):
         rng = np.random.default_rng(0)
@@ -3167,7 +3153,7 @@ class TestEventStudyGuardsPreserved:
         with pytest.raises(ValueError, match="modal mass"):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
-                est.fit(panel, "outcome", "dose", "period", "unit", aggregate="event_study")
+                est.fit(panel, "outcome", "dose", "period", "unit")
 
 
 class TestEventStudyNaNPropagation:
@@ -3186,7 +3172,7 @@ class TestEventStudyNaNPropagation:
             result = cast(
                 HeterogeneousAdoptionDiDEventStudyResults,
                 HeterogeneousAdoptionDiD(design="auto").fit(
-                    panel, "outcome", "dose", "period", "unit", aggregate="event_study"
+                    panel, "outcome", "dose", "period", "unit"
                 ),
             )
         # All per-horizon inference triples should be NaN when fit is degenerate.
@@ -3206,7 +3192,7 @@ class TestEventStudySklearnCompat:
         d[0] = 0.0
         panel = _make_multi_period_panel(d, n_periods=5, F=3, seed=1)
         est = HeterogeneousAdoptionDiD(design="auto")
-        est.fit(panel, "outcome", "dose", "period", "unit", aggregate="event_study")
+        est.fit(panel, "outcome", "dose", "period", "unit")
         assert est.design == "auto"  # raw preserved
 
     def test_fit_is_idempotent(self):
@@ -3218,8 +3204,8 @@ class TestEventStudySklearnCompat:
         est = HeterogeneousAdoptionDiD(design="auto")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
-            r1 = est.fit(panel, "outcome", "dose", "period", "unit", aggregate="event_study")
-            r2 = est.fit(panel, "outcome", "dose", "period", "unit", aggregate="event_study")
+            r1 = est.fit(panel, "outcome", "dose", "period", "unit")
+            r2 = est.fit(panel, "outcome", "dose", "period", "unit")
         np.testing.assert_allclose(r1.att, r2.att, atol=1e-14, rtol=0.0)
         np.testing.assert_allclose(r1.se, r2.se, atol=1e-14, rtol=0.0)
 
@@ -3236,10 +3222,8 @@ class TestEventStudySklearnCompat:
         assert cloned.alpha == 0.1
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
-            r_orig = est.fit(panel, "outcome", "dose", "period", "unit", aggregate="event_study")
-            r_clone = cloned.fit(
-                panel, "outcome", "dose", "period", "unit", aggregate="event_study"
-            )
+            r_orig = est.fit(panel, "outcome", "dose", "period", "unit")
+            r_clone = cloned.fit(panel, "outcome", "dose", "period", "unit")
         np.testing.assert_allclose(r_orig.att, r_clone.att, atol=1e-14, rtol=0.0)
 
 
@@ -3258,7 +3242,7 @@ class TestEventStudyWarnings:
         est = HeterogeneousAdoptionDiD(design="auto", vcov_type="classical")
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            est.fit(panel, "outcome", "dose", "period", "unit", aggregate="event_study")
+            est.fit(panel, "outcome", "dose", "period", "unit")
         vcov_warnings = [
             msg for msg in w if "vcov_type" in str(msg.message) and "ignored" in str(msg.message)
         ]
@@ -3274,7 +3258,7 @@ class TestEventStudyWarnings:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             r_cl = HeterogeneousAdoptionDiD(design="auto", cluster="state").fit(
-                panel, "outcome", "dose", "period", "unit", aggregate="event_study"
+                panel, "outcome", "dose", "period", "unit"
             )
         cluster_warnings = [
             msg
@@ -3283,7 +3267,7 @@ class TestEventStudyWarnings:
         ]
         assert len(cluster_warnings) == 0
         r_un = HeterogeneousAdoptionDiD(design="auto").fit(
-            panel, "outcome", "dose", "period", "unit", aggregate="event_study"
+            panel, "outcome", "dose", "period", "unit"
         )
         assert not np.allclose(r_cl.se, r_un.se)
         assert r_cl.vcov_type == "cr1"
@@ -3590,7 +3574,6 @@ class TestHADSurvey:
             "dose",
             "period",
             "unit",
-            aggregate="event_study",
         )
         from diff_diff.survey import SurveyDesign
 
@@ -3602,7 +3585,6 @@ class TestHADSurvey:
                 "dose",
                 "period",
                 "unit",
-                aggregate="event_study",
                 survey_design=SurveyDesign(weights="w"),
                 cband=False,  # skip bootstrap
             )
@@ -4860,7 +4842,7 @@ class TestEventStudyClusterBand:
         panel = self._clustered_panel(seed=2)
         r = HeterogeneousAdoptionDiD(
             design="continuous_at_zero", cluster="state", n_bootstrap=1500, seed=11
-        ).fit(panel, "outcome", "dose", "period", "unit", aggregate="event_study", cband=True)
+        ).fit(panel, "outcome", "dose", "period", "unit", cband=True)
         assert r.vcov_type == "cr1" and r.cluster_name == "state"
         assert r.cband_low is not None and np.all(np.isfinite(r.cband_low))
         assert r.cband_high is not None and np.all(np.isfinite(r.cband_high))
@@ -4882,7 +4864,7 @@ class TestEventStudyClusterBand:
         panel = _make_multi_period_panel(d, n_periods=5, F=3, seed=7, extra_cols={"state": state})
         r = HeterogeneousAdoptionDiD(
             design="mass_point", cluster="state", d_lower=d_lower, n_bootstrap=1500, seed=17
-        ).fit(panel, "outcome", "dose", "period", "unit", aggregate="event_study", cband=True)
+        ).fit(panel, "outcome", "dose", "period", "unit", cband=True)
         assert r.vcov_type == "cr1" and r.cluster_name == "state"
         assert r.cband_low is not None and np.all(np.isfinite(r.cband_low))
         assert r.cband_method == "cluster_multiplier_bootstrap"
@@ -4899,7 +4881,6 @@ class TestEventStudyClusterBand:
                 "dose",
                 "period",
                 "unit",
-                aggregate="event_study",
                 survey_design=SurveyDesign(weights="w"),
             )
 
@@ -4918,7 +4899,7 @@ class TestEventStudyClusterBand:
             warnings.simplefilter("always")
             r = HeterogeneousAdoptionDiD(
                 design="continuous_at_zero", cluster="state", n_bootstrap=500, seed=1
-            ).fit(panel, "outcome", "dose", "period", "unit", aggregate="event_study", cband=True)
+            ).fit(panel, "outcome", "dose", "period", "unit", cband=True)
         assert r.cband_low is None and r.cband_high is None
         assert any("single cluster" in str(x.message).lower() for x in w)
         # "Undefined band" (crit=NaN, method/count populated), NOT "band
@@ -4930,7 +4911,7 @@ class TestEventStudyClusterBand:
     def test_clustered_band_determinism(self):
         panel = self._clustered_panel(seed=2)
         kw = dict(design="continuous_at_zero", cluster="state", n_bootstrap=800, seed=21)
-        fit_kw = dict(aggregate="event_study", cband=True)
+        fit_kw = dict(cband=True)
         r1 = HeterogeneousAdoptionDiD(**kw).fit(
             panel, "outcome", "dose", "period", "unit", **fit_kw
         )
@@ -4983,7 +4964,7 @@ class TestEventStudySurveyCband:
         numerical output preserved)."""
         panel = self._multi_period_panel(G=200)
         est = HeterogeneousAdoptionDiD(design="continuous_at_zero", seed=0)
-        r = est.fit(panel, "outcome", "dose", "period", "unit", aggregate="event_study")
+        r = est.fit(panel, "outcome", "dose", "period", "unit")
         assert r.cband_low is None
         assert r.cband_high is None
         assert r.cband_crit_value is None
@@ -5006,7 +4987,6 @@ class TestEventStudySurveyCband:
                 "dose",
                 "period",
                 "unit",
-                aggregate="event_study",
                 survey_design=SurveyDesign(weights="w"),
                 cband=False,
             )
@@ -5035,7 +5015,6 @@ class TestEventStudySurveyCband:
                 "dose",
                 "period",
                 "unit",
-                aggregate="event_study",
                 survey_design=SurveyDesign(weights="w"),
                 cband=True,
             )
@@ -5082,7 +5061,6 @@ class TestEventStudySurveyCband:
                 "dose",
                 "period",
                 "unit",
-                aggregate="event_study",
                 first_treat="first_treat",
             )
             r_uni = est.fit(
@@ -5091,7 +5069,6 @@ class TestEventStudySurveyCband:
                 "dose",
                 "period",
                 "unit",
-                aggregate="event_study",
                 first_treat="first_treat",
                 survey_design=SurveyDesign(weights="w"),
                 cband=False,
@@ -5106,7 +5083,6 @@ class TestEventStudySurveyCband:
                 "dose",
                 "period",
                 "unit",
-                aggregate="event_study",
                 first_treat="first_treat",
                 survey_design=SurveyDesign(weights="w"),
                 cband=False,
@@ -5145,7 +5121,6 @@ class TestEventStudySurveyCband:
                 "dose",
                 "period",
                 "unit",
-                aggregate="event_study",
                 survey_design=SurveyDesign(weights="w"),
             )
         assert r.design == "mass_point"
@@ -5403,7 +5378,6 @@ class TestEventStudySurveyCband:
                     "dose",
                     "period",
                     "unit",
-                    aggregate="event_study",
                     survey_design=SurveyDesign(weights="w"),
                     cband=True,
                 )
@@ -5438,7 +5412,6 @@ class TestEventStudySurveyCband:
                 "dose",
                 "period",
                 "unit",
-                aggregate="event_study",
                 survey_design=SurveyDesign(weights="w"),
                 cband=False,
             )
@@ -5507,7 +5480,6 @@ class TestEventStudySurveyCband:
                     "dose",
                     "period",
                     "unit",
-                    aggregate="event_study",
                     survey_design=SurveyDesign(weights="w"),
                     cband=True,
                 )
@@ -5548,7 +5520,6 @@ class TestEventStudySurveyCband:
                 "dose",
                 "period",
                 "unit",
-                aggregate="event_study",
                 survey_design=sd,
             )
         assert r.variance_formula == "survey_binder_tsl"
@@ -5604,7 +5575,6 @@ class TestEventStudySurveyCband:
                 "dose",
                 "period",
                 "unit",
-                aggregate="event_study",
                 survey_design=sd,
             )
         assert r.variance_formula == "survey_binder_tsl_2sls"
@@ -5762,7 +5732,6 @@ class TestCovariatesTrap:
                 "dose",
                 "period",
                 "unit",
-                aggregate="event_study",
                 covariates=["x"],
             )
 

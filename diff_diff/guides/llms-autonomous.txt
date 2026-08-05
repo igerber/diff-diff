@@ -259,7 +259,7 @@ view. Every field below appears as a top-level key in that dict.
   doses), the situation is different: `ContinuousDiD` does not
   apply, and `HeterogeneousAdoptionDiD` is **not** a fallback
   either — HAD raises on negative post-period dose
-  (`had.py:1450-1459`). The applicable routing alternative on
+  (`had.py:1563-1572`). The applicable routing alternative on
   the negative-dose branch is linear DiD with the treatment as
   a signed continuous covariate. Re-encoding the treatment
   column to a non-negative scale (shifting, absolute value, etc.)
@@ -399,8 +399,8 @@ supported / out of scope; `warn` supported but with documented caveats;
   dose-response estimator - use `ContinuousDiD` for that.
 - `HeterogeneousAdoptionDiD` staggered support is `partial`, not
   general. Paper Appendix B.2 restricts staggered use to the
-  **last treatment cohort plus never-treated units**. With
-  `aggregate="event_study"` and a `first_treat` kwarg,
+  **last treatment cohort plus never-treated units**. On a
+  multi-period panel with a `first_treat` kwarg,
   `fit()` auto-filters to `F_last = max(cohorts)` and emits a
   `UserWarning` naming kept/dropped counts; earlier-cohort units
   are dropped. Without `first_treat`, a multi-cohort panel
@@ -614,7 +614,7 @@ When `treatment_type == "continuous"`:
   see §2 for the full routing-alternatives discussion (the two
   branches differ: HAD applies on the no-never-treated branch but
   not on the negative-dose branch, since HAD requires non-negative
-  dose support per `had.py:1450-1459`).
+  dose support per `had.py:1563-1572`).
   Note that staggered adoption IS supported natively (adoption
   timing is expressed via the `first_treat` column, not via
   within-unit dose variation), and `ContinuousDiD.fit()` applies
@@ -671,9 +671,10 @@ intensity of exposure differs):
   untreated group exists (paper Equation 2 / Theorem 1). The
   `target_parameter` attribute on the results object is literally
   `"WAS"` for Design 1' and `"WAS_d_lower"` for Design 1 with lower-dose
-  comparison under Assumption 6. `fit(aggregate="overall")` (Phase 2a)
-  returns a single scalar WAS; `fit(aggregate="event_study")` (Phase
-  2b) returns per-event-time WAS estimates. `did_had_pretest_workflow()`
+  comparison under Assumption 6. `fit()` selects the mode from the panel
+  shape: a two-period panel returns a single scalar WAS (Phase 2a);
+  a multi-period panel returns per-event-time WAS estimates (Phase
+  2b). The `aggregate=` override is deprecated (M-027). `did_had_pretest_workflow()`
   runs the paper's three-step TWFE-suitability battery: (1) QUG null
   via `qug_test`, (2) Assumption 7 pre-trends via `stute_test` /
   `stute_joint_pretest` (event-study path only; the two-period overall
@@ -685,7 +686,7 @@ intensity of exposure differs):
 
   **Staggered-timing scope is last-cohort-only (Appendix B.2).**
   HAD's staggered support is the `partial` cell in §3: on a
-  multi-cohort panel passed to `aggregate="event_study"`, `fit()`
+  multi-cohort multi-period panel (the event-study mode), `fit()`
   auto-filters to the last treatment cohort (`F_last =
   max(cohorts)`) plus never-treated units and emits a
   `UserWarning` naming kept/dropped counts; earlier treated
@@ -943,7 +944,7 @@ Reasoning chain:
    would raise at line 287-294 ("Dose must be strictly positive
    for treated units"). `HeterogeneousAdoptionDiD` is **not** a
    routing alternative here either — HAD requires non-negative
-   dose support (`had.py:1450-1459`, paper Section 2). The
+   dose support (`had.py:1563-1572`, paper Section 2). The
    applicable alternative is linear DiD with the treatment as a
    signed continuous covariate; see §2 for the full routing
    discussion.

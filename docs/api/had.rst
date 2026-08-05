@@ -105,7 +105,7 @@ Unit Remains Untreated" (arXiv:2405.04465v6), which:
    (unweighted cluster-robust), or route clustering through
    ``survey_design=SurveyDesign(weights='<weight_col>', psu='<cluster_col>')``. All other
    ``cluster=`` compositions are supported end-to-end, including the
-   ``cluster=`` + ``aggregate="event_study"`` + ``cband=True`` mass-point
+   ``cluster=`` + event-study-mode + ``cband=True`` mass-point
    path: the clustered sup-t band draws cluster-level multipliers on the
    per-unit influence function and normalizes by the CR1 analytical SE
    (variance families reconciled via the ``√(G/(G-1))`` CR1 scalar).
@@ -160,11 +160,11 @@ et al. (2026). The composite orchestrator
 does NOT pick the HAD design path (``continuous_at_zero`` /
 ``continuous_near_d_lower`` / ``mass_point``); that is auto-detected inside
 :meth:`HeterogeneousAdoptionDiD.fit` from the dose support. The workflow has
-two explicit modes selected by the caller via the ``aggregate=`` kwarg:
-``aggregate="overall"`` (default, two-period first-differenced sample) runs
-single-period tests; ``aggregate="event_study"`` (multi-period panel with
-three or more periods) runs joint multi-period tests. Both modes return a
-unified :class:`~diff_diff.HADPretestReport`.
+two modes selected from the panel shape (row M-139; the deprecated
+``aggregate=`` override warns and dies in 4.0): a two-period
+first-differenced sample runs the single-period tests; a multi-period panel
+(three or more periods) runs the joint multi-period tests. Both modes return
+a unified :class:`~diff_diff.HADPretestReport`.
 
 .. autofunction:: diff_diff.did_had_pretest_workflow
 
@@ -174,8 +174,8 @@ unified :class:`~diff_diff.HADPretestReport`.
    :undoc-members:
    :show-inheritance:
 
-Single-period tests (``aggregate="overall"``)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Single-period tests (two-period panels)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. autofunction:: diff_diff.qug_test
 
@@ -201,8 +201,8 @@ Single-period tests (``aggregate="overall"``)
    :undoc-members:
    :show-inheritance:
 
-Joint multi-period tests (``aggregate="event_study"``)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Joint multi-period tests (multi-period panels)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. autofunction:: diff_diff.stute_joint_pretest
 

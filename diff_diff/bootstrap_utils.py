@@ -677,7 +677,7 @@ def apply_stratum_centering(
 
     - HAD sup-t is a multiplier bootstrap on a precomputed influence
       tensor. The correction is applied to the tensor before
-      ``perturbations = psu_weights @ Psi_psu`` — see ``had.py:2151-2204``.
+      ``perturbations = psu_weights @ Psi_psu`` — see ``had.py:2264-2317``.
     - Stute is a wild residual bootstrap with refit-in-loop and a
       nonlinear functional. The correction is applied to the multipliers
       before the per-obs broadcast ``eta_obs = psu_mults[b,
@@ -736,7 +736,7 @@ def apply_stratum_centering(
     along ``psu_axis`` and rescale by ``sqrt(n_psu / (n_psu - 1))``.
     This is the standard small-sample correction for an iid cluster
     wild bootstrap (Wu 1986; Liu 1988) and matches the HAD sup-t
-    convention at ``had.py:2199-2204``.
+    convention at ``had.py:2312-2317``.
 
     The Stute call site has historically NOT applied this correction
     (pre-PR Phase 4.5 C). Lifting the gate on stratified designs +

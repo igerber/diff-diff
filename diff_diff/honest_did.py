@@ -621,7 +621,17 @@ def _extract_container_params(
             "covariance, but the pre-period coefficients are stage-1 "
             "residual means, not contrasts against a reference period as "
             "HonestDiD's delta_0=0 arithmetic requires (see the REGISTRY "
-            "TwoStageDiD Note and DEFERRED.md)."
+            "TwoStageDiD Note and DEFERRED.md); "
+            "HeterogeneousAdoptionDiDEventStudyResults container "
+            "admission is DEFERRED pending joint cross-horizon "
+            "covariance (per-horizon independent sandwiches only; "
+            "DEFERRED.md) - its coefficients ARE reference-normalized "
+            "(each horizon differences against the F-1 anchor), but the "
+            "anchor row itself is omitted from the container (its "
+            "coefficient is identically zero and the WAS is not "
+            "identified there), so no reference row exists for the "
+            "consumer grid (see the REGISTRY HeterogeneousAdoptionDiD "
+            "Note)."
         )
     _producer = surface.source.replace("Results", "")
     if surface.time_scale != "relative":

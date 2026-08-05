@@ -2322,7 +2322,7 @@ def _build_twostage_aggregation_kit(
         alpha=alpha,
         anticipation=anticipation,
         cband=False,  # no simultaneous-band concept on this estimator
-        bootstrap=None,  # replay not wired; results.aggregate() fails closed
+        bootstrap=None,  # replay not wired; recompute levels fail closed ('simple' relays, M-027)
     )
 
 

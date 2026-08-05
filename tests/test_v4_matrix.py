@@ -124,11 +124,13 @@ _MD_TOKEN_RE = re.compile(r"\[(M-\d{3})\]")
 # amendments (M-136 LPDiD level value; M-137/M-138 diagnostics time->post)
 # = 117, plus 2b PR-3a's EfficientDiD balance_e row (M-120, claimed from the
 # reserved pool) = 118, plus 2b PR-3b's Imputation/TwoStage balance_e rows
-# (M-118, M-119, claimed from the reserved pool) = 120.
+# (M-118, M-119, claimed from the reserved pool) = 120, plus 2b PR-4's
+# HAD workflow-aggregate row (M-139, next free id - the reserved pool is
+# spent/earmarked) = 121.
 # Ids are never reused and terminal rows are never deleted, so the ledger
 # only grows - raise the floor when rows are added; a lower parse count
 # means scanner/format drift or an illegal row deletion.
-ROW_COUNT_FLOOR = 120
+ROW_COUNT_FLOOR = 121
 
 # Committed snapshot of the shipped id set ("ids are never deleted or reused"
 # contract - a delete-one-add-one edit keeps the count above the floor but trips
@@ -179,6 +181,7 @@ _INITIAL_ID_RANGES = [
     (132, 135),
     (136, 138),
     (118, 119),
+    (139, 139),
 ]
 EXPECTED_INITIAL_IDS = frozenset(
     f"M-{n:03d}" for lo, hi in _INITIAL_ID_RANGES for n in range(lo, hi + 1)
@@ -577,14 +580,14 @@ def test_initial_ids_never_deleted():
     """The shipped id set is immutable: ids are never deleted or reused (spec section 11).
 
     ROW_COUNT_FLOOR alone would let a delete-one-add-one edit pass; this snapshot cannot.
-    Extends as rows ship (120 as of 2b PR-3b's Imputation/TwoStage balance_e
-    rows: Phase 1 + diagnostic-family + M-092/M-093 + M-094..M-096 + the
+    Extends as rows ship (121 as of 2b PR-4's HAD workflow-aggregate row:
+    Phase 1 + diagnostic-family + M-092/M-093 + M-094..M-096 + the
     M-097..M-115 public-function completeness sweep + M-117..M-120/M-122 +
     M-123/M-124 + M-125 + M-126 + M-127..M-131 + M-132..M-135 +
-    M-136..M-138)."""
+    M-136..M-138 + M-139)."""
     missing = sorted(EXPECTED_INITIAL_IDS - set(_ROW_IDS))
     assert not missing, f"ledger rows deleted (ids are permanent): {missing}"
-    assert len(EXPECTED_INITIAL_IDS) == 120
+    assert len(EXPECTED_INITIAL_IDS) == 121
 
 
 def test_version_tuple_pads_to_three_components():

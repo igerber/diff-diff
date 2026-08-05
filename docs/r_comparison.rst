@@ -257,8 +257,7 @@ identification assumptions (the design path is auto-detected separately by
 
    est = HeterogeneousAdoptionDiD()
    results = est.fit(had_data, outcome='y', unit='unit',
-                     time='period', dose='dose',
-                     aggregate='event_study')
+                     time='period', dose='dose')
 
 Key Differences
 ---------------

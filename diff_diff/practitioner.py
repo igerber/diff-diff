@@ -221,7 +221,7 @@ def _parallel_trends_step(staggered: bool = False) -> Dict[str, Any]:
                 "coefficients rather than the generic check_parallel_trends() "
                 "which assumes a single binary treatment with universal "
                 "pre-periods. Pre-treatment ATTs should be near zero. "
-                "Use CS with aggregate='event_study' or check the estimator's "
+                "Use CS post-fit results.aggregate('event_study') or check the estimator's "
                 "event-study output directly."
             ),
             code=(
@@ -378,22 +378,25 @@ def _handle_multi_period(results: Any):
 
 
 def _handle_cs(results: Any):
-    # Post-fit aggregate() RAISES on a bootstrapped fit (percentile
-    # statistics are not retained for re-aggregation), so the guidance
-    # must route those fits through the retained fit-time aggregation
-    # instead of advice that cannot run.
+    # The post-fit RECOMPUTE levels raise on a bootstrapped fit
+    # (percentile statistics are not retained for re-aggregation;
+    # 'simple' relays the stored quintet and stays available), so the
+    # event-study guidance must route those fits through the retained
+    # fit-time aggregation instead of advice that cannot run.
     is_bootstrap = getattr(results, "bootstrap_results", None) is not None
     if is_bootstrap:
         sensitivity_why = (
             "Bounds the treatment effect under plausible violations of "
-            "parallel trends. This fit is BOOTSTRAPPED, and post-fit "
-            "aggregate() raises on bootstrap fits - refit with the "
-            "fit-time aggregation to populate the event-study surface."
+            "parallel trends. This fit is BOOTSTRAPPED, and the post-fit "
+            "event-study/group recompute levels raise on bootstrap fits "
+            "(aggregate('simple') still relays the stored inference) - "
+            "refit with the fit-time aggregation to populate the "
+            "event-study surface."
         )
         sensitivity_code = (
             "from diff_diff import compute_honest_did\n"
-            "# Bootstrap fit: post-fit aggregate() raises - use the\n"
-            "# fit-time aggregation:\n"
+            "# Bootstrap fit: the post-fit ES recompute raises - use the\n"
+            "# fit-time aggregation for the event-study surface:\n"
             "results = cs.fit(data, ..., aggregate='event_study')\n"
             "honest = compute_honest_did(results, method='relative_magnitude', M=1.0)\n"
             "print(honest.summary())"
@@ -506,10 +509,11 @@ def _handle_imputation(results: Any):
                 "ImputationDiD aggregates post-fit from its panel-backed kit "
                 "(M-021) - no refit needed."
                 if getattr(results, "bootstrap_results", None) is None
-                else "This fit is BOOTSTRAPPED, and post-fit aggregate() "
-                "raises on bootstrap fits - refit with the deprecated "
-                "fit-time aggregation (or n_bootstrap=0) to obtain the "
-                "aggregated surfaces."
+                else "This fit is BOOTSTRAPPED: the post-fit event-study/group "
+                "recompute levels raise on bootstrap fits, while "
+                "aggregate('simple') relays the stored inference - "
+                "refit with the deprecated fit-time aggregation (or "
+                "n_bootstrap=0) to obtain the recomputed surfaces."
             ),
             code=(
                 "# Aggregate post-fit - no refit needed:\n"
@@ -563,10 +567,11 @@ def _handle_two_stage(results: Any):
                 "TwoStageDiD aggregates post-fit from its panel-backed kit "
                 "(M-022) - no refit needed."
                 if getattr(results, "bootstrap_results", None) is None
-                else "This fit is BOOTSTRAPPED, and post-fit aggregate() "
-                "raises on bootstrap fits - refit with the deprecated "
-                "fit-time aggregation (or n_bootstrap=0) to obtain the "
-                "aggregated surfaces."
+                else "This fit is BOOTSTRAPPED: the post-fit event-study/group "
+                "recompute levels raise on bootstrap fits, while "
+                "aggregate('simple') relays the stored inference - "
+                "refit with the deprecated fit-time aggregation (or "
+                "n_bootstrap=0) to obtain the recomputed surfaces."
             ),
             code=(
                 "# Aggregate post-fit - no refit needed:\n"
@@ -954,10 +959,11 @@ def _handle_efficient(results: Any):
             why=(
                 "EfficientDiD aggregates post-fit from retained EIFs " "(M-023) - no refit needed."
                 if getattr(results, "bootstrap_results", None) is None
-                else "This fit is BOOTSTRAPPED, and post-fit aggregate() "
-                "raises on bootstrap fits - refit with the deprecated "
-                "fit-time aggregation (or n_bootstrap=0) to obtain the "
-                "aggregated surfaces."
+                else "This fit is BOOTSTRAPPED: the post-fit event-study/group "
+                "recompute levels raise on bootstrap fits, while "
+                "aggregate('simple') relays the stored inference - "
+                "refit with the deprecated fit-time aggregation (or "
+                "n_bootstrap=0) to obtain the recomputed surfaces."
             ),
             code=(
                 "# Aggregate post-fit - no refit needed:\n"
@@ -1013,9 +1019,9 @@ def _handle_continuous(results: Any):
                 "HeterogeneousAdoptionDiD instead. HAD identifies a Weighted "
                 "Average Slope (WAS) at the dose support boundary by leveraging "
                 "dose variation across units. HAD's contract is panel-shape "
-                "dependent: `aggregate='overall'` (the default) is two-period "
+                "dependent - and fit() selects the mode from it (M-027): the overall (single-period WAS) estimator is two-period "
                 "only and hard-rejects multi-period panels at fit time; "
-                "multi-period panels MUST set `aggregate='event_study'`. "
+                "multi-period panels fit the per-horizon event-study estimator. "
                 "Additionally, on staggered (multi-cohort) panels the event-"
                 "study path auto-filters to the LAST treatment cohort + never-"
                 "treated units (paper Appendix B.2) and the estimand becomes "
@@ -1048,12 +1054,11 @@ def _handle_continuous(results: Any):
                 "    data_had_2p, outcome='y', unit='unit',\n"
                 "    time='t', dose='d', first_treat='first_treat')\n"
                 "\n"
-                "# Multi-period panel: must set aggregate='event_study'\n"
+                "# Multi-period panel: fit() selects the event-study mode\n"
                 "# (on staggered panels this is auto-last-cohort-only WAS)\n"
                 "had_es = had.fit(\n"
                 "    data_had_mp, outcome='y', unit='unit',\n"
-                "    time='t', dose='d', first_treat='first_treat',\n"
-                "    aggregate='event_study')"
+                "    time='t', dose='d', first_treat='first_treat')"
             ),
             step_name="estimator_selection",
         ),
@@ -1200,7 +1205,7 @@ def _handle_had(results: Any):
                 "path - a single pre-period cannot support the joint "
                 "Stute variant - and the returned verdict explicitly "
                 "flags that gap. To close step 2, refit on a multi-period "
-                "panel with aggregate='event_study' AND verify the panel "
+                "panel (the workflow then runs the event-study battery) AND verify the panel "
                 "has at least one earlier placebo pre-period beyond F-1; "
                 "if only the base pre-period F-1 is available, the "
                 "workflow still sets pretrends_joint=None, all_pass=False, "
@@ -1231,7 +1236,7 @@ def _handle_had(results: Any):
                 "    first_treat='first_treat')\n"
                 "print(report.summary())\n"
                 "# verdict explicitly flags the Assumption 7 gap on the\n"
-                "# overall path; aggregate='event_study' on a multi-period\n"
+                "# overall path; a multi-period panel (the event-study battery)\n"
                 "# panel adds joint Stute pre-trends + joint homogeneity-linearity.\n"
                 "# Passing survey_design= / weights= skips QUG (Phase 4.5 C0)\n"
                 "# and returns a linearity-conditional verdict only."
@@ -1307,30 +1312,30 @@ def _handle_had(results: Any):
         ),
         _step(
             baker_step=7,
-            label="Re-fit with aggregate='event_study' for per-horizon WAS",
+            label="Re-fit on a multi-period panel for per-horizon WAS",
             why=(
-                "On multi-period panels, the event-study aggregate returns "
+                "On multi-period panels, the event-study mode returns "
                 "per-event-time WAS estimates instead of a single scalar. "
                 "Reveals whether dose response grows, decays, or stabilizes "
                 "across post-treatment horizons. Pre-period placebos serve "
                 "as a parallel-trends sanity check. NOTE: this handler is "
                 "the single-period HAD handler, so the upstream fit was "
-                "two-period-only (`aggregate='overall'` hard-rejects more "
-                "than two periods at `had.py:980-987`). Use a distinct "
-                "multi-period panel `data_mp` for this step - the same "
-                "panel that the upstream fit ran on will not satisfy "
-                "the event-study path's period-count requirement."
+                "two-period-only (the overall estimator hard-rejects more "
+                "than two periods; fit() selects the mode from the panel "
+                "shape, M-027). Use a distinct multi-period panel "
+                "`data_mp` for this step - the same panel that the "
+                "upstream fit ran on will not satisfy the event-study "
+                "path's period-count requirement."
             ),
             code=(
                 "from diff_diff import HeterogeneousAdoptionDiD\n"
                 "# Requires a distinct multi-period panel - the upstream\n"
-                "# two-period panel was already consumed by `aggregate='overall'`.\n"
+                "# two-period panel already fit the overall (single-period) mode.\n"
                 "est = HeterogeneousAdoptionDiD()\n"
                 "es = est.fit(\n"
                 "    data_mp, outcome='y', unit='unit',\n"
                 "    time='t', dose='d',\n"
-                "    first_treat='first_treat',\n"
-                "    aggregate='event_study')"
+                "    first_treat='first_treat')"
             ),
             priority="medium",
             step_name="heterogeneity",
@@ -1382,7 +1387,8 @@ def _handle_had_event_study(results: Any):
             label="Run the HAD pretest battery (event-study mode)",
             why=(
                 "On multi-period unweighted panels, did_had_pretest_workflow "
-                "with aggregate='event_study' runs QUG plus joint Stute "
+                "runs the event-study battery (selected from the panel "
+                "shape, M-139): QUG plus joint Stute "
                 "pre-trends plus joint homogeneity-linearity Stute. The "
                 "joint Stute pre-trends variant closes the paper Section "
                 "4.2 step-2 gap ONLY IF the panel carries at least one "
@@ -1414,8 +1420,7 @@ def _handle_had_event_study(results: Any):
                 "report = did_had_pretest_workflow(\n"
                 "    data, outcome='y', unit='unit',\n"
                 "    time='t', dose='d',\n"
-                "    first_treat='first_treat',\n"
-                "    aggregate='event_study')\n"
+                "    first_treat='first_treat')\n"
                 "print(report.summary())"
             ),
             step_name="parallel_trends",
@@ -1494,7 +1499,7 @@ def _handle_had_event_study(results: Any):
                 "# survey_design= (the default classical sandwich raises\n"
                 "# NotImplementedError on the survey path because the\n"
                 "# Binder-TSL composition consumes the HC1-scale IF -\n"
-                "# see had.py:3495-3507). On the continuous designs the\n"
+                "# see had.py:3646-3658). On the continuous designs the\n"
                 "# vcov_type kwarg is unused (CCT-2014 robust SE is the\n"
                 "# only formula), so passing vcov_type='hc1' is a no-op\n"
                 "# there and a safe default for the survey-aware example.\n"
@@ -1504,7 +1509,6 @@ def _handle_had_event_study(results: Any):
                 "    data, outcome='y', unit='unit',\n"
                 "    time='t', dose='d',\n"
                 "    first_treat='first_treat',\n"
-                "    aggregate='event_study',\n"
                 "    survey_design=sd, cband=True)\n"
                 "es.cband_low, es.cband_high  # simultaneous band endpoints"
             ),

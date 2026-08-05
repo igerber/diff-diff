@@ -242,18 +242,26 @@ class TwoStageDiDResults(BaseResults, AggregationMixin):
                 "an older release will not have one. Re-fit with "
                 "diff-diff >= 3.9 to aggregate post-fit."
             )
-        if self.bootstrap_results is not None:
-            raise NotImplementedError(
-                "aggregate() is not yet available on a bootstrapped fit "
-                "(n_bootstrap > 0): the per-target bootstrap draws are not "
-                "retained, so post-fit re-aggregation cannot replay "
-                "percentile inference and analytical inference would "
-                "misrepresent the fit. Re-fit with the aggregation you "
-                "need, or use n_bootstrap=0."
-            )
-        bk = dict(kit.bookkeeping)
+        # Per-level bootstrap policy (v4-design section 6, converged with row
+        # M-027): 'simple' is a bit-exact RELAY of the stored overall quintet
+        # - faithful under any inference regime, bootstrap included - so it
+        # dispatches BEFORE the bootstrap gate. Only the RECOMPUTE levels
+        # below fail closed on bootstrapped fits. (This supersedes the
+        # uniform-conservatism decision recorded with M-022; its rationale is
+        # honored by the relay's NaN df column.)
         if level == "simple":
             return self._aggregate_simple_result(kit)
+        if self.bootstrap_results is not None:
+            raise NotImplementedError(
+                f"aggregate({level!r}) is not yet available on a bootstrapped "
+                "fit (n_bootstrap > 0): the per-target bootstrap draws are "
+                "not retained, so post-fit re-aggregation cannot replay "
+                "percentile inference and analytical inference would "
+                "misrepresent the fit. aggregate('simple') relays the stored "
+                "bootstrap inference and remains available; otherwise re-fit "
+                "with the aggregation you need, or use n_bootstrap=0."
+            )
+        bk = dict(kit.bookkeeping)
         # Fresh throwaway host per call, populated from KIT snapshots only
         # (estimator/config mutation after fit() must not leak in).
         agg = _TwoStageKitAggregator(
@@ -390,7 +398,9 @@ class TwoStageDiDResults(BaseResults, AggregationMixin):
         precisely why it must be snapshotted rather than re-derived: a
         post-fit level-matched replay produces a different n_valid).
         None → all-NaN df column; the replicate-undefined 0 sentinel NaNs
-        out via post_init.
+        out via post_init. Bootstrapped fits relay the stored quintet
+        verbatim with a NaN df column - no df governs percentile
+        inference (the per-level policy converged with row M-027).
         """
         return AggregationResult(
             level="simple",
@@ -403,7 +413,9 @@ class TwoStageDiDResults(BaseResults, AggregationMixin):
             conf_int_lower=np.array([self.overall_conf_int[0]], dtype=float),
             conf_int_upper=np.array([self.overall_conf_int[1]], dtype=float),
             n=np.array([kit.bookkeeping["n_treated_obs"]], dtype=float),
-            df=kit.bookkeeping["survey_df_final"],
+            df=(
+                np.nan if self.bootstrap_results is not None else kit.bookkeeping["survey_df_final"]
+            ),
             alpha=kit.alpha,
             n_kind="obs",
             weight=np.array([1.0], dtype=float),

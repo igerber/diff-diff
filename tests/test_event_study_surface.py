@@ -1159,7 +1159,7 @@ def _had_event_study():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         es = HeterogeneousAdoptionDiD(design="mass_point").fit(
-            panel, "outcome", "dose", "period", "unit", aggregate="event_study"
+            panel, "outcome", "dose", "period", "unit"
         )
     return panel, es
 

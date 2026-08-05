@@ -429,13 +429,11 @@ before estimation; see :doc:`api/had` for the full API and SE-regime contract.
    had_data = pd.DataFrame(rows)
 
    pretests = did_had_pretest_workflow(had_data, outcome='y', unit='unit',
-                                       time='period', dose='dose',
-                                       aggregate='event_study')
+                                       time='period', dose='dose')
 
    est = HeterogeneousAdoptionDiD()
    results = est.fit(had_data, outcome='y', unit='unit',
-                     time='period', dose='dose',
-                     aggregate='event_study')
+                     time='period', dose='dose')
 
    # Event-study results: per-horizon WAS at each event time
    for e, att in zip(results.event_times, results.att):

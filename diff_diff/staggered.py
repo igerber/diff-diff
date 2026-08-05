@@ -1864,11 +1864,14 @@ class CallawaySantAnna(
             ``plot_event_study`` all accept the post-fit container from
             ``results.aggregate('event_study')`` directly, so no consumer
             requires the fit-time surface anymore - EXCEPT on bootstrapped
-            fits (``n_bootstrap > 0``), where post-fit ``aggregate()``
-            raises (percentile inference cannot be reproduced from the
-            retained analytical state) and fit-time aggregation remains
-            the supported route. Otherwise it remains only as the
-            deprecated compatibility path through 3.9.
+            fits (``n_bootstrap > 0``), where the post-fit RECOMPUTE
+            levels (``'event_study'``/``'group'``) raise (percentile
+            inference cannot be reproduced from the retained analytical
+            state; ``aggregate('simple')`` relays the stored bootstrap
+            inference and stays available) and fit-time aggregation
+            remains the supported route for those levels. Otherwise it
+            remains only as the deprecated compatibility path through
+            3.9.
         balance_e : int, optional
             DEPRECATED since 3.9, removed in 4.0 (ledger row M-117). Passing
             it emits a ``FutureWarning``; it moves onto the post-fit call as
@@ -5149,10 +5152,13 @@ def _build_aggregation_kit(
         alpha=estimator.alpha,
         anticipation=estimator.anticipation,
         cband=bool(estimator.cband),
-        # Bootstrap replay is not wired in this PR: a bootstrapped fit's
-        # percentile inference cannot be reproduced from analytical state, so
-        # aggregate() fails closed on one rather than silently substituting
-        # analytical numbers. BootstrapReplaySpec (diff_diff/aggregation.py) is
-        # the verified mechanism for the follow-up.
+        # Bootstrap replay is not wired: a bootstrapped fit's percentile
+        # inference cannot be reproduced from analytical state, so the
+        # RECOMPUTE levels (event_study/group) fail closed on one rather than
+        # silently substituting analytical numbers ('simple' relays the
+        # stored bootstrap inference and stays available - the per-level
+        # policy converged with row M-027). BootstrapReplaySpec
+        # (diff_diff/aggregation.py) is the verified mechanism for the
+        # follow-up.
         bootstrap=None,
     )

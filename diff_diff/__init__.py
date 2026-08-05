@@ -549,7 +549,7 @@ __all__ = [
     "YatchewTestResults",
     "HADPretestReport",
     # HAD joint pre-tests (Phase 3 follow-up) — multi-period event-study
-    # workflow dispatch via did_had_pretest_workflow(aggregate="event_study")
+    # workflow dispatch selected from the panel shape (M-139)
     "stute_joint_pretest",
     "joint_pretrends_test",
     "joint_homogeneity_test",
