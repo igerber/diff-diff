@@ -50,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added percentile ``overall_conf_int`` to bootstrapped ``PTEResults``.
 - Added ``crit_val_checks`` simultaneous-band fallback utility.
 - Added ``group_time_att`` and ``aggte_obj`` result-container factories.
+- Added ``process_att_gt`` and ``attgt_pte_aggregations`` aggregation aliases.
 - Added public ``panel_empirical_bootstrap`` and ``mboot2`` bootstrap helpers.
 - Added R-style ``pte_params``, ``pte_results``, and ``pte_emp_boot`` aliases.
 - **R `twfeweights` compatibility layer.** Added `twfe_weights`, `attO_weights`,

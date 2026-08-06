@@ -81,6 +81,11 @@ def group_time_att(
     return att_gt.copy()
 
 
+def process_att_gt(att_gt: pd.DataFrame, **_: Any) -> pd.DataFrame:
+    """R ``process_att_gt``-style normalization of group-time output."""
+    return group_time_att(att_gt)
+
+
 @dataclass
 class PTEAggregateResult:
     estimate: float
@@ -713,3 +718,10 @@ def pte_aggte(
     if len(effects) != len(w):
         effects = frame.loc[weights.index, "attgt"].to_numpy(float)
     return PTEAggregateResult(float(np.nansum(effects * w)), weights.reset_index(drop=True), type)
+
+
+def attgt_pte_aggregations(
+    attgt: pd.DataFrame, *, type: str = "group", **kwargs: Any
+) -> PTEAggregateResult:
+    """Dispatch the standard ATT(g,t) aggregation path."""
+    return pte_aggte(attgt, type=type, **kwargs)

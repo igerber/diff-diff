@@ -26,6 +26,8 @@ inference is requested.
 confidence bands.
 Custom estimators can construct containers with ``group_time_att`` and
 ``aggte_obj``.
+``process_att_gt`` and ``attgt_pte_aggregations`` provide aggregation
+dispatch aliases for custom group-time outputs.
 ``panel_empirical_bootstrap`` and ``mboot2`` expose the two bootstrap engines
 for custom workflows.
 ``pte_params``, ``pte_results``, and ``pte_emp_boot`` provide R-style aliases.
@@ -44,6 +46,8 @@ for custom workflows.
    diff_diff.did_rcs_attgt
    diff_diff.group_time_att
    diff_diff.aggte_obj
+   diff_diff.process_att_gt
+   diff_diff.attgt_pte_aggregations
    diff_diff.panel_empirical_bootstrap
    diff_diff.mboot2
    diff_diff.pte_params
