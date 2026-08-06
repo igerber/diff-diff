@@ -29,7 +29,7 @@ print(f"ATT: {results.att:.3f} (SE: {results.se:.3f})")
 - **sklearn-like API**: All estimators use `fit()` method, `get_params()`/`set_params()` for configuration.
 - **Formula interface**: Supports R-style formulas like `"outcome ~ treated * post"`.
 - **Results objects**: Rich dataclass containers with `summary()`, `to_dict()`, `to_dataframe()`.
-- **Estimator aliases**: Short names available (e.g., `DiD`, `CS`, `SA`, `BJS`, `Gardner`, `SDiD`, `TWFE`, `DDD`, `CDiD`, `EDiD`, `Stacked`, `Bacon`).
+- **Estimator aliases**: Short names available (e.g., `DiD`, `CS`, `SA`, `BJS`, `SDiD`, `TWFE`, `DDD`, `EDiD`, `SCM`, `Bacon`). The former `CDiD`/`Gardner`/`Stacked` aliases are deprecated (3.9, removed in 4.0) - use `ContinuousDiD`/`TwoStageDiD`/`StackedDiD`.
 
 ## Practitioner Workflow (based on Baker et al. 2025)
 
@@ -480,7 +480,7 @@ TwoStageDiD(
 )
 ```
 
-**Alias:** `Gardner`
+**Alias:** `Gardner` (deprecated 3.9, removed 4.0 - emits FutureWarning; use `TwoStageDiD`)
 
 **fit() parameters:**
 
@@ -617,6 +617,8 @@ weights_df = results.get_unit_weights_df()
 ### SyntheticControl
 
 Classic Synthetic Control Method (Abadie, Diamond & Hainmueller 2010; Abadie & Gardeazabal 2003). Builds a single treated unit's counterfactual as a convex combination of never-treated "donor" units. **Donor weights only** (no time weights, no ridge) — distinct from `SyntheticDiD`.
+
+**Alias:** `SCM`
 
 ```python
 SyntheticControl(
@@ -756,7 +758,7 @@ is the paper's backward finite difference on `{0, d_1, …, d_J}` (`ACRT(d_1) = 
 covariate / survey) and reduces to the per-level 2×2 DiD SE. Multi-cohort fits need a shared dose
 support across cohorts (else `NotImplementedError`); an off-support `dvals` value raises `ValueError`.
 
-**Alias:** `CDiD`
+**Alias:** `CDiD` (deprecated 3.9, removed 4.0 - emits FutureWarning; use `ContinuousDiD`)
 
 **fit() parameters:**
 
@@ -1037,7 +1039,7 @@ StackedDiD(
 )
 ```
 
-**Alias:** `Stacked`
+**Alias:** `Stacked` (deprecated 3.9, removed 4.0 - emits FutureWarning; use `StackedDiD`)
 
 **fit() parameters:**
 
@@ -1482,19 +1484,21 @@ etwfe_pois = WooldridgeDiD(method='poisson')
 results = etwfe_pois.fit(data, outcome='y_count', unit='id', time='t', first_treat='first_treat')
 ```
 
-### Convenience Functions
+### Convenience Functions (deprecated 3.9, removed 4.0)
+
+All 8 wrapper functions (`imputation_did`, `two_stage_did`, `stacked_did`, `trop`, `synthetic_control`, `triple_difference`, `bacon_decompose`, `chaisemartin_dhaultfoeuille`) emit a `FutureWarning` since 3.9 and are removed in 4.0 (rows M-070..M-077) - construct the class instead:
 
 ```python
-# Functional interfaces (create estimator + call fit in one step)
-from diff_diff import imputation_did, two_stage_did, triple_difference, stacked_did, trop, bacon_decompose
+# Canonical class form (what the wrappers did internally)
+from diff_diff import ImputationDiD, TwoStageDiD, TripleDifference, StackedDiD, TROP, BaconDecomposition
 
-results = imputation_did(data, outcome='y', unit='id', time='t', first_treat='ft')
-results = two_stage_did(data, outcome='y', unit='id', time='t', first_treat='ft')
-results = triple_difference(data, outcome='y', group='g', partition='p', time='t')
-results = stacked_did(data, outcome='y', unit='id', time='t', first_treat='ft',
-                      kappa_pre=2, kappa_post=2)
-results = trop(data, outcome='y', treatment='d', unit='id', time='t')
-results = bacon_decompose(data, outcome='y', unit='id', time='t', first_treat='ft')
+results = ImputationDiD().fit(data, outcome='y', unit='id', time='t', first_treat='ft')
+results = TwoStageDiD().fit(data, outcome='y', unit='id', time='t', first_treat='ft')
+results = TripleDifference().fit(data, outcome='y', group='g', partition='p', post='t')
+results = StackedDiD(kappa_pre=2, kappa_post=2).fit(data, outcome='y', unit='id', time='t',
+                                                    first_treat='ft')
+results = TROP().fit(data, 'y', 'd', 'id', 't')
+results = BaconDecomposition().fit(data, outcome='y', unit='id', time='t', first_treat='ft')
 ```
 
 ## Results Objects
@@ -1738,7 +1742,7 @@ Returned by `TripleDifference.fit()`.
 
 ### BaconDecompositionResults
 
-Returned by `BaconDecomposition.fit()` and `bacon_decompose()`.
+Returned by `BaconDecomposition.fit()` (and the deprecated `bacon_decompose()` wrapper, removed in 4.0).
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
@@ -2179,7 +2183,7 @@ All plotting functions return a matplotlib `Figure` object.
 from diff_diff import plot_event_study
 
 plot_event_study(
-    results,                           # MultiPeriodDiDResults, CS, SA, BJS, Gardner, Stacked, or DataFrame
+    results,                           # MultiPeriodDiDResults, CS, SA, BJS, TwoStageDiD, StackedDiD, or DataFrame
     effects=None,                      # Manual dict of effects (alternative to results)
     se=None,                           # Manual dict of SEs
     periods=None,
@@ -2753,7 +2757,7 @@ no-scalar branch.
 ## DiagnosticReport
 
 Unified diagnostic runner orchestrating `check_parallel_trends`,
-`compute_pretrends_power`, `HonestDiD.sensitivity`, `bacon_decompose`,
+`compute_pretrends_power`, `HonestDiD.sensitivity`, `BaconDecomposition`,
 plus estimator-native surfaces for SyntheticDiD (`pre_treatment_fit`,
 `get_weight_concentration`, `in_time_placebo`, `sensitivity_to_zeta_omega`)
 and TROP (factor-model metrics). EfficientDiD PT uses the native
@@ -2827,7 +2831,7 @@ Power tier (drives BR phrasing for the `no_detected_violation` verdict):
 BR and DR do no estimator fitting and do not re-derive variance from
 raw data — every effect, SE, p-value, CI, and sensitivity bound is
 read from the fitted result or produced by an existing diff-diff
-utility (may call `check_parallel_trends`, `bacon_decompose`, or
+utility (may call `check_parallel_trends`, `BaconDecomposition.fit`, or
 `EfficientDiD.hausman_pretest` when the panel + column kwargs are
 supplied). The `design_effect` section is read-only: it echoes
 `survey_metadata.design_effect` / `effective_n` from the fitted

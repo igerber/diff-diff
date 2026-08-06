@@ -228,17 +228,17 @@ Basic usage::
     )
     results.print_summary()
 
-Quick estimation with convenience function::
+Quick one-call estimation (the ``trop()`` wrapper is deprecated since
+3.9 and removed in 4.0)::
 
-    from diff_diff import trop
+    from diff_diff import TROP
 
-    results = trop(
+    results = TROP(n_bootstrap=200).fit(
         data,
-        outcome='y',
-        treatment='treated',
-        unit='unit_id',
-        time='period',
-        n_bootstrap=200
+        'y',
+        'treated',
+        'unit_id',
+        'period',
     )
 
 Using the global method for faster estimation::

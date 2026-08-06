@@ -36,7 +36,7 @@ _ESTIMATOR_NAMES: Dict[str, str] = {
     "CallawaySantAnnaResults": "CallawaySantAnna",
     "SunAbrahamResults": "SunAbraham",
     "ImputationDiDResults": "ImputationDiD (Borusyak-Jaravel-Spiess)",
-    "TwoStageDiDResults": "TwoStageDiD (Gardner)",
+    "TwoStageDiDResults": "TwoStageDiD",
     "StackedDiDResults": "StackedDiD",
     "SyntheticDiDResults": "SyntheticDiD",
     "TROPResults": "TROP",
@@ -371,7 +371,7 @@ def _handle_multi_period(results: Any):
         _honest_did_step(),
         # Note: run_all_placebo_tests() requires binary time indicator,
         # which MultiPeriodDiD does not use. Omit placebo for this type.
-        _robustness_compare_step("CS, SA, or BJS"),
+        _robustness_compare_step("CallawaySantAnna, SunAbraham, or ImputationDiD"),
     ]
     warnings = _check_nan_att(results)
     return steps, warnings
@@ -445,7 +445,7 @@ def _handle_cs(results: Any):
             code=heterogeneity_code,
             step_name="heterogeneity",
         ),
-        _robustness_compare_step("SA, BJS, or Gardner"),
+        _robustness_compare_step("SunAbraham, ImputationDiD, or TwoStageDiD"),
         _covariates_step(),
     ]
     warnings = _check_nan_att(results)
@@ -492,7 +492,7 @@ def _handle_sa(results: Any):
             ),
             step_name="heterogeneity",
         ),
-        _robustness_compare_step("CS, BJS, or Gardner"),
+        _robustness_compare_step("CallawaySantAnna, ImputationDiD, or TwoStageDiD"),
         _covariates_step(),
     ]
     warnings = _check_nan_att(results)
@@ -538,8 +538,8 @@ def _handle_imputation(results: Any):
             why=(
                 "ImputationDiD does not have a control_group parameter. "
                 "Compare results with and without covariates, vary the "
-                "sample (drop cohorts), and compare with CS/SA as "
-                "falsification checks."
+                "sample (drop cohorts), and compare with CallawaySantAnna/"
+                "SunAbraham as falsification checks."
             ),
             code=(
                 "# Compare with alternative estimators as robustness:\n"
@@ -551,7 +551,7 @@ def _handle_imputation(results: Any):
             # variation recommendation. Tag separately.
             step_name="specification_comparison",
         ),
-        _robustness_compare_step("CS, SA, or Gardner"),
+        _robustness_compare_step("CallawaySantAnna, SunAbraham, or TwoStageDiD"),
         _covariates_step(),
     ]
     warnings = _check_nan_att(results)
@@ -597,8 +597,8 @@ def _handle_two_stage(results: Any):
             why=(
                 "TwoStageDiD does not have a control_group parameter. "
                 "Compare results with and without covariates, vary the "
-                "sample (drop cohorts), and compare with CS/SA as "
-                "falsification checks."
+                "sample (drop cohorts), and compare with CallawaySantAnna/"
+                "SunAbraham as falsification checks."
             ),
             code=(
                 "# Compare with alternative estimators as robustness:\n"
@@ -610,7 +610,7 @@ def _handle_two_stage(results: Any):
             # variation recommendation. Tag separately.
             step_name="specification_comparison",
         ),
-        _robustness_compare_step("CS, BJS, or SA"),
+        _robustness_compare_step("CallawaySantAnna, ImputationDiD, or SunAbraham"),
         _covariates_step(),
     ]
     warnings = _check_nan_att(results)
@@ -659,7 +659,7 @@ def _handle_stacked(results: Any):
             # diagnostic ever completes it, so the advice always survives.
             step_name="sub_experiment_balance",
         ),
-        _robustness_compare_step("CS, SA, or BJS"),
+        _robustness_compare_step("CallawaySantAnna, SunAbraham, or ImputationDiD"),
     ]
     warnings = _check_nan_att(results)
     return steps, warnings
@@ -742,7 +742,7 @@ def _handle_synthetic(results: Any):
         ),
         _step(
             baker_step=8,
-            label="Compare with staggered estimators (CS, SA)",
+            label="Compare with staggered estimators (CallawaySantAnna, SunAbraham)",
             why=(
                 "SyntheticDiD is for few treated units; compare with "
                 "staggered estimators if applicable. Use TROP only if "
@@ -798,7 +798,7 @@ def _handle_trop(results: Any):
             # battery complete.
             step_name="placebo",
         ),
-        _robustness_compare_step("SyntheticDiD or CS"),
+        _robustness_compare_step("SyntheticDiD or CallawaySantAnna"),
     ]
     warnings = _check_nan_att(results)
     return steps, warnings
@@ -859,7 +859,7 @@ def _handle_synthetic_control(results: Any):
             ),
             code=(
                 "# Exclude contaminated donors explicitly:\n"
-                "# synthetic_control(..., donor_pool=[clean, comparable, units])"
+                "# SyntheticControl().fit(..., donor_pool=[clean, comparable, units])"
             ),
             priority="medium",
             step_name="estimator_selection",
@@ -900,7 +900,7 @@ def _handle_synthetic_control(results: Any):
             # NOT "sensitivity" (a caller could mark that done and drop this step).
             step_name="in_time_placebo",
         ),
-        _robustness_compare_step("SyntheticDiD or CS"),
+        _robustness_compare_step("SyntheticDiD or CallawaySantAnna"),
     ]
     warnings = _check_nan_att(results)
     return steps, warnings
@@ -982,7 +982,7 @@ def _handle_efficient(results: Any):
             # completes, which never runs this aggregation.
             step_name="aggregation",
         ),
-        _robustness_compare_step("CS, SA, or BJS"),
+        _robustness_compare_step("CallawaySantAnna, SunAbraham, or ImputationDiD"),
         _covariates_step(),
     ]
     warnings = _check_nan_att(results)
@@ -1155,8 +1155,9 @@ def _handle_bacon(results: Any):
             why=(
                 "Bacon decomposition is diagnostic, not an estimator. "
                 "If substantial weight falls on 'later vs earlier' "
-                "comparisons, TWFE is biased. Use CS, SA, BJS, or another "
-                "heterogeneity-robust estimator for causal estimates."
+                "comparisons, TWFE is biased. Use CallawaySantAnna, SunAbraham, "
+                "ImputationDiD, or another heterogeneity-robust estimator "
+                "for causal estimates."
             ),
             code=(
                 "from diff_diff import CallawaySantAnna\n"

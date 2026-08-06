@@ -19,12 +19,12 @@ circular imports across the 16 result classes. They do no estimator
 fitting and do not re-derive any variance from raw data; every effect,
 SE, p-value, CI, and sensitivity bound is either read from the fitted
 result or produced by an existing diff-diff utility
-(`compute_honest_did`, `HonestDiD.sensitivity`, `bacon_decompose`,
+(`compute_honest_did`, `HonestDiD.sensitivity`, `BaconDecomposition`,
 `check_parallel_trends`, `compute_pretrends_power`). When the caller
 passes the raw panel + column kwargs, `DiagnosticReport` may call
 those utilities on the supplied data (2x2 PT via
 `check_parallel_trends`, Goodman-Bacon decomposition via
-`bacon_decompose`, and the EfficientDiD Hausman PT-All vs PT-Post
+`BaconDecomposition`, and the EfficientDiD Hausman PT-All vs PT-Post
 pretest via `EfficientDiD.hausman_pretest`).
 
 The `design_effect` section of `DiagnosticReport.to_dict()` is a
@@ -225,7 +225,7 @@ a library setting.
   `DiagnosticReport(survey_design=...)` and
   `BusinessReport(survey_design=...)` accept the original
   `SurveyDesign` object and forward it to
-  `bacon_decompose(survey_design=...)` so the Goodman-Bacon
+  `BaconDecomposition.fit(survey_design=...)` so the Goodman-Bacon
   decomposition is computed under the same design as the weighted
   estimate. When `survey_metadata` is set but `survey_design` is not
   supplied, Bacon skips with an explicit reason rather than replaying

@@ -107,22 +107,26 @@ paper's own label for its estimator, the same criterion that keeps SDiD). Change
 that CS/SA/BJS/LPDiD also produce, and retargeting it to a class whose default
 mode is the static ATT would make the name carry altered meaning. `SDDD` dies
 with its class [M-013] [M-064]. `QDiDResults` dies with QDiD [M-061].
-**Alias diet (2026-07-31):** `CDiD`, `Stacked` and `Gardner` are
+**Alias diet (2026-07-31; shipped in 3.9 by 2(d) PR-A):** `CDiD`,
+`Stacked` and `Gardner` are
 retired — [M-132]..[M-134] — deprecated 3.9, removed 4.0. Their target classes
 survive, so no parent-class shim can carry the warning; the 3.9 FutureWarning
 rides a module-level `__getattr__` [M-135]. The 3.9 consequence: the three
 names leave module globals (gone from `dir()` and static autocomplete) while
 staying importable and in `__all__`, and `from diff_diff import *` fires their
-FutureWarnings — accepted diet behavior, owned by the phase-2(d) PR. New:
-`SCM` for SyntheticControl [M-062] ("SC" rejected - one transposition from
-CS). The planned `Spillover` alias for SpilloverDiD is CANCELLED [M-063]
+FutureWarnings — accepted diet behavior (the package import protocol
+resolves each missing `__all__` name twice, so the star-import records
+six warnings for the three aliases; the test asserts the message set).
+New: `SCM` for SyntheticControl [M-062] ("SC" rejected - one
+transposition from CS). The planned `Spillover` alias for SpilloverDiD is CANCELLED [M-063]
 (never shipped). TROP and LPDiD are self-aliased acronyms.
 After 4.0: every estimator has exactly one class name and at most one alias —
 15 aliases total.
 
 ### 3.3 Module-level function wrappers
 
-The 8 estimator wrapper functions are deprecated in 3.9 and removed in 4.0
+The 8 estimator wrapper functions are deprecated in 3.9 (shipped by 2(d)
+PR-A: FutureWarning shims + docstring notes) and removed in 4.0
 ([M-070]..[M-077]): classes are the single canonical construction surface.
 `twowayfeweights` stays (diagnostic function, not a class duplicate);
 `compute_honest_did`, placebo/power helpers, and dataset loaders are
@@ -534,6 +538,22 @@ domain vocabulary, not drift.
   unsupported - and a warning still leaves a procedure running that the caller
   did not ask for.
 
+  **Locked implementation decisions (2026-08-06, for the 2(d) PR-B).**
+  The accepted value set `{"analytical", "wild_bootstrap"}` is validated
+  at `__init__` (transactional `set_params` inherits it via the
+  BaseEstimator probe re-init); the COHERENCE checks run at fit - DiD
+  with `inference="wild_bootstrap"` and no `cluster=` raises
+  `ValueError`, and DiD/TWFE with `wild_bootstrap` and
+  `n_bootstrap < 1` raise `ValueError`; TWFE's unit auto-cluster stays;
+  MultiPeriodDiD's warn-and-fallback stays until its 4.0 removal
+  (DEFERRED.md documents the limitation). The pinned fallback test
+  `test_did_wild_bootstrap_requires_cluster` flips BY DESIGN (its
+  CHANGELOG entry must say so). The roster guard is a dynamic sweep:
+  the set of estimators exposing `inference` in `get_params()` is
+  exactly {DifferenceInDifferences, MultiPeriodDiD,
+  TwoWayFixedEffects} - a future estimator gaining WCR must adopt the
+  selector or land its own row.
+
   The apparent `inference=` vs `n_bootstrap>0` split is NOT drift: an estimator
   whose bootstrap IS its inference method runs a different procedure -
   CallawaySantAnna an influence-function multiplier bootstrap, SunAbraham a
@@ -550,7 +570,14 @@ domain vocabulary, not drift.
 - `n_bootstrap` semantic unification [M-081]: `0` = bootstrap off wherever an
   analytical path exists; bootstrap-only estimators document their positive
   defaults. Counts stay tuned per estimator (999 light / 200 compute-heavy) -
-  NO numeric default changes.
+  NO numeric default changes. **Locked implementation decision
+  (2026-08-06, for the 2(d) PR-B)**: a shared `validate_n_bootstrap`
+  helper (non-negative int; rejects bool/None/negative; 0 stays legal
+  wherever it means off) is promoted to utils and applied to EVERY
+  estimator with a currently-unvalidated `n_bootstrap` - the roster is
+  GREP-DERIVED at PR-B implementation (known so far: CallawaySantAnna,
+  SunAbraham, EfficientDiD, ImputationDiD, TwoStageDiD, WooldridgeDiD,
+  ContinuousDiD, the DiD family, and StaggeredTripleDifference).
 - **Auto-cluster policy** [M-080], flips at 4.0: every panel estimator
   (required `unit` column) defaults to clustering at unit
   (Bertrand-Duflo-Mullainathan practice), setting `cluster_name` /
@@ -740,12 +767,18 @@ re-enumerate the cells' M-id lists:
    `EventStudyResults` downstream-consumability work (TODO.md row: the three
    consumers currently reject the unified container) lands before or inside
    this wave so the shims do not steer users into a dead end.
-6. 2(d): wrapper deprecations, the SCM introduction, the alias-diet
-   `__getattr__` shim + dieted-alias surface sweep (reader surfaces are
-   recorded in M-132..M-135's `code_refs`, the ledger-native home - this doc
-   carries no file inventory; the 2(d) PR starts from those `code_refs` and
-   additionally greps each dieted alias repo-wide), `n_bootstrap`, and the
-   wild-cluster-bootstrap roster guard.
+6. 2(d), split into TWO PRs (2026-08-06): PR-A - wrapper deprecations
+   [M-070..M-077], the SCM introduction [M-062], and the alias-diet
+   `__getattr__` shim [M-135] + dieted-alias surface sweep (reader
+   surfaces are recorded in M-132..M-135's `code_refs`, the
+   ledger-native home - this doc carries no file inventory; the PR
+   starts from those `code_refs` and additionally greps each dieted
+   alias repo-wide) (shipped: the eight wrapper shims +
+   `tests/test_v4_wrapper_shims.py`, the module `__getattr__` +
+   `tests/test_aliases.py`, SCM); then PR-B - the two inference-surface
+   policies, `n_bootstrap` semantic unification [M-081] and the
+   wild-cluster-bootstrap roster guard [M-096] (locked implementation
+   decisions live in section 7, per this section's boundary rule).
 7. Phase 3 merges (a)/(b)/(c) per the phase-3 cell.
 8. Phase 4: migration guide, the 3.9-cut checklist below, cut.
 

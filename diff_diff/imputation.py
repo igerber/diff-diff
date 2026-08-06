@@ -1392,6 +1392,11 @@ def imputation_did(
     """
     Convenience function for imputation DiD estimation.
 
+    .. deprecated:: 3.9
+        ``imputation_did()`` is deprecated and will be removed in 4.0
+        (row M-070). Construct the estimator instead:
+        ``ImputationDiD(...).fit(data, ...)``.
+
     This is a shortcut for creating an ImputationDiD estimator and calling fit().
 
     Parameters
@@ -1412,7 +1417,8 @@ def imputation_did(
         DEPRECATED (3.9, removed in 4.0; row M-021): forwarded to ``fit()``,
         which warns — aggregate post-fit via
         ``results.aggregate('event_study')`` instead. A plain wrapper call
-        (kwarg not supplied) never warns.
+        (kwarg not supplied) never fires the aggregate warning; since 3.9
+        every wrapper call fires the M-070 wrapper-deprecation warning.
     balance_e : int, optional
         DEPRECATED (3.9, removed in 4.0; row M-118): forwarded to ``fit()``,
         which warns — moves onto ``results.aggregate('event_study',
@@ -1447,6 +1453,12 @@ def imputation_did(
     >>> results.print_summary()
     >>> results.aggregate('event_study').summary()  # post-fit aggregation
     """
+    warnings.warn(
+        "imputation_did() is deprecated and will be removed in 4.0; "
+        "construct the estimator instead: ImputationDiD(...).fit(data, ...).",
+        FutureWarning,
+        stacklevel=2,
+    )
     est = ImputationDiD(vcov_type=vcov_type, **kwargs)
     return est.fit(
         data,

@@ -2347,6 +2347,11 @@ def two_stage_did(
     """
     Convenience function for two-stage DiD estimation.
 
+    .. deprecated:: 3.9
+        ``two_stage_did()`` is deprecated and will be removed in 4.0
+        (row M-071). Construct the estimator instead:
+        ``TwoStageDiD(...).fit(data, ...)``.
+
     This is a shortcut for creating a TwoStageDiD estimator and calling fit().
 
     Parameters
@@ -2367,7 +2372,8 @@ def two_stage_did(
         DEPRECATED (3.9, removed in 4.0; row M-022): forwarded to ``fit()``,
         which warns — aggregate post-fit via
         ``results.aggregate('event_study')`` instead. A plain wrapper call
-        (kwarg not supplied) never warns.
+        (kwarg not supplied) never fires the aggregate warning; since 3.9
+        every wrapper call fires the M-071 wrapper-deprecation warning.
     balance_e : int, optional
         DEPRECATED (3.9, removed in 4.0; row M-119): forwarded to ``fit()``,
         which warns — moves onto ``results.aggregate('event_study',
@@ -2400,6 +2406,12 @@ def two_stage_did(
     >>> results.print_summary()
     >>> results.aggregate('event_study').summary()  # post-fit aggregation
     """
+    warnings.warn(
+        "two_stage_did() is deprecated and will be removed in 4.0; "
+        "construct the estimator instead: TwoStageDiD(...).fit(data, ...).",
+        FutureWarning,
+        stacklevel=2,
+    )
     est = TwoStageDiD(vcov_type=vcov_type, **kwargs)
     return est.fit(
         data,

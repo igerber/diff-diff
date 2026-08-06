@@ -21,7 +21,11 @@ Most estimators have short aliases (``TROP`` already uses its short canonical na
 
 .. code-block:: python
 
-    from diff_diff import DiD, TWFE, EventStudy, SDiD, CS, CDiD, SA, BJS, Gardner, DDD, Stacked, Bacon
+    from diff_diff import DiD, TWFE, EventStudy, SDiD, CS, SA, BJS, DDD, SCM, Bacon
+
+``CDiD``, ``Gardner`` and ``Stacked`` are deprecated since 3.9 (they emit a
+``FutureWarning`` and are removed in 4.0) — use ``ContinuousDiD``,
+``TwoStageDiD`` and ``StackedDiD``.
 
 .. module:: diff_diff.estimators
 

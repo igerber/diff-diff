@@ -240,7 +240,7 @@ rows:
     warning: FutureWarning
     test_ref: tests/test_aggregate_contract.py
     code_refs: [diff_diff/imputation.py, diff_diff/imputation_aggregation.py, diff_diff/imputation_results.py, diff_diff/imputation_bootstrap.py, diff_diff/aggregation.py, diff_diff/results_base.py, diff_diff/honest_did.py, diff_diff/pretrends.py, diff_diff/practitioner.py, diff_diff/guides/llms-practitioner.txt]
-    notes: "Shimmed in 3.9: fit(aggregate=) warns via the shared NOT_SUPPLIED sentinel (plain fit() never warns; supplying ANY value, None included, warns - CS-style joint warning with balance_e [M-118], warn-and-still-work; the imputation_did wrapper forwards the sentinel so a plain wrapper call never warns). NO fit-time value validation existed and none is added (unknown strings silently act like None; the post-fit successor fails closed via the mixin vocabulary - a behavior improvement). The successor is a PANEL-BACKED lazy recompute kit: ES/group aggregation is a target-specific Theorem-3 recompute from the working panel + untreated FE model (no compact influence payload can honor a different balance_e), so the kit's bookkeeping holds REFERENCES to the SAME per-fit objects self._fit_data already retains for pretrend_test() - ZERO marginal memory and unchanged pickles via memoization (the _estimator_ref field already ships the panel; enumeration in the REGISTRY ImputationDiD Note). Value snapshots (treatment_groups copy, config scalars, a dataclasses.replace copy of survey_metadata, and the survey_df_seed/survey_df_final df channels) isolate recompute and the ES carrier from public-field mutation; aggregate() reads NOTHING mutable off the results object except the deliberate overall-quintet relay and the bootstrap_results gate. SUPPORTED SUBSET simple|event_study|group; calendar/'all' fail closed via the mixin; weights= rejected. Bootstrap fits: 'simple' RELAYS the stored percentile quintet verbatim (finite safe_inference t included) with a NaN df column, while the recompute levels fail closed (the per-target psi machinery makes replay tractable - a TODO row). The prior fail-closed-for-ALL-levels uniform-parity decision was superseded 2026-08-05 with the [M-027] per-level convergence; its rationale - never publish analytical provenance beside percentile inference - is honored by the NaN df column. Replicate-weight fits REPLAY the extracted _replicate_override_aggregates with a LEVEL-MATCHED stack ([overall, ES] or [overall, groups]): compute_replicate_refit_variance validates replicates jointly, so aggregate(L) reproduces fit(aggregate=L) exactly and a fit(aggregate='all') surface is NOT the equivalence target when a replicate NaNs on one family's targets; the same joint-stack coupling means migrating a replicate fit from fit(aggregate=) to plain fit changes the OVERALL row's se/CI/df on degenerate designs (documented migration delta, CHANGELOG + REGISTRY note (e) + a contract-test pin). pretrends=True + replicate: post-fit aggregate('event_study') raises the same NotImplementedError the fit-time gate raises (per-replicate lead refits unimplemented); group/simple still work. Simple relay: n = n_treated_obs with n_kind='obs' (the treated/control unit sets OVERLAP, so the CS/EDiD disjoint-units convention cannot apply - the StackedDiD carve-out class); df = the survey_df_final snapshot (what the stored overall inference received). Group rows record per-row df_used at each safe_inference call (additive row-dict key; the replicate override rewrites it, the bootstrap override clears it, the all-NaN cohort branch writes no key - consumers read via .get). The M-127 df_convention inert-config warning predicate is REVISED to reachability (pretrends AND not-replicate AND (deprecated fit-time ES/all supplied OR n_bootstrap <= 0)) because post-fit aggregate() made the old aggregate-keyed claim false; reachability-BASED, not exact - a fit whose bootstrap later fails (bootstrap_results=None) can still aggregate post-fit, so that corner warns spuriously (recorded on M-127 too). Container admission NOT widened: ImputationDiD is rejected BY DESIGN (no joint ES covariance - per-horizon conservative SEs only; see M-093). balance_e moves as its own row [M-118]."
+    notes: "Shimmed in 3.9: fit(aggregate=) warns via the shared NOT_SUPPLIED sentinel (plain fit() never warns; supplying ANY value, None included, warns - CS-style joint warning with balance_e [M-118], warn-and-still-work; the imputation_did wrapper forwards the sentinel so a plain wrapper call never fires the aggregate warning; since 3.9 the wrapper itself warns per [M-070]). NO fit-time value validation existed and none is added (unknown strings silently act like None; the post-fit successor fails closed via the mixin vocabulary - a behavior improvement). The successor is a PANEL-BACKED lazy recompute kit: ES/group aggregation is a target-specific Theorem-3 recompute from the working panel + untreated FE model (no compact influence payload can honor a different balance_e), so the kit's bookkeeping holds REFERENCES to the SAME per-fit objects self._fit_data already retains for pretrend_test() - ZERO marginal memory and unchanged pickles via memoization (the _estimator_ref field already ships the panel; enumeration in the REGISTRY ImputationDiD Note). Value snapshots (treatment_groups copy, config scalars, a dataclasses.replace copy of survey_metadata, and the survey_df_seed/survey_df_final df channels) isolate recompute and the ES carrier from public-field mutation; aggregate() reads NOTHING mutable off the results object except the deliberate overall-quintet relay and the bootstrap_results gate. SUPPORTED SUBSET simple|event_study|group; calendar/'all' fail closed via the mixin; weights= rejected. Bootstrap fits: 'simple' RELAYS the stored percentile quintet verbatim (finite safe_inference t included) with a NaN df column, while the recompute levels fail closed (the per-target psi machinery makes replay tractable - a TODO row). The prior fail-closed-for-ALL-levels uniform-parity decision was superseded 2026-08-05 with the [M-027] per-level convergence; its rationale - never publish analytical provenance beside percentile inference - is honored by the NaN df column. Replicate-weight fits REPLAY the extracted _replicate_override_aggregates with a LEVEL-MATCHED stack ([overall, ES] or [overall, groups]): compute_replicate_refit_variance validates replicates jointly, so aggregate(L) reproduces fit(aggregate=L) exactly and a fit(aggregate='all') surface is NOT the equivalence target when a replicate NaNs on one family's targets; the same joint-stack coupling means migrating a replicate fit from fit(aggregate=) to plain fit changes the OVERALL row's se/CI/df on degenerate designs (documented migration delta, CHANGELOG + REGISTRY note (e) + a contract-test pin). pretrends=True + replicate: post-fit aggregate('event_study') raises the same NotImplementedError the fit-time gate raises (per-replicate lead refits unimplemented); group/simple still work. Simple relay: n = n_treated_obs with n_kind='obs' (the treated/control unit sets OVERLAP, so the CS/EDiD disjoint-units convention cannot apply - the StackedDiD carve-out class); df = the survey_df_final snapshot (what the stored overall inference received). Group rows record per-row df_used at each safe_inference call (additive row-dict key; the replicate override rewrites it, the bootstrap override clears it, the all-NaN cohort branch writes no key - consumers read via .get). The M-127 df_convention inert-config warning predicate is REVISED to reachability (pretrends AND not-replicate AND (deprecated fit-time ES/all supplied OR n_bootstrap <= 0)) because post-fit aggregate() made the old aggregate-keyed claim false; reachability-BASED, not exact - a fit whose bootstrap later fails (bootstrap_results=None) can still aggregate post-fit, so that corner warns spuriously (recorded on M-127 too). Container admission NOT widened: ImputationDiD is rejected BY DESIGN (no joint ES covariance - per-horizon conservative SEs only; see M-093). balance_e moves as its own row [M-118]."
   - id: M-022
     kind: param
     group: aggregate-postfit
@@ -254,7 +254,7 @@ rows:
     warning: FutureWarning
     test_ref: tests/test_aggregate_contract.py
     code_refs: [diff_diff/two_stage.py, diff_diff/two_stage_aggregation.py, diff_diff/two_stage_results.py, diff_diff/two_stage_bootstrap.py, diff_diff/aggregation.py, diff_diff/results_base.py, diff_diff/honest_did.py, diff_diff/pretrends.py, diff_diff/practitioner.py, diff_diff/guides/llms-practitioner.txt]
-    notes: "Shimmed in 3.9: fit(aggregate=) warns via the shared NOT_SUPPLIED sentinel (plain fit() never warns; supplying ANY value, None included, warns - CS-style joint warning with balance_e [M-119], warn-and-still-work; the two_stage_did wrapper forwards the sentinel so a plain wrapper call never warns). NO fit-time value validation existed and none is added (unknown strings silently act like None; the post-fit successor fails closed via the mixin vocabulary). The successor is a PANEL-BACKED lazy recompute kit: each level is a fresh Stage-2 OLS + joint Gardner-GMM sandwich, so the kit retains a COLUMN-SUBSET COPY of the working frame (only the columns the moved methods read by name, deduplicated - cluster= may legally name the unit/time/first_treat column) plus the Stage-1 FE model, masks, and survey objects. MEMORY CONTRACT: this is the FIRST panel retention on TwoStageDiD results - O(n_obs) incl. unit/time/cluster identifier columns on every results object and pickle, and replicate designs additionally retain the (n_obs x R) replicate matrix via resolved_survey; the CS/EDiD identifier-minimization guarantee deliberately does NOT hold (a store_kit opt-out is a DEFERRED row). score_pad_mask/cluster_ids_full are stored as the Wave-E.3-GATED values fit actually passed. Value snapshots (treatment_groups copy, overall_att, survey_df_stage2/survey_df_final, a dataclasses.replace copy of survey_metadata) isolate recompute and the ES carrier from public-field mutation. SUPPORTED SUBSET simple|event_study|group; calendar/'all' fail closed; weights= rejected. Bootstrap fits: 'simple' RELAYS the stored percentile quintet verbatim (finite safe_inference t included) with a NaN df column, while the recompute levels fail closed (per-level GMM scores are function-locals; replay is a TODO row) - the prior uniform fail-closed decision superseded 2026-08-05 with the [M-027] per-level convergence; a fit whose bootstrap FAILED (bootstrap_results=None, analytical inference retained) aggregates normally. Replicate-weight fits REPLAY the extracted _replay_replicate_inference with a LEVEL-MATCHED stack - aggregate(L) reproduces fit(aggregate=L) exactly; fit(aggregate='all') is NOT the equivalence target on degenerate designs, and the same joint-stack coupling makes the migration to plain fit change the OVERALL row's se/CI/df there (documented migration delta). Post-fit aggregate('event_study') reproduces the M-092 container contract exactly: analytical fits thread the recomputed joint vcov + vcov_index + the finite-and->0 df scalar through the carrier; replicate fits thread vcov=None/index=None with the REPLAYED level-matched df. Simple relay: n = n_treated_obs with n_kind='obs' (overlapping unit sets - StackedDiD carve-out class); df = the survey_df_final snapshot (on replicate fits that value came from the [overall]-only stack - snapshotted, never re-derived). Group relay df is a SCALAR broadcast (deliberate divergence from ImputationDiD's per-row df_used: _stage2_group passes one immutable survey_df to every row, so the scalar is provenance-exact by construction and the moved method stays verbatim). Container admission NOT widened: DEFERRED pending a normalization derivation - analytical surfaces carry the real joint Gardner-GMM covariance (M-092), but pre-period coefficients are stage-1 residual means, not reference-normalized contrasts, while HonestDiD's Delta arithmetic hard-codes delta_0=0 (see M-093 + the DEFERRED.md paper-gated row). balance_e moves as its own row [M-119]."
+    notes: "Shimmed in 3.9: fit(aggregate=) warns via the shared NOT_SUPPLIED sentinel (plain fit() never warns; supplying ANY value, None included, warns - CS-style joint warning with balance_e [M-119], warn-and-still-work; the two_stage_did wrapper forwards the sentinel so a plain wrapper call never fires the aggregate warning; since 3.9 the wrapper itself warns per [M-071]). NO fit-time value validation existed and none is added (unknown strings silently act like None; the post-fit successor fails closed via the mixin vocabulary). The successor is a PANEL-BACKED lazy recompute kit: each level is a fresh Stage-2 OLS + joint Gardner-GMM sandwich, so the kit retains a COLUMN-SUBSET COPY of the working frame (only the columns the moved methods read by name, deduplicated - cluster= may legally name the unit/time/first_treat column) plus the Stage-1 FE model, masks, and survey objects. MEMORY CONTRACT: this is the FIRST panel retention on TwoStageDiD results - O(n_obs) incl. unit/time/cluster identifier columns on every results object and pickle, and replicate designs additionally retain the (n_obs x R) replicate matrix via resolved_survey; the CS/EDiD identifier-minimization guarantee deliberately does NOT hold (a store_kit opt-out is a DEFERRED row). score_pad_mask/cluster_ids_full are stored as the Wave-E.3-GATED values fit actually passed. Value snapshots (treatment_groups copy, overall_att, survey_df_stage2/survey_df_final, a dataclasses.replace copy of survey_metadata) isolate recompute and the ES carrier from public-field mutation. SUPPORTED SUBSET simple|event_study|group; calendar/'all' fail closed; weights= rejected. Bootstrap fits: 'simple' RELAYS the stored percentile quintet verbatim (finite safe_inference t included) with a NaN df column, while the recompute levels fail closed (per-level GMM scores are function-locals; replay is a TODO row) - the prior uniform fail-closed decision superseded 2026-08-05 with the [M-027] per-level convergence; a fit whose bootstrap FAILED (bootstrap_results=None, analytical inference retained) aggregates normally. Replicate-weight fits REPLAY the extracted _replay_replicate_inference with a LEVEL-MATCHED stack - aggregate(L) reproduces fit(aggregate=L) exactly; fit(aggregate='all') is NOT the equivalence target on degenerate designs, and the same joint-stack coupling makes the migration to plain fit change the OVERALL row's se/CI/df there (documented migration delta). Post-fit aggregate('event_study') reproduces the M-092 container contract exactly: analytical fits thread the recomputed joint vcov + vcov_index + the finite-and->0 df scalar through the carrier; replicate fits thread vcov=None/index=None with the REPLAYED level-matched df. Simple relay: n = n_treated_obs with n_kind='obs' (overlapping unit sets - StackedDiD carve-out class); df = the survey_df_final snapshot (on replicate fits that value came from the [overall]-only stack - snapshotted, never re-derived). Group relay df is a SCALAR broadcast (deliberate divergence from ImputationDiD's per-row df_used: _stage2_group passes one immutable survey_df to every row, so the scalar is provenance-exact by construction and the moved method stays verbatim). Container admission NOT widened: DEFERRED pending a normalization derivation - analytical surfaces carry the real joint Gardner-GMM covariance (M-092), but pre-period coefficients are stage-1 residual means, not reference-normalized contrasts, while HonestDiD's Delta arithmetic hard-codes delta_0=0 (see M-093 + the DEFERRED.md paper-gated row). balance_e moves as its own row [M-119]."
   - id: M-023
     kind: param
     group: aggregate-postfit
@@ -780,10 +780,11 @@ rows:
     introduced_in: "3.9"
     deprecated_in: null
     removed_in: null
-    status: planned
+    status: done
     phase: 2
-    code_refs: [diff_diff/__init__.py]
-    notes: "Introduce-only. 'SC' rejected: one transposition from the existing CS alias. TROP/LPDiD are self-aliased acronyms; no rows."
+    test_ref: tests/test_aliases.py
+    code_refs: [diff_diff/__init__.py, docs/api/estimators.rst, diff_diff/guides/llms-full.txt, diff_diff/guides/llms.txt]
+    notes: "Introduce-only. 'SC' rejected: one transposition from the existing CS alias. TROP/LPDiD are self-aliased acronyms; no rows. Shipped in 2(d) PR-A: SCM = SyntheticControl in module globals + __all__ + the guide/API alias rosters."
   - id: M-063
     kind: alias
     group: alias-table
@@ -807,11 +808,12 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
+    test_ref: tests/test_v4_wrapper_shims.py
     warning: FutureWarning
-    code_refs: [diff_diff/imputation.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt, docs/methodology/REGISTRY.md]
-    notes: "Use ImputationDiD. Only 8 of 24 estimators ever had wrappers; the surface is retired rather than completed."
+    code_refs: [diff_diff/imputation.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt, docs/methodology/REGISTRY.md, docs/api/imputation.rst]
+    notes: "Use ImputationDiD. Only 8 of 24 estimators ever had wrappers; the surface is retired rather than completed. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9."
   - id: M-071
     kind: function
     group: function-wrappers
@@ -819,11 +821,12 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
+    test_ref: tests/test_v4_wrapper_shims.py
     warning: FutureWarning
-    code_refs: [diff_diff/two_stage.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt, docs/methodology/REGISTRY.md]
-    notes: "Use TwoStageDiD."
+    code_refs: [diff_diff/two_stage.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt, docs/methodology/REGISTRY.md, docs/api/two_stage.rst]
+    notes: "Use TwoStageDiD. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9."
   - id: M-072
     kind: function
     group: function-wrappers
@@ -831,11 +834,12 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
+    test_ref: tests/test_v4_wrapper_shims.py
     warning: FutureWarning
-    code_refs: [diff_diff/stacked_did.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt]
-    notes: "Use StackedDiD."
+    code_refs: [diff_diff/stacked_did.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt, docs/api/stacked_did.rst]
+    notes: "Use StackedDiD. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9."
   - id: M-073
     kind: function
     group: function-wrappers
@@ -843,11 +847,12 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
+    test_ref: tests/test_v4_wrapper_shims.py
     warning: FutureWarning
-    code_refs: [diff_diff/trop.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt]
-    notes: "Use TROP."
+    code_refs: [diff_diff/trop.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt, docs/api/trop.rst, docs/tutorials/10_trop.ipynb]
+    notes: "Use TROP. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9."
   - id: M-074
     kind: function
     group: function-wrappers
@@ -855,11 +860,12 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
+    test_ref: tests/test_v4_wrapper_shims.py
     warning: FutureWarning
-    code_refs: [diff_diff/synthetic_control.py, diff_diff/__init__.py, diff_diff/practitioner.py, docs/methodology/REGISTRY.md]
-    notes: "Use SyntheticControl."
+    code_refs: [diff_diff/synthetic_control.py, diff_diff/__init__.py, diff_diff/practitioner.py, docs/methodology/REGISTRY.md, diff_diff/guides/llms-full.txt, docs/api/synthetic_control.rst, tests/test_methodology_synthetic_control.py]
+    notes: "Use SyntheticControl. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9."
   - id: M-075
     kind: function
     group: function-wrappers
@@ -867,11 +873,12 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
+    test_ref: tests/test_v4_wrapper_shims.py
     warning: FutureWarning
-    code_refs: [diff_diff/triple_diff.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt]
-    notes: "Use TripleDifference."
+    code_refs: [diff_diff/triple_diff.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt, docs/api/triple_diff.rst, docs/tutorials/08_triple_diff.ipynb]
+    notes: "Use TripleDifference. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9."
   - id: M-076
     kind: function
     group: function-wrappers
@@ -879,11 +886,12 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
+    test_ref: tests/test_v4_wrapper_shims.py
     warning: FutureWarning
-    code_refs: [diff_diff/bacon.py, diff_diff/__init__.py, diff_diff/diagnostic_report.py, docs/methodology/REPORTING.md, docs/methodology/REGISTRY.md, diff_diff/guides/llms-autonomous.txt, diff_diff/guides/llms-full.txt, diff_diff/visualization/_diagnostic.py, diff_diff/twfe.py]
-    notes: "Use BaconDecomposition. twowayfeweights stays - it is a diagnostic function, not a class duplicate."
+    code_refs: [diff_diff/bacon.py, diff_diff/__init__.py, diff_diff/diagnostic_report.py, docs/methodology/REPORTING.md, docs/methodology/REGISTRY.md, diff_diff/guides/llms-autonomous.txt, diff_diff/guides/llms-full.txt, diff_diff/visualization/_diagnostic.py, diff_diff/twfe.py, docs/api/bacon.rst, docs/tutorials/02_staggered_did.ipynb, docs/tutorials/09_real_world_examples.ipynb]
+    notes: "Use BaconDecomposition. twowayfeweights stays - it is a diagnostic function, not a class duplicate. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9. Internal callers migrated to the class (diagnostic_report runner + emitted guidance in twfe/visualization); message uses diagnostic wording (BaconDecompositionResults subclasses the Diagnostic marker)."
   - id: M-077
     kind: function
     group: function-wrappers
@@ -891,11 +899,12 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
+    test_ref: tests/test_v4_wrapper_shims.py
     warning: FutureWarning
-    code_refs: [diff_diff/chaisemartin_dhaultfoeuille.py, diff_diff/__init__.py]
-    notes: "Use ChaisemartinDHaultfoeuille."
+    code_refs: [diff_diff/chaisemartin_dhaultfoeuille.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt, docs/api/chaisemartin_dhaultfoeuille.rst]
+    notes: "Use ChaisemartinDHaultfoeuille. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9."
 
   - id: M-086
     kind: param-value
@@ -1569,7 +1578,7 @@ rows:
     status: planned
     phase: 5
     code_refs: [diff_diff/__init__.py, docs/api/estimators.rst, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, tests/test_aliases.py]
-    notes: "Alias diet 2026-07-31: not an established literature name and one edit from CiC/DiD/DCDH. Target class survives, so no parent-class shim can carry the warning - the 3.9 FutureWarning rides the module __getattr__ shim ([M-135]); removal at 4.0. code_refs list the known reader surfaces (section 8 rule 11); the 2d/removal PRs also grep repo-wide."
+    notes: "Alias diet 2026-07-31: not an established literature name and one edit from CiC/DiD/DCDH. Target class survives, so no parent-class shim can carry the warning - the 3.9 FutureWarning rides the module __getattr__ shim ([M-135]); removal at 4.0. code_refs list the known reader surfaces (section 8 rule 11); the 2d/removal PRs also grep repo-wide; 3.9 FutureWarning live via [M-135] since 2(d) PR-A."
   - id: M-133
     kind: alias
     group: alias-table
@@ -1582,7 +1591,7 @@ rows:
     status: planned
     phase: 5
     code_refs: [diff_diff/__init__.py, docs/api/estimators.rst, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, diff_diff/guides/llms-autonomous.txt, tests/test_aliases.py, diff_diff/diagnostic_report.py, diff_diff/business_report.py, diff_diff/power.py]
-    notes: "Alias diet 2026-07-31: a vague English adjective saving three characters over StackedDiD, with zero lookup value. Target class survives - the 3.9 FutureWarning rides the module __getattr__ shim ([M-135]); removal at 4.0. code_refs list the known reader surfaces; the 2d/removal PRs also grep repo-wide."
+    notes: "Alias diet 2026-07-31: a vague English adjective saving three characters over StackedDiD, with zero lookup value. Target class survives - the 3.9 FutureWarning rides the module __getattr__ shim ([M-135]); removal at 4.0. code_refs list the known reader surfaces; the 2d/removal PRs also grep repo-wide; 3.9 FutureWarning live via [M-135] since 2(d) PR-A."
   - id: M-134
     kind: alias
     group: alias-table
@@ -1595,7 +1604,7 @@ rows:
     status: planned
     phase: 5
     code_refs: [diff_diff/__init__.py, docs/api/estimators.rst, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, diff_diff/guides/llms-autonomous.txt, tests/test_aliases.py, diff_diff/diagnostic_report.py, diff_diff/practitioner.py, diff_diff/business_report.py]
-    notes: "Alias diet 2026-07-31: author surname as a class name; the ecosystem name for the method is did2s and 'Gardner (2022)' prose citations are unaffected. Target class survives - the 3.9 FutureWarning rides the module __getattr__ shim ([M-135]); removal at 4.0. code_refs list the known reader surfaces; the 2d/removal PRs also grep repo-wide."
+    notes: "Alias diet 2026-07-31: author surname as a class name; the ecosystem name for the method is did2s and 'Gardner (2022)' prose citations are unaffected. Target class survives - the 3.9 FutureWarning rides the module __getattr__ shim ([M-135]); removal at 4.0. code_refs list the known reader surfaces; the 2d/removal PRs also grep repo-wide; 3.9 FutureWarning live via [M-135] since 2(d) PR-A."
   - id: M-135
     kind: behavior
     group: alias-table
@@ -1604,10 +1613,11 @@ rows:
     introduced_in: "3.9"
     deprecated_in: null
     removed_in: null
-    status: planned
+    status: done
     phase: 2
+    test_ref: tests/test_aliases.py
     code_refs: [diff_diff/__init__.py]
-    notes: "Alias-diet warning mechanism: CDiD/Stacked/Gardner served via a PEP 562 module __getattr__ emitting FutureWarning naming the surviving class. Names stay in __all__ through 3.9 but leave module globals: dir()/vars() shrink symmetrically (test_dir_returns_full_module_namespace unaffected) and star-import fires the three warnings - accepted diet behavior, documented in v4-design section 3.2. Ships in phase 2d; test_due_rows_are_terminal forces it terminal before any 3.9 bump. Removals are [M-132]..[M-134]."
+    notes: "Alias-diet warning mechanism: CDiD/Stacked/Gardner served via a PEP 562 module __getattr__ emitting FutureWarning naming the surviving class. Names stay in __all__ through 3.9 but leave module globals: dir()/vars() shrink symmetrically (test_dir_returns_full_module_namespace unaffected) and star-import fires the alias warnings - SIX recorded under simplefilter('always'), not three: the package import protocol resolves each missing __all__ name twice (_handle_fromlist hasattr-probe, then the IMPORT_STAR getattr), so the test asserts the message SET, not a count - accepted diet behavior, documented in v4-design section 3.2. Shipped in 2(d) PR-A. Removals are [M-132]..[M-134]."
   - id: M-136
     kind: param-value
     group: renames-level

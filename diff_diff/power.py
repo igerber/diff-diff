@@ -2079,9 +2079,9 @@ def simulate_power(
         When provided, generates survey-structured data via
         ``generate_survey_did_data`` and injects ``SurveyDesign`` into
         estimator ``fit()``. Mutually exclusive with ``data_generator``.
-        Supported estimators: DiD, TWFE, MultiPeriod, CS, SA, Imputation,
-        TwoStage, Stacked, Efficient. Unsupported: TROP, SyntheticDiD,
-        TripleDifference. ``heterogeneous_te_by_strata`` must be False.
+        Supported estimators: DiD, TWFE, MultiPeriod, CS, SA, ImputationDiD,
+        TwoStageDiD, StackedDiD, EfficientDiD. Unsupported: TROP,
+        SyntheticDiD, TripleDifference. ``heterogeneous_te_by_strata`` must be False.
 
     Returns
     -------

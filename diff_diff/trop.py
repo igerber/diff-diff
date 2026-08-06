@@ -962,6 +962,10 @@ def trop(
     """
     Convenience function for TROP estimation.
 
+    .. deprecated:: 3.9
+        ``trop()`` is deprecated and will be removed in 4.0 (row M-073).
+        Construct the estimator instead: ``TROP(...).fit(data, ...)``.
+
     Parameters
     ----------
     data : pd.DataFrame
@@ -997,5 +1001,11 @@ def trop(
     >>> results = trop(data, 'y', 'treated', 'unit', 'time')
     >>> print(f"ATT: {results.att:.3f}")
     """
+    warnings.warn(
+        "trop() is deprecated and will be removed in 4.0; "
+        "construct the estimator instead: TROP(...).fit(data, ...).",
+        FutureWarning,
+        stacklevel=2,
+    )
     estimator = TROP(**kwargs)
     return estimator.fit(data, outcome, treatment, unit, time, survey_design=survey_design)

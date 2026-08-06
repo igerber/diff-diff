@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Deprecated
+- **The 8 estimator convenience wrappers + the CDiD/Gardner/Stacked alias
+  diet; new `SCM` alias** (v4 program 2(d) PR-A; ledger rows
+  [M-070]..[M-077] shimmed, [M-062] + [M-135] done, notes amendments to
+  [M-021]/[M-022] and [M-132]..[M-134]). The module-level wrapper
+  functions `imputation_did`, `two_stage_did`, `stacked_did`, `trop`,
+  `synthetic_control`, `triple_difference`, `bacon_decompose`, and
+  `chaisemartin_dhaultfoeuille` are deprecated (3.9, removed in 4.0):
+  every call now emits a `FutureWarning` naming the class successor -
+  classes are the single canonical construction surface (only 8 of 24
+  estimators ever had wrappers, so the surface retires rather than
+  completes; `twowayfeweights` stays - a diagnostic function, not a
+  class duplicate). The wrappers remain pure construct+fit relays -
+  results are bit-identical to the class path (pinned across the full
+  inference quintet in `tests/test_v4_wrapper_shims.py`), and the
+  `aggregate`/`balance_e` sentinel forwarding is unchanged (a plain
+  wrapper call fires exactly ONE warning - the wrapper deprecation;
+  four `test_plain_wrapper_call_does_not_warn`-style pins flipped BY
+  DESIGN to expect it). The `DiagnosticReport` Bacon runner migrated to
+  `BaconDecomposition` internally (numbers identical). ALIAS DIET: the
+  `CDiD`/`Gardner`/`Stacked` aliases are deprecated (3.9, removed 4.0;
+  rows M-132..M-134) - they leave module globals (gone from `dir()`
+  and static autocomplete) but stay importable and in `__all__`,
+  served by a new PEP 562 module `__getattr__` ([M-135]) that warns and
+  returns `ContinuousDiD`/`TwoStageDiD`/`StackedDiD`; a star-import
+  records the three alias warnings twice each (the package import
+  protocol resolves each missing `__all__` name twice - the tests
+  assert the message set, not the count). NEW: `SCM =
+  SyntheticControl` ([M-062], introduce-only). Emitted-guidance
+  register: `practitioner_next_steps()` recommendation strings now use
+  full class names (e.g. "CallawaySantAnna, SunAbraham, or
+  TwoStageDiD" instead of "CS, SA, or Gardner") and its
+  `output["estimator"]` display label for TwoStageDiD results is now
+  "TwoStageDiD" (previously "TwoStageDiD (Gardner)"); the
+  BusinessReport/DiagnosticReport Bacon caveats name classes likewise.
+
 ### Added
 - **HeterogeneousAdoptionDiD post-fit `aggregate()` + panel-shape mode
   inference, and the per-level bootstrap-gate convergence** (v4 program 2(b)
@@ -122,7 +158,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `fit()` never warns; supplying ANY value (None included) warns once;
     the deprecated path still returns exactly the numbers it always did.
     The `imputation_did`/`two_stage_did` wrappers forward the sentinel,
-    so plain wrapper calls never warn. Unknown `aggregate` strings keep
+    so plain wrapper calls never fire the aggregate warning (since 3.9
+    every wrapper call fires its own M-070/M-071 wrapper-deprecation
+    warning instead). Unknown `aggregate` strings keep
     silently acting like None on the deprecated path; the post-fit
     successor fails closed on unknown types - a behavior improvement.
   - MEMORY CONTRACT: ImputationDiD's kit references the SAME per-fit
@@ -245,7 +283,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     inert (CS-style warn-and-still-work - results are identical to a
     plain fit's), and the `group`/`all`/unknown-value `ValueError`s
     persist after the warning. The `stacked_did()` convenience wrapper
-    forwards the shim. `StackedDiDResults.aggregate()` ships as a pure
+    forwards the shim (a plain wrapper call fires only the M-072
+    wrapper-deprecation warning since 3.9). `StackedDiDResults.aggregate()` ships as a pure
     VIEW: `'event_study'` returns the unified container (with
     `base_period='universal'` and singleton `reference_event_times`
     provenance - one omitted reference per fit by construction);
@@ -519,7 +558,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `guides/*.txt`, and `docs/methodology/`. The guard's first run completed 26
   rows' `code_refs` with newly confirmed readers (e.g. `diagnostics.py`'s
   `fit(time=...)` call sites on [M-030], `diagnostic_report.py`'s bare
-  `bacon_decompose(...)` call on [M-076], the packaged-guide readers of
+  `bacon_decompose(...)` call on [M-076] (that internal call migrated to
+  the class form in the 2(d) PR-A), the packaged-guide readers of
   `cohort`/`aggregation`/the wrapper functions), rule 11 gained the
   token-family `code_refs` union clause, and the `plot_group_effects` cohort
   selector joined the section-8 domain-vocabulary carve-outs. Wired into the
@@ -741,7 +781,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ImputationDiD↔TwoStageDiD merge, and a moderate **alias diet** — `CDiD`,
   `Stacked` and `Gardner` are deprecated at 3.9 and removed at 4.0
   (ledger rows M-132..M-134), with the 3.9 `FutureWarning` carried by a
-  module-level `__getattr__` (M-135, ships in phase 2d) because the
+  module-level `__getattr__` (M-135, shipped by the 2(d) PR-A) because the
   target classes survive; `EDiD` was initially slated but retained (review
   evidence: it is the Chen-Sant'Anna-Xie paper's own estimator label); the
   never-shipped `Spillover` alias introduction is

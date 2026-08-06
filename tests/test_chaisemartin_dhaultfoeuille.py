@@ -210,14 +210,15 @@ class TestChaisemartinDHaultfoeuilleBasicAPI:
             time="period",
             treatment="treatment",
         )
-        results_fn = chaisemartin_dhaultfoeuille(
-            data,
-            outcome="outcome",
-            group="group",
-            time="period",
-            treatment="treatment",
-            seed=1,
-        )
+        with pytest.warns(FutureWarning, match=r"chaisemartin_dhaultfoeuille\(\) is deprecated"):
+            results_fn = chaisemartin_dhaultfoeuille(
+                data,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                seed=1,
+            )
         # Same point estimate
         assert results_class.overall_att == pytest.approx(results_fn.overall_att)
         assert results_class.overall_se == pytest.approx(results_fn.overall_se)
@@ -244,18 +245,21 @@ class TestChaisemartinDHaultfoeuilleBasicAPI:
                 treatment="treatment",
                 L_max=3,
             )
-            r_fn = chaisemartin_dhaultfoeuille(
-                df,
-                outcome="outcome",
-                group="group",
-                time="period",
-                treatment="treatment",
-                drop_larger_lower=False,
-                paths_of_interest=[(0, 1, 1, 1), (0, 1, 0, 0)],
-                twfe_diagnostic=False,
-                seed=42,
-                L_max=3,
-            )
+            with pytest.warns(
+                FutureWarning, match=r"chaisemartin_dhaultfoeuille\(\) is deprecated"
+            ):
+                r_fn = chaisemartin_dhaultfoeuille(
+                    df,
+                    outcome="outcome",
+                    group="group",
+                    time="period",
+                    treatment="treatment",
+                    drop_larger_lower=False,
+                    paths_of_interest=[(0, 1, 1, 1), (0, 1, 0, 0)],
+                    twfe_diagnostic=False,
+                    seed=42,
+                    L_max=3,
+                )
         # Both surfaces produce identical per-path effects.
         assert list(r_fn.path_effects.keys()) == list(r_class.path_effects.keys())
         for path in r_fn.path_effects:
@@ -489,16 +493,18 @@ class TestForwardCompatGates:
         assert est_default.get_params()["cluster"] is None
 
         # The convenience function also rejects (forward-compat gate
-        # propagates through the wrapper at __init__ time)
-        with pytest.raises(NotImplementedError, match=pattern):
-            chaisemartin_dhaultfoeuille(
-                data,
-                outcome="outcome",
-                group="group",
-                time="period",
-                treatment="treatment",
-                cluster="state",
-            )
+        # propagates through the wrapper at __init__ time; the wrapper
+        # deprecation warning fires first)
+        with pytest.warns(FutureWarning, match=r"chaisemartin_dhaultfoeuille\(\) is deprecated"):
+            with pytest.raises(NotImplementedError, match=pattern):
+                chaisemartin_dhaultfoeuille(
+                    data,
+                    outcome="outcome",
+                    group="group",
+                    time="period",
+                    treatment="treatment",
+                    cluster="state",
+                )
 
     def test_rank_deficient_action_error_raises_on_fitted_twfe(self):
         """

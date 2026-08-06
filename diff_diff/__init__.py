@@ -20,6 +20,9 @@ This library provides sklearn-like estimators for causal inference using
 the difference-in-differences methodology.
 """
 
+import warnings as _warnings
+from typing import Any as _Any
+
 # Import backend detection from dedicated module (avoids circular imports)
 from diff_diff._backend import (
     HAS_RUST_BACKEND,
@@ -318,13 +321,10 @@ TWFE = TwoWayFixedEffects
 EventStudy = MultiPeriodDiD
 SDiD = SyntheticDiD
 CS = CallawaySantAnna
-CDiD = ContinuousDiD
 SA = SunAbraham
 BJS = ImputationDiD
-Gardner = TwoStageDiD
 DDD = TripleDifference
 SDDD = StaggeredTripleDifference
-Stacked = StackedDiD
 Bacon = BaconDecomposition
 EDiD = EfficientDiD
 ETWFE = WooldridgeDiD
@@ -332,6 +332,34 @@ DCDH = ChaisemartinDHaultfoeuille
 HAD = HeterogeneousAdoptionDiD
 CiC = ChangesInChanges
 RDD = RegressionDiscontinuity
+SCM = SyntheticControl
+
+# Alias diet (rows M-132..M-134, mechanism M-135): CDiD / Gardner /
+# Stacked are deprecated in 3.9 and removed in 4.0. They deliberately
+# do NOT live in module globals — dir()/vars() no longer list them —
+# but stay importable (and in __all__) through 3.9, served by the PEP
+# 562 module __getattr__ below, which emits the FutureWarning naming
+# the surviving class.
+_DEPRECATED_ALIASES = {
+    "CDiD": "ContinuousDiD",
+    "Gardner": "TwoStageDiD",
+    "Stacked": "StackedDiD",
+}
+
+
+def __getattr__(name: str) -> _Any:
+    """PEP 562 warning shim for the dieted aliases (row M-135)."""
+    target = _DEPRECATED_ALIASES.get(name)
+    if target is not None:
+        _warnings.warn(
+            f"diff_diff.{name} is deprecated and will be removed in 4.0; "
+            f"use diff_diff.{target}.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        return globals()[target]
+    raise AttributeError(f"module 'diff_diff' has no attribute {name!r}")
+
 
 __version__ = "3.8.0"
 __all__ = [
@@ -353,7 +381,9 @@ __all__ = [
     "TROP",
     "SyntheticControl",
     "StackedDiD",
-    # Estimator aliases (short names)
+    # Estimator aliases (short names). CDiD / Gardner / Stacked are
+    # deprecated (M-132..M-134): still importable through 3.9 via the
+    # module __getattr__ (M-135), gone from module globals/dir().
     "DiD",
     "TWFE",
     "EventStudy",
@@ -367,6 +397,7 @@ __all__ = [
     "Gardner",
     "DDD",
     "SDDD",
+    "SCM",
     "Stacked",
     "Bacon",
     # Bacon Decomposition

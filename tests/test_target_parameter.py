@@ -357,11 +357,11 @@ class TestTargetParameterBaconDRIntegration:
     def test_dr_with_bacon_result_emits_target_parameter(self):
         import warnings
 
-        from diff_diff import DiagnosticReport, bacon_decompose, generate_staggered_data
+        from diff_diff import BaconDecomposition, DiagnosticReport, generate_staggered_data
 
         warnings.filterwarnings("ignore")
         df = generate_staggered_data(n_units=40, n_periods=5, seed=21)
-        bacon = bacon_decompose(
+        bacon = BaconDecomposition().fit(
             df,
             outcome="outcome",
             unit="unit",

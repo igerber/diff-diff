@@ -353,7 +353,8 @@ def plot_bacon(
     Parameters
     ----------
     results : BaconDecompositionResults
-        Results from BaconDecomposition.fit() or bacon_decompose().
+        Results from BaconDecomposition.fit() (or the deprecated
+        bacon_decompose() wrapper, removed in 4.0).
     plot_type : str, default="scatter"
         Type of plot to create:
         - "scatter": Scatter plot with estimates on x-axis, weights on y-axis
@@ -397,9 +398,9 @@ def plot_bacon(
     --------
     Scatter plot (default):
 
-    >>> from diff_diff import bacon_decompose, plot_bacon
-    >>> results = bacon_decompose(data, outcome='y', unit='id',
-    ...                           time='t', first_treat='first_treat')
+    >>> from diff_diff import BaconDecomposition, plot_bacon
+    >>> results = BaconDecomposition().fit(data, outcome='y', unit='id',
+    ...                                    time='t', first_treat='first_treat')
     >>> plot_bacon(results)
 
     Bar chart of weights by type:
@@ -422,8 +423,7 @@ def plot_bacon(
 
     See Also
     --------
-    bacon_decompose : Perform the decomposition
-    BaconDecomposition : Class-based interface
+    BaconDecomposition : Perform the decomposition
     """
     # Default colors
     if colors is None:

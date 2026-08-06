@@ -329,14 +329,15 @@ class TestStackedDiDSurvey:
         from diff_diff.stacked_did import stacked_did
 
         sd = SurveyDesign(weights="weight")
-        result = stacked_did(
-            staggered_survey_data,
-            "outcome",
-            "unit",
-            "time",
-            "first_treat",
-            survey_design=sd,
-        )
+        with pytest.warns(FutureWarning, match=r"stacked_did\(\) is deprecated"):
+            result = stacked_did(
+                staggered_survey_data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                survey_design=sd,
+            )
         assert result.survey_metadata is not None
 
     def test_summary_includes_survey(self, staggered_survey_data):
@@ -486,14 +487,15 @@ class TestBaconDecompositionSurvey:
         from diff_diff.bacon import bacon_decompose
 
         sd = SurveyDesign(weights="weight")
-        result = bacon_decompose(
-            staggered_survey_data,
-            "outcome",
-            "unit",
-            "time",
-            "first_treat",
-            survey_design=sd,
-        )
+        with pytest.warns(FutureWarning, match=r"bacon_decompose\(\) is deprecated"):
+            result = bacon_decompose(
+                staggered_survey_data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                survey_design=sd,
+            )
         assert result.survey_metadata is not None
 
 
@@ -633,15 +635,16 @@ class TestTripleDifferenceSurvey:
         from diff_diff.triple_diff import triple_difference
 
         sd = SurveyDesign(weights="weight")
-        result = triple_difference(
-            ddd_survey_data,
-            "outcome",
-            "group",
-            "partition",
-            "time",
-            estimation_method="reg",
-            survey_design=sd,
-        )
+        with pytest.warns(FutureWarning, match=r"triple_difference\(\) is deprecated"):
+            result = triple_difference(
+                ddd_survey_data,
+                "outcome",
+                "group",
+                "partition",
+                "time",
+                estimation_method="reg",
+                survey_design=sd,
+            )
         assert result.survey_metadata is not None
 
 

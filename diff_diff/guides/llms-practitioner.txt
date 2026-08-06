@@ -178,7 +178,7 @@ Route by ESTIMAND first, not by whether never-treated units happen
 to be present (HAD remains valid with a small never-treated share;
 see REGISTRY HeterogeneousAdoptionDiD edge cases):
 |-- Target estimand is per-dose ATT(d) / ACRT(d) curves (you want
-|        the dose-response function): ContinuousDiD (CDiD). Requires
+|        the dose-response function): ContinuousDiD. Requires
 |        a non-empty untreated comparison group — i.e. some units
 |        with dose == 0 throughout, encoded as either first_treat == 0
 |        or first_treat == inf (ContinuousDiD normalizes inf -> 0).
@@ -210,8 +210,8 @@ Is treatment adoption staggered (multiple cohorts, different timing)?
 |   |-- CallawaySantAnna (CS)  -- most general, doubly robust, recommended default
 |   |-- SunAbraham (SA)        -- interaction-weighted, good for event studies
 |   |-- ImputationDiD (BJS)    -- most efficient under homogeneous effects
-|   |-- TwoStageDiD (Gardner)  -- two-stage with GMM variance
-|   |-- StackedDiD (Stacked)   -- sub-experiment approach
+|   |-- TwoStageDiD            -- two-stage with GMM variance
+|   |-- StackedDiD             -- sub-experiment approach
 |   |-- EfficientDiD (EDiD)    -- optimal weighting for tighter SEs
 |   \-- WooldridgeDiD (ETWFE)  -- nonlinear outcomes (logit/Poisson) or saturated OLS
 |

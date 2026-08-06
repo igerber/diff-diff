@@ -31,11 +31,11 @@ from diff_diff import (
     DifferenceInDifferences,
     EfficientDiD,
     MultiPeriodDiD,
+    SyntheticControl,
     SyntheticDiD,
     generate_did_data,
     generate_factor_data,
     generate_staggered_data,
-    synthetic_control,
 )
 from diff_diff.diagnostic_report import (
     DIAGNOSTIC_REPORT_SCHEMA_VERSION,
@@ -165,17 +165,12 @@ def scm_fit():
     # global filter state for later tests in the same worker.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
-            df,
-            "y",
-            "treated",
-            "unit",
-            "year",
+        res = SyntheticControl(
             seed=0,
             n_starts=1,
             optimizer_options={"maxiter": 50},
             inner_min_decrease=1e-3,
-        )
+        ).fit(df, "y", "treated", "unit", "year")
     return res, df
 
 
@@ -293,7 +288,7 @@ class TestApplicabilityMatrix:
 
     def test_bacon_applicability_requires_all_column_kwargs(self, cs_fit):
         """Round-11 regression: Bacon needs the full ``outcome`` / ``time``
-        / ``unit`` / ``first_treat`` contract from ``bacon_decompose``."""
+        / ``unit`` / ``first_treat`` contract from ``BaconDecomposition.fit``."""
         fit, sdf = cs_fit
         dr = DiagnosticReport(
             fit,
@@ -2246,8 +2241,8 @@ class TestSCMNative:
         df = pd.DataFrame(rows)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            res = synthetic_control(
-                df, "y", "treated", "unit", "year", seed=0, n_starts=1, inner_min_decrease=1e-3
+            res = SyntheticControl(seed=0, n_starts=1, inner_min_decrease=1e-3).fit(
+                df, "y", "treated", "unit", "year"
             )
             res.in_space_placebo()  # only 1 donor -> infeasible
             native = DiagnosticReport(res).to_dict()["estimator_native_diagnostics"]
@@ -2619,7 +2614,7 @@ class TestSurveyDesignThreading:
 
     DR must:
       * accept a ``survey_design`` kwarg;
-      * thread it to ``bacon_decompose(survey_design=...)`` when the
+      * thread it to ``BaconDecomposition.fit(survey_design=...)`` when the
         user supplies it;
       * skip Bacon with an explicit reason when ``survey_metadata`` is
         set but ``survey_design`` is not supplied;
@@ -2804,7 +2799,7 @@ class TestSurveyDesignThreading:
 
     def test_survey_backed_staggered_threads_survey_design_to_bacon(self):
         """When ``survey_design`` is supplied, Bacon applicability flips
-        back to runnable and ``bacon_decompose`` is invoked with the
+        back to runnable and ``BaconDecomposition.fit`` is invoked with the
         survey design. Assert via ``unittest.mock.patch`` that the
         kwarg is forwarded.
         """
@@ -2830,7 +2825,12 @@ class TestSurveyDesignThreading:
         fake_decomp.twfe_estimate = 1.1
         fake_decomp.n_timing_groups = 2
 
-        with patch("diff_diff.bacon.bacon_decompose", return_value=fake_decomp) as m:
+        # 2(d) PR-A (M-076): the runner constructs BaconDecomposition
+        # directly, so the patch target and the assertion shape follow
+        # the class split - `weights` is a CONSTRUCTOR kwarg while
+        # `survey_design` stays a fit() kwarg.
+        with patch("diff_diff.bacon.BaconDecomposition") as m:
+            m.return_value.fit.return_value = fake_decomp
             dr = DiagnosticReport(
                 obj,
                 data=panel,
@@ -2845,11 +2845,14 @@ class TestSurveyDesignThreading:
             bacon = dr.to_dict()["bacon"]
             assert bacon["status"] == "ran"
             # The survey_design must be threaded through to
-            # bacon_decompose as a kwarg so the replayed decomposition
-            # matches the fitted design.
-            assert m.called, "bacon_decompose was not called"
-            _, kwargs = m.call_args
-            assert kwargs.get("survey_design") is sentinel_design
+            # BaconDecomposition.fit as a kwarg so the replayed
+            # decomposition matches the fitted design.
+            assert m.called, "BaconDecomposition was not constructed"
+            _, ctor_kwargs = m.call_args
+            assert ctor_kwargs.get("weights") == "exact"
+            assert m.return_value.fit.called, "BaconDecomposition.fit was not called"
+            _, fit_kwargs = m.return_value.fit.call_args
+            assert fit_kwargs.get("survey_design") is sentinel_design
 
 
 # ---------------------------------------------------------------------------
@@ -3395,3 +3398,18 @@ class TestStackedAlwaysComputedSurfaceCheckFlips:
         reason = pt.get("reason", "") + " ".join(str(v) for v in pt.values() if isinstance(v, str))
         assert "kappa_pre >= 2" in reason
         assert "aggregate='event_study'" not in reason
+
+
+class TestEmittedGuidanceCanonicalNames:
+    """2(d) PR-A per-site pin (user decision 2026-08-06): the executive
+    summary's Bacon caveat names estimators by full class name.
+    """
+
+    def test_bacon_caveat_uses_class_names(self):
+        import inspect
+
+        import diff_diff.diagnostic_report as dr_mod
+
+        source = inspect.getsource(dr_mod)
+        assert "(CS / SA / BJS / Gardner)" not in source
+        assert "heterogeneity-robust estimator (CallawaySantAnna, SunAbraham, " in source

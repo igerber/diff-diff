@@ -1728,3 +1728,90 @@ class TestCiCHandlerSpecificationPropagation:
         r0 = _mock_cic(att=0.5, estimator="cic", covariates=None, n_bootstrap=np.int64(0))
         output0 = practitioner_next_steps(r0, verbose=False)
         assert any("n_bootstrap=0" in w for w in output0["warnings"])
+
+
+class TestEmittedGuidanceCanonicalNames:
+    """2(d) PR-A per-site pins: emitted recommendation strings use full
+    class names (user decision 2026-08-06); the ``_ESTIMATOR_NAMES``
+    display map keeps kept-alias parentheticals but drops the DYING
+    Gardner one. Per-site assertions only - method/citation prose
+    (e.g. "Gardner 2022", "Stacked DiD") is deliberately untouched, so
+    no module-wide alias ban is asserted.
+    """
+
+    def test_compare_step_alternatives_use_class_names(self):
+        # Every _robustness_compare_step call site was migrated to full
+        # class names; the constructor embeds `alternatives` verbatim in
+        # the emitted label and code payloads.
+        import inspect
+
+        import diff_diff.practitioner as practitioner_mod
+
+        source = inspect.getsource(practitioner_mod)
+        migrated = [
+            '_robustness_compare_step("CallawaySantAnna, SunAbraham, or ImputationDiD")',
+            '_robustness_compare_step("SunAbraham, ImputationDiD, or TwoStageDiD")',
+            '_robustness_compare_step("CallawaySantAnna, ImputationDiD, or TwoStageDiD")',
+            '_robustness_compare_step("CallawaySantAnna, SunAbraham, or TwoStageDiD")',
+            '_robustness_compare_step("CallawaySantAnna, ImputationDiD, or SunAbraham")',
+            '_robustness_compare_step("SyntheticDiD or CallawaySantAnna")',
+        ]
+        for call in migrated:
+            assert call in source, f"missing migrated compare-step call: {call}"
+        # The old shorthand rosters are gone from compare-step calls.
+        import re
+
+        for stale in re.findall(r"_robustness_compare_step\(\"([^\"]+)\"\)", source):
+            for tok in ("CS", "SA", "BJS", "Gardner"):
+                assert not re.search(
+                    rf"\b{tok}\b", stale
+                ), f"compare-step roster still uses alias shorthand: {stale!r}"
+
+    def test_emitted_compare_step_label_uses_class_names(self):
+        # Behavioral arm: the constructed step embeds the roster in the
+        # emitted label/code strings.
+        from diff_diff.practitioner import _robustness_compare_step
+
+        step = _robustness_compare_step("CallawaySantAnna, SunAbraham, or ImputationDiD")
+        assert "CallawaySantAnna, SunAbraham, or ImputationDiD" in step["label"]
+        assert "CallawaySantAnna, SunAbraham, or ImputationDiD" in step["code"]
+
+    def test_falsification_why_payloads_use_class_names(self):
+        import inspect
+
+        import diff_diff.practitioner as practitioner_mod
+
+        source = inspect.getsource(practitioner_mod)
+        assert "compare with CS/SA as" not in source
+        assert source.count("compare with CallawaySantAnna/") == 2  # BJS + Gardner handler twins
+        assert "Use CS, SA, BJS, or another" not in source
+        assert "Use CallawaySantAnna, SunAbraham, " in source
+
+    def test_staggered_comparison_label_uses_class_names(self):
+        import inspect
+
+        import diff_diff.practitioner as practitioner_mod
+
+        source = inspect.getsource(practitioner_mod)
+        assert 'label="Compare with staggered estimators (CallawaySantAnna, SunAbraham)"' in source
+        assert "(CS, SA)" not in source
+
+    def test_estimator_display_map_drops_dying_gardner_parenthetical(self):
+        # Tier (ii): the display map keeps KEPT-alias parentheticals
+        # (DDD/HAD/CiC - pinned verbatim elsewhere) but carries no DYING
+        # alias token.
+        import re
+
+        from diff_diff.practitioner import _ESTIMATOR_NAMES
+
+        assert _ESTIMATOR_NAMES["TwoStageDiDResults"] == "TwoStageDiD"
+        for value in _ESTIMATOR_NAMES.values():
+            assert "Gardner" not in value, value
+            assert "CDiD" not in value, value
+            # `Stacked` only as part of StackedDiD (no "(Stacked)" parenthetical).
+            assert not re.search(r"\bStacked\b(?! ?DiD)", value.replace("StackedDiD", "")), value
+        # Kept parentheticals stay (deliberate kept-alias documentation).
+        assert _ESTIMATOR_NAMES["TripleDifferenceResults"] == "TripleDifference (DDD)"
+        assert _ESTIMATOR_NAMES["HeterogeneousAdoptionDiDResults"] == (
+            "HeterogeneousAdoptionDiD (HAD)"
+        )

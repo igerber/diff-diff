@@ -31,4 +31,9 @@
       ~ImputationDiD.seed
       ~ImputationDiD.anticipation
       ~ImputationDiD.horizon_max
+      ~ImputationDiD.pretrends
+      ~ImputationDiD.aux_partition
+      ~ImputationDiD.leave_one_out
+      ~ImputationDiD.rank_deficient_action
+      ~ImputationDiD.df_convention
 

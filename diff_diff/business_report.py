@@ -1652,8 +1652,8 @@ def _build_caveats(
     # Round-45 P1 CI review on PR #318: Goodman-Bacon is a
     # decomposition of TWFE weights (see ``bacon.py`` header and
     # Goodman-Bacon 2021). On fits already produced by a
-    # heterogeneity-robust estimator (CS / SA / BJS / Gardner /
-    # Wooldridge / EfficientDiD / Stacked / dCDH / TripleDifference /
+    # heterogeneity-robust estimator (CS / SA / BJS / TwoStageDiD /
+    # Wooldridge / EfficientDiD / StackedDiD / dCDH / TripleDifference /
     # StaggeredTripleDiff / SDiD / TROP), a high forbidden-weight share
     # says "TWFE would have been materially biased on this rollout",
     # not "the displayed estimator needs to be replaced" — the
@@ -1680,7 +1680,8 @@ def _build_caveats(
                         "later-vs-earlier comparisons. TWFE may be "
                         "materially biased under heterogeneous effects. "
                         "Re-estimate with a heterogeneity-robust "
-                        "estimator (CS / SA / BJS / Gardner)."
+                        "estimator (CallawaySantAnna, SunAbraham, "
+                        "ImputationDiD, or TwoStageDiD)."
                     )
                 else:
                     bacon_message = (

@@ -36,6 +36,7 @@
       ~ChaisemartinDHaultfoeuilleResults.design2_effects
       ~ChaisemartinDHaultfoeuilleResults.event_study_df
       ~ChaisemartinDHaultfoeuilleResults.event_study_effects
+      ~ChaisemartinDHaultfoeuilleResults.groups
       ~ChaisemartinDHaultfoeuilleResults.heterogeneity_effects
       ~ChaisemartinDHaultfoeuilleResults.honest_did_results
       ~ChaisemartinDHaultfoeuilleResults.is_significant

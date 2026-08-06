@@ -29,8 +29,9 @@
       ~StackedDiDResults.anticipation
       ~StackedDiDResults.att
       ~StackedDiDResults.balance
-      ~StackedDiDResults.base_period
       ~StackedDiDResults.balance_diagnostics
+      ~StackedDiDResults.base_period
+      ~StackedDiDResults.clean_control
       ~StackedDiDResults.cluster_name
       ~StackedDiDResults.coef_var
       ~StackedDiDResults.conf_int

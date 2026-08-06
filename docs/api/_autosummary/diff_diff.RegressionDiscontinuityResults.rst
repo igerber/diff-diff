@@ -45,6 +45,7 @@
       ~RegressionDiscontinuityResults.first_stage_t_stat
       ~RegressionDiscontinuityResults.first_stage_t_stat_bias_corrected
       ~RegressionDiscontinuityResults.first_stage_t_stat_conventional
+      ~RegressionDiscontinuityResults.treatment_col
       ~RegressionDiscontinuityResults.att
       ~RegressionDiscontinuityResults.se
       ~RegressionDiscontinuityResults.t_stat

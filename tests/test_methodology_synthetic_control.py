@@ -36,7 +36,6 @@ from diff_diff import (
     DiagnosticReport,
     SyntheticControl,
     SyntheticControlResults,
-    synthetic_control,
 )
 from diff_diff.conformal import (
     _block_collapse,
@@ -94,6 +93,20 @@ _FAST = dict(n_starts=1, optimizer_options={"maxiter": 50}, inner_min_decrease=1
 # Churn tests deliberately force inner non-convergence (inner_max_iter=1); KEEP that and only
 # cap the outer optimizer so it does not iterate to maxiter on the flat penalty landscape.
 _FAST_CHURN = dict(n_starts=1, optimizer_options={"maxiter": 5})
+
+
+def _synth_fit(data, outcome, treatment, unit, time, **kwargs):
+    """Construct-and-fit via the canonical class API (2(d) PR-A, M-074).
+
+    Migrated from the deprecated ``synthetic_control()`` wrapper: kwargs
+    are routed to ``SyntheticControl.__init__`` or ``fit()`` by
+    signature, exactly the class-API construction every call site now
+    exercises.
+    """
+    ctor_keys = set(SyntheticControl().get_params().keys())
+    ctor_kwargs = {k: v for k, v in kwargs.items() if k in ctor_keys}
+    fit_kwargs = {k: v for k, v in kwargs.items() if k not in ctor_keys}
+    return SyntheticControl(**ctor_kwargs).fit(data, outcome, treatment, unit, time, **fit_kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +230,7 @@ def test_non_binary_treatment_rejected():
     df = df.copy()
     df.loc[(df["unit"] == "d0") & (df["year"] == years[0]), "treated"] = 2
     with pytest.raises(ValueError, match="binary"):
-        synthetic_control(df, "y", "treated", "unit", "year", seed=0)
+        _synth_fit(df, "y", "treated", "unit", "year", seed=0)
 
 
 def test_missing_treatment_value_rejected():
@@ -227,7 +240,7 @@ def test_missing_treatment_value_rejected():
     df = df.copy()
     df.loc[(df["unit"] == "d0") & (df["year"] == years[0]), "treated"] = np.nan
     with pytest.raises(ValueError, match="missing"):
-        synthetic_control(df, "y", "treated", "unit", "year", seed=0)
+        _synth_fit(df, "y", "treated", "unit", "year", seed=0)
 
 
 def test_estimators_module_reexport():
@@ -246,12 +259,8 @@ def test_post_periods_canonicalized_and_gap_order_independent():
     df, years, T0 = _make_panel()
     ordered = years[T0:]
     scrambled = list(reversed(ordered)) + [ordered[-1]]  # unsorted + duplicate
-    r1 = synthetic_control(
-        df, "y", "treated", "unit", "year", post_periods=ordered, seed=0, **_FAST
-    )
-    r2 = synthetic_control(
-        df, "y", "treated", "unit", "year", post_periods=scrambled, seed=0, **_FAST
-    )
+    r1 = _synth_fit(df, "y", "treated", "unit", "year", post_periods=ordered, seed=0, **_FAST)
+    r2 = _synth_fit(df, "y", "treated", "unit", "year", post_periods=scrambled, seed=0, **_FAST)
     assert r1.post_periods == r2.post_periods == ordered
     assert abs(r1.att - r2.att) < 1e-12
     gdf = r2.get_gap_df()
@@ -267,9 +276,7 @@ def test_post_periods_canonicalized_and_gap_order_independent():
 
 def test_donor_pool_restricts_donors():
     df, years, T0 = _make_panel(n_donors=4)
-    res = synthetic_control(
-        df, "y", "treated", "unit", "year", donor_pool=["d0", "d1"], seed=0, **_FAST
-    )
+    res = _synth_fit(df, "y", "treated", "unit", "year", donor_pool=["d0", "d1"], seed=0, **_FAST)
     assert res.n_donors == 2
     assert set(res.get_weights_df()["unit"]) <= {"d0", "d1"}
 
@@ -278,7 +285,7 @@ def test_contaminated_donor_pool_rejected():
     df, years, T0 = _make_panel()
     # The treated unit itself must never appear in the donor pool.
     with pytest.raises(ValueError, match="treated unit|ever-treated|never-treated"):
-        synthetic_control(df, "y", "treated", "unit", "year", donor_pool=["d0", "treated"], seed=0)
+        _synth_fit(df, "y", "treated", "unit", "year", donor_pool=["d0", "treated"], seed=0)
 
 
 def test_ever_treated_donor_rejected():
@@ -287,7 +294,7 @@ def test_ever_treated_donor_rejected():
     df = df.copy()
     df.loc[(df["unit"] == "d0") & (df["year"] >= years[T0]), "treated"] = 1
     with pytest.raises(ValueError, match="ever-treated|never-treated"):
-        synthetic_control(
+        _synth_fit(
             df,
             "y",
             "treated",
@@ -367,7 +374,7 @@ def test_outer_v_nonconvergence_warning():
         # maxiter=1 forces the OUTER non-convergence; n_starts=1 + a loose inner tolerance
         # keep the (still-real) inner solves cheap. Loosening inner_min_decrease does not
         # affect whether the outer optimizer hits its 1-iteration cap.
-        synthetic_control(
+        _synth_fit(
             df,
             "y",
             "treated",
@@ -385,9 +392,7 @@ def test_inner_v_search_nonconvergence_warning():
     # inner_max_iter=1 makes them truncate, and the estimator emits an aggregated warning.
     df, _, _ = _make_panel()
     with pytest.warns(UserWarning, match="during nested V selection"):
-        synthetic_control(
-            df, "y", "treated", "unit", "year", seed=0, inner_max_iter=1, **_FAST_CHURN
-        )
+        _synth_fit(df, "y", "treated", "unit", "year", seed=0, inner_max_iter=1, **_FAST_CHURN)
 
 
 def test_single_inner_nonconvergence_excluded_from_v_ranking(monkeypatch):
@@ -416,7 +421,7 @@ def test_single_inner_nonconvergence_excluded_from_v_ranking(monkeypatch):
 
     monkeypatch.setattr(sc, "_inner_solve_W", patched)
     with pytest.warns(UserWarning, match="during nested V selection"):
-        res = synthetic_control(df, "y", "treated", "unit", "year", seed=0, **_FAST)
+        res = _synth_fit(df, "y", "treated", "unit", "year", seed=0, **_FAST)
 
     assert state["failed"]  # the patch actually fired on an objective evaluation
     assert np.isfinite(res.att)
@@ -429,7 +434,7 @@ def test_n_starts_one_runs():
     # n_starts=1 uses only the uniform start (short-circuits the heuristic candidates)
     # and still produces a valid nested fit.
     df, _, _ = _make_panel()
-    res = synthetic_control(
+    res = _synth_fit(
         df,
         "y",
         "treated",
@@ -453,7 +458,7 @@ def test_nested_production_defaults_smoke():
     # this stays non-slow. The @slow Tier-2 Basque test covers the defaults only in the Rust
     # matrix; this is the pure-Python complement.
     df, _, _ = _make_panel(n_donors=2)
-    res = synthetic_control(df, "y", "treated", "unit", "year", seed=0)  # production defaults
+    res = _synth_fit(df, "y", "treated", "unit", "year", seed=0)  # production defaults
     assert np.isfinite(res.att)
     assert abs(sum(res.donor_weights.values()) - 1.0) < 1e-6
     assert res.n_donors == 2
@@ -465,7 +470,7 @@ def test_non_finite_outcome_rejected():
     df = df.copy()
     df.loc[(df["unit"] == "d1") & (df["year"] == years[2]), "y"] = np.nan
     with pytest.raises(ValueError, match="non-finite"):
-        synthetic_control(df, "y", "treated", "unit", "year", seed=0)
+        _synth_fit(df, "y", "treated", "unit", "year", seed=0)
 
 
 def test_distinct_special_period_sets_not_duplicate():
@@ -508,7 +513,7 @@ def test_duplicate_predictor_window_periods_deduped():
     # A repeated period in predictor_window must not re-weight the mean: the
     # deduped window [y0,y0,y1] matches the explicit [y0,y1].
     df, years, T0 = _make_panel()
-    r_dup = synthetic_control(
+    r_dup = _synth_fit(
         df,
         "y",
         "treated",
@@ -519,7 +524,7 @@ def test_duplicate_predictor_window_periods_deduped():
         seed=0,
         **_FAST,
     )
-    r_uniq = synthetic_control(
+    r_uniq = _synth_fit(
         df,
         "y",
         "treated",
@@ -561,7 +566,7 @@ def test_poor_fit_warning():
         rows.append({"unit": "treated", "year": yr, "y": 50 + 2.0 * t, "treated": int(t >= T0)})
     df = pd.DataFrame(rows)
     with pytest.warns(UserWarning, match="Pre-treatment fit is poor"):
-        synthetic_control(df, "y", "treated", "unit", "year", seed=0, **_FAST)
+        _synth_fit(df, "y", "treated", "unit", "year", seed=0, **_FAST)
 
 
 def test_poor_fit_warning_flat_treated_pre_path():
@@ -580,7 +585,7 @@ def test_poor_fit_warning_flat_treated_pre_path():
         )
     df = pd.DataFrame(rows)
     with pytest.warns(UserWarning, match="Pre-treatment fit is poor"):
-        synthetic_control(df, "y", "treated", "unit", "year", seed=0, **_FAST)
+        _synth_fit(df, "y", "treated", "unit", "year", seed=0, **_FAST)
 
 
 # ---------------------------------------------------------------------------
@@ -628,7 +633,7 @@ def test_inner_nonconvergence_warning():
 
 def test_standardize_none_runs():
     df, _, _ = _make_panel()
-    res = synthetic_control(df, "y", "treated", "unit", "year", standardize="none", seed=0, **_FAST)
+    res = _synth_fit(df, "y", "treated", "unit", "year", standardize="none", seed=0, **_FAST)
     assert res.standardize == "none"
     assert np.isfinite(res.att)
 
@@ -670,7 +675,7 @@ def test_custom_v_wrong_length_rejected():
 def test_single_donor_degenerate_warns():
     df, _, _ = _make_panel(n_donors=1)
     with pytest.warns(UserWarning, match="single donor"):
-        res = synthetic_control(df, "y", "treated", "unit", "year", seed=0)
+        res = _synth_fit(df, "y", "treated", "unit", "year", seed=0)
     assert res.n_donors == 1
     assert abs(sum(res.donor_weights.values()) - 1.0) < 1e-9
 
@@ -686,7 +691,7 @@ def test_no_pre_period_rejected():
         rows.append({"unit": "treated", "year": yr, "y": 12.0 + yr, "treated": 1})
     df = pd.DataFrame(rows)
     with pytest.raises(ValueError, match="No pre-treatment periods|Cannot infer"):
-        synthetic_control(df, "y", "treated", "unit", "year", seed=0)
+        _synth_fit(df, "y", "treated", "unit", "year", seed=0)
 
 
 def test_single_pre_period_nested_warns():
@@ -700,7 +705,7 @@ def test_single_pre_period_nested_warns():
         rows.append({"unit": "treated", "year": yr, "y": 11.0 + i, "treated": int(i >= 1)})
     df = pd.DataFrame(rows)
     with pytest.warns(UserWarning, match="single pre period"):
-        synthetic_control(df, "y", "treated", "unit", "year", seed=0)
+        _synth_fit(df, "y", "treated", "unit", "year", seed=0)
 
 
 def test_multiple_treated_units_rejected():
@@ -708,7 +713,7 @@ def test_multiple_treated_units_rejected():
     df = df.copy()
     df.loc[(df["unit"] == "d0") & (df["year"] >= 2006), "treated"] = 1
     with pytest.raises(ValueError, match="exactly one"):
-        synthetic_control(df, "y", "treated", "unit", "year", seed=0)
+        _synth_fit(df, "y", "treated", "unit", "year", seed=0)
 
 
 # ---------------------------------------------------------------------------
@@ -749,7 +754,7 @@ def test_set_params_rolls_back_on_invalid():
 
 def test_nan_inference_contract():
     df, _, _ = _make_panel()
-    res = synthetic_control(df, "y", "treated", "unit", "year", seed=0, **_FAST)
+    res = _synth_fit(df, "y", "treated", "unit", "year", seed=0, **_FAST)
     assert_nan_inference(
         {"se": res.se, "t_stat": res.t_stat, "p_value": res.p_value, "conf_int": res.conf_int}
     )
@@ -758,7 +763,7 @@ def test_nan_inference_contract():
 
 def test_result_accessors_render():
     df, _, _ = _make_panel()
-    res = synthetic_control(df, "y", "treated", "unit", "year", seed=0, **_FAST)
+    res = _synth_fit(df, "y", "treated", "unit", "year", seed=0, **_FAST)
     assert isinstance(res, SyntheticControlResults)
     assert isinstance(res.summary(), str) and "Synthetic Control" in res.summary()
     assert "att" in res.to_dict()
@@ -778,10 +783,8 @@ def test_result_accessors_render():
 
 def test_inferred_post_matches_explicit():
     df, years, T0 = _make_panel()
-    r_inf = synthetic_control(df, "y", "treated", "unit", "year", seed=0, **_FAST)
-    r_exp = synthetic_control(
-        df, "y", "treated", "unit", "year", post_periods=years[T0:], seed=0, **_FAST
-    )
+    r_inf = _synth_fit(df, "y", "treated", "unit", "year", seed=0, **_FAST)
+    r_exp = _synth_fit(df, "y", "treated", "unit", "year", post_periods=years[T0:], seed=0, **_FAST)
     assert r_inf.post_periods == r_exp.post_periods == years[T0:]
     assert abs(r_inf.att - r_exp.att) < 1e-12
 
@@ -909,7 +912,7 @@ def _fit_for_placebo(n_donors=4, effect=3.0, **kw):
     opts.update(kw)
     with warnings.catch_warnings():  # single-donor / poor-fit fit warnings are not under test
         warnings.simplefilter("ignore")
-        return synthetic_control(df, "y", "treated", "unit", "year", seed=0, **opts)
+        return _synth_fit(df, "y", "treated", "unit", "year", seed=0, **opts)
 
 
 def test_in_space_placebo_strong_effect_ranks_treated_first():
@@ -1002,7 +1005,7 @@ def test_in_space_placebo_fails_closed_on_nonconverged_treated_fit():
     df, _, _ = _make_panel(n_donors=4, effect=3.0)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
+        res = _synth_fit(
             df,
             "y",
             "treated",
@@ -1070,7 +1073,7 @@ def test_in_space_placebo_custom_v_path():
     k = 6
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
+        res = _synth_fit(
             df,
             "y",
             "treated",
@@ -1131,7 +1134,7 @@ def test_in_space_placebo_perfect_treated_fit_finite_ratio():
     df = pd.DataFrame(rows)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
+        res = _synth_fit(
             df,
             "y",
             "treated",
@@ -1154,7 +1157,7 @@ def test_in_space_placebo_immune_to_post_fit_mutation():
     opts = {"maxiter": 50}
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
+        res = _synth_fit(
             df,
             "y",
             "treated",
@@ -1220,7 +1223,7 @@ def test_in_space_placebo_fails_closed_on_underoptimized_outer_v():
     df, _, _ = _make_panel(n_donors=4, effect=3.0)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
+        res = _synth_fit(
             df,
             "y",
             "treated",
@@ -1265,7 +1268,7 @@ def test_outer_v_convergence_tracks_selected_incumbent(monkeypatch):
     df, _, _ = _make_panel(n_donors=4)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
+        res = _synth_fit(
             df, "y", "treated", "unit", "year", seed=0, n_starts=2, inner_min_decrease=1e-3
         )
     # The winning incumbent came from a success=False run -> selected V is not a
@@ -1304,7 +1307,7 @@ def test_outer_v_powell_success_at_worse_point_does_not_validate(monkeypatch):
     df, _, _ = _make_panel(n_donors=4)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
+        res = _synth_fit(
             df, "y", "treated", "unit", "year", seed=0, n_starts=1, inner_min_decrease=1e-3
         )
     # Powell's success at a worse point must NOT flip the selected incumbent to converged.
@@ -1336,7 +1339,7 @@ def test_summary_distinguishes_infeasible_placebo_from_not_run():
     df, _, _ = _make_panel(n_donors=1)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(df, "y", "treated", "unit", "year", seed=0, **_FAST)
+        res = _synth_fit(df, "y", "treated", "unit", "year", seed=0, **_FAST)
         before = res.summary()
         res.in_space_placebo()  # infeasible: single donor -> no placebo distribution
         after = res.summary()
@@ -1356,7 +1359,7 @@ def test_summary_treated_fit_failure_names_specific_reason():
     df, _, _ = _make_panel(n_donors=4)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
+        res = _synth_fit(
             df,
             "y",
             "treated",
@@ -1458,7 +1461,7 @@ def _single_donor_panel(n_donors=4, T=8, T0=6, effect=3.0, seed=2):
 def _fit_cheap(df):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        return synthetic_control(df, "y", "treated", "unit", "year", seed=0, **_FAST)
+        return _synth_fit(df, "y", "treated", "unit", "year", seed=0, **_FAST)
 
 
 _LOO_COLS = ["dropped_unit", "att", "pre_rmspe", "post_rmspe", "rmspe_ratio", "delta_att", "status"]
@@ -1544,7 +1547,7 @@ def test_leave_one_out_fails_closed_on_nonconverged_treated_fit():
     df, _, _ = _make_panel(n_donors=4, effect=3.0)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
+        res = _synth_fit(
             df, "y", "treated", "unit", "year", seed=0, inner_max_iter=1, **_FAST_CHURN
         )
     assert res._fit_converged is False
@@ -1674,7 +1677,7 @@ def test_truncate_snapshot_custom_v_lockstep():
     df, _, _ = _make_panel(n_donors=4)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
+        res = _synth_fit(
             df,
             "y",
             "treated",
@@ -1698,7 +1701,7 @@ def test_truncate_snapshot_straddling_window_partial_keep():
     df, _, _ = _make_panel(n_donors=4)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
+        res = _synth_fit(
             df,
             "y",
             "treated",
@@ -1731,7 +1734,7 @@ def test_truncate_snapshot_infeasible_all_specs_dropped():
     df, _, _ = _make_panel(n_donors=4)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
+        res = _synth_fit(
             df,
             "y",
             "treated",
@@ -1888,7 +1891,7 @@ def test_in_time_placebo_custom_v_zero_mass_is_infeasible_not_failed():
     v = np.array([0.0, 0.0, 0.0, 1.0, 1.0, 1.0])  # all mass on the 2003/2004/2005 lags
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
+        res = _synth_fit(
             df,
             "y",
             "treated",
@@ -1938,7 +1941,7 @@ def test_in_time_placebo_windowed_covariate_dropped_and_warns():
     df, _, _ = _make_panel(n_donors=4)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
+        res = _synth_fit(
             df,
             "y",
             "treated",
@@ -1959,7 +1962,7 @@ def test_in_time_placebo_all_specs_dropped_infeasible():
     df, _, _ = _make_panel(n_donors=4)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
+        res = _synth_fit(
             df,
             "y",
             "treated",
@@ -1981,7 +1984,7 @@ def test_in_time_placebo_custom_v_runs_without_shape_error():
     df, _, _ = _make_panel(n_donors=4)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
+        res = _synth_fit(
             df,
             "y",
             "treated",
@@ -2004,7 +2007,7 @@ def test_in_time_placebo_accepts_2d_custom_v():
     v2d = v1d.reshape(1, 6)  # row-vector form accepted at fit time
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res1 = synthetic_control(
+        res1 = _synth_fit(
             df,
             "y",
             "treated",
@@ -2014,7 +2017,7 @@ def test_in_time_placebo_accepts_2d_custom_v():
             custom_v=v1d,
             inner_min_decrease=1e-3,
         )
-        res2 = synthetic_control(
+        res2 = _synth_fit(
             df,
             "y",
             "treated",
@@ -2042,7 +2045,7 @@ def test_in_time_placebo_fails_closed_on_nonconverged_treated_fit():
     df, _, _ = _make_panel(n_donors=4, effect=3.0)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
+        res = _synth_fit(
             df, "y", "treated", "unit", "year", seed=0, inner_max_iter=1, **_FAST_CHURN
         )
     assert res._fit_converged is False
@@ -2117,7 +2120,7 @@ def test_leave_one_out_matches_fresh_reduced_pool_fit():
     v = np.arange(1.0, 7.0)  # k = 6 default lag predictors; fixed V -> deterministic
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
+        res = _synth_fit(
             df,
             "y",
             "treated",
@@ -2132,7 +2135,7 @@ def test_leave_one_out_matches_fresh_reduced_pool_fit():
     d = [x for x in donor_ids if x in res.donor_weights][0]  # a positively-weighted donor
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        fresh = synthetic_control(
+        fresh = _synth_fit(
             df,
             "y",
             "treated",
@@ -2152,7 +2155,7 @@ def test_in_time_placebo_matches_fresh_backdated_fit():
     v = np.arange(1.0, 7.0)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
+        res = _synth_fit(
             df,
             "y",
             "treated",
@@ -2170,7 +2173,7 @@ def test_in_time_placebo_matches_fresh_backdated_fit():
     back["treated"] = ((back["unit"] == "treated") & (back["year"] >= 2003)).astype(int)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        fresh = synthetic_control(
+        fresh = _synth_fit(
             back,
             "y",
             "treated",
@@ -2463,8 +2466,8 @@ def test_inverse_variance_fit_is_deterministic_and_searchless():
     df, _, _ = _make_panel(n_donors=4)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        r1 = synthetic_control(df, "y", "treated", "unit", "year", v_method="inverse_variance")
-        r2 = synthetic_control(df, "y", "treated", "unit", "year", v_method="inverse_variance")
+        r1 = _synth_fit(df, "y", "treated", "unit", "year", v_method="inverse_variance")
+        r2 = _synth_fit(df, "y", "treated", "unit", "year", v_method="inverse_variance")
     assert r1.mspe_v is None  # no outer search ran
     assert r1.att == r2.att  # fully deterministic (no rng)
     assert r1.donor_weights == r2.donor_weights
@@ -2479,7 +2482,7 @@ def test_inverse_variance_weights_equal_inverse_row_variance():
     df, _, _ = _make_panel(n_donors=4)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(df, "y", "treated", "unit", "year", v_method="inverse_variance")
+        res = _synth_fit(df, "y", "treated", "unit", "year", v_method="inverse_variance")
     snap = res._fit_snapshot
     X1, X0, labels = sc._build_predictor_matrix(
         snap.pivots, snap.specs, snap.treated_id, snap.donor_ids
@@ -2537,14 +2540,14 @@ def test_inverse_variance_matches_paper_objective():
     df, _, _ = _make_panel(n_donors=4)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(df, "y", "treated", "unit", "year", v_method="inverse_variance")
+        res = _synth_fit(df, "y", "treated", "unit", "year", v_method="inverse_variance")
         snap = res._fit_snapshot
         X1, X0, labels = sc._build_predictor_matrix(
             snap.pivots, snap.specs, snap.treated_id, snap.donor_ids
         )
         k = X1.shape[0]
         v_iv = sc._inverse_variance_v(X1, X0)
-        res_uniform_std = synthetic_control(
+        res_uniform_std = _synth_fit(
             df,
             "y",
             "treated",
@@ -2554,7 +2557,7 @@ def test_inverse_variance_matches_paper_objective():
             custom_v=np.ones(k),
             standardize="std",
         )
-        res_invvar_none = synthetic_control(
+        res_invvar_none = _synth_fit(
             df,
             "y",
             "treated",
@@ -2573,7 +2576,7 @@ def test_inverse_variance_matches_paper_objective():
     # a DIFFERENT result, so this test actually discriminates the fix.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res_double = synthetic_control(
+        res_double = _synth_fit(
             df,
             "y",
             "treated",
@@ -2621,7 +2624,7 @@ def test_inverse_variance_zero_variance_row_gets_zero_weight():
     df, years = _panel_with_constant_lag(constant_years={2001})
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(df, "y", "treated", "unit", "year", v_method="inverse_variance")
+        res = _synth_fit(df, "y", "treated", "unit", "year", v_method="inverse_variance")
     assert res.v_weights["y_2001"] == pytest.approx(0.0, abs=1e-12)
     assert sum(res.v_weights.values()) == pytest.approx(1.0, abs=1e-9)
     assert any(v > 0 for k, v in res.v_weights.items() if k != "y_2001")
@@ -2635,7 +2638,7 @@ def test_inverse_variance_all_zero_variance_falls_back_to_uniform():
         warnings.simplefilter("ignore")
         warnings.simplefilter("always", UserWarning)
         with pytest.warns(UserWarning, match="no usable predictor variance"):
-            res = synthetic_control(df, "y", "treated", "unit", "year", v_method="inverse_variance")
+            res = _synth_fit(df, "y", "treated", "unit", "year", v_method="inverse_variance")
     vals = list(res.v_weights.values())
     assert np.allclose(vals, 1.0 / len(vals))
 
@@ -2647,7 +2650,7 @@ def test_inverse_variance_single_donor_returns_uniform_v():
     # inert here). The fit warns rather than silently relabeling.
     df, _, _ = _make_panel(n_donors=1)
     with pytest.warns(UserWarning, match="uniform regardless of v_method"):
-        res = synthetic_control(df, "y", "treated", "unit", "year", v_method="inverse_variance")
+        res = _synth_fit(df, "y", "treated", "unit", "year", v_method="inverse_variance")
     assert res.n_donors == 1
     assert abs(sum(res.donor_weights.values()) - 1.0) < 1e-9
     vw = list(res.v_weights.values())
@@ -2697,16 +2700,14 @@ def test_inverse_variance_in_time_placebo_matches_fresh_backdated_fit():
     df, _, _ = _make_panel(n_donors=4)  # pre = 2000..2005 (default per-period lags)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
-            df, "y", "treated", "unit", "year", v_method="inverse_variance", **_FAST
-        )
+        res = _synth_fit(df, "y", "treated", "unit", "year", v_method="inverse_variance", **_FAST)
         itp = res.in_time_placebo([2004])  # pre-fake = {2000..2003}
     placebo_att = itp.loc[itp["placebo_period"] == 2004, "placebo_att"].iloc[0]
     back = df[df["year"] <= 2005].copy()
     back["treated"] = ((back["unit"] == "treated") & (back["year"] >= 2004)).astype(int)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        fresh = synthetic_control(
+        fresh = _synth_fit(
             back, "y", "treated", "unit", "year", v_method="inverse_variance", **_FAST
         )
     assert placebo_att == pytest.approx(fresh.att, abs=1e-7)
@@ -2728,7 +2729,7 @@ def _fit_cv(df, *, specs=_CV_SPANNING, **kw):
     opts.update(kw)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        return synthetic_control(
+        return _synth_fit(
             df, "y", "treated", "unit", "year", v_method="cv", special_predictors=specs, **opts
         )
 
@@ -2740,7 +2741,7 @@ def test_cv_rejects_non_spanning_predictors():
     # with guidance to pass spanning predictors.
     df, _, _ = _make_panel(n_donors=4)
     with pytest.raises(ValueError, match="span BOTH the training"):
-        synthetic_control(df, "y", "treated", "unit", "year", v_method="cv", seed=0, **_FAST)
+        _synth_fit(df, "y", "treated", "unit", "year", v_method="cv", seed=0, **_FAST)
 
 
 def test_cv_runs_and_reports_validation_mspe():
@@ -2766,7 +2767,7 @@ def test_cv_t0_out_of_range_raises():
     # The t0-range check fires before the predictor-precondition check.
     df, _, _ = _make_panel(n_donors=4)  # 6 pre periods -> valid 1..5
     with pytest.raises(ValueError, match="out of range"):
-        synthetic_control(
+        _synth_fit(
             df,
             "y",
             "treated",
@@ -2792,7 +2793,7 @@ def test_cv_requires_two_pre_periods():
         rows.append({"unit": "treated", "year": yr, "y": 11.0 + i, "treated": int(i >= 1)})
     df = pd.DataFrame(rows)
     with pytest.raises(ValueError, match="requires at least 2 pre-treatment periods"):
-        synthetic_control(df, "y", "treated", "unit", "year", v_method="cv", **_FAST)
+        _synth_fit(df, "y", "treated", "unit", "year", v_method="cv", **_FAST)
 
 
 def test_cv_single_donor_validates_and_surfaces_v_cv_t0():
@@ -2802,7 +2803,7 @@ def test_cv_single_donor_validates_and_surfaces_v_cv_t0():
     # predictors keep the cv precondition satisfied so we exercise the J==1 path itself.
     df, _, _ = _make_panel(n_donors=1)  # 6 pre periods 2000-2005
     with pytest.raises(ValueError, match="out of range"):
-        synthetic_control(
+        _synth_fit(
             df,
             "y",
             "treated",
@@ -2815,7 +2816,7 @@ def test_cv_single_donor_validates_and_surfaces_v_cv_t0():
         )
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")  # degenerate single-donor warning
-        res = synthetic_control(
+        res = _synth_fit(
             df,
             "y",
             "treated",
@@ -2874,7 +2875,7 @@ def test_cv_reaggregation_matches_custom_v_per_window_steps():
     assert all(tp != vp for (_, tp, _), (_, vp, _) in zip(train_reagg, val_reagg))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        fin = synthetic_control(
+        fin = _synth_fit(
             df,
             "y",
             "treated",
@@ -2885,7 +2886,7 @@ def test_cv_reaggregation_matches_custom_v_per_window_steps():
             custom_v=v_star,
             inner_min_decrease=1e-3,
         )
-        tr = synthetic_control(
+        tr = _synth_fit(
             df,
             "y",
             "treated",
@@ -2965,7 +2966,7 @@ def test_cv_in_time_placebo_matches_fresh_backdated_fit():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         # backdated pre-fake = {2000..2003}; the spanning specs truncated to that window.
-        fresh = synthetic_control(
+        fresh = _synth_fit(
             back,
             "y",
             "treated",
@@ -2990,7 +2991,7 @@ def test_cv_v_cv_t0_surfaced_on_results_and_serialized():
     res_explicit = _fit_cv(df, v_cv_t0=2, seed=0)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res_nested = synthetic_control(df, "y", "treated", "unit", "year", seed=0, **_FAST)
+        res_nested = _synth_fit(df, "y", "treated", "unit", "year", seed=0, **_FAST)
     # Resolved value: None constructor -> len(pre)//2 = 3; explicit -> 2; non-cv -> None.
     assert res_default.v_cv_t0 == 3
     assert res_explicit.v_cv_t0 == 2
@@ -3030,7 +3031,7 @@ def test_cv_in_time_placebo_empty_window_is_infeasible_not_failed():
     df = pd.DataFrame(rows)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
+        res = _synth_fit(
             df,
             "y",
             "treated",
@@ -3159,7 +3160,7 @@ def test_cv_fails_closed_when_training_solve_truncates(specs):
     df, _, _ = _make_panel(n_donors=4)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = synthetic_control(
+        res = _synth_fit(
             df,
             "y",
             "treated",
@@ -3208,7 +3209,7 @@ def test_leave_one_out_cv_branch_and_fresh_reduced_pool_parity(monkeypatch):
     reduced = df[df["unit"] != dropped].copy()
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        fresh = synthetic_control(
+        fresh = _synth_fit(
             reduced,
             "y",
             "treated",

@@ -2077,18 +2077,19 @@ class TestTROPSurvey:
             )
 
     def test_convenience_function_with_survey(self, trop_survey_data, survey_design_weights):
-        """trop() convenience function accepts survey_design."""
-        result = trop(
-            trop_survey_data,
-            outcome="outcome",
-            treatment="D",
-            unit="unit",
-            time="time",
-            survey_design=survey_design_weights,
-            n_bootstrap=10,
-            seed=42,
-            max_iter=5,
-        )
+        """KEEP (2(d) PR-A, M-073): the deprecated wrapper threads survey_design."""
+        with pytest.warns(FutureWarning, match=r"trop\(\) is deprecated"):
+            result = trop(
+                trop_survey_data,
+                outcome="outcome",
+                treatment="D",
+                unit="unit",
+                time="time",
+                survey_design=survey_design_weights,
+                n_bootstrap=10,
+                seed=42,
+                max_iter=5,
+            )
         assert result.survey_metadata is not None
 
     def test_to_dict_includes_survey(self, trop_survey_data, survey_design_weights):

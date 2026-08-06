@@ -17,6 +17,33 @@ from diff_diff import (
 )
 
 
+def _bacon_fit(
+    data,
+    outcome=None,
+    unit=None,
+    time=None,
+    first_treat=None,
+    *,
+    weights="exact",
+    survey_design=None,
+    **kw,
+):
+    """Construct-and-fit via the canonical class API (2(d) PR-A, M-076).
+
+    Migrated from the deprecated ``bacon_decompose()`` wrapper: ``weights``
+    is a constructor kwarg, everything else goes to ``fit()``.
+    """
+    return BaconDecomposition(weights=weights).fit(
+        data,
+        outcome=outcome,
+        unit=unit,
+        time=time,
+        first_treat=first_treat,
+        survey_design=survey_design,
+        **kw,
+    )
+
+
 def generate_staggered_data(
     n_units: int = 100,
     n_periods: int = 10,
@@ -102,7 +129,7 @@ class TestBaconDecomposition:
         """Test that decomposition weights sum to approximately 1."""
         data = generate_staggered_data(seed=123)
 
-        results = bacon_decompose(
+        results = _bacon_fit(
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
@@ -117,7 +144,7 @@ class TestBaconDecomposition:
         """
         data = generate_staggered_data(seed=456)
 
-        results = bacon_decompose(
+        results = _bacon_fit(
             data,
             outcome="outcome",
             unit="unit",
@@ -137,7 +164,7 @@ class TestBaconDecomposition:
         """Test that all three comparison types are identified."""
         data = generate_staggered_data(n_cohorts=3, never_treated_frac=0.3)
 
-        results = bacon_decompose(
+        results = _bacon_fit(
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
@@ -152,7 +179,7 @@ class TestBaconDecomposition:
         """Test decomposition with no never-treated units."""
         data = generate_staggered_data(never_treated_frac=0.0)
 
-        results = bacon_decompose(
+        results = _bacon_fit(
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
@@ -164,7 +191,7 @@ class TestBaconDecomposition:
         """Test with single treatment cohort."""
         data = generate_staggered_data(n_cohorts=1, never_treated_frac=0.3)
 
-        results = bacon_decompose(
+        results = _bacon_fit(
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
@@ -177,7 +204,7 @@ class TestBaconDecomposition:
         """Test weight_by_type method."""
         data = generate_staggered_data()
 
-        results = bacon_decompose(
+        results = _bacon_fit(
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
@@ -192,7 +219,7 @@ class TestBaconDecomposition:
         """Test effect_by_type method."""
         data = generate_staggered_data()
 
-        results = bacon_decompose(
+        results = _bacon_fit(
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
@@ -206,7 +233,7 @@ class TestBaconDecomposition:
         """Test conversion to DataFrame."""
         data = generate_staggered_data()
 
-        results = bacon_decompose(
+        results = _bacon_fit(
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
@@ -224,7 +251,7 @@ class TestBaconDecomposition:
         """Test summary generation."""
         data = generate_staggered_data()
 
-        results = bacon_decompose(
+        results = _bacon_fit(
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
@@ -239,7 +266,7 @@ class TestBaconDecomposition:
         data = generate_staggered_data()
 
         with pytest.raises(ValueError, match="Missing columns"):
-            bacon_decompose(
+            _bacon_fit(
                 data, outcome="nonexistent", unit="unit", time="time", first_treat="first_treat"
             )
 
@@ -296,15 +323,21 @@ class TestTWFEIntegration:
 
 
 class TestBaconDecomposeFunction:
-    """Tests for bacon_decompose convenience function."""
+    """Tests for the DEPRECATED bacon_decompose convenience wrapper.
+
+    KEEP (2(d) PR-A, M-076): these stay on the wrapper path - the
+    wrapper survives until 4.0 and only these tests exercise it here -
+    updated for its new deprecation FutureWarning.
+    """
 
     def test_convenience_function(self):
-        """Test that convenience function works."""
+        """The deprecated wrapper still works, and warns."""
         data = generate_staggered_data()
 
-        results = bacon_decompose(
-            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
-        )
+        with pytest.warns(FutureWarning, match="bacon_decompose\\(\\) is deprecated"):
+            results = bacon_decompose(
+                data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+            )
 
         assert isinstance(results, BaconDecompositionResults)
 
@@ -318,7 +351,7 @@ class TestVisualization:
         from diff_diff import plot_bacon
 
         data = generate_staggered_data()
-        results = bacon_decompose(
+        results = _bacon_fit(
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
@@ -332,7 +365,7 @@ class TestVisualization:
         from diff_diff import plot_bacon
 
         data = generate_staggered_data()
-        results = bacon_decompose(
+        results = _bacon_fit(
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
@@ -346,7 +379,7 @@ class TestVisualization:
         from diff_diff import plot_bacon
 
         data = generate_staggered_data()
-        results = bacon_decompose(
+        results = _bacon_fit(
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
@@ -420,7 +453,7 @@ class TestWeightsParameter:
         """Test that exact and approximate weights can differ."""
         data = generate_staggered_data(seed=123, n_cohorts=3)
 
-        results_approx = bacon_decompose(
+        results_approx = _bacon_fit(
             data,
             outcome="outcome",
             unit="unit",
@@ -429,7 +462,7 @@ class TestWeightsParameter:
             weights="approximate",
         )
 
-        results_exact = bacon_decompose(
+        results_exact = _bacon_fit(
             data,
             outcome="outcome",
             unit="unit",
@@ -448,7 +481,7 @@ class TestWeightsParameter:
         """Test that exact weights generally have lower decomposition error."""
         data = generate_staggered_data(seed=456, n_cohorts=3)
 
-        results_approx = bacon_decompose(
+        results_approx = _bacon_fit(
             data,
             outcome="outcome",
             unit="unit",
@@ -457,7 +490,7 @@ class TestWeightsParameter:
             weights="approximate",
         )
 
-        results_exact = bacon_decompose(
+        results_exact = _bacon_fit(
             data,
             outcome="outcome",
             unit="unit",
@@ -476,17 +509,19 @@ class TestWeightsParameter:
             BaconDecomposition(weights="invalid")
 
     def test_convenience_function_weights_param(self):
-        """Test that convenience function accepts weights parameter."""
+        """KEEP (M-076): the deprecated wrapper's weights= routing to
+        the constructor - a property only the wrapper path exercises."""
         data = generate_staggered_data()
 
-        results = bacon_decompose(
-            data,
-            outcome="outcome",
-            unit="unit",
-            time="time",
-            first_treat="first_treat",
-            weights="exact",
-        )
+        with pytest.warns(FutureWarning, match="bacon_decompose\\(\\) is deprecated"):
+            results = bacon_decompose(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                weights="exact",
+            )
 
         assert isinstance(results, BaconDecompositionResults)
 
@@ -545,9 +580,7 @@ class TestBalancedPanelWarning:
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            bacon_decompose(
-                data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
-            )
+            _bacon_fit(data, outcome="outcome", unit="unit", time="time", first_treat="first_treat")
 
             # Should have warning about unbalanced panel
             unbalanced_warnings = [x for x in w if "unbalanced" in str(x.message).lower()]
@@ -559,9 +592,7 @@ class TestBalancedPanelWarning:
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            bacon_decompose(
-                data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
-            )
+            _bacon_fit(data, outcome="outcome", unit="unit", time="time", first_treat="first_treat")
 
             # Should NOT have warning about unbalanced panel
             unbalanced_warnings = [x for x in w if "unbalanced" in str(x.message).lower()]
@@ -575,7 +606,7 @@ class TestEdgeCases:
         """Test with small sample size."""
         data = generate_staggered_data(n_units=20, n_periods=5, n_cohorts=2)
 
-        results = bacon_decompose(
+        results = _bacon_fit(
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
@@ -587,7 +618,7 @@ class TestEdgeCases:
             n_units=200, n_periods=15, n_cohorts=5, never_treated_frac=0.2
         )
 
-        results = bacon_decompose(
+        results = _bacon_fit(
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
@@ -601,7 +632,7 @@ class TestEdgeCases:
         # Replace 0 with inf for never-treated
         data["first_treat"] = data["first_treat"].replace(0, np.inf)
 
-        results = bacon_decompose(
+        results = _bacon_fit(
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 

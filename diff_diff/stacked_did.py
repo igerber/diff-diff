@@ -1708,6 +1708,11 @@ def stacked_did(
     """
     Convenience function for stacked DiD estimation.
 
+    .. deprecated:: 3.9
+        ``stacked_did()`` is deprecated and will be removed in 4.0
+        (row M-072). Construct the estimator instead:
+        ``StackedDiD(...).fit(data, ...)``.
+
     This is a shortcut for creating a StackedDiD estimator and calling fit().
 
     Parameters
@@ -1757,6 +1762,12 @@ def stacked_did(
     >>> results.print_summary()
     >>> es = results.aggregate('event_study')  # post-fit view (M-024)
     """
+    warnings.warn(
+        "stacked_did() is deprecated and will be removed in 4.0; "
+        "construct the estimator instead: StackedDiD(...).fit(data, ...).",
+        FutureWarning,
+        stacklevel=2,
+    )
     est = StackedDiD(kappa_pre=kappa_pre, kappa_post=kappa_post, **kwargs)
     return est.fit(
         data,

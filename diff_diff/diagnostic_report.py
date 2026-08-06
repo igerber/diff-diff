@@ -13,7 +13,7 @@ Design principles:
 - No estimator fitting and no variance re-derivation from raw data. Every
   effect, SE, p-value, CI, and sensitivity bound is either read from
   ``results`` or produced by an existing diff-diff utility. May call
-  ``check_parallel_trends`` / ``bacon_decompose`` /
+  ``check_parallel_trends`` / ``BaconDecomposition`` /
   ``EfficientDiD.hausman_pretest`` when the caller supplies the panel +
   column kwargs. Report-layer cross-period aggregations (joint-Wald /
   Bonferroni pre-trends p-value, heterogeneity dispersion over
@@ -138,7 +138,7 @@ _APPLICABILITY: Dict[str, FrozenSet[str]] = {
         # ``bacon``. ``bacon`` is excluded because SpilloverDiD identifies
         # the direct effect off FAR-AWAY units (Butts Assumption 5), not
         # off the TWFE 2x2 comparisons a Goodman-Bacon decomposition
-        # enumerates: ``bacon_decompose`` on the raw binary treatment
+        # enumerates: a Bacon decomposition on the raw binary treatment
         # ignores the ring/distance structure and would pool spillover-
         # contaminated in-ring units into the control group — the exact
         # SUTVA violation the estimator exists to handle (same rationale
@@ -344,7 +344,7 @@ class DiagnosticReport:
     survey_design : SurveyDesign, optional
         The ``SurveyDesign`` object used to fit a survey-weighted
         estimator. Required for fit-faithful replay of Goodman-Bacon on a
-        survey-backed fit; threaded to ``bacon_decompose(survey_design=...)``.
+        survey-backed fit; threaded to ``BaconDecomposition.fit(survey_design=...)``.
         When the fit carries ``survey_metadata`` but ``survey_design`` is
         not supplied, Bacon is skipped with an explicit reason rather than
         replaying an unweighted decomposition for a design that does not
@@ -445,7 +445,7 @@ class DiagnosticReport:
         self._sensitivity_method = sensitivity_method
         self._alpha = float(alpha)
         # Round-40 P1 CI review on PR #318: survey-backed fits need the
-        # ``SurveyDesign`` object threaded through to ``bacon_decompose``
+        # ``SurveyDesign`` object threaded through to ``BaconDecomposition.fit``
         # for a fit-faithful Goodman-Bacon replay, and the unweighted
         # 2x2 parallel-trends helper (``utils.check_parallel_trends``)
         # cannot be called on a survey-weighted DiDResults without
@@ -944,7 +944,7 @@ class DiagnosticReport:
             if name == "BaconDecompositionResults":
                 return None
             # Otherwise mirror the full argument contract of
-            # ``_check_bacon`` / ``bacon_decompose``: the runner needs
+            # ``_check_bacon`` / ``BaconDecomposition.fit``: the runner needs
             # ``data``, ``first_treat``, and the ``outcome`` / ``time`` /
             # ``unit`` column names. Gating on only ``data`` +
             # ``first_treat`` (as before) left ``applicable_checks``
@@ -966,7 +966,7 @@ class DiagnosticReport:
                     "Bacon decomposition needs panel data + outcome / time "
                     "/ unit / first_treat column names. Missing: " + ", ".join(bacon_missing) + "."
                 )
-            # Round-40 P1 CI review on PR #318: ``bacon_decompose``
+            # Round-40 P1 CI review on PR #318: ``BaconDecomposition.fit``
             # supports a ``survey_design`` kwarg for survey-weighted
             # decomposition. When the fitted result carries
             # ``survey_metadata`` but the caller did not supply a
@@ -2004,7 +2004,7 @@ class DiagnosticReport:
         """Surface Bacon decomposition: read-out when applicable, else skip.
 
         If ``results`` is itself a ``BaconDecompositionResults``, read fields.
-        If ``data`` + ``first_treat`` are supplied, call ``bacon_decompose``.
+        If ``data`` + ``first_treat`` are supplied, run ``BaconDecomposition``.
         Otherwise, skip with a helpful reason.
         """
         if "bacon" in self._precomputed:
@@ -2046,15 +2046,16 @@ class DiagnosticReport:
             }
 
         try:
-            from diff_diff.bacon import bacon_decompose
+            from diff_diff.bacon import BaconDecomposition
 
-            bacon = bacon_decompose(
+            bacon = BaconDecomposition(
+                weights="exact",  # paper-faithful Eqs. 7-9 / 10e-g
+            ).fit(
                 data,
                 outcome=outcome,
                 unit=unit,
                 time=time,
                 first_treat=first_treat,
-                weights="exact",  # paper-faithful Eqs. 7-9 / 10e-g
                 survey_design=self._survey_design,
             )
         except ValueError as exc:
@@ -2063,7 +2064,8 @@ class DiagnosticReport:
             # ``_validate_unit_constant_survey``. Survey-backed reports on
             # panels with time-varying within-unit weights / strata / PSU
             # / FPC fail that check. The library still supports those
-            # panels via explicit ``bacon_decompose(weights="approximate", ...)``,
+            # panels via explicit
+            # ``BaconDecomposition(weights="approximate").fit(...)``,
             # so emit a structured skip pointing users at the
             # ``precomputed={'bacon': ...}`` escape hatch rather than an
             # opaque ``error`` block.
@@ -2074,8 +2076,9 @@ class DiagnosticReport:
                         "Survey design has within-unit-varying columns "
                         "(weights / strata / PSU / FPC), which the "
                         'paper-faithful ``weights="exact"`` Bacon path '
-                        "rejects. Run ``bacon_decompose(data, ..., "
-                        'weights="approximate", survey_design=design)`` '
+                        "rejects. Run "
+                        '``BaconDecomposition(weights="approximate")'
+                        ".fit(data, ..., survey_design=design)`` "
                         "yourself and pass via "
                         "``DiagnosticReport(..., precomputed={'bacon': result})`` "
                         f"to populate this section. Validator detail: {exc}"
@@ -2083,7 +2086,7 @@ class DiagnosticReport:
                 }
             return {
                 "status": "error",
-                "reason": f"bacon_decompose raised {type(exc).__name__}: {exc}",
+                "reason": f"the Bacon decomposition raised {type(exc).__name__}: {exc}",
             }
         except NotImplementedError as exc:
             # PR #454 R4 P3: ``BaconDecomposition.fit()`` raises
@@ -2102,7 +2105,7 @@ class DiagnosticReport:
                     "Bacon decomposition does not support (bacon is a "
                     "diagnostic and does not compute replicate-based "
                     "variance). To populate this section, run "
-                    "``bacon_decompose(data, ..., "
+                    "``BaconDecomposition().fit(data, ..., "
                     "survey_design=SurveyDesign(weights=..., strata=..., "
                     "psu=..., fpc=...))`` with a TSL-based design and "
                     "pass via "
@@ -2113,7 +2116,7 @@ class DiagnosticReport:
         except Exception as exc:  # noqa: BLE001
             return {
                 "status": "error",
-                "reason": f"bacon_decompose raised {type(exc).__name__}: {exc}",
+                "reason": f"the Bacon decomposition raised {type(exc).__name__}: {exc}",
             }
         return self._format_bacon(bacon)
 
@@ -4148,7 +4151,8 @@ def _render_overall_interpretation(schema: Dict[str, Any], labels: Dict[str, str
             sentences.append(
                 f"Goodman-Bacon decomposition flags {fw:.0%} of TWFE weight on "
                 f"'forbidden' later-vs-earlier comparisons — consider a "
-                f"heterogeneity-robust estimator (CS / SA / BJS / Gardner) if "
+                f"heterogeneity-robust estimator (CallawaySantAnna, SunAbraham, "
+                f"ImputationDiD, or TwoStageDiD) if "
                 f"not already in use."
             )
     deff = schema.get("design_effect") or {}

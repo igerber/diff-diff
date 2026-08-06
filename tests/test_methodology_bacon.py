@@ -43,6 +43,34 @@ from diff_diff import (
     bacon_decompose,
 )
 
+
+def _bacon_fit(
+    data,
+    outcome=None,
+    unit=None,
+    time=None,
+    first_treat=None,
+    *,
+    weights="exact",
+    survey_design=None,
+    **kw,
+):
+    """Construct-and-fit via the canonical class API (2(d) PR-A, M-076).
+
+    Migrated from the deprecated ``bacon_decompose()`` wrapper: ``weights``
+    is a constructor kwarg, everything else goes to ``fit()``.
+    """
+    return BaconDecomposition(weights=weights).fit(
+        data,
+        outcome=outcome,
+        unit=unit,
+        time=time,
+        first_treat=first_treat,
+        survey_design=survey_design,
+        **kw,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Hand-calculable DGP
 # ---------------------------------------------------------------------------
@@ -148,7 +176,7 @@ class TestBaconHandCalculation:
 
     def test_weights_sum_to_one(self) -> None:
         df = _hand_calc_panel()
-        results = bacon_decompose(
+        results = _bacon_fit(
             df,
             outcome="y",
             unit="unit",
@@ -162,7 +190,7 @@ class TestBaconHandCalculation:
     def test_twfe_equals_weighted_sum(self) -> None:
         """Theorem 1's algebraic identity at machine precision."""
         df = _hand_calc_panel()
-        results = bacon_decompose(
+        results = _bacon_fit(
             df,
             outcome="y",
             unit="unit",
@@ -177,7 +205,7 @@ class TestBaconHandCalculation:
 
     def test_three_comparison_types_present(self) -> None:
         df = _hand_calc_panel()
-        results = bacon_decompose(
+        results = _bacon_fit(
             df,
             outcome="y",
             unit="unit",
@@ -193,7 +221,7 @@ class TestBaconHandCalculation:
     def test_eq_10b_treated_vs_never_value(self) -> None:
         """β̂_{2U}^{2x2} = 5 on the hand-calc panel (constant ATT, no noise)."""
         df = _hand_calc_panel()
-        results = bacon_decompose(
+        results = _bacon_fit(
             df,
             outcome="y",
             unit="unit",
@@ -221,7 +249,7 @@ class TestBaconHandCalculation:
         So s_{2U} / s_{3U} = 0.75 (= 0.3 / 0.4).
         """
         df = _hand_calc_panel()
-        results = bacon_decompose(
+        results = _bacon_fit(
             df,
             outcome="y",
             unit="unit",
@@ -248,7 +276,7 @@ class TestBaconHandCalculation:
         Per the hand calc: s_{23}^k = 0.006944... / 0.069444... = 0.1
         """
         df = _hand_calc_panel()
-        results = bacon_decompose(
+        results = _bacon_fit(
             df,
             outcome="y",
             unit="unit",
@@ -271,7 +299,7 @@ class TestBaconHandCalculation:
         Per the hand calc: s_{23}^ℓ = 0.013889... / 0.069444... = 0.2
         """
         df = _hand_calc_panel()
-        results = bacon_decompose(
+        results = _bacon_fit(
             df,
             outcome="y",
             unit="unit",
@@ -323,7 +351,7 @@ class TestBaconParityR:
             if fixture_name == "meta":
                 continue
             panel = pd.DataFrame(fix["panel"])
-            results = bacon_decompose(
+            results = _bacon_fit(
                 panel,
                 outcome="y",
                 unit="unit",
@@ -340,7 +368,7 @@ class TestBaconParityR:
             if fixture_name == "meta":
                 continue
             panel = pd.DataFrame(fix["panel"])
-            results = bacon_decompose(
+            results = _bacon_fit(
                 panel,
                 outcome="y",
                 unit="unit",
@@ -409,7 +437,7 @@ class TestBaconParityR:
             panel = pd.DataFrame(fix["panel"])
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", category=UserWarning)
-                results = bacon_decompose(
+                results = _bacon_fit(
                     panel,
                     outcome="y",
                     unit="unit",
@@ -503,7 +531,7 @@ class TestBaconParityR:
         panel = pd.DataFrame(fix["panel"])
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=UserWarning)
-            results = bacon_decompose(
+            results = _bacon_fit(
                 panel,
                 outcome="y",
                 unit="unit",
@@ -615,7 +643,7 @@ class TestBaconAlwaysTreatedRemap:
     def test_warn_emitted_on_remap(self) -> None:
         df = _panel_with_always_treated()
         with pytest.warns(UserWarning, match="Remapping to U bucket"):
-            bacon_decompose(
+            _bacon_fit(
                 df,
                 outcome="y",
                 unit="unit",
@@ -630,7 +658,7 @@ class TestBaconAlwaysTreatedRemap:
         original = df["first_treat"].copy()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=UserWarning)
-            bacon_decompose(
+            _bacon_fit(
                 df,
                 outcome="y",
                 unit="unit",
@@ -644,7 +672,7 @@ class TestBaconAlwaysTreatedRemap:
         df = _panel_with_always_treated()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=UserWarning)
-            results = bacon_decompose(
+            results = _bacon_fit(
                 df,
                 outcome="y",
                 unit="unit",
@@ -690,7 +718,7 @@ class TestBaconAlwaysTreatedRemap:
         df = pd.DataFrame(rows, columns=["unit", "time", "y", "first_treat"])
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=UserWarning)
-            results = bacon_decompose(
+            results = _bacon_fit(
                 df,
                 outcome="y",
                 unit="unit",
@@ -754,7 +782,7 @@ class TestBaconAlwaysTreatedRemap:
         df = pd.DataFrame(rows, columns=["unit", "time", "y", "first_treat"])
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=UserWarning)
-            results = bacon_decompose(
+            results = _bacon_fit(
                 df,
                 outcome="y",
                 unit="unit",
@@ -804,7 +832,7 @@ class TestBaconAlwaysTreatedRemap:
         df = pd.DataFrame(rows, columns=["unit", "time", "y", "first_treat"])
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=UserWarning)
-            results = bacon_decompose(
+            results = _bacon_fit(
                 df,
                 outcome="y",
                 unit="unit",
@@ -833,7 +861,7 @@ class TestBaconAlwaysTreatedRemap:
         with warnings.catch_warnings():
             warnings.simplefilter("error", category=UserWarning)
             try:
-                bacon_decompose(
+                _bacon_fit(
                     df,
                     outcome="y",
                     unit="unit",
@@ -859,7 +887,7 @@ class TestBaconEdgeCases:
         df = _staggered_data(seed=22)
         # Drop never-treated
         df = df[df["first_treat"] > 0].copy()
-        results = bacon_decompose(
+        results = _bacon_fit(
             df,
             outcome="y",
             unit="unit",
@@ -890,7 +918,7 @@ class TestBaconEdgeCases:
                 rows.append((uid, t, y, 0))
             uid += 1
         df = pd.DataFrame(rows, columns=["unit", "time", "y", "first_treat"])
-        results = bacon_decompose(
+        results = _bacon_fit(
             df,
             outcome="y",
             unit="unit",
@@ -908,7 +936,7 @@ class TestBaconEdgeCases:
         # Drop a few rows to unbalance
         df = df.drop(df.sample(n=10, random_state=44).index).copy()
         with pytest.warns(UserWarning, match="Unbalanced panel"):
-            bacon_decompose(
+            _bacon_fit(
                 df,
                 outcome="y",
                 unit="unit",
@@ -929,7 +957,7 @@ class TestBaconEdgeCases:
         df = df.drop(df.sample(n=10, random_state=44).index).copy()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=UserWarning)
-            results = bacon_decompose(
+            results = _bacon_fit(
                 df,
                 outcome="y",
                 unit="unit",
@@ -952,7 +980,7 @@ class TestBaconEdgeCases:
     def test_constant_att_recovers_effect(self) -> None:
         """ΔATT=0 + VWCT=0 → β̂^DD ≈ true ATT (sample noise only)."""
         df = _staggered_data(seed=55)
-        results = bacon_decompose(
+        results = _bacon_fit(
             df,
             outcome="y",
             unit="unit",
@@ -967,7 +995,7 @@ class TestBaconEdgeCases:
     def test_weighted_sum_machine_precision(self) -> None:
         """The TWFE-vs-weighted-sum identity holds on noisy data too."""
         df = _staggered_data(seed=66)
-        results = bacon_decompose(
+        results = _bacon_fit(
             df,
             outcome="y",
             unit="unit",
@@ -1010,7 +1038,7 @@ class TestBaconWeightModes:
         """The two modes produce different relative weights (the approximate
         path uses a simplified variance not matching Eqs. 7-9)."""
         df = _staggered_data(seed=88)
-        r_exact = bacon_decompose(
+        r_exact = _bacon_fit(
             df,
             outcome="y",
             unit="unit",
@@ -1018,7 +1046,7 @@ class TestBaconWeightModes:
             first_treat="first_treat",
             weights="exact",
         )
-        r_approx = bacon_decompose(
+        r_approx = _bacon_fit(
             df,
             outcome="y",
             unit="unit",
@@ -1061,7 +1089,7 @@ class TestBaconSurveyDesignNarrowing:
         unit_w = df.groupby("unit").ngroup() * 0.1 + 1.0
         df = df.assign(w=unit_w.values)
         sd = SurveyDesign(weights="w")
-        results = bacon_decompose(
+        results = _bacon_fit(
             df,
             outcome="y",
             unit="unit",
@@ -1085,7 +1113,7 @@ class TestBaconSurveyDesignNarrowing:
         sd = SurveyDesign(weights="w")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=UserWarning)
-            results = bacon_decompose(
+            results = _bacon_fit(
                 df,
                 outcome="y",
                 unit="unit",
@@ -1136,19 +1164,22 @@ class TestBaconSurveyDesignNarrowing:
     def test_default_bacon_decompose_function_rejects_time_varying_weights(
         self,
     ) -> None:
-        """The new ``weights="exact"`` default flows through
-        ``bacon_decompose(...)`` (no explicit weights= kwarg). Same
-        rejection contract."""
+        """KEEP (2(d) PR-A, M-076): the ``weights="exact"`` default flows
+        through the DEPRECATED ``bacon_decompose(...)`` wrapper (no
+        explicit weights= kwarg) - only the wrapper path exercises that
+        default routing. Same rejection contract, now behind the
+        wrapper-deprecation FutureWarning."""
         df, sd = self._time_varying_survey_panel()
-        with pytest.raises(ValueError, match="varies within units"):
-            bacon_decompose(
-                df,
-                outcome="y",
-                unit="unit",
-                time="time",
-                first_treat="first_treat",
-                survey_design=sd,
-            )
+        with pytest.warns(FutureWarning, match="bacon_decompose\\(\\) is deprecated"):
+            with pytest.raises(ValueError, match="varies within units"):
+                bacon_decompose(
+                    df,
+                    outcome="y",
+                    unit="unit",
+                    time="time",
+                    first_treat="first_treat",
+                    survey_design=sd,
+                )
 
     def test_explicit_approximate_accepts_time_varying_weights(self) -> None:
         """Users can opt back into the obs-level weighted-means path via
@@ -1158,7 +1189,7 @@ class TestBaconSurveyDesignNarrowing:
         df, sd = self._time_varying_survey_panel()
         # Should not raise; produces a valid decomposition via the legacy
         # approximate path that tolerates obs-level weighted means.
-        results = bacon_decompose(
+        results = _bacon_fit(
             df,
             outcome="y",
             unit="unit",

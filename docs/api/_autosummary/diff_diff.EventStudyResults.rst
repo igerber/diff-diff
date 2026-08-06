@@ -31,6 +31,7 @@
       ~EventStudyResults.cband_upper
       ~EventStudyResults.df
       ~EventStudyResults.df_survey
+      ~EventStudyResults.estimand
       ~EventStudyResults.event_time_convention
       ~EventStudyResults.n_kind
       ~EventStudyResults.reference_event_times

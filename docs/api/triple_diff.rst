@@ -119,15 +119,15 @@ With covariates::
         covariates=['age', 'education', 'experience']
     )
 
-Using the convenience function::
+Quick one-call estimation (the ``triple_difference()`` wrapper is
+deprecated since 3.9 and removed in 4.0)::
 
-    from diff_diff import triple_difference
+    from diff_diff import TripleDifference
 
-    results = triple_difference(
+    results = TripleDifference(estimation_method='dr').fit(
         data,
         outcome='wages',
         group='policy_state',
         partition='female',
-        time='post',
-        estimation_method='dr'
+        post='post',
     )

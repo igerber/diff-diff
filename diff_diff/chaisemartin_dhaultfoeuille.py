@@ -8737,6 +8737,11 @@ def chaisemartin_dhaultfoeuille(
     One-shot convenience wrapper around
     :class:`ChaisemartinDHaultfoeuille`.
 
+    .. deprecated:: 3.9
+        ``chaisemartin_dhaultfoeuille()`` is deprecated and will be
+        removed in 4.0 (row M-077). Construct the estimator instead:
+        ``ChaisemartinDHaultfoeuille(...).fit(data, ...)``.
+
     Equivalent to::
 
         ChaisemartinDHaultfoeuille(**init_kwargs).fit(
@@ -8761,6 +8766,13 @@ def chaisemartin_dhaultfoeuille(
     """
     import inspect
 
+    warnings.warn(
+        "chaisemartin_dhaultfoeuille() is deprecated and will be removed in 4.0; "
+        "construct the estimator instead: "
+        "ChaisemartinDHaultfoeuille(...).fit(data, ...).",
+        FutureWarning,
+        stacklevel=2,
+    )
     init_keys = {
         name
         for name, p in inspect.signature(ChaisemartinDHaultfoeuille.__init__).parameters.items()

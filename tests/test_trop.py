@@ -14,6 +14,13 @@ from diff_diff.trop import TROP, TROPResults, trop
 from diff_diff.trop_local import _run_trop_bootstrap_loop
 
 
+def _trop_fit(data, *, outcome, treatment, unit, time, survey_design=None, **ctor_kwargs):
+    """Construct-and-fit via the canonical class API (2(d) PR-A, M-073)."""
+    return TROP(**ctor_kwargs).fit(
+        data, outcome, treatment, unit, time, survey_design=survey_design
+    )
+
+
 def generate_factor_dgp(
     n_units: int = 50,
     n_pre: int = 10,
@@ -474,38 +481,40 @@ class TestConvenienceFunction:
     """Tests for trop() convenience function."""
 
     def test_convenience_function(self, simple_panel_data):
-        """Test that convenience function works."""
-        results = trop(
-            simple_panel_data,
-            outcome="outcome",
-            treatment="treated",
-            unit="unit",
-            time="period",
-            lambda_time_grid=[0.0, 1.0],
-            lambda_unit_grid=[0.0, 1.0],
-            lambda_nn_grid=[0.0, 0.1],
-            n_bootstrap=10,
-            seed=42,
-        )
+        """KEEP (2(d) PR-A, M-073): the deprecated wrapper still works, and warns."""
+        with pytest.warns(FutureWarning, match=r"trop\(\) is deprecated"):
+            results = trop(
+                simple_panel_data,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
+                lambda_time_grid=[0.0, 1.0],
+                lambda_unit_grid=[0.0, 1.0],
+                lambda_nn_grid=[0.0, 0.1],
+                n_bootstrap=10,
+                seed=42,
+            )
 
         assert isinstance(results, TROPResults)
         assert results.n_obs == len(simple_panel_data)
 
     def test_convenience_with_kwargs(self, simple_panel_data):
-        """Test convenience function with additional kwargs."""
-        results = trop(
-            simple_panel_data,
-            outcome="outcome",
-            treatment="treated",
-            unit="unit",
-            time="period",
-            lambda_time_grid=[0.0, 0.5, 1.0],
-            lambda_unit_grid=[0.0, 0.5],
-            lambda_nn_grid=[0.0, 0.1],
-            max_iter=50,
-            n_bootstrap=10,
-            seed=42,
-        )
+        """KEEP (M-073): wrapper kwarg forwarding into the constructor."""
+        with pytest.warns(FutureWarning, match=r"trop\(\) is deprecated"):
+            results = trop(
+                simple_panel_data,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
+                lambda_time_grid=[0.0, 0.5, 1.0],
+                lambda_unit_grid=[0.0, 0.5],
+                lambda_nn_grid=[0.0, 0.1],
+                max_iter=50,
+                n_bootstrap=10,
+                seed=42,
+            )
 
         assert isinstance(results, TROPResults)
 
@@ -741,7 +750,7 @@ class TestOptimizationEquivalence:
         Running TROP twice with the same seed should produce identical results.
         """
         n_boot = ci_params.bootstrap(20)
-        results1 = trop(
+        results1 = _trop_fit(
             simple_panel_data,
             outcome="outcome",
             treatment="treated",
@@ -754,7 +763,7 @@ class TestOptimizationEquivalence:
             seed=42,
         )
 
-        results2 = trop(
+        results2 = _trop_fit(
             simple_panel_data,
             outcome="outcome",
             treatment="treated",
@@ -1207,7 +1216,7 @@ class TestCyclingSearch:
 
     def test_cycling_search_reproducible(self, simple_panel_data):
         """Test that cycling search produces reproducible results."""
-        results1 = trop(
+        results1 = _trop_fit(
             simple_panel_data,
             outcome="outcome",
             treatment="treated",
@@ -1220,7 +1229,7 @@ class TestCyclingSearch:
             seed=42,
         )
 
-        results2 = trop(
+        results2 = _trop_fit(
             simple_panel_data,
             outcome="outcome",
             treatment="treated",
@@ -1308,35 +1317,37 @@ class TestAPIChangesV2_1_8:
     def test_convenience_function_no_post_periods(self, simple_panel_data):
         """Test that trop() convenience function no longer accepts post_periods."""
         # This should work
-        results = trop(
-            simple_panel_data,
-            outcome="outcome",
-            treatment="treated",
-            unit="unit",
-            time="period",
-            lambda_time_grid=[0.0],
-            lambda_unit_grid=[0.0],
-            lambda_nn_grid=[0.0],
-            n_bootstrap=5,
-            seed=42,
-        )
-        assert results is not None
-
-        # This should fail
-        with pytest.raises(TypeError, match="unexpected keyword argument"):
-            trop(
+        with pytest.warns(FutureWarning, match=r"trop\(\) is deprecated"):
+            results = trop(
                 simple_panel_data,
                 outcome="outcome",
                 treatment="treated",
                 unit="unit",
                 time="period",
-                post_periods=[5, 6, 7],  # Should fail
                 lambda_time_grid=[0.0],
                 lambda_unit_grid=[0.0],
                 lambda_nn_grid=[0.0],
                 n_bootstrap=5,
                 seed=42,
             )
+        assert results is not None
+
+        # This should fail (the wrapper warns first, then the ctor rejects)
+        with pytest.warns(FutureWarning, match=r"trop\(\) is deprecated"):
+            with pytest.raises(TypeError, match="unexpected keyword argument"):
+                trop(
+                    simple_panel_data,
+                    outcome="outcome",
+                    treatment="treated",
+                    unit="unit",
+                    time="period",
+                    post_periods=[5, 6, 7],  # Should fail
+                    lambda_time_grid=[0.0],
+                    lambda_unit_grid=[0.0],
+                    lambda_nn_grid=[0.0],
+                    n_bootstrap=5,
+                    seed=42,
+                )
 
     def test_results_has_period_counts_not_lists(self, simple_panel_data):
         """Test that TROPResults has n_pre_periods/n_post_periods, not lists."""

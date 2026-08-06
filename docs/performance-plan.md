@@ -732,7 +732,7 @@ any rerun):
 | 2 | `diff_diff/imputation.py` ImputationDiD fit (+ `diff_diff/sun_abraham.py` SunAbraham fit) | Staggered CS @ 1,500 units | together consistently ~70-80% of the chain at every scale; either can be the top phase at a given (scale, backend) cell | **Investigate only after BRFSS fix lands.** Total chain is well under practitioner-perceptible threshold; candidate follow-up. Either phase is a legitimate target. |
 | 3 | `diff_diff/utils.py:1434` `_sc_weight_fw_numpy` | SDiD python @ any scale | dominates Python SDiD at all scales | **Already ported to Rust.** Python fallback acceptable as a teaching/safety path; non-production for n > 100. Python skipped at n=500 (jackknife cost would exceed 4 minutes per run). |
 | 4 | `diff_diff/chaisemartin_dhaultfoeuille.py` dCDH fit + heterogeneity | Reversible (single scale) | main fit and survey-aware heterogeneity refit each rebuild TSL scaffolding; heterogeneity phase is as expensive as the main fit | **Cache/precompute** - heterogeneity refit duplicates the main fit's TSL setup under the same `SurveyDesign`. Not P0; newer code path (v3.1) never optimization-reviewed. |
-| 5 | `diff_diff/continuous_did.py` CDiD spline bootstrap | Dose-response (single scale) | four spline fits ~equal, linear in variant count | **Leave alone** - well under perceptible threshold. |
+| 5 | `diff_diff/continuous_did.py` ContinuousDiD spline bootstrap | Dose-response (single scale) | four spline fits ~equal, linear in variant count | **Leave alone** - well under perceptible threshold. |
 
 ### Memory analysis
 

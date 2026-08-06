@@ -880,7 +880,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                 f"effects are heterogeneous across time. Consider using:\n"
                 f"  - CallawaySantAnna estimator for robust estimates\n"
                 f"  - TwoWayFixedEffects.decompose() to diagnose the decomposition\n"
-                f"  - bacon_decompose() to see weight on 'forbidden' comparisons",
+                f"  - BaconDecomposition().fit(...) to see weight on 'forbidden' comparisons",
                 UserWarning,
                 stacklevel=3,
             )
@@ -972,7 +972,6 @@ class TwoWayFixedEffects(DifferenceInDifferences):
 
         See Also
         --------
-        bacon_decompose : Standalone decomposition function
         BaconDecomposition : Class-based decomposition interface
         CallawaySantAnna : Robust estimator that avoids forbidden comparisons
         """

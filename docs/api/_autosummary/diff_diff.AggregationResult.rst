@@ -38,3 +38,4 @@
       ~AggregationResult.conf_int_upper
       ~AggregationResult.n
       ~AggregationResult.df
+

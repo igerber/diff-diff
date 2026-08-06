@@ -1,7 +1,7 @@
 """
 Scenario 6: Pricing dose-response with ContinuousDiD cubic spline.
 
-Chains: CDiD fit (overall ATT + ACRT + dose-response curves are always
+Chains: ContinuousDiD fit (overall ATT + ACRT + dose-response curves are always
 computed; bootstrap 199) -> dataframe extraction -> post-fit event-study
 pre-trend (results.aggregate('event_study'), row M-025) -> binarized-DiD
 comparison -> spline sensitivity (degree=1, num_knots=2).
@@ -76,7 +76,7 @@ def main():
 
     def binarized_comparison():
         # Derive post from the actual first_treat cohort in the data so
-        # this phase is aligned with the CDiD fits above. A hardcoded
+        # this phase is aligned with the ContinuousDiD fits above. A hardcoded
         # period cutoff would silently desync if the DGP cohort moves.
         treated_cohort = int(
             sorted(v for v in data["first_treat"].unique() if v > 0)[0]

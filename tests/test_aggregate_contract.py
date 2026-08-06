@@ -18,6 +18,7 @@ path, so drift here means a regression, not a design change.
 
 import copy
 import pickle
+import re
 import warnings
 
 import numpy as np
@@ -977,7 +978,9 @@ class TestDcdhShim:
         # through the wrapper too.
         from diff_diff.chaisemartin_dhaultfoeuille import chaisemartin_dhaultfoeuille
 
-        with pytest.warns(FutureWarning, match=r"fit\(aggregate=\) is deprecated"):
+        # Both warnings fire since 2(d) PR-A: the wrapper deprecation
+        # (M-077) plus the forwarded fit(aggregate=) shim.
+        with pytest.warns(FutureWarning) as record:
             chaisemartin_dhaultfoeuille(
                 dcdh_panel,
                 outcome="outcome",
@@ -986,6 +989,9 @@ class TestDcdhShim:
                 treatment="treat",
                 aggregate=None,
             )
+        msgs = [str(w.message) for w in record]
+        assert any("chaisemartin_dhaultfoeuille() is deprecated" in m for m in msgs), msgs
+        assert any(re.search(r"fit\(aggregate=\) is deprecated", m) for m in msgs), msgs
 
 
 class TestDcdhAggregate:
@@ -1249,7 +1255,8 @@ class TestStackedShim:
         # default and forwards verbatim into fit().
         from diff_diff.stacked_did import stacked_did
 
-        with pytest.warns(FutureWarning, match=r"fit\(aggregate=\) is deprecated"):
+        # Both warnings fire since 2(d) PR-A (M-072 + the forwarded shim).
+        with pytest.warns(FutureWarning) as record:
             stacked_did(
                 stacked_panel,
                 "outcome",
@@ -1260,8 +1267,15 @@ class TestStackedShim:
                 kappa_post=2,
                 aggregate="simple",
             )
+        msgs = [str(w.message) for w in record]
+        assert any("stacked_did() is deprecated" in m for m in msgs), msgs
+        assert any(re.search(r"fit\(aggregate=\) is deprecated", m) for m in msgs), msgs
 
-    def test_plain_wrapper_call_does_not_warn(self, stacked_panel):
+    def test_plain_wrapper_call_fires_only_wrapper_warning(self, stacked_panel):
+        # Flipped BY DESIGN in the 2(d) PR-A (M-072): the wrapper itself
+        # now emits its deprecation FutureWarning, but the sentinel
+        # forwarding is unchanged - a plain wrapper call must never fire
+        # the fit-time aggregate warning, so EXACTLY ONE FutureWarning.
         from diff_diff.stacked_did import stacked_did
 
         with warnings.catch_warnings(record=True) as caught:
@@ -1275,7 +1289,10 @@ class TestStackedShim:
                 kappa_pre=2,
                 kappa_post=2,
             )
-        assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
+        fw = [w for w in caught if issubclass(w.category, FutureWarning)]
+        assert len(fw) == 1, [str(w.message) for w in fw]
+        assert "stacked_did() is deprecated" in str(fw[0].message)
+        assert "StackedDiD.fit" not in str(fw[0].message)
         assert res.event_study_effects is not None
 
     def test_group_warns_then_raises_educational_error(self, stacked_panel):
@@ -2215,7 +2232,8 @@ class TestImputationShim:
     def test_wrapper_forwarded_aggregate_warns(self, imputation_panel):
         from diff_diff import imputation_did
 
-        with pytest.warns(FutureWarning, match=r"ImputationDiD\.fit\(aggregate=\)"):
+        # Both warnings fire since 2(d) PR-A (M-070 + the forwarded shim).
+        with pytest.warns(FutureWarning) as record:
             imputation_did(
                 imputation_panel,
                 "outcome",
@@ -2224,22 +2242,34 @@ class TestImputationShim:
                 "first_treat",
                 aggregate="event_study",
             )
+        msgs = [str(w.message) for w in record]
+        assert any("imputation_did() is deprecated" in m for m in msgs), msgs
+        assert any(re.search(r"ImputationDiD\.fit\(aggregate=\)", m) for m in msgs), msgs
 
     def test_wrapper_forwarded_balance_e_warns(self, imputation_panel):
         from diff_diff import imputation_did
 
-        with pytest.warns(FutureWarning, match=r"ImputationDiD\.fit\(balance_e=\)"):
+        with pytest.warns(FutureWarning) as record:
             imputation_did(
                 imputation_panel, "outcome", "unit", "period", "first_treat", balance_e=1
             )
+        msgs = [str(w.message) for w in record]
+        assert any("imputation_did() is deprecated" in m for m in msgs), msgs
+        assert any(re.search(r"ImputationDiD\.fit\(balance_e=\)", m) for m in msgs), msgs
 
-    def test_plain_wrapper_call_does_not_warn(self, imputation_panel):
+    def test_plain_wrapper_call_fires_only_wrapper_warning(self, imputation_panel):
+        # Flipped BY DESIGN in the 2(d) PR-A (M-070): the wrapper's own
+        # deprecation warning fires, the forwarded aggregate sentinel
+        # still never does - EXACTLY ONE FutureWarning.
         from diff_diff import imputation_did
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             imputation_did(imputation_panel, "outcome", "unit", "period", "first_treat")
-        assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
+        fw = [w for w in caught if issubclass(w.category, FutureWarning)]
+        assert len(fw) == 1, [str(w.message) for w in fw]
+        assert "imputation_did() is deprecated" in str(fw[0].message)
+        assert "ImputationDiD.fit" not in str(fw[0].message)
 
 
 class TestImputationAggregate:
@@ -2637,7 +2667,8 @@ class TestTwoStageShim:
     def test_wrapper_forwarded_aggregate_warns(self, twostage_panel):
         from diff_diff import two_stage_did
 
-        with pytest.warns(FutureWarning, match=r"TwoStageDiD\.fit\(aggregate=\)"):
+        # Both warnings fire since 2(d) PR-A (M-071 + the forwarded shim).
+        with pytest.warns(FutureWarning) as record:
             two_stage_did(
                 twostage_panel,
                 "outcome",
@@ -2646,20 +2677,32 @@ class TestTwoStageShim:
                 "first_treat",
                 aggregate="event_study",
             )
+        msgs = [str(w.message) for w in record]
+        assert any("two_stage_did() is deprecated" in m for m in msgs), msgs
+        assert any(re.search(r"TwoStageDiD\.fit\(aggregate=\)", m) for m in msgs), msgs
 
     def test_wrapper_forwarded_balance_e_warns(self, twostage_panel):
         from diff_diff import two_stage_did
 
-        with pytest.warns(FutureWarning, match=r"TwoStageDiD\.fit\(balance_e=\)"):
+        with pytest.warns(FutureWarning) as record:
             two_stage_did(twostage_panel, "outcome", "unit", "period", "first_treat", balance_e=1)
+        msgs = [str(w.message) for w in record]
+        assert any("two_stage_did() is deprecated" in m for m in msgs), msgs
+        assert any(re.search(r"TwoStageDiD\.fit\(balance_e=\)", m) for m in msgs), msgs
 
-    def test_plain_wrapper_call_does_not_warn(self, twostage_panel):
+    def test_plain_wrapper_call_fires_only_wrapper_warning(self, twostage_panel):
+        # Flipped BY DESIGN in the 2(d) PR-A (M-071): the wrapper's own
+        # deprecation warning fires, the forwarded aggregate sentinel
+        # still never does - EXACTLY ONE FutureWarning.
         from diff_diff import two_stage_did
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             two_stage_did(twostage_panel, "outcome", "unit", "period", "first_treat")
-        assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
+        fw = [w for w in caught if issubclass(w.category, FutureWarning)]
+        assert len(fw) == 1, [str(w.message) for w in fw]
+        assert "two_stage_did() is deprecated" in str(fw[0].message)
+        assert "TwoStageDiD.fit" not in str(fw[0].message)
 
 
 class TestTwoStageAggregate:

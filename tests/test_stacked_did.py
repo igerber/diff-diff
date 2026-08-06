@@ -729,16 +729,17 @@ class TestSklearnInterface:
             est.set_params(nonexistent_param=42)
 
     def test_convenience_function(self, staggered_data):
-        """stacked_did() convenience function works."""
-        results = stacked_did(
-            staggered_data,
-            outcome="outcome",
-            unit="unit",
-            time="period",
-            first_treat="first_treat",
-            kappa_pre=2,
-            kappa_post=2,
-        )
+        """KEEP (2(d) PR-A, M-072): the deprecated wrapper still works, and warns."""
+        with pytest.warns(FutureWarning, match=r"stacked_did\(\) is deprecated"):
+            results = stacked_did(
+                staggered_data,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                kappa_pre=2,
+                kappa_post=2,
+            )
         assert isinstance(results, StackedDiDResults)
         assert np.isfinite(results.overall_att)
 
@@ -1903,19 +1904,21 @@ class TestStackedDiDCovariateBalance:
         assert clone.balance == "entropy"
 
     def test_convenience_function_threads_covariates(self):
+        """KEEP (M-072): wrapper ctor/fit kwarg threading (balance + covariates)."""
         df = _balance_panel(seed=9)
-        res = stacked_did(
-            df,
-            "y",
-            "unit",
-            "time",
-            "first_treat",
-            kappa_pre=2,
-            kappa_post=2,
-            control_group="never_treated",
-            balance="entropy",
-            covariates=["x"],
-        )
+        with pytest.warns(FutureWarning, match=r"stacked_did\(\) is deprecated"):
+            res = stacked_did(
+                df,
+                "y",
+                "unit",
+                "time",
+                "first_treat",
+                kappa_pre=2,
+                kappa_post=2,
+                control_group="never_treated",
+                balance="entropy",
+                covariates=["x"],
+            )
         assert res.balance == "entropy"
         assert res.covariates == ["x"]
 

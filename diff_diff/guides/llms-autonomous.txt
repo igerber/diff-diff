@@ -485,7 +485,7 @@ estimators:
 - `ImputationDiD` (Borusyak, Jaravel, Spiess) - imputation-based,
   efficient under homoskedasticity, produces an imputation-based
   residual at the observation level.
-- `TwoStageDiD` (Gardner) - two-stage residualize-then-regress.
+- `TwoStageDiD` - two-stage residualize-then-regress.
 - `StackedDiD` - stacked event-study regressions, one subpanel per
   cohort. Conservative interpretation.
 - `WooldridgeDiD` (ETWFE) - extended-TWFE with cohort-by-time-by-
@@ -495,7 +495,7 @@ estimators:
   to pick. Requires a balanced panel (`PanelProfile.is_balanced ==
   True`); `fit()` raises `ValueError` on unbalanced input.
 
-Diagnostic: `bacon_decompose(df, ...)` shows the weight allocation of a
+Diagnostic: `BaconDecomposition().fit(df, ...)` shows the weight allocation of a
 TWFE fit to 2×2 comparison types. Forbidden-comparison weight > 10% is a
 strong signal that the TWFE estimate is biased.
 
@@ -1080,7 +1080,7 @@ Some estimators expose diagnostics as methods on the result object:
 
 ### Decomposition and weight auditing
 
-- `bacon_decompose(df, ...)` - Goodman-Bacon (2021) TWFE weight
+- `BaconDecomposition().fit(df, ...)` - Goodman-Bacon (2021) TWFE weight
   decomposition. Returns a `BaconDecompositionResults` with the weight
   on forbidden (later-vs-earlier) comparisons. Run before interpreting
   any TWFE staggered fit.
@@ -1251,7 +1251,7 @@ or the outcome model is correctly specified.
 - **Goodman-Bacon, Andrew (2021).** "Difference-in-Differences with
   Variation in Treatment Timing." Journal of Econometrics
   225(2): 254-277. TWFE weight decomposition;
-  `bacon_decompose` implements this.
+  `BaconDecomposition` implements this.
 - **Callaway, Brantly, and Pedro H. C. Sant'Anna (2021).**
   "Difference-in-Differences with Multiple Time Periods." Journal of
   Econometrics 225(2): 200-230. Group-time ATT.
@@ -1312,7 +1312,7 @@ This guide does **not**:
 - Promise forward-compatibility of the BR / DR schema or the alert
   catalogue. Treat these as experimental until the 12-item foundation-
   gap list closes.
-- Replace `bacon_decompose()`, `compute_honest_did()`, or any of the
+- Replace `BaconDecomposition`, `compute_honest_did()`, or any of the
   estimator-native diagnostics. Post-fit validation is mandatory, not
   optional, and belongs in the final write-up.
 - Cover methods outside diff-diff's estimator suite (e.g., instrumental

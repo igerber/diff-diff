@@ -679,41 +679,44 @@ class TestConvenienceFunction:
     """Test triple_difference convenience function."""
 
     def test_basic_usage(self, simple_ddd_data):
-        """Test basic usage of convenience function."""
-        results = triple_difference(
-            simple_ddd_data,
-            outcome="outcome",
-            group="group",
-            partition="partition",
-            time="time",
-        )
+        """KEEP (2(d) PR-A, M-075): the deprecated wrapper still works, and warns."""
+        with pytest.warns(FutureWarning, match=r"triple_difference\(\) is deprecated"):
+            results = triple_difference(
+                simple_ddd_data,
+                outcome="outcome",
+                group="group",
+                partition="partition",
+                time="time",
+            )
 
         assert isinstance(results, TripleDifferenceResults)
         assert abs(results.att - 2.0) < 0.5
 
     def test_with_method_specification(self, simple_ddd_data):
-        """Test convenience function with method specification."""
-        results = triple_difference(
-            simple_ddd_data,
-            outcome="outcome",
-            group="group",
-            partition="partition",
-            time="time",
-            estimation_method="reg",
-        )
+        """KEEP (M-075): wrapper kwarg forwarding (estimation_method)."""
+        with pytest.warns(FutureWarning, match=r"triple_difference\(\) is deprecated"):
+            results = triple_difference(
+                simple_ddd_data,
+                outcome="outcome",
+                group="group",
+                partition="partition",
+                time="time",
+                estimation_method="reg",
+            )
 
         assert results.estimation_method == "reg"
 
     def test_with_covariates(self, ddd_data_with_covariates):
-        """Test convenience function with covariates."""
-        results = triple_difference(
-            ddd_data_with_covariates,
-            outcome="outcome",
-            group="group",
-            partition="partition",
-            time="time",
-            covariates=["x1", "x2"],
-        )
+        """KEEP (M-075): wrapper kwarg forwarding (covariates)."""
+        with pytest.warns(FutureWarning, match=r"triple_difference\(\) is deprecated"):
+            results = triple_difference(
+                ddd_data_with_covariates,
+                outcome="outcome",
+                group="group",
+                partition="partition",
+                time="time",
+                covariates=["x1", "x2"],
+            )
 
         assert results is not None
 
@@ -968,18 +971,19 @@ class TestRankDeficientAction:
         # Add a covariate that is perfectly collinear with x1
         ddd_data_with_covariates["x1_dup"] = ddd_data_with_covariates["x1"].copy()
 
-        # Should raise with "error" action
-        with pytest.raises(ValueError, match="[Rr]ank-deficient"):
-            triple_difference(
-                ddd_data_with_covariates,
-                outcome="outcome",
-                group="group",
-                partition="partition",
-                time="time",
-                estimation_method="reg",
-                covariates=["x1", "x1_dup"],
-                rank_deficient_action="error",
-            )
+        # Should raise with "error" action (the wrapper warns first)
+        with pytest.warns(FutureWarning, match=r"triple_difference\(\) is deprecated"):
+            with pytest.raises(ValueError, match="[Rr]ank-deficient"):
+                triple_difference(
+                    ddd_data_with_covariates,
+                    outcome="outcome",
+                    group="group",
+                    partition="partition",
+                    time="time",
+                    estimation_method="reg",
+                    covariates=["x1", "x1_dup"],
+                    rank_deficient_action="error",
+                )
 
 
 class TestTripleDifferenceTStatNaN:
@@ -1572,27 +1576,29 @@ class TestTripleDifferenceVcovType:
     def test_triple_difference_convenience_func_rejects_invalid_vcov_type(self):
         """Invalid vcov_type rejected at the function entry point too."""
         data = generate_ddd_data(n_per_cell=40, true_att=2.0, seed=59)
-        with pytest.raises(ValueError, match="influence-function"):
-            triple_difference(
+        with pytest.warns(FutureWarning, match=r"triple_difference\(\) is deprecated"):
+            with pytest.raises(ValueError, match="influence-function"):
+                triple_difference(
+                    data,
+                    outcome="outcome",
+                    group="group",
+                    partition="partition",
+                    time="time",
+                    vcov_type="classical",
+                )
+
+    def test_triple_difference_convenience_func_threads_valid_vcov_type(self):
+        """Valid vcov_type='hc1' fits successfully AND lands on Results."""
+        data = generate_ddd_data(n_per_cell=40, true_att=2.0, seed=61)
+        with pytest.warns(FutureWarning, match=r"triple_difference\(\) is deprecated"):
+            res = triple_difference(
                 data,
                 outcome="outcome",
                 group="group",
                 partition="partition",
                 time="time",
-                vcov_type="classical",
+                vcov_type="hc1",
             )
-
-    def test_triple_difference_convenience_func_threads_valid_vcov_type(self):
-        """Valid vcov_type='hc1' fits successfully AND lands on Results."""
-        data = generate_ddd_data(n_per_cell=40, true_att=2.0, seed=61)
-        res = triple_difference(
-            data,
-            outcome="outcome",
-            group="group",
-            partition="partition",
-            time="time",
-            vcov_type="hc1",
-        )
         assert res.vcov_type == "hc1"
         assert np.isfinite(res.att)
         assert np.isfinite(res.se)

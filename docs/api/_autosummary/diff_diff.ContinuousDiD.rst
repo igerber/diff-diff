@@ -19,3 +19,9 @@
 
 
 
+   .. rubric:: Attributes
+
+   .. autosummary::
+
+      ~ContinuousDiD.alpha
+

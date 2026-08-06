@@ -31,4 +31,5 @@
       ~TwoStageDiD.seed
       ~TwoStageDiD.horizon_max
       ~TwoStageDiD.pretrends
+      ~TwoStageDiD.rank_deficient_action
 

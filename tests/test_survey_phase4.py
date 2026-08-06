@@ -457,14 +457,15 @@ class TestImputationDiDSurvey:
         from diff_diff import imputation_did
 
         sd = SurveyDesign(weights="weight")
-        r_wrapper = imputation_did(
-            staggered_survey_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            survey_design=sd,
-        )
+        with pytest.warns(FutureWarning, match=r"imputation_did\(\) is deprecated"):
+            r_wrapper = imputation_did(
+                staggered_survey_data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                survey_design=sd,
+            )
         r_direct = ImputationDiD().fit(
             staggered_survey_data,
             "outcome",
@@ -671,14 +672,15 @@ class TestTwoStageDiDSurvey:
         from diff_diff import two_stage_did
 
         sd = SurveyDesign(weights="weight")
-        r_wrapper = two_stage_did(
-            staggered_survey_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            survey_design=sd,
-        )
+        with pytest.warns(FutureWarning, match=r"two_stage_did\(\) is deprecated"):
+            r_wrapper = two_stage_did(
+                staggered_survey_data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                survey_design=sd,
+            )
         r_direct = TwoStageDiD().fit(
             staggered_survey_data,
             "outcome",

@@ -229,13 +229,13 @@ Basic usage with covariate and special predictors::
     gap_df = results.get_gap_df()        # period, gap, phase
     weights_df = results.get_weights_df()  # unit, weight (descending)
 
-Quick estimation with the convenience function::
+Quick one-call estimation (the ``synthetic_control()`` wrapper is
+deprecated since 3.9 and removed in 4.0)::
 
-    from diff_diff import synthetic_control
+    from diff_diff import SyntheticControl
 
-    results = synthetic_control(
-        data, outcome="gdpcap", treatment="treated",
-        unit="region", time="year",
+    results = SyntheticControl().fit(
+        data, "gdpcap", "treated", "region", "year",
     )
     print(f"ATT: {results.att:.3f}, pre-RMSPE: {results.pre_rmspe:.3f}")
 

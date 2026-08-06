@@ -303,12 +303,12 @@ serves a different purpose: R-parity accuracy). They complement it.
       dose="dose",
   )
   ```
-- **Operation chain.** (1) CDiD fit - produces
+- **Operation chain.** (1) ContinuousDiD fit - produces
   overall ATT, overall ACRT, and the dose-response curves
   unconditionally (the fit-time `aggregate=` kwarg is deprecated, row
   M-025); (2) extract
   `results.to_dataframe(level="dose_response")` and
-  `level="group_time"`; (3) a second analytical CDiD fit followed by
+  `level="group_time"`; (3) a second analytical ContinuousDiD fit followed by
   post-fit `results.aggregate("event_study")` for pre-trend
   diagnostics (the unified underscored spelling - the fit-time
   no-underscore `"eventstudy"` value dies with the deprecated kwarg in

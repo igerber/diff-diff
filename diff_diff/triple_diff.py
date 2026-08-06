@@ -2139,6 +2139,11 @@ def triple_difference(
     """
     Estimate Triple Difference (DDD) treatment effect.
 
+    .. deprecated:: 3.9
+        ``triple_difference()`` is deprecated and will be removed in 4.0
+        (row M-075). Construct the estimator instead:
+        ``TripleDifference(...).fit(data, ...)``.
+
     Convenience function that creates a TripleDifference estimator and
     fits it to the data in one step.
 
@@ -2206,6 +2211,12 @@ def triple_difference(
     ... )
     >>> print(f"ATT: {results.att:.3f} (SE: {results.se:.3f})")
     """
+    warnings.warn(
+        "triple_difference() is deprecated and will be removed in 4.0; "
+        "construct the estimator instead: TripleDifference(...).fit(data, ...).",
+        FutureWarning,
+        stacklevel=2,
+    )
     estimator = TripleDifference(
         estimation_method=estimation_method,
         robust=robust,

@@ -29,18 +29,18 @@ import pytest
 
 import diff_diff as dd
 from diff_diff import (
+    BaconDecomposition,
     BusinessContext,
     BusinessReport,
     CallawaySantAnna,
     DiagnosticReport,
     DifferenceInDifferences,
     MultiPeriodDiD,
+    SyntheticControl,
     SyntheticDiD,
-    bacon_decompose,
     generate_did_data,
     generate_factor_data,
     generate_staggered_data,
-    synthetic_control,
 )
 from diff_diff.business_report import BUSINESS_REPORT_SCHEMA_VERSION
 
@@ -131,17 +131,12 @@ def scm_fit():
     for t in range(T):
         rows.append({"unit": "treated", "year": years[t], "y": treated[t], "treated": int(t >= T0)})
     df = pd.DataFrame(rows)
-    res = synthetic_control(
-        df,
-        "y",
-        "treated",
-        "unit",
-        "year",
+    res = SyntheticControl(
         seed=0,
         n_starts=1,
         optimizer_options={"maxiter": 50},
         inner_min_decrease=1e-3,
-    )
+    ).fit(df, "y", "treated", "unit", "year")
     return res, df
 
 
@@ -521,7 +516,7 @@ class TestAppendix:
 class TestBaconTypeError:
     def test_br_on_bacon_raises(self):
         sdf = generate_staggered_data(n_units=30, n_periods=6, treatment_effect=1.5, seed=7)
-        bacon = bacon_decompose(
+        bacon = BaconDecomposition().fit(
             sdf, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
         )
         with pytest.raises(TypeError, match="BaconDecompositionResults is a diagnostic"):
@@ -4713,7 +4708,7 @@ class TestBusinessReportSurveyDesignPassthrough:
 
     def test_survey_backed_staggered_br_forwards_survey_design_to_bacon(self):
         """BR must forward ``survey_design`` to the auto-constructed
-        DR, which in turn threads it to ``bacon_decompose``. Verify via
+        DR, which in turn threads it to ``BaconDecomposition.fit``. Verify via
         ``unittest.mock.patch`` that the kwarg reaches the decomposer.
         """
         from unittest.mock import MagicMock, patch
@@ -4736,7 +4731,11 @@ class TestBusinessReportSurveyDesignPassthrough:
         fake_decomp.total_weight_later_vs_earlier = 0.05
         fake_decomp.twfe_estimate = 1.1
         fake_decomp.n_timing_groups = 2
-        with patch("diff_diff.bacon.bacon_decompose", return_value=fake_decomp) as m:
+        # 2(d) PR-A (M-076): the DR runner constructs BaconDecomposition
+        # directly - `weights` is a ctor kwarg, `survey_design` a fit()
+        # kwarg - so the patch target and assertions follow the split.
+        with patch("diff_diff.bacon.BaconDecomposition") as m:
+            m.return_value.fit.return_value = fake_decomp
             br = BusinessReport(
                 obj,
                 data=panel,
@@ -4747,9 +4746,12 @@ class TestBusinessReportSurveyDesignPassthrough:
                 survey_design=sentinel_design,
             )
             br.to_dict()  # trigger DR build
-            assert m.called, "bacon_decompose was not called"
-            _, kwargs = m.call_args
-            assert kwargs.get("survey_design") is sentinel_design
+            assert m.called, "BaconDecomposition was not constructed"
+            _, ctor_kwargs = m.call_args
+            assert ctor_kwargs.get("weights") == "exact"
+            assert m.return_value.fit.called, "BaconDecomposition.fit was not called"
+            _, fit_kwargs = m.return_value.fit.call_args
+            assert fit_kwargs.get("survey_design") is sentinel_design
 
     def test_survey_backed_staggered_br_skips_bacon_without_survey_design(self):
         """Without ``survey_design``, BR's DR must skip Bacon with the
@@ -5005,3 +5007,22 @@ class TestStackedAlwaysComputedSurfaceBusinessReport:
         assert schema["heterogeneity"]["status"] == "ran"
         labels = [s["label"] for s in d["next_steps"]]
         assert "Check sub-experiment balance" in labels
+
+
+class TestEmittedGuidanceCanonicalNames:
+    """2(d) PR-A per-site pins (user decision 2026-08-06): the emitted
+    Bacon recommendation uses full class names; preserved citation prose
+    ("Two-Stage DiD (Gardner 2022)", "Stacked DiD (Wing...)") is
+    deliberately untouched, so no module-wide alias ban is asserted.
+    """
+
+    def test_bacon_recommendation_uses_class_names(self):
+        import inspect
+
+        import diff_diff.business_report as br_mod
+
+        source = inspect.getsource(br_mod)
+        assert (
+            "estimator (CS / SA / BJS / Gardner)" not in source
+        ), "the Bacon recommendation still uses alias shorthand"
+        assert "ImputationDiD, or TwoStageDiD)." in source

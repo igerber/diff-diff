@@ -721,6 +721,11 @@ def synthetic_control(
     """
     Convenience function for classic synthetic control estimation.
 
+    .. deprecated:: 3.9
+        ``synthetic_control()`` is deprecated and will be removed in 4.0
+        (row M-074). Construct the estimator instead:
+        ``SyntheticControl(...).fit(data, ...)``.
+
     Constructor-only keyword arguments (``v_method`` — ``"nested"`` / ``"custom"`` /
     ``"cv"`` / ``"inverse_variance"`` — ``custom_v``, ``v_cv_t0``, ``n_starts``,
     ``standardize``, ``alpha``, ``seed``, ``optimizer_options``,
@@ -735,6 +740,12 @@ def synthetic_control(
     ...                         predictors=["x1", "x2"])
     >>> print(f"ATT: {res.att:.3f}, pre-RMSPE: {res.pre_rmspe:.3f}")
     """
+    warnings.warn(
+        "synthetic_control() is deprecated and will be removed in 4.0; "
+        "construct the estimator instead: SyntheticControl(...).fit(data, ...).",
+        FutureWarning,
+        stacklevel=2,
+    )
     ctor_keys = set(SyntheticControl().get_params().keys())
     ctor_kwargs = {k: v for k, v in kwargs.items() if k in ctor_keys}
     fit_kwargs = {k: v for k, v in kwargs.items() if k not in ctor_keys}

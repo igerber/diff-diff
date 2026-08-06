@@ -397,7 +397,7 @@ sources:
         type: methodology
       - path: docs/methodology/continuous-did.md
         type: methodology
-        note: "Detailed CDiD implementation docs"
+        note: "Detailed ContinuousDiD implementation docs"
       - path: docs/api/continuous_did.rst
         type: api_reference
       - path: docs/tutorials/14_continuous_did.ipynb

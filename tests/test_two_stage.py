@@ -1392,46 +1392,49 @@ class TestTwoStageDiDConvenience:
     """Tests for convenience function."""
 
     def test_convenience_function_returns_results(self):
-        """Convenience function should return TwoStageDiDResults."""
+        """KEEP (2(d) PR-A, M-071): the deprecated wrapper still works, and warns."""
         data = generate_test_data()
-        results = two_stage_did(
-            data,
-            outcome="outcome",
-            unit="unit",
-            time="time",
-            first_treat="first_treat",
-        )
+        with pytest.warns(FutureWarning, match=r"two_stage_did\(\) is deprecated"):
+            results = two_stage_did(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
 
         assert isinstance(results, TwoStageDiDResults)
         assert results.overall_att > 0
 
     def test_convenience_function_kwargs(self):
-        """Constructor kwargs should be forwarded."""
+        """KEEP (M-071): wrapper ctor-kwarg forwarding."""
         data = generate_test_data()
-        results = two_stage_did(
-            data,
-            outcome="outcome",
-            unit="unit",
-            time="time",
-            first_treat="first_treat",
-            anticipation=1,
-            alpha=0.1,
-        )
+        with pytest.warns(FutureWarning, match=r"two_stage_did\(\) is deprecated"):
+            results = two_stage_did(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                anticipation=1,
+                alpha=0.1,
+            )
 
         assert isinstance(results, TwoStageDiDResults)
         assert results.alpha == 0.1
 
     def test_convenience_function_aggregate(self):
-        """Convenience function should support aggregate parameter."""
+        """KEEP (M-071): the wrapper forwards the deprecated aggregate= (both warnings fire)."""
         data = generate_test_data()
-        results = two_stage_did(
-            data,
-            outcome="outcome",
-            unit="unit",
-            time="time",
-            first_treat="first_treat",
-            aggregate="event_study",
-        )
+        with pytest.warns(FutureWarning, match=r"two_stage_did\(\) is deprecated"):
+            results = two_stage_did(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                aggregate="event_study",
+            )
 
         assert results.event_study_effects is not None
 
@@ -2344,8 +2347,9 @@ class TestTwoStageDiDVcovType:
             warnings.simplefilter("ignore")
             r = two_stage_did(data, "outcome", "unit", "time", "first_treat", vcov_type="hc1")
         assert r.vcov_type == "hc1"
-        with pytest.raises(ValueError):
-            two_stage_did(data, "outcome", "unit", "time", "first_treat", vcov_type="classical")
+        with pytest.warns(FutureWarning, match=r"two_stage_did\(\) is deprecated"):
+            with pytest.raises(ValueError):
+                two_stage_did(data, "outcome", "unit", "time", "first_treat", vcov_type="classical")
 
     def test_fit_clone_idempotence(self):
         data = generate_test_data(n_units=60, seed=3)

@@ -1281,6 +1281,11 @@ def bacon_decompose(
     """
     Convenience function for Goodman-Bacon decomposition.
 
+    .. deprecated:: 3.9
+        ``bacon_decompose()`` is deprecated and will be removed in 4.0
+        (row M-076). Construct the diagnostic instead:
+        ``BaconDecomposition(...).fit(data, ...)``.
+
     Decomposes a TWFE estimate into weighted 2x2 DiD comparisons,
     showing which comparisons drive the estimate and whether
     problematic "forbidden comparisons" are involved.
@@ -1392,5 +1397,11 @@ def bacon_decompose(
     plot_bacon : Visualize the decomposition
     CallawaySantAnna : Robust estimator that avoids forbidden comparisons
     """
+    warnings.warn(
+        "bacon_decompose() is deprecated and will be removed in 4.0; "
+        "construct the diagnostic instead: BaconDecomposition(...).fit(data, ...).",
+        FutureWarning,
+        stacklevel=2,
+    )
     decomp = BaconDecomposition(weights=weights)
     return decomp.fit(data, outcome, unit, time, first_treat, survey_design=survey_design)

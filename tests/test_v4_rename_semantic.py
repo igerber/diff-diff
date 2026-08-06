@@ -151,13 +151,23 @@ class TestTimeToPost:
         with pytest.raises(TypeError, match=r"missing required argument: 'post'"):
             TripleDifference().fit(ddd_2x2x2, "y", "g", "q")
 
-    def test_wrapper_forwards_silently(self, ddd_2x2x2):
+    def test_wrapper_forwards_time_without_rename_warning(self, ddd_2x2x2):
+        # Flipped BY DESIGN in the 2(d) PR-A (M-075): the wrapper now
+        # fires its OWN deprecation FutureWarning, but the contract this
+        # test exists for is unchanged and only the wrapper path can
+        # express it - the wrapper's legacy positional `time` argument
+        # maps onto the renamed `post=` fit kwarg WITHOUT tripping
+        # M-031's inner rename warning. So: exactly ONE FutureWarning,
+        # the wrapper's, never the rename shim's.
         from diff_diff.triple_diff import triple_difference
 
         with warnings.catch_warnings(record=True) as record:
             warnings.simplefilter("always")
             r = triple_difference(ddd_2x2x2, "y", "g", "q", "t")
-        _assert_no_future_warning(record)
+        fw = [w for w in record if issubclass(w.category, FutureWarning)]
+        assert len(fw) == 1, [str(w.message) for w in fw]
+        assert "triple_difference() is deprecated" in str(fw[0].message)
+        assert "time=" not in str(fw[0].message)
         assert np.isfinite(r.att)
 
 
