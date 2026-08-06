@@ -87,6 +87,17 @@ class ImplicitAIPWResult:
     decomposition_est: float
 
 
+@dataclass
+class PostLassoResult:
+    """Post-Lasso DiD result and selected nuisance variables."""
+
+    att: float
+    se: float
+    selected_vars_outcome: np.ndarray
+    selected_vars_propensity: np.ndarray
+    influence_function: np.ndarray
+
+
 def two_period_covs_obj(
     est: float,
     weights: Any,
@@ -104,6 +115,53 @@ def two_period_covs_obj(
         cov_balance_df,
         ess,
     )
+
+
+def did_post_lasso(
+    y1: Any,
+    y0: Any,
+    treatment: Any,
+    covariates: Any,
+    *,
+    pscore_covariates: Optional[Any] = None,
+    weights: Optional[Any] = None,
+    random_state: Optional[int] = None,
+) -> PostLassoResult:
+    """Estimate a two-period AIPW DiD with post-Lasso nuisance selection."""
+    try:
+        from sklearn.linear_model import LassoCV, LogisticRegressionCV
+    except ImportError as exc:
+        raise ImportError("install diff-diff[ml] to use did_post_lasso") from exc
+    outcome = np.asarray(y1, float) - np.asarray(y0, float)
+    d = np.asarray(treatment).astype(int)
+    x = np.asarray(covariates, float)
+    if x.ndim != 2 or len(outcome) != len(d) or len(outcome) != len(x):
+        raise ValueError("y1, y0, treatment, and covariates must have compatible lengths")
+    if np.unique(d).tolist() != [0, 1]:
+        raise ValueError("treatment must contain both 0 and 1")
+    sample_weights = np.ones(len(d)) if weights is None else np.asarray(weights, float)
+    if len(sample_weights) != len(d) or np.any(sample_weights <= 0):
+        raise ValueError("weights must be positive and have one value per observation")
+    p_x = x if pscore_covariates is None else np.asarray(pscore_covariates, float)
+    if p_x.ndim != 2 or len(p_x) != len(d):
+        raise ValueError("pscore_covariates must have one row per observation")
+    outcome_model = LassoCV(cv=5, random_state=random_state).fit(
+        x[d == 0], outcome[d == 0], sample_weight=sample_weights[d == 0]
+    )
+    m_hat = outcome_model.predict(x)
+    propensity_model = LogisticRegressionCV(cv=5, max_iter=2000, random_state=random_state).fit(
+        p_x, d, sample_weight=sample_weights
+    )
+    propensity = np.clip(propensity_model.predict_proba(p_x)[:, 1], 1e-6, 1 - 1e-6)
+    pi = float(np.average(d, weights=sample_weights))
+    odds = propensity / (1 - propensity)
+    score = d / pi * (outcome - m_hat) - (1 - d) / pi * odds * (outcome - m_hat)
+    att = float(np.average(score, weights=sample_weights))
+    influence = score - att - att / pi * (d - pi)
+    se = float(np.sqrt(np.average(influence**2, weights=sample_weights) / len(d)))
+    selected_outcome = np.flatnonzero(np.abs(outcome_model.coef_) > 1e-10)
+    selected_propensity = np.flatnonzero(np.any(np.abs(propensity_model.coef_) > 1e-10, axis=0))
+    return PostLassoResult(att, se, selected_outcome, selected_propensity, influence)
 
 
 def gt_weights(

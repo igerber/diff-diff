@@ -66,6 +66,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added ``mp_covariate_bal_summary_helper`` for weighted multi-period balance
   summaries.
 - Added ``gt_weights`` and ``two_period_covs_obj`` result-object factories.
+- Added ``did_post_lasso`` with post-Lasso outcome/propensity selection and
+  normalized AIPW influence-function inference.
 - Added multi-period ``implicit_aipw_weights`` group-time decomposition.
 - **ContinuousDiD post-fit `aggregate()` - a MIXED view/recompute adopter**
   (v4 program 2(b) PR-3c; ledger row [M-025]). `ContinuousDiD.fit(aggregate=)`
