@@ -17,6 +17,9 @@ The implemented linear path is checked against the installed R
 function standard error. Binary bad controls use the logistic first stage and
 the Bernoulli-information influence-function correction, also checked against
 R.
+The same linear imputation is also available for staggered adoption through
+the per-``(g,t)`` ``didbc`` loop; joint multi-period inference is still a
+separate implementation step.
 
 .. autosummary::
    :toctree: _autosummary
@@ -24,6 +27,7 @@ R.
 
    diff_diff.didbc
    diff_diff.imputation_bad_control
+   diff_diff.staggered_imputation_bad_control
    diff_diff.extract_att
    diff_diff.BadControlsResult
    diff_diff.simulate_bad_controls

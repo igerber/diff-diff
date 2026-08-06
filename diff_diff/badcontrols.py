@@ -407,6 +407,64 @@ def imputation_bad_control(
     return BadControlsResult(att, se, att_gt, influence)
 
 
+def staggered_imputation_bad_control(
+    data: pd.DataFrame,
+    *,
+    yname: str,
+    gname: str,
+    tname: str,
+    idname: str,
+    bad_control: Optional[str] = None,
+    covariates: Sequence[str] = (),
+    bad_control_covariates: Sequence[str] = (),
+    control_group: str = "nevertreated",
+) -> BadControlsResult:
+    """Run the linear imputation estimator separately for each ``(g,t)`` cell."""
+    if control_group not in {"nevertreated", "notyettreated"}:
+        raise ValueError("control_group must be 'nevertreated' or 'notyettreated'")
+    periods = sorted(pd.unique(data[tname]).tolist())
+    groups = sorted(g for g in pd.unique(data[gname]) if g != 0)
+    if len(periods) < 3 or not groups:
+        raise ValueError("staggered imputation requires multiple periods and treated groups")
+    rows = []
+    cohort_sizes = data.groupby(idname)[gname].first().value_counts()
+    treated_total = cohort_sizes[cohort_sizes.index != 0].sum()
+    for group in groups:
+        for period in periods:
+            if period < group:
+                continue
+            eligible = data[gname].eq(group) | data[gname].eq(0)
+            if control_group == "notyettreated":
+                eligible |= data[gname].gt(period)
+            cell = data.loc[eligible & data[tname].isin([group - 1, period])].copy()
+            cell[gname] = np.where(cell[gname].eq(group), group, 0)
+            if cell[gname].eq(group).sum() == 0 or cell[gname].loc[cell[tname].eq(group - 1)].empty:
+                continue
+            result = imputation_bad_control(
+                cell,
+                yname=yname,
+                gname=gname,
+                tname=tname,
+                idname=idname,
+                bad_control=bad_control,
+                covariates=covariates,
+                bad_control_covariates=bad_control_covariates,
+            )
+            rows.append({"group": group, "time": period, "attgt": result.att, "se": result.se})
+    att_gt = pd.DataFrame(rows)
+    if att_gt.empty:
+        raise ValueError("no estimable staggered group-time cells")
+    weights = []
+    for group, period in zip(att_gt["group"], att_gt["time"]):
+        weights.append(
+            float(cohort_sizes.get(group, 0) / treated_total / (max(periods) - group + 1))
+        )
+    overall = float(np.sum(att_gt["attgt"] * np.asarray(weights)))
+    return BadControlsResult(
+        overall, float("nan"), att_gt, np.array([]), method="imputation-staggered"
+    )
+
+
 def didbc(
     data: pd.DataFrame,
     *,
@@ -455,6 +513,17 @@ def didbc(
         )
     if est_method != "imputation":
         raise ValueError("est_method must be 'imputation' or 'dr_ml'")
+    if data[tname].nunique() > 2:
+        return staggered_imputation_bad_control(
+            data,
+            yname=yname,
+            gname=gname,
+            tname=tname,
+            idname=idname,
+            bad_control=bad_control,
+            covariates=covariates,
+            bad_control_covariates=bad_control_covariates,
+        )
     return imputation_bad_control(
         data,
         yname=yname,
