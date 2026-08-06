@@ -72,6 +72,23 @@ class PTEAggregateResult:
     estimate: float
     weights: pd.DataFrame
     type: str = "group"
+    standard_error: float = float("nan")
+    conf_int: tuple[float, float] = (float("nan"), float("nan"))
+
+    def to_dataframe(self) -> pd.DataFrame:
+        out = self.weights.copy()
+        out["estimate"] = self.estimate
+        out["se"] = self.standard_error
+        return out
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "estimate": self.estimate,
+            "se": self.standard_error,
+            "conf_int": self.conf_int,
+            "type": self.type,
+            "weights": self.weights.to_dict(orient="records"),
+        }
 
 
 @dataclass
@@ -83,12 +100,27 @@ class PTEResults:
     overall_se: float
     influence_functions: Optional[np.ndarray] = None
     cohort_weights: Optional[dict[Any, float]] = None
+    bootstrap_distribution: Optional[np.ndarray] = None
 
     def to_dataframe(self) -> pd.DataFrame:
         return self.att_gt.copy()
 
     def aggregate(self, type: str = "group") -> PTEAggregateResult:
         return pte_aggte(self.att_gt, type=type, cohort_weights=self.cohort_weights)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "overall_att": self.overall_att,
+            "overall_se": self.overall_se,
+            "att_gt": self.att_gt.to_dict(orient="records"),
+            "cohort_weights": self.cohort_weights,
+        }
+
+    def summary(self) -> str:
+        return (
+            f"PTEResults(ATT={self.overall_att:.6f}, "
+            f"SE={self.overall_se:.6f}, cells={len(self.att_gt)})"
+        )
 
 
 def gt_data_frame(data: pd.DataFrame) -> GTDataFrame:
@@ -496,7 +528,8 @@ def pte(
                 ).overall_att
             )
         overall_se = float(np.std(bootstrap_att, ddof=1))
-    return PTEResults(att_gt, overall_att, overall_se, full_influence, cohort_weights)
+    distribution = np.asarray(bootstrap_att, dtype=float) if bstrap else None
+    return PTEResults(att_gt, overall_att, overall_se, full_influence, cohort_weights, distribution)
 
 
 def pte_default(

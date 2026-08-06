@@ -19,6 +19,8 @@ Full-history designs can use ``keep_all_untreated_subset`` or
 R-style convenience entry points.
 Dynamic aggregation normalizes cohort weights within each event time and can
 receive explicit ``cohort_weights``.
+``PTEResults`` exposes ``summary()``, ``to_dict()``, and the bootstrap
+distribution when empirical bootstrap inference is requested.
 
 .. autosummary::
    :toctree: _autosummary

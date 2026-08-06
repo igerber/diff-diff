@@ -52,3 +52,7 @@ def test_pte_empirical_bootstrap_is_seed_reproducible():
     second = pte(_panel(), **kwargs)
     assert np.isfinite(first.overall_se)
     assert np.isclose(first.overall_se, second.overall_se)
+    assert first.bootstrap_distribution is not None
+    assert len(first.bootstrap_distribution) == 9
+    assert "overall_att" in first.to_dict()
+    assert "PTEResults" in first.summary()
