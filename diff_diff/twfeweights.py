@@ -635,3 +635,98 @@ def combine_twfe_weights_gt(
     if row.empty:
         raise ValueError("requested group-time cell is not estimable")
     return float(row.iloc[0])
+
+
+def twfe_cov_bal_gt(
+    data: pd.DataFrame,
+    *,
+    g: Any,
+    tp: Any,
+    covariates: Sequence[str],
+    tname: str,
+    idname: str,
+    gname: str,
+) -> pd.DataFrame:
+    """Compute implicit-weighted covariate balance for one group-time cell."""
+    missing = sorted(set(covariates).difference(data.columns))
+    if missing:
+        raise ValueError(f"data is missing covariates: {missing}")
+    ordered = data.sort_values([idname, tname])
+    treatment = ((ordered[tname] >= ordered[gname]) & ordered[gname].ne(0)).astype(float).to_numpy()
+    unit_mean = (
+        pd.Series(treatment).groupby(ordered[idname].to_numpy()).transform("mean").to_numpy()
+    )
+    time_mean = pd.Series(treatment).groupby(ordered[tname].to_numpy()).transform("mean").to_numpy()
+    residual = treatment - unit_mean - time_mean + treatment.mean()
+    cell = (ordered[gname] == g) & (ordered[tname] == tp)
+    control = (ordered[gname] == 0) & (ordered[tname] == tp)
+    if not cell.any() or not control.any():
+        raise ValueError("requested group-time cell has no treated or control units")
+    unit_covariates = ordered.groupby(idname, sort=False)[list(covariates)].mean()
+    treated_ids = ordered.loc[cell, idname].to_numpy()
+    control_ids = ordered.loc[control, idname].to_numpy()
+    treated_mean = np.mean(residual[cell])
+    control_mean = np.mean(residual[control])
+    if treated_mean == 0 or control_mean == 0:
+        raise ValueError("implicit TWFE weights are undefined for this cell")
+    treated_weights = residual[cell] / treated_mean
+    control_weights = residual[control] / control_mean
+    rows = []
+    for covariate in covariates:
+        treated_values = unit_covariates.loc[treated_ids, covariate].to_numpy(float)
+        control_values = unit_covariates.loc[control_ids, covariate].to_numpy(float)
+        unweighted_diff = float(treated_values.mean() - control_values.mean())
+        weighted_diff = float(
+            np.mean(treated_values * treated_weights) - np.mean(control_values * control_weights)
+        )
+        pooled = pooled_sd(
+            np.r_[treated_values, control_values],
+            np.r_[np.ones(len(treated_values)), np.zeros(len(control_values))],
+        )
+        rows.append(
+            {
+                "group": g,
+                "time": tp,
+                "covariate": covariate,
+                "unweighted_diff": unweighted_diff,
+                "weighted_diff": weighted_diff,
+                "sd": pooled,
+                "unweighted_standardized_diff": unweighted_diff / pooled,
+                "weighted_standardized_diff": weighted_diff / pooled,
+                "ess_control": effective_sample_size(control_weights),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def twfe_cov_bal(
+    data: pd.DataFrame,
+    *,
+    covariates: Sequence[str],
+    tname: str,
+    idname: str,
+    gname: str,
+) -> pd.DataFrame:
+    """Compute TWFE implicit covariate balance for all estimable cells."""
+    periods = sorted(pd.unique(data[tname]))
+    groups = sorted(g for g in pd.unique(data[gname]) if g != 0)
+    frames = []
+    for group in groups:
+        for period in periods:
+            try:
+                frames.append(
+                    twfe_cov_bal_gt(
+                        data,
+                        g=group,
+                        tp=period,
+                        covariates=covariates,
+                        tname=tname,
+                        idname=idname,
+                        gname=gname,
+                    )
+                )
+            except ValueError:
+                continue
+    if not frames:
+        raise ValueError("no estimable group-time balance cells")
+    return pd.concat(frames, ignore_index=True)
