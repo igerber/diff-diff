@@ -32,3 +32,6 @@ implicit regression weights.  See :doc:`../references` for the full citation.
    diff_diff.two_period_aipw_weights
    diff_diff.implicit_twfe_weights
    diff_diff.ImplicitTWFEResult
+   diff_diff.GTWeightsResult
+   diff_diff.implicit_twfe_weights_gt
+   diff_diff.combine_twfe_weights_gt

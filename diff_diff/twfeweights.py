@@ -63,6 +63,40 @@ class ImplicitTWFEResult:
     pre_trends_bias: float
 
 
+@dataclass
+class GTWeightsResult:
+    """Local group-time TWFE weights."""
+
+    g: Any
+    tp: Any
+    treated: np.ndarray
+    comparison: np.ndarray
+    weights_treated: np.ndarray
+    weights_comparison: np.ndarray
+    weighted_outcome_diff: float
+    alpha_weight: float
+    ess: float
+
+
+def two_period_covs_obj(
+    est: float,
+    weights: Any,
+    dy: Any,
+    treatment: Any,
+    cov_balance_df: Optional[pd.DataFrame] = None,
+    ess: Optional[float] = None,
+) -> TwoPeriodCovariatesResult:
+    """Construct the Python equivalent of R ``two_period_covs_obj``."""
+    return TwoPeriodCovariatesResult(
+        float(est),
+        np.asarray(weights, float),
+        np.asarray(dy, float),
+        np.asarray(treatment),
+        cov_balance_df,
+        ess,
+    )
+
+
 def _coerce_inputs(
     attgt: pd.DataFrame,
     data: pd.DataFrame,
@@ -532,3 +566,72 @@ def implicit_twfe_weights(
     post = frame["time"] >= frame["group"]
     pre_bias = float(np.sum(frame.loc[~post, "alpha_weight"] * frame.loc[~post, "attgt"]))
     return ImplicitTWFEResult(frame, decomposition, decomposition, pre_bias)
+
+
+def implicit_twfe_weights_gt(
+    data: pd.DataFrame,
+    *,
+    g: Any,
+    tp: Any,
+    yname: str,
+    tname: str,
+    idname: str,
+    gname: str,
+    base_period: str = "first_period",
+) -> GTWeightsResult:
+    """Return local treated/control weights for one group-time cell."""
+    decomposition = implicit_twfe_weights(
+        data,
+        yname=yname,
+        tname=tname,
+        idname=idname,
+        gname=gname,
+        base_period=base_period,
+    )
+    row = decomposition.twfe_gt.loc[
+        decomposition.twfe_gt["group"].eq(g) & decomposition.twfe_gt["time"].eq(tp)
+    ]
+    if row.empty:
+        raise ValueError("requested group-time cell is not estimable")
+    ordered = data.sort_values([idname, tname])
+    periods = sorted(pd.unique(ordered[tname]))
+    base = periods[0] if base_period == "first_period" else g - 1
+    wide = ordered.pivot(index=idname, columns=tname, values=yname)
+    groups = ordered.groupby(idname, sort=False)[gname].first()
+    treated_ids = groups.index[groups.eq(g)]
+    control_ids = groups.index[groups.eq(0)]
+    treated_effect = (wide.loc[treated_ids, tp] - wide.loc[treated_ids, base]).to_numpy(float)
+    control_effect = (wide.loc[control_ids, tp] - wide.loc[control_ids, base]).to_numpy(float)
+    weights_treated = np.ones(len(treated_ids))
+    weights_control = np.ones(len(control_ids))
+    return GTWeightsResult(
+        g,
+        tp,
+        treated_effect,
+        control_effect,
+        weights_treated,
+        weights_control,
+        float(np.mean(treated_effect) - np.mean(control_effect)),
+        float(row["alpha_weight"].iloc[0]),
+        effective_sample_size(weights_control),
+    )
+
+
+def combine_twfe_weights_gt(
+    data: pd.DataFrame,
+    *,
+    g: Any,
+    tp: Any,
+    yname: str,
+    tname: str,
+    idname: str,
+    gname: str,
+) -> float:
+    """Return the TWFE decomposition weight for one group-time cell."""
+    result = implicit_twfe_weights(data, yname=yname, tname=tname, idname=idname, gname=gname)
+    row = result.twfe_gt.loc[
+        result.twfe_gt["group"].eq(g) & result.twfe_gt["time"].eq(tp), "alpha_weight"
+    ]
+    if row.empty:
+        raise ValueError("requested group-time cell is not estimable")
+    return float(row.iloc[0])
