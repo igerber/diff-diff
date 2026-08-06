@@ -322,6 +322,8 @@ def imputation_bad_control(
         raise ValueError("both treated and never-treated units are required")
 
     step1_pred: Optional[np.ndarray] = None
+    step1_probability: Optional[np.ndarray] = None
+    step1_binary = False
     if bad_control is None:
         wide["bc_pre"] = 0.0
         wide["bc_post_imp"] = 0.0
@@ -330,6 +332,7 @@ def imputation_bad_control(
         bc_pre, bc_post = f"{bad_control}_{periods[0]}", f"{bad_control}_{periods[1]}"
         wide["bc_pre"] = wide[bc_pre]
         wide["bc_post"] = wide[bc_post]
+        step1_binary = wide["bc_post"].nunique() == 2
         auxiliary = list(bad_control_covariates) + list(bad_control_d_covariates) + list(covariates)
         step1_columns = (
             ["bc_pre"] + auxiliary if identification_strategy == "unconfoundedness" else auxiliary
@@ -339,9 +342,13 @@ def imputation_bad_control(
             predicted, _ = _fit_predict(wide.loc[control], "delta_bc", step1_columns, wide)
             wide["bc_post_imp"] = wide["bc_pre"] + predicted
         else:
-            predicted, _ = _fit_predict(wide.loc[control], "bc_post", step1_columns, wide)
-            step1_pred = predicted
-            wide["bc_post_imp"] = wide["bc_post"]
+            if step1_binary:
+                predicted, _ = _logit_predict(wide.loc[control], "bc_post", step1_columns, wide)
+                step1_probability = predicted
+            else:
+                predicted, _ = _fit_predict(wide.loc[control], "bc_post", step1_columns, wide)
+                step1_pred = predicted
+            wide["bc_post_imp"] = wide["bc_post"].astype(float)
             wide.loc[treated, "bc_post_imp"] = predicted[treated.to_numpy()]
 
     outcome_columns = ["bc_post_imp", "bc_pre"] if bad_control is not None else []
@@ -365,14 +372,29 @@ def imputation_bad_control(
         s_control = _design(wide.loc[control], step1_columns)
         s_treated = _design(wide.loc[treated], step1_columns)
         u = wide.loc[control, "delta_y"].to_numpy(float) - predicted_y[control_mask]
-        if step1_pred is None:
-            raise RuntimeError("bad-control imputation did not produce a first-stage prediction")
-        v = wide.loc[control, "bc_post"].to_numpy(float) - step1_pred[control_mask]
+        if step1_binary:
+            if step1_probability is None:
+                raise RuntimeError("binary bad-control imputation did not produce probabilities")
+            v = wide.loc[control, "bc_post"].to_numpy(float) - step1_probability[control_mask]
+            s_weight = step1_probability[control_mask] * (1 - step1_probability[control_mask])
+            s_treated_weight = step1_probability[treated_mask] * (
+                1 - step1_probability[treated_mask]
+            )
+            sigma_s = s_control.T @ (s_control * s_weight[:, None]) / control.sum()
+        else:
+            if step1_pred is None:
+                raise RuntimeError(
+                    "bad-control imputation did not produce a first-stage prediction"
+                )
+            v = wide.loc[control, "bc_post"].to_numpy(float) - step1_pred[control_mask]
+            s_treated_weight = np.ones(treated.sum())
+            sigma_s = s_control.T @ s_control / control.sum()
         sigma_r = r_control.T @ r_control / control.sum()
-        sigma_s = s_control.T @ s_control / control.sum()
         beta1 = float(outcome_coef[1])
         kappa_r = np.linalg.solve(sigma_r, r_treated.mean(axis=0))
-        kappa_s = np.linalg.solve(sigma_s, beta1 * s_treated.mean(axis=0))
+        kappa_s = np.linalg.solve(
+            sigma_s, beta1 * (s_treated * s_treated_weight[:, None]).mean(axis=0)
+        )
         correction = (r_control @ kappa_r) * u + (s_control @ kappa_s) * v
         influence[control_mask] = -correction / (1.0 - pi)
     else:

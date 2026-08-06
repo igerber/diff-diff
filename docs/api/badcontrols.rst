@@ -14,7 +14,9 @@ selected with ``nuisance_method="ml"`` and requires the optional
 
 The implemented linear path is checked against the installed R
 ``badcontrols`` package on a shared fixture, including its two-step influence
-function standard error.
+function standard error. Binary bad controls use the logistic first stage and
+the Bernoulli-information influence-function correction, also checked against
+R.
 
 .. autosummary::
    :toctree: _autosummary

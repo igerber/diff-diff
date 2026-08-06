@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from diff_diff import did_attgt, didbc, twfe_weights, two_by_two_subset
+from diff_diff import did_attgt, didbc, simulate_bad_controls, twfe_weights, two_by_two_subset
 
 ROOT = Path(__file__).resolve().parent
 REFERENCE = ROOT / "r_parity_reference.R"
@@ -99,3 +99,25 @@ def test_badcontrols_imputation_matches_r(rscript, tmp_path):
     )
     np.testing.assert_allclose(py_result.att, r_result["att"], rtol=1e-8, atol=1e-8)
     np.testing.assert_allclose(py_result.se, r_result["se"], rtol=1e-8, atol=1e-8)
+
+
+def test_binary_badcontrols_imputation_matches_r(rscript, tmp_path):
+    simulated = simulate_bad_controls(
+        n=200,
+        T_max=2,
+        groups=[2],
+        binary_bad_control=True,
+        seed=42,
+    )
+    panel = simulated["data"]
+    r_result = _run_r(rscript, "badcontrols", panel, tmp_path).loc[0]
+    py_result = didbc(
+        panel,
+        yname="Y",
+        gname="G",
+        tname="period",
+        idname="id",
+        bad_control="X",
+    )
+    np.testing.assert_allclose(py_result.att, r_result["att"], rtol=1e-7, atol=1e-7)
+    np.testing.assert_allclose(py_result.se, r_result["se"], rtol=1e-7, atol=1e-7)
