@@ -11,6 +11,10 @@ The doubly robust machine-learning estimator is intentionally not substituted
 silently: requesting ``est_method="dr_ml"`` raises ``NotImplementedError``
 until its cross-fitting and inference contract is ported and validated.
 
+The implemented linear path is checked against the installed R
+``badcontrols`` package on a shared fixture, including its two-step influence
+function standard error.
+
 .. autosummary::
    :toctree: _autosummary
    :nosignatures:

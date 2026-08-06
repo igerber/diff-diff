@@ -8,9 +8,10 @@ def _bad_control_panel():
     rows = []
     for unit in range(20):
         treated = unit >= 10
-        x_pre = unit / 10.0
+        x_pre = (unit % 5) / 5.0
         for period in (0, 1):
-            x = x_pre + (1.5 if treated else 0.5) * period
+            noise = 0.01 * ((unit * 7) % 5) if period == 1 else 0.0
+            x = x_pre + (1.5 if treated else 0.5) * period + noise
             y = 2.0 * x + (3.0 if treated and period == 1 else 0.0)
             rows.append({"id": unit, "period": period, "G": 1 if treated else 0, "Y": y, "X": x})
     return pd.DataFrame(rows)

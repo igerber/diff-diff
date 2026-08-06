@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **R/Python parity fixtures for the new compatibility layers.** The
+  `twfeweights`, `ptetools`, and linear `badcontrols` paths now execute the
+  installed R packages on identical CSV fixtures and compare point estimates,
+  weights, and standard errors at `1e-8` tolerance.
 - **Initial R `badcontrols` imputation port.** Added the explicit two-period
   ``didbc`` / ``imputation_bad_control`` API, influence-function output, and
   ATT extraction helper. The ``dr_ml`` path fails closed until cross-fitting

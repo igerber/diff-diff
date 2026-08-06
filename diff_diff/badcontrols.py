@@ -137,6 +137,7 @@ def imputation_bad_control(
     if not treated.any() or not control.any():
         raise ValueError("both treated and never-treated units are required")
 
+    step1_pred: Optional[np.ndarray] = None
     if bad_control is None:
         wide["bc_pre"] = 0.0
         wide["bc_post_imp"] = 0.0
@@ -155,12 +156,13 @@ def imputation_bad_control(
             wide["bc_post_imp"] = wide["bc_pre"] + predicted
         else:
             predicted, _ = _fit_predict(wide.loc[control], "bc_post", step1_columns, wide)
+            step1_pred = predicted
             wide["bc_post_imp"] = wide["bc_post"]
             wide.loc[treated, "bc_post_imp"] = predicted[treated.to_numpy()]
 
     outcome_columns = ["bc_post_imp", "bc_pre"] if bad_control is not None else []
     outcome_columns += list(covariates)
-    predicted_y, _ = _fit_predict(wide.loc[control], "delta_y", outcome_columns, wide)
+    predicted_y, outcome_coef = _fit_predict(wide.loc[control], "delta_y", outcome_columns, wide)
     residual_treated = (
         wide.loc[treated, "delta_y"].to_numpy(float) - predicted_y[treated.to_numpy()]
     )
@@ -168,11 +170,30 @@ def imputation_bad_control(
     n = len(wide)
     influence = np.zeros(n, dtype=float)
     pi = float(treated.mean())
-    influence[treated.to_numpy()] = (residual_treated - att) / pi
-    control_residual = (
-        wide.loc[control, "delta_y"].to_numpy(float) - predicted_y[control.to_numpy()]
-    )
-    influence[control.to_numpy()] = -control_residual / (1.0 - pi)
+    treated_mask = treated.to_numpy()
+    control_mask = control.to_numpy()
+    influence[treated_mask] = (residual_treated - att) / pi
+    if bad_control is not None and identification_strategy == "unconfoundedness":
+        # Include uncertainty from both OLS steps, as in the R influence
+        # function for the linear imputation estimator.
+        r_control = _design(wide.loc[control], outcome_columns)
+        r_treated = _design(wide.loc[treated], outcome_columns)
+        s_control = _design(wide.loc[control], step1_columns)
+        s_treated = _design(wide.loc[treated], step1_columns)
+        u = wide.loc[control, "delta_y"].to_numpy(float) - predicted_y[control_mask]
+        if step1_pred is None:
+            raise RuntimeError("bad-control imputation did not produce a first-stage prediction")
+        v = wide.loc[control, "bc_post"].to_numpy(float) - step1_pred[control_mask]
+        sigma_r = r_control.T @ r_control / control.sum()
+        sigma_s = s_control.T @ s_control / control.sum()
+        beta1 = float(outcome_coef[1])
+        kappa_r = np.linalg.solve(sigma_r, r_treated.mean(axis=0))
+        kappa_s = np.linalg.solve(sigma_s, beta1 * s_treated.mean(axis=0))
+        correction = (r_control @ kappa_r) * u + (s_control @ kappa_s) * v
+        influence[control_mask] = -correction / (1.0 - pi)
+    else:
+        control_residual = wide.loc[control, "delta_y"].to_numpy(float) - predicted_y[control_mask]
+        influence[control_mask] = -control_residual / (1.0 - pi)
     se = float(np.sqrt(np.mean((influence - influence.mean()) ** 2) / n))
     att_gt = pd.DataFrame(
         {"group": [wide.loc[treated, gname].iloc[0]], "time": [periods[1]], "attgt": [att]}
