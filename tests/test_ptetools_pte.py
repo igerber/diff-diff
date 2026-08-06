@@ -55,4 +55,5 @@ def test_pte_empirical_bootstrap_is_seed_reproducible():
     assert first.bootstrap_distribution is not None
     assert len(first.bootstrap_distribution) == 9
     assert "overall_att" in first.to_dict()
+    assert first.overall_conf_int[0] <= first.overall_conf_int[1]
     assert "PTEResults" in first.summary()

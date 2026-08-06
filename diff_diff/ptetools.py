@@ -101,6 +101,7 @@ class PTEResults:
     influence_functions: Optional[np.ndarray] = None
     cohort_weights: Optional[dict[Any, float]] = None
     bootstrap_distribution: Optional[np.ndarray] = None
+    overall_conf_int: tuple[float, float] = (float("nan"), float("nan"))
 
     def to_dataframe(self) -> pd.DataFrame:
         return self.att_gt.copy()
@@ -112,6 +113,7 @@ class PTEResults:
         return {
             "overall_att": self.overall_att,
             "overall_se": self.overall_se,
+            "overall_conf_int": self.overall_conf_int,
             "att_gt": self.att_gt.to_dict(orient="records"),
             "cohort_weights": self.cohort_weights,
         }
@@ -119,7 +121,7 @@ class PTEResults:
     def summary(self) -> str:
         return (
             f"PTEResults(ATT={self.overall_att:.6f}, "
-            f"SE={self.overall_se:.6f}, cells={len(self.att_gt)})"
+            f"SE={self.overall_se:.6f}, CI={self.overall_conf_int}, cells={len(self.att_gt)})"
         )
 
 
@@ -529,7 +531,14 @@ def pte(
             )
         overall_se = float(np.std(bootstrap_att, ddof=1))
     distribution = np.asarray(bootstrap_att, dtype=float) if bstrap else None
-    return PTEResults(att_gt, overall_att, overall_se, full_influence, cohort_weights, distribution)
+    conf_int = (
+        tuple(np.quantile(distribution, [0.025, 0.975]))
+        if distribution is not None
+        else (float("nan"), float("nan"))
+    )
+    return PTEResults(
+        att_gt, overall_att, overall_se, full_influence, cohort_weights, distribution, conf_int
+    )
 
 
 def pte_default(
