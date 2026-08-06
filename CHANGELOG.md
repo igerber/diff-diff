@@ -53,6 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added ``process_att_gt`` and ``attgt_pte_aggregations`` aggregation aliases.
 - Added ``DoseResult``, ``dose_obj``, and ``pte_dose_results`` containers for
   dose-response outputs.
+- Added ``process_dose_gt``, which combines per-cell dose results into
+  ATT(d) / ACRT(d) curves and overall ATT/ACRT with multiplier-bootstrap
+  standard errors and (optionally) simultaneous critical values, plus a
+  ``bspline_basis`` helper that reproduces ``splines2::bSpline``/``dbs``
+  design matrices and ``mboot_se_and_crit`` for R-style sup-t inference.
 - Added ``panel=False`` repeated-cross-section support to the generic ``pte``
   loop.
 - Added ``panel=False`` repeated-cross-section support to the generic ``pte`` loop.

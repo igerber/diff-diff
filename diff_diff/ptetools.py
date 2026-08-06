@@ -13,6 +13,7 @@ from typing import Any, Optional, Sequence
 
 import numpy as np
 import pandas as pd
+from scipy.interpolate import BSpline
 from scipy.special import expit
 from scipy.stats import norm
 
@@ -112,27 +113,75 @@ class PTEAggregateResult:
 
 @dataclass
 class DoseResult:
-    """Container for dose-response ATT/ACRT curves."""
+    """Container for dose-response ATT/ACRT curves.
+
+    Mirrors R ``ptetools::dose_obj``. ``att_d`` / ``acrt_d`` are either the
+    single-column DataFrames accepted by ``pte_dose_results`` (``dose``+
+    ``att``) or the rich per-dose tables produced by ``process_dose_gt``
+    (``dose``/``att``/``se``/``crit``).
+    """
 
     dose: Any
     overall_att: Optional[float] = None
     overall_att_se: Optional[float] = None
     att_d: Optional[pd.DataFrame] = None
     acrt_d: Optional[pd.DataFrame] = None
+    overall_acrt: Optional[float] = None
+    overall_acrt_se: Optional[float] = None
+    overall_att_inffunc: Optional[np.ndarray] = None
+    overall_acrt_inffunc: Optional[np.ndarray] = None
+    att_d_se: Optional[np.ndarray] = None
+    att_d_crit: Optional[float] = None
+    att_d_inffunc: Optional[np.ndarray] = None
+    acrt_d_se: Optional[np.ndarray] = None
+    acrt_d_crit: Optional[float] = None
+    acrt_d_inffunc: Optional[np.ndarray] = None
+    simultaneous: bool = False
+    alp: float = 0.05
+    biters: int = 100
 
     def to_dict(self) -> dict[str, object]:
+        def frame(x: Optional[pd.DataFrame]) -> Optional[list[dict[str, object]]]:
+            return None if x is None else x.to_dict(orient="records")
+
+        def array(x: Optional[np.ndarray]) -> Optional[list[float]]:
+            return None if x is None else np.asarray(x, float).tolist()
+
         return {
-            "dose": self.dose,
+            "dose": np.asarray(self.dose).tolist(),
             "overall_att": self.overall_att,
             "overall_att_se": self.overall_att_se,
-            "att_d": None if self.att_d is None else self.att_d.to_dict(orient="records"),
-            "acrt_d": None if self.acrt_d is None else self.acrt_d.to_dict(orient="records"),
+            "overall_acrt": self.overall_acrt,
+            "overall_acrt_se": self.overall_acrt_se,
+            "att_d": frame(self.att_d),
+            "att_d_se": array(self.att_d_se),
+            "att_d_crit": self.att_d_crit,
+            "acrt_d": frame(self.acrt_d),
+            "acrt_d_se": array(self.acrt_d_se),
+            "acrt_d_crit": self.acrt_d_crit,
+            "simultaneous": self.simultaneous,
         }
 
     def summary(self) -> pd.DataFrame:
         if self.att_d is not None:
             return self.att_d.copy()
         return pd.DataFrame({"dose": np.asarray(self.dose)})
+
+
+def dose_rich_table(
+    dose: Any,
+    est: np.ndarray,
+    se: Optional[np.ndarray],
+    crit: Optional[float],
+) -> pd.DataFrame:
+    """Build the rich ``dose``/``att``/``se``/``crit`` table stored on ``att_d``."""
+    out = pd.DataFrame({"dose": np.asarray(dose)})
+    out["att"] = np.asarray(est)
+    if se is not None:
+        out["se"] = np.squeeze(np.asarray(se))
+    if crit is not None:
+        out["crit"] = float(crit)
+    return out
 
 
 def dose_obj(
@@ -752,6 +801,327 @@ def mboot2(
     rng = np.random.default_rng(seed)
     multipliers = rng.normal(size=(int(biters), influence_functions.shape[0]))
     return multipliers @ influence_functions / influence_functions.shape[0]
+
+
+def _type1_quantile(values: np.ndarray, q: float) -> float:
+    """R ``quantile(..., type=1)`` — inverse of the empirical distribution function."""
+    values = np.sort(np.asarray(values, dtype=float))
+    n = values.size
+    if n == 0:
+        return float("nan")
+    if n == 1:
+        return float(values[0])
+    j = n * q
+    if j < 1:
+        return float(values[0])
+    if np.isclose(j, round(j)):
+        return float(values[max(int(j) - 1, 0)])
+    return float(values[int(np.floor(j))])
+
+
+def mboot_se_and_crit(
+    draws: np.ndarray,
+    *,
+    alp: float = 0.05,
+    cband: bool = True,
+) -> tuple[np.ndarray, float, bool]:
+    """Convert ``mboot2`` draws into R-style bootstrap SEs and a sup-t critical value.
+
+    ``draws`` is the ``(biters, n_cols)`` matrix returned by ``mboot2`` (i.e.
+    the ``colMeans(ub * inffunc)`` terms R multiplies by ``sqrt(n)`` before
+    computing its IQR-based standard errors — the ``sqrt(n)`` factors cancel).
+    Returns ``(se, crit_val, cband_ok)`` following ``process_att_gt::mboot2``.
+    """
+    draws = np.asarray(draws, dtype=float)
+    if draws.ndim != 2:
+        raise ValueError("draws must be a two-dimensional array")
+    iqr_scale = norm.ppf(0.75) - norm.ppf(0.25)
+    se = np.array(
+        [(_type1_quantile(col, 0.75) - _type1_quantile(col, 0.25)) / iqr_scale for col in draws.T]
+    )
+    finite_se = np.all(np.isfinite(se)) and np.all(se > 0)
+    if finite_se:
+        sup_t = np.max(np.abs(draws / se), axis=1)
+        crit_val = _type1_quantile(sup_t, 1 - alp)
+    else:
+        crit_val = float("nan")
+    return se, float(crit_val), bool(finite_se and crit_val >= norm.ppf(1 - alp / 2))
+
+
+def _weighted_combine_list(entries: Sequence[Any], weights: np.ndarray) -> np.ndarray:
+    """``BMisc::weighted_combine_list`` — normalize weights, then sum ``w_i * entry_i``."""
+    weights = np.asarray(weights, dtype=float)
+    total = weights.sum()
+    if total == 0:
+        raise ValueError("weights sum to zero")
+    weights = weights / total
+    first = np.asarray(entries[0], dtype=float) * weights[0]
+    for entry, weight in zip(entries[1:], weights[1:]):
+        first = first + np.asarray(entry, dtype=float) * weight
+    return first
+
+
+def bspline_basis(
+    x: Any,
+    *,
+    degree: int = 3,
+    knots: Optional[Sequence[float]] = None,
+    derivative: int = 0,
+    intercept: bool = False,
+) -> np.ndarray:
+    """B-spline design matrix matching ``splines2::bSpline`` / ``splines2::dbs``.
+
+    Boundary knots are the range of ``x`` (clamped, multiplicity ``degree+1``);
+    ``intercept=False`` (matching splines2's default) drops the first basis
+    function, so the returned matrix has ``degree + len(knots)`` columns, the
+    convention R's ``process_dose_gt`` relies on before ``cbind``-ing a
+    constant column.
+    """
+    x = np.asarray(x, dtype=float)
+    if degree < 0:
+        raise ValueError("degree must be non-negative")
+    if derivative not in {0, 1}:
+        raise ValueError("derivative must be 0 or 1")
+    knots = np.asarray([], dtype=float) if knots is None else np.asarray(knots, dtype=float)
+    if np.any((knots <= x.min()) | (knots >= x.max())):
+        raise ValueError("interior knots must lie strictly inside the range of x")
+    if np.any(np.diff(knots) <= 0):
+        raise ValueError("knots must be strictly increasing")
+    t = np.concatenate(
+        [
+            np.repeat(x.min(), degree + 1),
+            knots,
+            np.repeat(x.max(), degree + 1),
+        ]
+    )
+    n_coeff = len(t) - degree - 1
+    if derivative == 0:
+        design = BSpline.design_matrix(x, t, degree).toarray()
+    else:
+        td = t[1:-1]
+        kd = degree - 1
+        transform = np.zeros((n_coeff - 1, n_coeff))
+        for j in range(n_coeff - 1):
+            denom = t[j + degree + 1] - t[j + 1]
+            transform[j, j] = -degree / denom
+            transform[j, j + 1] = degree / denom
+        design = np.column_stack([BSpline(td, transform[:, j], kd)(x) for j in range(n_coeff)])
+    if not intercept:
+        design = design[:, 1:]
+    return np.asarray(design, dtype=float)
+
+
+def _cell_results(gt_results: Any) -> list[dict[str, Any]]:
+    """Read the per-cell ``extra_gt_returns`` entries off a ``gt_results`` dict."""
+    raw = gt_results["extra_gt_returns"]
+    out = []
+    for entry in raw:
+        inner = entry["extra_gt_returns"]
+        required = {"att.d", "acrt.d", "att.overall", "acrt.overall", "bread", "Xe"}
+        missing = sorted(required.difference(inner))
+        if missing:
+            raise ValueError(f"dose cell results are missing: {missing}")
+        out.append(inner)
+    return out
+
+
+def process_dose_gt(
+    gt_results: dict[str, Any],
+    ptep: dict[str, Any],
+    *,
+    seed: Optional[int] = None,
+) -> DoseResult:
+    """Combine per-cell dose results into ATT(d) / ACRT(d) curves and overall effects.
+
+    Mirrors R ``ptetools::process_dose_gt``. ``gt_results`` carries the
+    group-time loop output — ``inffunc`` (the ``n x n_cells`` influence-function
+    matrix, zero-padded off-support rows per the R ``compute.pte`` convention),
+    ``attgt_list`` (``group``/``time.period``/``att``) and ``extra_gt_returns``
+    whose nested ``extra_gt_returns`` give ``att.d``, ``acrt.d``, ``att.overall``,
+    ``acrt.overall``, ``bet``, ``bread`` and ``Xe`` for each cell. ``ptep`` is a
+    dict of parameters: ``data``/``yname``/``gname``/``tname``/``idname`` (panel
+    fields), ``anticipation``, ``base_period``, ``control_group``, ``dvals``,
+    ``degree``, ``knots``, ``biters``, ``alp``, ``cband`` and ``bstrap``.
+
+    Dose standard errors always come from the multiplier bootstrap, matching R.
+    """
+    if not isinstance(gt_results, dict):
+        raise TypeError("gt_results must be a dict")
+    ptep = dict(ptep)
+    for key in ("data", "yname", "gname", "tname"):
+        if key not in ptep:
+            raise ValueError(f"ptep is missing required field: {key}")
+
+    def opt(key: str, default: Any) -> Any:
+        return ptep.get(key, default)
+
+    attgt_list = gt_results["attgt_list"]
+    att_gt = pd.DataFrame(
+        {
+            "group": [cell["group"] for cell in attgt_list],
+            "time": [cell["time.period"] for cell in attgt_list],
+            "attgt": [cell["att"] for cell in attgt_list],
+        }
+    )
+    o_weights = overall_weights(att_gt)
+    o_weight = o_weights["overall_weight"].to_numpy(float)
+
+    cells = _cell_results(gt_results)
+    groups = [entry["group"] for entry in gt_results["extra_gt_returns"]]
+    times = [entry["time.period"] for entry in gt_results["extra_gt_returns"]]
+    if not (
+        np.array_equal(groups, o_weights["group"]) and np.array_equal(times, o_weights["time"])
+    ):
+        raise ValueError(
+            "in processing dose results, mismatch between order of groups and time periods"
+        )
+
+    att_d_gt = [cell["att.d"] for cell in cells]
+    acrt_d_gt = [cell["acrt.d"] for cell in cells]
+    att_overall_gt = np.asarray([cell["att.overall"] for cell in cells], dtype=float)
+    acrt_overall_gt = np.asarray([cell["acrt.overall"] for cell in cells], dtype=float)
+    bread_gt = [cell["bread"] for cell in cells]
+    Xe_gt = [np.asarray(cell["Xe"], dtype=float) for cell in cells]
+
+    acrt_gt_inffunc = np.asarray(gt_results["inffunc"], dtype=float)
+    if acrt_gt_inffunc.ndim != 2:
+        raise ValueError("gt_results['inffunc'] must be a two-dimensional array")
+    n_units = acrt_gt_inffunc.shape[0]
+    if acrt_gt_inffunc.shape[1] != att_overall_gt.size:
+        raise ValueError("gt_results['inffunc'] must have one column per group-time cell")
+
+    biters = int(opt("biters", 100))
+    alp = float(opt("alp", 0.05))
+    cband = bool(opt("cband", True))
+    if biters < 2:
+        raise ValueError("biters must be an integer greater than or equal to 2")
+
+    # ------------------------------------------------------------------
+    # overall ATT: recomputed through the generic pte loop (R's self-call
+    # to pte_default), then sanity-checked against the cell contributions.
+    # ------------------------------------------------------------------
+    att_res = pte(
+        ptep["data"],
+        yname=ptep["yname"],
+        gname=ptep["gname"],
+        tname=ptep["tname"],
+        idname=ptep.get("idname"),
+        panel=bool(opt("panel", True)),
+        control_group=opt("control_group", "notyettreated"),
+        anticipation=int(opt("anticipation", 0)),
+        base_period=opt("base_period", "varying"),
+        covariates=(),
+        bstrap=False,
+    )
+    overall_att = float(att_res.overall_att)
+    att_inffunc = np.nan_to_num(np.asarray(att_res.influence_functions, dtype=float), nan=0.0)
+    if att_inffunc.shape[1] != att_overall_gt.size:
+        raise ValueError("influence function matrix does not align with group-time cells")
+    overall_att_inffunc = att_inffunc @ (o_weight / o_weight.sum())
+    overall_att_se = float(
+        mboot_se_and_crit(
+            mboot2(overall_att_inffunc[:, None], biters=biters, seed=seed),
+            alp=alp,
+            cband=False,
+        )[0][0]
+    )
+    if not np.isclose(overall_att, float(np.average(att_overall_gt, weights=o_weight))):
+        raise ValueError("failed sanity check: something off with calculating overall att")
+
+    # ------------------------------------------------------------------
+    # overall ACRT
+    # ------------------------------------------------------------------
+    overall_acrt = float(np.average(acrt_overall_gt, weights=o_weight))
+    overall_acrt_inffunc = acrt_gt_inffunc @ (o_weight / o_weight.sum())
+    overall_acrt_se = float(
+        mboot_se_and_crit(
+            mboot2(overall_acrt_inffunc[:, None], biters=biters, seed=seed),
+            alp=alp,
+            cband=False,
+        )[0][0]
+    )
+
+    # point estimates of ATT(d) and ACRT(d)
+    att_d = _weighted_combine_list(att_d_gt, o_weight)
+    acrt_d = _weighted_combine_list(acrt_d_gt, o_weight)
+
+    dvals = np.asarray(opt("dvals", None), dtype=float)
+    if dvals is None or dvals.size == 0:
+        raise ValueError("ptep['dvals'] must be a non-empty vector of dose values")
+    degree = int(opt("degree", 3))
+    knots = opt("knots", None)
+    if knots is None:
+        knots = np.array([], dtype=float)
+    bs_grid = np.column_stack(
+        [np.ones(dvals.size), bspline_basis(dvals, degree=degree, knots=knots)]
+    )
+    bs_deriv = np.column_stack(
+        [np.zeros(dvals.size), bspline_basis(dvals, degree=degree, knots=knots, derivative=1)]
+    )
+
+    # per-cell influence functions for ATT(d)
+    n1_vec = np.array([x.shape[0] for x in Xe_gt])
+    keep_mat = acrt_gt_inffunc != 0
+    if not np.array_equal(keep_mat.sum(axis=0), n1_vec):
+        raise ValueError("something off with overall influence function")
+    keep_mat2 = (att_inffunc != 0) & (~keep_mat)
+    comparison_inffunc = np.where(keep_mat2, att_inffunc, 0.0)
+    att_d_gt_inffunc = []
+    for i, x in enumerate(Xe_gt):
+        out = np.zeros((n_units, dvals.size))
+        this_inffunc = x @ bread_gt[i] @ bs_grid.T
+        out[keep_mat[:, i], :] = (n_units / n1_vec[i]) * this_inffunc
+        out[keep_mat2[:, i], :] = -comparison_inffunc[keep_mat2[:, i], i][:, None]
+        att_d_gt_inffunc.append(out)
+    att_d_inffunc = _weighted_combine_list(att_d_gt_inffunc, o_weight)
+
+    att_d_se, att_d_crit_val, att_cband_ok = mboot_se_and_crit(
+        mboot2(att_d_inffunc, biters=biters, seed=seed), alp=alp, cband=cband
+    )
+    if cband and att_cband_ok:
+        att_d_crit_val = float(crit_val_checks(att_d_crit_val, alp)[0])
+    elif not cband:
+        att_d_crit_val = float(norm.ppf(1 - alp / 2))
+
+    # per-cell influence functions for ACRT(d): same but derivative basis,
+    # no comparison-group contribution
+    acrt_d_gt_inffunc = []
+    for i, x in enumerate(Xe_gt):
+        out = np.zeros((n_units, dvals.size))
+        this_inffunc = x @ bread_gt[i] @ bs_deriv.T
+        out[keep_mat[:, i], :] = (n_units / n1_vec[i]) * this_inffunc
+        acrt_d_gt_inffunc.append(out)
+    acrt_d_inffunc = _weighted_combine_list(acrt_d_gt_inffunc, o_weight)
+
+    acrt_d_se, acrt_d_crit_val, acrt_cband_ok = mboot_se_and_crit(
+        mboot2(acrt_d_inffunc, biters=biters, seed=seed), alp=alp, cband=cband
+    )
+    if cband and acrt_cband_ok:
+        acrt_d_crit_val = float(crit_val_checks(acrt_d_crit_val, alp)[0])
+    elif not cband:
+        acrt_d_crit_val = float(norm.ppf(1 - alp / 2))
+
+    simultaneous = bool(cband and att_cband_ok and acrt_cband_ok)
+    return DoseResult(
+        dose=dvals,
+        overall_att=overall_att,
+        overall_att_se=overall_att_se,
+        overall_acrt=overall_acrt,
+        overall_acrt_se=overall_acrt_se,
+        overall_att_inffunc=overall_att_inffunc,
+        overall_acrt_inffunc=overall_acrt_inffunc,
+        att_d=dose_rich_table(dvals, att_d, att_d_se, att_d_crit_val),
+        att_d_se=att_d_se,
+        att_d_crit=att_d_crit_val,
+        att_d_inffunc=att_d_inffunc,
+        acrt_d=dose_rich_table(dvals, acrt_d, acrt_d_se, acrt_d_crit_val),
+        acrt_d_se=acrt_d_se,
+        acrt_d_crit=acrt_d_crit_val,
+        acrt_d_inffunc=acrt_d_inffunc,
+        simultaneous=simultaneous,
+        alp=alp,
+        biters=biters,
+    )
 
 
 def pte_aggte(

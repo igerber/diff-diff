@@ -30,6 +30,9 @@ Custom estimators can construct containers with ``group_time_att`` and
 ``process_att_gt`` and ``attgt_pte_aggregations`` provide aggregation
 dispatch aliases for custom group-time outputs.
 ``dose_obj`` and ``pte_dose_results`` provide a dose-response result surface.
+``process_dose_gt`` combines per-group-time dose results into ATT(d) / ACRT(d)
+curves and overall ATT/ACRT with multiplier-bootstrap standard errors;
+``bspline_basis`` builds the splines2-compatible spline design used there.
 ``panel_empirical_bootstrap`` and ``mboot2`` expose the two bootstrap engines
 for custom workflows.
 ``pte_params``, ``pte_results``, and ``pte_emp_boot`` provide R-style aliases.
@@ -53,6 +56,9 @@ for custom workflows.
    diff_diff.dose_obj
    diff_diff.pte_dose_results
    diff_diff.DoseResult
+   diff_diff.process_dose_gt
+   diff_diff.bspline_basis
+   diff_diff.mboot_se_and_crit
    diff_diff.panel_empirical_bootstrap
    diff_diff.mboot2
    diff_diff.pte_params
