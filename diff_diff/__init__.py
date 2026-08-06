@@ -329,6 +329,7 @@ from diff_diff.twfeweights import (
     effective_sample_size,
     frac_treated_extreme,
     ggtwfeweights,
+    gt_weights,
     implicit_twfe_weights,
     implicit_twfe_weights_gt,
     log_ratio_sd,
@@ -338,6 +339,7 @@ from diff_diff.twfeweights import (
     twfe_cov_bal_gt,
     twfe_weights,
     two_period_aipw_weights,
+    two_period_covs_obj,
     two_period_reg_weights,
 )
 from diff_diff.two_stage import (
@@ -491,11 +493,13 @@ __all__ = [
     "pooled_sd",
     "log_ratio_sd",
     "frac_treated_extreme",
+    "gt_weights",
     "two_period_reg_weights",
     "implicit_twfe_weights",
     "implicit_twfe_weights_gt",
     "combine_twfe_weights_gt",
     "two_period_aipw_weights",
+    "two_period_covs_obj",
     # WooldridgeDiD (ETWFE)
     "WooldridgeDiD",
     "WooldridgeDiDResults",

@@ -65,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added ``aipw_cov_bal`` and ``aipw_cov_bal_gt`` balance diagnostics.
 - Added ``mp_covariate_bal_summary_helper`` for weighted multi-period balance
   summaries.
+- Added ``gt_weights`` and ``two_period_covs_obj`` result-object factories.
 - **ContinuousDiD post-fit `aggregate()` - a MIXED view/recompute adopter**
   (v4 program 2(b) PR-3c; ledger row [M-025]). `ContinuousDiD.fit(aggregate=)`
   is deprecated (`FutureWarning`; removed in 4.0, and the no-underscore

@@ -97,6 +97,32 @@ def two_period_covs_obj(
     )
 
 
+def gt_weights(
+    *,
+    g: Any,
+    tp: Any,
+    treated: Any,
+    comparison: Any,
+    weights_treated: Any,
+    weights_comparison: Any,
+    weighted_outcome_diff: float,
+    alpha_weight: float,
+    ess: float,
+) -> GTWeightsResult:
+    """Construct a local ``GTWeightsResult`` object."""
+    return GTWeightsResult(
+        g,
+        tp,
+        np.asarray(treated, float),
+        np.asarray(comparison, float),
+        np.asarray(weights_treated, float),
+        np.asarray(weights_comparison, float),
+        float(weighted_outcome_diff),
+        float(alpha_weight),
+        float(ess),
+    )
+
+
 def _coerce_inputs(
     attgt: pd.DataFrame,
     data: pd.DataFrame,
