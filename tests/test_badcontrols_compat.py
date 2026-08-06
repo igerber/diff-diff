@@ -99,3 +99,22 @@ def test_dr_small_treated_group_falls_back_to_imputation():
         min_group_size=5,
     )
     assert result.method == "imputation"
+
+
+def test_badcontrols_bootstrap_is_reproducible():
+    kwargs = {
+        "yname": "Y",
+        "gname": "G",
+        "tname": "period",
+        "idname": "id",
+        "bad_control": "X",
+        "bstrap": True,
+        "biters": 7,
+        "seed": 12,
+    }
+    first = didbc(_bad_control_panel(), **kwargs)
+    second = didbc(_bad_control_panel(), **kwargs)
+    assert first.bootstrap_distribution is not None
+    assert np.allclose(first.bootstrap_distribution, second.bootstrap_distribution)
+    assert np.isfinite(first.se)
+    assert first.conf_int[0] <= first.conf_int[1]

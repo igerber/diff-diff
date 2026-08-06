@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cohort aggregation surface.
 - Added DR overlap and minimum-treated-group safeguards with explicit
   imputation fallback.
+- Added seeded cohort-stratified empirical bootstrap, bootstrap SE, and
+  percentile confidence intervals to ``didbc``.
 - **R `ptetools` compatibility primitives.** Added panel setup, two-period
   group-time subsetting, ATT(g,t) influence-function containers, unadjusted
   DID estimation, the generic ``pte`` group-time loop, and group/dynamic

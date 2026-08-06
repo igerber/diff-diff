@@ -24,6 +24,8 @@ The parametric and random-forest DR paths also loop over staggered cells; their
 joint multi-period inference is not yet combined across cells.
 The DR entry point validates ``overlap_threshold`` and ``min_group_size`` and
 falls back to imputation when the propensity model is not sufficiently supported.
+Set ``bstrap=True`` for a seeded, cohort-stratified empirical bootstrap with
+percentile confidence intervals.
 
 .. autosummary::
    :toctree: _autosummary

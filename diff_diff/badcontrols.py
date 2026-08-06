@@ -25,6 +25,8 @@ class BadControlsResult:
     att_gt: pd.DataFrame
     influence_function: np.ndarray
     method: str = "imputation"
+    bootstrap_distribution: Optional[np.ndarray] = None
+    conf_int: tuple[float, float] = (float("nan"), float("nan"))
 
     @property
     def overall_att(self) -> float:
@@ -40,6 +42,7 @@ class BadControlsResult:
             "se": self.se,
             "method": self.method,
             "att_gt": self.att_gt.to_dict(orient="records"),
+            "conf_int": self.conf_int,
         }
 
 
@@ -547,9 +550,69 @@ def didbc(
     random_state: Optional[int] = None,
     overlap_threshold: float = 0.99,
     min_group_size: int = 5,
+    bstrap: bool = False,
+    biters: int = 100,
+    seed: Optional[int] = None,
     **_: object,
 ) -> BadControlsResult:
     """Python spelling of R ``didbc`` for its linear imputation path."""
+    if bstrap:
+        if not isinstance(biters, (int, np.integer)) or biters < 2:
+            raise ValueError("biters must be an integer greater than or equal to 2")
+        rng = np.random.default_rng(seed)
+        bootstrap_att = []
+        for _ in range(int(biters)):
+            pieces = []
+            for _, group_data in data.groupby(gname, sort=False):
+                units = pd.unique(group_data[idname])
+                for draw, unit in enumerate(rng.choice(units, size=len(units), replace=True)):
+                    piece = group_data.loc[group_data[idname].eq(unit)].copy()
+                    piece[idname] = f"boot-{draw}-{len(pieces)}"
+                    pieces.append(piece)
+            sampled = pd.concat(pieces, ignore_index=True)
+            bootstrap_att.append(
+                didbc(
+                    sampled,
+                    yname=yname,
+                    gname=gname,
+                    tname=tname,
+                    idname=idname,
+                    bad_control=bad_control,
+                    covariates=covariates,
+                    bad_control_covariates=bad_control_covariates,
+                    identification_strategy=identification_strategy,
+                    est_method=est_method,
+                    nuisance_method=nuisance_method,
+                    n_folds=n_folds,
+                    random_state=random_state,
+                    overlap_threshold=overlap_threshold,
+                    min_group_size=min_group_size,
+                    bstrap=False,
+                ).att
+            )
+        base = didbc(
+            data,
+            yname=yname,
+            gname=gname,
+            tname=tname,
+            idname=idname,
+            bad_control=bad_control,
+            covariates=covariates,
+            bad_control_covariates=bad_control_covariates,
+            identification_strategy=identification_strategy,
+            est_method=est_method,
+            nuisance_method=nuisance_method,
+            n_folds=n_folds,
+            random_state=random_state,
+            overlap_threshold=overlap_threshold,
+            min_group_size=min_group_size,
+            bstrap=False,
+        )
+        distribution = np.asarray(bootstrap_att, dtype=float)
+        base.se = float(np.std(distribution, ddof=1))
+        base.bootstrap_distribution = distribution
+        base.conf_int = tuple(np.quantile(distribution, [0.025, 0.975]))
+        return base
     if data[tname].nunique() > 2:
         if est_method == "imputation":
             return staggered_imputation_bad_control(
