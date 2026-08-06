@@ -216,6 +216,20 @@ from diff_diff.profile import (
     TreatmentDoseShape,
     profile_panel,
 )
+from diff_diff.ptetools import (
+    ATTGTResult,
+    GTDataFrame,
+    PTEAggregateResult,
+    PTEParams,
+    TwoByTwoSubset,
+    attgt_if,
+    did_attgt,
+    gt_data_frame,
+    overall_weights,
+    pte_aggte,
+    setup_pte,
+    two_by_two_subset,
+)
 from diff_diff.rdd import (
     RegressionDiscontinuity,
     RegressionDiscontinuityResults,
@@ -515,6 +529,19 @@ __all__ = [
     "PreTrendsPowerCurve",
     "compute_pretrends_power",
     "compute_mdv",
+    # ptetools compatibility primitives
+    "PTEParams",
+    "GTDataFrame",
+    "TwoByTwoSubset",
+    "ATTGTResult",
+    "PTEAggregateResult",
+    "setup_pte",
+    "gt_data_frame",
+    "two_by_two_subset",
+    "attgt_if",
+    "did_attgt",
+    "overall_weights",
+    "pte_aggte",
     # Survey support
     "SurveyDesign",
     "SurveyMetadata",

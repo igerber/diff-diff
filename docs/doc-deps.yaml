@@ -100,6 +100,18 @@ sources:
       - path: docs/references.rst
         type: user_guide
 
+  diff_diff/ptetools.py:
+    drift_risk: high
+    docs:
+      - path: docs/api/ptetools.rst
+        type: api_reference
+      - path: docs/api/index.rst
+        type: api_reference
+      - path: docs/references.rst
+        type: user_guide
+      - path: CHANGELOG.md
+        type: user_guide
+
   # ── Base estimators ──────��───────────────────────────────────────────
 
   diff_diff/estimators.py:

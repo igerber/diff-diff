@@ -98,6 +98,14 @@ Weights on group-time average treatment effects, including the R
 
    twfeweights
 
+Panel Treatment-Effects Primitives
+----------------------------------
+
+.. toctree::
+   :maxdepth: 1
+
+   ptetools
+
 Visualization
 -------------
 
