@@ -118,3 +118,18 @@ def test_badcontrols_bootstrap_is_reproducible():
     assert np.allclose(first.bootstrap_distribution, second.bootstrap_distribution)
     assert np.isfinite(first.se)
     assert first.conf_int[0] <= first.conf_int[1]
+
+
+def test_imputation_accepts_covariate_changes():
+    panel = _bad_control_panel()
+    panel["Z"] = panel["id"] / 10 * panel["period"]
+    result = didbc(
+        panel,
+        yname="Y",
+        gname="G",
+        tname="period",
+        idname="id",
+        bad_control="X",
+        d_covariates=["Z"],
+    )
+    assert np.isfinite(result.att)

@@ -286,6 +286,7 @@ def imputation_bad_control(
     bad_control: Optional[str] = None,
     covariates: Sequence[str] = (),
     bad_control_covariates: Sequence[str] = (),
+    d_covariates: Sequence[str] = (),
     bad_control_d_covariates: Sequence[str] = (),
     identification_strategy: str = "unconfoundedness",
 ) -> BadControlsResult:
@@ -304,9 +305,8 @@ def imputation_bad_control(
     if len(periods) != 2:
         raise ValueError("imputation_bad_control currently requires exactly two periods")
     extra_columns = list(dict.fromkeys([bad_control] if bad_control else []))
-    extra_columns += (
-        list(covariates) + list(bad_control_covariates) + list(bad_control_d_covariates)
-    )
+    extra_columns += list(covariates) + list(bad_control_covariates)
+    extra_columns += list(d_covariates) + list(bad_control_d_covariates)
     wide = _wide_panel(
         data,
         yname,
@@ -319,6 +319,8 @@ def imputation_bad_control(
     )
     y_pre, y_post = f"{yname}_{periods[0]}", f"{yname}_{periods[1]}"
     wide["delta_y"] = wide[y_post] - wide[y_pre]
+    for column in list(d_covariates) + list(bad_control_d_covariates):
+        wide[f"d_{column}"] = wide[f"{column}_{periods[1]}"] - wide[f"{column}_{periods[0]}"]
     treated = wide["D"].eq(1)
     control = ~treated
     if not treated.any() or not control.any():
@@ -336,7 +338,8 @@ def imputation_bad_control(
         wide["bc_pre"] = wide[bc_pre]
         wide["bc_post"] = wide[bc_post]
         step1_binary = wide["bc_post"].nunique() == 2
-        auxiliary = list(bad_control_covariates) + list(bad_control_d_covariates) + list(covariates)
+        auxiliary = list(bad_control_covariates) + [f"d_{c}" for c in bad_control_d_covariates]
+        auxiliary += list(covariates) + [f"d_{c}" for c in d_covariates]
         step1_columns = (
             ["bc_pre"] + auxiliary if identification_strategy == "unconfoundedness" else auxiliary
         )
@@ -355,7 +358,7 @@ def imputation_bad_control(
             wide.loc[treated, "bc_post_imp"] = predicted[treated.to_numpy()]
 
     outcome_columns = ["bc_post_imp", "bc_pre"] if bad_control is not None else []
-    outcome_columns += list(covariates)
+    outcome_columns += list(covariates) + [f"d_{c}" for c in d_covariates]
     predicted_y, outcome_coef = _fit_predict(wide.loc[control], "delta_y", outcome_columns, wide)
     residual_treated = (
         wide.loc[treated, "delta_y"].to_numpy(float) - predicted_y[treated.to_numpy()]
@@ -420,6 +423,8 @@ def staggered_imputation_bad_control(
     bad_control: Optional[str] = None,
     covariates: Sequence[str] = (),
     bad_control_covariates: Sequence[str] = (),
+    d_covariates: Sequence[str] = (),
+    bad_control_d_covariates: Sequence[str] = (),
     control_group: str = "nevertreated",
 ) -> BadControlsResult:
     """Run the linear imputation estimator separately for each ``(g,t)`` cell."""
@@ -452,6 +457,8 @@ def staggered_imputation_bad_control(
                 bad_control=bad_control,
                 covariates=covariates,
                 bad_control_covariates=bad_control_covariates,
+                d_covariates=d_covariates,
+                bad_control_d_covariates=bad_control_d_covariates,
             )
             rows.append({"group": group, "time": period, "attgt": result.att, "se": result.se})
     att_gt = pd.DataFrame(rows)
@@ -543,6 +550,8 @@ def didbc(
     bad_control: Optional[str] = None,
     covariates: Sequence[str] = (),
     bad_control_covariates: Sequence[str] = (),
+    d_covariates: Sequence[str] = (),
+    bad_control_d_covariates: Sequence[str] = (),
     identification_strategy: str = "unconfoundedness",
     est_method: str = "imputation",
     nuisance_method: str = "ml",
@@ -624,6 +633,8 @@ def didbc(
                 bad_control=bad_control,
                 covariates=covariates,
                 bad_control_covariates=bad_control_covariates,
+                d_covariates=d_covariates,
+                bad_control_d_covariates=bad_control_d_covariates,
             )
         if est_method == "dr_ml":
             return staggered_dr_bad_control(
@@ -722,6 +733,8 @@ def didbc(
         bad_control=bad_control,
         covariates=covariates,
         bad_control_covariates=bad_control_covariates,
+        d_covariates=d_covariates,
+        bad_control_d_covariates=bad_control_d_covariates,
         identification_strategy=identification_strategy,
     )
 
