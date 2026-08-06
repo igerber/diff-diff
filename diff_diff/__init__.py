@@ -308,9 +308,14 @@ from diff_diff.trop import (
 )
 from diff_diff.twfeweights import (
     MPWeightsResult,
+    TwoPeriodCovariatesResult,
     att_simple_weights,
     attO_weights,
+    effective_sample_size,
+    frac_treated_extreme,
     ggtwfeweights,
+    log_ratio_sd,
+    pooled_sd,
     twfe_weights,
 )
 from diff_diff.two_stage import (
@@ -448,10 +453,15 @@ __all__ = [
     "twowayfeweights",
     # R twfeweights compatibility
     "MPWeightsResult",
+    "TwoPeriodCovariatesResult",
     "twfe_weights",
     "attO_weights",
     "att_simple_weights",
     "ggtwfeweights",
+    "effective_sample_size",
+    "pooled_sd",
+    "log_ratio_sd",
+    "frac_treated_extreme",
     # WooldridgeDiD (ETWFE)
     "WooldridgeDiD",
     "WooldridgeDiDResults",

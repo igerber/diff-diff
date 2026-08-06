@@ -40,6 +40,18 @@ class MPWeightsResult:
         return self.weights_df[key]
 
 
+@dataclass
+class TwoPeriodCovariatesResult:
+    """Container for two-period regression-weight diagnostics."""
+
+    est: float
+    weights: np.ndarray
+    dy: np.ndarray
+    treatment: np.ndarray
+    cov_balance_df: Optional[pd.DataFrame] = None
+    ess: Optional[float] = None
+
+
 def _coerce_inputs(
     attgt: pd.DataFrame,
     data: pd.DataFrame,
@@ -239,3 +251,94 @@ def ggtwfeweights(result: MPWeightsResult) -> Any:
     ax.set_ylabel("ATT(g,t)")
     ax.legend(title="post")
     return ax
+
+
+def effective_sample_size(est_weights: Any, sampling_weights: Optional[Any] = None) -> float:
+    """Compute the effective sample size of normalized estimation weights."""
+    weights = np.asarray(est_weights, dtype=float)
+    sampling = (
+        np.ones(len(weights)) if sampling_weights is None else np.asarray(sampling_weights, float)
+    )
+    sampling = sampling / np.mean(sampling)
+    weights = weights / np.average(weights, weights=sampling)
+    return float(weights.sum() ** 2 / np.sum(weights**2))
+
+
+def pooled_sd(x: Any, treatment: Any, sampling_weights: Optional[Any] = None) -> float:
+    """Compute the treated/control pooled weighted standard deviation."""
+    values = np.asarray(x, dtype=float)
+    d = np.asarray(treatment).astype(bool)
+    w = np.ones(len(values)) if sampling_weights is None else np.asarray(sampling_weights, float)
+    w = w / np.mean(w)
+
+    def variance(z: np.ndarray, z_w: np.ndarray) -> float:
+        mean = np.average(z, weights=z_w)
+        return float(np.average((z - mean) ** 2, weights=z_w))
+
+    n1, n0 = w[d].sum(), w[~d].sum()
+    return float(
+        np.sqrt(
+            ((n1 - 1) * variance(values[d], w[d]) + (n0 - 1) * variance(values[~d], w[~d]))
+            / (n1 + n0 - 2)
+        )
+    )
+
+
+def log_ratio_sd(
+    x: Any,
+    treatment: Any,
+    est_weights: Optional[Any] = None,
+    sampling_weights: Optional[Any] = None,
+) -> float:
+    """Compare treated/control weighted standard deviations on a log scale."""
+    values = np.asarray(x, dtype=float)
+    d = np.asarray(treatment).astype(bool)
+    sampling = (
+        np.ones(len(values)) if sampling_weights is None else np.asarray(sampling_weights, float)
+    )
+    sampling = sampling / np.mean(sampling)
+    estimation = (
+        np.ones(len(values)) if est_weights is None else np.asarray(est_weights, float).copy()
+    )
+    estimation[d] /= np.average(estimation[d], weights=sampling[d])
+    estimation[~d] /= np.average(estimation[~d], weights=sampling[~d])
+
+    def spread(mask: np.ndarray) -> float:
+        weighted = values[mask] * estimation[mask]
+        center = np.average(weighted, weights=sampling[mask])
+        return float(
+            np.sqrt(
+                (sampling[mask].sum() - 1)
+                * np.average((weighted - center) ** 2, weights=sampling[mask])
+            )
+        )
+
+    return float(np.log(spread(d)) - np.log(spread(~d)))
+
+
+def frac_treated_extreme(
+    x: Any,
+    treatment: Any,
+    est_weights: Optional[Any] = None,
+    sampling_weights: Optional[Any] = None,
+    alpha: float = 0.05,
+) -> float:
+    """Fraction of treated weighted mass outside untreated quantiles."""
+    values = np.asarray(x, dtype=float)
+    d = np.asarray(treatment).astype(bool)
+    if len(np.unique(values)) < 3:
+        return float("nan")
+    sampling = (
+        np.ones(len(values)) if sampling_weights is None else np.asarray(sampling_weights, float)
+    )
+    estimation = (
+        np.ones(len(values)) if est_weights is None else np.asarray(est_weights, float).copy()
+    )
+    estimation[d] /= np.average(estimation[d], weights=sampling[d])
+    estimation[~d] /= np.average(estimation[~d], weights=sampling[~d])
+    low, high = np.quantile(values[~d] * estimation[~d], [alpha / 2, 1 - alpha / 2])
+    treated_mass = sampling[d] * estimation[d]
+    return float(
+        treated_mass[(values[d] * estimation[d] < low) | (values[d] * estimation[d] > high)].sum()
+        / treated_mass.sum()
+    )
