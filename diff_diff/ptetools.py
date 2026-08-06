@@ -234,6 +234,32 @@ def two_by_two_rcs_subset(
     return TwoByTwoSubset(gt_data_frame(out), int(out["D"].sum()), np.ones(len(out), dtype=bool))
 
 
+def keep_all_untreated_subset(data: pd.DataFrame, g: Any, tp: Any) -> TwoByTwoSubset:
+    """Keep all untreated history plus cohort ``g`` through period ``tp``."""
+    treated_now = (data["G"] <= data["period"]) & data["G"].ne(0)
+    keep = (~treated_now) | data["G"].eq(g)
+    keep &= ~(data["G"].eq(g) & data["period"].gt(tp))
+    out = data.loc[keep].copy()
+    out["name"] = np.where(out["period"].eq(tp), "post", "pre")
+    out["D"] = ((out["G"] == g) & (out["period"] >= tp)).astype(int)
+    ids = pd.unique(data["id"])
+    return TwoByTwoSubset(
+        gt_data_frame(out), int(out["id"].nunique()), np.isin(ids, pd.unique(out["id"]))
+    )
+
+
+def keep_all_pretreatment_subset(data: pd.DataFrame, g: Any, tp: Any) -> TwoByTwoSubset:
+    """Keep all pre-treatment history through ``tp`` for eligible cohorts."""
+    out = data.loc[data["period"] <= tp].copy()
+    out = out.loc[out["G"].eq(g) | out["G"].gt(tp) | out["G"].eq(0)].copy()
+    out["name"] = np.where(out["period"].eq(tp), "post", "pre")
+    out["D"] = ((out["G"] == g) & (out["period"] >= tp)).astype(int)
+    ids = pd.unique(data["id"])
+    return TwoByTwoSubset(
+        gt_data_frame(out), int(out["id"].nunique()), np.isin(ids, pd.unique(out["id"]))
+    )
+
+
 def attgt_if(
     attgt: float, inf_func: Optional[Sequence[float]] = None, extra_gt_returns: Any = None
 ) -> ATTGTResult:

@@ -13,6 +13,8 @@ AIPW path in ``did_attgt`` and ``pte``. Set ``bstrap=True`` to use the
 unit-level empirical bootstrap with a reproducible ``seed``.
 Repeated-cross-section designs use ``two_by_two_rcs_subset`` and
 ``did_rcs_attgt``.
+Full-history designs can use ``keep_all_untreated_subset`` or
+``keep_all_pretreatment_subset``.
 
 .. autosummary::
    :toctree: _autosummary
@@ -21,6 +23,8 @@ Repeated-cross-section designs use ``two_by_two_rcs_subset`` and
    diff_diff.setup_pte
    diff_diff.two_by_two_subset
    diff_diff.two_by_two_rcs_subset
+   diff_diff.keep_all_untreated_subset
+   diff_diff.keep_all_pretreatment_subset
    diff_diff.gt_data_frame
    diff_diff.did_attgt
    diff_diff.did_rcs_attgt

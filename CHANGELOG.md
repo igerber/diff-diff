@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unit-level empirical bootstrap for overall ATT inference.
 - Added repeated-cross-section ``two_by_two_rcs_subset`` and
   ``did_rcs_attgt`` compatibility primitives.
+- Added full-history ``keep_all_untreated_subset`` and
+  ``keep_all_pretreatment_subset`` helpers for multi-period estimators.
 - **R `twfeweights` compatibility layer.** Added `twfe_weights`, `attO_weights`,
   `att_simple_weights`, `MPWeightsResult`, and `ggtwfeweights` for decomposing
   ATT(g,t) tables with R-compatible output columns and normalization rules,
