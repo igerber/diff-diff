@@ -19,6 +19,17 @@ Two-Way Fixed Effects
 
 - **Imai, K., & Kim, I. S. (2021).** "On the Use of Two-Way Fixed Effects Regression Models for Causal Inference with Panel Data." *Political Analysis*, 29(3), 405-415. https://doi.org/10.1017/pan.2020.33
 
+- **Caetano, C., & Callaway, B. (2026).** "Difference-in-Differences when Parallel Trends Holds Conditional on Covariates." *arXiv preprint* arXiv:2406.15288v3. https://arxiv.org/abs/2406.15288
+
+  Theoretical basis for hidden-linearity and covariate-balance diagnostics motivating the R ``twfeweights`` compatibility utilities.
+
+Bad Controls
+------------
+
+- **Caetano, C., Callaway, B., Payne, S., & Sant'Anna, H. (2026).** "Difference-in-Differences with Bad Controls." *arXiv preprint* arXiv:2608.03881v1. https://arxiv.org/abs/2608.03881
+
+  Theoretical basis for the planned ``ptetools`` / ``badcontrols`` ports, including imputation and doubly robust estimators for treatment-affected covariates.
+
 Wooldridge ETWFE
 ----------------
 

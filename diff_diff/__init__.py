@@ -283,6 +283,13 @@ from diff_diff.trop import (
     TROPResults,
     trop,
 )
+from diff_diff.twfeweights import (
+    MPWeightsResult,
+    att_simple_weights,
+    attO_weights,
+    ggtwfeweights,
+    twfe_weights,
+)
 from diff_diff.two_stage import (
     TwoStageBootstrapResults,
     TwoStageDiD,
@@ -416,6 +423,12 @@ __all__ = [
     "TWFEWeightsResult",
     "chaisemartin_dhaultfoeuille",
     "twowayfeweights",
+    # R twfeweights compatibility
+    "MPWeightsResult",
+    "twfe_weights",
+    "attO_weights",
+    "att_simple_weights",
+    "ggtwfeweights",
     # WooldridgeDiD (ETWFE)
     "WooldridgeDiD",
     "WooldridgeDiDResults",

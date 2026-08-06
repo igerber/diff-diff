@@ -85,7 +85,18 @@ Result containers returned by estimators:
    diff_diff.BaseResults
    diff_diff.Diagnostic
    diff_diff.EventStudyResults
-   diff_diff.AggregationResult
+    diff_diff.AggregationResult
+
+TWFE Weight Decompositions
+---------------------------
+
+Weights on group-time average treatment effects, including the R
+``twfeweights`` compatibility layer:
+
+.. toctree::
+   :maxdepth: 1
+
+   twfeweights
 
 Visualization
 -------------

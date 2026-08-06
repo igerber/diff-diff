@@ -87,6 +87,19 @@ groups:
 # ────────���─────────────────────────��───────────────────────────────────
 sources:
 
+  diff_diff/twfeweights.py:
+    drift_risk: medium
+    docs:
+      - path: docs/api/twfeweights.rst
+        type: api_reference
+      - path: README.md
+        section: "Diagnostics & Sensitivity"
+        type: user_guide
+      - path: CHANGELOG.md
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+
   # ── Base estimators ──────��───────────────────────────────────────────
 
   diff_diff/estimators.py:
