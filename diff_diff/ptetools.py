@@ -607,6 +607,29 @@ def pte_default(
     )
 
 
+def panel_empirical_bootstrap(data: pd.DataFrame, **kwargs: Any) -> PTEResults:
+    """Run the panel empirical bootstrap through the generic ``pte`` loop."""
+    kwargs = dict(kwargs)
+    kwargs["bstrap"] = True
+    return pte(data, **kwargs)
+
+
+def mboot2(
+    influence_functions: np.ndarray,
+    *,
+    biters: int = 100,
+    seed: Optional[int] = None,
+) -> np.ndarray:
+    """Generate multiplier-bootstrap draws from an influence-function matrix."""
+    if influence_functions.ndim != 2:
+        raise ValueError("influence_functions must be a two-dimensional array")
+    if biters < 2:
+        raise ValueError("biters must be at least 2")
+    rng = np.random.default_rng(seed)
+    multipliers = rng.normal(size=(int(biters), influence_functions.shape[0]))
+    return multipliers @ influence_functions / influence_functions.shape[0]
+
+
 def pte_aggte(
     attgt: pd.DataFrame,
     *,

@@ -26,6 +26,8 @@ inference is requested.
 confidence bands.
 Custom estimators can construct containers with ``group_time_att`` and
 ``aggte_obj``.
+``panel_empirical_bootstrap`` and ``mboot2`` expose the two bootstrap engines
+for custom workflows.
 
 .. autosummary::
    :toctree: _autosummary
@@ -41,6 +43,8 @@ Custom estimators can construct containers with ``group_time_att`` and
    diff_diff.did_rcs_attgt
    diff_diff.group_time_att
    diff_diff.aggte_obj
+   diff_diff.panel_empirical_bootstrap
+   diff_diff.mboot2
    diff_diff.setup_pte_basic
    diff_diff.pte_default
    diff_diff.pte_attgt

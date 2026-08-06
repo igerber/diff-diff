@@ -50,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added percentile ``overall_conf_int`` to bootstrapped ``PTEResults``.
 - Added ``crit_val_checks`` simultaneous-band fallback utility.
 - Added ``group_time_att`` and ``aggte_obj`` result-container factories.
+- Added public ``panel_empirical_bootstrap`` and ``mboot2`` bootstrap helpers.
 - **R `twfeweights` compatibility layer.** Added `twfe_weights`, `attO_weights`,
   `att_simple_weights`, `MPWeightsResult`, and `ggtwfeweights` for decomposing
   ATT(g,t) tables with R-compatible output columns and normalization rules,
