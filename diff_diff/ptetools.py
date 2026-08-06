@@ -197,6 +197,43 @@ def two_by_two_subset(
     return TwoByTwoSubset(gt_data_frame(out), int(out.loc[out.D == 1, "id"].nunique()), disidx)
 
 
+def two_by_two_rcs_subset(
+    data: pd.DataFrame,
+    g: Any,
+    tp: Any,
+    *,
+    gname: str = "G",
+    tname: str = "period",
+    yname: str = "Y",
+    control_group: str = "notyettreated",
+    anticipation: int = 0,
+    base_period: str = "varying",
+    covariates: Sequence[str] = (),
+) -> TwoByTwoSubset:
+    """Construct a two-period repeated-cross-section comparison."""
+    if control_group not in {"notyettreated", "nevertreated"}:
+        raise ValueError("control_group must be 'notyettreated' or 'nevertreated'")
+    pre = g - anticipation - 1 if base_period == "universal" else tp - 1
+    cohort = data[gname]
+    if control_group == "nevertreated":
+        keep = cohort.isin([0, g])
+    else:
+        keep = cohort.isin([0, g]) | (cohort > tp)
+    keep &= data[tname].isin([pre, tp])
+    columns = [gname, tname, yname] + list(covariates)
+    missing = sorted(set(columns).difference(data.columns))
+    if missing:
+        raise ValueError(f"data is missing columns: {missing}")
+    out = data.loc[keep, columns].copy().reset_index(drop=True)
+    out = out.rename(columns={gname: "G", tname: "period", yname: "Y"})
+    out["id"] = np.arange(len(out))
+    out["name"] = np.where(out["period"].eq(tp), "post", "pre")
+    out["D"] = (out["G"] == g).astype(int)
+    if out.empty or out["D"].sum() == 0 or (out["D"] == 0).sum() == 0:
+        raise ValueError("two_by_two_rcs_subset has no treated or comparison observations")
+    return TwoByTwoSubset(gt_data_frame(out), int(out["D"].sum()), np.ones(len(out), dtype=bool))
+
+
 def attgt_if(
     attgt: float, inf_func: Optional[Sequence[float]] = None, extra_gt_returns: Any = None
 ) -> ATTGTResult:
@@ -260,6 +297,39 @@ def did_attgt(
     else:
         inf[treated] = (delta[treated] - delta[treated].mean()) / treated.mean()
         inf[control] = -(delta[control] - delta[control].mean()) / (1.0 - treated.mean())
+    return attgt_if(att, inf)
+
+
+def did_rcs_attgt(
+    gt_data: GTDataFrame | pd.DataFrame, *, covariates: Sequence[str] = ()
+) -> ATTGTResult:
+    """Estimate an RCS ATT(g,t) from period-specific group means."""
+    frame = gt_data.data if isinstance(gt_data, GTDataFrame) else gt_data
+    if covariates:
+        raise NotImplementedError("RCS covariate adjustment is not implemented")
+    treated = frame["D"].eq(1)
+    post = frame["name"].eq("post")
+    control = ~treated
+    if not treated.any() or not control.any():
+        raise ValueError("both treated and comparison observations are required")
+    delta_treated = frame.loc[treated & post, "Y"].mean() - frame.loc[treated & ~post, "Y"].mean()
+    delta_control = frame.loc[control & post, "Y"].mean() - frame.loc[control & ~post, "Y"].mean()
+    att = float(delta_treated - delta_control)
+    inf = np.zeros(len(frame), dtype=float)
+    n_treated = treated.sum() / 2
+    n_control = control.sum() / 2
+    inf[treated & post] = (
+        frame.loc[treated & post, "Y"] - frame.loc[treated & post, "Y"].mean()
+    ) / n_treated
+    inf[treated & ~post] = (
+        -(frame.loc[treated & ~post, "Y"] - frame.loc[treated & ~post, "Y"].mean()) / n_treated
+    )
+    inf[control & post] = (
+        -(frame.loc[control & post, "Y"] - frame.loc[control & post, "Y"].mean()) / n_control
+    )
+    inf[control & ~post] = (
+        frame.loc[control & ~post, "Y"] - frame.loc[control & ~post, "Y"].mean()
+    ) / n_control
     return attgt_if(att, inf)
 
 

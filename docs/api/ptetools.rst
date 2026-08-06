@@ -11,6 +11,8 @@ loop.
 Pass pre-period column names through ``covariates=`` to use the conditional
 AIPW path in ``did_attgt`` and ``pte``. Set ``bstrap=True`` to use the
 unit-level empirical bootstrap with a reproducible ``seed``.
+Repeated-cross-section designs use ``two_by_two_rcs_subset`` and
+``did_rcs_attgt``.
 
 .. autosummary::
    :toctree: _autosummary
@@ -18,8 +20,10 @@ unit-level empirical bootstrap with a reproducible ``seed``.
 
    diff_diff.setup_pte
    diff_diff.two_by_two_subset
+   diff_diff.two_by_two_rcs_subset
    diff_diff.gt_data_frame
    diff_diff.did_attgt
+   diff_diff.did_rcs_attgt
    diff_diff.attgt_if
    diff_diff.overall_weights
    diff_diff.pte_aggte

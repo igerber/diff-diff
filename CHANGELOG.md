@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   aggregation building blocks. Pre-period covariates now use a conditional
   AIPW path in ``did_attgt`` and ``pte``. ``pte`` also supports a seeded
   unit-level empirical bootstrap for overall ATT inference.
+- Added repeated-cross-section ``two_by_two_rcs_subset`` and
+  ``did_rcs_attgt`` compatibility primitives.
 - **R `twfeweights` compatibility layer.** Added `twfe_weights`, `attO_weights`,
   `att_simple_weights`, `MPWeightsResult`, and `ggtwfeweights` for decomposing
   ATT(g,t) tables with R-compatible output columns and normalization rules,
