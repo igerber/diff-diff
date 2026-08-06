@@ -730,3 +730,81 @@ def twfe_cov_bal(
     if not frames:
         raise ValueError("no estimable group-time balance cells")
     return pd.concat(frames, ignore_index=True)
+
+
+def aipw_cov_bal_gt(
+    data: pd.DataFrame,
+    *,
+    covariates: Sequence[str],
+    yname: str,
+    tname: str,
+    idname: str,
+    gname: str,
+) -> pd.DataFrame:
+    """Compute two-period AIPW treated/control covariate balance."""
+    result = two_period_aipw_weights(
+        data, yname=yname, tname=tname, idname=idname, gname=gname, covariates=covariates
+    )
+    ordered = data.sort_values([idname, tname])
+    period = sorted(pd.unique(ordered[tname]))[0]
+    pre = ordered[ordered[tname] == period].set_index(idname)
+    treated = result.treatment.astype(bool)
+    rows = []
+    for covariate in covariates:
+        values = pre[covariate].to_numpy(float)
+        raw_diff = float(values[treated].mean() - values[~treated].mean())
+        weighted_diff = float(
+            np.mean(values[treated] * result.weights[treated])
+            - np.mean(values[~treated] * result.weights[~treated])
+        )
+        sd = pooled_sd(values, treated)
+        rows.append(
+            {
+                "covariate": covariate,
+                "unweighted_diff": raw_diff,
+                "weighted_diff": weighted_diff,
+                "sd": sd,
+                "unweighted_standardized_diff": raw_diff / sd,
+                "weighted_standardized_diff": weighted_diff / sd,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def aipw_cov_bal(
+    data: pd.DataFrame,
+    *,
+    covariates: Sequence[str],
+    yname: str,
+    tname: str,
+    idname: str,
+    gname: str,
+) -> pd.DataFrame:
+    """Compute AIPW covariate balance across two-period cells."""
+    periods = sorted(pd.unique(data[tname]))
+    groups = sorted(g for g in pd.unique(data[gname]) if g != 0)
+    frames = []
+    for group in groups:
+        for period in periods:
+            base = group - 1
+            if base not in periods or period < group:
+                continue
+            cell = data.loc[data[gname].isin([0, group]) & data[tname].isin([base, period])].copy()
+            cell[gname] = np.where(cell[gname].eq(group), group, 0)
+            try:
+                result = aipw_cov_bal_gt(
+                    cell,
+                    covariates=covariates,
+                    yname=yname,
+                    tname=tname,
+                    idname=idname,
+                    gname=gname,
+                )
+                result.insert(0, "group", group)
+                result.insert(1, "time", period)
+                frames.append(result)
+            except ValueError:
+                continue
+    if not frames:
+        raise ValueError("no estimable AIPW balance cells")
+    return pd.concat(frames, ignore_index=True)

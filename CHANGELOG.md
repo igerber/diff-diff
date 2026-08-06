@@ -62,6 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added local ``GTWeightsResult`` objects and
   ``implicit_twfe_weights_gt`` / ``combine_twfe_weights_gt`` accessors.
 - Added ``twfe_cov_bal`` and ``twfe_cov_bal_gt`` covariate-balance diagnostics.
+- Added ``aipw_cov_bal`` and ``aipw_cov_bal_gt`` balance diagnostics.
 - **ContinuousDiD post-fit `aggregate()` - a MIXED view/recompute adopter**
   (v4 program 2(b) PR-3c; ledger row [M-025]). `ContinuousDiD.fit(aggregate=)`
   is deprecated (`FutureWarning`; removed in 4.0, and the no-underscore
