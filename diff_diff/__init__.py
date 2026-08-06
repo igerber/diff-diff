@@ -46,6 +46,7 @@ from diff_diff.badcontrols import (
     extract_att,
     imputation_bad_control,
     simulate_bad_controls,
+    staggered_dr_bad_control,
     staggered_imputation_bad_control,
 )
 from diff_diff.business_report import (
@@ -682,6 +683,7 @@ __all__ = [
     "imputation_bad_control",
     "simulate_bad_controls",
     "staggered_imputation_bad_control",
+    "staggered_dr_bad_control",
 ]
 
 # Agent-facing entrypoints surface first in dir(diff_diff). LLM agents

@@ -20,6 +20,8 @@ R.
 The same linear imputation is also available for staggered adoption through
 the per-``(g,t)`` ``didbc`` loop; joint multi-period inference is still a
 separate implementation step.
+The parametric and random-forest DR paths also loop over staggered cells; their
+joint multi-period inference is not yet combined across cells.
 
 .. autosummary::
    :toctree: _autosummary

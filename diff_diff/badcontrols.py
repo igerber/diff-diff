@@ -465,6 +465,71 @@ def staggered_imputation_bad_control(
     )
 
 
+def staggered_dr_bad_control(
+    data: pd.DataFrame,
+    *,
+    yname: str,
+    gname: str,
+    tname: str,
+    idname: str,
+    bad_control: Optional[str] = None,
+    covariates: Sequence[str] = (),
+    bad_control_covariates: Sequence[str] = (),
+    nuisance_method: str = "parametric",
+    n_folds: int = 5,
+    random_state: Optional[int] = None,
+    control_group: str = "nevertreated",
+) -> BadControlsResult:
+    """Run the two-period DR estimator across staggered ``(g,t)`` cells."""
+    periods = sorted(pd.unique(data[tname]).tolist())
+    groups = sorted(g for g in pd.unique(data[gname]) if g != 0)
+    if control_group not in {"nevertreated", "notyettreated"}:
+        raise ValueError("control_group must be 'nevertreated' or 'notyettreated'")
+    rows = []
+    cohort_sizes = data.groupby(idname)[gname].first().value_counts()
+    treated_total = cohort_sizes[cohort_sizes.index != 0].sum()
+    for group in groups:
+        for period in periods:
+            if period < group:
+                continue
+            eligible = data[gname].eq(group) | data[gname].eq(0)
+            if control_group == "notyettreated":
+                eligible |= data[gname].gt(period)
+            cell = data.loc[eligible & data[tname].isin([group - 1, period])].copy()
+            cell[gname] = np.where(cell[gname].eq(group), group, 0)
+            if cell[gname].eq(group).sum() == 0:
+                continue
+            kwargs = dict(
+                yname=yname,
+                gname=gname,
+                tname=tname,
+                idname=idname,
+                bad_control=bad_control,
+                covariates=covariates,
+                bad_control_covariates=bad_control_covariates,
+            )
+            if nuisance_method == "parametric":
+                result = dr_parametric_bad_control(cell, **kwargs)
+            elif nuisance_method == "ml":
+                result = dr_ml_bad_control(
+                    cell, **kwargs, n_folds=n_folds, random_state=random_state
+                )
+            else:
+                raise ValueError("nuisance_method must be 'parametric' or 'ml'")
+            rows.append({"group": group, "time": period, "attgt": result.att, "se": result.se})
+    att_gt = pd.DataFrame(rows)
+    if att_gt.empty:
+        raise ValueError("no estimable staggered group-time cells")
+    weights = [
+        float(cohort_sizes.get(group, 0) / treated_total / (max(periods) - group + 1))
+        for group in att_gt["group"]
+    ]
+    overall = float(np.sum(att_gt["attgt"] * np.asarray(weights)))
+    return BadControlsResult(
+        overall, float("nan"), att_gt, np.array([]), method=f"dr_ml-{nuisance_method}-staggered"
+    )
+
+
 def didbc(
     data: pd.DataFrame,
     *,
@@ -483,6 +548,33 @@ def didbc(
     **_: object,
 ) -> BadControlsResult:
     """Python spelling of R ``didbc`` for its linear imputation path."""
+    if data[tname].nunique() > 2:
+        if est_method == "imputation":
+            return staggered_imputation_bad_control(
+                data,
+                yname=yname,
+                gname=gname,
+                tname=tname,
+                idname=idname,
+                bad_control=bad_control,
+                covariates=covariates,
+                bad_control_covariates=bad_control_covariates,
+            )
+        if est_method == "dr_ml":
+            return staggered_dr_bad_control(
+                data,
+                yname=yname,
+                gname=gname,
+                tname=tname,
+                idname=idname,
+                bad_control=bad_control,
+                covariates=covariates,
+                bad_control_covariates=bad_control_covariates,
+                nuisance_method=nuisance_method,
+                n_folds=n_folds,
+                random_state=random_state,
+            )
+        raise ValueError("est_method must be 'imputation' or 'dr_ml'")
     if est_method == "dr_ml":
         if nuisance_method == "ml":
             return dr_ml_bad_control(
@@ -513,17 +605,6 @@ def didbc(
         )
     if est_method != "imputation":
         raise ValueError("est_method must be 'imputation' or 'dr_ml'")
-    if data[tname].nunique() > 2:
-        return staggered_imputation_bad_control(
-            data,
-            yname=yname,
-            gname=gname,
-            tname=tname,
-            idname=idname,
-            bad_control=bad_control,
-            covariates=covariates,
-            bad_control_covariates=bad_control_covariates,
-        )
     return imputation_bad_control(
         data,
         yname=yname,
