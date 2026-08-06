@@ -110,6 +110,55 @@ class PTEAggregateResult:
         }
 
 
+@dataclass
+class DoseResult:
+    """Container for dose-response ATT/ACRT curves."""
+
+    dose: Any
+    overall_att: Optional[float] = None
+    overall_att_se: Optional[float] = None
+    att_d: Optional[pd.DataFrame] = None
+    acrt_d: Optional[pd.DataFrame] = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "dose": self.dose,
+            "overall_att": self.overall_att,
+            "overall_att_se": self.overall_att_se,
+            "att_d": None if self.att_d is None else self.att_d.to_dict(orient="records"),
+            "acrt_d": None if self.acrt_d is None else self.acrt_d.to_dict(orient="records"),
+        }
+
+    def summary(self) -> pd.DataFrame:
+        if self.att_d is not None:
+            return self.att_d.copy()
+        return pd.DataFrame({"dose": np.asarray(self.dose)})
+
+
+def dose_obj(
+    dose: Any,
+    *,
+    overall_att: Optional[float] = None,
+    overall_att_se: Optional[float] = None,
+    att_d: Optional[pd.DataFrame] = None,
+    acrt_d: Optional[pd.DataFrame] = None,
+    **_: Any,
+) -> DoseResult:
+    """Construct a dose-response result container."""
+    return DoseResult(dose, overall_att, overall_att_se, att_d, acrt_d)
+
+
+def pte_dose_results(
+    dose: Any,
+    att_d: pd.DataFrame,
+    *,
+    overall_att: Optional[float] = None,
+    overall_att_se: Optional[float] = None,
+) -> DoseResult:
+    """Construct a dose result from an ATT-by-dose table."""
+    return dose_obj(dose, overall_att=overall_att, overall_att_se=overall_att_se, att_d=att_d)
+
+
 def aggte_obj(
     estimate: float,
     weights: pd.DataFrame,

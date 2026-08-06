@@ -29,6 +29,7 @@ Custom estimators can construct containers with ``group_time_att`` and
 ``aggte_obj``.
 ``process_att_gt`` and ``attgt_pte_aggregations`` provide aggregation
 dispatch aliases for custom group-time outputs.
+``dose_obj`` and ``pte_dose_results`` provide a dose-response result surface.
 ``panel_empirical_bootstrap`` and ``mboot2`` expose the two bootstrap engines
 for custom workflows.
 ``pte_params``, ``pte_results``, and ``pte_emp_boot`` provide R-style aliases.
@@ -49,6 +50,9 @@ for custom workflows.
    diff_diff.aggte_obj
    diff_diff.process_att_gt
    diff_diff.attgt_pte_aggregations
+   diff_diff.dose_obj
+   diff_diff.pte_dose_results
+   diff_diff.DoseResult
    diff_diff.panel_empirical_bootstrap
    diff_diff.mboot2
    diff_diff.pte_params

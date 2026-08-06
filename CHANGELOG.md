@@ -51,6 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added ``crit_val_checks`` simultaneous-band fallback utility.
 - Added ``group_time_att`` and ``aggte_obj`` result-container factories.
 - Added ``process_att_gt`` and ``attgt_pte_aggregations`` aggregation aliases.
+- Added ``DoseResult``, ``dose_obj``, and ``pte_dose_results`` containers for
+  dose-response outputs.
 - Added ``panel=False`` repeated-cross-section support to the generic ``pte``
   loop.
 - Added ``panel=False`` repeated-cross-section support to the generic ``pte`` loop.
