@@ -322,6 +322,7 @@ from diff_diff.twfeweights import (
     log_ratio_sd,
     pooled_sd,
     twfe_weights,
+    two_period_aipw_weights,
     two_period_reg_weights,
 )
 from diff_diff.two_stage import (
@@ -469,6 +470,7 @@ __all__ = [
     "log_ratio_sd",
     "frac_treated_extreme",
     "two_period_reg_weights",
+    "two_period_aipw_weights",
     # WooldridgeDiD (ETWFE)
     "WooldridgeDiD",
     "WooldridgeDiDResults",

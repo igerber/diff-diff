@@ -14,6 +14,7 @@ from typing import Any, Optional, Sequence
 
 import numpy as np
 import pandas as pd
+from scipy.special import expit
 
 
 @dataclass
@@ -394,3 +395,54 @@ def two_period_reg_weights(
     estimate = float(np.average(implicit * dy, weights=sampling))
     ess = effective_sample_size(implicit[treatment == 0], sampling[treatment == 0])
     return TwoPeriodCovariatesResult(estimate, implicit, dy, treatment, ess=ess)
+
+
+def two_period_aipw_weights(
+    data: pd.DataFrame,
+    *,
+    yname: str,
+    tname: str,
+    idname: str,
+    gname: str,
+    covariates: Sequence[str] = (),
+) -> TwoPeriodCovariatesResult:
+    """Compute a two-period AIPW ATT and its implicit group weights."""
+    reg = two_period_reg_weights(
+        data,
+        yname=yname,
+        tname=tname,
+        idname=idname,
+        gname=gname,
+        covariates=(),
+    )
+    if not covariates:
+        return reg
+    ordered = data.sort_values([idname, tname])
+    periods = sorted(pd.unique(ordered[tname]))
+    pre = ordered[ordered[tname] == periods[0]].set_index(idname)
+    ids = pre.index
+    d = reg.treatment
+    dy = reg.dy
+    x = np.column_stack([np.ones(len(ids)), *[pre.loc[ids, c].to_numpy(float) for c in covariates]])
+    m_coef = np.linalg.lstsq(x[d == 0], dy[d == 0], rcond=None)[0]
+    m_hat = x @ m_coef
+    p_coef = np.zeros(x.shape[1], dtype=float)
+    for _ in range(100):
+        p = np.clip(expit(x @ p_coef), 1e-8, 1 - 1e-8)
+        v = np.clip(p * (1 - p), 1e-8, None)
+        z = x @ p_coef + (d - p) / v
+        updated = np.linalg.lstsq(x * np.sqrt(v)[:, None], z * np.sqrt(v), rcond=None)[0]
+        if np.max(np.abs(updated - p_coef)) < 1e-10:
+            p_coef = updated
+            break
+        p_coef = updated
+    propensity = np.clip(expit(x @ p_coef), 1e-8, 1 - 1e-8)
+    pi = float(d.mean())
+    residual = dy - m_hat
+    control_weight = propensity / (1 - propensity)
+    score = d / pi * residual - (1 - d) / pi * control_weight * residual
+    weights = np.ones(len(d), dtype=float)
+    weights[d == 0] = control_weight[d == 0] / np.mean(control_weight[d == 0])
+    return TwoPeriodCovariatesResult(
+        float(score.mean()), weights, dy, d, ess=effective_sample_size(weights[d == 0])
+    )
