@@ -318,6 +318,7 @@ from diff_diff.trop import (
 )
 from diff_diff.twfeweights import (
     GTWeightsResult,
+    ImplicitAIPWResult,
     ImplicitTWFEResult,
     MPWeightsResult,
     TwoPeriodCovariatesResult,
@@ -330,6 +331,7 @@ from diff_diff.twfeweights import (
     frac_treated_extreme,
     ggtwfeweights,
     gt_weights,
+    implicit_aipw_weights,
     implicit_twfe_weights,
     implicit_twfe_weights_gt,
     log_ratio_sd,
@@ -478,6 +480,7 @@ __all__ = [
     # R twfeweights compatibility
     "MPWeightsResult",
     "ImplicitTWFEResult",
+    "ImplicitAIPWResult",
     "GTWeightsResult",
     "TwoPeriodCovariatesResult",
     "twfe_weights",
@@ -496,6 +499,7 @@ __all__ = [
     "gt_weights",
     "two_period_reg_weights",
     "implicit_twfe_weights",
+    "implicit_aipw_weights",
     "implicit_twfe_weights_gt",
     "combine_twfe_weights_gt",
     "two_period_aipw_weights",

@@ -78,6 +78,15 @@ class GTWeightsResult:
     ess: float
 
 
+@dataclass
+class ImplicitAIPWResult:
+    """Multi-period AIPW decomposition."""
+
+    aipw_gt: pd.DataFrame
+    est: float
+    decomposition_est: float
+
+
 def two_period_covs_obj(
     est: float,
     weights: Any,
@@ -834,6 +843,57 @@ def aipw_cov_bal(
     if not frames:
         raise ValueError("no estimable AIPW balance cells")
     return pd.concat(frames, ignore_index=True)
+
+
+def implicit_aipw_weights(
+    data: pd.DataFrame,
+    *,
+    yname: str,
+    tname: str,
+    idname: str,
+    gname: str,
+    covariates: Sequence[str] = (),
+) -> ImplicitAIPWResult:
+    """Compute multi-period AIPW ATT(g,t) estimates and aggregation weights."""
+    periods = sorted(pd.unique(data[tname]))
+    groups = sorted(g for g in pd.unique(data[gname]) if g != 0)
+    unit_groups = data.groupby(idname, sort=False)[gname].first()
+    treated = unit_groups[unit_groups != 0]
+    cohort_share = (treated.value_counts() / len(treated)).to_dict()
+    rows = []
+    for group in groups:
+        for period in periods:
+            if period < group or group - 1 not in periods:
+                continue
+            cell = data.loc[
+                data[gname].isin([0, group]) & data[tname].isin([group - 1, period])
+            ].copy()
+            cell[gname] = np.where(cell[gname].eq(group), group, 0)
+            try:
+                result = two_period_aipw_weights(
+                    cell,
+                    yname=yname,
+                    tname=tname,
+                    idname=idname,
+                    gname=gname,
+                    covariates=covariates,
+                )
+            except ValueError:
+                continue
+            rows.append(
+                {
+                    "group": group,
+                    "time": period,
+                    "attgt": result.est,
+                    "att_weight": cohort_share[group] / (max(periods) - group + 1),
+                    "ess": result.ess,
+                }
+            )
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        raise ValueError("no estimable AIPW group-time cells")
+    estimate = float(np.sum(frame["att_weight"] * frame["attgt"]))
+    return ImplicitAIPWResult(frame, estimate, estimate)
 
 
 def mp_covariate_bal_summary_helper(
