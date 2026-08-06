@@ -37,6 +37,7 @@ or `round(..., 4)` pins.
 from __future__ import annotations
 
 import warnings
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -453,17 +454,22 @@ def test_notebook_prose_has_no_malformed_mode_phrases():
     R2 P2): the mechanical kwarg->mode rewording must never leave doubled
     phrases like "two-period (the overall (two-period) mode)" or a
     pseudo-call like ``did_had_pretest_workflow(the event-study ...)`` in
-    any HAD tutorial's markdown."""
+    any HAD tutorial's markdown. Paths anchor at the repo root and the
+    test skips when docs/ is absent (the isolated-install CI job copies
+    only tests/ - the ``_tutorial_drift`` loader convention)."""
     import json
 
-    for nb in (
+    root = Path(__file__).resolve().parents[1]
+    for rel in (
         "docs/tutorials/20_had_brand_campaign.ipynb",
         "docs/tutorials/21_had_pretest_workflow.ipynb",
         "docs/tutorials/22_had_survey_design.ipynb",
     ):
-        with open(nb) as fh:
-            cells = json.load(fh)["cells"]
+        nb = root / rel
+        if not nb.exists():
+            pytest.skip(f"Notebook {rel!r} not available in this CI environment")
+        cells = json.loads(nb.read_text())["cells"]
         text = "\n".join("".join(c["source"]) for c in cells)
-        assert "did_had_pretest_workflow(the" not in text, nb
-        assert "the overall (two-period) mode)" not in text, nb
-        assert "the event-study (multi-period) mode)" not in text, nb
+        assert "did_had_pretest_workflow(the" not in text, rel
+        assert "the overall (two-period) mode)" not in text, rel
+        assert "the event-study (multi-period) mode)" not in text, rel
