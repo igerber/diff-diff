@@ -571,7 +571,12 @@ def pte(
                 result = did_rcs_attgt(subset.gt_data, covariates=covariates)
             if result.inf_func is None:
                 raise RuntimeError("did_attgt did not return an influence function")
-            se = float(np.sqrt(np.nanmean(result.inf_func**2) / len(result.inf_func)))
+            finite_if = result.inf_func[np.isfinite(result.inf_func)]
+            se = (
+                float(np.sqrt(np.mean(finite_if**2) / len(result.inf_func)))
+                if finite_if.size
+                else float("nan")
+            )
             rows.append({"group": g, "time": tp, "attgt": result.attgt, "se": se})
             full_if = np.full(n_units, np.nan)
             full_if[subset.disidx] = result.inf_func
@@ -592,7 +597,8 @@ def pte(
         bootstrap_att = []
         for _ in range(int(biters)):
             sampled_units = []
-            for group_value, group_data in data.groupby(gname, sort=False):
+            bootstrap_groups = [gname] if panel else [gname, tname]
+            for _, group_data in data.groupby(bootstrap_groups, sort=False):
                 units = pd.unique(group_data[idname])
                 sampled_units.extend(rng.choice(units, size=len(units), replace=True))
             pieces = []

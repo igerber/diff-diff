@@ -72,3 +72,23 @@ def test_pte_supports_repeated_cross_sections():
     result = pte(data, yname="Y", gname="G", tname="period", panel=False)
     assert len(result.att_gt) == 1
     assert np.isclose(result.overall_att, 2.0)
+
+
+def test_rcs_pte_bootstrap_is_reproducible():
+    import pandas as pd
+
+    data = pd.DataFrame(
+        {
+            "period": [1, 1, 2, 2],
+            "G": [0, 2, 0, 2],
+            "Y": [0.0, 1.0, 1.0, 4.0],
+        }
+    )
+    first = pte(
+        data, yname="Y", gname="G", tname="period", panel=False, bstrap=True, biters=5, seed=3
+    )
+    second = pte(
+        data, yname="Y", gname="G", tname="period", panel=False, bstrap=True, biters=5, seed=3
+    )
+    assert np.isfinite(first.overall_se)
+    assert np.isclose(first.overall_se, second.overall_se)
