@@ -149,9 +149,14 @@ def did_post_lasso(
         x[d == 0], outcome[d == 0], sample_weight=sample_weights[d == 0]
     )
     m_hat = outcome_model.predict(x)
-    propensity_model = LogisticRegressionCV(cv=5, max_iter=2000, random_state=random_state).fit(
-        p_x, d, sample_weight=sample_weights
-    )
+    propensity_model = LogisticRegressionCV(
+        cv=5,
+        max_iter=2000,
+        random_state=random_state,
+        l1_ratios=(0,),
+        scoring="neg_log_loss",
+        use_legacy_attributes=False,
+    ).fit(p_x, d, sample_weight=sample_weights)
     propensity = np.clip(propensity_model.predict_proba(p_x)[:, 1], 1e-6, 1 - 1e-6)
     pi = float(np.average(d, weights=sample_weights))
     odds = propensity / (1 - propensity)
