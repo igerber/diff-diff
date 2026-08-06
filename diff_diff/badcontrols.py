@@ -451,3 +451,121 @@ def extract_att(result: BadControlsResult) -> dict[str, float]:
     if not isinstance(result, BadControlsResult):
         raise TypeError("result must be a BadControlsResult")
     return {"att": result.att, "se": result.se}
+
+
+def simulate_bad_controls(
+    n: int = 2000,
+    T_max: int = 4,
+    groups: Optional[Sequence[int]] = None,
+    dgp: str = "dgp1",
+    lambda_: float = 0.5,
+    delta: float = 0.5,
+    kappa: float = 0.5,
+    beta_drift: float = 0.2,
+    binary_bad_control: bool = False,
+    seed: Optional[int] = None,
+) -> dict[str, object]:
+    """Simulate a staggered panel with a treatment-affected covariate."""
+    if n < 2 or T_max < 2:
+        raise ValueError("n must be at least 2 and T_max must be at least 2")
+    if groups is None:
+        groups = tuple(range(2, T_max + 1))
+    groups = tuple(sorted(set(groups)))
+    if dgp not in {"dgp1", "dgp2", "dgp3", "dgp4", "dgp5"}:
+        raise ValueError("dgp must be one of dgp1, dgp2, dgp3, dgp4, dgp5")
+    if any(g < 2 or g > T_max for g in groups):
+        raise ValueError("groups must be between 2 and T_max")
+    rng = np.random.default_rng(seed)
+    z = rng.normal(size=n)
+    eta = rng.normal(size=n)
+    w = 0.8 * eta + 0.3 * z + 0.2 * rng.normal(size=n)
+    assignment = 0.2 * z + 0.4 * w + 0.3 * eta + rng.normal(size=n)
+    bins = np.quantile(assignment, np.linspace(0, 1, len(groups) + 2))
+    rank = np.searchsorted(bins[1:-1], assignment, side="right")
+    group_values = np.asarray((0,) + groups)
+    cohort = group_values[rank]
+    x0 = np.empty((n, T_max), dtype=float)
+    x_index = np.empty_like(x0)
+    x_index[:, 0] = 0.5 * eta + 0.4 * z
+    x0[:, 0] = (
+        rng.binomial(1, expit(x_index[:, 0]))
+        if binary_bad_control
+        else x_index[:, 0] + 0.3 * rng.normal(size=n)
+    )
+    for period in range(1, T_max):
+        lag = x0[:, period - 1]
+        if dgp == "dgp1":
+            index = 0.7 * lag + 0.3 * z + 0.2 * w + 0.15
+        elif dgp == "dgp2":
+            index = 0.7 * lag + 0.3 * z + 0.2 * w + 0.03 * w**2 + 0.15
+        elif dgp == "dgp3":
+            index = 0.7 * lag + 0.3 * z + 0.4 * lag * z + 0.2 * lag**2 + 0.15
+        elif dgp == "dgp4":
+            index = lag + 0.3 * z + 0.2 * w + 0.15
+        else:
+            index = 0.7 * lag + 0.3 * z + 0.2 * w + 0.03 * w**2 + 0.05 * lag * w + 0.15
+        x_index[:, period] = index
+        x0[:, period] = (
+            rng.binomial(1, expit(index))
+            if binary_bad_control
+            else index + 0.3 * rng.normal(size=n)
+        )
+    beta = 1 + beta_drift * (np.arange(1, T_max + 1) - 2)
+    y0 = np.column_stack(
+        [
+            0.3 * (period + 1)
+            + 0.5 * eta
+            + 0.3 * z
+            + beta[period] * x0[:, period]
+            + 0.3 * rng.normal(size=n)
+            for period in range(T_max)
+        ]
+    )
+    rows = []
+    true_rows = []
+    realized_effects = []
+    for unit in range(n):
+        for period in range(1, T_max + 1):
+            treated = cohort[unit] > 0 and period >= cohort[unit]
+            event = period - cohort[unit] if treated else 0
+            lam = lambda_ * (1 + kappa * event)
+            direct = delta * (1 + kappa * event)
+            if binary_bad_control:
+                p0, p1 = expit(x_index[unit, period - 1]), expit(x_index[unit, period - 1] + lam)
+                x = rng.binomial(1, p1 if treated else p0)
+                tau = beta[period - 1] * (p1 - p0) + direct
+            else:
+                tau = beta[period - 1] * lam + direct
+                x = x0[unit, period - 1] + (lam if treated else 0)
+            y = y0[unit, period - 1] + (tau if treated else 0)
+            if treated:
+                realized_effects.append(tau)
+            rows.append(
+                {
+                    "id": unit,
+                    "period": period,
+                    "G": cohort[unit],
+                    "D": int(treated),
+                    "Y": y,
+                    "X": x,
+                    "Z": z[unit],
+                    "W": w[unit],
+                }
+            )
+        for period in range(cohort[unit], T_max + 1) if cohort[unit] else []:
+            event = period - cohort[unit]
+            true_rows.append(
+                {
+                    "g": cohort[unit],
+                    "t": period,
+                    "att": beta[period - 1] * lambda_ * (1 + kappa * event)
+                    + delta * (1 + kappa * event),
+                }
+            )
+    panel = pd.DataFrame(rows)
+    true_att_gt = pd.DataFrame(true_rows).drop_duplicates(["g", "t"]).reset_index(drop=True)
+    return {
+        "data": panel,
+        "true_att_gt": true_att_gt,
+        "true_att_overall": float(np.mean(realized_effects)) if realized_effects else float("nan"),
+    }

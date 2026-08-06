@@ -24,3 +24,4 @@ function standard error.
    diff_diff.imputation_bad_control
    diff_diff.extract_att
    diff_diff.BadControlsResult
+   diff_diff.simulate_bad_controls

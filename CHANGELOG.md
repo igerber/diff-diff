@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``didbc`` / ``imputation_bad_control`` API, the parametric doubly robust
   score, random-forest cross-fitting path, influence-function output, and ATT
   extraction helper. Unknown nuisance methods fail closed.
+- Added ``simulate_bad_controls`` with dgp1--dgp5, continuous/binary bad
+  controls, and known group-time treatment effects.
 - **R `ptetools` compatibility primitives.** Added panel setup, two-period
   group-time subsetting, ATT(g,t) influence-function containers, unadjusted
   DID estimation, the generic ``pte`` group-time loop, and group/dynamic
