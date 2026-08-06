@@ -73,6 +73,22 @@ class PTEAggregateResult:
     type: str = "group"
 
 
+@dataclass
+class PTEResults:
+    """Results from the generic group-time ATT loop."""
+
+    att_gt: pd.DataFrame
+    overall_att: float
+    overall_se: float
+    influence_functions: Optional[np.ndarray] = None
+
+    def to_dataframe(self) -> pd.DataFrame:
+        return self.att_gt.copy()
+
+    def aggregate(self, type: str = "group") -> PTEAggregateResult:
+        return pte_aggte(self.att_gt, type=type)
+
+
 def gt_data_frame(data: pd.DataFrame) -> GTDataFrame:
     """Mark a two-period comparison table as ptetools-compatible."""
     required = {"G", "id", "period", "name", "Y", "D"}
@@ -228,6 +244,64 @@ def overall_weights(
         for g, t in zip(frame["group"], frame["time"])
     ]
     return frame[["group", "time", "overall_weight"]]
+
+
+def pte(
+    data: pd.DataFrame,
+    *,
+    yname: str,
+    gname: str,
+    tname: str,
+    idname: str,
+    control_group: str = "notyettreated",
+    anticipation: int = 0,
+    base_period: str = "varying",
+) -> PTEResults:
+    """Run the generic unadjusted panel ATT(g,t) loop."""
+    params = setup_pte(
+        data,
+        yname,
+        gname,
+        tname,
+        idname,
+        anticipation=anticipation,
+        base_period=base_period,
+    )
+    rows = []
+    influence = []
+    n_units = data[idname].nunique()
+    for g in params.groups:
+        for tp in params.time_periods:
+            if base_period == "universal" and tp == g - anticipation - 1:
+                rows.append({"group": g, "time": tp, "attgt": 0.0, "se": np.nan})
+                influence.append(np.full(n_units, np.nan))
+                continue
+            subset = two_by_two_subset(
+                data,
+                g,
+                tp,
+                gname=gname,
+                tname=tname,
+                idname=idname,
+                yname=yname,
+                control_group=control_group,
+                anticipation=anticipation,
+                base_period=base_period,
+            )
+            result = did_attgt(subset.gt_data)
+            if result.inf_func is None:
+                raise RuntimeError("did_attgt did not return an influence function")
+            se = float(np.sqrt(np.nanmean(result.inf_func**2) / len(result.inf_func)))
+            rows.append({"group": g, "time": tp, "attgt": result.attgt, "se": se})
+            full_if = np.full(n_units, np.nan)
+            full_if[subset.disidx] = result.inf_func
+            influence.append(full_if)
+    att_gt = pd.DataFrame(rows)
+    weights = overall_weights(att_gt)
+    valid = np.isfinite(att_gt["attgt"]) & (weights["overall_weight"] > 0)
+    overall_att = float(np.sum(att_gt.loc[valid, "attgt"] * weights.loc[valid, "overall_weight"]))
+    full_influence = np.asarray(influence, dtype=float).T if influence else None
+    return PTEResults(att_gt, overall_att, float("nan"), full_influence)
 
 
 def pte_aggte(attgt: pd.DataFrame, *, type: str = "group") -> PTEAggregateResult:
