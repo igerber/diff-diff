@@ -22,6 +22,8 @@ receive explicit ``cohort_weights``.
 ``PTEResults`` exposes ``summary()``, ``to_dict()``, and the bootstrap
 distribution and percentile ``overall_conf_int`` when empirical bootstrap
 inference is requested.
+``crit_val_checks`` validates simultaneous critical values before rendering
+confidence bands.
 
 .. autosummary::
    :toctree: _autosummary

@@ -48,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded ``PTEResults`` and ``PTEAggregateResult`` with summary,
   serialization, weight tables, and bootstrap-distribution surfaces.
 - Added percentile ``overall_conf_int`` to bootstrapped ``PTEResults``.
+- Added ``crit_val_checks`` simultaneous-band fallback utility.
 - **R `twfeweights` compatibility layer.** Added `twfe_weights`, `attO_weights`,
   `att_simple_weights`, `MPWeightsResult`, and `ggtwfeweights` for decomposing
   ATT(g,t) tables with R-compatible output columns and normalization rules,

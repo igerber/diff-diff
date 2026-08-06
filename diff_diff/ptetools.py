@@ -14,6 +14,7 @@ from typing import Any, Optional, Sequence
 import numpy as np
 import pandas as pd
 from scipy.special import expit
+from scipy.stats import norm
 
 
 @dataclass
@@ -123,6 +124,14 @@ class PTEResults:
             f"PTEResults(ATT={self.overall_att:.6f}, "
             f"SE={self.overall_se:.6f}, CI={self.overall_conf_int}, cells={len(self.att_gt)})"
         )
+
+
+def crit_val_checks(crit_val: float, alpha: float = 0.05) -> tuple[float, bool]:
+    """Validate a simultaneous critical value and return ``(value, cband)``."""
+    pointwise = float(norm.ppf(1 - alpha / 2))
+    if not np.isfinite(crit_val) or crit_val < pointwise:
+        return pointwise, False
+    return float(crit_val), True
 
 
 def gt_data_frame(data: pd.DataFrame) -> GTDataFrame:
