@@ -30,3 +30,5 @@ implicit regression weights.  See :doc:`../references` for the full citation.
    diff_diff.TwoPeriodCovariatesResult
    diff_diff.two_period_reg_weights
    diff_diff.two_period_aipw_weights
+   diff_diff.implicit_twfe_weights
+   diff_diff.ImplicitTWFEResult

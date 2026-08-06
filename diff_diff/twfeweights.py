@@ -53,6 +53,16 @@ class TwoPeriodCovariatesResult:
     ess: Optional[float] = None
 
 
+@dataclass
+class ImplicitTWFEResult:
+    """Multi-period no-covariate TWFE decomposition."""
+
+    twfe_gt: pd.DataFrame
+    est: float
+    decomposition_est: float
+    pre_trends_bias: float
+
+
 def _coerce_inputs(
     attgt: pd.DataFrame,
     data: pd.DataFrame,
@@ -446,3 +456,79 @@ def two_period_aipw_weights(
     return TwoPeriodCovariatesResult(
         float(score.mean()), weights, dy, d, ess=effective_sample_size(weights[d == 0])
     )
+
+
+def implicit_twfe_weights(
+    data: pd.DataFrame,
+    *,
+    yname: str,
+    tname: str,
+    idname: str,
+    gname: str,
+    base_period: str = "first_period",
+) -> ImplicitTWFEResult:
+    """Decompose a no-covariate staggered TWFE regression by group and time."""
+    if base_period not in {"first_period", "gmin1"}:
+        raise ValueError("base_period must be 'first_period' or 'gmin1'")
+    required = {yname, tname, idname, gname}
+    missing = sorted(required.difference(data.columns))
+    if missing:
+        raise ValueError(f"data is missing columns: {missing}")
+    periods = sorted(pd.unique(data[tname]))
+    counts = data.groupby(idname)[tname].nunique()
+    if len(periods) < 2 or (counts != len(periods)).any():
+        raise ValueError(
+            "implicit_twfe_weights requires a balanced panel with at least two periods"
+        )
+    ordered = data.sort_values([idname, tname]).copy()
+    treatment = ((ordered[tname] >= ordered[gname]) & ordered[gname].ne(0)).astype(float).to_numpy()
+    unit_mean = (
+        pd.Series(treatment).groupby(ordered[idname].to_numpy()).transform("mean").to_numpy()
+    )
+    time_mean = pd.Series(treatment).groupby(ordered[tname].to_numpy()).transform("mean").to_numpy()
+    residual = treatment - unit_mean - time_mean + treatment.mean()
+    denominator = np.mean(residual * treatment)
+    if denominator <= 0:
+        raise ValueError("treatment has no residual variation after fixed effects")
+    rows = []
+    unit_groups = ordered.groupby(idname, sort=False)[gname].first()
+    unit_ids = unit_groups.index
+    wide_y = ordered.pivot(index=idname, columns=tname, values=yname).loc[unit_ids]
+    group_values = sorted(g for g in pd.unique(ordered[gname]) if g != 0)
+    for group in group_values:
+        group_share = float(np.mean(unit_groups.to_numpy() == group))
+        for period in periods:
+            cell = (ordered[gname].to_numpy() == group) & (ordered[tname].to_numpy() == period)
+            treated_ids = ordered.loc[cell, idname].to_numpy()
+            control_ids = ordered.loc[
+                (ordered[gname].to_numpy() == 0) & (ordered[tname].to_numpy() == period), idname
+            ].to_numpy()
+            if len(treated_ids) == 0 or len(control_ids) == 0:
+                continue
+            base = periods[0] if base_period == "first_period" else group - 1
+            if base not in wide_y.columns:
+                continue
+            treated_effect = float(
+                (wide_y.loc[treated_ids, period] - wide_y.loc[treated_ids, base]).mean()
+            )
+            control_effect = float(
+                (wide_y.loc[control_ids, period] - wide_y.loc[control_ids, base]).mean()
+            )
+            alpha_weight = float(
+                np.mean(residual[cell]) * group_share / (denominator * len(periods))
+            )
+            rows.append(
+                {
+                    "group": group,
+                    "time": period,
+                    "alpha_weight": alpha_weight,
+                    "attgt": treated_effect - control_effect,
+                }
+            )
+    frame = pd.DataFrame(rows)
+    decomposition = (
+        float(np.sum(frame["alpha_weight"] * frame["attgt"])) if not frame.empty else float("nan")
+    )
+    post = frame["time"] >= frame["group"]
+    pre_bias = float(np.sum(frame.loc[~post, "alpha_weight"] * frame.loc[~post, "attgt"]))
+    return ImplicitTWFEResult(frame, decomposition, decomposition, pre_bias)

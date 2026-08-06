@@ -41,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   covariates.
 - Added the two-period ``two_period_aipw_weights`` ATT and implicit control
   weights calculation with optional pre-period covariates.
+- Added the no-covariate multi-period ``implicit_twfe_weights`` group-time
+  decomposition and pre-trends contribution surface.
 - **ContinuousDiD post-fit `aggregate()` - a MIXED view/recompute adopter**
   (v4 program 2(b) PR-3c; ledger row [M-025]). `ContinuousDiD.fit(aggregate=)`
   is deprecated (`FutureWarning`; removed in 4.0, and the no-underscore
