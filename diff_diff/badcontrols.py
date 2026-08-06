@@ -545,6 +545,8 @@ def didbc(
     nuisance_method: str = "ml",
     n_folds: int = 5,
     random_state: Optional[int] = None,
+    overlap_threshold: float = 0.99,
+    min_group_size: int = 5,
     **_: object,
 ) -> BadControlsResult:
     """Python spelling of R ``didbc`` for its linear imputation path."""
@@ -576,6 +578,49 @@ def didbc(
             )
         raise ValueError("est_method must be 'imputation' or 'dr_ml'")
     if est_method == "dr_ml":
+        if not 0 < overlap_threshold < 1:
+            raise ValueError("overlap_threshold must be between 0 and 1")
+        if not isinstance(min_group_size, (int, np.integer)) or min_group_size < 1:
+            raise ValueError("min_group_size must be a positive integer")
+        treated_count = int((data.groupby(idname)[gname].first() != 0).sum())
+        covariate_count = len(covariates) + len(bad_control_covariates) + (1 if bad_control else 0)
+        if treated_count < covariate_count + min_group_size:
+            return imputation_bad_control(
+                data,
+                yname=yname,
+                gname=gname,
+                tname=tname,
+                idname=idname,
+                bad_control=bad_control,
+                covariates=covariates,
+                bad_control_covariates=bad_control_covariates,
+            )
+        periods = sorted(pd.unique(data[tname]).tolist())
+        extra = list(
+            dict.fromkeys(
+                ([bad_control] if bad_control else [])
+                + list(covariates)
+                + list(bad_control_covariates)
+            )
+        )
+        wide = _wide_panel(data, yname, gname, tname, idname, periods[0], periods[1], extra)
+        if bad_control is not None:
+            wide["bc_pre"] = wide[f"{bad_control}_{periods[0]}"]
+            propensity_columns = ["bc_pre"] + list(bad_control_covariates) + list(covariates)
+        else:
+            propensity_columns = list(covariates)
+        propensity, _ = _logit_predict(wide, "D", propensity_columns, wide)
+        if float(np.max(propensity)) > overlap_threshold:
+            return imputation_bad_control(
+                data,
+                yname=yname,
+                gname=gname,
+                tname=tname,
+                idname=idname,
+                bad_control=bad_control,
+                covariates=covariates,
+                bad_control_covariates=bad_control_covariates,
+            )
         if nuisance_method == "ml":
             return dr_ml_bad_control(
                 data,

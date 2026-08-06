@@ -22,6 +22,8 @@ the per-``(g,t)`` ``didbc`` loop; joint multi-period inference is still a
 separate implementation step.
 The parametric and random-forest DR paths also loop over staggered cells; their
 joint multi-period inference is not yet combined across cells.
+The DR entry point validates ``overlap_threshold`` and ``min_group_size`` and
+falls back to imputation when the propensity model is not sufficiently supported.
 
 .. autosummary::
    :toctree: _autosummary

@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and aggregating them with cohort/post-period weights.
 - Added staggered parametric and random-forest DR cell loops with the same
   cohort aggregation surface.
+- Added DR overlap and minimum-treated-group safeguards with explicit
+  imputation fallback.
 - **R `ptetools` compatibility primitives.** Added panel setup, two-period
   group-time subsetting, ATT(g,t) influence-function containers, unadjusted
   DID estimation, the generic ``pte`` group-time loop, and group/dynamic

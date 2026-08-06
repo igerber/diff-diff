@@ -81,3 +81,21 @@ def test_random_forest_dr_cross_fits_and_returns_finite_result():
     assert result.method == "dr_ml"
     assert np.isfinite(result.att)
     assert np.isfinite(result.se)
+
+
+def test_dr_small_treated_group_falls_back_to_imputation():
+    panel = _bad_control_panel().query("id < 14").copy()
+    panel["G"] = (panel["id"] >= 10).astype(int)
+    panel.loc[panel["G"].eq(1), "G"] = 1
+    result = didbc(
+        panel,
+        yname="Y",
+        gname="G",
+        tname="period",
+        idname="id",
+        bad_control="X",
+        est_method="dr_ml",
+        nuisance_method="parametric",
+        min_group_size=5,
+    )
+    assert result.method == "imputation"
