@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `att_simple_weights`, `MPWeightsResult`, and `ggtwfeweights` for decomposing
   ATT(g,t) tables with R-compatible output columns and normalization rules,
   plus effective-sample-size and covariate-spread diagnostics.
+- Added the two-period ``two_period_reg_weights`` Frisch-Waugh-Lovell
+  implicit-weight calculation with time-varying changes and time-invariant
+  covariates.
 - **ContinuousDiD post-fit `aggregate()` - a MIXED view/recompute adopter**
   (v4 program 2(b) PR-3c; ledger row [M-025]). `ContinuousDiD.fit(aggregate=)`
   is deprecated (`FutureWarning`; removed in 4.0, and the no-underscore

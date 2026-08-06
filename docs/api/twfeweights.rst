@@ -28,3 +28,4 @@ implicit regression weights.  See :doc:`../references` for the full citation.
    diff_diff.log_ratio_sd
    diff_diff.frac_treated_extreme
    diff_diff.TwoPeriodCovariatesResult
+   diff_diff.two_period_reg_weights

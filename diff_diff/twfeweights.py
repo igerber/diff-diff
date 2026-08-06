@@ -10,7 +10,7 @@ Python representation rather than depending on the internal layout of an R
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -342,3 +342,55 @@ def frac_treated_extreme(
         treated_mass[(values[d] * estimation[d] < low) | (values[d] * estimation[d] > high)].sum()
         / treated_mass.sum()
     )
+
+
+def two_period_reg_weights(
+    data: pd.DataFrame,
+    *,
+    yname: str,
+    tname: str,
+    idname: str,
+    gname: str,
+    covariates: Sequence[str] = (),
+    time_invariant_covariates: Sequence[str] = (),
+    weightsname: Optional[str] = None,
+) -> TwoPeriodCovariatesResult:
+    """Compute two-period TWFE implicit regression weights."""
+    required = {yname, tname, idname, gname, *covariates, *time_invariant_covariates}
+    missing = sorted(required.difference(data.columns))
+    if missing:
+        raise ValueError(f"data is missing columns: {missing}")
+    periods = sorted(pd.unique(data[tname]))
+    if len(periods) != 2:
+        raise ValueError("two_period_reg_weights only supports two periods")
+    counts = data.groupby(idname)[tname].nunique()
+    if (counts != 2).any():
+        raise ValueError("two_period_reg_weights requires a balanced panel")
+    ordered = data.sort_values([idname, tname])
+    pre = ordered[ordered[tname] == periods[0]].set_index(idname)
+    post = ordered[ordered[tname] == periods[1]].set_index(idname)
+    ids = pre.index
+    dy = (post.loc[ids, yname] - pre.loc[ids, yname]).to_numpy(float)
+    treatment = (post.loc[ids, gname].to_numpy() != 0).astype(float)
+    features = [np.ones(len(ids))]
+    for column in covariates:
+        features.append((post.loc[ids, column] - pre.loc[ids, column]).to_numpy(float))
+    for column in time_invariant_covariates:
+        features.append(pre.loc[ids, column].to_numpy(float))
+    x = np.column_stack(features)
+    sampling = (
+        np.ones(len(ids)) if weightsname is None else pre.loc[ids, weightsname].to_numpy(float)
+    )
+    if np.any(~np.isfinite(sampling)) or np.any(sampling <= 0):
+        raise ValueError("sampling weights must be positive and finite")
+    coef = np.linalg.lstsq(
+        x * np.sqrt(sampling)[:, None], treatment * np.sqrt(sampling), rcond=None
+    )[0]
+    residual = treatment - x @ coef
+    denominator = np.average(residual**2, weights=sampling)
+    if denominator <= 0:
+        raise ValueError("treatment is collinear with the supplied covariates")
+    implicit = residual / denominator
+    estimate = float(np.average(implicit * dy, weights=sampling))
+    ess = effective_sample_size(implicit[treatment == 0], sampling[treatment == 0])
+    return TwoPeriodCovariatesResult(estimate, implicit, dy, treatment, ess=ess)
