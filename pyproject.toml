@@ -75,6 +75,9 @@ dev = [
 plotly = [
     "plotly>=5.0",
 ]
+ml = [
+    "scikit-learn>=1.2",
+]
 docs = [
     "sphinx>=6.0",
     "pydata-sphinx-theme>=0.16.1",

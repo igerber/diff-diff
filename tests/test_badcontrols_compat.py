@@ -31,7 +31,7 @@ def test_imputation_recovers_effect_through_a_bad_control():
     assert extract_att(result) == {"att": result.att, "se": result.se}
 
 
-def test_dr_ml_is_explicitly_not_silently_substituted():
+def test_unknown_dr_nuisance_method_fails_closed():
     try:
         didbc(
             _bad_control_panel(),
@@ -41,11 +41,12 @@ def test_dr_ml_is_explicitly_not_silently_substituted():
             idname="id",
             bad_control="X",
             est_method="dr_ml",
+            nuisance_method="unknown",
         )
     except NotImplementedError as exc:
         assert "dr_ml" in str(exc)
     else:
-        raise AssertionError("dr_ml must not silently fall back to imputation")
+        raise AssertionError("unknown nuisance methods must fail closed")
 
 
 def test_parametric_dr_returns_finite_att_and_influence_function():
@@ -63,3 +64,20 @@ def test_parametric_dr_returns_finite_att_and_influence_function():
     assert np.isfinite(result.att)
     assert np.isfinite(result.se)
     assert np.isclose(result.influence_function.mean(), 0.0)
+
+
+def test_random_forest_dr_cross_fits_and_returns_finite_result():
+    result = didbc(
+        _bad_control_panel(),
+        yname="Y",
+        gname="G",
+        tname="period",
+        idname="id",
+        bad_control="X",
+        est_method="dr_ml",
+        nuisance_method="ml",
+        n_folds=2,
+    )
+    assert result.method == "dr_ml"
+    assert np.isfinite(result.att)
+    assert np.isfinite(result.se)

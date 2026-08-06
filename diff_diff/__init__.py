@@ -42,6 +42,7 @@ from diff_diff.bacon import (
 from diff_diff.badcontrols import (
     BadControlsResult,
     didbc,
+    dr_ml_bad_control,
     extract_att,
     imputation_bad_control,
 )
@@ -638,6 +639,7 @@ __all__ = [
     "AggregationResult",
     "BadControlsResult",
     "didbc",
+    "dr_ml_bad_control",
     "extract_att",
     "imputation_bad_control",
 ]

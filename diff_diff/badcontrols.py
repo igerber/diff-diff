@@ -149,6 +149,101 @@ def dr_parametric_bad_control(
     return BadControlsResult(att, se, att_gt, influence, method="dr_ml-parametric")
 
 
+def dr_ml_bad_control(
+    data: pd.DataFrame,
+    *,
+    yname: str,
+    gname: str,
+    tname: str,
+    idname: str,
+    bad_control: Optional[str] = None,
+    covariates: Sequence[str] = (),
+    bad_control_covariates: Sequence[str] = (),
+    n_folds: int = 5,
+    random_state: Optional[int] = None,
+) -> BadControlsResult:
+    """Estimate the DR bad-control score with cross-fitted random forests."""
+    try:
+        from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+    except ImportError as exc:
+        raise ImportError("install diff-diff[ml] to use nuisance_method='ml'") from exc
+    if not isinstance(n_folds, (int, np.integer)) or n_folds < 2:
+        raise ValueError("n_folds must be an integer greater than or equal to 2")
+    periods = sorted(pd.unique(data[tname]).tolist())
+    if len(periods) != 2:
+        raise ValueError("dr_ml_bad_control currently requires exactly two periods")
+    extra = list(
+        dict.fromkeys(
+            ([bad_control] if bad_control else []) + list(covariates) + list(bad_control_covariates)
+        )
+    )
+    wide = _wide_panel(data, yname, gname, tname, idname, periods[0], periods[1], extra)
+    wide["delta_y"] = wide[f"{yname}_{periods[1]}"] - wide[f"{yname}_{periods[0]}"]
+    treated = wide["D"].eq(1).to_numpy()
+    control = ~treated
+    if treated.sum() < n_folds or control.sum() < n_folds:
+        raise ValueError("each treatment arm must have at least n_folds units")
+    if bad_control is not None:
+        wide["bc_pre"] = wide[f"{bad_control}_{periods[0]}"]
+        wide["bc_post"] = wide[f"{bad_control}_{periods[1]}"]
+        m_columns = ["bc_post", "bc_pre"] + list(covariates)
+        p_columns = ["bc_pre"] + list(bad_control_covariates) + list(covariates)
+    else:
+        m_columns = list(covariates)
+        p_columns = list(covariates)
+    x_m = _design(wide, m_columns)[:, 1:]
+    x_p = _design(wide, p_columns)[:, 1:]
+    rng = np.random.default_rng(random_state)
+    fold_ids = np.empty(len(wide), dtype=int)
+    for mask in (treated, control):
+        indices = np.flatnonzero(mask)
+        rng.shuffle(indices)
+        fold_ids[indices] = np.arange(len(indices)) % n_folds
+    m_hat = np.zeros(len(wide), dtype=float)
+    p_hat = np.zeros(len(wide), dtype=float)
+    nu_hat = np.zeros(len(wide), dtype=float)
+    omega_hat = np.zeros(len(wide), dtype=float)
+    for fold in range(n_folds):
+        train = fold_ids != fold
+        test = ~train
+        train_control = train & control
+        m_model = RandomForestRegressor(
+            n_estimators=200, min_samples_leaf=5, random_state=random_state
+        )
+        m_model.fit(x_m[train_control], wide.loc[train_control, "delta_y"])
+        m_hat[test] = m_model.predict(x_m[test])
+        p_model = RandomForestClassifier(
+            n_estimators=200, min_samples_leaf=5, random_state=random_state
+        )
+        p_model.fit(x_p[train], wide.loc[train, "D"])
+        p_hat[test] = np.clip(p_model.predict_proba(x_p[test])[:, 1], 1e-4, 1 - 1e-4)
+        nu_model = RandomForestRegressor(
+            n_estimators=200, min_samples_leaf=5, random_state=random_state
+        )
+        nu_model.fit(x_p[train_control], m_hat[train_control])
+        nu_hat[test] = nu_model.predict(x_p[test])
+        omega_model = RandomForestRegressor(
+            n_estimators=200, min_samples_leaf=5, random_state=random_state
+        )
+        odds_train = p_hat[train_control] / (1 - p_hat[train_control])
+        omega_model.fit(x_m[train_control], odds_train)
+        omega_hat[test] = omega_model.predict(x_m[test])
+    pi = float(treated.mean())
+    delta_y = wide["delta_y"].to_numpy(float)
+    d = treated.astype(float)
+    odds = p_hat / (1 - p_hat)
+    score = d / pi * delta_y - d / pi * nu_hat
+    score -= (1 - d) / pi * (m_hat - nu_hat) * odds
+    score -= (1 - d) / pi * (delta_y - m_hat) * omega_hat
+    att = float(score.mean())
+    influence = score - att - att / pi * (d - pi)
+    se = float(np.sqrt(np.mean(influence**2) / len(wide)))
+    att_gt = pd.DataFrame(
+        {"group": [wide.loc[treated, gname].iloc[0]], "time": [periods[1]], "attgt": [att]}
+    )
+    return BadControlsResult(att, se, att_gt, influence, method="dr_ml")
+
+
 def _wide_panel(
     data: pd.DataFrame,
     yname: str,
@@ -303,10 +398,25 @@ def didbc(
     identification_strategy: str = "unconfoundedness",
     est_method: str = "imputation",
     nuisance_method: str = "ml",
+    n_folds: int = 5,
+    random_state: Optional[int] = None,
     **_: object,
 ) -> BadControlsResult:
     """Python spelling of R ``didbc`` for its linear imputation path."""
     if est_method == "dr_ml":
+        if nuisance_method == "ml":
+            return dr_ml_bad_control(
+                data,
+                yname=yname,
+                gname=gname,
+                tname=tname,
+                idname=idname,
+                bad_control=bad_control,
+                covariates=covariates,
+                bad_control_covariates=bad_control_covariates,
+                n_folds=n_folds,
+                random_state=random_state,
+            )
         if nuisance_method != "parametric":
             raise NotImplementedError(
                 "est_method='dr_ml' with nuisance_method='ml' is not implemented in this release"
