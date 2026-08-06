@@ -504,7 +504,8 @@ def pte(
     yname: str,
     gname: str,
     tname: str,
-    idname: str,
+    idname: Optional[str] = None,
+    panel: bool = True,
     control_group: str = "notyettreated",
     anticipation: int = 0,
     base_period: str = "varying",
@@ -514,12 +515,19 @@ def pte(
     seed: Optional[int] = None,
 ) -> PTEResults:
     """Run the generic unadjusted panel ATT(g,t) loop."""
+    if not panel:
+        data = data.copy()
+        idname = idname or "_pte_rowid"
+        data[idname] = np.arange(len(data))
+    if idname is None:
+        raise ValueError("idname is required when panel=True")
     params = setup_pte(
         data,
         yname,
         gname,
         tname,
         idname,
+        panel=panel,
         anticipation=anticipation,
         base_period=base_period,
     )
@@ -532,20 +540,35 @@ def pte(
                 rows.append({"group": g, "time": tp, "attgt": 0.0, "se": np.nan})
                 influence.append(np.full(n_units, np.nan))
                 continue
-            subset = two_by_two_subset(
-                data,
-                g,
-                tp,
-                gname=gname,
-                tname=tname,
-                idname=idname,
-                yname=yname,
-                control_group=control_group,
-                anticipation=anticipation,
-                base_period=base_period,
-                covariates=covariates,
-            )
-            result = did_attgt(subset.gt_data, covariates=covariates)
+            if panel:
+                subset = two_by_two_subset(
+                    data,
+                    g,
+                    tp,
+                    gname=gname,
+                    tname=tname,
+                    idname=idname,
+                    yname=yname,
+                    control_group=control_group,
+                    anticipation=anticipation,
+                    base_period=base_period,
+                    covariates=covariates,
+                )
+                result = did_attgt(subset.gt_data, covariates=covariates)
+            else:
+                subset = two_by_two_rcs_subset(
+                    data,
+                    g,
+                    tp,
+                    gname=gname,
+                    tname=tname,
+                    yname=yname,
+                    control_group=control_group,
+                    anticipation=anticipation,
+                    base_period=base_period,
+                    covariates=covariates,
+                )
+                result = did_rcs_attgt(subset.gt_data, covariates=covariates)
             if result.inf_func is None:
                 raise RuntimeError("did_attgt did not return an influence function")
             se = float(np.sqrt(np.nanmean(result.inf_func**2) / len(result.inf_func)))

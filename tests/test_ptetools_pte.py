@@ -57,3 +57,18 @@ def test_pte_empirical_bootstrap_is_seed_reproducible():
     assert "overall_att" in first.to_dict()
     assert first.overall_conf_int[0] <= first.overall_conf_int[1]
     assert "PTEResults" in first.summary()
+
+
+def test_pte_supports_repeated_cross_sections():
+    import pandas as pd
+
+    data = pd.DataFrame(
+        {
+            "period": [1, 1, 2, 2],
+            "G": [0, 2, 0, 2],
+            "Y": [0.0, 1.0, 1.0, 4.0],
+        }
+    )
+    result = pte(data, yname="Y", gname="G", tname="period", panel=False)
+    assert len(result.att_gt) == 1
+    assert np.isclose(result.overall_att, 2.0)

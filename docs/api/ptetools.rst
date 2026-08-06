@@ -12,7 +12,8 @@ Pass pre-period column names through ``covariates=`` to use the conditional
 AIPW path in ``did_attgt`` and ``pte``. Set ``bstrap=True`` to use the
 unit-level empirical bootstrap with a reproducible ``seed``.
 Repeated-cross-section designs use ``two_by_two_rcs_subset`` and
-``did_rcs_attgt``.
+``did_rcs_attgt``; pass ``panel=False`` to ``pte`` for the full RCS loop.
+Pass ``panel=False`` to ``pte`` for the repeated-cross-section main loop.
 Full-history designs can use ``keep_all_untreated_subset`` or
 ``keep_all_pretreatment_subset``.
 ``setup_pte_basic``, ``pte_default``, and ``pte_attgt`` provide the standard
