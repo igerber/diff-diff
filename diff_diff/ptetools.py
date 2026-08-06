@@ -153,6 +153,19 @@ def setup_pte(
     )
 
 
+def setup_pte_basic(
+    data: pd.DataFrame,
+    yname: str,
+    gname: str,
+    tname: str,
+    idname: Optional[str] = None,
+    *,
+    panel: bool = True,
+) -> PTEParams:
+    """Basic R ``setup_pte_basic``-compatible panel description."""
+    return setup_pte(data, yname, gname, tname, idname, panel=panel)
+
+
 def two_by_two_subset(
     data: pd.DataFrame,
     g: Any,
@@ -326,6 +339,13 @@ def did_attgt(
     return attgt_if(att, inf)
 
 
+def pte_attgt(
+    gt_data: GTDataFrame | pd.DataFrame, *, covariates: Sequence[str] = ()
+) -> ATTGTResult:
+    """Alias for the panel ATT(g,t) step used by ``pte_default``."""
+    return did_attgt(gt_data, covariates=covariates)
+
+
 def did_rcs_attgt(
     gt_data: GTDataFrame | pd.DataFrame, *, covariates: Sequence[str] = ()
 ) -> ATTGTResult:
@@ -473,6 +493,38 @@ def pte(
             )
         overall_se = float(np.std(bootstrap_att, ddof=1))
     return PTEResults(att_gt, overall_att, overall_se, full_influence)
+
+
+def pte_default(
+    data: pd.DataFrame,
+    *,
+    yname: str,
+    gname: str,
+    tname: str,
+    idname: str,
+    covariates: Sequence[str] = (),
+    control_group: str = "notyettreated",
+    anticipation: int = 0,
+    base_period: str = "varying",
+    bstrap: bool = False,
+    biters: int = 100,
+    seed: Optional[int] = None,
+) -> PTEResults:
+    """R ``pte_default``-style wrapper around the generic panel estimator."""
+    return pte(
+        data,
+        yname=yname,
+        gname=gname,
+        tname=tname,
+        idname=idname,
+        covariates=covariates,
+        control_group=control_group,
+        anticipation=anticipation,
+        base_period=base_period,
+        bstrap=bstrap,
+        biters=biters,
+        seed=seed,
+    )
 
 
 def pte_aggte(attgt: pd.DataFrame, *, type: str = "group") -> PTEAggregateResult:

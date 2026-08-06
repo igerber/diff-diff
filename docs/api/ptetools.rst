@@ -15,6 +15,8 @@ Repeated-cross-section designs use ``two_by_two_rcs_subset`` and
 ``did_rcs_attgt``.
 Full-history designs can use ``keep_all_untreated_subset`` or
 ``keep_all_pretreatment_subset``.
+``setup_pte_basic``, ``pte_default``, and ``pte_attgt`` provide the standard
+R-style convenience entry points.
 
 .. autosummary::
    :toctree: _autosummary
@@ -28,6 +30,9 @@ Full-history designs can use ``keep_all_untreated_subset`` or
    diff_diff.gt_data_frame
    diff_diff.did_attgt
    diff_diff.did_rcs_attgt
+   diff_diff.setup_pte_basic
+   diff_diff.pte_default
+   diff_diff.pte_attgt
    diff_diff.attgt_if
    diff_diff.overall_weights
    diff_diff.pte_aggte

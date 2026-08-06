@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``did_rcs_attgt`` compatibility primitives.
 - Added full-history ``keep_all_untreated_subset`` and
   ``keep_all_pretreatment_subset`` helpers for multi-period estimators.
+- Added ``setup_pte_basic``, ``pte_default``, and ``pte_attgt`` convenience
+  wrappers matching common R ``ptetools`` entry points.
 - **R `twfeweights` compatibility layer.** Added `twfe_weights`, `attO_weights`,
   `att_simple_weights`, `MPWeightsResult`, and `ggtwfeweights` for decomposing
   ATT(g,t) tables with R-compatible output columns and normalization rules,
