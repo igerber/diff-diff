@@ -13,6 +13,7 @@ from typing import Any, Optional, Sequence
 
 import numpy as np
 import pandas as pd
+from scipy.special import expit
 
 
 @dataclass
@@ -164,6 +165,7 @@ def two_by_two_subset(
     control_group: str = "notyettreated",
     anticipation: int = 0,
     base_period: str = "varying",
+    covariates: Sequence[str] = (),
 ) -> TwoByTwoSubset:
     """Construct the two-period ``(g,t)`` subset used by ATT(g,t) estimators."""
     if control_group not in {"notyettreated", "nevertreated"}:
@@ -179,7 +181,11 @@ def two_by_two_subset(
     else:
         keep = cohort.isin([0, g]) | (cohort > tp)
     keep &= data[tname].isin([pre, tp])
-    out = data.loc[keep, [gname, idname, tname, yname]].copy()
+    columns = [gname, idname, tname, yname] + list(covariates)
+    missing_covariates = sorted(set(covariates).difference(data.columns))
+    if missing_covariates:
+        raise ValueError(f"data is missing covariates: {missing_covariates}")
+    out = data.loc[keep, columns].copy()
     out = out.rename(columns={gname: "G", idname: "id", tname: "period", yname: "Y"})
     out["name"] = np.where(out["period"].eq(tp), "post", "pre")
     out["D"] = (out["G"] == g).astype(int)
@@ -202,8 +208,10 @@ def attgt_if(
     )
 
 
-def did_attgt(gt_data: GTDataFrame | pd.DataFrame) -> ATTGTResult:
-    """Estimate an unadjusted two-period ATT and its influence function."""
+def did_attgt(
+    gt_data: GTDataFrame | pd.DataFrame, *, covariates: Sequence[str] = ()
+) -> ATTGTResult:
+    """Estimate a two-period ATT, optionally with pre-period AIPW covariates."""
     frame = gt_data.data if isinstance(gt_data, GTDataFrame) else gt_data
     required = {"id", "D", "name", "Y"}
     missing = sorted(required.difference(frame.columns))
@@ -218,10 +226,40 @@ def did_attgt(gt_data: GTDataFrame | pd.DataFrame) -> ATTGTResult:
     control = treat == 0
     if treated.sum() == 0 or control.sum() == 0:
         raise ValueError("both treated and comparison units are required")
-    att = float(delta[treated].mean() - delta[control].mean())
+    if covariates:
+        pre = frame.loc[frame["name"].eq("pre")].set_index("id")
+        x = pre.loc[wide.index, list(covariates)].to_numpy(float)
+        x = np.column_stack([np.ones(len(x)), x])
+        control_x = x[control]
+        control_delta = delta[control]
+        m_coef = np.linalg.lstsq(control_x, control_delta, rcond=None)[0]
+        m_hat = x @ m_coef
+        p_coef = np.zeros(x.shape[1], dtype=float)
+        for _ in range(100):
+            probability = np.clip(expit(x @ p_coef), 1e-8, 1 - 1e-8)
+            variance = np.clip(probability * (1 - probability), 1e-8, None)
+            working = x @ p_coef + (treat - probability) / variance
+            updated = np.linalg.lstsq(
+                x * np.sqrt(variance)[:, None], working * np.sqrt(variance), rcond=None
+            )[0]
+            if np.max(np.abs(updated - p_coef)) < 1e-10:
+                p_coef = updated
+                break
+            p_coef = updated
+        propensity = np.clip(expit(x @ p_coef), 1e-8, 1 - 1e-8)
+        pi = float(treated.mean())
+        residual = delta - m_hat
+        score = treated / pi * residual - control / pi * propensity / (1 - propensity) * residual
+        att = float(score.mean())
+    else:
+        score = None
+        att = float(delta[treated].mean() - delta[control].mean())
     inf = np.zeros(len(delta), dtype=float)
-    inf[treated] = (delta[treated] - delta[treated].mean()) / treated.mean()
-    inf[control] = -(delta[control] - delta[control].mean()) / (1.0 - treated.mean())
+    if score is not None:
+        inf = score - att - att / treated.mean() * (treat - treated.mean())
+    else:
+        inf[treated] = (delta[treated] - delta[treated].mean()) / treated.mean()
+        inf[control] = -(delta[control] - delta[control].mean()) / (1.0 - treated.mean())
     return attgt_if(att, inf)
 
 
@@ -256,6 +294,7 @@ def pte(
     control_group: str = "notyettreated",
     anticipation: int = 0,
     base_period: str = "varying",
+    covariates: Sequence[str] = (),
 ) -> PTEResults:
     """Run the generic unadjusted panel ATT(g,t) loop."""
     params = setup_pte(
@@ -287,8 +326,9 @@ def pte(
                 control_group=control_group,
                 anticipation=anticipation,
                 base_period=base_period,
+                covariates=covariates,
             )
-            result = did_attgt(subset.gt_data)
+            result = did_attgt(subset.gt_data, covariates=covariates)
             if result.inf_func is None:
                 raise RuntimeError("did_attgt did not return an influence function")
             se = float(np.sqrt(np.nanmean(result.inf_func**2) / len(result.inf_func)))

@@ -22,3 +22,17 @@ def test_pte_runs_group_time_loop_and_returns_results():
     assert len(result.att_gt) == 4
     assert np.isfinite(result.overall_att)
     assert result.to_dataframe().equals(result.att_gt)
+
+
+def test_pte_accepts_pre_period_covariates():
+    panel = _panel()
+    panel["Z"] = np.repeat([0.0, 1.0, 0.5, 1.5], 3)
+    result = pte(
+        panel,
+        yname="Y",
+        gname="G",
+        tname="period",
+        idname="id",
+        covariates=["Z"],
+    )
+    assert np.isfinite(result.att_gt["attgt"].dropna()).all()

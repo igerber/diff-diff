@@ -8,6 +8,8 @@ describe a panel, ``two_by_two_subset`` to create a group-time comparison, and
 return ``ATTGTResult`` objects and aggregate group-time effects with
 ``pte_aggte``. The ``pte`` wrapper runs the complete unadjusted group-time
 loop.
+Pass pre-period column names through ``covariates=`` to use the conditional
+AIPW path in ``did_attgt`` and ``pte``.
 
 .. autosummary::
    :toctree: _autosummary
