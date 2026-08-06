@@ -68,6 +68,19 @@ class ATTGTResult:
     extra_gt_returns: Any = None
 
 
+def group_time_att(
+    att_gt: pd.DataFrame, *, influence_functions: Optional[np.ndarray] = None
+) -> pd.DataFrame:
+    """Validate and construct a group-time ATT table."""
+    required = {"group", "time", "attgt"}
+    missing = sorted(required.difference(att_gt.columns))
+    if missing:
+        raise ValueError(f"att_gt is missing columns: {missing}")
+    if influence_functions is not None and len(influence_functions) != len(att_gt):
+        raise ValueError("influence_functions must have one row per ATT(g,t) cell")
+    return att_gt.copy()
+
+
 @dataclass
 class PTEAggregateResult:
     estimate: float
@@ -90,6 +103,18 @@ class PTEAggregateResult:
             "type": self.type,
             "weights": self.weights.to_dict(orient="records"),
         }
+
+
+def aggte_obj(
+    estimate: float,
+    weights: pd.DataFrame,
+    *,
+    type: str = "group",
+    standard_error: float = float("nan"),
+    conf_int: tuple[float, float] = (float("nan"), float("nan")),
+) -> PTEAggregateResult:
+    """Construct an aggregate treatment-effect result container."""
+    return PTEAggregateResult(estimate, weights, type, standard_error, conf_int)
 
 
 @dataclass

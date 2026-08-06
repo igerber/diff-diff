@@ -24,6 +24,8 @@ distribution and percentile ``overall_conf_int`` when empirical bootstrap
 inference is requested.
 ``crit_val_checks`` validates simultaneous critical values before rendering
 confidence bands.
+Custom estimators can construct containers with ``group_time_att`` and
+``aggte_obj``.
 
 .. autosummary::
    :toctree: _autosummary
@@ -37,6 +39,8 @@ confidence bands.
    diff_diff.gt_data_frame
    diff_diff.did_attgt
    diff_diff.did_rcs_attgt
+   diff_diff.group_time_att
+   diff_diff.aggte_obj
    diff_diff.setup_pte_basic
    diff_diff.pte_default
    diff_diff.pte_attgt
