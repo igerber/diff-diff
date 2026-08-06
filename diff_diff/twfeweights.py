@@ -808,3 +808,36 @@ def aipw_cov_bal(
     if not frames:
         raise ValueError("no estimable AIPW balance cells")
     return pd.concat(frames, ignore_index=True)
+
+
+def mp_covariate_bal_summary_helper(
+    cov_balance: pd.DataFrame,
+    *,
+    weights: Optional[Any] = None,
+    post_only: bool = True,
+) -> pd.DataFrame:
+    """Aggregate group-time covariate balance rows into a summary table."""
+    required = {"covariate", "unweighted_diff", "weighted_diff", "sd"}
+    missing = sorted(required.difference(cov_balance.columns))
+    if missing:
+        raise ValueError(f"cov_balance is missing columns: {missing}")
+    frame = cov_balance.copy()
+    if post_only and {"group", "time"}.issubset(frame.columns):
+        frame = frame.loc[frame["time"] >= frame["group"]].copy()
+    frame = frame.reset_index(drop=True)
+    if frame.empty:
+        raise ValueError("no covariate balance rows remain after filtering")
+    w = np.ones(len(frame)) if weights is None else np.asarray(weights, dtype=float)
+    if len(w) != len(frame):
+        raise ValueError("weights must have one value per balance row")
+    rows = []
+    for covariate, group in frame.groupby("covariate", sort=False):
+        local = w[group.index.to_numpy()]
+        local = local / local.sum()
+        row = {"covariate": covariate}
+        for column in ("unweighted_diff", "weighted_diff", "sd"):
+            row[column] = float(np.sum(local * group[column].to_numpy(float)))
+        row["unweighted_standardized_diff"] = row["unweighted_diff"] / row["sd"]
+        row["weighted_standardized_diff"] = row["weighted_diff"] / row["sd"]
+        rows.append(row)
+    return pd.DataFrame(rows)

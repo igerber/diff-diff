@@ -39,3 +39,4 @@ implicit regression weights.  See :doc:`../references` for the full citation.
    diff_diff.twfe_cov_bal_gt
    diff_diff.aipw_cov_bal
    diff_diff.aipw_cov_bal_gt
+   diff_diff.mp_covariate_bal_summary_helper
