@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Initial R `badcontrols` imputation port.** Added the explicit two-period
+  ``didbc`` / ``imputation_bad_control`` API, influence-function output, and
+  ATT extraction helper. The ``dr_ml`` path fails closed until cross-fitting
+  and machine-learning inference are validated against R.
 - **R `ptetools` compatibility primitives.** Added panel setup, two-period
   group-time subsetting, ATT(g,t) influence-function containers, unadjusted
   DID estimation, and group/dynamic aggregation building blocks.

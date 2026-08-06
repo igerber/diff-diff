@@ -106,6 +106,14 @@ Panel Treatment-Effects Primitives
 
    ptetools
 
+Bad-Control DiD
+---------------
+
+.. toctree::
+   :maxdepth: 1
+
+   badcontrols
+
 Visualization
 -------------
 

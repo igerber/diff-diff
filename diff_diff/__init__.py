@@ -39,6 +39,12 @@ from diff_diff.bacon import (
     Comparison2x2,
     bacon_decompose,
 )
+from diff_diff.badcontrols import (
+    BadControlsResult,
+    didbc,
+    extract_att,
+    imputation_bad_control,
+)
 from diff_diff.business_report import (
     BUSINESS_REPORT_SCHEMA_VERSION,
     BusinessContext,
@@ -630,6 +636,10 @@ __all__ = [
     "Diagnostic",
     "EventStudyResults",
     "AggregationResult",
+    "BadControlsResult",
+    "didbc",
+    "extract_att",
+    "imputation_bad_control",
 ]
 
 # Agent-facing entrypoints surface first in dir(diff_diff). LLM agents
