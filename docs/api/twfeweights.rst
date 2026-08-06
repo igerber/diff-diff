@@ -36,6 +36,7 @@ implicit regression weights.  See :doc:`../references` for the full citation.
    diff_diff.gt_weights
    diff_diff.two_period_covs_obj
    diff_diff.did_post_lasso
+   diff_diff.did_post_lasso_ra
    diff_diff.PostLassoResult
    diff_diff.implicit_aipw_weights
    diff_diff.ImplicitAIPWResult

@@ -164,6 +164,39 @@ def did_post_lasso(
     return PostLassoResult(att, se, selected_outcome, selected_propensity, influence)
 
 
+def did_post_lasso_ra(
+    y1: Any,
+    y0: Any,
+    treatment: Any,
+    covariates: Any,
+    *,
+    weights: Optional[Any] = None,
+    random_state: Optional[int] = None,
+) -> PostLassoResult:
+    """Post-Lasso regression-adjustment DiD without propensity selection."""
+    try:
+        from sklearn.linear_model import LassoCV
+    except ImportError as exc:
+        raise ImportError("install diff-diff[ml] to use did_post_lasso_ra") from exc
+    outcome = np.asarray(y1, float) - np.asarray(y0, float)
+    d = np.asarray(treatment).astype(bool)
+    x = np.asarray(covariates, float)
+    sample_weights = np.ones(len(d)) if weights is None else np.asarray(weights, float)
+    if x.ndim != 2 or len(outcome) != len(d) or len(outcome) != len(x):
+        raise ValueError("inputs must have compatible lengths")
+    model = LassoCV(cv=5, random_state=random_state).fit(
+        x[~d], outcome[~d], sample_weight=sample_weights[~d]
+    )
+    m_hat = model.predict(x)
+    pi = float(np.average(d, weights=sample_weights))
+    score = d / pi * (outcome - m_hat)
+    att = float(np.average(score, weights=sample_weights))
+    influence = score - att - att / pi * (d.astype(float) - pi)
+    se = float(np.sqrt(np.average(influence**2, weights=sample_weights) / len(d)))
+    selected = np.flatnonzero(np.abs(model.coef_) > 1e-10)
+    return PostLassoResult(att, se, selected, np.array([], dtype=int), influence)
+
+
 def gt_weights(
     *,
     g: Any,
