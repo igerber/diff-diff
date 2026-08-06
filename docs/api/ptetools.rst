@@ -9,7 +9,8 @@ return ``ATTGTResult`` objects and aggregate group-time effects with
 ``pte_aggte``. The ``pte`` wrapper runs the complete unadjusted group-time
 loop.
 Pass pre-period column names through ``covariates=`` to use the conditional
-AIPW path in ``did_attgt`` and ``pte``.
+AIPW path in ``did_attgt`` and ``pte``. Set ``bstrap=True`` to use the
+unit-level empirical bootstrap with a reproducible ``seed``.
 
 .. autosummary::
    :toctree: _autosummary

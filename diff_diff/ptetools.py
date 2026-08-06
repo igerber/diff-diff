@@ -295,6 +295,9 @@ def pte(
     anticipation: int = 0,
     base_period: str = "varying",
     covariates: Sequence[str] = (),
+    bstrap: bool = False,
+    biters: int = 100,
+    seed: Optional[int] = None,
 ) -> PTEResults:
     """Run the generic unadjusted panel ATT(g,t) loop."""
     params = setup_pte(
@@ -341,7 +344,39 @@ def pte(
     valid = np.isfinite(att_gt["attgt"]) & (weights["overall_weight"] > 0)
     overall_att = float(np.sum(att_gt.loc[valid, "attgt"] * weights.loc[valid, "overall_weight"]))
     full_influence = np.asarray(influence, dtype=float).T if influence else None
-    return PTEResults(att_gt, overall_att, float("nan"), full_influence)
+    overall_se = float("nan")
+    if bstrap:
+        if not isinstance(biters, (int, np.integer)) or biters < 2:
+            raise ValueError("biters must be an integer greater than or equal to 2")
+        rng = np.random.default_rng(seed)
+        bootstrap_att = []
+        for _ in range(int(biters)):
+            sampled_units = []
+            for group_value, group_data in data.groupby(gname, sort=False):
+                units = pd.unique(group_data[idname])
+                sampled_units.extend(rng.choice(units, size=len(units), replace=True))
+            pieces = []
+            for draw, unit in enumerate(sampled_units):
+                piece = data.loc[data[idname].eq(unit)].copy()
+                piece[idname] = draw
+                pieces.append(piece)
+            sampled = pd.concat(pieces, ignore_index=True)
+            bootstrap_att.append(
+                pte(
+                    sampled,
+                    yname=yname,
+                    gname=gname,
+                    tname=tname,
+                    idname=idname,
+                    control_group=control_group,
+                    anticipation=anticipation,
+                    base_period=base_period,
+                    covariates=covariates,
+                    bstrap=False,
+                ).overall_att
+            )
+        overall_se = float(np.std(bootstrap_att, ddof=1))
+    return PTEResults(att_gt, overall_att, overall_se, full_influence)
 
 
 def pte_aggte(attgt: pd.DataFrame, *, type: str = "group") -> PTEAggregateResult:

@@ -36,3 +36,19 @@ def test_pte_accepts_pre_period_covariates():
         covariates=["Z"],
     )
     assert np.isfinite(result.att_gt["attgt"].dropna()).all()
+
+
+def test_pte_empirical_bootstrap_is_seed_reproducible():
+    kwargs = {
+        "yname": "Y",
+        "gname": "G",
+        "tname": "period",
+        "idname": "id",
+        "bstrap": True,
+        "biters": 9,
+        "seed": 42,
+    }
+    first = pte(_panel(), **kwargs)
+    second = pte(_panel(), **kwargs)
+    assert np.isfinite(first.overall_se)
+    assert np.isclose(first.overall_se, second.overall_se)

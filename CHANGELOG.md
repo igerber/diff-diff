@@ -20,7 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   group-time subsetting, ATT(g,t) influence-function containers, unadjusted
   DID estimation, the generic ``pte`` group-time loop, and group/dynamic
   aggregation building blocks. Pre-period covariates now use a conditional
-  AIPW path in ``did_attgt`` and ``pte``.
+  AIPW path in ``did_attgt`` and ``pte``. ``pte`` also supports a seeded
+  unit-level empirical bootstrap for overall ATT inference.
 - **R `twfeweights` compatibility layer.** Added `twfe_weights`, `attO_weights`,
   `att_simple_weights`, `MPWeightsResult`, and `ggtwfeweights` for decomposing
   ATT(g,t) tables with R-compatible output columns and normalization rules.
