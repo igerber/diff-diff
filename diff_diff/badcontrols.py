@@ -98,6 +98,8 @@ def dr_parametric_bad_control(
     bad_control: Optional[str] = None,
     covariates: Sequence[str] = (),
     bad_control_covariates: Sequence[str] = (),
+    d_covariates: Sequence[str] = (),
+    bad_control_d_covariates: Sequence[str] = (),
 ) -> BadControlsResult:
     """Estimate the two-period parametric doubly robust bad-control score.
 
@@ -110,11 +112,17 @@ def dr_parametric_bad_control(
         raise ValueError("dr_parametric_bad_control currently requires exactly two periods")
     extra = list(
         dict.fromkeys(
-            ([bad_control] if bad_control else []) + list(covariates) + list(bad_control_covariates)
+            ([bad_control] if bad_control else [])
+            + list(covariates)
+            + list(bad_control_covariates)
+            + list(d_covariates)
+            + list(bad_control_d_covariates)
         )
     )
     wide = _wide_panel(data, yname, gname, tname, idname, periods[0], periods[1], extra)
     wide["delta_y"] = wide[f"{yname}_{periods[1]}"] - wide[f"{yname}_{periods[0]}"]
+    for column in list(d_covariates) + list(bad_control_d_covariates):
+        wide[f"d_{column}"] = wide[f"{column}_{periods[1]}"] - wide[f"{column}_{periods[0]}"]
     treated = wide["D"].eq(1)
     control = ~treated
     if not treated.any() or not control.any():
@@ -123,10 +131,13 @@ def dr_parametric_bad_control(
         wide["bc_pre"] = wide[f"{bad_control}_{periods[0]}"]
         wide["bc_post"] = wide[f"{bad_control}_{periods[1]}"]
         m_columns = ["bc_post", "bc_pre"] + list(covariates)
-        p_columns = ["bc_pre"] + list(bad_control_covariates) + list(covariates)
+        m_columns += [f"d_{column}" for column in d_covariates]
+        p_columns = ["bc_pre"] + list(bad_control_covariates)
+        p_columns += [f"d_{column}" for column in bad_control_d_covariates]
+        p_columns += list(covariates) + [f"d_{column}" for column in d_covariates]
     else:
-        m_columns = list(covariates)
-        p_columns = list(covariates)
+        m_columns = list(covariates) + [f"d_{column}" for column in d_covariates]
+        p_columns = m_columns
     m_hat, _ = _fit_predict(wide.loc[control], "delta_y", m_columns, wide)
     p_hat, _ = _logit_predict(wide, "D", p_columns, wide)
     wide["m_hat"] = m_hat
@@ -162,6 +173,8 @@ def dr_ml_bad_control(
     bad_control: Optional[str] = None,
     covariates: Sequence[str] = (),
     bad_control_covariates: Sequence[str] = (),
+    d_covariates: Sequence[str] = (),
+    bad_control_d_covariates: Sequence[str] = (),
     n_folds: int = 5,
     random_state: Optional[int] = None,
 ) -> BadControlsResult:
@@ -177,11 +190,17 @@ def dr_ml_bad_control(
         raise ValueError("dr_ml_bad_control currently requires exactly two periods")
     extra = list(
         dict.fromkeys(
-            ([bad_control] if bad_control else []) + list(covariates) + list(bad_control_covariates)
+            ([bad_control] if bad_control else [])
+            + list(covariates)
+            + list(bad_control_covariates)
+            + list(d_covariates)
+            + list(bad_control_d_covariates)
         )
     )
     wide = _wide_panel(data, yname, gname, tname, idname, periods[0], periods[1], extra)
     wide["delta_y"] = wide[f"{yname}_{periods[1]}"] - wide[f"{yname}_{periods[0]}"]
+    for column in list(d_covariates) + list(bad_control_d_covariates):
+        wide[f"d_{column}"] = wide[f"{column}_{periods[1]}"] - wide[f"{column}_{periods[0]}"]
     treated = wide["D"].eq(1).to_numpy()
     control = ~treated
     if treated.sum() < n_folds or control.sum() < n_folds:
@@ -190,10 +209,13 @@ def dr_ml_bad_control(
         wide["bc_pre"] = wide[f"{bad_control}_{periods[0]}"]
         wide["bc_post"] = wide[f"{bad_control}_{periods[1]}"]
         m_columns = ["bc_post", "bc_pre"] + list(covariates)
-        p_columns = ["bc_pre"] + list(bad_control_covariates) + list(covariates)
+        m_columns += [f"d_{column}" for column in d_covariates]
+        p_columns = ["bc_pre"] + list(bad_control_covariates)
+        p_columns += [f"d_{column}" for column in bad_control_d_covariates]
+        p_columns += list(covariates) + [f"d_{column}" for column in d_covariates]
     else:
-        m_columns = list(covariates)
-        p_columns = list(covariates)
+        m_columns = list(covariates) + [f"d_{column}" for column in d_covariates]
+        p_columns = m_columns
     x_m = _design(wide, m_columns)[:, 1:]
     x_p = _design(wide, p_columns)[:, 1:]
     rng = np.random.default_rng(random_state)
@@ -705,6 +727,8 @@ def didbc(
                 bad_control=bad_control,
                 covariates=covariates,
                 bad_control_covariates=bad_control_covariates,
+                d_covariates=d_covariates,
+                bad_control_d_covariates=bad_control_d_covariates,
                 n_folds=n_folds,
                 random_state=random_state,
             )
@@ -721,6 +745,8 @@ def didbc(
             bad_control=bad_control,
             covariates=covariates,
             bad_control_covariates=bad_control_covariates,
+            d_covariates=d_covariates,
+            bad_control_d_covariates=bad_control_d_covariates,
         )
     if est_method != "imputation":
         raise ValueError("est_method must be 'imputation' or 'dr_ml'")

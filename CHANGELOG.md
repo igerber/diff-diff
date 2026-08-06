@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added seeded cohort-stratified empirical bootstrap, bootstrap SE, and
   percentile confidence intervals to ``didbc``.
 - Added imputation support for general and bad-control covariate changes.
+- Extended the same covariate-change design matrices to parametric and
+  random-forest DR nuisance models.
 - **R `ptetools` compatibility primitives.** Added panel setup, two-period
   group-time subsetting, ATT(g,t) influence-function containers, unadjusted
   DID estimation, the generic ``pte`` group-time loop, and group/dynamic

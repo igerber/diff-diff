@@ -26,7 +26,7 @@ The DR entry point validates ``overlap_threshold`` and ``min_group_size`` and
 falls back to imputation when the propensity model is not sufficiently supported.
 Set ``bstrap=True`` for a seeded, cohort-stratified empirical bootstrap with
 percentile confidence intervals.
-Imputation also accepts ``d_covariates`` and
+Imputation and parametric/ML DR paths accept ``d_covariates`` and
 ``bad_control_d_covariates`` for post-minus-pre changes.
 
 .. autosummary::

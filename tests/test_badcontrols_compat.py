@@ -133,3 +133,20 @@ def test_imputation_accepts_covariate_changes():
         d_covariates=["Z"],
     )
     assert np.isfinite(result.att)
+
+
+def test_parametric_dr_accepts_covariate_changes():
+    panel = _bad_control_panel()
+    panel["Z"] = panel["id"] / 10 * panel["period"]
+    result = didbc(
+        panel,
+        yname="Y",
+        gname="G",
+        tname="period",
+        idname="id",
+        bad_control="X",
+        est_method="dr_ml",
+        nuisance_method="parametric",
+        d_covariates=["Z"],
+    )
+    assert np.isfinite(result.att)
