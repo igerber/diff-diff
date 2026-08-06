@@ -235,6 +235,30 @@ def setup_pte_basic(
     return setup_pte(data, yname, gname, tname, idname, panel=panel)
 
 
+def pte_params(
+    data: pd.DataFrame,
+    yname: str,
+    gname: str,
+    tname: str,
+    idname: Optional[str] = None,
+    *,
+    panel: bool = True,
+    anticipation: int = 0,
+    base_period: str = "varying",
+) -> PTEParams:
+    """R ``pte_params``-style constructor backed by ``setup_pte``."""
+    return setup_pte(
+        data,
+        yname,
+        gname,
+        tname,
+        idname,
+        panel=panel,
+        anticipation=anticipation,
+        base_period=base_period,
+    )
+
+
 def two_by_two_subset(
     data: pd.DataFrame,
     g: Any,
@@ -605,6 +629,23 @@ def pte_default(
         biters=biters,
         seed=seed,
     )
+
+
+def pte_results(
+    att_gt: pd.DataFrame,
+    overall_att: float,
+    overall_se: float = float("nan"),
+) -> PTEResults:
+    """Construct a ``PTEResults`` object from aggregate inputs."""
+    return PTEResults(group_time_att(att_gt), overall_att, overall_se)
+
+
+def pte_emp_boot(
+    data: pd.DataFrame,
+    **kwargs: Any,
+) -> PTEResults:
+    """R ``pte_emp_boot``-style wrapper for empirical bootstrap results."""
+    return panel_empirical_bootstrap(data, **kwargs)
 
 
 def panel_empirical_bootstrap(data: pd.DataFrame, **kwargs: Any) -> PTEResults:

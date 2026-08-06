@@ -28,6 +28,7 @@ Custom estimators can construct containers with ``group_time_att`` and
 ``aggte_obj``.
 ``panel_empirical_bootstrap`` and ``mboot2`` expose the two bootstrap engines
 for custom workflows.
+``pte_params``, ``pte_results``, and ``pte_emp_boot`` provide R-style aliases.
 
 .. autosummary::
    :toctree: _autosummary
@@ -45,6 +46,9 @@ for custom workflows.
    diff_diff.aggte_obj
    diff_diff.panel_empirical_bootstrap
    diff_diff.mboot2
+   diff_diff.pte_params
+   diff_diff.pte_results
+   diff_diff.pte_emp_boot
    diff_diff.setup_pte_basic
    diff_diff.pte_default
    diff_diff.pte_attgt
