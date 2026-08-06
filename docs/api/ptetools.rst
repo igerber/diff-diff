@@ -17,6 +17,8 @@ Full-history designs can use ``keep_all_untreated_subset`` or
 ``keep_all_pretreatment_subset``.
 ``setup_pte_basic``, ``pte_default``, and ``pte_attgt`` provide the standard
 R-style convenience entry points.
+Dynamic aggregation normalizes cohort weights within each event time and can
+receive explicit ``cohort_weights``.
 
 .. autosummary::
    :toctree: _autosummary

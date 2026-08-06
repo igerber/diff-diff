@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``keep_all_pretreatment_subset`` helpers for multi-period estimators.
 - Added ``setup_pte_basic``, ``pte_default``, and ``pte_attgt`` convenience
   wrappers matching common R ``ptetools`` entry points.
+- Corrected dynamic/group aggregation to use treated-unit cohort weights and
+  normalize dynamic weights separately at each event time.
 - **R `twfeweights` compatibility layer.** Added `twfe_weights`, `attO_weights`,
   `att_simple_weights`, `MPWeightsResult`, and `ggtwfeweights` for decomposing
   ATT(g,t) tables with R-compatible output columns and normalization rules,

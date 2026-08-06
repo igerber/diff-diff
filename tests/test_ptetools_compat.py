@@ -45,3 +45,20 @@ def test_ptetools_aggregation_weights_and_att():
     assert np.isclose(weights["overall_weight"].sum(), 1.0)
     result = pte_aggte(effects, type="group")
     assert np.isclose(result.estimate, 2.75)
+
+
+def test_dynamic_aggregation_normalizes_cohort_weights_by_event_time():
+    effects = pd.DataFrame(
+        {
+            "group": [2, 2, 3, 3],
+            "time": [2, 3, 3, 4],
+            "attgt": [1.0, 2.0, 3.0, 4.0],
+        }
+    )
+    result = pte_aggte(effects, type="dynamic", cohort_weights={2: 0.75, 3: 0.25})
+    assert np.isclose(
+        result.weights.groupby(result.weights["time"] - result.weights["group"])["overall_weight"]
+        .sum()
+        .min(),
+        1.0,
+    )

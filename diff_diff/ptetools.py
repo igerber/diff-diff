@@ -82,12 +82,13 @@ class PTEResults:
     overall_att: float
     overall_se: float
     influence_functions: Optional[np.ndarray] = None
+    cohort_weights: Optional[dict[Any, float]] = None
 
     def to_dataframe(self) -> pd.DataFrame:
         return self.att_gt.copy()
 
     def aggregate(self, type: str = "group") -> PTEAggregateResult:
-        return pte_aggte(self.att_gt, type=type)
+        return pte_aggte(self.att_gt, type=type, cohort_weights=self.cohort_weights)
 
 
 def gt_data_frame(data: pd.DataFrame) -> GTDataFrame:
@@ -456,7 +457,10 @@ def pte(
             full_if[subset.disidx] = result.inf_func
             influence.append(full_if)
     att_gt = pd.DataFrame(rows)
-    weights = overall_weights(att_gt)
+    unit_groups = data.groupby(idname, sort=False)[gname].first()
+    treated_groups = unit_groups[unit_groups != 0]
+    cohort_weights = (treated_groups.value_counts() / len(treated_groups)).to_dict()
+    weights = pte_aggte(att_gt, type="group", cohort_weights=cohort_weights).weights
     valid = np.isfinite(att_gt["attgt"]) & (weights["overall_weight"] > 0)
     overall_att = float(np.sum(att_gt.loc[valid, "attgt"] * weights.loc[valid, "overall_weight"]))
     full_influence = np.asarray(influence, dtype=float).T if influence else None
@@ -492,7 +496,7 @@ def pte(
                 ).overall_att
             )
         overall_se = float(np.std(bootstrap_att, ddof=1))
-    return PTEResults(att_gt, overall_att, overall_se, full_influence)
+    return PTEResults(att_gt, overall_att, overall_se, full_influence, cohort_weights)
 
 
 def pte_default(
@@ -527,21 +531,42 @@ def pte_default(
     )
 
 
-def pte_aggte(attgt: pd.DataFrame, *, type: str = "group") -> PTEAggregateResult:
+def pte_aggte(
+    attgt: pd.DataFrame,
+    *,
+    type: str = "group",
+    cohort_weights: Optional[dict[Any, float]] = None,
+) -> PTEAggregateResult:
     """Aggregate an ATT(g,t) table using group or dynamic weights."""
     if type not in {"group", "dynamic"}:
         raise ValueError("type must be 'group' or 'dynamic'")
     frame = attgt.copy()
     if type == "group":
-        weights = overall_weights(frame)
+        if cohort_weights is None:
+            weights = overall_weights(frame)
+        else:
+            frame = frame.rename(columns={"group": "group", "time": "time"})
+            post = (frame["group"] != 0) & (frame["time"] >= frame["group"])
+            post_counts = frame.loc[post].groupby("group")["time"].transform("count")
+            frame["overall_weight"] = 0.0
+            frame.loc[post, "overall_weight"] = [
+                cohort_weights.get(g, 0.0) / count
+                for g, count in zip(frame.loc[post, "group"], post_counts)
+            ]
+            weights = frame[["group", "time", "overall_weight"]]
     else:
         required = {"group", "time", "attgt"}
         if not required.issubset(frame.columns):
             raise ValueError("dynamic aggregation requires group, time, and attgt columns")
         frame["event_time"] = frame["time"] - frame["group"]
         frame = frame.loc[frame["event_time"] >= 0].copy()
-        frame["overall_weight"] = frame.groupby("event_time")["group"].transform("count").rdiv(1.0)
-        frame["overall_weight"] /= frame["overall_weight"].sum()
+        if cohort_weights is None:
+            counts = frame["group"].value_counts().astype(float)
+            cohort_weights = (counts / counts.sum()).to_dict()
+        frame["cohort_weight"] = frame["group"].map(cohort_weights).fillna(0.0)
+        frame["overall_weight"] = frame.groupby("event_time")["cohort_weight"].transform(
+            lambda values: values / values.sum() if values.sum() > 0 else values
+        )
         weights = frame[["group", "time", "overall_weight"]]
     effects = frame["attgt"].to_numpy(float)
     w = weights["overall_weight"].to_numpy(float)
