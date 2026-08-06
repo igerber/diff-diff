@@ -13,6 +13,7 @@ from typing import Optional, Sequence
 
 import numpy as np
 import pandas as pd
+from scipy.special import expit
 
 
 @dataclass
@@ -58,6 +59,94 @@ def _fit_predict(
     y_train = pd.to_numeric(train[target], errors="raise").to_numpy(float)
     coef, _, _, _ = np.linalg.lstsq(x_train, y_train, rcond=None)
     return _design(new, columns) @ coef, coef
+
+
+def _logit_predict(
+    train: pd.DataFrame,
+    treatment: str,
+    columns: Sequence[str],
+    new: pd.DataFrame,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Fit a logistic working model by IRLS and return fitted probabilities."""
+    x = _design(train, columns)
+    y = train[treatment].to_numpy(float)
+    beta = np.zeros(x.shape[1], dtype=float)
+    for _ in range(100):
+        probability = np.clip(expit(x @ beta), 1e-8, 1 - 1e-8)
+        variance = np.clip(probability * (1 - probability), 1e-8, None)
+        working = x @ beta + (y - probability) / variance
+        updated = np.linalg.lstsq(
+            x * np.sqrt(variance)[:, None], working * np.sqrt(variance), rcond=None
+        )[0]
+        if np.max(np.abs(updated - beta)) < 1e-10:
+            beta = updated
+            break
+        beta = updated
+    return np.clip(expit(_design(new, columns) @ beta), 1e-8, 1 - 1e-8), beta
+
+
+def dr_parametric_bad_control(
+    data: pd.DataFrame,
+    *,
+    yname: str,
+    gname: str,
+    tname: str,
+    idname: str,
+    bad_control: Optional[str] = None,
+    covariates: Sequence[str] = (),
+    bad_control_covariates: Sequence[str] = (),
+) -> BadControlsResult:
+    """Estimate the two-period parametric doubly robust bad-control score.
+
+    This follows Equation (11) of Caetano et al. (2026).  It uses the
+    parametric nuisance models without cross-fitting; the cross-fitted ML
+    route remains a separate implementation step.
+    """
+    periods = sorted(pd.unique(data[tname]).tolist())
+    if len(periods) != 2:
+        raise ValueError("dr_parametric_bad_control currently requires exactly two periods")
+    extra = list(
+        dict.fromkeys(
+            ([bad_control] if bad_control else []) + list(covariates) + list(bad_control_covariates)
+        )
+    )
+    wide = _wide_panel(data, yname, gname, tname, idname, periods[0], periods[1], extra)
+    wide["delta_y"] = wide[f"{yname}_{periods[1]}"] - wide[f"{yname}_{periods[0]}"]
+    treated = wide["D"].eq(1)
+    control = ~treated
+    if not treated.any() or not control.any():
+        raise ValueError("both treated and never-treated units are required")
+    if bad_control is not None:
+        wide["bc_pre"] = wide[f"{bad_control}_{periods[0]}"]
+        wide["bc_post"] = wide[f"{bad_control}_{periods[1]}"]
+        m_columns = ["bc_post", "bc_pre"] + list(covariates)
+        p_columns = ["bc_pre"] + list(bad_control_covariates) + list(covariates)
+    else:
+        m_columns = list(covariates)
+        p_columns = list(covariates)
+    m_hat, _ = _fit_predict(wide.loc[control], "delta_y", m_columns, wide)
+    p_hat, _ = _logit_predict(wide, "D", p_columns, wide)
+    wide["m_hat"] = m_hat
+    nu_hat, _ = _fit_predict(wide.loc[control], "m_hat", p_columns, wide)
+    odds = p_hat / (1 - p_hat)
+    wide["odds_hat"] = odds
+    omega_hat, _ = _fit_predict(wide.loc[control], "odds_hat", m_columns, wide)
+    delta_y = wide["delta_y"].to_numpy(float)
+    d = treated.to_numpy(float)
+    pi = float(d.mean())
+    score = (
+        d / pi * delta_y
+        - d / pi * nu_hat
+        - (1 - d) / pi * (m_hat - nu_hat) * odds
+        - (1 - d) / pi * (delta_y - m_hat) * omega_hat
+    )
+    att = float(score.mean())
+    influence = score - att - att / pi * (d - pi)
+    se = float(np.sqrt(np.mean(influence**2) / len(wide)))
+    att_gt = pd.DataFrame(
+        {"group": [wide.loc[treated, gname].iloc[0]], "time": [periods[1]], "attgt": [att]}
+    )
+    return BadControlsResult(att, se, att_gt, influence, method="dr_ml-parametric")
 
 
 def _wide_panel(
@@ -213,11 +302,27 @@ def didbc(
     bad_control_covariates: Sequence[str] = (),
     identification_strategy: str = "unconfoundedness",
     est_method: str = "imputation",
+    nuisance_method: str = "ml",
     **_: object,
 ) -> BadControlsResult:
     """Python spelling of R ``didbc`` for its linear imputation path."""
+    if est_method == "dr_ml":
+        if nuisance_method != "parametric":
+            raise NotImplementedError(
+                "est_method='dr_ml' with nuisance_method='ml' is not implemented in this release"
+            )
+        return dr_parametric_bad_control(
+            data,
+            yname=yname,
+            gname=gname,
+            tname=tname,
+            idname=idname,
+            bad_control=bad_control,
+            covariates=covariates,
+            bad_control_covariates=bad_control_covariates,
+        )
     if est_method != "imputation":
-        raise NotImplementedError("est_method='dr_ml' is not implemented in this release")
+        raise ValueError("est_method must be 'imputation' or 'dr_ml'")
     return imputation_bad_control(
         data,
         yname=yname,

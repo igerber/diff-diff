@@ -1,15 +1,17 @@
 Bad-Control DiD
 ===============
 
-The initial ``badcontrols`` compatibility layer implements the linear,
-two-period imputation estimator from Caetano, Callaway, Payne, and Sant'Anna
-(2026).  It first imputes the untreated evolution of a treatment-affected
-covariate among controls, then estimates the outcome trend using that imputed
-counterfactual covariate.
+The ``badcontrols`` compatibility layer implements the linear, two-period
+imputation estimator and the parametric doubly robust score from Caetano,
+Callaway, Payne, and Sant'Anna (2026).  The imputation path first imputes the
+untreated evolution of a treatment-affected covariate among controls, then
+estimates the outcome trend using that imputed counterfactual covariate.
 
-The doubly robust machine-learning estimator is intentionally not substituted
-silently: requesting ``est_method="dr_ml"`` raises ``NotImplementedError``
-until its cross-fitting and inference contract is ported and validated.
+The parametric path is selected with ``est_method="dr_ml",
+nuisance_method="parametric"``.  The random-forest cross-fitted path is
+intentionally not substituted silently: requesting ``nuisance_method="ml"``
+raises ``NotImplementedError`` until its inference contract is ported and
+validated.
 
 The implemented linear path is checked against the installed R
 ``badcontrols`` package on a shared fixture, including its two-step influence

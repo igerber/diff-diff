@@ -46,3 +46,20 @@ def test_dr_ml_is_explicitly_not_silently_substituted():
         assert "dr_ml" in str(exc)
     else:
         raise AssertionError("dr_ml must not silently fall back to imputation")
+
+
+def test_parametric_dr_returns_finite_att_and_influence_function():
+    result = didbc(
+        _bad_control_panel(),
+        yname="Y",
+        gname="G",
+        tname="period",
+        idname="id",
+        bad_control="X",
+        est_method="dr_ml",
+        nuisance_method="parametric",
+    )
+    assert result.method == "dr_ml-parametric"
+    assert np.isfinite(result.att)
+    assert np.isfinite(result.se)
+    assert np.isclose(result.influence_function.mean(), 0.0)

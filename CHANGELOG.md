@@ -12,10 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `twfeweights`, `ptetools`, and linear `badcontrols` paths now execute the
   installed R packages on identical CSV fixtures and compare point estimates,
   weights, and standard errors at `1e-8` tolerance.
-- **Initial R `badcontrols` imputation port.** Added the explicit two-period
-  ``didbc`` / ``imputation_bad_control`` API, influence-function output, and
-  ATT extraction helper. The ``dr_ml`` path fails closed until cross-fitting
-  and machine-learning inference are validated against R.
+- **Initial R `badcontrols` port.** Added the explicit two-period
+  ``didbc`` / ``imputation_bad_control`` API, the parametric doubly robust
+  score, influence-function output, and ATT extraction helper. The random
+  forest cross-fitting path fails closed until its inference is validated.
 - **R `ptetools` compatibility primitives.** Added panel setup, two-period
   group-time subsetting, ATT(g,t) influence-function containers, unadjusted
   DID estimation, and group/dynamic aggregation building blocks.
