@@ -22,6 +22,7 @@ This document provides the academic foundations and key implementation requireme
    - [LPDiD](#lpdid)
    - [LWDiD](#lwdid)
 3. [Advanced Estimators](#advanced-estimators)
+   - [Bad Controls (didbc / dr_ml_attgt)](#bad-controls)
    - [SyntheticDiD](#syntheticdid)
    - [SyntheticControl](#syntheticcontrol)
    - [TripleDifference](#tripledifference)
@@ -2481,6 +2482,20 @@ Event-study/placebo transformations over ALL periods (Appendix D): demeaning (D.
 - [ ] All-eventually-treated (Sec. 4.3) and unbalanced-panel (Sec. 4.4) support
 - [ ] Common-timing no-covariate case reproduces plain DiD (3.4); Theorem 3.1 pooled-OLS equivalence (cross-estimator test vs `DifferenceInDifferences` / ETWFE at r = g)
 - [ ] Prop 99 / castle-laws / Walmart replication targets pinned as tests
+
+---
+
+# Bad Controls
+
+## `didbc` / `dr_ml_attgt` / imputation-DR bad-control estimators
+
+- [x] Two-period DR bad-control estimator with cross-fitted nuisance regression
+- [x] Parametric nuisance path: OLS for the control-outcome model `m(X)`, logit for the propensity `p(X)`, and the DR score assembled on the influence-function template (matches R `badcontrols`)
+- [x] Cross-fitting: fold assignment is computed within each treatment arm (`treated` / `control`) so both arms see all folds; passes `fold_ids` through the public `dr_ml_attgt` surface and validates values lie in `0..n_folds-1`
+- [x] ML nuisance path (`RandomForestClassifier` / `RandomForestRegressor`) with `min_samples_leaf=5`, clipped predicted propensities to `[1e-4, 1-1e-4]`, and additive nuisance `nu(X)` / `omega(X)` cross-fits per R's split
+- [x] Overlap guard: a preliminary propensity fit with `max(p) > 0.99` falls back to the imputation estimator for the whole cell (mirrors R `dr_ml_attgt`)
+- **Note (deviation from R):** the parametric DR path now cross-fits like R's `dr_ml_attgt` — different fold draws yield different finite-sample ATTs (pinned by `test_parametric_dr_cross_fits_and_is_fold_dependent`), whereas a full-sample fit would be fold-invariant. R's ML pathway is a causal-forest `grf` fit; Python uses `sklearn` random forests via `dr_ml_bad_control`. Parameterization (`n_estimators`, `min_samples_leaf`) is chosen for stability and is not byte-parity-able with `grf`, so no ML-parity claim is made; the parametric pathway is the parity surface.
+- **Note (deviation from R):** guarding on `R`'s between-arm overlap fallback uses the Python logit (`_logit_fit_predict`) rather than R's `glm(..., family=binomial)` link for the preliminary propensity; the cross-fit split itself re-fits `m` and `omega` on the treated-control training arm exactly as R does.
 
 ---
 

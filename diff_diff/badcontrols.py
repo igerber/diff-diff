@@ -124,6 +124,27 @@ def _logit_predict(
     return np.clip(expit(_design(new, columns) @ beta), 1e-8, 1 - 1e-8), beta
 
 
+def _ols_fit_predict(x_train: np.ndarray, y_train: np.ndarray, x_new: np.ndarray) -> np.ndarray:
+    coef, _, _, _ = np.linalg.lstsq(x_train, y_train, rcond=None)
+    return x_new @ coef
+
+
+def _logit_fit_predict(x_train: np.ndarray, y_train: np.ndarray, x_new: np.ndarray) -> np.ndarray:
+    beta = np.zeros(x_train.shape[1], dtype=float)
+    for _ in range(100):
+        probability = np.clip(expit(x_train @ beta), 1e-8, 1 - 1e-8)
+        variance = np.clip(probability * (1 - probability), 1e-8, None)
+        working = x_train @ beta + (y_train - probability) / variance
+        updated = np.linalg.lstsq(
+            x_train * np.sqrt(variance)[:, None], working * np.sqrt(variance), rcond=None
+        )[0]
+        if np.max(np.abs(updated - beta)) < 1e-10:
+            beta = updated
+            break
+        beta = updated
+    return np.clip(expit(x_new @ beta), 1e-8, 1 - 1e-8)
+
+
 def dr_parametric_bad_control(
     data: pd.DataFrame,
     *,
@@ -136,13 +157,24 @@ def dr_parametric_bad_control(
     bad_control_covariates: Sequence[str] = (),
     d_covariates: Sequence[str] = (),
     bad_control_d_covariates: Sequence[str] = (),
+    n_folds: int = 5,
+    random_state: Optional[int] = None,
+    fold_ids: Optional[np.ndarray] = None,
 ) -> BadControlsResult:
     """Estimate the two-period parametric doubly robust bad-control score.
 
-    This follows Equation (11) of Caetano et al. (2026).  It uses the
-    parametric nuisance models without cross-fitting; the cross-fitted ML
-    route remains a separate implementation step.
+    This follows Equation (11) of Caetano et al. (2026) and mirrors the R
+    ``badcontrols::dr_ml_attgt`` cross-fitting loop: ``m_0``, ``nu_0``, and
+    ``omega_0`` are OLS fits and ``p_2`` a logistic fit, each trained on the
+    ``n_folds - 1`` in-fold observations and evaluated on the held-out fold.
+    ``m_0``'s in-sample fitted values are the target of ``nu_0`` and ``p_2``'s
+    in-sample fitted odds the target of ``omega_0`` (Algorithm 1, step 2b of
+    the paper).  ``fold_ids`` supplies an explicit per-unit fold assignment
+    (the shared-fold ingress used for R/Python parity); when ``None``, folds
+    are assigned from ``random_state`` exactly as in ``dr_ml_bad_control``.
     """
+    if not isinstance(n_folds, (int, np.integer)) or n_folds < 2:
+        raise ValueError("n_folds must be an integer greater than or equal to 2")
     periods = sorted(pd.unique(data[tname]).tolist())
     if len(periods) != 2:
         raise ValueError("dr_parametric_bad_control currently requires exactly two periods")
@@ -159,10 +191,10 @@ def dr_parametric_bad_control(
     wide["delta_y"] = wide[f"{yname}_{periods[1]}"] - wide[f"{yname}_{periods[0]}"]
     for column in list(d_covariates) + list(bad_control_d_covariates):
         wide[f"d_{column}"] = wide[f"{column}_{periods[1]}"] - wide[f"{column}_{periods[0]}"]
-    treated = wide["D"].eq(1)
+    treated = wide["D"].eq(1).to_numpy()
     control = ~treated
-    if not treated.any() or not control.any():
-        raise ValueError("both treated and never-treated units are required")
+    if treated.sum() < n_folds or control.sum() < n_folds:
+        raise ValueError("each treatment arm must have at least n_folds units")
     if bad_control is not None:
         wide["bc_pre"] = wide[f"{bad_control}_{periods[0]}"]
         wide["bc_post"] = wide[f"{bad_control}_{periods[1]}"]
@@ -174,16 +206,49 @@ def dr_parametric_bad_control(
     else:
         m_columns = list(covariates) + [f"d_{column}" for column in d_covariates]
         p_columns = m_columns
-    m_hat, _ = _fit_predict(wide.loc[control], "delta_y", m_columns, wide)
-    p_hat, _ = _logit_predict(wide, "D", p_columns, wide)
-    wide["m_hat"] = m_hat
-    nu_hat, _ = _fit_predict(wide.loc[control], "m_hat", p_columns, wide)
-    odds = p_hat / (1 - p_hat)
-    wide["odds_hat"] = odds
-    omega_hat, _ = _fit_predict(wide.loc[control], "odds_hat", m_columns, wide)
+    n = len(wide)
+    x_m_full = _design(wide, m_columns)
+    x_p_full = _design(wide, p_columns)
     delta_y = wide["delta_y"].to_numpy(float)
-    d = treated.to_numpy(float)
+    d = treated.astype(float)
+    if fold_ids is None:
+        rng = np.random.default_rng(random_state)
+        fold_ids = np.empty(n, dtype=int)
+        for mask in (treated, control):
+            indices = np.flatnonzero(mask)
+            rng.shuffle(indices)
+            fold_ids[indices] = np.arange(len(indices)) % n_folds
+    else:
+        fold_ids = np.asarray(fold_ids, dtype=int)
+        if fold_ids.shape != (n,) or set(np.unique(fold_ids)).difference(range(n_folds)):
+            raise ValueError("fold_ids must be length n with values in 0..n_folds-1")
+    m_hat = np.zeros(n, dtype=float)
+    p_hat = np.zeros(n, dtype=float)
+    nu_hat = np.zeros(n, dtype=float)
+    omega_hat = np.zeros(n, dtype=float)
+    for fold in range(n_folds):
+        train = fold_ids != fold
+        test = ~train
+        train_control = train & control
+        xm_train_ct = x_m_full[train_control]
+        x_p_train_ct = x_p_full[train_control]
+        ym_train = delta_y[train_control]
+        m_coef, _, _, _ = np.linalg.lstsq(xm_train_ct, ym_train, rcond=None)
+        m_fit_ct = xm_train_ct @ m_coef
+        m_hat[test] = x_m_full[test] @ m_coef
+        p_hat[test] = _logit_fit_predict(x_p_full[train], d[train], x_p_full[test])
+        if bad_control is not None:
+            nu_coef, _, _, _ = np.linalg.lstsq(x_p_train_ct, m_fit_ct, rcond=None)
+            nu_hat[test] = x_p_full[test] @ nu_coef
+            p_train_ct = _logit_fit_predict(x_p_full[train], d[train], x_p_train_ct)
+            odds_train_ct = p_train_ct / (1 - p_train_ct)
+            omega_coef, _, _, _ = np.linalg.lstsq(xm_train_ct, odds_train_ct, rcond=None)
+            omega_hat[test] = x_m_full[test] @ omega_coef
+        else:
+            nu_hat[test] = m_hat[test]
+            omega_hat[test] = p_hat[test] / (1 - p_hat[test])
     pi = float(d.mean())
+    odds = p_hat / (1 - p_hat)
     score = (
         d / pi * delta_y
         - d / pi * nu_hat
@@ -192,7 +257,7 @@ def dr_parametric_bad_control(
     )
     att = float(score.mean())
     influence = score - att - att / pi * (d - pi)
-    se = float(np.sqrt(np.mean(influence**2) / len(wide)))
+    se = float(np.sqrt(np.mean(influence**2) / n))
     att_gt = pd.DataFrame(
         {"group": [wide.loc[treated, gname].iloc[0]], "time": [periods[1]], "attgt": [att]}
     )
@@ -321,6 +386,7 @@ def dr_ml_attgt(
     nuisance_method: str = "ml",
     n_folds: int = 5,
     random_state: Optional[int] = None,
+    fold_ids: Optional[np.ndarray] = None,
     **_: Any,
 ) -> BadControlsResult:
     """R ``badcontrols::dr_ml_attgt``-style two-period cell wrapper."""
@@ -343,6 +409,42 @@ def dr_ml_attgt(
     if len(bad_control) > 1:
         raise ValueError("bad_control_formula must contain at most one variable")
     bad_control_name = bad_control[0] if bad_control else None
+    periods = sorted(pd.unique(frame["period"]).tolist())
+    if len(periods) != 2:
+        raise ValueError("dr_ml_attgt requires a two-period cell")
+    covariate_count = len(covariates) + len(bad_control_covariates) + (1 if bad_control_name else 0)
+    treated_count = int(frame["D"].eq(1).sum())
+    if treated_count < covariate_count + 5:
+        return imputation_bad_control(
+            frame,
+            yname="Y",
+            gname="G",
+            tname="period",
+            idname="id",
+            bad_control=bad_control_name,
+            covariates=covariates,
+            bad_control_covariates=bad_control_covariates,
+        )
+    extra = list(dict.fromkeys([bad_control_name] if bad_control_name else []))
+    extra += list(covariates) + list(bad_control_covariates)
+    wide = _wide_panel(frame, "Y", "G", "period", "id", periods[0], periods[1], extra)
+    if bad_control_name is not None:
+        wide["bc_pre"] = wide[f"{bad_control_name}_{periods[0]}"]
+        propensity_columns = ["bc_pre"] + list(bad_control_covariates) + list(covariates)
+    else:
+        propensity_columns = list(covariates)
+    propensity, _ = _logit_predict(wide, "D", propensity_columns, wide)
+    if float(np.max(propensity)) > 0.99:
+        return imputation_bad_control(
+            frame,
+            yname="Y",
+            gname="G",
+            tname="period",
+            idname="id",
+            bad_control=bad_control_name,
+            covariates=covariates,
+            bad_control_covariates=bad_control_covariates,
+        )
     if nuisance_method == "parametric":
         return dr_parametric_bad_control(
             frame,
@@ -355,6 +457,9 @@ def dr_ml_attgt(
             bad_control_covariates=bad_control_covariates,
             d_covariates=d_covariates,
             bad_control_d_covariates=bad_control_d_covariates,
+            n_folds=n_folds,
+            random_state=random_state,
+            fold_ids=fold_ids,
         )
     if nuisance_method != "ml":
         raise ValueError("nuisance_method must be 'ml' or 'parametric'")
@@ -646,7 +751,9 @@ def staggered_dr_bad_control(
                 bad_control_covariates=bad_control_covariates,
             )
             if nuisance_method == "parametric":
-                result = dr_parametric_bad_control(cell, **kwargs)
+                result = dr_parametric_bad_control(
+                    cell, **kwargs, n_folds=n_folds, random_state=random_state
+                )
             elif nuisance_method == "ml":
                 result = dr_ml_bad_control(
                     cell, **kwargs, n_folds=n_folds, random_state=random_state
@@ -852,6 +959,8 @@ def didbc(
             bad_control_covariates=bad_control_covariates,
             d_covariates=d_covariates,
             bad_control_d_covariates=bad_control_d_covariates,
+            n_folds=n_folds,
+            random_state=random_state,
         )
     if est_method != "imputation":
         raise ValueError("est_method must be 'imputation' or 'dr_ml'")
