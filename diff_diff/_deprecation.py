@@ -52,6 +52,13 @@ class _NotSupplied:
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return "<not supplied>"
 
+    def __copy__(self) -> "_NotSupplied":
+        return self
+
+    def __deepcopy__(self, memo: dict[int, object]) -> "_NotSupplied":
+        memo[id(self)] = self
+        return self
+
 
 NOT_SUPPLIED = _NotSupplied()
 

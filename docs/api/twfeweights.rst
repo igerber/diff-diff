@@ -22,6 +22,7 @@ implicit regression weights.  See :doc:`../references` for the full citation.
    diff_diff.attO_weights
    diff_diff.att_simple_weights
    diff_diff.MPWeightsResult
+   diff_diff.mp_weights_obj
    diff_diff.ggtwfeweights
    diff_diff.effective_sample_size
    diff_diff.pooled_sd

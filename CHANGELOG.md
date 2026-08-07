@@ -50,6 +50,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added percentile ``overall_conf_int`` to bootstrapped ``PTEResults``.
 - Added ``crit_val_checks`` simultaneous-band fallback utility.
 - Added ``group_time_att`` and ``aggte_obj`` result-container factories.
+- Added the R-compatible ``attgt_noif`` result-container factory for custom
+  group-time estimators without influence functions.
+- Added ``covid_attgt``, reusing the DRDID-validated doubly-robust core for
+  Callaway--Li levels and first-difference outcomes.
+- Added ``ggpte_cont`` as a matplotlib/Plotly-compatible wrapper for
+  ``DoseResult`` curves.
+- Added ``ggpte`` as an event-study plotting wrapper for ``PTEResults``.
+- Extended ``PTEResults.aggregate()`` with influence-function standard errors,
+  normal-based confidence intervals, and ``to_dataframe(level=...)`` views for
+  ATT(g,t), group, and dynamic results.
+- Added ``plot_qtt`` for overall and dynamic QTT visualization.
+- Added ``mp_weights_obj`` and broader ``ggtwfeweights`` result support, plus
+  the R-style ``dr_ml_attgt`` bad-controls cell wrapper.
+- Added callback hooks to ``pte`` for custom setup, subset, ATT(g,t), and
+  aggregation functions.
+- Added explicit Python counterparts for the R ``autoplot``/``plot`` methods
+  on PTE, QTT, empirical-bootstrap, and dose-response result objects.
+- Added DRDID covariate adjustment to ``did_rcs_attgt`` and optional
+  multiplier-bootstrap bands to dynamic ``PTEResults.aggregate()`` results.
 - Added ``process_att_gt`` and ``attgt_pte_aggregations`` aggregation aliases.
 - Added ``DoseResult``, ``dose_obj``, and ``pte_dose_results`` containers for
   dose-response outputs.
@@ -58,6 +77,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   standard errors and (optionally) simultaneous critical values, plus a
   ``bspline_basis`` helper that reproduces ``splines2::bSpline``/``dbs``
   design matrices and ``mboot_se_and_crit`` for R-style sup-t inference.
+- **R `ptetools` QTT/QoTT compatibility.** Ported the quantile-treatment-effects
+  machinery: ``compute_pte`` runs the ``(g,t)`` loop over F0/F1 cumulative
+  distribution functions, ``qtt_pte_aggregations`` / ``qott_pte_aggregations``
+  mix per-cell CDFs into overall / dynamic / group quantile curves (with a
+  documented fix for R's latent merge-reorder misalignment), and
+  ``qtt_empirical_bootstrap`` derives pointwise and uniform (sup-t) confidence
+  bands from seeded unit-level block bootstrap. ``pte_qtt`` / ``PTEQTTResult``
+  hold the resulting curves and ``block_boot_sample`` resamples a panel by unit.
+  Numeric parity with R ``ptetools`` verified on single- and two-cohort panels.
 - Added ``panel=False`` repeated-cross-section support to the generic ``pte``
   loop.
 - Added ``panel=False`` repeated-cross-section support to the generic ``pte`` loop.

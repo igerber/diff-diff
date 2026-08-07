@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from diff_diff import didbc, extract_att
+from diff_diff import didbc, dr_ml_attgt, extract_att
 
 
 def _bad_control_panel():
@@ -64,6 +64,22 @@ def test_parametric_dr_returns_finite_att_and_influence_function():
     assert np.isfinite(result.att)
     assert np.isfinite(result.se)
     assert np.isclose(result.influence_function.mean(), 0.0)
+
+
+def test_dr_ml_attgt_accepts_r_style_gt_data():
+    gt_data = _bad_control_panel().copy()
+    gt_data["name"] = np.where(gt_data["period"].eq(0), "pre", "post")
+    gt_data["D"] = (gt_data["G"] != 0).astype(int)
+    result = dr_ml_attgt(
+        gt_data,
+        xformula="~1",
+        bad_control_formula="~X",
+        d_covs_formula="~-1",
+        nuisance_method="parametric",
+    )
+
+    assert result.method == "dr_ml-parametric"
+    assert np.isfinite(result.att)
 
 
 def test_random_forest_dr_cross_fits_and_returns_finite_result():

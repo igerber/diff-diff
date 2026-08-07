@@ -9,7 +9,7 @@ comparison, and ``did_attgt`` estimates the resulting two-period ATT.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -94,11 +94,17 @@ class PTEAggregateResult:
     type: str = "group"
     standard_error: float = float("nan")
     conf_int: tuple[float, float] = (float("nan"), float("nan"))
+    by_event_time: Optional[pd.DataFrame] = None
+    bootstrap_distribution: Optional[np.ndarray] = None
 
     def to_dataframe(self) -> pd.DataFrame:
+        if self.by_event_time is not None:
+            return self.by_event_time.copy()
         out = self.weights.copy()
         out["estimate"] = self.estimate
         out["se"] = self.standard_error
+        out["conf_int_lower"] = self.conf_int[0]
+        out["conf_int_upper"] = self.conf_int[1]
         return out
 
     def to_dict(self) -> dict[str, object]:
@@ -108,6 +114,14 @@ class PTEAggregateResult:
             "conf_int": self.conf_int,
             "type": self.type,
             "weights": self.weights.to_dict(orient="records"),
+            "by_event_time": (
+                None if self.by_event_time is None else self.by_event_time.to_dict(orient="records")
+            ),
+            "bootstrap_distribution": (
+                None
+                if self.bootstrap_distribution is None
+                else self.bootstrap_distribution.tolist()
+            ),
         }
 
 
@@ -208,6 +222,194 @@ def pte_dose_results(
     return dose_obj(dose, overall_att=overall_att, overall_att_se=overall_att_se, att_d=att_d)
 
 
+def ggpte_cont(
+    result: DoseResult,
+    *,
+    type: str = "att",
+    show: bool = False,
+    **kwargs: Any,
+) -> Any:
+    """Plot a dose result using the project's matplotlib dose-response API.
+
+    This is the Python equivalent of the deprecated R ``ggpte_cont`` wrapper;
+    the returned object is a matplotlib ``Axes`` (or a Plotly figure when
+    ``backend='plotly'`` is passed).
+    """
+    if not isinstance(result, DoseResult):
+        raise TypeError("result must be a DoseResult")
+    target = {"att": "att_d", "acrt": "acrt_d"}.get(type)
+    if target is None:
+        raise ValueError("type must be 'att' or 'acrt'")
+    table = getattr(result, target)
+    if table is None:
+        raise ValueError(f"DoseResult does not contain the {type.upper()} curve")
+    estimate_name = "att" if type == "att" else "acrt"
+    data = table.rename(columns={estimate_name: "effect"}).copy()
+    if "effect" not in data.columns:
+        raise ValueError(f"DoseResult {target} must contain '{estimate_name}'")
+    if "crit" in data.columns and "se" in data.columns:
+        data["conf_int_lower"] = data["effect"] - data["crit"] * data["se"]
+        data["conf_int_upper"] = data["effect"] + data["crit"] * data["se"]
+    from diff_diff.visualization import plot_dose_response
+
+    return plot_dose_response(
+        data=data,
+        target=type,
+        show=show,
+        **kwargs,
+    )
+
+
+def ggpte(result: PTEResults, *, show: bool = False, **kwargs: Any) -> Any:
+    """Plot the dynamic ATT surface of a ``PTEResults`` object."""
+    if not isinstance(result, PTEResults):
+        raise TypeError("result must be a PTEResults")
+    frame = result.att_gt.copy()
+    frame["event_time"] = frame["time"] - frame["group"]
+    frame = frame.loc[frame["group"] != 0].copy()
+    if frame.empty:
+        raise ValueError("PTEResults has no treated event-study cells")
+    cohort_weights = result.cohort_weights
+    if cohort_weights is None:
+        counts = frame["group"].value_counts().astype(float)
+        cohort_weights = (counts / counts.sum()).to_dict()
+    frame["cohort_weight"] = frame["group"].map(cohort_weights).fillna(0.0)
+    frame["overall_weight"] = frame.groupby("event_time")["cohort_weight"].transform(
+        lambda values: values / values.sum() if values.sum() > 0 else values
+    )
+    frame = frame.reset_index(drop=True)
+    estimates = frame.groupby("event_time").apply(
+        lambda values: float(np.sum(values["attgt"] * values["overall_weight"])),
+        include_groups=False,
+    )
+    se: dict[Any, float] = {}
+    if result.influence_functions is not None:
+        influence = np.asarray(result.influence_functions, dtype=float)
+        cell_weights = frame["overall_weight"].to_numpy(float)
+        for event_time, positions in frame.groupby("event_time").groups.items():
+            positions_array = np.asarray(list(positions), dtype=int)
+            weighted_if = influence[:, positions_array] @ cell_weights[positions_array]
+            se[event_time] = float(np.sqrt(np.nansum(weighted_if**2)))
+    from diff_diff.visualization import plot_event_study
+
+    return plot_event_study(
+        effects=estimates.to_dict(),
+        se=se or None,
+        periods=list(estimates.index),
+        pre_periods=[event_time for event_time in estimates.index if event_time < 0],
+        post_periods=[event_time for event_time in estimates.index if event_time >= 0],
+        title="Treatment Effects Over Event Time",
+        show=show,
+        **kwargs,
+    )
+
+
+def plot_qtt(
+    result: PTEQTTResult,
+    *,
+    type: str = "overall",
+    cband: bool = True,
+    plot_probs: Sequence[float] = (0.5,),
+    plot_ci: Optional[bool] = None,
+    show: bool = False,
+    ax: Any = None,
+) -> Any:
+    """Plot an overall or dynamic QTT curve."""
+    if not isinstance(result, PTEQTTResult):
+        raise TypeError("result must be a PTEQTTResult")
+    if type not in {"overall", "dynamic"}:
+        raise ValueError("type must be 'overall' or 'dynamic'")
+    from diff_diff.visualization._common import _require_matplotlib
+
+    plt = _require_matplotlib()
+    if ax is None:
+        _, ax = plt.subplots(figsize=(10, 6))
+    frame = result.overall if type == "overall" else result.dynamic
+    lower_name = "lower_ub" if cband else "lower_pw"
+    upper_name = "upper_ub" if cband else "upper_pw"
+
+    if type == "overall":
+        ax.axhline(0.0, color="gray", linewidth=1)
+        ax.plot(frame["probs"], frame["qtt"], marker="o", label="QTT")
+        if lower_name in frame and upper_name in frame:
+            ax.plot(frame["probs"], frame[lower_name], linestyle="--", color="gray")
+            ax.plot(frame["probs"], frame[upper_name], linestyle="--", color="gray")
+        ax.set_xlabel("Quantile")
+        ax.set_ylabel("QTT")
+        ax.set_xlim(0.0, 1.0)
+        ax.set_title("Quantile Treatment Effects")
+    else:
+        available = set(frame["probs"].unique())
+        selected = list(plot_probs)
+        missing = sorted(set(selected).difference(available))
+        if missing:
+            raise ValueError(f"plot_probs value(s) not found: {missing}")
+        if plot_ci is None:
+            plot_ci = len(selected) == 1
+        ax.axhline(0.0, color="gray", linewidth=1)
+        ax.axvline(-0.5, color="gray", linestyle="--", linewidth=1)
+        for prob in selected:
+            curve = frame.loc[frame["probs"].eq(prob)].sort_values("e")
+            line = ax.plot(curve["e"], curve["qtt"], marker="o", label=f"q={prob:g}")[0]
+            if plot_ci and lower_name in curve and upper_name in curve:
+                ax.errorbar(
+                    curve["e"],
+                    curve["qtt"],
+                    yerr=[curve["qtt"] - curve[lower_name], curve[upper_name] - curve["qtt"]],
+                    fmt="none",
+                    ecolor=line.get_color(),
+                    capsize=3,
+                )
+        ax.set_xlabel("Event Time")
+        ax.set_ylabel("QTT")
+        ax.set_title("Dynamic Quantile Treatment Effects")
+        if len(selected) > 1:
+            ax.legend(title="Quantile")
+    if show:
+        plt.show()
+    return ax
+
+
+def autoplot_pte_results(result: PTEResults, **kwargs: Any) -> Any:
+    """Python-named counterpart of R ``autoplot.pte_results``."""
+    return ggpte(result, **kwargs)
+
+
+def plot_pte_results(result: PTEResults, **kwargs: Any) -> Any:
+    """Python-named counterpart of R ``plot.pte_results``."""
+    return ggpte(result, show=True, **kwargs)
+
+
+def autoplot_pte_emp_boot(result: PTEResults, **kwargs: Any) -> Any:
+    """Python-named counterpart of R ``autoplot.pte_emp_boot``."""
+    return ggpte(result, **kwargs)
+
+
+def plot_pte_emp_boot(result: PTEResults, **kwargs: Any) -> Any:
+    """Python-named counterpart of R ``plot.pte_emp_boot``."""
+    return ggpte(result, show=True, **kwargs)
+
+
+def autoplot_pte_qtt(result: PTEQTTResult, **kwargs: Any) -> Any:
+    """Python-named counterpart of R ``autoplot.pte_qtt``."""
+    return plot_qtt(result, **kwargs)
+
+
+def plot_pte_qtt(result: PTEQTTResult, **kwargs: Any) -> Any:
+    """Python-named counterpart of R ``plot.pte_qtt``."""
+    return plot_qtt(result, show=True, **kwargs)
+
+
+def autoplot_dose_obj(result: DoseResult, **kwargs: Any) -> Any:
+    """Python-named counterpart of R ``autoplot.dose_obj``."""
+    return ggpte_cont(result, **kwargs)
+
+
+def plot_dose_obj(result: DoseResult, **kwargs: Any) -> Any:
+    """Python-named counterpart of R ``plot.dose_obj``."""
+    return ggpte_cont(result, show=True, **kwargs)
+
+
 def aggte_obj(
     estimate: float,
     weights: pd.DataFrame,
@@ -232,11 +434,115 @@ class PTEResults:
     bootstrap_distribution: Optional[np.ndarray] = None
     overall_conf_int: tuple[float, float] = (float("nan"), float("nan"))
 
-    def to_dataframe(self) -> pd.DataFrame:
-        return self.att_gt.copy()
+    def to_dataframe(self, level: str = "att_gt") -> pd.DataFrame:
+        """Return ATT(g,t) rows or a post-fit aggregate table."""
+        if level == "att_gt":
+            return self.att_gt.copy()
+        if level in {"group", "dynamic"}:
+            return self.aggregate(level).to_dataframe()
+        raise ValueError("level must be 'att_gt', 'group', or 'dynamic'")
 
-    def aggregate(self, type: str = "group") -> PTEAggregateResult:
-        return pte_aggte(self.att_gt, type=type, cohort_weights=self.cohort_weights)
+    def aggregate(
+        self,
+        type: str = "group",
+        *,
+        bstrap: bool = False,
+        biters: int = 1000,
+        seed: Optional[int] = None,
+        alpha: float = 0.05,
+    ) -> PTEAggregateResult:
+        """Aggregate post-fit effects, optionally with multiplier bootstrap."""
+        if not 0 < alpha < 1:
+            raise ValueError("alpha must be between 0 and 1")
+        if bstrap and (not isinstance(biters, (int, np.integer)) or biters < 2):
+            raise ValueError("biters must be an integer greater than or equal to 2")
+        aggregate = pte_aggte(self.att_gt, type=type, cohort_weights=self.cohort_weights)
+        if self.influence_functions is None or aggregate.weights.empty:
+            return aggregate
+
+        inference_weights = aggregate.weights.copy()
+        source_indices = []
+        for group, time in zip(inference_weights["group"], inference_weights["time"]):
+            matches = self.att_gt.index[
+                self.att_gt["group"].eq(group) & self.att_gt["time"].eq(time)
+            ]
+            if len(matches) != 1:
+                return aggregate
+            source_indices.append(int(matches[0]))
+        weights = inference_weights["overall_weight"].to_numpy(float)
+        influence = np.asarray(self.influence_functions, dtype=float)
+        if influence.ndim != 2 or max(source_indices) >= influence.shape[1]:
+            return aggregate
+        weighted_if = influence[:, source_indices] @ weights
+        standard_error = float(np.sqrt(np.nansum(weighted_if**2)))
+        critical = float(norm.ppf(0.975))
+        conf_int = (
+            float(aggregate.estimate - critical * standard_error),
+            float(aggregate.estimate + critical * standard_error),
+        )
+        by_event_time = None
+        bootstrap_distribution = None
+        if type == "dynamic":
+            event_frame = inference_weights.copy()
+            event_frame["event_time"] = event_frame["time"] - event_frame["group"]
+            event_rows = []
+            event_ifs = []
+            for event_time, event_group in event_frame.groupby("event_time", sort=True):
+                positions = event_group.index.to_numpy(int)
+                event_weights = event_group["overall_weight"].to_numpy(float)
+                source_positions = np.asarray(source_indices)[positions]
+                event_estimate = float(
+                    np.sum(self.att_gt.iloc[source_positions]["attgt"] * event_weights)
+                )
+                event_if = influence[:, source_positions] @ event_weights
+                event_se = float(np.sqrt(np.nansum(event_if**2)))
+                event_ifs.append(event_if)
+                event_rows.append(
+                    {
+                        "event_time": event_time,
+                        "estimate": event_estimate,
+                        "se": event_se,
+                        "conf_int_lower": event_estimate - critical * event_se,
+                        "conf_int_upper": event_estimate + critical * event_se,
+                    }
+                )
+            by_event_time = pd.DataFrame(event_rows)
+            if bstrap:
+                rng = np.random.default_rng(seed)
+                event_if_matrix = np.column_stack(event_ifs)
+                draws = (
+                    np.asarray(rng.standard_normal((int(biters), influence.shape[0])))
+                    @ event_if_matrix
+                )
+                bootstrap_distribution = draws + by_event_time["estimate"].to_numpy(float)
+                bootstrap_se = np.std(draws, axis=0, ddof=1)
+                lower_pw = np.quantile(bootstrap_distribution, alpha / 2, axis=0)
+                upper_pw = np.quantile(bootstrap_distribution, 1 - alpha / 2, axis=0)
+                studentized = draws / np.where(bootstrap_se > 0, bootstrap_se, np.nan)
+                abs_studentized = np.abs(studentized)
+                row_max = np.max(
+                    np.where(np.isfinite(abs_studentized), abs_studentized, -np.inf), axis=1
+                )
+                finite_row_max = row_max[np.isfinite(row_max)]
+                critical = (
+                    float(np.quantile(finite_row_max, 1 - alpha))
+                    if finite_row_max.size
+                    else float(norm.ppf(1 - alpha / 2))
+                )
+                by_event_time["se"] = bootstrap_se
+                by_event_time["lower_pw"] = lower_pw
+                by_event_time["upper_pw"] = upper_pw
+                by_event_time["lower_ub"] = by_event_time["estimate"] - critical * bootstrap_se
+                by_event_time["upper_ub"] = by_event_time["estimate"] + critical * bootstrap_se
+        return PTEAggregateResult(
+            estimate=aggregate.estimate,
+            weights=aggregate.weights,
+            type=aggregate.type,
+            standard_error=standard_error,
+            conf_int=conf_int,
+            by_event_time=by_event_time,
+            bootstrap_distribution=bootstrap_distribution,
+        )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -480,6 +786,11 @@ def attgt_if(
     )
 
 
+def attgt_noif(attgt: float, extra_gt_returns: Any = None) -> ATTGTResult:
+    """Create the no-influence-function result used by R ``attgt_noif``."""
+    return ATTGTResult(attgt=float(attgt), extra_gt_returns=extra_gt_returns)
+
+
 def did_attgt(
     gt_data: GTDataFrame | pd.DataFrame, *, covariates: Sequence[str] = ()
 ) -> ATTGTResult:
@@ -535,6 +846,71 @@ def did_attgt(
     return attgt_if(att, inf)
 
 
+def covid_attgt(
+    gt_data: GTDataFrame | pd.DataFrame,
+    *,
+    covariates: Sequence[str] = (),
+    d_covariates: Sequence[str] = (),
+    d_outcome: bool = False,
+) -> ATTGTResult:
+    """Estimate the R ``ptetools::covid_attgt`` ATT(g,t).
+
+    This is the Callaway--Li levels estimator: when ``d_outcome=False`` the
+    outcome is the post-period level relative to a zero baseline; setting
+    ``d_outcome=True`` uses the post-minus-pre outcome.  Pre-period covariates
+    and optional covariate changes enter the DRDID panel score.  The score is
+    delegated to the same DRDID-validated core used by
+    :class:`CallawaySantAnna`.
+    """
+    frame = gt_data.data if isinstance(gt_data, GTDataFrame) else gt_data
+    required = {"id", "D", "name", "Y"}
+    missing = sorted(required.difference(frame.columns))
+    if missing:
+        raise ValueError(f"gt_data is missing required columns: {missing}")
+    if not {"pre", "post"}.issubset(frame["name"].unique()):
+        raise ValueError("gt_data must contain both pre and post observations")
+
+    wide = frame.pivot_table(index="id", columns="name", values="Y", aggfunc="first")
+    if wide[["pre", "post"]].isna().any().any():
+        raise ValueError("each id must have one pre and one post outcome")
+    treatment = frame.groupby("id", sort=False)["D"].first().reindex(wide.index).to_numpy(float)
+    treated = treatment == 1
+    control = treatment == 0
+    if not treated.any() or not control.any():
+        raise ValueError("both treated and comparison units are required")
+
+    pre = frame.loc[frame["name"].eq("pre")].set_index("id").reindex(wide.index)
+    post = frame.loc[frame["name"].eq("post")].set_index("id").reindex(wide.index)
+    columns = list(covariates) + list(d_covariates)
+    missing_covariates = sorted(set(columns).difference(frame.columns))
+    if missing_covariates:
+        raise ValueError(f"covariates are missing from gt_data: {missing_covariates}")
+    if covariates:
+        X = pre[list(covariates)].to_numpy(float)
+    else:
+        X = np.empty((len(wide), 0), dtype=float)
+    if d_covariates:
+        dX = post[list(d_covariates)].to_numpy(float) - pre[list(d_covariates)].to_numpy(float)
+        X = np.column_stack([X, dX])
+
+    outcome = (
+        (wide["post"] - wide["pre"]).to_numpy(float) if d_outcome else wide["post"].to_numpy(float)
+    )
+    from diff_diff.staggered import CallawaySantAnna
+
+    estimator = CallawaySantAnna(estimation_method="dr")
+    # The score is used as a standalone cell primitive, outside fit(), where
+    # CallawaySantAnna normally initializes this diagnostic accumulator.
+    estimator._safe_inv_tracker = []
+    att, _, inf_func = estimator._doubly_robust(
+        outcome[treated], outcome[control], X[treated], X[control]
+    )
+    ordered_inf = np.empty(len(wide), dtype=float)
+    ordered_inf[treated] = inf_func[: treated.sum()]
+    ordered_inf[control] = inf_func[treated.sum() :]
+    return attgt_if(att, ordered_inf)
+
+
 def pte_attgt(
     gt_data: GTDataFrame | pd.DataFrame, *, covariates: Sequence[str] = ()
 ) -> ATTGTResult:
@@ -547,13 +923,38 @@ def did_rcs_attgt(
 ) -> ATTGTResult:
     """Estimate an RCS ATT(g,t) from period-specific group means."""
     frame = gt_data.data if isinstance(gt_data, GTDataFrame) else gt_data
-    if covariates:
-        raise NotImplementedError("RCS covariate adjustment is not implemented")
     treated = frame["D"].eq(1)
     post = frame["name"].eq("post")
     control = ~treated
     if not treated.any() or not control.any():
         raise ValueError("both treated and comparison observations are required")
+    if covariates:
+        missing = sorted(set(covariates).difference(frame.columns))
+        if missing:
+            raise ValueError(f"covariates are missing from gt_data: {missing}")
+        from diff_diff.staggered import CallawaySantAnna
+
+        estimator = CallawaySantAnna(estimation_method="dr", panel=False)
+        estimator._safe_inv_tracker = []
+        y_gt = frame.loc[treated & post, "Y"].to_numpy(float)
+        y_gs = frame.loc[treated & ~post, "Y"].to_numpy(float)
+        y_ct = frame.loc[control & post, "Y"].to_numpy(float)
+        y_cs = frame.loc[control & ~post, "Y"].to_numpy(float)
+        X_gt = frame.loc[treated & post, list(covariates)].to_numpy(float)
+        X_gs = frame.loc[treated & ~post, list(covariates)].to_numpy(float)
+        X_ct = frame.loc[control & post, list(covariates)].to_numpy(float)
+        X_cs = frame.loc[control & ~post, list(covariates)].to_numpy(float)
+        att, _, inf_concat, _ = estimator._doubly_robust_rc(
+            y_gt, y_gs, y_ct, y_cs, X_gt, X_gs, X_ct, X_cs
+        )
+        lengths = [len(y_gt), len(y_gs), len(y_ct), len(y_cs)]
+        pieces = np.split(np.asarray(inf_concat, dtype=float), np.cumsum(lengths)[:-1])
+        inf = np.zeros(len(frame), dtype=float)
+        for mask, piece in zip(
+            (treated & post, treated & ~post, control & post, control & ~post), pieces
+        ):
+            inf[mask.to_numpy()] = piece
+        return attgt_if(att, inf)
     delta_treated = frame.loc[treated & post, "Y"].mean() - frame.loc[treated & ~post, "Y"].mean()
     delta_control = frame.loc[control & post, "Y"].mean() - frame.loc[control & ~post, "Y"].mean()
     att = float(delta_treated - delta_control)
@@ -611,24 +1012,52 @@ def pte(
     bstrap: bool = False,
     biters: int = 100,
     seed: Optional[int] = None,
+    setup_pte_fun: Optional[Callable[..., Any]] = None,
+    subset_fun: Optional[Callable[..., Any]] = None,
+    attgt_fun: Optional[Callable[..., Any]] = None,
+    aggte_fun: Optional[Callable[..., Any]] = None,
 ) -> PTEResults:
-    """Run the generic unadjusted panel ATT(g,t) loop."""
+    """Run the generic group-time loop with optional custom callbacks.
+
+    Custom callbacks receive ordinary Python objects: ``setup_pte_fun`` gets
+    the panel metadata arguments and must return ``PTEParams``; ``subset_fun``
+    gets ``(data, g, tp)`` and returns ``TwoByTwoSubset`` or a compatible
+    ``GTDataFrame``; ``attgt_fun`` gets the selected ``GTDataFrame`` and must
+    return ``ATTGTResult`` or a mapping with ``attgt`` and optional
+    ``inf_func``; ``aggte_fun`` gets ``(att_gt, cohort_weights)`` and may
+    return ``PTEAggregateResult``. Defaults reproduce the built-in R-style
+    unadjusted path.
+    """
     if not panel:
         data = data.copy()
         idname = idname or "_pte_rowid"
         data[idname] = np.arange(len(data))
     if idname is None:
         raise ValueError("idname is required when panel=True")
-    params = setup_pte(
-        data,
-        yname,
-        gname,
-        tname,
-        idname,
-        panel=panel,
-        anticipation=anticipation,
-        base_period=base_period,
-    )
+    if setup_pte_fun is None:
+        params = setup_pte(
+            data,
+            yname,
+            gname,
+            tname,
+            idname,
+            panel=panel,
+            anticipation=anticipation,
+            base_period=base_period,
+        )
+    else:
+        params = setup_pte_fun(
+            data,
+            yname=yname,
+            gname=gname,
+            tname=tname,
+            idname=idname,
+            panel=panel,
+            anticipation=anticipation,
+            base_period=base_period,
+        )
+        if not isinstance(params, PTEParams):
+            raise TypeError("setup_pte_fun must return PTEParams")
     rows = []
     influence = []
     n_units = data[idname].nunique()
@@ -639,20 +1068,32 @@ def pte(
                 influence.append(np.full(n_units, np.nan))
                 continue
             if panel:
-                subset = two_by_two_subset(
-                    data,
-                    g,
-                    tp,
-                    gname=gname,
-                    tname=tname,
-                    idname=idname,
-                    yname=yname,
-                    control_group=control_group,
-                    anticipation=anticipation,
-                    base_period=base_period,
-                    covariates=covariates,
+                subset = (
+                    subset_fun(data, g, tp)
+                    if subset_fun is not None
+                    else two_by_two_subset(
+                        data,
+                        g,
+                        tp,
+                        gname=gname,
+                        tname=tname,
+                        idname=idname,
+                        yname=yname,
+                        control_group=control_group,
+                        anticipation=anticipation,
+                        base_period=base_period,
+                        covariates=covariates,
+                    )
                 )
-                result = did_attgt(subset.gt_data, covariates=covariates)
+                if isinstance(subset, GTDataFrame):
+                    subset = TwoByTwoSubset(subset, len(subset), np.ones(len(subset), dtype=bool))
+                if not isinstance(subset, TwoByTwoSubset):
+                    raise TypeError("subset_fun must return TwoByTwoSubset or GTDataFrame")
+                result = (
+                    attgt_fun(subset.gt_data)
+                    if attgt_fun is not None
+                    else did_attgt(subset.gt_data, covariates=covariates)
+                )
             else:
                 subset = two_by_two_rcs_subset(
                     data,
@@ -666,7 +1107,19 @@ def pte(
                     base_period=base_period,
                     covariates=covariates,
                 )
-                result = did_rcs_attgt(subset.gt_data, covariates=covariates)
+                result = (
+                    attgt_fun(subset.gt_data)
+                    if attgt_fun is not None
+                    else did_rcs_attgt(subset.gt_data, covariates=covariates)
+                )
+            if isinstance(result, dict):
+                result = ATTGTResult(
+                    float(result["attgt"]),
+                    result.get("inf_func"),
+                    result.get("extra_gt_returns"),
+                )
+            if not isinstance(result, ATTGTResult):
+                raise TypeError("attgt_fun must return ATTGTResult or a mapping")
             if result.inf_func is None:
                 raise RuntimeError("did_attgt did not return an influence function")
             finite_if = result.inf_func[np.isfinite(result.inf_func)]
@@ -683,7 +1136,14 @@ def pte(
     unit_groups = data.groupby(idname, sort=False)[gname].first()
     treated_groups = unit_groups[unit_groups != 0]
     cohort_weights = (treated_groups.value_counts() / len(treated_groups)).to_dict()
-    weights = pte_aggte(att_gt, type="group", cohort_weights=cohort_weights).weights
+    aggregate = (
+        aggte_fun(att_gt, cohort_weights)
+        if aggte_fun is not None
+        else pte_aggte(att_gt, type="group", cohort_weights=cohort_weights)
+    )
+    if not isinstance(aggregate, PTEAggregateResult):
+        raise TypeError("aggte_fun must return PTEAggregateResult")
+    weights = aggregate.weights
     valid = np.isfinite(att_gt["attgt"]) & (weights["overall_weight"] > 0)
     overall_att = float(np.sum(att_gt.loc[valid, "attgt"] * weights.loc[valid, "overall_weight"]))
     full_influence = np.asarray(influence, dtype=float).T if influence else None
@@ -717,6 +1177,10 @@ def pte(
                     base_period=base_period,
                     covariates=covariates,
                     bstrap=False,
+                    setup_pte_fun=setup_pte_fun,
+                    subset_fun=subset_fun,
+                    attgt_fun=attgt_fun,
+                    aggte_fun=aggte_fun,
                 ).overall_att
             )
         overall_se = float(np.std(bootstrap_att, ddof=1))
@@ -814,7 +1278,7 @@ def _type1_quantile(values: np.ndarray, q: float) -> float:
     j = n * q
     if j < 1:
         return float(values[0])
-    if np.isclose(j, round(j)):
+    if j == np.floor(j):
         return float(values[max(int(j) - 1, 0)])
     return float(values[int(np.floor(j))])
 
@@ -1173,3 +1637,663 @@ def attgt_pte_aggregations(
 ) -> PTEAggregateResult:
     """Dispatch the standard ATT(g,t) aggregation path."""
     return pte_aggte(attgt, type=type, **kwargs)
+
+
+# =============================================================================
+# QTT (quantile treatment effects) machinery
+#   Mirrors the ``gt_type = "qtt"`` / ``"qott"`` branch of R ``ptetools``:
+#   per-cell ``(g,t)`` distributions F0/F1 (and Fte for QoTT) are mixed with
+#   the R ``attgt_pte_aggregations`` weights and inverted at each quantile level
+#   in ``probs``.  Standard errors / simultaneous bands come from a unit-level
+#   empirical bootstrap (``qtt_empirical_bootstrap``).
+# =============================================================================
+
+
+def _pget(ptep: Any, key: str, default: Any = None) -> Any:
+    """Read a parameter off a ``PTEParams`` or plain dict."""
+    if isinstance(ptep, dict):
+        return ptep.get(key, default)
+    if hasattr(ptep, key):
+        return getattr(ptep, key)
+    raise ValueError(f"ptep is missing required field: {key}")
+
+
+def _ptep_field(ptep: Any, key: str, default: Any = None) -> Any:
+    """Read a parameter, tolerating missing fields on dataclass ``ptep``s.
+
+    Unlike ``_pget``, a missing attribute on an object just yields ``default``
+    (mirrors R's ``$`` extraction returning ``NULL`` for absent list elements).
+    """
+    if isinstance(ptep, dict):
+        return ptep.get(key, default)
+    return getattr(ptep, key, default)
+
+
+class _ECDF:
+    """A step-function empirical distribution (``make_dist``'s approxfun).
+
+    Evaluated at a query ``q`` it returns the piecewise-constant CDF with
+    ``yleft=0``, ``yright=1`` and ``ties="ordered"``, mirroring R's
+    ``approxfun(x, Fx, method="constant")``.
+    """
+
+    def __init__(self, x: Any, y: Any) -> None:
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        idx = np.argsort(x)
+        self.x, self.y = x[idx].copy(), y[idx].copy()
+        self.nobs = len(self.x)
+
+    def __call__(self, q: Any) -> np.ndarray:
+        q = np.atleast_1d(np.asarray(q, dtype=float))
+        pos = np.searchsorted(self.x, q, side="right") - 1
+        out = np.zeros_like(q)
+        valid = pos >= 0
+        clipped = np.clip(pos, 0, len(self.x) - 1)
+        out[valid] = self.y[clipped[valid]]
+        out[pos >= len(self.x)] = 1.0
+        return out
+
+
+def combine_ecdfs(
+    y_seq: Any, ecdflist: Sequence[Any], weights: Optional[Sequence[float]] = None
+) -> _ECDF:
+    """Mix per-\\.((g,t))`` CDFs into one CDF — ``BMisc::combine_ecdfs``."""
+    y_seq = np.asarray(y_seq, dtype=float)
+    y_seq = np.sort(y_seq)
+    if len(ecdflist) == 0:
+        return _ECDF(y_seq, np.zeros_like(y_seq))
+    w = (
+        np.full(len(ecdflist), 1.0 / len(ecdflist))
+        if weights is None
+        else np.asarray(weights, dtype=float)
+    )
+    w = w / w.sum() if w.sum() != 0 else w
+    values = np.column_stack([np.asarray(ecdf(y_seq), dtype=float) for ecdf in ecdflist])
+    return _ECDF(y_seq, values @ w)
+
+
+def ecdf_quantiles(ecdf: _ECDF, probs: Any) -> np.ndarray:
+    """``quantile(ecdf, probs, type = 1)`` mirroring ``quantile.ecdf``.
+
+    R reconstructs an approximate equally-weighted pseudo-sample from the stored
+    breakpoints and CDF heights, then applies the type-1 inverse-CDF quantile;
+    this reproduces that exactly (verified against the installed ``ptetools``).
+    """
+    probs = np.atleast_1d(np.asarray(probs, dtype=float))
+    rounded = np.round(ecdf.nobs * ecdf.y).astype(int)
+    counts = np.diff(np.concatenate([[0], rounded]))
+    recon = np.repeat(ecdf.x, counts)
+    if recon.size == 0:
+        return np.full(probs.shape, np.nan)
+    return np.array([_type1_quantile(recon, p) for p in probs])
+
+
+def block_boot_sample(
+    data: pd.DataFrame, idname: str, rng: Optional[np.random.Generator] = None
+) -> pd.DataFrame:
+    """Block-resample a panel by unit, re-indexing ids (``blockBootSample``)."""
+    unique_ids = pd.unique(data[idname])
+    if unique_ids.size == 0:
+        raise ValueError("cannot bootstrap an empty panel")
+    rng = rng if rng is not None else np.random.default_rng()
+    sampled = rng.choice(unique_ids, size=unique_ids.size, replace=True)
+    pieces = []
+    for new_id, old_id in enumerate(sampled):
+        block = data.loc[data[idname].eq(old_id)].copy()
+        block[idname] = new_id
+        pieces.append(block)
+    return pd.concat(pieces, ignore_index=True)
+
+
+def _attgt_pte_weights(attgt_list: Sequence[dict[str, Any]], ptep: Any) -> dict[str, Any]:
+    """Port of the R ``attgt_pte_aggregations`` weight computation.
+
+    Given the per-cell ``(group, time.period, att)`` entries, builds the
+    group/dynamic/overall weights used to mix ``(g,t)`` CDFs.  Row order
+    follows R's ``merge`` (sorted by ``group`` then ``time.period``).
+    """
+    groups = list(_pget(ptep, "groups"))
+    periods = list(_pget(ptep, "time_periods"))
+    data = _pget(ptep, "data")
+    gname = _pget(ptep, "gname")
+    tname = _pget(ptep, "tname")
+    frame = pd.DataFrame(
+        [
+            {"group": c["group"], "time.period": c["time.period"], "att": float(c["att"])}
+            for c in attgt_list
+        ]
+    )
+    frame = frame.dropna(subset=["att"]).reset_index(drop=True)
+    frame["e"] = frame["time.period"] - frame["group"]
+    first_period = periods[0]
+    n_group: dict[Any, float] = {}
+    for group in groups:
+        sub = data.loc[(data[gname] == group) & (data[tname] == first_period)]
+        n_group[group] = float(len(sub))
+    frame["n.group"] = frame["group"].map(n_group).fillna(0.0)
+    frame = frame.sort_values(["group", "time.period"]).reset_index(drop=True)
+
+    eseq = sorted(pd.unique(frame["e"]))
+    dyn_rows = []
+    dyn_weights = []
+    for this_e in eseq:
+        res_e = frame.loc[frame["e"].eq(this_e)]
+        w = res_e["n.group"].to_numpy(float)
+        w = w / w.sum() if w.sum() else w
+        mask = frame["e"].to_numpy() == this_e
+        wvec = np.zeros(len(frame))
+        wvec[mask] = w
+        dyn_weights.append({"e": this_e, "weights": wvec})
+        dyn_rows.append({"e": this_e, "att.e": float((res_e["att"].to_numpy() * w).sum())})
+
+    group_rows = []
+    group_weights = []
+    for group in groups:
+        mask = (frame["group"] == group) & (frame["time.period"] >= frame["group"])
+        res_g = frame.loc[mask]
+        if len(res_g) == 0:
+            continue
+        wvec = np.zeros(len(frame))
+        wvec[mask.to_numpy()] = 1.0 / len(res_g)
+        group_weights.append({"g": group, "weights": wvec})
+        group_rows.append(
+            {
+                "group": group,
+                "att.g": float(res_g["att"].mean()),
+                "n.group": float(frame.loc[frame["group"] == group, "n.group"].iloc[0]),
+                "group_post_length": len(res_g),
+            }
+        )
+    grp = pd.DataFrame(group_rows)
+    if len(grp) == 0:
+        over_weights = np.zeros(len(frame))
+        att_overall = float("nan")
+    else:
+        grp = grp.dropna(subset=["n.group"])
+        total = grp["n.group"].sum()
+        att_overall = float((grp["att.g"] * grp["n.group"]).sum() / total)
+        if (grp["group_post_length"] == 0).any() or total == 0:
+            grp = grp.assign(g_overall_w=0.0)
+        else:
+            grp = grp.assign(g_overall_w=(grp["n.group"] / total) / grp["group_post_length"])
+        over_map = dict(zip(grp["group"], grp["g_overall_w"]))
+        gr_over = frame["group"].map(over_map).fillna(0.0).to_numpy()
+        over_weights = np.where((frame["e"] >= 0).to_numpy(), gr_over, 0.0)
+
+    return {
+        "attgt_results": frame[["group", "time.period", "att"]],
+        "dyn_results": (
+            pd.DataFrame(dyn_rows, columns=["e", "att.e"])
+            if dyn_rows
+            else pd.DataFrame(columns=["e", "att.e"])
+        ),
+        "dyn_weights": dyn_weights,
+        "group_results": (
+            grp[["group", "att.g"]] if len(grp) else pd.DataFrame(columns=["group", "att.g"])
+        ),
+        "group_weights": group_weights,
+        "overall_results": att_overall,
+        "overall_weights": over_weights,
+    }
+
+
+def _aligned_cell_returns(
+    extra_gt_returns: Sequence[dict[str, Any]],
+    order: Sequence[tuple[Any, Any]],
+) -> list[dict[str, Any]]:
+    """Reorder per-cell extra returns to match ``_attgt_pte_aggregations`` rows."""
+    lookup = {(e["group"], e["time.period"]): e.get("extra_gt_returns") for e in extra_gt_returns}
+    aligned = []
+    for group, time_period in order:
+        cell = lookup.get((group, time_period))
+        if cell is None:
+            raise ValueError("extra_gt_returns is missing a group-time cell present in attgt_list")
+        aligned.append(cell)
+    return aligned
+
+
+def pte_qtt(
+    overall: pd.DataFrame,
+    dynamic: pd.DataFrame,
+    group: pd.DataFrame,
+    *,
+    F0_overall: Any = None,
+    F1_overall: Any = None,
+    ptep: Any = None,
+) -> "PTEQTTResult":
+    """Construct a ``pte_qtt`` result container (R ``ptetools::pte_qtt``)."""
+    return PTEQTTResult(overall, dynamic, group, F0_overall, F1_overall, ptep)
+
+
+@dataclass
+class PTEQTTResult:
+    """Full quantile treatment-effect curve (R ``pte_qtt`` object).
+
+    ``overall``/``dynamic``/``group`` are DataFrames with ``probs`` + ``qtt``
+    (plus ``se``/confidence-band columns after ``qtt_empirical_bootstrap``);
+    ``F0_overall``/``F1_overall`` are the mixed ``_ECDF`` CDFs.
+    """
+
+    overall: pd.DataFrame
+    dynamic: pd.DataFrame
+    group: pd.DataFrame
+    F0_overall: Any = None
+    F1_overall: Any = None
+    ptep: Any = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "overall": self.overall.to_dict(orient="records"),
+            "dynamic": self.dynamic.to_dict(orient="records"),
+            "group": self.group.to_dict(orient="records"),
+        }
+
+    def summary(self) -> str:
+        probs = self.overall["probs"]
+        qtt = self.overall["qtt"]
+        return f"PTEQTTResult(overall QTT: median {np.nanmedian(qtt):.4f} over {len(probs)} quantile levels)"
+
+
+def qtt_pte_aggregations(
+    attgt_list: Sequence[dict[str, Any]],
+    ptep: Any,
+    extra_gt_returns: Sequence[dict[str, Any]],
+    probs: Optional[Sequence[float]] = None,
+) -> dict[str, Any]:
+    """Mix ``(g,t)`` F0/F1 CDFs into overall/dynamic/group QTT curves.
+
+    Mirrors R ``ptetools::qtt_pte_aggregations``: the per-cell CDFs are aligned
+    to the aggregated weight rows (a deliberate fix of R's latent ordering
+    assumption when the compute loop is time-major but the weights are
+    group-major), mixed with the ``_attgt_pte_weights`` weights over a common
+    ``y.seq`` grid, and inverted at each ``probs`` level (``quantile.ecdf``).
+    """
+    if probs is None:
+        probs = np.arange(0.05, 0.951, 0.05)
+    probs = np.asarray(probs, dtype=float)
+    agg = _attgt_pte_weights(attgt_list, ptep)
+    order = list(zip(agg["attgt_results"]["group"], agg["attgt_results"]["time.period"]))
+    cells = _aligned_cell_returns(extra_gt_returns, order)
+    F0_gt = [cell["F0"] for cell in cells]
+    F1_gt = [cell["F1"] for cell in cells]
+
+    data = _pget(ptep, "data")
+    yname = _pget(ptep, "yname")
+    y_seq = np.quantile(data[yname], np.linspace(0.0, 1.0, 1000))
+    overall_w = np.asarray(agg["overall_weights"], dtype=float)
+    F0_overall = combine_ecdfs(y_seq, F0_gt, overall_w)
+    F1_overall = combine_ecdfs(y_seq, F1_gt, overall_w)
+    overall_results = pd.DataFrame(
+        {
+            "probs": probs,
+            "qtt": ecdf_quantiles(F1_overall, probs) - ecdf_quantiles(F0_overall, probs),
+        }
+    )
+
+    dyn_rows = []
+    for dw in agg["dyn_weights"]:
+        w = np.asarray(dw["weights"], dtype=float)
+        F0_e = combine_ecdfs(y_seq, F0_gt, w)
+        F1_e = combine_ecdfs(y_seq, F1_gt, w)
+        dyn_rows.append(
+            pd.DataFrame(
+                {
+                    "e": dw["e"],
+                    "probs": probs,
+                    "qtt": ecdf_quantiles(F1_e, probs) - ecdf_quantiles(F0_e, probs),
+                }
+            )
+        )
+    dyn_results = (
+        pd.concat(dyn_rows, ignore_index=True)
+        if dyn_rows
+        else pd.DataFrame(columns=["e", "probs", "qtt"])
+    )
+
+    group_rows = []
+    for gw in agg["group_weights"]:
+        w = np.asarray(gw["weights"], dtype=float)
+        F0_g = combine_ecdfs(y_seq, F0_gt, w)
+        F1_g = combine_ecdfs(y_seq, F1_gt, w)
+        group_rows.append(
+            pd.DataFrame(
+                {
+                    "group": gw["g"],
+                    "probs": probs,
+                    "qtt": ecdf_quantiles(F1_g, probs) - ecdf_quantiles(F0_g, probs),
+                }
+            )
+        )
+    group_results = (
+        pd.concat(group_rows, ignore_index=True)
+        if group_rows
+        else pd.DataFrame(columns=["group", "probs", "qtt"])
+    )
+
+    return {
+        "overall_results": overall_results,
+        "dyn_results": dyn_results,
+        "group_results": group_results,
+        "F0_overall": F0_overall,
+        "F1_overall": F1_overall,
+    }
+
+
+def qott_pte_aggregations(
+    attgt_list: Sequence[dict[str, Any]],
+    ptep: Any,
+    extra_gt_returns: Sequence[dict[str, Any]],
+    ret_quantile: Optional[Sequence[float]] = None,
+) -> dict[str, Any]:
+    """Aggregate ``(g,t)`` treatment-effect distributions into QoTT curves."""
+    if ret_quantile is None:
+        ret_quantile = _ptep_field(ptep, "ret_quantile", None)
+    if ret_quantile is None:
+        ret_quantile = np.arange(0.05, 0.951, 0.05)
+    ret_quantile = np.asarray(ret_quantile, dtype=float)
+    agg = _attgt_pte_weights(attgt_list, ptep)
+    cells = _aligned_cell_returns(
+        extra_gt_returns,
+        list(zip(agg["attgt_results"]["group"], agg["attgt_results"]["time.period"])),
+    )
+    Fte_gt = [cell["Fte"] for cell in cells]
+    data = _pget(ptep, "data")
+    yname = _pget(ptep, "yname")
+    y_seq = np.linspace(-np.max(data[yname]), np.max(data[yname]), 1000)
+    overall_w = np.asarray(agg["overall_weights"], dtype=float)
+    Fte_overall = combine_ecdfs(y_seq, Fte_gt, overall_w)
+    overall = ecdf_quantiles(Fte_overall, ret_quantile)
+
+    dyn_rows = []
+    for dw in agg["dyn_weights"]:
+        Fte_e = combine_ecdfs(y_seq, Fte_gt, np.asarray(dw["weights"], dtype=float))
+        dyn_rows.append(
+            pd.DataFrame(
+                {"e": dw["e"], "probs": ret_quantile, "qott": ecdf_quantiles(Fte_e, ret_quantile)}
+            )
+        )
+    dyn_results = (
+        pd.concat(dyn_rows, ignore_index=True)
+        if dyn_rows
+        else pd.DataFrame(columns=["e", "probs", "qott"])
+    )
+
+    group_rows = []
+    for gw in agg["group_weights"]:
+        Fte_g = combine_ecdfs(y_seq, Fte_gt, np.asarray(gw["weights"], dtype=float))
+        group_rows.append(
+            pd.DataFrame(
+                {
+                    "group": gw["g"],
+                    "probs": ret_quantile,
+                    "qott": ecdf_quantiles(Fte_g, ret_quantile),
+                }
+            )
+        )
+    group_results = (
+        pd.concat(group_rows, ignore_index=True)
+        if group_rows
+        else pd.DataFrame(columns=["group", "probs", "qott"])
+    )
+
+    return {
+        "overall_results": overall,
+        "dyn_results": dyn_results,
+        "group_results": group_results,
+        "Fte_overall": Fte_overall,
+    }
+
+
+def compute_pte(
+    ptep: Any,
+    subset_fun: Any,
+    attgt_fun: Any,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Run the ``(g,t)`` estimation loop — R ``ptetools::compute.pte``.
+
+    ``subset_fun(data, g, tp, ...)`` yields a ``TwoByTwoSubset`` and
+    ``attgt_fun(gt_data=gt_data, ...)`` yields an ``ATTGTResult`` whose
+    ``extra_gt_returns`` carries the per-cell ``F0``/``F1`` (and ``Fte`` for
+    QoTT) ``_ECDF`` objects.  Returns ``attgt.list`` (ordered time-major),
+    ``inffunc`` and ``extra_gt_returns`` exactly like R.
+    """
+    data = _pget(ptep, "data")
+    gname = _pget(ptep, "gname")
+    tname = _pget(ptep, "tname")
+    idname = _pget(ptep, "idname")
+    panel = _pget(ptep, "panel")
+    base_period = _pget(ptep, "base_period", "varying")
+    anticipation = _pget(ptep, "anticipation", 0)
+    time_periods = list(_pget(ptep, "time_periods") or _pget(ptep, "tlist", []))
+    groups = list(_pget(ptep, "groups") or _pget(ptep, "glist", []))
+    n = data[idname].nunique() if panel else len(data)
+
+    subset_kwargs = dict(kwargs)
+    subset_kwargs.setdefault("gname", gname)
+    subset_kwargs.setdefault("tname", tname)
+    subset_kwargs.setdefault("yname", _pget(ptep, "yname"))
+    if idname is not None:
+        subset_kwargs.setdefault("idname", idname)
+    subset_kwargs.setdefault("anticipation", anticipation)
+    subset_kwargs.setdefault("base_period", base_period)
+
+    attgt_list: list[dict[str, Any]] = []
+    extra_gt_returns: list[dict[str, Any]] = []
+    inffunc = np.full((n, len(groups) * len(time_periods)), np.nan)
+    counter = 0
+    for tp in time_periods:
+        for g in groups:
+            if base_period == "universal" and tp == (g - 1 - anticipation):
+                attgt_list.append({"att": 0, "group": g, "time.period": tp})
+                extra_gt_returns.append({"extra_gt_returns": None, "group": g, "time.period": tp})
+                counter += 1
+                continue
+            gt_subset = subset_fun(data, g, tp, **subset_kwargs)
+            gt_data = gt_subset.gt_data
+            n1 = gt_subset.n1
+            disidx = gt_subset.disidx
+            attgt = attgt_fun(gt_data=gt_data, **kwargs)
+            attgt_list.append({"att": attgt.attgt, "group": g, "time.period": tp})
+            extra_gt_returns.append(
+                {"extra_gt_returns": attgt.extra_gt_returns, "group": g, "time.period": tp}
+            )
+            if attgt.inf_func is not None and n1:
+                scaled = (n / n1) * np.asarray(attgt.inf_func, dtype=float)
+                this_if = np.zeros(n)
+                this_if[disidx] = scaled
+                inffunc[:, counter] = this_if
+            counter += 1
+    return {
+        "attgt.list": attgt_list,
+        "inffunc": inffunc,
+        "extra_gt_returns": extra_gt_returns,
+    }
+
+
+def _qtt_crit_val(boot_mat: np.ndarray, qtt_est: np.ndarray, alp: float) -> float:
+    """Sup-t critical value over the QTT curve — R ``qtt_crit_val``.
+
+    Standardises each quantile column by a robust ``(IQR / (z.75 - z.25))``
+    scale (falling back to the sample SD clamped to ``1e-9``), takes the
+    per-bootstrap maximum absolute standardised deviation, and returns the
+    ``(1 - alp)`` type-1 empirical quantile of that sup statistic.
+    """
+    boot_mat = np.asarray(boot_mat, dtype=float)
+    qtt_est = np.asarray(qtt_est, dtype=float)
+    iqr_scale = np.array(
+        [
+            _type1_quantile(boot_mat[:, j], 0.75) - _type1_quantile(boot_mat[:, j], 0.25)
+            for j in range(boot_mat.shape[1])
+        ]
+    )
+    sigmahalf = iqr_scale / (norm.ppf(0.75) - norm.ppf(0.25))
+    if np.any(sigmahalf == 0):
+        sigmahalf = np.maximum(np.std(boot_mat, axis=0, ddof=1), 1e-9)
+    cb = np.max(np.abs((boot_mat - qtt_est) / sigmahalf), axis=1)
+    return _type1_quantile(cb, 1 - alp)
+
+
+def qtt_empirical_bootstrap(
+    attgt_list: Sequence[dict[str, Any]],
+    ptep: Any,
+    setup_pte_fun: Any,
+    subset_fun: Any,
+    attgt_fun: Any,
+    extra_gt_returns: Sequence[dict[str, Any]],
+    aggte_fun: Any = None,
+    *,
+    seed: Optional[int] = None,
+    **kwargs: Any,
+) -> PTEQTTResult:
+    """Unit-level empirical bootstrap for QTT — R ``qtt_empirical_bootstrap``.
+
+    Repeatedly block-resamples units (or resamples rows for repeated cross
+    sections), re-estimates the per-cell F0/F1 CDFs, re-aggregates the QTT
+    curve, and derives bootstrap pointwise SEs (``qtt +/- z*se``) plus uniform
+    bands (``qtt +/- crit*se``) using the sup-t critical value ``_qtt_crit_val``.
+    """
+    if aggte_fun is None:
+        aggte_fun = qtt_pte_aggregations
+    probs = _ptep_field(ptep, "probs", None)
+    probs = np.asarray(probs, dtype=float) if probs is not None else np.arange(0.05, 0.951, 0.05)
+    data = _pget(ptep, "data")
+    yname = _pget(ptep, "yname")
+    gname = _pget(ptep, "gname")
+    tname = _pget(ptep, "tname")
+    idname = _pget(ptep, "idname")
+    panel = _pget(ptep, "panel")
+    alp = _ptep_field(ptep, "alp", 0.05)
+    biters = int(_ptep_field(ptep, "biters", 99))
+    boot_type = _ptep_field(ptep, "boot_type", "empirical")
+    gt_type = _ptep_field(ptep, "gt_type", "qtt")
+
+    aggte = aggte_fun(attgt_list, ptep, extra_gt_returns)
+    z = norm.ppf(1 - alp / 2)
+    rng = np.random.default_rng(seed)
+    boot_res: list[Any] = []
+    for _ in range(int(biters)):
+        if panel:
+            bdata = block_boot_sample(data.copy(), idname, rng=rng)
+        else:
+            idx = rng.integers(0, len(data), size=len(data))
+            bdata = data.iloc[idx].reset_index(drop=True).copy()
+            bdata[".rowid"] = np.arange(len(bdata))
+            bdata["id"] = bdata[".rowid"]
+        bptep = setup_pte_fun(
+            yname=yname,
+            gname=gname,
+            tname=tname,
+            idname=idname,
+            data=bdata,
+            panel=panel,
+            alp=alp,
+            boot_type=boot_type,
+            gt_type=gt_type,
+            probs=probs,
+            biters=biters,
+            cl=kwargs.get("cl", 1),
+            **kwargs,
+        )
+        bres_gt = compute_pte(bptep, subset_fun, attgt_fun, **kwargs)
+        boot_res.append(aggte_fun(bres_gt["attgt.list"], bptep, bres_gt["extra_gt_returns"]))
+
+    overall_boot = np.asarray([br["overall_results"]["qtt"] for br in boot_res], dtype=float)
+    overall_se = np.std(overall_boot, axis=0, ddof=1)
+    overall_cval = _qtt_crit_val(overall_boot, aggte["overall_results"]["qtt"].to_numpy(), alp)
+    overall_results = aggte["overall_results"].copy()
+    overall_results["se"] = overall_se
+    overall_results["lower_pw"] = overall_results["qtt"] - z * overall_se
+    overall_results["upper_pw"] = overall_results["qtt"] + z * overall_se
+    overall_results["lower_ub"] = overall_results["qtt"] - overall_cval * overall_se
+    overall_results["upper_ub"] = overall_results["qtt"] + overall_cval * overall_se
+
+    dyn_se_rows: list[pd.DataFrame] = []
+    for this_e in dict.fromkeys(aggte["dyn_results"]["e"]):
+        boot_rows = []
+        for br in boot_res:
+            grp = br["dyn_results"]
+            vals = grp.loc[grp["e"].eq(this_e), "qtt"].to_numpy() if not grp.empty else np.array([])
+            boot_rows.append(vals if vals.size == probs.size else None)
+        complete = [r for r in boot_rows if r is not None]
+        if len(complete) < 2:
+            continue
+        boot_mat = np.asarray(complete, dtype=float)
+        qtt_est = aggte["dyn_results"].loc[aggte["dyn_results"]["e"].eq(this_e), "qtt"].to_numpy()
+        this_cval = _qtt_crit_val(boot_mat, qtt_est, alp)
+        dyn_se_rows.append(
+            pd.DataFrame(
+                {
+                    "e": this_e,
+                    "probs": probs,
+                    "se": np.std(boot_mat, axis=0, ddof=1),
+                    "cval": this_cval,
+                }
+            )
+        )
+    if dyn_se_rows:
+        dyn_se_df = pd.concat(dyn_se_rows, ignore_index=True)
+        dyn_results = pd.merge(aggte["dyn_results"], dyn_se_df, on=["e", "probs"], how="inner")
+    else:
+        dyn_results = aggte["dyn_results"].copy()
+    if not dyn_results.empty:
+        dyn_results = dyn_results.copy()
+        dyn_results["lower_pw"] = dyn_results["qtt"] - z * dyn_results["se"]
+        dyn_results["upper_pw"] = dyn_results["qtt"] + z * dyn_results["se"]
+        dyn_results["lower_ub"] = dyn_results["qtt"] - dyn_results["cval"] * dyn_results["se"]
+        dyn_results["upper_ub"] = dyn_results["qtt"] + dyn_results["cval"] * dyn_results["se"]
+        dyn_results = dyn_results.drop(columns=["cval"])
+
+    group_se_rows: list[pd.DataFrame] = []
+    for g in dict.fromkeys(aggte["group_results"]["group"]):
+        boot_rows = []
+        for br in boot_res:
+            grp = br["group_results"]
+            vals = grp.loc[grp["group"].eq(g), "qtt"].to_numpy() if not grp.empty else np.array([])
+            boot_rows.append(vals if vals.size == probs.size else None)
+        complete = [r for r in boot_rows if r is not None]
+        if len(complete) < 2:
+            continue
+        boot_mat = np.asarray(complete, dtype=float)
+        qtt_est = (
+            aggte["group_results"].loc[aggte["group_results"]["group"].eq(g), "qtt"].to_numpy()
+        )
+        this_cval = _qtt_crit_val(boot_mat, qtt_est, alp)
+        group_se_rows.append(
+            pd.DataFrame(
+                {
+                    "group": g,
+                    "probs": probs,
+                    "se": np.std(boot_mat, axis=0, ddof=1),
+                    "cval": this_cval,
+                }
+            )
+        )
+    if group_se_rows:
+        group_se_df = pd.concat(group_se_rows, ignore_index=True)
+        group_results = pd.merge(
+            aggte["group_results"], group_se_df, on=["group", "probs"], how="inner"
+        )
+    else:
+        group_results = aggte["group_results"].copy()
+    if not group_results.empty:
+        group_results = group_results.copy()
+        group_results["lower_pw"] = group_results["qtt"] - z * group_results["se"]
+        group_results["upper_pw"] = group_results["qtt"] + z * group_results["se"]
+        group_results["lower_ub"] = (
+            group_results["qtt"] - group_results["cval"] * group_results["se"]
+        )
+        group_results["upper_ub"] = (
+            group_results["qtt"] + group_results["cval"] * group_results["se"]
+        )
+        group_results = group_results.drop(columns=["cval"])
+
+    return pte_qtt(
+        overall_results,
+        dyn_results,
+        group_results,
+        F0_overall=aggte.get("F0_overall"),
+        F1_overall=aggte.get("F1_overall"),
+        ptep=ptep,
+    )

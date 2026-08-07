@@ -40,6 +40,9 @@ class MPWeightsResult:
     def __getitem__(self, key: Any) -> Any:
         return self.weights_df[key]
 
+    def summary(self) -> pd.DataFrame:
+        return self.weights_df.describe(include="all")
+
 
 @dataclass
 class TwoPeriodCovariatesResult:
@@ -52,6 +55,12 @@ class TwoPeriodCovariatesResult:
     cov_balance_df: Optional[pd.DataFrame] = None
     ess: Optional[float] = None
 
+    def summary(self) -> Any:
+        return self.cov_balance_df if self.cov_balance_df is not None else self.to_dict()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"est": self.est, "ess": self.ess, "n": len(self.dy)}
+
 
 @dataclass
 class ImplicitTWFEResult:
@@ -61,6 +70,9 @@ class ImplicitTWFEResult:
     est: float
     decomposition_est: float
     pre_trends_bias: float
+
+    def summary(self) -> pd.DataFrame:
+        return self.twfe_gt.copy()
 
 
 @dataclass
@@ -86,6 +98,9 @@ class ImplicitAIPWResult:
     est: float
     decomposition_est: float
 
+    def summary(self) -> pd.DataFrame:
+        return self.aipw_gt.copy()
+
 
 @dataclass
 class PostLassoResult:
@@ -96,6 +111,17 @@ class PostLassoResult:
     selected_vars_outcome: np.ndarray
     selected_vars_propensity: np.ndarray
     influence_function: np.ndarray
+
+
+def mp_weights_obj(weights_df: pd.DataFrame) -> MPWeightsResult:
+    """Construct the R ``mp_weights_obj`` equivalent."""
+    required = {"group", "time.period", "weight", "attgt"}
+    missing = sorted(required.difference(weights_df.columns))
+    if missing:
+        raise ValueError(f"weights_df is missing columns: {missing}")
+    out = weights_df.copy()
+    out["post"] = ((out["time.period"] >= out["group"]) & (out["group"] != 0)).astype(bool)
+    return MPWeightsResult(out[["group", "time.period", "weight", "attgt", "post"]])
 
 
 def two_period_covs_obj(
@@ -413,19 +439,36 @@ def att_simple_weights(
     return _result_frame(effects, values / total, keep_untreated)
 
 
-def ggtwfeweights(result: MPWeightsResult) -> Any:
-    """Plot weights when matplotlib is installed."""
+def ggtwfeweights(result: Any) -> Any:
+    """Plot R ``ggtwfeweights``-compatible weight/decomposition objects."""
     import matplotlib.pyplot as plt
 
-    frame = result.weights_df
     fig, ax = plt.subplots()
-    for post, values in frame.groupby("post"):
-        ax.scatter(values["weight"], values["attgt"], label=str(post))
+    if isinstance(result, MPWeightsResult):
+        frame = result.weights_df
+        for post, values in frame.groupby("post"):
+            ax.scatter(values["weight"], values["attgt"], label=str(post))
+        ax.set_xlabel("weight")
+        ax.set_ylabel("ATT(g,t)")
+    elif isinstance(result, (ImplicitTWFEResult, ImplicitAIPWResult)):
+        frame = result.twfe_gt if isinstance(result, ImplicitTWFEResult) else result.aipw_gt
+        weight_col = next((c for c in ("weight", "w", "twfe_weight") if c in frame), None)
+        effect_col = next((c for c in ("attgt", "att", "effect") if c in frame), None)
+        if weight_col is None or effect_col is None:
+            raise ValueError("decomposition result must contain weight and effect columns")
+        ax.scatter(frame[weight_col], frame[effect_col])
+        ax.set_xlabel(weight_col)
+        ax.set_ylabel(effect_col)
+    elif isinstance(result, TwoPeriodCovariatesResult):
+        ax.hist(result.weights, bins=min(20, max(1, len(result.weights))))
+        ax.set_xlabel("implicit weight")
+        ax.set_ylabel("count")
+    else:
+        raise TypeError("unsupported twfeweights result type")
     ax.axhline(0, color="black", linewidth=1.5)
     ax.axvline(0, color="black", linewidth=1.5)
-    ax.set_xlabel("weight")
-    ax.set_ylabel("ATT(g,t)")
-    ax.legend(title="post")
+    if isinstance(result, MPWeightsResult):
+        ax.legend(title="post")
     return ax
 
 

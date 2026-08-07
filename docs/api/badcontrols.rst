@@ -26,6 +26,10 @@ The DR entry point validates ``overlap_threshold`` and ``min_group_size`` and
 falls back to imputation when the propensity model is not sufficiently supported.
 Set ``bstrap=True`` for a seeded, cohort-stratified empirical bootstrap with
 percentile confidence intervals.
+The R-style cell wrapper ``dr_ml_attgt`` accepts simple additive formula
+strings such as ``xformula="~ x1 + x2"`` and ``bad_control_formula="~ X"``;
+simple interactions such as ``xformula="~ x1 * x2"`` are expanded to main
+effects and a product column. Arbitrary function transforms are not supported.
 Imputation and parametric/ML DR paths accept ``d_covariates`` and
 ``bad_control_d_covariates`` for post-minus-pre changes.
 
@@ -33,7 +37,9 @@ Imputation and parametric/ML DR paths accept ``d_covariates`` and
    :toctree: _autosummary
    :nosignatures:
 
-   diff_diff.didbc
+    diff_diff.didbc
+    diff_diff.dr_ml_attgt
+    diff_diff.dr_ml_bad_control
    diff_diff.imputation_bad_control
    diff_diff.staggered_imputation_bad_control
    diff_diff.extract_att

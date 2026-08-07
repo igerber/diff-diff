@@ -1,6 +1,9 @@
+import matplotlib
 import numpy as np
 
-from diff_diff import pte
+matplotlib.use("Agg")
+
+from diff_diff import autoplot_pte_results, did_attgt, ggpte, pte, two_by_two_subset
 
 
 def _panel():
@@ -21,7 +24,43 @@ def test_pte_runs_group_time_loop_and_returns_results():
     assert set(result.att_gt.columns) == {"group", "time", "attgt", "se"}
     assert len(result.att_gt) == 4
     assert np.isfinite(result.overall_att)
+    assert (
+        autoplot_pte_results(result, show=False).get_title() == "Treatment Effects Over Event Time"
+    )
     assert result.to_dataframe().equals(result.att_gt)
+
+
+def test_pte_aggregate_exposes_inference_and_level_tables():
+    result = pte(_panel(), yname="Y", gname="G", tname="period", idname="id")
+    dynamic = result.aggregate("dynamic")
+
+    assert np.isfinite(dynamic.standard_error)
+    assert dynamic.conf_int[0] <= dynamic.estimate <= dynamic.conf_int[1]
+    dynamic_table = result.to_dataframe("dynamic")
+    assert {"event_time", "estimate", "se", "conf_int_lower", "conf_int_upper"}.issubset(
+        dynamic_table.columns
+    )
+    assert dynamic_table["event_time"].is_unique
+
+
+def test_pte_dynamic_aggregate_multiplier_bootstrap_bands():
+    result = pte(_panel(), yname="Y", gname="G", tname="period", idname="id")
+    aggregate = result.aggregate("dynamic", bstrap=True, biters=40, seed=11)
+    table = aggregate.to_dataframe()
+
+    assert aggregate.bootstrap_distribution is not None
+    assert aggregate.bootstrap_distribution.shape == (40, len(table))
+    assert {"lower_pw", "upper_pw", "lower_ub", "upper_ub"}.issubset(table.columns)
+
+
+def test_ggpte_adapts_dynamic_results_to_event_study_plot():
+    result = pte(_panel(), yname="Y", gname="G", tname="period", idname="id")
+    ax = ggpte(result, show=False)
+
+    assert ax.get_title() == "Treatment Effects Over Event Time"
+    assert ax.get_xlabel() == "Period Relative to Treatment"
+    tick_labels = {label.get_text() for label in ax.get_xticklabels()}
+    assert {"-1", "0", "1"}.issubset(tick_labels)
 
 
 def test_pte_accepts_pre_period_covariates():
@@ -36,6 +75,27 @@ def test_pte_accepts_pre_period_covariates():
         covariates=["Z"],
     )
     assert np.isfinite(result.att_gt["attgt"].dropna()).all()
+
+
+def test_pte_accepts_custom_subset_and_attgt_callbacks():
+    def subset_fun(data, group, time):
+        return two_by_two_subset(data, group, time)
+
+    def attgt_fun(gt_data):
+        result = did_attgt(gt_data)
+        return {"attgt": result.attgt, "inf_func": result.inf_func}
+
+    result = pte(
+        _panel(),
+        yname="Y",
+        gname="G",
+        tname="period",
+        idname="id",
+        subset_fun=subset_fun,
+        attgt_fun=attgt_fun,
+    )
+    assert len(result.att_gt) == 4
+    assert np.isfinite(result.overall_att)
 
 
 def test_pte_empirical_bootstrap_is_seed_reproducible():

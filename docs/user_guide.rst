@@ -46,11 +46,18 @@ registry documenting every estimator's equations and edge cases.
       Academic foundations, equations, and documented edge cases for every
       estimator.
 
-   .. grid-item-card:: Reporting
+    .. grid-item-card:: Reporting
       :link: methodology/REPORTING
       :link-type: doc
 
-      Conventions for reporting DiD results.
+       Conventions for reporting DiD results.
+
+    .. grid-item-card:: R ptetools Compatibility
+       :link: ptetools_compatibility
+       :link-type: doc
+
+       Port group-time, DRDID, QTT, and dose-response workflows from R
+       ``ptetools``.
 
 .. toctree::
    :maxdepth: 1
@@ -61,4 +68,5 @@ registry documenting every estimator's equations and edge cases.
    Python Comparison <python_comparison>
    benchmarks
    Methodology Registry <methodology/REGISTRY>
-   Reporting <methodology/REPORTING>
+    Reporting <methodology/REPORTING>
+    R ptetools Compatibility <ptetools_compatibility>

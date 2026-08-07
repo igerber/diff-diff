@@ -1322,6 +1322,7 @@ labels.*
 - [x] B-spline basis construction matching R's `splines2::bSpline` (global knots from all treated doses; boundary knots use training-dose range; see deviation note above)
 - [x] Multi-period (g,t) cell iteration with base period selection
 - [x] Dose-response and event-study aggregation with group-proportional weights (n_treated/n_total per group, divided among post-treatment cells; R `ptetools` convention)
+- **Note (deviation from R):** QTT aggregation aligns each cell's unit-weighted F0/F1 CDF to the exact weight row it belongs to (`_aligned_cell_returns` in `diff_diff/ptetools.py`). R's `ptetools::qtt_pte_aggregations` reorders rows via internal `merge`, so in multi-cohort panels the time-major `(g,t)` CDF list is combined with group-sorted weights — a latent ordering bug. The Python port matches R's single-cohort result exactly and fixes the multi-cohort misalignment; pinned in `tests/test_ptetools_qtt.py`.
 - [x] Multiplier bootstrap for inference
 - [x] Analytical SEs via influence functions
 - [x] Equation verification tests (linear, quadratic, multi-period)

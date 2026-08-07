@@ -9,7 +9,7 @@ single treatment-affected covariate.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -26,6 +26,7 @@ class BadControlsResult:
     influence_function: np.ndarray
     method: str = "imputation"
     bootstrap_distribution: Optional[np.ndarray] = None
+
     conf_int: tuple[float, float] = (float("nan"), float("nan"))
 
     @property
@@ -44,6 +45,41 @@ class BadControlsResult:
             "att_gt": self.att_gt.to_dict(orient="records"),
             "conf_int": self.conf_int,
         }
+
+
+def _formula_columns(
+    formula: Optional[str], name: str, frame: Optional[pd.DataFrame] = None
+) -> list[str]:
+    """Parse the simple additive R formula subset used by badcontrols."""
+    if formula is None:
+        return []
+    if not isinstance(formula, str) or "~" not in formula:
+        raise ValueError(f"{name} must be an R-style formula string such as '~ x1 + x2'")
+    rhs = formula.split("~", 1)[1].strip()
+    if rhs in {"", "1", "-1", "0"}:
+        return []
+    terms = [term.strip() for term in rhs.replace("-1", "").split("+")]
+    output: list[str] = []
+    for term in terms:
+        if not term or term in {"1", "0"}:
+            continue
+        factors = [factor.strip() for factor in term.split("*")]
+        if len(factors) == 1 and ":" in term:
+            factors = [factor.strip() for factor in term.split(":")]
+        if len(factors) == 1:
+            output.append(factors[0])
+            continue
+        if frame is None:
+            raise ValueError(f"{name} interaction requires the gt_data frame")
+        missing = sorted(set(factors).difference(frame.columns))
+        if missing:
+            raise ValueError(f"{name} is missing columns: {missing}")
+        if "*" in term:
+            output.extend(factor for factor in factors if factor not in output)
+        interaction_name = "__formula_" + "_x_".join(factors)
+        frame[interaction_name] = frame[factors].prod(axis=1)
+        output.append(interaction_name)
+    return output
 
 
 def _design(frame: pd.DataFrame, columns: Sequence[str]) -> np.ndarray:
@@ -267,6 +303,75 @@ def dr_ml_bad_control(
         {"group": [wide.loc[treated, gname].iloc[0]], "time": [periods[1]], "attgt": [att]}
     )
     return BadControlsResult(att, se, att_gt, influence, method="dr_ml")
+
+
+def dr_ml_attgt(
+    gt_data: pd.DataFrame,
+    *,
+    xformula: Optional[str] = None,
+    bad_control_formula: Optional[str] = None,
+    d_covs_formula: Optional[str] = None,
+    bad_control_cov_formula: Optional[str] = None,
+    bad_control_d_cov_formula: Optional[str] = None,
+    covariates: Sequence[str] = (),
+    bad_control: Optional[str] = None,
+    d_covariates: Sequence[str] = (),
+    bad_control_covariates: Sequence[str] = (),
+    bad_control_d_covariates: Sequence[str] = (),
+    nuisance_method: str = "ml",
+    n_folds: int = 5,
+    random_state: Optional[int] = None,
+    **_: Any,
+) -> BadControlsResult:
+    """R ``badcontrols::dr_ml_attgt``-style two-period cell wrapper."""
+    frame = getattr(gt_data, "data", gt_data)
+    required = {"G", "id", "period", "Y", "D"}
+    missing = sorted(required.difference(frame.columns))
+    if missing:
+        raise ValueError(f"gt_data is missing required columns: {missing}")
+    covariates = _formula_columns(xformula, "xformula", frame) or list(covariates)
+    bad_control = _formula_columns(bad_control_formula, "bad_control_formula", frame) or (
+        [bad_control] if bad_control else []
+    )
+    d_covariates = _formula_columns(d_covs_formula, "d_covs_formula", frame) or list(d_covariates)
+    bad_control_covariates = _formula_columns(
+        bad_control_cov_formula, "bad_control_cov_formula", frame
+    ) or list(bad_control_covariates)
+    bad_control_d_covariates = _formula_columns(
+        bad_control_d_cov_formula, "bad_control_d_cov_formula", frame
+    ) or list(bad_control_d_covariates)
+    if len(bad_control) > 1:
+        raise ValueError("bad_control_formula must contain at most one variable")
+    bad_control_name = bad_control[0] if bad_control else None
+    if nuisance_method == "parametric":
+        return dr_parametric_bad_control(
+            frame,
+            yname="Y",
+            gname="G",
+            tname="period",
+            idname="id",
+            bad_control=bad_control_name,
+            covariates=covariates,
+            bad_control_covariates=bad_control_covariates,
+            d_covariates=d_covariates,
+            bad_control_d_covariates=bad_control_d_covariates,
+        )
+    if nuisance_method != "ml":
+        raise ValueError("nuisance_method must be 'ml' or 'parametric'")
+    return dr_ml_bad_control(
+        frame,
+        yname="Y",
+        gname="G",
+        tname="period",
+        idname="id",
+        bad_control=bad_control_name,
+        covariates=covariates,
+        bad_control_covariates=bad_control_covariates,
+        d_covariates=d_covariates,
+        bad_control_d_covariates=bad_control_d_covariates,
+        n_folds=n_folds,
+        random_state=random_state,
+    )
 
 
 def _wide_panel(

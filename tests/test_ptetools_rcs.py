@@ -17,3 +17,19 @@ def test_rcs_subset_and_attgt_use_period_specific_cross_sections():
     assert subset.n1 == 2
     assert np.isclose(result.attgt, 2.0)
     assert len(result.inf_func) == 4
+
+
+def test_rcs_covariate_adjustment_uses_drdid_rc_core():
+    rows = []
+    for period in (1, 2):
+        for i in range(40):
+            treated = i < 20
+            x = float(i % 10) / 10
+            y = 0.5 * x + period + (1.0 if treated and period == 2 else 0.0)
+            rows.append({"period": period, "G": 2 if treated else 0, "Y": y, "x": x})
+    subset = two_by_two_rcs_subset(pd.DataFrame(rows), 2, 2, covariates=["x"])
+    result = did_rcs_attgt(subset.gt_data, covariates=["x"])
+
+    assert np.isfinite(result.attgt)
+    assert result.inf_func is not None
+    assert result.inf_func.shape == (80,)
