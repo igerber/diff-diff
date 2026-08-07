@@ -55,8 +55,8 @@ DifferenceInDifferences(
     vcov_type: str | None = None,           # Variance family: "hc1" (default), "classical", "hc2", "hc2_bm", "conley"
     cluster: str | None = None,             # Column for cluster-robust SEs
     alpha: float = 0.05,                    # Significance level
-    inference: str = "analytical",          # "analytical" or "wild_bootstrap"
-    n_bootstrap: int = 999,                 # Bootstrap replications (if inference="wild_bootstrap")
+    inference: str = "analytical",          # "analytical" or "wild_bootstrap" (wild_bootstrap requires cluster=)
+    n_bootstrap: int = 999,                 # Bootstrap replications; >= 2 under inference="wild_bootstrap"
     bootstrap_weights: str = "rademacher",  # "rademacher", "webb", or "mammen"
     seed: int | None = None,                # Random seed
     rank_deficient_action: str = "warn",    # "warn", "error", or "silent"

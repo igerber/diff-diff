@@ -43,6 +43,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "TwoStageDiD" (previously "TwoStageDiD (Gardner)"); the
   BusinessReport/DiagnosticReport Bacon caveats name classes likewise.
 
+### Changed
+- **`n_bootstrap` is validated and the `inference` selector fails closed**
+  (v4 program 2(d) PR-B; ledger rows [M-081] + [M-096] → `done`).
+  (a) A shared `validate_n_bootstrap` (promoted verbatim from
+  ChangesInChanges' local validator: non-negative integer, numpy integers
+  accepted, bool/None/float/negative rejected) now runs at `__init__` for
+  CallawaySantAnna, SunAbraham, EfficientDiD, ImputationDiD, TwoStageDiD,
+  WooldridgeDiD, ContinuousDiD, StaggeredTripleDifference and the DiD
+  family (DifferenceInDifferences; MultiPeriodDiD/TwoWayFixedEffects
+  inherit) - values that previously meant silent-bootstrap-off (negatives)
+  or latent breakage (floats/bools/None) now raise; `0` stays legal and
+  still means bootstrap off on every `> 0`-gated analytical lane. No
+  numeric defaults changed. (b) `inference=` accepts exactly
+  `{"analytical", "wild_bootstrap"}` (string-typed) at construction and
+  transactional `set_params` - unknown or non-string values raise instead
+  of silently running analytical inference. (c) At fit,
+  `DifferenceInDifferences` with `inference="wild_bootstrap"` and no
+  `cluster=` now raises `ValueError` where it previously fell back to
+  analytical SILENTLY - the pinned test
+  `test_did_wild_bootstrap_requires_cluster` flipped BY DESIGN to assert
+  the raise. (d) DiD/TWFE with `wild_bootstrap` and `n_bootstrap < 2`
+  raise at fit, closing the `n_bootstrap ∈ {0, 1}` states that ran WCR
+  with too few draws and returned a wild-labeled all-NaN inference tuple
+  with no warning. TWFE's unit auto-cluster still satisfies the cluster
+  prerequisite; the survey and Conley rejections keep precedence;
+  MultiPeriodDiD's warn-and-analytical-fallback is unchanged (and
+  n_bootstrap-independent). Emitted-guidance surfaces
+  (`docs/troubleshooting.rst`, `docs/choosing_estimator.rst`, `README.md`,
+  the bundled `llms*.txt` guides) now state the `cluster=` prerequisite
+  where they recommend wild bootstrap for DiD.
+
 ### Added
 - **HeterogeneousAdoptionDiD post-fit `aggregate()` + panel-shape mode
   inference, and the per-level bootstrap-gate convergence** (v4 program 2(b)
@@ -891,14 +922,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lands while `__version__` is still 3.8.x) - the `M-091`/`M-092` pattern.
   `M-096` covers the `inference="wild_bootstrap"` selector contract, which
   governs wild CLUSTER bootstrap offered as an alternative to analytical SEs -
-  a roster of `DifferenceInDifferences` + `TwoWayFixedEffects`. Two things the
-  audit established. (i) The selector does **not** fail closed today:
-  `inference=` is stored with no valid-value check anywhere, and DiD routes
-  `wild_bootstrap` without `cluster=` silently to analytical (a currently
-  *pinned* behavior), so a typo or a missing prerequisite quietly changes which
-  SE/p-value/CI procedure runs. Phase 2 must validate the accepted value set on
-  `__init__` and transactional `set_params` and handle the missing-cluster case
-  explicitly. (ii) The apparent `inference=` vs `n_bootstrap>0` split is not
+  a SUPPORT roster of `DifferenceInDifferences` + `TwoWayFixedEffects` (the
+  selector *param* is additionally exposed by `MultiPeriodDiD`, which has no
+  wild path and falls back - support ≠ exposure). Two things the
+  audit established. (i) The selector did **not** fail closed at audit time:
+  `inference=` was stored with no valid-value check anywhere, and DiD routed
+  `wild_bootstrap` without `cluster=` silently to analytical (a then-*pinned*
+  behavior), so a typo or a missing prerequisite quietly changed which
+  SE/p-value/CI procedure ran. SHIPPED later in this release (the 2(d) PR-B
+  `### Changed` entry above): the accepted value set is validated on
+  `__init__` and transactional `set_params`, and the missing-cluster case
+  raises at fit. (ii) The apparent `inference=` vs `n_bootstrap>0` split is not
   drift - estimators whose bootstrap *is* their inference method run materially
   different procedures (CallawaySantAnna an influence-function multiplier
   bootstrap; SunAbraham a unit-pairs bootstrap, Rao-Wu rescaled on survey
@@ -1338,6 +1372,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by `tests/test_v4_matrix.py` (new-surface tripwires, removal pins,
   default-flip and warning-retirement sweeps). Repo-internal documentation +
   test only - **no public API or numerical behavior change.**
+
+### Fixed
+- **Stale wild-bootstrap metadata on refits**: `DifferenceInDifferences`
+  and `TwoWayFixedEffects` never cleared their per-fit bootstrap state, so
+  a wild-bootstrap fit followed by `set_params(inference="analytical")`
+  and a refit reported `inference_method="wild_bootstrap"` plus stale
+  `n_bootstrap`/`n_clusters`/`p_val_type` on an analytically-inferred
+  result. Both estimators now reset the state at the top of `fit()`;
+  refit transitions label inference from the current fit only.
 
 ## [3.8.0] - 2026-07-18
 

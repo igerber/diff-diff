@@ -48,8 +48,16 @@ from diff_diff.utils import (
     validate_covariate_names,
     validate_design_term_names,
     validate_df_convention,
+    validate_n_bootstrap,
     wild_bootstrap_se,
 )
+
+# Accepted values for the `inference` selector (M-096). Exposed by exactly
+# DifferenceInDifferences, MultiPeriodDiD and TwoWayFixedEffects (the two
+# subclasses inherit this __init__); the fail-closed check lives in
+# DifferenceInDifferences.__init__ and set_params inherits it via the
+# BaseEstimator probe re-init.
+_INFERENCE_METHODS = ("analytical", "wild_bootstrap")
 
 
 class DifferenceInDifferences(BaseEstimator):
@@ -108,9 +116,16 @@ class DifferenceInDifferences(BaseEstimator):
     inference : str, default="analytical"
         Inference method: "analytical" for standard asymptotic inference,
         or "wild_bootstrap" for wild cluster bootstrap (recommended when
-        number of clusters is small, <50).
+        number of clusters is small, <50). Exactly these two (string)
+        values are accepted; anything else raises ``ValueError`` at
+        construction. ``"wild_bootstrap"`` requires ``cluster=`` — a fit
+        without it raises ``ValueError`` (since 3.9; previously it fell
+        back to analytical inference silently).
     n_bootstrap : int, default=999
         Number of bootstrap replications when inference="wild_bootstrap".
+        Must be a non-negative integer; ``>= 2`` is required when
+        ``inference="wild_bootstrap"`` (0 or 1 replications cannot produce
+        bootstrap inference — the fit raises ``ValueError``).
     bootstrap_weights : str, default="rademacher"
         Type of bootstrap weights: "rademacher" (standard), "webb"
         (recommended for <10 clusters), or "mammen" (skewness correction).
@@ -233,6 +248,13 @@ class DifferenceInDifferences(BaseEstimator):
         from diff_diff.linalg import resolve_vcov_type
 
         validate_df_convention(df_convention)
+        validate_n_bootstrap(n_bootstrap)
+        # Fail-closed inference selector (M-096): an unrecognized or
+        # non-string value must never silently route to analytical. The
+        # isinstance guard matters — bare tuple membership admits a
+        # one-element ndarray via elementwise __eq__.
+        if not isinstance(inference, str) or inference not in _INFERENCE_METHODS:
+            raise ValueError(f"inference must be one of {_INFERENCE_METHODS}, got {inference!r}")
 
         # `robust` is deprecated (rows M-045..M-047; removed in 4.0). None is
         # the not-supplied sentinel: default constructions and get_params
@@ -380,6 +402,11 @@ class DifferenceInDifferences(BaseEstimator):
         )
         # Body-local name; the public parameter is post (M-030).
         time = post
+        # Per-fit bootstrap state: cleared up front so the result builder
+        # labels inference from THIS fit only. Without the reset, a wild fit
+        # followed by set_params(inference="analytical") + refit reported
+        # stale inference_method="wild_bootstrap" + bootstrap metadata.
+        self._bootstrap_results = None
         # Parse formula if provided
         if formula is not None:
             outcome, treatment, time, covariates = self._parse_formula(formula, data)
@@ -512,6 +539,26 @@ class DifferenceInDifferences(BaseEstimator):
                 inference=self.inference,
                 cluster=self.cluster,
             )
+
+        # Fail-closed wild-bootstrap coherence (M-096). Placed AFTER the
+        # survey and Conley front doors so their NotImplementedError
+        # rejections keep precedence (raising "pass cluster=" on a
+        # wild+Conley fit would be contradictory guidance — Conley rejects
+        # the combination regardless of cluster).
+        if self.inference == "wild_bootstrap":
+            if self.cluster is None:
+                raise ValueError(
+                    "inference='wild_bootstrap' requires cluster=. The wild cluster "
+                    "bootstrap resamples at the cluster level; pass cluster= or use "
+                    "inference='analytical'."
+                )
+            if self.n_bootstrap < 2:
+                raise ValueError(
+                    f"inference='wild_bootstrap' requires n_bootstrap >= 2 "
+                    f"(got {self.n_bootstrap}). At least 2 replications are needed "
+                    f"for bootstrap inference; use inference='analytical' for "
+                    f"analytical SEs."
+                )
 
         if absorb:
             # FWL theorem: demean ALL regressors alongside outcome.

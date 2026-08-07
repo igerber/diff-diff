@@ -104,7 +104,7 @@ For survey-specific limitations (`NotImplementedError` paths), see the
 | `SpilloverDiD` estimator-level end-to-end vcov reconstruction tests (`bread @ meat @ bread` against `res.vcov`): requires exposing the estimator's internal `X_2_kept` design arrays; the surface is currently pinned from different angles (uniform-weight bit-identity, drift goldens, manual lincom reconstruction at rtol=1e-6). | `spillover.py`, `tests/test_spillover.py` | follow-up | Low |
 | `SpilloverDiD` Wave E.3 `finite_mask + design-subset` hygiene not yet adopted for TwoStageDiD's analogous pattern (`two_stage.py:567-601`) — separate parity follow-up noted in the `docs/api/spillover.rst` Restrictions block. | `two_stage.py` | Wave E.3 | Low |
 | `HeterogeneousAdoptionDiD` `covariates=` (Theorem 6 multivariate-covariate extension) not implemented — `fit(covariates=...)` raises `NotImplementedError` via the shipped future-work trap (locked by the `test_had.py` / `test_methodology_had.py` L73 tests); the deferred work is the Theorem 6 extension itself. | `had.py` | Phase 2a | Low |
-| MultiPeriodDiD wild bootstrap not supported (falls back to analytical) — user-facing edge-case limitation. | `estimators.py:1647` | — | Low |
+| MultiPeriodDiD wild bootstrap not supported (falls back to analytical, n_bootstrap-independent) — user-facing edge-case limitation; the 4.0 removal replaces the fallback with a raise (v4-design §4.1). | `estimators.py:1574` | — | Low |
 | `predict()` raises `NotImplementedError` — rarely needed; user-facing limitation. | `estimators.py:890-911` | — | Low |
 
 ## Version-gated (v4)

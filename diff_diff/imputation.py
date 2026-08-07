@@ -49,6 +49,7 @@ from diff_diff.imputation_results import (  # noqa: F401 (re-export)
 from diff_diff.utils import (
     safe_inference,
     validate_df_convention,
+    validate_n_bootstrap,
 )
 
 if TYPE_CHECKING:
@@ -237,6 +238,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
         self.alpha = alpha
         self.cluster = cluster
         self.vcov_type = vcov_type
+        validate_n_bootstrap(n_bootstrap)
         self.n_bootstrap = n_bootstrap
         self.bootstrap_weights = bootstrap_weights
         self.seed = seed
@@ -384,8 +386,9 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
         # rejects fit-time ES and the post-fit path fails closed too) AND
         # (the deprecated fit-time ES/all was supplied OR n_bootstrap <= 0 —
         # a bootstrapped fit builds no ES surface and post-fit aggregate()
-        # fails closed on it; <= 0 because n_bootstrap is unvalidated and
-        # every bootstrap gate is `> 0`). Reachability-BASED, not exact: a
+        # fails closed on it; validate_n_bootstrap rejects negatives at
+        # __init__, so 0 is the only reachable off value and `<= 0` is
+        # equivalent to `== 0` — kept as-is, no behavior change). Reachability-BASED, not exact: a
         # fit whose bootstrap later FAILS (bootstrap_results=None) can still
         # aggregate post-fit, so that corner warns spuriously — the warning
         # fires before the bootstrap runs and cannot know. (The post-fit

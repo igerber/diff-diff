@@ -13,7 +13,9 @@
 >   Step 2), to ensure AI agents execute it as a distinct action.
 > - **Sources of uncertainty** (paper's Step 4) are folded into Step 5
 >   (Estimate) with an explicit cluster-count check directive: >= 50 clusters
->   for asymptotic SEs, otherwise wild bootstrap. The 50-cluster threshold is
+>   for asymptotic SEs, otherwise wild bootstrap where the estimator supports
+>   it (DiD with `cluster=`; TWFE auto-clusters) or a bootstrapped
+>   `n_bootstrap` otherwise. The 50-cluster threshold is
 >   a diff-diff convention.
 > - **Step 8** is "Robustness & Reporting" (compare estimators, report with
 >   and without covariates). The paper's Step 8 is "Keep learning." The
@@ -268,7 +270,8 @@ print(f"Number of clusters: {n_clusters}")
 if n_clusters >= 50:
     print("-> Use cluster-robust SEs (asymptotic approximation is reliable)")
 else:
-    print(f"-> Only {n_clusters} clusters — use wild cluster bootstrap")
+    print(f"-> Only {n_clusters} clusters — use wild cluster bootstrap "
+          f"(DiD/TWFE: inference='wild_bootstrap'; CS/SA: a bootstrapped n_bootstrap)")
 ```
 
 Now run the estimator chosen in Step 4. Examples for common designs:
@@ -634,7 +637,7 @@ print(bacon_result.summary())
 
 # Step 5: Estimate (cluster at county level — treatment assignment unit)
 n_clusters = data['countyreal'].nunique()
-print(f"Clusters: {n_clusters} -> {'cluster-robust SEs' if n_clusters >= 50 else 'wild bootstrap'}")
+print(f"Clusters: {n_clusters} -> {'cluster-robust SEs' if n_clusters >= 50 else 'few clusters — CS below uses cluster-robust SEs; a bootstrapped n_bootstrap is the CS small-G option'}")
 cs = CallawaySantAnna(
     control_group='never_treated', estimation_method='dr',
     cluster='countyreal',

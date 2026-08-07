@@ -43,6 +43,7 @@ from diff_diff.utils import (
     safe_inference,
     snap_absorbed_regressors,
     validate_df_convention,
+    validate_n_bootstrap,
 )
 from diff_diff.utils import (
     within_transform as _within_transform_util,
@@ -729,6 +730,7 @@ class SunAbraham(BaseEstimator):
         self.anticipation = anticipation
         self.alpha = alpha
         self.cluster = cluster
+        validate_n_bootstrap(n_bootstrap)
         self.n_bootstrap = n_bootstrap
         self.seed = seed
         self.rank_deficient_action = rank_deficient_action

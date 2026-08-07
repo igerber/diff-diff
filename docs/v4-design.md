@@ -524,35 +524,46 @@ domain vocabulary, not drift.
   fallback with an explicit raise in the merged event-study mode, so the roster
   pins estimators that SUPPORT WCR, not those that merely expose the param.)
 
-  **The selector must fail closed** - it does not today. `inference=` is stored
-  without any valid-value check, and DiD routes `wild_bootstrap` WITHOUT
-  `cluster=` silently to analytical (pinned by
-  `tests/test_wild_bootstrap.py::test_did_wild_bootstrap_requires_cluster`), so
-  a typo or a missing prerequisite quietly changes which SE/p-value/CI
-  procedure runs - the no-silent-failures principle applied to inference
-  selection. Fail closed means REFUSE, not warn-and-degrade: Phase 2 pins the
-  accepted set to exactly `{"analytical", "wild_bootstrap"}` on `__init__` and
-  transactional `set_params`, and makes `wild_bootstrap` without `cluster=`
-  raise `ValueError`. REGISTRY specifies WCR as `inference="wild_bootstrap"`
-  *(with `cluster=`)*, so that combination is incoherent rather than merely
-  unsupported - and a warning still leaves a procedure running that the caller
-  did not ask for.
+  **The selector must fail closed** - and since 3.9 (2(d) PR-B, [M-096]
+  `done`) it does. Before the fix, `inference=` was stored without any
+  valid-value check, and DiD routed `wild_bootstrap` WITHOUT `cluster=`
+  silently to analytical (formerly pinned by
+  `tests/test_wild_bootstrap.py::test_did_wild_bootstrap_requires_cluster`,
+  flipped BY DESIGN), so a typo or a missing prerequisite quietly changed
+  which SE/p-value/CI procedure ran - the no-silent-failures principle
+  applied to inference selection. Fail closed means REFUSE, not
+  warn-and-degrade: the accepted set is pinned to exactly
+  `{"analytical", "wild_bootstrap"}` (string-typed) on `__init__` and
+  transactional `set_params`, and `wild_bootstrap` without `cluster=`
+  raises `ValueError` at fit. REGISTRY specifies WCR as
+  `inference="wild_bootstrap"` *(with `cluster=`)*, so that combination is
+  incoherent rather than merely unsupported - and a warning would still
+  leave a procedure running that the caller did not ask for.
 
-  **Locked implementation decisions (2026-08-06, for the 2(d) PR-B).**
-  The accepted value set `{"analytical", "wild_bootstrap"}` is validated
-  at `__init__` (transactional `set_params` inherits it via the
+  **Implementation decisions (locked 2026-08-06; shipped in the 2(d)
+  PR-B).** The accepted value set `{"analytical", "wild_bootstrap"}` is
+  validated at `__init__` (transactional `set_params` inherits it via the
   BaseEstimator probe re-init); the COHERENCE checks run at fit - DiD
   with `inference="wild_bootstrap"` and no `cluster=` raises
   `ValueError`, and DiD/TWFE with `wild_bootstrap` and
-  `n_bootstrap < 1` raise `ValueError`; TWFE's unit auto-cluster stays;
-  MultiPeriodDiD's warn-and-fallback stays until its 4.0 removal
-  (DEFERRED.md documents the limitation). The pinned fallback test
-  `test_did_wild_bootstrap_requires_cluster` flips BY DESIGN (its
-  CHANGELOG entry must say so). The roster guard is a dynamic sweep:
-  the set of estimators exposing `inference` in `get_params()` is
-  exactly {DifferenceInDifferences, MultiPeriodDiD,
-  TwoWayFixedEffects} - a future estimator gaining WCR must adopt the
-  selector or land its own row.
+  `n_bootstrap < 2` raise `ValueError`. **Amendment (2026-08-07,
+  user-approved, same-diff with the [M-096] ledger notes): the floor is
+  `< 2`, not the originally-locked `< 1`** - review verified by execution
+  that `n_bootstrap ∈ {0, 1}` deterministically degenerates (the wild
+  routing never consulted `n_bootstrap > 0`; both values ran WCR with too
+  few draws and returned a wild-labeled all-NaN inference tuple with no
+  warning), and `>= 2` is already the house floor in SyntheticDiD/TROP.
+  TWFE's unit auto-cluster stays; MultiPeriodDiD's warn-and-fallback
+  stays until its 4.0 removal (DEFERRED.md documents the limitation; the
+  fallback is n_bootstrap-independent). The flipped fallback test carries
+  its CHANGELOG disclosure. The roster guard is a dynamic sweep: the set
+  of estimators exposing `inference` in `get_params()` is exactly
+  {DifferenceInDifferences, MultiPeriodDiD, TwoWayFixedEffects} - a
+  future estimator gaining WCR must adopt the selector or land its own
+  row. The shipping PR also fixed a latent fit-idempotency bug in the
+  same class: `_bootstrap_results` is now reset per-fit, so a refit after
+  `set_params(inference="analytical")` no longer reports stale
+  `inference_method="wild_bootstrap"` + bootstrap metadata.
 
   The apparent `inference=` vs `n_bootstrap>0` split is NOT drift: an estimator
   whose bootstrap IS its inference method runs a different procedure -
@@ -567,17 +578,27 @@ domain vocabulary, not drift.
   documented domain vocabulary on the section 6 precedent. Should one of them
   later want an `inference=` selector, the value names its own method - that is
   additive, post-4.0, minor-version work, not part of this program.
-- `n_bootstrap` semantic unification [M-081]: `0` = bootstrap off wherever an
-  analytical path exists; bootstrap-only estimators document their positive
-  defaults. Counts stay tuned per estimator (999 light / 200 compute-heavy) -
-  NO numeric default changes. **Locked implementation decision
-  (2026-08-06, for the 2(d) PR-B)**: a shared `validate_n_bootstrap`
-  helper (non-negative int; rejects bool/None/negative; 0 stays legal
-  wherever it means off) is promoted to utils and applied to EVERY
-  estimator with a currently-unvalidated `n_bootstrap` - the roster is
-  GREP-DERIVED at PR-B implementation (known so far: CallawaySantAnna,
-  SunAbraham, EfficientDiD, ImputationDiD, TwoStageDiD, WooldridgeDiD,
-  ContinuousDiD, the DiD family, and StaggeredTripleDifference).
+- `n_bootstrap` semantic unification [M-081, `done` since 3.9]: `0` =
+  bootstrap off wherever an analytical path exists; bootstrap-only
+  estimators document their positive defaults. Counts stay tuned per
+  estimator (999 light / 200 compute-heavy) - NO numeric default changes.
+  **Implementation decision (locked 2026-08-06; shipped in the 2(d)
+  PR-B)**: a shared `validate_n_bootstrap` helper (non-negative int;
+  accepts numpy integers; rejects bool/None/float/negative; 0 stays legal
+  wherever it means off) is promoted to utils - verbatim from
+  ChangesInChanges' local validator - and applied to EVERY estimator with
+  a previously-unvalidated `n_bootstrap`: CallawaySantAnna, SunAbraham,
+  EfficientDiD, ImputationDiD, TwoStageDiD, WooldridgeDiD, ContinuousDiD,
+  the DiD family (DiD's `__init__`, inherited by MPD/TWFE), and
+  StaggeredTripleDifference; CiC/QDiD re-point to the shared helper.
+  **Named exception**: HeterogeneousAdoptionDiD has an analytical
+  pointwise path but deliberately floors `n_bootstrap >= 1` - its
+  `n_bootstrap` powers ONLY the optional sup-t band, whose off-switch is
+  `fit(cband=False)`, so `n_bootstrap=0` would be a second, ambiguous
+  off-switch; the 0=off clause does not apply to HAD and no HAD behavior
+  changed. On the DiD/TWFE wild lane, 0 never meant off (the routing
+  consults only the selector) - the [M-096] floor now rejects
+  `n_bootstrap < 2` there at fit.
 - **Auto-cluster policy** [M-080], flips at 4.0: every panel estimator
   (required `unit` column) defaults to clustering at unit
   (Bertrand-Duflo-Mullainathan practice), setting `cluster_name` /
@@ -777,8 +798,11 @@ re-enumerate the cells' M-id lists:
    `tests/test_v4_wrapper_shims.py`, the module `__getattr__` +
    `tests/test_aliases.py`, SCM); then PR-B - the two inference-surface
    policies, `n_bootstrap` semantic unification [M-081] and the
-   wild-cluster-bootstrap roster guard [M-096] (locked implementation
-   decisions live in section 7, per this section's boundary rule).
+   wild-cluster-bootstrap roster guard [M-096] (implementation
+   decisions live in section 7, per this section's boundary rule)
+   (shipped: the shared `validate_n_bootstrap` sweep, the fail-closed
+   selector + `< 2` wild floor + per-fit bootstrap-state reset, and
+   `tests/test_v4_inference_policy.py`).
 7. Phase 3 merges (a)/(b)/(c) per the phase-3 cell.
 8. Phase 4: migration guide, the 3.9-cut checklist below, cut.
 

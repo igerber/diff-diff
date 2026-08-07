@@ -38,7 +38,7 @@ from diff_diff.staggered_results import (
     CallawaySantAnnaResults,
     GroupTimeEffect,
 )
-from diff_diff.utils import safe_inference, safe_inference_batch
+from diff_diff.utils import safe_inference, safe_inference_batch, validate_n_bootstrap
 
 if TYPE_CHECKING:
     from diff_diff.survey import SurveyDesign
@@ -613,6 +613,7 @@ class CallawaySantAnna(
         # narrow contract makes the flag a no-op today but consistency
         # avoids surprises if the contract ever broadens).
         self._vcov_type_explicit = vcov_type != "hc1"
+        validate_n_bootstrap(n_bootstrap)
         self.n_bootstrap = n_bootstrap
         self.bootstrap_weights = bootstrap_weights
         self.seed = seed

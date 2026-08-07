@@ -482,6 +482,25 @@ def validate_df_convention(value: str) -> None:
         raise ValueError(f"df_convention must be one of {_DF_CONVENTIONS}, got {value!r}")
 
 
+def validate_n_bootstrap(n_bootstrap: Any) -> None:
+    """Raise ValueError unless ``n_bootstrap`` is a non-negative integer.
+
+    Shared by every estimator constructor whose ``n_bootstrap`` gates an
+    optional bootstrap (promoted from ChangesInChanges' local validator;
+    accepts numpy integers, rejects bool/None/float/negative). ``0`` means
+    bootstrap off wherever a ``> 0`` gate exists — the zero-default
+    estimators (CallawaySantAnna, SunAbraham, EfficientDiD, ImputationDiD,
+    TwoStageDiD, WooldridgeDiD, ContinuousDiD, StaggeredTripleDifference)
+    and every analytical lane. On the DiD/TWFE wild-bootstrap lane 0 never
+    meant off (the routing consults only ``inference=``); their fit-level
+    floor rejects ``n_bootstrap < 2`` under ``inference="wild_bootstrap"``.
+    """
+    if isinstance(n_bootstrap, bool) or not isinstance(n_bootstrap, (int, np.integer)):
+        raise ValueError(f"n_bootstrap must be a non-negative integer, got '{n_bootstrap}'")
+    if n_bootstrap < 0:
+        raise ValueError(f"n_bootstrap must be a non-negative integer, got '{n_bootstrap}'")
+
+
 def resolve_tail_df(
     df_convention: str,
     *,

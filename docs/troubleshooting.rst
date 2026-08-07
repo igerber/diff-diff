@@ -158,7 +158,8 @@ Standard Error Issues
 .. code-block:: python
 
    # Reduce number of bootstrap iterations (default is 999)
-   did = DifferenceInDifferences(inference='wild_bootstrap', n_bootstrap=499)
+   did = DifferenceInDifferences(inference='wild_bootstrap', cluster='unit_id',
+                                  n_bootstrap=499)
 
    # Note: Fewer iterations = less precise p-values
    # 499 is minimum recommended for publication
@@ -290,7 +291,8 @@ Performance Issues
                       unit='unit_id', time='period')
 
    # Reduce bootstrap iterations for initial exploration
-   did = DifferenceInDifferences(inference='wild_bootstrap', n_bootstrap=99)
+   did = DifferenceInDifferences(inference='wild_bootstrap', cluster='unit_id',
+                                  n_bootstrap=99)
 
    # For CallawaySantAnna, start without bootstrap
    cs = CallawaySantAnna()

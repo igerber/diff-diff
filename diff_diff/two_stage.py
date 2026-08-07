@@ -51,7 +51,7 @@ from diff_diff.two_stage_results import (
     TwoStageBootstrapResults,  # noqa: F401
     TwoStageDiDResults,
 )  # noqa: F401 (re-export)
-from diff_diff.utils import safe_inference
+from diff_diff.utils import safe_inference, validate_n_bootstrap
 
 if TYPE_CHECKING:
     # Forward reference for the Wave E.1 survey-design path. Imported under
@@ -1343,6 +1343,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
         self.alpha = alpha
         self.cluster = cluster
         self.vcov_type = vcov_type
+        validate_n_bootstrap(n_bootstrap)
         self.n_bootstrap = n_bootstrap
         self.bootstrap_weights = bootstrap_weights
         self.seed = seed

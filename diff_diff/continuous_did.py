@@ -45,7 +45,7 @@ from diff_diff.survey import (
     build_unit_first_row_index,
     compute_survey_vcov,
 )
-from diff_diff.utils import safe_inference
+from diff_diff.utils import safe_inference, validate_n_bootstrap
 
 if TYPE_CHECKING:
     from diff_diff.survey import ResolvedSurveyDesign, SurveyDesign
@@ -286,6 +286,7 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
         self.anticipation = anticipation
         self.base_period = base_period
         self.alpha = alpha
+        validate_n_bootstrap(n_bootstrap)
         self.n_bootstrap = n_bootstrap
         self.bootstrap_weights = bootstrap_weights
         self.seed = seed

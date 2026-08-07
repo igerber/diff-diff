@@ -61,6 +61,7 @@ from diff_diff.utils import (
     safe_inference_batch,
     validate_binary,
     validate_covariate_names,
+    validate_n_bootstrap,
 )
 
 # Default quantile grid: qte's ``probs = seq(0.05, 0.95, 0.05)`` (19 points), pinned to
@@ -1132,13 +1133,6 @@ def _validate_quantiles(quantiles: Optional[Any]) -> None:
         raise ValueError(f"quantiles must be finite and strictly inside (0, 1), got '{quantiles}'")
 
 
-def _validate_n_bootstrap(n_bootstrap: Any) -> None:
-    if isinstance(n_bootstrap, bool) or not isinstance(n_bootstrap, (int, np.integer)):
-        raise ValueError(f"n_bootstrap must be a non-negative integer, got '{n_bootstrap}'")
-    if n_bootstrap < 0:
-        raise ValueError(f"n_bootstrap must be a non-negative integer, got '{n_bootstrap}'")
-
-
 def _validate_alpha(alpha: Any) -> None:
     if not isinstance(alpha, (int, float, np.floating)) or isinstance(alpha, bool):
         raise ValueError(f"alpha must be a float strictly between 0 and 1, got '{alpha}'")
@@ -1161,7 +1155,7 @@ def _validate_seed(seed: Any) -> None:
 def _validate_all_params(params: Dict[str, Any]) -> None:
     """Validate the full hyperparameter dict (used by __init__, set_params, and fit)."""
     _validate_quantiles(params["quantiles"])
-    _validate_n_bootstrap(params["n_bootstrap"])
+    validate_n_bootstrap(params["n_bootstrap"])
     _validate_alpha(params["alpha"])
     _validate_panel(params["panel"])
     _validate_seed(params["seed"])

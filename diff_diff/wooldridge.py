@@ -37,6 +37,7 @@ from diff_diff.utils import (
     safe_inference,
     snap_absorbed_regressors,
     validate_df_convention,
+    validate_n_bootstrap,
     within_transform,
 )
 from diff_diff.wooldridge_results import WooldridgeDiDResults
@@ -1007,6 +1008,7 @@ class WooldridgeDiD(BaseEstimator):
         self.demean_covariates = demean_covariates
         self.alpha = alpha
         self.cluster = cluster
+        validate_n_bootstrap(n_bootstrap)
         self.n_bootstrap = n_bootstrap
         self.bootstrap_weights = bootstrap_weights
         self.seed = seed

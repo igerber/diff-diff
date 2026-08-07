@@ -1397,11 +1397,13 @@ class TestFitBehavior:
 
         The wild-bootstrap SE comes from resampling, not from the analytical
         sandwich. `vcov_type` has no effect on the bootstrap SE output, but
-        the fit should still succeed without errors.
+        the fit should still succeed without errors. (cluster= added in 3.9:
+        the fail-closed selector rejects wild bootstrap without it — M-096.)
         """
         data = _make_did_panel(n_units=20)
         est = DifferenceInDifferences(
             vcov_type="hc2_bm",
+            cluster="unit",
             inference="wild_bootstrap",
             n_bootstrap=50,
             seed=42,

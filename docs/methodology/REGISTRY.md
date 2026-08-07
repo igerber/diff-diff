@@ -73,6 +73,7 @@ where τ is the ATT.
 - Default: HC1 heteroskedasticity-robust
 - Optional: Cluster-robust (specify `cluster` parameter)
 - Optional: Wild cluster bootstrap for small number of clusters
+  (`inference="wild_bootstrap"` with `cluster=` — required since 3.9, see the WCR Note)
 - With `absorb=`, the absorbed-FE degrees-of-freedom adjustment uses the
   component-aware rank (`diff_diff.utils.absorbed_fe_rank`) — see the
   TwoWayFixedEffects section's absorbed-FE degrees-of-freedom note for the
@@ -110,6 +111,17 @@ bootstrap of Cameron, Gelbach & Miller (2008), matching the defaults of R's
 `diff_diff.utils.wild_bootstrap_se`; used by `DifferenceInDifferences` and (inherited)
 `TwoWayFixedEffects`. (`MultiPeriodDiD` does **not** support it — it falls back to analytical
 inference and the inherited `p_val_type` is inert there.)
+
+- **Note:** Since 3.9 the selector fails closed (rows M-081/M-096): `inference=`
+  accepts exactly `{"analytical", "wild_bootstrap"}` (string-typed) at construction
+  and `set_params`; `DifferenceInDifferences` with `wild_bootstrap` and no
+  `cluster=` raises `ValueError` at fit — the code now matches this section's own
+  "(with `cluster=`)" definition, where it previously fell back to analytical
+  silently — and DiD/TWFE with `n_bootstrap < 2` under `wild_bootstrap` raise
+  (0 or 1 replications deterministically produce the all-NaN degenerate tuple).
+  `TwoWayFixedEffects`' unit auto-cluster satisfies the cluster prerequisite;
+  the survey and Conley `NotImplementedError` rejections keep precedence.
+  `MultiPeriodDiD` keeps its warn-and-analytical-fallback until its 4.0 removal.
 
 *Algorithm (test of H₀: τ = r, default r = 0):*
 1. **Impose the null** by dropping the interaction column and re-fitting the reduced model;
@@ -282,8 +294,9 @@ where V is the VCV sub-matrix for post-treatment δ_e coefficients.
   BLAS-dependent rounding; the clamp keeps the SE finite (0 for a genuinely-zero variance)
   and deterministic across BLAS implementations, never `NaN`. No effect on any positive
   variance. Regression: `tests/test_methodology_wls_cr2.py::TestLinearRegressionFENanGuardEndToEnd`.
-- Optional: Wild cluster bootstrap (complex for multi-coefficient testing;
-  requires joint bootstrap distribution)
+- Wild cluster bootstrap: **not supported** — `inference="wild_bootstrap"` warns and
+  falls back to analytical inference (multi-coefficient testing would require the
+  joint bootstrap distribution; the 4.0 removal replaces the fallback with a raise)
 - Degrees of freedom adjusted for absorbed fixed effects: component-aware rank
   via `diff_diff.utils.absorbed_fe_rank` (own `_absorbed_fe_vcov_scale` gate at
   its fit site — MultiPeriodDiD is a second implementation, not an alias of
@@ -4934,8 +4947,8 @@ should be a deliberate user choice.
 
 | Estimator | Default SE | Alternatives |
 |-----------|-----------|--------------|
-| DifferenceInDifferences | HC1 robust | Cluster-robust, wild bootstrap |
-| MultiPeriodDiD | HC1 robust | Cluster-robust (via `cluster` param), wild bootstrap |
+| DifferenceInDifferences | HC1 robust | Cluster-robust, wild bootstrap (with `cluster=`) |
+| MultiPeriodDiD | HC1 robust | Cluster-robust (via `cluster` param); no wild path — `inference="wild_bootstrap"` warns and falls back to analytical |
 | TwoWayFixedEffects | Cluster at unit | Wild bootstrap |
 | CallawaySantAnna | Analytical (influence fn) | Multiplier bootstrap |
 | SunAbraham | Cluster-robust + delta method | Pairs bootstrap |

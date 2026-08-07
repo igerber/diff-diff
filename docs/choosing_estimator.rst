@@ -684,7 +684,7 @@ differences helps interpret results and choose appropriate inference.
      - Details
    * - ``DifferenceInDifferences``
      - HC1 (heteroskedasticity-robust)
-     - Uses White's robust SEs by default. Specify ``cluster`` for cluster-robust SEs. Use ``inference='wild_bootstrap'`` for few clusters (<30).
+     - Uses White's robust SEs by default. Specify ``cluster`` for cluster-robust SEs. Use ``inference='wild_bootstrap'`` (with ``cluster=`` — required) for few clusters (<50).
    * - ``TwoWayFixedEffects``
      - Cluster-robust (unit level)
      - Always clusters at unit level after within-transformation. Specify ``cluster`` to override. Use ``inference='wild_bootstrap'`` for few clusters.
@@ -733,10 +733,11 @@ differences helps interpret results and choose appropriate inference.
 
 **Recommendations by sample size:**
 
-- **Large samples (N > 1000, clusters > 50)**: Default analytical SEs are reliable
-- **Medium samples (clusters 30-50)**: Cluster-robust SEs recommended
-- **Small samples (clusters < 30)**: Use wild cluster bootstrap (``inference='wild_bootstrap'``)
-- **Very few clusters (< 10)**: Use Webb 6-point distribution (``weight_type='webb'``)
+- **Large samples (>= 50 clusters)**: Cluster-robust SEs are reliable (the asymptotic
+  approximation holds; the 50-cluster threshold is the diff-diff convention used
+  throughout the guides)
+- **Small samples (clusters < 50)**: Use wild cluster bootstrap (``inference='wild_bootstrap'`` with ``cluster=`` — ``TwoWayFixedEffects`` auto-clusters at unit level)
+- **Very few clusters (< 10)**: Use Webb 6-point distribution (``bootstrap_weights='webb'``)
 
 **Common pitfall:** Forgetting to cluster when units are observed multiple times.
 For panel data, always cluster at the unit level unless you have a strong reason not to.

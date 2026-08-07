@@ -64,7 +64,7 @@ from diff_diff.efficient_did_weights import (
     compute_omega_star_nocov,
     enumerate_valid_triples,
 )
-from diff_diff.utils import safe_inference
+from diff_diff.utils import safe_inference, validate_n_bootstrap
 
 # Re-export for convenience
 __all__ = ["EfficientDiD", "EfficientDiDResults", "EDiDBootstrapResults"]
@@ -359,6 +359,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
         self.cluster = cluster
         self.vcov_type = vcov_type
         self.control_group = control_group
+        validate_n_bootstrap(n_bootstrap)
         self.n_bootstrap = n_bootstrap
         self.bootstrap_weights = bootstrap_weights
         self.seed = seed

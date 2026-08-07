@@ -125,6 +125,12 @@ sources:
         type: user_guide
       - path: docs/practitioner_decision_tree.rst
         type: user_guide
+      - path: docs/troubleshooting.rst
+        type: user_guide
+        note: "Wild-bootstrap examples and inference guidance (cluster= prerequisite, n_bootstrap floor) track the DiD selector contract (M-096)"
+      - path: diff_diff/guides/llms-practitioner.txt
+        type: user_guide
+        note: "Step-5 inference decision rule and small-G advice strings track the DiD/TWFE wild-bootstrap contract (M-096)"
 
   diff_diff/twfe.py:
     drift_risk: low

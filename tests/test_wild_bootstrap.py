@@ -5,6 +5,7 @@ Tests the wild_bootstrap_se() function and its integration with DiD estimators.
 """
 
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -451,16 +452,26 @@ class TestEstimatorIntegration:
         assert results.se > 0
 
     def test_did_wild_bootstrap_requires_cluster(self, clustered_did_data, ci_params):
-        """Test that wild bootstrap is only used when cluster is specified."""
+        """Wild bootstrap without cluster= raises (fail-closed, M-096).
+
+        Flipped BY DESIGN in 3.9: this previously pinned a SILENT fallback
+        to analytical inference — a no-silent-failures violation the
+        selector contract closes. The name is now literally true.
+        """
         n_boot = ci_params.bootstrap(99)
         did = DifferenceInDifferences(
             inference="wild_bootstrap", n_bootstrap=n_boot, seed=42  # No cluster specified
         )
 
-        results = did.fit(clustered_did_data, outcome="outcome", treatment="treated", post="post")
-
-        # Should fall back to analytical since no cluster specified
-        assert results.inference_method == "analytical"
+        with pytest.raises(
+            ValueError,
+            match=re.escape(
+                "inference='wild_bootstrap' requires cluster=. The wild cluster "
+                "bootstrap resamples at the cluster level; pass cluster= or use "
+                "inference='analytical'."
+            ),
+        ):
+            did.fit(clustered_did_data, outcome="outcome", treatment="treated", post="post")
 
     def test_twfe_with_wild_bootstrap(self, clustered_did_data, ci_params):
         """Test TwoWayFixedEffects with wild bootstrap."""

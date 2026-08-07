@@ -180,6 +180,10 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             If a covariate name collides with a reserved structural term name
             or duplicates another covariate.
         """
+        # Per-fit bootstrap state: cleared up front so the result builder
+        # labels inference from THIS fit only (see the matching reset in
+        # DifferenceInDifferences.fit).
+        self._bootstrap_results = None
         # Validate unit column exists
         if unit not in data.columns:
             raise ValueError(f"Unit column '{unit}' not found in data")
@@ -272,6 +276,18 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         _replicate_vcov_remap_twfe = _uses_replicate_twfe and self._warn_replicate_vcov_ignored()
         if _replicate_vcov_remap_twfe:
             use_full_dummy = False
+
+        # Fail-closed wild-bootstrap floor (M-096), after BOTH front doors
+        # (Conley + survey resolution) so their rejections keep precedence.
+        # No cluster-required check for TWFE: cluster=None auto-clusters at
+        # unit under wild bootstrap (see the class docstring).
+        if self.inference == "wild_bootstrap" and self.n_bootstrap < 2:
+            raise ValueError(
+                f"inference='wild_bootstrap' requires n_bootstrap >= 2 "
+                f"(got {self.n_bootstrap}). At least 2 replications are needed "
+                f"for bootstrap inference; use inference='analytical' for "
+                f"analytical SEs."
+            )
 
         # Unit-level clustering is the TWFE default when `cluster` is not
         # explicitly provided. But the one-way ``classical`` and ``hc2``
