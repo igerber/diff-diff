@@ -1,5 +1,5 @@
 .. meta::
-   :description: Hands-on diff-diff tutorials — 28 Jupyter notebooks covering basic 2x2 DiD, staggered adoption, synthetic DiD, power analysis, and business applications.
+   :description: Hands-on diff-diff tutorials — 29 Jupyter notebooks covering basic 2x2 DiD, staggered adoption, synthetic DiD, power analysis, business applications, and R-package compatibility.
    :keywords: DiD tutorial, difference-in-differences examples, causal inference notebooks
 
 Tutorials
@@ -282,3 +282,26 @@ Assess identifying assumptions and size your study before committing to it.
    Power Analysis <06_power_analysis>
    Pre-Trends Power <07_pretrends_power>
    Staggered vs Collapsed Power <24_staggered_vs_collapsed_power>
+
+R-Package Compatibility
+-----------------------
+
+Python ports of the R ``twfeweights``, ``ptetools``, and ``badcontrols`` packages.
+
+.. grid:: 1 2 2 3
+   :gutter: 3
+
+   .. grid-item-card:: R-Package Compatibility
+      :link: 28_did_badcontrols
+      :link-type: doc
+
+      End-to-end use of the R ``twfeweights``, ``ptetools``, and ``badcontrols``
+      ports: TWFE weight decomposition, group-time ATT, and bad-control-robust
+      estimates.
+
+.. toctree::
+   :maxdepth: 1
+   :caption: R-Package Compatibility
+   :hidden:
+
+   R-Package Compatibility <28_did_badcontrols>
