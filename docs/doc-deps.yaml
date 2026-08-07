@@ -99,6 +99,8 @@ sources:
         type: user_guide
       - path: docs/references.rst
         type: user_guide
+      - path: docs/tutorials/28_did_badcontrols.ipynb
+        type: tutorial
 
   diff_diff/ptetools.py:
     drift_risk: high
@@ -111,6 +113,8 @@ sources:
         type: user_guide
       - path: CHANGELOG.md
         type: user_guide
+      - path: docs/tutorials/28_did_badcontrols.ipynb
+        type: tutorial
 
   diff_diff/badcontrols.py:
     drift_risk: high
@@ -121,6 +125,8 @@ sources:
         type: user_guide
       - path: CHANGELOG.md
         type: user_guide
+      - path: docs/tutorials/28_did_badcontrols.ipynb
+        type: tutorial
 
   # ── Base estimators ──────��───────────────────────────────────────────
 

@@ -78,6 +78,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (R `fixest` segfaults on the parity fixture) and `did_post_lasso` (incomplete R
   source with a `browser()` debug path) are verified for internal consistency, not
   byte-level R parity.
+- Added tutorial 28 (`docs/tutorials/28_did_badcontrols.ipynb`) demonstrating the
+  R-package ports end-to-end: `pte` group-time ATT on the Callaway--Sant'Anna panel,
+  `twfe_weights` negative-weight decomposition, and `didbc` bad-control estimates on
+  `simulate_bad_controls` output.
 - Added ``DoseResult``, ``dose_obj``, and ``pte_dose_results`` containers for
   dose-response outputs.
 - Added ``process_dose_gt``, which combines per-cell dose results into
