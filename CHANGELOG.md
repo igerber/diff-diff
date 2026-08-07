@@ -70,6 +70,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added DRDID covariate adjustment to ``did_rcs_attgt`` and optional
   multiplier-bootstrap bands to dynamic ``PTEResults.aggregate()`` results.
 - Added ``process_att_gt`` and ``attgt_pte_aggregations`` aggregation aliases.
+- **Cross-fit parametric DR bad-control score** matching R's `dr_ml_attgt`:
+  per-arm fold splits, OLS/logit cross-fitted nuisances, a `fold_ids` ingress
+  for exact shared-fold R/Python parity, and the `max(propensity)>0.99`
+  imputation fallback.
+- Documented dropped-parity surfaces as REGISTRY deviations: `implicit_twfe_weights`
+  (R `fixest` segfaults on the parity fixture) and `did_post_lasso` (incomplete R
+  source with a `browser()` debug path) are verified for internal consistency, not
+  byte-level R parity.
 - Added ``DoseResult``, ``dose_obj``, and ``pte_dose_results`` containers for
   dose-response outputs.
 - Added ``process_dose_gt``, which combines per-cell dose results into

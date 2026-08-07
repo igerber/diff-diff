@@ -13,6 +13,7 @@ This document provides the academic foundations and key implementation requireme
 2. [Modern Staggered Estimators](#modern-staggered-estimators)
    - [CallawaySantAnna](#callawaysantanna)
    - [ChaisemartinDHaultfoeuille](#chaisemartindhaultfoeuille)
+   - [twfe_weights (weight decomposition + post-lasso)](#twfe_weights-weight-decomposition--post-lasso)
    - [ContinuousDiD](#continuousdid)
    - [SunAbraham](#sunabraham)
    - [ImputationDiD](#imputationdid)
@@ -1198,6 +1199,20 @@ The guard is fired by `_survey_se_from_group_if` (analytical and replicate) and 
 7. **Deviation from R:** Phase 3 `DID^X` covariate adjustment uses equal cell weights in the first-stage OLS (consistent with the Phase 1 cell-count convention, deviation #1). R weights by `N_{gt}`. On one-observation-per-cell panels results are identical. When baseline-specific first stages fail (`n_obs = 0` or `n_obs < n_params`), both Python and R drop the affected strata. Cross-references the `**Note (Phase 3 DID^X covariate adjustment):**` in the Phase 3 discussion above and `METHODOLOGY_REVIEW.md` § DCDH Deviations #7.
 
 ---
+
+## twfe_weights (weight decomposition + post-lasso)
+
+The `twfeweights` R-package port (weight decomposition, post-lasso AIPW, and the implicit/Frisch-Waugh-Lovell weight paths).
+
+- [x] `twfe_weights` / `attO_weights` / `att_simple_weights`: weight decomposition from an `ATT(g,t)` panel, with `keep_untreated=True` producing the exact R output columns `group, time.period, weight, attgt, post` and the normalization `sum(post weights) = +1`, `sum(pre weights) = -1`. Numeric parity with R `twfeweights::twfe_weights` pinned via `tests/r_parity_reference.R` (mode `twfeweights`).
+- [x] `did_post_lasso` / `did_post_lasso_ra`: two-period AIPW / regression-adjustment DiD with cross-validated Lasso outcome selection (`sklearn`, optional `[ml]` extra).
+- [x] `implicit_twfe_weights` / `implicit_twfe_weights_gt`: closed-form (g,t)-decomposition of a no-covariate staggered TWFE regression (FWL residual score) with `base_period ∈ {first_period, gmin1}` and the pre-trend-bias readout.
+- **Note (deviation from R):** `did_post_lasso` parity is NOT claimed — the R reference source is incomplete (the `ptetools`/`twfeweights` R tree carries a `browser()` debug path in the post-lasso helper, so there is no runnable R implementation to match). Python's `LassoCV`-based selection is a faithful reading of the paper's post-lasso AIPW recipe; the parity surface for the port is the weight decomposition (`twfe_weights`) rather than the Lasso pathway.
+- **Note (deviation from R):** `implicit_twfe_weights` parity is NOT claimed at byte level — the equivalent R fit (`fixest::feols` on the small parity fixture) segfaults, so no stable R reference number exists. The Python closed-form FWL decomposition is verified for internal consistency (`alpha_weight * attgt` reconstructs the TWFE estimator; pre-period weights reproduce the documented pre-trend bias) rather than against R output.
+- **Note (deviation from R):** the post-lasso pathways use `sklearn.linear_model.LassoCV` / `LogisticRegressionCV` (`l1_ratios=(0,)` for the propensity, i.e. a no-penalty logit) — an optional-dependency surface. Core `twfe_weights`/`att_*` weight decomposition has no third-party dependency.
+
+---
+
 
 ## ContinuousDiD
 
