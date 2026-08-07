@@ -14,6 +14,7 @@ This document provides the academic foundations and key implementation requireme
    - [CallawaySantAnna](#callawaysantanna)
    - [ChaisemartinDHaultfoeuille](#chaisemartindhaultfoeuille)
    - [twfe_weights (weight decomposition + post-lasso)](#twfe_weights-weight-decomposition--post-lasso)
+   - [ptetools PTE / process_dose_gt influence surface](#ptetools-pte--process_dose_gt-influence-surface)
    - [ContinuousDiD](#continuousdid)
    - [SunAbraham](#sunabraham)
    - [ImputationDiD](#imputationdid)
@@ -1213,6 +1214,12 @@ The `twfeweights` R-package port (weight decomposition, post-lasso AIPW, and the
 
 ---
 
+## ptetools PTE / process_dose_gt influence surface
+
+- **Note (deviation from R):** the high-level `pte()` influence surface now mirrors R's `compute.pte` exactly — off-support units get a **zero** influence entry (not `NaN`) and each cell's influence function is scaled by `(n / n1)` for the overall-vs-sample sample sizes (`diff_diff/ptetools.py`, `pte()`). R (`ptetools/R/pte.R:137-141`) zero-pads with `rep(0, n); this.inf_func[disidx] <- (n/n1) * attgt$inf_func`; the base-period-skip cells keep a full `NA` column on both sides. The lower-level `compute_pte` (`diff_diff/ptetools.py`) already implemented this; the higher-level `pte()` wrapper now does too. Pinned by `test_pte_influence_surface_zero_pads_off_support_and_scales_by_n_over_n1`.
+- The `process_dose_gt` `n1_vec` / `keep_mat` disaggregation follows R's same zero-padded inffunc convention (`out = np.zeros(...)`; `keep_mat = acrt_gt_inffunc != 0`; `n1_vec = colSums(keep_mat)`), matching `process_dose_gt.R:103-125`.
+
+---
 
 ## ContinuousDiD
 

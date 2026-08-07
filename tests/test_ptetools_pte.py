@@ -119,6 +119,32 @@ def test_pte_empirical_bootstrap_is_seed_reproducible():
     assert "PTEResults" in first.summary()
 
 
+def test_pte_influence_surface_zero_pads_off_support_and_scales_by_n_over_n1():
+    """Mirror R's compute.pte influence surface (pte.R:137-141): off-support
+    units get a zero influence entry and the cell influence function is scaled
+    by (n / n1) to account for the overall-vs-cell sample sizes."""
+    panel = _panel()
+    n_units = panel["id"].nunique()
+    result = pte(panel, yname="Y", gname="G", tname="period", idname="id")
+
+    influence = result.influence_functions
+    assert influence is not None
+    assert influence.shape == (n_units, len(result.att_gt))
+    assert not np.isnan(influence).any(), "off-support entries must be zero, not NaN"
+
+    for row, gtp in result.att_gt.iterrows():
+        subset = two_by_two_subset(
+            panel, gtp["group"], gtp["time"], gname="G", tname="period", idname="id"
+        )
+        if subset.n1 == 0:
+            continue
+        cell_att = did_attgt(subset.gt_data)
+        placed = influence[subset.disidx, row]
+        expected = (n_units / subset.n1) * np.asarray(cell_att.inf_func, dtype=float)
+        assert np.allclose(placed, expected)
+        assert np.all(influence[~subset.disidx, row] == 0.0)
+
+
 def test_pte_supports_repeated_cross_sections():
     import pandas as pd
 

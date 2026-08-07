@@ -1129,8 +1129,12 @@ def pte(
                 else float("nan")
             )
             rows.append({"group": g, "time": tp, "attgt": result.attgt, "se": se})
-            full_if = np.full(n_units, np.nan)
-            full_if[subset.disidx] = result.inf_func
+            # Mirror R's compute.pte influence surface: zero-pad off-support
+            # units and scale the cell influence function by (n / n1) to adjust
+            # for the relative size of the overall sample vs the cell.
+            full_if = np.zeros(n_units)
+            n1 = int(subset.n1) if subset.n1 else result.inf_func.size
+            full_if[subset.disidx] = (n_units / n1) * result.inf_func
             influence.append(full_if)
     att_gt = pd.DataFrame(rows)
     unit_groups = data.groupby(idname, sort=False)[gname].first()
