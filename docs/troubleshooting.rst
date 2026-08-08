@@ -286,9 +286,11 @@ Performance Issues
 .. code-block:: python
 
    # TWFE already handles unit + time FE via within-transformation
+   # (post= is the 0/1 post-treatment dummy; the deprecated time= alias
+   # still works through 3.9)
    twfe = TwoWayFixedEffects()
    results = twfe.fit(data, outcome='y', treatment='treated',
-                      unit='unit_id', time='period')
+                      unit='unit_id', post='post')
 
    # Reduce bootstrap iterations for initial exploration
    did = DifferenceInDifferences(inference='wild_bootstrap', cluster='unit_id',

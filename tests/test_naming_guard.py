@@ -779,13 +779,26 @@ def _live_family_code_refs(tok):
     return refs
 
 
+# Deprecation shims whose __init__ FORWARDS verbatim (*args/**kwargs +
+# super().__init__) to the named base with a mirrored __signature__ (the
+# 3.9 class merges, v4-design section 4.1). Their effective __init__ is no
+# longer the base's function object, but calls under the shim's name still
+# read every base constructor param - so they stay in the base's
+# init-sharing group. Forward home for the phase-3 siblings (SDDD, QDiD).
+_FORWARDING_INIT_SHIMS = {
+    "MultiPeriodDiD": "DifferenceInDifferences",
+}
+
+
 def _init_sharing_class_names(_cache={}):
     """Exported class names grouped by the id() of their EFFECTIVE __init__.
 
     A subclass that inherits its constructor (``TwoWayFixedEffects`` from
     ``DifferenceInDifferences``) is callable under its own name with the
     base's params - ``TwoWayFixedEffects(robust=True)`` reads M-045's dying
-    param under a callee name the base-class form cannot see."""
+    param under a callee name the base-class form cannot see. Forwarding
+    deprecation shims (``_FORWARDING_INIT_SHIMS``) join their base's group
+    by declaration - identity grouping cannot see through the wrapper."""
     if not _cache:
         groups = {}
         for name in diff_diff.__all__:
@@ -795,6 +808,13 @@ def _init_sharing_class_names(_cache={}):
             func = _unwrap_callable(inspect.getattr_static(obj, "__init__", None))
             if func is not None:
                 groups.setdefault(id(func), set()).add(name)
+        for shim_name, base_name in _FORWARDING_INIT_SHIMS.items():
+            base = getattr(diff_diff, base_name, None)
+            if base is None or not inspect.isclass(base):
+                continue
+            base_func = _unwrap_callable(inspect.getattr_static(base, "__init__", None))
+            if base_func is not None:
+                groups.setdefault(id(base_func), set()).add(shim_name)
         _cache["groups"] = groups
     return _cache["groups"]
 

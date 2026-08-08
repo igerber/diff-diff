@@ -122,10 +122,15 @@ twfe.fit(
     data: pd.DataFrame,
     outcome: str,
     treatment: str,
-    time: str,
+    post: str,                    # 0/1 post dummy (renamed from time=, which warns through 3.9)
     unit: str,
     covariates: list[str] = None,
-) -> DiDResults
+    event_study: bool = False,    # per-period event study returning EventStudyResults
+    spec: str = "within",         # "within" (unit-FE event study) | "pooled" (the MultiPeriodDiD design)
+    reference_period: Any = None, # ES mode: omitted period (default: last pre-period, e=-1)
+    post_periods: list = None,    # ES mode: post-treatment period values
+    time: str = ...,              # ES mode: the CALENDAR column (keyword); static: deprecated alias for post
+) -> DiDResults | EventStudyResults
 ```
 
 **Usage:**
@@ -134,15 +139,26 @@ twfe.fit(
 from diff_diff import TwoWayFixedEffects
 
 twfe = TwoWayFixedEffects()
-results = twfe.fit(data, outcome='y', treatment='treated', time='post', unit='unit_id')
+results = twfe.fit(data, outcome='y', treatment='treated', post='post', unit='unit_id')
 results.print_summary()
+
+# Event-study mode (absorbs the deprecated MultiPeriodDiD; spec="pooled"
+# reproduces its design; wild bootstrap raises in this mode; the unit
+# auto-cluster applies with the static carve-outs)
+es = twfe.fit(data, outcome='y', treatment='treated', unit='unit_id',
+              event_study=True, time='period', post_periods=[4, 5, 6, 7])
+es.print_summary()
 ```
 
 **Note:** TWFE can be biased with staggered treatment timing and heterogeneous effects. Consider CallawaySantAnna, SunAbraham, or ImputationDiD for staggered designs.
 
 ### MultiPeriodDiD
 
-Event-study style DiD with period-specific treatment effects. Inherits from DifferenceInDifferences.
+DEPRECATED (3.9, removed in 4.0; ledger row M-010): use
+`TwoWayFixedEffects(...).fit(..., event_study=True)` - `spec="pooled"`
+reproduces this design exactly. Constructing MultiPeriodDiD (or its
+EventStudy alias) emits a FutureWarning. Event-study style DiD with
+period-specific treatment effects. Inherits from DifferenceInDifferences.
 
 ```python
 MultiPeriodDiD(
@@ -2539,7 +2555,7 @@ mirroring `MultiPeriodDiD.fit(unit=...)` / `TwoWayFixedEffects.fit(unit=...)`.
 ```python
 import numpy as np
 from diff_diff.linalg import LinearRegression
-from diff_diff import DifferenceInDifferences, MultiPeriodDiD, TwoWayFixedEffects
+from diff_diff import DifferenceInDifferences, TwoWayFixedEffects
 
 # Cross-sectional design: 1 row per unit, n × 2 lat/lon coords.
 reg = LinearRegression(
@@ -2553,34 +2569,37 @@ reg = LinearRegression(
 se = np.sqrt(np.diag(reg.vcov_))
 
 # Panel design: TWFE with within-unit Bartlett serial HAC.
-# TWFE's `time` column is intrinsically a binary post indicator
-# (treatment * time interaction); only numeric encodings are supported on
-# this surface. `conley_lag_cutoff=1` includes the cross-period pair under
-# the Bartlett taper. For multi-period panels, use MultiPeriodDiD.
+# Static TWFE's `post` column is a binary post indicator (treatment * post
+# interaction; `time=` is its deprecated alias through 3.9); only numeric
+# encodings are supported on this surface. `conley_lag_cutoff=1` includes
+# the cross-period pair under the Bartlett taper. For multi-period panels,
+# use the TWFE event-study mode (`event_study=True, time=<calendar col>`;
+# MultiPeriodDiD is deprecated).
 res = TwoWayFixedEffects(
     vcov_type="conley",
     conley_coords=("lat", "lon"),        # column names on `data`
     conley_cutoff_km=500.0,
     conley_lag_cutoff=1,                 # within-unit Bartlett, lag 1 panel period
-).fit(data, outcome="y", treatment="treated", time="post", unit="unit_id")
+).fit(data, outcome="y", treatment="treated", post="post", unit="unit_id")
 
-# Panel design: MultiPeriodDiD with multi-period time.
-# MultiPeriodDiD builds period dummies (NOT a treated * time product), so
+# Panel design: multi-period event study (TWFE event-study mode; the
+# deprecated MultiPeriodDiD behaves identically via the shared core).
+# The design builds period dummies (NOT a treated * time product), so
 # `time` can be any orderable encoding — int years (2020, 2021, ...),
 # YYYYMM (202012, 202101, ...), datetime64, pd.Period, strings.
 # `_compute_conley_vcov` normalizes time to dense codes 0..T-1 internally,
 # so `conley_lag_cutoff` always counts panel periods regardless of label.
-mp_res = MultiPeriodDiD(
+mp_res = TwoWayFixedEffects(
     vcov_type="conley",
     conley_coords=("lat", "lon"),
     conley_cutoff_km=200.0,
     conley_lag_cutoff=2,                 # within-unit Bartlett up to 2 panel periods
-).fit(data, outcome="y", treatment="treated", time="period",
-      post_periods=[2, 3], unit="unit_id")
+).fit(data, outcome="y", treatment="treated", event_study=True,
+      spec="pooled", time="period", post_periods=[2, 3], unit="unit_id")
 
 # 2-period DiD on a panel: DiD.fit(unit="<col>") opts into the Conley
 # panel block-decomposed sandwich; on a 2-period design the ATT/SE match
-# MultiPeriodDiD(...).fit(..., post_periods=[1], reference_period=0) bit-exactly.
+# the pooled event-study fit with post_periods=[1], reference_period=0 bit-exactly.
 did_res = DifferenceInDifferences(
     vcov_type="conley",
     conley_coords=("lat", "lon"),
@@ -2600,7 +2619,7 @@ combined_res = TwoWayFixedEffects(
     conley_coords=("lat", "lon"),
     conley_cutoff_km=500.0,
     conley_lag_cutoff=1,
-).fit(data, outcome="y", treatment="treated", time="post", unit="unit_id")
+).fit(data, outcome="y", treatment="treated", post="post", unit="unit_id")
 ```
 
 **Note on `conley_lag_cutoff` semantics:** the lag is counted in **panel
@@ -2688,7 +2707,7 @@ DIFF_DIFF_BACKEND=rust pytest     # Force Rust (fail if unavailable)
 |----------|----------------------|
 | Classic 2x2 design (one treated group, one time split) | `DifferenceInDifferences` |
 | Panel data with unit + time FE | `TwoWayFixedEffects` |
-| Event study with multiple periods | `MultiPeriodDiD` |
+| Event study with multiple periods (simultaneous adoption) | `TwoWayFixedEffects` with `event_study=True` (`spec="pooled"` reproduces the deprecated `MultiPeriodDiD`) |
 | Staggered treatment timing | `CallawaySantAnna`, `ImputationDiD`, or `SunAbraham` |
 | Few treated units / synthetic control | `SyntheticDiD` |
 | Interactive fixed effects / factor confounding | `TROP` |

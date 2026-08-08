@@ -7,7 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **TwoWayFixedEffects event-study mode** (v4 program Phase 3(a); ledger
+  row [M-010] shimmed): `TWFE().fit(..., event_study=True, time="period",
+  spec="within"|"pooled", reference_period=None, post_periods=[...])`
+  estimates per-period treatment effects and returns the unified
+  `EventStudyResults` surface natively (`source="TwoWayFixedEffects"`,
+  plus two new container provenance fields: the authoritative
+  `post_periods` calendar partition and `estimation_spec` - ledger row
+  [M-092] amendment). `spec="within"` (default) estimates the unit-FE
+  event study; `spec="pooled"` reproduces the MultiPeriodDiD design
+  exactly (the only spec valid for repeated cross-sections - it is the
+  migration target for 3.x MultiPeriodDiD fits, reproducing their
+  numbers under matched cluster settings and unconditionally without a
+  unit id). Point estimates coincide across the two specs only in the
+  restricted equivalence case (balanced panel, no covariates,
+  simultaneous adoption); with unbalanced panels or covariates the
+  unit-FE projection changes point estimates too. Event-study calls
+  pass `time=` (calendar) and `unit=` as keywords; `post_periods=` is
+  REQUIRED in event-study mode (the treatment boundary is not observable
+  from a time-invariant ever-treated indicator, so MultiPeriodDiD's
+  midpoint default - last half of the calendar - is a silent guess and
+  is deliberately not carried over; MultiPeriodDiD itself keeps it
+  through 3.9); the mode carries
+  TWFE's inference stack from day one - unit auto-cluster (with the
+  static carve-outs: dropped on Conley and for explicit one-way
+  analytical families, never injected as a survey PSU) - and
+  `inference="wild_bootstrap"` raises an explicit `ValueError` (the
+  wild cluster bootstrap covers the static ATT only; MultiPeriodDiD's
+  silent analytical fallback is deliberately not carried into the
+  merged mode). HonestDiD, PreTrendsPower, and `plot_event_study`
+  consume the new surface (dedicated calendar container routes with
+  native-route parity; HonestDiD scoped to chronologically-partitioned
+  surfaces per the Rambachan-Roth restriction geometry).
+
+### Changed
+- **DiagnosticReport and BusinessReport explicitly reject
+  `EventStudyResults` inputs** (previously: DiagnosticReport silently
+  produced a zero-check report via an empty type-keyed applicability
+  set, and BusinessReport rendered an all-null scalar headline). Both
+  errors steer to the fitted estimator's scalar results; admission of
+  event-study surfaces is tracked in TODO.md.
+
 ### Deprecated
+- **MultiPeriodDiD + the EventStudy alias** (v4 program Phase 3(a);
+  ledger rows [M-010] shimmed, [M-060]): constructing `MultiPeriodDiD`
+  (or `EventStudy` - the same class object) emits a `FutureWarning`
+  naming the successor; both are removed in 4.0. Migration:
+  `TwoWayFixedEffects().fit(..., event_study=True, spec="pooled")`
+  reproduces the MultiPeriodDiD design; the default `spec="within"`
+  adds unit fixed effects (standard errors and, on unbalanced or
+  covariate designs, point estimates shift - the documented estimate
+  change). Behavior of fitted MultiPeriodDiD results is unchanged
+  through 3.9.
+- **TwoWayFixedEffects static `fit(time=)` renamed to `post=`** (ledger
+  row [M-082] shimmed): the static 0/1 dummy parameter is `post=`; the
+  old keyword still works through 3.9 with a `FutureWarning` (from 4.0,
+  `time=` means the event-study calendar column only - the 4.0 semantic
+  enforcement is row [M-083]). Positional callers are unaffected
+  (`post` occupies the old slot).
 - **The 8 estimator convenience wrappers + the CDiD/Gardner/Stacked alias
   diet; new `SCM` alias** (v4 program 2(d) PR-A; ledger rows
   [M-070]..[M-077] shimmed, [M-062] + [M-135] done, notes amendments to

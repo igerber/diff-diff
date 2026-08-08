@@ -89,13 +89,13 @@ def _fit(scenario, df):
         from diff_diff import TwoWayFixedEffects
 
         res = TwoWayFixedEffects().fit(
-            df, outcome="y", treatment="treated", time="post", unit="unit"
+            df, outcome="y", treatment="treated", post="post", unit="unit"
         )
     elif scenario in ("geo_experiment", "tail_stress"):
         from diff_diff import DifferenceInDifferences
 
         res = DifferenceInDifferences().fit(
-            df, outcome="y", treatment="treated", time="post", absorb=["store", "week"]
+            df, outcome="y", treatment="treated", post="post", absorb=["store", "week"]
         )
     elif scenario == "survey_absorb":
         from diff_diff import DifferenceInDifferences
@@ -107,7 +107,7 @@ def _fit(scenario, df):
             df,
             outcome="y",
             treatment="treated",
-            time="post",
+            post="post",
             absorb=["state", "month"],
             survey_design=design,
         )

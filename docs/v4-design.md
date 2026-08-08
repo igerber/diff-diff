@@ -266,13 +266,30 @@ RegressionDiscontinuity's [M-040] [M-041]).
 ```python
 TWFE().fit(df, outcome, treatment, post, unit)            # static ATT
                                                           # (post = 0/1 dummy)
-TWFE().fit(df, outcome, treatment, time, unit,
-           event_study=True)                              # dynamic mode
+TWFE().fit(df, outcome, treatment, time="period",
+           unit="id", event_study=True,
+           post_periods=[3, 4, 5])                        # dynamic mode
                                                           # (time = calendar)
-TWFE().fit(df, outcome, treatment, time,
-           event_study=True, spec="pooled")               # old MPD model;
+TWFE().fit(df, outcome, treatment, time="period",
+           event_study=True, spec="pooled",
+           post_periods=[3, 4, 5])                        # old MPD model;
                                                           # repeated cross-sections
 ```
+
+(Amended 2026-08-07, Phase 3(a) review: the event-study calls pass
+`time=`/`unit=` as KEYWORDS. Signature slot 4 belongs to `post` for the
+whole M-082 shim window and beyond - the same slot cannot carry the
+static dummy and the calendar column - so the calendar `time=` lives at
+the signature tail, exactly like the M-031 merged staggered interface. A
+positional 4th argument under `event_study=True` lands in `post` and is
+rejected with a message steering to `time=`. Second amendment, same
+review cycle: `post_periods=` is REQUIRED (non-empty) in event-study
+mode. The treatment boundary is not observable from the documented
+time-invariant ever-treated indicator, so MultiPeriodDiD's midpoint
+default - last half of the calendar - is a silent guess; the merged mode
+fails loud instead, consistent with its day-one wild raise and
+no-legacy-defaults posture. MPD itself keeps the midpoint default
+through 3.9.)
 
 **The static `time`/`post` contract [M-082] [M-083].** Today's static TWFE
 takes its 0/1 post dummy in a param NAMED `time` (the code and REGISTRY warn
@@ -312,9 +329,22 @@ Migration guide gets a worked example of both specs.
 
 **Inference.** The merged class carries TWFE's inference stack: auto-cluster
 at unit (section 7), wild bootstrap for the static mode. Wild bootstrap in
-event-study mode raises an explicit `ValueError` at 4.0 (MPD's current silent
+event-study mode raises an explicit `ValueError` (MPD's current silent
 analytical fallback violates the no-silent-failures principle); porting it is
-backlog, not scope.
+backlog, not scope. (Amended 2026-08-07 with the Phase 3(a) ship, precision:
+the raise is live from the mode's 3.9 BIRTH - a new surface needs no
+deprecation window - and the original "at 4.0" phrasing described when MPD's
+fallback dies with the class.) Auto-cluster decision (user-approved
+2026-08-07): the event-study mode auto-clusters at unit FROM 3.9 - new API
+adopts the section-7 end-state immediately, so [M-080]'s 4.0 flip never
+re-touches it - WITH static TWFE's carve-outs mirrored lane-for-lane: the
+auto-cluster is silently dropped on the Conley path (an implicit spatial x
+unit product kernel would zero every between-unit pair), never injected as a
+survey PSU (the documented implicit-per-observation-PSU rule), and dropped
+for explicit one-way analytical families; explicit `cluster=` always passes
+through and behaves exactly like MPD's own explicit cluster on every lane.
+The pooled-parity gate therefore pins bit-exactness under MATCHED cluster
+settings and unconditionally in the no-unit repeated-cross-sections form.
 
 **Results.** 3.9's `TWFE(event_study=True)` returns the unified event-study
 surface (section 5) from day one - no intermediate container churn.
@@ -326,7 +356,10 @@ unified surface in the same Phase 3 PR.
 **Deprecation choreography.** 3.9: `event_study=`/`spec=` ship on TWFE;
 `MultiPeriodDiD.__init__` emits FutureWarning; `EventStudy` alias warns
 [M-060]. 4.0: MultiPeriodDiD, MultiPeriodDiDResults, PeriodEffect, EventStudy
-removed [M-010] [M-011] [M-012] [M-060].
+removed [M-010] [M-011] [M-012] [M-060]. (Shipped 3.9, Phase 3(a): the mode,
+the shim, the alias warning riding it, the `time=`->`post=` rename [M-082],
+and the consumer ports - see the [M-010] ledger notes for the shipped
+mechanics and the test triple in tests/test_v4_merge_mpd.py.)
 
 ### 4.2 TripleDifference absorbs StaggeredTripleDifference [M-013]
 
@@ -748,7 +781,7 @@ above; anything only one PR cares about stays in that PR's plan.**
 |---|---|---|
 | 1 (this PR) | - | Spec + matrix + enforcement test + support edits |
 | 2: contract foundations | 3.9 | (a) results base + unified event-study representation [M-092] + to_dict completion + the Diagnostic marker base on the diagnostic result roster [M-091] (section 3.5); (b) `aggregate()` + fit(aggregate=) shims [M-020..M-027] [M-139] (M-020's shim already shipped; M-139 is the HAD workflow twin, a pre-cut amendment); (c) param renames [M-030..M-047] [M-084] [M-086..M-089] + their results-field mirrors [M-094] [M-095] (section 8 rule 9) + the public-function completeness sweep [M-097..M-113] (section 8 rule 10) + the dCDH results mirror [M-114] + the fourth `robust` site [M-115] + the 2(c)-ii missed-rename amendments [M-136..M-138] (LPDiD `level` value; the two post-dummy diagnostics params) + BaseEstimator mixin + ContinuousDiD covariates move; (d) alias introduction [M-062] (the Spillover introduction is cancelled [M-063]) + the alias-diet `__getattr__` warning shim [M-135] + wrapper deprecations [M-070..M-077] + the two inference-surface policies: `n_bootstrap` semantic unification [M-081] and the wild-cluster-bootstrap roster guard [M-096]; shipped insertions (all done): the aggregate contract [M-122], the ETWFE reference-period family [M-123] [M-124] [M-125], and the variance-consolidation program [M-126] [M-127] |
-| 3: merges | 3.9 | (a) TWFE event-study mode [M-010] + EventStudy warn [M-060] + the fit `time`->`post` rename [M-082] (gates: section 4.1's equivalence/divergence/pooled-parity test triple); (b) TripleDifference facade [M-013] + the SDDD alias [M-064]; (c) CiC method= [M-015] |
+| 3: merges | 3.9 | (a) TWFE event-study mode [M-010] + EventStudy warn [M-060] + the fit `time`->`post` rename [M-082] (gates: section 4.1's equivalence/divergence/pooled-parity test triple) (shipped: tests/test_v4_merge_mpd.py; consumer ports incl. HonestDiD/PreTrendsPower calendar routes); (b) TripleDifference facade [M-013] + the SDDD alias [M-064]; (c) CiC method= [M-015] |
 | 4: release + soak | 3.9 cut | Migration guide written (skeleton: section 10); maintainer cuts 3.9; maint/3.8 rule active |
 | 5: enforcement | 4.0 | Removals [M-010..M-015, M-020..M-027, M-139, M-030, M-032..M-047 old names, M-060, M-061, M-064, M-070..M-077, M-084, M-086..M-089, M-001..M-003, M-117, M-118, M-119, M-120] + the alias diet [M-132]..[M-134] + the amendment's old names [M-094] [M-095] [M-097..M-115] [M-136..M-138] (incl. their consumer migrations and the `clean_control` serialized reporting key); M-031's old `time` name persists as the merged class's calendar column, so it is deliberately absent from the removal roster (its 4.0 enforcement is the M-085 behavior entry below); property window: [M-016] property-flips at 4.0 (removal at 5.0); storage flips [M-050..M-058]; default policies [M-004..M-006, M-128..M-131, M-080]; merged-class behavior enforcements [M-083] [M-085]; warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; docs/llms.txt/README refresh |
 | 6: front door | 4.1 | `event_study(data, outcome, unit, time, first_treat, estimator=...)` comparison entry point over the staggered family (sketch only; specified in its own plan) |

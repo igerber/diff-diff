@@ -844,13 +844,14 @@ class PreTrendsPower(BaseEstimator):
     --------
     Basic usage with MultiPeriodDiD results:
 
-    >>> from diff_diff import MultiPeriodDiD
+    >>> from diff_diff import TwoWayFixedEffects
     >>> from diff_diff.pretrends import PreTrendsPower
     >>>
     >>> # Fit event study
-    >>> mp_did = MultiPeriodDiD()
-    >>> results = mp_did.fit(data, outcome='y', treatment='treated',
-    ...                      time='period', post_periods=[4, 5, 6, 7])
+    >>> twfe = TwoWayFixedEffects()
+    >>> results = twfe.fit(data, outcome='y', treatment='treated',
+    ...                    unit='unit', event_study=True,
+    ...                    time='period', post_periods=[4, 5, 6, 7])
     >>>
     >>> # Analyze pre-trends power
     >>> pt = PreTrendsPower(alpha=0.05, power=0.80)
@@ -1416,6 +1417,146 @@ class PreTrendsPower(BaseEstimator):
             "StackedDiDResults.aggregate('event_study')."
         )
 
+    def _extract_calendar_container_pre_period_params(
+        self,
+        surface: Any,
+        pre_periods: Optional[List[int]] = None,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int, Optional[np.ndarray], str]:
+        """Calendar-scale container branch (TWFE event-study mode, M-010).
+
+        Reconstructs EXACTLY the inputs the native
+        ``MultiPeriodDiDResults`` branch reads: the pre-period set from
+        the container's authoritative ``post_periods`` partition
+        provenance (never a positional split), per-period effects/SEs,
+        the pre-period vcov sub-block via the container's explicit
+        ``vcov_index``, and - critically - the ``reference_period``
+        plumbed through ``_coerce_relative_times_from_reference``, so
+        Roth's gamma-unit relative times, the string-label degradation
+        warning, and the REGISTRY gamma-unit contract are reproduced
+        exactly (the native route is NOT arithmetic-free: it subtracts
+        labels from the reference).
+
+        Unlike HonestDiD's calendar route, this one is NOT
+        geometry-scoped: power/MDV consume pre-period coefficients and
+        ref-relative offsets, which are well-defined for arbitrary
+        (non-suffix) declared partitions and non-last references.
+        """
+        if surface.source != "TwoWayFixedEffects":
+            raise TypeError(
+                "PreTrendsPower accepts calendar-scale EventStudyResults "
+                "containers from the TwoWayFixedEffects event-study mode "
+                f"only (got source={surface.source!r}). For MultiPeriodDiD "
+                "pass the native MultiPeriodDiDResults object."
+            )
+        if surface.post_periods is None:
+            raise TypeError(
+                "PreTrendsPower requires the calendar container's "
+                "post_periods partition provenance (present on "
+                "producer-built TwoWayFixedEffects event-study surfaces); "
+                "a calendar surface without it cannot be partitioned into "
+                "pre/post periods - the partition is not recoverable from "
+                "event_time positions."
+            )
+
+        _all_labels = surface.event_time.tolist()
+        if len(set(_all_labels)) != len(_all_labels):
+            raise ValueError(
+                "The event-study container carries duplicate event_time "
+                f"labels ({_all_labels}); each horizon must appear "
+                "exactly once."
+            )
+
+        ref_rows = surface.event_time[surface.is_reference].tolist()
+        if len(ref_rows) != 1:
+            raise ValueError(
+                "PreTrendsPower requires exactly one reference row on a "
+                f"calendar-scale container (got {sorted(ref_rows)}): "
+                "relative times are computed against the single omitted "
+                "reference period."
+            )
+        ref = ref_rows[0]
+
+        post_set = set(surface.post_periods)
+        _by_label = {t: i for i, t in enumerate(_all_labels)}
+        # The native MPD complement rule for the declared pre grid; the
+        # eligible set then drops the reference and unusable-inference rows
+        # in CHRONOLOGICAL (sorted) order.
+        declared_pre = [p for p in sorted(_all_labels) if p not in post_set]
+        if len(declared_pre) == 0:
+            raise ValueError(
+                "No pre-treatment periods found in results. "
+                "Pre-trends power analysis requires pre-period coefficients. "
+                "If you estimated all periods as post_periods, use the pre_periods "
+                "parameter to specify which are actually pre-treatment."
+            )
+        # R9: the finite-EFFECT conjunct guards hand-built containers
+        # carrying a NaN/Inf coefficient beside a finite SE (producer
+        # surfaces NaN the whole inference row, so first-party behavior
+        # is unchanged; the native/relative routes' SE-only filters are
+        # the TODO.md one-contract alignment row).
+        eligible_pre = [
+            p
+            for p in declared_pre
+            if not bool(surface.is_reference[_by_label[p]])
+            and np.isfinite(surface.att[_by_label[p]])
+            and np.isfinite(surface.se[_by_label[p]])
+            and surface.se[_by_label[p]] > 0
+        ]
+
+        if pre_periods is not None:
+            # R8: an explicit selection is VALIDATED, never silently
+            # filtered or left in caller order (the relative container
+            # route's contract): unknown labels, the reference row,
+            # rows with unusable inference, and duplicates all fail
+            # loud, and the validated selection is arranged in calendar
+            # chronology before effects/weights/VCV construction -
+            # positional alternatives (last_period, custom weights)
+            # must target the chronological grid, not argument order.
+            requested = list(pre_periods)
+            if len(set(requested)) != len(requested):
+                raise ValueError(
+                    f"Requested pre_periods contain duplicate labels "
+                    f"({requested}); the pre-period selection is ambiguous."
+                )
+            missing = [t for t in requested if t not in eligible_pre]
+            if missing:
+                raise ValueError(
+                    f"Requested pre_periods {missing} are not eligible "
+                    f"pre-treatment periods on this event-study surface "
+                    f"(eligible: {eligible_pre})."
+                )
+            _req = set(requested)
+            estimated_pre_periods = [p for p in eligible_pre if p in _req]
+        else:
+            estimated_pre_periods = eligible_pre
+
+        if len(estimated_pre_periods) == 0:
+            raise ValueError(
+                "No estimated pre-period coefficients found. "
+                "The pre-trends test requires at least one estimated "
+                "pre-period coefficient (excluding the reference period)."
+            )
+
+        n_pre = len(estimated_pre_periods)
+        effects = np.array([float(surface.att[_by_label[p]]) for p in estimated_pre_periods])
+        ses = np.array([float(surface.se[_by_label[p]]) for p in estimated_pre_periods])
+
+        # Hardened extraction shared with the relative container route:
+        # duplicate or incomplete vcov_index fails loud, the sub-block
+        # passes _validate_vcov_subblock (PreTrendsPower keeps its
+        # documented singular handling), and the diagonal fallback is
+        # reserved for a vcov-less container.
+        vcov, covariance_source = _extract_container_vcov_subblock(
+            surface, estimated_pre_periods, ses
+        )
+
+        # Gamma-unit plumbing (the native branch's tail, verbatim
+        # semantics): numeric/Period/Timestamp labels subtract to Roth
+        # relative offsets; string labels degrade to None with the
+        # helper's pinned UserWarning (MDV then NOT in gamma units).
+        relative_times = _coerce_relative_times_from_reference(estimated_pre_periods, ref)
+        return effects, ses, vcov, n_pre, relative_times, covariance_source
+
     def _extract_container_pre_period_params(
         self,
         surface: Any,
@@ -1436,12 +1577,20 @@ class PreTrendsPower(BaseEstimator):
         from pre-trend coefficients, and PreTrendsPower has no native dCDH
         branch either.
         """
+        # Calendar-scale surfaces (the TWFE event-study mode, row M-010)
+        # route into the native-branch reconstruction - the relative-scale
+        # arithmetic below (anticipation cutoffs, float(ref) coercion)
+        # never applies to calendar labels.
+        if surface.time_scale == "calendar":
+            return self._extract_calendar_container_pre_period_params(surface, pre_periods)
+
         if surface.source not in ("CallawaySantAnnaResults", "StackedDiDResults"):
             raise TypeError(
                 "PreTrendsPower accepts EventStudyResults containers "
                 "produced by CallawaySantAnnaResults.aggregate("
-                "'event_study') or StackedDiDResults.aggregate("
-                "'event_study') only "
+                "'event_study'), StackedDiDResults.aggregate("
+                "'event_study'), or the TwoWayFixedEffects event-study "
+                "mode (calendar-scale surfaces) only "
                 f"(got source={surface.source!r}). For other estimators "
                 "pass the native results object where supported "
                 "(MultiPeriodDiDResults, CallawaySantAnnaResults, or "
@@ -2252,10 +2401,10 @@ def compute_pretrends_power(
 
     Examples
     --------
-    >>> from diff_diff import MultiPeriodDiD
+    >>> from diff_diff import TwoWayFixedEffects
     >>> from diff_diff.pretrends import compute_pretrends_power
     >>>
-    >>> results = MultiPeriodDiD().fit(data, ...)
+    >>> results = TwoWayFixedEffects().fit(data, ..., event_study=True)
     >>> power_results = compute_pretrends_power(results, pre_periods=[0, 1, 2, 3])
     >>> print(f"MDV: {power_results.mdv:.3f}")
     >>> print(f"Power: {power_results.power:.1%}")

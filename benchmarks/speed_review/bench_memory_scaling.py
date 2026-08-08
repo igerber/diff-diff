@@ -139,7 +139,7 @@ def _run_one(cfg):
             _twfe_panel(nu, ncov=ncov),
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
             covariates=[f"x{j}" for j in range(ncov)],
         )

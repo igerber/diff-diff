@@ -327,6 +327,24 @@ class EventStudyResults(BaseResults):
     #: numbers never silently change meaning. Optional provenance appended
     #: last (the M-092 pre-cut amendment convention).
     estimand: Optional[str] = None
+    #: Calendar-partition provenance (M-092 pre-cut amendment #5, with row
+    #: M-010): the producer's AUTHORITATIVE post-treatment period labels.
+    #: MultiPeriodDiD accepts an ARBITRARY ``post_periods`` subset (a
+    #: non-suffix split is legal), and the partition is not recoverable
+    #: from ``event_time``/``is_reference`` positionally - consumers that
+    #: need pre/post classification on a calendar surface (HonestDiD,
+    #: PreTrendsPower, the plotter) read THIS field; pre-periods derive as
+    #: the complement: non-reference rows whose ``event_time`` is not in
+    #: ``post_periods``. Threaded by ``_from_mpd`` (and the TWFE
+    #: event-study producer); None from every other builder.
+    post_periods: Optional[Tuple[Any, ...]] = None
+    #: TWFE event-study design provenance (M-092 amendment #5, with row
+    #: M-010): ``"within"`` (unit + time FE) or ``"pooled"`` (the
+    #: MultiPeriodDiD design - treatment-group dummy + period dummies, no
+    #: unit FE). The two specs differ materially in SEs, so the design
+    #: must be recoverable from the container. None from every builder
+    #: (only the TwoWayFixedEffects event-study producer sets it).
+    estimation_spec: Optional[str] = None
 
     _ARRAY_FIELDS = (
         "att",
@@ -441,6 +459,46 @@ class EventStudyResults(BaseResults):
             raise ValueError(
                 f"EventStudyResults n_kind {self.n_kind!r} is not in the shared "
                 f"vocabulary {N_KIND_VOCABULARY}."
+            )
+
+        # post_periods is the AUTHORITATIVE calendar partition consumers
+        # classify by, so malformed-but-present content is a contract break
+        # (the same fail-closed posture as n_kind / the vcov pairing): a
+        # hand-built surface must never silently mispartition a consumer.
+        if self.post_periods is not None:
+            pp = tuple(self.post_periods)
+            if len(pp) == 0:
+                raise ValueError(
+                    "EventStudyResults post_periods must be a nonempty tuple "
+                    "when provided (None means 'no partition recorded')."
+                )
+            if len(set(pp)) != len(pp):
+                raise ValueError(f"EventStudyResults post_periods contains duplicates: {pp}.")
+            event_set = set(self.event_time.tolist())
+            missing = [p for p in pp if p not in event_set]
+            if missing:
+                raise ValueError(
+                    f"EventStudyResults post_periods entries {missing} are not " f"in event_time."
+                )
+            ref_set = set(self.event_time[self.is_reference].tolist())
+            overlap = [p for p in pp if p in ref_set]
+            if overlap:
+                raise ValueError(
+                    f"EventStudyResults post_periods entries {overlap} are "
+                    f"reference rows; the reference period is pre-treatment "
+                    f"by construction."
+                )
+            self.post_periods = pp
+
+        # estimation_spec is a two-value design label (TWFE event-study
+        # producer only); off-vocabulary values are rejected like n_kind.
+        if self.estimation_spec is not None and self.estimation_spec not in (
+            "within",
+            "pooled",
+        ):
+            raise ValueError(
+                f"EventStudyResults estimation_spec {self.estimation_spec!r} "
+                f"is not in ('within', 'pooled')."
             )
         self.df = df_arr
 
@@ -557,6 +615,15 @@ class EventStudyResults(BaseResults):
             "cband_crit_value": self.cband_crit_value,
             "alpha": self.alpha,
             "source": self.source,
+            # Calendar-partition + design provenance (M-092 amendment #5):
+            # post_periods labels JSON-safed like event_time (they carry the
+            # same Timestamp/Period label types on calendar surfaces).
+            "post_periods": (
+                [_json_safe_label(p) for p in self.post_periods]
+                if self.post_periods is not None
+                else None
+            ),
+            "estimation_spec": self.estimation_spec,
             "df": cast(np.ndarray, self.df).tolist(),
             "base_period": self.base_period,
             "anticipation": self.anticipation,
@@ -1039,6 +1106,13 @@ def _from_mpd(results: Any) -> EventStudyResults:
     if isinstance(df_map, dict):
         df_arg = np.array([float(df_map[p]) if p in df_map else np.nan for p in all_periods])
 
+    # Calendar-partition provenance (M-092 amendment #5): the producer's
+    # AUTHORITATIVE post_periods list - an arbitrary subset is legal on
+    # MultiPeriodDiD, so consumers must never re-derive the partition
+    # positionally from the reference row.
+    _mpd_post = getattr(results, "post_periods", None)
+    post_periods_arg: Optional[Tuple[Any, ...]] = tuple(_mpd_post) if _mpd_post else None
+
     return EventStudyResults(
         event_time=np.asarray(all_periods),
         att=att,
@@ -1058,6 +1132,7 @@ def _from_mpd(results: Any) -> EventStudyResults:
         alpha=getattr(results, "alpha", 0.05),
         source=type(results).__name__,
         df=df_arg,
+        post_periods=post_periods_arg,
         **_provenance_kwargs(results),
     )
 

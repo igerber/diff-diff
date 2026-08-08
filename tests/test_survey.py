@@ -903,7 +903,7 @@ class TestIntegration:
             twfe_panel_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
             survey_design=sd,
         )
@@ -3518,7 +3518,7 @@ class TestRound23Fixes:
             df,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
             survey_design=SurveyDesign(weights="weight"),
         )
@@ -3536,7 +3536,7 @@ class TestRound23Fixes:
             df,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
             survey_design=SurveyDesign(weights="weight", strata="stratum"),
         )
@@ -3552,7 +3552,7 @@ class TestRound23Fixes:
             df,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
             survey_design=SurveyDesign(weights="weight"),
         )
@@ -3567,7 +3567,7 @@ class TestRound23Fixes:
             df,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
         )
         assert result is not None

@@ -2,8 +2,9 @@
 Two-Way Fixed Effects estimator for panel Difference-in-Differences.
 """
 
+import dataclasses
 import warnings
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -12,9 +13,11 @@ if TYPE_CHECKING:
     from diff_diff.bacon import BaconDecompositionResults
     from diff_diff.survey import SurveyDesign
 
+from diff_diff._deprecation import NOT_SUPPLIED, require_arg, resolve_renamed_kwarg
 from diff_diff.estimators import DifferenceInDifferences
 from diff_diff.linalg import LinearRegression
 from diff_diff.results import DiDResults
+from diff_diff.results_base import EventStudyResults, _from_mpd
 from diff_diff.utils import (
     absorbed_fe_cr1_k_increment,
     absorbed_fe_rank,
@@ -80,6 +83,36 @@ class TwoWayFixedEffects(DifferenceInDifferences):
 
     where α_i are unit fixed effects and γ_t are time fixed effects.
 
+    **Event-study mode (3.9).** ``fit(..., event_study=True,
+    time=<calendar column>)`` estimates per-period treatment effects and
+    returns the unified
+    :class:`~diff_diff.results_base.EventStudyResults` surface instead of
+    the single static ATT (absorbing the deprecated ``MultiPeriodDiD``).
+    ``spec="within"`` (default) estimates the unit-FE event study
+    ``α_i + γ_t + Σ_e δ_e (D_i × 1[t=e])``; ``spec="pooled"`` reproduces
+    the MultiPeriodDiD design exactly (treatment-group dummy + period
+    dummies, no unit FE - the only spec valid for repeated
+    cross-sections). Point estimates coincide across the two specs only
+    on balanced no-covariate simultaneous-adoption panels; standard
+    errors differ in general. Both specs assume SIMULTANEOUS adoption
+    (all treated units adopt at the same time). The staggered-adoption
+    advisory can only detect timing from within-unit 0-to-1 transitions
+    (a time-varying ``D_it`` column, which itself draws a warning): with
+    the documented time-invariant ever-treated ``D_i`` indicator,
+    adoption timing is not observable in the inputs at all, so the
+    assumption cannot be verified by the estimator - it is asserted by
+    the user. For the same reason the calendar partition is explicit:
+    ``post_periods=`` is REQUIRED in event-study mode (the deprecated
+    MultiPeriodDiD midpoint default is not carried over). For staggered
+    designs use ``CallawaySantAnna`` or
+    ``SunAbraham``. The mode carries TWFE's inference stack
+    from day one: unit auto-cluster (with the same carve-outs as the
+    static path - dropped on Conley, never injected as a survey PSU,
+    dropped for explicit one-way analytical families), and
+    ``inference="wild_bootstrap"`` raises (the wild cluster bootstrap
+    covers the static ATT only). See
+    ``docs/methodology/REGISTRY.md`` "Event-study mode".
+
     **HC2 / Bell-McCaffrey are supported via an internal full-dummy build.**
     Because TWFE's within-transformation preserves coefficients but not the
     hat matrix, HC2 leverage and CR2 Bell-McCaffrey corrections on the
@@ -137,13 +170,18 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         data: pd.DataFrame,
         outcome: str,
         treatment: str,
-        time: str,
-        unit: str,
+        post: Any = NOT_SUPPLIED,
+        unit: Any = NOT_SUPPLIED,
         covariates: Optional[List[str]] = None,
         survey_design: Optional["SurveyDesign"] = None,
-    ) -> DiDResults:
+        event_study: bool = False,
+        spec: str = "within",
+        reference_period: Any = None,
+        post_periods: Optional[List[Any]] = None,
+        time: Any = NOT_SUPPLIED,
+    ) -> Union[DiDResults, EventStudyResults]:
         """
-        Fit Two-Way Fixed Effects model.
+        Fit Two-Way Fixed Effects model (static ATT or event-study mode).
 
         Parameters
         ----------
@@ -153,10 +191,15 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             Name of outcome variable column.
         treatment : str
             Name of treatment indicator column.
-        time : str
-            Name of time period column.
+        post : str
+            Static mode: name of the 0/1 post-treatment indicator column
+            (renamed from ``time``, row M-082 - see Notes). Not accepted in
+            event-study mode (which takes the calendar ``time=`` instead).
         unit : str
-            Name of unit identifier column.
+            Name of unit identifier column. Required in static mode and for
+            ``spec="within"``; optional for ``spec="pooled"`` (the only
+            event-study spec that works without a unit id - repeated
+            cross-sections).
         covariates : list, optional
             List of covariate column names. Names must not collide with reserved
             structural terms (``const``, ``ATT``, unit/time fixed-effect dummy
@@ -168,22 +211,113 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             Survey design specification for design-based inference. When provided,
             uses Taylor Series Linearization for variance estimation and
             applies sampling weights to the regression.
+        event_study : bool, default False
+            Estimate a per-period event study instead of the single static
+            ATT (row M-010, absorbing MultiPeriodDiD). Returns the unified
+            :class:`~diff_diff.results_base.EventStudyResults` surface.
+        spec : {"within", "pooled"}, default "within"
+            Event-study design. ``"within"`` estimates the unit-FE event
+            study (unit + time fixed effects + per-period treatment
+            interactions). ``"pooled"`` reproduces the MultiPeriodDiD
+            design exactly (treatment-group dummy + period dummies, no
+            unit FE; the only spec valid for repeated cross-sections).
+            Point estimates coincide only in the restricted equivalence
+            case (balanced panel, no covariates, simultaneous adoption);
+            see the class Notes.
+        reference_period : any, optional
+            Event-study mode: the omitted (reference) period. Defaults to
+            the last pre-treatment period (e=-1 convention).
+        post_periods : list
+            Event-study mode: the post-treatment period values. REQUIRED
+            (non-empty) when ``event_study=True``: the treatment boundary
+            is not observable from a time-invariant ever-treated
+            indicator, so it cannot be inferred - the deprecated
+            MultiPeriodDiD midpoint default (last half of the calendar)
+            is deliberately not carried into the merged mode.
+        time : str
+            Event-study mode: the calendar time column (keyword-only in
+            practice - positional slot 4 belongs to ``post``). In static
+            mode, ``time=`` is a DEPRECATED alias for ``post`` (row
+            M-082); it warns with ``FutureWarning``. From 4.0, ``time=``
+            means the event-study calendar column only.
 
         Returns
         -------
-        DiDResults
-            Estimation results.
+        DiDResults or EventStudyResults
+            Static estimation results, or the unified event-study surface
+            when ``event_study=True``.
 
         Raises
         ------
         ValueError
             If a covariate name collides with a reserved structural term name
-            or duplicates another covariate.
+            or duplicates another covariate; if event-study-only parameters
+            are passed with ``event_study=False``; if ``post=`` is passed in
+            event-study mode; if ``spec="within"`` lacks ``unit=``; or if
+            ``inference="wild_bootstrap"`` is combined with event-study mode
+            (the wild cluster bootstrap covers the static ATT only).
         """
         # Per-fit bootstrap state: cleared up front so the result builder
         # labels inference from THIS fit only (see the matching reset in
         # DifferenceInDifferences.fit).
         self._bootstrap_results = None
+
+        # --- Mode routing (rows M-010 / M-082; v4-design section 4.1) ---
+        # The spec value set is mode-independent: event_study=False with
+        # spec="bogus" must not pass silently while "pooled" is rejected.
+        if spec not in ("within", "pooled"):
+            raise ValueError(f"spec must be one of ('within', 'pooled'), got {spec!r}")
+        if event_study:
+            # The event-study branch owns its own post/time/unit resolution
+            # (the raw sentinels are passed through; running the static
+            # rename shim first would fold the calendar time= into post
+            # with a spurious M-082 warning).
+            return self._fit_event_study(
+                data,
+                outcome,
+                treatment,
+                post=post,
+                unit=unit,
+                covariates=covariates,
+                survey_design=survey_design,
+                spec=spec,
+                reference_period=reference_period,
+                post_periods=post_periods,
+                time=time,
+            )
+        # Static/ES param coherence: event-study-only parameters are
+        # rejected in static mode rather than silently ignored. The
+        # spec="within"-in-static corner is indistinguishable from the
+        # default and passes silently (documented).
+        _es_only = []
+        if spec != "within":
+            _es_only.append("spec")
+        if reference_period is not None:
+            _es_only.append("reference_period")
+        if post_periods is not None:
+            _es_only.append("post_periods")
+        if _es_only:
+            raise ValueError(
+                f"{', '.join(_es_only)} require(s) event_study=True; static "
+                f"TwoWayFixedEffects estimates a single ATT from the 0/1 "
+                f"post= dummy."
+            )
+
+        # --- Static mode: time= -> post= rename shim (row M-082) ---
+        post = resolve_renamed_kwarg(
+            "TwoWayFixedEffects.fit",
+            "time",
+            time,
+            "post",
+            post,
+            default=NOT_SUPPLIED,
+            extra="From 4.0, time= means the event-study calendar column only.",
+        )
+        require_arg("TwoWayFixedEffects.fit", "post", post)
+        require_arg("TwoWayFixedEffects.fit", "unit", unit)
+        # Body-local name; the public static parameter is post (M-082).
+        time = post
+
         # Validate unit column exists
         if unit not in data.columns:
             raise ValueError(f"Unit column '{unit}' not found in data")
@@ -861,6 +995,218 @@ class TwoWayFixedEffects(DifferenceInDifferences):
 
         self.is_fitted_ = True
         return self.results_
+
+    def _fit_event_study(
+        self,
+        data: pd.DataFrame,
+        outcome: str,
+        treatment: str,
+        *,
+        post: Any,
+        unit: Any,
+        covariates: Optional[List[str]],
+        survey_design: Optional["SurveyDesign"],
+        spec: str,
+        reference_period: Any,
+        post_periods: Optional[List[Any]],
+        time: Any,
+    ) -> EventStudyResults:
+        """TWFE event-study mode (row M-010; docs/v4-design.md section 4.1).
+
+        Runs the shared event-study core
+        (:meth:`DifferenceInDifferences._fit_event_study_core`) under one of
+        two designs - ``spec="pooled"`` is the MultiPeriodDiD design
+        verbatim; ``spec="within"`` absorbs the unit fixed effects and
+        omits the (absorbed) treatment main effect - and returns the
+        unified :class:`~diff_diff.results_base.EventStudyResults` surface.
+
+        Inference carries TWFE's stack: the unit auto-cluster applies from
+        day one (user decision 2026-08-07) WITH static TWFE's carve-outs
+        mirrored lane-for-lane - the auto-cluster is dropped on the Conley
+        path (an implicit spatial x unit product kernel would zero every
+        between-unit pair), never injected as a survey PSU (the documented
+        implicit-per-observation-PSU rule), and dropped for explicit
+        one-way analytical families. Explicit ``cluster=`` always passes
+        through and behaves exactly like MultiPeriodDiD's own explicit
+        cluster on every lane. Wild bootstrap raises: the WCR
+        implementation covers the static ATT only, and MultiPeriodDiD's
+        silent analytical fallback is deliberately not carried into the
+        merged mode (no-silent-failures).
+        """
+        # Step 0: sentinel normalization. The core's unit guard treats any
+        # non-None value as a column name, so NOT_SUPPLIED must never
+        # reach it.
+        unit_resolved: Optional[str] = None if unit is NOT_SUPPLIED else unit
+
+        # Step 3: wild raise, first in the branch - a mode-capability error
+        # precedes every lane front door (survey/Conley resolution happens
+        # inside the core, and MPD's warn-and-fallback is not inherited).
+        if self.inference == "wild_bootstrap":
+            raise ValueError(
+                "inference='wild_bootstrap' is not supported in event-study "
+                "mode: the wild cluster bootstrap covers the static ATT "
+                "only. Use inference='analytical' for event-study fits."
+            )
+
+        # Step 4: within requires a unit id (the FE being absorbed).
+        if spec == "within" and unit_resolved is None:
+            raise ValueError(
+                "spec='within' requires unit=; the unit fixed effects are "
+                "absorbed at the unit level. spec='pooled' is the only "
+                "event-study spec that works without a unit id (repeated "
+                "cross-sections)."
+            )
+
+        # Step 5: the calendar column arrives as time= (keyword); the
+        # static 0/1 dummy post= is rejected rather than silently ignored.
+        # A positional 4th argument lands in post and is caught here.
+        if post is not NOT_SUPPLIED:
+            raise ValueError(
+                "event-study mode takes time= (calendar column) as a "
+                "keyword; post= is the static-mode 0/1 dummy. Pass "
+                "fit(..., event_study=True, time='<calendar column>')."
+            )
+        require_arg("TwoWayFixedEffects.fit", "time", time)
+
+        # Step 5.5: the calendar partition is REQUIRED. The treatment
+        # boundary is not observable from the documented time-invariant
+        # ever-treated D_i indicator (the REGISTRY staggered-detection-limit
+        # Note), so it cannot be inferred from the data; the deprecated
+        # MultiPeriodDiD midpoint default (last half of the calendar) is a
+        # silent guess and is deliberately not carried into the merged
+        # mode (mirrors the day-one wild raise: no legacy defaults on the
+        # new surface).
+        if post_periods is not None:
+            # materialize ONCE (R8): a one-shot iterable would otherwise be
+            # exhausted by the emptiness check before reaching the core
+            post_periods = list(post_periods)
+        if post_periods is None or len(post_periods) == 0:
+            raise ValueError(
+                "event-study mode requires an explicit post_periods= (the "
+                "post-treatment calendar periods): the treatment boundary "
+                "is not observable from a time-invariant ever-treated "
+                "treatment indicator, and the deprecated MultiPeriodDiD "
+                "midpoint default (last half of the calendar) is "
+                "deliberately not carried into the merged mode."
+            )
+        if len(set(post_periods)) != len(post_periods):
+            # R10: fail at the front door - the container's own
+            # duplicate validation would otherwise reject only AFTER the
+            # full regression has run.
+            raise ValueError(
+                f"post_periods contains duplicate labels ({post_periods}); "
+                "the calendar partition is ambiguous."
+            )
+
+        # Step 6: auto-cluster resolution (user decision 2026-08-07), with
+        # the three static-mirror carve-outs. Explicit cluster= wins and
+        # passes through on every lane; when survey_design carries its own
+        # PSU the shared resolver still gives the PSU precedence (identical
+        # on every class).
+        if self.cluster is not None:
+            cluster_override: Optional[str] = self.cluster
+        elif self.vcov_type == "conley":
+            # Static mirror: the implicit unit auto-cluster is silently
+            # dropped on the Conley path - combining Conley with unit-level
+            # clusters would zero out all between-unit pairs and defeat the
+            # spatial pooling. Only explicit cluster= combines.
+            cluster_override = None
+        elif survey_design is not None:
+            # Static mirror (the documented implicit-per-observation-PSU
+            # rule): the auto-cluster is never injected as a survey PSU;
+            # only user-explicit cluster= becomes one.
+            cluster_override = None
+        elif self.vcov_type in ("classical", "hc2") and self._vcov_type_explicit:
+            # The explicit one-way analytical exception (mirrors the static
+            # cluster_var block; inference is always analytical here - wild
+            # raised above).
+            cluster_override = None
+        else:
+            cluster_override = unit_resolved  # None when no unit was passed
+
+        # Step 7: run the shared core. spec="pooled" is the 3.x
+        # MultiPeriodDiD design verbatim; spec="within" absorbs the unit FE
+        # and omits the (absorbed) treatment main-effect column. The core
+        # has no wild path, so effective_inference is always analytical
+        # here. _frame_offset=2: user -> fit -> _fit_event_study -> core.
+        if spec == "within":
+            # Step 4 guarantees a unit id on the within spec.
+            assert unit_resolved is not None
+            absorb_arg: Optional[List[str]] = [unit_resolved]
+            if (
+                self.vcov_type in ("hc2", "hc2_bm")
+                and unit_resolved in data.columns
+                and time in data.columns
+            ):
+                # Memory guard, mirroring the static full-dummy preflight:
+                # the core's absorb->fixed_effects auto-route for HC2/HC2-BM
+                # materializes a dense design of intercept + period dummies
+                # + per-period interactions + covariates + unit dummies.
+                # Same ~50M float64 entry threshold (~400 MB) as static.
+                # Column-presence guard (R7): a missing unit/time column
+                # falls through to the core's own validation error instead
+                # of a raw KeyError from this size estimate.
+                _n_units = int(data[unit_resolved].nunique())
+                _n_periods = int(data[time].nunique())
+                _design_cols = (
+                    1 + 2 * max(0, _n_periods - 1) + len(covariates or []) + max(0, _n_units - 1)
+                )
+                _design_entries = len(data) * _design_cols
+                if _design_entries > 50_000_000:
+                    warnings.warn(
+                        f"TwoWayFixedEffects(vcov_type={self.vcov_type!r}) in "
+                        f"event-study mode builds a dense {len(data)} x "
+                        f"{_design_cols} full-dummy design "
+                        f"(~{_design_entries / 1e6:.1f}M float64 entries, "
+                        f"~{_design_entries * 8 / 1e9:.2f} GB) for the "
+                        "leverage-corrected HC2/HC2-BM path. For panels with "
+                        "many units, consider vcov_type='hc1' (absorbed "
+                        "within-transform path; no leverage term, lower "
+                        "memory) unless small-sample HC2/HC2-BM inference is "
+                        "required.",
+                        UserWarning,
+                        stacklevel=3,
+                    )
+        else:
+            absorb_arg = None
+        results_internal, _, _ = self._fit_event_study_core(
+            data,
+            outcome,
+            treatment,
+            time,
+            post_periods,
+            covariates,
+            None,  # fixed_effects: not offered in event-study mode
+            absorb_arg,
+            reference_period,
+            unit_resolved,
+            survey_design,
+            "analytical",
+            include_treatment_main=(spec == "pooled"),
+            warn_legacy_reference_default=False,
+            cluster_override=cluster_override,
+            estimator_name="TwoWayFixedEffects",
+            _frame_offset=2,
+        )
+
+        # Step 8: convert to the unified surface. The internal
+        # MultiPeriodDiDResults is a construction detail (the 4.0 removal
+        # PR decouples it - ledger row M-011); the surface carries the
+        # TWFE provenance: source, the authoritative calendar partition
+        # (threaded by _from_mpd), and the design spec. The legacy
+        # writer-only _coefficients/_vcov attrs are deliberately left
+        # untouched (static TWFE has never set them; nothing reads them).
+        # dataclasses.replace re-runs __post_init__, so the final provenance
+        # (source + estimation_spec) passes the container's own validation
+        # atomically instead of being patched on after construction.
+        surface = dataclasses.replace(
+            _from_mpd(results_internal),
+            source="TwoWayFixedEffects",
+            estimation_spec=spec,
+        )
+        self.results_ = surface
+        self.is_fitted_ = True
+        return surface
 
     def _check_staggered_treatment(
         self,

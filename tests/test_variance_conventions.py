@@ -189,7 +189,7 @@ ROWS = [
     dict(
         key="did_absorb_hc1_cluster_unit",
         fit=lambda df: diff_diff.DifferenceInDifferences(cluster="unit").fit(
-            df, outcome="y", treatment="grp", time="post", absorb=["unit", "time"]
+            df, outcome="y", treatment="grp", post="post", absorb=["unit", "time"]
         ),
         cr1_k=(7,),
         tail_df=(294.0,),
@@ -202,7 +202,7 @@ ROWS = [
     dict(
         key="did_fixed_effects_hc1_cluster_unit",
         fit=lambda df: diff_diff.DifferenceInDifferences(cluster="unit").fit(
-            df, outcome="y", treatment="grp", time="post", fixed_effects=["unit", "time"]
+            df, outcome="y", treatment="grp", post="post", fixed_effects=["unit", "time"]
         ),
         cr1_k=(7,),
         tail_df=(294.0,),
@@ -216,7 +216,7 @@ ROWS = [
     dict(
         key="did_plain_hc1_cluster_unit",
         fit=lambda df: diff_diff.DifferenceInDifferences(cluster="unit").fit(
-            df, outcome="y", treatment="grp", time="post"
+            df, outcome="y", treatment="grp", post="post"
         ),
         cr1_k=(4,),
         tail_df=(356.0,),
@@ -226,7 +226,7 @@ ROWS = [
     dict(
         key="twfe_hc1_cluster_unit_time_post",
         fit=lambda df: diff_diff.TwoWayFixedEffects(vcov_type="hc1", cluster="unit").fit(
-            df, outcome="y", treatment="grp", time="post", unit="unit"
+            df, outcome="y", treatment="grp", post="post", unit="unit"
         ),
         cr1_k=(3,),
         tail_df=(298.0,),
@@ -522,7 +522,7 @@ def test_capture_flags_non_hc1_clustered_family(monkeypatch):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         diff_diff.DifferenceInDifferences(vcov_type="hc2_bm", cluster="unit").fit(
-            df, outcome="y", treatment="grp", time="post"
+            df, outcome="y", treatment="grp", post="post"
         )
     assert cap.cr1_k == []
     assert cap.unexpected_clustered, "non-hc1 clustered call was not flagged"
@@ -541,10 +541,10 @@ def test_d1_convergence_is_pinned():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         a = diff_diff.DifferenceInDifferences(cluster="unit").fit(
-            df, outcome="y", treatment="grp", time="post", absorb=["unit", "time"]
+            df, outcome="y", treatment="grp", post="post", absorb=["unit", "time"]
         )
         f = diff_diff.DifferenceInDifferences(cluster="unit").fit(
-            df, outcome="y", treatment="grp", time="post", fixed_effects=["unit", "time"]
+            df, outcome="y", treatment="grp", post="post", fixed_effects=["unit", "time"]
         )
     np.testing.assert_allclose(a.att, f.att, rtol=0, atol=1e-10)
     np.testing.assert_allclose(f.se / a.se, 1.0, rtol=1e-9)
@@ -842,10 +842,10 @@ class TestAbsorbedFeRank:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r_un = diff_diff.DifferenceInDifferences(vcov_type="hc1").fit(
-                df, outcome="y", treatment="grp", time="post", absorb=["unit", "time"]
+                df, outcome="y", treatment="grp", post="post", absorb=["unit", "time"]
             )
             r_cl = diff_diff.DifferenceInDifferences(cluster="unit").fit(
-                df, outcome="y", treatment="grp", time="post", absorb=["unit", "time"]
+                df, outcome="y", treatment="grp", post="post", absorb=["unit", "time"]
             )
         # new count (adj=63): measured; old count (adj=64) would be ~0.44% larger
         np.testing.assert_allclose(r_un.se, 0.2811268249, rtol=1e-8)
@@ -861,7 +861,7 @@ class TestAbsorbedFeRank:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             tw = diff_diff.TwoWayFixedEffects(vcov_type="hc1", cluster="unit").fit(
-                df, outcome="y", treatment="grp", time="time", unit="unit"
+                df, outcome="y", treatment="grp", post="time", unit="unit"
             )
             mpd = diff_diff.MultiPeriodDiD(cluster="unit").fit(
                 df, outcome="y", treatment="grp", time="time", absorb=["unit", "time"]
@@ -904,7 +904,7 @@ class TestAbsorbedFeRank:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = diff_diff.DifferenceInDifferences(vcov_type="hc1").fit(
-                tiny, outcome="y", treatment="grp", time="post", absorb=["unit", "time"]
+                tiny, outcome="y", treatment="grp", post="post", absorb=["unit", "time"]
             )
         assert np.isfinite(r.se), "newly-finite direction: SE must be finite now"
         with warnings.catch_warnings():
@@ -913,7 +913,7 @@ class TestAbsorbedFeRank:
                 tiny.iloc[:-1],
                 outcome="y",
                 treatment="grp",
-                time="post",
+                post="post",
                 absorb=["unit", "time"],
             )
         assert not np.isfinite(r2.se), "saturated design must stay fail-closed NaN"
@@ -1279,10 +1279,10 @@ class TestKReferenceConvergence:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             a = diff_diff.DifferenceInDifferences(cluster="state").fit(
-                df, outcome="y", treatment="grp", time="post", absorb=["unit", "state"]
+                df, outcome="y", treatment="grp", post="post", absorb=["unit", "state"]
             )
             f = diff_diff.DifferenceInDifferences(cluster="state").fit(
-                df, outcome="y", treatment="grp", time="post", fixed_effects=["unit", "state"]
+                df, outcome="y", treatment="grp", post="post", fixed_effects=["unit", "state"]
             )
         assert np.isfinite(a.se) and a.se > 0
         np.testing.assert_allclose(f.se, a.se, rtol=1e-12)
@@ -1311,7 +1311,7 @@ class TestKReferenceConvergence:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             return diff_diff.DifferenceInDifferences(cluster="unit").fit(
-                df, outcome="y", treatment="grp", time="post", absorb=["unit", "time"]
+                df, outcome="y", treatment="grp", post="post", absorb=["unit", "time"]
             )
 
     def test_clustered_fail_closed_below_the_boundary(self):
@@ -1359,17 +1359,17 @@ class TestKReferenceConvergence:
             warnings.simplefilter("ignore")
             r_ab = diff_diff.DifferenceInDifferences(
                 cluster="unit", inference="wild_bootstrap", n_bootstrap=99, seed=42
-            ).fit(df, outcome="y", treatment="grp", time="post", absorb=["unit", "time"])
+            ).fit(df, outcome="y", treatment="grp", post="post", absorb=["unit", "time"])
             r_fe = diff_diff.DifferenceInDifferences(
                 cluster="unit", inference="wild_bootstrap", n_bootstrap=99, seed=42
-            ).fit(df, outcome="y", treatment="grp", time="post", fixed_effects=["unit", "time"])
+            ).fit(df, outcome="y", treatment="grp", post="post", fixed_effects=["unit", "time"])
             r_tw = diff_diff.TwoWayFixedEffects(
                 vcov_type="hc2",
                 cluster="unit",
                 inference="wild_bootstrap",
                 n_bootstrap=99,
                 seed=42,
-            ).fit(df, outcome="y", treatment="grp", time="post", unit="unit")
+            ).fit(df, outcome="y", treatment="grp", post="post", unit="unit")
         assert r_ab.se == np.sqrt(r_ab.vcov[3, 3])
         assert r_fe.se == np.sqrt(r_fe.vcov[3, 3])
         assert r_tw.se == np.sqrt(r_tw.vcov[1, 1])

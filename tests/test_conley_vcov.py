@@ -1202,7 +1202,7 @@ class TestConleyEstimatorIntegration:
                 conley_coords=("lat", "lon"),
                 conley_cutoff_km=2000.0,
                 conley_lag_cutoff=1,
-            ).fit(df, outcome="y", treatment="treated", time="time", unit="unit")
+            ).fit(df, outcome="y", treatment="treated", post="time", unit="unit")
 
     def test_mpd_conley_wild_bootstrap_raises_without_warning(self):
         """MPD + Conley + inference='wild_bootstrap' raises NotImplementedError
@@ -1858,7 +1858,7 @@ class TestConleyTWFE:
             conley_coords=("lat", "lon"),
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=1,
-        ).fit(panel, outcome="y", treatment="treated", time="time", unit="unit")
+        ).fit(panel, outcome="y", treatment="treated", post="time", unit="unit")
         assert np.isfinite(res.att), "ATT must be finite"
         assert np.isfinite(res.se) and res.se > 0, "SE must be positive and finite"
 
@@ -1881,7 +1881,7 @@ class TestConleyTWFE:
             conley_coords=("lat", "lon"),
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=1,
-        ).fit(panel, outcome="y", treatment="treated", time="time", unit="unit")
+        ).fit(panel, outcome="y", treatment="treated", post="time", unit="unit")
         assert np.isfinite(res.att)
         assert np.isfinite(res.se) and res.se > 0
         assert res.cluster_name == "region"
@@ -1900,7 +1900,7 @@ class TestConleyTWFE:
                 conley_coords=("lat", "lon"),
                 conley_cutoff_km=2000.0,
                 conley_lag_cutoff=1,
-            ).fit(panel, outcome="y", treatment="treated", time="time", unit="unit")
+            ).fit(panel, outcome="y", treatment="treated", post="time", unit="unit")
 
     def test_twfe_conley_repeated_coords_panel_finite_se(self, panel):
         """Phase 2 regression for the Phase-1 silent-bug case: each unit's
@@ -1917,7 +1917,7 @@ class TestConleyTWFE:
             conley_coords=("lat", "lon"),
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=1,
-        ).fit(panel, outcome="y", treatment="treated", time="time", unit="unit")
+        ).fit(panel, outcome="y", treatment="treated", post="time", unit="unit")
         assert np.isfinite(res.se) and res.se > 0
 
     def test_twfe_conley_missing_lag_cutoff_raises(self, panel):
@@ -1929,7 +1929,7 @@ class TestConleyTWFE:
                 vcov_type="conley",
                 conley_coords=("lat", "lon"),
                 conley_cutoff_km=2000.0,
-            ).fit(panel, outcome="y", treatment="treated", time="time", unit="unit")
+            ).fit(panel, outcome="y", treatment="treated", post="time", unit="unit")
 
     def test_twfe_conley_binary_post_label_normalization(self, panel):
         """TWFE with binary `post` (values {0,1}) + `conley_lag_cutoff=1`
@@ -1948,7 +1948,7 @@ class TestConleyTWFE:
             conley_coords=("lat", "lon"),
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=1,
-        ).fit(df_post, outcome="y", treatment="treated", time="post", unit="unit")
+        ).fit(df_post, outcome="y", treatment="treated", post="post", unit="unit")
         assert np.isfinite(res.se) and res.se > 0
 
     def test_twfe_conley_summary_emits_conley_label(self, panel):
@@ -1964,7 +1964,7 @@ class TestConleyTWFE:
             conley_coords=("lat", "lon"),
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=1,
-        ).fit(panel, outcome="y", treatment="treated", time="time", unit="unit")
+        ).fit(panel, outcome="y", treatment="treated", post="time", unit="unit")
         summary = res.summary()
         assert "Conley spatial HAC" in summary
         assert "lag_cutoff=1" in summary
@@ -1989,7 +1989,7 @@ class TestConleyTWFE:
             conley_coords=("lat", "lon"),
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=1,
-        ).fit(panel, outcome="y", treatment="treated", time="time", unit="unit")
+        ).fit(panel, outcome="y", treatment="treated", post="time", unit="unit")
         summary = res.summary()
         assert "Conley spatial HAC" in summary
         assert "+ cluster product kernel at region" in summary
@@ -2011,7 +2011,7 @@ class TestConleyTWFE:
             conley_coords=("lat", "lon"),
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=1,
-        ).fit(panel, outcome="y", treatment="treated", time="time", unit="unit")
+        ).fit(panel, outcome="y", treatment="treated", post="time", unit="unit")
         d = res.to_dict()
         assert d["vcov_type"] == "conley"
         assert d["conley_lag_cutoff"] == 1
@@ -2031,7 +2031,7 @@ class TestConleyTWFE:
             conley_coords=("lat", "lon"),
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=1,
-        ).fit(panel, outcome="y", treatment="treated", time="time", unit="unit")
+        ).fit(panel, outcome="y", treatment="treated", post="time", unit="unit")
         assert res.cluster_name is None
         d = res.to_dict()
         assert "cluster_name" not in d
@@ -2057,7 +2057,7 @@ class TestConleyTWFE:
                 df_str,
                 outcome="y",
                 treatment="treated",
-                time="time_str",
+                post="time_str",
                 unit="unit",
             )
 
@@ -2083,7 +2083,7 @@ class TestConleyTWFE:
             conley_coords=("lat", "lon"),
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=1,
-        ).fit(panel, outcome="y", treatment="treated", time="time", unit="unit")
+        ).fit(panel, outcome="y", treatment="treated", post="time", unit="unit")
         # Manually demean using the same within-transform util TWFE uses
         from diff_diff.utils import within_transform as _within_transform_util
 
@@ -2998,7 +2998,7 @@ class TestConleyCluster:
             conley_coords=("lat", "lon"),
             conley_cutoff_km=2000.0,
             conley_lag_cutoff=1,
-        ).fit(df, outcome="y", treatment="treated", time="time", unit="unit")
+        ).fit(df, outcome="y", treatment="treated", post="time", unit="unit")
         assert res.cluster_name == "region"
         d = res.to_dict()
         assert d.get("cluster_name") == "region"

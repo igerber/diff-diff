@@ -97,7 +97,7 @@ def fit_2x2(panel, rollout_start, tail_start=None):
             collapse_2x2(panel, rollout_start, tail_start),
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
         )
     return r.att, r.se, r.conf_int, bool(r.p_value < 0.05)
 

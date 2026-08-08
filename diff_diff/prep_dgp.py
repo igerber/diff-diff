@@ -998,12 +998,13 @@ def generate_event_study_data(
     >>> data['event_time'].unique()
     array([-5, -4, -3, -2, -1,  0,  1,  2,  3,  4])
 
-    Use with MultiPeriodDiD:
+    Use with the TwoWayFixedEffects event-study mode:
 
-    >>> from diff_diff import MultiPeriodDiD
-    >>> mp_did = MultiPeriodDiD()
-    >>> results = mp_did.fit(data, outcome='outcome', treatment='treated',
-    ...                      time='period', post_periods=[5, 6, 7, 8, 9])
+    >>> from diff_diff import TwoWayFixedEffects
+    >>> twfe = TwoWayFixedEffects()
+    >>> results = twfe.fit(data, outcome='outcome', treatment='treated',
+    ...                    unit='unit', event_study=True, time='period',
+    ...                    post_periods=[5, 6, 7, 8, 9])
 
     Notes
     -----

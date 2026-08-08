@@ -311,11 +311,15 @@ print(results.summary())
 
 ### Event study
 ```python
-from diff_diff import MultiPeriodDiD
+from diff_diff import TwoWayFixedEffects
 
-es = MultiPeriodDiD(cluster='unit_id')
-results = es.fit(data, outcome='y', unit='unit_id', time='period',
-                 treatment='treated')
+# TwoWayFixedEffects event-study mode (MultiPeriodDiD is deprecated in
+# 3.9; spec='pooled' reproduces its design). post_periods= is REQUIRED:
+# the treatment boundary cannot be inferred from a time-invariant
+# ever-treated indicator.
+es = TwoWayFixedEffects(cluster='unit_id')
+results = es.fit(data, outcome='y', unit='unit_id', treatment='treated',
+                 event_study=True, time='period', post_periods=[3, 4, 5])
 print(results.summary())
 ```
 
@@ -348,7 +352,7 @@ This step is CRITICAL and most often skipped. Run at least one of:
 
 ### HonestDiD (Rambachan & Roth 2023) - recommended
 Bounds on the treatment effect under violations of parallel trends.
-Works with MultiPeriodDiD, CallawaySantAnna, and ChaisemartinDHaultfoeuille
+Works with MultiPeriodDiD (deprecated - the TWFE event-study surface also admits), CallawaySantAnna, and ChaisemartinDHaultfoeuille
 (dCDH) results, plus StackedDiD via the post-fit
 `results.aggregate('event_study')` container (needs `kappa_pre >= 2` so
 estimated pre-periods exist).

@@ -174,8 +174,10 @@ A new parameter is only complete when it is:
 - applied in **every** aggregation mode — `simple`, `event_study`, and `group`
 - applied in the **bootstrap/inference** paths, not just the analytical one
 - reflected on the result object, so `to_dict()`/`summary()` do not misreport it
-- propagated to the estimators that inherit it: `TwoWayFixedEffects` and
-  `MultiPeriodDiD` define no `__init__` of their own, so they inherit a new
+- propagated to the estimators that inherit it: `TwoWayFixedEffects` defines
+  no `__init__` of its own, and `MultiPeriodDiD`'s 3.9 deprecation shim
+  forwards via `super().__init__(*args, **kwargs)` with an import-time
+  `__signature__` mirror - so both inherit a new
   `DifferenceInDifferences` constructor parameter automatically;
   `SyntheticDiD` defines its OWN signature (it forwards only
   `robust`/`cluster`/`alpha` to `super().__init__`), so a new parent

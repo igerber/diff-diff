@@ -46,13 +46,14 @@ Example
 
 .. code-block:: python
 
-   from diff_diff import MultiPeriodDiD, HonestDiD
+   from diff_diff import TwoWayFixedEffects, HonestDiD
 
-   # First fit an event study
-   model = MultiPeriodDiD()
+   # First fit an event study (TwoWayFixedEffects event-study mode;
+   # HonestDiD also accepts the surface directly)
+   model = TwoWayFixedEffects()
    results = model.fit(data, outcome='y', treatment='treated',
-                       time='period', unit='unit_id',
-                       post_periods=[5, 6, 7], reference_period=4)
+                       unit='unit_id', event_study=True, time='period',
+                       post_periods=[5, 6, 7, 8, 9], reference_period=4)
 
    # Compute bounds under relative magnitudes restriction
    honest = HonestDiD(method='relative_magnitude', M=1.0)
@@ -143,17 +144,17 @@ Complete Example
 
    import numpy as np
    from diff_diff import (
-       MultiPeriodDiD,
+       TwoWayFixedEffects,
        HonestDiD,
        plot_sensitivity,
        plot_honest_event_study,
    )
 
-   # Fit event study
-   model = MultiPeriodDiD()
+   # Fit event study (TwoWayFixedEffects event-study mode)
+   model = TwoWayFixedEffects()
    results = model.fit(data, outcome='y', treatment='treated',
-                       time='period', unit='unit_id',
-                       post_periods=[5, 6, 7], reference_period=4)
+                       unit='unit_id', event_study=True, time='period',
+                       post_periods=[5, 6, 7, 8, 9], reference_period=4)
 
    # Sensitivity analysis under relative magnitudes
    honest_rm = HonestDiD(method='relative_magnitude', M=1.0)

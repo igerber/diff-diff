@@ -1914,7 +1914,7 @@ class TestEstimatorIntegration:
         )
 
         twfe = TwoWayFixedEffects()
-        result = twfe.fit(data, outcome="y", treatment="treated", time="post", unit="unit")
+        result = twfe.fit(data, outcome="y", treatment="treated", post="post", unit="unit")
 
         # Should produce valid results
         assert result.se > 0

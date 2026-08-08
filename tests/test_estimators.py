@@ -920,7 +920,7 @@ class TestTwoWayFixedEffects:
 
         twfe = TwoWayFixedEffects()
         results = twfe.fit(
-            twfe_panel_data, outcome="outcome", treatment="treated", time="post", unit="unit"
+            twfe_panel_data, outcome="outcome", treatment="treated", post="post", unit="unit"
         )
 
         assert results is not None
@@ -943,7 +943,7 @@ class TestTwoWayFixedEffects:
             twfe_panel_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
             covariates=["size"],
         )
@@ -961,7 +961,7 @@ class TestTwoWayFixedEffects:
                 twfe_panel_data,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 unit="nonexistent_unit",
             )
 
@@ -971,7 +971,7 @@ class TestTwoWayFixedEffects:
 
         twfe = TwoWayFixedEffects()
         results = twfe.fit(
-            twfe_panel_data, outcome="outcome", treatment="treated", time="post", unit="unit"
+            twfe_panel_data, outcome="outcome", treatment="treated", post="post", unit="unit"
         )
 
         # Cluster should NOT be mutated (remains None) - clustering is handled internally
@@ -1013,7 +1013,7 @@ class TestTwoWayFixedEffects:
         # The key is that it should NOT silently produce misleading results
         try:
             results = twfe.fit(
-                df_collinear, outcome="outcome", treatment="treated", time="post", unit="unit"
+                df_collinear, outcome="outcome", treatment="treated", post="post", unit="unit"
             )
             # If we get here without error, the ATT should still be computed
             # (this means only covariates were dropped, not the treatment)
@@ -1038,7 +1038,7 @@ class TestTwoWayFixedEffects:
                 twfe_panel_data,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 unit="unit",
                 covariates=["collinear_cov"],
             )
@@ -1062,7 +1062,7 @@ class TestTwoWayFixedEffects:
                 twfe_panel_data,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 unit="unit",
                 covariates=["size", "size_dup"],
             )
@@ -1974,9 +1974,16 @@ class TestMultiPeriodDiDEventStudy:
                 time="period",
                 post_periods=[3, 4, 5],
             )
-        future_warnings = [x for x in w if issubclass(x.category, FutureWarning)]
-        assert len(future_warnings) > 0, "Expected FutureWarning for reference_period default"
-        assert "reference_period" in str(future_warnings[0].message)
+        # Select BY MESSAGE, not index: MultiPeriodDiD's construction now
+        # emits its own deprecation FutureWarning first (row M-010), and
+        # simplefilter("always") resets the filter list, so the pyproject
+        # ignore cannot shield this record-based block.
+        ref_warnings = [
+            x
+            for x in w
+            if issubclass(x.category, FutureWarning) and "reference_period" in str(x.message)
+        ]
+        assert len(ref_warnings) > 0, "Expected FutureWarning for reference_period default"
 
     def test_pre_period_effects_near_zero(self, panel_data):
         """Under parallel trends DGP, pre-period effects should be ~0."""
@@ -3277,7 +3284,7 @@ class TestUnbalancedPanels:
         # FE-spanned junk column survived rank detection and produced a finite
         # garbage ATT. The v3.6.x span guard now routes that spec into TWFE's
         # collinearity error, so the test uses the well-specified form.
-        results = twfe.fit(df, outcome="outcome", treatment="treated", unit="unit", time="post")
+        results = twfe.fit(df, outcome="outcome", treatment="treated", unit="unit", post="post")
 
         # Should produce valid results
         assert np.isfinite(results.att)
@@ -3288,7 +3295,7 @@ class TestUnbalancedPanels:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 TwoWayFixedEffects().fit(
-                    df, outcome="outcome", treatment="post", unit="unit", time="period"
+                    df, outcome="outcome", treatment="post", unit="unit", post="period"
                 )
 
     def test_multiperiod_with_sparse_data(self):
@@ -3574,7 +3581,7 @@ class TestCollinearityDetection:
             outcome="outcome",
             treatment="treated",
             unit="unit",
-            time="post",
+            post="post",
             covariates=["unit_covariate"],
         )
 
@@ -3838,14 +3845,14 @@ class TestAbsorbedRegressorSnap:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             base = TwoWayFixedEffects().fit(
-                df, outcome="y", treatment="treated", time="post", unit="unit"
+                df, outcome="y", treatment="treated", post="post", unit="unit"
             )
         with pytest.warns(UserWarning, match="collinear with the absorbed"):
             res = TwoWayFixedEffects().fit(
                 df,
                 outcome="y",
                 treatment="treated",
-                time="post",
+                post="post",
                 unit="unit",
                 covariates=["xc"],
             )

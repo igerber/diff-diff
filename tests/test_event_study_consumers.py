@@ -927,14 +927,17 @@ class TestSourceScopedAdmission:
 
     def test_calendar_scale_rejected(self):
         # Belt-and-suspenders: even a CS-sourced container is rejected on a
-        # non-relative time scale (CS never emits calendar).
+        # calendar time scale (CS never emits calendar). Since the M-010
+        # merge, calendar surfaces route to the TWFE calendar branch, whose
+        # source gate rejects everything but the TWFE event-study producer -
+        # the rejection survives with the calendar-route message.
         surface = _tiny_container(
             event_time=np.array(["2018", "2019", "2020", "2021"], dtype=object),
             time_scale="calendar",
         )
-        with pytest.raises(TypeError, match="relative"):
+        with pytest.raises(TypeError, match="TwoWayFixedEffects event-study mode"):
             compute_honest_did(surface, M=0.5)
-        with pytest.raises(TypeError, match="relative"):
+        with pytest.raises(TypeError, match="TwoWayFixedEffects event-study mode"):
             compute_pretrends_power(surface, M=0.1)
 
     def test_multiple_reference_rows_fail_closed_in_honest(self):

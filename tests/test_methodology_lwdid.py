@@ -507,7 +507,7 @@ class TestCrossEstimatorEquivalence:
         lw = LWDiD(rolling="demean", estimator="ra", vce="classical").fit(
             df, outcome="y", unit="unit", time="time", treatment="treat"
         )
-        dd = DifferenceInDifferences().fit(df, outcome="y", treatment="treated_group", time="post")
+        dd = DifferenceInDifferences().fit(df, outcome="y", treatment="treated_group", post="post")
         np.testing.assert_allclose(lw.att, dd.att, rtol=0, atol=1e-10)
 
     @pytest.mark.parametrize("r", [5, 7])
@@ -520,7 +520,7 @@ class TestCrossEstimatorEquivalence:
             df, outcome="y", unit="unit", time="time", treatment="treat"
         )
         sub = df[(df["time"] < 5) | (df["time"] == r)]
-        dd = DifferenceInDifferences().fit(sub, outcome="y", treatment="treated_group", time="post")
+        dd = DifferenceInDifferences().fit(sub, outcome="y", treatment="treated_group", post="post")
         np.testing.assert_allclose(res.period_effects[r]["att"], dd.att, rtol=0, atol=1e-10)
 
     def test_detrend_t3_closed_form(self):

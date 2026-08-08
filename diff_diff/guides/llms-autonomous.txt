@@ -339,7 +339,7 @@ supported / out of scope; `warn` supported but with documented caveats;
 | Estimator | binary absorbing | staggered | continuous | triple-diff | never-treated required | covariate adjustment | few-treated (synthetic) | heterogeneous adoption | clustered SE |
 |---|---|---|---|---|---|---|---|---|---|
 | `DifferenceInDifferences` | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ |
-| `MultiPeriodDiD` | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ |
+| `MultiPeriodDiD` (deprecated 3.9 → `TwoWayFixedEffects` `event_study=True`) | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ |
 | `TwoWayFixedEffects` | ✓ | warn | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ |
 | `CallawaySantAnna` | ✓ | ✓ | ✗ | ✗ | partial | ✓ | ✗ | ✗ | ✓ |
 | `SunAbraham` | ✓ | ✓ | ✗ | ✗ | ✓ | ✓ | ✗ | ✗ | ✓ |
@@ -459,7 +459,7 @@ case; the choice between them is mostly about output shape:
 When `is_staggered == False` and `n_periods > 2`, event-study dynamics
 can be estimated but cohort-mixing bias is moot:
 
-- `MultiPeriodDiD` - per-period effect, standard event-study plot.
+- `TwoWayFixedEffects(...).fit(..., event_study=True)` - per-period effects, standard event-study plot (`MultiPeriodDiD` is its deprecated predecessor; `spec='pooled'` reproduces it).
 - `TwoWayFixedEffects` with event-time dummies - similar output, no
   forbidden comparisons because there is only one cohort.
 

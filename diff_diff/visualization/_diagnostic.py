@@ -79,12 +79,14 @@ def plot_sensitivity(
 
     Examples
     --------
-    >>> from diff_diff import MultiPeriodDiD
+    >>> from diff_diff import TwoWayFixedEffects
     >>> from diff_diff.honest_did import HonestDiD
     >>> from diff_diff.visualization import plot_sensitivity
     >>>
     >>> # Fit event study and run sensitivity analysis
-    >>> results = MultiPeriodDiD().fit(data, ...)
+    >>> results = TwoWayFixedEffects().fit(
+    ...     data, ..., event_study=True, post_periods=[3, 4, 5]
+    ... )
     >>> honest = HonestDiD(method='relative_magnitude')
     >>> sensitivity = honest.sensitivity_analysis(results)
     >>>

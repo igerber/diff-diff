@@ -405,6 +405,28 @@ class DiagnosticReport:
         outcome_label: Optional[str] = None,
         treatment_label: Optional[str] = None,
     ):
+        # The unified event-study container (row M-092) is rejected
+        # explicitly: _APPLICABILITY is keyed by scalar results-class
+        # names, so an EventStudyResults input would silently resolve to
+        # an EMPTY applicability set and produce a zero-check report
+        # (no-silent-failures). Admission of EventStudyResults surfaces
+        # (the TWFE event-study mode and aggregate('event_study')
+        # containers) is tracked in TODO.md - until then, run diagnostics
+        # on the fitted estimator's scalar results (e.g. the static TWFE
+        # fit or the MultiPeriodDiD results object).
+        from diff_diff.results_base import EventStudyResults as _ESR
+
+        if isinstance(results, _ESR):
+            raise TypeError(
+                "DiagnosticReport does not yet support EventStudyResults "
+                "surfaces (the TWFE event-study mode and "
+                "aggregate('event_study') containers): its checks are "
+                "keyed to scalar estimator results. Run it on the fitted "
+                "estimator's scalar results instead (e.g. a static "
+                "TwoWayFixedEffects fit, or the native results object of "
+                "the producing estimator). EventStudyResults admission is "
+                "tracked in TODO.md."
+            )
         # Marked diagnostic results (spec section 3.5, ledger row M-091)
         # are rejected BY TYPE — except Bacon, whose dedicated read-out
         # is retained. Before the marker, such inputs silently produced

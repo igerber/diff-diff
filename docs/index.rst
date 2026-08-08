@@ -138,7 +138,7 @@ Supported Estimators
    * - :class:`~diff_diff.TwoWayFixedEffects`
      - Panel data with unit and time fixed effects
    * - :class:`~diff_diff.MultiPeriodDiD`
-     - Event study with period-specific treatment effects
+     - Event study with period-specific treatment effects (deprecated 3.9 — use :class:`~diff_diff.TwoWayFixedEffects` ``event_study=True``)
    * - :class:`~diff_diff.CallawaySantAnna`
      - Callaway & Sant'Anna (2021) group-time ATT for staggered adoption
    * - :class:`~diff_diff.ChaisemartinDHaultfoeuille`

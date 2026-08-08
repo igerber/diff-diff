@@ -145,12 +145,13 @@ def plot_event_study(
 
     Examples
     --------
-    Using with MultiPeriodDiD results:
+    Using with TwoWayFixedEffects event-study results:
 
-    >>> from diff_diff import MultiPeriodDiD, plot_event_study
-    >>> did = MultiPeriodDiD()
-    >>> results = did.fit(data, outcome='y', treatment='treated',
-    ...                   time='period', post_periods=[3, 4, 5])
+    >>> from diff_diff import TwoWayFixedEffects, plot_event_study
+    >>> twfe = TwoWayFixedEffects()
+    >>> results = twfe.fit(data, outcome='y', treatment='treated',
+    ...                    unit='unit', event_study=True,
+    ...                    time='period', post_periods=[3, 4, 5])
     >>> plot_event_study(results)
 
     Using with a DataFrame:
@@ -365,6 +366,25 @@ def plot_event_study(
     )
 
 
+def _pre_shading_runs(pre_x: List[int]) -> List[Tuple[int, int]]:
+    """Contiguous runs of pre-period x-positions, as (start, end) pairs.
+
+    The pre-period set need not be contiguous: a calendar surface with
+    non-suffix ``post_periods`` provenance (legal on MultiPeriodDiD /
+    the TWFE event-study mode) interleaves post periods between pre
+    periods, and a single min-to-max span would shade those post periods
+    as pre-treatment. One span per contiguous run keeps the shading
+    truthful on every partition shape.
+    """
+    runs: List[Tuple[int, int]] = []
+    for x in sorted(pre_x):
+        if runs and x == runs[-1][1] + 1:
+            runs[-1] = (runs[-1][0], x)
+        else:
+            runs.append((x, x))
+    return runs
+
+
 def _render_event_study_mpl(
     df,
     *,
@@ -401,11 +421,13 @@ def _render_event_study_mpl(
     period_to_x = {p: i for i, p in enumerate(df["period"])}
     x_vals = [period_to_x[p] for p in df["period"]]
 
-    # Shade pre-treatment region
+    # Shade pre-treatment region - one span per CONTIGUOUS run of pre
+    # positions (a single min-to-max span would shade interleaved post
+    # periods as pre on non-suffix partitions).
     if shade_pre and pre_periods is not None:
         pre_x = [period_to_x[p] for p in pre_periods if p in period_to_x]
-        if pre_x:
-            ax.axvspan(min(pre_x) - 0.5, max(pre_x) + 0.5, color=shade_color, alpha=0.5, zorder=0)
+        for run_start, run_end in _pre_shading_runs(pre_x):
+            ax.axvspan(run_start - 0.5, run_end + 0.5, color=shade_color, alpha=0.5, zorder=0)
 
     # Draw horizontal zero line
     if show_zero_line:
@@ -520,13 +542,16 @@ def _render_event_study_plotly(
     x_vals = list(range(len(periods)))
     tick_labels = [str(p) for p in periods]
 
-    # Shade pre-treatment region
+    # Shade pre-treatment region - one vrect per CONTIGUOUS run of pre
+    # positions (mirrors the matplotlib renderer; a single min-to-max
+    # vrect would shade interleaved post periods as pre on non-suffix
+    # partitions).
     if shade_pre and pre_periods is not None:
         pre_x = [period_to_x[p] for p in pre_periods if p in period_to_x]
-        if pre_x:
+        for run_start, run_end in _pre_shading_runs(pre_x):
             fig.add_vrect(
-                x0=min(pre_x) - 0.5,
-                x1=max(pre_x) + 0.5,
+                x0=run_start - 0.5,
+                x1=run_end + 0.5,
                 fillcolor=_color_to_rgba(shade_color, 0.5),
                 line_width=0,
                 layer="below",
@@ -762,11 +787,29 @@ def _extract_plot_data(
                 _post_start = -int(surface.anticipation or 0)
                 derived_pre = [p for p in periods if p < _post_start]
                 derived_post = [p for p in periods if p >= _post_start]
+            elif surface.post_periods is not None:
+                # Calendar labels with the AUTHORITATIVE partition
+                # provenance (row M-092 amendment #5, threaded by
+                # _from_mpd / the TWFE event-study producer): the declared
+                # post set may be an arbitrary subset (non-suffix splits
+                # are legal on MultiPeriodDiD), so the positional
+                # fallback below would mislabel it - always prefer the
+                # provenance. Pre = non-reference complement.
+                _post_set = set(surface.post_periods)
+                derived_post = [p for p in periods if p in _post_set]
+                derived_pre = [
+                    p
+                    for p in periods
+                    if p not in _post_set
+                    and p != reference_period
+                    and (reference_marks is None or p not in reference_marks)
+                ]
             else:
-                # Calendar labels (possibly str/Timestamp): numeric `p < 0`
-                # is undefined - split POSITIONALLY around the reference
-                # row (rows before it in event_time order are pre); with
-                # no reference row, all rows are post.
+                # Calendar labels (possibly str/Timestamp) WITHOUT
+                # partition provenance: numeric `p < 0` is undefined -
+                # split POSITIONALLY around the reference row (rows before
+                # it in event_time order are pre); with no reference row,
+                # all rows are post.
                 if reference_period is not None and reference_period in keys:
                     ref_pos = keys.index(reference_period)
                     derived_pre = [p for p in periods if p in keys and keys.index(p) < ref_pos]

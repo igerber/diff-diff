@@ -194,7 +194,7 @@ class TestPopulationRelations:
         # comparison uses a large sample and a loose tolerance.
         df = make_additive_panel(20000, seed=42)
         qdid = fit_quiet(QDiD(n_bootstrap=0), df)
-        did = DifferenceInDifferences().fit(df, outcome="y", treatment="treated", time="post")
+        did = DifferenceInDifferences().fit(df, outcome="y", treatment="treated", post="post")
         assert qdid.att == pytest.approx(did.att, abs=0.05)
 
     def test_cic_matches_did_on_additive_dgp(self):
@@ -202,7 +202,7 @@ class TestPopulationRelations:
         # and DiD probability limits coincide.
         df = make_additive_panel(20000, seed=7)
         cic = fit_quiet(ChangesInChanges(n_bootstrap=0), df)
-        did = DifferenceInDifferences().fit(df, outcome="y", treatment="treated", time="post")
+        did = DifferenceInDifferences().fit(df, outcome="y", treatment="treated", post="post")
         assert cic.att == pytest.approx(did.att, abs=0.05)
 
     def test_cic_scale_invariance_nonlinear_dgp(self):

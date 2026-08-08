@@ -1704,7 +1704,7 @@ class TestEstimatorCoverage:
         result = simulate_power(
             _UnregisteredEstimator(),
             data_generator=generate_did_data,
-            estimator_kwargs=dict(outcome="outcome", treatment="treated", time="post"),
+            estimator_kwargs=dict(outcome="outcome", treatment="treated", post="post"),
             n_simulations=5,
             seed=42,
             progress=False,
@@ -1748,7 +1748,7 @@ class TestEstimatorCoverage:
         result = simulate_power(
             _UnregisteredEstimator(),
             data_generator=generate_did_data,
-            estimator_kwargs=dict(outcome="outcome", treatment="treated", time="post"),
+            estimator_kwargs=dict(outcome="outcome", treatment="treated", post="post"),
             result_extractor=_custom_extractor,
             n_simulations=5,
             seed=42,
@@ -1774,7 +1774,7 @@ class TestEstimatorCoverage:
         result = simulate_mde(
             _UnregisteredEstimator(),
             data_generator=generate_did_data,
-            estimator_kwargs=dict(outcome="outcome", treatment="treated", time="post"),
+            estimator_kwargs=dict(outcome="outcome", treatment="treated", post="post"),
             result_extractor=_custom_extractor,
             n_simulations=5,
             effect_range=(0.5, 5.0),

@@ -177,6 +177,16 @@ independent full-refit enumeration in `tests/test_wild_bootstrap.py::test_wcr_ma
 
 ## MultiPeriodDiD
 
+- **Note:** Deprecated in 3.9, removed in 4.0 (ledger row M-010): merged into
+  the `TwoWayFixedEffects` event-study mode. `TWFE().fit(...,
+  event_study=True, spec="pooled", time=<calendar col>)` reproduces this
+  estimator's design EXACTLY (same shared estimation core; bit-exact under
+  matched cluster settings and unconditionally without a unit id); the
+  default `spec="within"` adds unit fixed effects (standard errors shift in
+  general, and point estimates too on unbalanced/covariate designs - the
+  documented estimate change). Everything below remains the 3.x contract
+  for the deprecated class through its removal.
+
 **Primary source:** Event study methodology
 - Freyaldenhoven, S., Hansen, C., Pérez, J.P., & Shapiro, J.M. (2021). Visualization,
   identification, and estimation in the linear panel event-study design. NBER Working Paper 29170.
@@ -348,6 +358,15 @@ where V is the VCV sub-matrix for post-treatment δ_e coefficients.
   within-unit treatment variation is detected. Advises creating an ever-treated
   indicator. Without ever-treated D_i, pre-period interaction coefficients are
   unidentified.
+- **Note (staggered detection requires D_it input):** the staggered-adoption
+  and treatment-reversal checks derive adoption timing from within-unit 0→1
+  transitions, so they can only fire on time-varying `D_it` input (itself
+  off-contract per the bullet above). With the contract-valid time-invariant
+  `D_i`, adoption timing is not observable in the inputs and the
+  simultaneous-adoption scope is a user-asserted design assumption - the
+  estimator cannot verify it. See the TwoWayFixedEffects event-study-mode
+  Note (staggered-adoption detection limit); the cohort-timing validation
+  input that would close this is tracked in TODO.md.
 - Pre-test of parallel trends: joint F-test on pre-treatment δ_e coefficients.
   Low power in pre-test does not validate parallel trends (Roth 2022).
 
@@ -374,6 +393,69 @@ where V is the VCV sub-matrix for post-treatment δ_e coefficients.
 
 **Primary source:** Panel data econometrics
 - Wooldridge, J.M. (2010). *Econometric Analysis of Cross Section and Panel Data*, 2nd ed. MIT Press, Chapter 10.
+
+### Event-study mode (3.9, ledger row M-010)
+
+`fit(..., event_study=True, time=<calendar col>, spec="within"|"pooled",
+reference_period=None, post_periods=<required>)` estimates per-period
+treatment effects and returns the unified `EventStudyResults` surface (spec section 5
+of `docs/v4-design.md`; `source="TwoWayFixedEffects"`, `estimation_spec` and
+the authoritative `post_periods` partition recorded as provenance). The
+static 0/1-dummy contract below is unchanged; in event-study mode `time=` is
+the CALENDAR column (keyword), and the static dummy parameter is `post=`
+(row M-082; `time=` remains its deprecated alias through 3.9).
+
+*Designs:*
+```
+spec="within":  Y_it = α_i + γ_t + Σ_{e≠ref} δ_e (D_i × 1[t=e]) + X'β + ε_it
+spec="pooled":  Y_it = α  + βD_i + Σ_{t≠ref} γ_t Period_t
+                      + Σ_{e≠ref} δ_e (D_i × 1[t=e]) + X'β + ε_it
+```
+`spec="pooled"` is the MultiPeriodDiD design verbatim (shared estimation
+core - bit-exact reproduction under matched cluster settings) and the only
+spec valid for repeated cross-sections; `spec="within"` absorbs the unit
+fixed effects (the treatment main effect is omitted - it is spanned by the
+unit FE). Point estimates coincide across specs only in the restricted
+equivalence case (balanced panel, no covariates, simultaneous adoption);
+otherwise the unit-FE projection changes point estimates too. The reference
+period defaults to the last pre-treatment period (e=-1 convention) with no
+transition warning (the legacy-default FutureWarning is MultiPeriodDiD-only,
+row M-007).
+
+- **Note (staggered-adoption detection limit):** both specs assume
+  simultaneous adoption (the MultiPeriodDiD scope, inherited verbatim). The
+  staggered-adoption advisory infers adoption timing from within-unit 0→1
+  transitions of the treatment column - i.e. it can only fire on a
+  time-varying `D_it` input, which the companion time-varying-treatment
+  warning already flags as off-contract. Under the documented time-invariant
+  ever-treated `D_i` contract, adoption timing is not observable in
+  `(y, D_i, unit, time)` at all, so simultaneous adoption cannot be verified
+  by the estimator and is asserted by the user (like parallel trends). An
+  optional cohort-timing validation input (`first_treat=`/`cohort=`) that
+  would make the assumption checkable under `D_i` is tracked in TODO.md.
+- **Note (explicit calendar partition):** for the same reason, `post_periods=`
+  is REQUIRED (non-empty) in event-study mode: the boundary cannot be
+  inferred from the data, so MultiPeriodDiD's midpoint default (last half of
+  the calendar) is a silent guess and is deliberately not carried into the
+  merged mode - omission raises with a message naming the rejected default.
+  MultiPeriodDiD itself keeps the documented midpoint default through 3.9.
+
+*Inference:*
+- **Note:** the event-study mode auto-clusters at the unit level from 3.9
+  (decision 2026-08-07; new API adopts the section-7 end-state policy
+  immediately), mirroring the static carve-outs lane-for-lane: the
+  auto-cluster is silently dropped on the Conley path (only explicit
+  `cluster=` combines), never injected as a survey PSU (the
+  implicit-per-observation-PSU rule), and dropped for explicit one-way
+  analytical families (`classical`/`hc2`). Explicit `cluster=` passes
+  through and behaves exactly like MultiPeriodDiD's own explicit cluster on
+  every lane (survey PSU injection included).
+- **Note:** `inference="wild_bootstrap"` in event-study mode raises
+  `ValueError` from the mode's 3.9 birth - the WCR implementation covers
+  the static ATT only, and MultiPeriodDiD's silent analytical fallback is
+  deliberately not carried into the merged mode (no-silent-failures). This
+  mode-level error fires BEFORE the survey/Conley front doors (contrast the
+  static precedence contract in the Conley section).
 
 **Key implementation requirements:**
 
@@ -529,7 +611,19 @@ This matches the behavior of R's `fixest::feols()` with absorbed FE.
   `docs/methodology/variance-conventions.md` (D1/D2, fixed 3.9).
 
 *Edge cases:*
-- Singleton units/periods are automatically dropped
+- Singleton units/periods are RETAINED, not dropped (both the static path and
+  the event-study mode, which shares the class inference stack). A singleton
+  unit's within-demeaned row is identically zero, so point estimates are
+  unchanged by its presence; it does count toward `N`, the cluster count `G`,
+  and residual df, so CR1/finite-sample SEs shift slightly (measured
+  `0.41019 -> 0.40962` on a 20-unit static fixture with one added
+  single-observation control).
+  - **Deviation from R:** Stata's `reghdfe` iteratively DROPS singleton
+    groups by default; R's `fixest::feols` retains them (a console notice
+    only, unless `fixef.rm` is escalated). diff-diff matches the fixest
+    default. An opt-in reghdfe-style pruning knob is tracked in TODO.md -
+    changing the default would move published SEs and needs its own
+    reviewed change.
 - Treatment perfectly collinear with FE raises error with informative message listing dropped columns
 - Covariate collinearity emits warning but estimation continues (ATT still identified)
 - Rank-deficient design matrix: warns and sets NA for dropped coefficients (R-style, matches `lm()`)
@@ -4609,6 +4703,28 @@ Where `n_k` is the sample share of timing group `k`, `n_{kℓ} = n_k / (n_k + n_
 - Requires event-study estimates with pre-treatment coefficients
 - Warns if pre-treatment coefficients suggest parallel trends violation
 - M=0 for Delta^SD: enforces linear trend extrapolation (not exact parallel trends)
+- **Note (positional restriction geometry, 3.9):** the Delta^SD/Delta^RM
+  restriction matrices are built POSITIONALLY over the concatenated
+  declared pre/post coefficient lists, assuming one chronological pre/post
+  boundary. The native `MultiPeriodDiDResults` route does NOT validate a
+  declared partition against that assumption - a non-suffix
+  `post_periods` (e.g. `[2, 5]` on periods 0-5) or a non-last-pre
+  `reference_period` is accepted and produces bounds whose restriction
+  system does not match the equations above (a pre-existing limitation;
+  the transform-or-reject fix is the DEFERRED.md row). The 3.9 TWFE
+  event-study CALENDAR container route fails closed instead: it rejects
+  non-chronological declared partitions outright (row M-010).
+  - **Note (string calendar labels):** chronology on the calendar route is
+    `sorted()` order - verifiable for numeric/Period/Timestamp labels, but
+    for STRING labels lexical order is only ASSUMED chronology (unpadded
+    numeric suffixes sort `'c10'` before `'c2'`), and a mismatch would
+    silently shift the positional `l_vec` target. The calendar route emits
+    a `UserWarning` on string labels recommending orderable label types.
+    First-party surfaces are internally CONSISTENT either way - the
+    estimator sorted its calendar the same way at fit time, so the fit's
+    own ordering (reference selection, partition suffix semantics, plot
+    order) already reflects the same assumption; the warning marks the
+    input-type ambiguity, not a route divergence.
 
 *Restriction classes (Equations 8, Section 2.3):*
 
@@ -4948,8 +5064,8 @@ should be a deliberate user choice.
 | Estimator | Default SE | Alternatives |
 |-----------|-----------|--------------|
 | DifferenceInDifferences | HC1 robust | Cluster-robust, wild bootstrap (with `cluster=`) |
-| MultiPeriodDiD | HC1 robust | Cluster-robust (via `cluster` param); no wild path — `inference="wild_bootstrap"` warns and falls back to analytical |
-| TwoWayFixedEffects | Cluster at unit | Wild bootstrap |
+| MultiPeriodDiD (deprecated 3.9 → TWFE event-study mode) | HC1 robust | Cluster-robust (via `cluster` param); no wild path — `inference="wild_bootstrap"` warns and falls back to analytical |
+| TwoWayFixedEffects | Cluster at unit (static AND event-study mode; ES carve-outs: dropped on Conley / never a survey PSU / explicit one-way) | Wild bootstrap (static only; event-study mode raises) |
 | CallawaySantAnna | Analytical (influence fn) | Multiplier bootstrap |
 | SunAbraham | Cluster-robust + delta method | Pairs bootstrap |
 | ImputationDiD | Conservative clustered (Thm 3) | Multiplier bootstrap (library extension; percentile CIs and empirical p-values, consistent with CS/SA) |
@@ -5484,7 +5600,7 @@ metrics (`"haversine"`, `"euclidean"`) satisfy this by construction.
 - `MultiPeriodDiD` / `DifferenceInDifferences` `(vcov_type="conley")` without `unit=` at fit-time → `ValueError`.
 - `TwoWayFixedEffects(vcov_type="conley", cluster=<col>)` is supported (Wave A #119): combined spatial + cluster product kernel applies. The cluster must be time-invariant within each unit on the panel path (validator-enforced). TWFE's default auto-cluster is silently dropped on the Conley path; explicit cluster is required to opt in.
 - `DifferenceInDifferences(vcov_type="conley", cluster=<col>)`: combined kernel applies; same time-invariance contract on the panel path. DiD has no auto-cluster, so the cluster choice is fully explicit.
-- `DifferenceInDifferences` / `MultiPeriodDiD` / `TwoWayFixedEffects` `(vcov_type="conley", inference="wild_bootstrap")` → `NotImplementedError`. (MPD's pre-Conley analytical-fallback `UserWarning` is suppressed when `vcov_type="conley"` so the user gets one consistent error message.)
+- `DifferenceInDifferences` / `MultiPeriodDiD` / `TwoWayFixedEffects` `(vcov_type="conley", inference="wild_bootstrap")` → `NotImplementedError`. (MPD's pre-Conley analytical-fallback `UserWarning` is suppressed when `vcov_type="conley"` so the user gets one consistent error message.) **Note (mode qualifier, 3.9):** this is the STATIC contract; in the TWFE event-study mode (`event_study=True`, row M-010) the mode-level wild `ValueError` fires first - a mode-capability error precedes the Conley front door (see the TwoWayFixedEffects event-study section).
 - `DifferenceInDifferences` / `MultiPeriodDiD` / `TwoWayFixedEffects` `(vcov_type="conley")` + `survey_design=` → `NotImplementedError` at the estimator level. **Note (open methodological question):** weighted spatial-HAC under probability sampling is an open methodological question; no canonical extension of Conley (1999) exists for the combination.
 - `SyntheticDiD(vcov_type="conley")` → `TypeError` (SyntheticDiD uses bootstrap/jackknife/placebo variance, not the analytical sandwich; tracked in DEFERRED.md).
 - Generic `LinearRegression(vcov_type="conley", survey_design=...)` → `NotImplementedError`. Generic `LinearRegression / compute_robust_vcov` Conley rejects `weights=` for any `weight_type` (`pweight` / `aweight` / `fweight`) → `NotImplementedError` (weighted Conley is not implemented on the generic linalg surface). `compute_robust_vcov` does not accept `survey_design=`; the survey-design surface is `LinearRegression` only. **Note (open methodological question):** the `pweight` / `survey_design` subset additionally reflects an open methodological question — no canonical extension of Conley (1999) exists for weighted spatial-HAC under probability sampling. (Estimator-specific shipped surfaces — SpilloverDiD via Wave E.1/E.2/E.3 and TwoStageDiD via Wave E.3 parity — are explicitly excepted; see "Note (deferral status, 2026-05-26)" below.)

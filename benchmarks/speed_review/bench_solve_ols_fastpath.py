@@ -105,7 +105,7 @@ def build(scenario):
 
         def fit(d):
             res = TwoWayFixedEffects().fit(
-                d, outcome="y", treatment="treated", time="post", unit="unit"
+                d, outcome="y", treatment="treated", post="post", unit="unit"
             )
             return float(res.att), float(res.se)
 
@@ -142,7 +142,7 @@ def build(scenario):
                 d,
                 outcome="y",
                 treatment="treated",
-                time="post",
+                post="post",
                 absorb=["state", "month"],
                 survey_design=design,
             )

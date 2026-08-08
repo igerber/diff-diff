@@ -155,7 +155,7 @@ def _fit_did(est, df, **kw):
 
 
 def _fit_twfe(est, df, **kw):
-    return est.fit(df, outcome="y", treatment="treated", time="post", unit="unit", **kw)
+    return est.fit(df, outcome="y", treatment="treated", post="post", unit="unit", **kw)
 
 
 def _assert_finite_quintet(results):

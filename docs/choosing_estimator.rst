@@ -45,7 +45,9 @@ Start here and follow the questions:
 5. **Do you need period-specific effects?** (Event study design)
 
    - **No** → Use :class:`~diff_diff.TwoWayFixedEffects`
-   - **Yes** → Use :class:`~diff_diff.MultiPeriodDiD`
+   - **Yes** → Use :class:`~diff_diff.TwoWayFixedEffects` with
+     ``event_study=True`` (``MultiPeriodDiD`` is deprecated in 3.9;
+     ``spec="pooled"`` reproduces its design)
 
 6. **Is your treated group small?** (Few treated units, many controls)
 
@@ -70,7 +72,7 @@ Quick Reference
      - Panel data, simultaneous treatment
      - Parallel trends (all periods)
      - Single ATT with unit/time FE
-   * - ``MultiPeriodDiD``
+   * - ``MultiPeriodDiD`` (deprecated 3.9 → ``TwoWayFixedEffects`` ``event_study=True``)
      - Event studies, dynamic effects
      - Parallel trends (pre-periods)
      - Period-specific effects
@@ -188,25 +190,32 @@ Use :class:`~diff_diff.TwoWayFixedEffects` when:
 
    twfe = TwoWayFixedEffects()
    results = twfe.fit(data, outcome='y', treatment='treated',
-                      unit='unit_id', time='period')
+                      unit='unit_id', post='post')
 
 Multi-Period Event Study
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-Use :class:`~diff_diff.MultiPeriodDiD` when:
+Use :class:`~diff_diff.TwoWayFixedEffects` with ``event_study=True`` when:
 
 - You want a full event-study with pre and post treatment effects
 - You need pre-period coefficients to assess parallel trends
 - You want to visualize treatment effect dynamics over time
 - All treated units receive treatment at the same time (simultaneous adoption)
 
+The default ``spec="within"`` estimates the unit-FE event study;
+``spec="pooled"`` reproduces the design of the deprecated
+:class:`~diff_diff.MultiPeriodDiD` (removed in 4.0) and is the only spec
+valid for repeated cross-sections.
+
 .. code-block:: python
 
-   from diff_diff import MultiPeriodDiD, plot_event_study
+   from diff_diff import TwoWayFixedEffects, plot_event_study
 
-   event = MultiPeriodDiD()
+   event = TwoWayFixedEffects()
    results = event.fit(data, outcome='y', treatment='treated',
-                       time='period', unit='unit_id', reference_period=2)
+                       unit='unit_id', event_study=True,
+                       time='period', post_periods=[3, 4, 5],
+                       reference_period=2)
 
    # Visualize
    plot_event_study(results)
@@ -687,8 +696,8 @@ differences helps interpret results and choose appropriate inference.
      - Uses White's robust SEs by default. Specify ``cluster`` for cluster-robust SEs. Use ``inference='wild_bootstrap'`` (with ``cluster=`` — required) for few clusters (<50).
    * - ``TwoWayFixedEffects``
      - Cluster-robust (unit level)
-     - Always clusters at unit level after within-transformation. Specify ``cluster`` to override. Use ``inference='wild_bootstrap'`` for few clusters.
-   * - ``MultiPeriodDiD``
+     - Always clusters at unit level after within-transformation (static AND event-study mode). Specify ``cluster`` to override. Use ``inference='wild_bootstrap'`` for few clusters (static mode only; event-study mode raises).
+   * - ``MultiPeriodDiD`` (deprecated 3.9)
      - HC1 (heteroskedasticity-robust)
      - Same as basic DiD. Cluster-robust available via ``cluster``. Wild bootstrap not yet supported for multi-coefficient inference.
    * - ``CallawaySantAnna``

@@ -59,6 +59,9 @@ MultiPeriodDiD (alias: ``EventStudy``)
 --------------------------------------
 
 Event study estimator with period-specific treatment effects.
+*Deprecated in 3.9, removed in 4.0*: use
+:class:`~diff_diff.TwoWayFixedEffects` with ``event_study=True``
+(``spec="pooled"`` reproduces this design exactly).
 
 .. autoclass:: diff_diff.MultiPeriodDiD
    :no-index:

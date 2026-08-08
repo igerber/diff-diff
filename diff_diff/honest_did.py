@@ -577,6 +577,237 @@ class SensitivityResults(Diagnostic):
 # =============================================================================
 
 
+def _extract_calendar_container_params(
+    surface: Any,
+) -> Tuple[np.ndarray, np.ndarray, int, int, List[Any], List[Any], Optional[float]]:
+    """Calendar-scale container branch (TWFE event-study mode, row M-010).
+
+    Reconstructs EXACTLY the inputs the native ``MultiPeriodDiDResults``
+    branch reads - the authoritative pre/post partition (from the
+    container's ``post_periods`` provenance, never derived positionally),
+    the per-period estimates, the event-study vcov sub-block, and the
+    scalar ``df_survey`` - and applies the same row filter and
+    consecutive-grid validation, so the calendar route can never create a
+    third behavior. Admission is provenance-gated and GEOMETRY-SCOPED:
+
+    - ``post_periods`` provenance must be present (a hand-built calendar
+      surface without the partition is rejected - the partition is not
+      recoverable from ``event_time``/``is_reference``).
+    - Exactly ONE reference row (the native branch never needed this
+      guard - a fitted producer always has one - but containers are
+      publicly constructible, and with several references the scalar
+      ``reference_period`` is None and the boundary is undefined).
+    - Registry geometry only: the Rambachan-Roth restriction matrices are
+      built positionally around a single chronological pre/post boundary
+      (Delta^SD over consecutive second differences with delta_0 = 0 at
+      the boundary), so a non-suffix ``post_periods`` or a reference that
+      is not the last pre-period is REJECTED rather than silently fed to
+      the restriction builders. The native route does not validate
+      declared partitions (a pre-existing limitation - see the REGISTRY
+      HonestDiD Note and the DEFERRED.md row); this new route fails
+      closed instead of reproducing that geometry.
+
+    No unknown-provenance/base-period warning fires here: a first-party
+    calendar surface with the partition provenance and a marked reference
+    IS verified provenance (the native branch these surfaces replicate
+    has no such warning).
+    """
+    if surface.source != "TwoWayFixedEffects":
+        raise TypeError(
+            "HonestDiD accepts calendar-scale EventStudyResults containers "
+            "from the TwoWayFixedEffects event-study mode only (got "
+            f"source={surface.source!r}). For MultiPeriodDiD pass the "
+            "native MultiPeriodDiDResults object."
+        )
+    if surface.post_periods is None:
+        raise TypeError(
+            "HonestDiD requires the calendar container's post_periods "
+            "partition provenance (present on producer-built "
+            "TwoWayFixedEffects event-study surfaces); a calendar surface "
+            "without it cannot be partitioned into pre/post periods - the "
+            "partition is not recoverable from event_time positions."
+        )
+
+    _all_labels = surface.event_time.tolist()
+    if len(set(_all_labels)) != len(_all_labels):
+        raise ValueError(
+            "The event-study container carries duplicate event_time "
+            f"labels ({_all_labels}); each horizon must appear exactly "
+            "once."
+        )
+
+    ref_rows = surface.event_time[surface.is_reference].tolist()
+    if len(ref_rows) != 1:
+        raise ValueError(
+            "HonestDiD requires exactly one reference row on a "
+            f"calendar-scale container (got {sorted(ref_rows)}): the "
+            "Rambachan-Roth boundary (delta_0 = 0) is defined at the "
+            "single omitted reference period."
+        )
+    ref_period = ref_rows[0]
+
+    # Registry geometry scoping: chronological boundary only.
+    post_set = set(surface.post_periods)
+    sorted_labels = sorted(_all_labels)
+    n_post = len(post_set)
+    is_suffix = set(sorted_labels[-n_post:]) == post_set
+    pre_labels = [p for p in sorted_labels if p not in post_set]
+    ref_is_last_pre = bool(pre_labels) and pre_labels[-1] == ref_period
+    if not (is_suffix and ref_is_last_pre):
+        raise ValueError(
+            "HonestDiD requires Registry-valid chronological geometry on "
+            "a calendar-scale container: post_periods must be the suffix "
+            "of the sorted period grid and the reference must be the last "
+            f"pre-period (got post_periods={sorted(post_set)}, "
+            f"reference={ref_period!r}, periods={sorted_labels}). The "
+            "Rambachan-Roth restrictions are built positionally over "
+            "consecutive differences around a single pre/post boundary; "
+            "a non-chronological declared partition is not expressible in "
+            "that system (see the REGISTRY HonestDiD Note and the "
+            "DEFERRED.md transform-or-reject row)."
+        )
+
+    # String calendar labels: chronology is unverifiable, and every
+    # ordering step here (and in the FIT that produced a first-party
+    # surface - the estimator sorts its calendar the same way) assumes
+    # sorted() order. The Rambachan-Roth restrictions are positional over
+    # consecutive periods, so a true chronology that differs from lexical
+    # sorting (unpadded numeric suffixes: 'c10' sorts before 'c2') would
+    # silently shift the l_vec sensitivity target - warn loudly (the
+    # pretrends string-label degradation convention; stacklevel=5 as for
+    # the vcov-less warning below).
+    if any(isinstance(t, str) for t in _all_labels):
+        warnings.warn(
+            "The event-study container carries STRING calendar labels; "
+            "chronological order cannot be verified and is assumed to be "
+            "sorted() order (the same assumption the estimator made at "
+            "fit time). The Rambachan-Roth restrictions are positional "
+            "over consecutive periods, so a chronology that differs from "
+            "lexical sorting (e.g. unpadded numeric suffixes, where "
+            "'c10' sorts before 'c2') silently shifts the sensitivity "
+            "target. Use numeric, Period, or Timestamp calendar labels "
+            "to make the order verifiable.",
+            UserWarning,
+            stacklevel=5,
+        )
+
+    # Native-branch reconstruction. Row filter mirrors the MPD branch:
+    # non-reference rows with finite EFFECT and finite, positive SE (the
+    # native branch requires both - a NaN/Inf coefficient with a positive
+    # SE must not reach the LP/optimizer).
+    _by_label = {t: i for i, t in enumerate(_all_labels)}
+    keep_mask = (
+        (~surface.is_reference)
+        & np.isfinite(surface.att)
+        & np.isfinite(surface.se)
+        & (surface.se > 0)
+    )
+    finite_labels = {t for t, k in zip(_all_labels, keep_mask) if k}
+
+    declared_pre = [p for p in sorted_labels if p not in post_set]  # incl. reference
+    declared_post = [p for p in sorted_labels if p in post_set]
+    pre_estimated = [p for p in declared_pre if p in finite_labels]
+    post_estimated = [p for p in declared_post if p in finite_labels]
+
+    # Consecutive estimated horizons around the reference (the native
+    # branch's positional-geometry guard, verbatim semantics: the
+    # estimable grid is every non-reference row).
+    _pre_grid = [p for p in declared_pre if p != ref_period]
+    _post_grid = declared_post
+    _pre_ok = pre_estimated == _pre_grid[len(_pre_grid) - len(pre_estimated) :]
+    _post_ok = post_estimated == _post_grid[: len(post_estimated)]
+    if not (_pre_ok and _post_ok):
+        _dropped_pre = [p for p in _pre_grid if p not in finite_labels]
+        _dropped_post = [p for p in _post_grid if p not in finite_labels]
+        raise ValueError(
+            "HonestDiD requires consecutive estimated horizons around "
+            "the reference period: retained pre-periods must end "
+            "immediately before it and retained post-periods must "
+            "start immediately after it, with no interior gaps (the "
+            "Rambachan-Roth restrictions are built positionally). "
+            "Horizons with undefined inference (non-finite or zero "
+            f"SE) break that grid here: dropped pre {_dropped_pre}, "
+            f"dropped post {_dropped_post}. Only leading pre-periods "
+            "and trailing post-periods can be dropped safely."
+        )
+
+    all_estimated = pre_estimated + post_estimated
+    if not all_estimated:
+        raise ValueError(
+            "No period effects with finite estimates found. " "Cannot compute HonestDiD bounds."
+        )
+    if len(pre_estimated) == 0:
+        raise ValueError(
+            "No pre-period effects with finite estimates found. "
+            "HonestDiD requires at least one identified pre-period "
+            "coefficient."
+        )
+    if len(post_estimated) == 0:
+        raise ValueError(
+            "No post-period effects with finite estimates found. "
+            "HonestDiD requires at least one identified post-treatment "
+            "coefficient (the sensitivity target)."
+        )
+
+    beta_hat = np.array([float(surface.att[_by_label[t]]) for t in all_estimated])
+    ses = [float(surface.se[_by_label[t]]) for t in all_estimated]
+
+    # Event-study vcov sub-block via the container's explicit index
+    # (mirrors the native interaction_indices lookup), hardened to the
+    # relative container path's convention above: duplicate or incomplete
+    # vcov_index fails loud, the extracted block passes
+    # _validate_vcov_subblock with allow_singular=False (Rambachan-Roth
+    # inference assumes eigenvalues bounded away from zero), and the
+    # diagonal approximation is reserved for a vcov-less container, with
+    # the same warning.
+    ses_arr = np.asarray(ses, dtype=float)
+    if surface.vcov is not None and surface.vcov_index is not None:
+        vcov_labels = list(surface.vcov_index.tolist())
+        if len(set(vcov_labels)) != len(vcov_labels):
+            raise ValueError(
+                "The event-study container's vcov_index carries duplicate "
+                f"labels ({vcov_labels}); the covariance sub-block is "
+                "ambiguous."
+            )
+        missing = [t for t in all_estimated if t not in vcov_labels]
+        if missing:
+            raise ValueError(
+                f"The event-study container's vcov_index is missing "
+                f"retained horizon(s) {missing}; cannot extract the "
+                f"covariance sub-block. Available index: {vcov_labels}."
+            )
+        idx = [vcov_labels.index(t) for t in all_estimated]
+        sigma = _validate_vcov_subblock(
+            np.asarray(surface.vcov, dtype=float)[np.ix_(idx, idx)],
+            ses_arr,
+            "HonestDiD",
+            allow_singular=False,
+        )
+    else:
+        # stacklevel=5: one frame deeper than the relative container
+        # path's identical warning (this helper is dispatched from
+        # _extract_container_params).
+        warnings.warn(
+            "Event-study container carries no full covariance matrix; "
+            "using a diagonal approximation from the stored standard "
+            "errors. Cross-event-time covariance is unavailable on this "
+            "surface.",
+            UserWarning,
+            stacklevel=5,
+        )
+        sigma = np.diag(ses_arr**2)
+
+    return (
+        beta_hat,
+        sigma,
+        len(pre_estimated),
+        len(post_estimated),
+        pre_estimated,
+        post_estimated,
+        surface.df_survey,
+    )
+
+
 def _extract_container_params(
     surface: Any,
 ) -> Tuple[np.ndarray, np.ndarray, int, int, List[Any], List[Any], Optional[float]]:
@@ -600,11 +831,20 @@ def _extract_container_params(
     """
     import warnings
 
+    # Calendar-scale surfaces (the TWFE event-study mode, row M-010) route
+    # into the native-branch reconstruction - the relative-scale arithmetic
+    # below (anticipation cutoffs, ref-gap literals) never applies to
+    # calendar labels.
+    if surface.time_scale == "calendar":
+        return _extract_calendar_container_params(surface)
+
     if surface.source not in ("CallawaySantAnnaResults", "StackedDiDResults"):
         raise TypeError(
             "HonestDiD accepts EventStudyResults containers produced by "
-            "CallawaySantAnnaResults.aggregate('event_study') or "
-            "StackedDiDResults.aggregate('event_study') only "
+            "CallawaySantAnnaResults.aggregate('event_study'), "
+            "StackedDiDResults.aggregate('event_study'), or the "
+            "TwoWayFixedEffects event-study mode (calendar-scale "
+            "surfaces) only "
             f"(got source={surface.source!r}). For other estimators pass "
             "the native results object where supported "
             "(MultiPeriodDiDResults, CallawaySantAnnaResults, or "
@@ -1001,6 +1241,12 @@ def _extract_event_study_params(
                 "No pre-period effects with finite estimates found. "
                 "HonestDiD requires at least one identified pre-period "
                 "coefficient."
+            )
+        if num_post_periods == 0:
+            raise ValueError(
+                "No post-period effects with finite estimates found. "
+                "HonestDiD requires at least one identified post-treatment "
+                "coefficient (the sensitivity target)."
             )
 
         # Extract proper sub-VCV for interaction terms
@@ -2838,13 +3084,14 @@ class HonestDiD(BaseEstimator):
 
     Examples
     --------
-    >>> from diff_diff import MultiPeriodDiD
+    >>> from diff_diff import TwoWayFixedEffects
     >>> from diff_diff.honest_did import HonestDiD
     >>>
     >>> # Fit event study
-    >>> mp_did = MultiPeriodDiD()
-    >>> results = mp_did.fit(data, outcome='y', treatment='treated',
-    ...                      time='period', post_periods=[4,5,6,7])
+    >>> twfe = TwoWayFixedEffects()
+    >>> results = twfe.fit(data, outcome='y', treatment='treated',
+    ...                    unit='unit', event_study=True,
+    ...                    time='period', post_periods=[4,5,6,7])
     >>>
     >>> # Sensitivity analysis with relative magnitudes
     >>> honest = HonestDiD(method='relative_magnitude', M=1.0)

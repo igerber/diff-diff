@@ -576,7 +576,7 @@ class TestTargetParameterRealFitIntegration:
         warnings.filterwarnings("ignore")
         df = generate_did_data(n_units=40, n_periods=4, seed=7)
         fit = TwoWayFixedEffects().fit(
-            df, outcome="outcome", treatment="treated", time="post", unit="unit"
+            df, outcome="outcome", treatment="treated", post="post", unit="unit"
         )
         # Real TWFE fit returns DiDResults (no separate TWFE result class).
         assert type(fit).__name__ == "DiDResults"

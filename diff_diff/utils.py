@@ -3671,6 +3671,7 @@ def snap_absorbed_regressors(
     rel_tol: float = 1e-10,
     weights: Optional[np.ndarray] = None,
     screen_tol: float = 1e-3,
+    stacklevel: int = 3,
 ) -> List[str]:
     """Zero out regressors that were absorbed (spanned) by the fixed effects.
 
@@ -3780,7 +3781,7 @@ def snap_absorbed_regressors(
             "so their coefficients are not identified and will be reported "
             "as NaN.",
             UserWarning,
-            stacklevel=3,
+            stacklevel=stacklevel,
         )
     return snapped
 

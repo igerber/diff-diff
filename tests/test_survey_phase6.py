@@ -1602,7 +1602,7 @@ class TestSubpopulationMaskValidation:
             data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
             survey_design=sd,
         )

@@ -481,7 +481,7 @@ class TestEstimatorIntegration:
         )
 
         results = twfe.fit(
-            clustered_did_data, outcome="outcome", treatment="treated", time="period", unit="unit"
+            clustered_did_data, outcome="outcome", treatment="treated", post="period", unit="unit"
         )
 
         assert results.inference_method == "wild_bootstrap"
@@ -1297,7 +1297,7 @@ def test_twfe_wild_bootstrap_p_val_type_propagates():
         n_bootstrap=999,
         seed=7,
         p_val_type="equal-tailed",
-    ).fit(df, outcome="outcome", treatment="treated", time="post", unit="unit")
+    ).fit(df, outcome="outcome", treatment="treated", post="post", unit="unit")
     assert res.p_val_type == "equal-tailed"
     assert res.to_dict()["p_val_type"] == "equal-tailed"
     lower, upper = res.conf_int

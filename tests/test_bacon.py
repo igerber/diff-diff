@@ -315,7 +315,7 @@ class TestTWFEIntegration:
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            twfe.fit(data, outcome="outcome", treatment="treated", time="time", unit="unit")
+            twfe.fit(data, outcome="outcome", treatment="treated", post="time", unit="unit")
 
             # Should have emitted a warning about staggered treatment
             staggered_warnings = [x for x in w if "staggered" in str(x.message).lower()]

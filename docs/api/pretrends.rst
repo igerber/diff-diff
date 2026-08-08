@@ -47,13 +47,13 @@ Example
 
 .. code-block:: python
 
-   from diff_diff import MultiPeriodDiD, PreTrendsPower
+   from diff_diff import TwoWayFixedEffects, PreTrendsPower
 
-   # First fit an event study
-   model = MultiPeriodDiD()
+   # First fit an event study (TwoWayFixedEffects event-study mode)
+   model = TwoWayFixedEffects()
    results = model.fit(data, outcome='y', treatment='treated',
-                       time='period', unit='unit_id',
-                       post_periods=[5, 6, 7], reference_period=4)
+                       unit='unit_id', event_study=True, time='period',
+                       post_periods=[5, 6, 7, 8, 9], reference_period=4)
 
    # Compute pre-trends power for linear violations.
    # Default acceptance region is the Roth (2022) NIS box probability.
@@ -150,17 +150,17 @@ Complete Example
 
    import numpy as np
    from diff_diff import (
-       MultiPeriodDiD,
+       TwoWayFixedEffects,
        PreTrendsPower,
        compute_mdv,
        plot_pretrends_power,
    )
 
-   # Fit event study
-   model = MultiPeriodDiD()
+   # Fit event study (TwoWayFixedEffects event-study mode)
+   model = TwoWayFixedEffects()
    results = model.fit(data, outcome='y', treatment='treated',
-                       time='period', unit='unit_id',
-                       post_periods=[5, 6, 7], reference_period=4)
+                       unit='unit_id', event_study=True, time='period',
+                       post_periods=[5, 6, 7, 8, 9], reference_period=4)
 
    # Compute MDV
    mdv = compute_mdv(results, alpha=0.05, target_power=0.80)

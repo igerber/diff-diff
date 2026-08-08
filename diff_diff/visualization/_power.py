@@ -424,13 +424,14 @@ def plot_pretrends_power(
     --------
     From PreTrendsPower results:
 
-    >>> from diff_diff import MultiPeriodDiD
+    >>> from diff_diff import TwoWayFixedEffects
     >>> from diff_diff.pretrends import PreTrendsPower
     >>> from diff_diff.visualization import plot_pretrends_power
     >>>
-    >>> mp_did = MultiPeriodDiD()
-    >>> event_results = mp_did.fit(data, outcome='y', treatment='treated',
-    ...                            time='period', post_periods=[4, 5, 6, 7])
+    >>> twfe = TwoWayFixedEffects()
+    >>> event_results = twfe.fit(data, outcome='y', treatment='treated',
+    ...                          unit='unit', event_study=True,
+    ...                          time='period', post_periods=[4, 5, 6, 7])
     >>>
     >>> pt = PreTrendsPower()
     >>> curve = pt.power_curve(event_results)

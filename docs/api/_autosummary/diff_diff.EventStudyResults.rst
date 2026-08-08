@@ -32,8 +32,10 @@
       ~EventStudyResults.df
       ~EventStudyResults.df_survey
       ~EventStudyResults.estimand
+      ~EventStudyResults.estimation_spec
       ~EventStudyResults.event_time_convention
       ~EventStudyResults.n_kind
+      ~EventStudyResults.post_periods
       ~EventStudyResults.reference_event_times
       ~EventStudyResults.reference_period
       ~EventStudyResults.reference_periods

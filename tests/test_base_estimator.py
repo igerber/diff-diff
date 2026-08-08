@@ -172,12 +172,25 @@ def test_init_signature_matches_get_params(cls):
     assert set(est.get_params()) == sig
 
 
+# Classes whose CONSTRUCTION deliberately warns during a deprecation window
+# (3.9 class merges, v4-design section 4.1). The round-trip test's
+# warnings-as-errors filter exists to catch UNEXPECTED warnings from a
+# re-init; these messages are expected by contract and are ignored inside
+# the error filter. Forward home for the phase-3 siblings (SDDD, QDiD).
+DEPRECATED_CLASS_WARNINGS = {
+    "MultiPeriodDiD": r"MultiPeriodDiD is deprecated",
+}
+
+
 @estimators
 def test_reinstantiation_round_trip(cls):
     est = _make(cls)
     params = est.get_params()
     with warnings.catch_warnings():
         warnings.simplefilter("error")
+        _expected = DEPRECATED_CLASS_WARNINGS.get(cls.__name__)
+        if _expected is not None:
+            warnings.filterwarnings("ignore", message=_expected, category=FutureWarning)
         clone = cls(**params)
     assert clone.get_params() == params
 

@@ -119,23 +119,28 @@ For panel data with multiple periods:
        outcome='outcome',
        treatment='treated',
        unit='unit_id',
-       time='period'
+       post='post'
    )
 
 Event Study Design
 ------------------
 
-Examine treatment effects over time:
+Examine treatment effects over time with the TwoWayFixedEffects
+event-study mode (``spec="pooled"`` reproduces the deprecated
+``MultiPeriodDiD`` design; the default ``spec="within"`` adds unit fixed
+effects):
 
 .. code-block:: python
 
-   from diff_diff import MultiPeriodDiD
+   from diff_diff import TwoWayFixedEffects
 
-   event = MultiPeriodDiD()
+   event = TwoWayFixedEffects()
    results = event.fit(
        data,
        outcome='outcome',
        treatment='treated',
+       unit='unit_id',
+       event_study=True,
        time='period',
        post_periods=[5, 6, 7, 8, 9],
        reference_period=4

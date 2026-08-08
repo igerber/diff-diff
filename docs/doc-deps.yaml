@@ -143,6 +143,21 @@ sources:
         type: methodology
       - path: docs/api/estimators.rst
         type: api_reference
+      - path: docs/quickstart.rst
+        type: user_guide
+        note: "TWFE static example (post= dummy) + the Event Study Design section (event_study=True); both track the fit signature (rows M-010/M-082)"
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+        note: "Decision-tree question 5, Quick Reference + SE tables, and the Multi-Period Event Study section all teach the event-study mode (rows M-010/M-082)"
+      - path: docs/troubleshooting.rst
+        type: user_guide
+        note: "Static TWFE example uses post= (row M-082)"
+      - path: diff_diff/guides/llms.txt
+        type: user_guide
+        note: "TWFE catalog line documents event_study=True (row M-010)"
+      - path: diff_diff/guides/llms-full.txt
+        type: user_guide
+        note: "TWFE block documents the full fit signature incl. event-study params; the Conley section's panel examples use post=/event_study (rows M-010/M-082)"
 
   # ── CallawaySantAnna (staggered group) ─────��────────────────────────
 

@@ -177,6 +177,28 @@ class BusinessReport:
         survey_design: Optional[Any] = None,
         precomputed: Optional[Dict[str, Any]] = None,
     ):
+        # The unified event-study container (row M-092) is rejected
+        # explicitly: BusinessReport's headline schema is SCALAR
+        # (effect/se/ci/p on one inference row), while EventStudyResults
+        # is per-period by construction and the TWFE event-study mode
+        # deliberately ships no overall ATT - so the report would render
+        # an all-null headline under the generic fall-through
+        # (no-silent-failures). BR/DR admission of EventStudyResults
+        # surfaces is tracked in TODO.md.
+        from diff_diff.results_base import EventStudyResults as _ESR
+
+        if isinstance(results, _ESR):
+            raise TypeError(
+                "BusinessReport does not yet support EventStudyResults "
+                "surfaces (the TWFE event-study mode and "
+                "aggregate('event_study') containers): the narrative "
+                "headline is scalar and per-period surfaces carry no "
+                "overall ATT. Build the report from the fitted "
+                "estimator's scalar results (e.g. a static "
+                "TwoWayFixedEffects fit); use the event-study surface "
+                "with HonestDiD, PreTrendsPower, or plot_event_study. "
+                "EventStudyResults admission is tracked in TODO.md."
+            )
         # Marked diagnostic results are rejected BY TYPE (spec section
         # 3.5, ledger row M-091): BusinessReport's primary input is a
         # fitted ESTIMATOR result carrying the canonical inference row.

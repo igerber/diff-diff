@@ -75,13 +75,13 @@ def make_phases(data, results, rw_cols):
         # practitioners actually start.
         did = DifferenceInDifferences(robust=True)
         results["naive"] = did.fit(
-            data, outcome="outcome", treatment="treat_unit", time="post",
+            data, outcome="outcome", treatment="treat_unit", post="post",
         )
 
     def tsl_fit():
         did = DifferenceInDifferences(robust=True)
         results["tsl"] = did.fit(
-            data, outcome="outcome", treatment="treat_unit", time="post",
+            data, outcome="outcome", treatment="treat_unit", post="post",
             survey_design=sd_tsl,
         )
 
@@ -94,7 +94,7 @@ def make_phases(data, results, rw_cols):
         )
         did = DifferenceInDifferences(robust=True)
         results["replicate"] = did.fit(
-            data, outcome="outcome", treatment="treat_unit", time="post",
+            data, outcome="outcome", treatment="treat_unit", post="post",
             survey_design=sd,
         )
 
@@ -103,7 +103,7 @@ def make_phases(data, results, rw_cols):
         for y in ("outcome", "consideration", "purchase_intent"):
             did = DifferenceInDifferences(robust=True)
             out[y] = did.fit(
-                data, outcome=y, treatment="treat_unit", time="post",
+                data, outcome=y, treatment="treat_unit", post="post",
                 survey_design=sd_tsl,
             )
         results["multi_outcome"] = out

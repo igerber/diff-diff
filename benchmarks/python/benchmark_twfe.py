@@ -80,7 +80,7 @@ def main():
     if args.warmup:
         print("Warm-up fit (untimed)...")
         TwoWayFixedEffects(robust=True).fit(
-            data, outcome="outcome", treatment="treated", time="post", unit="unit"
+            data, outcome="outcome", treatment="treated", post="post", unit="unit"
         )
 
     twfe = TwoWayFixedEffects(robust=True)  # auto-clusters at unit level
@@ -90,7 +90,7 @@ def main():
             data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
         )
 

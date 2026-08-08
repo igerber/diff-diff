@@ -243,7 +243,7 @@ class TestFitBehavior:
         data = _make_did_panel(n_units=20)
         est = TwoWayFixedEffects(robust=False)
         with pytest.warns(UserWarning, match="robust=False with cluster"):
-            res = est.fit(data, outcome="y", treatment="treated", time="time", unit="unit")
+            res = est.fit(data, outcome="y", treatment="treated", post="time", unit="unit")
         assert np.isfinite(res.att) and np.isfinite(res.se)
         assert res.vcov_type == "hc1"
         assert "CR1 cluster-robust at unit" in res.summary()
@@ -743,7 +743,7 @@ class TestFitBehavior:
                 data,
                 outcome="y",
                 treatment="treated",
-                time="time",
+                post="time",
                 unit="unit",
             )
             assert np.isfinite(res.att), f"{vcov}: ATT not finite"
@@ -764,7 +764,7 @@ class TestFitBehavior:
         """
         data = _make_did_panel(n_units=20)
         res_twfe = TwoWayFixedEffects(vcov_type="hc2").fit(
-            data, outcome="y", treatment="treated", time="time", unit="unit"
+            data, outcome="y", treatment="treated", post="time", unit="unit"
         )
         res_did = DifferenceInDifferences(vcov_type="hc2").fit(
             data,
@@ -785,7 +785,7 @@ class TestFitBehavior:
         """
         data = _make_did_panel(n_units=20)
         res_twfe = TwoWayFixedEffects(vcov_type="hc2_bm").fit(
-            data, outcome="y", treatment="treated", time="time", unit="unit"
+            data, outcome="y", treatment="treated", post="time", unit="unit"
         )
         res_did = DifferenceInDifferences(vcov_type="hc2_bm", cluster="unit").fit(
             data,
@@ -832,7 +832,7 @@ class TestFitBehavior:
         data = pd.DataFrame(rows)
 
         res_twfe = TwoWayFixedEffects(vcov_type="hc2_bm").fit(
-            data, outcome="y", treatment="treated", time="time", unit="unit"
+            data, outcome="y", treatment="treated", post="time", unit="unit"
         )
         # Auto-cluster fires; result reports unit as the cluster name.
         assert res_twfe.cluster_name == "unit"
@@ -891,7 +891,7 @@ class TestFitBehavior:
         """
         data = _make_did_panel(n_units=20)
         res = TwoWayFixedEffects(vcov_type="hc2", inference="analytical").fit(
-            data, outcome="y", treatment="treated", time="time", unit="unit"
+            data, outcome="y", treatment="treated", post="time", unit="unit"
         )
         assert np.isfinite(res.att)
         assert np.isfinite(res.se)
@@ -935,7 +935,7 @@ class TestFitBehavior:
                 data,
                 outcome="y",
                 treatment="treated",
-                time="time",
+                post="time",
                 unit="unit",
                 covariates=["x_invariant"],
             )
@@ -963,7 +963,7 @@ class TestFitBehavior:
             inference="wild_bootstrap",
             n_bootstrap=50,
             seed=1,
-        ).fit(data, outcome="y", treatment="treated", time="time", unit="unit")
+        ).fit(data, outcome="y", treatment="treated", post="time", unit="unit")
         assert np.isfinite(res.se)
         assert res.se > 0
         # Bootstrap consumed unit-level clusters.
@@ -1001,7 +1001,7 @@ class TestFitBehavior:
                 data,
                 outcome="y",
                 treatment="treated",
-                time="time",
+                post="time",
                 unit="unit",
                 survey_design=sd,
             )
@@ -1033,7 +1033,7 @@ class TestFitBehavior:
         # (TWFE.fit builds _treatment_post internally from data[treatment] *
         # data[time], so we just need data["treated"] and data["time"] right.)
         res = TwoWayFixedEffects(vcov_type="hc2_bm").fit(
-            data, outcome="y", treatment="treated", time="time", unit="unit"
+            data, outcome="y", treatment="treated", post="time", unit="unit"
         )
         assert np.isfinite(res.att)
         assert np.isfinite(res.se)
@@ -1054,7 +1054,7 @@ class TestFitBehavior:
 
         data = _make_did_panel(n_units=20)
         res = TwoWayFixedEffects(vcov_type=vcov).fit(
-            data, outcome="y", treatment="treated", time="time", unit="unit"
+            data, outcome="y", treatment="treated", post="time", unit="unit"
         )
         assert res.vcov is not None
         assert res.vcov.shape[0] == res.vcov.shape[1]
@@ -1084,7 +1084,7 @@ class TestFitBehavior:
         """
         data = _make_did_panel(n_units=20)
         res_twfe = TwoWayFixedEffects(vcov_type=vcov).fit(
-            data, outcome="y", treatment="treated", time="time", unit="unit"
+            data, outcome="y", treatment="treated", post="time", unit="unit"
         )
         cluster_kwarg = "unit" if vcov == "hc2_bm" else None
         res_did = DifferenceInDifferences(vcov_type=vcov, cluster=cluster_kwarg).fit(
@@ -1136,7 +1136,7 @@ class TestFitBehavior:
             data,
             outcome="y",
             treatment="treated",
-            time="time",
+            post="time",
             unit="unit",
             survey_design=sd,
         )
@@ -1181,7 +1181,7 @@ class TestFitBehavior:
             data,
             outcome="y",
             treatment="treated",
-            time="time",
+            post="time",
             unit="unit",
             survey_design=sd,
         )
@@ -1210,7 +1210,7 @@ class TestFitBehavior:
         data = pd.DataFrame(rows)
 
         res = TwoWayFixedEffects(vcov_type="hc1").fit(
-            data, outcome="y", treatment="treated", time="time", unit="unit"
+            data, outcome="y", treatment="treated", post="time", unit="unit"
         )
         summary = res.summary()
         # TWFE auto-clusters at the unit column when cluster=None.
@@ -1226,7 +1226,7 @@ class TestFitBehavior:
         """
         data = _make_did_panel(n_units=20)
         res = TwoWayFixedEffects(vcov_type="classical").fit(
-            data, outcome="y", treatment="treated", time="time", unit="unit"
+            data, outcome="y", treatment="treated", post="time", unit="unit"
         )
         assert np.isfinite(res.att)
         assert np.isfinite(res.se)
@@ -1249,7 +1249,7 @@ class TestFitBehavior:
         """
         data = _make_did_panel(n_units=20)
         res = TwoWayFixedEffects(vcov_type="classical").fit(
-            data, outcome="y", treatment="treated", time="time", unit="unit"
+            data, outcome="y", treatment="treated", post="time", unit="unit"
         )
         assert res.vcov_type == "classical"
         assert res.cluster_name is None
@@ -1270,7 +1270,7 @@ class TestFitBehavior:
             inference="wild_bootstrap",
             n_bootstrap=50,
             seed=1,
-        ).fit(data, outcome="y", treatment="treated", time="time", unit="unit")
+        ).fit(data, outcome="y", treatment="treated", post="time", unit="unit")
         # Bootstrap must have succeeded with a finite SE.
         assert np.isfinite(res.se)
         assert res.se > 0
@@ -2375,7 +2375,7 @@ class TestTWFECovariateNameCollision:
                 df,
                 outcome="y",
                 treatment="treated",
-                time="time",
+                post="time",
                 unit="unit",
                 covariates=[name],
             )
@@ -2386,7 +2386,7 @@ class TestTWFECovariateNameCollision:
             df,
             outcome="y",
             treatment="treated",
-            time="time",
+            post="time",
             unit="unit",
             covariates=["x1"],
         )
@@ -2401,7 +2401,7 @@ class TestTWFECovariateNameCollision:
             df,
             outcome="y",
             treatment="treated",
-            time="time",
+            post="time",
             unit="unit",
             covariates=["x1"],
         )
@@ -2425,7 +2425,7 @@ class TestTWFECovariateNameCollision:
             df,
             outcome="y",
             treatment="treated",
-            time="time",
+            post="time",
             unit="unit",
             covariates=["x1"],
         )
@@ -2622,7 +2622,7 @@ class TestAbsorbedFEFullKParity:
         DiD is the oracle. After the fix TWFE(classical) SE == that oracle."""
         df = _make_absorb_panel()
         tw = TwoWayFixedEffects(vcov_type="classical").fit(
-            df, outcome="y", treatment="treated", time="post", unit="unit"
+            df, outcome="y", treatment="treated", post="post", unit="unit"
         )
         fe = DifferenceInDifferences(vcov_type="classical").fit(
             df, outcome="y", treatment="treated", post="post", fixed_effects=["unit", "post"]
@@ -2813,7 +2813,7 @@ class TestDfConvention:
         from scipy import stats
 
         data = self._clustered_panel()
-        kw = dict(outcome="y", treatment="group", time="post", unit="unit")
+        kw = dict(outcome="y", treatment="group", post="post", unit="unit")
         r0 = estimator_cls(cluster="unit").fit(data, **kw)
         r1 = estimator_cls(cluster="unit", df_convention="cluster").fit(data, **kw)
         assert r0.att == r1.att and r0.se == r1.se and r0.t_stat == r1.t_stat
@@ -2832,7 +2832,7 @@ class TestDfConvention:
 
         data = self._clustered_panel()
         data["treated"] = data["group"] * data["post"]
-        kw = dict(outcome="y", treatment="treated", time="post", unit="unit")
+        kw = dict(outcome="y", treatment="treated", post="post", unit="unit")
         r0 = TwoWayFixedEffects().fit(data, **kw)
         r1 = TwoWayFixedEffects(df_convention="cluster").fit(data, **kw)
         assert r0.se == r1.se and r0.t_stat == r1.t_stat
@@ -2914,7 +2914,7 @@ class TestDfConvention:
         lon = {u: -100 + rng.uniform(-2, 2) for u in units}
         data["lat"] = data["unit"].map(lat)
         data["lon"] = data["unit"].map(lon)
-        kw = dict(outcome="y", treatment="group", time="post", unit="unit")
+        kw = dict(outcome="y", treatment="group", post="post", unit="unit")
         common = dict(
             vcov_type="conley",
             cluster="unit",
@@ -2931,7 +2931,7 @@ class TestDfConvention:
         knob is fallback-level only, so hc2_bm inference is IDENTICAL with
         the knob on and off."""
         data = self._clustered_panel(n_units=20)
-        kw = dict(outcome="y", treatment="group", time="post", unit="unit")
+        kw = dict(outcome="y", treatment="group", post="post", unit="unit")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r0 = DifferenceInDifferences(cluster="unit", vcov_type="hc2_bm").fit(data, **kw)
@@ -3093,7 +3093,7 @@ class TestDfConvention:
     def test_unclustered_fit_knob_is_inert(self):
         """No cluster -> n_clusters_ is None -> knob has zero effect."""
         data = self._clustered_panel()
-        kw = dict(outcome="y", treatment="group", time="post")
+        kw = dict(outcome="y", treatment="group", post="post")
         r0 = DifferenceInDifferences().fit(data, **kw)
         r1 = DifferenceInDifferences(df_convention="cluster").fit(data, **kw)
         assert (r0.p_value, r0.conf_int) == (r1.p_value, r1.conf_int)
@@ -3128,7 +3128,7 @@ class TestDfConventionNormal:
                 )
         return pd.DataFrame(rows)
 
-    _kw = dict(outcome="y", treatment="group", time="post")
+    _kw = dict(outcome="y", treatment="group", post="post")
 
     def test_normal_is_z_on_every_fit(self):
         from scipy import stats
@@ -3168,7 +3168,7 @@ class TestDfConventionNormal:
 
         data = self._panel()
         rt = TwoWayFixedEffects(cluster="unit", df_convention="normal").fit(
-            data, outcome="y", treatment="group", time="post", unit="unit"
+            data, outcome="y", treatment="group", post="post", unit="unit"
         )
         assert rt.p_value == pytest.approx(2 * stats.norm.sf(abs(rt.t_stat)), rel=1e-14)
         rm = MultiPeriodDiD(cluster="unit", df_convention="normal").fit(

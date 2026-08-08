@@ -86,7 +86,7 @@ def main():
         data_bin["post"] = (data_bin["period"] >= treated_cohort).astype(int)
         did = DifferenceInDifferences(robust=True)
         results["binarized"] = did.fit(
-            data_bin, outcome="outcome", treatment="treated_any", time="post",
+            data_bin, outcome="outcome", treatment="treated_any", post="post",
         )
 
     def spline_sensitivity_linear():

@@ -1841,3 +1841,83 @@ def test_lpdid_pooled_df_threaded():
     assert res.to_dict()["pooled_df"] == res.pooled_df
     # Native pooled frame schema is UNCHANGED.
     assert "df" not in res.pooled.columns
+
+
+# ---------------------------------------------------------------------------
+# M-092 amendment #5 (Phase 3(a), with M-010): the calendar-partition and
+# design provenance fields
+# ---------------------------------------------------------------------------
+
+
+class TestPartitionProvenanceFields:
+    def test_post_periods_threaded_by_from_mpd(self):
+        from diff_diff import MultiPeriodDiD
+        from diff_diff.results_base import _from_mpd
+
+        rng = np.random.default_rng(9)
+        rows = []
+        for u in range(24):
+            ti = 1 if u < 12 else 0
+            for t in range(6):
+                rows.append(
+                    {
+                        "unit": u,
+                        "period": t,
+                        "treated": ti,
+                        "y": rng.normal() + 0.4 * ti * (t in (2, 5)),
+                    }
+                )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = MultiPeriodDiD().fit(
+                pd.DataFrame(rows),
+                "y",
+                "treated",
+                "period",
+                post_periods=[2, 5],
+                reference_period=4,
+            )
+        surface = _from_mpd(res)
+        # the AUTHORITATIVE (possibly non-suffix) declared partition, verbatim
+        assert surface.post_periods == (2, 5)
+        assert surface.estimation_spec is None  # TWFE producer only
+
+    def test_absent_on_other_producers(self):
+        surface = _tiny_surface()
+        assert surface.post_periods is None
+        assert surface.estimation_spec is None
+        d = surface.to_dict()
+        assert d["post_periods"] is None
+        assert d["estimation_spec"] is None
+
+    def test_post_periods_content_validated(self):
+        # Fail-closed on malformed-but-present content (the n_kind / vcov
+        # pairing convention): consumers classify by this field.
+        with pytest.raises(ValueError, match="nonempty"):
+            _tiny_surface(post_periods=())
+        with pytest.raises(ValueError, match="duplicates"):
+            _tiny_surface(post_periods=(1, 1))
+        with pytest.raises(ValueError, match="not\\s+in\\s+event_time|are not"):
+            _tiny_surface(post_periods=(9,))
+        with pytest.raises(ValueError, match="reference rows"):
+            _tiny_surface(post_periods=(-1, 1))
+
+    def test_estimation_spec_vocabulary(self):
+        with pytest.raises(ValueError, match="'within', 'pooled'"):
+            _tiny_surface(estimation_spec="banana")
+        assert _tiny_surface(estimation_spec="within").estimation_spec == "within"
+
+    def test_json_round_trip_carries_both_fields(self):
+        import json
+
+        surface = _tiny_surface(post_periods=(0, 1), estimation_spec="pooled")
+        payload = json.loads(json.dumps(surface.to_dict()))
+        assert payload["post_periods"] == [0, 1]
+        assert payload["estimation_spec"] == "pooled"
+
+    def test_copy_semantics(self):
+        # tuple coercion: a caller-owned list never aliases the container
+        pp = [0, 1]
+        surface = _tiny_surface(post_periods=pp)
+        pp.append(99)
+        assert surface.post_periods == (0, 1)

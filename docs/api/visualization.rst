@@ -17,12 +17,13 @@ Example
 
 .. code-block:: python
 
-   from diff_diff import MultiPeriodDiD, plot_event_study
+   from diff_diff import TwoWayFixedEffects, plot_event_study
 
-   # Fit event study model
-   model = MultiPeriodDiD()
+   # Fit an event study (TwoWayFixedEffects event-study mode)
+   model = TwoWayFixedEffects()
    results = model.fit(data, outcome='y', treatment='treated',
-                       time='period', unit='unit_id', reference_period=2)
+                       unit='unit_id', event_study=True, time='period',
+                       post_periods=[3, 4, 5], reference_period=2)
 
    # Create plot
    ax = plot_event_study(results)

@@ -308,7 +308,9 @@ def _twfe_fit_kwargs(
     n_periods: int,
     treatment_period: int,
 ) -> Dict[str, Any]:
-    return dict(outcome="outcome", treatment="treated", time="post", unit="unit")
+    # post= is the renamed static dummy parameter (row M-082); the DGP's
+    # "post" column is the 0/1 indicator.
+    return dict(outcome="outcome", treatment="treated", post="post", unit="unit")
 
 
 def _multiperiod_fit_kwargs(
@@ -452,10 +454,11 @@ def _survey_twfe_fit_kwargs(
     survey_config: SurveyPowerConfig,
 ) -> Dict[str, Any]:
     """Fit kwargs for TwoWayFixedEffects with survey design."""
+    # post= is the renamed static dummy parameter (row M-082).
     return dict(
         outcome="outcome",
         treatment="ever_treated",
-        time="post",
+        post="post",
         unit="unit",
         survey_design=survey_config._build_survey_design(),
     )
