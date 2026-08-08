@@ -153,10 +153,22 @@ def test_reviewer_invocations_are_pinned():
     codex = (_SKILL / "codex_review.py").read_text()
     assert 'CODEX_MODEL = "gpt-5.6-sol"' in codex
     assert 'CODEX_EFFORT = "xhigh"' in codex
-    assert "CODEX_TIMEOUT_S = 1200" in codex
+    assert "CODEX_TIMEOUT_S = 2400" in codex
     # and codex_review.py actually passes them to call_codex
     assert "model=CODEX_MODEL" in codex and "effort=CODEX_EFFORT" in codex
     assert "timeout_s=CODEX_TIMEOUT_S" in codex
+
+    # SKILL.md STATES the ceiling to the reader ("caps at Ns and exits 3"), so
+    # bumping CODEX_TIMEOUT_S without editing the prose leaves the skill's own
+    # instructions lying about its behavior. Derive both and compare rather than
+    # hard-coding the number twice, so this cannot drift on the next bump.
+    code_cap = re.search(r"^CODEX_TIMEOUT_S\s*=\s*([\d.]+)", codex, re.M)
+    assert code_cap, "CODEX_TIMEOUT_S assignment not found in codex_review.py"
+    doc_cap = re.search(r"caps at (\d+)s and exits 3", (_SKILL / "SKILL.md").read_text())
+    assert doc_cap, "SKILL.md no longer states the codex cap - keep it or drop this pin"
+    assert float(doc_cap.group(1)) == float(code_cap.group(1)), (
+        f"SKILL.md says {doc_cap.group(1)}s but codex_review.py caps at " f"{code_cap.group(1)}s"
+    )
 
     skill = (_SKILL / "SKILL.md").read_text()
     # BOTH Claude subagents (reviewer 1 AND merge) select model=opus — assert
@@ -321,7 +333,7 @@ def test_codex_review_forwards_pins_and_prints_sensitive_notice(tmp_path, monkey
     assert call["prompt"] == "RENDERED PROMPT"
     assert call["model"] == cr.CODEX_MODEL == "gpt-5.6-sol"
     assert call["effort"] == cr.CODEX_EFFORT == "xhigh"
-    assert call["timeout_s"] == cr.CODEX_TIMEOUT_S == 1200.0
+    assert call["timeout_s"] == cr.CODEX_TIMEOUT_S == 2400.0
 
 
 def test_codex_review_absent_returns_2_and_writes_nothing(tmp_path, monkeypatch):

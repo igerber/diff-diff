@@ -28,10 +28,24 @@ CODEX_MODEL = "gpt-5.6-sol"
 CODEX_EFFORT = "xhigh"
 # The timeout is NOT the campaign value (the campaign ran unattended at
 # CODEX_TIMEOUT_S=3600). It is an interactive-gate ceiling: high enough to clear
-# the plan-review runtimes observed in the campaign (up to ~430s) with room to
-# spare, low enough to bound the interactive wait. A timeout is treated as codex
-# being unavailable (exit 3 → LOUD single-Claude fallback), so err generous.
-CODEX_TIMEOUT_S = 1200.0
+# real plan-review runtimes with room to spare, low enough to bound the
+# interactive wait. A timeout is treated as codex being unavailable (exit 3 →
+# LOUD single-Claude fallback), so err generous.
+#
+# Raised 1200 → 2400 on 2026-08-08. The old value was calibrated to the campaign's
+# observed runtimes (up to ~430s), whose plans were far smaller than production
+# ones: a dense ~500-line plan whose reviewer must verify claims against 15+ repo
+# files ran 3-4x that, and codex timed out on 6 of 9 rounds of a single v4 plan
+# (every failure a genuine `codex exec timed out after 1200.0s`, never an auth or
+# availability error). Retrying is the wrong remedy — a failed attempt burns the
+# full ceiling before the retry starts, and a round that retried once timed out
+# twice for 40 minutes total. Plan review is simply the slow surface here: its
+# reviewer reads the plan AND cross-checks every claim against the live tree.
+#
+# Changing this does NOT require engine re-validation: the "do not change without
+# re-validation" note above binds CODEX_MODEL and CODEX_EFFORT (what Campaign 1
+# graded). The ceiling is an operational knob and is graded by nothing.
+CODEX_TIMEOUT_S = 2400.0
 
 
 def _load_openai_review(repo_root: str):

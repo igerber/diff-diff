@@ -163,7 +163,7 @@ python3 ".claude/skills/plan-review/codex_review.py" \
 - **Exit 0** → codex review is in `<work_dir>/review_b.md`; go to step 5.
 - **Non-zero (2 = codex absent, 3 = timeout/error)** → codex is unavailable;
   take the **Loud fallback** below and skip steps 5-6. A hung codex cannot
-  wedge the gate — `codex_review.py` caps at 1200s and exits 3.
+  wedge the gate — `codex_review.py` caps at 2400s and exits 3.
 
 ### 5. Merge + verify — Claude @ Opus
 
