@@ -29,7 +29,7 @@ Reference:
 
 import warnings
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -586,6 +586,11 @@ class TripleDifference(
     .. [2] Gruber, J. (1994). The incidence of mandated maternity benefits.
            American Economic Review, 84(3), 622-641.
     """
+
+    # Names this estimator in the shared bootstrap mixin's user-facing
+    # warnings. The mixin is shared with the other hosts, so a hard-coded
+    # literal there would misname whichever surface was actually fit.
+    _BOOTSTRAP_LABEL: ClassVar[str] = "TripleDifference"
 
     _PARAM_ATTR_ALIASES = {"robust": "_robust_arg"}
     _DERIVED_CONFIG_ATTRS = ("robust",)

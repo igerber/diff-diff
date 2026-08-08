@@ -8,7 +8,7 @@ are in :mod:`diff_diff.bootstrap_utils`.
 
 import warnings
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 
@@ -128,6 +128,15 @@ class CallawaySantAnnaBootstrapMixin:
     """
 
     # Type hints for attributes accessed from the main class
+    # Host-supplied estimator name for user-facing bootstrap warnings. Declared
+    # here because mypy type-checks the mixin independently of its hosts, so
+    # `self._BOOTSTRAP_LABEL` would otherwise be [attr-defined]. ClassVar, not a
+    # bare annotation: the hosts set it as class-level constant data, and an
+    # instance-variable declaration here would make each of those a
+    # "cannot override instance variable with class variable" [misc] error.
+    # (Contrast `_warn_frame_offset`, which IS assigned via instance and so must
+    # NOT be a ClassVar.)
+    _BOOTSTRAP_LABEL: ClassVar[str]
     n_bootstrap: int
     bootstrap_weights: str
     alpha: float
@@ -393,7 +402,7 @@ class CallawaySantAnnaBootstrapMixin:
                 import warnings as _warnings
 
                 _warnings.warn(
-                    f"CallawaySantAnna bootstrap with survey/cluster design "
+                    f"{self._BOOTSTRAP_LABEL} bootstrap with survey/cluster design "
                     f"has only {len(psu_ids)} PSU(s); bootstrap variance is "
                     "unidentified. All bootstrap inference fields "
                     "(overall_se, group_time_ses, event_study_ses, "

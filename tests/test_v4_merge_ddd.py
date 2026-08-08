@@ -1517,6 +1517,87 @@ class TestGateHConsumers:
         direct = TripleDifference().fit(cross, **C_COLS)
         _eq_with_nans(_quintet(r), _quintet(direct))
 
+    @pytest.mark.parametrize("fn_name", ["simulate_power", "simulate_mde", "simulate_sample_size"])
+    def test_power_accepts_explicit_none_aggregate_and_balance_e(self, cross, fn_name):
+        """`aggregate`/`balance_e` default to None and fit() rejects only a
+        NON-None value, so keying the power guard on KEY PRESENCE rejected
+        `estimator_kwargs={"aggregate": None}` - a config fit() accepts. That
+        broke the boundary the guard exists to uphold: legal to fit implies
+        legal to simulate."""
+        import diff_diff.power as power_mod
+
+        kw = {"aggregate": None, "balance_e": None}
+        assert TripleDifference().fit(cross, **C_COLS, **kw) is not None
+
+        fn = getattr(power_mod, fn_name)
+        extra = {"n_units": 48} if fn_name != "simulate_sample_size" else {}
+        if fn_name != "simulate_power":
+            extra.update(max_steps=2, progress=False)
+        assert fn(TripleDifference(), n_simulations=2, seed=1, estimator_kwargs=kw, **extra)
+
+    @pytest.mark.parametrize("key,value", [("aggregate", "simple"), ("balance_e", 1)])
+    def test_power_still_rejects_non_none_aggregate_and_balance_e(self, key, value):
+        from diff_diff.power import simulate_power
+
+        with pytest.raises(ValueError, match="staggered DDD mode"):
+            simulate_power(
+                TripleDifference(), n_units=48, n_simulations=1, estimator_kwargs={key: value}
+            )
+
+    @pytest.mark.parametrize("key", ["first_treat", "unit"])
+    @pytest.mark.parametrize("value", ["g", None])
+    def test_power_rejects_mode_selectors_by_presence(self, key, value):
+        """The other half of the same rule: `first_treat`/`unit` are
+        sentinel-defaulted in fit(), so SUPPLYING them at all is the signal -
+        an explicit None still selects staggered mode and then fails on a
+        missing column. Presence is the correct test for these two."""
+        from diff_diff.power import simulate_power
+
+        with pytest.raises(ValueError, match="staggered DDD mode"):
+            simulate_power(
+                TripleDifference(), n_units=48, n_simulations=1, estimator_kwargs={key: value}
+            )
+
+    @pytest.mark.parametrize("surface", ["merged", "deprecated"])
+    def test_bootstrap_warning_names_the_estimator_that_was_fit(self, stag, surface):
+        """The single-PSU/degenerate-design warning lives in the mixin shared by
+        CallawaySantAnna and BOTH DDD classes, so the hard-coded literal named
+        CallawaySantAnna no matter which surface was fit - a misleading diagnosis
+        on a fit that is failing closed.
+
+        Routed through a real degenerate fit rather than asserted against source
+        text: a source pin cannot see whether the interpolated value actually
+        reaches the user."""
+        df = stag.copy()
+        df["w"] = 1.0
+        df["psu"] = 0  # collapse to one PSU -> bootstrap variance unidentified
+        df["fpc_col"] = 10**6  # design-based variance so the PSU is retained
+        design = SurveyDesign(weights="w", psu="psu", fpc="fpc_col")
+        ctor = dict(estimation_method="reg", n_bootstrap=20, seed=7)
+        fit = _fit_new if surface == "merged" else _fit_old
+        expected = "TripleDifference" if surface == "merged" else "StaggeredTripleDifference"
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            fit(df, aggregate="event_study", survey_design=design, ctor=ctor)
+        hits = [
+            str(w.message)
+            for w in caught
+            if "bootstrap with survey/cluster design" in str(w.message)
+        ]
+        assert hits, "expected the single-PSU bootstrap warning"
+        assert all(m.startswith(f"{expected} bootstrap") for m in hits), hits
+        assert not any(m.startswith("CallawaySantAnna") for m in hits)
+
+    def test_bootstrap_label_is_declared_on_every_host(self):
+        """CallawaySantAnna shares the mixin and its message was already correct,
+        so its label must stay byte-identical."""
+        from diff_diff.staggered import CallawaySantAnna
+
+        assert CallawaySantAnna._BOOTSTRAP_LABEL == "CallawaySantAnna"
+        assert TripleDifference._BOOTSTRAP_LABEL == "TripleDifference"
+        assert StaggeredTripleDifference._BOOTSTRAP_LABEL == "StaggeredTripleDifference"
+
     @pytest.mark.parametrize(
         "staggered", ["control_group", "anticipation", "base_period", "n_bootstrap"]
     )

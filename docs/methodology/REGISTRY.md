@@ -3140,7 +3140,14 @@ shared verbatim.
   `n_bootstrap` themselves all raise in 2x2x2 mode. **The power surface applies
   the SAME boundary:** `simulate_power` / `simulate_mde` / `simulate_sample_size`
   reject only those four and accept the three inert ones, so an estimator that is
-  legal to `fit()` is legal to simulate. An earlier 3(b) revision rejected all
+  legal to `fit()` is legal to simulate. That equivalence extends to the FIT
+  kwargs, and the test differs per param because `fit()`'s does: `first_treat`
+  and `unit` are sentinel-defaulted, so SUPPLYING them at all selects staggered
+  mode (an explicit `first_treat=None` still does, then fails on a missing
+  column), while `aggregate`/`balance_e` default to `None` and only a NON-`None`
+  value is staggered-only. Power therefore keys on presence for the first pair
+  and on value for the second — keying on presence throughout would reject
+  `estimator_kwargs={"aggregate": None}`, a configuration `fit()` accepts. An earlier 3(b) revision rejected all
   seven at the power front door, which made `TripleDifference(seed=7)` fittable
   but not simulatable - `seed` is set habitually for reproducibility and the
   `simulate_*` helpers take their own separate `seed=`.

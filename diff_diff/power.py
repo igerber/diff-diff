@@ -627,7 +627,19 @@ _DDD_STAGGERED_CTOR_PARAMS = STAGGERED_DDD_CTOR_PARAMS
 # The mode TRIGGER is a fit param, and estimator_kwargs IS the fit-kwargs
 # channel, so these can genuinely flip the merged class into staggered mode
 # against 2x2x2 data - the one path that reaches the trigger at all.
-_DDD_STAGGERED_FIT_KEYS = ("first_treat", "unit", "aggregate", "balance_e")
+#
+# The two tuples encode DIFFERENT tests, mirroring `TripleDifference.fit()`
+# exactly. `first_treat` and `unit` are sentinel-defaulted there
+# (`x is not NOT_SUPPLIED`), so SUPPLYING them at all is the signal - an
+# explicit `first_treat=None` still selects staggered mode and then fails on a
+# missing column. `aggregate`/`balance_e` default to None and fit only rejects a
+# NON-None value, so keying on presence here would reject
+# `estimator_kwargs={"aggregate": None}` - a config `fit()` accepts - and break
+# the documented "legal to fit implies legal to simulate" boundary.
+_DDD_STAGGERED_FIT_KEYS_BY_PRESENCE = ("first_treat", "unit")
+_DDD_STAGGERED_FIT_KEYS_BY_VALUE = ("aggregate", "balance_e")
+# Retained as the union for callers/tests that want the whole roster.
+_DDD_STAGGERED_FIT_KEYS = _DDD_STAGGERED_FIT_KEYS_BY_PRESENCE + _DDD_STAGGERED_FIT_KEYS_BY_VALUE
 
 
 def _reject_staggered_ddd_config(estimator: Any, est_kwargs: Dict[str, Any]) -> None:
@@ -643,7 +655,8 @@ def _reject_staggered_ddd_config(estimator: Any, est_kwargs: Dict[str, Any]) -> 
     if type(estimator).__name__ != "TripleDifference":
         return
     offenders = staggered_ddd_ctor_offenders(estimator)
-    offenders += [k for k in _DDD_STAGGERED_FIT_KEYS if k in est_kwargs]
+    offenders += [k for k in _DDD_STAGGERED_FIT_KEYS_BY_PRESENCE if k in est_kwargs]
+    offenders += [k for k in _DDD_STAGGERED_FIT_KEYS_BY_VALUE if est_kwargs.get(k) is not None]
     if not offenders:
         return
     raise ValueError(

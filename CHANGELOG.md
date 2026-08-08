@@ -39,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `np.clip(pscore, trim, 1 - trim)`, so `pscore_trim=0` silently disabled the
   overlap guard that keeps the `1/(1-p)` IPW/DR weights finite, and
   `>= 0.5` inverted the clip bounds.
+- **The single-PSU bootstrap warning now names the estimator that was fit.**
+  It lives in the mixin shared by `CallawaySantAnna` and both DDD classes and
+  was hard-coded to `"CallawaySantAnna bootstrap ..."`, so a DDD fit failing
+  closed on a degenerate design pointed diagnosis at the wrong estimator.
+  `CallawaySantAnna`'s own message is byte-identical to before.
 - **Degenerate enabling cohorts are now reported** (both DDD staggered
   surfaces). A positive `first_treat` cohort whose units are all
   `partition == 0` identifies no `ATT(g,t)` and contributes to no aggregate,

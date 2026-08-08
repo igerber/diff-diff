@@ -7,7 +7,7 @@ including the Callaway-Sant'Anna (2021) estimator.
 
 import bisect
 import warnings
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -530,6 +530,11 @@ class CallawaySantAnna(
     Callaway, B., & Sant'Anna, P. H. (2021). Difference-in-Differences with
     multiple time periods. Journal of Econometrics, 225(2), 200-230.
     """
+
+    # Names this estimator in the shared bootstrap mixin's user-facing
+    # warnings. The mixin is shared with the other hosts, so a hard-coded
+    # literal there would misname whichever surface was actually fit.
+    _BOOTSTRAP_LABEL: ClassVar[str] = "CallawaySantAnna"
 
     def __init__(
         self,
