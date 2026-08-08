@@ -469,20 +469,6 @@ class TripleDifference(
         When ``rank_deficient_action="error"``, errors are always
         re-raised regardless of this setting.
 
-    The remaining parameters apply to the STAGGERED mode only
-    (``fit(..., first_treat=...)``). Four of them - ``control_group``,
-    ``anticipation``, ``base_period`` and ``n_bootstrap`` - raise a
-    ``ValueError`` if given a non-default value and then used to fit the 2x2x2
-    design, rather than being silently ignored: that engine has one pre/post
-    contrast, so there is no comparison-cohort choice, no anticipation window,
-    no base-period rule and no multiplier bootstrap.
-
-    The other three - ``bootstrap_weights``, ``seed`` and ``cband`` - are
-    ACCEPTED and inert in 2x2x2 mode. They act only through ``n_bootstrap > 0``,
-    which that mode already rejects, so they are unreachable by construction
-    rather than silently ignored. The power helpers apply the same boundary, so
-    an estimator that is legal to ``fit()`` is legal to simulate.
-
     control_group : str, default="not_yet_treated"
         Comparison cohort for staggered mode: ``"not_yet_treated"`` (units
         whose enabling period is still in the future) or ``"never_treated"``
@@ -576,6 +562,22 @@ class TripleDifference(
 
     This is weaker than requiring separate parallel trends for two DiDs,
     as biases can cancel out in the differencing.
+
+    **Which parameters belong to which mode.** ``control_group``,
+    ``anticipation``, ``base_period``, ``n_bootstrap``, ``bootstrap_weights``,
+    ``seed`` and ``cband`` apply to the STAGGERED mode only
+    (``fit(..., first_treat=...)``).
+
+    The first four raise a ``ValueError`` if given a non-default value and then
+    used to fit the 2x2x2 design, rather than being silently ignored: that
+    engine has one pre/post contrast, so there is no comparison-cohort choice,
+    no anticipation window, no base-period rule and no multiplier bootstrap.
+
+    The other three - ``bootstrap_weights``, ``seed`` and ``cband`` - are
+    ACCEPTED and inert in 2x2x2 mode. They act only through ``n_bootstrap > 0``,
+    which that mode already rejects, so they are unreachable by construction
+    rather than silently ignored. The power helpers apply the same boundary, so
+    an estimator that is legal to ``fit()`` is legal to simulate.
 
     References
     ----------
