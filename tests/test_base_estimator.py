@@ -176,9 +176,10 @@ def test_init_signature_matches_get_params(cls):
 # (3.9 class merges, v4-design section 4.1). The round-trip test's
 # warnings-as-errors filter exists to catch UNEXPECTED warnings from a
 # re-init; these messages are expected by contract and are ignored inside
-# the error filter. Forward home for the phase-3 siblings (SDDD, QDiD).
+# the error filter. Forward home for the remaining phase-3 sibling (QDiD).
 DEPRECATED_CLASS_WARNINGS = {
     "MultiPeriodDiD": r"MultiPeriodDiD is deprecated",
+    "StaggeredTripleDifference": r"StaggeredTripleDifference is deprecated",
 }
 
 

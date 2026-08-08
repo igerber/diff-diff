@@ -1,0 +1,1699 @@
+"""Shared staggered-DDD engine (private).
+
+Holds the estimation core both DDD surfaces run: `TripleDifference` in its
+staggered mode (ledger row M-013) and the deprecated `StaggeredTripleDifference`
+until its 4.0 removal. Relocated VERBATIM in phase 3(b) - the only changes are
+the three parameterization knobs described below, so the merge is an API merge
+and the numbers cannot move.
+
+Knobs, all passed explicitly by the two callers:
+
+  estimator_name   interpolated into every message that names a class, so the
+                   merged surface never steers users at the deprecated one
+  partition_label  "partition" on the merged surface, "eligibility" on the
+                   dying one - the third-dimension vocabulary
+  _frame_offset    added to every user-attributed `stacklevel`, so warning
+                   attribution is identical through both call depths
+                   (user -> fit -> core on the dying class = 1;
+                    user -> fit -> _fit_staggered -> core on the merged one = 2)
+
+The offset is ALSO mirrored onto `self._warn_frame_offset` for the duration of a
+fit, because four helper methods and the shared bootstrap mixin warn from depths
+this function cannot reach by argument.
+
+Private module: not exported, and mapped as a member of the
+`staggered_triple_diff` group in docs/doc-deps.yaml so /docs-impact still
+resolves this engine's methodology docs.
+"""
+
+import warnings
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
+
+from diff_diff.linalg import (
+    _check_propensity_diagnostics,
+    _rank_guarded_inv,
+    solve_logit,
+)
+from diff_diff.staggered_triple_diff_results import StaggeredTripleDiffResults
+from diff_diff.utils import safe_inference, validate_anticipation
+
+if TYPE_CHECKING:
+    from diff_diff.survey import SurveyDesign
+
+# Type alias for pre-computed structures
+PrecomputedData = Dict[str, Any]
+
+# The dying class accepts R's compact spellings; the merged class uses the
+# underscored library vocabulary from birth (M-013). The engine reads both so a
+# single core can serve both surfaces without a value shim on either.
+_NEVER_TREATED = frozenset({"nevertreated", "never_treated"})
+
+
+def _is_never_treated(control_group: str) -> bool:
+    """True for either spelling of the never-treated comparison group."""
+    return control_group in _NEVER_TREATED
+
+
+class _StaggeredTripleDiffEngineMixin:
+    """Estimation core for staggered DDD. Not usable standalone.
+
+    Mixed into both `TripleDifference` and `StaggeredTripleDifference`, which
+    supply the constructor attributes and the CS aggregation/bootstrap mixins
+    this core calls. The annotations below exist because mypy type-checks this
+    class independently of its hosts (`attr-defined` is not disabled) - they are
+    declarations, never assignments.
+    """
+
+    # Constructor attributes read from the host class.
+    estimation_method: str
+    control_group: str
+    alpha: float
+    anticipation: int
+    base_period: str
+    n_bootstrap: int
+    cband: bool
+    pscore_trim: float
+    cluster: Optional[str]
+    rank_deficient_action: str
+    epv_threshold: float
+    pscore_fallback: str
+
+    # Fit-time state this core assigns.
+    is_fitted_: bool
+    _lstsq_fallback_tracker: Any
+    _ps_lstsq_fallback_tracker: Any
+
+    # Warning-attribution offset, mirrored from _fit_staggered_core's
+    # _frame_offset for the duration of a fit. A PLAIN class attribute, not a
+    # ClassVar: `self._warn_frame_offset = ...` on a ClassVar is a mypy [misc]
+    # error ("cannot assign to class variable via instance").
+    _warn_frame_offset = 0
+
+    if TYPE_CHECKING:
+        # Supplied by the CS aggregation/bootstrap mixins on every host class.
+        # Same house pattern as CallawaySantAnnaBootstrapMixin's own stub block,
+        # and the same caveat: these signatures must MATCH the implementations
+        # they shadow, or the two base classes become incompatible wherever both
+        # are mixed in.
+
+        def _aggregate_simple(
+            self,
+            group_time_effects: Dict,
+            influence_func_info: Dict,
+            df: Optional[pd.DataFrame],
+            unit: Optional[str],
+            precomputed: Optional["PrecomputedData"] = None,
+        ) -> Tuple[float, float, Optional[int]]: ...
+
+        def _aggregate_event_study(
+            self,
+            group_time_effects: Dict,
+            influence_func_info: Dict,
+            groups: List[Any],
+            time_periods: List[Any],
+            balance_e: Optional[int] = None,
+            df: Optional[pd.DataFrame] = None,
+            unit: Optional[str] = None,
+            precomputed: Optional["PrecomputedData"] = None,
+        ) -> Any: ...
+
+        def _aggregate_by_group(
+            self,
+            group_time_effects: Dict,
+            influence_func_info: Dict,
+            groups: List[Any],
+            precomputed: Optional["PrecomputedData"] = None,
+            df: Optional[pd.DataFrame] = None,
+            unit: Optional[str] = None,
+        ) -> Dict[Any, Dict[str, Any]]: ...
+
+        def _run_multiplier_bootstrap(
+            self,
+            group_time_effects: Dict[Tuple[Any, Any], Dict[str, Any]],
+            influence_func_info: Dict[Tuple[Any, Any], Dict[str, Any]],
+            aggregate: Optional[str],
+            balance_e: Optional[int],
+            treatment_groups: List[Any],
+            time_periods: List[Any],
+            df: Any = None,
+            unit: Optional[str] = None,
+            precomputed: Any = None,
+            cband: bool = True,
+        ) -> Any: ...
+
+    def _fit_staggered_core(
+        self,
+        data: pd.DataFrame,
+        outcome: str,
+        unit: str,
+        time: str,
+        first_treat: str,
+        partition: str,
+        covariates: Optional[List[str]] = None,
+        aggregate: Optional[str] = None,
+        balance_e: Optional[int] = None,
+        survey_design: Optional["SurveyDesign"] = None,
+        *,
+        estimator_name: str,
+        partition_label: str,
+        _frame_offset: int = 0,
+    ) -> StaggeredTripleDiffResults:
+        """Fit the staggered triple-difference estimator.
+
+        The estimation body is the 3.x `StaggeredTripleDifference.fit` verbatim;
+        see the module docstring for the three knobs.
+        """
+        # Body-local alias so the relocated body stays byte-identical (the
+        # `time = post` precedent in triple_diff.py). The PARAMETER is
+        # `partition`; the third dimension is `eligibility` only internally.
+        eligibility = partition
+        self._warn_frame_offset = _frame_offset
+        try:
+            # Identification-assumption guard, enforced in the ENGINE so BOTH
+            # public surfaces fail closed on the same input. The merged
+            # constructor validates this eagerly; this call additionally covers
+            # the deprecated StaggeredTripleDifference (whose 3.x API SHAPE is
+            # frozen through removal - that freeze was never a licence to emit
+            # silently-biased numbers) and direct attribute mutation on either
+            # class, which bypasses __init__ and set_params alike.
+            validate_anticipation(self.anticipation)
+            from diff_diff.survey import (
+                _resolve_survey_for_fit,
+                _validate_unit_constant_survey,
+                compute_survey_metadata,
+            )
+
+            resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
+                _resolve_survey_for_fit(survey_design, data, "analytical")
+            )
+
+            if resolved_survey is not None:
+                _validate_unit_constant_survey(data, unit, survey_design)
+                if resolved_survey.weight_type != "pweight":
+                    raise ValueError(
+                        f"{estimator_name} survey support requires "
+                        f"weight_type='pweight', got '{resolved_survey.weight_type}'. "
+                        f"The survey variance math assumes probability weights."
+                    )
+            if aggregate is not None and aggregate not in [
+                "event_study",
+                "group",
+                "simple",
+                "all",
+            ]:
+                raise ValueError(
+                    f"aggregate must be 'event_study', 'group', 'simple', or 'all', "
+                    f"got '{aggregate}'"
+                )
+
+            df = data.copy()
+            self._validate_inputs(
+                df,
+                outcome,
+                unit,
+                time,
+                first_treat,
+                eligibility,
+                covariates,
+                partition_label=partition_label,
+            )
+
+            if self.cluster is not None:
+                warnings.warn(
+                    "cluster parameter is accepted but cluster-robust analytical SEs "
+                    "are not yet implemented for staggered DDD. Use n_bootstrap > 0 "
+                    "for unit-level clustered inference via multiplier bootstrap.",
+                    UserWarning,
+                    stacklevel=2 + _frame_offset,
+                )
+
+            if first_treat != "first_treat":
+                df["first_treat"] = df[first_treat]
+            # Surface the inf → 0 recategorization the same way StaggeredDiD does
+            # (see `staggered.py:1508-1519`). Silently recoding inf would shift
+            # units between treated and never-treated pools with no signal
+            # (axis-E silent coercion under the Phase 2 audit).
+            _inf_mask = np.isposinf(df["first_treat"].values)
+            if _inf_mask.any():
+                n_inf_rows = int(_inf_mask.sum())
+                warnings.warn(
+                    f"{n_inf_rows} row(s) have first_treat=inf; recoding to 0 "
+                    f"(never-treated). Use first_treat=0 to suppress this warning.",
+                    UserWarning,
+                    stacklevel=2 + _frame_offset,
+                )
+            df["first_treat"] = df["first_treat"].replace([np.inf, float("inf")], 0)
+
+            # Negative cohorts belong to NEITHER population and must fail closed.
+            # _precompute_structures builds the treated set from `g > 0` and the
+            # never-enabled set from `g == 0`, so a unit encoded with the common
+            # `-1` never-treated convention (or `-inf`) is silently dropped from
+            # both - it still counts toward n_obs while contributing to no ATT
+            # comparison, and the fit returns a plausible finite estimate for a
+            # DIFFERENT population (measured: overall_att 3.29438582 -> 2.99470938
+            # with n_never_enabled 24 -> 0, no error and no warning).
+            # This is the same input axis the +inf branch above already defends,
+            # so silence here was a hole in an established contract, not an
+            # undocumented input. Raising rather than recoding: unlike +inf, a
+            # negative value has no unambiguous intent (-1 as "never" is a
+            # convention, not a limit), and guessing would be exactly the silent
+            # sample change being fixed.
+            _ft_vals = np.asarray(pd.to_numeric(df["first_treat"], errors="coerce"), dtype=float)
+            _neg_mask = _ft_vals < 0
+            if _neg_mask.any():
+                _bad = np.unique(_ft_vals[_neg_mask])
+                raise ValueError(
+                    f"first_treat contains {int(_neg_mask.sum())} row(s) with negative "
+                    f"cohort value(s) {sorted(_bad.tolist())}. Never-treated units must "
+                    f"be encoded as 0 (or +inf, which is recoded to 0 with a warning); "
+                    f"treated cohorts must be positive period labels. Negative values "
+                    f"would be excluded from BOTH the treated and the comparison "
+                    f"cohorts, silently estimating on a different population."
+                )
+
+            precomputed = self._precompute_structures(
+                df,
+                outcome,
+                unit,
+                time,
+                eligibility,
+                covariates,
+                resolved_survey=resolved_survey,
+            )
+
+            # Recompute survey metadata from unit-level resolved survey
+            if resolved_survey is not None and survey_metadata is not None:
+                resolved_survey_unit = precomputed.get("resolved_survey_unit")
+                if resolved_survey_unit is not None:
+                    unit_w = resolved_survey_unit.weights
+                    survey_metadata = compute_survey_metadata(resolved_survey_unit, unit_w)
+
+            # Survey df for t-distribution critical values
+            df_survey = precomputed.get("df_survey")
+            if (
+                df_survey is None
+                and resolved_survey is not None
+                and hasattr(resolved_survey, "uses_replicate_variance")
+                and resolved_survey.uses_replicate_variance
+            ):
+                df_survey = 0  # Forces NaN inference for undefined replicate df
+
+            treatment_groups = precomputed["treatment_groups"]
+            time_periods = precomputed["time_periods"]
+            all_units = precomputed["all_units"]
+            time_to_col = precomputed["time_to_col"]
+            unit_cohorts = precomputed["unit_cohorts"]
+            eligibility_per_unit = precomputed["eligibility_per_unit"]
+            n_units = len(all_units)
+
+            pscore_cache: Dict = {}
+
+            group_time_effects: Dict[Tuple, Dict[str, Any]] = {}
+            influence_func_info: Dict[Tuple, Dict[str, Any]] = {}
+            comparison_group_counts: Dict[Tuple, int] = {}
+            gmm_weights_store: Dict[Tuple, Dict] = {}
+            epv_diagnostics: Optional[Dict[Tuple, Dict[str, Any]]] = (
+                {} if (covariates and self.estimation_method in ("ipw", "dr")) else None
+            )
+
+            # Trackers for rank-deficient linalg solves across all (g, g_c, t)
+            # cells. `_compute_did_panel` appends to the OR-side tracker;
+            # `_compute_pscore` appends to the PS-side tracker. Both surface as
+            # ONE aggregate warning below rather than fanning out per cell.
+            self._lstsq_fallback_tracker: List[float] = []
+            self._ps_lstsq_fallback_tracker: List[float] = []
+
+            # A positive cohort with NO eligible treated units (every unit
+            # partition==0) cannot identify ATT(g,t): the DDD contrast needs the
+            # eligible-treated cell. Such a cohort silently contributed nothing
+            # while still being advertised in `groups`, so the aggregate narrowed
+            # with no statement of which cohort dropped out (the only warnings
+            # naming it describe its role as a COMPARISON cohort for other g).
+            # Warn per deficient cohort; the estimate itself is unchanged and
+            # remains valid for the cohorts that do identify.
+            for _g in treatment_groups:
+                _n_elig = int(np.sum((unit_cohorts == _g) & (eligibility_per_unit == 1)))
+                if _n_elig == 0:
+                    _n_units_g = int(np.sum(unit_cohorts == _g))
+                    warnings.warn(
+                        f"Enabling cohort g={_g} has no eligible treated units "
+                        f"(partition==1) among its {_n_units_g} unit(s), so ATT(g,t) is "
+                        f"unidentified there and the cohort contributes to no aggregate. "
+                        f"It is excluded from `groups`; the reported estimate covers the "
+                        f"remaining cohort(s) only.",
+                        UserWarning,
+                        stacklevel=2 + _frame_offset,
+                    )
+
+            for g in treatment_groups:
+                # In universal mode, skip the reference period (t == g-1-anticipation)
+                # so it's omitted from GT estimation. The event-study mixin injects
+                # a synthetic reference row with effect=0, matching CS behavior.
+                if self.base_period == "universal":
+                    universal_base = g - 1 - self.anticipation
+                    valid_periods = [t for t in time_periods if t != universal_base]
+                else:
+                    valid_periods = time_periods
+
+                for t in valid_periods:
+                    base_period_val = self._get_base_period(g, t)
+                    if base_period_val is None:
+                        continue
+                    if base_period_val not in time_to_col:
+                        warnings.warn(
+                            f"Base period {base_period_val} for (g={g}, t={t}) is "
+                            "outside the observed panel. Skipping this cell.",
+                            UserWarning,
+                            stacklevel=2 + _frame_offset,
+                        )
+                        continue
+                    if t not in time_to_col:
+                        continue
+
+                    has_never_enabled = bool(np.any(unit_cohorts == 0))
+
+                    if _is_never_treated(self.control_group):
+                        # Only use never-enabled cohort as comparison
+                        valid_gc = [0] if has_never_enabled else []
+                    else:
+                        # Use all valid comparison cohorts (not-yet-treated + never)
+                        # Threshold accounts for anticipation: cohorts that start
+                        # treatment within the anticipation window are contaminated.
+                        nyt_threshold = max(t, base_period_val) + self.anticipation
+                        valid_gc = [gc for gc in treatment_groups if gc > nyt_threshold and gc != g]
+                        if has_never_enabled:
+                            valid_gc = [0] + valid_gc
+
+                    if not valid_gc:
+                        warnings.warn(
+                            f"No valid comparison groups for (g={g}, t={t}), skipping.",
+                            UserWarning,
+                            stacklevel=2 + _frame_offset,
+                        )
+                        continue
+
+                    treated_mask = (unit_cohorts == g) & (eligibility_per_unit == 1)
+                    n_treated = int(np.sum(treated_mask))
+                    if n_treated == 0:
+                        continue
+
+                    att_vec = []
+                    inf_raw = []  # unrescaled IFs
+                    gc_labels = []
+                    gc_cell_sizes = []  # size_gt_ctrl per surviving gc
+
+                    for gc in valid_gc:
+                        result = self._compute_ddd_gt_gc(
+                            precomputed,
+                            g,
+                            gc,
+                            t,
+                            base_period_val,
+                            covariates,
+                            pscore_cache,
+                            epv_diagnostics=epv_diagnostics,
+                        )
+                        if result is None:
+                            continue
+                        att_gc, inf_gc, size_gt_ctrl = result
+                        if not np.isfinite(att_gc):
+                            continue
+
+                        att_vec.append(att_gc)
+                        inf_raw.append(inf_gc)
+                        gc_labels.append(gc)
+                        gc_cell_sizes.append(size_gt_ctrl)
+
+                    if not att_vec:
+                        continue
+
+                    # Compute size_gt from SURVIVING comparison cohorts only
+                    # (not from all initially valid gc's)
+                    surviving_units = treated_mask.copy()
+                    for gc in gc_labels:
+                        surviving_units |= (unit_cohorts == gc) | (unit_cohorts == g)
+                    survey_w = precomputed.get("survey_weights")
+                    if survey_w is not None:
+                        size_gt = float(np.sum(survey_w[surviving_units]))
+                    else:
+                        size_gt = float(np.sum(surviving_units))
+
+                    # Apply IF rescaling now that size_gt is known
+                    inf_matrix = []
+                    for inf_gc, size_gt_ctrl in zip(inf_raw, gc_cell_sizes):
+                        if size_gt_ctrl > 0:
+                            inf_gc = inf_gc * (size_gt / size_gt_ctrl)
+                        inf_matrix.append(inf_gc)
+
+                    att_gmm, inf_gmm, gmm_w, se_gt = self._combine_gmm(
+                        np.array(att_vec),
+                        np.array(inf_matrix),
+                        n_units,
+                    )
+
+                    if not np.isfinite(att_gmm):
+                        continue
+
+                    # R's single-gc SE uses size_gt in denominator, not n_total.
+                    # For multi-gc (GMM), the size_gt factor is already in Omega
+                    # via the per-gc rescaling, so n_total is correct.
+                    if len(gc_labels) == 1:
+                        se_gt = float(np.sqrt(np.sum(inf_gmm**2) / size_gt**2))
+
+                    if not np.isfinite(se_gt) or se_gt <= 0:
+                        se_gt = np.nan
+
+                    t_stat, p_value, conf_int = safe_inference(
+                        att_gmm, se_gt, alpha=self.alpha, df=df_survey
+                    )
+
+                    # Rescale IF for mixin compatibility.
+                    # R stores IF * (n/size_gt) in inf_func_mat, then uses
+                    # SE = sqrt(sum(IF^2)/n^2) = sqrt(sum(psi^2)) with psi = IF/n.
+                    # We need psi = IF_rescaled / n so mixin's sqrt(sum(psi^2)) works.
+                    # IF is already at size_gt/size_gt_ctrl scale from above.
+                    # Apply the final n/size_gt factor, then divide by n for mixin.
+                    inf_gmm_rescaled = inf_gmm * (n_units / size_gt)
+                    inf_gmm_scaled = inf_gmm_rescaled / n_units
+
+                    # INVARIANT: np.where over boolean masks -> duplicate-free
+                    # index arrays (fancy-+= scatter contract, see
+                    # staggered_aggregation._combined_if_fast).
+                    treated_idx = np.where(treated_mask)[0]
+                    treated_inf = inf_gmm_scaled[treated_idx]
+                    nonzero_mask = (inf_gmm_scaled != 0) & ~treated_mask
+                    control_idx = np.where(nonzero_mask)[0]
+                    control_inf = inf_gmm_scaled[control_idx]
+                    n_control = int(np.sum(nonzero_mask))
+
+                    group_time_effects[(g, t)] = {
+                        "effect": att_gmm,
+                        "se": se_gt,
+                        "t_stat": t_stat,
+                        "p_value": p_value,
+                        "conf_int": conf_int,
+                        "n_treated": n_treated,
+                        "n_control": n_control,
+                    }
+                    influence_func_info[(g, t)] = {
+                        "treated_idx": treated_idx,
+                        "control_idx": control_idx,
+                        "treated_inf": treated_inf,
+                        "control_inf": control_inf,
+                    }
+                    comparison_group_counts[(g, t)] = len(gc_labels)
+                    gmm_weights_store[(g, t)] = dict(zip(gc_labels, gmm_w.tolist()))
+
+            # Consolidated OR influence-function rank-deficiency warning.
+            # Finding #17 in the Phase 2 silent-failures audit: the per-pair OR
+            # solve at _compute_did_panel() previously fell back to lstsq with no
+            # signal, so near/fully singular X'WX in the covariate expansion went
+            # to the user as a normal result.
+            if self._lstsq_fallback_tracker and self.rank_deficient_action != "silent":
+                n_cells = len(self._lstsq_fallback_tracker)
+                finite_conds = [c for c in self._lstsq_fallback_tracker if np.isfinite(c)]
+                max_cond = max(finite_conds) if finite_conds else float("inf")
+                warnings.warn(
+                    f"Rank-deficient X'WX detected in the outcome-regression "
+                    f"influence-function step for {n_cells} (g, g_c, t) pair(s); "
+                    f"dropped redundant direction(s) via a rank-guarded inverse. "
+                    f"Max condition number of affected X'WX: {max_cond:.2e}. "
+                    f"Standard errors use the identified covariate subset; consider "
+                    f"dropping collinear covariates or using "
+                    f"estimation_method='ipw' to avoid the OR projection.",
+                    UserWarning,
+                    stacklevel=2 + _frame_offset,
+                )
+
+            # Consolidated PS-Hessian rank-deficiency warning (sibling of the
+            # OR path above). `_compute_pscore` previously fell back from
+            # `np.linalg.inv(X'WX)` to `np.linalg.lstsq` with no signal, so
+            # a rank-deficient propensity-score design silently degraded
+            # IPW/DR influence-function corrections.
+            if self._ps_lstsq_fallback_tracker and self.rank_deficient_action != "silent":
+                n_cells = len(self._ps_lstsq_fallback_tracker)
+                finite_conds = [c for c in self._ps_lstsq_fallback_tracker if np.isfinite(c)]
+                max_cond = max(finite_conds) if finite_conds else float("inf")
+                warnings.warn(
+                    f"Rank-deficient X'WX detected in the propensity-score "
+                    f"Hessian for {n_cells} (g, g_c, t) pair(s); dropped redundant "
+                    f"direction(s) via a rank-guarded inverse. Max condition number "
+                    f"of affected X'WX: {max_cond:.2e}. IPW/DR influence-function "
+                    f"corrections use the identified covariate subset; consider "
+                    f"dropping collinear propensity-score covariates or using "
+                    f"estimation_method='reg' to avoid the PS path.",
+                    UserWarning,
+                    stacklevel=2 + _frame_offset,
+                )
+
+            # Consolidated EPV summary warning
+            if epv_diagnostics:
+                low_epv = {k: v for k, v in epv_diagnostics.items() if v.get("is_low")}
+                if low_epv:
+                    n_affected = len(low_epv)
+                    n_total = len(epv_diagnostics)
+                    min_entry = min(low_epv.values(), key=lambda v: v["epv"])
+                    min_g = min(low_epv.keys(), key=lambda k: low_epv[k]["epv"])
+                    warnings.warn(
+                        f"Low Events Per Variable (EPV) detected in "
+                        f"{n_affected} of {n_total} cohort-time cell(s). "
+                        f"Minimum EPV: {min_entry['epv']:.1f} (cohort g={min_g[0]}). "
+                        f"Consider estimation_method='reg' or fewer covariates. "
+                        f"Call results.epv_summary() for per-cohort details.",
+                        UserWarning,
+                        stacklevel=2 + _frame_offset,
+                    )
+
+            if not group_time_effects:
+                raise ValueError(
+                    "No valid group-time effects could be computed. "
+                    f"Check that the data has sufficient variation in treatment "
+                    f"timing and {partition_label}."
+                )
+
+            # For aggregation: use eligible-treated-only cohort assignments so
+            # WIF weights match the point estimate weights (n_treated per cohort,
+            # i.e. P(S=g, Q=1)). This matches the paper's Eq 4.13 which defines
+            # aggregation weights over the treated population (G_i defined only
+            # for Q=1 units). Ineligible units get cohort=0 so they don't
+            # contribute to pg for any treatment group.
+            # Both precomputed["unit_cohorts"] AND df["first_treat"] must be
+            # zeroed for ineligible units because the WIF code reads both.
+            precomputed_agg = dict(precomputed)
+            cohorts_for_agg = precomputed["unit_cohorts"].copy()
+            cohorts_for_agg[eligibility_per_unit == 0] = 0
+            precomputed_agg["unit_cohorts"] = cohorts_for_agg
+
+            df_agg = df.copy()
+            df_agg.loc[df_agg[eligibility] == 0, "first_treat"] = 0
+
+            # Overall ATT via aggregation mixin
+            overall_att, overall_se, overall_effective_df = self._aggregate_simple(
+                group_time_effects, influence_func_info, df_agg, unit, precomputed_agg
+            )
+            # Preserve the ORIGINAL survey df before the simple-overall statistic mutates
+            # it below. The Eq. 4.14 overall (overall_att_es) must fall back to this
+            # original df, never to the simple overall's per-statistic replicate df — the
+            # two statistics can drop different replicate subsets, so reusing the simple
+            # overall's df would silently give overall_att_es the wrong p-value/CI.
+            df_survey_original = df_survey
+            # Use per-statistic effective df from replicate aggregation if available;
+            # otherwise fall back to the original df from the survey design.
+            if overall_effective_df is not None:
+                df_survey = overall_effective_df
+                if survey_metadata is not None:
+                    survey_metadata.df_survey = df_survey
+            overall_t_stat, overall_p_value, overall_conf_int = safe_inference(
+                overall_att, overall_se, alpha=self.alpha, df=df_survey
+            )
+
+            # Aggregations
+            event_study_effects = None
+            group_effects = None
+            es_aggregation = None
+            if aggregate in ("event_study", "all"):
+                es_aggregation = self._aggregate_event_study(
+                    group_time_effects,
+                    influence_func_info,
+                    treatment_groups,
+                    time_periods,
+                    balance_e,
+                    df_agg,
+                    unit,
+                    precomputed_agg,
+                )
+                event_study_effects = es_aggregation.effects
+            if aggregate in ("group", "all"):
+                group_effects = self._aggregate_by_group(
+                    group_time_effects,
+                    influence_func_info,
+                    treatment_groups,
+                    precomputed_agg,
+                    df_agg,
+                    unit,
+                )
+
+            # Paper Eq. (4.14) overall ATT (event-study average): an opt-in summary
+            # alongside the default CS-simple ``overall_att``. ``_aggregate_event_study``
+            # RETURNS it on its aggregation object (it used to stash it on
+            # ``self._event_study_overall``); populated only when the event-study
+            # aggregation ran. Analytical inference here; the bootstrap block below
+            # overrides the SE when ``n_bootstrap > 0`` (mirroring ``overall_se``).
+            overall_att_es = None
+            overall_se_es = None
+            overall_t_stat_es = None
+            overall_p_value_es = None
+            overall_conf_int_es = None
+            # Whether the ANALYTICAL Eq. 4.14 SE was non-finite while its point estimate
+            # was finite (i.e. a contributing horizon's influence function was non-finite).
+            # Captured before any bootstrap override so the terminal warning below does not
+            # misdiagnose a bootstrap-side NaN SE (e.g. cluster-unidentified) as an
+            # analytical-IF failure (the bootstrap path emits its own warning).
+            analytical_overall_es_se_nonfinite = False
+            if aggregate in ("event_study", "all"):
+                es_overall = es_aggregation.overall if es_aggregation is not None else None
+                if es_overall is not None:
+                    overall_att_es = es_overall["att"]
+                    overall_se_es = es_overall["se"]
+                    analytical_overall_es_se_nonfinite = bool(
+                        np.isfinite(overall_att_es) and not np.isfinite(overall_se_es)
+                    )
+                    es_eff_df = es_overall.get("effective_df")
+                    # Fall back to the ORIGINAL survey df, not the simple-overall's mutated
+                    # per-statistic df (P1 fix): overall_att_es has its own replicate df.
+                    df_for_es = es_eff_df if es_eff_df is not None else df_survey_original
+                    overall_t_stat_es, overall_p_value_es, overall_conf_int_es = safe_inference(
+                        overall_att_es, overall_se_es, alpha=self.alpha, df=df_for_es
+                    )
+                else:
+                    # Event-study aggregation was requested but yielded no post-treatment
+                    # horizon: this is "requested but undefined" -> NaN + warning (the
+                    # library's overall-aggregation contract, matching _aggregate_simple),
+                    # distinct from "not requested" which leaves the fields None.
+                    warnings.warn(
+                        "Event-study aggregation was requested but no post-treatment "
+                        "horizons are available for the Eq. 4.14 overall (overall_att_es); "
+                        "returning NaN.",
+                        UserWarning,
+                        stacklevel=2 + _frame_offset,
+                    )
+                    overall_att_es = np.nan
+                    overall_se_es = np.nan
+                    overall_t_stat_es, overall_p_value_es, overall_conf_int_es = safe_inference(
+                        np.nan, np.nan, alpha=self.alpha, df=df_survey
+                    )
+
+            # Reject replicate-weight designs for bootstrap — replicate variance
+            # is an analytical alternative, not compatible with bootstrap
+            if (
+                self.n_bootstrap > 0
+                and resolved_survey is not None
+                and hasattr(resolved_survey, "uses_replicate_variance")
+                and resolved_survey.uses_replicate_variance
+            ):
+                raise NotImplementedError(
+                    f"{estimator_name} bootstrap (n_bootstrap > 0) is not "
+                    "supported with replicate-weight survey designs. Replicate "
+                    "weights provide analytical variance; use n_bootstrap=0 instead."
+                )
+
+            # Bootstrap
+            bootstrap_results = None
+            cband_crit_value = None
+            if self.n_bootstrap > 0:
+                bootstrap_results = self._run_multiplier_bootstrap(
+                    group_time_effects,
+                    influence_func_info,
+                    aggregate,
+                    balance_e,
+                    treatment_groups,
+                    time_periods,
+                    df_agg,
+                    unit,
+                    precomputed_agg,
+                    self.cband,
+                )
+                if bootstrap_results is not None:
+                    overall_se = bootstrap_results.overall_att_se
+                    overall_t_stat, overall_p_value, overall_conf_int = safe_inference(
+                        overall_att, overall_se, alpha=self.alpha, df=df_survey
+                    )
+                    overall_conf_int = bootstrap_results.overall_att_ci
+                    overall_p_value = bootstrap_results.overall_att_p_value
+
+                    # Mirror the override for the Eq. (4.14) event-study-average overall
+                    # (only when event-study aggregation produced it). A NaN bootstrap SE
+                    # (e.g. cluster-unidentified) correctly NaNs the inference.
+                    if (
+                        overall_att_es is not None
+                        and bootstrap_results.overall_att_es_se is not None
+                    ):
+                        overall_se_es = bootstrap_results.overall_att_es_se
+                        overall_t_stat_es, overall_p_value_es, overall_conf_int_es = safe_inference(
+                            overall_att_es, overall_se_es, alpha=self.alpha, df=df_survey
+                        )
+                        overall_conf_int_es = bootstrap_results.overall_att_es_ci
+                        overall_p_value_es = bootstrap_results.overall_att_es_p_value
+                    if bootstrap_results.cband_crit_value is not None:
+                        cband_crit_value = bootstrap_results.cband_crit_value
+
+                    # Update group-time effects with bootstrap SEs
+                    if bootstrap_results.group_time_ses:
+                        for gt_key in group_time_effects:
+                            if gt_key in bootstrap_results.group_time_ses:
+                                group_time_effects[gt_key]["se"] = bootstrap_results.group_time_ses[
+                                    gt_key
+                                ]
+                                group_time_effects[gt_key]["conf_int"] = (
+                                    bootstrap_results.group_time_cis[gt_key]
+                                )
+                                group_time_effects[gt_key]["p_value"] = (
+                                    bootstrap_results.group_time_p_values[gt_key]
+                                )
+                                t_val, _, _ = safe_inference(
+                                    group_time_effects[gt_key]["effect"],
+                                    bootstrap_results.group_time_ses[gt_key],
+                                    alpha=self.alpha,
+                                    df=df_survey,
+                                )
+                                group_time_effects[gt_key]["t_stat"] = t_val
+
+                    if event_study_effects and bootstrap_results.event_study_ses:
+                        for e_key in event_study_effects:
+                            if e_key in bootstrap_results.event_study_ses:
+                                # ses/cis/p_values are populated together.
+                                assert (
+                                    bootstrap_results.event_study_cis is not None
+                                    and bootstrap_results.event_study_p_values is not None
+                                )
+                                event_study_effects[e_key]["se"] = (
+                                    bootstrap_results.event_study_ses[e_key]
+                                )
+                                event_study_effects[e_key]["conf_int"] = (
+                                    bootstrap_results.event_study_cis[e_key]
+                                )
+                                event_study_effects[e_key]["p_value"] = (
+                                    bootstrap_results.event_study_p_values[e_key]
+                                )
+                                t_val, _, _ = safe_inference(
+                                    event_study_effects[e_key]["effect"],
+                                    bootstrap_results.event_study_ses[e_key],
+                                    alpha=self.alpha,
+                                    df=df_survey,
+                                )
+                                event_study_effects[e_key]["t_stat"] = t_val
+                                if cband_crit_value is not None:
+                                    bs_se = bootstrap_results.event_study_ses[e_key]
+                                    eff = event_study_effects[e_key]["effect"]
+                                    event_study_effects[e_key]["cband_conf_int"] = (
+                                        eff - cband_crit_value * bs_se,
+                                        eff + cband_crit_value * bs_se,
+                                    )
+
+                    # Update group effects with bootstrap SEs
+                    if (
+                        group_effects
+                        and bootstrap_results.group_effect_ses is not None
+                        and bootstrap_results.group_effect_cis is not None
+                        and bootstrap_results.group_effect_p_values is not None
+                    ):
+                        grp_keys = [
+                            g for g in group_effects if g in bootstrap_results.group_effect_ses
+                        ]
+                        for g_key in grp_keys:
+                            group_effects[g_key]["se"] = bootstrap_results.group_effect_ses[g_key]
+                            group_effects[g_key]["conf_int"] = bootstrap_results.group_effect_cis[
+                                g_key
+                            ]
+                            group_effects[g_key]["p_value"] = (
+                                bootstrap_results.group_effect_p_values[g_key]
+                            )
+                            t_val, _, _ = safe_inference(
+                                group_effects[g_key]["effect"],
+                                bootstrap_results.group_effect_ses[g_key],
+                                alpha=self.alpha,
+                                df=df_survey,
+                            )
+                            group_effects[g_key]["t_stat"] = t_val
+                            # Bootstrap se/p/CI replaced the analytical ones, which
+                            # is what the retained df described - keeping it would
+                            # claim a t-reference that governed nothing.
+                            group_effects[g_key]["df_used"] = None
+
+            # Eq. 4.14 overall: an ANALYTICAL non-finite SE under a finite point estimate
+            # (a contributing horizon's influence function is non-finite, or the variance is
+            # unidentified — e.g. a single-PSU/cluster design). Surface it — never NaN the SE
+            # silently. Gated on the analytical-origin flag (captured before the bootstrap
+            # override) and the final state still being non-finite: a bootstrap that supplies a
+            # finite SE rescues it (no warning), and a bootstrap that NaNs the SE for unrelated
+            # reasons (e.g. cluster-unidentified) is reported by the bootstrap's own warning,
+            # not misdiagnosed here as an analytical-IF failure.
+            if (
+                analytical_overall_es_se_nonfinite
+                and overall_se_es is not None
+                and not np.isfinite(overall_se_es)
+            ):
+                warnings.warn(
+                    "Eq. 4.14 overall (overall_att_es) point estimate is defined but its "
+                    "standard error is undefined (NaN): either a contributing post-treatment "
+                    "event-study horizon has a non-finite influence function, or the variance "
+                    "is unidentified (e.g. a single-PSU/cluster survey design). overall_se_es "
+                    "and its inference fields are NaN.",
+                    UserWarning,
+                    stacklevel=2 + _frame_offset,
+                )
+
+            n_treated_units = int(np.sum((unit_cohorts > 0) & (eligibility_per_unit == 1)))
+            n_control_units = n_units - n_treated_units
+            n_never_enabled = int(np.sum(unit_cohorts == 0))
+            n_eligible = int(np.sum(eligibility_per_unit == 1))
+            n_ineligible = int(np.sum(eligibility_per_unit == 0))
+
+            self.results_ = StaggeredTripleDiffResults(
+                group_time_effects=group_time_effects,
+                overall_att=overall_att,
+                overall_se=overall_se,
+                overall_t_stat=overall_t_stat,
+                overall_p_value=overall_p_value,
+                overall_conf_int=overall_conf_int,
+                # Cohorts that actually produced at least one (g, t) cell. A
+                # cohort can drop out for several reasons (no eligible treated
+                # units, no valid comparison cohort, every base period outside
+                # the panel); reporting the INPUT roster made `groups` and
+                # `n_groups` claim coverage the estimate does not have. Derived
+                # from the realised cells so it is honest for every reason,
+                # order-preserving against the sorted input roster.
+                groups=[g for g in treatment_groups if g in {gt[0] for gt in group_time_effects}],
+                time_periods=time_periods,
+                n_obs=len(df),
+                n_treated_units=n_treated_units,
+                n_control_units=n_control_units,
+                n_never_enabled=n_never_enabled,
+                n_eligible=n_eligible,
+                n_ineligible=n_ineligible,
+                alpha=self.alpha,
+                control_group=self.control_group,
+                base_period=self.base_period,
+                anticipation=self.anticipation,
+                estimation_method=self.estimation_method,
+                event_study_effects=event_study_effects,
+                group_effects=group_effects,
+                bootstrap_results=bootstrap_results,
+                cband_crit_value=cband_crit_value,
+                pscore_trim=self.pscore_trim,
+                survey_metadata=survey_metadata,
+                comparison_group_counts=comparison_group_counts,
+                gmm_weights=gmm_weights_store,
+                epv_diagnostics=epv_diagnostics if epv_diagnostics else None,
+                epv_threshold=self.epv_threshold,
+                pscore_fallback=self.pscore_fallback,
+                overall_att_es=overall_att_es,
+                overall_se_es=overall_se_es,
+                overall_t_stat_es=overall_t_stat_es,
+                overall_p_value_es=overall_p_value_es,
+                overall_conf_int_es=overall_conf_int_es,
+            )
+            self.is_fitted_ = True
+            return self.results_
+        finally:
+            self._warn_frame_offset = 0
+
+    # ------------------------------------------------------------------
+    # Validation
+    # ------------------------------------------------------------------
+
+    def _validate_inputs(
+        self,
+        df: pd.DataFrame,
+        outcome: str,
+        unit: str,
+        time: str,
+        first_treat: str,
+        eligibility: str,
+        covariates: Optional[List[str]],
+        *,
+        partition_label: str = "eligibility",
+    ) -> None:
+        """Validate input data."""
+        required_cols = [outcome, unit, time, first_treat, eligibility]
+        if covariates:
+            required_cols.extend(covariates)
+        missing = [c for c in required_cols if c not in df.columns]
+        if missing:
+            raise ValueError(f"Missing columns: {missing}")
+
+        elig_vals = df[eligibility].dropna().unique()
+        if not set(elig_vals).issubset({0, 1, 0.0, 1.0}):
+            raise ValueError(
+                f"{partition_label.capitalize()} column '{eligibility}' must be binary (0/1). "
+                f"Found values: {sorted(elig_vals)}"
+            )
+        elig_by_unit = df.groupby(unit)[eligibility].nunique()
+        varying = elig_by_unit[elig_by_unit > 1]
+        if len(varying) > 0:
+            raise ValueError(
+                f"{partition_label.capitalize()} must be time-invariant within units. "
+                f"Found {len(varying)} units with varying {partition_label}."
+            )
+        for col in [outcome, first_treat, eligibility]:
+            if df[col].isna().any():
+                raise ValueError(f"Column '{col}' contains missing values.")
+
+        # Reject non-finite outcomes (Inf/-Inf)
+        if not np.all(np.isfinite(df[outcome])):
+            raise ValueError(
+                f"Column '{outcome}' contains non-finite values (Inf/-Inf). "
+                "All outcome values must be finite."
+            )
+
+        # Reject non-finite covariates
+        if covariates:
+            for cov in covariates:
+                if df[cov].isna().any():
+                    raise ValueError(f"Covariate '{cov}' contains missing values.")
+                if not np.all(np.isfinite(df[cov])):
+                    raise ValueError(f"Covariate '{cov}' contains non-finite values.")
+        if df[eligibility].nunique() < 2:
+            raise ValueError(
+                "Need both eligible (Q=1) and ineligible (Q=0) units. "
+                f"Only found Q={df[eligibility].unique()[0]}."
+            )
+
+        # Check unique (unit, time) pairs — no duplicate rows
+        dup = df.duplicated(subset=[unit, time], keep=False)
+        if dup.any():
+            raise ValueError(
+                f"Duplicate (unit, time) rows found. "
+                f"{int(dup.sum())} duplicates detected. Panel must have unique rows."
+            )
+
+        # Check balanced panel — every unit observed in exactly the global period set
+        global_periods = set(df[time].unique())
+        n_global_periods = len(global_periods)
+        unit_period_sets = df.groupby(unit)[time].apply(set)
+        mismatched = unit_period_sets[unit_period_sets != global_periods]
+        if len(mismatched) > 0:
+            raise ValueError(
+                "Unbalanced panel detected. All units must be observed in "
+                f"all {n_global_periods} periods. "
+                f"Found {len(mismatched)} units with different period sets."
+            )
+
+        # Check time-invariant first_treat
+        ft_by_unit = df.groupby(unit)[first_treat].nunique()
+        varying_ft = ft_by_unit[ft_by_unit > 1]
+        if len(varying_ft) > 0:
+            raise ValueError(
+                f"first_treat must be time-invariant within units. "
+                f"Found {len(varying_ft)} units with varying first_treat."
+            )
+
+        # Check time-invariant covariates
+        if covariates:
+            for cov in covariates:
+                cov_nunique = df.groupby(unit)[cov].nunique()
+                varying_cov = cov_nunique[cov_nunique > 1]
+                if len(varying_cov) > 0:
+                    raise ValueError(
+                        f"Covariate '{cov}' must be time-invariant within units. "
+                        f"Found {len(varying_cov)} units with varying values."
+                    )
+
+    # ------------------------------------------------------------------
+    # Precomputation
+    # ------------------------------------------------------------------
+
+    def _precompute_structures(
+        self,
+        df: pd.DataFrame,
+        outcome: str,
+        unit: str,
+        time: str,
+        eligibility: str,
+        covariates: Optional[List[str]],
+        resolved_survey=None,
+    ) -> PrecomputedData:
+        """Build precomputed structures for efficient computation."""
+        all_units = np.array(sorted(df[unit].unique()))
+        time_periods = sorted(df[time].unique())
+        n_units = len(all_units)
+        n_periods = len(time_periods)
+
+        unit_to_idx = {u: i for i, u in enumerate(all_units)}
+        time_to_col = {t: j for j, t in enumerate(time_periods)}
+
+        outcome_matrix = np.full((n_units, n_periods), np.nan)
+        for _, row in df.iterrows():
+            u_idx = unit_to_idx[row[unit]]
+            t_idx = time_to_col[row[time]]
+            outcome_matrix[u_idx, t_idx] = row[outcome]
+
+        unit_df = df.groupby(unit).first().reindex(all_units)
+        unit_cohorts = unit_df["first_treat"].values.astype(float)
+        eligibility_per_unit = unit_df[eligibility].values.astype(int)
+
+        treatment_groups = sorted([g for g in np.unique(unit_cohorts) if g > 0])
+
+        covariate_matrix = None
+        if covariates:
+            cov_wide = {}
+            for cov in covariates:
+                cov_vals = np.full(n_units, np.nan)
+                for u_id, idx in unit_to_idx.items():
+                    u_data = df.loc[df[unit] == u_id, cov]
+                    if len(u_data) > 0:
+                        cov_vals[idx] = u_data.iloc[0]
+                cov_wide[cov] = cov_vals
+            covariate_matrix = np.column_stack(list(cov_wide.values()))
+
+        # Extract per-unit survey weights and collapse design to unit level
+        survey_weights_arr = None
+        resolved_survey_unit = None
+        if resolved_survey is not None:
+            from diff_diff.survey import collapse_survey_to_unit_level
+
+            survey_weights_arr = (
+                pd.Series(resolved_survey.weights, index=df.index)
+                .groupby(df[unit])
+                .first()
+                .reindex(all_units)
+                .values.astype(np.float64)
+            )
+            # Normalize to sum=n for aggregation/rescaling (matches pweight
+            # convention). Raw weights preserved in resolved_survey_unit for
+            # replicate w_r/w_full ratios — those are inherently scale-invariant.
+            sw_sum = np.sum(survey_weights_arr)
+            if sw_sum > 0:
+                survey_weights_arr = survey_weights_arr * (len(survey_weights_arr) / sw_sum)
+            resolved_survey_unit = collapse_survey_to_unit_level(
+                resolved_survey, df, unit, all_units
+            )
+
+        return {
+            "all_units": all_units,
+            "unit_to_idx": unit_to_idx,
+            "time_periods": time_periods,
+            "time_to_col": time_to_col,
+            "outcome_matrix": outcome_matrix,
+            "unit_cohorts": unit_cohorts,
+            "eligibility_per_unit": eligibility_per_unit,
+            "treatment_groups": treatment_groups,
+            "covariate_matrix": covariate_matrix,
+            "n_units": n_units,
+            "n_periods": n_periods,
+            "survey_weights": survey_weights_arr,
+            "resolved_survey_unit": resolved_survey_unit,
+            "df_survey": (
+                resolved_survey_unit.df_survey if resolved_survey_unit is not None else None
+            ),
+        }
+
+    # ------------------------------------------------------------------
+    # Base period
+    # ------------------------------------------------------------------
+
+    def _get_base_period(self, g: Any, t: Any) -> Optional[Any]:
+        """Determine base period for a (g, t) pair."""
+        if self.base_period == "universal":
+            return g - 1 - self.anticipation
+        else:
+            if t < g - self.anticipation:
+                return t - 1
+            else:
+                return g - 1 - self.anticipation
+
+    # ------------------------------------------------------------------
+    # Three-DiD DDD for one (g, g_c, t) triple
+    # ------------------------------------------------------------------
+
+    def _compute_ddd_gt_gc(
+        self,
+        precomputed: PrecomputedData,
+        g: Any,
+        g_c: Any,
+        t: Any,
+        base_period_val: Any,
+        covariates: Optional[List[str]],
+        pscore_cache: Dict,
+        epv_diagnostics: Optional[Dict] = None,
+    ) -> Optional[Tuple[float, np.ndarray, float]]:
+        """
+        Compute DDD ATT for one (g, g_c, t) triple.
+
+        Returns (att_ddd, inf_full_n_units, size_gt_ctrl) or None.
+        """
+        outcome_matrix = precomputed["outcome_matrix"]
+        time_to_col = precomputed["time_to_col"]
+        unit_cohorts = precomputed["unit_cohorts"]
+        eligibility_per_unit = precomputed["eligibility_per_unit"]
+        covariate_matrix = precomputed["covariate_matrix"]
+        n_units = precomputed["n_units"]
+        survey_weights = precomputed.get("survey_weights")
+
+        t_col = time_to_col[t]
+        b_col = time_to_col[base_period_val]
+
+        # Four sub-groups within this (g, g_c) cell
+        treated_mask = (unit_cohorts == g) & (eligibility_per_unit == 1)  # subgroup 4
+        sub_a_mask = (unit_cohorts == g) & (eligibility_per_unit == 0)  # subgroup 3
+        sub_b_mask = (unit_cohorts == g_c) & (eligibility_per_unit == 1)  # subgroup 2
+        sub_c_mask = (unit_cohorts == g_c) & (eligibility_per_unit == 0)  # subgroup 1
+
+        n_treated = int(np.sum(treated_mask))
+        n_a = int(np.sum(sub_a_mask))
+        n_b = int(np.sum(sub_b_mask))
+        n_c = int(np.sum(sub_c_mask))
+
+        # Check for empty subgroups (by count or by survey weight mass)
+        empty = []
+        if n_treated == 0:
+            empty.append(f"(S={g},Q=1)")
+        if n_a == 0:
+            empty.append(f"(S={g},Q=0)")
+        if n_b == 0:
+            empty.append(f"(S={g_c},Q=1)")
+        if n_c == 0:
+            empty.append(f"(S={g_c},Q=0)")
+        # Zero survey-weight mass after subpopulation filtering = effectively empty
+        if not empty and survey_weights is not None:
+            if np.sum(survey_weights[treated_mask]) <= 0:
+                empty.append(f"(S={g},Q=1,mass=0)")
+            if np.sum(survey_weights[sub_a_mask]) <= 0:
+                empty.append(f"(S={g},Q=0,mass=0)")
+            if np.sum(survey_weights[sub_b_mask]) <= 0:
+                empty.append(f"(S={g_c},Q=1,mass=0)")
+            if np.sum(survey_weights[sub_c_mask]) <= 0:
+                empty.append(f"(S={g_c},Q=0,mass=0)")
+        if empty:
+            warnings.warn(
+                f"Empty subgroup(s) {', '.join(empty)} for "
+                f"(g={g}, g_c={g_c}, t={t}). "
+                "Comparison unidentified, skipping.",
+                UserWarning,
+                stacklevel=3 + self._warn_frame_offset,
+            )
+            return None
+
+        if min(n_treated, n_a, n_b, n_c) < 5:
+            warnings.warn(
+                f"Small cell size for (g={g}, g_c={g_c}, t={t}). " "Estimates may be unreliable.",
+                UserWarning,
+                stacklevel=3 + self._warn_frame_offset,
+            )
+
+        # Outcome changes
+        delta_y_all = outcome_matrix[:, t_col] - outcome_matrix[:, b_col]
+        valid = np.isfinite(delta_y_all)
+        for m in [treated_mask, sub_a_mask, sub_b_mask, sub_c_mask]:
+            if not np.all(valid[m]):
+                return None
+
+        # Three pairwise DiDs, each on a 2-cell subset
+        # Collect per-DiD EPV diagnostics; merge worst into (g,t) key later
+        epv_diag_a = {} if epv_diagnostics is not None else None
+        epv_diag_b = {} if epv_diagnostics is not None else None
+        epv_diag_c = {} if epv_diagnostics is not None else None
+
+        # DiD_A: subgroup 4 vs 3 (treated-eligible vs treated-ineligible)
+        pair_a_mask = treated_mask | sub_a_mask
+        did_a = self._run_pairwise_did(
+            delta_y_all,
+            pair_a_mask,
+            treated_mask,
+            sub_a_mask,
+            covariate_matrix,
+            pscore_cache,
+            (g, g, 0, base_period_val),
+            survey_weights=survey_weights,
+            context_label=f"cohort g={g}, DiD_A (g_c={g_c})",
+            epv_diagnostics_out=epv_diag_a,
+        )
+
+        # DiD_B: subgroup 4 vs 2 (treated-eligible vs control-eligible)
+        pair_b_mask = treated_mask | sub_b_mask
+        did_b = self._run_pairwise_did(
+            delta_y_all,
+            pair_b_mask,
+            treated_mask,
+            sub_b_mask,
+            covariate_matrix,
+            pscore_cache,
+            (g, g_c, 1, base_period_val),
+            survey_weights=survey_weights,
+            context_label=f"cohort g={g}, DiD_B (g_c={g_c})",
+            epv_diagnostics_out=epv_diag_b,
+        )
+
+        # DiD_C: subgroup 4 vs 1 (treated-eligible vs control-ineligible)
+        pair_c_mask = treated_mask | sub_c_mask
+        did_c = self._run_pairwise_did(
+            delta_y_all,
+            pair_c_mask,
+            treated_mask,
+            sub_c_mask,
+            covariate_matrix,
+            pscore_cache,
+            (g, g_c, 0, base_period_val),
+            survey_weights=survey_weights,
+            context_label=f"cohort g={g}, DiD_C (g_c={g_c})",
+            epv_diagnostics_out=epv_diag_c,
+        )
+
+        # Merge per-DiD EPV diagnostics: keep the worst (lowest EPV) entry
+        # across all three DiDs for this g_c. If multiple g_c contribute to the
+        # same (g, t) cell, retain the overall minimum EPV across all g_c calls.
+        if epv_diagnostics is not None:
+            candidates = [d for d in [epv_diag_a, epv_diag_b, epv_diag_c] if d]
+            if candidates:
+                worst = min(candidates, key=lambda d: d.get("epv", float("inf")))
+                existing = epv_diagnostics.get((g, t))
+                if existing is None or worst.get("epv", float("inf")) < existing.get(
+                    "epv", float("inf")
+                ):
+                    epv_diagnostics[(g, t)] = worst
+
+        if did_a is None or did_b is None or did_c is None:
+            return None
+
+        att_a, inf_a = did_a
+        att_b, inf_b = did_b
+        att_c, inf_c = did_c
+
+        att_ddd = att_a + att_b - att_c
+
+        # Three-DiD IF combination: w_j = n_cell / n_pair_j (R's att_dr convention)
+        # With survey weights, use survey-weighted cell sizes
+        if survey_weights is not None:
+            sw_4 = float(np.sum(survey_weights[treated_mask]))
+            sw_3 = float(np.sum(survey_weights[sub_a_mask]))
+            sw_2 = float(np.sum(survey_weights[sub_b_mask]))
+            sw_1 = float(np.sum(survey_weights[sub_c_mask]))
+            n_cell_w = sw_4 + sw_3 + sw_2 + sw_1
+            n_pair_a_w = sw_4 + sw_3
+            n_pair_b_w = sw_4 + sw_2
+            n_pair_c_w = sw_4 + sw_1
+            w_3 = n_cell_w / n_pair_a_w if n_pair_a_w > 0 else 1.0
+            w_2 = n_cell_w / n_pair_b_w if n_pair_b_w > 0 else 1.0
+            w_1 = n_cell_w / n_pair_c_w if n_pair_c_w > 0 else 1.0
+            size_gt_ctrl = n_cell_w
+        else:
+            n_cell = n_treated + n_a + n_b + n_c
+            n_pair_a = n_treated + n_a
+            n_pair_b = n_treated + n_b
+            n_pair_c = n_treated + n_c
+            w_3 = n_cell / n_pair_a if n_pair_a > 0 else 1.0
+            w_2 = n_cell / n_pair_b if n_pair_b > 0 else 1.0
+            w_1 = n_cell / n_pair_c if n_pair_c > 0 else 1.0
+            size_gt_ctrl = float(n_cell)
+
+        # Scatter pair-level IFs into n_units-length vector
+        inf_full = np.zeros(n_units)
+        pair_a_idx = np.where(pair_a_mask)[0]
+        pair_b_idx = np.where(pair_b_mask)[0]
+        pair_c_idx = np.where(pair_c_mask)[0]
+
+        inf_full[pair_a_idx] += w_3 * inf_a
+        inf_full[pair_b_idx] += w_2 * inf_b
+        inf_full[pair_c_idx] -= w_1 * inf_c
+
+        return att_ddd, inf_full, size_gt_ctrl
+
+    # ------------------------------------------------------------------
+    # Pairwise DiD (matches R's compute_did)
+    # ------------------------------------------------------------------
+
+    def _run_pairwise_did(
+        self,
+        delta_y_all: np.ndarray,
+        pair_mask: np.ndarray,
+        treated_mask: np.ndarray,
+        control_mask: np.ndarray,
+        covariate_matrix: Optional[np.ndarray],
+        pscore_cache: Dict,
+        pscore_key: Any,
+        survey_weights: Optional[np.ndarray] = None,
+        context_label: str = "",
+        epv_diagnostics_out: Optional[dict] = None,
+    ) -> Optional[Tuple[float, np.ndarray]]:
+        """
+        Compute a single pairwise DiD ATT and IF on a 2-cell subset.
+
+        Matches R's triplediff::compute_did() formulation exactly:
+        Riesz/Hajek normalization, PS + OR IF corrections.
+
+        Returns (att, inf_func) where inf_func has length n_pair,
+        ordered by pair_mask indices. Returns None if insufficient data.
+        """
+        pair_idx = np.where(pair_mask)[0]
+        n_pair = len(pair_idx)
+        if n_pair == 0:
+            return None
+
+        delta_y = delta_y_all[pair_idx]
+        PA4 = treated_mask[pair_idx].astype(float)
+        PAa = control_mask[pair_idx].astype(float)
+        sw_pair = survey_weights[pair_idx] if survey_weights is not None else None
+
+        n_t = int(np.sum(PA4))
+        n_c = int(np.sum(PAa))
+        if n_t == 0 or n_c == 0:
+            return None
+
+        has_covariates = covariate_matrix is not None and self.estimation_method != "none"
+
+        # Build covariate matrix with intercept for the pair
+        covX = None
+        if has_covariates:
+            # The flag definition above guarantees this (mypy can't track it).
+            assert covariate_matrix is not None
+            X_pair = covariate_matrix[pair_idx]
+            covX = np.column_stack([np.ones(n_pair), X_pair])
+
+        # Compute nuisance parameters based on estimation method
+        pscore = None
+        hessian = None
+        or_delta = np.zeros(n_pair)
+
+        if self.estimation_method in ("ipw", "dr") and covX is not None:
+            pscore, hessian = self._compute_pscore(
+                PA4,
+                covX,
+                pscore_cache,
+                pscore_key,
+                survey_weights=sw_pair,
+                context_label=context_label,
+                epv_diagnostics_out=epv_diagnostics_out,
+            )
+
+        if self.estimation_method in ("reg", "dr") and covX is not None:
+            or_delta = self._compute_or(
+                delta_y,
+                PAa,
+                covX,
+                survey_weights=sw_pair,
+            )
+
+        # Compute ATT and IF (R's compute_did formulation)
+        return self._compute_did_panel(
+            delta_y,
+            PA4,
+            PAa,
+            covX,
+            pscore,
+            hessian,
+            or_delta,
+            survey_weights=sw_pair,
+        )
+
+    # ------------------------------------------------------------------
+    # Core DR/IPW/RA computation (matches R's compute_did exactly)
+    # ------------------------------------------------------------------
+
+    def _compute_did_panel(
+        self,
+        delta_y: np.ndarray,
+        PA4: np.ndarray,
+        PAa: np.ndarray,
+        covX: Optional[np.ndarray],
+        pscore: Optional[np.ndarray],
+        hessian: Optional[np.ndarray],
+        or_delta: np.ndarray,
+        survey_weights: Optional[np.ndarray] = None,
+    ) -> Tuple[float, np.ndarray]:
+        """
+        Pairwise DiD ATT and influence function.
+        Matches R's triplediff::compute_did() line-by-line.
+
+        Parameters
+        ----------
+        delta_y : outcome changes for 2-cell subset (n_pair,)
+        PA4 : treated indicator (n_pair,)
+        PAa : control indicator (n_pair,)
+        covX : covariate matrix with intercept (n_pair, p) or None
+        pscore : propensity scores (n_pair,) or None
+        hessian : (X'WX)^{-1} * n_pair or None
+        or_delta : OR predictions (n_pair,), zeros if no covariates
+        survey_weights : per-observation survey weights (n_pair,) or None
+
+        Returns
+        -------
+        (att, inf_func) where inf_func has length n_pair.
+        """
+        n_pair = len(delta_y)
+        est = self.estimation_method
+
+        # Riesz representers (R lines 243-250)
+        if est == "reg" or pscore is None:
+            w_treat = PA4.copy()
+            w_control = PAa.copy()
+        else:
+            w_treat = PA4.copy()
+            pscore_safe = np.clip(pscore, self.pscore_trim, 1 - self.pscore_trim)
+            w_control = pscore_safe * PAa / (1 - pscore_safe)
+
+        # Incorporate survey weights into Riesz representers
+        if survey_weights is not None:
+            w_treat = w_treat * survey_weights
+            w_control = w_control * survey_weights
+
+        # DR ATT via Hajek normalization (R lines 251-256)
+        resid = delta_y - or_delta
+        riesz_treat = w_treat * resid
+        riesz_control = w_control * resid
+
+        mean_w_treat = np.mean(w_treat)
+        mean_w_control = np.mean(w_control)
+
+        if mean_w_treat <= 0 or mean_w_control <= 0:
+            return float("nan"), np.zeros(n_pair)
+
+        att_treat = np.mean(riesz_treat) / mean_w_treat
+        att_control = np.mean(riesz_control) / mean_w_control
+        dr_att = att_treat - att_control
+
+        # Base IF (R lines 302-304)
+        inf_treat_did = riesz_treat - w_treat * att_treat
+        inf_control_did = riesz_control - w_control * att_control
+
+        # PS correction (R lines 262-273) — IPW and DR only
+        inf_control_pscore = 0.0
+        if est != "reg" and hessian is not None and covX is not None:
+            M2 = np.mean((w_control * (resid - att_control))[:, None] * covX, axis=0)
+            if survey_weights is not None:
+                score_ps = survey_weights[:, None] * (PA4 - pscore_safe)[:, None] * covX
+            else:
+                score_ps = (PA4 - pscore_safe)[:, None] * covX
+            asy_lin_rep_ps = score_ps @ hessian
+            inf_control_pscore = asy_lin_rep_ps @ M2
+
+        # OR correction (R lines 278-300) — reg and DR only
+        inf_treat_or = 0.0
+        inf_cont_or = 0.0
+        if est != "ipw" and covX is not None:
+            M1 = np.mean(w_treat[:, None] * covX, axis=0)
+            M3 = np.mean(w_control[:, None] * covX, axis=0)
+
+            if survey_weights is not None:
+                or_x = (PAa * survey_weights)[:, None] * covX
+                or_ex = (PAa * survey_weights * resid)[:, None] * covX
+            else:
+                or_x = PAa[:, None] * covX
+                or_ex = (PAa * resid)[:, None] * covX
+            XpX = or_x.T @ covX / n_pair
+
+            # Rank-guarded inverse: a near-singular X'WX (constant/collinear
+            # covariate) does not raise LinAlgError, so np.linalg.solve would
+            # return a garbage inverse that inflates the OR influence function.
+            # _rank_guarded_inv truncates redundant directions (finite SE on the
+            # identified subset) and is the sole owner of the tracker append.
+            XpX_inv, _, _ = _rank_guarded_inv(
+                XpX, tracker=getattr(self, "_lstsq_fallback_tracker", None)
+            )
+            asy_linear_or = (XpX_inv @ or_ex.T).T
+
+            inf_treat_or = -(asy_linear_or @ M1)
+            inf_cont_or = -(asy_linear_or @ M3)
+
+        # Final IF assembly (R lines 307-310)
+        inf_control = (inf_control_did + inf_control_pscore + inf_cont_or) / mean_w_control
+        inf_treat = (inf_treat_did + inf_treat_or) / mean_w_treat
+        inf_func = inf_treat - inf_control
+
+        return float(dr_att), inf_func
+
+    # ------------------------------------------------------------------
+    # Nuisance parameter computation
+    # ------------------------------------------------------------------
+
+    def _compute_pscore(
+        self,
+        PA4: np.ndarray,
+        covX: np.ndarray,
+        pscore_cache: Dict,
+        pscore_key: Any,
+        survey_weights: Optional[np.ndarray] = None,
+        context_label: str = "",
+        epv_diagnostics_out: Optional[dict] = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Fit logistic P(PA4=1|X). Returns (pscore, hessian).
+
+        hessian = (X'WX)^{-1} * n_pair, matching R's convention.
+        When survey_weights is provided, IRLS uses survey-weighted
+        working weights and the hessian accounts for survey weights.
+        """
+        cached = pscore_cache.get(pscore_key)
+        n_pair = len(PA4)
+
+        if cached is not None:
+            beta_logistic, cached_diag = cached
+            z = np.dot(covX, beta_logistic)
+            z = np.clip(z, -500, 500)
+            pscore = 1 / (1 + np.exp(-z))
+            if epv_diagnostics_out is not None and cached_diag:
+                epv_diagnostics_out.update(cached_diag)
+        else:
+            X_no_intercept = covX[:, 1:]  # solve_logit adds its own intercept
+            diag = {}
+            try:
+                beta_logistic, pscore = solve_logit(
+                    X_no_intercept,
+                    PA4,
+                    rank_deficient_action=self.rank_deficient_action,
+                    weights=survey_weights,
+                    epv_threshold=self.epv_threshold,
+                    context_label=context_label,
+                    diagnostics_out=diag,
+                )
+                _check_propensity_diagnostics(pscore, self.pscore_trim)
+                # Zero-fill NaN coefficients (from rank-deficient columns)
+                # before caching, so cache reuse doesn't propagate NaN.
+                # Cache alongside EPV diagnostics for replay on cache hits.
+                beta_clean = np.where(np.isfinite(beta_logistic), beta_logistic, 0.0)
+                pscore_cache[pscore_key] = (beta_clean, diag)
+            except (np.linalg.LinAlgError, ValueError):
+                if self.pscore_fallback == "error" or self.rank_deficient_action == "error":
+                    raise
+                ctx = f" for {context_label}" if context_label else ""
+                warnings.warn(
+                    f"Propensity score estimation failed{ctx}. "
+                    f"Falling back to unconditional propensity "
+                    f"(propensity model ignores covariates; outcome "
+                    f"regression still uses them for DR). "
+                    f"Consider estimation_method='reg' to avoid "
+                    f"propensity scores entirely.",
+                    UserWarning,
+                    stacklevel=5 + self._warn_frame_offset,
+                )
+                # Use survey-weighted treated share when weights available
+                if survey_weights is not None:
+                    pos = survey_weights > 0
+                    if np.any(pos):
+                        p_uc = np.average(PA4[pos], weights=survey_weights[pos])
+                    else:
+                        p_uc = np.mean(PA4)
+                else:
+                    p_uc = np.mean(PA4)
+                pscore = np.full(n_pair, p_uc)
+                pscore = np.clip(pscore, self.pscore_trim, 1 - self.pscore_trim)
+                # No hessian for unconditional fallback
+                return pscore, None
+            if epv_diagnostics_out is not None and diag:
+                epv_diagnostics_out.update(diag)
+
+        pscore = np.clip(pscore, 1e-6, 1 - 1e-6)
+
+        # Hessian: (X'WX)^{-1} * n (matching R's compute_pscore)
+        W = pscore * (1 - pscore)
+        if survey_weights is not None:
+            W = W * survey_weights
+        XWX = covX.T @ (W[:, None] * covX)
+        # Rank-guarded inverse (sibling of the OR-side guard in
+        # _compute_did_panel). A near-singular X'WX (constant/collinear
+        # propensity covariate) does not raise LinAlgError, so the old
+        # np.linalg.inv returned a garbage inverse that inflated IPW/DR
+        # influence-function corrections. The helper truncates redundant
+        # directions and is the sole owner of the PS-Hessian tracker append.
+        XWX_inv, _, _ = _rank_guarded_inv(
+            XWX, tracker=getattr(self, "_ps_lstsq_fallback_tracker", None)
+        )
+        hessian = XWX_inv * n_pair
+
+        return pscore, hessian
+
+    def _compute_or(
+        self,
+        delta_y: np.ndarray,
+        PAa: np.ndarray,
+        covX: np.ndarray,
+        survey_weights: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """Fit OLS on control outcome changes. Returns or_delta for all pair units.
+
+        Honors self.rank_deficient_action for collinear covariates. The outcome
+        regression is fit through the shared scale-robust solver
+        (``solve_ols`` -> column-equilibrated SVD; matches TripleDifference and
+        R's lm()/QR), with optional WLS via ``solve_ols(weights=...)``.
+        """
+        from diff_diff.linalg import solve_ols as _solve_ols
+
+        control_mask = PAa > 0
+        n_c = int(np.sum(control_mask))
+        if n_c == 0:
+            return np.zeros(len(delta_y))
+
+        X_control = covX[control_mask]
+        y_control = delta_y[control_mask]
+        sw_control = survey_weights[control_mask] if survey_weights is not None else None
+
+        # Outcome regression via the shared scale-robust solver (`solve_ols` ->
+        # column-equilibrated SVD/gelsd; matches TripleDifference and R's
+        # lm()/QR). Replaces the prior `cho_solve(X'X)` cache fast path, which
+        # was NOT scale-equilibrated (a large-scale covariate would corrupt the
+        # OR fit via the normal-equations Cholesky). We only need beta for the
+        # OR prediction, so zero the NaN (dropped-column) coefficients.
+        beta, _, _ = _solve_ols(
+            X_control,
+            y_control,
+            rank_deficient_action=self.rank_deficient_action,
+            weights=sw_control,
+            return_vcov=False,
+        )
+        beta = np.where(np.isnan(beta), 0.0, beta)
+
+        return covX @ beta
+
+    # ------------------------------------------------------------------
+    # GMM-optimal combination (matches R's att_gt GMM procedure)
+    # ------------------------------------------------------------------
+
+    def _combine_gmm(
+        self,
+        att_vec: np.ndarray,
+        inf_func_matrix: np.ndarray,
+        n_units: int,
+    ) -> Tuple[float, np.ndarray, np.ndarray, float]:
+        """
+        Combine comparison-group-specific estimates via GMM-optimal weights.
+
+        Returns (att_gmm, inf_gmm, weights, se_gmm).
+        """
+        k = len(att_vec)
+
+        if k == 1:
+            att_gmm = float(att_vec[0])
+            inf_gmm = inf_func_matrix[0].copy()
+            # R's SE: sqrt(sum(IF^2) / n^2)
+            se_gmm = float(np.sqrt(np.sum(inf_gmm**2) / n_units**2))
+            return att_gmm, inf_gmm, np.array([1.0]), se_gmm
+
+        # R: OMEGA <- cov(inf_mat_local) — sample covariance, ddof=1
+        Omega = np.cov(inf_func_matrix)
+
+        ones = np.ones(k)
+        try:
+            Omega_inv = np.linalg.inv(Omega)
+        except np.linalg.LinAlgError:
+            warnings.warn(
+                "Singular covariance matrix in GMM combination. " "Using pseudoinverse.",
+                UserWarning,
+                stacklevel=3 + self._warn_frame_offset,
+            )
+            Omega_inv = np.linalg.pinv(Omega)
+
+        denom = float(ones @ Omega_inv @ ones)
+        if denom <= 0 or not np.isfinite(denom):
+            weights = np.full(k, 1.0 / k)
+            att_gmm = float(weights @ att_vec)
+            inf_gmm = weights @ inf_func_matrix
+            se_gmm = float(np.sqrt(np.sum(inf_gmm**2) / n_units**2))
+        else:
+            weights = (Omega_inv @ ones) / denom
+            att_gmm = float(weights @ att_vec)
+            inf_gmm = weights @ inf_func_matrix
+            # R: gmm_se <- sqrt(1 / (n * sum(inv_OMEGA)))
+            se_gmm = float(np.sqrt(1.0 / (n_units * denom)))
+
+        return att_gmm, inf_gmm, weights, se_gmm

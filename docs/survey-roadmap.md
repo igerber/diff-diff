@@ -79,8 +79,10 @@ Weighted `solve_logit()` in `linalg.py` — survey weights enter IRLS as
   workflow (strata, PSU, FPC, replicates, subpopulation, DEFF)
 - **7d.** HonestDiD + survey: survey df and event-study VCV propagated
   to sensitivity analysis with t-distribution critical values
-- **7e.** StaggeredTripleDifference survey support (only implementation
-  in R or Python with design-based DDD variance)
+- **7e.** Staggered DDD survey support (only implementation in R or Python
+  with design-based DDD variance). Reached via `TripleDifference` with
+  `first_treat=` since 3.9; `StaggeredTripleDifference` is deprecated
+  (row M-013) but runs the same engine until its 4.0 removal.
 
 ### Phase 8: Survey Maturity (v2.8.3-v2.8.4)
 

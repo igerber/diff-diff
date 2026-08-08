@@ -3102,7 +3102,162 @@ contract changes.
 
 ---
 
+
+### Staggered mode (3.9, ledger row M-013)
+
+Since 3.9 `TripleDifference` serves BOTH DDD designs from one signature, mirroring
+the reference implementation (`triplediff::ddd()` does the same). The estimand,
+estimator and variance of each design are unchanged - the merge is API-only, and
+the staggered estimation core is the relocated `StaggeredTripleDifference` engine,
+shared verbatim.
+
+- **Dispatch.** `first_treat=` selects the staggered engine; the 2x2x2 engine
+  serves `(group, partition, post)`. Mixing the two parameter sets is an ERROR in
+  both directions, constructor params included, never a silent guess. The
+  staggered-only fit params (`unit`, `first_treat`, `aggregate`, `balance_e`) are
+  keyword-only, so a positionally-written staggered call cannot bind to the 2x2x2
+  slots; positional slots 1-8 are unchanged.
+- **Note (`time=` semantics):** the dual role is resolved by dispatch ORDER, not
+  value inspection. In staggered mode `time=` is the calendar column and emits NO
+  rename warning; in 2x2x2 mode it stays the deprecated alias for `post=` (row
+  M-031) and warns. At 4.0 it means the calendar column only (row M-085).
+- **Note (vocabulary):** the third dimension is `partition` in both modes, and
+  `control_group` takes the underscored values `"not_yet_treated"` /
+  `"never_treated"`. R's compact spellings are accepted only by the deprecated
+  `StaggeredTripleDifference` and die with it.
+- **Note (`cluster=` raises in staggered mode):** cluster-robust ANALYTICAL SEs
+  are not implemented for the staggered engine, so on this surface `cluster=`
+  raises a `ValueError` steering to `n_bootstrap > 0` (unit-level clustering via
+  the multiplier bootstrap). The deprecated class keeps its 3.x
+  accepted-then-warned-then-ignored `UserWarning`. **Deviation from the dying
+  class, deliberate:** the raise is live from the mode's 3.9 birth, because a new
+  surface needs no deprecation window and should not accept a parameter it does
+  not honor. In 2x2x2 mode `cluster=` continues to give Liang-Zeger CR1.
+- **Note (unreachable-by-construction params):** `bootstrap_weights`, `seed` and
+  `cband` pass silently in 2x2x2 mode. They take effect only through
+  `n_bootstrap > 0`, which 2x2x2 mode rejects outright, so they are unreachable
+  rather than silently ignored. `control_group`, `anticipation`, `base_period` and
+  `n_bootstrap` themselves all raise in 2x2x2 mode. **The power surface applies
+  the SAME boundary:** `simulate_power` / `simulate_mde` / `simulate_sample_size`
+  reject only those four and accept the three inert ones, so an estimator that is
+  legal to `fit()` is legal to simulate. An earlier 3(b) revision rejected all
+  seven at the power front door, which made `TripleDifference(seed=7)` fittable
+  but not simulatable - `seed` is set habitually for reproducibility and the
+  `simulate_*` helpers take their own separate `seed=`.
+- **Note (`pscore_trim` validation tightened, ledger row M-142):** the merged
+  constructor adopts the staggered engine's `0 < pscore_trim < 0.5` rule;
+  `TripleDifference`'s `pscore_trim` was previously unvalidated. The value feeds
+  `np.clip(pscore, trim, 1 - trim)` in both engines, so `trim=0` disabled the
+  overlap guard that keeps the `1/(1-p)` IPW/DR weights finite and `trim >= 0.5`
+  inverted the clip bounds. `TripleDifference(pscore_trim=0)` therefore changes
+  from accepted to a loud `ValueError`. **Sibling divergence, recorded rather than
+  silently tolerated:** `ContinuousDiD` still validates `0.0 <= pscore_trim < 0.5`
+  and so still admits `0`; aligning it is out of scope for a DDD merge and is
+  tracked as a `TODO.md` row.
+- **Note (the `triple_difference()` wrapper stays 2x2x2-only):** the deprecated
+  functional wrapper is deliberately NOT extended to staggered mode. It reaches
+  only the 2x2x2 design and forwards its own `time=` as `post=`. Three reasons,
+  all program-level rather than local: the wrapper is itself deprecated in 3.9
+  and removed at 4.0 (row M-075), so widening it would mint new removal
+  obligations for params introduced solely to be deleted; phase 3(a) set the
+  precedent by extending no wrapper with its new event-study mode; and the
+  wrapper's own deprecation message already steers to the class, which is where
+  staggered mode lives. A caller who needs staggered DDD migrates to
+  `TripleDifference(...).fit(..., first_treat=...)` - the migration the row
+  exists to produce. Pinned by
+  `tests/test_v4_merge_ddd.py::TestGateHConsumers::test_deprecated_wrapper_stays_2x2x2_only`.
+- **Note (bootstrap `seed` is estimator state, not results provenance):** the
+  staggered container does NOT carry the `seed` that generated its bootstrap
+  SEs, p-values and sup-t bands; it is readable from the estimator
+  (`est.seed` / `get_params()`), not from the returned result. `seed` IS fully
+  propagated in the operative sense - it reaches the multiplier draws, so the
+  same seed reproduces an SE bit-exactly and a different seed moves it - and it
+  appears in `get_params()`/`set_params()`. What is absent is a results-object
+  FIELD. This is deliberate and pre-dates the 3.9 merge: `seed` was already a
+  `StaggeredTripleDifference` constructor param that its container never
+  recorded, and `CallawaySantAnnaResults` has exactly the same gap through the
+  shared `CallawaySantAnnaBootstrapMixin`. Adding the field to one container
+  alone would leave the two siblings inconsistent, and
+  `StaggeredTripleDiffResults` is already slated for the 4.0 container port
+  (row M-014), so the fix is sequenced there and tracked as a `TODO.md` row
+  covering BOTH containers. Estimators that do expose it
+  (`ContinuousDiDResults`, `EfficientDiDResults`, `SyntheticDiDResults`) are
+  the precedent for the eventual shape.
+- **Note (`anticipation` domain validated from birth):** `anticipation` is one of
+  the seven staggered-only constructor params introduced on `TripleDifference` in
+  3.9, and it is validated as a non-negative integer (`bool` rejected) from that
+  birth - so this is a new param's input contract, not a tightening of an existing
+  one, and it needs no lifecycle row. The guard is load-bearing rather than
+  cosmetic: the value feeds BOTH the base-period rule and the comparison-cohort
+  threshold, so `anticipation=-1` would make the universal base period `g` - an
+  ALREADY-TREATED period - and relax the not-yet-treated threshold to
+  `max(t, base) - 1`, admitting cohorts treated at the evaluation period as clean
+  controls. Neither condition is observable in the output, so an unvalidated
+  window is a silent estimand change (see the no-silent-failures policy).
+  `bool` is rejected because `True` would otherwise coerce to a silent
+  one-period window. The check is the shared `utils.validate_anticipation`, and
+  it is ALSO called from the staggered engine, so the deprecated
+  `StaggeredTripleDifference` fails closed too — its frozen 3.x API shape was
+  never a licence to emit silently-biased numbers from the same engine. The
+  split is deliberate: on the dying class CONSTRUCTION still succeeds (its
+  signature contract is untouched) and FIT raises, because this is an
+  identification guard rather than an API change. The engine-level call also
+  covers direct attribute mutation, which bypasses `__init__` and `set_params`
+  alike. **Sibling divergence, recorded rather than silently tolerated:** among
+  the remaining estimators taking `anticipation`, only `spillover.py` and
+  `wooldridge.py` validate it (and neither rejects `bool`); aligning the family
+  behind the shared helper is tracked as a `TODO.md` row.
+- **Note (degenerate enabling cohorts are reported, not hidden):** a positive
+  `first_treat` cohort whose units are ALL `partition == 0` cannot identify
+  `ATT(g,t)` — the DDD contrast needs the eligible-treated cell — so it
+  contributes to no aggregate. That was previously invisible: the cohort was
+  still listed in `results.groups`/`n_groups`, and the only warnings naming it
+  described its role as a COMPARISON cohort for other `g`, never as a treated
+  cohort that dropped out. The estimate quietly covered fewer cohorts than the
+  metadata advertised. Now a `UserWarning` names the cohort, its unit count and
+  the consequence, and `groups` is derived from the cohorts that actually
+  produced a `(g, t)` cell — so it is honest for every drop-out reason (no
+  eligible treated units, no valid comparison cohort, all base periods outside
+  the panel), not just this one. **The estimate is deliberately unchanged:** it
+  remains valid for the cohorts that do identify, and this engine already
+  warns-and-skips rather than raising for unidentified CELLS, so raising for a
+  cohort would have been the odd one out. Pre-existing behavior on
+  `StaggeredTripleDifference`; the fix is in the shared engine, so both
+  surfaces report identically.
+- **Note (`first_treat` cohort encoding is fail-closed on negatives):** the
+  contract is `0` for never-treated (or `+inf`, recoded to `0` with a
+  `UserWarning`) and positive period labels for treated cohorts. Negative values
+  — including the common `-1` never-treated convention and `-inf` — raise a
+  `ValueError` naming the offending values. They are NOT recoded: unlike `+inf`,
+  a negative value carries no unambiguous intent, and guessing would be the
+  silent sample change the guard exists to stop. Why it is a guard and not a
+  documentation matter: `_precompute_structures` builds the treated set from
+  `g > 0` and the never-enabled set from `g == 0`, so a negatively-encoded unit
+  belonged to NEITHER — still counted toward `n_obs` while contributing to no
+  ATT comparison — and the fit returned a plausible finite estimate for a
+  different population (measured on the 3(b) fixture: `overall_att`
+  3.29438582 → 2.99470938 with `n_never_enabled` 24 → 0, no error and no
+  warning). The guard lives in the shared engine, so BOTH surfaces fail closed;
+  the behavior it replaces was pre-existing on `StaggeredTripleDifference`.
+- **Note (results containers):** 2x2x2 mode returns `TripleDifferenceResults` and
+  staggered mode returns `StaggeredTripleDiffResults` through 3.9; `fit`'s return
+  type is a `Union`. The one-shape unification lands at 4.0 with row M-014, so no
+  downstream consumer changes in 3.9.
+
 ## StaggeredTripleDifference
+
+- **Note:** Deprecated in 3.9, removed in 4.0 (ledger row M-013). The successor is
+  `TripleDifference().fit(..., unit=, time=, first_treat=, partition=)`, which runs
+  this EXACT engine - the estimation core moved verbatim to
+  `diff_diff/_staggered_triple_diff_engine.py` and both classes mix it in, so the
+  numbers are identical by construction (pinned bit-exactly in
+  `tests/test_v4_merge_ddd.py`). Two vocabulary differences on the merged surface:
+  `eligibility=` is named `partition=`, and `control_group` takes the underscored
+  values `"not_yet_treated"`/`"never_treated"` (R's compact spellings stay on this
+  class and die with it). One behavior difference: `cluster=` RAISES on the merged
+  surface instead of being accepted-then-warned-then-ignored, because a new surface
+  should not ship a parameter it does not honor. Everything below remains the 3.x
+  contract for the deprecated class through its removal.
 
 **Primary source:** [Ortiz-Villavicencio, M., & Sant'Anna, P.H.C. (2025). Better Understanding Triple Differences Estimators. arXiv:2505.09942v3.](https://arxiv.org/abs/2505.09942v3). Paper review on file: `docs/methodology/papers/ortiz-villavicencio-santanna-2025-review.md`.
 

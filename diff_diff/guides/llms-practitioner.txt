@@ -173,7 +173,8 @@ Use this decision tree to select the appropriate estimator:
 ```
 Is this a triple-difference (DDD) design? (Two criteria: e.g., policy + eligibility)
 |-- YES, simultaneous (2x2x2):   TripleDifference (DDD)
-|-- YES, staggered timing:       StaggeredTripleDifference (SDDD)
+|-- YES, staggered timing:       TripleDifference(...).fit(..., first_treat=)
+|                                (StaggeredTripleDifference/SDDD deprecated 3.9)
 |
 Is treatment continuous (doses/intensities)?
 Route by ESTIMAND first, not by whether never-treated units happen

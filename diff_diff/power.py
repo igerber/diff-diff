@@ -29,6 +29,10 @@ import pandas as pd
 from scipy import stats
 
 from diff_diff.results_base import Diagnostic
+from diff_diff.utils import (
+    STAGGERED_DDD_CTOR_PARAMS,
+    staggered_ddd_ctor_offenders,
+)
 
 # Maximum sample size returned when effect is too small to detect
 # (e.g., zero effect or extremely small relative to noise)
@@ -600,6 +604,56 @@ _SURVEY_FIT_BUILDERS: Dict[str, Callable] = {
 # Unsupported: factor-model and triple-diff estimators (survey DGP produces
 # staggered cohort data, not factor-model or 2x2x2 data).
 _SURVEY_UNSUPPORTED = frozenset({"TROP", "SyntheticDiD", "TripleDifference"})
+
+# TripleDifference serves two designs from one class since 3.9 (row M-013), but
+# power only ever fits the 2x2x2 one: both registered DDD profiles build
+# (group, partition, post) fit kwargs. A staggered-configured estimator would
+# therefore be simulated under the wrong design, so reject it at the front door.
+# The ROSTER of staggered-only constructor params is real information (it is not
+# derivable from the signature alone - the 2x2x2 params live there too), but the
+# DEFAULT VALUES are not: hard-coding them would let a future constructor-default
+# change silently reclassify an otherwise-default estimator as staggered-configured
+# and reject a legitimate 2x2x2 power run. So the roster is explicit and the values
+# are read off the estimator's OWN signature at call time. Deriving per-instance
+# rather than importing TripleDifference also preserves this module's deliberate
+# no-estimator-import design (dispatch is by ``type(estimator).__name__``).
+# Row M-013's staggered-only constructor roster and its default derivation live
+# in utils so this module and TripleDifference.fit() cannot drift apart: fit()
+# rejects these in 2x2x2 mode, and power rejects a staggered-configured
+# estimator at the front door. Both must mean the same thing by "staggered
+# configuration". See utils.STAGGERED_DDD_CTOR_PARAMS for why bootstrap_weights,
+# seed and cband are excluded (inert without n_bootstrap > 0, accepted by both).
+_DDD_STAGGERED_CTOR_PARAMS = STAGGERED_DDD_CTOR_PARAMS
+# The mode TRIGGER is a fit param, and estimator_kwargs IS the fit-kwargs
+# channel, so these can genuinely flip the merged class into staggered mode
+# against 2x2x2 data - the one path that reaches the trigger at all.
+_DDD_STAGGERED_FIT_KEYS = ("first_treat", "unit", "aggregate", "balance_e")
+
+
+def _reject_staggered_ddd_config(estimator: Any, est_kwargs: Dict[str, Any]) -> None:
+    """Reject a staggered-configured TripleDifference at the power front door.
+
+    Two arms, because the two config channels are different things: constructor
+    values live on the passed INSTANCE, while ``estimator_kwargs`` is forwarded
+    to ``fit()``. Note there is no working staggered route through the power
+    surface today - the custom ``data_generator`` path still builds fit kwargs
+    from the registered profile whenever one exists - so the message must not
+    advertise one.
+    """
+    if type(estimator).__name__ != "TripleDifference":
+        return
+    offenders = staggered_ddd_ctor_offenders(estimator)
+    offenders += [k for k in _DDD_STAGGERED_FIT_KEYS if k in est_kwargs]
+    if not offenders:
+        return
+    raise ValueError(
+        f"Power analysis for TripleDifference covers the 2x2x2 design only, but "
+        f"{', '.join(sorted(set(offenders)))} configure(s) the staggered DDD mode. Both "
+        f"registered DDD data generators produce 2x2x2 data and fit with "
+        f"(group=, partition=, post=), so a staggered configuration would be simulated "
+        f"under the wrong design. Staggered-DDD power is not supported yet (tracked in "
+        f"TODO.md); drop the staggered configuration to run the 2x2x2 analysis."
+    )
 
 
 def _check_staggered_dgp_compat(
@@ -2209,6 +2263,10 @@ def simulate_power(
     data_gen_kwargs = data_generator_kwargs or {}
     est_kwargs = estimator_kwargs or {}
 
+    # Row M-013: TripleDifference is two designs behind one class; power fits
+    # the 2x2x2 one only.
+    _reject_staggered_ddd_config(estimator, est_kwargs)
+
     # Block survey_design in estimator_kwargs when survey_config is active.
     # Custom survey design overrides go through SurveyPowerConfig.survey_design.
     if use_survey_dgp and "survey_design" in est_kwargs:
@@ -2886,6 +2944,12 @@ def simulate_mde(
     estimator_name = type(estimator).__name__
     search_path: List[Dict[str, float]] = []
 
+    # Row M-013: reject a staggered-configured TripleDifference here rather than
+    # letting it surface from inside a simulation replicate. This runs BEFORE the
+    # per-entry-point setup below, which is why it cannot simply ride on
+    # simulate_power's guard.
+    _reject_staggered_ddd_config(estimator, estimator_kwargs or {})
+
     # Compute effective N for DDD (N is fixed throughout MDE search). Only the
     # cross-sectional 2x2x2 DGP (n_periods <= 2) rounds n_units to a multiple of
     # 8; the panel DGP (n_periods > 2) maps n_units directly, so report None.
@@ -3105,6 +3169,12 @@ def simulate_sample_size(
     master_rng = np.random.default_rng(seed)
     estimator_name = type(estimator).__name__
     search_path: List[Dict[str, float]] = []
+
+    # Row M-013: reject a staggered-configured TripleDifference here rather than
+    # letting it surface from inside a simulation replicate. This runs BEFORE the
+    # per-entry-point setup below, which is why it cannot simply ride on
+    # simulate_power's guard.
+    _reject_staggered_ddd_config(estimator, estimator_kwargs or {})
 
     # Determine min_n from registry. DDD splits cross-sectional (n_periods <= 2,
     # 2x2x2 factorial) from panel (n_periods > 2, generate_ddd_panel_data).

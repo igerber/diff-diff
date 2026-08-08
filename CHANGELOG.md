@@ -8,6 +8,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **TripleDifference serves both DDD designs** (v4 program Phase 3(b); ledger
+  rows [M-013] shimmed, [M-064]): `TripleDifference().fit(..., unit=, time=,
+  first_treat=, partition=)` estimates the staggered-adoption DDD design that
+  `StaggeredTripleDifference` used to own, while the existing
+  `fit(df, outcome, group, partition, post)` call keeps serving the 2x2x2
+  design unchanged. `first_treat=` selects the engine; mixing the two
+  parameter sets raises rather than guessing. This mirrors the reference
+  implementation, whose `triplediff::ddd()` also serves both designs from one
+  signature.
+  - The estimation cores are UNCHANGED - both classes now share one relocated
+    engine, so the staggered numbers are identical by construction (pinned
+    bit-exactly, including per-`(g,t)` tables and seeded bootstrap draws).
+  - The staggered-only fit params (`unit`, `first_treat`, `aggregate`,
+    `balance_e`) are keyword-only; every existing positional slot, `time=`
+    included, is unchanged.
+  - The constructor gains `control_group`, `anticipation`, `base_period`,
+    `n_bootstrap`, `bootstrap_weights`, `seed` and `cband`. `control_group`
+    takes the underscored `"not_yet_treated"`/`"never_treated"`.
+  - `time=` keeps both meanings without ambiguity: the calendar column in
+    staggered mode (no warning), the deprecated alias for `post=` in 2x2x2
+    mode (row [M-031], warns).
+  - 2x2x2 mode returns `TripleDifferenceResults` and staggered mode returns
+    `StaggeredTripleDiffResults`; the containers unify at 4.0 (row [M-014]),
+    so downstream consumers are unaffected.
+
+### Changed
+- **`TripleDifference(pscore_trim=)` is now validated** (ledger row [M-142]):
+  values outside `(0, 0.5)` raise instead of being accepted. The value feeds
+  `np.clip(pscore, trim, 1 - trim)`, so `pscore_trim=0` silently disabled the
+  overlap guard that keeps the `1/(1-p)` IPW/DR weights finite, and
+  `>= 0.5` inverted the clip bounds.
+- **Degenerate enabling cohorts are now reported** (both DDD staggered
+  surfaces). A positive `first_treat` cohort whose units are all
+  `partition == 0` identifies no `ATT(g,t)` and contributes to no aggregate,
+  but was still counted in `results.groups`/`n_groups` with no warning naming
+  it — so the estimate silently covered fewer cohorts than the metadata
+  claimed. A `UserWarning` now names the cohort, and `groups` reflects the
+  cohorts that actually produced a `(g, t)` cell. **Estimates are unchanged**;
+  this is a reporting fix.
+- **Negative `first_treat` cohort values now raise** (both `TripleDifference`
+  staggered mode and the deprecated `StaggeredTripleDifference`, which share the
+  engine). Never-treated units must be `0`, or `+inf` (recoded to `0` with a
+  warning, unchanged); treated cohorts must be positive period labels. A unit
+  encoded with the common `-1` never-treated convention previously belonged to
+  neither the treated nor the comparison population: it still counted toward
+  `n_obs` but entered no ATT comparison, so the fit returned a plausible finite
+  estimate for a silently different population. **This is a bug fix that changes
+  results:** such a fit now raises instead of returning a number. Fits using
+  `0`/`+inf` are byte-for-byte unchanged.
+- **`anticipation` is validated** as a non-negative integer (`bool` rejected)
+  via the shared `utils.validate_anticipation`, on `TripleDifference` at
+  construction and in the staggered engine for both surfaces. The window feeds
+  both the base-period rule and the not-yet-treated threshold, so a negative
+  value would have made the universal base period an already-treated period and
+  admitted cohorts treated at the evaluation period as clean controls - neither
+  visible in the output. On the deprecated class, construction still succeeds
+  and `fit()` raises: an identification guard, not a signature change.
+- **`cluster=` raises in staggered DDD mode** on the merged surface, steering
+  to `n_bootstrap > 0` (unit-level clustering via the multiplier bootstrap).
+  Cluster-robust analytical SEs are not implemented for the staggered engine;
+  the deprecated `StaggeredTripleDifference` keeps its 3.x behavior of
+  accepting, warning and ignoring. 2x2x2 mode is unaffected (Liang-Zeger CR1).
+- **Power analysis rejects a staggered-configured `TripleDifference`** at
+  `simulate_power`, `simulate_mde` and `simulate_sample_size`. Both registered
+  DDD data generators produce 2x2x2 data, so a staggered configuration would
+  have been simulated under the wrong design. Staggered-DDD power is not
+  supported yet. "Staggered-configured" means a non-default `control_group`,
+  `anticipation`, `base_period` or `n_bootstrap`; `bootstrap_weights`, `seed`
+  and `cband` are accepted, matching `fit()`, since they are inert without
+  `n_bootstrap > 0`.
+
+### Deprecated
+- **`StaggeredTripleDifference` and its `SDDD` alias** (ledger rows [M-013],
+  [M-064]): deprecated in 3.9, removed in 4.0. Migration:
+  `StaggeredTripleDifference(...).fit(df, outcome, unit, time, first_treat,
+  eligibility)` becomes `TripleDifference(...).fit(df, outcome, unit=...,
+  time=..., first_treat=..., partition=...)`. Two vocabulary changes:
+  `eligibility=` is named `partition=`, and `control_group` takes
+  `"not_yet_treated"`/`"never_treated"` instead of R's compact
+  `"notyettreated"`/`"nevertreated"`. The deprecated class keeps its 3.x
+  parameter names and values until removal, so existing code keeps working
+  (with a `FutureWarning`) until 4.0.
+
 - **TwoWayFixedEffects event-study mode** (v4 program Phase 3(a); ledger
   row [M-010] shimmed): `TWFE().fit(..., event_study=True, time="period",
   spec="within"|"pooled", reference_period=None, post_periods=[...])`

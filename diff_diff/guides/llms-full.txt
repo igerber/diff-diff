@@ -1336,6 +1336,14 @@ plot_bacon(results)
 
 ### StaggeredTripleDifference
 
+DEPRECATED in 3.9, removed in 4.0 (ledger row M-013). Use
+`TripleDifference().fit(..., unit=, time=, first_treat=, partition=)` - the same
+engine, so the numbers are identical. Vocabulary on the merged surface:
+`eligibility=` is `partition=`, and `control_group` takes the underscored values
+`not_yet_treated`/`never_treated` (this class keeps R's compact `notyettreated`/
+`nevertreated` until removal). `cluster=` raises on the merged surface instead of
+being accepted-and-ignored. Alias `SDDD` is deprecated with the class.
+
 Ortiz-Villavicencio & Sant'Anna (2025) staggered DDD estimator for designs with two eligibility criteria and staggered treatment timing.
 
 ```python

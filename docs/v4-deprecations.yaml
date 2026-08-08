@@ -171,11 +171,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 3
+    status: shimmed
+    phase: 5
     warning: FutureWarning
-    code_refs: [diff_diff/triple_diff.py, diff_diff/staggered_triple_diff.py, diff_diff/__init__.py]
-    notes: "Facade dispatch: 2x2x2 engine vs staggered engine, both internally unchanged (R-parity preserved). Partition param unified as 'partition'. The compact 'notyettreated' control_group spelling rides this class removal - no value shim on the dying class; the unified class uses underscored values from birth."
+    code_refs: [diff_diff/triple_diff.py, diff_diff/staggered_triple_diff.py, diff_diff/_staggered_triple_diff_engine.py, diff_diff/staggered_bootstrap.py, diff_diff/power.py, diff_diff/__init__.py]
+    test_ref: tests/test_v4_merge_ddd.py
+    notes: "Facade dispatch: 2x2x2 engine vs staggered engine, both internally unchanged (R-parity preserved). Partition param unified as 'partition'. The compact 'notyettreated' control_group spelling rides this class removal - no value shim on the dying class; the unified class uses underscored values from birth. SHIPPED 3.9 (Phase 3(b)). Mechanics: (1) the estimation core moved VERBATIM to the private diff_diff/_staggered_triple_diff_engine.py, mixed into both classes, so neither surface forks the math - the pre-merge oracles reproduce bit-identically on both engines (tests/_capture_v4_merge_ddd_oracles.py). (2) The core takes three knobs: estimator_name (messages never name the deprecated class on the merged surface), partition_label (applied to BOTH sentences of the time-invariance error - the tail 'varying eligibility' would otherwise leak onto the partition= interface), and _frame_offset, mirrored onto self._warn_frame_offset for the four helper depths plus the shared bootstrap mixin, so warning attribution is unchanged on both paths. (3) fit dispatches on first_treat=; the staggered-only fit params are KEYWORD-ONLY (a positionally-written staggered call cannot bind to the 2x2x2 slots), while positional slots 1-8 including the deprecated time= are preserved byte-for-byte, so nothing narrows. (4) Mixing the two designs' params raises in BOTH directions, constructor params included (control_group/anticipation/base_period/n_bootstrap in 2x2x2; robust/vcov_type in staggered). bootstrap_weights/seed/cband pass silently in 2x2x2 because they are unreachable without n_bootstrap > 0, which is itself rejected - recorded here and in REGISTRY rather than left to discovery. The power front door (simulate_power/simulate_mde/simulate_sample_size) applies the SAME boundary, rejecting only control_group/anticipation/base_period/n_bootstrap: an earlier revision had it reject all seven, which made TripleDifference(seed=7) legal to fit and illegal to simulate. The phase also added TWO fail-closed identification guards in the SHARED engine, so both surfaces (the deprecated class included) reject them: negative/-inf first_treat cohort values, which previously fell into neither the treated nor the comparison population and silently estimated on a different sample (overall_att 3.29438582 -> 2.99470938, n_never_enabled 24 -> 0 on the 3(b) fixture); and a non-negative-integer anticipation window via the new shared utils.validate_anticipation. The dying class's API SHAPE stays frozen - construction still succeeds, fit raises - because these are identification guards, not signature changes. (5) cluster= RAISES in staggered mode (the deprecated class keeps its accepted-then-warned-then-ignored UserWarning): a new surface should not ship an accepted-but-unhonored param, the 3(a) precedent. (6) Returns StaggeredTripleDiffResults through 3.9; the container unification is M-014's job at 4.0. (7) pscore_trim validation tightened, rowed separately as M-142. Fit-time aggregate=/balance_e= are carried on the surviving class and rowed as M-140/M-141."
   - id: M-014
     kind: class
     group: merge-ddd
@@ -186,7 +187,7 @@ rows:
     status: planned
     phase: 5
     code_refs: [diff_diff/staggered_triple_diff_results.py, diff_diff/__init__.py]
-    notes: "Deprecation rides parent [M-013]. Successor = unified TripleDifference results shape (degenerate single-ATT view for 2x2x2)."
+    notes: "Deprecation rides parent [M-013]. Successor = unified TripleDifference results shape (degenerate single-ATT view for 2x2x2). 4.0 REMOVAL NOTE: since Phase 3(b) this container has a SECOND construction site - TripleDifference's staggered mode returns it too (the facade is API-only in 3.9; user-approved 2026-08-08). The 4.0 PR that unifies the shape must therefore decouple _fit_staggered_core's construction site as well as the deprecated class's, and it needs a disposition for TripleDifferenceResults, which has no row of its own. M-140/M-141's removed_in: 4.0 machine-checks that the unified container gains the post-fit aggregate() this release, so the two obligations land together."
   - id: M-015
     kind: class
     group: merge-qdid
@@ -768,9 +769,9 @@ rows:
     deprecated_in: "3.9"
     removed_in: "4.0"
     status: planned
-    phase: 3
+    phase: 5
     code_refs: [diff_diff/__init__.py]
-    notes: "Dies with its class [M-013]; deprecation warning rides the parent class shim (same object). Migrate the old_target locator when [M-013] flips to removed (cross-row rule)."
+    notes: "Dies with its class [M-013]; deprecation warning rides the parent class shim (same object). Migrate the old_target locator when [M-013] flips to removed (cross-row rule). 3.9 FutureWarning live via the parent [M-013] shim since Phase 3(b) - SDDD stays a plain module global (NOT an entry in __init__'s _DEPRECATED_ALIASES: that table is read only by the module __getattr__, which never fires for a real global, so an entry would be dead code). Status stays 'planned' because this row's own transition is the 4.0 removal; the parent's message names the alias explicitly. Pinned by tests/test_v4_merge_ddd.py."
   - id: M-062
     kind: alias
     group: alias-table
@@ -878,8 +879,8 @@ rows:
     phase: 5
     test_ref: tests/test_v4_wrapper_shims.py
     warning: FutureWarning
-    code_refs: [diff_diff/triple_diff.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt, docs/api/triple_diff.rst, docs/tutorials/08_triple_diff.ipynb]
-    notes: "Use TripleDifference. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9."
+    code_refs: [diff_diff/triple_diff.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt, docs/api/triple_diff.rst, docs/tutorials/08_triple_diff.ipynb, docs/methodology/REGISTRY.md]
+    notes: "Use TripleDifference. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9. Phase 3(b) DELIBERATELY did not widen it to the merged staggered mode ([M-013]): the wrapper reaches only the 2x2x2 design, because growing a surface that is removed at 4.0 would mint fresh removal obligations for params introduced solely to be deleted, and phase 3(a) set the precedent by extending no wrapper with its new event-study mode. A caller needing staggered DDD migrates to the class - the migration this row exists to produce. Pinned by tests/test_v4_merge_ddd.py::TestGateHConsumers::test_deprecated_wrapper_stays_2x2x2_only and REGISTRY-noted."
   - id: M-076
     kind: function
     group: function-wrappers
@@ -1679,3 +1680,41 @@ rows:
     test_ref: tests/test_aggregate_contract.py
     code_refs: [diff_diff/had_pretests.py, diff_diff/had.py]
     notes: "The workflow twin of [M-027], added as a pre-cut amendment (next free id - the reserved 2(b) pool is spent/earmarked: M-118/M-119/M-120 claimed, M-116/M-121 intentionally unused). did_had_pretest_workflow's aggregate= routed WHICH pretest battery runs on the same 'overall'/'event_study' vocabulary the fit param used; it never calls fit(), so the successor is the SAME panel-shape inference (_infer_aggregate_mode, shared with fit so the two surfaces cannot drift), applied after the workflow's own alias reconciliation. A plain workflow call never warns; supplying ANY value warns once, then the legacy routing runs unchanged (invalid values still raise ValueError after the warning). `new` is null: there is no successor symbol - the HADPretestReport.aggregate FIELD survives as honest output metadata recording which battery ran (SURFACE_ALLOWLIST entry in tests/test_naming_guard.py; the MODES survive 4.0, only the param dies). The mode vocabulary dies from both public surfaces at 4.0."
+
+  - id: M-140
+    kind: param
+    group: merge-ddd
+    old: "diff_diff:TripleDifference.fit[aggregate]"
+    new: "diff_diff:TripleDifferenceResults.aggregate"
+    introduced_in: null
+    deprecated_in: null
+    removed_in: "4.0"
+    status: planned
+    phase: 5
+    code_refs: [diff_diff/triple_diff.py]
+    notes: "The fit-time aggregate= carried onto the SURVIVING class by the M-013 merge, and the one documented exception to section 6's aggregate-postfit program (M-020..M-027): the staggered DDD container has no post-fit aggregate() to steer users to (no AggregationMixin on StaggeredTripleDiffResults), so fit-time routing ships here as the only route rather than as a deprecated one. Hence deprecated_in and warning are null - nothing is being steered away from yet. introduced_in is DELIBERATELY null even though the param ships in 3.9: collect_due_problems fails any row past its introduced_in still at 'planned', 'shimmed' would require the successor locator to resolve (it cannot until the 4.0 container port), and 'removed' trips the early-removal guard - the ledger's status vocabulary cannot express 'introduced now, successor not built yet', so the row is modelled purely as a scheduled REMOVAL. removed_in: 4.0 is load-bearing twice: it satisfies the phase-table direction-2 citation predicate at phase 5, and it machine-checks the container port at the 4.0 bump, which is M-014's job in the same release. Section 6 carries the matching dated amendment."
+  - id: M-141
+    kind: param
+    group: merge-ddd
+    old: "diff_diff:TripleDifference.fit[balance_e]"
+    new: "diff_diff:TripleDifferenceResults.aggregate[balance_e]"
+    introduced_in: null
+    deprecated_in: null
+    removed_in: "4.0"
+    status: planned
+    phase: 5
+    code_refs: [diff_diff/triple_diff.py]
+    notes: "Twin of [M-140] for the balance_e knob - see its notes for the null-version rationale. Rowed separately rather than riding M-140's notes, per the M-117..M-120 precedent and M-020's own note that prose-only balance_e tracking was exactly the un-rowed-obligation class the gating-completeness amendment closed."
+  - id: M-142
+    kind: behavior
+    group: merge-ddd
+    old: "diff_diff:TripleDifference[pscore_trim]"
+    new: null
+    introduced_in: "3.9"
+    deprecated_in: null
+    removed_in: null
+    status: done
+    phase: 3
+    test_ref: tests/test_v4_merge_ddd.py
+    code_refs: [diff_diff/triple_diff.py]
+    notes: "Input-validation tightening shipped with the M-013 merge: TripleDifference's pscore_trim was previously UNVALIDATED, and the merged constructor adopts the staggered engine's 0 < x < 0.5 rule. Not cosmetic - the value feeds np.clip(pscore, trim, 1 - trim) in both engines, so trim=0 disables the overlap guard that keeps the 1/(1-p) IPW/DR weights finite and trim >= 0.5 inverts the clip bounds. TripleDifference(pscore_trim=0) therefore changes from accepted to a loud ValueError; no in-repo caller passed it. Same shape as [M-096] (a 3.9 validation tightening on a previously-unvalidated/silently-degrading param, rowed in the PR that shipped it), and status 'done' is terminal so the row is exempt from both phase-table directions. SIBLING DIVERGENCE, deliberate and recorded in REGISTRY: ContinuousDiD still validates 0.0 <= pscore_trim < 0.5, i.e. it admits 0 - aligning it is out of scope for a DDD merge and carries a TODO.md row instead of silent drift."

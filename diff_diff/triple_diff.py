@@ -29,7 +29,7 @@ Reference:
 
 import warnings
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -41,10 +41,19 @@ from diff_diff._deprecation import (
     resolve_renamed_kwarg,
     warn_deprecated_kwarg,
 )
+from diff_diff._staggered_triple_diff_engine import _StaggeredTripleDiffEngineMixin
 from diff_diff.linalg import _rank_guarded_inv, solve_logit, solve_ols
 from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.results_base import BaseResults
-from diff_diff.utils import safe_inference
+from diff_diff.staggered_aggregation import CallawaySantAnnaAggregationMixin
+from diff_diff.staggered_bootstrap import CallawaySantAnnaBootstrapMixin
+from diff_diff.staggered_triple_diff_results import StaggeredTripleDiffResults
+from diff_diff.utils import (
+    safe_inference,
+    staggered_ddd_ctor_offenders,
+    validate_anticipation,
+    validate_n_bootstrap,
+)
 
 if TYPE_CHECKING:
     from diff_diff.survey import SurveyDesign
@@ -384,7 +393,12 @@ class TripleDifferenceResults(BaseResults):
 # =============================================================================
 
 
-class TripleDifference(BaseEstimator):
+class TripleDifference(
+    _StaggeredTripleDiffEngineMixin,
+    CallawaySantAnnaBootstrapMixin,
+    CallawaySantAnnaAggregationMixin,
+    BaseEstimator,
+):
     """
     Triple Difference (DDD) estimator.
 
@@ -455,10 +469,58 @@ class TripleDifference(BaseEstimator):
         When ``rank_deficient_action="error"``, errors are always
         re-raised regardless of this setting.
 
+    The remaining parameters apply to the STAGGERED mode only
+    (``fit(..., first_treat=...)``). Four of them - ``control_group``,
+    ``anticipation``, ``base_period`` and ``n_bootstrap`` - raise a
+    ``ValueError`` if given a non-default value and then used to fit the 2x2x2
+    design, rather than being silently ignored: that engine has one pre/post
+    contrast, so there is no comparison-cohort choice, no anticipation window,
+    no base-period rule and no multiplier bootstrap.
+
+    The other three - ``bootstrap_weights``, ``seed`` and ``cband`` - are
+    ACCEPTED and inert in 2x2x2 mode. They act only through ``n_bootstrap > 0``,
+    which that mode already rejects, so they are unreachable by construction
+    rather than silently ignored. The power helpers apply the same boundary, so
+    an estimator that is legal to ``fit()`` is legal to simulate.
+
+    control_group : str, default="not_yet_treated"
+        Comparison cohort for staggered mode: ``"not_yet_treated"`` (units
+        whose enabling period is still in the future) or ``"never_treated"``
+        (the never-enabled cohort only). The compact R spellings
+        ``"notyettreated"``/``"nevertreated"`` are accepted only by the
+        deprecated ``StaggeredTripleDifference`` and die with it at 4.0.
+    anticipation : int, default=0
+        Number of periods before the enabling period in which units may
+        already respond. Must be a non-negative integer. Shifts each cohort's
+        base period earlier and excludes cohorts entering treatment within the
+        window from the comparison group.
+    base_period : str, default="varying"
+        ``"varying"`` uses consecutive comparisons - each pre-treatment period
+        ``t`` is compared to ``t - 1``, while post-treatment periods use the
+        fixed cohort reference ``g - 1 - anticipation``. ``"universal"`` uses
+        ``g - 1 - anticipation`` for every period, pre and post alike.
+        The two therefore differ only on the PRE-treatment effects, which is
+        what makes ``"varying"`` the pre-trend-readable default.
+    n_bootstrap : int, default=0
+        Multiplier-bootstrap replications for staggered mode. ``0`` means the
+        analytical influence-function SEs (the library-wide ``0 = off``
+        convention, row M-081). Clustered inference in staggered mode is only
+        available through this path - ``cluster=`` is rejected there.
+    bootstrap_weights : str, default="rademacher"
+        Multiplier distribution: ``"rademacher"``, ``"mammen"`` or ``"webb"``.
+    seed : int, optional
+        Seed for the multiplier bootstrap.
+    cband : bool, default=True
+        Whether to compute simultaneous (sup-t) confidence bands alongside the
+        pointwise ones.
+
     Attributes
     ----------
-    results_ : TripleDifferenceResults
-        Estimation results after calling fit().
+    results_ : TripleDifferenceResults or StaggeredTripleDiffResults
+        Estimation results after calling fit(). The 2x2x2 mode returns
+        ``TripleDifferenceResults``; the staggered mode returns
+        ``StaggeredTripleDiffResults`` (the two containers unify at 4.0, row
+        M-014).
     is_fitted_ : bool
         Whether the model has been fitted.
 
@@ -539,11 +601,67 @@ class TripleDifference(BaseEstimator):
         rank_deficient_action: str = "warn",
         epv_threshold: float = 10,
         pscore_fallback: str = "error",
+        control_group: str = "not_yet_treated",
+        anticipation: int = 0,
+        base_period: str = "varying",
+        n_bootstrap: int = 0,
+        bootstrap_weights: str = "rademacher",
+        seed: Optional[int] = None,
+        cband: bool = True,
     ):
         if estimation_method not in ("dr", "reg", "ipw"):
             raise ValueError(
                 f"estimation_method must be 'dr', 'reg', or 'ipw', " f"got '{estimation_method}'"
             )
+        # Staggered-mode value contracts (M-013). The merged class uses the
+        # UNDERSCORED library vocabulary from birth; R's compact spellings
+        # ("notyettreated"/"nevertreated") die with StaggeredTripleDifference
+        # at 4.0 and are deliberately NOT accepted here.
+        if control_group not in ("never_treated", "not_yet_treated"):
+            raise ValueError(
+                f"control_group must be 'never_treated' or 'not_yet_treated', "
+                f"got '{control_group}'"
+            )
+        # `anticipation` feeds BOTH the base-period rule and the comparison-cohort
+        # threshold, so an out-of-domain value silently changes the estimand
+        # rather than failing: anticipation=-1 makes the universal base period
+        # `g` (an ALREADY-TREATED period) and relaxes the not-yet-treated
+        # threshold to max(t, base) - 1, admitting cohorts treated at the
+        # evaluation period as "clean" controls. Neither condition is
+        # observable in the output. `bool` is rejected too - `True` would
+        # otherwise coerce to a silent one-period window. (The sibling
+        # estimators taking `anticipation` are not yet uniformly validated;
+        # aligning the family is tracked in TODO.md.)
+        validate_anticipation(anticipation)
+        if base_period not in ("varying", "universal"):
+            raise ValueError(f"base_period must be 'varying' or 'universal', got '{base_period}'")
+        if bootstrap_weights not in ("rademacher", "mammen", "webb"):
+            raise ValueError(
+                f"bootstrap_weights must be 'rademacher', 'mammen', or 'webb', "
+                f"got '{bootstrap_weights}'"
+            )
+        validate_n_bootstrap(n_bootstrap)
+        # pscore_trim gains the staggered engine's range check (row M-142). It
+        # was previously unvalidated here, but the value feeds
+        # np.clip(pscore, trim, 1 - trim) in both engines: trim=0 disables the
+        # overlap guard that keeps the 1/(1-p) IPW/DR weights finite, and
+        # trim >= 0.5 inverts the clip bounds.
+        # The TYPE guard precedes the range check so the documented ValueError is
+        # what users actually see: a bare `0 < x < 0.5` raises an incidental
+        # TypeError on None/str/complex/list, an ambiguous-truth ValueError on a
+        # multi-element array, and - worst - ACCEPTS a 1-element array, storing an
+        # ndarray as the parameter. Same shape as validate_n_bootstrap: reject
+        # bool (True would read as a 1.0 trim), then non-real-scalar, then
+        # non-finite, then the range.
+        if isinstance(pscore_trim, bool) or not isinstance(
+            pscore_trim, (int, float, np.integer, np.floating)
+        ):
+            raise ValueError(
+                f"pscore_trim must be a real number in (0, 0.5), got {pscore_trim!r} "
+                f"(type {type(pscore_trim).__name__})"
+            )
+        if not np.isfinite(pscore_trim) or not 0 < pscore_trim < 0.5:
+            raise ValueError(f"pscore_trim must be in (0, 0.5), got {pscore_trim}")
         if rank_deficient_action not in ["warn", "error", "silent"]:
             raise ValueError(
                 f"rank_deficient_action must be 'warn', 'error', or 'silent', "
@@ -580,23 +698,46 @@ class TripleDifference(BaseEstimator):
         self.rank_deficient_action = rank_deficient_action
         self.epv_threshold = epv_threshold
         self.pscore_fallback = pscore_fallback
+        # Staggered-mode config (M-013). Inert in 2x2x2 mode, and fit() rejects
+        # any non-default value there rather than letting it pass unused.
+        self.control_group = control_group
+        self.anticipation = anticipation
+        self.base_period = base_period
+        self.n_bootstrap = n_bootstrap
+        self.bootstrap_weights = bootstrap_weights
+        self.seed = seed
+        self.cband = cband
 
         self.is_fitted_ = False
-        self.results_: Optional[TripleDifferenceResults] = None
+        self.results_: Optional[Union[TripleDifferenceResults, StaggeredTripleDiffResults]] = None
 
     def fit(
         self,
         data: pd.DataFrame,
         outcome: str,
-        group: str,
-        partition: str,
+        group: Any = NOT_SUPPLIED,
+        partition: Any = NOT_SUPPLIED,
         post: Any = NOT_SUPPLIED,
         covariates: Optional[List[str]] = None,
         survey_design=None,
         time: Any = NOT_SUPPLIED,
-    ) -> TripleDifferenceResults:
+        *,
+        unit: Any = NOT_SUPPLIED,
+        first_treat: Any = NOT_SUPPLIED,
+        aggregate: Optional[str] = None,
+        balance_e: Optional[int] = None,
+    ) -> Union[TripleDifferenceResults, StaggeredTripleDiffResults]:
         """
-        Fit the Triple Difference model.
+        Fit the Triple Difference model, in either of its two designs.
+
+        The 2x2x2 design takes ``(group, partition, post)``; the staggered
+        design takes ``(unit, time, first_treat, partition)``. ``first_treat=``
+        selects the staggered engine - mixing the two parameter sets is an
+        error, never a guess. This mirrors the reference implementation, whose
+        ``triplediff::ddd()`` serves both designs from one signature.
+
+        The staggered-only parameters are keyword-only, so a staggered call
+        written positionally cannot silently bind to the 2x2x2 slots.
 
         Parameters
         ----------
@@ -605,13 +746,14 @@ class TripleDifference(BaseEstimator):
         outcome : str
             Name of the outcome variable column.
         group : str
-            Name of the group indicator column (0/1).
+            2x2x2 mode. Name of the group indicator column (0/1).
             1 = treated group (e.g., states that enacted policy).
             0 = control group.
         partition : str
-            Name of the partition/eligibility indicator column (0/1).
-            1 = eligible partition (e.g., women, targeted demographic).
-            0 = ineligible partition.
+            BOTH modes. Name of the partition/eligibility indicator column
+            (0/1). 1 = eligible partition (e.g., women, targeted demographic);
+            0 = ineligible partition. In staggered mode it must be
+            time-invariant within units.
         post : str
             Name of the post-period indicator column (0/1).
             1 = post-treatment period.
@@ -625,24 +767,119 @@ class TripleDifference(BaseEstimator):
             provided, uses survey weights for estimation and Taylor Series
             Linearization (TSL) for variance estimation. Supported with
             all estimation methods ("reg", "ipw", "dr").
+        time : str
+            In STAGGERED mode, the calendar period column (keyword). In 2x2x2
+            mode it is the deprecated alias for ``post`` (row M-031) and warns
+            with ``FutureWarning``. From 4.0 it means the calendar column only
+            (row M-085).
+        unit : str, keyword-only
+            Staggered mode. Unit identifier column.
+        first_treat : str, keyword-only
+            Staggered mode, and the MODE TRIGGER. Column giving each unit's
+            enabling period; 0 or ``np.inf`` marks never-enabled units.
+        aggregate : str, optional, keyword-only
+            Staggered mode. ``"event_study"``, ``"group"``, ``"simple"`` or
+            ``"all"``.
+        balance_e : int, optional, keyword-only
+            Staggered mode. Event time to balance the event study on.
 
         Returns
         -------
-        TripleDifferenceResults
-            Object containing estimation results.
+        TripleDifferenceResults or StaggeredTripleDiffResults
+            2x2x2 mode returns ``TripleDifferenceResults``; staggered mode
+            returns ``StaggeredTripleDiffResults``. The two containers unify at
+            4.0 (row M-014).
 
         Raises
         ------
         ValueError
-            If required columns are missing or data validation fails.
+            If required columns are missing, data validation fails, or the two
+            designs' parameters are mixed.
         NotImplementedError
             If survey_design is used with wild_bootstrap inference.
-
-        The keyword-only ``time`` parameter is a deprecated alias for
-        ``post`` (row M-031); it warns with ``FutureWarning``. From 4.0,
-        ``time=`` on the merged staggered interface means the CALENDAR
-        column only (row M-085) - the 2x2x2 post dummy is ``post=``.
         """
+        # ---- Step 0: mode-INDEPENDENT value validation -------------------
+        # A bad `aggregate` value must not be masked by a mode error (3(a)'s
+        # `spec` precedent). Consequence, deliberate: fit(aggregate="bogus")
+        # WITHOUT first_treat reports the invalid value, not the mode error.
+        # `_validate_vcov_type` is deliberately NOT hoisted here - moving it
+        # ahead of the M-031 shim would make a direct-attribute-mutated
+        # vcov_type raise BEFORE the rename FutureWarning that fires today.
+        if aggregate is not None and aggregate not in ("event_study", "group", "simple", "all"):
+            raise ValueError(
+                f"aggregate must be 'event_study', 'group', 'simple', or 'all', "
+                f"got '{aggregate}'"
+            )
+
+        # ---- Step 1: staggered mode ---------------------------------------
+        # Raw sentinels forwarded: the 2x2x2 rename shim must not run, because
+        # `time=` is the calendar column on this path, not a deprecated alias.
+        if first_treat is not NOT_SUPPLIED:
+            return self._fit_staggered(
+                data,
+                outcome,
+                unit=unit,
+                time=time,
+                first_treat=first_treat,
+                partition=partition,
+                group=group,
+                post=post,
+                covariates=covariates,
+                aggregate=aggregate,
+                balance_e=balance_e,
+                survey_design=survey_design,
+            )
+
+        # ---- Step 2: 2x2x2 mode, staggered-only FIT params ----------------
+        _staggered_only = [
+            name
+            for name, supplied in (
+                ("unit", unit is not NOT_SUPPLIED),
+                ("aggregate", aggregate is not None),
+                ("balance_e", balance_e is not None),
+            )
+            if supplied
+        ]
+        if _staggered_only:
+            raise ValueError(
+                f"{', '.join(_staggered_only)} require(s) first_treat= (the staggered DDD "
+                f"mode); the 2x2x2 TripleDifference design estimates a single ATT from the "
+                f"(group=, partition=, post=) triple and has no adoption cohorts to "
+                f"aggregate over. For staggered adoption pass fit(..., unit=<unit id>, "
+                f"time=<calendar column>, first_treat=<cohort column>, "
+                f"partition=<partition column>)."
+            )
+
+        # ---- Step 3: 2x2x2 mode, staggered-only CONSTRUCTOR params --------
+        # The mode is only known at fit time, so this coherence check cannot
+        # live in __init__. bootstrap_weights/seed/cband are deliberately NOT
+        # listed: they only take effect through n_bootstrap > 0, which is
+        # rejected here, so they are unreachable-by-construction rather than
+        # silently ignored (documented in REGISTRY and the M-013 notes).
+        # Roster AND defaults come from the shared helper (derived from this
+        # class's own __init__ signature), not a local copy: the power entry
+        # points apply the same boundary, and two hand-maintained lists would
+        # eventually disagree about what "staggered-configured" means.
+        _staggered_ctor = staggered_ddd_ctor_offenders(self)
+        if _staggered_ctor:
+            raise ValueError(
+                f"TripleDifference({', '.join(n + '=' for n in _staggered_ctor)}) applies to "
+                f"the staggered DDD mode only (fit(..., first_treat=)): the 2x2x2 engine has "
+                f"one pre/post contrast, so there is no comparison-cohort choice, no "
+                f"anticipation window, no base-period rule and no multiplier bootstrap - its "
+                f"SEs come from the efficient influence function (cluster= for CR1). Drop the "
+                f"parameter(s), or pass first_treat= to fit the staggered design."
+            )
+
+        # ---- Step 4: 2x2x2 mode, the M-031 rename shim --------------------
+        # group/partition are sentinel-defaulted now (they must be omissible in
+        # staggered mode), so their missing-argument TypeErrors are restored
+        # here. They run BEFORE the rename shim: after it, fit(df, "y",
+        # time="t") would newly emit the M-031 FutureWarning before raising the
+        # missing-group TypeError (today it raises immediately, with no
+        # warning, and under -W error the surfaced exception type would flip).
+        require_arg("TripleDifference.fit", "group", group)
+        require_arg("TripleDifference.fit", "partition", partition)
         post = resolve_renamed_kwarg(
             "TripleDifference.fit",
             "time",
@@ -862,6 +1099,102 @@ class TripleDifference(BaseEstimator):
 
         self.is_fitted_ = True
         return self.results_
+
+    def _fit_staggered(
+        self,
+        data: pd.DataFrame,
+        outcome: str,
+        *,
+        unit: Any,
+        time: Any,
+        first_treat: Any,
+        partition: Any,
+        group: Any,
+        post: Any,
+        covariates: Optional[List[str]],
+        aggregate: Optional[str],
+        balance_e: Optional[int],
+        survey_design,
+    ) -> StaggeredTripleDiffResults:
+        """Staggered branch of the merged fit (row M-013).
+
+        Reached only when ``first_treat=`` was supplied. Rejects the other
+        design's parameters rather than ignoring them, then hands off to the
+        engine shared with the deprecated ``StaggeredTripleDifference``.
+        """
+        # Step 1: the 2x2x2 params are rejected, not ignored. A positional 3rd
+        # or 5th argument lands in group/post and is caught here.
+        _2x2x2_only = [
+            name for name, value in (("group", group), ("post", post)) if value is not NOT_SUPPLIED
+        ]
+        if _2x2x2_only:
+            raise ValueError(
+                f"{', '.join(_2x2x2_only)} belong(s) to the 2x2x2 mode and cannot be combined "
+                f"with first_treat=: staggered DDD reads the treated cohort from first_treat= "
+                f"(0 or np.inf = never enabled) and the pre/post contrast from time= (the "
+                f"calendar column), so there is no 0/1 group dummy and no 0/1 post dummy. "
+                f"Positional arguments 3-5 are the 2x2x2 (group, partition, post) triple - in "
+                f"staggered mode pass unit=, time=, first_treat= and partition= as keywords."
+            )
+
+        # Step 2: the reverse constructor guard, the mirror of the 2x2x2 one.
+        # The two arms have DIFFERENT reachability. `robust=` is constructible
+        # (it only warns), so that arm is reached normally. `vcov_type` is
+        # validated eagerly in __init__ and by set_params' probe re-init, so a
+        # bad value never survives construction - its only live route is direct
+        # attribute mutation, the same bypass __init__'s comment documents. That
+        # makes this arm the staggered mode's direct-mutation guard, not dead
+        # code, and it is why no separate _validate_vcov_type call is needed.
+        _2x2x2_ctor = [
+            name
+            for name, non_default in (
+                ("robust", self._robust_arg is not None),
+                ("vcov_type", self.vcov_type != "hc1"),
+            )
+            if non_default
+        ]
+        if _2x2x2_ctor:
+            raise ValueError(
+                f"TripleDifference({', '.join(n + '=' for n in _2x2x2_ctor)}) applies to the "
+                f"2x2x2 mode only: the staggered engine's SEs come from the GMM-combined "
+                f"influence function (analytical) or the multiplier bootstrap "
+                f"(n_bootstrap > 0), so there is no sandwich family to select."
+            )
+
+        # Step 3: required staggered columns (first_treat is present already).
+        require_arg("TripleDifference.fit", "unit", unit)
+        require_arg("TripleDifference.fit", "time", time)
+        require_arg("TripleDifference.fit", "partition", partition)
+
+        # Step 4: cluster= is a CONSTRUCTOR param and the staggered engine has
+        # no clustered analytical path. The deprecated class accepts-then-warns
+        # -then-ignores it; this surface is new, so it raises from birth rather
+        # than shipping an accepted-but-unhonored parameter (3(a)'s precedent).
+        if self.cluster is not None:
+            raise ValueError(
+                "cluster= is not supported in staggered DDD mode: cluster-robust ANALYTICAL "
+                "SEs are not implemented for the staggered engine. Use n_bootstrap > 0 for "
+                "unit-level clustered inference via the multiplier bootstrap, or fit the "
+                "2x2x2 design, where cluster= gives Liang-Zeger CR1 standard errors."
+            )
+
+        results = self._fit_staggered_core(
+            data,
+            outcome,
+            unit,
+            time,
+            first_treat,
+            partition,
+            covariates=covariates,
+            aggregate=aggregate,
+            balance_e=balance_e,
+            survey_design=survey_design,
+            estimator_name="TripleDifference",
+            partition_label="partition",
+            _frame_offset=2,
+        )
+        self.results_ = results
+        return results
 
     def _validate_data(
         self,

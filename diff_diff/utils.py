@@ -2,6 +2,7 @@
 Utility functions for difference-in-differences estimation.
 """
 
+import inspect
 import os
 import warnings
 from dataclasses import dataclass, field
@@ -490,7 +491,8 @@ def validate_n_bootstrap(n_bootstrap: Any) -> None:
     accepts numpy integers, rejects bool/None/float/negative). ``0`` means
     bootstrap off wherever a ``> 0`` gate exists — the zero-default
     estimators (CallawaySantAnna, SunAbraham, EfficientDiD, ImputationDiD,
-    TwoStageDiD, WooldridgeDiD, ContinuousDiD, StaggeredTripleDifference)
+    TwoStageDiD, WooldridgeDiD, ContinuousDiD, StaggeredTripleDifference,
+    TripleDifference)
     and every analytical lane. On the DiD/TWFE wild-bootstrap lane 0 never
     meant off (the routing consults only ``inference=``); their fit-level
     floor rejects ``n_bootstrap < 2`` under ``inference="wild_bootstrap"``.
@@ -499,6 +501,81 @@ def validate_n_bootstrap(n_bootstrap: Any) -> None:
         raise ValueError(f"n_bootstrap must be a non-negative integer, got '{n_bootstrap}'")
     if n_bootstrap < 0:
         raise ValueError(f"n_bootstrap must be a non-negative integer, got '{n_bootstrap}'")
+
+
+# The staggered-only TripleDifference constructor params that genuinely select
+# staggered behavior (row M-013). Lives here because TWO independent consumers
+# need the same boundary and must not drift apart: TripleDifference.fit(), which
+# rejects them in 2x2x2 mode, and the power entry points, which reject a
+# staggered-configured estimator at the front door. `bootstrap_weights`, `seed`
+# and `cband` are deliberately EXCLUDED - they act only through n_bootstrap > 0,
+# which 2x2x2 mode already rejects, so both surfaces accept them as inert.
+STAGGERED_DDD_CTOR_PARAMS = (
+    "control_group",
+    "anticipation",
+    "base_period",
+    "n_bootstrap",
+)
+
+
+def staggered_ddd_ctor_defaults(estimator: Any) -> Dict[str, Any]:
+    """Read :data:`STAGGERED_DDD_CTOR_PARAMS` defaults off ``estimator``'s class.
+
+    Derived from the live ``__init__`` signature rather than hard-coded, so a
+    future default change cannot make the two mode-detection boundaries
+    disagree — or, worse, reclassify an otherwise-default estimator as
+    staggered-configured and reject a legitimate 2x2x2 run.
+
+    Params absent from the signature, or present with no default, are skipped:
+    a param with no default has no "non-default value" to detect, and treating
+    ``Parameter.empty`` as the default would flag every instance.
+    """
+    try:
+        params = inspect.signature(type(estimator).__init__).parameters
+    except (TypeError, ValueError):  # pragma: no cover - exotic callables
+        return {}
+    return {
+        name: params[name].default
+        for name in STAGGERED_DDD_CTOR_PARAMS
+        if name in params and params[name].default is not inspect.Parameter.empty
+    }
+
+
+def staggered_ddd_ctor_offenders(estimator: Any) -> List[str]:
+    """Names in :data:`STAGGERED_DDD_CTOR_PARAMS` set to a non-default value."""
+    return [
+        name
+        for name, default in staggered_ddd_ctor_defaults(estimator).items()
+        if getattr(estimator, name, default) != default
+    ]
+
+
+def validate_anticipation(anticipation: Any) -> None:
+    """Raise ValueError unless ``anticipation`` is a non-negative integer.
+
+    An out-of-domain anticipation window does not fail loudly on its own — it
+    silently changes the ESTIMAND. On the staggered DDD engine the value feeds
+    both the base-period rule and the comparison-cohort threshold, so
+    ``anticipation=-1`` makes the universal base period ``g`` (an
+    ALREADY-TREATED period) and relaxes the not-yet-treated threshold to
+    ``max(t, base) - 1``, admitting cohorts treated at the evaluation period as
+    clean controls. Neither condition is observable in the output.
+
+    ``bool`` is rejected: ``True`` would otherwise coerce to a silent
+    one-period window. Numpy integers are accepted, matching
+    :func:`validate_n_bootstrap`, whose shape this follows.
+
+    Adopted by ``TripleDifference`` and the shared staggered engine (so the
+    deprecated ``StaggeredTripleDifference`` fails closed too). The remaining
+    estimators taking ``anticipation`` are tracked for alignment in TODO.md.
+    """
+    if isinstance(anticipation, bool) or not isinstance(anticipation, (int, np.integer)):
+        raise ValueError(
+            f"anticipation must be a non-negative integer; got "
+            f"{anticipation!r} (type {type(anticipation).__name__})."
+        )
+    if anticipation < 0:
+        raise ValueError(f"anticipation must be a non-negative integer; got {anticipation!r}.")
 
 
 def resolve_tail_df(

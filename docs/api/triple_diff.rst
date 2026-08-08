@@ -29,6 +29,39 @@ TripleDifference
 
 Main estimator class for Triple Difference designs.
 
+Since 3.9 this class serves BOTH triple-difference designs (ledger row M-013):
+the 2x2x2 design, and the staggered-adoption design that
+:class:`~diff_diff.StaggeredTripleDifference` used to own. ``first_treat=``
+selects the staggered engine; mixing the two designs' parameters raises rather
+than guessing. The estimation cores are unchanged - both surfaces share one
+engine, so the staggered numbers are identical to the deprecated class's.
+
+.. code-block:: python
+
+   from diff_diff import TripleDifference
+
+   # 2x2x2 design (unchanged)
+   ddd = TripleDifference(estimation_method="dr")
+   res = ddd.fit(df, outcome="y", group="state", partition="eligible", post="post")
+
+   # staggered adoption - the staggered params are keyword-only
+   sddd = TripleDifference(estimation_method="dr", control_group="not_yet_treated")
+   res = sddd.fit(
+       df,
+       outcome="y",
+       partition="eligible",
+       unit="id",
+       time="period",
+       first_treat="enacted",
+       aggregate="event_study",
+   )
+
+2x2x2 mode returns :class:`~diff_diff.TripleDifferenceResults`; staggered mode
+returns :class:`~diff_diff.StaggeredTripleDiffResults` (the containers unify at
+4.0, row M-014). ``cluster=`` gives Liang-Zeger CR1 in 2x2x2 mode and raises in
+staggered mode, where unit-level clustering is available through
+``n_bootstrap > 0``.
+
 .. autoclass:: diff_diff.TripleDifference
    :no-index:
    :members:

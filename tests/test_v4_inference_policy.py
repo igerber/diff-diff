@@ -44,6 +44,7 @@ from diff_diff import (
     QDiD,
     StaggeredTripleDifference,
     SunAbraham,
+    TripleDifference,
     TwoStageDiD,
     TwoWayFixedEffects,
     WooldridgeDiD,
@@ -96,6 +97,7 @@ VALIDATED_CLASSES = [
     WooldridgeDiD,
     ContinuousDiD,
     StaggeredTripleDifference,
+    TripleDifference,
     ChangesInChanges,
     QDiD,
 ]

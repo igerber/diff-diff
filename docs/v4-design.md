@@ -368,9 +368,22 @@ mechanics and the test triple in tests/test_v4_merge_mpd.py.)
 ```python
 ddd = TripleDifference()
 ddd.fit(df, outcome, group, partition, post)              # 2x2x2 (RC engine)
-ddd.fit(df, outcome, unit, time, first_treat, partition,  # staggered (panel engine)
-        covariates=None, ...)
+ddd.fit(df, outcome, partition=..., unit=..., time=...,   # staggered (panel engine)
+        first_treat=..., covariates=None, ...)
 ```
+
+**(Amended 2026-08-08, Phase 3(b) ship.)** The staggered snippet is KEYWORD
+form, not positional. Positional slots 1-8 belong to the 2x2x2 design and are
+preserved byte-for-byte (`data, outcome, group, partition, post, covariates,
+survey_design, time`) - including `time` at slot 8, so nothing narrows and no
+compat row is needed. The four staggered-only params (`unit`, `first_treat`,
+`aggregate`, `balance_e`) are KEYWORD-ONLY: a staggered call written
+positionally would otherwise bind `group="unit"`, `partition="period"`,
+`post="first_treat"` and land in 2x2x2 mode with a confusing downstream error
+instead of a mode error. `time=` keeps its dual role, resolved by dispatch
+ORDER rather than by value inspection: the staggered branch is taken before the
+M-031 rename shim runs, so `time=` is the calendar column there and emits no
+rename warning.
 
 **Routing semantics.** One class, two engines, both internally UNCHANGED in
 this program (R-parity preserved; engine unification is a possible 4.x
@@ -386,13 +399,30 @@ both modes (the paper's and R package's vocabulary); the staggered engine's
 **Inference note.** The two engines keep their existing inference stacks
 (analytical influence-function SEs on the 2x2x2 engine; multiplier bootstrap +
 GMM weighting on the staggered engine). `cluster=` analytical SEs remain
-staggered-mode-unsupported (bootstrap required), as today - documented in the
-class docstring, tracked as post-4.0 backlog.
+staggered-mode-unsupported (bootstrap required) - documented in the class
+docstring, tracked as post-4.0 backlog. **(Amended 2026-08-08, Phase 3(b) ship,
+user-approved.)** On the MERGED surface `cluster=` now RAISES a `ValueError`
+steering to `n_bootstrap > 0`, rather than the deprecated class's
+accepted-then-warned-then-ignored `UserWarning`, which is preserved unchanged on
+that class. Same reasoning 3(a) ratified for MPD's wild-bootstrap fallback: the
+raise is live from the mode's 3.9 BIRTH, because a new surface needs no
+deprecation window and should not ship a parameter it does not honor.
 
 **Results.** One results shape: the staggered container's structure with the
 2x2x2 case as the degenerate single-ATT view (canonical quintet always
 populated; group-time table empty in 2x2x2 mode). StaggeredTripleDiffResults
-dies [M-014].
+dies [M-014]. **(Amended 2026-08-08, Phase 3(b) ship, user-approved.)** That end
+state lands at 4.0, not in 3.9. The 3.9 facade is API-only: 2x2x2 mode returns
+`TripleDifferenceResults`, staggered mode returns `StaggeredTripleDiffResults`,
+and `fit`'s return type widens to a `Union` (the `TwoWayFixedEffects` precedent
+from 3(a)). Rationale: 3(a) could consume a finished container because
+`EventStudyResults` shipped in Phase 2, whereas unifying here would have to
+INVENT one - the two containers disagree on storage (native quintet vs
+`overall_*` + property aliases), nine 2x2x2 fields have no staggered
+counterpart, `to_dataframe`/`epv_summary`/`summary` diverge, and changing the
+2x2x2 return type is an unrowed breaking change to a surface with no
+deprecation row. [M-014] keeps the obligation and now records the second
+construction site.
 
 **Deprecation choreography.** 3.9: staggered params ship on TripleDifference;
 `time` -> `post` in 2x2x2 mode [M-031] (the `time` NAME persists as the
@@ -469,6 +499,18 @@ following the existing `SyntheticDiDResults.__setstate__` precedent
 strongest norm (`did::aggte`, `etwfe::emfx`, Stata `estat aggregation`).
 `fit(aggregate=)` is deprecated in 3.9 and removed in 4.0
 ([M-020]..[M-027]); `balance_e` moves to `aggregate()` alongside it.
+
+**(Amended 2026-08-08, Phase 3(b) ship - ONE documented exception.)** The DDD
+staggered mode is the single surface where fit-time `aggregate=`/`balance_e=`
+ship as CANONICAL rather than deprecated, because it has no post-fit successor
+to steer to: `StaggeredTripleDiffResults` carries no `AggregationMixin`, and
+`results_base.py`'s absent-surface hint for it literally reads "refit with
+aggregate='event_study'". The M-013 merge therefore carries both params onto
+the surviving `TripleDifference`, rowed as [M-140] [M-141] with
+`deprecated_in: null` (nothing to steer away from yet) and `removed_in: "4.0"`,
+which machine-checks that the 4.0 container unification ([M-014]) delivers the
+post-fit `aggregate()` in the same release the params die. The rule above is
+otherwise unchanged: no OTHER estimator may add a fit-time `aggregate=`.
 
 **Vocabulary.** Closed set: `"simple"`, `"event_study"`, `"group"`,
 `"calendar"`, plus per-estimator documented extras where the estimand demands
@@ -781,9 +823,9 @@ above; anything only one PR cares about stays in that PR's plan.**
 |---|---|---|
 | 1 (this PR) | - | Spec + matrix + enforcement test + support edits |
 | 2: contract foundations | 3.9 | (a) results base + unified event-study representation [M-092] + to_dict completion + the Diagnostic marker base on the diagnostic result roster [M-091] (section 3.5); (b) `aggregate()` + fit(aggregate=) shims [M-020..M-027] [M-139] (M-020's shim already shipped; M-139 is the HAD workflow twin, a pre-cut amendment); (c) param renames [M-030..M-047] [M-084] [M-086..M-089] + their results-field mirrors [M-094] [M-095] (section 8 rule 9) + the public-function completeness sweep [M-097..M-113] (section 8 rule 10) + the dCDH results mirror [M-114] + the fourth `robust` site [M-115] + the 2(c)-ii missed-rename amendments [M-136..M-138] (LPDiD `level` value; the two post-dummy diagnostics params) + BaseEstimator mixin + ContinuousDiD covariates move; (d) alias introduction [M-062] (the Spillover introduction is cancelled [M-063]) + the alias-diet `__getattr__` warning shim [M-135] + wrapper deprecations [M-070..M-077] + the two inference-surface policies: `n_bootstrap` semantic unification [M-081] and the wild-cluster-bootstrap roster guard [M-096]; shipped insertions (all done): the aggregate contract [M-122], the ETWFE reference-period family [M-123] [M-124] [M-125], and the variance-consolidation program [M-126] [M-127] |
-| 3: merges | 3.9 | (a) TWFE event-study mode [M-010] + EventStudy warn [M-060] + the fit `time`->`post` rename [M-082] (gates: section 4.1's equivalence/divergence/pooled-parity test triple) (shipped: tests/test_v4_merge_mpd.py; consumer ports incl. HonestDiD/PreTrendsPower calendar routes); (b) TripleDifference facade [M-013] + the SDDD alias [M-064]; (c) CiC method= [M-015] |
+| 3: merges | 3.9 | (a) TWFE event-study mode [M-010] + EventStudy warn [M-060] + the fit `time`->`post` rename [M-082] (gates: section 4.1's equivalence/divergence/pooled-parity test triple) (shipped: tests/test_v4_merge_mpd.py; consumer ports incl. HonestDiD/PreTrendsPower calendar routes); (b) TripleDifference facade [M-013] + the SDDD alias [M-064] (shipped: tests/test_v4_merge_ddd.py; the engine relocation into the private shared mixin, the keyword-only staggered fit params, and the pscore_trim tightening [M-142]. The fit-time aggregate=/balance_e= carve-out rows are scheduled REMOVALS and so are cited in the phase-5 cell, not here - their only lifecycle version is removed_in 4.0); (c) CiC method= [M-015] |
 | 4: release + soak | 3.9 cut | Migration guide written (skeleton: section 10); maintainer cuts 3.9; maint/3.8 rule active |
-| 5: enforcement | 4.0 | Removals [M-010..M-015, M-020..M-027, M-139, M-030, M-032..M-047 old names, M-060, M-061, M-064, M-070..M-077, M-084, M-086..M-089, M-001..M-003, M-117, M-118, M-119, M-120] + the alias diet [M-132]..[M-134] + the amendment's old names [M-094] [M-095] [M-097..M-115] [M-136..M-138] (incl. their consumer migrations and the `clean_control` serialized reporting key); M-031's old `time` name persists as the merged class's calendar column, so it is deliberately absent from the removal roster (its 4.0 enforcement is the M-085 behavior entry below); property window: [M-016] property-flips at 4.0 (removal at 5.0); storage flips [M-050..M-058]; default policies [M-004..M-006, M-128..M-131, M-080]; merged-class behavior enforcements [M-083] [M-085]; warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; docs/llms.txt/README refresh |
+| 5: enforcement | 4.0 | Removals [M-010..M-015, M-020..M-027, M-139, M-030, M-032..M-047 old names, M-060, M-061, M-064, M-070..M-077, M-084, M-086..M-089, M-001..M-003, M-117, M-118, M-119, M-120, M-140, M-141] + the alias diet [M-132]..[M-134] + the amendment's old names [M-094] [M-095] [M-097..M-115] [M-136..M-138] (incl. their consumer migrations and the `clean_control` serialized reporting key); M-031's old `time` name persists as the merged class's calendar column, so it is deliberately absent from the removal roster (its 4.0 enforcement is the M-085 behavior entry below); property window: [M-016] property-flips at 4.0 (removal at 5.0); storage flips [M-050..M-058]; default policies [M-004..M-006, M-128..M-131, M-080]; merged-class behavior enforcements [M-083] [M-085]; warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; docs/llms.txt/README refresh |
 | 6: front door | 4.1 | `event_study(data, outcome, unit, time, first_treat, estimator=...)` comparison entry point over the staggered family (sketch only; specified in its own plan) |
 
 Citation semantic for the table: a cell may cite a row whose current `phase`

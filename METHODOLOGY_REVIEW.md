@@ -988,7 +988,7 @@ These three are feature deferrals (paper-supported extensions that the library h
 
 | Field | Value |
 |-------|-------|
-| Module | `staggered_triple_diff.py`, `staggered_triple_diff_results.py` |
+| Module | `_staggered_triple_diff_engine.py` (the shared engine), `staggered_triple_diff.py` (deprecated class surface), `staggered_triple_diff_results.py` |
 | Primary Reference | Ortiz-Villavicencio & Sant'Anna (2025) — same paper as TripleDifference, staggered case |
 | R Reference | `triplediff::ddd(panel=TRUE)` + `agg_ddd()` (per `benchmarks/R/benchmark_staggered_triplediff.R`) |
 | Status | **Complete** |

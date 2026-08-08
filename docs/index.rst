@@ -162,7 +162,7 @@ Supported Estimators
    * - :class:`~diff_diff.TripleDifference`
      - Triple difference (DDD) estimator
    * - :class:`~diff_diff.StaggeredTripleDifference`
-     - Ortiz-Villavicencio & Sant'Anna (2025) staggered DDD with group-time ATT
+     - Ortiz-Villavicencio & Sant'Anna (2025) staggered DDD with group-time ATT (deprecated 3.9 - use :class:`~diff_diff.TripleDifference` with ``first_treat=``)
    * - :class:`~diff_diff.ContinuousDiD`
      - Callaway, Goodman-Bacon & Sant'Anna (2024) continuous-treatment dose-response DiD
    * - :class:`~diff_diff.HeterogeneousAdoptionDiD`

@@ -577,6 +577,9 @@ some states and some demographic subgroups within states):
 
 - `TripleDifference` - classic two-period DDD.
 - `StaggeredTripleDifference` - staggered DDD, robust to cohort-mixing.
+  DEPRECATED 3.9 (removed 4.0): use
+  `TripleDifference().fit(..., unit=, time=, first_treat=, partition=)`,
+  the same engine. `control_group` takes `not_yet_treated`/`never_treated`.
 
 Triple-difference is not automatically detected by `profile_panel`;
 it requires the caller to identify the third comparison axis. If a

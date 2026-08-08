@@ -137,6 +137,14 @@ StaggeredTripleDifference
 Ortiz-Villavicencio & Sant'Anna (2025) staggered triple-difference (DDD) estimator
 with group-time ATT identification under heterogeneous treatment timing.
 
+.. deprecated:: 3.9
+   Removed in 4.0 (ledger row M-013). Use
+   :class:`~diff_diff.TripleDifference` with
+   ``fit(..., unit=, time=, first_treat=, partition=)``, which runs the same
+   engine. ``eligibility=`` is named ``partition=`` there, and ``control_group``
+   takes the underscored values ``"not_yet_treated"``/``"never_treated"``. The
+   ``SDDD`` alias is deprecated with the class.
+
 .. autoclass:: diff_diff.StaggeredTripleDifference
    :no-index:
    :members:

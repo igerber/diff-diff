@@ -29,6 +29,14 @@ groups:
   staggered_triple_diff:
     - diff_diff/staggered_triple_diff.py
     - diff_diff/staggered_triple_diff_results.py
+    # The estimation engine relocated here in phase 3(b) (row M-013) and is
+    # shared with TripleDifference's staggered mode. Private (leading
+    # underscore), so tests/test_doc_deps_integrity.py exempts it from needing
+    # its own `sources:` key - but it is mapped as a GROUP MEMBER anyway,
+    # because /docs-check and /docs-impact have no private carve-out and,
+    # more importantly, the whole staggered methodology would otherwise live
+    # in a module with no path to REGISTRY.md.
+    - diff_diff/_staggered_triple_diff_engine.py
   trop:
     - diff_diff/trop.py
     - diff_diff/trop_global.py
@@ -226,6 +234,12 @@ sources:
       - path: diff_diff/guides/llms.txt
         section: "Estimators"
         type: user_guide
+      # Hand-edit-only surfaces before phase 3(b): neither was mapped, so
+      # /docs-impact could not surface them when this estimator changed.
+      - path: docs/survey-roadmap.md
+        type: user_guide
+      - path: docs/methodology/papers/ortiz-villavicencio-santanna-2025-review.md
+        type: methodology
 
   # ── SunAbraham ──────────────────────────────────────────────────────
 

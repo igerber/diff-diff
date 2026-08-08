@@ -126,11 +126,13 @@ _MD_TOKEN_RE = re.compile(r"\[(M-\d{3})\]")
 # reserved pool) = 118, plus 2b PR-3b's Imputation/TwoStage balance_e rows
 # (M-118, M-119, claimed from the reserved pool) = 120, plus 2b PR-4's
 # HAD workflow-aggregate row (M-139, next free id - the reserved pool is
-# spent/earmarked) = 121.
+# spent/earmarked) = 121; + the phase-3(b) DDD merge rows (M-140/M-141 carry
+# fit-time aggregate=/balance_e= onto the surviving TripleDifference, M-142 the
+# pscore_trim tightening) = 124.
 # Ids are never reused and terminal rows are never deleted, so the ledger
 # only grows - raise the floor when rows are added; a lower parse count
 # means scanner/format drift or an illegal row deletion.
-ROW_COUNT_FLOOR = 121
+ROW_COUNT_FLOOR = 124
 
 # Committed snapshot of the shipped id set ("ids are never deleted or reused"
 # contract - a delete-one-add-one edit keeps the count above the floor but trips
@@ -182,6 +184,7 @@ _INITIAL_ID_RANGES = [
     (136, 138),
     (118, 119),
     (139, 139),
+    (140, 142),
 ]
 EXPECTED_INITIAL_IDS = frozenset(
     f"M-{n:03d}" for lo, hi in _INITIAL_ID_RANGES for n in range(lo, hi + 1)
@@ -584,10 +587,10 @@ def test_initial_ids_never_deleted():
     Phase 1 + diagnostic-family + M-092/M-093 + M-094..M-096 + the
     M-097..M-115 public-function completeness sweep + M-117..M-120/M-122 +
     M-123/M-124 + M-125 + M-126 + M-127..M-131 + M-132..M-135 +
-    M-136..M-138 + M-139)."""
+    M-136..M-138 + M-139 + M-140..M-142)."""
     missing = sorted(EXPECTED_INITIAL_IDS - set(_ROW_IDS))
     assert not missing, f"ledger rows deleted (ids are permanent): {missing}"
-    assert len(EXPECTED_INITIAL_IDS) == 121
+    assert len(EXPECTED_INITIAL_IDS) == 124
 
 
 def test_version_tuple_pads_to_three_components():

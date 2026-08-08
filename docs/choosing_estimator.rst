@@ -16,7 +16,7 @@ Start here and follow the questions:
 
    - **No** → Go to question 1
    - **Yes, simultaneous treatment (2×2×2)** → Use :class:`~diff_diff.TripleDifference`
-   - **Yes, with staggered timing** → Use :class:`~diff_diff.StaggeredTripleDifference`
+   - **Yes, with staggered timing** → Use :class:`~diff_diff.TripleDifference` with ``first_treat=`` (:class:`~diff_diff.StaggeredTripleDifference` is deprecated in 3.9 and runs the same engine until its 4.0 removal)
 
 1. **Is treatment continuous?** (Units receive different doses or intensities)
 
@@ -844,12 +844,12 @@ estimation. The depth of support varies by estimator and variance method:
      - Full (TSL)
      - Full (analytical)
      - Group-level (warning)
-   * - ``TripleDifference``
+   * - ``TripleDifference`` (2x2x2 mode)
      - pweight only
      - Full
      - Full (analytical)
      - --
-   * - ``StaggeredTripleDifference``
+   * - ``TripleDifference`` (staggered mode, ``first_treat=``)
      - pweight only
      - Full
      - Full
