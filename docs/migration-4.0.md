@@ -163,6 +163,25 @@ att = results.att          # canonical, works now
 att = results.overall_att  # warns from 4.0, removed at 5.0
 ```
 
+**The whole inference quintet moves, not just the point estimate.** Wherever a container
+carried `overall_*` inference fields alongside `overall_att`, they flip to the canonical
+names in the same step:
+
+| old | new |
+|---|---|
+| `overall_att` | `att` |
+| `overall_se` | `se` |
+| `overall_t_stat` | `t_stat` |
+| `overall_p_value` | `p_value` |
+| `overall_conf_int` | `conf_int` |
+
+```{note}
+`ContinuousDiDResults` is the outlier: its sibling fields are spelled
+`overall_att_se`, `overall_att_t_stat`, `overall_att_p_value` and
+`overall_att_conf_int` — with the `att` infix — and they flip to the same canonical
+names. If you grep for `overall_se` you will miss them.
+```
+
 ## Inference defaults that move numbers
 
 Two changes alter results without changing any call:
@@ -207,12 +226,26 @@ your code), and accepted-value renames, which change strings rather than names.
 | `\bunit_col\s*=` | `unit=` |
 | `\bfirst_treat_col\s*=` | `first_treat=` |
 | `\brunning_col\s*=` | `running=` |
+| `\btreatment_col\s*=` | `takeup=` |
 | `\bweight_col\s*=` | `weights=` |
 | `\bcohort\s*=` | `first_treat=` |
 | `\bclean_control\s*=` | `control_group=` |
+| `\bcontrols\s*=` | `covariates=` |
+| `\baggregation\s*=` | `level=` |
 
-Review each hit: these are word-boundary matches on common words, and `time=`/`unit=` are also
-legitimate parameter names elsewhere.
+Note `treatment_col` maps to **`takeup`**, not `treatment` — it is the one `*_col` parameter
+whose replacement is not just the suffix dropped.
+
+**Three renames are deliberately NOT in the table, because a global replace would corrupt
+working code.** Each is a rename only in a specific call:
+
+| rename | where it applies | why it cannot be global |
+|---|---|---|
+| `group=` → `unit=` | `ChaisemartinDHaultfoeuille.fit`, `twowayfeweights` | `TripleDifference.fit` takes a `group=` that is **not** renamed |
+| `time=` → `post=` | `DifferenceInDifferences.fit`, `permutation_test`, `leave_one_out_test` | `time=` survives everywhere else as the calendar column — see the renamed-parameters section |
+| `aggregate=` → post-fit call | the aggregation family | not a rename at all; it moves off `fit()` |
+
+Review every hit even in the safe table: these are word-boundary matches on common words.
 
 ## Already shipped in 3.9
 
@@ -298,8 +331,8 @@ does not mean no action is required, so read the `Fix` cell.
 | M-083 | merge-mpd | `diff_diff:TwoWayFixedEffects.fit[time]` | — | In static mode (`event_study=False`), `time=` raises - pass `post=` for the 0/1 post dummy. `time=` now means the calendar column only. |
 | M-015 | merge-qdid | `diff_diff:QDiD` | `diff_diff:ChangesInChanges[method]` | See the merges section for the worked before/after. |
 | M-143 | merge-qdid | `diff_diff:ChangesInChangesResults.estimator` | `diff_diff:ChangesInChangesResults.method` | See the merges section for the worked before/after. |
-| M-001 | obligation-sdid-params | `diff_diff:SyntheticDiD[lambda_reg]` | — | Already ignored since 3.0.0 - drop it and set `zeta_omega=` instead. |
-| M-002 | obligation-sdid-params | `diff_diff:SyntheticDiD[zeta]` | — | Already ignored since 3.0.0 - drop it and set `zeta_lambda=` instead. |
+| M-001 | obligation-sdid-params | `diff_diff:SyntheticDiD[lambda_reg]` | — | Drop it. It has been IGNORED since 3.0.0, so 3.x already auto-computes regularization - do NOT copy its value into `zeta_omega=`, which activates an override that was inert and changes weights, ATT and inference. Set `zeta_omega=` only as a deliberate new choice. |
+| M-002 | obligation-sdid-params | `diff_diff:SyntheticDiD[zeta]` | — | Drop it. It has been IGNORED since 3.0.0, so 3.x already auto-computes regularization - do NOT copy its value into `zeta_lambda=`, which activates an override that was inert and changes weights, ATT and inference. Set `zeta_lambda=` only as a deliberate new choice. |
 | M-003 | obligation-sdid-params | `diff_diff:SyntheticDiDResults.placebo_effects` | `diff_diff:SyntheticDiDResults.variance_effects` | Read `variance_effects` instead of `placebo_effects`. |
 | M-007 | obligation-warning-retirements | `diff_diff.estimators` | — | The MultiPeriodDiD `e=-1` transition FutureWarning stops being emitted; drop any warning filter that suppressed it. |
 | M-080 | policy-auto-cluster | `diff_diff:TwoWayFixedEffects[cluster]` | — | Panel estimators auto-cluster at `unit` when `cluster=` is omitted; pass `cluster=False` to disable it and keep unclustered 3.x standard errors (`None`/omission means auto-cluster, not off). |

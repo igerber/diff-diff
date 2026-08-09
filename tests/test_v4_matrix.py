@@ -1291,8 +1291,29 @@ def test_migration_guide_examples_bind_to_real_signatures():
     import inspect
 
     diff_diff = importlib.import_module("diff_diff")
+    blocks = _guide_python_blocks(GUIDE.read_text())
+    pairs = [p for b in blocks for p in _diff_diff_call_keywords_with(b, diff_diff)]
+
+    # Vacuity floor: without it, deleting every example - or renaming the ```python
+    # fence - empties the loop below and the gate passes while checking nothing.
+    assert (
+        len(blocks) >= 4
+    ), f"expected at least 4 ```python blocks in the guide, found {len(blocks)}"
+    assert len(pairs) >= 20, f"expected at least 20 resolvable keywords, found {len(pairs)}"
+    for owner in (
+        "MultiPeriodDiD",
+        "TwoWayFixedEffects",
+        "StaggeredTripleDifference",
+        "TripleDifference",
+        "QDiD",
+        "ChangesInChanges",
+    ):
+        assert any(
+            t.split(".")[0] == owner for t, _ in pairs
+        ), f"the {owner} worked example vanished from the guide"
+
     problems = []
-    for block in _guide_python_blocks(GUIDE.read_text()):
+    for block in blocks:
         for target, keyword in _diff_diff_call_keywords_with(block, diff_diff):
             owner, _, method = target.partition(".")
             obj = getattr(diff_diff, owner)
