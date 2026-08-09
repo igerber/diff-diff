@@ -93,6 +93,25 @@ _DEFAULT_QUANTILES = np.array(
     ]
 )
 
+# The two estimators ChangesInChanges dispatches over (row M-015). Lowercase only -
+# no "CiC"/"QDiD" casing - matching the library-wide rule that a uniform name never
+# carries an altered spelling. The value is the ``kind`` handed to _fit_distributional
+# and is echoed back on the results container as ``method``.
+_VALID_METHODS = ("cic", "qdid")
+
+# Row M-015: the QDiD CLASS is deprecated, the QDiD METHOD is not. Emitted once per
+# construction from QDiD.__init__ (set_params re-emits via BaseEstimator's transactional
+# probe re-init - the documented side effect MultiPeriodDiD's and SDDD's shims also have).
+# Pinned verbatim by tests/test_v4_merge_cic.py and the targeted pytest filter in
+# pyproject.toml. REMOVE WITH THE CLASS at 4.0.
+_QDID_DEPRECATION_MSG = (
+    "QDiD is deprecated and will be removed in 4.0; use "
+    "ChangesInChanges(method='qdid') instead - the same engine, so the numbers "
+    "are unchanged. Only the class spelling is deprecated: method='qdid' is a "
+    "fully supported comparison mode and emits no warning of its own. The "
+    "QDiDResults alias is deprecated with it."
+)
+
 # Covariate-path quantile-regression tau grid: qte hardcodes ``seq(0.01, 0.99, 0.01)``
 # inside compute.CiC/compute.QDiD (99 taus, not user-configurable). Pinned to R's EXACT
 # seq() doubles for the same reason as _DEFAULT_QUANTILES: natural numpy constructions
@@ -827,7 +846,12 @@ def _fit_distributional(
     quantiles = np.sort(
         np.asarray(_DEFAULT_QUANTILES if est.quantiles is None else est.quantiles, dtype=float)
     )
-    estimator_name = "ChangesInChanges" if kind == "cic" else "QDiD"
+    # Derived from the INSTANCE, not from ``kind``: with method= on the merged class,
+    # a kind-based map would name "QDiD" in errors raised by a fit the user made
+    # through ChangesInChanges(method="qdid") - a class they never constructed. This
+    # is byte-identical to the old mapping on both 3.x surfaces (QDiD -> "QDiD",
+    # ChangesInChanges -> "ChangesInChanges").
+    estimator_name = type(est).__name__
 
     # ---- column resolution -------------------------------------------------
     if formula is not None:
@@ -1108,7 +1132,7 @@ def _fit_distributional(
         n_bootstrap=est.n_bootstrap,
         n_bootstrap_valid=n_valid,
         panel=est.panel,
-        estimator=kind,
+        method=kind,
         quantiles=quantiles,
         alpha=est.alpha,
         covariates=list(covariates) if covariates is not None else None,
@@ -1152,6 +1176,18 @@ def _validate_seed(seed: Any) -> None:
         raise ValueError(f"seed must be None or a non-negative integer, got '{seed}'")
 
 
+def _validate_method(method: Any) -> None:
+    # isinstance FIRST, matching _validate_panel/_validate_seed. A bare
+    # membership test is not enough: `np.array(["cic"]) in _VALID_METHODS`
+    # compares elementwise and bool()s a 1-element result to True, so the array
+    # would be stored as self.method - an unhashable tag that breaks the
+    # _ESTIMATOR_TITLES lookup in summary() and serializes as an array. (A
+    # multi-element array raises the ambiguous-truth ValueError instead, which
+    # is a confusing message for a simple type error.)
+    if not isinstance(method, str) or method not in _VALID_METHODS:
+        raise ValueError(f"method must be 'cic' or 'qdid', got '{method}'")
+
+
 def _validate_all_params(params: Dict[str, Any]) -> None:
     """Validate the full hyperparameter dict (used by __init__, set_params, and fit)."""
     _validate_quantiles(params["quantiles"])
@@ -1159,6 +1195,11 @@ def _validate_all_params(params: Dict[str, Any]) -> None:
     _validate_alpha(params["alpha"])
     _validate_panel(params["panel"])
     _validate_seed(params["seed"])
+    # ``.get``, not ``[...]``: QDiD keeps its frozen five-param __init__ (row
+    # M-015 deprecates the class, not the method), so its get_params() carries
+    # no "method" key and _fit_distributional re-validates through this same
+    # function on every QDiD fit. A bare params["method"] would KeyError there.
+    _validate_method(params.get("method", "cic"))
 
 
 class ChangesInChanges(BaseEstimator):
@@ -1193,26 +1234,42 @@ class ChangesInChanges(BaseEstimator):
         marginal cell distributions either way.
     seed : int, optional
         Seed for the bootstrap RNG (``numpy.random.default_rng``).
+    method : str, default="cic"
+        Which 2x2 distributional estimator to fit. ``"cic"`` is
+        Changes-in-Changes (Athey & Imbens 2006); ``"qdid"`` is the
+        quantile-DiD comparison estimator, matching ``qte::QDiD()``. The
+        default encodes Athey & Imbens' recommendation of CiC over QDiD
+        (2006, p. 447), but ``"qdid"`` is a fully supported mode and selecting
+        it emits no warning. Every other constructor parameter, the ``fit``
+        signature, the bootstrap machinery and the results container are
+        shared; the value is echoed back as ``results.method``.
 
     Notes
     -----
-    Quantile effects are point-identified only on the eq. (17) interior range
-    ``(q_lower, q_upper)``; effects outside it keep their point estimates (qte
-    parity) but report NaN inference with a warning. This guard applies to
-    unconditional (no-covariate) fits only: with covariates the eq. (17)
-    bounds are not the relevant objects (``q_lower``/``q_upper`` are NaN) and
-    a conditional support diagnostic replaces the unconditional one.
+    **CiC only (``method="cic"``).** Quantile effects are point-identified
+    only on the eq. (17) interior range ``(q_lower, q_upper)``; effects
+    outside it keep their point estimates (qte parity) but report NaN
+    inference with a warning. This guard applies to unconditional
+    (no-covariate) fits only: with covariates the eq. (17) bounds are not the
+    relevant objects (``q_lower``/``q_upper`` are NaN) and a conditional
+    support diagnostic replaces the unconditional one. QDiD has no eq. (17)
+    analogue, so ``q_lower``/``q_upper`` are NaN for every ``method="qdid"``
+    fit; its own diagnostic is a non-monotonicity warning on the implied
+    counterfactual quantile function (footnote 21), unconditional fits only.
 
     Covariates (``covariates=`` at fit time, or trailing formula terms) port
     qte's ``xformla`` branch exactly: linear quantile regressions of the
-    outcome on the covariates within the control pre- and post-period cells on
-    qte's fixed internal 0.01-0.99 tau grid (99 points, not user-configurable),
-    conditional-rank imputation per treated pre-period observation, and the
-    same bootstrap schemes with every quantile regression refit inside each
-    replicate. Covariates must be numeric (dummy-encode categoricals). Runtime
-    note: a covariate fit solves roughly ``2 x 99 x (1 + n_bootstrap)`` small
-    linear programs (~40k at the default ``n_bootstrap=200``) - typically tens
-    of seconds at moderate cell sizes, the same cost profile as ``qte::CiC``.
+    outcome on the covariates, on qte's fixed internal 0.01-0.99 tau grid (99
+    points, not user-configurable), conditional-rank imputation per treated
+    pre-period observation, and the same bootstrap schemes with every quantile
+    regression refit inside each replicate. The cells regressed differ by
+    method: CiC fits the two CONTROL cells, QDiD fits three (both control
+    cells plus treated-pre, with the type-7/type-1 quantile asymmetry qte
+    itself carries). Covariates must be numeric (dummy-encode categoricals).
+    Runtime note: a covariate fit solves roughly ``k x 99 x (1 + n_bootstrap)``
+    small linear programs for ``k`` in {2, 3} (~40-60k at the default
+    ``n_bootstrap=200``) - typically tens of seconds at moderate cell sizes,
+    the same cost profile as ``qte::CiC`` / ``qte::QDiD``.
 
     Additive random group-time shocks (random effects at the group x period
     level) BIAS the CiC estimator - unlike linear DiD, where they only
@@ -1233,9 +1290,16 @@ class ChangesInChanges(BaseEstimator):
         alpha: float = 0.05,
         panel: bool = False,
         seed: Optional[int] = None,
+        *,
+        method: str = "cic",
     ):
         # Stored verbatim (sklearn-clone contract): quantiles=None resolves to the
         # default grid at fit time, the raw None round-trips get_params().
+        #
+        # ``method`` is in this hand-built dict, not just in _validate_all_params'
+        # ``.get`` default: __init__ does NOT forward get_params(), so omitting it
+        # here would let ChangesInChanges(method="bogus") - and the set_params probe
+        # re-init that reconstructs through it - succeed silently.
         _validate_all_params(
             {
                 "quantiles": quantiles,
@@ -1243,6 +1307,7 @@ class ChangesInChanges(BaseEstimator):
                 "alpha": alpha,
                 "panel": panel,
                 "seed": seed,
+                "method": method,
             }
         )
         self.quantiles = quantiles
@@ -1250,6 +1315,7 @@ class ChangesInChanges(BaseEstimator):
         self.alpha = alpha
         self.panel = panel
         self.seed = seed
+        self.method = method
         self.is_fitted_ = False
         self.results_: Optional[ChangesInChangesResults] = None
 
@@ -1265,7 +1331,7 @@ class ChangesInChanges(BaseEstimator):
         covariates: Optional[List[str]] = None,
         unit: Optional[str] = None,
     ) -> ChangesInChangesResults:
-        """Fit the CiC estimator on a 2x2 dataset.
+        """Fit the selected estimator (``method=``) on a 2x2 dataset.
 
         Parameters
         ----------
@@ -1293,12 +1359,18 @@ class ChangesInChanges(BaseEstimator):
             (documented) when ``panel=False``, matching qte's ``idname``.
         """
         return _fit_distributional(
-            self, data, outcome, treatment, time, formula, covariates, unit, "cic"
+            self, data, outcome, treatment, time, formula, covariates, unit, self.method
         )
 
 
 class QDiD(BaseEstimator):
     """Quantile Difference-in-Differences comparison estimator (2x2 design).
+
+    .. deprecated:: 3.9
+       Use ``ChangesInChanges(method="qdid")`` instead; this class is removed
+       in 4.0 (ledger row M-015). The ESTIMATOR is not deprecated - only this
+       class spelling. The merged surface runs the same engine, so the numbers
+       are unchanged, and ``method="qdid"`` emits no warning of its own.
 
     Applies DiD quantile-by-quantile: ``qte(tau) = Q(y11, tau) - [Q(y10, tau)
     + Q(y01, tau) - Q(y00, tau)]`` with R type-7 (linear-interpolation)
@@ -1326,9 +1398,12 @@ class QDiD(BaseEstimator):
     for the treated post-period quantiles, type-1 for the imputed
     counterfactual - and that asymmetry is ported verbatim (REGISTRY Note).
 
-    Constructor parameters, fit signature, bootstrap behavior, and the results
-    container are identical to :class:`ChangesInChanges` (no interior-range
-    guard: eq. 17 has no QDiD analogue).
+    Fit signature, bootstrap behavior, and the results container are identical
+    to :class:`ChangesInChanges` (no interior-range guard: eq. 17 has no QDiD
+    analogue). The constructor parameters are identical EXCEPT that the merged
+    class additionally carries ``method=``, which is what selects this
+    estimator there; this class deliberately keeps its frozen five-parameter
+    signature through removal, so ``QDiD(method=...)`` is not accepted.
     """
 
     def __init__(
@@ -1339,8 +1414,14 @@ class QDiD(BaseEstimator):
         panel: bool = False,
         seed: Optional[int] = None,
     ):
+        # Row M-015. Per construction, so a caller sees it at the site that names the
+        # dying class. NOT added to _DEPRECATED_ALIASES in __init__.py - QDiD is a real
+        # class there, not an alias, and routing it through both would double-warn.
+        warnings.warn(_QDID_DEPRECATION_MSG, FutureWarning, stacklevel=2)
         # Stored verbatim (sklearn-clone contract): quantiles=None resolves to the
         # default grid at fit time, the raw None round-trips get_params().
+        # No "method" key: this class's five-param contract is frozen through removal,
+        # which is why _validate_all_params reads it with .get rather than [...].
         _validate_all_params(
             {
                 "quantiles": quantiles,

@@ -103,6 +103,33 @@ Mixin cross-class attribute access uses `TYPE_CHECKING`-guarded attribute/method
 the bootstrap mixin classes; keep stubs in sync with implementations (stub drift shows up
 as `[misc]` unpack-arity errors).
 
+**Local `mypy` can fail for an environment reason that is NOT a code defect** (observed
+2026-08). `lint.yml` installs the runtime deps at exact pins (`numpy==2.4.5 pandas==3.0.3
+scipy==1.17.1`) precisely to freeze stub drift, but those pins live only in the workflow —
+they are not in the `dev` extra, so `pip install -e ".[dev]"` does not reproduce them and a
+local numpy drifts freely. With a newer numpy (2.5.1 seen locally), mypy targeting
+`python_version = "3.10"` aborts inside numpy's own `__init__.pyi`:
+
+```
+numpy/__init__.pyi:737: error: Type statement is only supported in Python 3.12 and greater  [syntax]
+Found 1 error in 1 file (errors prevented further checking)
+```
+
+That is numpy 2.5's stubs using PEP 695 `type` statements. Note the trailing line: checking
+**stops**, so this masquerades as "one error" while actually verifying nothing. CI is
+unaffected (it installs the pins on a clean runner). To reproduce the real gate locally,
+build a throwaway venv at the workflow's pins rather than debugging the error:
+
+```bash
+python3 -m venv /tmp/mypyenv
+/tmp/mypyenv/bin/pip install mypy==2.3.0 numpy==2.4.5 pandas==3.0.3 scipy==1.17.1
+/tmp/mypyenv/bin/mypy diff_diff
+```
+
+Folding the runtime pins into the `dev` extra would remove the divergence, but it would also
+pin every contributor's numpy for ordinary test runs — deliberately not done; re-evaluate if
+the drift starts costing more than the workaround.
+
 ## Test Coverage
 
 Visualization tests skip when matplotlib / plotly are not installed (see

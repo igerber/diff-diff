@@ -92,6 +92,10 @@ QDiD
 
 Quantile difference-in-differences comparison estimator.
 
+*Deprecated in 3.9, removed in 4.0* - use ``ChangesInChanges(method="qdid")``
+instead. The same engine runs either way, so the numbers are unchanged; only
+the class spelling is deprecated, not the estimator.
+
 .. autoclass:: diff_diff.QDiD
    :no-index:
    :members:
@@ -110,8 +114,9 @@ Quantile difference-in-differences comparison estimator.
 ChangesInChangesResults
 -----------------------
 
-Results container shared by both estimators (the ``estimator`` field records
-which produced it; ``QDiDResults`` is an alias of this class).
+Results container shared by both estimators (the ``method`` field records
+which produced it - the pre-3.9 name ``estimator`` still reads it with a
+``FutureWarning`` until 4.0; ``QDiDResults`` is an alias of this class).
 
 .. autoclass:: diff_diff.changes_in_changes_results.ChangesInChangesResults
    :no-index:
@@ -183,11 +188,12 @@ Panel mode (same units in both periods) changes only the bootstrap::
         data, outcome="y", treatment="treated", time="post", unit="unit"
     )
 
-QDiD as a comparison estimator::
+QDiD as a comparison estimator (selected with ``method=`` on the merged
+class)::
 
-    from diff_diff import QDiD
+    from diff_diff import ChangesInChanges
 
-    qdid = QDiD(n_bootstrap=200, seed=42)
+    qdid = ChangesInChanges(method="qdid", n_bootstrap=200, seed=42)
     results_qdid = qdid.fit(data, outcome="y", treatment="treated", time="post")
 
 Covariates (conditional CiC via per-cell quantile regression, matching qte's
@@ -236,7 +242,7 @@ Comparison with related estimators
      - 2x2
      - ATT + quantile effects
      - ``h(u, t)`` monotone in scalar unobservable; ``U`` time-invariant within groups
-   * - ``QDiD``
+   * - ``QDiD`` (``ChangesInChanges(method="qdid")``)
      - 2x2
      - ATT + quantile effects
      - Additive quantile model (scale-dependent, testable restrictions)

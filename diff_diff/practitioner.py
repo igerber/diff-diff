@@ -51,16 +51,34 @@ _ESTIMATOR_NAMES: Dict[str, str] = {
 }
 
 
+def _distributional_kind(results: Any) -> Any:
+    """Read a ChangesInChangesResults' method tag, old field name included.
+
+    Row M-143 renamed the field ``estimator`` -> ``method``. The fallback is
+    NOT ``getattr(results, "estimator", None)``: on a real results object that
+    name is now a deprecation property, so reading it emits a FutureWarning
+    even when it returns the right value - which turns into an error under the
+    warning-as-error assertions this module's own tests use. Reading the
+    instance ``__dict__`` finds a duck-typed hand-built attribute without ever
+    touching the descriptor. Real results resolve ``method`` first, so the
+    fallback only ever fires for mocks built before the rename.
+    """
+    kind = getattr(results, "method", None)
+    if kind is not None:
+        return kind
+    return getattr(results, "__dict__", {}).get("estimator")
+
+
 def _estimator_display(type_name: str, results: Any) -> str:
     """Per-instance display name.
 
     ``ChangesInChangesResults`` is shared by CiC and QDiD (``QDiDResults``
     is an alias), so the static per-type map cannot distinguish them; the
-    ``estimator`` field ("cic"/"qdid") does. Defensive: mock results may
+    ``method`` field ("cic"/"qdid") does. Defensive: mock results may
     lack the field, in which case the static entry is the fallback.
     """
     if type_name == "ChangesInChangesResults":
-        kind = getattr(results, "estimator", None)
+        kind = _distributional_kind(results)
         if kind == "cic":
             return "ChangesInChanges (CiC)"
         if kind == "qdid":
@@ -1569,7 +1587,7 @@ def _cic_assumptions_step(results: Any) -> Dict[str, Any]:
     distributional, not mean parallel trends. Same baker_step/step_name,
     so ``completed_steps`` filtering is unchanged.
     """
-    if getattr(results, "estimator", None) == "qdid":
+    if _distributional_kind(results) == "qdid":
         why = (
             "Name the distributional assumptions you are invoking - not a "
             "mean parallel-trends variant. QDiD's justifying model "
@@ -1600,13 +1618,20 @@ def _cic_assumptions_step(results: Any) -> Dict[str, Any]:
 
 
 def _cic_fit_snippet(
-    est_name: str,
     results: Any,
     var: str,
     data_var: str = "data",
     covariates: str = "same",
+    *,
+    method: Optional[str] = None,
 ) -> str:
-    """Render a CiC/QDiD constructor+fit snippet preserving the fit's design.
+    """Render a ChangesInChanges constructor+fit snippet preserving the fit's design.
+
+    Always emits ``ChangesInChanges(...)``: row M-015 deprecates the QDiD
+    CLASS, so guidance must never hand the reader a ``QDiD(...)`` call. Pass
+    ``method="qdid"`` to select that estimator on the merged surface; any other
+    value (including the default ``None``) emits no ``method=`` argument at
+    all, keeping CiC snippets byte-identical to the pre-merge text.
 
     Refit snippets must mirror the original specification: ``panel=True``
     changes the bootstrap resampling scheme (unit-block vs pooled rows)
@@ -1627,6 +1652,9 @@ def _cic_fit_snippet(
     panel = bool(getattr(results, "panel", False))
     covs = list(getattr(results, "covariates", None) or []) if covariates == "same" else []
     ctor_args = "n_bootstrap=200, seed=42"
+    if method == "qdid":
+        # First: it is the identification choice, not an inference knob.
+        ctor_args = "method='qdid', " + ctor_args
     if panel:
         ctor_args += ", panel=True"
     extras = []
@@ -1641,7 +1669,7 @@ def _cic_fit_snippet(
         body += ",\n    " + ", ".join(extras) + ")"
     else:
         body += ")"
-    snippet = f"{var} = {est_name}({ctor_args}).fit(\n" + body
+    snippet = f"{var} = ChangesInChanges({ctor_args}).fit(\n" + body
     if panel:
         snippet += (
             "\n# panel=True + unit= mirror the original unit-block bootstrap (use your unit column)"
@@ -1672,7 +1700,7 @@ def _handle_cic(results: Any):
     """ChangesInChanges / QDiD guidance (shared results class).
 
     CiC and QDiD share ``ChangesInChangesResults`` (``QDiDResults`` is an
-    alias), so this single handler branches on the ``estimator`` field
+    alias), so this single handler branches on the ``method`` field
     ("cic"/"qdid"; unknown or missing kinds fall to the CiC branch - the
     paper-primary, safe-voiced default) and on covariate status
     (truthiness, not ``is not None``: fit() normalizes ``covariates=[]``
@@ -1682,9 +1710,14 @@ def _handle_cic(results: Any):
     CiC-covariate-only: the QDiD covariate path has no support diagnostic
     (``_check_conditional_support`` is invoked on the CiC path only).
     """
-    is_qdid = getattr(results, "estimator", None) == "qdid"
+    is_qdid = _distributional_kind(results) == "qdid"
     has_cov = bool(getattr(results, "covariates", None))
+    # Display name for step LABELS (still the estimator's own name - the METHOD
+    # "QDiD" is not deprecated, only the class spelling is).
     est_name = "QDiD" if is_qdid else "ChangesInChanges"
+    # Constructor argument for emitted SNIPPETS: every snippet now builds
+    # ChangesInChanges, selecting the estimator via method= (row M-015).
+    _snippet_method = "qdid" if is_qdid else None
 
     if is_qdid:
         s3_why = (
@@ -1778,7 +1811,7 @@ def _handle_cic(results: Any):
                 ),
                 code=(
                     "from diff_diff import ChangesInChanges\n"
-                    + _cic_fit_snippet("ChangesInChanges", results, "cic_results")
+                    + _cic_fit_snippet(results, "cic_results")
                     + "\nprint(cic_results.summary())"
                 ),
                 step_name="estimator_selection",
@@ -1895,10 +1928,10 @@ def _handle_cic(results: Any):
                 ),
                 code=(
                     "# Requires >= 2 pre-periods in the SOURCE panel:\n"
-                    f"from diff_diff import {est_name}\n"
+                    "from diff_diff import ChangesInChanges\n"
                     "pre = source_panel[source_panel['period'].isin([p0, p1])].copy()\n"
                     "pre['post'] = (pre['period'] == p1).astype(int)\n"
-                    + _cic_fit_snippet(est_name, results, "placebo", data_var="pre")
+                    + _cic_fit_snippet(results, "placebo", data_var="pre", method=_snippet_method)
                     + "\nprint(placebo.summary())  # QTE/ATT should be ~ 0"
                 ),
                 priority="medium",
@@ -1956,9 +1989,11 @@ def _handle_cic(results: Any):
                 label="Report with and without covariates",
                 why=s8b_why,
                 code=(
-                    f"from diff_diff import {est_name}\n"
+                    "from diff_diff import ChangesInChanges\n"
                     "# Explicitly UNCONDITIONAL refit (covariates dropped by design):\n"
-                    + _cic_fit_snippet(est_name, results, "results_nocov", covariates="none")
+                    + _cic_fit_snippet(
+                        results, "results_nocov", covariates="none", method=_snippet_method
+                    )
                     + "\nprint(results.att, results_nocov.att)"
                 ),
                 priority="medium",
@@ -1987,8 +2022,10 @@ def _handle_cic(results: Any):
                     "at moderate cell sizes."
                 ),
                 code=(
-                    f"from diff_diff import {est_name}\n"
-                    + _cic_fit_snippet(est_name, results, "results_cov", covariates="add")
+                    "from diff_diff import ChangesInChanges\n"
+                    + _cic_fit_snippet(
+                        results, "results_cov", covariates="add", method=_snippet_method
+                    )
                     + "\nprint(results.att, results_cov.att)  # compare ATT + QTE profiles"
                 ),
                 priority="medium",
@@ -2076,8 +2113,8 @@ def _handle_cic(results: Any):
                     "primary (p. 447). " + s8c_why_tail
                 ),
                 code=(
-                    "from diff_diff import QDiD, DifferenceInDifferences\n"
-                    + _cic_fit_snippet("QDiD", results, "qdid_results")
+                    "from diff_diff import ChangesInChanges, DifferenceInDifferences\n"
+                    + _cic_fit_snippet(results, "qdid_results", method="qdid")
                     + "\n"
                     + _did_anchor_snippet(results)
                     + "\nprint(results.att, qdid_results.att, did_results.att)"

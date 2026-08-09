@@ -1207,7 +1207,7 @@ sources:
       - path: diff_diff/guides/llms-full.txt
         section: "Practitioner Workflow"
         type: user_guide
-        note: "HAD handlers (_handle_had / _handle_had_event_study) emit did_had_pretest_workflow + bandwidth_diagnostics references; symmetric Step-4 routing in _handle_continuous; _handle_cic branches on ChangesInChangesResults.estimator/covariates and restates the CiC/QDiD fit-time diagnostics (interior range, envelope, footnote-21, bootstrap health)"
+        note: "HAD handlers (_handle_had / _handle_had_event_study) emit did_had_pretest_workflow + bandwidth_diagnostics references; symmetric Step-4 routing in _handle_continuous; _handle_cic branches on ChangesInChangesResults.method/covariates and restates the CiC/QDiD fit-time diagnostics (interior range, envelope, footnote-21, bootstrap health)"
 
   # ── Visualization (visualization group) ────────────────────────────
 

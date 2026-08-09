@@ -1534,7 +1534,7 @@ class TestCiCHandler:
 
     def test_failed_replicates_warning(self):
         r = _mock_cic(
-            att=0.5, estimator="cic", covariates=None, n_bootstrap=200, n_bootstrap_valid=100
+            att=0.5, method="cic", covariates=None, n_bootstrap=200, n_bootstrap_valid=100
         )
         output = practitioner_next_steps(r, verbose=False)
         joined = " ".join(output["warnings"])
@@ -1545,7 +1545,7 @@ class TestCiCHandler:
         # 4/200 = 2% failed, below the 5% fit-time materiality threshold
         # (warn_bootstrap_failure_rate) that this surface mirrors.
         r = _mock_cic(
-            att=0.5, estimator="cic", covariates=None, n_bootstrap=200, n_bootstrap_valid=196
+            att=0.5, method="cic", covariates=None, n_bootstrap=200, n_bootstrap_valid=196
         )
         output = practitioner_next_steps(r, verbose=False)
         assert output["warnings"] == []
@@ -1553,7 +1553,7 @@ class TestCiCHandler:
     def test_nan_att_warning(self):
         r = _mock_cic(
             att=float("nan"),
-            estimator="cic",
+            method="cic",
             covariates=None,
             n_bootstrap=200,
             n_bootstrap_valid=200,
@@ -1572,9 +1572,7 @@ class TestCiCHandler:
     def test_empty_list_covariates_mock_takes_unconditional_branch(self):
         # fit() normalizes covariates=[] to None, but hand-built results
         # may carry the empty list - the branch predicate is truthiness.
-        r = _mock_cic(
-            att=0.5, estimator="cic", covariates=[], n_bootstrap=200, n_bootstrap_valid=200
-        )
+        r = _mock_cic(att=0.5, method="cic", covariates=[], n_bootstrap=200, n_bootstrap_valid=200)
         output = practitioner_next_steps(r, verbose=False)
         labels = [s["label"] for s in output["next_steps"]]
         assert any("interior point-identification range" in lbl for lbl in labels)
@@ -1711,21 +1709,21 @@ class TestCiCHandlerSpecificationPropagation:
     def test_n_bootstrap_one_warning(self):
         # n_bootstrap=1 passes the disabled-inference check but cannot
         # clear the >= 2 valid-replicate SE gate: all inference is NaN.
-        r = _mock_cic(att=0.5, estimator="cic", covariates=None, n_bootstrap=1, n_bootstrap_valid=1)
+        r = _mock_cic(att=0.5, method="cic", covariates=None, n_bootstrap=1, n_bootstrap_valid=1)
         output = practitioner_next_steps(r, verbose=False)
         assert any("n_bootstrap=1 cannot produce inference" in w for w in output["warnings"])
 
     def test_bootstrap_warnings_accept_numpy_scalars(self):
         r = _mock_cic(
             att=0.5,
-            estimator="cic",
+            method="cic",
             covariates=None,
             n_bootstrap=np.int64(200),
             n_bootstrap_valid=np.int64(100),
         )
         output = practitioner_next_steps(r, verbose=False)
         assert any("100 of 200" in w for w in output["warnings"])
-        r0 = _mock_cic(att=0.5, estimator="cic", covariates=None, n_bootstrap=np.int64(0))
+        r0 = _mock_cic(att=0.5, method="cic", covariates=None, n_bootstrap=np.int64(0))
         output0 = practitioner_next_steps(r0, verbose=False)
         assert any("n_bootstrap=0" in w for w in output0["warnings"])
 

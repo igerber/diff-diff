@@ -39,7 +39,7 @@ Start here and follow the questions:
 4. **Do you have panel data?** (Multiple observations per unit over time)
 
    - **No** → Use :class:`~diff_diff.DifferenceInDifferences` (basic 2x2)
-   - **No, and you care about effect heterogeneity across the outcome distribution** → Use :class:`~diff_diff.ChangesInChanges` (2x2 quantile treatment effects, invariant to monotone outcome rescaling in unconditional fits; optional numeric covariates via quantile-regression conditioning - the covariate branch's linear quantile regressions are not equivariant to nonlinear monotone transforms; works with panel data too - ``panel=True`` changes only the bootstrap). :class:`~diff_diff.QDiD` is the quantile-DiD comparison estimator; Athey & Imbens (2006) recommend CiC over it
+   - **No, and you care about effect heterogeneity across the outcome distribution** → Use :class:`~diff_diff.ChangesInChanges` (2x2 quantile treatment effects, invariant to monotone outcome rescaling in unconditional fits; optional numeric covariates via quantile-regression conditioning - the covariate branch's linear quantile regressions are not equivariant to nonlinear monotone transforms; works with panel data too - ``panel=True`` changes only the bootstrap). :class:`~diff_diff.ChangesInChanges` with ``method="qdid"`` is the quantile-DiD comparison estimator (the standalone ``QDiD`` class is deprecated in 3.9); Athey & Imbens (2006) recommend CiC over it
    - **Yes** → Go to question 5
 
 5. **Do you need period-specific effects?** (Event study design)
@@ -140,7 +140,7 @@ Quick Reference
      - 2x2 distributional effects (which quantiles moved, not just the mean)
      - h(u, t) monotone in a scalar unobservable; U time-invariant within groups
      - ATT + quantile treatment effects (bootstrap inference)
-   * - ``QDiD``
+   * - ``QDiD`` (deprecated 3.9; use ``ChangesInChanges(method="qdid")``)
      - 2x2 quantile-DiD comparison alongside ChangesInChanges
      - Additive quantile model (scale-dependent, testable restrictions)
      - ATT + quantile treatment effects (bootstrap inference)

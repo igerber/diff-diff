@@ -119,7 +119,7 @@ Full guide: `diff_diff.get_llm_guide("practitioner")`.
 - [StaggeredTripleDifference](https://diff-diff.readthedocs.io/en/stable/api/staggered.html#staggeredtripledifference) - Ortiz-Villavicencio & Sant'Anna (2025) staggered DDD with group-time ATT (deprecated 3.9 - use `TripleDifference` with `first_treat=`)
 - [WooldridgeDiD](https://diff-diff.readthedocs.io/en/stable/api/wooldridge_etwfe.html) - Wooldridge (2023, 2025) ETWFE: saturated OLS, logit/Poisson QMLE (ASF-based ATT). Alias `ETWFE`.
 - [LPDiD](https://diff-diff.readthedocs.io/en/stable/api/lpdid.html) - Dube, Girardi, Jorda & Taylor (2025) Local Projections DiD: per-horizon long-difference event study on clean controls (no negative weighting), variance- or equally-weighted ATT, for absorbing or non-absorbing (reversible) treatment
-- [ChangesInChanges](https://diff-diff.readthedocs.io/en/stable/api/changes_in_changes.html) - Athey & Imbens (2006) nonlinear/distributional DiD for the 2x2 design: full counterfactual distribution and quantile treatment effects via CDF transformation, plus the QDiD comparison estimator; bootstrap inference; R qte parity. Alias `CiC`
+- [ChangesInChanges](https://diff-diff.readthedocs.io/en/stable/api/changes_in_changes.html) - Athey & Imbens (2006) nonlinear/distributional DiD for the 2x2 design: full counterfactual distribution and quantile treatment effects via CDF transformation, plus the QDiD comparison estimator via `method="qdid"`; bootstrap inference; R qte parity. Alias `CiC`
 - [BaconDecomposition](https://diff-diff.readthedocs.io/en/stable/api/bacon.html) - Goodman-Bacon (2021) decomposition for diagnosing TWFE bias in staggered settings
 
 ## Diagnostics & Sensitivity

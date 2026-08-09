@@ -137,6 +137,11 @@ markers = [
 filterwarnings = [
     "ignore:MultiPeriodDiD is deprecated:FutureWarning",
     "ignore:StaggeredTripleDifference is deprecated:FutureWarning",
+    "ignore:QDiD is deprecated:FutureWarning",
+    # Row M-143's results-FIELD alias, not a class: the CiC family reads
+    # res.estimator on every BOTH-parametrized run (test_changes_in_changes.py's
+    # test_results_types_and_fields). REMOVE WITH THE FIELD at 4.0.
+    "ignore:ChangesInChangesResults.estimator is deprecated:FutureWarning",
 ]
 
 [tool.black]

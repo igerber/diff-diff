@@ -54,7 +54,7 @@ import pandas as pd
 import pytest
 from scipy import stats
 
-from diff_diff import ChangesInChanges, DifferenceInDifferences, QDiD, practitioner_next_steps
+from diff_diff import ChangesInChanges, DifferenceInDifferences, practitioner_next_steps
 from tests._tutorial_drift import assert_quotes_in_rendered, notebook_markdown
 
 NB = "docs/tutorials/27_cic_distributional_effects.ipynb"
@@ -191,8 +191,12 @@ class TestMainStory:
             ChangesInChanges(n_bootstrap=0).fit(
                 df_log, outcome="log_spend", treatment="treated", time="post"
             )
-            QDiD(n_bootstrap=0).fit(df, outcome="spend", treatment="treated", time="post")
-            QDiD(n_bootstrap=0).fit(df_log, outcome="log_spend", treatment="treated", time="post")
+            ChangesInChanges(method="qdid", n_bootstrap=0).fit(
+                df, outcome="spend", treatment="treated", time="post"
+            )
+            ChangesInChanges(method="qdid", n_bootstrap=0).fit(
+                df_log, outcome="log_spend", treatment="treated", time="post"
+            )
 
     def test_mean_did_verdict(self, did):
         # "$0.22, p = 0.90" - insignificant AND biased (truth is ~$3.01).
@@ -270,8 +274,10 @@ class TestScaleEquivariance:
         assert abs(100 * (np.exp(did_log.att) - 1) - 14.0) < 0.1
 
     def test_qdid_scale_gap_grows_toward_top(self, df, df_log):
-        qdid = QDiD(n_bootstrap=0).fit(df, outcome="spend", treatment="treated", time="post")
-        qdid_log = QDiD(n_bootstrap=0).fit(
+        qdid = ChangesInChanges(method="qdid", n_bootstrap=0).fit(
+            df, outcome="spend", treatment="treated", time="post"
+        )
+        qdid_log = ChangesInChanges(method="qdid", n_bootstrap=0).fit(
             df_log, outcome="log_spend", treatment="treated", time="post"
         )
         y11 = df.query("treated == 1 and post == 1")["spend"].to_numpy()

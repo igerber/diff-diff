@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff._deprecation import deprecated_field_property
 from diff_diff.results_base import BaseResults
 
 _ESTIMATOR_TITLES = {
@@ -51,7 +52,7 @@ class ChangesInChangesResults(BaseResults):
     n_bootstrap: int
     n_bootstrap_valid: int
     panel: bool
-    estimator: str
+    method: str
     quantiles: np.ndarray = field(repr=False)
     alpha: float = 0.05
     covariates: Optional[List[str]] = None
@@ -114,7 +115,11 @@ class ChangesInChangesResults(BaseResults):
             "n_bootstrap": self.n_bootstrap,
             "n_bootstrap_valid": self.n_bootstrap_valid,
             "panel": self.panel,
-            "estimator": self.estimator,
+            "method": self.method,
+            # Dual-key 3.9 window (row M-143, the M-094/rdd.py twin): the old key
+            # stays until 4.0 so serialized consumers keep working. Both read the
+            # SAME attribute - they can never disagree.
+            "estimator": self.method,
             "alpha": self.alpha,
             "covariates": list(self.covariates) if self.covariates else None,
             "inference_method": "bootstrap" if self.n_bootstrap > 0 else "none",
@@ -170,7 +175,7 @@ class ChangesInChangesResults(BaseResults):
         cs = self.cell_sizes
         lines = [
             bar,
-            _ESTIMATOR_TITLES.get(self.estimator, "Distributional DiD Results").center(width),
+            _ESTIMATOR_TITLES.get(self.method, "Distributional DiD Results").center(width),
             bar,
             f"Observations: {self.n_obs}    Mode: {mode}",
             (
@@ -192,7 +197,7 @@ class ChangesInChangesResults(BaseResults):
             )
         else:
             lines.append("Inference: disabled (n_bootstrap=0); all inference fields are NaN")
-        if self.estimator == "cic" and np.isfinite(self.q_lower) and np.isfinite(self.q_upper):
+        if self.method == "cic" and np.isfinite(self.q_lower) and np.isfinite(self.q_upper):
             lines.append(
                 f"Point-identified interior quantile range (eq. 17): "
                 f"({self.q_lower:.4f}, {self.q_upper:.4f})"
@@ -229,16 +234,37 @@ class ChangesInChangesResults(BaseResults):
         """Print :meth:`summary` to stdout."""
         print(self.summary())
 
+    # Row M-143: read-only alias for the pre-3.9 ``estimator`` field name. No
+    # annotation, so it stays a descriptor and never becomes a
+    # __dataclass_fields__ entry. Being setter-less is deliberate and load-bearing:
+    # ``setattr(res, "estimator", ...)`` must fail rather than silently write a
+    # shadow attribute the renamed field would not see.
+    estimator = deprecated_field_property("ChangesInChangesResults", "estimator", "method")
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        """Migrate pickles created before the ``estimator`` -> ``method`` rename.
+
+        Results pickled before row M-143 stored the tag under ``estimator``;
+        rewriting the key on load keeps both ``method`` and the deprecated
+        ``estimator`` alias working on old pickles. Dataclass unpickling routes
+        through here for CURRENT objects too, so this must stay a pass-through
+        in the common case.
+        """
+        if "estimator" in state and "method" not in state:
+            state = dict(state)
+            state["method"] = state.pop("estimator")
+        self.__dict__.update(state)
+
     def __repr__(self) -> str:
         att_s = "nan" if np.isnan(self.att) else f"{self.att:.4f}"
         se_s = "nan" if np.isnan(self.se) else f"{self.se:.4f}"
         return (
             "ChangesInChangesResults("
-            f"estimator={self.estimator!r}, ATT={att_s}, SE={se_s}, "
+            f"method={self.method!r}, ATT={att_s}, SE={se_s}, "
             f"n_quantiles={len(self.quantile_effects)}, "
             f"panel={self.panel}, n_bootstrap={self.n_bootstrap})"
         )
 
 
-# QDiD shares the container; the ``estimator`` field distinguishes the two.
+# QDiD shares the container; the ``method`` field distinguishes the two.
 QDiDResults = ChangesInChangesResults

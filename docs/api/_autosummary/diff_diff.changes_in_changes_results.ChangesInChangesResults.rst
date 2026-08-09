@@ -27,6 +27,7 @@
 
       ~ChangesInChangesResults.alpha
       ~ChangesInChangesResults.covariates
+      ~ChangesInChangesResults.estimator
       ~ChangesInChangesResults.is_significant
       ~ChangesInChangesResults.significance_stars
       ~ChangesInChangesResults.att
@@ -43,6 +44,6 @@
       ~ChangesInChangesResults.n_bootstrap
       ~ChangesInChangesResults.n_bootstrap_valid
       ~ChangesInChangesResults.panel
-      ~ChangesInChangesResults.estimator
+      ~ChangesInChangesResults.method
       ~ChangesInChangesResults.quantiles
 

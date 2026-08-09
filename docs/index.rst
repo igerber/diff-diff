@@ -174,7 +174,7 @@ Supported Estimators
    * - :class:`~diff_diff.ChangesInChanges`
      - Athey & Imbens (2006) distributional DiD with quantile treatment effects
    * - :class:`~diff_diff.QDiD`
-     - Quantile DiD comparison estimator applying DiD quantile-by-quantile
+     - Quantile DiD comparison estimator applying DiD quantile-by-quantile (deprecated 3.9 - use :class:`~diff_diff.ChangesInChanges` with ``method="qdid"``)
    * - :class:`~diff_diff.RegressionDiscontinuity`
      - Calonico, Cattaneo & Titiunik (2014) sharp/fuzzy RD with robust bias-corrected inference
    * - :class:`~diff_diff.TROP`

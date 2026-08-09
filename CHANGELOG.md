@@ -8,6 +8,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **ChangesInChanges serves both 2x2 distributional estimators** (v4 program
+  Phase 3(c); ledger rows [M-015] shimmed, [M-143]):
+  `ChangesInChanges(method="qdid")` fits the quantile-DiD comparison estimator
+  that the standalone `QDiD` class used to own; `method="cic"` (the default,
+  encoding Athey & Imbens' p. 447 recommendation) is unchanged. `method=` is
+  keyword-only, so every existing positional slot is preserved, and accepts
+  lowercase `"cic"`/`"qdid"` only.
+  - The estimation core is UNCHANGED - both classes always shared one
+    dispatcher, one bootstrap path and one results container, so the numbers
+    are identical by construction (pinned bit-exactly, plus literals captured
+    from the pre-merge tree).
+  - **Only the CLASS spelling is deprecated, not the estimator.**
+    `method="qdid"` is fully supported and emits no advisory warning: the
+    existing footnote-21 non-monotonicity warning and the practitioner
+    guidance already carry the paper's recommendation.
+  - Errors raised during a `method="qdid"` fit now name `ChangesInChanges`
+    rather than a class the caller never constructed.
+
+### Changed
+- `ChangesInChangesResults.estimator` is renamed to `.method` (ledger row
+  [M-143]), matching the new constructor parameter it echoes. The old name
+  still reads through a deprecation property, `to_dict()` emits BOTH keys for
+  the 3.9 window, and old pickles migrate on load; the deprecated name and the
+  duplicate key are removed in 4.0. `repr()` now prints `method=`.
+
+### Deprecated
+- **`QDiD` is deprecated** and will be removed in 4.0 (ledger row [M-015]);
+  use `ChangesInChanges(method="qdid")`. The `QDiDResults` alias is deprecated
+  with it ([M-061]). Constructing `QDiD` warns; the numbers are unchanged.
+
 - **TripleDifference serves both DDD designs** (v4 program Phase 3(b); ledger
   rows [M-013] shimmed, [M-064]): `TripleDifference().fit(..., unit=, time=,
   first_treat=, partition=)` estimates the staggered-adoption DDD design that

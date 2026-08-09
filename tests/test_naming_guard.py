@@ -124,6 +124,10 @@ _PATTERN_TOKENS = {
     "zeta",
     "placebo_effects",
     "period_effects",
+    # M-143 (ChangesInChangesResults.estimator -> .method). Not optional:
+    # test_predicate_binds_to_ledger_tokens requires every live param/field
+    # rename token to satisfy _pattern_hit, so adding the row arms Duty A.
+    "estimator",
 }
 
 # Tokens that are LEGAL canonical vocabulary on other surfaces (rule 1 `time`,
@@ -142,6 +146,14 @@ _AMBIGUOUS_TOKENS = {
     # bare grep (docs/guides-lane hits on canonical successor vocabulary
     # are covered by CONSUMER_ALLOWLIST entries below).
     "aggregate",
+    # M-143's old token: "estimator" is canonical vocabulary on independent
+    # surfaces (AggregationResult.estimator holds a CLASS NAME; power.py's
+    # estimator= takes an estimator INSTANCE; utils.validate_covariate_names
+    # has an estimator= label param). The precise lanes still sweep the dying
+    # field - a results field is read as `.estimator` or "estimator", and the
+    # only kwarg-lane hits left in changes_in_changes.py are the construction
+    # site (now method=) and validate_covariate_names', neither a stale reader.
+    "estimator",
 }
 
 
@@ -502,6 +514,22 @@ _RULE1_TIME_SURFACES = (
 )
 
 SURFACE_ALLOWLIST = {
+    # M-143 renames a RESULTS field named `estimator`; these four public
+    # surfaces share only the word. AggregationResult.estimator holds a CLASS
+    # NAME ("StackedDiD"), not a method tag - the very collision M-143 exists
+    # to stop propagating - and the power entry points take an estimator
+    # INSTANCE. None of them is a reader of the dying field.
+    "AggregationResult.estimator": (
+        "independent same-named field holding a CLASS NAME, not CiC's "
+        "method tag (M-143); survives 4.0"
+    ),
+    **{
+        f"{fn}[estimator]": (
+            "power API's estimator INSTANCE param, unrelated to CiC's "
+            "results method tag (M-143); survives 4.0"
+        )
+        for fn in ("simulate_power", "simulate_mde", "simulate_sample_size")
+    },
     **{f"{cls}.groups": _CS_COHORT for cls in _CS_GROUPS_CLASSES},
     "GroupTimeEffect.group": _CS_COHORT,
     "HADPretestReport.aggregate": (
@@ -932,6 +960,39 @@ _CS_GROUPS_READER = (
 )
 
 CONSUMER_ALLOWLIST = {
+    # M-143's `estimator` token is ordinary vocabulary across the library:
+    # report schema keys, an AggregationResult field holding a class name, and
+    # a label parameter. None of these reads ChangesInChangesResults' renamed
+    # field. The one file that DID name it - diff_diff/guides/llms-full.txt -
+    # was migrated in this same diff (migrate-first rule) and remains a lane
+    # hit only through its unrelated backticked schema key.
+    ("estimator", "diff_diff/aggregation.py"): (
+        "AggregationResult.estimator - independent field holding a CLASS NAME"
+    ),
+    ("estimator", "diff_diff/business_report.py"): (
+        'report-schema "estimator" keys holding class names / native tags'
+    ),
+    ("estimator", "diff_diff/diagnostic_report.py"): (
+        'report-schema "estimator" keys holding type(results).__name__'
+    ),
+    ("estimator", "diff_diff/had.py"): (
+        "prose/schema use of the word, not a read of CiC's results field"
+    ),
+    ("estimator", "diff_diff/lpdid.py"): (
+        "prose/schema use of the word, not a read of CiC's results field"
+    ),
+    ("estimator", "diff_diff/utils.py"): (
+        "validate_covariate_names' estimator= LABEL parameter (default "
+        '"estimator"), unrelated to the renamed field'
+    ),
+    ("estimator", "diff_diff/guides/llms-full.txt"): (
+        "remaining hit is the backticked report-schema key; the one sentence "
+        "that named ChangesInChangesResults.estimator was migrated to "
+        "`method` in this diff"
+    ),
+    ("estimator", "docs/methodology/papers/calonico-cattaneo-farrell-titiunik-2017-review.md"): (
+        "RDD paper review's own use of the word - no CiC surface involved"
+    ),
     ("lambda_reg", "diff_diff/prep.py"): (
         "rank_control_units' own independent regularization param - not the "
         "removed SyntheticDiD kwarg (M-001)"

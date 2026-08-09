@@ -1202,6 +1202,7 @@ ChangesInChanges(
     alpha: float = 0.05,                  # Pointwise CI level (uniform bands stay fixed at 95%)
     panel: bool = False,                  # True: same units both periods (requires unit=); affects resampling only
     seed: int | None = None,              # Bootstrap RNG seed (numpy default_rng)
+    method: str = 'cic',                  # KEYWORD-ONLY. 'cic' | 'qdid' - which 2x2 distributional estimator to fit
 )
 ```
 
@@ -1235,7 +1236,7 @@ print(results.uniform_bands())    # sup-t simultaneous bands (fixed 95%)
 
 ### QDiD
 
-Quantile Difference-in-Differences comparison estimator (Athey & Imbens 2006, Section 3.3) for the 2x2 design: `QTE(tau) = Q(y11,tau) - [Q(y10,tau) + Q(y01,tau) - Q(y00,tau)]` with R type-7 linear-interpolation quantiles, matching `qte::QDiD()` (v1.3.1) exactly - including its ATT formula (control-group quantile functions evaluated at treated pre-period own-sample ranks; population-equivalent to the paper's k^QDID transformation but a different finite-sample estimator, see the REGISTRY.md Note). The paper recommends ChangesInChanges over QDiD: QDiD's justifying model is not scale-invariant, forces identical unobservable distributions in all four cells, and places testable restrictions on the data (a warning fires when the implied counterfactual quantile function is non-monotone; unconditional fits only - the covariate-path counterfactual quantile curve is monotone by construction). QDiD's mean effect equals standard DiD's ATT in population. Constructor, fit signature (including `covariates=`), bootstrap machinery, and results container are identical to ChangesInChanges (no interior-range guard; `q_lower`/`q_upper` are NaN). Covariate fits use quantile regressions in THREE cells with own-cell conditional ranks and qte's verbatim-ported asymmetric quantile types (type-7 treated-post, type-1 imputed counterfactual).
+Quantile Difference-in-Differences comparison estimator (Athey & Imbens 2006, Section 3.3) for the 2x2 design: `QTE(tau) = Q(y11,tau) - [Q(y10,tau) + Q(y01,tau) - Q(y00,tau)]` with R type-7 linear-interpolation quantiles, matching `qte::QDiD()` (v1.3.1) exactly - including its ATT formula (control-group quantile functions evaluated at treated pre-period own-sample ranks; population-equivalent to the paper's k^QDID transformation but a different finite-sample estimator, see the REGISTRY.md Note). The paper recommends ChangesInChanges over QDiD: QDiD's justifying model is not scale-invariant, forces identical unobservable distributions in all four cells, and places testable restrictions on the data (a warning fires when the implied counterfactual quantile function is non-monotone; unconditional fits only - the covariate-path counterfactual quantile curve is monotone by construction). QDiD's mean effect equals standard DiD's ATT in population. **Deprecated in 3.9, removed in 4.0 - use `ChangesInChanges(method="qdid")` instead** (same engine, identical numbers; only the class spelling is deprecated, the estimator is not). Fit signature (including `covariates=`), bootstrap machinery, and results container are identical to ChangesInChanges (no interior-range guard; `q_lower`/`q_upper` are NaN); the constructor is identical EXCEPT that the merged class additionally carries `method=`, which is what selects this estimator there. Covariate fits use quantile regressions in THREE cells with own-cell conditional ranks and qte's verbatim-ported asymmetric quantile types (type-7 treated-post, type-1 imputed counterfactual).
 
 ```python
 QDiD(
@@ -1250,9 +1251,9 @@ QDiD(
 **Usage:**
 
 ```python
-from diff_diff import QDiD
+from diff_diff import ChangesInChanges
 
-qdid = QDiD(n_bootstrap=200, seed=42)
+qdid = ChangesInChanges(method='qdid', n_bootstrap=200, seed=42)
 results = qdid.fit(data, outcome='y', treatment='treated', time='post')
 ```
 
@@ -1943,7 +1944,7 @@ Per-horizon event-study results container for `HeterogeneousAdoptionDiD`'s event
 
 ### ChangesInChangesResults
 
-Results container shared by `ChangesInChanges` and `QDiD` (the `estimator` field is `"cic"` or `"qdid"`; `QDiDResults` is an alias of this class). Flat-native headline fields `att`, `se`, `t_stat`, `p_value`, `conf_int`; `quantile_effects` is a DataFrame with columns `quantile`, `qte`, `se`, `t_stat`, `p_value`, `conf_low`, `conf_high`. `q_lower`/`q_upper` bound the point-identified interior quantile range for unconditional CiC fits (NaN for QDiD and for covariate fits); `sup_t_crit` is the qte sup-t critical value backing `uniform_bands()` (fixed 95% level). Also carries `n_obs`, `cell_sizes`, `n_bootstrap`, `n_bootstrap_valid`, `panel`, `quantiles`, `alpha`, and `covariates` (the covariate columns of a conditional fit, else None). Methods: `summary()`, `print_summary()`, `to_dict()`, `to_dataframe(level="quantiles"|"att")`, `uniform_bands()`. All inference flows through `safe_inference`/`safe_inference_batch` (joint-NaN contract; `n_bootstrap=0` yields NaN inference everywhere).
+Results container shared by `ChangesInChanges` and `QDiD` (the `method` field is `"cic"` or `"qdid"`; the pre-3.9 name `estimator` still reads it with a FutureWarning until 4.0; `QDiDResults` is an alias of this class). Flat-native headline fields `att`, `se`, `t_stat`, `p_value`, `conf_int`; `quantile_effects` is a DataFrame with columns `quantile`, `qte`, `se`, `t_stat`, `p_value`, `conf_low`, `conf_high`. `q_lower`/`q_upper` bound the point-identified interior quantile range for unconditional CiC fits (NaN for QDiD and for covariate fits); `sup_t_crit` is the qte sup-t critical value backing `uniform_bands()` (fixed 95% level). Also carries `n_obs`, `cell_sizes`, `n_bootstrap`, `n_bootstrap_valid`, `panel`, `quantiles`, `alpha`, and `covariates` (the covariate columns of a conditional fit, else None). Methods: `summary()`, `print_summary()`, `to_dict()`, `to_dataframe(level="quantiles"|"att")`, `uniform_bands()`. All inference flows through `safe_inference`/`safe_inference_batch` (joint-NaN contract; `n_bootstrap=0` yields NaN inference everywhere).
 
 ### TROPResults
 

@@ -216,7 +216,7 @@ C^pq = E[p(Y_00)*q(Y_01)],   C^rs = E[r(Y_10)*s(Y_11)] = Cov( k(Y_10), Y_11 )
 
 ### QDiD variant (Section 3.3, journal pp. 446-447)
 
-The paper formalizes quantile DiD as the natural comparison estimator; the library ships it alongside CiC (planned class `QDiD`). Applying DiD quantile-by-quantile (coefficients `alpha_q, beta_q, gamma_q` indexed by quantile) gives the transformation (unnumbered display, p. 447):
+The paper formalizes quantile DiD as the natural comparison estimator; the library ships it alongside CiC, selected with `ChangesInChanges(method="qdid")` (the standalone `QDiD` class is deprecated in 3.9 and removed in 4.0). Applying DiD quantile-by-quantile (coefficients `alpha_q, beta_q, gamma_q` indexed by quantile) gives the transformation (unnumbered display, p. 447):
 
 ```
 k^QDID(y) = y + F_Y,01^{-1}( F_Y,10(y) ) - F_Y,00^{-1}( F_Y,10(y) )
@@ -370,7 +370,7 @@ Aggregation `tau_Lambda = Lambda' tau^CIC_I` (columns of Lambda sum to 1): sampl
 | `quantiles` (quantile effects grid) | array of floats in (0,1) | deciles (library choice; paper suggests quartiles or deciles for joint tests, p. 465) | must lie strictly inside `(q_lower, q_upper)` from eq. (17); estimator NaNs/warns outside |
 | `n_bootstrap` | int | library convention (paper: none - inference is analytical; qte parity target uses bootstrap) | SE stability; align with qte for parity tests |
 | `mode` | {"panel", "rc"} | inferred from unit id presence | Assumption 5.3 vs 5.1 sampling; affects resampling only |
-| `variant` | CiC vs QDiD (separate classes) | CiC | authors recommend CiC (p. 447); QDiD kept as comparison estimator |
+| `method` | CiC vs QDiD (one class, `method="cic"`/`"qdid"`) | `"cic"` | authors recommend CiC (p. 447); QDiD kept as comparison estimator |
 | density bandwidth (deferred analytical SEs) | float | `N^{-1/3}` (footnote 31) | paper's one-sided EDF difference quotient; any boundary-uniform-consistent estimator admissible |
 
 ### Relation to Existing diff-diff Estimators
