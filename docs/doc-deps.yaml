@@ -139,6 +139,8 @@ sources:
       - path: diff_diff/guides/llms-practitioner.txt
         type: user_guide
         note: "Step-5 inference decision rule and small-G advice strings track the DiD/TWFE wild-bootstrap contract (M-096)"
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   diff_diff/twfe.py:
     drift_risk: low
@@ -166,6 +168,8 @@ sources:
       - path: diff_diff/guides/llms-full.txt
         type: user_guide
         note: "TWFE block documents the full fit signature incl. event-study params; the Conley section's panel examples use post=/event_study (rows M-010/M-082)"
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   # ── CallawaySantAnna (staggered group) ─────��────────────────────────
 
@@ -209,6 +213,8 @@ sources:
       - path: docs/practitioner_decision_tree.rst
         section: "Staggered Rollout"
         type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   # ── StaggeredTripleDifference (staggered_triple_diff group) ─────────
 
@@ -240,6 +246,8 @@ sources:
         type: user_guide
       - path: docs/methodology/papers/ortiz-villavicencio-santanna-2025-review.md
         type: methodology
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   # ── SunAbraham ──────────────────────────────────────────────────────
 
@@ -272,6 +280,8 @@ sources:
         type: user_guide
       - path: docs/benchmarks.rst
         type: performance
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   # ── ImputationDiD (imputation group) ───��────────────────────────────
 
@@ -305,6 +315,8 @@ sources:
         type: user_guide
       - path: docs/choosing_estimator.rst
         type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   # ── TwoStageDiD (two_stage group) ────────────���─────────────────────
 
@@ -335,6 +347,8 @@ sources:
         section: "Estimators"
         type: user_guide
       - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/migration-4.0.md
         type: user_guide
 
   # ── SpilloverDiD (spillover group) ──────────────────────────────────
@@ -388,6 +402,8 @@ sources:
         type: user_guide
       - path: docs/benchmarks.rst
         type: performance
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   # ── ChaisemartinDHaultfoeuille (chaisemartin_dhaultfoeuille group) ──
 
@@ -421,6 +437,8 @@ sources:
       - path: ROADMAP.md
         section: "de Chaisemartin-D'Haultfœuille (dCDH) Estimator"
         type: roadmap
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   # ── ContinuousDiD (continuous_did group) ────────────────────��───────
 
@@ -453,6 +471,8 @@ sources:
       - path: docs/practitioner_decision_tree.rst
         section: "Varying Spending Levels"
         type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   # ── HeterogeneousAdoptionDiD (HAD) ──────────────────────────────────
 
@@ -482,6 +502,8 @@ sources:
       - path: docs/choosing_estimator.rst
         section: "SE methodology + Survey Design Support tables"
         type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
   diff_diff/rdplot.py:
     drift_risk: medium
     docs:
@@ -501,6 +523,8 @@ sources:
         type: user_guide
       - path: diff_diff/guides/llms-full.txt
         section: "RDPlot"
+        type: user_guide
+      - path: docs/migration-4.0.md
         type: user_guide
   diff_diff/_rdrobust_port.py:
     drift_risk: high
@@ -540,6 +564,8 @@ sources:
       - path: docs/tutorials/22_had_survey_design.ipynb
         type: tutorial
         note: "Survey-aware HAD walkthrough; drift-locked at `tests/test_t22_had_survey_design_drift.py`. Drift-locks `HAD(design=\"auto\")` resolution to `continuous_near_d_lower` on T22's panel and the `survey_design=` path's SE/CI behavior."
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   diff_diff/had_pretests.py:
     drift_risk: medium
@@ -562,6 +588,8 @@ sources:
       - path: docs/tutorials/22_had_survey_design.ipynb
         type: tutorial
         note: "Survey-aware pretest workflow walkthrough (overall + event-study under SurveyDesign(strata=...)); drift-locks `_QUG_DEFERRED_SUFFIX`, the event-study summary QUG-skip note, and joint pretrends/homogeneity horizon labels under stratified-clustered Stute bootstrap (PR #432). Drift-locked at tests/test_t22_had_survey_design_drift.py"
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   diff_diff/local_linear.py:
     drift_risk: low
@@ -579,6 +607,8 @@ sources:
     docs:
       - path: diff_diff/guides/llms-autonomous.txt
         section: "agent_workflow recommended starting call"
+        type: user_guide
+      - path: docs/migration-4.0.md
         type: user_guide
 
   diff_diff/profile.py:
@@ -620,6 +650,8 @@ sources:
         type: user_guide
       - path: docs/benchmarks.rst
         type: performance
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   # ── TripleDifference ───────────────────────────────────────────────
 
@@ -645,6 +677,8 @@ sources:
         section: "Estimators"
         type: user_guide
       - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/migration-4.0.md
         type: user_guide
 
   # ── StackedDiD (stacked_did group) ─────────────────────────────────
@@ -684,6 +718,8 @@ sources:
         type: user_guide
       - path: docs/choosing_estimator.rst
         type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   # ── WooldridgeDiD (wooldridge group) ────────────────────────────────
 
@@ -712,6 +748,8 @@ sources:
         section: "Estimators"
         type: user_guide
       - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/migration-4.0.md
         type: user_guide
 
   # ── LPDiD (lpdid group) ────────────────────────────────────────────
@@ -743,6 +781,8 @@ sources:
       - path: docs/choosing_estimator.rst
         type: user_guide
       - path: docs/survey-roadmap.md
+        type: user_guide
+      - path: docs/migration-4.0.md
         type: user_guide
 
   # ── ChangesInChanges + QDiD (changes_in_changes group) ────────────
@@ -778,6 +818,8 @@ sources:
         type: user_guide
       - path: docs/r_comparison.rst
         type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   # ── TROP (trop group) ──────────────────────────────────────────────
 
@@ -806,6 +848,8 @@ sources:
         type: user_guide
       - path: docs/performance-plan.md
         type: performance
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   # ── SyntheticControl ────────────────────────────────────────────────
 
@@ -834,6 +878,8 @@ sources:
         type: user_guide
       - path: docs/tutorials/25_synthetic_control_policy.ipynb
         type: tutorial
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   diff_diff/synthetic_control_results.py:
     drift_risk: low
@@ -889,6 +935,10 @@ sources:
       - path: diff_diff/guides/llms.txt
         section: "Diagnostics and Sensitivity Analysis"
         type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
+      - path: docs/r_comparison.rst
+        type: user_guide
 
   # ── BaconDecomposition ───���─────────────────────────────────────────
 
@@ -914,6 +964,8 @@ sources:
       - path: diff_diff/guides/llms.txt
         section: "Estimators"
         type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   # ── Diagnostics & analysis ───────���─────────────────────────────────
 
@@ -930,6 +982,8 @@ sources:
         type: api_reference
       - path: docs/tutorials/04_parallel_trends.ipynb
         type: tutorial
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   diff_diff/pretrends.py:
     drift_risk: low
@@ -943,6 +997,8 @@ sources:
         type: tutorial
       - path: docs/tutorials/07_pretrends_power.ipynb
         type: tutorial
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   diff_diff/business_report.py:
     drift_risk: medium
@@ -960,6 +1016,8 @@ sources:
       - path: diff_diff/guides/llms-full.txt
         section: "BusinessReport"
         type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   diff_diff/diagnostic_report.py:
     drift_risk: medium
@@ -976,6 +1034,8 @@ sources:
         type: user_guide
       - path: diff_diff/guides/llms-full.txt
         section: "DiagnosticReport"
+        type: user_guide
+      - path: docs/migration-4.0.md
         type: user_guide
 
   diff_diff/mmm.py:
@@ -1011,6 +1071,8 @@ sources:
         type: tutorial
       - path: docs/tutorials/07_pretrends_power.ipynb
         type: tutorial
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   # ── Survey support ─────────────────────────────────────────────────
 
@@ -1069,6 +1131,8 @@ sources:
         type: performance
       - path: docs/api/utils.rst
         type: api_reference
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   diff_diff/conley.py:
     drift_risk: medium
@@ -1120,6 +1184,10 @@ sources:
         section: "SyntheticDiD"
         type: methodology
         note: "SyntheticDiDResults hosts validation diagnostics (LOO, weight concentration, in-time placebo, zeta sensitivity)"
+      - path: docs/migration-4.0.md
+        type: user_guide
+      - path: docs/r_comparison.rst
+        type: user_guide
 
   diff_diff/aggregation.py:
     drift_risk: low
@@ -1130,6 +1198,10 @@ sources:
         section: "6. Aggregation contract"
         type: design_spec
         note: "AggregationResult / AggregationKit / AggregationMixin - the post-fit results.aggregate(type=) surface (4.0 program Phase 2; ledger rows M-020..M-027, M-122)"
+      - path: docs/migration-4.0.md
+        type: user_guide
+      - path: docs/r_comparison.rst
+        type: user_guide
 
   diff_diff/results_base.py:
     drift_risk: low
@@ -1140,6 +1212,8 @@ sources:
         section: "5. Results contract"
         type: design_spec
         note: "BaseResults / Diagnostic marker / EventStudyResults contract (4.0 program Phase 2; ledger rows M-091/M-092/M-093)"
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   diff_diff/bootstrap_utils.py:
     drift_risk: medium
@@ -1175,6 +1249,8 @@ sources:
         type: user_guide
       - path: docs/survey-roadmap.md
         type: roadmap
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   diff_diff/prep_dgp.py:
     drift_risk: low
@@ -1187,6 +1263,8 @@ sources:
         type: user_guide
       - path: docs/tutorials/25_synthetic_control_policy.ipynb
         type: tutorial
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   diff_diff/datasets.py:
     drift_risk: low
@@ -1198,6 +1276,8 @@ sources:
       - path: docs/methodology/REGISTRY.md
         section: "Castle Doctrine treatment coding"
         type: methodology
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   diff_diff/practitioner.py:
     drift_risk: low
@@ -1208,6 +1288,8 @@ sources:
         section: "Practitioner Workflow"
         type: user_guide
         note: "HAD handlers (_handle_had / _handle_had_event_study) emit did_had_pretest_workflow + bandwidth_diagnostics references; symmetric Step-4 routing in _handle_continuous; _handle_cic branches on ChangesInChangesResults.method/covariates and restates the CiC/QDiD fit-time diagnostics (interior range, envelope, footnote-21, bootstrap health)"
+      - path: docs/migration-4.0.md
+        type: user_guide
 
   # ── Visualization (visualization group) ────────────────────────────
 

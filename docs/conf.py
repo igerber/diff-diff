@@ -34,20 +34,20 @@ extensions = [
     "sphinx_design",
 ]
 
-# MyST renders the two in-site methodology markdown pages (REGISTRY.md,
-# REPORTING.md) so cross-refs use :doc: instead of off-site blob/main URLs
-# (stable-docs readers otherwise land on a different revision than their
-# package version). dollarmath/amsmath cover the registry's LaTeX;
-# heading anchors to depth 4 make its GitHub-style #section links resolve.
+# MyST renders the three in-site markdown pages (methodology/REGISTRY.md,
+# methodology/REPORTING.md, migration-4.0.md) so cross-refs use :doc: instead
+# of off-site blob/main URLs (stable-docs readers otherwise land on a different
+# revision than their package version). dollarmath/amsmath cover the registry's
+# LaTeX; heading anchors to depth 4 make its GitHub-style #section links resolve.
 myst_enable_extensions = ["dollarmath", "amsmath"]
 myst_heading_anchors = 4
 
 
 templates_path = ["_templates"]
-# Only the two methodology pages are published; every other repo-internal
-# markdown under docs/ stays out of the build (performance/benchmark notes
-# are deliberately NOT on RTD — see the repo convention — and un-toctree'd
-# .md files would fail the -W build as orphans).
+# Only the two methodology pages and the 4.0 migration guide are published;
+# every other repo-internal markdown under docs/ stays out of the build
+# (performance/benchmark notes are deliberately NOT on RTD — see the repo
+# convention — and un-toctree'd .md files would fail the -W build as orphans).
 exclude_patterns = [
     "_build",
     "Thumbs.db",

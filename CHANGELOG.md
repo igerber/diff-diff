@@ -8,6 +8,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **4.0 migration guide** (`docs/migration-4.0.md`, v4 program Phase 4; the
+  section-9 checklist item 3 obligation): every change that requires action at
+  the 4.0 cut, as a 21-row orientation table plus a 108-row per-symbol appendix
+  carrying the ledger's own `Old`/`New` locators and a one-line fix for each.
+  Also worked before/after examples for the three 3.9 merges, a codemod regex
+  table for the mechanical renames, and a separate "already shipped in 3.9"
+  section for the behaviour changes that are easy to mistake for 4.0 work. The
+  appendix is checked against `docs/v4-deprecations.yaml` in both directions by
+  `tests/test_v4_matrix.py`, so a rescheduled or added ledger row fails CI until
+  the guide is updated. Two hazards the guide calls out explicitly because they
+  are not derivable from the ledger: `robust=` translates to `vcov_type=`
+  differently on each of its four estimators (on `TripleDifference`,
+  `vcov_type="classical"` raises), and post-fit `aggregate()` still raises on
+  bootstrapped fits for five estimator families whose fit-time keyword 4.0
+  removes.
+- **R-equivalents argument mapping table** (`docs/r_comparison.rst`, the
+  section-8 rule-8 obligation): an explicit `yname`/`tname`/`idname`/`gname` ->
+  `outcome`/`time`/`unit`/`first_treat` table, extended across the `did`,
+  `HonestDiD` and `synthdid` mappings the page already evidences with paired
+  code blocks, including the non-1:1 cases (`aggte(type="dynamic")` ->
+  `aggregate(type="event_study")`; HonestDiD's coefficient/vcov inputs carried
+  by the results object). This table is the library's stated alternative to
+  shipping R-spelling parameter aliases, and is now gated by
+  `tests/test_docs_ia.py`.
+
+### Fixed
+- **`docs/r_comparison.rst` migration tips named a nonexistent results field**
+  (`.ci`); the canonical accessor is `.conf_int`. The `aggte()` comparison
+  comment also claimed aggregation is requested at fit time, which stopped being
+  the whole story when post-fit `results.aggregate()` shipped.
+
+### Added
 - **ChangesInChanges serves both 2x2 distributional estimators** (v4 program
   Phase 3(c); ledger rows [M-015] shimmed, [M-143]):
   `ChangesInChanges(method="qdid")` fits the quantile-DiD comparison estimator

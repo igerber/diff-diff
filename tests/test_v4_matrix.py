@@ -1026,3 +1026,287 @@ def test_dual_parse_against_real_yaml_when_available():
     assert isinstance(loaded, dict) and "rows" in loaded, "ledger is not valid YAML"
     real_ids = [r["id"] for r in loaded["rows"]]
     assert real_ids == _ROW_IDS, "scanner row ids diverge from yaml.safe_load - format drift"
+
+
+# ---------------------------------------------------------------------------
+# Migration-guide parity (docs/migration-4.0.md) - spec section 9 checklist item 3
+# ---------------------------------------------------------------------------
+GUIDE = REPO_ROOT / "docs" / "migration-4.0.md"
+
+#: Cells that would tell a reader nothing is required of them. Asserted against the
+#: `Fix` column of EVERY null-successor row (not just the 12 that are obviously
+#: behavioural): `new: null` means "the ledger names no successor locator", which
+#: says nothing about whether work is needed, so a no-op phrase is never safe there.
+#: Matched as whole phrases, never as substrings - a bare "none" would fire on the
+#: legitimate `cluster=None` / `summary(alpha=None)` that two of these cells must state.
+_NO_OP_FIX_RE = re.compile(
+    r"\b(nothing to do|no action (is )?(required|needed)|no change (is )?(required|needed)|n/a)\b",
+    re.IGNORECASE,
+)
+
+
+def _at_4_0(version):
+    """True when ``version`` is present and denotes 4.0 (``_version_tuple`` raises on None)."""
+    return version is not None and _version_tuple(version) == (4, 0, 0)
+
+
+def _changes_at_4_0(row):
+    """Does this row require reader action at the 4.0 cut?
+
+    Keyed on the two LIFECYCLE version fields only - a symbol removed at 4.0, or one
+    whose deprecation warning starts firing at 4.0 (the ``field-flip`` family, removed
+    at 5.0). 108 of the 125 rows qualify.
+
+    The 17 that do not, and why (this enumeration is the contract - a reader of the
+    guide must be able to trust that nothing 4.0-relevant was dropped):
+
+    - 12 ``behavior`` rows with ``introduced_in: 3.9`` and no dep/rem: already shipped
+      in 3.9, so there is no 4.0 action. They get their own guide section, not an
+      appendix row.
+    - ``M-062``, ``M-063``: aliases, introduce-only / all lifecycle fields null.
+    - ``M-031``, ``M-082``: ``deprecated_in: 3.9`` with ``removed_in: null``, because
+      the NAME ``time`` survives with a new meaning. Their 4.0 enforcement rows
+      (``M-085`` and ``M-083`` respectively) DO qualify and carry the raise.
+    - ``M-008``: ``decision_due: 4.0`` but ``status: evaluate`` with no
+      ``decided_default``. ``decision_due`` is deliberately NOT part of this predicate:
+      the outcome is unknown and "evaluated, kept off" is a terminal state (spec
+      section 11), so it is documented as a pending go/no-go rather than as a change
+      the reader must act on. ``collect_due_problems`` does gate on ``decision_due`` -
+      that is the release sweep, a different question from "what must a user change".
+    """
+    return _at_4_0(row.get("removed_in")) or _at_4_0(row.get("deprecated_in"))
+
+
+def _guide_table_rows(text, header_first_cell):
+    """Parse the MyST pipe table whose header row starts with ``header_first_cell``.
+
+    Returns a list of cell-lists (header and the ``---`` separator dropped). Tables are
+    discriminated by their header, not by position, so adding prose between them is safe.
+    """
+    rows = []
+    in_table = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            in_table = False
+            continue
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        if not in_table:
+            if cells and cells[0] == header_first_cell:
+                in_table = True
+            continue
+        if all(set(c) <= set("-: ") for c in cells):  # the |---|---| separator
+            continue
+        rows.append(cells)
+    return rows
+
+
+def _qualifying_rows():
+    return [r for r in ROWS if _changes_at_4_0(r)]
+
+
+def _appendix_rows():
+    return _guide_table_rows(GUIDE.read_text(), "Row")
+
+
+def _orientation_rows():
+    return _guide_table_rows(GUIDE.read_text(), "Area")
+
+
+def test_migration_guide_exists():
+    """Spec section 9 checklist item 3. Every gate below reads this file."""
+    assert GUIDE.exists(), (
+        f"{GUIDE.relative_to(REPO_ROOT)} is missing - it is checklist item 3 of the 3.9-cut "
+        "checklist (docs/v4-design.md section 9)."
+    )
+
+
+def test_migration_guide_appendix_covers_every_4_0_change():
+    """The appendix has EXACTLY one row per ledger row that changes at 4.0.
+
+    Compared as multisets, not sets: a duplicated M-id would satisfy set equality while
+    breaking the appendix's stated contract that a ctrl-F on a symbol lands once.
+    """
+    from collections import Counter
+
+    expected = Counter(r["id"] for r in _qualifying_rows())
+    actual = Counter(cells[0] for cells in _appendix_rows())
+    missing = sorted((expected - actual).elements())
+    stale = sorted((actual - expected).elements())
+    assert not missing and not stale, (
+        f"migration guide appendix drifted from the ledger:\n"
+        f"  missing rows (in ledger, absent from the guide): {missing}\n"
+        f"  stale/duplicated rows (in the guide, not a qualifying ledger row): {stale}"
+    )
+
+
+def test_migration_guide_appendix_cells_match_the_ledger():
+    """Group/Old/New are compared against the ledger literally; Fix must be substantive.
+
+    ``New`` has exactly three legal renderings, and the gate must encode all three or it
+    cannot pass its own prescribed table:
+      1. the ledger's ``new`` locator verbatim;
+      2. an em dash where ``new`` is null;
+      3. the locator plus the unavailable marker, for successors the ledger names but
+         that do not exist yet (M-140/M-141).
+    """
+    by_id = {r["id"]: r for r in _qualifying_rows()}
+    problems = []
+    for cells in _appendix_rows():
+        rid, group, old, new, fix = (cells + [""] * 5)[:5]
+        # The guide renders locators as inline code; the ledger stores them bare.
+        old = old.strip("`")
+        row = by_id.get(rid)
+        if row is None:
+            continue  # covered by the coverage gate above
+        if group != (row.get("group") or ""):
+            problems.append(f"{rid}: Group is {group!r}, ledger says {row.get('group')!r}")
+        if old != (row.get("old") or ""):
+            problems.append(f"{rid}: Old is {old!r}, ledger says {row.get('old')!r}")
+        expected_new = row.get("new")
+        if expected_new is None:
+            if new != "—":
+                problems.append(
+                    f"{rid}: ledger has no successor; New must be an em dash, got {new!r}"
+                )
+        elif expected_new not in new:
+            problems.append(f"{rid}: New is {new!r}, ledger says {expected_new!r}")
+        if not fix.strip():
+            problems.append(f"{rid}: Fix cell is empty")
+        elif expected_new is None and _NO_OP_FIX_RE.search(fix):
+            problems.append(
+                f"{rid}: Fix reads {fix!r}. A null successor does NOT mean no action - this row "
+                "is a default flip, behaviour change, translation or replacement; state it."
+            )
+    assert (
+        not problems
+    ), "migration guide appendix cells disagree with the ledger:\n  " + "\n  ".join(problems)
+
+
+def test_migration_guide_appendix_is_sorted():
+    """Sorted by group, then id - the appendix's stated lookup contract."""
+    keys = [(cells[1], cells[0]) for cells in _appendix_rows()]
+    assert keys == sorted(keys), "appendix rows are not sorted by (group, id)"
+
+
+def test_migration_guide_orientation_table_covers_every_group():
+    """One orientation row per group with at least one qualifying row, and no others."""
+    expected = {r.get("group") for r in _qualifying_rows()}
+    actual = {cells[0] for cells in _orientation_rows()}
+    missing, stale = sorted(expected - actual), sorted(actual - expected)
+    assert not missing and not stale, (
+        f"orientation table drifted:\n  missing groups: {missing}\n"
+        f"  groups with zero qualifying rows (or typos): {stale}"
+    )
+
+
+# --- parser unit tests: a table parser that silently matches nothing would make every
+# --- gate above vacuously green, so the parser is pinned on hand-built input.
+_SAMPLE_TABLE = """
+Some prose that is not a table.
+
+| Row | Group | Old | New | Fix |
+|---|---|---|---|---|
+| M-001 | grp-a | `diff_diff:A.b` | — | Drop it. |
+| M-002 | grp-b | `diff_diff:C.d` | `diff_diff:C.e` | Rename it. |
+
+More prose.
+
+| Area | What changes | Rows | Where |
+|---|---|---|---|
+| grp-a | something | 1 | S1 |
+"""
+
+
+def test_table_parser_finds_rows_and_discriminates_by_header():
+    appendix = _guide_table_rows(_SAMPLE_TABLE, "Row")
+    assert [c[0] for c in appendix] == ["M-001", "M-002"], "appendix rows not parsed"
+    assert appendix[0][3] == "—" and appendix[1][3] == "`diff_diff:C.e`"
+    orientation = _guide_table_rows(_SAMPLE_TABLE, "Area")
+    assert [c[0] for c in orientation] == ["grp-a"], "orientation table not discriminated by header"
+
+
+def test_table_parser_returns_nothing_for_an_absent_header():
+    """The vacuity guard: an unknown header yields no rows, so a gate keyed on a typo'd
+    header would fail loudly rather than pass with an empty comparison set."""
+    assert _guide_table_rows(_SAMPLE_TABLE, "Nonexistent") == []
+
+
+def test_appendix_parser_is_not_vacuous_on_the_real_guide():
+    """Pins the live parse against the ledger's own count - if the guide's table format
+    drifts (a renamed header, a switch to list-tables), every other gate would compare two
+    empty sets and pass."""
+    assert len(_appendix_rows()) == len(_qualifying_rows()) > 100
+
+
+def _guide_python_blocks(text):
+    """Source of every ```python fenced block in the guide."""
+    return re.findall(r"^```python\n(.*?)^```", text, re.M | re.S)
+
+
+def _diff_diff_call_keywords_with(source, diff_diff):
+    """(target, keyword) pairs for calls this module can resolve to a diff_diff export.
+
+    Covers the two shapes the guide's worked examples use: ``Estimator(...)`` (constructor
+    keywords) and ``Estimator(...).fit(...)`` (fit keywords). Calls on names it cannot
+    resolve - ``results.aggregate("event_study")`` - are skipped rather than guessed at.
+    """
+    import ast
+
+    pairs = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name):
+            target, owner = func.id, func.id
+        elif (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Call)
+            and isinstance(func.value.func, ast.Name)
+        ):
+            target, owner = f"{func.value.func.id}.{func.attr}", func.value.func.id
+        else:
+            continue
+        if not hasattr(diff_diff, owner):
+            continue
+        for kw in node.keywords:
+            if kw.arg:
+                pairs.append((target, kw.arg))
+    return pairs
+
+
+def test_migration_guide_examples_bind_to_real_signatures():
+    """Every keyword in the guide's worked examples must exist on the callable it targets.
+
+    The guide is markdown, so ``tests/test_doc_snippets.py`` (RST-only) never executes it -
+    a wrong keyword would otherwise ship silently. This is the targeted substitute: it binds
+    the examples to real signatures without executing 4.0-only behaviour.
+
+    It exists because the first local review of this page found EVERY merge example carrying
+    an invalid keyword (``treated=`` for ``treatment=``, ``partition=`` for ``eligibility=``,
+    ``post=`` for ``time=``) - each one plausible, each one wrong.
+    """
+    import importlib
+    import inspect
+
+    diff_diff = importlib.import_module("diff_diff")
+    problems = []
+    for block in _guide_python_blocks(GUIDE.read_text()):
+        for target, keyword in _diff_diff_call_keywords_with(block, diff_diff):
+            owner, _, method = target.partition(".")
+            obj = getattr(diff_diff, owner)
+            if method:
+                obj = getattr(obj, method, None)
+                if obj is None:
+                    problems.append(f"{target}: {owner} has no {method}()")
+                    continue
+            params = inspect.signature(obj).parameters
+            if keyword not in params:
+                problems.append(
+                    f"{target}({keyword}=...) - not a parameter "
+                    f"(accepts: {sorted(p for p in params if p != 'self')})"
+                )
+    assert (
+        not problems
+    ), "migration guide examples use keywords that do not exist:\n  " + "\n  ".join(problems)

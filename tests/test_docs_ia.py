@@ -635,3 +635,106 @@ def test_stub_parser_flags_no_index_classes_but_not_functions():
         _stub_no_index_autoclasses(bad_class + ".. autofunction:: example\n   :no-index:\n") == []
     )
     assert _stub_no_index_autoclasses(bad_class + ".. autoclass:: Example\n   :no-members:\n") == []
+
+
+# ---------------------------------------------------------------------------
+# R-equivalents argument table (docs/r_comparison.rst) - the rule-8 obligation
+# (docs/v4-design.md section 8 rule 8, asserted by hand per section 9 item 2)
+# ---------------------------------------------------------------------------
+#: Rows whose diff-diff side is carried by a fitted results object rather than by a
+#: named parameter. They are exempt from the resolve check (there is no signature to
+#: look in) but NOT from the presence floor below.
+_R_TABLE_RESULTS_MARKER = "results object"
+
+#: The mappings this table exists to publish. Rule 8 names the first four explicitly;
+#: the rest are the ones the page already evidences with paired R/Python code blocks,
+#: so losing any of them would silently gut the table while leaving it "present".
+_R_TABLE_REQUIRED = {
+    "yname": "outcome",
+    "tname": "time",
+    "idname": "unit",
+    "gname": "first_treat",
+    "xformla": "covariates",
+    "est_method": "estimation_method",
+    "aggte(type=)": "type",
+    "Mbarvec / Mvec": "M_grid",
+}
+#: At least one row per in-scope package, so a whole block cannot vanish.
+_R_TABLE_REQUIRED_PACKAGES = {"did", "HonestDiD", "synthdid"}
+
+
+def _r_argument_table_rows():
+    """Parse the `Argument mapping` list-table into (package, r_arg, dd_equiv, where) tuples."""
+    body = _section_body((DOCS / "r_comparison.rst").read_text(), "Argument mapping")
+    rows, current = [], []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("* - "):
+            if current:
+                rows.append(current)
+            current = [stripped[4:].strip()]
+        elif stripped.startswith("- ") and current:
+            current.append(stripped[2:].strip())
+    if current:
+        rows.append(current)
+    # drop the header row
+    return [r for r in rows if r and r[0] != "R package"]
+
+
+def _strip_rst_code(cell):
+    return cell.replace("``", "").strip()
+
+
+def test_r_argument_table_is_complete_and_real():
+    """Both directions: every listed diff-diff name must exist where the row says it
+    lives, and every mapping the table exists to publish must still be listed.
+
+    The forward direction resolves against the SPECIFIC callable named in the row's
+    ``Where it lives`` cell, not against any public callable - names like ``time`` or
+    ``unit`` would otherwise be satisfied by an unrelated signature.
+
+    The R side cannot be gated: the repo ships no R package signatures, so nothing here
+    can prove ``yname`` is still ``did``'s spelling. That half is a human review job.
+    """
+    import importlib
+    import inspect
+
+    rows = _r_argument_table_rows()
+    assert rows, "the Argument mapping table is missing or its list-table shape changed"
+
+    problems = []
+    for row in rows:
+        if len(row) < 4:
+            problems.append(f"malformed row: {row}")
+            continue
+        _pkg, _r_arg, dd_equiv, where = (_strip_rst_code(c) for c in row[:4])
+        if where == _R_TABLE_RESULTS_MARKER or not dd_equiv or " " in dd_equiv:
+            continue  # concept row, or prose rather than a single identifier
+        target, _, attr = where.rpartition(".")
+        try:
+            obj = getattr(importlib.import_module("diff_diff"), target or attr)
+            if target:
+                obj = getattr(obj, attr)
+        except AttributeError:
+            problems.append(f"{where!r} does not resolve on diff_diff")
+            continue
+        params = inspect.signature(obj).parameters
+        if dd_equiv not in params:
+            problems.append(
+                f"{dd_equiv!r} is not a parameter of {where} (params: {sorted(params)})"
+            )
+    assert not problems, "R argument table names surfaces that do not exist:\n  " + "\n  ".join(
+        problems
+    )
+
+    listed = {_strip_rst_code(r[1]): _strip_rst_code(r[2]) for r in rows if len(r) >= 3}
+    missing = {k: v for k, v in _R_TABLE_REQUIRED.items() if listed.get(k) != v}
+    assert not missing, (
+        "the R argument table lost mappings it exists to publish (rule 8, "
+        f"docs/v4-design.md section 8): {missing}"
+    )
+    packages = {_strip_rst_code(r[0]) for r in rows}
+    assert _R_TABLE_REQUIRED_PACKAGES <= packages, (
+        f"R argument table is missing an in-scope package block: "
+        f"{sorted(_R_TABLE_REQUIRED_PACKAGES - packages)}"
+    )

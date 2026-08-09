@@ -893,9 +893,31 @@ not expressible as ledger rows, so the 3.9 release PR asserts them by hand:
    `tests/test_base_estimator.py` (25 classes converted; the ten
    formerly-lazy set_params surfaces now validate eagerly, REGISTRY
    EfficientDiD note updated in the same diff).
-2. The R-equivalents mapping table (section 8 rule 8) ships in the docs.
-3. The migration guide exists (section 10) and its TL;DR table has a row per
+2. The R-equivalents mapping table (section 8 rule 8) ships in the docs. DONE:
+   the `Argument mapping` section of `docs/r_comparison.rst`, gated by
+   `tests/test_docs_ia.py::test_r_argument_table_is_complete_and_real`
+   (two-directional: every listed diff-diff name must resolve on the callable
+   the row names, and the rule-8 quartet plus the page's evidenced mappings
+   must stay listed). Scoped to the three packages the page evidences with
+   paired R/Python code blocks - `did`, `HonestDiD`, `synthdid`; `fixest`,
+   `DIDmultiplegtDYN` and `DIDHAD` appear there in prose only, so they are
+   named as out of scope rather than mapped from memory. The R side itself is
+   ungateable (the repo ships no R package signatures) and the test says so.
+3. The migration guide exists (section 10) and its appendix has a row per
    breaking change, generated against the matrix rather than hand-listed.
+   DONE: `docs/migration-4.0.md`, gated by the
+   `test_migration_guide_*` family in `tests/test_v4_matrix.py`.
+   AMENDED 2026-08-09: "generated against the matrix" is true of the appendix's
+   ROW SET - `_changes_at_4_0` derives it from the ledger and the gates assert
+   it in both directions, including per-cell `Group`/`Old`/`New` equality. It is
+   deliberately NOT true of the `Fix` column, which is hand-written per row.
+   Seven plan-review rounds established why: every attempt to derive migration
+   advice from a single ledger field was falsified by execution (`introduced_in`
+   is a storage-flip date, not an availability date; a null `new` covers
+   removals, default flips AND translations; a successor that resolves can still
+   raise). The gates therefore assert what is mechanically checkable and refuse
+   a no-op `Fix` on a null-successor row, rather than pretending the advice is
+   derivable.
 4. The ledger and this document agree on the phase breakdown in the table
    above - any PR that re-scoped a phase edited both. Invariant and
    enforcement spec: `tests/test_naming_guard.py` (module docstring).
@@ -936,6 +958,37 @@ major"/"flip") to catch anything born outside the matrix.
 7. Removed functions and aliases (wrappers, EventStudy, SDDD, QDiDResults,
    and the alias-diet three: CDiD, Stacked, Gardner).
 8. Codemod section: the mechanical renames as a script/regex table.
+
+**(Amended 2026-08-09, Phase 4 ship.)** The skeleton above is what shipped, with
+five recorded deviations:
+
+- **Two tables, not one.** A literal "TL;DR" over 108 rows is not a TL;DR, so §1 is
+  a 21-row orientation table (one per ledger `group` with at least one qualifying
+  row) plus a complete 108-row appendix for symbol lookup. Both are gated.
+- **No `Available since` column.** Considered and rejected: it cannot be derived.
+  `introduced_in` tracks the dataclass storage flip, so the nine `field-flip` rows
+  say `4.0` while `.att` already resolves today; and a successor that exists can
+  still raise (the five bootstrapped-fit `aggregate()` families). Availability is
+  stated in prose where it is verifiable instead.
+- **§7b "Remaining 4.0 changes"** was added: §§2-8 as skeletoned cover only 102 of
+  the 108 qualifying rows, leaving `obligation-sdid-params`, `constructor-hygiene`,
+  `diagnostic-family` and `obligation-warning-retirements` homeless. It is not
+  titled "removals" - M-007 is a warning retirement and M-090 a roster move.
+- **§9 "Already shipped in 3.9"** was added for the 12 already-shipped `behavior`
+  rows, which moved behaviour but carry no 4.0 action. Split three ways (numbers
+  moved / fail-closed validation / additive API), because filing M-081 under
+  "defaults that moved numbers" would contradict its own note ("No numeric default
+  changes"). Outside the appendix and outside the 4.0 gates.
+- **The codemod table covers identifier renames only** - not the five dropped
+  params (no successor to write), not the three `field` renames (`.groups` ->
+  `.units` would rewrite every pandas `groupby(...).groups` in user code), and not
+  the two `param-value` rows (they rename accepted strings, not names).
+
+The page is MyST markdown published through the existing `myst_parser` config; it
+is the third in-site markdown page, toctree'd under the User Guide section (the
+root toctree stays at five entries). `TODO.md`/`DEFERRED.md`/this file/the ledger
+YAML are referenced as inline literals, never links - none is a Sphinx document, so
+a MyST link to them fails the `-W` build.
 
 ## 11. Matrix mechanics (normative schema for `docs/v4-deprecations.yaml`)
 

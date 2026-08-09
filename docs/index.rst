@@ -85,8 +85,8 @@ Explore the Documentation
       :link: user_guide
       :link-type: doc
 
-      References, R and Python comparisons, benchmarks, and the
-      methodology registry.
+      References, R and Python comparisons, benchmarks, the 4.0 migration
+      guide, and the methodology registry.
 
    .. grid-item-card:: API Reference
       :link: api/index

@@ -1,13 +1,14 @@
 .. meta::
-   :description: The diff-diff user guide — scholarly references, validation against R and Python packages, benchmarks, and the full methodology registry.
-   :keywords: DiD methodology, R did package comparison, DiD benchmarks, econometrics references
+   :description: The diff-diff user guide — scholarly references, validation against R and Python packages, benchmarks, the 4.0 migration guide, and the full methodology registry.
+   :keywords: DiD methodology, R did package comparison, DiD benchmarks, econometrics references, diff-diff 4.0 migration
 
 User Guide
 ==========
 
 The methods behind the library: scholarly references, validation against R
-and Python implementations, performance benchmarks, and the methodology
-registry documenting every estimator's equations and edge cases.
+and Python implementations, performance benchmarks, the migration guide for
+the upcoming 4.0 release, and the methodology registry documenting every
+estimator's equations and edge cases.
 
 .. grid:: 1 2 2 3
    :gutter: 3
@@ -31,6 +32,13 @@ registry documenting every estimator's equations and edge cases.
       :link-type: doc
 
       How diff-diff compares to other Python causal-inference libraries.
+
+   .. grid-item-card:: Migrating to 4.0
+      :link: migration-4.0
+      :link-type: doc
+
+      Every breaking change in the upcoming 4.0 release, with the one-line
+      fix for each and a codemod table for the mechanical renames.
 
    .. grid-item-card:: Benchmarks
       :link: benchmarks
@@ -59,6 +67,7 @@ registry documenting every estimator's equations and edge cases.
    references
    R Comparison <r_comparison>
    Python Comparison <python_comparison>
+   Migrating to 4.0 <migration-4.0>
    benchmarks
    Methodology Registry <methodology/REGISTRY>
    Reporting <methodology/REPORTING>

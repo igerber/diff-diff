@@ -44,6 +44,92 @@ Overview
      - ``fwildclusterboot``
      - N/A
 
+Argument mapping
+----------------
+
+diff-diff deliberately ships **no argument aliases** for the R spellings. Where the
+library owns a concept it uses its own name; where a name is the field's language it
+uses that. This table is the translation layer that replaces aliasing — it is the
+answer to "why isn't ``first_treat`` spelled ``gname``".
+
+``Where it lives`` names the callable that accepts the argument, since not every R
+argument maps onto ``fit()``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 12 20 24 26 18
+
+   * - R package
+     - R argument
+     - diff-diff equivalent
+     - Where it lives
+     - Notes
+   * - ``did``
+     - ``yname``
+     - ``outcome``
+     - ``CallawaySantAnna.fit``
+     -
+   * - ``did``
+     - ``tname``
+     - ``time``
+     - ``CallawaySantAnna.fit``
+     -
+   * - ``did``
+     - ``idname``
+     - ``unit``
+     - ``CallawaySantAnna.fit``
+     -
+   * - ``did``
+     - ``gname``
+     - ``first_treat``
+     - ``CallawaySantAnna.fit``
+     - First treated period; ``0`` marks never-treated
+   * - ``did``
+     - ``xformla``
+     - ``covariates``
+     - ``CallawaySantAnna.fit``
+     - A list of column names, not a formula
+   * - ``did``
+     - ``est_method``
+     - ``estimation_method``
+     - ``CallawaySantAnna``
+     - Constructor, not ``fit()``
+   * - ``did``
+     - ``aggte(type=)``
+     - ``type``
+     - ``CallawaySantAnnaResults.aggregate``
+     - Post-fit, not a fit argument. ``"dynamic"`` becomes ``"event_study"``
+   * - ``HonestDiD``
+     - ``Mbarvec`` / ``Mvec``
+     - ``M_grid``
+     - ``HonestDiD.sensitivity_analysis``
+     -
+   * - ``HonestDiD``
+     - ``betahat`` / ``sigma``
+     - carried by the fitted results
+     - results object
+     - Pass the results object itself; there is no coefficient/vcov argument
+   * - ``HonestDiD``
+     - ``numPrePeriods`` / ``numPostPeriods``
+     - inferred from the results
+     - results object
+     - Derived from the event-study surface, never passed
+   * - ``synthdid``
+     - ``Y`` (outcome matrix)
+     - ``outcome``
+     - ``SyntheticDiD.fit``
+     - Long-format column name, not a matrix
+   * - ``synthdid``
+     - ``N0`` / ``T0`` (control/pre counts)
+     - ``treatment`` + ``post_periods``
+     - ``SyntheticDiD.fit``
+     - Not a 1:1 mapping: a time-invariant treatment indicator plus the post-period list replaces the block structure
+
+``fixest``, ``DIDmultiplegtDYN`` and ``DIDHAD`` are discussed on this page in prose
+rather than with paired examples, so they are deliberately absent here rather than
+mapped from memory. See :doc:`migration-4.0` for the 4.0 renames, which change several
+of the diff-diff spellings above.
+
 Package Correspondence
 ----------------------
 
@@ -118,7 +204,8 @@ staggered DiD. Here's how to translate common operations:
 
 .. code-block:: python
 
-   # Python (unlike R's aggte(), aggregation is requested at fit time)
+   # Python (R's aggte() has two counterparts: the fit-time aggregate= shown here,
+   # deprecated in 3.9, and post-fit results.aggregate(type=), which supersedes it)
    results = cs.fit(data, outcome='Y', time='period', unit='id',
                     first_treat='G', aggregate='all')
    overall_att = results.overall_att  # Simple aggregation
@@ -451,7 +538,7 @@ Migration Tips
 2. **Formula interface**: diff-diff supports R-style formulas for basic DiD:
    ``formula='y ~ treated * post'``
 
-3. **Results access**: Use ``.att``, ``.se``, ``.ci`` instead of ``$att``, ``$se``
+3. **Results access**: Use ``.att``, ``.se``, ``.conf_int`` instead of ``$att``, ``$se``
 
 4. **Visualization**: ``plot_event_study()`` produces matplotlib figures similar
    to ``ggdid()`` output
