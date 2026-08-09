@@ -1348,12 +1348,16 @@ class ChangesInChanges(BaseEstimator):
             raises - deliberately stricter than ``DifferenceInDifferences``,
             which silently lets the formula win.
         covariates : list of str, optional
-            Numeric covariate columns for the conditional (quantile-
-            regression) CiC - qte's ``xformla``. Fit-time argument only (not a
-            hyperparameter; absent from ``get_params()``, like ``unit``).
-            Dummy-encode categorical covariates first. In panel mode,
-            covariates may be time-varying: each (group, period) cell uses its
-            own rows' covariate values, exactly like qte.
+            Numeric covariate columns selecting the conditional
+            (quantile-regression) branch of whichever estimator ``method``
+            names - qte's ``xformla``, supported for BOTH ``"cic"`` and
+            ``"qdid"``. The cells regressed differ: CiC fits the two control
+            cells, QDiD fits three (both control cells plus treated-pre).
+            Fit-time argument only (not a hyperparameter; absent from
+            ``get_params()``, like ``unit``). Dummy-encode categorical
+            covariates first. In panel mode, covariates may be time-varying:
+            each (group, period) cell uses its own rows' covariate values,
+            exactly like qte.
         unit : str, optional
             Unit identifier column. Required when ``panel=True``; ignored
             (documented) when ``panel=False``, matching qte's ``idname``.

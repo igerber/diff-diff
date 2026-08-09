@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   use `ChangesInChanges(method="qdid")`. The `QDiDResults` alias is deprecated
   with it ([M-061]). Constructing `QDiD` warns; the numbers are unchanged.
 
+### Added
 - **TripleDifference serves both DDD designs** (v4 program Phase 3(b); ledger
   rows [M-013] shimmed, [M-064]): `TripleDifference().fit(..., unit=, time=,
   first_treat=, partition=)` estimates the staggered-adoption DDD design that
