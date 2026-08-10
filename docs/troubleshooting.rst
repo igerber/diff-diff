@@ -237,13 +237,16 @@ Visualization Issues
 
    from diff_diff import plot_event_study
 
-   # For CallawaySantAnna, aggregate to an event study post-fit, then plot
-   cs = CallawaySantAnna()
+   # For CallawaySantAnna, aggregate to an event study post-fit, then plot.
+   # Use base_period="universal" so e=-1 is a true common reference - under
+   # the default varying base, e=-1 is an ESTIMATED pre-treatment effect and
+   # normalizing the plot around it would silently shift every point.
+   cs = CallawaySantAnna(base_period='universal')
    results = cs.fit(data, outcome='y', unit='unit_id',
                     time='period', first_treat='first_treat')
    es = results.aggregate('event_study')
 
-   # Check the surface first
+   # Check the surface first (the is_reference column marks e=-1)
    print(es.to_dataframe())
 
    # Specify reference period explicitly
