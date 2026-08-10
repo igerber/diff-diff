@@ -209,7 +209,11 @@ Staggered Adoption Issues
    # Check cohort sizes
    print(data.groupby('first_treat')['unit_id'].nunique())
 
-   # Use bootstrap for better inference
+   # Use bootstrap for better inference. On a BOOTSTRAPPED fit, post-fit
+   # results.aggregate('event_study') raises - the percentile draws are not
+   # retained - so the deprecated fit-time aggregate= remains the documented
+   # route for this case until 4.0. (results.aggregate('simple') relays the
+   # stored bootstrap inference and works on any fit.)
    cs = CallawaySantAnna(n_bootstrap=999)
    results = cs.fit(data, outcome='y', unit='unit_id',
                     time='period', first_treat='first_treat',
@@ -233,17 +237,17 @@ Visualization Issues
 
    from diff_diff import plot_event_study
 
-   # Check your results first
-   print(results.period_effects)  # or results.event_study_effects
+   # For CallawaySantAnna, aggregate to an event study post-fit, then plot
+   cs = CallawaySantAnna()
+   results = cs.fit(data, outcome='y', unit='unit_id',
+                    time='period', first_treat='first_treat')
+   es = results.aggregate('event_study')
+
+   # Check the surface first
+   print(es.to_dataframe())
 
    # Specify reference period explicitly
-   plot_event_study(results, reference_period=-1)
-
-   # For CallawaySantAnna, fit with aggregate='event_study'
-   results = cs.fit(data, outcome='y', unit='unit_id',
-                    time='period', first_treat='first_treat',
-                    aggregate='event_study')
-   plot_event_study(results)
+   plot_event_study(es, reference_period=-1)
 
 "Plot doesn't show in Jupyter"
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

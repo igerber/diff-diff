@@ -413,11 +413,9 @@ _CONTEXT_DEPENDENT_SNIPPETS = {
     "python_comparison:block5",
     "quickstart:block3",
     "quickstart:block9",
-    "r_comparison:block2",
     "r_comparison:block3",
     "r_comparison:block4",
     "r_comparison:block7",
-    "troubleshooting:block8",
 }
 
 

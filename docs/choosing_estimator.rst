@@ -246,11 +246,9 @@ This is the recommended estimator for most applied work with staggered adoption.
    # Overall ATT
    print(f"Overall ATT: {results.overall_att:.3f}")
 
-   # Event study aggregation
-   es = cs.fit(data, outcome='y', unit='unit_id',
-               time='period', first_treat='first_treat',
-               covariates=['x1', 'x2'], aggregate='event_study')
-   event_study_df = es.to_dataframe('event_study')
+   # Event study aggregation (post-fit - no refit needed)
+   es = results.aggregate('event_study')
+   event_study_df = es.to_dataframe()
 
 Reversible (Non-Absorbing) Treatment
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

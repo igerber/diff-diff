@@ -204,13 +204,14 @@ staggered DiD. Here's how to translate common operations:
 
 .. code-block:: python
 
-   # Python (R's aggte() has two counterparts: the fit-time aggregate= shown here,
-   # deprecated in 3.9, and post-fit results.aggregate(type=), which supersedes it)
+   # Python (post-fit results.aggregate(type=) is aggte()'s counterpart;
+   # R's "dynamic" is spelled "event_study")
+   cs = CallawaySantAnna()
    results = cs.fit(data, outcome='Y', time='period', unit='id',
-                    first_treat='G', aggregate='all')
-   overall_att = results.overall_att  # Simple aggregation
-   event_study = results.event_study_effects  # Dynamic
-   by_group = results.group_effects  # By cohort
+                    first_treat='G')
+   agg_simple = results.aggregate('simple')
+   agg_dynamic = results.aggregate('event_study')
+   agg_group = results.aggregate('group')
 
 R ``HonestDiD`` Package → diff-diff
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
