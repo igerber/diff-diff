@@ -14,11 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   teach post-fit `results.aggregate(type=...)` (the r_comparison block maps
   1:1 onto R's three `aggte()` calls; `'all'` has no post-fit counterpart),
   and `troubleshooting.rst`'s event-study-plot remedy is rewritten to a
-  `base_period="universal"` fit plotted via
-  `plot_event_study(results.aggregate('event_study'), reference_period=-1)` -
-  universal, not the varying default, because under a varying base `e=-1` is
-  an estimated effect and explicit renormalization around it would shift
-  every plotted point (REGISTRY's varying-base common-reference warning).
+  `base_period="universal"` fit whose `aggregate('event_study')` container is
+  plotted directly - the container carries its own `is_reference` marking, so
+  the example inspects the actual reference row(s) rather than hard-coding
+  `reference_period=-1` (under the varying default every pre-period point is
+  an estimated effect with no common anchor, and on gapped grids even the
+  universal base can anchor at an event time other than -1).
   The troubleshooting bootstrap passage deliberately KEEPS fit-time
   `aggregate='event_study'` with a comment naming it the documented until-4.0
   exception (post-fit recompute levels raise on a bootstrapped fit;

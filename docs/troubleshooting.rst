@@ -238,19 +238,22 @@ Visualization Issues
    from diff_diff import plot_event_study
 
    # For CallawaySantAnna, aggregate to an event study post-fit, then plot.
-   # Use base_period="universal" so e=-1 is a true common reference - under
-   # the default varying base, e=-1 is an ESTIMATED pre-treatment effect and
-   # normalizing the plot around it would silently shift every point.
+   # base_period="universal" gives the event study explicit reference row(s),
+   # marked in the container - under the default varying base every
+   # pre-treatment point is an estimated effect with no common anchor, so
+   # renormalizing a plot around one would silently shift every point.
    cs = CallawaySantAnna(base_period='universal')
    results = cs.fit(data, outcome='y', unit='unit_id',
                     time='period', first_treat='first_treat')
    es = results.aggregate('event_study')
 
-   # Check the surface first (the is_reference column marks e=-1)
-   print(es.to_dataframe())
+   # Inspect the actual reference row(s) - on gapped period grids the
+   # positional base can sit at an event time other than -1
+   print(es.to_dataframe().query("is_reference"))
 
-   # Specify reference period explicitly
-   plot_event_study(es, reference_period=-1)
+   # Plot the container - it carries its own reference; no manual
+   # reference_period override is needed (or safe to hard-code)
+   plot_event_study(es)
 
 "Plot doesn't show in Jupyter"
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
