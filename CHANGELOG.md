@@ -5,7 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.9.0] - 2026-08-10
+
+The 3.9 shim release of the 4.0 API-unification program (`docs/v4-design.md`):
+every new surface ships additively, and every old spelling keeps working
+through 3.9 with a `FutureWarning` steering to its replacement. Highlights:
+the three estimator merges (TwoWayFixedEffects absorbs MultiPeriodDiD via
+`event_study=True`, TripleDifference absorbs StaggeredTripleDifference,
+ChangesInChanges absorbs QDiD via `method=`), post-fit
+`results.aggregate(type=...)` across the staggered family, the library-wide
+parameter-rename program (uniform `post`/`time`/`unit`/`first_treat`/
+`covariates` vocabulary, `_col` suffixes dropped), the shared `BaseEstimator`
+`get_params`/`set_params` mixin with transactional `set_params`, fail-closed
+inference-selector validation, deprecation of the module-level estimator
+wrapper functions and the `CDiD`/`Stacked`/`Gardner` aliases, and the 4.0
+migration guide (`docs/migration-4.0.md`). Lifecycle authority for every
+deprecation: `docs/v4-deprecations.yaml`. Full detail in the entries below.
+
+### Changed
+- **Version 3.9.0 + the armed 4.0 rename window.** Bumping `__version__` to
+  3.9 arms the naming guard's next enforcement window (section-8 rule-11
+  "Duty C" in `tests/test_naming_guard.py`: a rename's reader inventory is
+  due when its `deprecated_in` enters the next-release horizon), so this
+  release records the previously-uninventoried readers of the 4.0-scheduled
+  old names on their ledger rows' `code_refs`: the `overall_att` field-flip
+  family [M-050]..[M-058] (producer modules, `diagnostic_report.py`'s
+  `getattr` fallback chains, `prep_dgp.py`, the staggered-DDD engine and
+  container, the three bundled AI guides, and the REGISTRY / REPORTING /
+  continuous-did methodology pages) and [M-016] `period_effects`
+  (`llms-full.txt`). No status flips and no behavior changes - the 4.0
+  removal PRs consult these inventories so no reader is missed.
 
 ### Added
 - **4.0 migration guide** (`docs/migration-4.0.md`, v4 program Phase 4; the
@@ -4744,6 +4773,7 @@ for the full feature history leading to this release.
 [2.1.2]: https://github.com/igerber/diff-diff/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/igerber/diff-diff/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/igerber/diff-diff/compare/v2.0.3...v2.1.0
+[3.9.0]: https://github.com/igerber/diff-diff/compare/v3.8.0...v3.9.0
 [3.8.0]: https://github.com/igerber/diff-diff/compare/v3.7.0...v3.8.0
 [3.7.0]: https://github.com/igerber/diff-diff/compare/v3.6.2...v3.7.0
 [3.6.2]: https://github.com/igerber/diff-diff/compare/v3.6.1...v3.6.2

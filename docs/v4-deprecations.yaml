@@ -212,8 +212,8 @@ rows:
     status: planned
     phase: 5
     warning: FutureWarning
-    code_refs: [diff_diff/results.py, diff_diff/honest_did.py, diff_diff/pretrends.py, diff_diff/visualization/_event_study.py, diff_diff/results_base.py, diff_diff/diagnostic_report.py, diff_diff/estimators.py]
-    notes: "Period-keyed dict becomes a FutureWarning property VIEW over the unified event-study surface on the successor container at 4.0; removed 5.0. Migrate this locator to the successor class when [M-011] flips (cross-row rule, spec section 11)."
+    code_refs: [diff_diff/results.py, diff_diff/honest_did.py, diff_diff/pretrends.py, diff_diff/visualization/_event_study.py, diff_diff/results_base.py, diff_diff/diagnostic_report.py, diff_diff/estimators.py, diff_diff/guides/llms-full.txt]
+    notes: "Period-keyed dict becomes a FutureWarning property VIEW over the unified event-study surface on the successor container at 4.0; removed 5.0. Migrate this locator to the successor class when [M-011] flips (cross-row rule, spec section 11). Reader inventory completed at the 3.9 bump, when the rule-11 Duty C window armed for 4.0-scheduled rows."
 
   # ---- fit(aggregate=) -> results.aggregate(type=) -------------------------
   - id: M-020
@@ -626,8 +626,8 @@ rows:
     phase: 5
     warning: FutureWarning
     test_ref: null
-    code_refs: [diff_diff/staggered_results.py, diff_diff/power.py, diff_diff/practitioner.py, diff_diff/efficient_did.py, diff_diff/wooldridge.py, diff_diff/_reporting_helpers.py]
-    notes: "Pickle migration via __setstate__ per spec section 5."
+    code_refs: [diff_diff/staggered_results.py, diff_diff/staggered.py, diff_diff/staggered_aggregation.py, diff_diff/power.py, diff_diff/practitioner.py, diff_diff/efficient_did.py, diff_diff/wooldridge.py, diff_diff/_reporting_helpers.py, diff_diff/diagnostic_report.py, diff_diff/prep_dgp.py, diff_diff/_staggered_triple_diff_engine.py, diff_diff/staggered_triple_diff_results.py, diff_diff/guides/llms-autonomous.txt, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, docs/methodology/REGISTRY.md, docs/methodology/REPORTING.md]
+    notes: "Pickle migration via __setstate__ per spec section 5. This row carries the token family's CROSS-CUTTING consumer inventory (reports, guides, methodology docs, DGP helpers, the un-rowed staggered-DDD engine/container) alongside its own producers; per-class producer files live on their own rows. Inventory completed at the 3.9 bump, when the rule-11 Duty C window armed for 4.0-scheduled rows."
   - id: M-051
     kind: field
     group: field-flip
@@ -652,7 +652,7 @@ rows:
     status: planned
     phase: 5
     warning: FutureWarning
-    code_refs: [diff_diff/imputation_results.py]
+    code_refs: [diff_diff/imputation_results.py, diff_diff/imputation.py]
     notes: ""
   - id: M-053
     kind: field
@@ -665,7 +665,7 @@ rows:
     status: planned
     phase: 5
     warning: FutureWarning
-    code_refs: [diff_diff/two_stage_results.py]
+    code_refs: [diff_diff/two_stage_results.py, diff_diff/two_stage.py]
     notes: ""
   - id: M-054
     kind: field
@@ -678,7 +678,7 @@ rows:
     status: planned
     phase: 5
     warning: FutureWarning
-    code_refs: [diff_diff/stacked_did_results.py]
+    code_refs: [diff_diff/stacked_did_results.py, diff_diff/stacked_did.py]
     notes: ""
   - id: M-055
     kind: field
@@ -691,7 +691,7 @@ rows:
     status: planned
     phase: 5
     warning: FutureWarning
-    code_refs: [diff_diff/efficient_did_results.py]
+    code_refs: [diff_diff/efficient_did_results.py, diff_diff/efficient_did_aggregation.py]
     notes: ""
   - id: M-056
     kind: field
@@ -717,7 +717,7 @@ rows:
     status: planned
     phase: 5
     warning: FutureWarning
-    code_refs: [diff_diff/chaisemartin_dhaultfoeuille_results.py]
+    code_refs: [diff_diff/chaisemartin_dhaultfoeuille_results.py, diff_diff/chaisemartin_dhaultfoeuille.py]
     notes: ""
   - id: M-058
     kind: field
@@ -730,7 +730,7 @@ rows:
     status: planned
     phase: 5
     warning: FutureWarning
-    code_refs: [diff_diff/continuous_did_results.py]
+    code_refs: [diff_diff/continuous_did_results.py, diff_diff/continuous_did.py, docs/methodology/continuous-did.md]
     notes: "Also flips the deviant overall_att_se/overall_att_p_value/overall_att_conf_int/overall_att_t_stat sibling fields (the trap-catalog outlier)."
 
   # ---- Alias table ---------------------------------------------------------
