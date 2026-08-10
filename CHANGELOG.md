@@ -8,8 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [3.9.0] - 2026-08-10
 
 The 3.9 shim release of the 4.0 API-unification program (`docs/v4-design.md`):
-every new surface ships additively, and every old spelling keeps working
-through 3.9 with a `FutureWarning` steering to its replacement. Highlights:
+every new surface ships additively, and every deprecated spelling keeps
+working through 3.9, with a `FutureWarning` on its documented shim path
+(a few windows are deliberately silent and rowed as such in the ledger -
+e.g. the `QDiDResults` export alias, where constructing `QDiD` is what
+warns). Highlights:
 the three estimator merges (TwoWayFixedEffects absorbs MultiPeriodDiD via
 `event_study=True`, TripleDifference absorbs StaggeredTripleDifference,
 ChangesInChanges absorbs QDiD via `method=`), post-fit
