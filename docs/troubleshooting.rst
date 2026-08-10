@@ -235,7 +235,7 @@ Visualization Issues
 
 .. code-block:: python
 
-   from diff_diff import plot_event_study
+   from diff_diff import CallawaySantAnna, plot_event_study
 
    # For CallawaySantAnna, aggregate to an event study post-fit, then plot.
    # base_period="universal" gives the event study explicit reference row(s),
