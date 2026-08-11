@@ -243,7 +243,6 @@ def fit_survey_cs(micro, weights_col):
         time="year",
         first_treat="g",
         survey_design=second_stage,
-        aggregate="all",
     )
 
 
@@ -317,8 +316,9 @@ def test_scenario_b_design_weights_overstate(pipeline):
         "the realized truth (~-2.98pp)"
     )
     # Pre-trends stay clean (drift starts at adoption): |pre| below 1.5pp.
-    es = res.event_study_effects
-    max_pre = max(abs(es[e]["effect"]) * 100 for e in es if e < -1)
+    # (Post-fit container, mirroring the notebook's migrated read.)
+    agg = res.aggregate("event_study")
+    max_pre = max(abs(a) * 100 for t, a in zip(agg.event_time, agg.att) if t < -1)
     assert max_pre < 1.5, f"pre-trend coefficient drifted: {max_pre:.2f}pp"
 
 
@@ -403,7 +403,6 @@ def test_native_adapter_parity(pipeline):
             estimation_method="reg",
             control_group="not_yet_treated",
             base_period="universal",
-            aggregate="all",
         )
     np.testing.assert_allclose(res_adapter.overall_att, pipeline["B_raked"].overall_att, rtol=1e-12)
     assert hasattr(res_adapter, "_balance_adjustment")

@@ -27,6 +27,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   allowlisted `NameError`s (`r_comparison:block2`, `troubleshooting:block8`)
   are now self-contained and removed from `_CONTEXT_DEPENDENT_SNIPPETS`, so
   `tests/test_doc_snippets.py` actually executes them.
+- **Tutorial notebooks migrated off the deprecated fit-time `aggregate=`**
+  (the sweep's notebook half, completing the TODO row): 16 analytical
+  fit/configuration sites across `02_staggered_did`, `16_survey_did` (including its
+  200-draw Monte-Carlo loop), `26_composition_drift_calibration` (native
+  seam + the two `balance`-adapter sites, where the kwarg was not
+  load-bearing), `16_wooldridge_etwfe`, `17_brand_awareness_survey` and
+  `24_staggered_vs_collapsed_power` now fit plain and aggregate post-fit,
+  with legacy `event_study_effects`/`group_effects` dict reads rebound to
+  the containers (keyed lookups preserve each notebook's missing-event-time
+  fallbacks; cells that printed the fit-time `summary()` aggregation blocks
+  print the container summaries instead, so no rendered teaching content is
+  lost). The BOOTSTRAPPED fits (`02` cell 20, both `09_real_world_examples`
+  case studies) deliberately KEEP fit-time `aggregate=` with comments naming
+  it the documented until-4.0 exception, and `08_triple_diff`'s staggered
+  DDD keeps it as the canonical route (M-140/M-141).
+  `tests/test_t26_composition_drift_calibration_drift.py` mirrors the t26
+  migration at all three of its sites. All edited notebooks re-executed
+  under `DIFF_DIFF_BACKEND=python` (the CI/RTD backend); notebooks stored
+  in compact JSON were normalized to nbformat's canonical layout by the
+  write-back.
 
 ## [3.9.0] - 2026-08-10
 
