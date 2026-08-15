@@ -50,6 +50,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identification).
 
 ### Changed
+- **DiagnosticReport's event-study-gated checks now consume the post-fit
+  `results.aggregate('event_study')` surface** (the 3.9 M-020 family;
+  retires the TODO "diagnostic_report ES-gated checks" row): on a modern
+  plain fit whose raw `event_study_effects` field is absent, the report
+  derives the `EventStudyResults` container internally — once, cached,
+  fail-soft — so `parallel_trends`, `pretrends_power`, `sensitivity`
+  (CallawaySantAnna; the container is M-093-admitted into
+  `compute_pretrends_power`/`HonestDiD` with pinned raw-route parity) and
+  `heterogeneity` (ImputationDiD / TwoStageDiD / ContinuousDiD, whose
+  plain-fit heterogeneity previously skipped) run without the deprecated
+  fit-time kwarg. Derived-route sections carry the additive
+  `pre_period_source="aggregate_event_study"` schema key (BusinessReport
+  lifts it into its `pre_trends` block), and warnings re-emitted by a kit
+  recompute are captured and re-published on the consuming section.
+  Derivation failures fail closed to explicit per-check skip reasons — a
+  bootstrapped fit's `NotImplementedError`, a kit-less unpickle's
+  `ValueError` — and the remediation strings no longer steer users to the
+  dying kwarg (Wooldridge points at its own in-place
+  `results.aggregate(type='event_study')`; the staggered-DDD reason names
+  the fit-time kwarg as that surface's canonical route per M-140; a
+  one-pre-period MultiPeriodDiD fit gets an accurate
+  reference-period message). Deliberately KEPT: raw-field precedence (a
+  present `event_study_effects` — the requested-but-empty `{}` sentinel
+  included — is authoritative and never re-derived, preserving fit-time
+  `balance_e` semantics), dCDH's `placebo_event_study` branch, the
+  Spillover/Stacked estimator-accurate messages, the `EventStudyResults`
+  INPUT rejection at DR/BR construction (admission is its own TODO row),
+  the M-093 consumer-admission set (CS only on the derived route), and no
+  auto-call of Wooldridge's mutating `aggregate()`. `applicable_checks`
+  may now trigger the one cached derivation; the docstring/RST laziness
+  guarantee is amended accordingly. The report API pages
+  (`docs/api/diagnostic_report.rst`, `business_report.rst`) migrate their
+  examples off the fit-time kwarg.
 - **Narrative docs migrated off the deprecated fit-time `aggregate=`** (the
   3.9 M-020 family; TODO "fit-time aggregate= teachings" sweep, RST half):
   `choosing_estimator.rst`, `python_comparison.rst` and `r_comparison.rst` now

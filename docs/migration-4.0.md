@@ -142,6 +142,18 @@ results = CallawaySantAnna().fit(data, ...)
 event_study = results.aggregate("event_study")
 ```
 
+`DiagnosticReport` / `BusinessReport` need no migration step of their own:
+where applicable, their event-study-gated checks derive the surface
+internally via the result's post-fit `aggregate('event_study')` when the
+raw `event_study_effects` field is absent, so moving a fit off the
+fit-time keyword no longer silently disables those checks. The routing is
+estimator-specific: CallawaySantAnna derives for parallel trends,
+pre-trends power, and sensitivity; ImputationDiD and TwoStageDiD for
+parallel trends (`pretrends=True` fits) and heterogeneity; ContinuousDiD
+for heterogeneity. StackedDiD and SunAbraham always populate the raw
+surface (nothing to derive), and ChaisemartinDHaultfoeuille's pre-period
+checks read `placebo_event_study` directly.
+
 ```{warning}
 **Bootstrapped fits have no route yet.** On `CallawaySantAnna`, `ImputationDiD`, `TwoStageDiD`,
 `EfficientDiD` and `ContinuousDiD`, the post-fit recompute levels raise `NotImplementedError`

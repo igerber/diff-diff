@@ -3413,3 +3413,721 @@ class TestEmittedGuidanceCanonicalNames:
         source = inspect.getsource(dr_mod)
         assert "(CS / SA / BJS / Gardner)" not in source
         assert "heterogeneity-robust estimator (CallawaySantAnna, SunAbraham, " in source
+
+
+# ---------------------------------------------------------------------------
+# Derived post-fit event-study surface (results.aggregate('event_study'))
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def cs_plain_fit():
+    """Plain (modern, no fit-time aggregate=) CS fit — the derived-route fixture."""
+    sdf = generate_staggered_data(n_units=100, n_periods=6, treatment_effect=1.5, seed=7)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        cs = CallawaySantAnna(base_period="universal").fit(
+            sdf, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
+        )
+    return cs, sdf
+
+
+@pytest.fixture(scope="module")
+def cs_bootstrap_plain_fit():
+    # Explicit hard-coded n_bootstrap (report-suite precedent:
+    # test_business_report.py's SyntheticDiD bootstrap fixture); the only
+    # assertion on this fixture is the fail-closed skip, so the iteration
+    # count carries no numeric meaning and is not ci_params-scaled.
+    sdf = generate_staggered_data(n_units=100, n_periods=6, treatment_effect=1.5, seed=7)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        cs = CallawaySantAnna(base_period="universal", n_bootstrap=50, seed=1).fit(
+            sdf, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
+        )
+    return cs, sdf
+
+
+@pytest.fixture(scope="module")
+def imp_pretrends_fits():
+    """(raw-kwarg fit, plain fit) ImputationDiD pair, both pretrends=True.
+
+    ``pretrends=True`` is REQUIRED for estimated pre-period horizons to
+    exist at all — under the default ``pretrends=False`` the derived
+    surface carries only the reference lead.
+    """
+    from diff_diff import ImputationDiD
+
+    sdf = generate_staggered_data(n_units=100, n_periods=6, treatment_effect=1.5, seed=7)
+    kw = dict(outcome="outcome", unit="unit", time="period", first_treat="first_treat")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        raw = ImputationDiD(pretrends=True).fit(sdf, aggregate="event_study", **kw)
+        plain = ImputationDiD(pretrends=True).fit(sdf, **kw)
+    return raw, plain, sdf
+
+
+@pytest.fixture(scope="module")
+def ts_pretrends_fits():
+    """(raw-kwarg fit, plain fit) TwoStageDiD pair, both pretrends=True."""
+    from diff_diff import TwoStageDiD
+
+    sdf = generate_staggered_data(n_units=100, n_periods=6, treatment_effect=1.5, seed=7)
+    kw = dict(outcome="outcome", unit="unit", time="period", first_treat="first_treat")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        raw = TwoStageDiD(pretrends=True).fit(sdf, aggregate="event_study", **kw)
+        plain = TwoStageDiD(pretrends=True).fit(sdf, **kw)
+    return raw, plain, sdf
+
+
+class TestDerivedEventStudySurface:
+    """DR obtains the ES surface from post-fit aggregate('event_study')."""
+
+    def test_plain_cs_fit_runs_event_study_gated_checks(self, cs_plain_fit):
+        cs, sdf = cs_plain_fit
+        dr = DiagnosticReport(
+            cs, data=sdf, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
+        )
+        applicable = set(dr.applicable_checks)
+        assert {"parallel_trends", "pretrends_power", "sensitivity", "heterogeneity"} <= applicable
+        d = dr.run_all().to_dict()
+        for check in ("parallel_trends", "pretrends_power", "sensitivity", "heterogeneity"):
+            assert d[check]["status"] == "ran", (check, d[check])
+
+    def test_plain_cs_pt_parity_with_kwarg_route(self, cs_plain_fit, cs_fit):
+        plain, _ = cs_plain_fit
+        raw, _ = cs_fit
+        d_plain = DiagnosticReport(plain).run_all().to_dict()["parallel_trends"]
+        d_raw = DiagnosticReport(raw).run_all().to_dict()["parallel_trends"]
+        assert d_plain["method"] == "joint_wald_event_study"
+        assert d_raw["method"] == "joint_wald_event_study"
+        # Kit recompute is ~1 ULP off fit-time (BLAS reassociation) — NOT
+        # bit-identity.
+        np.testing.assert_allclose(
+            d_plain["joint_p_value"], d_raw["joint_p_value"], rtol=1e-12, atol=1e-12
+        )
+        np.testing.assert_allclose(
+            d_plain["test_statistic"], d_raw["test_statistic"], rtol=1e-12, atol=1e-12
+        )
+        rows_plain = sorted(d_plain["per_period"], key=lambda p: p["period"])
+        rows_raw = sorted(d_raw["per_period"], key=lambda p: p["period"])
+        assert [p["period"] for p in rows_plain] == [p["period"] for p in rows_raw]
+        for a, b in zip(rows_plain, rows_raw):
+            np.testing.assert_allclose(a["coef"], b["coef"], rtol=1e-12, atol=1e-12)
+            np.testing.assert_allclose(a["se"], b["se"], rtol=1e-12, atol=1e-12)
+
+    def test_plain_cs_pretrends_power_parity(self, cs_plain_fit, cs_fit):
+        plain, _ = cs_plain_fit
+        raw, _ = cs_fit
+        d_plain = DiagnosticReport(plain).run_all().to_dict()["pretrends_power"]
+        d_raw = DiagnosticReport(raw).run_all().to_dict()["pretrends_power"]
+        assert d_plain["status"] == d_raw["status"] == "ran"
+        assert d_plain["covariance_source"] == "full_pre_period_vcov"
+        assert d_raw["covariance_source"] == "full_pre_period_vcov"
+        assert d_plain["tier"] == d_raw["tier"]
+        # SciPy's Genz MVN CDF is internally randomized (~1e-5 jitter
+        # between identical calls); 1e-3 is the repo's container-parity pin.
+        np.testing.assert_allclose(d_plain["mdv"], d_raw["mdv"], rtol=1e-3, atol=1e-3)
+        np.testing.assert_allclose(
+            d_plain["power_at_violation_magnitude"],
+            d_raw["power_at_violation_magnitude"],
+            rtol=1e-3,
+            atol=1e-3,
+        )
+
+    def test_plain_cs_sensitivity_parity(self, cs_plain_fit, cs_fit):
+        plain, _ = cs_plain_fit
+        raw, _ = cs_fit
+        d_plain = DiagnosticReport(plain).run_all().to_dict()["sensitivity"]
+        d_raw = DiagnosticReport(raw).run_all().to_dict()["sensitivity"]
+        assert d_plain["status"] == d_raw["status"] == "ran"
+        # On this fixture breakdown_M is None on BOTH routes — assert the
+        # shape equality, never a numeric tolerance on it.
+        assert d_plain["breakdown_M"] is None
+        assert d_raw["breakdown_M"] is None
+        assert len(d_plain["grid"]) == len(d_raw["grid"])
+        for a, b in zip(d_plain["grid"], d_raw["grid"]):
+            np.testing.assert_allclose(a["ci_lower"], b["ci_lower"], rtol=1e-12, atol=1e-12)
+            np.testing.assert_allclose(a["ci_upper"], b["ci_upper"], rtol=1e-12, atol=1e-12)
+
+    def test_derived_route_emits_pre_period_source(self, cs_plain_fit, cs_fit):
+        plain, _ = cs_plain_fit
+        raw, _ = cs_fit
+        d_plain = DiagnosticReport(plain).run_all().to_dict()
+        d_raw = DiagnosticReport(raw).run_all().to_dict()
+        assert d_plain["parallel_trends"]["pre_period_source"] == "aggregate_event_study"
+        assert d_plain["pretrends_power"]["pre_period_source"] == "aggregate_event_study"
+        assert d_plain["sensitivity"]["pre_period_source"] == "aggregate_event_study"
+        assert "pre_period_source" not in d_raw["parallel_trends"]
+        assert "pre_period_source" not in d_raw["pretrends_power"]
+        assert "pre_period_source" not in d_raw["sensitivity"]
+
+    def test_bootstrap_plain_cs_skips_with_honest_reason(self, cs_bootstrap_plain_fit):
+        cs, _ = cs_bootstrap_plain_fit
+        skipped = DiagnosticReport(cs).run_all().skipped_checks
+        for check in ("parallel_trends", "pretrends_power", "sensitivity"):
+            assert check in skipped, skipped
+            assert "aggregate('event_study')" in skipped[check]
+            assert "bootstrap" in skipped[check]
+            assert "deprecated" not in skipped[check]
+
+    def test_missing_kit_value_error_leg(self, cs_plain_fit):
+        import copy
+
+        cs, _ = cs_plain_fit
+        stripped = copy.copy(cs)
+        object.__setattr__(stripped, "_aggregation_kit", None)
+        skipped = DiagnosticReport(stripped).run_all().skipped_checks
+        # ALL three ES-gated consumers carry the accurate failure reason —
+        # no availability leg may mask it with a coefficient-count message.
+        for check in ("parallel_trends", "pretrends_power", "sensitivity"):
+            assert check in skipped, skipped
+            assert "ValueError" in skipped[check]
+            assert "no aggregation kit" in skipped[check]
+
+    def test_imputation_pretrends_replicate_not_implemented_leg(self):
+        from diff_diff import ImputationDiD, SurveyDesign
+
+        sdf = generate_staggered_data(n_units=100, n_periods=6, treatment_effect=1.5, seed=7).copy()
+        rng = np.random.default_rng(5)
+        wmap = {u: rng.uniform(0.5, 2.0) for u in sdf["unit"].unique()}
+        sdf["w"] = sdf["unit"].map(wmap)
+        rep_cols = []
+        for r in range(8):
+            col = f"rw{r}"
+            rep_cols.append(col)
+            jitter = {u: rng.uniform(0.1, 2.0) for u in sdf["unit"].unique()}
+            sdf[col] = sdf["unit"].map(jitter) * sdf["w"]
+        sd = SurveyDesign(weights="w", replicate_weights=rep_cols, replicate_method="JK1")
+        imp = ImputationDiD(pretrends=True).fit(
+            sdf,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            survey_design=sd,
+        )
+        skipped = DiagnosticReport(imp).run_all().skipped_checks
+        # The non-bootstrap test of the "{TypeName}: {msg}" embedding.
+        assert "parallel_trends" in skipped
+        assert "NotImplementedError" in skipped["parallel_trends"]
+
+    def test_wooldridge_reason_points_at_inplace_aggregate(self):
+        from diff_diff import WooldridgeDiD
+
+        sdf = generate_staggered_data(n_units=100, n_periods=6, treatment_effect=1.5, seed=7)
+        w = WooldridgeDiD().fit(
+            sdf, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
+        )
+        skipped = DiagnosticReport(w).run_all().skipped_checks
+        assert "results.aggregate(type='event_study')" in skipped["parallel_trends"]
+        assert "deprecated" not in skipped["parallel_trends"]
+        # DR must never auto-call Wooldridge's MUTATING aggregate.
+        assert w.event_study_effects is None
+
+    def test_staggered_triple_diff_reason_names_canonical_kwarg(self):
+        from diff_diff import TripleDifference
+
+        sdf = generate_staggered_data(n_units=100, n_periods=6, treatment_effect=1.5, seed=7)
+        sdf = sdf.assign(partition=(sdf["unit"] % 2))
+        t = TripleDifference().fit(
+            sdf,
+            outcome="outcome",
+            unit="unit",
+            partition="partition",
+            time="period",
+            first_treat="first_treat",
+        )
+        skipped = DiagnosticReport(t).run_all().skipped_checks
+        assert "aggregate='event_study'" in skipped["parallel_trends"]
+        assert "canonical" in skipped["parallel_trends"]
+        assert "deprecated" not in skipped["parallel_trends"]
+
+    def test_plain_imputation_twostage_continuous_heterogeneity(
+        self, imp_pretrends_fits, ts_pretrends_fits
+    ):
+        _, imp_plain, _ = imp_pretrends_fits
+        _, ts_plain, _ = ts_pretrends_fits
+        for res in (imp_plain, ts_plain):
+            d = DiagnosticReport(res).run_all().to_dict()["heterogeneity"]
+            assert d["status"] == "ran", d
+            assert d["source"] == "aggregate_event_study_post"
+        from diff_diff import ContinuousDiD
+
+        rng = np.random.default_rng(3)
+        n = 200
+        cdf = pd.DataFrame({"unit": np.repeat(np.arange(n), 4), "period": np.tile([1, 2, 3, 4], n)})
+        cdf["first_treat"] = np.repeat(np.where(np.arange(n) % 2 == 0, 3, 0), 4)
+        cdf["dose"] = np.repeat(np.where(np.arange(n) % 2 == 0, rng.uniform(0.5, 2.0, n), 0.0), 4)
+        cdf["outcome"] = rng.normal(0, 1, len(cdf)) + cdf["dose"] * np.maximum(
+            0, cdf["period"] - cdf["first_treat"] + 1
+        ) * (cdf["first_treat"] > 0)
+        c = ContinuousDiD().fit(
+            cdf,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            dose="dose",
+        )
+        d = DiagnosticReport(c).run_all().to_dict()["heterogeneity"]
+        assert d["status"] == "ran"
+        assert d["source"] == "aggregate_event_study_post"
+
+    def test_plain_imputation_twostage_pt_runs(self, imp_pretrends_fits, ts_pretrends_fits):
+        _, imp_plain, _ = imp_pretrends_fits
+        _, ts_plain, _ = ts_pretrends_fits
+        for res in (imp_plain, ts_plain):
+            d = DiagnosticReport(res).run_all().to_dict()["parallel_trends"]
+            assert d["status"] == "ran", d
+            assert d["pre_period_source"] == "aggregate_event_study"
+
+    def test_twostage_without_pretrends_gets_no_pre_horizons_reason(self):
+        from diff_diff import TwoStageDiD
+
+        sdf = generate_staggered_data(n_units=100, n_periods=6, treatment_effect=1.5, seed=7)
+        ts = TwoStageDiD().fit(
+            sdf, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
+        )
+        results = DiagnosticReport(ts).run_all()
+        skipped = results.skipped_checks
+        assert "no pre-periods" in skipped["parallel_trends"]
+        assert "aggregate='event_study'" not in skipped["parallel_trends"]
+        # A SUCCESSFUL derivation that turned out pre-empty still carries
+        # the derived-route provenance on the gate-skipped section.
+        pt = results.to_dict()["parallel_trends"]
+        assert pt["status"] == "skipped"
+        assert pt["pre_period_source"] == "aggregate_event_study"
+
+    def test_mpd_one_pre_period_gets_reference_message(self):
+        rng = np.random.default_rng(5)
+        rows = []
+        for u in range(60):
+            for t in (1, 2):
+                rows.append(
+                    {
+                        "unit": u,
+                        "period": t,
+                        "treated": int(u < 30),
+                        "outcome": rng.normal() + (1.0 if (u < 30 and t == 2) else 0.0),
+                    }
+                )
+        mdf = pd.DataFrame(rows)
+        m = MultiPeriodDiD().fit(
+            mdf,
+            outcome="outcome",
+            treatment="treated",
+            time="period",
+            unit="unit",
+            post_periods=[2],
+        )
+        skipped = DiagnosticReport(m).run_all().skipped_checks
+        assert "every pre-treatment period is the omitted reference" in skipped["parallel_trends"]
+        assert "does not support post-fit" not in skipped["parallel_trends"]
+
+    def test_adapter_zero_count_row_excluded(self):
+        # Mirror of the raw-route pin: an n == 0, NaN-effect NON-reference
+        # container row is EXCLUDED (never counted in n_dropped_undefined).
+        from diff_diff.diagnostic_report import (
+            _collect_pre_period_coefs,
+            _surface_to_event_study_dict,
+        )
+        from diff_diff.results_base import EventStudyResults
+
+        surface = EventStudyResults(
+            event_time=np.array([-3, -2, -1, 0, 1]),
+            att=np.array([0.1, np.nan, 0.0, 0.5, 0.6]),
+            se=np.array([0.05, np.nan, np.nan, 0.1, 0.1]),
+            t_stat=np.array([2.0, np.nan, np.nan, 5.0, 6.0]),
+            p_value=np.array([0.04, np.nan, np.nan, 0.001, 0.001]),
+            conf_int_lower=np.array([0.0, np.nan, np.nan, 0.3, 0.4]),
+            conf_int_upper=np.array([0.2, np.nan, np.nan, 0.7, 0.8]),
+            is_reference=np.array([False, False, True, False, False]),
+            n=np.array([40.0, 0.0, np.nan, 40.0, 40.0]),
+        )
+        adapted = _surface_to_event_study_dict(surface)
+        # Reference row (-1) and zero-count row (-2) both excluded.
+        assert set(adapted) == {-3, 0, 1}
+        assert all(isinstance(k, int) for k in adapted)
+
+        class _Shell:
+            event_study_effects = None
+            anticipation = 0
+
+        pre_coefs, n_dropped = _collect_pre_period_coefs(_Shell(), surface_dict=adapted)
+        assert [k for (k, _, _, _) in pre_coefs] == [-3]
+        assert n_dropped == 0
+
+    def test_adapter_rejects_calendar_scale(self):
+        from diff_diff.diagnostic_report import _surface_to_event_study_dict
+        from diff_diff.results_base import EventStudyResults
+
+        surface = EventStudyResults(
+            event_time=np.array(["2001", "2002"], dtype=object),
+            att=np.array([0.1, 0.2]),
+            se=np.array([0.05, 0.05]),
+            t_stat=np.array([2.0, 4.0]),
+            p_value=np.array([0.04, 0.001]),
+            conf_int_lower=np.array([0.0, 0.1]),
+            conf_int_upper=np.array([0.2, 0.3]),
+            is_reference=np.array([False, False]),
+            n=np.array([40.0, 40.0]),
+            time_scale="calendar",
+            source="TwoWayFixedEffects",
+            post_periods=["2002"],
+        )
+        with pytest.raises(ValueError, match="relative-scale"):
+            _surface_to_event_study_dict(surface)
+
+    def test_imputation_twostage_raw_vs_derived_pt_parity(
+        self, imp_pretrends_fits, ts_pretrends_fits
+    ):
+        imp_raw, imp_plain, _ = imp_pretrends_fits
+        ts_raw, ts_plain, _ = ts_pretrends_fits
+        # ImputationDiD carries no event-study vcov on either route -> both
+        # take the Bonferroni path; joint p compared at 1e-12.
+        d_raw = DiagnosticReport(imp_raw).run_all().to_dict()["parallel_trends"]
+        d_plain = DiagnosticReport(imp_plain).run_all().to_dict()["parallel_trends"]
+        assert d_raw["method"] == d_plain["method"] == "bonferroni"
+        np.testing.assert_allclose(
+            d_plain["joint_p_value"], d_raw["joint_p_value"], rtol=1e-12, atol=1e-12
+        )
+        # TwoStageDiD persists the ES vcov on both routes -> joint Wald.
+        d_raw = DiagnosticReport(ts_raw).run_all().to_dict()["parallel_trends"]
+        d_plain = DiagnosticReport(ts_plain).run_all().to_dict()["parallel_trends"]
+        assert d_raw["method"] == d_plain["method"] == "joint_wald_event_study"
+        np.testing.assert_allclose(
+            d_plain["test_statistic"], d_raw["test_statistic"], rtol=1e-12, atol=1e-12
+        )
+        np.testing.assert_allclose(
+            d_plain["joint_p_value"], d_raw["joint_p_value"], rtol=1e-12, atol=1e-12
+        )
+
+    @staticmethod
+    def _assert_heterogeneity_parity(raw_fit, plain_fit):
+        d_raw = DiagnosticReport(raw_fit).run_all().to_dict()["heterogeneity"]
+        d_plain = DiagnosticReport(plain_fit).run_all().to_dict()["heterogeneity"]
+        assert d_raw["source"] == "event_study_effects_post"
+        assert d_plain["source"] == "aggregate_event_study_post"
+        assert d_plain["n_effects"] == d_raw["n_effects"]
+        assert d_plain["sign_consistent"] == d_raw["sign_consistent"]
+        for key in ("min", "max", "mean", "sd", "range"):
+            np.testing.assert_allclose(d_plain[key], d_raw[key], rtol=1e-12, atol=1e-12)
+
+    def test_imputation_heterogeneity_numeric_parity(self, imp_pretrends_fits):
+        imp_raw, imp_plain, _ = imp_pretrends_fits
+        self._assert_heterogeneity_parity(imp_raw, imp_plain)
+
+    def test_twostage_heterogeneity_numeric_parity(self, ts_pretrends_fits):
+        ts_raw, ts_plain, _ = ts_pretrends_fits
+        self._assert_heterogeneity_parity(ts_raw, ts_plain)
+
+    def test_continuous_heterogeneity_numeric_parity(self):
+        from diff_diff import ContinuousDiD
+
+        rng = np.random.default_rng(3)
+        n = 200
+        cdf = pd.DataFrame({"unit": np.repeat(np.arange(n), 4), "period": np.tile([1, 2, 3, 4], n)})
+        cdf["first_treat"] = np.repeat(np.where(np.arange(n) % 2 == 0, 3, 0), 4)
+        cdf["dose"] = np.repeat(np.where(np.arange(n) % 2 == 0, rng.uniform(0.5, 2.0, n), 0.0), 4)
+        cdf["outcome"] = rng.normal(0, 1, len(cdf)) + cdf["dose"] * np.maximum(
+            0, cdf["period"] - cdf["first_treat"] + 1
+        ) * (cdf["first_treat"] > 0)
+        kw = dict(
+            outcome="outcome", unit="unit", time="period", first_treat="first_treat", dose="dose"
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            # ContinuousDiD's fit-time spelling has no underscore.
+            raw = ContinuousDiD().fit(cdf, aggregate="eventstudy", **kw)
+            plain = ContinuousDiD().fit(cdf, **kw)
+        self._assert_heterogeneity_parity(raw, plain)
+
+    def test_pre_period_source_on_inconclusive_derived_return(self, cs_plain_fit):
+        cs, _ = cs_plain_fit
+        dr = DiagnosticReport(cs)
+        surface, surface_dict, _ = dr._resolve_event_study_surface()
+        assert surface is not None
+        # Force an undefined-inference pre row through the derived dict so
+        # the runner takes the dropped-undefined inconclusive branch.
+        poisoned = dict(surface_dict)
+        first_pre = min(k for k in poisoned if k < 0)
+        poisoned[first_pre] = {"effect": np.nan, "se": np.nan, "p_value": np.nan}
+        dr._derived_es_cache = (surface, poisoned, None)
+        d = dr.run_all().to_dict()["parallel_trends"]
+        assert d["method"] == "inconclusive"
+        assert d["pre_period_source"] == "aggregate_event_study"
+
+    def test_anticipation_boundary_respected_on_derived_route(self):
+        sdf = generate_staggered_data(n_units=120, n_periods=8, treatment_effect=1.5, seed=7)
+        cs = CallawaySantAnna(base_period="universal", anticipation=1).fit(
+            sdf, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
+        )
+        d = DiagnosticReport(cs).run_all().to_dict()["parallel_trends"]
+        assert d["status"] == "ran"
+        assert d["pre_period_source"] == "aggregate_event_study"
+        assert all(p["period"] < -1 for p in d["per_period"])
+
+    def test_requested_but_empty_raw_field_is_authoritative(self):
+        # Round-4 dual-review P0 pin: a fit whose fit-time aggregate=/
+        # balance_e= produced the REQUESTED-but-empty {} sentinel must
+        # behave exactly as today — no silent re-derivation (which would
+        # drop the fit-time balance_e and report effects over cohorts the
+        # fit deliberately excluded).
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            sdf = generate_staggered_data(n_units=100, n_periods=6, treatment_effect=1.5, seed=7)
+            e = EfficientDiD().fit(
+                sdf,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                aggregate="event_study",
+                balance_e=4,
+            )
+        assert e.event_study_effects == {}
+        calls = {"n": 0}
+        orig = type(e).aggregate
+
+        def counting(self, *args, **kwargs):
+            calls["n"] += 1
+            return orig(self, *args, **kwargs)
+
+        with patch.object(type(e), "aggregate", counting):
+            d = DiagnosticReport(e).run_all().to_dict()
+        assert d["heterogeneity"]["status"] == "skipped"
+        assert calls["n"] == 0
+
+    def test_derived_route_warnings_republished(self, cs_plain_fit):
+        cs, _ = cs_plain_fit
+        orig = type(cs).aggregate
+
+        def warning_aggregate(self, *args, **kwargs):
+            warnings.warn("synthetic kit-recompute caveat", UserWarning, stacklevel=2)
+            return orig(self, *args, **kwargs)
+
+        with patch.object(type(cs), "aggregate", warning_aggregate):
+            d = DiagnosticReport(cs).run_all().to_dict()
+        pt = d["parallel_trends"]
+        assert pt["status"] == "ran"
+        assert any("synthetic kit-recompute caveat" in w for w in pt.get("warnings", []))
+        # Record-and-republish reaches the top-level warnings channel too.
+        assert any("synthetic kit-recompute caveat" in w for w in d["warnings"])
+
+    def test_no_mutation_after_run_all(self, cs_plain_fit):
+        cs, _ = cs_plain_fit
+        DiagnosticReport(cs).run_all()
+        assert cs.event_study_effects is None
+
+    def test_raw_precedence_never_calls_aggregate(self, cs_fit):
+        cs, _ = cs_fit
+
+        def boom(self, *args, **kwargs):
+            raise AssertionError("aggregate() must not be called when the raw field is present")
+
+        with patch.object(type(cs), "aggregate", boom):
+            d = DiagnosticReport(cs).run_all().to_dict()
+        assert d["parallel_trends"]["status"] == "ran"
+
+    def test_derivation_is_cached_single_call(self, cs_plain_fit):
+        cs, _ = cs_plain_fit
+        calls = {"n": 0}
+        orig = type(cs).aggregate
+
+        def counting(self, *args, **kwargs):
+            calls["n"] += 1
+            return orig(self, *args, **kwargs)
+
+        with patch.object(type(cs), "aggregate", counting):
+            dr = DiagnosticReport(cs)
+            dr.applicable_checks
+            dr.run_all()
+        assert calls["n"] == 1
+
+    def test_survey_backed_raw_vs_derived_pt_parity(self):
+        # Round-1 local-review P2: the derived-surface covariance composed
+        # with the report-level finite-df (F(k, df_survey)) inference had
+        # no direct raw-vs-derived pin.
+        from diff_diff import SurveyDesign, TwoStageDiD
+
+        rng = np.random.default_rng(9)
+        sdf = generate_staggered_data(n_units=100, n_periods=6, treatment_effect=1.5, seed=7).copy()
+        units = sdf["unit"].unique()
+        sdf["w"] = sdf["unit"].map({u: rng.uniform(0.5, 2.0) for u in units})
+        sdf["stratum"] = sdf["unit"].map({u: int(u) % 4 for u in units})
+        sdf["psu"] = sdf["unit"]
+        sd = SurveyDesign(weights="w", strata="stratum", psu="psu")
+        kw = dict(
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            survey_design=sd,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            cs_raw = CallawaySantAnna(base_period="universal").fit(
+                sdf, aggregate="event_study", **kw
+            )
+            cs_plain = CallawaySantAnna(base_period="universal").fit(sdf, **kw)
+            ts_raw = TwoStageDiD(pretrends=True).fit(sdf, aggregate="event_study", **kw)
+            ts_plain = TwoStageDiD(pretrends=True).fit(sdf, **kw)
+        for raw, plain in ((cs_raw, cs_plain), (ts_raw, ts_plain)):
+            d_raw = DiagnosticReport(raw).run_all().to_dict()["parallel_trends"]
+            d_plain = DiagnosticReport(plain).run_all().to_dict()["parallel_trends"]
+            assert d_raw["method"] == "joint_wald_event_study_survey"
+            assert d_plain["method"] == "joint_wald_event_study_survey"
+            np.testing.assert_allclose(
+                d_plain["test_statistic"], d_raw["test_statistic"], rtol=1e-12, atol=1e-12
+            )
+            np.testing.assert_allclose(
+                d_plain["joint_p_value"], d_raw["joint_p_value"], rtol=1e-12, atol=1e-12
+            )
+            np.testing.assert_allclose(
+                d_plain["df_denom"], d_raw["df_denom"], rtol=1e-12, atol=1e-12
+            )
+            assert d_plain["pre_period_source"] == "aggregate_event_study"
+            assert "pre_period_source" not in d_raw
+
+    def test_derived_route_error_paths_carry_provenance(self, cs_plain_fit):
+        # A derived-route consumer failure must stay schema-distinguishable
+        # from a raw-route one (the additive-key contract).
+        cs, _ = cs_plain_fit
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("synthetic consumer failure")
+
+        with patch("diff_diff.pretrends.compute_pretrends_power", boom):
+            d = DiagnosticReport(cs).run_all().to_dict()["pretrends_power"]
+        assert d["status"] == "error"
+        assert d["pre_period_source"] == "aggregate_event_study"
+
+        from diff_diff.honest_did import HonestDiD
+
+        with patch.object(HonestDiD, "sensitivity_analysis", boom):
+            d = DiagnosticReport(cs).run_all().to_dict()["sensitivity"]
+        assert d["status"] == "error"
+        assert d["pre_period_source"] == "aggregate_event_study"
+
+    def test_warning_then_failure_rides_skipped_section_and_top_level(self, cs_plain_fit):
+        # A warning emitted by aggregate('event_study') immediately before
+        # the call raises must appear BOTH on the gate-skipped consuming
+        # section and in the top-level warnings channel.
+        cs, _ = cs_plain_fit
+
+        def warn_then_raise(self, *args, **kwargs):
+            warnings.warn("kit caveat before failure", UserWarning, stacklevel=2)
+            raise NotImplementedError("synthetic derivation failure")
+
+        with patch.object(type(cs), "aggregate", warn_then_raise):
+            results = DiagnosticReport(cs).run_all()
+        d = results.to_dict()
+        pt = d["parallel_trends"]
+        assert pt["status"] == "skipped"
+        assert "NotImplementedError" in pt["reason"]
+        assert any("kit caveat before failure" in w for w in pt.get("warnings", []))
+        assert any("kit caveat before failure" in w for w in d["warnings"])
+
+    def test_successful_empty_derivation_warning_rides_skipped_section(self):
+        # A successful reference-only derivation that EMITS a warning:
+        # the warning appears on the gate-skipped consuming section AND at
+        # the top level, and the section carries the derived provenance.
+        from diff_diff import TwoStageDiD
+
+        sdf = generate_staggered_data(n_units=100, n_periods=6, treatment_effect=1.5, seed=7)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ts = TwoStageDiD().fit(
+                sdf, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
+            )
+        orig = type(ts).aggregate
+
+        def warn_then_succeed(self, *args, **kwargs):
+            warnings.warn("reference-only surface caveat", UserWarning, stacklevel=2)
+            return orig(self, *args, **kwargs)
+
+        with patch.object(type(ts), "aggregate", warn_then_succeed):
+            d = DiagnosticReport(ts).run_all().to_dict()
+        pt = d["parallel_trends"]
+        assert pt["status"] == "skipped"
+        assert pt["pre_period_source"] == "aggregate_event_study"
+        assert any("reference-only surface caveat" in w for w in pt.get("warnings", []))
+        assert any("reference-only surface caveat" in w for w in d["warnings"])
+
+    def test_wrong_container_type_warning_rides_skipped_section(self, cs_plain_fit):
+        # Defensive branch: aggregate() warns and then returns a
+        # non-EventStudyResults object — treated exactly like a raised
+        # exception (failure recorded, warning republished on the section).
+        cs, _ = cs_plain_fit
+
+        def warn_then_wrong_type(self, *args, **kwargs):
+            warnings.warn("wrong-type caveat", UserWarning, stacklevel=2)
+            return {"not": "a container"}
+
+        with patch.object(type(cs), "aggregate", warn_then_wrong_type):
+            d = DiagnosticReport(cs).run_all().to_dict()
+        for check in ("parallel_trends", "pretrends_power", "sensitivity"):
+            assert d[check]["status"] == "skipped", d[check]
+            assert "unexpected dict" in d[check]["reason"]
+        pt = d["parallel_trends"]
+        assert any("wrong-type caveat" in w for w in pt.get("warnings", []))
+        assert any("wrong-type caveat" in w for w in d["warnings"])
+
+    def test_user_opted_out_check_carries_no_derived_provenance(self, cs_plain_fit):
+        # A run_*=False opt-out skip never consulted the resolver and must
+        # stay a plain opt-out skip — no provenance, no derivation warnings
+        # — while the consuming sections still carry them.
+        cs, _ = cs_plain_fit
+        orig = type(cs).aggregate
+
+        def warning_aggregate(self, *args, **kwargs):
+            warnings.warn("kit caveat", UserWarning, stacklevel=2)
+            return orig(self, *args, **kwargs)
+
+        with patch.object(type(cs), "aggregate", warning_aggregate):
+            d = DiagnosticReport(cs, run_sensitivity=False).run_all().to_dict()
+        sens = d["sensitivity"]
+        assert sens["status"] == "skipped"
+        assert "user opted out" in sens["reason"]
+        assert "pre_period_source" not in sens
+        assert "warnings" not in sens
+        pt = d["parallel_trends"]
+        assert pt["status"] == "ran"
+        assert any("kit caveat" in w for w in pt.get("warnings", []))
+
+    def test_derived_warning_single_copy_at_top_level(self, cs_plain_fit):
+        # One derivation event -> one top-level copy, even when three
+        # consuming sections each carry the section-local copy.
+        cs, _ = cs_plain_fit
+        orig = type(cs).aggregate
+
+        def warning_aggregate(self, *args, **kwargs):
+            warnings.warn("single-copy caveat", UserWarning, stacklevel=2)
+            return orig(self, *args, **kwargs)
+
+        with patch.object(type(cs), "aggregate", warning_aggregate):
+            d = DiagnosticReport(cs).run_all().to_dict()
+        for check in ("parallel_trends", "pretrends_power", "sensitivity"):
+            assert any("single-copy caveat" in w for w in d[check].get("warnings", []))
+        assert sum("single-copy caveat" in w for w in d["warnings"]) == 1
+
+    def test_bootstrap_failure_heterogeneity_skips_with_context(self):
+        # Derived heterogeneity producers on a bootstrapped fit: the runner
+        # section fails closed with the derivation context and publishes no
+        # numeric heterogeneity fields.
+        from diff_diff import ImputationDiD
+
+        sdf = generate_staggered_data(n_units=100, n_periods=6, treatment_effect=1.5, seed=7)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            imp = ImputationDiD(pretrends=True, n_bootstrap=19, seed=1).fit(
+                sdf, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
+            )
+        d = DiagnosticReport(imp).run_all().to_dict()
+        het = d["heterogeneity"]
+        assert het["status"] == "skipped"
+        assert "aggregate('event_study')" in het["reason"]
+        assert "NotImplementedError" in het["reason"]
+        assert "n_effects" not in het
+        assert "mean" not in het

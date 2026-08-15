@@ -13,9 +13,13 @@ Design principles:
 
 - Plain English, not academic jargon. The library ships this in addition to, not
   in place of, the estimator's existing ``results.summary()`` academic output.
-- No estimator fitting and no variance re-derivation. Every effect, SE, p-value,
-  CI, and sensitivity bound is either read from ``results`` or produced by an
-  existing diff-diff utility. The report layer does compose a few cross-period
+- No estimator fitting. Every effect, SE, p-value, CI, and sensitivity bound
+  is either read from ``results``, derived by the auto-constructed
+  ``DiagnosticReport`` from the result's own post-fit
+  ``aggregate('event_study')`` surface (a view or retained-kit recompute,
+  used only when the raw ``event_study_effects`` field is absent; see the
+  ``DiagnosticReport`` module docstring), or produced by an existing
+  diff-diff utility. The report layer does compose a few cross-period
   summaries from per-period inputs already on the result (joint-Wald / Bonferroni
   pre-trends p-value, MDV-to-ATT ratio, heterogeneity dispersion over
   post-treatment effects); see ``docs/methodology/REPORTING.md`` for the full
@@ -351,8 +355,10 @@ class BusinessReport:
                 "precomputed= contains keys that are not implemented: "
                 f"{sorted(_br_unsupported)}. Supported keys: "
                 f"{sorted(_br_supported_precomputed)}. ``design_effect``, "
-                "``heterogeneity``, and ``epv`` are read directly from the "
-                "fitted result and do not accept precomputed overrides."
+                "``heterogeneity``, and ``epv`` are read from the fitted "
+                "result (heterogeneity may also derive the post-fit "
+                "aggregate('event_study') surface) and do not accept "
+                "precomputed overrides."
             )
 
         resolved_alpha = alpha if alpha is not None else getattr(results, "alpha", 0.05)
@@ -956,6 +962,14 @@ def _lift_pre_trends(dr: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         # ``verdict == "inconclusive"`` per ``_pt_event_study``'s
         # inconclusive branch (``diagnostic_report.py:999``).
         "n_dropped_undefined": pt.get("n_dropped_undefined"),
+        # Provenance of the pre-period surface: "aggregate_event_study"
+        # when DR derived it from the post-fit
+        # ``results.aggregate('event_study')`` container. BR always emits
+        # the key — ``None`` on raw-field routes (DR itself omits the key
+        # there; ``dict.get`` maps that to None). Lifted explicitly for
+        # the same reason as ``n_dropped_undefined`` — this function is a
+        # field whitelist.
+        "pre_period_source": pt.get("pre_period_source"),
         "reason": pt.get("reason"),
         # Carry the denominator df through when the survey F-reference
         # branch was used so BR consumers can flag the finite-sample

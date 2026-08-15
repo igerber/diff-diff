@@ -7,7 +7,11 @@ Goodman-Bacon, design-effect, EPV, heterogeneity, and estimator-native
 checks for SyntheticDiD and TROP) into a single report with a stable
 AI-legible schema.
 
-Construction is free; ``run_all()`` triggers the compute and caches.
+Construction is free; accessing ``applicable_checks`` may derive the
+fit's post-fit event-study surface once (a view or kit recompute via
+``results.aggregate('event_study')``, cached for the report's
+lifetime, and only when the raw ``event_study_effects`` field is
+absent); ``run_all()`` triggers the full check computation and caches.
 A second call to ``to_dict()`` or ``summary()`` reuses the cached
 result.
 
@@ -56,8 +60,11 @@ Example
 
    cs = CallawaySantAnna(base_period="universal").fit(
        df, outcome="outcome", unit="unit", time="period",
-       first_treat="first_treat", aggregate="event_study",
+       first_treat="first_treat",
    )
+   # The event-study-gated checks (parallel trends, pre-trends power,
+   # sensitivity) derive the surface internally via the result's
+   # post-fit aggregate('event_study') when needed.
    dr = DiagnosticReport(
        cs,
        data=df,

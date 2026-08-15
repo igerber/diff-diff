@@ -2821,11 +2821,14 @@ dr = DiagnosticReport(
     precomputed={"sensitivity": my_honest_did_results},
 )
 
-dr.run_all()             # triggers compute, caches
+dr.run_all()             # triggers the full check computation, caches
 print(dr.summary())      # overall-interpretation paragraph
 dr.to_dict()             # AI-legible schema
 dr.to_dataframe()        # one row per check
 dr.applicable_checks     # tuple of checks that will run for this estimator
+                         # (may derive the fit's post-fit
+                         # aggregate('event_study') surface once, cached,
+                         # when the raw event_study_effects field is absent)
 dr.skipped_checks        # dict of {check: plain-English reason}
 ```
 
@@ -2856,9 +2859,12 @@ Power tier (drives BR phrasing for the `no_detected_violation` verdict):
 
 ### Methodology notes
 
-BR and DR do no estimator fitting and do not re-derive variance from
-raw data — every effect, SE, p-value, CI, and sensitivity bound is
-read from the fitted result or produced by an existing diff-diff
+BR and DR do no estimator fitting — every effect, SE, p-value, CI, and
+sensitivity bound is read from the fitted result, derived from the
+result's own post-fit `aggregate('event_study')` surface (a view or
+retained-kit recompute, used only when the raw `event_study_effects`
+field is absent; bootstrapped / kit-less fits fail closed to an
+explicit skip), or produced by an existing diff-diff
 utility (may call `check_parallel_trends`, `BaconDecomposition.fit`, or
 `EfficientDiD.hausman_pretest` when the panel + column kwargs are
 supplied). The `design_effect` section is read-only: it echoes

@@ -74,8 +74,11 @@ Example
 
    cs = CallawaySantAnna(base_period="universal").fit(
        df, outcome="revenue", unit="store", time="period",
-       first_treat="first_treat", aggregate="event_study",
+       first_treat="first_treat",
    )
+   # The auto-constructed DiagnosticReport derives the event-study
+   # surface internally via post-fit aggregate('event_study') when the
+   # pre-trends checks need it.
    report = BusinessReport(
        cs,
        outcome_label="Revenue per store",

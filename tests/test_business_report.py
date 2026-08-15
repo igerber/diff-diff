@@ -5026,3 +5026,57 @@ class TestEmittedGuidanceCanonicalNames:
             "estimator (CS / SA / BJS / Gardner)" not in source
         ), "the Bacon recommendation still uses alias shorthand"
         assert "ImputationDiD, or TwoStageDiD)." in source
+
+
+class TestDerivedEventStudySurfaceLift:
+    """BR consumes DR's derived post-fit event-study surface transparently."""
+
+    @pytest.fixture(scope="class")
+    def cs_plain_fit_br(self):
+        # Module-scoped fixtures are not shareable across test modules, so
+        # this small plain fit is duplicated here rather than promoted to
+        # conftest (dual-review P2).
+        sdf = generate_staggered_data(n_units=100, n_periods=6, treatment_effect=1.5, seed=7)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            cs = CallawaySantAnna(base_period="universal").fit(
+                sdf, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
+            )
+        return cs, sdf
+
+    def test_plain_cs_fit_business_report_pt_verdict(self, cs_plain_fit_br):
+        cs, sdf = cs_plain_fit_br
+        br = BusinessReport(
+            cs,
+            outcome_label="revenue",
+            treatment_label="the campaign",
+            data=sdf,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+        )
+        d = br.to_dict()
+        pt = d["pre_trends"]
+        assert pt["status"] == "computed"
+        assert pt["verdict"] is not None
+        # The provenance key crosses the _lift_pre_trends whitelist.
+        assert pt["pre_period_source"] == "aggregate_event_study"
+
+    def test_raw_route_business_report_pre_period_source_is_none(self):
+        # Raw-field (fit-time kwarg) route: BR still emits the key, as None.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            sdf = generate_staggered_data(n_units=100, n_periods=6, treatment_effect=1.5, seed=7)
+            cs = CallawaySantAnna(base_period="universal").fit(
+                sdf,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                aggregate="event_study",
+            )
+        d = BusinessReport(cs, outcome_label="revenue").to_dict()
+        pt = d["pre_trends"]
+        assert pt["status"] == "computed"
+        assert pt["pre_period_source"] is None

@@ -10,17 +10,24 @@ Design principles:
 
 - No hard pass/fail gates. Severity is conveyed by natural-language phrasing,
   not a traffic-light enum. See ``docs/methodology/REPORTING.md``.
-- No estimator fitting and no variance re-derivation from raw data. Every
-  effect, SE, p-value, CI, and sensitivity bound is either read from
-  ``results`` or produced by an existing diff-diff utility. May call
+- No estimator fitting. Every effect, SE, p-value, CI, and sensitivity
+  bound is either read from ``results``, derived from the result's own
+  post-fit ``aggregate('event_study')`` surface (a view or retained-kit
+  recompute — for ImputationDiD a panel-backed recompute, for TwoStageDiD
+  a fresh Stage-2 OLS + GMM sandwich over the retained frame; used only
+  when the raw ``event_study_effects`` field is absent, and failing
+  closed to an explicit skip on bootstrapped / kit-less fits), or
+  produced by an existing diff-diff utility. May call
   ``check_parallel_trends`` / ``BaconDecomposition`` /
   ``EfficientDiD.hausman_pretest`` when the caller supplies the panel +
   column kwargs. Report-layer cross-period aggregations (joint-Wald /
   Bonferroni pre-trends p-value, heterogeneity dispersion over
   post-treatment effects) are enumerated in
   ``docs/methodology/REPORTING.md``.
-- Lazy evaluation. ``DiagnosticReport(results, ...)`` is free; ``run_all()``
-  triggers compute and caches.
+- Lazy evaluation. ``DiagnosticReport(results, ...)`` is free; accessing
+  ``applicable_checks`` may derive the post-fit event-study surface once
+  (a view or kit recompute, cached for the report's lifetime);
+  ``run_all()`` triggers the full check computation and caches.
 - Never prove a null. Pre-trends phrasing uses power information from
   ``compute_pretrends_power`` to distinguish well-powered from underpowered
   non-violations.
@@ -252,6 +259,16 @@ _PT_METHOD: Dict[str, str] = {
     "SyntheticControlResults": "scm_fit",
 }
 
+# Producers whose DERIVED post-fit ``aggregate('event_study')`` container may
+# be handed to the external consumers (``compute_pretrends_power`` /
+# ``HonestDiD.sensitivity_analysis``). Ledger row M-093 admits containers
+# from CS + Stacked (relative route) + TWFE (calendar route) only; Stacked
+# never reaches the derived route (its raw event-study surface is always
+# populated since M-024) and TWFE is not a DiagnosticReport input, so CS is
+# the whole set. Widening admission is a per-estimator methodology decision
+# (M-093), never a report-layer convenience.
+_DERIVED_SURFACE_CONSUMER_SOURCES: FrozenSet[str] = frozenset({"CallawaySantAnnaResults"})
+
 
 @dataclass(frozen=True)
 class DiagnosticReportResults(Diagnostic):
@@ -368,8 +385,10 @@ class DiagnosticReport:
         - ``"bacon"`` — a ``BaconDecompositionResults`` object.
 
         Other sections (``design_effect``, ``heterogeneity``, ``epv``) are
-        read directly from the fitted result object and do not currently
-        accept precomputed values — there is no expensive call to bypass.
+        read from the fitted result object and do not currently accept
+        precomputed values (``heterogeneity`` may additionally derive the
+        post-fit ``aggregate('event_study')`` surface when the raw fields
+        are absent; ``design_effect`` / ``epv`` are pure reads).
         ``placebo`` is reserved in the schema but opt-in / deferred in MVP for the
         generic battery; ``SyntheticControl`` surfaces its in-space placebo under
         ``estimator_native_diagnostics`` (run ``results.in_space_placebo()``).
@@ -487,9 +506,24 @@ class DiagnosticReport:
                 "precomputed= contains keys that are not implemented: "
                 f"{sorted(_unsupported)}. Supported keys: "
                 f"{sorted(_supported_precomputed)}. ``design_effect``, "
-                "``heterogeneity``, and ``epv`` are read directly from the "
-                "fitted result and do not accept precomputed overrides."
+                "``heterogeneity``, and ``epv`` are read from the fitted "
+                "result (heterogeneity may also derive the post-fit "
+                "aggregate('event_study') surface) and do not accept "
+                "precomputed overrides."
             )
+        # Post-fit event-study derivation cache (see
+        # _resolve_event_study_surface): a triple
+        # (surface, surface_dict, why) once resolved, plus the bare
+        # exception string and any warnings captured during derivation.
+        self._derived_es_cache: Optional[
+            Tuple[Optional[Any], Optional[Dict[Any, Dict[str, float]]], Optional[str]]
+        ] = None
+        self._derived_es_failure: Optional[str] = None
+        self._derived_es_warnings: List[str] = []
+        # Which checks' GATES consulted the resolver — a user-opt-out or
+        # precomputed skip never consults it, and must not carry derived
+        # provenance/warnings it played no part in.
+        self._derived_es_consulted: set = set()
 
         # Estimator-aware precomputed validation. SDiD / TROP route
         # robustness to ``estimator_native_diagnostics`` (SDiD: weighted
@@ -611,9 +645,13 @@ class DiagnosticReport:
     def applicable_checks(self) -> Tuple[str, ...]:
         """Names of checks that will run, given estimator + instance + options.
 
-        No compute is triggered; this reflects only the applicability matrix
-        filtered by instance state (survey_metadata, epv_diagnostics, vcov)
-        and the user's ``run_*`` flags.
+        Reflects the applicability matrix filtered by instance state
+        (survey_metadata, epv_diagnostics, vcov) and the user's ``run_*``
+        flags. When the fit's raw ``event_study_effects`` field is absent,
+        accessing this property may derive the post-fit
+        ``aggregate('event_study')`` surface once (a view or kit
+        recompute, cached for the report's lifetime); ``run_all()``
+        triggers the full check computation.
         """
         return tuple(sorted(self._compute_applicable_checks()[0]))
 
@@ -700,6 +738,128 @@ class DiagnosticReport:
         )
 
         return applicable, skipped
+
+    def _resolve_event_study_surface(
+        self,
+    ) -> Tuple[Optional[Any], Optional[Dict[Any, Dict[str, float]]], Optional[str]]:
+        """Resolve the post-fit event-study surface for this fit, once.
+
+        Returns the cached triple ``(surface, surface_dict, why)``:
+
+        - ``surface`` — the ``EventStudyResults`` container from
+          ``results.aggregate('event_study')``, or ``None``;
+        - ``surface_dict`` — the container adapted to the legacy
+          ``event_study_effects`` dict shape (``_surface_to_event_study_dict``),
+          converted eagerly here so adapter errors degrade to a skip reason
+          instead of escaping through the unguarded gate call sites;
+        - ``why`` — a plain-English reason no surface is available, or
+          ``None`` (both ``None`` means the raw field is present and
+          authoritative).
+
+        The raw ``event_study_effects`` field always takes precedence when it
+        is not ``None`` — including the requested-but-empty ``{}`` sentinel,
+        which encodes fit-time configuration (e.g. an EfficientDiD
+        ``balance_e=`` that emptied the window) that a re-derivation without
+        those settings would silently overturn. Derivation failures
+        (bootstrapped fits, missing kits) are cached as skip reasons, never
+        raised; warnings emitted by a kit recompute are captured into
+        ``self._derived_es_warnings`` and re-published by the consuming
+        runners (record-and-republish, mirroring the sensitivity helper).
+        """
+        if self._derived_es_cache is not None:
+            return self._derived_es_cache
+        import warnings as _warnings
+
+        r = self._results
+        name = type(r).__name__
+        prefix = "No pre-period event-study coefficients are exposed on this fit"
+        surface: Optional[Any] = None
+        surface_dict: Optional[Dict[Any, Dict[str, float]]] = None
+        why: Optional[str] = None
+        if getattr(r, "event_study_effects", None) is not None:
+            # Raw precedence, ``is not None`` deliberately: ``{}`` is the
+            # REQUESTED-but-no-estimable-horizons sentinel and must never be
+            # silently re-derived (the fit-time balance_e/aggregate settings
+            # behind it are not retained for replay).
+            pass
+        elif name == "WooldridgeDiDResults":
+            # Its bespoke aggregate() MUTATES the results object in place;
+            # the report must never auto-call it on the user's object.
+            why = (
+                f"{prefix}. Wooldridge event-study output is produced by "
+                "results.aggregate(type='event_study'), which computes and "
+                "stores the per-event-time surface on the results object in "
+                "place; call it on the results object, then re-run the "
+                "report."
+            )
+        elif name == "StaggeredTripleDiffResults":
+            # Fit-time aggregate= is the CANONICAL route here (ledger row
+            # M-140, not deprecated); the container gains post-fit
+            # aggregate() with the M-014 unification at 4.0.
+            why = (
+                f"{prefix}. Re-fit with fit(..., aggregate='event_study') on "
+                "TripleDifference's staggered mode to populate the "
+                "per-event-time output - the fit-time kwarg is the canonical "
+                "event-study route for staggered triple-difference (its "
+                "results container gains post-fit aggregate() at 4.0)."
+            )
+        elif "event_study" not in getattr(type(r), "_AGGREGATE_SUPPORTED", ()):
+            why = (
+                f"{prefix}, and {name} does not support post-fit "
+                "results.aggregate('event_study'), so the report cannot "
+                "derive the surface."
+            )
+        else:
+            from diff_diff.results_base import EventStudyResults as _ESR
+
+            caught: List[Any] = []
+            try:
+                with _warnings.catch_warnings(record=True) as caught:
+                    # record=True alone installs no filter: without the
+                    # explicit simplefilter an ambient warnings-as-errors
+                    # filter would convert the kits' fit-time re-emissions
+                    # into spurious derivation failures.
+                    _warnings.simplefilter("always")
+                    candidate = r.aggregate("event_study")
+                    if not isinstance(candidate, _ESR):
+                        # Recorded as a derivation failure so downstream
+                        # consumers (heterogeneity context, warning
+                        # republication on gate-skips) treat this branch
+                        # exactly like a raised exception.
+                        self._derived_es_failure = (
+                            f"TypeError: results.aggregate('event_study') "
+                            f"returned {type(candidate).__name__}"
+                        )
+                        why = (
+                            f"{prefix}, and results.aggregate('event_study') "
+                            f"returned an unexpected {type(candidate).__name__} "
+                            "instead of an EventStudyResults container, so the "
+                            "report cannot derive the surface."
+                        )
+                    else:
+                        surface = candidate
+                        surface_dict = _surface_to_event_study_dict(candidate)
+            except Exception as exc:  # noqa: BLE001 — fail-soft by design:
+                # expected failures are NotImplementedError (bootstrap
+                # gates, pretrends+replicate) and ValueError (missing kit),
+                # but the surface builder can raise bare TypeError and this
+                # resolver runs on the applicable_checks path with no outer
+                # guard; an escaped exception would hard-fail the report.
+                self._derived_es_failure = f"{type(exc).__name__}: {exc}"
+                surface = None
+                surface_dict = None
+                why = (
+                    f"{prefix}, and the event-study surface could not be "
+                    "derived via results.aggregate('event_study'): "
+                    f"{self._derived_es_failure}"
+                )
+            # Persist captured warnings on BOTH the success and the failure
+            # path (a warning followed by an exception must not be
+            # discarded); the schema assembly republishes them even when
+            # every derived-route consumer errors or skips.
+            self._derived_es_warnings = [str(w.message) for w in caught]
+        self._derived_es_cache = (surface, surface_dict, why)
+        return self._derived_es_cache
 
     def _instance_skip_reason(self, check: str) -> Optional[str]:
         """Return a plain-English reason this check cannot run on this instance, or None."""
@@ -807,13 +967,42 @@ class DiagnosticReport:
                             "pre-periods. Re-fit with kappa_pre >= 2 so "
                             "pre-treatment event-study coefficients exist."
                         )
+                    # ``pre_period_effects`` producers (MultiPeriodDiD): a
+                    # valid one-pre-period fit has an EMPTY dict here because
+                    # its sole pre-period is the omitted reference — that is
+                    # not a missing post-fit aggregation route, so it must
+                    # not fall through to the resolver's taxonomy.
+                    if getattr(r, "pre_period_effects", None) is not None:
+                        return (
+                            "No estimated pre-period coefficients exist on "
+                            "this fit: every pre-treatment period is the "
+                            "omitted reference. Re-fit with more "
+                            "pre-treatment periods to enable pre-trend "
+                            "checks."
+                        )
+                    self._derived_es_consulted.add("parallel_trends")
+                    surface, surface_dict, why = self._resolve_event_study_surface()
+                    if surface is not None:
+                        pre_coefs, n_dropped_undefined = _collect_pre_period_coefs(
+                            r, surface_dict=surface_dict
+                        )
+                        if pre_coefs or n_dropped_undefined:
+                            return None  # runner consumes the derived surface
+                        return (
+                            "No estimated pre-treatment horizons exist on the "
+                            "event-study surface derived via "
+                            "results.aggregate('event_study'): the event "
+                            "window has no pre-periods. Widen the pre-event "
+                            "window at fit time to enable pre-trend checks."
+                        )
+                    if why is not None:
+                        return why
+                    # Raw field present (incl. the requested-but-empty ``{}``
+                    # sentinel) but no estimated pre-treatment horizons.
                     return (
-                        "No pre-period event-study coefficients are exposed on "
-                        "this fit. For staggered estimators, re-fit with "
-                        "aggregate='event_study' to populate event-study "
-                        "output (deprecated but functional until 4.0 - these "
-                        "checks read the raw event_study_effects field, which "
-                        "post-fit results.aggregate() does not populate)."
+                        "No pre-period event-study coefficients are "
+                        "available: the fit's event-study surface has no "
+                        "estimated pre-treatment horizons."
                     )
                 # vcov is optional for the Bonferroni fallback.
             if method == "hausman":
@@ -867,17 +1056,33 @@ class DiagnosticReport:
             has_vcov = getattr(r, "vcov", None) is not None
             has_event_vcov = getattr(r, "event_study_vcov", None) is not None
             has_event_es = getattr(r, "event_study_effects", None) is not None
-            if not (has_vcov or has_event_vcov or has_event_es):
+            self._derived_es_consulted.add("pretrends_power")
+            surface, surface_dict, why = self._resolve_event_study_surface()
+            if surface is not None and surface.source not in _DERIVED_SURFACE_CONSUMER_SOURCES:
+                # Fail closed on a non-admitted producer (M-093). Unreachable
+                # under the current applicability set (MPD/CS/SA); locals
+                # only — never mutate the cache.
+                surface = None
+                surface_dict = None
+            if not (has_vcov or has_event_vcov or has_event_es or surface is not None):
                 return (
-                    "Pre-trends power needs either results.vcov or "
-                    "event_study_effects (from aggregate='event_study' on "
-                    "staggered estimators - deprecated but functional until "
-                    "4.0; these checks read the raw field, which post-fit "
-                    "results.aggregate() does not populate); neither "
-                    "available."
-                )
-            pre_coefs, _ = _collect_pre_period_coefs(r)
+                    "Pre-trends power needs a pre-period event-study "
+                    "surface; this fit exposes neither results.vcov, "
+                    "event_study_vcov, nor event_study_effects, and one "
+                    "could not be derived. " + (why or "")
+                ).rstrip()
+            pre_coefs, _ = _collect_pre_period_coefs(r, surface_dict=surface_dict)
             if len(pre_coefs) < 2:
+                # A recorded derivation failure is the real cause when the
+                # raw field is absent — another availability leg (vcov)
+                # must not mask the actionable remediation with a generic
+                # coefficient-count reason.
+                if (
+                    getattr(r, "event_study_effects", None) is None
+                    and self._derived_es_failure is not None
+                    and why is not None
+                ):
+                    return why
                 return "Pre-trends power needs >= 2 pre-treatment periods."
             return None
         if check == "sensitivity":
@@ -942,13 +1147,28 @@ class DiagnosticReport:
             has_vcov = getattr(r, "vcov", None) is not None
             has_event_vcov = getattr(r, "event_study_vcov", None) is not None
             has_event_es = getattr(r, "event_study_effects", None) is not None
-            if not (has_vcov or has_event_vcov or has_event_es):
+            self._derived_es_consulted.add("sensitivity")
+            surface, surface_dict, why = self._resolve_event_study_surface()
+            if surface is not None and surface.source not in _DERIVED_SURFACE_CONSUMER_SOURCES:
+                # Fail closed on a non-admitted producer (M-093); locals only.
+                surface = None
+                surface_dict = None
+            if not (has_vcov or has_event_vcov or has_event_es or surface is not None):
                 return (
-                    "HonestDiD needs either results.vcov, event_study_vcov, "
-                    "or event_study_effects; none available."
-                )
-            pre_coefs, _ = _collect_pre_period_coefs(r)
+                    "HonestDiD needs a pre-period event-study surface "
+                    "(results.vcov, event_study_vcov, or "
+                    "event_study_effects); none is available and one could "
+                    "not be derived. " + (why or "")
+                ).rstrip()
+            pre_coefs, _ = _collect_pre_period_coefs(r, surface_dict=surface_dict)
             if len(pre_coefs) < 1:
+                # Same masking guard as the pretrends_power gate above.
+                if (
+                    getattr(r, "event_study_effects", None) is None
+                    and self._derived_es_failure is not None
+                    and why is not None
+                ):
+                    return why
                 return "HonestDiD requires at least one pre-period coefficient."
             return None
         if check == "bacon":
@@ -1040,6 +1260,17 @@ class DiagnosticReport:
         """Run the diagnostic battery and assemble the schema."""
         applicable, skipped = self._compute_applicable_checks()
 
+        # Checks whose gate consults the derived event-study surface: a
+        # gate-skipped section still carries the derived-route provenance
+        # (a SUCCESSFUL derivation that turned out empty/too small must
+        # stay schema-distinguishable from a raw route) and any captured
+        # derivation warnings — the record-and-republish promise in
+        # REPORTING.md covers the consuming section, not just the
+        # top-level channel. A never-resolved cache (or a raw-route fit,
+        # where the resolver parks at rung 1) attaches nothing.
+        _es_gated = {"parallel_trends", "pretrends_power", "sensitivity", "heterogeneity"}
+        _derived_surface = self._derived_es_cache[0] if self._derived_es_cache is not None else None
+
         # Initialize all schema sections to either "ran"/"skipped"/"not_applicable".
         sections: Dict[str, Dict[str, Any]] = {}
         for check in _CHECK_NAMES:
@@ -1047,6 +1278,16 @@ class DiagnosticReport:
                 sections[check] = {"status": "not_run", "reason": "pending implementation"}
             elif check in skipped:
                 sections[check] = {"status": "skipped", "reason": skipped[check]}
+                # Only checks whose GATE actually consulted the resolver
+                # carry the derived provenance/warnings — a user-opt-out or
+                # precomputed skip played no part in the derivation.
+                if check in _es_gated and check in self._derived_es_consulted:
+                    if _derived_surface is not None:
+                        sections[check]["pre_period_source"] = "aggregate_event_study"
+                    if (
+                        _derived_surface is not None or self._derived_es_failure is not None
+                    ) and self._derived_es_warnings:
+                        sections[check]["warnings"] = list(self._derived_es_warnings)
             else:
                 sections[check] = {
                     "status": "not_applicable",
@@ -1157,7 +1398,22 @@ class DiagnosticReport:
                 for msg in section_warnings:
                     if msg is None:
                         continue
+                    # A derivation warning is copied onto EVERY consuming
+                    # section; the top-level channel keeps one copy (the
+                    # first consuming section's prefix), not one per
+                    # section. Section-local copies are untouched.
+                    if msg in self._derived_es_warnings and any(
+                        w.endswith(f": {msg}") for w in top_warnings
+                    ):
+                        continue
                     top_warnings.append(f"{check}: {msg}")
+        # Warnings captured while deriving the post-fit event-study surface
+        # are re-published even when every derived-route consumer errored or
+        # skipped (record-and-republish; a section-level copy above may
+        # already carry them — do not duplicate).
+        for msg in self._derived_es_warnings:
+            if not any(msg in w for w in top_warnings):
+                top_warnings.append(f"derived event-study surface: {msg}")
             # Some sections (e.g., sensitivity skipped for varying-base CS)
             # also surface methodology-critical context via ``reason`` even
             # though ``status != "error"``. We do not duplicate those here
@@ -1366,7 +1622,26 @@ class DiagnosticReport:
         ImputationDiD style, dict of dicts with ``effect``/``se``/``p_value`` keys).
         """
         r = self._results
-        pre_coefs, n_dropped_undefined = _collect_pre_period_coefs(r)
+        surface, surface_dict, _why = self._resolve_event_study_surface()
+        # ``derived`` is True only when the raw field is absent and the
+        # post-fit surface substituted for it (rung 1 of the resolver
+        # guarantees ``surface is None`` whenever the raw field is present).
+        derived = surface is not None
+
+        def _mark_derived(section: Dict[str, Any]) -> Dict[str, Any]:
+            # Derived-route provenance: every return of this runner carries
+            # the source key when the surface was derived, so an
+            # inconclusive/skip on the derived route stays
+            # schema-distinguishable from a raw-route one; captured
+            # derivation warnings are re-published (record-and-republish).
+            if derived:
+                section["pre_period_source"] = "aggregate_event_study"
+                if self._derived_es_warnings:
+                    existing = list(section.get("warnings") or [])
+                    section["warnings"] = existing + list(self._derived_es_warnings)
+            return section
+
+        pre_coefs, n_dropped_undefined = _collect_pre_period_coefs(r, surface_dict=surface_dict)
         # Round-33 P0 / Round-42 P1 CI review on PR #318: undefined-
         # inference rows must drive an explicit ``inconclusive`` PT
         # result rather than either (a) silently shrinking the
@@ -1381,32 +1656,36 @@ class DiagnosticReport:
         # quote it and stakeholders see an explicit "PT could not be
         # assessed" warning rather than a silent PT-absent narrative.
         if n_dropped_undefined > 0:
-            return {
-                "status": "ran",
-                "method": "inconclusive",
-                "joint_p_value": None,
-                "test_statistic": None,
-                "df": len(pre_coefs),
-                "n_pre_periods": len(pre_coefs),
-                "n_dropped_undefined": n_dropped_undefined,
-                "verdict": "inconclusive",
-                "reason": (
-                    f"{n_dropped_undefined} pre-period coefficient(s) "
-                    "have undefined inference (non-finite effect / SE or "
-                    "SE <= 0). Per the safe-inference contract "
-                    "(``utils.py`` line 175, REGISTRY.md line 197), this "
-                    "yields NaN downstream; the joint PT test is "
-                    "inconclusive on this fit. Re-fit with a different "
-                    "variance method (bootstrap / cluster) if the "
-                    "affected rows are a small number of cohorts, or "
-                    "investigate why the per-period SE collapsed."
-                ),
-            }
+            return _mark_derived(
+                {
+                    "status": "ran",
+                    "method": "inconclusive",
+                    "joint_p_value": None,
+                    "test_statistic": None,
+                    "df": len(pre_coefs),
+                    "n_pre_periods": len(pre_coefs),
+                    "n_dropped_undefined": n_dropped_undefined,
+                    "verdict": "inconclusive",
+                    "reason": (
+                        f"{n_dropped_undefined} pre-period coefficient(s) "
+                        "have undefined inference (non-finite effect / SE or "
+                        "SE <= 0). Per the safe-inference contract "
+                        "(``utils.py`` line 175, REGISTRY.md line 197), this "
+                        "yields NaN downstream; the joint PT test is "
+                        "inconclusive on this fit. Re-fit with a different "
+                        "variance method (bootstrap / cluster) if the "
+                        "affected rows are a small number of cohorts, or "
+                        "investigate why the per-period SE collapsed."
+                    ),
+                }
+            )
         if not pre_coefs:
-            return {
-                "status": "skipped",
-                "reason": "No pre-period event-study coefficients available.",
-            }
+            return _mark_derived(
+                {
+                    "status": "skipped",
+                    "reason": "No pre-period event-study coefficients available.",
+                }
+            )
         interaction_indices = getattr(r, "interaction_indices", None)
         vcov = getattr(r, "vcov", None)
 
@@ -1457,27 +1736,29 @@ class DiagnosticReport:
             1 for (_, _, _, p) in pre_coefs if not (isinstance(p, (int, float)) and np.isfinite(p))
         )
         if _n_nonfinite_p > 0:
-            return {
-                "status": "ran",
-                "method": "inconclusive",
-                "joint_p_value": None,
-                "test_statistic": None,
-                "df": len(pre_coefs),
-                "n_pre_periods": len(pre_coefs),
-                "n_dropped_undefined": _n_nonfinite_p,
-                "per_period": per_period,
-                "verdict": "inconclusive",
-                "reason": (
-                    f"{_n_nonfinite_p} retained pre-period coefficient(s) "
-                    "have non-finite per-period p-value: the source "
-                    "estimator's inference failed closed (e.g. hc2_bm "
-                    "Bell-McCaffrey DOF unavailable, or collapsed "
-                    "replicate-survey df). A joint Wald over the persisted "
-                    "covariance would silently convert that undefined "
-                    "inference into a finite verdict; the PT test is "
-                    "inconclusive on this fit."
-                ),
-            }
+            return _mark_derived(
+                {
+                    "status": "ran",
+                    "method": "inconclusive",
+                    "joint_p_value": None,
+                    "test_statistic": None,
+                    "df": len(pre_coefs),
+                    "n_pre_periods": len(pre_coefs),
+                    "n_dropped_undefined": _n_nonfinite_p,
+                    "per_period": per_period,
+                    "verdict": "inconclusive",
+                    "reason": (
+                        f"{_n_nonfinite_p} retained pre-period coefficient(s) "
+                        "have non-finite per-period p-value: the source "
+                        "estimator's inference failed closed (e.g. hc2_bm "
+                        "Bell-McCaffrey DOF unavailable, or collapsed "
+                        "replicate-survey df). A joint Wald over the persisted "
+                        "covariance would silently convert that undefined "
+                        "inference into a finite verdict; the PT test is "
+                        "inconclusive on this fit."
+                    ),
+                }
+            )
         vcov_for_wald: Optional[Any] = None
         idx_map_for_wald: Optional[Any] = None
         vcov_method_tag = "joint_wald"
@@ -1496,6 +1777,20 @@ class DiagnosticReport:
             else:
                 es_vcov = getattr(r, "event_study_vcov", None)
                 es_vcov_index = getattr(r, "event_study_vcov_index", None)
+                if es_vcov is None or es_vcov_index is None:
+                    # Derived-route covariance: the post-fit container
+                    # carries the same event-study vcov + ordered index
+                    # (np.int64 labels hash-equal to the adapter's int
+                    # keys; extra vcov rows are tolerated by the sub-block
+                    # indexing below).
+                    if (
+                        derived
+                        and surface is not None
+                        and getattr(surface, "vcov", None) is not None
+                        and getattr(surface, "vcov_index", None) is not None
+                    ):
+                        es_vcov = surface.vcov
+                        es_vcov_index = list(surface.vcov_index)
                 if es_vcov is not None and es_vcov_index is not None:
                     vcov_for_wald = es_vcov
                     # ``event_study_vcov_index`` is an ordered list of
@@ -1607,27 +1902,29 @@ class DiagnosticReport:
                 if not (isinstance(p["p_value"], (int, float)) and np.isfinite(p["p_value"]))
             )
             if nan_p_count > 0:
-                return {
-                    "status": "ran",
-                    "method": "inconclusive",
-                    "joint_p_value": None,
-                    "test_statistic": None,
-                    "df": len(pre_coefs),
-                    "n_pre_periods": len(pre_coefs),
-                    "n_dropped_undefined": nan_p_count,
-                    "per_period": per_period,
-                    "verdict": "inconclusive",
-                    "reason": (
-                        f"{nan_p_count} retained pre-period coefficient(s) "
-                        "have non-finite per-period p-value (undefined "
-                        "inference per the ``safe_inference`` contract — "
-                        "e.g., replicate-weight survey fits where effective "
-                        "df collapsed). Bonferroni on the remaining subset "
-                        "would silently shrink the test family; the joint "
-                        "PT test is inconclusive on this fit. Inspect the "
-                        "per_period block for the undefined rows."
-                    ),
-                }
+                return _mark_derived(
+                    {
+                        "status": "ran",
+                        "method": "inconclusive",
+                        "joint_p_value": None,
+                        "test_statistic": None,
+                        "df": len(pre_coefs),
+                        "n_pre_periods": len(pre_coefs),
+                        "n_dropped_undefined": nan_p_count,
+                        "per_period": per_period,
+                        "verdict": "inconclusive",
+                        "reason": (
+                            f"{nan_p_count} retained pre-period coefficient(s) "
+                            "have non-finite per-period p-value (undefined "
+                            "inference per the ``safe_inference`` contract — "
+                            "e.g., replicate-weight survey fits where effective "
+                            "df collapsed). Bonferroni on the remaining subset "
+                            "would silently shrink the test family; the joint "
+                            "PT test is inconclusive on this fit. Inspect the "
+                            "per_period block for the undefined rows."
+                        ),
+                    }
+                )
             ps = [p["p_value"] for p in per_period]
             if ps:
                 joint_p = min(1.0, min(ps) * len(ps))
@@ -1647,7 +1944,7 @@ class DiagnosticReport:
         # silently presenting a chi-square-style result.
         if df_denom is not None:
             out["df_denom"] = df_denom
-        return out
+        return _mark_derived(out)
 
     def _check_pretrends_power(self) -> Dict[str, Any]:
         """Compute pre-trends power (MDV) via ``compute_pretrends_power``.
@@ -1660,18 +1957,37 @@ class DiagnosticReport:
 
         from diff_diff.pretrends import compute_pretrends_power
 
+        # Derived-route substitution: when the raw event-study surface is
+        # absent and the resolver produced a container from an M-093-admitted
+        # producer (CS only), hand the container to the consumer — it accepts
+        # EventStudyResults directly, with pinned parity to the raw route.
+        surface, _surface_dict, _why = self._resolve_event_study_surface()
+        target: Any = self._results
+        pt_derived = False
+        if surface is not None and surface.source in _DERIVED_SURFACE_CONSUMER_SOURCES:
+            target = surface
+            pt_derived = True
+
         try:
             pp = compute_pretrends_power(
-                self._results,
+                target,
                 alpha=self._alpha,
                 target_power=0.80,
                 violation_type="linear",
             )
         except Exception as exc:  # noqa: BLE001
-            return {
+            err: Dict[str, Any] = {
                 "status": "error",
                 "reason": f"compute_pretrends_power raised " f"{type(exc).__name__}: {exc}",
             }
+            if pt_derived:
+                # A derived-route failure stays schema-distinguishable from
+                # a raw-route one (the additive-key contract in
+                # REPORTING.md), and captured derivation warnings ride out.
+                err["pre_period_source"] = "aggregate_event_study"
+                if self._derived_es_warnings:
+                    err["warnings"] = list(self._derived_es_warnings)
+            return err
 
         # Build the schema section and compute the level-scale max-pre-
         # violation / |ATT| ratio for BR tier classification. Post-PR-B
@@ -1705,7 +2021,7 @@ class DiagnosticReport:
         if cov_source == "unknown":
             cov_source = self._infer_cov_source(self._results)
         tier = _apply_diag_fallback_downgrade(_power_tier(ratio), cov_source)
-        return {
+        section: Dict[str, Any] = {
             "status": "ran",
             "method": "compute_pretrends_power",
             "violation_type": getattr(pp, "violation_type", "linear"),
@@ -1724,6 +2040,11 @@ class DiagnosticReport:
             "tier": tier,
             "covariance_source": cov_source,
         }
+        if pt_derived:
+            section["pre_period_source"] = "aggregate_event_study"
+            if self._derived_es_warnings:
+                section["warnings"] = list(self._derived_es_warnings)
+        return section
 
     def _format_precomputed_pretrends_power(self, obj: Any) -> Dict[str, Any]:
         """Adapt a pre-computed ``PreTrendsPowerResults`` to the schema shape.
@@ -1906,6 +2227,19 @@ class DiagnosticReport:
 
         import warnings as _warnings
 
+        # Derived-route substitution: hand HonestDiD the post-fit
+        # container when the raw event-study surface is absent and the
+        # producer is M-093-admitted (CS only); HonestDiD accepts
+        # EventStudyResults directly with pinned raw-route parity.
+        # Resolved OUTSIDE the try so ``sens_derived`` is always bound in
+        # the except handler (the resolver itself never raises).
+        surface, _surface_dict, _why = self._resolve_event_study_surface()
+        sens_target: Any = self._results
+        sens_derived = False
+        if surface is not None and surface.source in _DERIVED_SURFACE_CONSUMER_SOURCES:
+            sens_target = surface
+            sens_derived = True
+
         try:
             from typing import cast
 
@@ -1926,18 +2260,28 @@ class DiagnosticReport:
                     alpha=self._alpha,
                 )
                 sens = honest.sensitivity_analysis(
-                    self._results,
+                    sens_target,
                     M_grid=list(self._sensitivity_M_grid),
                 )
         except Exception as exc:  # noqa: BLE001
-            return {
+            err: Dict[str, Any] = {
                 "status": "error",
                 "method": self._sensitivity_method,
                 "reason": f"HonestDiD.sensitivity_analysis raised " f"{type(exc).__name__}: {exc}",
             }
+            if sens_derived:
+                # Same additive-key contract as the pretrends_power error
+                # path: derived-route failures carry their provenance.
+                err["pre_period_source"] = "aggregate_event_study"
+                if self._derived_es_warnings:
+                    err["warnings"] = list(self._derived_es_warnings)
+            return err
 
         captured = [str(w.message) for w in caught if issubclass(w.category, Warning)]
         formatted = self._format_sensitivity_results(sens)
+        if sens_derived:
+            formatted["pre_period_source"] = "aggregate_event_study"
+            captured = list(self._derived_es_warnings) + captured
         if captured:
             formatted["warnings"] = captured
         return formatted
@@ -2244,14 +2588,58 @@ class DiagnosticReport:
             "band_label": band_label,
         }
 
+    def _surface_post_effect_scalars(self, surface: Any) -> List[float]:
+        """Post-treatment effect scalars from a derived event-study surface.
+
+        Mirrors ``_collect_effect_scalars``'s event-study branch: rows at or
+        after the anticipation-aware boundary, reference rows excluded,
+        finite effects only.
+        """
+        boundary = _pre_post_boundary(self._results)
+        vals: List[float] = []
+        for k, att, is_ref in zip(surface.event_time, surface.att, surface.is_reference):
+            if bool(is_ref):
+                continue
+            try:
+                rel = int(k)
+            except (TypeError, ValueError):
+                continue
+            if rel < boundary:
+                continue
+            att_f = float(att)
+            if np.isfinite(att_f):
+                vals.append(att_f)
+        return vals
+
     def _check_heterogeneity(self) -> Dict[str, Any]:
         """Compute effect-stability metrics (CV, range, sign consistency)."""
         effects = self._collect_effect_scalars()
+        het_derived = False
         if not effects:
-            return {
-                "status": "skipped",
-                "reason": "No group / event-study / period effects available.",
-            }
+            # Derived-surface fallback: the raw effect fields are empty
+            # (e.g. a plain ImputationDiD/TwoStageDiD/ContinuousDiD fit) —
+            # consume the post-fit aggregate('event_study') surface when
+            # one resolves. This is a DR-internal computation over the
+            # coefficient list; no consumer admission is involved.
+            surface, _surface_dict, _why = self._resolve_event_study_surface()
+            if surface is not None:
+                effects = self._surface_post_effect_scalars(surface)
+                het_derived = bool(effects)
+            if not effects:
+                reason = "No group / event-study / period effects available."
+                if self._derived_es_failure is not None:
+                    # Post-period phrasing: never inherit the pre-period-
+                    # shaped resolver reason here; append only the bare
+                    # derivation context.
+                    reason += (
+                        " The event-study surface could not be derived via "
+                        "results.aggregate('event_study'): "
+                        f"{self._derived_es_failure}"
+                    )
+                skip: Dict[str, Any] = {"status": "skipped", "reason": reason}
+                if self._derived_es_warnings:
+                    skip["warnings"] = list(self._derived_es_warnings)
+                return skip
         vals = np.array(effects, dtype=float)
         finite = vals[np.isfinite(vals)]
         if finite.size == 0:
@@ -2265,9 +2653,11 @@ class DiagnosticReport:
         mx = float(np.max(finite))
         cv = sd / abs(mean) if abs(mean) > 0.1 * sd and abs(mean) > 0 else None
         sign_consistent = bool(np.all(finite >= 0) or np.all(finite <= 0))
-        return {
+        section: Dict[str, Any] = {
             "status": "ran",
-            "source": self._heterogeneity_source(),
+            "source": (
+                "aggregate_event_study_post" if het_derived else self._heterogeneity_source()
+            ),
             "n_effects": int(finite.size),
             "min": mn,
             "max": mx,
@@ -2277,6 +2667,9 @@ class DiagnosticReport:
             "cv": cv,
             "sign_consistent": sign_consistent,
         }
+        if het_derived and self._derived_es_warnings:
+            section["warnings"] = list(self._derived_es_warnings)
+        return section
 
     def _check_epv(self) -> Dict[str, Any]:
         """Read EPV diagnostics from ``results.epv_diagnostics``.
@@ -3587,8 +3980,62 @@ def _pre_post_boundary(results: Any) -> int:
     return -k
 
 
+def _surface_to_event_study_dict(surface: Any) -> Dict[Any, Dict[str, float]]:
+    """Adapt an ``EventStudyResults`` container to the legacy
+    ``event_study_effects`` dict shape consumed by this module's readers.
+
+    Only relative-scale surfaces are adaptable — calendar-scale
+    ``event_time`` legally carries str/datetime labels that ``int()`` would
+    mangle. Unreachable via ``_resolve_event_study_surface`` today (no
+    calendar producer declares ``_AGGREGATE_SUPPORTED``), but the helper
+    must not depend on caller ordering.
+
+    Rows are SKIPPED when ``is_reference`` is set OR the row's count is
+    exactly zero (reference rows carry NaN ``n``, so the conditions are
+    disjoint). The zero-count skip mirrors the raw route's
+    ``n_groups == 0`` / ``n_obs == 0`` exclusion in
+    ``_collect_pre_period_coefs`` — the container deliberately preserves
+    NaN-effect zero-count horizons as NON-reference rows
+    (``results_base._from_relative_dict``), and without this skip such a
+    row would inflate ``n_dropped_undefined`` and flip a valid joint-Wald
+    PT to "inconclusive". NaN se/p on surviving rows pass through so the
+    undefined-inference guards behave identically to the raw route.
+
+    Keys are Python ``int`` (matching the ImputationDiD/TwoStageDiD raw
+    key dtype exactly; the CS derived route orders numerically where its
+    raw ``np.int64`` keys str-sort — presentational only, the two routes
+    never coexist).
+    """
+    if getattr(surface, "time_scale", "relative") != "relative":
+        raise ValueError(
+            "Only relative-scale EventStudyResults surfaces can be adapted "
+            f"to the event_study_effects dict shape; got time_scale="
+            f"{surface.time_scale!r}."
+        )
+    out: Dict[Any, Dict[str, float]] = {}
+    for k, att, se, p, is_ref, n in zip(
+        surface.event_time,
+        surface.att,
+        surface.se,
+        surface.p_value,
+        surface.is_reference,
+        surface.n,
+    ):
+        if bool(is_ref):
+            continue
+        if np.isfinite(n) and float(n) == 0.0:
+            continue
+        out[int(k)] = {
+            "effect": float(att),
+            "se": float(se),
+            "p_value": float(p),
+        }
+    return out
+
+
 def _collect_pre_period_coefs(
     results: Any,
+    surface_dict: Optional[Dict[Any, Dict[str, float]]] = None,
 ) -> Tuple[List[Tuple[Any, float, float, Optional[float]]], int]:
     """Return ``(sorted list of (key, effect, se, p_value), n_dropped_undefined)``
     for pre-period coefficients.
@@ -3598,6 +4045,10 @@ def _collect_pre_period_coefs(
       * ``event_study_effects``: dict-of-dict (with ``effect`` / ``se`` / ``p_value`` keys)
         on the staggered estimators (CS / SA / ImputationDiD / Stacked / EDiD / etc.).
         Pre-period entries are those with negative relative-time keys.
+        When the raw field is ``None`` and the caller supplies
+        ``surface_dict`` (the resolver's pre-converted post-fit
+        ``aggregate('event_study')`` surface), that dict substitutes for
+        the raw field; a raw ``{}`` is authoritative and never overridden.
       * ``placebo_event_study``: dict-of-dict on
         ``ChaisemartinDHaultfoeuilleResults`` — dCDH's dynamic placebos
         ``DID^{pl}_l`` are the estimator's pre-period analogue.
@@ -3676,7 +4127,10 @@ def _collect_pre_period_coefs(
         # anticipation window (not true pre-periods) and only use
         # ``e < -k`` for PT tests.
         pre_cutoff = _pre_post_boundary(results)
-        es = getattr(results, "event_study_effects", None) or {}
+        es = getattr(results, "event_study_effects", None)
+        if es is None and surface_dict is not None:
+            es = surface_dict
+        es = es or {}
         for k, entry in es.items():
             # Pre-period relative-time keys are negative (convention: e=-1, -2, ...).
             try:

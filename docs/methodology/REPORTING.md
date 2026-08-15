@@ -16,11 +16,35 @@ here rather than duplicating content.
 
 Both modules dispatch by `type(results).__name__` lookup to avoid
 circular imports across the 16 result classes. They do no estimator
-fitting and do not re-derive any variance from raw data; every effect,
-SE, p-value, CI, and sensitivity bound is either read from the fitted
-result or produced by an existing diff-diff utility
-(`compute_honest_did`, `HonestDiD.sensitivity`, `BaconDecomposition`,
-`check_parallel_trends`, `compute_pretrends_power`). When the caller
+fitting; every effect, SE, p-value, CI, and sensitivity bound is
+either read from the fitted result, derived from the result's own
+post-fit `aggregate('event_study')` surface, or produced by an
+existing diff-diff utility (`compute_honest_did`,
+`HonestDiD.sensitivity`, `BaconDecomposition`,
+`check_parallel_trends`, `compute_pretrends_power`). The post-fit
+derivation is the one report-layer data source beyond direct reads:
+when a fit's raw `event_study_effects` field is absent (the modern,
+no-fit-time-`aggregate=` path), `DiagnosticReport` resolves
+`results.aggregate('event_study')` once (cached) and consumes the
+returned `EventStudyResults` container, where applicable per
+estimator: CallawaySantAnna for parallel_trends / pretrends_power /
+sensitivity, ImputationDiD and TwoStageDiD for parallel_trends
+(`pretrends=True` fits) and heterogeneity, ContinuousDiD for
+heterogeneity. StackedDiD, SunAbraham, and dCDH never reach the
+derived route (raw surface always populated, or the
+`placebo_event_study` branch). For CS the derivation is an
+influence-kit recompute; ImputationDiD's
+kit is a panel-backed Theorem-3 recompute from the retained working
+panel, and TwoStageDiD's runs a fresh Stage-2 OLS + GMM sandwich over
+a retained frame copy (ledger rows M-021/M-022) — so those two
+producers DO recompute variance from their retained kits, exactly as
+their own post-fit `aggregate()` does. Bootstrapped and kit-less fits
+fail closed: the derivation exception is caught and surfaced as an
+explicit per-check skip reason, never substituted with analytical
+numbers. The raw field, when present — including the
+requested-but-empty `{}` sentinel, which encodes fit-time
+configuration such as a `balance_e=` that emptied the window — always
+takes precedence and is never re-derived. When the caller
 passes the raw panel + column kwargs, `DiagnosticReport` may call
 those utilities on the supplied data (2x2 PT via
 `check_parallel_trends`, Goodman-Bacon decomposition via
@@ -186,7 +210,10 @@ notably `CallawaySantAnna`, `ImputationDiD`, `TwoStageDiD`, and
 (or `att` / `avg_att`) scalar is ALWAYS the simple weighted
 aggregation; post-fit `results.aggregate()` (the successor to the
 deprecated fit-time `aggregate` kwarg, rows M-020..M-027) returns
-the horizon / group tables without changing the headline scalar. Disambiguating those tables in prose is
+the horizon / group tables without changing the headline scalar —
+and `DiagnosticReport` now consumes those post-fit tables
+internally for its event-study-gated checks when the raw fields are
+absent. Disambiguating those tables in prose is
 tracked under BR/DR gap #9 (per-cohort narrative rendering).
 
 `ContinuousDiDResults` emits a single `"dose_overall"` tag with a
@@ -217,8 +244,18 @@ a library setting.
   event-study or staggered result objects. `check_parallel_trends` in
   `diff_diff/utils.py` assumes a single binary treatment with universal
   pre-periods; for staggered and event-study designs, DR reads the
-  pre-period event-study coefficients directly and constructs a joint
-  Wald statistic (or Bonferroni fallback when `vcov` is missing). This
+  pre-period event-study coefficients directly off the fitted result —
+  or, when the raw `event_study_effects` field is absent, off the
+  internally derived post-fit `aggregate('event_study')` container,
+  which carries the same coefficients — and constructs a joint
+  Wald statistic (or Bonferroni fallback when `vcov` is missing). On
+  the derived route the PT / pre-trends-power / sensitivity sections
+  carry the additive schema key
+  `pre_period_source = "aggregate_event_study"` (raw-field fits omit
+  the key, mirroring the `df_denom` additive-key convention), and any
+  warnings the kit recompute re-emits are captured and re-published on
+  the consuming section's `warnings` list (record-and-republish; never
+  swallowed). This
   mirrors the guidance in `practitioner._parallel_trends_step(staggered=True)`.
 
 - **Note:** Survey-design threading for fit-faithful Bacon replay.
@@ -240,9 +277,10 @@ a library setting.
   design even when it is available. Users must pass
   `precomputed={'parallel_trends': ...}` with a survey-aware pretest
   result to opt in. Event-study PT on staggered estimators is
-  unaffected — it reads the weighted pre-period coefficients directly
-  off the fitted result and uses the finite-df reference described
-  below, so no second replay is needed.
+  unaffected — it reads the weighted pre-period coefficients off the
+  fitted result (or off its internally derived post-fit container,
+  which carries the same weighted coefficients) and uses the finite-df
+  reference described below, so no second replay is needed.
 
 - **Note:** Survey finite-df PT policy. When the fitted result carries
   a finite `survey_metadata.df_survey`, `_pt_event_study` computes
@@ -392,10 +430,18 @@ a library setting.
   diagonal), TwoStageDiD on the analytical paths only (bootstrap and
   replicate-weight modes clear it). Where the covariance is present,
   the PT check takes the joint-Wald path (subject to the hc2_bm
-  policy and rank guard below). Pretrends POWER: natively
+  policy and rank guard below); on the derived route the same
+  covariance arrives via the container's `vcov` / `vcov_index`
+  fields. Pretrends POWER: natively
   `compute_pretrends_power()` supports MPD / CS / SunAbraham fits;
   since row M-024 a Stacked `results.aggregate('event_study')`
-  CONTAINER also admits (kappa_pre >= 2). Stacked/TwoStage NATIVE
+  CONTAINER also admits (kappa_pre >= 2). On plain (no fit-time
+  `aggregate=`) CS fits, `DiagnosticReport` internally derives the CS
+  container and feeds it to `compute_pretrends_power` /
+  `HonestDiD.sensitivity_analysis` — CS is M-093-admitted with pinned
+  raw-route parity; the admission set itself is unchanged (widening
+  is a per-estimator methodology decision, ledger row M-093).
+  Stacked/TwoStage NATIVE
   results remain outside DR's power applicability - within
   DiagnosticReport their covariance is consumed by the PT check and
   by the PRECOMPUTED-power provenance classifier only (a stored power
