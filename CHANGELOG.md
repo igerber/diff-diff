@@ -39,6 +39,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   framing - that layer shipped in 3.9 and this is its consumer. The
   estimator-owned-totals remainder for CS/EfficientDiD/StackedDiD stays
   tracked in DEFERRED.md.
+- **Tutorial 28: The Scholarship Illusion** (`docs/tutorials/28_rdd_scholarship_illusion.ipynb`) -
+  the regression discontinuity walkthrough: a naive above-vs-below comparison
+  overstates a merit scholarship's effect fivefold; `RDPlot` makes the confound
+  and the cutoff jump visible, sharp `RegressionDiscontinuity` recovers the
+  offer's intent-to-treat effect with robust bias-corrected inference, and the
+  tutorial closes with the validity toolkit (estimator-as-balance-test, placebo
+  cutoffs, bandwidth sensitivity), fuzzy RD via `takeup=` (first stage +
+  complier LATE), and CCFT 2019 covariate adjustment (precision, not
+  identification).
 
 ### Changed
 - **Narrative docs migrated off the deprecated fit-time `aggregate=`** (the

@@ -504,6 +504,8 @@ sources:
         type: user_guide
       - path: docs/migration-4.0.md
         type: user_guide
+      - path: docs/tutorials/28_rdd_scholarship_illusion.ipynb
+        type: tutorial
   diff_diff/rdplot.py:
     drift_risk: medium
     docs:
@@ -526,6 +528,8 @@ sources:
         type: user_guide
       - path: docs/migration-4.0.md
         type: user_guide
+      - path: docs/tutorials/28_rdd_scholarship_illusion.ipynb
+        type: tutorial
   diff_diff/_rdrobust_port.py:
     drift_risk: high
     docs:

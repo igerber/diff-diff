@@ -215,6 +215,13 @@ Modern estimators for designs the basic toolkit cannot handle.
 
       Single-treated-unit policy evaluation with two routes to inference.
 
+   .. grid-item-card:: Regression Discontinuity
+      :link: 28_rdd_scholarship_illusion
+      :link-type: doc
+
+      Sharp and fuzzy RD from plot to estimate, when a naive cutoff
+      comparison overstates the effect fivefold.
+
 .. toctree::
    :maxdepth: 1
    :caption: Advanced Methods
@@ -229,6 +236,7 @@ Modern estimators for designs the basic toolkit cannot handle.
    Survey-Aware DiD <16_survey_did>
    Wooldridge ETWFE <16_wooldridge_etwfe>
    Synthetic Control for Policy <25_synthetic_control_policy>
+   Regression Discontinuity (RDD) <28_rdd_scholarship_illusion>
 
 Study Design
 ------------
