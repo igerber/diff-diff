@@ -49,9 +49,9 @@ SEED = 25
 N = 8_000
 CUTOFF = 65.0
 TRUE_EFFECT = 4_000.0
-P_COMPLY = 0.72
+P_ENROLL_IF_OFFERED = 0.72
 P_ALWAYS = 0.06
-TRUE_ITT = (P_COMPLY - P_ALWAYS) * TRUE_EFFECT  # 2640.0
+TRUE_ITT = (P_ENROLL_IF_OFFERED - P_ALWAYS) * TRUE_EFFECT  # 2640.0
 
 H_GRID = (3, 5, 8, 12, 15)
 
@@ -71,7 +71,7 @@ def make_cohort() -> pd.DataFrame:
     hs_gpa = np.clip(2.9 + 0.016 * (score - 60) + rng.normal(0, 0.30, N), 0.0, 4.0)
     offer = (score >= CUTOFF).astype(int)
     u = rng.uniform(size=N)
-    enrolled = np.where(offer == 1, (u < P_COMPLY), (u < P_ALWAYS)).astype(int)
+    enrolled = np.where(offer == 1, (u < P_ENROLL_IF_OFFERED), (u < P_ALWAYS)).astype(int)
     base = 24_000 + 320 * score + 7.0 * (score - 60) ** 2
     earnings = (
         base
