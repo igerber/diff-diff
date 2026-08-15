@@ -457,8 +457,9 @@ def to_pymc_marketing_lift_test(
         treated observation's effect is identified (ImputationDiD averages finite
         tau-hat only while ``n`` stays the raw count at both levels; TwoStageDiD's
         'simple' ATT support excludes rows with non-finite first-stage residuals
-        while ``n`` reports the pre-filter count - both warn at fit time on the
-        degenerate branch, and ``"auto"`` on such a fit overcounts). An
+        while ``n`` reports the pre-filter count, though its 'group' counts are
+        post-filter - the affected fits warn at fit time on the degenerate
+        branch, and ``"auto"`` there overcounts). An
         ``att * scale`` (or ``se * scale``) that overflows the float range
         surfaces via this function's ordinary finiteness errors - ``sigma`` is
         validated before ``delta_y``, so a row where both overflow reports
@@ -854,10 +855,12 @@ def to_meridian_roi_prior(
         treated observations the ATT averages over. Passing ``"auto"`` acknowledges
         three assumptions the container cannot verify: additive-level outcome (not
         log/rate/share), an unweighted fit (survey-weighted fits pair a weighted
-        ``att`` with a raw-count ``n``), and fully identified effects (both
-        estimators report the pre-filter treated-observation count while averaging
-        finite effects only; both warn at fit time on the degenerate branch, and
-        ``"auto"`` there overcounts). An overflowing ``att * scale`` surfaces via
+        ``att`` with a raw-count ``n``), and fully identified effects
+        (ImputationDiD reports the raw treated-observation count at BOTH levels
+        while averaging finite effects only; TwoStageDiD does so only at
+        ``'simple'`` - its ``'group'`` counts are post-filter; the affected fits
+        warn at fit time on the degenerate branch, and ``"auto"`` there
+        overcounts). An overflowing ``att * scale`` surfaces via
         this function's ordinary finiteness errors - ``incremental_outcome`` is
         validated before ``incremental_outcome_se``, so a row where both overflow
         reports ``incremental_outcome``.
