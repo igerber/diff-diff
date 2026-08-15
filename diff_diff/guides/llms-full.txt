@@ -2896,6 +2896,7 @@ parameterization, pools, and emits snippets.
 from diff_diff import (
     ImputationDiD,
     SyntheticDiD,
+    meridian_calibration_mask,
     to_pymc_marketing_lift_test,
     to_meridian_roi_prior,
 )
@@ -2935,14 +2936,28 @@ prior.roi_mean, prior.roi_sd          # pooled ROI moments
 prior.mu, prior.sigma                 # LogNormal params (match Google's
                                       # lognormal_dist_from_mean_std)
 prior.to_dict()                       # JSON-ready
+
+# Build the (n_media_times, n_media_channels) boolean mask from the MMM's own
+# coordinates; window = inclusive (start, end) tuple or explicit-labels list.
+# Experiment channel True on the window; every OTHER channel ALL-TRUE
+# (Meridian's convention - an all-False column zeroes that channel's
+# calibration spend). roi_m priors only: Meridian rejects the mask for mroi_m
+# (use full_model_window=True there). to_code() serializes the array.
+mask = meridian_calibration_mask(
+    media_times=media_times,          # the model's time coordinate labels
+    media_channels=["search", "tv"],  # InputData channel order (same list
+    channel="tv",                     # as to_code's media_channels)
+    window=("2024-01-15", "2024-03-04"),
+)
 print(prior.to_code(                  # ready-to-paste PriorDistribution +
     channel="tv",                     # ModelSpec; roi_m/mroi_m is per-channel
     media_channels=["search", "tv"],  # so channel scope is required (vector
                                       # prior in model channel order; other
                                       # channels keep the Meridian default),
-    roi_calibration_period="mask",    # AND time scope (mask expr) or
-                                      # full_model_window=True; sets
-))                                    # media_prior_type accordingly.
+    roi_calibration_period=mask,      # AND time scope: the boolean ndarray
+                                      # above, a mask expr string, or
+))                                    # full_model_window=True; sets
+                                      # media_prior_type accordingly.
 
 # Container route (ImputationDiD/TwoStageDiD): derive the totals from the
 # post-fit aggregation instead of hand-scoping.

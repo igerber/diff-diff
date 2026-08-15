@@ -262,6 +262,7 @@ Convert experiment results into Marketing Mix Model calibration inputs
 
    diff_diff.to_pymc_marketing_lift_test
    diff_diff.to_meridian_roi_prior
+   diff_diff.meridian_calibration_mask
    diff_diff.MeridianROIPrior
 
 Boundary Local-Linear Estimators

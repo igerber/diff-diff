@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Meridian `roi_calibration_period` mask builder + `to_code()` array support.**
+  New `meridian_calibration_mask(media_times=, media_channels=, channel=, window=)`
+  builds the boolean `(n_media_times, n_media_channels)` mask Meridian's
+  `ModelSpec` expects, from the MMM's own coordinates taken verbatim: the
+  experiment channel's column(s) are True exactly on the window, and every
+  other channel's column is all-True - Meridian's documented convention
+  (channels not named in an experiment use ALL periods for ROI calibration;
+  an all-False column would zero that channel's aggregated calibration spend
+  in `input_data._aggregate_spend`).
+  Window convention: a 2-tuple is `(start, end)` inclusive bounds (value-ordered,
+  `pd.to_datetime`-coerced against datetime coordinates, timezone mismatches fail
+  closed both ways); any other sequence is explicit labels with fail-closed
+  membership. `MeridianROIPrior.to_code()` now also accepts that array for
+  `roi_calibration_period` - a new capability, serialized into the generated
+  snippet as an `np.ones` prelude plus per-column-group window assignments -
+  alongside the pre-existing expression-string and `full_model_window=True`
+  routes. Array acceptance is fail-closed: bool or 0/1-numeric only (cast to
+  bool, matching Google's own float `np.zeros` example), masked arrays
+  rejected, all-False masks rejected, and ANY entirely-False column rejected
+  (it would zero that channel's calibration spend). Masks apply to `roi_m`
+  priors only. The mask's row count and column order are
+  not machine-checkable inside `to_code` (no time coordinate is passed and the
+  array carries no channel labels) - documented caveats; the builder guarantees
+  both when given the model's own coordinates.
 - **MMM exporters: container mode on the 3.9 aggregation surface.** Both
   `to_pymc_marketing_lift_test` and `to_meridian_roi_prior` now accept
   `aggregation_result=` - the pinned `AggregationResult` returned by post-fit
@@ -48,6 +72,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cutoffs, bandwidth sensitivity), fuzzy RD via `takeup=` (first stage +
   complier LATE), and CCFT 2019 covariate adjustment (precision, not
   identification).
+
+### Fixed
+- **`MeridianROIPrior.to_code()` emitted invalid time-scoped `mroi_m` snippets.**
+  Meridian 1.7.0's `ModelSpec._validate_roi_calibration_period` rejects a
+  non-None `roi_calibration_period` unless the media prior type is `'roi'`, so
+  the expression-string route (shipped with the exporters) produced `mroi_m`
+  snippets that fail at `ModelSpec` construction. `to_code()` now fails closed
+  for `parameter="mroi_m"` with any non-None `roi_calibration_period` (array or
+  expression), pointing at `full_model_window=True` as the mroi route.
 
 ### Changed
 - **Narrative docs migrated off the deprecated fit-time `aggregate=`** (the

@@ -361,6 +361,10 @@ MMM Calibration Interop
 
   Documents the experiment-to-ROI-prior calibration workflow and caveats; the lognormal ``(mu, sigma)`` closed form emitted by ``to_meridian_roi_prior`` matches Meridian's ``prior_distribution.lognormal_dist_from_mean_std`` (verified against Meridian 1.7.0 source).
 
+- **Google.** "Set the ROI Calibration Period." *Google Meridian documentation (configure-model guide)*. https://developers.google.com/meridian/docs/user-guide/configure-model
+
+  Defines the ``roi_calibration_period`` contract ``meridian_calibration_mask`` builds against: an optional boolean array of shape ``(n_media_times, n_media_channels)``, True where a period participates in ROI calibration, time labels drawn from the model's ``time`` coordinate and channels ordered by ``data.media_channel``.
+
 - **Zhou, G., Choe, Y., & Hetrakul, C. (2023).** "Calibrated MMM Better Predicts True ROAS." *Meta Marketing Science*. https://medium.com/@gufengzhou/calibrated-mmm-better-predicts-true-roas-d5adfc8abdc4
 
   Empirical motivation for experiment calibration: calibrating MMMs against lift experiments substantially reduces ROAS prediction error.

@@ -67,7 +67,12 @@ import pandas as pd
 from diff_diff.aggregation import AggregationResult
 from diff_diff.results_base import BaseResults
 
-__all__ = ["MeridianROIPrior", "to_meridian_roi_prior", "to_pymc_marketing_lift_test"]
+__all__ = [
+    "MeridianROIPrior",
+    "meridian_calibration_mask",
+    "to_meridian_roi_prior",
+    "to_pymc_marketing_lift_test",
+]
 
 _WRONG_SIGN_POLICIES = ("raise", "drop", "keep")
 _LIFT_TEST_RESERVED = frozenset({"channel", "x", "delta_x", "delta_y", "sigma"})
@@ -126,7 +131,7 @@ _MERIDIAN_SINGLE_CHANNEL_TEMPLATE = """\
 import tensorflow_probability as tfp
 from meridian.model import prior_distribution, spec
 
-roi_prior = tfp.distributions.LogNormal({mu!r}, {sigma!r}, name="{param}")
+{mask_prelude}roi_prior = tfp.distributions.LogNormal({mu!r}, {sigma!r}, name="{param}")
 prior = prior_distribution.PriorDistribution({param}=roi_prior)
 model_spec = spec.ModelSpec(
     prior=prior,
@@ -147,7 +152,7 @@ _MERIDIAN_MULTI_CHANNEL_TEMPLATE = """\
 import tensorflow_probability as tfp
 from meridian.model import prior_distribution, spec
 
-mu = {mu_vector!r}
+{mask_prelude}mu = {mu_vector!r}
 sigma = {sigma_vector!r}
 roi_prior = tfp.distributions.LogNormal(mu, sigma, name="{param}")
 prior = prior_distribution.PriorDistribution({param}=roi_prior)
@@ -350,10 +355,17 @@ def _extract_aggregation_rows(
                 )
         scales = ns
     elif scale is not None:
-        scales = [
-            _finite_positive("scale", v, i)
-            for i, v in enumerate(_broadcast("scale", scale, n_rows))
-        ]
+        # bool is an int subclass, so float(True) == 1.0 would silently scale
+        # by one - a plausible typo for scale="auto" - and must fail closed.
+        scale_values = _broadcast("scale", scale, n_rows)
+        if isinstance(scale, (bool, np.bool_)) or any(
+            isinstance(v, (bool, np.bool_)) for v in scale_values
+        ):
+            raise ValueError(
+                "scale must be a number, a sequence of numbers, or the string "
+                "'auto'; got a boolean (did you mean scale='auto'?)"
+            )
+        scales = [_finite_positive("scale", v, i) for i, v in enumerate(scale_values)]
     else:
         raise ValueError(
             f"scale is required with aggregation_result: pass a numeric "
@@ -618,6 +630,35 @@ def to_pymc_marketing_lift_test(
     return pd.DataFrame(rows, columns=columns)
 
 
+def _mask_prelude(arr: np.ndarray) -> str:
+    """Serialize a boolean mask into snippet statements (exact for any mask).
+
+    Ones-based form mirroring Google's configure-model idiom: initialize
+    all-True, then for each group of columns sharing the same row pattern,
+    clear the group and set its True rows. Meridian's contract makes the
+    all-True base the natural one - channels without an experiment use all
+    periods - and every column has at least one True by the time this runs
+    (all-False columns are rejected upstream), so groups stay small. Position
+    lists go through ``.tolist()`` so plain ints are interpolated (numpy 2.x
+    reprs ``np.int64`` elements otherwise). Long lines for large masks are an
+    accepted trade-off: this is generated paste-code, not black-formatted
+    source.
+    """
+    n_rows, n_cols = arr.shape
+    lines = [f"roi_calibration_period = np.ones(({n_rows}, {n_cols}), dtype=bool)"]
+    groups: Dict[Tuple[int, ...], List[int]] = {}
+    for col in range(n_cols):
+        if arr[:, col].all():
+            continue
+        key = tuple(np.flatnonzero(arr[:, col]).tolist())
+        groups.setdefault(key, []).append(col)
+    for rows_key, cols in groups.items():
+        lines.append(f"roi_calibration_period[:, {cols!r}] = False")
+        lines.append(f"roi_calibration_period[np.ix_({list(rows_key)!r}, {cols!r})] = True")
+    body = "\n".join(lines)
+    return f"import numpy as np\n\n{body}\n\n"
+
+
 @dataclass(frozen=True)
 class ExperimentROI:
     """Per-experiment ROI contribution inside a :class:`MeridianROIPrior`."""
@@ -671,7 +712,7 @@ class MeridianROIPrior:
         channel: Optional[str] = None,
         media_channels: Optional[Sequence[str]] = None,
         single_channel: bool = False,
-        roi_calibration_period: Optional[str] = None,
+        roi_calibration_period: Optional[Union[str, np.ndarray]] = None,
         full_model_window: bool = False,
     ) -> str:
         """Ready-to-paste Meridian snippet (channel- and time-scoped; 1.7.0 pinned).
@@ -691,31 +732,147 @@ class MeridianROIPrior:
 
         The prior's TIME scope is also required: Meridian's default
         ``roi_calibration_period=None`` applies the prior over all model times, but
-        the prior was estimated on the experiment window. Pass
-        ``roi_calibration_period="<expression>"`` (the boolean
-        ``(n_media_times, n_media_channels)`` mask for your window) or
-        ``full_model_window=True`` to acknowledge that the two coincide.
+        the prior was estimated on the experiment window. Three routes:
+
+        - ``roi_calibration_period=<boolean numpy array>`` - the
+          ``(n_media_times, n_media_channels)`` mask, typically built by
+          :func:`meridian_calibration_mask`. The array is serialized into the
+          snippet as a short ``np.ones`` + per-column-group assignment prelude.
+          Boolean dtype, or numeric containing only 0/1 (Google's own docs build
+          the mask with float zeros), is accepted and cast to bool; masked
+          arrays are rejected (fill or drop the mask explicitly). An all-False
+          mask is rejected, and so is ANY entirely-False column: Meridian
+          aggregates each channel's calibration spend through its mask column,
+          so an all-False column zeroes it - channels without an experiment
+          must use ALL periods (Google's documented convention; the builder
+          sets non-experiment channels all-True). Only ``roi_m`` priors can be
+          time-scoped: Meridian 1.7.0 rejects a non-None
+          ``roi_calibration_period`` unless the media prior type is ``'roi'``,
+          so ``parameter="mroi_m"`` priors must use ``full_model_window=True``
+          (applies to the expression-string route too). Two things this method
+          cannot verify and the caller owns: the ROW count (no time coordinate
+          is passed here - the builder guarantees consistency when its
+          ``media_times`` matches the model's coordinates; hand-built arrays
+          are the caller's responsibility) and the column ORDER/identity (the
+          mask carries no channel labels - the ``media_channels`` given to the
+          builder and to this method must be the same list in the same order;
+          only the count is machine-checked).
+        - ``roi_calibration_period="<expression>"`` - a Python expression string
+          interpolated verbatim into the snippet (the pre-existing route).
+        - ``full_model_window=True`` - acknowledges that the experiment window and
+          the MMM window coincide. Note Meridian's own guidance: the
+          configure-model guide states the use of ``roi_calibration_period``
+          "is not generally recommended because calibrating the ROI of a
+          specific time period does not necessarily improve estimation of the
+          overall ROI" - prefer ``full_model_window=True`` when the experiment
+          evidence reasonably transfers to the full window, and reserve the
+          mask for evidence genuinely specific to a narrower period.
 
         Snippets use the TensorFlow substrate of TensorFlow Probability; JAX-backed
         Meridian users should swap the import for
         ``tensorflow_probability.substrates.jax`` (noted in the generated code).
         """
         if roi_calibration_period is None and not full_model_window:
+            if self.parameter == "roi_m":
+                remedy = (
+                    "Pass roi_calibration_period=<expression building the boolean "
+                    "(n_media_times, n_media_channels) mask for your experiment "
+                    "window>, or full_model_window=True to acknowledge that the MMM "
+                    "window and the experiment window coincide, or build the array "
+                    "with meridian_calibration_mask(media_times=..., "
+                    "media_channels=..., channel=..., window=...) and pass it here."
+                )
+            else:
+                # Meridian 1.7.0 accepts roi_calibration_period only for 'roi'
+                # priors, so the mask routes would fail the next validation -
+                # recommend the one route that works for this parameter.
+                remedy = (
+                    f"Meridian 1.7.0 accepts roi_calibration_period only when the "
+                    f"media prior type is 'roi', so a {self.parameter!r} prior has "
+                    f"exactly one route: pass full_model_window=True to acknowledge "
+                    f"the full-window interpretation."
+                )
             raise ValueError(
                 "to_code() needs the prior's time scope: Meridian's default "
                 "roi_calibration_period=None applies the prior over ALL model times, "
                 "but this prior was estimated on the EXPERIMENT window, and ROI "
-                "differs across windows under varying spend and saturation. Pass "
-                "roi_calibration_period=<expression building the boolean "
-                "(n_media_times, n_media_channels) mask for your experiment window>, "
-                "or full_model_window=True to acknowledge that the MMM window and the "
-                "experiment window coincide."
+                "differs across windows under varying spend and saturation. " + remedy
             )
         if roi_calibration_period is not None and full_model_window:
             raise ValueError(
                 "pass either roi_calibration_period or full_model_window=True, not both"
             )
-        if roi_calibration_period is not None:
+        if roi_calibration_period is not None and self.parameter != "roi_m":
+            raise ValueError(
+                f"Meridian 1.7.0 rejects a non-None roi_calibration_period unless "
+                f"the media prior type is 'roi' "
+                f"(ModelSpec._validate_roi_calibration_period), so a "
+                f"{self.parameter!r} prior cannot be time-scoped via this argument "
+                f"- pass full_model_window=True to acknowledge the full-window "
+                f"interpretation instead"
+            )
+        mask_prelude = ""
+        mask_arr: Optional[np.ndarray] = None
+        if roi_calibration_period is None:
+            calibration_period = "None"
+        elif isinstance(roi_calibration_period, np.ndarray):
+            if isinstance(roi_calibration_period, np.ma.MaskedArray):
+                raise TypeError(
+                    "roi_calibration_period masked arrays are not accepted (np.asarray "
+                    "would silently drop the mask, turning masked cells into "
+                    "calibration values); fill or drop the mask explicitly"
+                )
+            arr = np.asarray(roi_calibration_period)
+            if arr.ndim != 2:
+                raise ValueError(
+                    f"roi_calibration_period array must be 2-D with shape "
+                    f"(n_media_times, n_media_channels); got shape {arr.shape}"
+                )
+            if arr.size == 0:
+                raise ValueError(
+                    f"roi_calibration_period array must be non-empty; got shape " f"{arr.shape}"
+                )
+            if arr.dtype != np.bool_:
+                if np.issubdtype(arr.dtype, np.number):
+                    if not np.isin(arr, (0, 1)).all():
+                        raise ValueError(
+                            "roi_calibration_period array must be boolean, or numeric "
+                            "containing only 0/1 (Google's example builds it with "
+                            "np.zeros); it contains values other than 0/1"
+                        )
+                    arr = arr.astype(bool)
+                else:
+                    raise ValueError(
+                        f"roi_calibration_period array must be boolean, or numeric "
+                        f"containing only 0/1 (Google's example builds it with "
+                        f"np.zeros); got dtype {arr.dtype}"
+                    )
+            if not arr.any():
+                raise ValueError(
+                    "roi_calibration_period array is all False, which disables ROI "
+                    "calibration at every time and silently discards the experiment "
+                    "prior's time scope; build the mask with "
+                    "meridian_calibration_mask(...) for your experiment window, or "
+                    "pass full_model_window=True"
+                )
+            # Meridian aggregates each channel's calibration spend through its
+            # mask column (input_data._aggregate_spend einsum), so an all-False
+            # column zeroes that channel's calibration spend - Google's own
+            # example sets channels without an experiment to ALL periods.
+            for col in range(arr.shape[1]):
+                if not arr[:, col].any():
+                    raise ValueError(
+                        f"roi_calibration_period mask column {col} is entirely "
+                        f"False, which zeroes that channel's aggregated calibration "
+                        f"spend in Meridian; channels without an experiment must "
+                        f"use ALL periods (Google's documented convention) - build "
+                        f"the mask with meridian_calibration_mask(...), which sets "
+                        f"non-experiment channels all-True"
+                    )
+            mask_arr = arr
+            mask_prelude = _mask_prelude(arr)
+            calibration_period = "roi_calibration_period"
+        elif isinstance(roi_calibration_period, str):
             try:
                 ast.parse(roi_calibration_period, mode="eval")
             except SyntaxError as exc:
@@ -725,12 +882,18 @@ class MeridianROIPrior:
                     f"interpolated verbatim into the snippet); got "
                     f"{roi_calibration_period!r}, which does not parse: {exc.msg}"
                 ) from exc
+            calibration_period = roi_calibration_period
+        else:
+            raise TypeError(
+                f"roi_calibration_period must be a Python expression string or a "
+                f"boolean numpy array of shape (n_media_times, n_media_channels); "
+                f"got {type(roi_calibration_period).__name__}"
+            )
         window_note = (
             "Experiment window == full model window (acknowledged via full_model_window=True)."
             if full_model_window
             else "Mask restricting the prior to the experiment window."
         )
-        calibration_period = "None" if full_model_window else roi_calibration_period
         prior_type = "roi" if self.parameter == "roi_m" else "mroi"
         if media_channels is not None:
             if single_channel:
@@ -742,6 +905,12 @@ class MeridianROIPrior:
                 raise ValueError(
                     f"channel must name the experiment channel within media_channels; "
                     f"got channel={channel!r}, media_channels={channels!r}"
+                )
+            if mask_arr is not None and mask_arr.shape[1] != len(channels):
+                raise ValueError(
+                    f"roi_calibration_period mask has {mask_arr.shape[1]} channel "
+                    f"column(s) but media_channels has {len(channels)} channel(s); "
+                    f"the mask's columns must align to media_channels order"
                 )
             default_mu, default_sigma = _MERIDIAN_PARAM_DEFAULTS[self.parameter]
             mu_vector = [self.mu if c == channel else default_mu for c in channels]
@@ -757,8 +926,15 @@ class MeridianROIPrior:
                 window_note=window_note,
                 calibration_period=calibration_period,
                 prior_type=prior_type,
+                mask_prelude=mask_prelude,
             )
         if single_channel:
+            if mask_arr is not None and mask_arr.shape[1] != 1:
+                raise ValueError(
+                    f"single_channel=True but the roi_calibration_period mask has "
+                    f"{mask_arr.shape[1]} channel columns; a single-channel model's "
+                    f"mask must have exactly 1 column"
+                )
             return _MERIDIAN_SINGLE_CHANNEL_TEMPLATE.format(
                 mu=self.mu,
                 sigma=self.sigma,
@@ -766,6 +942,7 @@ class MeridianROIPrior:
                 window_note=window_note,
                 calibration_period=calibration_period,
                 prior_type=prior_type,
+                mask_prelude=mask_prelude,
             )
         raise ValueError(
             "to_code() needs explicit channel scope: a scalar prior broadcasts to "
@@ -1018,3 +1195,289 @@ def to_meridian_roi_prior(
         parameter=parameter,
         per_experiment=per_experiment,
     )
+
+
+def _validate_label_sequence(name: str, value: Any) -> List[Any]:
+    """Container-type gate shared by the mask builder's sequence parameters.
+
+    Accepts list/tuple/1-D ndarray/Series/Index (deliberately wider than
+    ``_is_sequence``, which rejects ``pd.Index`` - the natural type for a
+    model's coordinates). Wrong TYPES raise TypeError; ``pd.MultiIndex`` is
+    rejected here because ``pd.isna`` raises raw ``NotImplementedError`` on it
+    downstream.
+    """
+    if isinstance(value, (str, bytes)) or isinstance(value, Mapping):
+        raise TypeError(
+            f"{name} must be a sequence of labels (list, tuple, ndarray, Series, "
+            f"or Index); got {type(value).__name__}"
+        )
+    if isinstance(value, pd.MultiIndex):
+        raise TypeError(
+            f"{name} must be a flat sequence of labels; got a MultiIndex "
+            f"(Meridian coordinates are flat labels)"
+        )
+    if isinstance(value, np.ndarray):
+        if value.ndim != 1:
+            raise TypeError(
+                f"{name} must be a 1-D sequence of labels; got a " f"{value.ndim}-D array"
+            )
+    elif not isinstance(value, (list, tuple, pd.Series, pd.Index)):
+        raise TypeError(
+            f"{name} must be a sequence of labels (list, tuple, ndarray, Series, "
+            f"or Index); got {type(value).__name__}"
+        )
+    return list(value)
+
+
+def _coerce_window_value(value: Any, tz: Any) -> Any:
+    """Coerce one window bound/label against datetime media_times (fail-closed tz)."""
+    try:
+        coerced = pd.to_datetime(value)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(
+            f"window value {value!r} could not be coerced to a datetime to match "
+            f"datetime media_times"
+        ) from exc
+    if tz is not None and coerced.tzinfo is None:
+        raise ValueError(
+            f"window value {value!r} is timezone-naive but media_times is "
+            f"timezone-aware ({tz}); pass tz-aware values or explicit labels"
+        )
+    if tz is None and coerced.tzinfo is not None:
+        raise ValueError(
+            f"window value {value!r} is timezone-aware but media_times is "
+            f"timezone-naive; pass naive values or explicit labels"
+        )
+    return coerced
+
+
+def _window_bounds_selection(times_index: pd.Index, start: Any, end: Any) -> np.ndarray:
+    """Row selection for a (start, end) inclusive-bounds window."""
+    for bound_name, bound in (("start", start), ("end", end)):
+        if isinstance(bound, (np.ndarray, list, tuple, pd.Series, pd.Index)):
+            raise TypeError(
+                f"window bounds must be scalar labels; got a "
+                f"{type(bound).__name__} for window {bound_name}"
+            )
+        if pd.isna(bound):
+            raise ValueError(
+                f"window bounds must not be missing (None/NaN/NaT/pd.NA); got "
+                f"{bound!r} for window {bound_name}"
+            )
+    if pd.api.types.is_datetime64_any_dtype(times_index.dtype):
+        tz = getattr(times_index, "tz", None)
+        start = _coerce_window_value(start, tz)
+        end = _coerce_window_value(end, tz)
+    try:
+        reversed_bounds = bool(start > end)
+    except TypeError:
+        reversed_bounds = False  # unorderable -> the comparison funnel below raises
+    if reversed_bounds:
+        raise ValueError(
+            f"window start {start!r} is after window end {end!r}; bounds are "
+            f"inclusive (start, end)"
+        )
+    try:
+        sel = np.asarray((times_index >= start) & (times_index <= end), dtype=bool)
+    except TypeError as exc:
+        raise ValueError(
+            f"window bounds ({start!r}, {end!r}) cannot be order-compared against "
+            f"media_times labels (mixed or mismatched types); pass window as a "
+            f"list of explicit time labels instead"
+        ) from exc
+    if not sel.any():
+        raise ValueError(
+            f"window ({start!r}, {end!r}) selects no media_times labels; "
+            f"media_times runs {times_index[0]!r} .. {times_index[-1]!r} (bounds "
+            f"are inclusive and compared by value)"
+        )
+    return sel
+
+
+def _window_labels_selection(times_index: pd.Index, labels: List[Any]) -> np.ndarray:
+    """Row selection for an explicit-labels window (fail-closed membership)."""
+    if not labels:
+        raise ValueError("window must contain at least one time label")
+    for lab in labels:
+        # A missing label would fail the membership check anyway (a None
+        # coerces to NaT, never present in a complete coordinate index), but
+        # the message would then show the coerced NaT - name the actual input.
+        if not isinstance(lab, (np.ndarray, list, tuple, pd.Series, pd.Index)) and pd.isna(lab):
+            raise ValueError(
+                f"window labels must not be missing (None/NaN/NaT/pd.NA); got " f"{lab!r}"
+            )
+    if pd.api.types.is_datetime64_any_dtype(times_index.dtype):
+        tz = getattr(times_index, "tz", None)
+        labels = [_coerce_window_value(lab, tz) for lab in labels]
+    missing = [lab for lab in labels if lab not in times_index]
+    if missing:
+        raise ValueError(
+            f"window label(s) {missing!r} not in media_times; labels are matched "
+            f"exactly (after pd.to_datetime coercion when media_times is "
+            f"datetime-like) - check formatting and timezone"
+        )
+    return np.asarray(times_index.isin(labels), dtype=bool)
+
+
+def meridian_calibration_mask(
+    *,
+    media_times: Sequence[Any],
+    media_channels: Sequence[str],
+    channel: Union[str, Sequence[str]],
+    window: Union[Tuple[Any, Any], Sequence[Any]],
+) -> np.ndarray:
+    """Build Meridian's boolean ``roi_calibration_period`` mask for an experiment.
+
+    Returns a ``(len(media_times), len(media_channels))`` bool array: the
+    experiment channel's column(s) are True exactly on the selected window,
+    and every OTHER channel's column is all-True - Meridian's documented
+    convention ("any media channels not specified ... will utilize all
+    available periods for ROI calibration", configure-model guide); an
+    all-False column would zero that channel's aggregated calibration spend.
+    Suitable to pass straight to Meridian's
+    ``spec.ModelSpec(roi_calibration_period=...)``, or to
+    :meth:`MeridianROIPrior.to_code`, which serializes it into the generated
+    snippet. Valid for ``roi_m`` priors only: Meridian 1.7.0 rejects a
+    non-None ``roi_calibration_period`` unless the media prior type is
+    ``'roi'``.
+
+    **Window convention:** a 2-TUPLE is ``(start, end)`` INCLUSIVE bounds; any
+    OTHER sequence (list, ndarray, Series, Index) is a set of explicit time
+    labels. To select exactly two labels, pass a list ``[a, b]``, not a tuple.
+
+    Parameters
+    ----------
+    media_times : list, tuple, ndarray, Series, or Index
+        The MMM's time coordinate labels, taken VERBATIM in model order (str
+        dates, datetimes, periods, or ints; unique, no missing labels; these
+        five container types are the accepted forms - materialize e.g. a
+        ``range`` with ``list(...)``).
+        Meridian's ``n_media_times`` can exceed ``len(data.time)`` when
+        ``max_lag > 0`` adds lagged leading periods, yet Google's own
+        configure-model example builds the mask with ``len(data.time)`` rows -
+        this builder does not resolve that nuance: pass whichever coordinate
+        list your ``ModelSpec`` expects, and the mask gets one row per entry.
+        String labels order-compare lexicographically under a bounds window -
+        right for zero-padded ISO dates (``'2021-11-01'``), wrong for
+        ``'1/2/2021'``-style formats (use explicit labels or datetime labels
+        there).
+    media_channels : list, tuple, ndarray, Series, or Index of str
+        Channel names in the Meridian ``InputData`` media-channel order (the
+        same contract as ``to_code(media_channels=)``); unique, non-empty. The
+        mask's columns are positioned by this order - keep the SAME list, in
+        the same order, for the builder and for ``to_code``.
+    channel : str or sequence of str
+        The experiment channel(s) whose columns carry the window - here a
+        sequence means "the set of mask columns to mark for THIS experiment"
+        (unlike ``to_pymc_marketing_lift_test(channel=...)``, where a sequence
+        is one channel per experiment row; the builder has no per-row axis).
+        Every name must be in ``media_channels``.
+    window : tuple or sequence
+        Either ``(start, end)`` inclusive bounds - selected by order comparison
+        against ``media_times``, with ``pd.to_datetime`` coercion of the values
+        when ``media_times`` is datetime-like (timezone mismatches fail closed
+        in both directions) - or a sequence of explicit time labels, every one
+        of which must be present in ``media_times``. Must select at least one
+        time. Selection is by label VALUE at its position, so an unsorted
+        ``media_times`` is well-defined.
+
+    Returns
+    -------
+    np.ndarray
+        Boolean, shape ``(len(media_times), len(media_channels))``.
+
+    Raises
+    ------
+    TypeError
+        On wrong-typed inputs (string/Mapping/scalar/MultiIndex/non-1-D-array
+        containers, a scalar or Mapping ``window``, an array-valued window
+        bound).
+    ValueError
+        On empty inputs, duplicate or missing labels, unknown channels,
+        malformed or empty-selection windows, and unorderable or timezone-
+        mismatched bounds.
+    """
+    times = _validate_label_sequence("media_times", media_times)
+    if not times:
+        raise ValueError("media_times must be non-empty")
+    times_index = pd.Index(times)
+    if isinstance(times_index, pd.MultiIndex):
+        raise TypeError(
+            "media_times contains tuple-valued labels, which construct a "
+            "MultiIndex; Meridian time coordinates are flat labels"
+        )
+    if pd.isna(times_index).any():
+        raise ValueError(
+            "media_times contains missing label(s) (NaN/NaT); Meridian time "
+            "coordinates are complete, and a missing label would silently "
+            "un-select its row"
+        )
+    if times_index.has_duplicates:
+        dupes = times_index[times_index.duplicated()].unique().tolist()
+        raise ValueError(
+            f"media_times contains duplicate label(s): {dupes!r}; time labels "
+            f"must be unique to map labels to mask rows"
+        )
+    channels = _validate_label_sequence("media_channels", media_channels)
+    if not channels:
+        raise ValueError("media_channels must be non-empty")
+    # Missing elements fail closed with a named error: a pd.NA element would
+    # otherwise raise a raw ambiguous-truth TypeError inside the duplicate
+    # check, and a None would silently become a mask column.
+    if any(pd.isna(c) for c in channels):
+        raise ValueError("media_channels must not contain missing names (None/NaN/pd.NA)")
+    dup_channels = sorted({c for i, c in enumerate(channels) if c in channels[:i]})
+    if dup_channels:
+        raise ValueError(f"media_channels contains duplicate channel(s): {dup_channels!r}")
+    if isinstance(channel, str):
+        channel_list = [channel]
+    else:
+        channel_list = _validate_label_sequence("channel", channel)
+    if not channel_list:
+        raise ValueError("channel must name at least one experiment channel")
+    if any(pd.isna(c) for c in channel_list):
+        raise ValueError("channel must not contain missing names (None/NaN/pd.NA)")
+    dup_exp = sorted({c for i, c in enumerate(channel_list) if c in channel_list[:i]})
+    if dup_exp:
+        raise ValueError(f"channel contains duplicate name(s): {dup_exp!r}")
+    missing_channels = [c for c in channel_list if c not in channels]
+    if missing_channels:
+        raise ValueError(
+            f"channel(s) {missing_channels!r} not in media_channels {channels!r}; "
+            f"the mask's columns are positioned by media_channels order"
+        )
+    if isinstance(window, tuple):
+        if len(window) != 2:
+            raise ValueError(
+                "window given as a tuple must be exactly (start, end); to select "
+                "explicit time labels pass a list"
+            )
+        sel = _window_bounds_selection(times_index, window[0], window[1])
+    elif isinstance(window, (str, bytes)) or isinstance(window, Mapping):
+        raise TypeError(
+            f"window must be a (start, end) tuple (inclusive bounds) or a "
+            f"sequence of explicit time labels; got {type(window).__name__}"
+        )
+    elif isinstance(window, np.ndarray) and window.ndim != 1:
+        raise TypeError(
+            f"window must be a (start, end) tuple (inclusive bounds) or a 1-D "
+            f"sequence of explicit time labels; got a {window.ndim}-D array"
+        )
+    elif isinstance(window, (list, np.ndarray, pd.Series, pd.Index)):
+        sel = _window_labels_selection(times_index, list(window))
+    else:
+        raise TypeError(
+            f"window must be a (start, end) tuple (inclusive bounds) or a "
+            f"sequence of explicit time labels; got {type(window).__name__}"
+        )
+    # Meridian's documented convention (configure-model guide): channels not
+    # named in the experiment use ALL periods for ROI calibration - an
+    # all-False column would zero that channel's aggregated calibration spend
+    # (input_data._aggregate_spend). So: all-True base, experiment columns
+    # cleared, then their window rows set.
+    mask = np.ones((len(times), len(channels)), dtype=bool)
+    cols = [channels.index(c) for c in channel_list]
+    mask[:, cols] = False
+    rows = np.flatnonzero(sel)
+    mask[np.ix_(rows, cols)] = True
+    return mask

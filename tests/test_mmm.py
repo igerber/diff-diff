@@ -24,6 +24,7 @@ from diff_diff import (
     DifferenceInDifferences,
     ImputationDiD,
     TwoStageDiD,
+    meridian_calibration_mask,
     to_meridian_roi_prior,
     to_pymc_marketing_lift_test,
 )
@@ -422,6 +423,561 @@ class TestToCode:
                 single_channel=True,
                 full_model_window=True,
             )
+        with pytest.raises(ValueError, match="not both"):
+            self._prior().to_code(
+                single_channel=True,
+                roi_calibration_period=np.ones((3, 1), dtype=bool),
+                full_model_window=True,
+            )
+
+
+class TestMeridianCalibrationMask:
+    """meridian_calibration_mask: window resolution + fail-closed validation."""
+
+    _TIMES = pd.date_range("2024-01-01", periods=5, freq="W-MON")
+    _CHANNELS = ["search", "tv", "radio"]
+
+    def _expected(self, rows, cols):
+        # Meridian's convention: non-experiment channels use ALL periods, so
+        # the expected mask is all-True except the experiment columns, which
+        # carry only the window rows.
+        expected = np.ones((5, 3), dtype=bool)
+        expected[:, cols] = False
+        expected[np.ix_(rows, cols)] = True
+        return expected
+
+    def _assert_mask(self, mask, rows, cols):
+        assert mask.dtype == np.bool_
+        assert mask.shape == (5, 3)
+        assert np.array_equal(mask, self._expected(rows, cols))
+
+    def test_bounds_window_datetime_media_times_str_bounds(self):
+        mask = meridian_calibration_mask(
+            media_times=self._TIMES,
+            media_channels=self._CHANNELS,
+            channel="tv",
+            window=("2024-01-15", "2024-01-29"),  # inclusive both ends
+        )
+        self._assert_mask(mask, [2, 3, 4], [1])
+
+    def test_bounds_window_numeric_labels(self):
+        mask = meridian_calibration_mask(
+            media_times=[1, 2, 3, 4, 5],
+            media_channels=self._CHANNELS,
+            channel="tv",
+            window=(2, 4),
+        )
+        self._assert_mask(mask, [1, 2, 3], [1])
+
+    def test_bounds_window_iso_string_labels(self):
+        labels = [str(t.date()) for t in self._TIMES]
+        mask = meridian_calibration_mask(
+            media_times=labels,
+            media_channels=self._CHANNELS,
+            channel="search",
+            window=("2024-01-15", "2024-01-29"),
+        )
+        self._assert_mask(mask, [2, 3, 4], [0])
+
+    def test_explicit_labels_window_noncontiguous_multichannel(self):
+        mask = meridian_calibration_mask(
+            media_times=[1, 2, 3, 4, 5],
+            media_channels=self._CHANNELS,
+            channel=["tv", "radio"],
+            window=[1, 3, 5],
+        )
+        self._assert_mask(mask, [0, 2, 4], [1, 2])
+
+    def test_media_times_accepts_index_and_series(self):
+        from_index = meridian_calibration_mask(
+            media_times=pd.Index([1, 2, 3, 4, 5]),
+            media_channels=self._CHANNELS,
+            channel="tv",
+            window=(2, 4),
+        )
+        from_series = meridian_calibration_mask(
+            media_times=pd.Series([1, 2, 3, 4, 5], index=[9, 8, 7, 6, 5]),
+            media_channels=self._CHANNELS,
+            channel="tv",
+            window=(2, 4),
+        )
+        assert np.array_equal(from_index, from_series)
+        self._assert_mask(from_index, [1, 2, 3], [1])
+
+    def test_channel_string_vs_sequence_equivalent(self):
+        a = meridian_calibration_mask(
+            media_times=[1, 2, 3, 4, 5],
+            media_channels=self._CHANNELS,
+            channel="tv",
+            window=(1, 5),
+        )
+        b = meridian_calibration_mask(
+            media_times=[1, 2, 3, 4, 5],
+            media_channels=self._CHANNELS,
+            channel=["tv"],
+            window=(1, 5),
+        )
+        assert np.array_equal(a, b)
+
+    def test_tz_aware_success(self):
+        times = pd.date_range("2024-01-01", periods=5, freq="W-MON", tz="UTC")
+        mask = meridian_calibration_mask(
+            media_times=times,
+            media_channels=self._CHANNELS,
+            channel="tv",
+            window=(pd.Timestamp("2024-01-15", tz="UTC"), pd.Timestamp("2024-01-29", tz="UTC")),
+        )
+        self._assert_mask(mask, [2, 3, 4], [1])
+
+    def test_datetime_coercion_on_labels_path(self):
+        mask = meridian_calibration_mask(
+            media_times=self._TIMES,
+            media_channels=self._CHANNELS,
+            channel="tv",
+            window=["2024-01-01", "2024-01-29"],  # str labels vs DatetimeIndex
+        )
+        self._assert_mask(mask, [0, 4], [1])
+
+    def test_duplicate_window_labels_ok(self):
+        mask = meridian_calibration_mask(
+            media_times=[1, 2, 3, 4, 5],
+            media_channels=self._CHANNELS,
+            channel="tv",
+            window=[3, 3],
+        )
+        self._assert_mask(mask, [2], [1])
+
+    def test_missing_channel_raises(self):
+        with pytest.raises(ValueError, match="not in media_channels"):
+            meridian_calibration_mask(
+                media_times=[1, 2],
+                media_channels=["search"],
+                channel="tv",
+                window=(1, 2),
+            )
+
+    def test_missing_window_label_raises(self):
+        with pytest.raises(ValueError, match="not in media_times"):
+            meridian_calibration_mask(
+                media_times=[1, 2],
+                media_channels=["tv"],
+                channel="tv",
+                window=[1, 7],
+            )
+
+    def test_empty_and_bad_media_times(self):
+        with pytest.raises(ValueError, match="media_times must be non-empty"):
+            meridian_calibration_mask(
+                media_times=[], media_channels=["tv"], channel="tv", window=(1, 2)
+            )
+        with pytest.raises(ValueError, match="duplicate label"):
+            meridian_calibration_mask(
+                media_times=[1, 1, 2], media_channels=["tv"], channel="tv", window=(1, 2)
+            )
+        with pytest.raises(ValueError, match="NaN/NaT"):
+            meridian_calibration_mask(
+                media_times=[1.0, math.nan],
+                media_channels=["tv"],
+                channel="tv",
+                window=(1, 2),
+            )
+
+    def test_missing_channel_names_raise(self):
+        # pd.NA would otherwise raise a raw ambiguous-truth TypeError in the
+        # duplicate check; None would silently become a mask column.
+        for bad in (None, math.nan, pd.NA):
+            with pytest.raises(ValueError, match="must not contain missing names"):
+                meridian_calibration_mask(
+                    media_times=[1, 2],
+                    media_channels=["tv", bad],
+                    channel="tv",
+                    window=(1, 2),
+                )
+            with pytest.raises(ValueError, match="must not contain missing names"):
+                meridian_calibration_mask(
+                    media_times=[1, 2],
+                    media_channels=["tv", "search"],
+                    channel=["tv", bad],
+                    window=(1, 2),
+                )
+
+    def test_duplicate_channels_raise(self):
+        with pytest.raises(ValueError, match="duplicate channel"):
+            meridian_calibration_mask(
+                media_times=[1, 2],
+                media_channels=["tv", "tv"],
+                channel="tv",
+                window=(1, 2),
+            )
+        with pytest.raises(ValueError, match="duplicate name"):
+            meridian_calibration_mask(
+                media_times=[1, 2],
+                media_channels=["tv", "search"],
+                channel=["tv", "tv"],
+                window=(1, 2),
+            )
+
+    def test_empty_channel_and_media_channels(self):
+        with pytest.raises(ValueError, match="media_channels must be non-empty"):
+            meridian_calibration_mask(
+                media_times=[1, 2], media_channels=[], channel="tv", window=(1, 2)
+            )
+        with pytest.raises(ValueError, match="at least one experiment channel"):
+            meridian_calibration_mask(
+                media_times=[1, 2], media_channels=["tv"], channel=[], window=(1, 2)
+            )
+
+    def test_window_tuple_wrong_length_raises(self):
+        with pytest.raises(ValueError, match="exactly"):
+            meridian_calibration_mask(
+                media_times=[1, 2, 3],
+                media_channels=["tv"],
+                channel="tv",
+                window=(1, 2, 3),
+            )
+
+    def test_window_empty_labels_raises(self):
+        with pytest.raises(ValueError, match="at least one time label"):
+            meridian_calibration_mask(
+                media_times=[1, 2], media_channels=["tv"], channel="tv", window=[]
+            )
+
+    def test_reversed_bounds_raises(self):
+        with pytest.raises(ValueError, match="after window end"):
+            meridian_calibration_mask(
+                media_times=[1, 2, 3],
+                media_channels=["tv"],
+                channel="tv",
+                window=(3, 1),
+            )
+
+    def test_bounds_select_nothing_raises(self):
+        with pytest.raises(ValueError, match="selects no"):
+            meridian_calibration_mask(
+                media_times=[1, 2, 3],
+                media_channels=["tv"],
+                channel="tv",
+                window=(7, 9),
+            )
+
+    def test_unorderable_bounds_raise(self):
+        with pytest.raises(ValueError, match="order-compared"):
+            meridian_calibration_mask(
+                media_times=["a", "b", "c"],
+                media_channels=["tv"],
+                channel="tv",
+                window=(1, 2),
+            )
+
+    def test_unparseable_datetime_bound_raises(self):
+        with pytest.raises(ValueError, match="coerced"):
+            meridian_calibration_mask(
+                media_times=self._TIMES,
+                media_channels=["tv"],
+                channel="tv",
+                window=("not-a-date", "2024-01-29"),
+            )
+
+    def test_tz_mismatch_fails_closed_both_ways(self):
+        aware = pd.date_range("2024-01-01", periods=3, freq="W-MON", tz="UTC")
+        with pytest.raises(ValueError, match="timezone"):
+            meridian_calibration_mask(
+                media_times=aware,
+                media_channels=["tv"],
+                channel="tv",
+                window=("2024-01-01", "2024-01-15"),
+            )
+        naive = pd.date_range("2024-01-01", periods=3, freq="W-MON")
+        with pytest.raises(ValueError, match="timezone"):
+            meridian_calibration_mask(
+                media_times=naive,
+                media_channels=["tv"],
+                channel="tv",
+                window=(pd.Timestamp("2024-01-01", tz="UTC"), pd.Timestamp("2024-01-15", tz="UTC")),
+            )
+
+    def test_missing_bound_raises(self):
+        for bad in (None, math.nan, pd.NaT, pd.NA):
+            with pytest.raises(ValueError, match="must not be missing"):
+                meridian_calibration_mask(
+                    media_times=[1, 2, 3],
+                    media_channels=["tv"],
+                    channel="tv",
+                    window=(bad, 2),
+                )
+
+    def test_missing_window_label_raises_named(self):
+        # Missing labels fail closed on BOTH coordinate kinds, naming the
+        # actual input (not its NaT coercion).
+        times = pd.date_range("2024-01-01", periods=3, freq="W-MON")
+        for bad in (None, math.nan, pd.NaT, pd.NA):
+            with pytest.raises(ValueError, match="must not be missing"):
+                meridian_calibration_mask(
+                    media_times=times,
+                    media_channels=["tv"],
+                    channel="tv",
+                    window=["2024-01-01", bad],
+                )
+        with pytest.raises(ValueError, match="must not be missing"):
+            meridian_calibration_mask(
+                media_times=[1, 2, 3],
+                media_channels=["tv"],
+                channel="tv",
+                window=[1, None],
+            )
+
+    def test_wrong_typed_media_times(self):
+        multi = pd.MultiIndex.from_tuples([(1, 2), (3, 4)])
+        for bad in ("abc", {"a": 1}, 5, multi, np.zeros((2, 2)), np.array(1.0)):
+            with pytest.raises(TypeError):
+                meridian_calibration_mask(
+                    media_times=bad, media_channels=["tv"], channel="tv", window=(1, 2)
+                )
+        # Tuple-valued labels pass the outer gate but pd.Index promotes them to
+        # a MultiIndex - rejected after construction.
+        with pytest.raises(TypeError, match="MultiIndex"):
+            meridian_calibration_mask(
+                media_times=[(1, 2), (3, 4)],
+                media_channels=["tv"],
+                channel="tv",
+                window=(1, 2),
+            )
+
+    def test_wrong_typed_media_channels(self):
+        for bad in ("abc", {"a": 1}, 5, np.zeros((2, 2))):
+            with pytest.raises(TypeError):
+                meridian_calibration_mask(
+                    media_times=[1, 2], media_channels=bad, channel="tv", window=(1, 2)
+                )
+
+    def test_wrong_typed_channel_and_window(self):
+        with pytest.raises(TypeError):
+            meridian_calibration_mask(
+                media_times=[1, 2],
+                media_channels=["tv"],
+                channel={"a": 1},
+                window=(1, 2),
+            )
+        with pytest.raises(TypeError):
+            meridian_calibration_mask(
+                media_times=[1, 2],
+                media_channels=["tv"],
+                channel=np.array(1.0),
+                window=(1, 2),
+            )
+        for bad_window in (5, "2024-01-01", {"a": 1}):
+            with pytest.raises(TypeError, match=r"\(start, end\) tuple"):
+                meridian_calibration_mask(
+                    media_times=[1, 2],
+                    media_channels=["tv"],
+                    channel="tv",
+                    window=bad_window,
+                )
+        with pytest.raises(TypeError, match="must be scalar labels"):
+            meridian_calibration_mask(
+                media_times=[1, 2, 3],
+                media_channels=["tv"],
+                channel="tv",
+                window=(np.array([1, 2]), 3),
+            )
+
+
+class TestToCodeArrayMask:
+    """to_code() ndarray route: validation, serialization, round-trips."""
+
+    def _prior(self):
+        return to_meridian_roi_prior(
+            incremental_outcome=9_600.0,
+            incremental_outcome_se=2_400.0,
+            spend=20_000.0,
+        )
+
+    def _builder_mask(self):
+        return meridian_calibration_mask(
+            media_times=pd.date_range("2024-01-01", periods=5, freq="W-MON"),
+            media_channels=["search", "tv"],
+            channel="tv",
+            window=("2024-01-15", "2024-01-29"),
+        )
+
+    @staticmethod
+    def _exec_prelude(code, stop_marker):
+        ns = {}
+        prelude = code[code.index("import numpy as np") : code.index(stop_marker)]
+        exec(compile(prelude, "<prelude>", "exec"), ns)
+        return ns["roi_calibration_period"]
+
+    def test_array_mask_prelude_and_slot(self):
+        code = self._prior().to_code(
+            channel="tv",
+            media_channels=["search", "tv"],
+            roi_calibration_period=self._builder_mask(),
+        )
+        assert "import numpy as np" in code
+        assert "np.ones((5, 2), dtype=bool)" in code
+        assert "roi_calibration_period[:, [1]] = False" in code
+        assert "np.ix_([2, 3, 4], [1])" in code
+        assert "roi_calibration_period=roi_calibration_period" in code
+
+    def test_array_mask_round_trip(self):
+        from diff_diff.mmm import _mask_prelude
+
+        mask = self._builder_mask()
+        # Helper-level round-trip.
+        ns = {}
+        exec(compile(_mask_prelude(mask), "<prelude>", "exec"), ns)
+        assert np.array_equal(ns["roi_calibration_period"], mask)
+        assert ns["roi_calibration_period"].dtype == np.bool_
+        assert ns["roi_calibration_period"].shape == mask.shape
+        # Snippet-slice round-trip (multi-channel snippet: prelude ends at mu =).
+        code = self._prior().to_code(
+            channel="tv", media_channels=["search", "tv"], roi_calibration_period=mask
+        )
+        rebuilt = self._exec_prelude(code, "mu = ")
+        assert np.array_equal(rebuilt, mask)
+
+    def test_array_mask_per_channel_windows_round_trip(self):
+        # Different window per channel: two column groups in the prelude, each
+        # cleared and re-set, must reproduce the mask exactly.
+        mask = np.zeros((4, 2), dtype=bool)
+        mask[0:2, 0] = True
+        mask[2:4, 1] = True
+        from diff_diff.mmm import _mask_prelude
+
+        prelude = _mask_prelude(mask)
+        assert prelude.count("= False") == 2  # one clear per column group
+        code = self._prior().to_code(
+            channel="tv", media_channels=["search", "tv"], roi_calibration_period=mask
+        )
+        rebuilt = self._exec_prelude(code, "mu = ")
+        assert np.array_equal(rebuilt, mask)
+        assert rebuilt.dtype == np.bool_
+
+    def test_array_mask_all_true_round_trip(self):
+        mask = np.ones((3, 2), dtype=bool)
+        from diff_diff.mmm import _mask_prelude
+
+        prelude = _mask_prelude(mask)
+        assert "= False" not in prelude  # all-True needs only the ones init
+        ns = {}
+        exec(compile(prelude, "<prelude>", "exec"), ns)
+        assert np.array_equal(ns["roi_calibration_period"], mask)
+
+    def test_array_mask_channel_count_mismatch(self):
+        mask = np.ones((3, 3), dtype=bool)
+        with pytest.raises(ValueError, match="channel column"):
+            self._prior().to_code(
+                channel="tv", media_channels=["search", "tv"], roi_calibration_period=mask
+            )
+
+    def test_array_mask_single_channel_column_check(self):
+        with pytest.raises(ValueError, match="exactly 1 column"):
+            self._prior().to_code(
+                single_channel=True, roi_calibration_period=np.ones((3, 2), dtype=bool)
+            )
+        code = self._prior().to_code(
+            single_channel=True, roi_calibration_period=np.ones((3, 1), dtype=bool)
+        )
+        rebuilt = self._exec_prelude(code, "roi_prior = ")
+        assert rebuilt.shape == (3, 1)
+
+    def test_array_mask_all_false_rejected(self):
+        with pytest.raises(ValueError, match="all False"):
+            self._prior().to_code(
+                single_channel=True, roi_calibration_period=np.zeros((3, 1), dtype=bool)
+            )
+
+    def test_array_mask_all_false_column_rejected(self):
+        # Meridian aggregates each channel's calibration spend through its mask
+        # column, so ANY all-False column (here 'tv') is rejected even when
+        # other columns carry Trues - Google's convention gives non-experiment
+        # channels ALL periods, never none.
+        mask = np.zeros((3, 2), dtype=bool)
+        mask[:, 0] = True  # 'search' all periods; 'tv' entirely False
+        with pytest.raises(ValueError, match="entirely False"):
+            self._prior().to_code(
+                channel="tv", media_channels=["search", "tv"], roi_calibration_period=mask
+            )
+        # The mirror direction: every column has a True -> accepted.
+        mask[1, 1] = True
+        code = self._prior().to_code(
+            channel="tv", media_channels=["search", "tv"], roi_calibration_period=mask
+        )
+        assert "roi_calibration_period=roi_calibration_period" in code
+
+    def test_mroi_priors_cannot_be_time_scoped(self):
+        # Meridian 1.7.0's ModelSpec rejects roi_calibration_period unless the
+        # media prior type is 'roi' - both the ndarray and expression routes
+        # must fail closed for mroi_m; full_model_window stays valid.
+        mroi = to_meridian_roi_prior(
+            incremental_outcome=9_600.0,
+            incremental_outcome_se=2_400.0,
+            spend=20_000.0,
+            parameter="mroi_m",
+        )
+        with pytest.raises(ValueError, match="unless the media prior type"):
+            mroi.to_code(
+                single_channel=True,
+                roi_calibration_period=np.ones((3, 1), dtype=bool),
+            )
+        with pytest.raises(ValueError, match="unless the media prior type"):
+            mroi.to_code(single_channel=True, roi_calibration_period="my_mask")
+        code = mroi.to_code(single_channel=True, full_model_window=True)
+        assert "roi_calibration_period=None" in code
+        # The no-time-scope error is parameter-aware: for mroi_m it recommends
+        # ONLY the route that Meridian accepts, never the mask routes the next
+        # validation would reject.
+        with pytest.raises(ValueError, match="exactly one route"):
+            mroi.to_code(single_channel=True)
+
+    def test_array_mask_bad_shape_and_values(self):
+        with pytest.raises(ValueError, match="2-D"):
+            self._prior().to_code(
+                single_channel=True, roi_calibration_period=np.ones(3, dtype=bool)
+            )
+        with pytest.raises(ValueError, match="non-empty"):
+            self._prior().to_code(
+                single_channel=True, roi_calibration_period=np.ones((0, 2), dtype=bool)
+            )
+        bad = np.zeros((3, 1))
+        bad[0, 0] = 0.5
+        with pytest.raises(ValueError, match="only 0/1"):
+            self._prior().to_code(single_channel=True, roi_calibration_period=bad)
+        with pytest.raises(ValueError, match="only 0/1"):
+            self._prior().to_code(
+                single_channel=True,
+                roi_calibration_period=np.array([["a"]], dtype=object),
+            )
+
+    def test_array_mask_float01_google_parity(self):
+        # Google's configure-model example builds the mask with float np.zeros.
+        mask = np.zeros((3, 1))
+        mask[1, 0] = 1.0
+        code = self._prior().to_code(single_channel=True, roi_calibration_period=mask)
+        rebuilt = self._exec_prelude(code, "roi_prior = ")
+        assert rebuilt.dtype == np.bool_
+        assert np.array_equal(rebuilt, mask.astype(bool))
+
+    def test_array_mask_masked_array_rejected(self):
+        masked = np.ma.masked_array(np.ones((2, 1)), mask=[[True], [False]])
+        with pytest.raises(TypeError, match="masked arrays are not accepted"):
+            self._prior().to_code(single_channel=True, roi_calibration_period=masked)
+
+    def test_non_str_non_array_rejected(self):
+        with pytest.raises(TypeError, match="expression string or a boolean numpy array"):
+            self._prior().to_code(single_channel=True, roi_calibration_period=[[True, False]])
+
+    def test_time_scope_error_mentions_builder(self):
+        with pytest.raises(ValueError, match="meridian_calibration_mask"):
+            self._prior().to_code(single_channel=True)
+
+    def test_empty_prelude_routes_stay_clean(self):
+        # Both empty-{mask_prelude} routes emit no numpy artifacts.
+        full_window = self._prior().to_code(single_channel=True, full_model_window=True)
+        str_expr = self._prior().to_code(single_channel=True, roi_calibration_period="my_mask")
+        for code in (full_window, str_expr):
+            assert "import numpy" not in code
+            assert "np.zeros(" not in code
 
 
 class TestRealisticWorkflow:
@@ -675,6 +1231,18 @@ class TestAggregationExtraction:
         agg = _make_agg()
         with pytest.raises(ValueError, match="scale is required with aggregation_result"):
             to_pymc_marketing_lift_test(channel="tv", x=1.0, delta_x=1.0, aggregation_result=agg)
+
+    def test_boolean_scale_rejected(self):
+        # float(True) == 1.0 would silently scale by one - a plausible typo
+        # for scale="auto" - so booleans fail closed, scalar and per-row.
+        agg = _make_agg()
+        for bad in (True, np.bool_(True), [True]):
+            with pytest.raises(ValueError, match="got a boolean"):
+                to_pymc_marketing_lift_test(
+                    channel="tv", x=1.0, delta_x=1.0, aggregation_result=agg, scale=bad
+                )
+        with pytest.raises(ValueError, match="got a boolean"):
+            to_meridian_roi_prior(aggregation_result=agg, scale=True, spend=10.0)
 
     def test_non_auto_string_scale_rejected(self):
         agg = _make_agg()
@@ -1123,4 +1691,5 @@ def test_public_exports():
 
     assert diff_diff.to_pymc_marketing_lift_test is to_pymc_marketing_lift_test
     assert diff_diff.to_meridian_roi_prior is to_meridian_roi_prior
+    assert diff_diff.meridian_calibration_mask is meridian_calibration_mask
     assert diff_diff.MeridianROIPrior is MeridianROIPrior

@@ -162,6 +162,7 @@ from diff_diff.lpdid import LPDiD
 from diff_diff.lpdid_results import LPDiDResults
 from diff_diff.mmm import (
     MeridianROIPrior,
+    meridian_calibration_mask,
     to_meridian_roi_prior,
     to_pymc_marketing_lift_test,
 )
@@ -613,6 +614,7 @@ __all__ = [
     # MMM calibration export (interop)
     "to_pymc_marketing_lift_test",
     "to_meridian_roi_prior",
+    "meridian_calibration_mask",
     "MeridianROIPrior",
     # LLM guide accessor
     "get_llm_guide",

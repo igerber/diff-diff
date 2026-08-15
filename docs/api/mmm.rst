@@ -152,10 +152,50 @@ Example
    )
    print(prior.roi_mean, prior.roi_sd)
 
-   # Channel- and time-scoped snippet: roi_m is per-channel, and the prior was
-   # estimated on the experiment window.
+Scoping the prior to the experiment window
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``to_code()`` requires the prior's time scope. Build the boolean
+``(n_media_times, n_media_channels)`` mask with
+:func:`~diff_diff.meridian_calibration_mask` and pass it directly - the array is
+serialized into the generated snippet (a string expression or
+``full_model_window=True`` also work). Note Meridian's own guidance: its
+configure-model guide states that ``roi_calibration_period`` "is not generally
+recommended because calibrating the ROI of a specific time period does not
+necessarily improve estimation of the overall ROI" - prefer
+``full_model_window=True`` when the experiment evidence reasonably transfers to
+the full window, and reserve the mask for evidence genuinely specific to a
+narrower period:
+
+.. code-block:: python
+
+   import pandas as pd
+
+   from diff_diff import meridian_calibration_mask, to_meridian_roi_prior
+
+   prior = to_meridian_roi_prior(
+       incremental_outcome=180_000.0,
+       incremental_outcome_se=45_000.0,
+       spend=200_000.0,
+   )
+
+   # The MMM's own coordinates: time labels in model order, channels in
+   # InputData order. window=(start, end) is inclusive; pass a list for
+   # explicit (possibly non-contiguous) time labels instead.
+   media_times = pd.date_range('2023-09-04', periods=52, freq='W-MON')
+   mask = meridian_calibration_mask(
+       media_times=media_times,
+       media_channels=['search', 'tv'],
+       channel='tv',
+       window=('2024-01-15', '2024-03-04'),
+   )
    print(prior.to_code(channel='tv', media_channels=['search', 'tv'],
-                       roi_calibration_period='experiment_window_mask'))
+                       roi_calibration_period=mask))
+   # The snippet rebuilds the same mask (all-True base; the experiment
+   # channel's column carries only the window - other channels keep ALL
+   # periods, Meridian's documented convention) and passes it to
+   # ModelSpec(roi_calibration_period=...). roi_m priors only: Meridian
+   # rejects the mask for mroi_m (use full_model_window=True there).
 
 Deriving totals from a fitted aggregation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -181,6 +221,13 @@ those containers' ``n`` does not count treated unit-periods (CallawaySantAnna's
    )
    # incremental_outcome == att * 132.0, and its SE == se * 132.0.
 
+meridian_calibration_mask
+-------------------------
+
+Build the boolean ``roi_calibration_period`` mask from the MMM's own coordinates.
+
+.. autofunction:: diff_diff.meridian_calibration_mask
+
 MeridianROIPrior
 ----------------
 
@@ -200,5 +247,8 @@ References
   https://developers.google.com/meridian/docs/advanced-modeling/set-custom-priors-past-experiments
 - Google Meridian, ROI/mROI/contribution parameterizations:
   https://developers.google.com/meridian/docs/advanced-modeling/roi-mroi-contribution-parameterizations
+- Google Meridian, "Set the ROI calibration period" (the
+  ``roi_calibration_period`` mask shape/semantics contract):
+  https://developers.google.com/meridian/docs/user-guide/configure-model
 - Zhou, G., Choe, Y., & Hetrakul, C. (2023). Calibrated MMM better predicts true
   ROAS. Meta Marketing Science.
