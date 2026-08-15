@@ -300,6 +300,9 @@ class TestTutorial28Drift:
                 "asymptotically valid",  # RBC coverage claim (not "honest")
                 "testable sufficient condition",  # balance role (not necessity)
                 "for this illustration",  # placebo medians are illustrative
+                "funded enrollment",  # the treatment is enrollment, not
+                # scholarship receipt (CI review)
+                "`b = h`",  # h-only sweep moves the bias bandwidth too
                 "first-order linearization of the ratio",  # RBC ratio caveat
             ],
             surface="markdown",
