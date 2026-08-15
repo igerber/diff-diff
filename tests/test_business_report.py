@@ -5080,3 +5080,19 @@ class TestDerivedEventStudySurfaceLift:
         pt = d["pre_trends"]
         assert pt["status"] == "computed"
         assert pt["pre_period_source"] is None
+
+    def test_skipped_pt_still_lifts_derived_provenance(self):
+        # CI review P2: a default TwoStageDiD fit (pretrends=False) derives a
+        # pre-empty surface, DR gate-skips PT with derived provenance, and BR's
+        # skip-path lift must carry the key rather than drop it.
+        from diff_diff import TwoStageDiD
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            sdf = generate_staggered_data(n_units=100, n_periods=6, treatment_effect=1.5, seed=7)
+            ts = TwoStageDiD().fit(
+                sdf, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
+            )
+        pt = BusinessReport(ts, outcome_label="y").to_dict()["pre_trends"]
+        assert pt["status"] == "skipped"
+        assert pt["pre_period_source"] == "aggregate_event_study"

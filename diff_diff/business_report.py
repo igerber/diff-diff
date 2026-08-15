@@ -947,6 +947,10 @@ def _lift_pre_trends(dr: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         return {
             "status": pt.get("status", "not_run"),
             "reason": pt.get("reason"),
+            # DR attaches derived-surface provenance to gate-skipped
+            # sections too (a successful-but-empty derivation) — the skip
+            # path must not drop it (None on raw routes, same as below).
+            "pre_period_source": pt.get("pre_period_source"),
         }
     return {
         "status": "computed",
