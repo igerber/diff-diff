@@ -385,12 +385,15 @@ class TwoStageDiDResults(BaseResults, AggregationMixin):
     def _aggregate_simple_result(self, kit: Any) -> AggregationResult:
         """One-row relay of the stored overall inference (bit-exact).
 
-        ``n = n_treated_obs`` (|Omega_1|, the D-column support the ATT
-        averages over) with ``n_kind="obs"``: TwoStageDiD's
+        ``n = n_treated_obs`` (|Omega_1|, the pre-filter D-column count)
+        with ``n_kind="obs"``: TwoStageDiD's
         ``n_treated_units``/``n_control_units`` unit sets OVERLAP (an
         eventually-treated unit contributes untreated observations), so
         the CS/EDiD disjoint-units convention cannot apply (the StackedDiD
-        carve-out class).
+        carve-out class). The ATT's actual Stage-2 support excludes rows
+        whose ``y_tilde`` is non-finite (their treatment indicator is
+        zeroed before the OLS), so on such degenerate fits - which warn at
+        fit time - ``n`` exceeds the averaged support.
 
         ``df`` is the kit's ``survey_df_final`` snapshot - the exact value
         the STORED overall ``safe_inference`` received (on a replicate fit

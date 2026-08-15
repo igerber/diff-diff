@@ -1,21 +1,29 @@
 """Tests for diff_diff.mmm - MMM calibration input assembly (interop).
 
-The exporters are explicit-in / validated-out: the caller supplies the already-scoped
-incremental outcome and its SE, and the module assembles the target schema, enforces
-each consumer's guards, converts to the lognormal parameterization, and pools. These
-tests cover the schema/guards/math directly, plus a realistic workflow test that reads
-att/se off fitted estimators and feeds them in (the module never introspects results).
+The exporters take either explicit already-scoped numbers or the pinned
+``AggregationResult`` container (``aggregation_result=`` + ``scale=``, with
+``scale="auto"`` honored only for the audited ImputationDiD/TwoStageDiD
+producers); the module assembles the target schema, enforces each consumer's
+guards, converts to the lognormal parameterization, and pools. These tests cover
+the schema/guards/math directly, the container-mode extraction/routing matrix,
+end-to-end workflows on fitted estimators, and a contract pin of exactly the
+container surface the module consumes.
 """
 
 import math
 import warnings
 
+import numpy as np
+import pandas as pd
 import pytest
 from scipy import stats
 
 from diff_diff import (
+    AggregationResult,
     CallawaySantAnna,
     DifferenceInDifferences,
+    ImputationDiD,
+    TwoStageDiD,
     to_meridian_roi_prior,
     to_pymc_marketing_lift_test,
 )
@@ -443,12 +451,13 @@ class TestRealisticWorkflow:
         assert prior.roi_mean == pytest.approx(total / 100_000.0)
 
     def test_callaway_santanna_workflow(self):
-        # CS gives a headline ATT; the caller is responsible for turning it into a
-        # total incremental outcome using the estimator's own aggregation (not a
-        # naive att x count, which need not reproduce CS's cohort weights or
-        # variance - that estimator-owned aggregation is the post-4.0 follow-up).
-        # Here we simply confirm the fitted numbers flow through the exporter once
-        # the caller has supplied a total and its SE.
+        # CS gives a headline ATT; the container route now exists
+        # (aggregation_result= + a NUMERIC scale=, see TestAggregationWorkflow),
+        # but CS's own estimator-owned aggregation producing a total incremental
+        # outcome remains undelivered (DEFERRED.md remainder row) - a naive
+        # att x count need not reproduce CS's cohort weights or variance. Here we
+        # simply confirm the fitted numbers flow through the exporter once the
+        # caller has supplied a total and its SE.
         data = generate_staggered_data(n_units=80, n_periods=8, seed=7)
         cs = CallawaySantAnna().fit(
             data, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
@@ -461,6 +470,652 @@ class TestRealisticWorkflow:
             spend=200_000.0,
         )
         assert prior.roi_mean == pytest.approx(150_000.0 / 200_000.0)
+
+
+def _make_agg(
+    level="simple",
+    estimator="ImputationDiD",
+    n_kind="obs",
+    labels=("overall",),
+    atts=(2.0,),
+    ses=(0.5,),
+    ns=(30.0,),
+    targets=None,
+):
+    """Hand-built AggregationResult mirroring the producers' field conventions."""
+    k = len(labels)
+    return AggregationResult(
+        level=level,
+        label=np.array(labels, dtype=object),
+        target=np.array(targets if targets is not None else ["att"] * k, dtype=object),
+        att=np.array(atts, dtype=float),
+        se=np.array(ses, dtype=float),
+        t_stat=np.full(k, 1.0),
+        p_value=np.full(k, 0.5),
+        conf_int_lower=np.full(k, 0.0),
+        conf_int_upper=np.full(k, 1.0),
+        n=np.array(ns, dtype=float),
+        df=np.full(k, np.nan),
+        n_kind=n_kind,
+        estimator=estimator,
+    )
+
+
+class TestAggregationExtraction:
+    """Container-mode routing/rejection matrix, on hand-built containers."""
+
+    def test_rejects_results_object_with_remedy(self):
+        result = DifferenceInDifferences().fit(
+            generate_did_data(n_units=20, n_periods=2, treatment_period=1, seed=3),
+            outcome="outcome",
+            treatment="treated",
+            post="post",
+        )
+        with pytest.raises(TypeError, match="have no container-mode route"):
+            to_pymc_marketing_lift_test(channel="tv", x=1.0, delta_x=1.0, aggregation_result=result)
+
+    def test_event_study_container_gets_results_object_message(self):
+        from diff_diff import EventStudyResults
+
+        es = EventStudyResults(
+            event_time=np.array([-1, 0, 1]),
+            att=np.array([0.0, 1.0, 1.5]),
+            se=np.array([np.nan, 0.2, 0.3]),
+            t_stat=np.array([np.nan, 5.0, 5.0]),
+            p_value=np.array([np.nan, 0.01, 0.01]),
+            conf_int_lower=np.array([np.nan, 0.6, 0.9]),
+            conf_int_upper=np.array([np.nan, 1.4, 2.1]),
+            is_reference=np.array([True, False, False]),
+            n=np.array([np.nan, 10.0, 10.0]),
+        )
+        # EventStudyResults subclasses BaseResults, so it must get the 1a
+        # results-object message, never the generic 1b one.
+        with pytest.raises(TypeError, match="EventStudyResults and estimators"):
+            to_pymc_marketing_lift_test(channel="tv", x=1.0, delta_x=1.0, aggregation_result=es)
+
+    def test_rejects_non_container_type(self):
+        from diff_diff.results_base import Diagnostic
+
+        class _SomeDiagnostic(Diagnostic):
+            """Stand-in for the Diagnostic-marker roster (not BaseResults)."""
+
+        for bad in (object(), _SomeDiagnostic()):
+            with pytest.raises(TypeError, match="Only AggregationResult is supported"):
+                to_pymc_marketing_lift_test(
+                    channel="tv", x=1.0, delta_x=1.0, aggregation_result=bad
+                )
+
+    def test_results_object_without_scale_still_type_error(self):
+        # The type check runs before the scale-required check.
+        result = DifferenceInDifferences().fit(
+            generate_did_data(n_units=20, n_periods=2, treatment_period=1, seed=3),
+            outcome="outcome",
+            treatment="treated",
+            post="post",
+        )
+        with pytest.raises(TypeError, match="must be an AggregationResult"):
+            to_meridian_roi_prior(aggregation_result=result, spend=10.0)
+
+    def test_rejects_unsupported_level(self):
+        agg = _make_agg(level="calendar")
+        with pytest.raises(ValueError, match="level must be 'simple' or 'group'"):
+            to_pymc_marketing_lift_test(
+                channel="tv", x=1.0, delta_x=1.0, aggregation_result=agg, scale=1.0
+            )
+
+    def test_rejects_empty_container(self):
+        agg = _make_agg(level="group", labels=(), atts=(), ses=(), ns=())
+        with pytest.raises(ValueError, match="has no rows"):
+            to_pymc_marketing_lift_test(
+                channel="tv", x=1.0, delta_x=1.0, aggregation_result=agg, scale=1.0
+            )
+
+    def test_rejects_multi_row_simple_container(self):
+        agg = _make_agg(
+            level="simple",
+            labels=("overall", "overall2"),
+            atts=(1.0, 2.0),
+            ses=(0.1, 0.1),
+            ns=(5.0, 5.0),
+        )
+        with pytest.raises(ValueError, match="out of contract"):
+            to_pymc_marketing_lift_test(
+                channel="tv", x=1.0, delta_x=1.0, aggregation_result=agg, scale=1.0
+            )
+
+    def test_rejects_non_att_target_whole_container(self):
+        # ContinuousDiD's simple container carries att + acrt rows; the acrt row
+        # is a dose derivative, so the WHOLE container is rejected (no filtering).
+        agg = _make_agg(
+            level="simple",
+            estimator="ContinuousDiD",
+            n_kind="units",
+            labels=("overall", "overall"),
+            atts=(1.0, 0.2),
+            ses=(0.1, 0.05),
+            ns=(40.0, 40.0),
+            targets=("att", "acrt"),
+        )
+        with pytest.raises(ValueError, match="rejected whole"):
+            to_pymc_marketing_lift_test(
+                channel="tv", x=1.0, delta_x=1.0, aggregation_result=agg, scale=1.0
+            )
+
+    def test_rejects_unusable_inference(self):
+        for atts, ses in (
+            ((math.nan,), (0.5,)),
+            ((math.inf,), (0.5,)),
+            ((1.0,), (0.0,)),
+            ((1.0,), (-1.0,)),
+            ((1.0,), (math.nan,)),
+            ((1.0,), (math.inf,)),
+        ):
+            agg = _make_agg(atts=atts, ses=ses)
+            with pytest.raises(ValueError, match="no usable point estimate/SE"):
+                to_pymc_marketing_lift_test(
+                    channel="tv",
+                    x=1.0,
+                    delta_x=1.0,
+                    aggregation_result=agg,
+                    scale=1.0,
+                )
+
+    def test_auto_scale_allowlisted_estimators(self):
+        for estimator in ("ImputationDiD", "TwoStageDiD"):
+            agg = _make_agg(estimator=estimator, atts=(2.0,), ses=(0.5,), ns=(30.0,))
+            df = to_pymc_marketing_lift_test(
+                channel="tv",
+                x=100.0,
+                delta_x=50.0,
+                aggregation_result=agg,
+                scale="auto",
+            )
+            assert df.loc[0, "delta_y"] == 2.0 * 30.0
+            assert df.loc[0, "sigma"] == 0.5 * 30.0
+
+    def test_auto_scale_rejected_off_allowlist(self):
+        cases = [
+            ("CallawaySantAnna", "treated\\+control"),
+            ("EfficientDiD", "disjoint treated\\+control"),
+            ("StackedDiD", "deduplicated distinct-treated-unit"),
+            ("SomethingNew", "not audited"),
+            (None, "not audited"),
+        ]
+        for estimator, fragment in cases:
+            agg = _make_agg(estimator=estimator)
+            with pytest.raises(ValueError, match=fragment):
+                to_pymc_marketing_lift_test(
+                    channel="tv",
+                    x=1.0,
+                    delta_x=1.0,
+                    aggregation_result=agg,
+                    scale="auto",
+                )
+
+    def test_auto_scale_n_kind_drift_guard(self):
+        agg = _make_agg(estimator="ImputationDiD", n_kind="units")
+        with pytest.raises(ValueError, match="schema has drifted"):
+            to_pymc_marketing_lift_test(
+                channel="tv", x=1.0, delta_x=1.0, aggregation_result=agg, scale="auto"
+            )
+
+    def test_auto_scale_rejects_bad_n(self):
+        for n in (math.nan, 0.0, -3.0, math.inf, -math.inf):
+            agg = _make_agg(ns=(n,))
+            with pytest.raises(ValueError, match="cannot auto-derive scale"):
+                to_pymc_marketing_lift_test(
+                    channel="tv",
+                    x=1.0,
+                    delta_x=1.0,
+                    aggregation_result=agg,
+                    scale="auto",
+                )
+
+    def test_missing_scale_names_both_routes(self):
+        agg = _make_agg()
+        with pytest.raises(ValueError, match="scale is required with aggregation_result"):
+            to_pymc_marketing_lift_test(channel="tv", x=1.0, delta_x=1.0, aggregation_result=agg)
+
+    def test_non_auto_string_scale_rejected(self):
+        agg = _make_agg()
+        with pytest.raises(ValueError, match="or the string 'auto'"):
+            to_pymc_marketing_lift_test(
+                channel="tv", x=1.0, delta_x=1.0, aggregation_result=agg, scale="AUTO"
+            )
+
+    def test_explicit_scale_scalar_and_per_row(self):
+        agg = _make_agg(
+            level="group",
+            estimator="CallawaySantAnna",
+            n_kind="cells",
+            labels=(2001, 2002),
+            atts=(1.0, 2.0),
+            ses=(0.1, 0.2),
+            ns=(4.0, 5.0),
+        )
+        df = to_pymc_marketing_lift_test(
+            channel="tv", x=1.0, delta_x=1.0, aggregation_result=agg, scale=10.0
+        )
+        assert df["delta_y"].tolist() == [10.0, 20.0]
+        df2 = to_pymc_marketing_lift_test(
+            channel="tv", x=1.0, delta_x=1.0, aggregation_result=agg, scale=[10.0, 100.0]
+        )
+        assert df2["delta_y"].tolist() == [10.0, 200.0]
+        assert df2["sigma"].tolist() == [pytest.approx(1.0), pytest.approx(20.0)]
+
+    def test_scale_validation_reuses_existing_messages(self):
+        agg = _make_agg(
+            level="group",
+            labels=(1, 2),
+            atts=(1.0, 2.0),
+            ses=(0.1, 0.2),
+            ns=(4.0, 5.0),
+        )
+        with pytest.raises(ValueError, match="scale has length 3 but 2"):
+            to_pymc_marketing_lift_test(
+                channel="tv",
+                x=1.0,
+                delta_x=1.0,
+                aggregation_result=agg,
+                scale=[1.0, 2.0, 3.0],
+            )
+        for bad in (0.0, -1.0, math.nan, math.inf):
+            with pytest.raises(ValueError, match="scale must be finite and > 0"):
+                to_pymc_marketing_lift_test(
+                    channel="tv",
+                    x=1.0,
+                    delta_x=1.0,
+                    aggregation_result=agg,
+                    scale=bad,
+                )
+
+    def test_row_order_is_to_dataframe_order(self):
+        # Producer order 2003, 2001; to_dataframe() sorts sortable labels, so the
+        # 2001 row comes first and per-row scale aligns to the SORTED order.
+        agg = _make_agg(
+            level="group",
+            labels=(2003, 2001),
+            atts=(3.0, 1.0),
+            ses=(0.3, 0.1),
+            ns=(7.0, 5.0),
+        )
+        df = to_pymc_marketing_lift_test(
+            channel="tv",
+            x=1.0,
+            delta_x=1.0,
+            aggregation_result=agg,
+            scale=[10.0, 100.0],
+        )
+        # Sorted order: label 2001 (att=1.0) gets scale 10, label 2003 gets 100.
+        assert df["delta_y"].tolist() == [10.0, 300.0]
+
+
+class TestLiftTestFromAggregation:
+    def test_simple_container_one_row(self):
+        agg = _make_agg(atts=(2.5,), ses=(0.4,), ns=(12.0,))
+        df = to_pymc_marketing_lift_test(
+            channel="tv",
+            x=500.0,
+            delta_x=250.0,
+            aggregation_result=agg,
+            scale="auto",
+            dims={"geo": "US"},
+        )
+        assert list(df.columns) == ["channel", "geo", "x", "delta_x", "delta_y", "sigma"]
+        assert df.loc[0, "delta_y"] == 2.5 * 12.0
+        assert df.loc[0, "sigma"] == pytest.approx(0.4 * 12.0)
+
+    def test_group_container_broadcast_interplay(self):
+        agg = _make_agg(
+            level="group",
+            labels=(1, 2, 3),
+            atts=(1.0, 2.0, 3.0),
+            ses=(0.1, 0.2, 0.3),
+            ns=(10.0, 10.0, 10.0),
+        )
+        df = to_pymc_marketing_lift_test(
+            channel="tv",
+            x=[100.0, 200.0, 300.0],
+            delta_x=50.0,
+            aggregation_result=agg,
+            scale="auto",
+        )
+        assert len(df) == 3
+        assert df["x"].tolist() == [100.0, 200.0, 300.0]
+        assert df["delta_x"].tolist() == [50.0, 50.0, 50.0]
+        with pytest.raises(ValueError, match="x has length 2 but 3"):
+            to_pymc_marketing_lift_test(
+                channel="tv",
+                x=[100.0, 200.0],
+                delta_x=50.0,
+                aggregation_result=agg,
+                scale="auto",
+            )
+
+    def test_mode_exclusivity(self):
+        agg = _make_agg()
+        with pytest.raises(ValueError, match="not both"):
+            to_pymc_marketing_lift_test(
+                channel="tv",
+                x=1.0,
+                delta_x=1.0,
+                delta_y=5.0,
+                sigma=1.0,
+                aggregation_result=agg,
+                scale=1.0,
+            )
+        # Container plus exactly ONE lone member is also "not both" (or-joined).
+        with pytest.raises(ValueError, match="not both"):
+            to_pymc_marketing_lift_test(
+                channel="tv",
+                x=1.0,
+                delta_x=1.0,
+                delta_y=5.0,
+                aggregation_result=agg,
+                scale=1.0,
+            )
+        with pytest.raises(ValueError, match="delta_y and sigma are required"):
+            to_pymc_marketing_lift_test(channel="tv", x=1.0, delta_x=1.0)
+        with pytest.raises(ValueError, match="sigma is required"):
+            to_pymc_marketing_lift_test(channel="tv", x=1.0, delta_x=1.0, delta_y=5.0)
+        with pytest.raises(ValueError, match="delta_y is required"):
+            to_pymc_marketing_lift_test(channel="tv", x=1.0, delta_x=1.0, sigma=1.0)
+        with pytest.raises(ValueError, match="scale only applies with"):
+            to_pymc_marketing_lift_test(
+                channel="tv", x=1.0, delta_x=1.0, delta_y=5.0, sigma=1.0, scale=2.0
+            )
+
+    def test_sign_policy_applies_to_derived_rows(self):
+        agg = _make_agg(atts=(-2.0,), ses=(0.5,), ns=(10.0,))
+        with pytest.raises(ValueError, match="NonMonotonicError"):
+            to_pymc_marketing_lift_test(
+                channel="tv",
+                x=100.0,
+                delta_x=50.0,
+                aggregation_result=agg,
+                scale="auto",
+            )
+        with pytest.warns(UserWarning, match="Keeping invalid"):
+            df = to_pymc_marketing_lift_test(
+                channel="tv",
+                x=100.0,
+                delta_x=50.0,
+                aggregation_result=agg,
+                scale="auto",
+                on_wrong_sign="keep",
+            )
+        assert df.loc[0, "delta_y"] == -20.0
+
+
+class TestMeridianFromAggregation:
+    def test_simple_container_prior_math(self):
+        agg = _make_agg(atts=(2.0,), ses=(0.5,), ns=(30.0,))
+        prior = to_meridian_roi_prior(aggregation_result=agg, scale="auto", spend=1_000.0)
+        total, total_se = 2.0 * 30.0, 0.5 * 30.0
+        assert prior.roi_mean == pytest.approx(total / 1_000.0)
+        assert prior.roi_sd == pytest.approx(total_se / 1_000.0)
+        # Lognormal closed-form roundtrip (Google's parameterization).
+        m, s = prior.roi_mean, prior.roi_sd
+        assert prior.sigma == pytest.approx(math.sqrt(math.log(1 + (s / m) ** 2)))
+        assert prior.mu == pytest.approx(math.log(m) - 0.5 * math.log(1 + (s / m) ** 2))
+
+    def test_group_container_per_cohort_spend_pooling(self):
+        agg = _make_agg(
+            level="group",
+            estimator="TwoStageDiD",
+            labels=(2001, 2002),
+            atts=(1.0, 2.0),
+            ses=(0.1, 0.2),
+            ns=(10.0, 20.0),
+        )
+        spends = [500.0, 1_500.0]
+        prior = to_meridian_roi_prior(aggregation_result=agg, scale="auto", spend=spends)
+        rois = [1.0 * 10.0 / 500.0, 2.0 * 20.0 / 1_500.0]
+        sds = [0.1 * 10.0 / 500.0, 0.2 * 20.0 / 1_500.0]
+        weights = [500.0 / 2_000.0, 1_500.0 / 2_000.0]
+        assert prior.roi_mean == pytest.approx(sum(w * r for w, r in zip(weights, rois)))
+        assert prior.roi_sd == pytest.approx(math.hypot(*(w * s for w, s in zip(weights, sds))))
+        assert [e.spend for e in prior.per_experiment] == spends
+
+    def test_mode_exclusivity(self):
+        agg = _make_agg()
+        with pytest.raises(ValueError, match="not both"):
+            to_meridian_roi_prior(
+                incremental_outcome=10.0,
+                incremental_outcome_se=1.0,
+                aggregation_result=agg,
+                scale=1.0,
+                spend=100.0,
+            )
+        with pytest.raises(ValueError, match="not both"):
+            to_meridian_roi_prior(
+                incremental_outcome_se=1.0,
+                aggregation_result=agg,
+                scale=1.0,
+                spend=100.0,
+            )
+        with pytest.raises(ValueError, match="incremental_outcome and incremental_outcome_se are"):
+            to_meridian_roi_prior(spend=100.0)
+        with pytest.raises(ValueError, match="incremental_outcome_se is required"):
+            to_meridian_roi_prior(incremental_outcome=10.0, spend=100.0)
+        with pytest.raises(ValueError, match="incremental_outcome is required"):
+            to_meridian_roi_prior(incremental_outcome_se=1.0, spend=100.0)
+        with pytest.raises(ValueError, match="scale only applies with"):
+            to_meridian_roi_prior(
+                incremental_outcome=10.0,
+                incremental_outcome_se=1.0,
+                scale=2.0,
+                spend=100.0,
+            )
+
+    def test_negative_pooled_att_hits_positivity_guard(self):
+        agg = _make_agg(atts=(-2.0,), ses=(0.5,), ns=(30.0,))
+        with pytest.raises(ValueError, match="positive support"):
+            to_meridian_roi_prior(aggregation_result=agg, scale="auto", spend=1_000.0)
+
+
+class TestAggregationWorkflow:
+    """End-to-end: fit -> aggregate -> export, with container-independent oracles
+    (treated unit-period counts computed from the input frame, never agg.n)."""
+
+    def test_imputation_auto_scale(self):
+        data = generate_staggered_data(n_units=60, n_periods=6, seed=11)
+        res = ImputationDiD().fit(
+            data, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
+        )
+        agg = res.aggregate("simple")
+        assert agg.estimator == "ImputationDiD"
+        # Frame-derived treated-obs count (never-treated coded first_treat == 0).
+        treated_obs = int(
+            ((data["first_treat"] > 0) & (data["period"] >= data["first_treat"])).sum()
+        )
+        spend = 50_000.0
+        prior = to_meridian_roi_prior(aggregation_result=agg, scale="auto", spend=spend)
+        manual = to_meridian_roi_prior(
+            incremental_outcome=float(agg.att[0]) * treated_obs,
+            incremental_outcome_se=float(agg.se[0]) * treated_obs,
+            spend=spend,
+        )
+        assert prior.roi_mean == pytest.approx(manual.roi_mean)
+        assert prior.roi_sd == pytest.approx(manual.roi_sd)
+
+    def test_two_stage_group_auto_scale(self):
+        data = generate_staggered_data(n_units=60, n_periods=6, seed=11)
+        res = TwoStageDiD().fit(
+            data, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
+        )
+        agg = res.aggregate("group")
+        frame = agg.to_dataframe()
+        df = to_pymc_marketing_lift_test(
+            channel="tv",
+            x=100.0,
+            delta_x=50.0,
+            aggregation_result=agg,
+            scale="auto",
+            on_wrong_sign="keep",
+        )
+        assert len(df) == len(frame)
+        for i, (_, row) in enumerate(frame.iterrows()):
+            cohort = row["label"]
+            cohort_obs = int(
+                ((data["first_treat"] == cohort) & (data["period"] >= data["first_treat"])).sum()
+            )
+            assert df.loc[i, "delta_y"] == pytest.approx(row["att"] * cohort_obs)
+
+    def test_callaway_explicit_scale_path(self):
+        data = generate_staggered_data(n_units=60, n_periods=6, seed=11)
+        cs = CallawaySantAnna().fit(
+            data, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
+        )
+        agg = cs.aggregate("simple")
+        with pytest.raises(ValueError, match="treated\\+control"):
+            to_meridian_roi_prior(aggregation_result=agg, scale="auto", spend=1_000.0)
+        scale = 40.0  # caller-derived treated unit-periods for THEIR scoping
+        prior = to_meridian_roi_prior(aggregation_result=agg, scale=scale, spend=1_000.0)
+        assert prior.roi_mean == pytest.approx(float(agg.att[0]) * scale / 1_000.0)
+
+    def test_imputation_nonfinite_tau_divergence(self):
+        # tests/test_imputation.py recipe: drop never-treated obs at t=5 so that
+        # period's time FE is unidentified -> non-finite tau-hat there, while the
+        # container's n stays the raw |Omega_1| count. This is the documented
+        # scale="auto" overcount scenario, pinned behaviorally.
+        rng = np.random.default_rng(42)
+        rows = []
+        for i in range(40):
+            ft = 2 if i < 20 else 99
+            for t in range(6):
+                if ft == 99 and t == 5:
+                    continue
+                y = rng.standard_normal() + i * 0.1 + t * 0.05
+                if t >= ft:
+                    y += 1.0
+                rows.append({"unit": i, "time": t, "outcome": y, "first_treat": ft})
+        data = pd.DataFrame(rows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = ImputationDiD().fit(
+                data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+            )
+        agg = res.aggregate("simple")
+        full_omega_1 = 20 * 4  # 20 treated units, periods 2..5
+        identified_obs = 20 * 3  # (cohort, t=5) cell is unidentified
+        assert float(agg.n[0]) == full_omega_1
+        assert float(agg.n[0]) > identified_obs  # auto-scale would overcount
+
+    def test_two_stage_nonfinite_ytilde_divergence(self):
+        # Analogous construction: with no untreated observations at t=5, stage 1
+        # (fit on untreated obs only) cannot identify that period's time FE, so
+        # treated rows there get non-finite y_tilde and drop from the ATT's
+        # support - while the simple container's n stays the pre-filter |Omega_1|.
+        rng = np.random.default_rng(42)
+        rows = []
+        for i in range(40):
+            ft = 2 if i < 20 else 99
+            for t in range(6):
+                if ft == 99 and t == 5:
+                    continue
+                y = rng.standard_normal() + i * 0.1 + t * 0.05
+                if t >= ft:
+                    y += 1.0
+                rows.append({"unit": i, "time": t, "outcome": y, "first_treat": ft})
+        data = pd.DataFrame(rows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = TwoStageDiD().fit(
+                data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+            )
+        agg = res.aggregate("simple")
+        full_omega_1 = 20 * 4
+        post_filter_support = 20 * 3  # treated rows at t=5 lose their y_tilde
+        assert float(agg.n[0]) == full_omega_1
+        assert float(agg.n[0]) > post_filter_support
+
+    def test_overflow_surfaces_downstream_messages(self):
+        # Only the effect product overflows (huge att, tiny se), so the message
+        # names the effect, per each exporter's own validation order.
+        agg = _make_agg(atts=(1e300,), ses=(1e-300,), ns=(30.0,))
+        with pytest.raises(ValueError, match="delta_y must be finite"):
+            to_pymc_marketing_lift_test(
+                channel="tv",
+                x=1.0,
+                delta_x=1.0,
+                aggregation_result=agg,
+                scale=1e10,
+            )
+        with pytest.raises(ValueError, match="incremental_outcome must be finite"):
+            to_meridian_roi_prior(aggregation_result=agg, scale=1e10, spend=100.0)
+
+
+class TestAggregationContractPin:
+    """Pin exactly the AggregationResult surface mmm consumes, so container schema
+    drift fails loudly here (independent of tests/test_aggregate_contract.py,
+    which compares producer frames AGAINST the constant, not the constant itself).
+    Containers at any alpha behave identically: alpha/CI/df/p are not consumed."""
+
+    _CONSUMED_COLUMNS = {"label", "target", "att", "se", "n"}
+    _NOT_CONSUMED_COLUMNS = {
+        "level",  # consumed as the ATTRIBUTE, not the frame column
+        "t_stat",
+        "p_value",
+        "conf_int_lower",
+        "conf_int_upper",
+        "weight",
+        "df",
+    }
+
+    def test_aggregation_schema_literal_pin(self):
+        from diff_diff.aggregation import AGGREGATION_SCHEMA
+
+        # mmm consumes to_dataframe() rows; a schema change must be consciously
+        # synced with _extract_aggregation_rows.
+        assert AGGREGATION_SCHEMA == (
+            "level",
+            "label",
+            "target",
+            "att",
+            "se",
+            "t_stat",
+            "p_value",
+            "conf_int_lower",
+            "conf_int_upper",
+            "n",
+            "weight",
+            "df",
+        )
+
+    def test_consumed_surface_is_closed(self):
+        from diff_diff.aggregation import AGGREGATION_SCHEMA
+
+        # The consumed + deliberately-not-consumed sets jointly cover the schema,
+        # so this pin is a closed definition of mmm's read surface.
+        assert self._CONSUMED_COLUMNS | self._NOT_CONSUMED_COLUMNS == set(AGGREGATION_SCHEMA)
+        agg = _make_agg()
+        for attr in ("level", "n_kind", "estimator"):
+            assert hasattr(agg, attr)
+        assert callable(agg.to_dataframe)
+        frame = agg.to_dataframe()
+        for col in self._CONSUMED_COLUMNS:
+            assert col in frame.columns
+
+    def test_public_annotations_runtime_resolvable(self):
+        # AggregationResult is imported at module runtime (not TYPE_CHECKING),
+        # so annotation consumers can resolve the exporters' signatures.
+        import typing
+
+        for fn in (to_pymc_marketing_lift_test, to_meridian_roi_prior):
+            hints = typing.get_type_hints(fn)
+            assert "aggregation_result" in hints and "scale" in hints
+
+    def test_allowlist_strings_match_provenance_derivation(self):
+        from diff_diff.imputation_results import ImputationDiDResults
+        from diff_diff.mmm import _SCALE_AUTO_ESTIMATORS
+        from diff_diff.two_stage_results import TwoStageDiDResults
+
+        derived = {
+            cls.__name__.replace("Results", "")
+            for cls in (ImputationDiDResults, TwoStageDiDResults)
+        }
+        assert derived == set(_SCALE_AUTO_ESTIMATORS)
 
 
 def test_public_exports():

@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **MMM exporters: container mode on the 3.9 aggregation surface.** Both
+  `to_pymc_marketing_lift_test` and `to_meridian_roi_prior` now accept
+  `aggregation_result=` - the pinned `AggregationResult` returned by post-fit
+  `results.aggregate('simple')` (one experiment row) or `'group'` (one row per
+  cohort) - together with the new `scale=`, deriving `effect = att * scale` and
+  `se = se * scale` per row in `to_dataframe()` order (the order every per-row
+  sequence kwarg aligns to). `scale` is always required with a container: a
+  finite positive number (scalar or per-row), or `"auto"`, which reads the
+  container's per-row `n` and is honored ONLY for ImputationDiD/TwoStageDiD
+  fits - the audited producers whose `n` is exactly the treated unit-periods
+  the ATT averages over. `"auto"` is an explicit acknowledgement of three
+  assumptions the container cannot verify (additive-level outcome, unweighted
+  fit, fully identified effects - both estimators warn at fit time on the
+  degenerate identification branch, where `att * n` overcounts; behaviorally
+  pinned in the tests). Everything else fails closed with the remedy inline:
+  raw results objects and `EventStudyResults` (the exporters never call
+  `aggregate()` themselves), `calendar`/`dose`/unknown levels, non-`"att"`
+  target rows (ContinuousDiD's `acrt`, HAD's WAS, dCDH's estimand relays -
+  container rejected whole, no silent row filtering), rows without usable
+  inference, and `scale="auto"` on any other estimator provenance
+  (CallawaySantAnna/EfficientDiD/StackedDiD hints explain their `n` semantics;
+  routing keys on the container's `estimator` field, never on `n_kind`, which
+  serves only as a drift guard). The explicit `delta_y`/`sigma` and
+  `incremental_outcome`/`incremental_outcome_se` route is unchanged and the two
+  routes are mutually exclusive. Docs: the REGISTRY MMM section, `api/mmm.rst`
+  (whose examples are now self-contained and executed by
+  `tests/test_doc_snippets.py`), and both LLM guides drop the pre-3.9 "does
+  not introspect result objects / deferred to the post-4.0 aggregate() layer"
+  framing - that layer shipped in 3.9 and this is its consumer. The
+  estimator-owned-totals remainder for CS/EfficientDiD/StackedDiD stays
+  tracked in DEFERRED.md.
+
 ### Changed
 - **Narrative docs migrated off the deprecated fit-time `aggregate=`** (the
   3.9 M-020 family; TODO "fit-time aggregate= teachings" sweep, RST half):

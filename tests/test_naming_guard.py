@@ -969,6 +969,11 @@ CONSUMER_ALLOWLIST = {
     ("estimator", "diff_diff/aggregation.py"): (
         "AggregationResult.estimator - independent field holding a CLASS NAME"
     ),
+    ("estimator", "diff_diff/mmm.py"): (
+        "reads AggregationResult.estimator (the container's own provenance "
+        "field, a CLASS NAME) to route container-mode scale='auto' - not a "
+        "read of CiC's renamed results field"
+    ),
     ("estimator", "diff_diff/business_report.py"): (
         'report-schema "estimator" keys holding class names / native tags'
     ),

@@ -2873,21 +2873,28 @@ stability policy.
 ## MMM Calibration Export
 
 Interop builders converting experiment results into Marketing Mix Model
-(MMM) calibration inputs. Pure numpy/pandas - no MMM package is imported,
-no result object is introspected (the module is purely additive). Design:
-EXPLICIT IN, VALIDATED OUT. Reconciling an experiment estimate to a
-calibration input needs the target MMM's row granularity (per-geo vs
-national), its time window, and the outcome scale (additive levels vs
-log/rate/share) - none of which diff-diff can see - so the CALLER supplies
-the already-scoped incremental outcome and its SE (read off summary(),
-aggregated to the population/window one MMM row represents). diff-diff
-assembles the schema, enforces each consumer's guards, converts to the
-lognormal parameterization, pools, and emits snippets. Deriving totals
-from a fit is deferred to the post-4.0 results.aggregate() layer, where
-the estimator owns its aggregation weights/balance/survey masses.
+(MMM) calibration inputs. Pure numpy/pandas - no MMM package is imported.
+Design: EXPLICIT NUMBERS IN, OR THE PINNED AGGREGATION CONTRACT IN -
+VALIDATED OUT. Reconciling an experiment estimate to a calibration input
+needs the target MMM's row granularity (per-geo vs national), its time
+window, and the outcome scale (additive levels vs log/rate/share), so the
+default route stays explicit: the CALLER supplies the already-scoped
+incremental outcome and its SE (read off summary(), aggregated to the
+population/window one MMM row represents). Alternatively both exporters
+take aggregation_result= (the AggregationResult from post-fit
+results.aggregate('simple'|'group')) + scale=, deriving effect =
+att * scale and se = se * scale per row in to_dataframe() order;
+scale="auto" (per-row n off the container) is honored ONLY for
+ImputationDiD/TwoStageDiD fits - it acknowledges an additive-level
+outcome, an unweighted fit, and fully identified effects - and every
+other estimator, raw results objects, and EventStudyResults fail closed
+(the module never calls aggregate() itself). diff-diff assembles the
+schema, enforces each consumer's guards, converts to the lognormal
+parameterization, pools, and emits snippets.
 
 ```python
 from diff_diff import (
+    ImputationDiD,
     SyntheticDiD,
     to_pymc_marketing_lift_test,
     to_meridian_roi_prior,
@@ -2936,9 +2943,27 @@ print(prior.to_code(                  # ready-to-paste PriorDistribution +
     roi_calibration_period="mask",    # AND time scope (mask expr) or
                                       # full_model_window=True; sets
 ))                                    # media_prior_type accordingly.
+
+# Container route (ImputationDiD/TwoStageDiD): derive the totals from the
+# post-fit aggregation instead of hand-scoping.
+res = ImputationDiD().fit(data, outcome="outcome", unit="unit",
+                          time="period", first_treat="first_treat")
+prior2 = to_meridian_roi_prior(
+    aggregation_result=res.aggregate("simple"),
+    scale="auto",              # att x n (n = treated unit-periods here)
+    spend=200_000.0,
+)
 ```
 
 Key points:
+- Container mode: aggregation_result= accepts ONLY AggregationResult
+  ('simple' = one experiment row; 'group' = one per cohort, rows in
+  to_dataframe() order - per-row scale/spend/x/delta_x align to it).
+  scale= is always required: numeric, or "auto" for the audited
+  ImputationDiD/TwoStageDiD producers only (CS/EfficientDiD/StackedDiD
+  n counts units/cells, not treated unit-periods - pass a numeric scale).
+  A 'group' container's cohorts come from ONE fit: widen se_widening for
+  Meridian pooling, and note PyMC scores each row as independent evidence.
 - Lift frame: one row per experiment, columns [channel, *dims, x, delta_x,
   delta_y, sigma]; guards on sigma>0, delta_x!=0, x>=0, x+delta_x>=0,
   finite delta_y; dims must not collide with reserved columns and must

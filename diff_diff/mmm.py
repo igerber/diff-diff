@@ -20,16 +20,24 @@ dominant Python MMM frameworks consume that evidence in different shapes:
   ``mu = ln(m) - ln((s/m)^2 + 1)/2``, ``sigma = sqrt(ln((s/m)^2 + 1))``. See
   https://developers.google.com/meridian/docs/advanced-modeling/set-custom-priors-past-experiments.
 
-**Design: explicit in, validated out.** These functions do NOT rescale a result's
-headline ATT. Reconciling an experiment's estimate to a calibration input requires
-context diff-diff cannot see - the target MMM's row granularity (per-geo vs national),
-its time window, and the outcome's scale (additive levels vs a log/rate/share) - so
-the CALLER supplies the already-scoped incremental outcome and its standard error (the
-numbers they read off a fitted result's ``summary()``, aggregated to the population and
-window their MMM row represents). diff-diff does only what it can verify: assemble the
-exact target schema, enforce the sign/positivity/monotonicity guards each consumer
-requires, convert to the lognormal parameterization (with parity to Google's closed
-form), pool multiple experiments, and emit ready-to-paste snippets. It is pure
+**Design: explicit numbers in, or the pinned aggregation contract in - validated out.**
+Reconciling an experiment's estimate to a calibration input requires context diff-diff
+cannot always see - the target MMM's row granularity (per-geo vs national), its time
+window, and the outcome's scale (additive levels vs a log/rate/share). The default
+route therefore stays fully explicit: the CALLER supplies the already-scoped
+incremental outcome and its standard error (the numbers they read off a fitted
+result's ``summary()``, aggregated to the population and window their MMM row
+represents). Alternatively, both exporters accept ``aggregation_result=`` - the pinned
+:class:`~diff_diff.aggregation.AggregationResult` container returned by
+``results.aggregate('simple')`` / ``results.aggregate('group')`` - together with
+``scale=``, and derive ``effect = att * scale`` / ``se_out = se * scale`` per row.
+The derivation is fail-closed: raw results objects are rejected (this module never
+calls ``aggregate()`` itself), and ``scale="auto"`` (reading the row count off the
+container) is honored only for the audited producers whose ``n`` matches the ATT's
+averaged support on unweighted, fully identified fits. diff-diff does only what it can verify:
+assemble the exact target schema, enforce the sign/positivity/monotonicity guards each
+consumer requires, convert to the lognormal parameterization (with parity to Google's
+closed form), pool multiple experiments, and emit ready-to-paste snippets. It is pure
 numpy/pandas and never imports an MMM package.
 """
 
@@ -39,15 +47,64 @@ import ast
 import math
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import (
+    Any,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import numpy as np
 import pandas as pd
+
+# Runtime import (no cycle: aggregation.py depends only on results_base), so the
+# exporters' public annotations resolve under typing.get_type_hints().
+from diff_diff.aggregation import AggregationResult
+from diff_diff.results_base import BaseResults
 
 __all__ = ["MeridianROIPrior", "to_meridian_roi_prior", "to_pymc_marketing_lift_test"]
 
 _WRONG_SIGN_POLICIES = ("raise", "drop", "keep")
 _LIFT_TEST_RESERVED = frozenset({"channel", "x", "delta_x", "delta_y", "sigma"})
+
+# Container-mode routing (audited against each producer's aggregation source):
+# scale="auto" reads per-row n off the container ONLY for these producers, whose n
+# matches the treated observations (unit-periods) the ATT averages over on
+# unweighted, fully identified fits, at both
+# supported levels. Routing keys on AggregationResult.estimator - NEVER on n_kind
+# alone: CallawaySantAnna repeated-cross-section fits report n_kind="obs" with
+# n = treated+control observations, so n_kind is only a drift sanity guard here.
+_SCALE_AUTO_ESTIMATORS = frozenset({"ImputationDiD", "TwoStageDiD"})
+_CONTAINER_LEVELS = ("simple", "group")
+
+# Why scale="auto" is refused, per audited non-allowlisted producer. The generic
+# closing prescription in the error is an EXAMPLE for the unweighted additive case,
+# never a universal formula.
+_SCALE_HINTS = {
+    "CallawaySantAnna": (
+        "CallawaySantAnna's n is not a treated unit-period count: the 'simple' "
+        "container reports treated+control units (treated+control OBSERVATIONS on "
+        "repeated-cross-section fits, where n_kind='obs' still does not mean "
+        "treated unit-periods), and the 'group' container reports contributing "
+        "(g, t) cells (n_kind='cells')."
+    ),
+    "EfficientDiD": (
+        "EfficientDiD's n counts disjoint treated+control units ('simple') or "
+        "contributing (g, t) cells ('group'), not treated unit-periods."
+    ),
+    "StackedDiD": (
+        "StackedDiD's n is a deduplicated distinct-treated-unit count - units, not "
+        "treated unit-periods, so no per-observation mass exists - and under "
+        "weighting='population'/'sample_share' the ATT is a weighted estimand for "
+        "which raw treated exposure is not the right multiplier; derive the scoped "
+        "total per your weighting choice."
+    ),
+}
 
 # Meridian prior parameters this exporter can target, with each one's Meridian
 # default LogNormal(mu, sigma) per channel (verified against
@@ -172,13 +229,155 @@ def _normalize_dims(
     return dim_cols, rows
 
 
+def _extract_aggregation_rows(
+    aggregation_result: Any,
+    scale: Optional[Union[float, Sequence[float], str]],
+    *,
+    effect_name: str,
+    se_name: str,
+) -> Tuple[List[float], List[float], List[Any]]:
+    """Derive per-row ``(effect, se)`` from a pinned ``AggregationResult``.
+
+    Every per-row value (``label``, ``target``, ``att``, ``se``, ``n``) is read
+    from ONE ``to_dataframe()`` call, so rows arrive in the order ``summary()``
+    prints (sorted by label when sortable, producer order otherwise) - the
+    alignment order for every per-row sequence kwarg, ``scale`` included.
+    Fail-closed throughout: anything the container cannot verify raises with the
+    remedy inline.
+    """
+    if not isinstance(aggregation_result, AggregationResult):
+        if isinstance(aggregation_result, BaseResults):
+            raise TypeError(
+                f"aggregation_result must be an AggregationResult - the container "
+                f"returned by res.aggregate('simple') or res.aggregate('group') on "
+                f"estimators that produce one; got "
+                f"{type(aggregation_result).__name__}. EventStudyResults and "
+                f"estimators whose aggregate() does not return that container "
+                f"(WooldridgeDiDResults returns the results object itself; "
+                f"HeterogeneousAdoptionDiD event-study results support only "
+                f"'event_study') have no container-mode route - pass the explicit "
+                f"{effect_name}/{se_name} arguments instead"
+            )
+        raise TypeError(
+            f"aggregation_result must be an AggregationResult (the return value of "
+            f"res.aggregate('simple') or res.aggregate('group')); got "
+            f"{type(aggregation_result).__name__}. Only AggregationResult is "
+            f"supported."
+        )
+    level = aggregation_result.level
+    if level not in _CONTAINER_LEVELS:
+        raise ValueError(
+            f"aggregation_result.level must be 'simple' or 'group'; got {level!r}. "
+            f"Other levels ('calendar', 'dose', estimator-specific extras) have no "
+            f"defined MMM-experiment mapping - re-aggregate at a supported level."
+        )
+    frame = aggregation_result.to_dataframe()
+    if len(frame) == 0:
+        raise ValueError(
+            "aggregation_result has no rows (the aggregation selected no cells); "
+            "nothing to export"
+        )
+    if level == "simple":
+        target_list = list(frame["target"].tolist())
+        offending = sorted({t for t in target_list if target_list.count(t) > 1})
+        if offending:
+            raise ValueError(
+                f"aggregation_result has level='simple' but multiple rows for "
+                f"target(s) {offending!r}; producers emit a single 'overall' row "
+                f"per target for 'simple', so this container is out of contract - "
+                f"re-aggregate, or use level='group' for per-cohort rows"
+            )
+    bad_targets = [(i, t) for i, t in enumerate(frame["target"].tolist()) if t != "att"]
+    if bad_targets:
+        idxs = [i for i, _ in bad_targets]
+        targets = sorted({t for _, t in bad_targets})
+        raise ValueError(
+            f"aggregation_result row(s) {idxs} have target {targets!r} where 'att' "
+            f"is required; only ATT rows map to an MMM incremental outcome "
+            f"(ContinuousDiD's 'acrt' dose derivative, HeterogeneousAdoptionDiD's "
+            f"WAS estimands, and ChaisemartinDHaultfoeuille's estimand relays are "
+            f"not per-unit-period ATTs). The container is rejected whole - no "
+            f"silent row filtering."
+        )
+    labels = frame["label"].tolist()
+    atts = [float(v) for v in frame["att"].tolist()]
+    ses = [float(v) for v in frame["se"].tolist()]
+    ns = [float(v) for v in frame["n"].tolist()]
+    for i, (att_i, se_i) in enumerate(zip(atts, ses)):
+        if not (math.isfinite(att_i) and math.isfinite(se_i) and se_i > 0):
+            raise ValueError(
+                f"aggregation_result row [{i}] (label {labels[i]!r}) has "
+                f"att={att_i!r}, se={se_i!r}; the fit carries no usable point "
+                f"estimate/SE for this row, so it cannot calibrate an MMM"
+            )
+    n_rows = len(frame)
+    if isinstance(scale, str):
+        if scale != "auto":
+            raise ValueError(
+                f"scale must be a number, a sequence of numbers, or the string "
+                f"'auto'; got {scale!r}"
+            )
+        estimator = aggregation_result.estimator
+        if estimator not in _SCALE_AUTO_ESTIMATORS:
+            if estimator is not None and estimator in _SCALE_HINTS:
+                hint = _SCALE_HINTS[estimator]
+            else:
+                hint = (
+                    f"estimator provenance is {estimator!r}, whose n semantics "
+                    f"diff-diff has not audited for this derivation."
+                )
+            raise ValueError(
+                f"scale='auto' is not available for this container: {hint} Pass a "
+                f"numeric scale=<the factor converting this row's per-observation "
+                f"ATT to your MMM row's total, e.g. treated units x treated "
+                f"periods for an unweighted additive fit>, in to_dataframe() "
+                f"order; auto-derivation is audited only for ImputationDiD and "
+                f"TwoStageDiD, whose n is the treated observations the ATT "
+                f"averages over."
+            )
+        n_kind = aggregation_result.n_kind
+        if n_kind != "obs":
+            raise ValueError(
+                f"aggregation_result from {estimator} reports n_kind={n_kind!r}, "
+                f"expected 'obs'; the container schema has drifted from the "
+                f"audited contract - pass a numeric scale explicitly"
+            )
+        for i, n_i in enumerate(ns):
+            if not (math.isfinite(n_i) and n_i > 0):
+                raise ValueError(
+                    f"aggregation_result row [{i}] (label {labels[i]!r}) has "
+                    f"n={n_i!r}; cannot auto-derive scale - pass a numeric scale"
+                )
+        scales = ns
+    elif scale is not None:
+        scales = [
+            _finite_positive("scale", v, i)
+            for i, v in enumerate(_broadcast("scale", scale, n_rows))
+        ]
+    else:
+        raise ValueError(
+            f"scale is required with aggregation_result: pass a numeric "
+            f"scale=<the factor converting each row's per-observation ATT to your "
+            f"MMM row's total; e.g. treated units x treated periods for an "
+            f"unweighted additive fit> (scalar or one value per row in "
+            f"to_dataframe() order), or scale='auto' (ImputationDiD/TwoStageDiD "
+            f"fits only - see the {effect_name} docstring for the assumptions "
+            f"'auto' acknowledges)"
+        )
+    effects = [att_i * s_i for att_i, s_i in zip(atts, scales)]
+    ses_out = [se_i * s_i for se_i, s_i in zip(ses, scales)]
+    return effects, ses_out, labels
+
+
 def to_pymc_marketing_lift_test(
     *,
     channel: Union[str, Sequence[str]],
     x: Union[float, Sequence[float]],
     delta_x: Union[float, Sequence[float]],
-    delta_y: Union[float, Sequence[float]],
-    sigma: Union[float, Sequence[float]],
+    delta_y: Optional[Union[float, Sequence[float]]] = None,
+    sigma: Optional[Union[float, Sequence[float]]] = None,
+    aggregation_result: Optional[AggregationResult] = None,
+    scale: Optional[Union[float, Sequence[float], Literal["auto"]]] = None,
     dims: Optional[Union[Mapping[str, str], Sequence[Mapping[str, str]]]] = None,
     on_wrong_sign: str = "raise",
 ) -> pd.DataFrame:
@@ -190,15 +389,19 @@ def to_pymc_marketing_lift_test(
     API accepts the same shape). All values stay in original data units
     (PyMC-Marketing rescales internally).
 
-    **The caller supplies the scoped effect.** ``delta_y`` and ``sigma`` are the
-    measured incremental outcome and its standard error, already aggregated to the
-    population and time window ONE target-MMM row represents. This function does not
-    rescale an ATT, because the reconciliation needs the MMM's row granularity and
-    outcome scale, which it cannot see. Read the effect and SE off your fitted
-    result's ``summary()`` and scope them yourself: PyMC-Marketing scores one row's
-    ``delta_y`` against ``saturation(x + delta_x) - saturation(x)``, so ``x``,
-    ``delta_x``, ``delta_y``, and ``sigma`` must all describe the SAME observation
-    (same channel, same population, same period span, additive-level outcome).
+    **Two input routes.** Either the caller supplies the scoped effect explicitly -
+    ``delta_y`` and ``sigma``, the measured incremental outcome and its standard
+    error already aggregated to the population and time window ONE target-MMM row
+    represents - or passes ``aggregation_result=`` (the pinned container returned by
+    ``results.aggregate('simple')`` / ``results.aggregate('group')``) together with
+    ``scale=``, and this function derives ``delta_y = att * scale`` and
+    ``sigma = se * scale`` per container row. Rescaling is performed ONLY under that
+    explicit contract - reconciliation context the container cannot carry (the MMM's
+    row granularity, the outcome's scale) remains the caller's acknowledgement, see
+    ``scale``. Either way, PyMC-Marketing scores one row's ``delta_y`` against
+    ``saturation(x + delta_x) - saturation(x)``, so ``x``, ``delta_x``, ``delta_y``,
+    and ``sigma`` must all describe the SAME observation (same channel, same
+    population, same period span, additive-level outcome).
 
     Parameters
     ----------
@@ -209,12 +412,57 @@ def to_pymc_marketing_lift_test(
     delta_x : float or sequence of float
         Spend change during the experiment (nonzero; negative for go-dark/holdout
         tests, with ``x + delta_x >= 0``), in the same units as ``x``.
-    delta_y : float or sequence of float
+    delta_y : float or sequence of float, optional
         Measured incremental outcome for the SAME observation as ``x``/``delta_x``,
         in original outcome units. Finite; must be nonzero and share ``delta_x``'s
-        sign (see ``on_wrong_sign``).
-    sigma : float or sequence of float
-        Standard error of ``delta_y`` (finite, positive).
+        sign (see ``on_wrong_sign``). Required together with ``sigma`` unless
+        ``aggregation_result`` is given (the two routes are mutually exclusive).
+    sigma : float or sequence of float, optional
+        Standard error of ``delta_y`` (finite, positive). Required together with
+        ``delta_y`` unless ``aggregation_result`` is given.
+    aggregation_result : AggregationResult, optional
+        The pinned container returned by ``results.aggregate('simple')`` (one
+        experiment row) or ``results.aggregate('group')`` (one row per cohort).
+        Mutually exclusive with ``delta_y``/``sigma``; requires ``scale``. Rows are
+        consumed in ``aggregation_result.to_dataframe()`` order - the order
+        ``summary()`` prints - and every per-row sequence kwarg (``scale``, ``x``,
+        ``delta_x``, ``dims``, ...) aligns to that order. Raw results objects and
+        ``EventStudyResults`` are rejected; this function never calls
+        ``aggregate()`` itself. On a bootstrapped fit, ``aggregate('simple')``
+        relays the stored percentile SE, which is used as-is. Group-container
+        cautions: (1) cohort rows come from ONE fit sharing controls and windows,
+        yet each emitted lift row is scored by PyMC-Marketing as an independent
+        observation with only its marginal ``sigma`` - the omitted cross-cohort
+        covariance can misstate the joint evidence (overstating it when the net
+        covariance is positive, as shared controls typically induce), and its
+        direction cannot be determined from marginal SEs alone; (2) a scalar
+        ``x`` or
+        ``delta_x`` replicates to every cohort row, asserting the channel's FULL
+        baseline spend / spend change produced only that cohort's ``delta_y`` -
+        pass per-cohort values; (3) the emitted frame carries NO cohort-label
+        column, so pass per-row ``dims`` to keep multi-cohort rows
+        distinguishable.
+    scale : float, sequence of float, or "auto", optional
+        Converts each container row's per-observation ATT to the row's total
+        incremental outcome: ``delta_y = att * scale``, ``sigma = se * scale``.
+        Required with ``aggregation_result`` (finite, positive; scalar or one value
+        per row in ``to_dataframe()`` order; e.g. treated units x treated periods
+        for an unweighted additive fit - an example, not a universal formula).
+        ``scale="auto"`` derives ``scale`` from the container's per-row ``n`` and is
+        accepted ONLY for ImputationDiD and TwoStageDiD fits, whose ``n`` is the
+        treated observations the ATT averages over. Passing ``"auto"`` acknowledges
+        three assumptions the container cannot verify: the outcome is in additive
+        levels (not log/rate/share); the fit is unweighted (on survey-weighted fits
+        ``att`` is a weighted average while ``n`` is a raw count); and every
+        treated observation's effect is identified (ImputationDiD averages finite
+        tau-hat only while ``n`` stays the raw count at both levels; TwoStageDiD's
+        'simple' ATT support excludes rows with non-finite first-stage residuals
+        while ``n`` reports the pre-filter count - both warn at fit time on the
+        degenerate branch, and ``"auto"`` on such a fit overcounts). An
+        ``att * scale`` (or ``se * scale``) that overflows the float range
+        surfaces via this function's ordinary finiteness errors - ``sigma`` is
+        validated before ``delta_y``, so a row where both overflow reports
+        ``sigma``.
     dims : mapping or sequence of mappings, optional
         Extra model-dimension columns, e.g. ``{"geo": "US-CA"}`` for a geo-level MMM
         built with ``MMM(dims=("geo",))``. Values must match the target model's
@@ -249,7 +497,36 @@ def to_pymc_marketing_lift_test(
             f"on_wrong_sign must be one of {_WRONG_SIGN_POLICIES}; got {on_wrong_sign!r}"
         )
 
-    n = _seq_len(channel, x, delta_x, delta_y, sigma, dims)
+    if aggregation_result is not None:
+        if delta_y is not None or sigma is not None:
+            raise ValueError(
+                "pass either aggregation_result= or delta_y=/sigma=, not both; "
+                "aggregation mode derives delta_y and sigma from the container "
+                "(delta_y = att * scale, sigma = se * scale)"
+            )
+        delta_y, sigma, _ = _extract_aggregation_rows(
+            aggregation_result, scale, effect_name="delta_y", se_name="sigma"
+        )
+        n = len(delta_y)
+    else:
+        if scale is not None:
+            raise ValueError(
+                "scale only applies with aggregation_result=; without a container, "
+                "pass the already-scaled delta_y and sigma directly"
+            )
+        if delta_y is None or sigma is None:
+            missing = (
+                "delta_y and sigma are"
+                if delta_y is None and sigma is None
+                else ("delta_y is" if delta_y is None else "sigma is")
+            )
+            raise ValueError(
+                f"{missing} required when aggregation_result is not given; pass "
+                f"both delta_y and sigma, or pass "
+                f"aggregation_result=res.aggregate('simple'|'group') with scale= "
+                f"to derive them from a fitted result"
+            )
+        n = _seq_len(channel, x, delta_x, delta_y, sigma, dims)
     channels = _broadcast("channel", channel, n)
     xs = _broadcast("x", x, n)
     delta_xs = _broadcast("delta_x", delta_x, n)
@@ -499,8 +776,10 @@ class MeridianROIPrior:
 
 def to_meridian_roi_prior(
     *,
-    incremental_outcome: Union[float, Sequence[float]],
-    incremental_outcome_se: Union[float, Sequence[float]],
+    incremental_outcome: Optional[Union[float, Sequence[float]]] = None,
+    incremental_outcome_se: Optional[Union[float, Sequence[float]]] = None,
+    aggregation_result: Optional[AggregationResult] = None,
+    scale: Optional[Union[float, Sequence[float], Literal["auto"]]] = None,
     spend: Union[float, Sequence[float]],
     parameter: str = "roi_m",
     se_widening: float = 1.0,
@@ -517,24 +796,71 @@ def to_meridian_roi_prior(
     independent - widen via ``se_widening`` when experiments share controls or windows).
     The pooled mean/sd map to lognormal ``(mu, sigma)`` via Google's closed form.
 
-    **The caller supplies the scoped estimand.** ``incremental_outcome`` is the total
-    incremental outcome the experiment measured, matching the estimand of the target
-    prior: for ``parameter="roi_m"`` that is the outcome attributable to the channel's
-    spend against a zero-spend counterfactual (a full holdout), divided here by
-    ``spend`` = the channel's total spend over the window; for ``parameter="mroi_m"``
-    it is the marginal outcome of the spend change, divided by that spend change. Sign,
-    aggregation, and population are the caller's responsibility - diff-diff does not
-    rescale a headline ATT.
+    **Two input routes.** Either the caller supplies the scoped estimand explicitly -
+    ``incremental_outcome`` is the total incremental outcome the experiment measured,
+    matching the estimand of the target prior: for ``parameter="roi_m"`` that is the
+    outcome attributable to the channel's spend against a zero-spend counterfactual
+    (a full holdout), divided here by ``spend`` = the channel's total spend over the
+    window; for ``parameter="mroi_m"`` it is the marginal outcome of the spend
+    change, divided by that spend change - or passes ``aggregation_result=`` with
+    ``scale=``, and this function derives ``incremental_outcome = att * scale`` and
+    ``incremental_outcome_se = se * scale`` per container row. Rescaling happens ONLY
+    under that explicit contract; sign, estimand match, and population remain the
+    caller's responsibility.
 
     Parameters
     ----------
-    incremental_outcome : float or sequence of float
+    incremental_outcome : float or sequence of float, optional
         Total incremental outcome per experiment (the estimand matching ``parameter``),
         in the same currency/units as the MMM. Must be finite; the pooled ROI must be
-        positive (lognormal support).
-    incremental_outcome_se : float or sequence of float
+        positive (lognormal support). Required together with
+        ``incremental_outcome_se`` unless ``aggregation_result`` is given (the two
+        routes are mutually exclusive).
+    incremental_outcome_se : float or sequence of float, optional
         Standard error of ``incremental_outcome`` (finite, positive), computed for the
-        caller's aggregation.
+        caller's aggregation. Required together with ``incremental_outcome`` unless
+        ``aggregation_result`` is given.
+    aggregation_result : AggregationResult, optional
+        The pinned container returned by ``results.aggregate('simple')`` (one
+        experiment) or ``results.aggregate('group')`` (one experiment per cohort,
+        feeding the spend-weighted pooling below). Mutually exclusive with
+        ``incremental_outcome``/``incremental_outcome_se``; requires ``scale``. Rows
+        are consumed in ``aggregation_result.to_dataframe()`` order - the order
+        ``summary()`` prints - and per-row sequence kwargs (``scale``, ``spend``)
+        align to that order. Raw results objects and ``EventStudyResults`` are
+        rejected; this function never calls ``aggregate()`` itself. Group-container
+        cautions: (1) cohort rows come from ONE fit sharing controls and windows,
+        and the container carries only per-row SEs (the joint covariance's
+        off-diagonals are discarded upstream), so the independence pooling below
+        can misstate the pooled uncertainty - it is anti-conservative when the
+        net weighted covariance is positive (shared controls typically induce
+        positive correlation), and the direction cannot be determined from
+        marginal SEs alone; ``se_widening > 1`` is a conservative heuristic, not
+        an exact correction; (2) a scalar
+        ``spend`` replicates per row, making ``total_spend = n_rows * spend`` and
+        the pooled prior the arithmetic MEAN of cohort ROIs,
+        ``sum(effect_i) / (n_rows * spend)`` - an n-fold understatement of channel
+        ROI if the scalar was meant as the channel's TOTAL spend; pass per-cohort
+        spends.
+    scale : float, sequence of float, or "auto", optional
+        Converts each container row's per-observation ATT to that experiment's total
+        incremental outcome: ``incremental_outcome = att * scale``,
+        ``incremental_outcome_se = se * scale``. Required with
+        ``aggregation_result`` (finite, positive; scalar or one value per row in
+        ``to_dataframe()`` order; e.g. treated units x treated periods for an
+        unweighted additive fit - an example, not a universal formula).
+        ``scale="auto"`` derives ``scale`` from the container's per-row ``n`` and is
+        accepted ONLY for ImputationDiD and TwoStageDiD fits, whose ``n`` is the
+        treated observations the ATT averages over. Passing ``"auto"`` acknowledges
+        three assumptions the container cannot verify: additive-level outcome (not
+        log/rate/share), an unweighted fit (survey-weighted fits pair a weighted
+        ``att`` with a raw-count ``n``), and fully identified effects (both
+        estimators report the pre-filter treated-observation count while averaging
+        finite effects only; both warn at fit time on the degenerate branch, and
+        ``"auto"`` there overcounts). An overflowing ``att * scale`` surfaces via
+        this function's ordinary finiteness errors - ``incremental_outcome`` is
+        validated before ``incremental_outcome_se``, so a row where both overflow
+        reports ``incremental_outcome``.
     spend : float or sequence of float
         Spend the incremental outcome is divided by (finite, positive): the channel's
         total spend over the window for ``roi_m``, or the spend change for ``mroi_m``.
@@ -575,7 +901,45 @@ def to_meridian_roi_prior(
     if not math.isfinite(se_w) or se_w <= 0:
         raise ValueError(f"se_widening must be finite and > 0; got {se_widening!r}")
 
-    n = _seq_len(incremental_outcome, incremental_outcome_se, spend)
+    if aggregation_result is not None:
+        if incremental_outcome is not None or incremental_outcome_se is not None:
+            raise ValueError(
+                "pass either aggregation_result= or "
+                "incremental_outcome=/incremental_outcome_se=, not both; "
+                "aggregation mode derives them from the container "
+                "(incremental_outcome = att * scale, "
+                "incremental_outcome_se = se * scale)"
+            )
+        incremental_outcome, incremental_outcome_se, _ = _extract_aggregation_rows(
+            aggregation_result,
+            scale,
+            effect_name="incremental_outcome",
+            se_name="incremental_outcome_se",
+        )
+        n = len(incremental_outcome)
+    else:
+        if scale is not None:
+            raise ValueError(
+                "scale only applies with aggregation_result=; without a container, "
+                "pass the already-scaled incremental_outcome and "
+                "incremental_outcome_se directly"
+            )
+        if incremental_outcome is None or incremental_outcome_se is None:
+            missing = (
+                "incremental_outcome and incremental_outcome_se are"
+                if incremental_outcome is None and incremental_outcome_se is None
+                else (
+                    "incremental_outcome is"
+                    if incremental_outcome is None
+                    else "incremental_outcome_se is"
+                )
+            )
+            raise ValueError(
+                f"{missing} required when aggregation_result is not given; pass "
+                f"both, or pass aggregation_result=res.aggregate('simple'|'group') "
+                f"with scale= to derive them from a fitted result"
+            )
+        n = _seq_len(incremental_outcome, incremental_outcome_se, spend)
     outcomes = _broadcast("incremental_outcome", incremental_outcome, n)
     outcome_ses = _broadcast("incremental_outcome_se", incremental_outcome_se, n)
     spends = _broadcast("spend", spend, n)

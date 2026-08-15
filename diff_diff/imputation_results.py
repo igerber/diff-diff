@@ -386,7 +386,10 @@ class ImputationDiDResults(BaseResults, AggregationMixin):
         CS/EDiD disjoint-units convention cannot apply (the StackedDiD
         carve-out class); the treated-observation count is the population
         the overall ATT averages over and matches every other Imputation
-        row's n semantics.
+        row's n semantics. Of that population, only finite-tau-hat
+        observations enter the average - ``n`` reports the raw count, so
+        on partially unidentified fits (which warn at fit time) ``n``
+        exceeds the averaged support.
 
         ``df`` is the kit's ``survey_df_final`` snapshot - the exact value
         the STORED overall ``safe_inference`` received (on a replicate fit

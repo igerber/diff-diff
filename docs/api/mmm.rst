@@ -22,16 +22,24 @@ dominant Python MMM frameworks consume that evidence in different shapes:
    error to the prior standard deviation, converted to lognormal ``(mu, sigma)`` with
    Google's closed form.
 
-**Explicit in, validated out.** These functions do not rescale a result's headline
-ATT. Reconciling an experiment's estimate to a calibration input needs context
-diff-diff cannot see - the target MMM's row granularity (per-geo vs national), its
-time window, and the outcome's scale (additive levels vs a log/rate/share) - so the
-caller supplies the already-scoped incremental outcome and its standard error (the
-numbers read off a fitted result's ``summary()``, aggregated to the population and
-window one MMM row represents). diff-diff does only what it can verify: assemble the
-exact schema, enforce each consumer's guards, convert to the lognormal
-parameterization (parity with Google's closed form), pool, and emit snippets. It is
-pure numpy/pandas and imports no MMM package.
+**Explicit numbers in, or the pinned aggregation contract in - validated out.**
+Reconciling an experiment's estimate to a calibration input needs context diff-diff
+cannot always see - the target MMM's row granularity (per-geo vs national), its
+time window, and the outcome's scale (additive levels vs a log/rate/share). The
+default route stays fully explicit: the caller supplies the already-scoped
+incremental outcome and its standard error (the numbers read off a fitted result's
+``summary()``, aggregated to the population and window one MMM row represents).
+Alternatively both exporters accept ``aggregation_result=`` - the pinned
+:class:`~diff_diff.AggregationResult` returned by ``results.aggregate('simple')``
+or ``results.aggregate('group')`` - with ``scale=``, deriving
+``effect = att * scale`` and ``se = se * scale`` per row; ``scale="auto"`` (reading
+the container's own treated-observation count) is honored only for ImputationDiD
+and TwoStageDiD fits, and acknowledges assumptions the container cannot verify
+(additive-level outcome, unweighted fit, fully identified effects - see the
+docstrings). diff-diff does only what it can verify: assemble the exact schema,
+enforce each consumer's guards, convert to the lognormal parameterization (parity
+with Google's closed form), pool, and emit snippets. It is pure numpy/pandas and
+imports no MMM package.
 
 to_pymc_marketing_lift_test
 ---------------------------
@@ -45,6 +53,9 @@ Example
 
 .. code-block:: python
 
+   import numpy as np
+   import pandas as pd
+
    from diff_diff import SyntheticDiD, to_pymc_marketing_lift_test
 
    # Single-treated-geo experiment (US-CA): TV spend raised there vs control
@@ -53,8 +64,22 @@ Example
    # treated geos the pooled ATT is an average - do not assign it to one geo;
    # export each geo's own effect, or omit the geo dim and match aggregate
    # spend to an aggregate lift.)
+   rng = np.random.default_rng(42)
+   geos = [f"g{i}" for i in range(9)] + ["US-CA"]
+   panel = pd.DataFrame(
+       {
+           "geo": g,
+           "week": w,
+           "treated": int(g == "US-CA"),  # block treatment: constant per unit
+           "revenue": 100.0 + 2.0 * w + rng.normal(0.0, 1.0)
+           + (8.0 if g == "US-CA" and w >= 8 else 0.0),
+       }
+       for g in geos
+       for w in range(12)
+   )
    result = SyntheticDiD().fit(panel, outcome='revenue', treatment='treated',
-                               unit='geo', time='week')
+                               unit='geo', time='week',
+                               post_periods=list(range(8, 12)))
 
    df_lift = to_pymc_marketing_lift_test(
        channel='tv',
@@ -66,6 +91,33 @@ Example
    )
    # -> columns [channel, geo, x, delta_x, delta_y, sigma], ready for
    #    MMM.add_lift_test_measurements(df_lift)
+
+Deriving totals from a fitted aggregation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For ImputationDiD and TwoStageDiD fits, the post-fit aggregation container can
+supply the effect numbers directly - ``scale="auto"`` multiplies the per-observation
+ATT by the container's treated-observation count (an explicit acknowledgement that
+the outcome is in additive levels, the fit is unweighted, and every treated
+observation's effect is identified; see the docstring):
+
+.. code-block:: python
+
+   from diff_diff import ImputationDiD, to_pymc_marketing_lift_test
+   from diff_diff.prep import generate_staggered_data
+
+   data = generate_staggered_data(n_units=60, n_periods=6, seed=11)
+   res = ImputationDiD().fit(data, outcome='outcome', unit='unit',
+                             time='period', first_treat='first_treat')
+
+   df_lift = to_pymc_marketing_lift_test(
+       channel='tv',
+       x=50_000.0,
+       delta_x=20_000.0,
+       aggregation_result=res.aggregate('simple'),  # one experiment row
+       scale='auto',  # ImputationDiD's n IS the treated unit-periods
+   )
+   # delta_y == att * n, sigma == se * n, then the usual guards apply.
 
 to_meridian_roi_prior
 ---------------------
@@ -80,13 +132,17 @@ Example
 .. code-block:: python
 
    from diff_diff import DifferenceInDifferences, to_meridian_roi_prior
+   from diff_diff.prep import generate_did_data
 
-   result = DifferenceInDifferences().fit(panel, outcome='revenue',
+   panel = generate_did_data(n_units=60, n_periods=2, treatment_effect=5.0,
+                             treatment_period=1, seed=7)
+   result = DifferenceInDifferences().fit(panel, outcome='outcome',
                                           treatment='treated', post='post')
 
-   # Caller aggregates the ATT to a total incremental outcome over the treated
-   # population and window (e.g. att x treated units x post periods) and supplies
-   # its SE - diff-diff does not rescale the headline effect.
+   # On the explicit route the caller aggregates the ATT to a total incremental
+   # outcome over the treated population and window (e.g. att x treated units x
+   # post periods for an unweighted additive fit) and supplies its SE; the
+   # aggregation-container route below derives the numbers instead.
    prior = to_meridian_roi_prior(
        incremental_outcome=180_000.0,     # total incremental revenue
        incremental_outcome_se=45_000.0,   # its standard error
@@ -100,6 +156,30 @@ Example
    # estimated on the experiment window.
    print(prior.to_code(channel='tv', media_channels=['search', 'tv'],
                        roi_calibration_period='experiment_window_mask'))
+
+Deriving totals from a fitted aggregation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Estimators outside the ``scale="auto"`` allowlist still hand the exporter their
+effect and SE via the container - the caller supplies the numeric scale, because
+those containers' ``n`` does not count treated unit-periods (CallawaySantAnna's
+``simple`` container, for example, counts treated *and* control units):
+
+.. code-block:: python
+
+   from diff_diff import CallawaySantAnna, to_meridian_roi_prior
+   from diff_diff.prep import generate_staggered_data
+
+   data = generate_staggered_data(n_units=60, n_periods=6, seed=11)
+   cs = CallawaySantAnna().fit(data, outcome='outcome', unit='unit',
+                               time='period', first_treat='first_treat')
+
+   prior = to_meridian_roi_prior(
+       aggregation_result=cs.aggregate('simple'),
+       scale=132.0,        # caller-derived treated unit-periods for THEIR scoping
+       spend=200_000.0,
+   )
+   # incremental_outcome == att * 132.0, and its SE == se * 132.0.
 
 MeridianROIPrior
 ----------------
