@@ -4484,7 +4484,11 @@ plots; bin-count selector formulas, implemented as `RDPlot`),
 rdrobust software reference this port parity-targets),
 `calonico-cattaneo-farrell-2018-review.md` (JASA - CER-optimal bandwidths),
 `calonico-cattaneo-farrell-titiunik-2019-review.md` (REStat - covariate
-adjustment, implemented).
+adjustment, implemented),
+`cattaneo-jansson-ma-2020-review.md` (JASA - boundary-adaptive local
+polynomial density estimators + the density-discontinuity manipulation test;
+the rddensity methodology. Review only - the packaged density test remains a
+documented v1 seam pending implementation).
 
 ## RDPlot
 
