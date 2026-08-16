@@ -30,8 +30,9 @@ default route stays fully explicit: the caller supplies the already-scoped
 incremental outcome and its standard error (the numbers read off a fitted result's
 ``summary()``, aggregated to the population and window one MMM row represents).
 Alternatively both exporters accept ``aggregation_result=`` - the pinned
-:class:`~diff_diff.AggregationResult` returned by ``results.aggregate('simple')``
-or ``results.aggregate('group')`` - with ``scale=``, deriving
+:class:`~diff_diff.AggregationResult` returned by ``results.aggregate('simple')``,
+``results.aggregate('group')`` (each with ``scale=``), or
+``results.aggregate('total')`` (already the total; no scale) - deriving
 ``effect = att * scale`` and ``se = se * scale`` per row; ``scale="auto"`` (reading
 the container's own treated-observation count) is honored only for ImputationDiD
 and TwoStageDiD fits, and acknowledges assumptions the container cannot verify
@@ -95,11 +96,15 @@ Example
 Deriving totals from a fitted aggregation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-For ImputationDiD and TwoStageDiD fits, the post-fit aggregation container can
-supply the effect numbers directly - ``scale="auto"`` multiplies the per-observation
-ATT by the container's treated-observation count (an explicit acknowledgement that
-the outcome is in additive levels, the fit is unweighted, and every treated
-observation's effect is identified; see the docstring):
+The primary route (3.10) is ``results.aggregate('total')`` - the
+estimator-owned total incremental outcome on CallawaySantAnna, EfficientDiD,
+ImputationDiD, and TwoStageDiD (panel non-survey fits): its single row is
+already ``C x overall`` over the estimator's finite-masked complete-case
+support, so the exporter takes the container alone and rejects any ``scale``.
+For overall-total exports this supersedes ``scale="auto"``; ``"auto"`` remains
+the route for ImputationDiD/TwoStageDiD ``group``-level (per-cohort)
+containers. Either way the outcome must be in additive levels (see the
+docstrings):
 
 .. code-block:: python
 
@@ -114,10 +119,13 @@ observation's effect is identified; see the docstring):
        channel='tv',
        x=50_000.0,
        delta_x=20_000.0,
-       aggregation_result=res.aggregate('simple'),  # one experiment row
-       scale='auto',  # ImputationDiD's n IS the treated unit-periods
+       aggregation_result=res.aggregate('total'),  # already the total; no scale
    )
-   # delta_y == att * n, sigma == se * n, then the usual guards apply.
+   # delta_y == the total row's att, sigma == its se; the usual guards apply.
+   # Scaled-container alternatives: aggregation_result=res.aggregate('simple')
+   # (one overall row) or res.aggregate('group') (per-cohort rows) with
+   # scale='auto' - ImputationDiD's n IS the treated unit-periods there, at
+   # the cost of the documented raw-support caveat.
 
 to_meridian_roi_prior
 ---------------------
@@ -200,8 +208,11 @@ narrower period:
 Deriving totals from a fitted aggregation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Estimators outside the ``scale="auto"`` allowlist still hand the exporter their
-effect and SE via the container - the caller supplies the numeric scale, because
+Estimators outside the ``scale="auto"`` allowlist reach the exporter through
+``results.aggregate('total')`` too - where supported, that container needs no
+scale at all. On the routings totals do not support (repeated-cross-section,
+declared ``survey_design=``, divergent bare-``cluster=`` masses), the caller
+supplies a numeric scale instead - a caller-defined estimand, needed because
 those containers' ``n`` does not count treated unit-periods (CallawaySantAnna's
 ``simple`` container, for example, counts treated *and* control units):
 

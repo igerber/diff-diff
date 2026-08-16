@@ -171,7 +171,7 @@ A new parameter is only complete when it is:
   a `_PARAM_ATTR_ALIASES` entry, and constructor-derived state a
   `_DERIVED_CONFIG_ATTRS` entry — see `diff_diff/_base.py` and the
   inheritance map in `CLAUDE.md`)
-- applied in **every** aggregation mode — `simple`, `event_study`, and `group`
+- applied in **every** parameter-applying aggregation mode — `simple`, `event_study`, and `group`. `total` accepts no independent aggregation parameters, but every parameter that changes the overall keeper set or aggregation mass (e.g. `anticipation`) must also be reflected — and tested — in `total`'s mass
 - applied in the **bootstrap/inference** paths, not just the analytical one
 - reflected on the result object, so `to_dict()`/`summary()` do not misreport it
 - propagated to the estimators that inherit it: `TwoWayFixedEffects` defines

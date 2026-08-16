@@ -1646,13 +1646,21 @@ Returned by `CallawaySantAnna.fit()`.
 
 **Methods:** `aggregate(type, weights=None, *, balance_e=None)`, `summary()`, `print_summary()`, `to_dataframe(level="event_study"|"group_time"|"group")`
 
-`aggregate("simple"|"event_study"|"group")` re-aggregates POST-FIT with no
+`aggregate("simple"|"event_study"|"group"|"total")` re-aggregates POST-FIT
+with no
 refit, returning a NEW object and leaving the result unchanged.
 `"event_study"` returns `EventStudyResults`; the others return
-`AggregationResult`. `balance_e=` applies to `"event_study"` only. Raises on
+`AggregationResult`. `"total"` (3.10) is the estimator-owned total
+incremental outcome - an exact relay C x overall over the finite-masked
+complete-case support (single `target="total"` row; panel non-survey fits
+only: repeated-cross-section-routed and declared-`survey_design` fits raise
+`NotImplementedError` with the reason, as do bare-`cluster=` fits whose
+cohort-mass weighting diverges from the complete-case count).
+`balance_e=` applies to `"event_study"` only. Raises on
 `"calendar"` (CS has no calendar aggregator) and, on a bootstrapped fit, on
 the recompute levels (`"event_study"`/`"group"`) rather than substituting
-analytical inference for percentile-bootstrap statistics - `"simple"` relays
+analytical inference for percentile-bootstrap statistics - `"simple"` and,
+where supported, `"total"` relay
 the stored bootstrap inference with a NaN df column (the per-level rule).
 
 ### SunAbrahamResults
@@ -1832,7 +1840,7 @@ Each event study effect dict contains: `effect`, `se`, `t_stat`, `p_value`, `con
 | `n_clusters` | `int | None` | Number of effective clusters; `None` under survey designs and `None` under EfficientDiD's default unclustered fit |
 | `df_convention` | `str | None` | On the knob-carrying containers (`StackedDiDResults`, `ImputationDiDResults`, `WooldridgeDiDResults`, `LPDiDResults`, `SunAbrahamResults`): the configured df convention (3.9 / M-127); `StackedDiDResults` additionally carries `inference_df` (the overall-ATT df actually used) |
 
-**Methods:** `summary()`, `print_summary()`, `to_dataframe()`, `to_dict()` (flat dict of headline aliases + `vcov_type` + conditional `cluster_name`/`n_clusters`/`n_bootstrap`/`inference_method`); `aggregate(type, weights=None, *, balance_e=None)` on the shipped post-fit adopters (`StackedDiDResults` views since 3.9/M-024; `EfficientDiDResults` recomputes from retained EIFs since 3.9/M-023; `ImputationDiDResults` and `TwoStageDiDResults` recompute from their PANEL-BACKED kits since 3.9/M-021/M-022 - on bootstrapped fits their recompute levels raise while `'simple'` relays the stored bootstrap inference with a NaN df column (the per-level rule, converged with M-027); `ContinuousDiDResults` is MIXED since 3.9/M-025 - `'simple'`/`'dose'` are views over stored fields that work on any fit incl. bootstrapped, `'event_study'` recomputes from a pruned per-cell IF kit and raises on bootstrapped fits; `HeterogeneousAdoptionDiDResults` and `HeterogeneousAdoptionDiDEventStudyResults` are pure views since 3.9/M-027 - `'simple'` on the overall class, `'event_study'` on the event-study class, no kit, work on pickles from any release)
+**Methods:** `summary()`, `print_summary()`, `to_dataframe()`, `to_dict()` (flat dict of headline aliases + `vcov_type` + conditional `cluster_name`/`n_clusters`/`n_bootstrap`/`inference_method`); `aggregate(type, weights=None, *, balance_e=None)` on the shipped post-fit adopters (`StackedDiDResults` views since 3.9/M-024; `EfficientDiDResults` recomputes from retained EIFs since 3.9/M-023; `ImputationDiDResults` and `TwoStageDiDResults` recompute from their PANEL-BACKED kits since 3.9/M-021/M-022 - on bootstrapped fits their recompute levels raise while `'simple'` and, where supported, `'total'` relay the stored bootstrap inference with a NaN df column (the per-level rule, converged with M-027); `'total'` (3.10) is the estimator-owned total incremental outcome on `CallawaySantAnnaResults`/`EfficientDiDResults`/`ImputationDiDResults`/`TwoStageDiDResults` - panel non-survey fits only, fails closed with the reason elsewhere; `ContinuousDiDResults` is MIXED since 3.9/M-025 - `'simple'`/`'dose'` are views over stored fields that work on any fit incl. bootstrapped, `'event_study'` recomputes from a pruned per-cell IF kit and raises on bootstrapped fits; `HeterogeneousAdoptionDiDResults` and `HeterogeneousAdoptionDiDEventStudyResults` are pure views since 3.9/M-027 - `'simple'` on the overall class, `'event_study'` on the event-study class, no kit, work on pickles from any release)
 
 ### ContinuousDiDResults
 
@@ -2889,7 +2897,12 @@ incremental outcome and its SE (read off summary(), aggregated to the
 population/window one MMM row represents). Alternatively both exporters
 take aggregation_result= (the AggregationResult from post-fit
 results.aggregate('simple'|'group')) + scale=, deriving effect =
-att * scale and se = se * scale per row in to_dataframe() order;
+att * scale and se = se * scale per row in to_dataframe() order, OR a
+results.aggregate('total') container ALONE (3.10: its single row is the
+estimator-owned total incremental outcome - scale is REJECTED, and for
+overall totals this supersedes scale="auto", eliminating the documented
+Imputation/TwoStage raw-support overcount for that use; the total remains
+meaningful only for additive-level outcomes);
 scale="auto" (per-row n off the container) is honored ONLY for
 ImputationDiD/TwoStageDiD fits - it acknowledges an additive-level
 outcome, an unweighted fit, and fully identified effects - and every
@@ -2965,24 +2978,28 @@ print(prior.to_code(                  # ready-to-paste PriorDistribution +
 ))                                    # full_model_window=True; sets
                                       # media_prior_type accordingly.
 
-# Container route (ImputationDiD/TwoStageDiD): derive the totals from the
-# post-fit aggregation instead of hand-scoping.
+# Container route: the estimator-owned total needs no scale at all (3.10;
+# CS/EfficientDiD/ImputationDiD/TwoStageDiD, panel non-survey fits).
 res = ImputationDiD().fit(data, outcome="outcome", unit="unit",
                           time="period", first_treat="first_treat")
 prior2 = to_meridian_roi_prior(
-    aggregation_result=res.aggregate("simple"),
-    scale="auto",              # att x n (n = treated unit-periods here)
+    aggregation_result=res.aggregate("total"),   # already the total
     spend=200_000.0,
 )
+# 'simple'/'group' containers remain available with scale= (or scale="auto"
+# on ImputationDiD/TwoStageDiD, e.g. for per-cohort 'group' exports).
 ```
 
 Key points:
 - Container mode: aggregation_result= accepts ONLY AggregationResult
   ('simple' = one experiment row; 'group' = one per cohort, rows in
-  to_dataframe() order - per-row scale/spend/x/delta_x align to it).
-  scale= is always required: numeric, or "auto" for the audited
+  to_dataframe() order - per-row scale/spend/x/delta_x align to it;
+  'total' = one already-scaled total row, NO scale accepted).
+  scale= is required for 'simple'/'group' containers: numeric, or "auto"
+  for the audited
   ImputationDiD/TwoStageDiD producers only (CS/EfficientDiD/StackedDiD
-  n counts units/cells, not treated unit-periods - pass a numeric scale).
+  n counts units/cells, not treated unit-periods - use
+  results.aggregate('total') where supported, else a numeric scale).
   A 'group' container's cohorts come from ONE fit: widen se_widening for
   Meridian pooling, and note PyMC scores each row as independent evidence.
 - Lift frame: one row per experiment, columns [channel, *dims, x, delta_x,

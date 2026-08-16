@@ -212,8 +212,9 @@ Staggered Adoption Issues
    # Use bootstrap for better inference. On a BOOTSTRAPPED fit, post-fit
    # results.aggregate('event_study') raises - the percentile draws are not
    # retained - so the deprecated fit-time aggregate= remains the documented
-   # route for this case until 4.0. (results.aggregate('simple') relays the
-   # stored bootstrap inference and works on any fit.)
+   # route for this case until 4.0. (results.aggregate('simple') - and,
+   # where supported, results.aggregate('total') - relays the stored
+   # bootstrap inference.)
    cs = CallawaySantAnna(n_bootstrap=999)
    results = cs.fit(data, outcome='y', unit='unit_id',
                     time='period', first_treat='first_treat',

@@ -503,13 +503,15 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
             ``"event_study"``, ``"group"``, or ``"all"``; unknown strings
             act like ``None``, unchanged).  Aggregate as a post-fit step
             instead: ``results.aggregate('event_study')`` /
-            ``.aggregate('group')`` / ``.aggregate('simple')``.  On
+            ``.aggregate('group')`` / ``.aggregate('simple')`` /
+            ``.aggregate('total')``.  On
             bootstrapped fits (``n_bootstrap > 0``) the post-fit
             RECOMPUTE levels (``'event_study'``/``'group'``) fail closed
             — the deprecated fit-time path remains the supported route
             for those bootstrapped aggregated surfaces —  while
-            ``aggregate('simple')`` relays the stored bootstrap
-            inference and stays available (the per-level policy
+            ``aggregate('simple')`` and, where supported,
+            ``aggregate('total')`` relay the stored bootstrap
+            inference and stay available (the per-level policy
             converged with row M-027).
         balance_e : int, optional
             DEPRECATED (3.9, removed in 4.0, row M-120): moves onto
@@ -559,7 +561,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
                 "removed in 4.0. Fit once, then aggregate as a post-fit "
                 "step: results = EfficientDiD().fit(...); "
                 "results.aggregate('event_study') / .aggregate('group') / "
-                ".aggregate('simple'). balance_e moves onto aggregate() "
+                ".aggregate('simple') / .aggregate('total'). balance_e moves onto aggregate() "
                 "alongside it: results.aggregate('event_study', "
                 "balance_e=2).",
                 FutureWarning,

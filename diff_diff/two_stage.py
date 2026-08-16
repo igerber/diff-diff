@@ -1387,7 +1387,8 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
         aggregate : str, optional
             DEPRECATED (3.9, removed in 4.0; row M-022): aggregate as a
             post-fit step instead — ``results.aggregate('event_study')`` /
-            ``.aggregate('group')`` / ``.aggregate('simple')``. Supplying
+            ``.aggregate('group')`` / ``.aggregate('simple')`` /
+            ``.aggregate('total')``. Supplying
             ANY value (``None`` included) warns; the deprecated path still
             works and returns exactly the numbers it always did
             (fit-time mode: None/"simple" overall only, "event_study",
@@ -1432,7 +1433,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
                 "removed in 4.0. Fit once, then aggregate as a post-fit "
                 "step: results = TwoStageDiD().fit(...); "
                 "results.aggregate('event_study') / .aggregate('group') / "
-                ".aggregate('simple'). balance_e moves onto aggregate() "
+                ".aggregate('simple') / .aggregate('total'). balance_e moves onto aggregate() "
                 "alongside it: results.aggregate('event_study', "
                 "balance_e=2).",
                 FutureWarning,

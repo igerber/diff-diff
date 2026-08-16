@@ -159,7 +159,8 @@ checks read `placebo_event_study` directly.
 `EfficientDiD` and `ContinuousDiD`, the post-fit recompute levels raise `NotImplementedError`
 when the fit used `n_bootstrap > 0`, while the fit-time keyword they replace is removed at 4.0.
 If you bootstrap *and* aggregate, keep the fit-time call for now and track the open
-`TODO.md` draw-retention rows. `aggregate("simple")` does relay, and `StackedDiD`,
+`TODO.md` draw-retention rows. `aggregate("simple")` — and, on its four adopters,
+`aggregate("total")` (3.10) — does relay, and `StackedDiD`,
 `ChaisemartinDHaultfoeuille` and `HeterogeneousAdoptionDiD` are unaffected — their `aggregate()`
 is a pure view over stored fields.
 ```

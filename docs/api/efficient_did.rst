@@ -122,6 +122,7 @@ Basic usage::
     # Aggregate post-fit - recomputed from retained EIFs, no refit:
     print(results.aggregate('event_study').to_dataframe())
     print(results.aggregate('group').to_dataframe())
+    print(results.aggregate('total').to_dataframe())  # estimator-owned total (3.10)
 
 PT-Post mode (matches CS for post-treatment ATT)::
 

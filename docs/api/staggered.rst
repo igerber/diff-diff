@@ -52,6 +52,11 @@ Results container for Callaway-Sant'Anna estimation.
       ~CallawaySantAnnaResults.summary
       ~CallawaySantAnnaResults.to_dataframe
 
+   ``aggregate()`` levels: ``'simple'``, ``'event_study'``, ``'group'``, and
+   ``'total'`` (3.10) - the estimator-owned total incremental outcome
+   (``C x overall`` over the finite-masked complete-case support; panel
+   non-survey fits only, consumed by :mod:`diff_diff.mmm` with no scale).
+
 GroupTimeEffect
 ---------------
 

@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from diff_diff.aggregation import AggregationMixin, AggregationResult
+from diff_diff.aggregation import AggregationMixin, AggregationResult, build_total_relay_row
 from diff_diff.imputation_aggregation import _ImputationAggregationMixin
 from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.results_base import BaseResults, build_event_study_surface
@@ -205,7 +205,7 @@ class ImputationDiDResults(BaseResults, AggregationMixin):
 
     # Post-fit aggregation vocabulary (M-021). balance_e keeps the mixin
     # default ("event_study",) - CS precedent, do not redeclare.
-    _AGGREGATE_SUPPORTED = ("simple", "event_study", "group")
+    _AGGREGATE_SUPPORTED = ("simple", "event_study", "group", "total")
 
     # --- Inference-field aliases (balance/external-adapter compatibility) ---
     @property
@@ -250,14 +250,17 @@ class ImputationDiDResults(BaseResults, AggregationMixin):
         # honored by the relay's NaN df column.)
         if level == "simple":
             return self._aggregate_simple_result(kit)
+        if level == "total":
+            return self._aggregate_total_result(kit)
         if self.bootstrap_results is not None:
             raise NotImplementedError(
                 f"aggregate({level!r}) is not yet available on a bootstrapped "
                 "fit (n_bootstrap > 0): the per-target bootstrap draws are "
                 "not retained, so post-fit re-aggregation cannot replay "
                 "percentile inference and analytical inference would "
-                "misrepresent the fit. aggregate('simple') relays the stored "
-                "bootstrap inference and remains available; otherwise re-fit "
+                "misrepresent the fit. aggregate('simple') and, where "
+                "supported, aggregate('total') relay the stored "
+                "bootstrap inference and remain available; otherwise re-fit "
                 "with the aggregation you need, or use n_bootstrap=0."
             )
         bk = dict(kit.bookkeeping)
@@ -417,6 +420,50 @@ class ImputationDiDResults(BaseResults, AggregationMixin):
             alpha=kit.alpha,
             n_kind="obs",
             weight=np.array([1.0], dtype=float),
+            estimator=type(self).__name__.replace("Results", ""),
+        )
+
+    def _aggregate_total_result(self, kit: Any) -> AggregationResult:
+        """The estimator-owned total incremental outcome as a one-row table.
+
+        Exact relay ``C x overall`` CONDITIONAL on the realized aggregation
+        mass, with ``C`` the FINITE-tau complete-case support snapshot
+        (``total_support``, stashed at kit build) - the finite support is
+        what the overall averages over, so ``C x overall = sum(tau)``
+        exactly, fixing the documented raw-|Omega_1| overcount of the
+        ``scale="auto"`` route ('simple''s ``n`` stays raw by contract).
+        Zero support (the all-unidentified fit, where overall is already
+        NaN) maps to a NaN mass -> all-NaN row. Fails closed on fits
+        declaring a ``survey_design=`` (see the REGISTRY Note).
+        """
+        bk = kit.bookkeeping
+        support = bk.get("total_support")
+        if support is None:
+            raise NotImplementedError(
+                "aggregate('total') needs fit-time state this result "
+                "predates: it was fitted before aggregate('total') existed - "
+                "refit to use it."
+            )
+        if bk["survey_metadata"] is not None:
+            raise NotImplementedError(
+                "aggregate('total') is not available on fits declaring a "
+                "survey_design: the realized-mass relay omits the survey "
+                "mass-uncertainty variance term, and design-aware "
+                "population-scale totals are not implemented (retained "
+                "weight scale differs by design family) - tracked in "
+                "DEFERRED.md. For an unweighted clustered fit, cluster= "
+                "(without survey_design) supports totals."
+            )
+        mass = float(support) if support > 0 else float(np.nan)
+        return build_total_relay_row(
+            mass=mass,
+            att=self.overall_att,
+            se=self.overall_se,
+            t_stat=self.overall_t_stat,
+            p_value=self.overall_p_value,
+            conf_int=self.overall_conf_int,
+            df=(np.nan if self.bootstrap_results is not None else bk["survey_df_final"]),
+            alpha=kit.alpha,
             estimator=type(self).__name__.replace("Results", ""),
         )
 

@@ -45,6 +45,13 @@ AGGREGATION_VOCABULARY: Tuple[str, ...] = (
     "event_study",
     "group",
     "calendar",
+    # "total": the estimator-owned total incremental outcome - an exact relay
+    # C x overall (C = the estimator's finite-masked complete-case aggregation
+    # support), CONDITIONAL on the realized aggregation mass. Shared meaning
+    # across adopters (CallawaySantAnna / ImputationDiD / TwoStageDiD /
+    # EfficientDiD); per-estimator support remains a subset, so non-adopters
+    # raise the same vocabulary-suffixed error as "calendar".
+    "total",
 )
 
 #: Pinned column schema of ``AggregationResult.to_dataframe()`` - identical for
@@ -97,6 +104,77 @@ def resolve_inference_df(results: Any) -> Optional[float]:
     return None
 
 
+def build_total_relay_row(
+    *,
+    mass: float,
+    att: Optional[float],
+    se: Optional[float],
+    t_stat: Optional[float],
+    p_value: Optional[float],
+    conf_int: Tuple[float, float],
+    df: Optional[float],
+    alpha: float,
+    estimator: str,
+) -> "AggregationResult":
+    """One ``level='total'`` row: the exact relay ``mass x overall``.
+
+    The estimand is the total incremental outcome CONDITIONAL ON THE REALIZED
+    AGGREGATION MASS: ``att = mass x overall_att``, ``se = mass x overall_se``,
+    CI scaled by ``mass``, ``t_stat``/``p_value``/``df`` inherited unchanged
+    (every SE branch is homogeneous of degree 1, so the relay is exact under
+    analytical AND percentile-bootstrap inference). Inherited NaNs PASS
+    THROUGH - a degenerate fit whose CI is (nan, nan) beside a finite att
+    keeps its finite ``att``/``n``, mirroring what ``aggregate('simple')``
+    publishes on the same fit (the repo's non-estimable-row convention:
+    att/n are inputs, never blanked by NaN inference fields).
+
+    Two cases blank the WHOLE row (att/se/t/p/CI/n/df all NaN):
+    - ``mass`` is not finite (no aggregable support exists), or
+    - a FINITE overall value became non-finite BY the scaling (true float
+      overflow; surfaced per this code family's finiteness convention rather
+      than an ``errstate`` wrap).
+    """
+
+    def _f(v: Optional[float]) -> float:
+        return float(v) if v is not None else np.nan
+
+    a, s = _f(att), _f(se)
+    t, p = _f(t_stat), _f(p_value)
+    lo, hi = _f(conf_int[0]), _f(conf_int[1])
+    d = _f(df)
+
+    s_att, s_se = mass * a, mass * s
+    s_lo, s_hi = mass * lo, mass * hi
+    n_val = float(mass)
+    overflowed = np.isfinite(mass) and (
+        (np.isfinite(a) and not np.isfinite(s_att))
+        or (np.isfinite(s) and not np.isfinite(s_se))
+        or (np.isfinite(lo) and not np.isfinite(s_lo))
+        or (np.isfinite(hi) and not np.isfinite(s_hi))
+    )
+    if not np.isfinite(mass) or overflowed:
+        s_att = s_se = s_lo = s_hi = t = p = d = np.nan
+        n_val = np.nan
+
+    return AggregationResult(
+        level="total",
+        label=np.array(["total"], dtype=object),
+        target=np.array(["total"], dtype=object),
+        att=np.array([s_att], dtype=float),
+        se=np.array([s_se], dtype=float),
+        t_stat=np.array([t], dtype=float),
+        p_value=np.array([p], dtype=float),
+        conf_int_lower=np.array([s_lo], dtype=float),
+        conf_int_upper=np.array([s_hi], dtype=float),
+        n=np.array([n_val], dtype=float),
+        df=d,
+        alpha=alpha,
+        n_kind="obs",
+        weight=np.array([1.0], dtype=float),
+        estimator=estimator,
+    )
+
+
 def _sortable(labels: np.ndarray) -> bool:
     """Can ``labels`` be ordered without raising?
 
@@ -128,11 +206,14 @@ class AggregationResult(BaseResults):
     label : np.ndarray
         Per-row aggregation key: the cohort for ``"group"``, the calendar
         period for ``"calendar"``, the dose for ``"dose"``. A single
-        ``"overall"`` entry for ``"simple"``.
+        ``"overall"`` entry for ``"simple"``; a single ``"total"`` entry for
+        ``"total"``.
     target : np.ndarray
         Per-row estimand discriminator, so one container can carry two
         aligned estimands over the same labels (ContinuousDiD's ATT(d) and
-        ACRT(d) become 2N rows). ``"att"`` where an estimator has one.
+        ACRT(d) become 2N rows). ``"att"`` where an estimator has one;
+        ``"total"`` on a ``"total"`` row - a total incremental outcome over
+        the estimator's aggregation mass, not an ATT.
     att, se, t_stat, p_value : np.ndarray
         The canonical quintet, per row, carrying WHATEVER inference the fit
         stored - never recomputed. On a bootstrapped fit that usually means
@@ -157,7 +238,8 @@ class AggregationResult(BaseResults):
         ``(level, target)`` group. ``None`` where no per-row mass exists -
         CallawaySantAnna's ``"group"`` aggregation weights ``(g, t)`` cells
         equally WITHIN each cohort and has no cross-cohort mass, so inventing
-        one would be a fabricated number.
+        one would be a fabricated number. Single-row containers
+        (``"simple"``, ``"total"``) carry ``weight=[1.0]``.
     df : np.ndarray
         Per-row inference degrees of freedom, NaN where none governed the
         stored p-value. NaN on percentile-bootstrap rows (no df governs
@@ -454,9 +536,12 @@ class AggregationKit:
     ----------
     bookkeeping : dict
         The aggregation-relevant subset of the estimator's ``precomputed``
-        mapping. O(n_units) on panel fits; several entries are
-        observation-length on repeated cross-sections, where
-        ``all_units = np.arange(n_obs)`` by construction.
+        mapping, plus fit-time DERIVED keys stashed by the kit builder
+        (CallawaySantAnna's ``agg_gt_cells``/``is_survey_fit``,
+        ImputationDiD's ``total_support`` - see each builder). O(n_units) on
+        panel fits, except ``agg_gt_cells`` which is O(n_gt) 4-tuples;
+        several entries are observation-length on repeated cross-sections,
+        where ``all_units = np.arange(n_obs)`` by construction.
     influence : dict
         Per-``(g, t)`` influence-function payload. The DOMINANT retained
         object, roughly O(n_units x n_gt).

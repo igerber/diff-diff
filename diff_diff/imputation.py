@@ -288,7 +288,8 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
         aggregate : str, optional
             DEPRECATED (3.9, removed in 4.0; row M-021): aggregate as a
             post-fit step instead — ``results.aggregate('event_study')`` /
-            ``.aggregate('group')`` / ``.aggregate('simple')``. Supplying
+            ``.aggregate('group')`` / ``.aggregate('simple')`` /
+            ``.aggregate('total')``. Supplying
             ANY value (``None`` included) warns; the deprecated path still
             works and returns exactly the numbers it always did
             (fit-time mode: None/"simple" overall only, "event_study",
@@ -336,7 +337,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
                 "removed in 4.0. Fit once, then aggregate as a post-fit "
                 "step: results = ImputationDiD().fit(...); "
                 "results.aggregate('event_study') / .aggregate('group') / "
-                ".aggregate('simple'). balance_e moves onto aggregate() "
+                ".aggregate('simple') / .aggregate('total'). balance_e moves onto aggregate() "
                 "alongside it: results.aggregate('event_study', "
                 "balance_e=2).",
                 FutureWarning,
@@ -1351,6 +1352,16 @@ def _build_imputation_aggregation_kit(
         "treatment_groups": list(treatment_groups),
         "overall_att": float(overall_att),
         "n_treated_obs": int(n_treated_obs),
+        # 'total' mass: the finite-tau complete-case support, SNAPSHOT at kit
+        # build - the kit's "df" above is a live reference to the _fit_data
+        # frame, so a post-fit frame edit must not be able to move the total
+        # (the snapshot-discipline rule; missing on legacy kits -> the total
+        # route fails closed with the refit message).
+        "total_support": float(
+            np.isfinite(
+                np.asarray(fit_data["df"].loc[fit_data["omega_1_mask"], "_tau_hat"], dtype=float)
+            ).sum()
+        ),
         "uses_replicate": bool(uses_replicate),
         "horizon_max": horizon_max,
         "pretrends": pretrends,

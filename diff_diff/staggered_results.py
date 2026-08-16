@@ -11,10 +11,18 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from diff_diff.aggregation import AggregationMixin, AggregationResult, resolve_inference_df
+from diff_diff.aggregation import (
+    AggregationMixin,
+    AggregationResult,
+    build_total_relay_row,
+    resolve_inference_df,
+)
 from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.results_base import BaseResults, build_event_study_surface
-from diff_diff.staggered_aggregation import CallawaySantAnnaAggregationMixin
+from diff_diff.staggered_aggregation import (
+    CallawaySantAnnaAggregationMixin,
+    fixed_cohort_agg_weights,
+)
 
 if TYPE_CHECKING:
     from diff_diff.staggered_bootstrap import CSBootstrapResults
@@ -294,10 +302,10 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
     # Post-fit aggregation (spec section 6; ledger rows M-020 / M-117)
     # ------------------------------------------------------------------ #
 
-    #: CS implements simple / event-study / group. ``"calendar"`` is part of
-    #: the library-wide vocabulary but CS has no calendar aggregator (the
-    #: DEFERRED "Calendar-time aggregation" row), so asking for it raises.
-    _AGGREGATE_SUPPORTED = ("simple", "event_study", "group")
+    #: CS implements simple / event-study / group / total. ``"calendar"`` is
+    #: part of the library-wide vocabulary but CS has no calendar aggregator
+    #: (the DEFERRED "Calendar-time aggregation" row), so asking for it raises.
+    _AGGREGATE_SUPPORTED = ("simple", "event_study", "group", "total")
 
     def _aggregate_compute(
         self, level: str, *, weights: Optional[str], balance_e: Optional[int]
@@ -310,12 +318,15 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
                 "result unpickled from an older release will not have one."
             )
         # Per-level bootstrap policy (v4-design section 6, converged with row
-        # M-027): 'simple' is a bit-exact RELAY of the stored overall
-        # inference - faithful under any inference regime, bootstrap included
-        # - so it dispatches BEFORE the bootstrap gate. Only the RECOMPUTE
-        # levels below fail closed on bootstrapped fits.
+        # M-027): 'simple' and 'total' are bit-exact RELAYS of the stored
+        # overall inference - faithful under any inference regime, bootstrap
+        # included (every SE branch is homogeneous of degree 1 in the x C
+        # scaling) - so they dispatch BEFORE the bootstrap gate. Only the
+        # RECOMPUTE levels below fail closed on bootstrapped fits.
         if level == "simple":
             return self._aggregate_simple_result(kit)
+        if level == "total":
+            return self._aggregate_total_result(kit)
         if self.bootstrap_results is not None:
             # Fail closed rather than silently handing back analytical numbers:
             # a bootstrapped fit's se/p/CI are percentile statistics, and
@@ -324,8 +335,9 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
                 f"aggregate({level!r}) is not yet available on a bootstrapped "
                 "fit (n_bootstrap > 0): its inference is percentile-bootstrap "
                 "based and cannot be reproduced from the analytical state "
-                "retained here. aggregate('simple') relays the stored "
-                "bootstrap inference and remains available; otherwise re-fit "
+                "retained here. aggregate('simple') and, where supported, "
+                "aggregate('total') relay the stored "
+                "bootstrap inference and remain available; otherwise re-fit "
                 "with the aggregation you need, or use n_bootstrap=0 for "
                 "analytical inference."
             )
@@ -419,6 +431,131 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
             weight=np.array([1.0], dtype=float),
             estimator=type(self).__name__.replace("Results", ""),
         )
+
+    def _aggregate_total_result(self, kit: Any) -> AggregationResult:
+        """The estimator-owned total incremental outcome as a one-row table.
+
+        Exact relay ``C x overall`` CONDITIONAL on the realized aggregation
+        mass, where ``C`` is the complete-case treated-observation support
+        the fit's own simple aggregation used (``_cs_total_mass``). Fails
+        closed - with the reason - on the routings where that mass is not a
+        complete-case count: repeated-cross-section routing, declared
+        ``survey_design=`` fits, and bare-``cluster=`` fits whose cohort-mass
+        weighting diverges from the complete-case count (incomplete treated
+        cells). See the REGISTRY CS post-fit ``aggregate('total')`` Note.
+        """
+        bk = kit.bookkeeping
+        # Gate 1 - RC routing. Checked FIRST: a fit that is both
+        # survey-declared AND RC-routed must get this (more informative)
+        # message deterministically.
+        if not bk.get("is_panel", True) or bk.get("agg_cohort_masses") is not None:
+            raise NotImplementedError(
+                "aggregate('total') is not available on "
+                "repeated-cross-section-routed fits: the cohort mass counts "
+                "units, not treated observations, so a complete-case total "
+                "is not recoverable from the retained fit state - tracked "
+                "in DEFERRED.md."
+            )
+        # Panel-routed legacy kits (pre-upgrade pickles) fail closed: the
+        # fit-time snapshots below are the only mutation-proof carriers, and
+        # falling back to the mutable public fields would let a post-fit
+        # edit silently bypass the survey gate or move the mass.
+        cells = bk.get("agg_gt_cells")
+        is_survey_fit = bk.get("is_survey_fit")
+        if cells is None or is_survey_fit is None:
+            raise NotImplementedError(
+                "aggregate('total') needs fit-time state this result "
+                "predates: it was fitted before aggregate('total') existed - "
+                "refit to use it."
+            )
+        # Gate 2 - declared survey design (immutable fit-time provenance;
+        # bare-cluster fits synthesize an internal design but keep this
+        # False, so they are ADMITTED).
+        if is_survey_fit:
+            raise NotImplementedError(
+                "aggregate('total') is not available on fits declaring a "
+                "survey_design: the realized-mass relay omits the survey "
+                "mass-uncertainty variance term, and design-aware "
+                "population-scale totals are not implemented (retained "
+                "weight scale differs by design family) - tracked in "
+                "DEFERRED.md. For an unweighted clustered fit, cluster= "
+                "(without survey_design) supports totals."
+            )
+        ci = self.overall_conf_int or (np.nan, np.nan)
+        return build_total_relay_row(
+            mass=self._cs_total_mass(kit),
+            att=self.overall_att,
+            se=self.overall_se,
+            t_stat=self.overall_t_stat,
+            p_value=self.overall_p_value,
+            conf_int=ci,
+            df=(np.nan if self.bootstrap_results is not None else resolve_inference_df(self)),
+            alpha=self.alpha,
+            estimator=type(self).__name__.replace("Results", ""),
+        )
+
+    def _cs_total_mass(self, kit: Any) -> float:
+        """The realized simple-aggregation mass ``C``, from kit snapshots.
+
+        Replays ``_aggregate_simple``'s cell selection verbatim
+        (staggered_aggregation.py: anticipation filter first, finite-effect
+        mask second, weight = cohort mass where ``fixed_cohort_agg_weights``
+        provides one else per-cell complete-case ``n_treated``, pairwise
+        ``np.sum``) over the immutable ``agg_gt_cells`` fit-time snapshot -
+        never the mutable public ``group_time_effects``. The ``agg_weight``
+        fallback of the source is deliberately absent: that field exists
+        only on RC-routed cells, which the RC gate excludes, and the 4-tuple
+        snapshot does not carry it.
+
+        On admitted fits the cohort-mass branch (bare-``cluster=``: the
+        synthesized all-ones design makes each cohort mass the integer
+        cohort size) must COINCIDE with the complete-case count - when kept
+        cells have incomplete treated support the two disagree (the same
+        overcount that keeps RC routings gated) and this raises rather than
+        publishing an ambiguous mass. Empty post set or all-NaN effects
+        return NaN WITHOUT re-emitting the fit-time UserWarnings (the
+        no-post-fit-re-warn convention; the NaN row is the signal).
+        """
+        bk = kit.bookkeeping
+        # TRAP: never bk["agg_total_weight"] - that is the RC all-units WIF
+        # mass, not the kept-cell simple mass.
+        masses = fixed_cohort_agg_weights(bk)
+        effects_list: List[float] = []
+        weights_list: List[float] = []
+        complete_case: List[float] = []
+        for g, t, effect, n_treated in bk["agg_gt_cells"]:
+            if t < g - kit.anticipation:
+                continue
+            effects_list.append(effect)
+            if masses is not None and g in masses:
+                weights_list.append(masses[g])
+            else:
+                weights_list.append(n_treated)
+            complete_case.append(n_treated)
+        if not effects_list:
+            return float(np.nan)
+        effects = np.array(effects_list, dtype=float)
+        weights = np.array(weights_list, dtype=float)
+        cc = np.array(complete_case, dtype=float)
+        finite_mask = np.isfinite(effects)
+        if not np.all(finite_mask):
+            weights = weights[finite_mask]
+            cc = cc[finite_mask]
+        if len(weights) == 0:
+            return float(np.nan)
+        total_weight = float(np.sum(weights))
+        # Coincidence guard - only meaningful when a finite mass exists and
+        # the cohort-mass branch was taken.
+        if masses is not None and np.isfinite(total_weight) and total_weight != float(np.sum(cc)):
+            raise NotImplementedError(
+                "aggregate('total') is not available on this fit: the "
+                "cohort-mass weighting (from cluster=) counts full cohorts "
+                "per period, but some kept cells have incomplete treated "
+                "support, so the realized aggregation mass and the "
+                "complete-case treated-observation count disagree - tracked "
+                "in DEFERRED.md."
+            )
+        return total_weight
 
     def _group_effects_to_aggregation(
         self, effects: Dict[Any, Dict[str, Any]], kit: Any

@@ -108,6 +108,7 @@ Event study with visualization::
     results = est.fit(data, outcome='outcome', unit='unit',
                       time='period', first_treat='first_treat')
     es = results.aggregate('event_study')   # post-fit (M-021)
+    total = results.aggregate('total')      # estimator-owned total (3.10)
     plot_event_study(es)
 
 Pre-trend test::

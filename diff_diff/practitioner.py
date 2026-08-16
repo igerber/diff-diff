@@ -398,7 +398,7 @@ def _handle_multi_period(results: Any):
 def _handle_cs(results: Any):
     # The post-fit RECOMPUTE levels raise on a bootstrapped fit
     # (percentile statistics are not retained for re-aggregation;
-    # 'simple' relays the stored quintet and stays available), so the
+    # 'simple'/'total' relay the stored quintet and stay available), so the
     # event-study guidance must route those fits through the retained
     # fit-time aggregation instead of advice that cannot run.
     is_bootstrap = getattr(results, "bootstrap_results", None) is not None
@@ -407,7 +407,8 @@ def _handle_cs(results: Any):
             "Bounds the treatment effect under plausible violations of "
             "parallel trends. This fit is BOOTSTRAPPED, and the post-fit "
             "event-study/group recompute levels raise on bootstrap fits "
-            "(aggregate('simple') still relays the stored inference) - "
+            "(aggregate('simple') and, where supported, aggregate('total') "
+            "still relay the stored inference) - "
             "refit with the fit-time aggregation to populate the "
             "event-study surface."
         )
@@ -529,7 +530,8 @@ def _handle_imputation(results: Any):
                 if getattr(results, "bootstrap_results", None) is None
                 else "This fit is BOOTSTRAPPED: the post-fit event-study/group "
                 "recompute levels raise on bootstrap fits, while "
-                "aggregate('simple') relays the stored inference - "
+                "aggregate('simple') and, where supported, "
+                "aggregate('total') relay the stored inference - "
                 "refit with the deprecated fit-time aggregation (or "
                 "n_bootstrap=0) to obtain the recomputed surfaces."
             ),
@@ -587,7 +589,8 @@ def _handle_two_stage(results: Any):
                 if getattr(results, "bootstrap_results", None) is None
                 else "This fit is BOOTSTRAPPED: the post-fit event-study/group "
                 "recompute levels raise on bootstrap fits, while "
-                "aggregate('simple') relays the stored inference - "
+                "aggregate('simple') and, where supported, "
+                "aggregate('total') relay the stored inference - "
                 "refit with the deprecated fit-time aggregation (or "
                 "n_bootstrap=0) to obtain the recomputed surfaces."
             ),
@@ -979,7 +982,8 @@ def _handle_efficient(results: Any):
                 if getattr(results, "bootstrap_results", None) is None
                 else "This fit is BOOTSTRAPPED: the post-fit event-study/group "
                 "recompute levels raise on bootstrap fits, while "
-                "aggregate('simple') relays the stored inference - "
+                "aggregate('simple') and, where supported, "
+                "aggregate('total') relay the stored inference - "
                 "refit with the deprecated fit-time aggregation (or "
                 "n_bootstrap=0) to obtain the recomputed surfaces."
             ),

@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`results.aggregate('total')` - the estimator-owned total incremental
+  outcome** on CallawaySantAnna, EfficientDiD, ImputationDiD, and TwoStageDiD,
+  promoted into the library-wide aggregation vocabulary. The single
+  `target="total"` row is an exact relay `C x overall` CONDITIONAL on the
+  realized aggregation mass - `att/se/CI` scaled by `C`, `t`/`p`/`df`
+  inherited - where `C` is each estimator's finite-masked complete-case
+  aggregation support (CS: the kept post-anticipation finite cells' mass,
+  replayed from an immutable fit-time kit snapshot; ImputationDiD: the
+  finite-tau support, fixing the documented raw-support overcount of the MMM
+  `scale="auto"` route for total exports; TwoStageDiD: the post-filter
+  treatment-indicator support; EfficientDiD: the kept cells' integer
+  `n_treated` sum). Scope is PANEL, NON-SURVEY fits: repeated-cross-section
+  routings, fits declaring a `survey_design=` (any weight type), CS
+  bare-`cluster=` fits whose cohort-mass weighting diverges from the
+  complete-case count, and - on CS and ImputationDiD, whose masses need new
+  fit-time kit snapshots - pre-upgrade pickled kits, all raise
+  `NotImplementedError` naming the reason (EfficientDiD and TwoStageDiD
+  compute their masses from state older kits already retain, so their legacy
+  artifacts work as-is) (the survey/RC remainder - with its
+  att*dC mass-uncertainty variance term - and the StackedDiD stage-out are
+  tracked in DEFERRED.md). 'total' is a RELAY level: available on
+  bootstrapped fits with a NaN df column. Both `diff_diff.mmm` exporters
+  admit the container ALONE - any `scale` is rejected as double-counting -
+  and for overall-total exports this supersedes `scale="auto"` (which remains
+  the per-cohort `group`-container route).
 - **Meridian `roi_calibration_period` mask builder + `to_code()` array support.**
   New `meridian_calibration_mask(media_times=, media_channels=, channel=, window=)`
   builds the boolean `(n_media_times, n_media_channels)` mask Meridian's
@@ -38,7 +63,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `results.aggregate('simple')` (one experiment row) or `'group'` (one row per
   cohort) - together with the new `scale=`, deriving `effect = att * scale` and
   `se = se * scale` per row in `to_dataframe()` order (the order every per-row
-  sequence kwarg aligns to). `scale` is always required with a container: a
+  sequence kwarg aligns to). `scale` is required with a `'simple'`/`'group'` container (a `'total'`
+  container forbids it - see the totals entry below): a
   finite positive number (scalar or per-row), or `"auto"`, which reads the
   container's per-row `n` and is honored ONLY for ImputationDiD/TwoStageDiD
   fits - the audited producers whose `n` is exactly the treated unit-periods
@@ -49,8 +75,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pinned in the tests). Everything else fails closed with the remedy inline:
   raw results objects and `EventStudyResults` (the exporters never call
   `aggregate()` themselves), `calendar`/`dose`/unknown levels, non-`"att"`
-  target rows (ContinuousDiD's `acrt`, HAD's WAS, dCDH's estimand relays -
-  container rejected whole, no silent row filtering), rows without usable
+  target rows on `'simple'`/`'group'` containers (ContinuousDiD's `acrt`,
+  HAD's WAS, dCDH's estimand relays -
+  container rejected whole, no silent row filtering; `'total'` rows carry
+  `target='total'` by contract), rows without usable
   inference, and `scale="auto"` on any other estimator provenance
   (CallawaySantAnna/EfficientDiD/StackedDiD hints explain their `n` semantics;
   routing keys on the container's `estimator` field, never on `n_kind`, which
@@ -61,8 +89,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/test_doc_snippets.py`), and both LLM guides drop the pre-3.9 "does
   not introspect result objects / deferred to the post-4.0 aggregate() layer"
   framing - that layer shipped in 3.9 and this is its consumer. The
-  estimator-owned-totals remainder for CS/EfficientDiD/StackedDiD stays
-  tracked in DEFERRED.md.
+  estimator-owned totals shipped in this release for
+  CS/EfficientDiD/ImputationDiD/TwoStageDiD on panel non-survey fits (the
+  `aggregate('total')` entry below); the two remainders - StackedDiD totals
+  and survey/repeated-cross-section totals - stay tracked in DEFERRED.md.
 - **Tutorial 28: The Scholarship Illusion** (`docs/tutorials/28_rdd_scholarship_illusion.ipynb`) -
   the regression discontinuity walkthrough: a naive above-vs-below comparison
   overstates a merit scholarship's effect fivefold; `RDPlot` makes the confound

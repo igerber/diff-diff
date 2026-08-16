@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from diff_diff.aggregation import AggregationMixin, AggregationResult
+from diff_diff.aggregation import AggregationMixin, AggregationResult, build_total_relay_row
 from diff_diff.efficient_did_aggregation import _EfficientAggregationMixin
 from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.results_base import BaseResults, build_event_study_surface
@@ -235,7 +235,7 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
     # annotation) so they never enter dataclasses.fields; the mixin's
     # ClassVar-annotated defaults document the contract. balance_e keeps
     # the mixin default ("event_study",) - CS precedent, do not redeclare.
-    _AGGREGATE_SUPPORTED = ("simple", "event_study", "group")
+    _AGGREGATE_SUPPORTED = ("simple", "event_study", "group", "total")
 
     # --- Inference-field aliases (balance/external-adapter compatibility) ---
     @property
@@ -305,14 +305,17 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
         # is honored by the relay's NaN df column.)
         if level == "simple":
             return self._aggregate_simple_result(kit)
+        if level == "total":
+            return self._aggregate_total_result(kit)
         if self.bootstrap_results is not None:
             raise NotImplementedError(
                 f"aggregate({level!r}) is not yet available on a bootstrapped "
                 "fit (n_bootstrap > 0): the per-horizon bootstrap draws are "
                 "not retained, so post-fit re-aggregation cannot replay "
                 "percentile inference and analytical inference would "
-                "misrepresent the fit. aggregate('simple') relays the stored "
-                "bootstrap inference and remains available; otherwise re-fit "
+                "misrepresent the fit. aggregate('simple') and, where "
+                "supported, aggregate('total') relay the stored "
+                "bootstrap inference and remain available; otherwise re-fit "
                 "with the aggregation you need, or use n_bootstrap=0."
             )
         bk = dict(kit.bookkeeping)
@@ -414,6 +417,57 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
             alpha=kit.alpha,
             n_kind="units",
             weight=np.array([1.0], dtype=float),
+            estimator=type(self).__name__.replace("Results", ""),
+        )
+
+    def _aggregate_total_result(self, kit: Any) -> AggregationResult:
+        """The estimator-owned total incremental outcome as a one-row table.
+
+        Exact relay ``C x overall`` CONDITIONAL on the realized aggregation
+        mass, with ``C = sum(n_treated)`` over the KEPT (g, t) cells of the
+        kit's deep-copied ``group_time_effects`` snapshot - keepers are the
+        post-anticipation, finite-effect cells, mirroring the simple
+        aggregation's ``cohort_fractions`` support. The integer per-cell
+        ``n_treated`` sum is used, NEVER the float
+        ``n_units x sum(cohort_fractions)`` product (routinely non-integral
+        by roundoff). No keepers -> NaN mass -> all-NaN row. Fails closed on
+        fits declaring a ``survey_design=`` (see the REGISTRY Note).
+        """
+        bk = kit.bookkeeping
+        # Survey gate, from the kit's own markers: EDiD never synthesizes an
+        # internal design, so a non-None marker means the fit DECLARED a
+        # survey_design (weight-type-agnostic: unweighted psu-only and
+        # analytic fweight designs populate these too). There is NO
+        # "survey_weights" key in this kit.
+        if bk.get("unit_level_weights") is not None or bk.get("resolved_survey_unit") is not None:
+            raise NotImplementedError(
+                "aggregate('total') is not available on fits declaring a "
+                "survey_design: the realized-mass relay omits the survey "
+                "mass-uncertainty variance term, and design-aware "
+                "population-scale totals are not implemented (retained "
+                "weight scale differs by design family) - tracked in "
+                "DEFERRED.md. For an unweighted clustered fit, cluster= "
+                "(without survey_design) supports totals."
+            )
+        support = 0.0
+        n_keepers = 0
+        for (g, t), cell in bk["group_time_effects"].items():
+            if t < g - kit.anticipation:
+                continue
+            if not np.isfinite(float(cell["effect"])):
+                continue
+            support += float(cell["n_treated"])
+            n_keepers += 1
+        mass = support if n_keepers > 0 else float(np.nan)
+        return build_total_relay_row(
+            mass=mass,
+            att=self.overall_att,
+            se=self.overall_se,
+            t_stat=self.overall_t_stat,
+            p_value=self.overall_p_value,
+            conf_int=self.overall_conf_int,
+            df=(np.nan if self.bootstrap_results is not None else bk["df_survey"]),
+            alpha=kit.alpha,
             estimator=type(self).__name__.replace("Results", ""),
         )
 

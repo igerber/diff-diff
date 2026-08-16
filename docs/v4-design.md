@@ -513,7 +513,7 @@ post-fit `aggregate()` in the same release the params die. The rule above is
 otherwise unchanged: no OTHER estimator may add a fit-time `aggregate=`.
 
 **Vocabulary.** Closed set: `"simple"`, `"event_study"`, `"group"`,
-`"calendar"`, plus per-estimator documented extras where the estimand demands
+`"calendar"`, `"total"`, plus per-estimator documented extras where the estimand demands
 them (ContinuousDiD adds `"dose"` [M-025]; HAD's `"overall"` maps to
 `"simple"` [M-027] - its fit-time mode selector, and the workflow twin
 `did_had_pretest_workflow(aggregate=)` [M-139], both resolve by
@@ -523,6 +523,23 @@ documented extra). The drifted spellings die across ALL their surfaces:
 EXISTING post-fit `aggregate(type=)` - the emfx-style prior art for this
 section's pattern - plus `summary(aggregation=)` and
 `to_dataframe(aggregation=)` [M-044] [M-086] [M-087].
+
+**(Amended 2026-08-16, total-incremental-outcome promotion.)** `"total"`
+joins the closed set: the estimator-owned total incremental outcome, an
+exact relay `C x overall` CONDITIONAL on the realized aggregation mass,
+where `C` is the adopter's finite-masked complete-case aggregation support
+(CallawaySantAnna: the kept post-anticipation finite cells' mass, replayed
+from a fit-time kit snapshot; ImputationDiD: the finite-tau support -
+fixing the documented raw-|Omega_1| overcount of the MMM `scale="auto"`
+route for total exports; TwoStageDiD: the post-filter treatment-indicator
+support; EfficientDiD: the kept cells' integer `n_treated` sum). Adopters:
+those four, panel non-survey fits only - repeated-cross-section-routed
+fits, fits declaring a `survey_design=`, and CS bare-`cluster=` fits whose
+cohort-mass weighting diverges from the complete-case count all raise
+`NotImplementedError` naming the reason (DEFERRED tracks the survey/RC
+remainder and its att*dC mass-uncertainty variance term). StackedDiD is
+staged out (estimand ill-defined under `weighting=` variants; DEFERRED).
+Non-adopters keep the fail-closed vocabulary error.
 
 **Heterogeneous-`target` rendering** (added with [M-025], the first
 producer of a mixed-target `AggregationResult` - ContinuousDiD's att/acrt
@@ -563,7 +580,9 @@ or administrative IDs. Analytical-vs-bootstrap inference of the aggregated
 estimand follows the fit's inference method, and the bootstrap gate is
 PER-LEVEL (converged with [M-027] across CS/EDiD/Imputation/TwoStage,
 which previously failed closed on every level): a level that RELAYS the
-fit's stored inference verbatim (`'simple'` on every adopter; all of
+fit's stored inference verbatim (`'simple'` on every adopter; `'total'`
+on its four adopters - the x C scaling is homogeneous of degree 1, so the
+relay is exact under percentile inference too; all of
 dCDH/StackedDiD/HAD) is faithful under any inference regime and stays
 available on bootstrapped fits, with the df COLUMN NaN'd there - no df
 governs percentile inference, so a relay never publishes analytical

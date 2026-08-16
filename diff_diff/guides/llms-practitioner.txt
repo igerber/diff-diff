@@ -362,8 +362,9 @@ estimated pre-periods exist).
   results.aggregate('event_study'))` - no refit needed (the fit-time
   `aggregate=` route is deprecated since 3.9). EXCEPTION: on a
   BOOTSTRAPPED fit (`n_bootstrap > 0`) the post-fit recompute levels
-  (`'event_study'`/`'group'`) raise, while `aggregate('simple')`
-  relays the stored bootstrap inference; use the retained fit-time
+  (`'event_study'`/`'group'`) raise, while `aggregate('simple')` and,
+  where supported, `aggregate('total')`
+  relay the stored bootstrap inference; use the retained fit-time
   `aggregate='event_study'` for a bootstrapped event-study surface.
 - For dCDH: requires `L_max >= 1` (multi-horizon mode). Bounds use placebo
   estimates `DID^{pl}_l` as pre-period coefficients rather than standard
@@ -441,9 +442,13 @@ print(results.aggregate('group').to_dataframe())        # Per-cohort ATTs
 print(results.aggregate('event_study').to_dataframe())  # Dynamic effects
 # balance_e moves onto aggregate() too:
 print(results.aggregate('event_study', balance_e=2).to_dataframe())
+# NEW in 3.10 - the estimator-owned TOTAL incremental outcome (exact
+# relay C x overall; single row; panel non-survey fits only):
+print(results.aggregate('total').to_dataframe())
 # EXCEPTION: on a BOOTSTRAPPED fit the RECOMPUTE levels
 # (event_study/group) raise on CS/EfficientDiD/ImputationDiD/TwoStageDiD
-# — aggregate('simple') relays the stored bootstrap inference; use the
+# — aggregate('simple') and, where supported, aggregate('total') relay
+# the stored bootstrap inference; use the
 # deprecated fit-time aggregation for a bootstrapped ES/group surface:
 results = cs.fit(data, ..., aggregate='all')
 ```

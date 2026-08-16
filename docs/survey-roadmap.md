@@ -280,6 +280,7 @@ the limitation and suggested alternative.
 | WooldridgeDiD | Unsupported-period filtering + `survey_design` | Restrict the frame to the supported periods explicitly and re-fit. Deleting rows in-place is naive subsetting: it removes their PSUs and strata from the TSL meat and from `df_survey = n_PSU - n_strata`. Exact only if every PSU and stratum survives the restriction (true on a balanced panel; NOT in general — an unbalanced frame can hold a PSU observed only at unsupported periods). Verify before relying on it. |
 | WooldridgeDiD | Unidentified-cohort exclusion + `survey_design` | Same reason (ledger `M-123`). Drop the cohort from the frame yourself, or supply a panel where every cohort has a pre-treatment period. |
 | All bootstrap estimators | Bootstrap + replicate weights | These are alternative variance methods; pick one |
+| CS, EfficientDiD, ImputationDiD, TwoStageDiD | `aggregate('total')` on fits declaring a `survey_design` | The estimator-owned total (3.10) is panel non-survey only: the realized-mass relay omits the survey mass-uncertainty (att*dC) variance term and design-aware population-scale totals are not implemented (retained weight scale differs by design family). Pass a caller-derived numeric `scale=` to the MMM exporters instead, or use `cluster=` (without `survey_design`) for an unweighted clustered fit. Tracked in DEFERRED.md (Paper-gated). |
 
 **Warning/fallback (no error):** MultiPeriodDiD with `wild_bootstrap` +
 `survey_design` warns and falls back to analytical inference.

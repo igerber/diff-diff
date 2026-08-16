@@ -286,7 +286,7 @@ class TestFailClosed:
     def test_error_names_supported_types(self, fitted):
         with pytest.raises(ValueError) as exc:
             fitted.aggregate("nonsense")
-        for level in ("simple", "event_study", "group"):
+        for level in ("simple", "event_study", "group", "total"):
             assert level in str(exc.value)
 
     def test_weights_rejected(self, fitted):
@@ -294,7 +294,7 @@ class TestFailClosed:
         with pytest.raises(ValueError, match="weights"):
             fitted.aggregate("simple", "cohort_share")
 
-    @pytest.mark.parametrize("level", ["simple", "group"])
+    @pytest.mark.parametrize("level", ["simple", "group", "total"])
     def test_balance_e_rejected_where_inert(self, fitted, level):
         """balance_e applies to event-study aggregation ONLY - silently
         ignoring it elsewhere would accept a user argument that does nothing."""
@@ -311,7 +311,9 @@ class TestFailClosed:
         for level in ("event_study", "group"):
             with pytest.raises(NotImplementedError, match="bootstrap") as exc:
                 boot.aggregate(level)
-            assert "aggregate('simple') relays" in str(exc.value)
+            assert "aggregate('simple') and, where supported, aggregate('total') relay" in str(
+                exc.value
+            )
 
     def test_bootstrap_simple_relays_stored_quintet(self, panel):
         """Per-level policy (converged with M-027): 'simple' is a bit-exact
@@ -490,7 +492,7 @@ class TestInertnessAcrossDesigns:
             native = CallawaySantAnna(panel=False).fit(data, aggregate="all", **FIT_KW)
         _assert_level_matches(post, native, level)
 
-    @pytest.mark.parametrize("level", ["simple", "group", "event_study"])
+    @pytest.mark.parametrize("level", ["simple", "group", "event_study", "total"])
     def test_anticipation_matches_fit_time(self, panel, level):
         post = CallawaySantAnna(anticipation=1).fit(panel, **FIT_KW)
         with warnings.catch_warnings():
@@ -498,7 +500,7 @@ class TestInertnessAcrossDesigns:
             native = CallawaySantAnna(anticipation=1).fit(panel, aggregate="all", **FIT_KW)
         _assert_level_matches(post, native, level)
 
-    @pytest.mark.parametrize("level", ["simple", "group", "event_study"])
+    @pytest.mark.parametrize("level", ["simple", "group", "event_study", "total"])
     def test_universal_base_period_matches_fit_time(self, panel, level):
         """REGISTRY gives universal bases their own reference-cell and
         VCV-index semantics (a zero reference cell per cohort), which the
@@ -510,7 +512,7 @@ class TestInertnessAcrossDesigns:
             native = CallawaySantAnna(**kw).fit(panel, aggregate="all", **FIT_KW)
         _assert_level_matches(post, native, level)
 
-    @pytest.mark.parametrize("level", ["simple", "group", "event_study"])
+    @pytest.mark.parametrize("level", ["simple", "group", "event_study", "total"])
     def test_not_yet_treated_with_anticipation_matches_fit_time(self, panel, level):
         """The not-yet-treated control group interacts with anticipation in
         picking each (g, t) comparison set - a different code path from the
@@ -551,6 +553,22 @@ class TestInertnessAcrossDesigns:
 
 def _assert_level_matches(post, native, level):
     """Compare a post-fit aggregation against the fit-time surface at 1e-14."""
+    if level == "total":
+        # Identity form (total == n x overall on the SAME fit) AND the
+        # independent-mass form (n pinned against a frame-derived oracle from
+        # the OTHER fit's public cells) - the identity alone passes for ANY C.
+        got = post.aggregate("total")
+        antic = getattr(native, "anticipation", 0)
+        n_exp = sum(
+            d["n_treated"]
+            for (g, t), d in native.group_time_effects.items()
+            if t >= g - antic and np.isfinite(d["effect"])
+        )
+        assert got.n[0] == float(n_exp)
+        assert np.allclose(got.att[0], got.n[0] * native.overall_att, rtol=1e-12)
+        assert np.allclose(got.se[0], got.n[0] * native.overall_se, rtol=1e-12)
+        assert np.allclose(got.t_stat[0], native.overall_t_stat, rtol=1e-14, atol=0, equal_nan=True)
+        return
     if level == "simple":
         got = post.aggregate("simple")
         assert np.allclose(got.att[0], native.overall_att, rtol=1e-14, atol=1e-14)
@@ -798,7 +816,9 @@ class TestContainerNormalization:
         with pytest.raises(ValueError, match="vocabulary"):
             AggregationResult(df=None, n_kind="widgets", **self._kw())
 
-    @pytest.mark.parametrize("level,expected", [("simple", "units"), ("group", "cells")])
+    @pytest.mark.parametrize(
+        "level,expected", [("simple", "units"), ("group", "cells"), ("total", "obs")]
+    )
     def test_cs_n_kinds_are_in_the_shared_vocabulary(self, fitted, level, expected):
         from diff_diff.results_base import N_KIND_VOCABULARY
 
@@ -1919,7 +1939,9 @@ class TestEfficientAggregate:
         for level in ("event_study", "group"):
             with pytest.raises(NotImplementedError, match="bootstrap") as exc:
                 res.aggregate(level)
-            assert "aggregate('simple') relays" in str(exc.value)
+            assert "aggregate('simple') and, where supported, aggregate('total') relay" in str(
+                exc.value
+            )
 
     def test_bootstrap_simple_relays_stored_quintet(self, efficient_panel):
         res = _fit_efficient(efficient_panel, est_kw={"n_bootstrap": 20, "seed": 1})
@@ -2433,7 +2455,9 @@ class TestImputationAggregate:
         for level in ("event_study", "group"):
             with pytest.raises(NotImplementedError, match="bootstrap") as exc:
                 res.aggregate(level)
-            assert "aggregate('simple') relays" in str(exc.value)
+            assert "aggregate('simple') and, where supported, aggregate('total') relay" in str(
+                exc.value
+            )
 
     def test_bootstrap_simple_relays_stored_quintet(self, imputation_panel):
         res = _fit_imputation(imputation_panel, est_kw={"n_bootstrap": 19, "seed": 1})
@@ -2924,7 +2948,9 @@ class TestTwoStageAggregate:
         for level in ("event_study", "group"):
             with pytest.raises(NotImplementedError, match="bootstrap") as exc:
                 res.aggregate(level)
-            assert "aggregate('simple') relays" in str(exc.value)
+            assert "aggregate('simple') and, where supported, aggregate('total') relay" in str(
+                exc.value
+            )
 
     def test_bootstrap_simple_relays_stored_quintet(self, twostage_panel):
         res = _fit_twostage(twostage_panel, est_kw={"n_bootstrap": 19, "seed": 1})
@@ -4000,3 +4026,605 @@ class TestHadAggregate:
             had_fitted_2p.aggregate("simple")
             had_fitted_multi.aggregate("event_study")
         assert [w for w in caught if issubclass(w.category, FutureWarning)] == []
+
+
+# =============================================================================
+# aggregate('total') - the estimator-owned total incremental outcome
+# (exact relay C x overall, CONDITIONAL on the realized aggregation mass)
+# =============================================================================
+
+
+def _raw_treated_obs(frame, time_col="time"):
+    """Frame-derived treated unit-period count (the container-independent oracle)."""
+    return int(((frame["first_treat"] > 0) & (frame[time_col] >= frame["first_treat"])).sum())
+
+
+class TestTotalCallawaySantAnna:
+    """CS total: relay identity, mass oracles, and the fail-closed routings."""
+
+    def test_identity_and_independent_mass(self, panel, fitted):
+        tot = fitted.aggregate("total")
+        simple = fitted.aggregate("simple")
+        assert tot.level == "total"
+        assert tot.label[0] == "total" and tot.target[0] == "total"
+        assert tot.n_kind == "obs" and tot.weight[0] == 1.0
+        # Independent mass oracles: kept finite post cells AND the raw frame
+        # (clean balanced DGP, so the two coincide).
+        n_cells = sum(
+            d["n_treated"]
+            for (g, t), d in fitted.group_time_effects.items()
+            if t >= g and np.isfinite(d["effect"])
+        )
+        assert tot.n[0] == float(n_cells) == float(_raw_treated_obs(panel))
+        assert np.allclose(tot.att[0], tot.n[0] * simple.att[0], rtol=1e-12)
+        assert np.allclose(tot.se[0], tot.n[0] * simple.se[0], rtol=1e-12)
+        assert tot.t_stat[0] == simple.t_stat[0]
+        assert tot.p_value[0] == simple.p_value[0]
+        assert np.allclose(tot.conf_int_lower[0], tot.n[0] * simple.conf_int_lower[0], rtol=1e-12)
+        assert np.allclose(tot.conf_int_upper[0], tot.n[0] * simple.conf_int_upper[0], rtol=1e-12)
+
+    def test_df_carrier_plain_panel_is_nan(self, fitted):
+        # A plain (non-cluster, non-survey) analytical CS fit has no survey df
+        # and no df_inference, so the total row's df provenance column is NaN -
+        # same carrier as the simple relay.
+        tot = fitted.aggregate("total")
+        simple = fitted.aggregate("simple")
+        assert np.isnan(tot.df[0]) == np.isnan(simple.df[0])
+
+    def test_bare_cluster_admitted_with_finite_df(self, panel):
+        """cluster= (no survey_design) is a mainstream ADMITTED routing: the
+        synthesized all-ones design is not a survey. On a clean panel the
+        cohort-mass branch coincides with the complete-case count, and the
+        fit's cluster df flows into the total row's df carrier (clean
+        fixtures alone would hide a wrong carrier)."""
+        from diff_diff.aggregation import resolve_inference_df
+
+        res = CallawaySantAnna(cluster="unit").fit(panel, **FIT_KW)
+        tot = res.aggregate("total")
+        assert tot.n[0] == float(_raw_treated_obs(panel))
+        expected_df = resolve_inference_df(res)
+        if expected_df is not None and np.isfinite(expected_df):
+            assert tot.df[0] == expected_df
+        assert np.allclose(tot.att[0], tot.n[0] * res.aggregate("simple").att[0], rtol=1e-12)
+
+    def test_cluster_divergence_fails_closed(self, panel):
+        """Bare-cluster fit whose kept cells have INCOMPLETE treated support:
+        the cohort-mass weighting (full cohort per period) disagrees with the
+        complete-case count, so the total is ambiguous and fails closed."""
+        holed = panel.copy()
+        treated_rows = holed.index[
+            (holed["first_treat"] > 0) & (holed["time"] >= holed["first_treat"])
+        ]
+        holed.loc[treated_rows[:3], "y"] = np.nan
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            plain = CallawaySantAnna().fit(holed.dropna(), **FIT_KW)
+            clustered = CallawaySantAnna(cluster="unit").fit(holed.dropna(), **FIT_KW)
+        # The plain fit is admitted at the complete-case count...
+        tot_plain = plain.aggregate("total")
+        assert tot_plain.n[0] < _raw_treated_obs(panel)
+        # ...while the cluster fit's masses branch diverges and refuses.
+        with pytest.raises(NotImplementedError, match="incomplete treated support"):
+            clustered.aggregate("total")
+
+    def test_rcs_fails_closed(self):
+        data = _rcs()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            res = CallawaySantAnna(panel=False).fit(data, **FIT_KW)
+        with pytest.raises(NotImplementedError, match="repeated-cross-section"):
+            res.aggregate("total")
+
+    def test_genuinely_unbalanced_rc_routing_fails_closed(self, panel):
+        thinned = panel.drop(panel.index[::13]).reset_index(drop=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = CallawaySantAnna(allow_unbalanced_panel=True).fit(thinned, **FIT_KW)
+        with pytest.raises(NotImplementedError, match="repeated-cross-section"):
+            res.aggregate("total")
+
+    def test_balanced_panel_with_unbalanced_flag_is_admitted(self, panel):
+        """allow_unbalanced_panel=True on a BALANCED panel stays panel-routed
+        (routing keys on the data, not the constructor flag) and is admitted."""
+        res = CallawaySantAnna(allow_unbalanced_panel=True).fit(panel, **FIT_KW)
+        tot = res.aggregate("total")
+        assert tot.n[0] == float(_raw_treated_obs(panel))
+
+    def test_survey_fails_closed_and_gate_is_immutable(self, survey_fit):
+        with pytest.raises(NotImplementedError, match="declaring a survey_design"):
+            survey_fit.aggregate("total")
+        # Mutating the PUBLIC field must not bypass the gate: it reads the
+        # kit's fit-time is_survey_fit snapshot, never self.survey_metadata.
+        survey_fit.survey_metadata = None
+        with pytest.raises(NotImplementedError, match="declaring a survey_design"):
+            survey_fit.aggregate("total")
+
+    def test_survey_plus_rc_gets_the_rc_message(self):
+        """A fit that is BOTH survey-declared and RC-routed deterministically
+        gets the (more informative) RC message - the gate order is pinned."""
+        from diff_diff import SurveyDesign
+
+        data = _rcs()
+        data = data.assign(psu=np.arange(len(data)) % 10)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = CallawaySantAnna(panel=False).fit(
+                data, survey_design=SurveyDesign(psu="psu"), **FIT_KW
+            )
+        with pytest.raises(NotImplementedError, match="repeated-cross-section"):
+            res.aggregate("total")
+
+    def test_legacy_kit_fails_closed(self, panel):
+        """Pre-upgrade kits (no fit-time snapshots) refuse with the refit
+        message - never a mutable-field or public-replay fallback."""
+        for missing in ("agg_gt_cells", "is_survey_fit", "both"):
+            res = CallawaySantAnna().fit(panel, **FIT_KW)
+            bk = res._aggregation_kit.bookkeeping
+            if missing in ("agg_gt_cells", "both"):
+                del bk["agg_gt_cells"]
+            if missing in ("is_survey_fit", "both"):
+                del bk["is_survey_fit"]
+            with pytest.raises(NotImplementedError, match="refit"):
+                res.aggregate("total")
+
+    def test_post_fit_mutation_immunity(self, panel):
+        """The mass comes from the immutable kit snapshot; the scalars come
+        from the same stored fields the simple relay reads - so a public-field
+        edit cannot desynchronize total == n x simple."""
+        res = CallawaySantAnna().fit(panel, **FIT_KW)
+        n_before = res.aggregate("total").n[0]
+        for k in list(res.group_time_effects):
+            res.group_time_effects[k]["n_treated"] = 9999
+            res.group_time_effects[k]["effect"] = np.nan
+        tot = res.aggregate("total")
+        assert tot.n[0] == n_before
+        assert np.allclose(tot.att[0], tot.n[0] * res.aggregate("simple").att[0], rtol=1e-12)
+
+    def test_anticipation_window_cells_count(self, panel):
+        """anticipation=1 keeps the g-1 window cells in the post set (cells
+        with g - anticipation <= t < g COUNT as post), so the mass grows by
+        exactly the window cells' treated observations."""
+        res0 = CallawaySantAnna().fit(panel, **FIT_KW)
+        res1 = CallawaySantAnna(anticipation=1).fit(panel, **FIT_KW)
+        n0 = res0.aggregate("total").n[0]
+        n1 = res1.aggregate("total").n[0]
+        window = sum(
+            d["n_treated"]
+            for (g, t), d in res1.group_time_effects.items()
+            if g - 1 <= t < g and np.isfinite(d["effect"])
+        )
+        assert n1 == n0 + window and window > 0
+
+    def test_universal_base_reference_cells_excluded(self, panel):
+        """Universal-base fits carry reference cells; the anticipation filter
+        alone excludes them from the mass (their period is < g by
+        construction), so the mass matches the varying-base fit's."""
+        res_u = CallawaySantAnna(base_period="universal").fit(panel, **FIT_KW)
+        res_v = CallawaySantAnna().fit(panel, **FIT_KW)
+        assert res_u.aggregate("total").n[0] == res_v.aggregate("total").n[0]
+
+    def test_zero_c_arms_emit_all_nan_row_without_warning(self, panel):
+        """Empty post set / all-NaN effects -> all-NaN row, NO UserWarning
+        (the no-post-fit-re-warn convention), on the plain-panel branch AND
+        the cohort-mass (bare-cluster) branch - the isfinite(C) guard must
+        run BEFORE the coincidence comparison (NaN != 0.0 is True)."""
+        for ctor in ({}, {"cluster": "unit"}):
+            res = CallawaySantAnna(**ctor).fit(panel, **FIT_KW)
+            cells = res._aggregation_kit.bookkeeping["agg_gt_cells"]
+            res._aggregation_kit.bookkeeping["agg_gt_cells"] = tuple(
+                (g, t, float("nan"), n) for (g, t, _, n) in cells
+            )
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                tot = res.aggregate("total")
+            assert [w for w in caught if issubclass(w.category, UserWarning)] == []
+            for col in ("att", "se", "t_stat", "p_value", "conf_int_lower", "conf_int_upper", "n"):
+                assert np.isnan(getattr(tot, col)[0]), (ctor, col)
+            assert np.isnan(tot.df[0])
+
+    def test_true_overflow_blanks_whole_row(self, panel):
+        """A FINITE overall value that becomes non-finite BY the x C scaling
+        blanks the row entirely - the one path allowed to blank a finite att,
+        pinned on both the att and se halves of the guard."""
+        for field_name in ("overall_att", "overall_se"):
+            res = CallawaySantAnna().fit(panel, **FIT_KW)
+            setattr(res, field_name, 1e308)
+            tot = res.aggregate("total")
+            for col in ("att", "se", "t_stat", "p_value", "conf_int_lower", "conf_int_upper", "n"):
+                assert np.isnan(getattr(tot, col)[0]), (field_name, col)
+
+    def test_bootstrap_total_relays(self, panel):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            boot = CallawaySantAnna(n_bootstrap=49, seed=42).fit(panel, **FIT_KW)
+        tot = boot.aggregate("total")
+        simple = boot.aggregate("simple")
+        assert np.allclose(tot.att[0], tot.n[0] * simple.att[0], rtol=1e-12)
+        assert np.allclose(tot.se[0], tot.n[0] * simple.se[0], rtol=1e-12)
+        assert np.isnan(tot.df[0])
+
+    def test_pickle_round_trip(self, fitted):
+        import pickle
+
+        clone = pickle.loads(pickle.dumps(fitted))
+        a, b = fitted.aggregate("total"), clone.aggregate("total")
+        assert a.att[0] == b.att[0] and a.n[0] == b.n[0]
+
+    def test_inert_across_other_levels(self, fitted):
+        before = fitted.aggregate("total").att[0]
+        fitted.aggregate("group")
+        fitted.aggregate("event_study")
+        assert fitted.aggregate("total").att[0] == before
+
+    def test_constant_tau_recovers_total(self):
+        """Leg 2 (runs in the default suite; POINT-ESTIMATE estimand check -
+        no confidence-interval assertion intended): on a constant-effect DGP
+        the total approximates tau x the raw treated unit-period count, with
+        BOTH oracle factors container-independent."""
+        rng = np.random.default_rng(7)
+        tau = 2.0
+        rows = []
+        for u in range(60):
+            g = [0, 4, 5][u % 3]
+            for t in range(1, 8):
+                y = 1.0 + 0.3 * t + 0.2 * (u % 7) + (tau if g and t >= g else 0.0)
+                rows.append({"unit": u, "time": t, "first_treat": g, "y": y + rng.normal(0, 0.05)})
+        frame = pd.DataFrame(rows)
+        res = CallawaySantAnna().fit(frame, **FIT_KW)
+        tot = res.aggregate("total")
+        expected = tau * _raw_treated_obs(frame)
+        assert abs(tot.att[0] - expected) / expected < 0.05
+
+
+class TestTotalNonAdopters:
+    """'total' is vocabulary-wide; non-adopters fail closed with the suffix."""
+
+    def test_stacked_rejects_total_with_vocabulary_suffix(self, stacked_fitted):
+        # StackedDiD is the in-file AggregationMixin non-adopter exemplar:
+        # 'total' is vocabulary-wide, so the mixin's fail-closed error names
+        # it as known-but-unimplemented rather than unknown.
+        with pytest.raises(ValueError, match="Unsupported aggregation type") as exc:
+            stacked_fitted.aggregate("total")
+        assert "vocabulary" in str(exc.value)
+
+    def test_wooldridge_custom_aggregate_rejects_total_its_own_way(self):
+        """WooldridgeDiDResults is NOT an AggregationMixin subclass - its
+        custom aggregate(type=...) raises its own fail-closed ValueError
+        naming what it supports (no vocabulary suffix expected)."""
+        from diff_diff import WooldridgeDiD
+
+        rng = np.random.default_rng(9)
+        rows = []
+        for u in range(40):
+            g = [0, 3, 4][u % 3]
+            for t in range(1, 7):
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "first_treat": g,
+                        "y": 1.0 + 0.1 * t + (1.0 if g and t >= g else 0.0) + rng.normal(0, 0.2),
+                    }
+                )
+        df = pd.DataFrame(rows)
+        res = WooldridgeDiD().fit(
+            df, outcome="y", unit="unit", time="time", first_treat="first_treat"
+        )
+        with pytest.raises(ValueError, match="type must be one of"):
+            res.aggregate("total")
+
+
+class TestTotalImputation:
+    """ImputationDiD total: finite-support mass (sum-tau identity)."""
+
+    def _fit(self, frame, **kw):
+        from diff_diff import ImputationDiD
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return ImputationDiD().fit(frame, **IMPUTATION_KW, **kw)
+
+    def test_identity_sum_tau_and_raw_frame_oracle(self):
+        frame = _imputation_panel()
+        res = self._fit(frame)
+        tot = res.aggregate("total")
+        simple = res.aggregate("simple")
+        # fully identified DGP
+        assert tot.n[0] == float(_raw_treated_obs(frame, time_col="period"))
+        assert np.allclose(tot.att[0], tot.n[0] * simple.att[0], rtol=1e-12)
+        assert np.allclose(tot.se[0], tot.n[0] * simple.se[0], rtol=1e-12)
+        # C x overall == sum(tau) exactly (overall is the finite-support mean)
+        assert np.allclose(tot.att[0], res.treatment_effects["tau_hat"].sum(), rtol=1e-10)
+        assert tot.df[0] == simple.df[0] or (np.isnan(tot.df[0]) and np.isnan(simple.df[0]))
+
+    def test_survey_fails_closed_analytic_and_replicate(self):
+        for replicate in (False, True):
+            frame, rep_cols = _imputation_survey_panel(replicate=replicate)
+            design = _imputation_survey_design(rep_cols if replicate else None)
+            from diff_diff import ImputationDiD
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                res = ImputationDiD().fit(frame, survey_design=design, **IMPUTATION_KW)
+            with pytest.raises(NotImplementedError, match="declaring a survey_design"):
+                res.aggregate("total")
+            res.survey_metadata = None  # gate reads the kit snapshot
+            with pytest.raises(NotImplementedError, match="declaring a survey_design"):
+                res.aggregate("total")
+
+    def test_live_frame_mutation_immunity(self):
+        """The kit's 'df' is a live _fit_data reference; the mass must come
+        from the fit-time total_support stash, not a frame recompute."""
+        res = self._fit(_imputation_panel())
+        n_before = res.aggregate("total").n[0]
+        res._aggregation_kit.bookkeeping["df"]["_tau_hat"] = np.nan
+        assert res.aggregate("total").n[0] == n_before
+
+    def test_legacy_kit_fails_closed(self):
+        res = self._fit(_imputation_panel())
+        del res._aggregation_kit.bookkeeping["total_support"]
+        with pytest.raises(NotImplementedError, match="refit"):
+            res.aggregate("total")
+
+    def test_zero_support_emits_all_nan_row_without_warning(self):
+        """C == 0 (the all-unidentified fit's support) maps to a NaN mass and
+        an all-NaN row - never a finite n=0 beside NaN inference."""
+        res = self._fit(_imputation_panel())
+        res._aggregation_kit.bookkeeping["total_support"] = 0.0
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            tot = res.aggregate("total")
+        assert [w for w in caught if issubclass(w.category, UserWarning)] == []
+        for col in ("att", "se", "t_stat", "p_value", "conf_int_lower", "conf_int_upper", "n"):
+            assert np.isnan(getattr(tot, col)[0]), col
+        assert np.isnan(tot.df[0])
+
+    def test_degenerate_inference_passes_through(self):
+        """Constant outcome: overall att=0, se=0, CI=(nan, nan), t/p NaN with
+        C > 0. The total row MIRRORS the simple relay - att/n stay finite,
+        inherited NaNs pass through, nothing is blanket-blanked (the repo's
+        non-estimable-row convention)."""
+        frame = _imputation_panel()
+        frame = frame.assign(outcome=5.0)
+        res = self._fit(frame)
+        tot = res.aggregate("total")
+        simple = res.aggregate("simple")
+        # The constant-outcome fit really is degenerate: se == 0, CI == NaN.
+        assert simple.se[0] == 0.0 and np.isnan(simple.conf_int_lower[0])
+        assert np.isfinite(tot.n[0]) and tot.n[0] > 0
+        assert tot.att[0] == tot.n[0] * simple.att[0]
+        assert tot.se[0] == 0.0
+        assert np.isnan(tot.conf_int_lower[0])
+
+    def test_bootstrap_total_relays(self):
+        from diff_diff import ImputationDiD
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = ImputationDiD(n_bootstrap=49, seed=3).fit(_imputation_panel(), **IMPUTATION_KW)
+        tot = res.aggregate("total")
+        simple = res.aggregate("simple")
+        assert np.allclose(tot.att[0], tot.n[0] * simple.att[0], rtol=1e-12)
+        assert np.allclose(tot.se[0], tot.n[0] * simple.se[0], rtol=1e-12)
+        assert tot.t_stat[0] == simple.t_stat[0]
+        assert tot.p_value[0] == simple.p_value[0]
+        assert np.isnan(tot.df[0])
+
+    def test_leg4_divergence_finite_support_not_raw(self):
+        """On a partially unidentified fit the total uses the FINITE support -
+        the fix for the documented scale='auto' overcount ('simple''s n stays
+        raw |Omega_1| by contract)."""
+        frame = _imputation_panel()
+        # Drop the never-treated observations at the last period so some
+        # treated cells lose identification (the tutorial divergence recipe).
+        keep = ~((frame["first_treat"] == 0) & (frame["period"] == frame["period"].max()))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = self._fit(frame[keep])
+        tot = res.aggregate("total")
+        simple = res.aggregate("simple")
+        raw_n = simple.n[0]
+        # The recipe MUST produce reduced finite support (166 < 250 on this
+        # fixture) - an unconditional pin, so a fixture drift that stops
+        # exercising the divergence fails loudly instead of passing vacuously.
+        assert np.isfinite(tot.n[0]) and tot.n[0] < raw_n, (tot.n[0], raw_n)
+        assert np.allclose(tot.att[0], tot.n[0] * simple.att[0], rtol=1e-12)
+        assert not np.allclose(tot.att[0], raw_n * simple.att[0], rtol=1e-12)
+
+
+class TestTotalTwoStage:
+    """TwoStageDiD total: post-filter D-support."""
+
+    def _fit(self, frame, **kw):
+        from diff_diff import TwoStageDiD
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return TwoStageDiD().fit(frame, **TWOSTAGE_KW, **kw)
+
+    def test_identity_and_raw_frame_oracle(self):
+        frame = _twostage_panel()
+        res = self._fit(frame)
+        tot = res.aggregate("total")
+        simple = res.aggregate("simple")
+        assert tot.n[0] == float(_raw_treated_obs(frame, time_col="period"))
+        assert np.allclose(tot.att[0], tot.n[0] * simple.att[0], rtol=1e-12)
+        assert np.allclose(tot.se[0], tot.n[0] * simple.se[0], rtol=1e-12)
+
+    def test_survey_fails_closed_and_gate_is_immutable(self):
+        from diff_diff import SurveyDesign, TwoStageDiD
+
+        frame = _twostage_panel()
+        frame = frame.assign(psu=frame["unit"] % 10)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = TwoStageDiD().fit(frame, survey_design=SurveyDesign(psu="psu"), **TWOSTAGE_KW)
+        with pytest.raises(NotImplementedError, match="declaring a survey_design"):
+            res.aggregate("total")
+        res.survey_metadata = None
+        with pytest.raises(NotImplementedError, match="declaring a survey_design"):
+            res.aggregate("total")
+
+    def test_reduced_post_filter_support(self):
+        """total.n is the POST-FILTER treatment-indicator support: non-finite
+        treated `_y_tilde` rows leave D, so n drops below raw |Omega_1| (the
+        'simple' row's documented pre-filter count)."""
+        res = self._fit(_twostage_panel())
+        bk = res._aggregation_kit.bookkeeping
+        d_mask = np.asarray(bk["omega_1_mask"], dtype=bool)
+        raw_n = float(d_mask.sum())
+        # Degrade three treated rows' first-stage residuals in the kit's
+        # PRIVATE frame copy (the state the fit-time masker would have seen).
+        idx = bk["df"].index[d_mask][:3]
+        bk["df"].loc[idx, "_y_tilde"] = np.nan
+        tot = res.aggregate("total")
+        assert tot.n[0] == raw_n - 3
+        simple = res.aggregate("simple")
+        assert simple.n[0] == raw_n  # 'simple' keeps the raw count by contract
+        assert np.allclose(tot.att[0], tot.n[0] * simple.att[0], rtol=1e-12)
+
+    def test_zero_support_emits_all_nan_row_without_warning(self):
+        res = self._fit(_twostage_panel())
+        bk = res._aggregation_kit.bookkeeping
+        d_mask = np.asarray(bk["omega_1_mask"], dtype=bool)
+        bk["df"].loc[bk["df"].index[d_mask], "_y_tilde"] = np.nan
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            tot = res.aggregate("total")
+        assert [w for w in caught if issubclass(w.category, UserWarning)] == []
+        for col in ("att", "se", "t_stat", "p_value", "conf_int_lower", "conf_int_upper", "n"):
+            assert np.isnan(getattr(tot, col)[0]), col
+
+    def test_bootstrap_total_relays(self):
+        from diff_diff import TwoStageDiD
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = TwoStageDiD(n_bootstrap=49, seed=3).fit(_twostage_panel(), **TWOSTAGE_KW)
+        tot = res.aggregate("total")
+        simple = res.aggregate("simple")
+        assert np.allclose(tot.att[0], tot.n[0] * simple.att[0], rtol=1e-12)
+        assert np.isnan(tot.df[0])
+
+
+class TestTotalEfficientDiD:
+    """EfficientDiD total: integer sum of kept cells' n_treated."""
+
+    def _fit(self, frame, **kw):
+        from diff_diff import EfficientDiD
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return EfficientDiD().fit(frame, **EFFICIENT_KW, **kw)
+
+    def test_identity_and_integer_mass(self):
+        frame = _efficient_panel()
+        res = self._fit(frame)
+        tot = res.aggregate("total")
+        simple = res.aggregate("simple")
+        # Integer by construction: sum of per-cell integer n_treated, never
+        # the float n_units x sum(cohort_fractions) product.
+        assert tot.n[0] == int(tot.n[0])
+        n_cells = sum(
+            c["n_treated"]
+            for (g, t), c in res._aggregation_kit.bookkeeping["group_time_effects"].items()
+            if t >= g and np.isfinite(c["effect"])
+        )
+        assert tot.n[0] == float(n_cells)
+        assert np.allclose(tot.att[0], tot.n[0] * simple.att[0], rtol=1e-12)
+        assert np.allclose(tot.se[0], tot.n[0] * simple.se[0], rtol=1e-12)
+
+    def test_survey_fails_closed_all_design_shapes(self):
+        """The gate is weight-type-agnostic: analytic pweight, replicate,
+        UNWEIGHTED psu-only, and analytic FWEIGHT declared designs all fail
+        closed (fweight resolved weights stay RAW - the gate must not depend
+        on any weight-scale property)."""
+        from diff_diff import EfficientDiD, SurveyDesign
+
+        frame, _ = _efficient_survey_panel()
+        frame_rep, rep_cols = _efficient_survey_panel(replicate=True)
+        plain = _efficient_panel()
+        arms = [
+            (frame, _efficient_survey_design()),
+            (frame_rep, _efficient_survey_design(rep_cols)),
+            (plain.assign(psu=plain["unit"] % 10), SurveyDesign(psu="psu")),
+            (
+                plain.assign(w=10.0 + (plain["unit"] % 5)),
+                SurveyDesign(weights="w", weight_type="fweight"),
+            ),
+        ]
+        for arm_frame, arm_design in arms:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                res = EfficientDiD().fit(arm_frame, survey_design=arm_design, **EFFICIENT_KW)
+            with pytest.raises(NotImplementedError, match="declaring a survey_design"):
+                res.aggregate("total")
+            res.survey_metadata = None
+            with pytest.raises(NotImplementedError, match="declaring a survey_design"):
+                res.aggregate("total")
+
+    def test_bootstrap_total_relays(self):
+        from diff_diff import EfficientDiD
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = EfficientDiD(n_bootstrap=49, seed=3).fit(_efficient_panel(), **EFFICIENT_KW)
+        tot = res.aggregate("total")
+        simple = res.aggregate("simple")
+        assert np.allclose(tot.att[0], tot.n[0] * simple.att[0], rtol=1e-12)
+        assert np.allclose(tot.se[0], tot.n[0] * simple.se[0], rtol=1e-12)
+        assert tot.t_stat[0] == simple.t_stat[0]
+        assert tot.p_value[0] == simple.p_value[0]
+        assert np.isnan(tot.df[0])
+
+    def test_post_fit_mutation_immunity(self):
+        """The mass reads the kit's deep-copied cells; a NaN edit of the
+        public field (which WOULD perturb finite-keeper selection) is inert."""
+        res = self._fit(_efficient_panel())
+        n_before = res.aggregate("total").n[0]
+        for k in list(res.group_time_effects):
+            res.group_time_effects[k]["effect"] = np.nan
+            res.group_time_effects[k]["n_treated"] = 777
+        assert res.aggregate("total").n[0] == n_before
+
+    def test_anticipation_window_cells_enter_the_mass(self):
+        """anticipation=1 keeps the g-1 window cells as post, so C grows by
+        exactly those cells' n_treated (the CS twin of this pin)."""
+        from diff_diff import EfficientDiD
+
+        frame = _efficient_panel()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res0 = EfficientDiD().fit(frame, **EFFICIENT_KW)
+            res1 = EfficientDiD(anticipation=1).fit(frame, **EFFICIENT_KW)
+        n0 = res0.aggregate("total").n[0]
+        n1 = res1.aggregate("total").n[0]
+        window = sum(
+            c["n_treated"]
+            for (g, t), c in res1._aggregation_kit.bookkeeping["group_time_effects"].items()
+            if g - 1 <= t < g and np.isfinite(float(c["effect"]))
+        )
+        assert n1 == n0 + window and window > 0
+
+    def test_zero_keepers_emit_all_nan_row_without_warning(self):
+        res = self._fit(_efficient_panel())
+        gte = res._aggregation_kit.bookkeeping["group_time_effects"]
+        for cell in gte.values():
+            cell["effect"] = float("nan")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            tot = res.aggregate("total")
+        assert [w for w in caught if issubclass(w.category, UserWarning)] == []
+        for col in ("att", "se", "t_stat", "p_value", "conf_int_lower", "conf_int_upper", "n"):
+            assert np.isnan(getattr(tot, col)[0]), col
+
+    def test_degenerate_inference_passes_through(self):
+        frame = _efficient_panel().assign(outcome=5.0)
+        res = self._fit(frame)
+        tot = res.aggregate("total")
+        simple = res.aggregate("simple")
+        # The constant-outcome fit really is degenerate: se == 0.
+        assert simple.se[0] == 0.0
+        assert np.isfinite(tot.n[0]) and tot.n[0] > 0
+        assert tot.att[0] == tot.n[0] * simple.att[0]
+        assert tot.se[0] == 0.0

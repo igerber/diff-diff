@@ -1873,8 +1873,9 @@ class CallawaySantAnna(
             fits (``n_bootstrap > 0``), where the post-fit RECOMPUTE
             levels (``'event_study'``/``'group'``) raise (percentile
             inference cannot be reproduced from the retained analytical
-            state; ``aggregate('simple')`` relays the stored bootstrap
-            inference and stays available) and fit-time aggregation
+            state; ``aggregate('simple')`` and, where supported,
+            ``aggregate('total')`` relay the stored bootstrap
+            inference and stay available) and fit-time aggregation
             remains the supported route for those levels. Otherwise it
             remains only as the deprecated compatibility path through
             3.9.
@@ -1920,7 +1921,7 @@ class CallawaySantAnna(
                 "in 4.0. Fit once, then aggregate as a post-fit step: "
                 "results = CallawaySantAnna().fit(...); "
                 "results.aggregate('event_study') / .aggregate('group') / "
-                ".aggregate('simple'). balance_e moves onto aggregate() alongside "
+                ".aggregate('simple') / .aggregate('total'). balance_e moves onto aggregate() alongside "
                 "it: results.aggregate('event_study', balance_e=2).",
                 FutureWarning,
                 stacklevel=2,
@@ -3028,10 +3029,16 @@ class CallawaySantAnna(
         # Attach the post-fit aggregation kit (spec section 6, rows M-020/M-117).
         # Built HERE because neither `precomputed` nor `influence_func_info`
         # survives fit() - they are locals - so the kit cannot be reconstructed
-        # later. It deliberately excludes the data matrices: re-aggregation reads
-        # only unit-level bookkeeping, so the source panel is never retained.
+        # later. It deliberately excludes the data matrices: re-aggregation
+        # reads unit-level bookkeeping plus the fit-time derived snapshots
+        # (`agg_gt_cells` is per-(g, t) CELL data for the 'total' replay), so
+        # the source panel is never retained.
         self.results_._aggregation_kit = _build_aggregation_kit(
-            self, precomputed, influence_func_info, group_time_effects
+            self,
+            precomputed,
+            influence_func_info,
+            group_time_effects,
+            is_survey_fit=survey_metadata is not None,
         )
 
         self.is_fitted_ = True
@@ -5120,6 +5127,8 @@ def _build_aggregation_kit(
     precomputed: Optional[Dict[str, Any]],
     influence_func_info: Optional[Dict[str, Any]],
     group_time_effects: Optional[Dict[Any, Any]],
+    *,
+    is_survey_fit: bool = False,
 ) -> Optional["AggregationKit"]:
     """Distil the fit-time state post-fit re-aggregation needs.
 
@@ -5134,6 +5143,21 @@ def _build_aggregation_kit(
         for key in _AGGREGATION_BOOKKEEPING_KEYS:
             if key in precomputed:
                 bookkeeping[key] = precomputed[key]
+
+    # Fit-time DERIVED keys (never present in ``precomputed``, so they are
+    # direct assignments rather than whitelist entries). ``agg_gt_cells``
+    # snapshots the (g, t) cells 'total' replays over - an immutable tuple, so
+    # a post-fit edit of the public ``group_time_effects`` cannot move the
+    # total mass (the EDiD snapshot-discipline rule). ``is_survey_fit``
+    # records whether the ORIGINAL fit declared a ``survey_design=`` (the
+    # bare-``cluster=`` synthesize path keeps ``survey_metadata`` None, and
+    # kit ``survey_weights``/``resolved_survey_unit`` are populated on that
+    # admitted routing too, so neither can serve as the survey marker).
+    bookkeeping["agg_gt_cells"] = tuple(
+        (g, t, float(data["effect"]), float(data["n_treated"]))
+        for (g, t), data in group_time_effects.items()
+    )
+    bookkeeping["is_survey_fit"] = bool(is_survey_fit)
 
     # Data minimization: the results object is picklable and users share
     # result artifacts, so the kit must not turn it into a carrier for raw
@@ -5161,10 +5185,10 @@ def _build_aggregation_kit(
         # Bootstrap replay is not wired: a bootstrapped fit's percentile
         # inference cannot be reproduced from analytical state, so the
         # RECOMPUTE levels (event_study/group) fail closed on one rather than
-        # silently substituting analytical numbers ('simple' relays the
-        # stored bootstrap inference and stays available - the per-level
-        # policy converged with row M-027). BootstrapReplaySpec
-        # (diff_diff/aggregation.py) is the verified mechanism for the
-        # follow-up.
+        # silently substituting analytical numbers ('simple' and, where
+        # supported, 'total' relay the stored bootstrap inference and stay
+        # available - the per-level policy converged with row M-027).
+        # BootstrapReplaySpec (diff_diff/aggregation.py) is the verified
+        # mechanism for the follow-up.
         bootstrap=None,
     )

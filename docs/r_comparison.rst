@@ -212,6 +212,10 @@ staggered DiD. Here's how to translate common operations:
    agg_simple = results.aggregate('simple')
    agg_dynamic = results.aggregate('event_study')
    agg_group = results.aggregate('group')
+   # 'total' (3.10) has no aggte() counterpart - a library-first extension:
+   # the estimator-owned total incremental outcome (C x overall) on panel
+   # non-survey fits, consumed by diff_diff.mmm with no scale.
+   agg_total = results.aggregate('total')
 
 R ``HonestDiD`` Package → diff-diff
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
