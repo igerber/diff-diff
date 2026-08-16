@@ -78,7 +78,7 @@ Explore the Documentation
       :link: tutorials/index
       :link-type: doc
 
-      28 hands-on notebooks, from basic 2x2 DiD to survey-weighted and
+      31 hands-on notebooks, from basic 2x2 DiD to survey-weighted and
       spillover-aware designs.
 
    .. grid-item-card:: User Guide

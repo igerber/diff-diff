@@ -10,6 +10,9 @@ on:
       - '.github/workflows/notebooks.yml'
       # the interop drift guard runs only in this workflow (balance installed)
       - 'tests/test_t26_composition_drift_calibration_drift.py'
+      # the MMM tutorial drift guards run as a step in execute-notebooks
+      - 'tests/test_t29_mmm_calibration_pymc_drift.py'
+      - 'tests/test_t30_mmm_calibration_meridian_drift.py'
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, labeled, unlabeled]
@@ -20,6 +23,9 @@ on:
       - '.github/workflows/notebooks.yml'
       # the interop drift guard runs only in this workflow (balance installed)
       - 'tests/test_t26_composition_drift_calibration_drift.py'
+      # the MMM tutorial drift guards run as a step in execute-notebooks
+      - 'tests/test_t29_mmm_calibration_pymc_drift.py'
+      - 'tests/test_t30_mmm_calibration_meridian_drift.py'
   schedule:
     # Weekly Sunday 6am UTC — smoke test that notebooks still execute cleanly
     - cron: '0 6 * * 0'
@@ -63,6 +69,8 @@ jobs:
             --ignore=docs/tutorials/06_power_analysis.ipynb \
             --ignore=docs/tutorials/10_trop.ipynb \
             --ignore=docs/tutorials/26_composition_drift_calibration.ipynb \
+            --ignore=docs/tutorials/29_mmm_calibration_pymc.ipynb \
+            --ignore=docs/tutorials/30_mmm_calibration_meridian.ipynb \
             -v \
             --tb=short
           # Excluded notebooks (too slow for pure-Python CI without Rust backend):
@@ -72,6 +80,21 @@ jobs:
           #   26_composition_drift_calibration — requires the balance package;
           #   runs in the isolated interop-notebooks job below so this job's
           #   minimal env keeps enforcing that tutorials add no dependencies
+          #   29/30_mmm_calibration_* — require pymc-marketing / google-meridian,
+          #   which cannot even share ONE environment (arviz conflict) and run
+          #   multi-minute MCMC; executed locally with committed outputs. Their
+          #   drift guards run in the next step, and the mmm-interop.yml workflow
+          #   smoke-tests the exporters against the real frameworks (no sampling).
+
+      - name: Run MMM tutorial drift guards
+        # The MMM notebooks are excluded from execution above, so their committed
+        # surface is protected here: DGP/sampler/integration needles + diff-diff
+        # recomputation of the DiD-side numbers (no MMM frameworks needed).
+        env:
+          DIFF_DIFF_BACKEND: python
+        run: |
+          pytest tests/test_t29_mmm_calibration_pymc_drift.py \
+            tests/test_t30_mmm_calibration_meridian_drift.py -v --tb=short
 
       - name: Upload failed notebook outputs
         if: failure()

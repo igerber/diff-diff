@@ -32,6 +32,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   REGISTRY's LWDiD section gains the maintainer implementation notes (RI
   convention, dual overall-ATT conventions, Sec 4.3 rejection, inference
   default, API conformance).
+- **Executed MMM calibration tutorials + CI interop canary.** Two new tutorials
+  run the diff-diff -> MMM hand-off end-to-end against the real frameworks:
+  `29_mmm_calibration_pymc.ipynb` (a staggered geo spend-boost experiment
+  exported with `to_pymc_marketing_lift_test` and fed to pymc-marketing 1.0's
+  `MMM.add_lift_test_measurements`) and `30_mmm_calibration_meridian.ipynb` (a
+  geo-holdout launch exported with `to_meridian_roi_prior` +
+  `meridian_calibration_mask`, with the generated `to_code()` snippet executed
+  verbatim in google-meridian 1.8). Both fit the MMM without and with the
+  calibration and demonstrate the ROI posterior moving to the simulated truth
+  and tightening, with in-notebook sampler-health and acceptance asserts. The
+  heavy frameworks stay out of diff-diff's dependencies: the notebooks execute
+  locally (committed outputs; they cannot even share one environment - the two
+  frameworks pin conflicting `arviz` ranges) and are guarded by
+  diff-diff-only drift tests (`tests/test_t29_*`/`test_t30_*`), while a new
+  `mmm-interop.yml` workflow smoke-tests the exporters against floating
+  framework releases on exporter-touching PRs (paths-scoped to `mmm.py` +
+  `aggregation.py`, the two files that own the exporter contract) and a
+  weekly cron
+  (`tests/test_mmm_interop_pymc.py`, `tests/test_mmm_interop_meridian.py` -
+  schema, dims, value-retention, and Meridian defaults-drift pins; the
+  1.7.0-pinned `to_code()` templates and `_MERIDIAN_PARAM_DEFAULTS` are
+  execution-validated on Meridian 1.8.0). The practitioner guide's Step 8
+  gains the route-qualified MMM hand-off pointer.
 - **`results.aggregate('total')` - the estimator-owned total incremental
   outcome** on CallawaySantAnna, EfficientDiD, ImputationDiD, and TwoStageDiD,
   promoted into the library-wide aggregation vocabulary. The single

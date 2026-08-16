@@ -371,7 +371,7 @@ MMM Calibration Interop
 
 - **Google.** "Set Custom Prior Distributions Using Past Experiments." *Google Meridian documentation*. https://developers.google.com/meridian/docs/advanced-modeling/set-custom-priors-past-experiments
 
-  Documents the experiment-to-ROI-prior calibration workflow and caveats; the lognormal ``(mu, sigma)`` closed form emitted by ``to_meridian_roi_prior`` matches Meridian's ``prior_distribution.lognormal_dist_from_mean_std`` (verified against Meridian 1.7.0 source).
+  Documents the experiment-to-ROI-prior calibration workflow and caveats; the lognormal ``(mu, sigma)`` closed form emitted by ``to_meridian_roi_prior`` matches Meridian's ``prior_distribution.lognormal_dist_from_mean_std`` (verified against Meridian 1.7.0 source; execution-validated on 1.8.0, 2026-08).
 
 - **Google.** "Set the ROI Calibration Period." *Google Meridian documentation (configure-model guide)*. https://developers.google.com/meridian/docs/user-guide/configure-model
 

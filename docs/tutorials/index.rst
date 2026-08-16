@@ -1,5 +1,5 @@
 .. meta::
-   :description: Hands-on diff-diff tutorials — 28 Jupyter notebooks covering basic 2x2 DiD, staggered adoption, synthetic DiD, power analysis, and business applications.
+   :description: Hands-on diff-diff tutorials — 31 Jupyter notebooks covering basic 2x2 DiD, staggered adoption, synthetic DiD, power analysis, and business applications.
    :keywords: DiD tutorial, difference-in-differences examples, causal inference notebooks
 
 Tutorials
@@ -79,6 +79,20 @@ Practitioner walkthroughs built around marketing and policy scenarios.
       See which quantiles moved when the average hides the action, with
       Changes-in-Changes.
 
+   .. grid-item-card:: MMM Calibration: PyMC-Marketing
+      :link: 29_mmm_calibration_pymc
+      :link-type: doc
+
+      Turn a geo spend-boost experiment into a PyMC-Marketing lift test and
+      watch the MMM's ROI posterior correct - executed end-to-end.
+
+   .. grid-item-card:: MMM Calibration: Meridian
+      :link: 30_mmm_calibration_meridian
+      :link-type: doc
+
+      Export a geo-holdout launch as Meridian's ROI prior and calibration
+      mask, then fit the real model - executed end-to-end.
+
 .. toctree::
    :maxdepth: 1
    :caption: Business Applications
@@ -93,6 +107,8 @@ Practitioner walkthroughs built around marketing and policy scenarios.
    Spillover DiD (TVA) <23_spillover_tva>
    Composition Drift & Calibration <26_composition_drift_calibration>
    Distributional Effects (CiC) <27_cic_distributional_effects>
+   MMM Calibration: PyMC-Marketing <29_mmm_calibration_pymc>
+   MMM Calibration: Meridian <30_mmm_calibration_meridian>
 
 Fundamentals
 ------------

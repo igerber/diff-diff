@@ -19,6 +19,7 @@ on:
       # this suite (enforced by TestRustTestWorkflowPathFilter).
       - '.github/workflows/docs-tests.yml'
       - '.github/workflows/notebooks.yml'
+      - '.github/workflows/mmm-interop.yml'
       - '.github/workflows/ci-gate.yml'
       - '.github/workflows/release-build-check.yml'
       # lint.yml carries the ruff/black pin-sync contract locked by
@@ -51,6 +52,7 @@ on:
       # this suite (enforced by TestRustTestWorkflowPathFilter).
       - '.github/workflows/docs-tests.yml'
       - '.github/workflows/notebooks.yml'
+      - '.github/workflows/mmm-interop.yml'
       - '.github/workflows/ci-gate.yml'
       - '.github/workflows/release-build-check.yml'
       # lint.yml carries the ruff/black pin-sync contract locked by

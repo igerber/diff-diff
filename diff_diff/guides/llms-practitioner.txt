@@ -591,6 +591,25 @@ guidance = practitioner_next_steps(results)
 # Returns context-aware suggestions for what to do next
 ```
 
+### Hand off to an MMM (marketing mix model)
+
+When the DiD measured a geo experiment on a marketing channel, export the
+result as MMM calibration input via `diff_diff.mmm` - the route depends on
+the grain the target MMM row represents:
+
+- The MMM row IS the campaign total (e.g. Meridian ROI priors):
+  `results.aggregate('total')` -> `to_meridian_roi_prior(aggregation_result=...,
+  spend=...)` - the total container arrives pre-scaled; `scale` is not accepted.
+- The MMM row's population/period grain differs from the total's span (e.g. a
+  PyMC-Marketing weekly lift row for a national model):
+  `results.aggregate('simple')` or `aggregate('group')` plus an explicit
+  `scale=` -> `to_pymc_marketing_lift_test(aggregation_result=..., scale=...,
+  x=..., delta_x=...)` - every lift-row field must describe the SAME
+  observation (same channel, population, and period span).
+
+Executed end-to-end examples: tutorials 29 (PyMC-Marketing lift test) and
+30 (Meridian ROI prior + calibration mask).
+
 ---
 
 ## Common Pitfalls

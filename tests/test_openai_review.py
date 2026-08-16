@@ -2203,6 +2203,7 @@ class TestRustTestWorkflowPathFilter:
         ".github/workflows/notebooks.yml",
         ".github/workflows/ci-gate.yml",
         ".github/workflows/release-build-check.yml",
+        ".github/workflows/mmm-interop.yml",
     )
 
     def test_rust_test_yml_push_filter_covers_guarded_workflows(self, workflow_paths):
@@ -2269,6 +2270,7 @@ class TestCiWorkflowLabelEventGuard:
     EXPECTED_JOBS = {
         "rust-test.yml": ("rust-tests", "python-tests", "python-fallback"),
         "notebooks.yml": ("execute-notebooks", "interop-notebooks"),
+        "mmm-interop.yml": ("mmm-pymc-interop", "mmm-meridian-interop"),
         "docs-tests.yml": ("doc-snippets", "sphinx-build", "docs-deps-py39-smoke"),
         # release-build-check.yml is a single reusable-workflow caller job gated on
         # ready-for-ci (it build-tests the PyPI release path on PRs); lock its guard too.

@@ -39,6 +39,25 @@ def test_content_stability_practitioner_workflow():
     assert "8-step" in get_llm_guide("practitioner").lower()
 
 
+def test_practitioner_step8_mmm_handoff_route_qualified():
+    """The Step-8 MMM hand-off must stay ROUTE-QUALIFIED: both exporters named,
+    the total-container route AND the scaled simple/group route both present
+    inside the Step-8 slice - an unqualified total-first claim (or a total-route
+    deletion) must fail here, not ship silently."""
+    guide = get_llm_guide("practitioner")
+    start = guide.index("## Step 8")
+    end = guide.index("## Common Pitfalls")
+    step8 = guide[start:end]
+    for needle in (
+        "to_pymc_marketing_lift_test",
+        "to_meridian_roi_prior",
+        "aggregate('total')",
+        "scale=",
+        "SAME\n  observation",
+    ):
+        assert needle in step8, f"Step-8 MMM hand-off lost {needle!r}"
+
+
 def test_content_stability_self_reference_after_rewrite():
     assert "get_llm_guide" in get_llm_guide("concise")
 

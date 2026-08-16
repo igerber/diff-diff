@@ -8,6 +8,14 @@ Assemble Marketing Mix Model (MMM) calibration inputs from experiment results.
 Overview
 --------
 
+.. seealso::
+
+   Tutorials 29 (:doc:`../tutorials/29_mmm_calibration_pymc`) and 30
+   (:doc:`../tutorials/30_mmm_calibration_meridian`) run both hand-offs
+   end-to-end against the real frameworks - a lift-test calibration in
+   PyMC-Marketing and an ROI-prior calibration in Meridian - including the
+   with/without-calibration posterior comparison.
+
 MMM practitioners calibrate their models against experimental evidence. The two
 dominant Python MMM frameworks consume that evidence in different shapes:
 

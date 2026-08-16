@@ -1,0 +1,129 @@
+name: MMM Interop
+
+# Schema-drift canary for the diff_diff.mmm exporters against the REAL MMM
+# frameworks (pymc-marketing, google-meridian). Lives in its own workflow file
+# because `paths:` is workflow-level: inside notebooks.yml these heavy jobs
+# would fire on every notebook-prose PR and pay full TensorFlow/PyMC installs.
+#
+# Version policy: CI installs FLOATING ranges (like the balance job's
+# "balance>=0.21") so the weekly cron genuinely resolves new upstream releases
+# and acts as an upstream-drift canary; the tutorial notebooks and their local
+# execution venvs stay pinned to exact versions for reproducibility.
+#
+# Fragile edge: google-meridian pins an exact tfp-nightly build. If that wheel
+# ever disappears from PyPI, first bump/resolve google-meridian to the newest
+# release; if none resolves, flip this workflow to cron-only in a hotfix PR —
+# never leave it red on labeled PRs.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # The exporters' behavior is owned by mmm.py plus the pinned
+      # AggregationResult container shape (aggregation.py); estimator-internal
+      # changes cannot alter the exporter contract without touching these, and
+      # the normal suite owns the container contract itself - so the heavy
+      # framework installs do not fan out to unrelated library changes.
+      - 'diff_diff/mmm.py'
+      - 'diff_diff/aggregation.py'
+      - 'pyproject.toml'
+      - 'tests/test_mmm_interop_pymc.py'
+      - 'tests/test_mmm_interop_meridian.py'
+      - '.github/workflows/mmm-interop.yml'
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    paths:
+      # The exporters' behavior is owned by mmm.py plus the pinned
+      # AggregationResult container shape (aggregation.py); estimator-internal
+      # changes cannot alter the exporter contract without touching these, and
+      # the normal suite owns the container contract itself - so the heavy
+      # framework installs do not fan out to unrelated library changes.
+      - 'diff_diff/mmm.py'
+      - 'diff_diff/aggregation.py'
+      - 'pyproject.toml'
+      - 'tests/test_mmm_interop_pymc.py'
+      - 'tests/test_mmm_interop_meridian.py'
+      - '.github/workflows/mmm-interop.yml'
+  schedule:
+    # Weekly Sunday 7am UTC (offset from notebooks.yml) — upstream-drift canary:
+    # the floating installs resolve the latest framework releases.
+    - cron: '0 7 * * 0'
+
+permissions:
+  contents: read
+
+jobs:
+  mmm-pymc-interop:
+    name: PyMC-Marketing interop smoke
+    # Same ready-for-ci label gate as the notebooks.yml jobs (keep in sync).
+    if: >-
+      github.event_name != 'pull_request'
+      || (contains(github.event.pull_request.labels.*.name, 'ready-for-ci')
+      && (github.event.action != 'labeled' && github.event.action != 'unlabeled'
+      || github.event.label.name == 'ready-for-ci'))
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install numpy pandas scipy pytest "pymc-marketing>=1.0,<2"
+          # Add repo root to Python path so tests can import diff_diff
+          # (pip install -e . requires the Rust/maturin toolchain; .pth avoids that)
+          python -c "import site; print(site.getsitepackages()[0])" | xargs -I{} sh -c 'echo "$PWD" > {}/diff_diff_dev.pth'
+
+      - name: Import canary
+        # Its own step so an install/transitive-import failure FAILS the job
+        # instead of being swallowed by pytest.importorskip into an all-skipped
+        # green run.
+        run: python -c "import pymc_marketing; print(pymc_marketing.__version__)"
+
+      - name: Run interop smoke tests
+        env:
+          DIFF_DIFF_BACKEND: python
+        run: |
+          pytest tests/test_mmm_interop_pymc.py -v --tb=short
+
+  mmm-meridian-interop:
+    name: Meridian interop smoke
+    # Same ready-for-ci label gate as the notebooks.yml jobs (keep in sync).
+    if: >-
+      github.event_name != 'pull_request'
+      || (contains(github.event.pull_request.labels.*.name, 'ready-for-ci')
+      && (github.event.action != 'labeled' && github.event.action != 'unlabeled'
+      || github.event.label.name == 'ready-for-ci'))
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install numpy pandas scipy pytest "google-meridian>=1.8,<2"
+          # Add repo root to Python path so tests can import diff_diff
+          # (pip install -e . requires the Rust/maturin toolchain; .pth avoids that)
+          python -c "import site; print(site.getsitepackages()[0])" | xargs -I{} sh -c 'echo "$PWD" > {}/diff_diff_dev.pth'
+
+      - name: Import canary
+        # Its own step so an install/transitive-import failure FAILS the job
+        # instead of being swallowed by pytest.importorskip into an all-skipped
+        # green run.
+        run: python -c "import meridian; print(meridian.__version__)"
+
+      - name: Run interop smoke tests
+        env:
+          DIFF_DIFF_BACKEND: python
+        run: |
+          pytest tests/test_mmm_interop_meridian.py -v --tb=short

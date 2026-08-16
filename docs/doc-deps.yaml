@@ -1073,7 +1073,7 @@ sources:
       - path: docs/methodology/REGISTRY.md
         section: "MMM Calibration Export (interop)"
         type: methodology
-        note: "Lift-test scaling semantics, spend-weighted pooling, lognormal closed form (pinned to Meridian 1.7.0), sign/positivity policies."
+        note: "Lift-test scaling semantics, spend-weighted pooling, lognormal closed form (pinned to Meridian 1.7.0; execution-validated on 1.8.0), sign/positivity policies."
       - path: docs/api/mmm.rst
         type: api_reference
       - path: README.md
@@ -1087,6 +1087,15 @@ sources:
       - path: diff_diff/guides/llms-full.txt
         section: "MMM Calibration Export"
         type: user_guide
+      - path: diff_diff/guides/llms-practitioner.txt
+        section: "Step 8 MMM hand-off"
+        type: user_guide
+      - path: docs/tutorials/29_mmm_calibration_pymc.ipynb
+        type: tutorial
+        note: "pymc-marketing interop: executed lift-test calibration; drift guard tests/test_t29_mmm_calibration_pymc_drift.py"
+      - path: docs/tutorials/30_mmm_calibration_meridian.ipynb
+        type: tutorial
+        note: "meridian interop: executed ROI-prior calibration + to_code snippet; drift guard tests/test_t30_mmm_calibration_meridian_drift.py"
 
   diff_diff/power.py:
     drift_risk: low
@@ -1231,6 +1240,15 @@ sources:
         type: user_guide
       - path: docs/r_comparison.rst
         type: user_guide
+      - path: diff_diff/guides/llms-practitioner.txt
+        section: "Step 8 MMM hand-off (aggregate routes)"
+        type: user_guide
+      - path: docs/tutorials/29_mmm_calibration_pymc.ipynb
+        type: tutorial
+        note: "aggregate('simple')+scale lift-row route taught end-to-end"
+      - path: docs/tutorials/30_mmm_calibration_meridian.ipynb
+        type: tutorial
+        note: "aggregate('total') container route taught end-to-end"
 
   diff_diff/results_base.py:
     drift_risk: low

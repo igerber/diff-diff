@@ -159,6 +159,20 @@ A loyalty program looks dead on mean DiD ($0.22, p = 0.90) but in truth lifted t
 - Covariate-composition confounding fixed with `covariates=` (quantile-regression conditioning, qte `xformla` parity), and the `practitioner_next_steps()` close
 - Companion drift-test file (`tests/test_t27_cic_distributional_effects_drift.py`); fully self-contained (runs live, no committed data files)
 
+### 29. MMM Calibration with PyMC-Marketing Lift Tests (`29_mmm_calibration_pymc.ipynb`)
+Executed end-to-end against the real framework: a staggered geo spend-boost experiment measured with `CallawaySantAnna`, exported via `to_pymc_marketing_lift_test`, and fed to `MMM.add_lift_test_measurements` - the demand-chasing-biased MMM's search-ROI posterior moves to the simulated truth and tightens:
+- Grain reconciliation for a national-weekly lift row (`aggregate('simple')` + `scale=G_treated`), the `aggregate('total')` campaign headline, and the double-count guardrail
+- With/without-calibration money plot plus in-notebook sampler-health and posterior acceptance asserts
+- Requires `pip install "pymc-marketing==1.0.0"` on Python 3.12 (this tutorial only); cannot share an environment with the Meridian tutorial (conflicting `arviz` pins); fully self-contained data
+- Companion drift-test file (`tests/test_t29_mmm_calibration_pymc_drift.py`)
+
+### 30. MMM Calibration with Meridian ROI Priors (`30_mmm_calibration_meridian.ipynb`)
+Executed end-to-end against the real framework: a geo-holdout launch experiment (the `roi_m` estimand exactly), exported via `to_meridian_roi_prior` from the `aggregate('total')` container, with `meridian_calibration_mask` and the generated `to_code()` snippet run verbatim:
+- A national Meridian model that cannot see the geo holdout overcredits the launch; the experiment prior centers its ROI posterior on the truth and tightens it
+- Window/spend/mass alignment asserts, default-vs-calibrated money plot, and sampler-health checks
+- Requires `pip install "google-meridian==1.8.0"` on Python 3.12 (this tutorial only); cannot share an environment with the PyMC-Marketing tutorial (conflicting `arviz` pins); fully self-contained data
+- Companion drift-test file (`tests/test_t30_mmm_calibration_meridian_drift.py`)
+
 ## Running the Notebooks
 
 1. Install diff-diff with dependencies:

@@ -152,3 +152,24 @@ Linux.
   covariates); logistic-regression overflow in edge cases (separate from the BLAS bug).
 - **Long-term:** revert to the `@` operator when numpy ≥ 2.3 becomes the minimum supported
   version.
+
+## MMM tutorial environments (notebooks 29 / 30)
+
+The two executed MMM calibration tutorials need frameworks that CANNOT share one
+environment: pymc-marketing 1.0 requires `arviz>=1.2,<2.0` while google-meridian
+requires `arviz<0.20`. Each notebook therefore has its own Python 3.12 venv and
+Jupyter kernel (TensorFlow does not support the 3.14 dev environment):
+
+- `~/.venvs/diffdiff-mmm-pymc` -> kernel `diffdiff-mmm-pymc`
+  (`pymc-marketing==1.0.0` + matplotlib/ipykernel/jupyter/nbconvert/pytest)
+- `~/.venvs/diffdiff-mmm-meridian` -> kernel `diffdiff-mmm-meridian`
+  (`google-meridian==1.8.0` + the same tooling)
+
+Both use the CI jobs' `diff_diff_dev.pth` shim (the repo root written into
+site-packages) instead of `pip install -e .` (the maturin build backend would
+demand a Rust build). Committed notebooks stay kernelspec-free; every local
+execution names the kernel explicitly (`--nbmake-kernel=...` /
+`nbconvert --ExecutePreprocessor.kernel_name=...`) - never the default
+`python3` kernel. Fragile edge: google-meridian pins an exact `tfp-nightly`
+build; the response protocol lives in `.github/workflows/mmm-interop.yml`'s
+header comment.

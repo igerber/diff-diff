@@ -135,12 +135,16 @@ _SCALE_HINTS = {
 
 # Meridian prior parameters this exporter can target, with each one's Meridian
 # default LogNormal(mu, sigma) per channel (verified against
-# meridian/model/prior_distribution.py at 1.7.0): roi_m is the return on a
+# meridian/model/prior_distribution.py at 1.7.0; execution-validated unchanged on
+# 1.8.0, 2026-08, and continuously checked by tests/test_mmm_interop_meridian.py's
+# defaults-drift canary): roi_m is the return on a
 # channel's full spend (zero-spend counterfactual), mroi_m the marginal return.
 # Channels without an experiment keep the default in the vector snippet.
 _MERIDIAN_PARAM_DEFAULTS = {"roi_m": (0.2, 0.9), "mroi_m": (0.0, 0.5)}
 
-# The .to_code() templates are pinned against google-meridian 1.7.0 (2026-06); they
+# The .to_code() templates are pinned against google-meridian 1.7.0 (2026-06) and
+# execution-validated on 1.8.0 (2026-08: the generated snippets exec verbatim into a
+# ModelSpec that Meridian 1.8.0 accepts); they
 # are convenience snippets, not a programmatic contract. Meridian's roi_m/mroi_m have
 # batch shape n_media_channels; a scalar LogNormal broadcasts to EVERY channel, so the
 # scalar template is gated behind an explicit single_channel opt-in.
@@ -817,7 +821,8 @@ class MeridianROIPrior:
         roi_calibration_period: Optional[Union[str, np.ndarray]] = None,
         full_model_window: bool = False,
     ) -> str:
-        """Ready-to-paste Meridian snippet (channel- and time-scoped; 1.7.0 pinned).
+        """Ready-to-paste Meridian snippet (channel- and time-scoped; 1.7.0 pinned,
+        execution-validated on 1.8.0).
 
         Meridian's ``roi_m``/``mroi_m`` prior has batch shape ``n_media_channels`` and
         a scalar distribution broadcasts to EVERY media channel - a TV experiment's
