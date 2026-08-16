@@ -482,3 +482,46 @@ def test_doc_snippet(test_id: str, code: str, skip_reason: Optional[str]):
         # raises, so this must be a finally, not a trailing statement).
         os.environ.clear()
         os.environ.update(env_snapshot)
+
+
+# ---------------------------------------------------------------------------
+# Pinned-output regression: quickstart's printed summary block
+# ---------------------------------------------------------------------------
+_TEXT_BLOCK_RE = re.compile(
+    r"^\.\.\s+code-block::\s+text\s*$\n"
+    r"(?:\s*:\w[^:]*:.*\n)*"
+    r"\n"
+    r"((?:[ \t]+\S.*\n|[ \t]*\n)+)",
+    re.MULTILINE,
+)
+
+
+def test_quickstart_pinned_summary_output():
+    """quickstart.rst's pinned ``summary()`` output matches the seeded run.
+
+    The snippet harness executes python blocks but ignores
+    ``code-block:: text``, so the documented output could otherwise drift
+    silently while CI stays green. The example is fully seeded, so the
+    printed block is reproducible and can be pinned exactly; keep the
+    generator call here in sync with the quickstart basic example.
+    """
+    import diff_diff
+
+    text = (DOCS_DIR / "quickstart.rst").read_text()
+    blocks = [textwrap.dedent(m.group(1)) for m in _TEXT_BLOCK_RE.finditer(text)]
+    assert len(blocks) == 1, "expected exactly one text block in quickstart.rst"
+    documented = [ln.rstrip() for ln in blocks[0].strip().splitlines()]
+
+    data = diff_diff.generate_did_data(
+        n_units=100,
+        n_periods=10,
+        treatment_effect=5.0,
+        treatment_period=5,
+        treatment_fraction=0.5,
+        seed=42,
+    )
+    results = diff_diff.DifferenceInDifferences().fit(
+        data, outcome="outcome", treatment="treated", post="post"
+    )
+    actual = [ln.rstrip() for ln in results.summary().strip().splitlines()]
+    assert actual == documented

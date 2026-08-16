@@ -304,18 +304,20 @@ identification rests on stronger structural assumptions (Design 1).
    from diff_diff import HeterogeneousAdoptionDiD, did_had_pretest_workflow
 
    # Universal rollout: every market advertises (no holdout), at varying spend.
-   # Spend = 0 in the pre-period (baseline); each market keeps a fixed spend
-   # level in the post-period (with a low-spend group as the anchor).
+   # Spend = 0 in the pre-period (baseline); each market keeps its own distinct
+   # spend level in the post-period. Keeping the doses continuous (no ties at
+   # the minimum) is what makes the QUG pretest below well-defined.
    rng = np.random.default_rng(42)
    n_markets = 60
-   spend = np.where(rng.random(n_markets) < 0.3, 1.0, rng.uniform(1.0, 10.0, n_markets))
+   spend = rng.uniform(1.0, 10.0, n_markets)
    base = rng.normal(100, 10, n_markets)
+   noise = rng.normal(0, 1.0, n_markets)
    data = pd.DataFrame(
        {
            "unit": np.repeat(np.arange(n_markets), 2),
            "period": np.tile([1, 2], n_markets),
            "dose": np.column_stack([np.zeros(n_markets), spend]).ravel(),
-           "outcome": np.column_stack([base, base + 3.0 * spend]).ravel(),
+           "outcome": np.column_stack([base, base + 3.0 * spend + noise]).ravel(),
        }
    )
 

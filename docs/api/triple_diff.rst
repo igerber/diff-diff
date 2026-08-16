@@ -133,7 +133,8 @@ Basic usage::
 
     from diff_diff import TripleDifference, generate_ddd_data
 
-    # Synthetic DDD panel: group (0/1), partition (0/1), time (0=pre/1=post)
+    # Synthetic 2x2x2 DDD sample (repeated cross-section - each row is its own
+    # unit): group (0/1), partition (0/1), time (0=pre/1=post)
     data = generate_ddd_data(n_per_cell=100, treatment_effect=2.0, seed=42)
 
     ddd = TripleDifference(estimation_method='dr')
