@@ -57,12 +57,14 @@ $STATA -b do benchmarks/stata/generate_lpdid_ra_golden.do
 $STATA -b do benchmarks/stata/generate_imputation_loo_golden.do
 $STATA -b do benchmarks/stata/generate_etwfe_cs_golden.do
 $STATA -b do benchmarks/stata/generate_reghdfe_kref_golden.do
+$STATA -b do benchmarks/stata/generate_lwdid_golden.do   # see stata/README.md for its warm-up step
 ```
 
 The `LPDiD` arm uses only **native** Stata commands (`teffects`), pinned by
 `version 19`. The `ImputationDiD` arm depends on SSC packages
 (`did_imputation`/`reghdfe`/`ftools`/`require`), the ETWFE/CS arm on
-`drdid`/`csdid`/`jwdid`/`hdfe`, and the reghdfe K_reference arm on `reghdfe`;
+`drdid`/`csdid`/`jwdid`/`hdfe`, the reghdfe K_reference arm on `reghdfe`,
+and the LWDiD arm on the authors' `lwdid`;
 `version 19` does NOT pin SSC packages
 (SSC has no version history) — install them once via `requirements.do` (the
 generators do not auto-install) and each golden records version/checksum
@@ -87,7 +89,8 @@ benchmarks/
 │   ├── generate_lpdid_ra_golden.do        # LPDiD RA SE vs teffects ra
 │   ├── generate_imputation_loo_golden.do  # ImputationDiD LOO SE vs did_imputation leaveout
 │   ├── generate_etwfe_cs_golden.do        # ETWFE/CS vs jwdid + csdid (+ subsample ladder)
-│   └── generate_reghdfe_kref_golden.do    # clustered CR1 K_reference vs reghdfe (disconnected panel)
+│   ├── generate_reghdfe_kref_golden.do    # clustered CR1 K_reference vs reghdfe (disconnected panel)
+│   └── generate_lwdid_golden.do           # LWDiD vs the authors' lwdid (small-N, RI, event-study bootstrap)
 ├── python/
 │   ├── utils.py              # Common utilities
 │   ├── benchmark_callaway.py # CallawaySantAnna

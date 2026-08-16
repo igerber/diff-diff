@@ -1,10 +1,11 @@
 # Stata parity benchmarks
 
-Stata golden generators live here. They are the **first Stata arm** in the repo;
-the pattern mirrors `benchmarks/R/` (a `generate_*` script writes a committed
-golden JSON that a skip-guarded `tests/test_*_parity.py` reads, so CI never needs
-Stata). Stata is node-locked single-user, so — exactly like the R arm — goldens
-are committed and only regenerated locally.
+Stata golden generators live here (five arms: LPDiD `teffects ra`,
+ImputationDiD leave-one-out, ETWFE/CS, reghdfe K_reference, LWDiD); the
+pattern mirrors `benchmarks/R/` (a `generate_*` script writes a committed
+golden JSON that a skip-guarded test reads, so CI never needs Stata). Stata
+is node-locked single-user, so — exactly like the R arm — goldens are
+committed and only regenerated locally.
 
 Locating the binary (macOS, StataSE 19; **not** on `PATH` by default):
 
@@ -133,11 +134,11 @@ The A.9 leave-one-out (LOO) variance has **no runnable R reference** — R
 internal psi-identity + hand-calc + MC coverage. The authors' own Stata `did_imputation`
 (Borusyak) ships the same option (`leaveout`); this arm turns it into a measured anchor.
 
-## This is the first SSC-dependent arm
+## SSC dependence (vs the native-`teffects` LPDiD arm)
 
 Unlike the native-`teffects` LPDiD arm, `did_imputation` is an SSC package with a
 dependency chain `did_imputation → reghdfe → require + ftools`, none pinned by
-`version 19`. The generator does **not** install them — run
+`version 19`. (The ETWFE/CS and LWDiD arms are SSC-dependent in the same way.) The generator does **not** install them — run
 `benchmarks/stata/requirements.do` once first — and it records each package's version
 in `meta.ssc_versions` (the `*!` ado header line) so drift is detectable. Byte-identical
 regeneration is therefore scoped to a fixed Stata + fixed installed SSC versions.
@@ -281,13 +282,89 @@ Two arms:
   sqrt((N−10)/(N−11))`. On CONNECTED designs the two coincide — the jwdid
   subsample ladder above pins machine-precision agreement at every G.
 
+# LWDiD parity vs the authors' `lwdid` package
+
+`benchmarks/stata/generate_lwdid_golden.do` produces
+`benchmarks/data/lwdid_stata_golden.json`, consumed by
+`tests/test_methodology_lwdid.py` (import-skip-gated until `diff_diff.lwdid`
+lands via PR #588) and schema-validated on main by the ungated
+`tests/test_lwdid_stata_golden_schema.py`.
+
+## Why the authors' `lwdid`
+
+Printed-table goldens (LW 2026 Table 3, LW 2025 Tables A4/A5) only reach
+three decimals and don't cover the randomization-inference convention or the
+multiplier-bootstrap SEs at all. The authors' SSC `lwdid` (Hur, Lee &
+Wooldridge) is the reference implementation; this arm pins it at full
+precision: Prop 99 small-N ATT/SE + RI p at 100k reps (both rollings),
+castle-doctrine `tau_omega` ATT/SE (both rollings), and the six Walmart
+large-N event-study configs (per-r WATT points + B=9,999 multiplier-bootstrap
+SEs, `set seed` pinned). It is an SSC arm: `meta.ssc_versions` records the
+verbatim `lwdid` version line (fail-closed capture — the generator aborts if
+no version line is found), and `capture which lwdid` exits 111 if the package
+is missing (`requirements.do` installs it).
+
+## Inputs and their integrity
+
+Prop 99 / Walmart come from the loader cache
+(`~/.cache/diff_diff/datasets/{prop99,walmart}.dta` — the authors' SSC
+ancillary files). Loader success does NOT guarantee the on-disk bytes (cache
+writes are best-effort), so the regeneration recipe hashes the cache files
+directly. Castle uses the committed
+`benchmarks/data/real/castle_lw_subset.csv`; note `set type double` makes
+`import delimited` read it at double precision (a float import shifts the
+8th decimal — the committed golden is the double-precision read, matching
+Python). In-`.do` gates: `confirm numeric variable` + row-count asserts per
+dataset. Measured-value smoke gates cover the SMALL-N blocks only (prop99
+att + detrend RI p; castle att/se); the Walmart block's gates are
+schema/cardinality/nonmissing (one row per event time, no missing cells) -
+its value anchoring lives in the Python parity tests.
+
+## Regenerating
+
+```bash
+# 1. fail-closed warm-up: loaders genuine AND on-disk cache bytes SHA-verified
+python -c "from diff_diff import load_prop99, load_walmart; \
+  import hashlib, pathlib; \
+  dfs = {'prop99': load_prop99(), 'walmart': load_walmart()}; \
+  assert all(df.attrs.get('source') != 'synthetic_fallback' for df in dfs.values()); \
+  pins = {'prop99': '16c3ac1da351788817433fc890ec2f502a8bdfcb46cbc8d693653330e71d5a65', \
+          'walmart': '410885572143dceb9daa643a8097768f1bc3493f9437451a9e4d1d5dc1e18d14'}; \
+  cache = pathlib.Path.home() / '.cache' / 'diff_diff' / 'datasets'; \
+  [1/0 for n, w in pins.items() if hashlib.sha256((cache / (n + '.dta')).read_bytes()).hexdigest() != w]"
+# 2. generate (about 15 minutes; six B=9,999 bootstrap runs dominate)
+STATA=/Applications/Stata/StataSE.app/Contents/MacOS/stata-se
+$STATA -b do benchmarks/stata/requirements.do            # one-time SSC install
+$STATA -b do benchmarks/stata/generate_lwdid_golden.do
+grep -E '^r\([0-9]+\);' generate_lwdid_golden.log        # must print nothing
+```
+
+## JSON schema
+
+```json
+{
+  "meta": {"ssc_versions": {"lwdid": "version 2.4.2 ..."}, "bootstrap_scheme": "...",
+           "control_pool": {...}, "datasets": {...}, "stata_version": 19,
+           "rireps": 100000, "riseed": ..., "bootstrap_reps": 9999, "bootstrap_seed": ...},
+  "prop99":  {"demean": {"att": ..., "se": ..., "p_ri": ...}, "detrend": {...}},
+  "castle":  {"demean": {"att": ..., "se": ...}, "detrend": {...}},
+  "walmart": {"<rolling>_<method>__<outcome>": {
+      "watt": {"-22": [point, se], ..., "13": [point, se]},
+      "overall": {"Pre_avg": [point, se], "Post_avg": [point, se]}}, ...}
+}
+```
+
+Stata missing values are emitted as JSON `null` (the `_jnum` writer has an
+explicit missing branch).
+
 ## Known constraints
 
 - **Batch mode always exits 0**, even on a hard error (`r(NNN);`). Never trust the
-  shell exit code — parse the `.log` for `^r\([0-9]+\);`. Each generator also runs an
-  informational in-`.do` point smoke gate (LPDiD 1e-8, ImputationDiD 1e-6) that
-  surfaces as `r(9);` on a gross bug; the Python parity test is authoritative (LPDiD
-  point 1e-10; ImputationDiD `abs=1e-7`).
+  shell exit code — parse the `.log` for `^r\([0-9]+\);`. The LPDiD, ImputationDiD
+  and LWDiD generators also run informational in-`.do` smoke gates (LPDiD 1e-8,
+  ImputationDiD 1e-6, LWDiD 1e-10/1e-6 on its SMALL-N blocks; the LWDiD Walmart
+  block gates schema/cardinality/nonmissing only) that surface as `r(9);` on a
+  gross bug; the Python parity tests are authoritative.
 - **`c(flavor)` misreports the edition** as `IC` on StataSE, and `c(edition)` is
   unreliable. The generator derives the edition from the `c(MP)` / `c(SE)` 0/1 flags,
   with BE by elimination (`c(BE)` is undefined and `cond()` evaluates all branches
@@ -295,5 +372,6 @@ Two arms:
   current value.
 - **SSC has no version history.** `ssc install` always fetches latest and there is
   no lockfile / archive to pin against. The LPDiD arm is exempt (`teffects` is native,
-  pinned by `version 19`); the ImputationDiD arm records its SSC package versions in
-  `meta.ssc_versions` so drift is at least detectable — new SSC arms should do the same.
+  pinned by `version 19`); the SSC arms (ImputationDiD, ETWFE/CS, LWDiD) record their
+  SSC package versions in `meta.ssc_versions` so drift is at least detectable — new
+  SSC arms should do the same.

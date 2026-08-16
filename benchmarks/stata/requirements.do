@@ -23,9 +23,11 @@
 *!                       jwdid dependency; jwdid errors with "You need to install
 *!                       hdfe from SSC" without it)
 *!                       (both consumed by generate_etwfe_cs_golden.do)
+*!   lwdid             - Lee & Wooldridge rolling DiD, the authors' reference
+*!                       implementation (consumed by generate_lwdid_golden.do)
 
 version 19
-foreach p in ftools require reghdfe did_imputation drdid csdid hdfe jwdid {
+foreach p in ftools require reghdfe did_imputation drdid csdid hdfe jwdid lwdid {
     capture which `p'
     if _rc {
         di as txt "Installing `p' from SSC ..."

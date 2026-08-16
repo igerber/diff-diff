@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **LWDiD Stata parity arm + acceptance-suite re-anchor (ahead of PR #588's merge).**
+  New golden generator `benchmarks/stata/generate_lwdid_golden.do` runs the
+  authors' own SSC `lwdid` package (v2.4.2, version line pinned in the
+  golden's meta) over the loader-cached Prop 99 / Walmart panels and the
+  committed castle subset, emitting `benchmarks/data/lwdid_stata_golden.json`:
+  full-precision small-N ATT/SE (Prop 99 both rollings + castle `tau_omega`),
+  Prop 99 randomization-inference p at 100k reps, and the six Walmart
+  event-study configs' per-r WATT points + multiplier-bootstrap SEs at
+  B=9,999. The maintainer validation suite `tests/test_methodology_lwdid.py`
+  is rewritten against the agreed post-rename LWDiD API as the acceptance
+  bar for the contribution's final round: the RI golden re-anchors from the
+  paper's printed 0.020 to the authors'-package inclusive-ties convention
+  (~0.051 — the printed value is not reproducible with the package; REGISTRY
+  LWDiD RI note), and the Walmart SE xfail scaffolding is retired: the RA
+  config's bootstrap SEs become a passing Monte-Carlo-tolerance comparison
+  against the Stata golden, while the four IPWRA SE columns are committed as
+  provenance only — they diverge systematically (~15%) pending the E.3
+  influence-function adjudication in the contribution's final round (REGISTRY
+  LWDiD IPWRA-variance note). A new ungated
+  `tests/test_lwdid_stata_golden_schema.py` validates the golden's schema on
+  main (the methodology suite import-skips until `diff_diff.lwdid` lands).
+  REGISTRY's LWDiD section gains the maintainer implementation notes (RI
+  convention, dual overall-ATT conventions, Sec 4.3 rejection, inference
+  default, API conformance).
 - **`results.aggregate('total')` - the estimator-owned total incremental
   outcome** on CallawaySantAnna, EfficientDiD, ImputationDiD, and TwoStageDiD,
   promoted into the library-wide aggregation vocabulary. The single
