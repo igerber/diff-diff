@@ -38,21 +38,23 @@ engine, so the staggered numbers are identical to the deprecated class's.
 
 .. code-block:: python
 
-   from diff_diff import TripleDifference
+   from diff_diff import TripleDifference, generate_ddd_data, generate_staggered_ddd_data
 
-   # 2x2x2 design (unchanged)
+   # 2x2x2 design (unchanged) - columns: outcome, group, partition, time
+   df = generate_ddd_data(n_per_cell=100, treatment_effect=2.0, seed=42)
    ddd = TripleDifference(estimation_method="dr")
-   res = ddd.fit(df, outcome="y", group="state", partition="eligible", post="post")
+   res = ddd.fit(df, outcome="outcome", group="group", partition="partition", post="time")
 
    # staggered adoption - the staggered params are keyword-only
+   sdf = generate_staggered_ddd_data(n_units=120, n_periods=8, seed=42)
    sddd = TripleDifference(estimation_method="dr", control_group="not_yet_treated")
    res = sddd.fit(
-       df,
-       outcome="y",
-       partition="eligible",
-       unit="id",
+       sdf,
+       outcome="outcome",
+       partition="eligibility",
+       unit="unit",
        time="period",
-       first_treat="enacted",
+       first_treat="first_treat",
        aggregate="event_study",
    )
 
@@ -129,38 +131,51 @@ Example Usage
 
 Basic usage::
 
-    from diff_diff import TripleDifference
+    from diff_diff import TripleDifference, generate_ddd_data
+
+    # Synthetic DDD panel: group (0/1), partition (0/1), time (0=pre/1=post)
+    data = generate_ddd_data(n_per_cell=100, treatment_effect=2.0, seed=42)
 
     ddd = TripleDifference(estimation_method='dr')
     results = ddd.fit(
         data,
-        outcome='wages',
-        group='policy_state',       # 1=state enacted policy, 0=control state
-        partition='female',         # 1=women (affected by policy), 0=men
-        post='post'                 # 1=post-policy, 0=pre-policy
+        outcome='outcome',
+        group='group',          # 1=state enacted policy, 0=control state
+        partition='partition',  # 1=women (affected by policy), 0=men
+        post='time'             # 1=post-policy, 0=pre-policy
     )
     results.print_summary()
 
 With covariates::
 
+    from diff_diff import TripleDifference, generate_ddd_data
+
+    data = generate_ddd_data(
+        n_per_cell=100, treatment_effect=2.0,
+        add_covariates=True, seed=42,
+    )
+
+    ddd = TripleDifference(estimation_method='dr')
     results = ddd.fit(
         data,
-        outcome='wages',
-        group='policy_state',
-        partition='female',
-        post='post',
-        covariates=['age', 'education', 'experience']
+        outcome='outcome',
+        group='group',
+        partition='partition',
+        post='time',
+        covariates=['age', 'education']
     )
 
 Quick one-call estimation (the ``triple_difference()`` wrapper is
 deprecated since 3.9 and removed in 4.0)::
 
-    from diff_diff import TripleDifference
+    from diff_diff import TripleDifference, generate_ddd_data
+
+    data = generate_ddd_data(n_per_cell=100, treatment_effect=2.0, seed=42)
 
     results = TripleDifference(estimation_method='dr').fit(
         data,
-        outcome='wages',
-        group='policy_state',
-        partition='female',
-        post='post',
+        outcome='outcome',
+        group='group',
+        partition='partition',
+        post='time',
     )

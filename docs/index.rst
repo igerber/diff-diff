@@ -10,11 +10,21 @@ It provides sklearn-like estimators with statsmodels-style output for econometri
 
 .. code-block:: python
 
-   from diff_diff import DifferenceInDifferences
+   from diff_diff import DifferenceInDifferences, generate_did_data
+
+   # Simulate a panel: 100 units, 10 periods, true treatment lift of 5.0
+   data = generate_did_data(
+       n_units=100,
+       n_periods=10,
+       treatment_effect=5.0,
+       treatment_period=5,
+       treatment_fraction=0.5,
+       seed=42,
+   )
 
    # Fit a basic DiD model
    did = DifferenceInDifferences()
-   results = did.fit(data, outcome='y', treatment='treated', post='post')
+   results = did.fit(data, outcome='outcome', treatment='treated', post='post')
    print(results.summary())
 
 Key Features

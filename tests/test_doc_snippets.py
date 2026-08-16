@@ -39,7 +39,13 @@ RST_FILES = [
     "api/pretrends.rst",
     "api/power.rst",
     "api/changes_in_changes.rst",
+    "api/business_report.rst",
+    "api/diagnostic_report.rst",
+    "api/estimators.rst",
     "api/mmm.rst",
+    "api/triple_diff.rst",
+    "practitioner_decision_tree.rst",
+    "practitioner_getting_started.rst",
     "python_comparison.rst",
     "r_comparison.rst",
 ]
@@ -417,6 +423,7 @@ _CONTEXT_DEPENDENT_SNIPPETS = {
     "r_comparison:block3",
     "r_comparison:block4",
     "r_comparison:block7",
+    "practitioner_getting_started:block5",
 }
 
 

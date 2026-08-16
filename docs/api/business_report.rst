@@ -70,7 +70,13 @@ Example
 
 .. code-block:: python
 
-   from diff_diff import CallawaySantAnna, BusinessReport
+   from diff_diff import CallawaySantAnna, BusinessReport, generate_staggered_data
+
+   # Staggered-rollout loyalty program across stores
+   df = generate_staggered_data(
+       n_units=60, n_periods=10, cohort_periods=[4, 7],
+       never_treated_frac=0.3, treatment_effect=5.0, seed=42,
+   ).rename(columns={"unit": "store", "outcome": "revenue"})
 
    cs = CallawaySantAnna(base_period="universal").fit(
        df, outcome="revenue", unit="store", time="period",

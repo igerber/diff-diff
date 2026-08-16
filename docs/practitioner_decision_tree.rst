@@ -299,20 +299,38 @@ identification rests on stronger structural assumptions (Design 1).
 
 .. code-block:: python
 
+   import numpy as np
+   import pandas as pd
    from diff_diff import HeterogeneousAdoptionDiD, did_had_pretest_workflow
+
+   # Universal rollout: every market advertises (no holdout), at varying spend.
+   # Spend = 0 in the pre-period (baseline); each market keeps a fixed spend
+   # level in the post-period (with a low-spend group as the anchor).
+   rng = np.random.default_rng(42)
+   n_markets = 60
+   spend = np.where(rng.random(n_markets) < 0.3, 1.0, rng.uniform(1.0, 10.0, n_markets))
+   base = rng.normal(100, 10, n_markets)
+   data = pd.DataFrame(
+       {
+           "unit": np.repeat(np.arange(n_markets), 2),
+           "period": np.tile([1, 2], n_markets),
+           "dose": np.column_stack([np.zeros(n_markets), spend]).ravel(),
+           "outcome": np.column_stack([base, base + 3.0 * spend]).ravel(),
+       }
+   )
 
    # Run the pretest battery first - it surfaces violations of the HAD
    # identification assumptions (it does NOT pick the design path; the
    # estimator does that internally from the dose support).
    pretests = did_had_pretest_workflow(
-       data, outcome="y", unit="unit",
+       data, outcome="outcome", unit="unit",
        time="period", dose="dose",
    )
    print(pretests)
 
    est = HeterogeneousAdoptionDiD()
    results = est.fit(
-       data, outcome="y", unit="unit",
+       data, outcome="outcome", unit="unit",
        time="period", dose="dose",
    )
    print(f"Resolved estimand: {results.target_parameter}")
@@ -416,10 +434,26 @@ See :doc:`practitioner_getting_started` for an end-to-end example.
 
 .. code-block:: python
 
+   import pandas as pd
    from diff_diff import DifferenceInDifferences, SurveyDesign
 
+   # Toy survey panel: 4 markets measured before/after the campaign,
+   # with sampling weights, strata, and geographic clusters (PSUs).
+   survey = pd.DataFrame(
+       {
+           "unit": [0, 0, 1, 1, 2, 2, 3, 3],
+           "period": [1, 2, 1, 2, 1, 2, 1, 2],
+           "treated": [1, 1, 1, 1, 0, 0, 0, 0],
+           "post": [0, 1, 0, 1, 0, 1, 0, 1],
+           "outcome": [100, 106, 102, 108, 95, 96, 97, 98],
+           "sample_weight": [1.2, 1.2, 0.9, 0.9, 1.1, 1.1, 1.0, 1.0],
+           "stratum": ["A", "A", "A", "A", "B", "B", "B", "B"],
+           "cluster_id": [0, 0, 1, 1, 2, 2, 3, 3],
+       }
+   )
+
    # Reference column names in your data; SurveyDesign resolves them at fit time.
-   survey = SurveyDesign(
+   survey_design = SurveyDesign(
        weights="sample_weight",  # observation-level sampling weight
        strata="stratum",         # stratification variable
        psu="cluster_id",         # primary sampling unit (e.g., geography)
@@ -427,9 +461,10 @@ See :doc:`practitioner_getting_started` for an end-to-end example.
 
    did = DifferenceInDifferences()
    results = did.fit(
-       data, outcome="outcome", treatment="treated",
-       post="post", survey_design=survey,
+       survey, outcome="outcome", treatment="treated",
+       post="post", survey_design=survey_design,
    )
+   print(results.summary())
 
 .. tip::
 
