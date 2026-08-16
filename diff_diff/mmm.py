@@ -92,6 +92,11 @@ _LIFT_TEST_RESERVED = frozenset({"channel", "x", "delta_x", "delta_y", "sigma"})
 # n = treated+control observations, so n_kind is only a drift sanity guard here.
 _SCALE_AUTO_ESTIMATORS = frozenset({"ImputationDiD", "TwoStageDiD"})
 _CONTAINER_LEVELS = ("simple", "group", "total")
+# The audited aggregate('total') producers: only their total containers are
+# admitted (the "already scaled" claim is provenance-gated like "auto" -
+# StackedDiD is staged out and unknown provenance could be any hand-built
+# container). A new adopter extends this set in the PR that ships its total.
+_TOTAL_ESTIMATORS = frozenset({"CallawaySantAnna", "EfficientDiD", "ImputationDiD", "TwoStageDiD"})
 
 # Why scale="auto" is refused, per audited non-allowlisted producer. The generic
 # closing prescription in the error is an EXAMPLE for the unweighted additive case,
@@ -306,7 +311,24 @@ def _extract_aggregation_rows(
         # A total container's row is ALREADY the total incremental outcome
         # (the estimator applied its own finite-masked aggregation mass), so
         # the simple/group target+scale machinery below does not apply: the
-        # row relays as-is and any scale would double-count.
+        # row relays as-is and any scale would double-count. Because "already
+        # scaled" is a PRODUCER claim, admission is provenance-gated exactly
+        # like scale="auto": only the audited total adopters are trusted
+        # (StackedDiD is staged out - its total estimand is undefined under
+        # weighting= variants - and unknown/missing provenance could be any
+        # hand-built container whose att is NOT a total).
+        estimator = aggregation_result.estimator
+        if estimator not in _TOTAL_ESTIMATORS:
+            raise ValueError(
+                f"a level='total' container is accepted only from the audited "
+                f"total adopters {sorted(_TOTAL_ESTIMATORS)}; got estimator "
+                f"provenance {estimator!r}. Their aggregate('total') is the "
+                f"only producer whose single row is verifiably the "
+                f"estimator-owned total (StackedDiD totals are staged out - "
+                f"see DEFERRED.md); for other sources pass the explicit "
+                f"{effect_name}/{se_name} numbers, or a 'simple'/'group' "
+                f"container with a numeric scale."
+            )
         if len(frame) != 1:
             raise ValueError(
                 f"aggregation_result has level='total' but {len(frame)} rows; "
@@ -318,6 +340,19 @@ def _extract_aggregation_rows(
             raise ValueError(
                 f"a 'total' container's single row must carry target='total'; "
                 f"got {total_target!r}. The container is rejected whole - "
+                f"re-aggregate with results.aggregate('total')"
+            )
+        total_label = frame["label"].tolist()[0]
+        n_kind = aggregation_result.n_kind
+        weight_arr = aggregation_result.weight
+        weight_ok = weight_arr is not None and len(weight_arr) == 1 and float(weight_arr[0]) == 1.0
+        if total_label != "total" or n_kind != "obs" or not weight_ok:
+            raise ValueError(
+                f"a 'total' container must carry the producer contract "
+                f"label='total', n_kind='obs', weight=[1.0]; got "
+                f"label={total_label!r}, n_kind={n_kind!r}, "
+                f"weight={None if weight_arr is None else list(weight_arr)!r}. "
+                f"The container schema has drifted from the audited contract - "
                 f"re-aggregate with results.aggregate('total')"
             )
         labels = frame["label"].tolist()

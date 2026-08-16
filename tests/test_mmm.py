@@ -1038,6 +1038,7 @@ def _make_agg(
     ses=(0.5,),
     ns=(30.0,),
     targets=None,
+    weight=None,
 ):
     """Hand-built AggregationResult mirroring the producers' field conventions."""
     k = len(labels)
@@ -1054,6 +1055,7 @@ def _make_agg(
         n=np.array(ns, dtype=float),
         df=np.full(k, np.nan),
         n_kind=n_kind,
+        weight=(None if weight is None else np.array(weight, dtype=float)),
         estimator=estimator,
     )
 
@@ -1700,11 +1702,12 @@ class TestTotalContainerAdmission:
     """level='total' containers: admitted with NO scale, rejected with any."""
 
     def _tot(self, att=6.0, se=1.5, n=30.0, estimator="ImputationDiD", **kw):
+        kw.setdefault("labels", ("total",))
+        kw.setdefault("targets", ("total",))
+        kw.setdefault("weight", (1.0,))
         return _make_agg(
             level="total",
             estimator=estimator,
-            labels=("total",),
-            targets=("total",),
             atts=(att,),
             ses=(se,),
             ns=(n,),
@@ -1733,6 +1736,42 @@ class TestTotalContainerAdmission:
                 scale=scale,
             )
 
+    @pytest.mark.parametrize("estimator", ["StackedDiD", "SomeNewEstimator", None])
+    def test_unaudited_provenance_rejected(self, estimator):
+        """The 'already scaled' claim is provenance-gated like scale='auto':
+        StackedDiD is staged out, and unknown/missing provenance could be any
+        hand-built container whose att is NOT a total."""
+        agg = self._tot(estimator=estimator)
+        with pytest.raises(ValueError, match="audited total adopters"):
+            to_pymc_marketing_lift_test(channel="tv", x=1.0, delta_x=1.0, aggregation_result=agg)
+        with pytest.raises(ValueError, match="audited total adopters"):
+            to_meridian_roi_prior(aggregation_result=agg, spend=10.0)
+
+    @pytest.mark.parametrize(
+        "estimator",
+        ["CallawaySantAnna", "EfficientDiD", "ImputationDiD", "TwoStageDiD"],
+    )
+    def test_all_four_adopters_admitted(self, estimator):
+        frame = to_pymc_marketing_lift_test(
+            channel="tv", x=1.0, delta_x=1.0, aggregation_result=self._tot(estimator=estimator)
+        )
+        assert frame["delta_y"].iloc[0] == 6.0
+
+    def test_drifted_producer_contract_rejected(self):
+        """label/n_kind/weight must match what aggregate('total') emits -
+        schema drift on a hand-altered container fails closed."""
+        for kw in (
+            {"n_kind": "units"},
+            {"labels": ("overall",)},
+            {"weight": None},
+            {"weight": (0.5,)},
+        ):
+            agg = self._tot(**kw)
+            with pytest.raises(ValueError, match="producer contract"):
+                to_pymc_marketing_lift_test(
+                    channel="tv", x=1.0, delta_x=1.0, aggregation_result=agg
+                )
+
     def test_multi_row_total_rejected(self):
         agg = _make_agg(
             level="total",
@@ -1741,12 +1780,13 @@ class TestTotalContainerAdmission:
             atts=(1.0, 2.0),
             ses=(0.5, 0.5),
             ns=(10.0, 10.0),
+            weight=(0.5, 0.5),
         )
         with pytest.raises(ValueError, match="single 'total' row"):
             to_pymc_marketing_lift_test(channel="tv", x=1.0, delta_x=1.0, aggregation_result=agg)
 
     def test_att_target_total_rejected(self):
-        agg = _make_agg(level="total", labels=("total",), targets=("att",))
+        agg = _make_agg(level="total", labels=("total",), targets=("att",), weight=(1.0,))
         with pytest.raises(ValueError, match="target='total'"):
             to_pymc_marketing_lift_test(channel="tv", x=1.0, delta_x=1.0, aggregation_result=agg)
 

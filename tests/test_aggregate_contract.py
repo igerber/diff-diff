@@ -4366,6 +4366,27 @@ class TestTotalImputation:
         with pytest.raises(NotImplementedError, match="refit"):
             res.aggregate("total")
 
+    def test_anticipation_window_obs_enter_the_mass(self):
+        """anticipation=1 widens the treated support to t >= g - 1, so the
+        total mass grows by exactly the frame-derived window observations
+        (ImputationDiD's mass comes from anticipation-adjusted masks)."""
+        from diff_diff import ImputationDiD
+
+        frame = _imputation_panel()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            n0 = ImputationDiD().fit(frame, **IMPUTATION_KW).aggregate("total").n[0]
+            n1 = ImputationDiD(anticipation=1).fit(frame, **IMPUTATION_KW).aggregate("total").n[0]
+        window = int(
+            (
+                (frame["first_treat"] > 0)
+                & (frame["period"] >= frame["first_treat"] - 1)
+                & (frame["period"] < frame["first_treat"])
+            ).sum()
+        )
+        assert window > 0
+        assert n1 == n0 + window
+
     def test_zero_support_emits_all_nan_row_without_warning(self):
         """C == 0 (the all-unidentified fit's support) maps to a NaN mass and
         an all-NaN row - never a finite n=0 beside NaN inference."""
@@ -4464,6 +4485,27 @@ class TestTotalTwoStage:
         res.survey_metadata = None
         with pytest.raises(NotImplementedError, match="declaring a survey_design"):
             res.aggregate("total")
+
+    def test_anticipation_window_obs_enter_the_mass(self):
+        """anticipation=1 widens the treated support to t >= g - 1, so the
+        total mass grows by exactly the frame-derived window observations
+        (TwoStageDiD's mass comes from anticipation-adjusted masks)."""
+        from diff_diff import TwoStageDiD
+
+        frame = _twostage_panel()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            n0 = TwoStageDiD().fit(frame, **TWOSTAGE_KW).aggregate("total").n[0]
+            n1 = TwoStageDiD(anticipation=1).fit(frame, **TWOSTAGE_KW).aggregate("total").n[0]
+        window = int(
+            (
+                (frame["first_treat"] > 0)
+                & (frame["period"] >= frame["first_treat"] - 1)
+                & (frame["period"] < frame["first_treat"])
+            ).sum()
+        )
+        assert window > 0
+        assert n1 == n0 + window
 
     def test_reduced_post_filter_support(self):
         """total.n is the POST-FILTER treatment-indicator support: non-finite

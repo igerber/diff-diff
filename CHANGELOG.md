@@ -30,7 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   att*dC mass-uncertainty variance term - and the StackedDiD stage-out are
   tracked in DEFERRED.md). 'total' is a RELAY level: available on
   bootstrapped fits with a NaN df column. Both `diff_diff.mmm` exporters
-  admit the container ALONE - any `scale` is rejected as double-counting -
+  admit the container ALONE - any `scale` is rejected as double-counting,
+  and admission is provenance-gated to the four audited adopters with the
+  full producer contract validated (hand-built/StackedDiD/unknown-provenance
+  totals fail closed) -
   and for overall-total exports this supersedes `scale="auto"` (which remains
   the per-cohort `group`-container route).
 - **Meridian `roi_calibration_period` mask builder + `to_code()` array support.**
