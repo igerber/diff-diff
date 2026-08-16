@@ -1036,6 +1036,58 @@ R quirk replicated for parity (rdplot_mean_bin is the reliable bin
 identity). Sampling weights and R's subset= are documented seams (filter
 the DataFrame instead).
 
+### RDDensityTest
+
+Manipulation (density-discontinuity) test diagnostic (Cattaneo, Jansson &
+Ma 2020), parity-targeting R rddensity 3.0. NOT a treatment-effect
+estimator: tests the null of NO discontinuity in the running variable's
+density at the cutoff (McCrary's manipulation question) via boundary-
+adaptive local polynomial density estimation - the density is the slope of
+a kernel-weighted local polynomial regression of the rank-based EDF - with
+ROBUST BIAS-CORRECTED inference (order q = p+1 estimators at order-p
+MSE-optimal bandwidths). A significant test is evidence of sorting around
+the cutoff; a null supports (never proves) the RD continuity assumption.
+Inference assumes an i.i.d. sample with a smooth, positive density near
+the cutoff on each side (CJM Assumption 1); clustered, survey-weighted, or
+repeated-observation dependence is unsupported - there is no cluster=
+surface.
+
+```python
+RDDensityTest(
+    cutoff=0.0,
+    p=2,                        # density estimation order (1..7)
+    q=None,                     # bias-correction order; None -> p+1; q==p = conventional test
+    fitselect="unrestricted",   # or "restricted" (shared CDF/higher derivatives; only the density jumps)
+    kernel="triangular",        # / "epanechnikov" / "uniform" (R spellings accepted)
+    vcov_type="jackknife",      # R's default; or "plugin" (asymptotic)
+    h=None,                     # manual bandwidth: scalar or (h_left, h_right)
+    bwselect="comb",            # each / diff / sum / comb (median rule; restricted: min(diff, sum))
+    masspoints="adjust",        # RD-family surface: adjust (R TRUE) / check (warn only) / off
+    regularize=True,
+    n_local_min=None,           # None -> 20+p+1; 0 disables the gate (R semantics, ceil applied)
+    n_unique_min=None,
+    report_all=False,           # also report the conventional (order-p) test, R's all=TRUE
+)
+
+test = RDDensityTest()
+res = test.fit(df, running="score")
+res.t_stat, res.p_value          # robust bias-corrected manipulation test
+res.f_left, res.f_right          # per-side density estimates at the cutoff (whole-sample scale)
+res.bandwidths                   # the rdbwdensity 4-row h-table (None on manual h)
+res.to_dataframe()               # tidy left/right/diff table (+ conventional rows with report_all)
+print(res.summary())             # R-style block (Conventional row iff report_all=True)
+```
+
+Repeated running-variable values are mass-point adjusted with a warning
+(matching R massPoints=TRUE; "check" warns without adjusting, "off" is
+silent). Degenerate designs fail loud: a side of (almost) only repeated
+values, singular local fits, and degenerate selected bandwidths raise
+ValueError (R silently returns numerically meaningless output there);
+negative/zero/non-finite variance estimates degrade SEs and inference to
+NaN with a warning, and finite NEGATIVE density estimates warn. No
+confidence-interval fields, matching R's output surface (CIs belong to
+rdplotdensity, a documented seam alongside the binomial windows test).
+
 ### StackedDiD
 
 Stacked DiD estimator (Wing, Freedman & Hollingsworth 2024). Addresses TWFE bias with corrective Q-weights.

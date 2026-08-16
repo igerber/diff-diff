@@ -92,6 +92,7 @@ BAD_VALUES = {
     "QDiD": {"alpha": 5.0},
     "HeterogeneousAdoptionDiD": {"design": "not_a_design"},
     "RegressionDiscontinuity": {"kernel": "not_a_kernel"},
+    "RDDensityTest": {"kernel": "not_a_kernel"},
     "ChaisemartinDHaultfoeuille": {"cluster": "unit"},  # NotImplementedError gate
     "TROP": {"method": "not_a_method"},
     "PreTrendsPower": {"alpha": 5.0},
@@ -105,6 +106,9 @@ BAD_VALUES = {
 # lanes. Defaults to alpha/seed when present.
 MUTATIONS = {
     "BaconDecomposition": {"weights": "approximate"},
+    # p-dependent defaults (q=None -> p+1, floors -> 20+p+1) must
+    # re-derive after set_params(p=...); a p mutation exercises that
+    "RDDensityTest": {"p": 3},
 }
 
 

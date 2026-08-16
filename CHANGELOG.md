@@ -36,6 +36,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   totals fail closed) -
   and for overall-total exports this supersedes `scale="auto"` (which remains
   the per-cohort `group`-container route).
+- **RDDensityTest - manipulation testing via local polynomial density
+  estimation** (`diff_diff/rddensity.py`; Cattaneo, Jansson & Ma 2020, JASA):
+  the McCrary-style density-discontinuity test for RD designs, closing the
+  RD toolkit's last documented v1 seam. End-to-end parity with R `rddensity`
+  3.0 (CRAN tarball sha256-pinned; 47-config golden suite over five
+  synthetic DGPs with embedded R-drawn samples plus the vendored senate and
+  Head Start CSVs, including the standalone `rdbwdensity` h-tables). Robust
+  bias-corrected inference (order `q=p+1` at order-`p` MSE-optimal
+  bandwidths), unrestricted + restricted models, jackknife (default) and
+  plug-in variances, the `each`/`diff`/`sum`/`comb` bandwidth menu with R's
+  regularization quirks replicated exactly, R-parity mass-point adjustment
+  behind the RD-family `masspoints="adjust"/"check"/"off"` surface, and
+  fail-loud guards replacing R's silent degenerate modes (documented
+  Deviations in the methodology registry). The CJM 2020 Head Start
+  application (Table 1) is reproduced at display precision for p=1/p=2 and
+  pinned at R-3.0 behavior for the version-drifted p=3 rows. Diagnostic
+  family (`RDDensityTestResult`); software-level R behaviors documented in
+  `docs/methodology/rddensity-source-notes.md`. The binomial windows test,
+  `rdplotdensity` plots, a public bandwidth-selector helper, and a Tutorial
+  28 executed demo cell are tracked follow-ups in `DEFERRED.md`.
 - **Meridian `roi_calibration_period` mask builder + `to_code()` array support.**
   New `meridian_calibration_mask(media_times=, media_channels=, channel=, window=)`
   builds the boolean `(n_media_times, n_media_channels)` mask Meridian's

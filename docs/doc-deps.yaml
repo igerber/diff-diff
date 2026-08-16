@@ -530,6 +530,31 @@ sources:
         type: user_guide
       - path: docs/tutorials/28_rdd_scholarship_illusion.ipynb
         type: tutorial
+  diff_diff/rddensity.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "RDDensityTest"
+        type: methodology
+        note: "rddensity 3.0 parity pin (CRAN tarball sha256) + the Note/Deviation labels live here; software-level R behaviors (rank EDF, windowed jackknife, selector gates) are documented in docs/methodology/rddensity-source-notes.md - any port change must re-run the golden suite (tests/test_rddensity.py) against benchmarks/data/rddensity_golden.json."
+      - path: docs/methodology/rddensity-source-notes.md
+        type: methodology
+      - path: docs/api/regression_discontinuity.rst
+        type: api_reference
+      - path: README.md
+        section: "Diagnostics & Sensitivity (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Diagnostics and Sensitivity Analysis"
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "RDDensityTest"
+        type: user_guide
+      - path: diff_diff/guides/llms-autonomous.txt
+        section: "RD in-scope routing paragraph"
+        type: user_guide
   diff_diff/_rdrobust_port.py:
     drift_risk: high
     docs:

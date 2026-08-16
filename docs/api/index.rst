@@ -82,6 +82,7 @@ Result containers returned by estimators:
    diff_diff.TWFEWeightsResult
    diff_diff.RegressionDiscontinuityResults
    diff_diff.RDPlotResult
+   diff_diff.RDDensityTestResult
    diff_diff.BaseResults
    diff_diff.Diagnostic
    diff_diff.EventStudyResults
@@ -121,6 +122,7 @@ Placebo tests and model diagnostics:
    diff_diff.leave_one_out_test
    diff_diff.run_all_placebo_tests
    diff_diff.PlaceboTestResults
+   diff_diff.RDDensityTest
 
 Panel Profiling
 ---------------

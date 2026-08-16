@@ -125,6 +125,7 @@ Full guide: `diff_diff.get_llm_guide("practitioner")`.
 ## Diagnostics & Sensitivity
 
 - [RD Plots](https://diff-diff.readthedocs.io/en/stable/api/regression_discontinuity.html) - Calonico, Cattaneo & Titiunik (2015) optimal data-driven RD plots (`RDPlot`): all 8 rdrobust `binselect` bin selectors, implied-scale/WIMSE-weight reporting, optional matplotlib rendering
+- [Manipulation Testing](https://diff-diff.readthedocs.io/en/stable/api/regression_discontinuity.html) - Cattaneo, Jansson & Ma (2020) density-discontinuity test (`RDDensityTest`): rddensity 3.0 parity, robust bias-corrected inference, unrestricted/restricted models, mass-point adjustment
 - [Parallel Trends Testing](https://diff-diff.readthedocs.io/en/stable/api/diagnostics.html) - simple and Wasserstein-robust parallel trends tests, equivalence testing (TOST)
 - [Placebo Tests](https://diff-diff.readthedocs.io/en/stable/api/diagnostics.html) - placebo timing, group, permutation, leave-one-out
 - [Honest DiD](https://diff-diff.readthedocs.io/en/stable/api/honest_did.html) - Rambachan & Roth (2023) sensitivity analysis: robust CI under PT violations, breakdown values

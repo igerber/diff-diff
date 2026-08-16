@@ -32,6 +32,7 @@ from diff_diff.practitioner import practitioner_next_steps
 DIAGNOSTIC_ROSTER = [
     "BaconDecompositionResults",
     "RDPlotResult",
+    "RDDensityTestResult",
     "HonestDiDResults",
     "SensitivityResults",
     "PreTrendsPowerResults",

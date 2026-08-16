@@ -185,3 +185,34 @@ shasum -a 256 rdrobust_4.0.0.tar.gz
 R CMD INSTALL rdrobust_4.0.0.tar.gz
 Rscript benchmarks/R/generate_rdrobust_golden.R
 ```
+
+# R `rddensity` manipulation-test golden fixtures
+
+`benchmarks/R/generate_rddensity_golden.R` produces
+`benchmarks/data/rddensity_golden.json`, consumed by
+`tests/test_rddensity.py` to verify that `diff_diff.RDDensityTest` matches
+R `rddensity::rddensity()` + `rddensity::rdbwdensity()` (Cattaneo, Jansson
+& Ma) across 47 configs (five synthetic DGPs with embedded R-drawn samples,
+plus the vendored `rdrobust_senate.csv` and `rddensity_headstart.csv` - the
+latter fetched from the CJM 2020 replication repository
+`rdpackages-replication/CJM_2020_JASA`, sha256
+`28f42a04ca7392e786e5f93ba311cdc91489a293c061a3bc59f53f4cfc536ce9`).
+The parity target is CRAN **rddensity 3.0** - pin the install to the
+versioned tarball, never an unpinned `install.packages()`:
+
+```sh
+# Verify the source of record (must print the sha256 below):
+curl -sfLO https://cran.r-project.org/src/contrib/rddensity_3.0.tar.gz \
+  || curl -sfLO https://cran.r-project.org/src/contrib/Archive/rddensity/rddensity_3.0.tar.gz
+shasum -a 256 rddensity_3.0.tar.gz
+# expected: a9c45ab0f6b86ead4d91084db16513d4156b7f59b0472510b63deb5dee6f305d
+
+R CMD INSTALL rddensity_3.0.tar.gz
+Rscript benchmarks/R/generate_rddensity_golden.R
+```
+
+The generator hard-asserts `packageVersion("rddensity") == "3.0"`, embeds
+every synthetic sample at 17 significant digits (R RNG streams are not
+reproducible from numpy), and aborts loudly if the mass-point fixtures fail
+to separate the two `nLocalMin`/`nUniqueMin` regularization gates (the
+floor-gate configs exist to pin exactly that behavior).

@@ -194,7 +194,7 @@ BaconDecomposition (reclassified OUT of the README/API estimator lists),
 RDPlot (consolidated from the RD grouping), parallel-trends testing, the
 placebo suite, HonestDiD, PreTrendsPower, PowerAnalysis,
 `twowayfeweights`, the HAD pretests, DiagnosticReport's results, and the
-upcoming CJM 2020 density test (born into the family). Explicit
+CJM 2020 density test (`RDDensityTest`, born into the family). Explicit
 NON-members despite current docs placement: Conley spatial-HAC (an
 embedded inference method on estimators, not a diagnostic object) and
 other design elements listed under the README section. (A narrower
@@ -215,7 +215,7 @@ RESULT types: `BaconDecompositionResults`, `RDPlotResult`,
 BUILDER today - Phase 2 moves or delegates them onto the container to meet
 the contract; BusinessReport exports no result container, so nothing to
 mark there) - plus every future diagnostic's result type (the density
-test's first). Entry-point classes are NOT marked (one
+test's `RDDensityTestResult` was the first). Entry-point classes are NOT marked (one
 marker, one meaning). Contract: marked results expose `summary()` /
 `to_dataframe()` and are exempt from the section 5 quintet BY TYPE
 (isinstance-checkable, so BusinessReport / DiagnosticReport /

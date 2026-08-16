@@ -1327,9 +1327,11 @@ This guide does **not**:
   threshold is the fuzzy design (`fit(..., takeup=...)`, local
   Wald ratio with a first-stage block); precision covariates go in via
   `fit(..., covariates=[...])` (same estimand - check covariate balance
-  first by fitting each covariate as the outcome). Cluster-robust RD
-  variance and weak-IV-robust fuzzy inference are documented follow-ups,
-  so point users needing those at R rdrobust.
+  first by fitting each covariate as the outcome); manipulation
+  (density-discontinuity) testing of the running variable is in scope
+  via `RDDensityTest` (McCrary-style validity check, rddensity parity).
+  Cluster-robust RD variance and weak-IV-robust fuzzy inference are
+  documented follow-ups, so point users needing those at R rdrobust.
 
 **If in doubt, consult the primary references in §8 and use
 `get_llm_guide("practitioner")` for the Baker et al. workflow.**

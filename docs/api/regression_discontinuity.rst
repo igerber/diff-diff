@@ -45,11 +45,11 @@ naming them (``covs_drop=True``, R's default).
 
    **Scope of this release.** Sharp, fuzzy, and covariate-adjusted
    designs with the nearest-neighbor variance estimator (rdrobust's
-   default), plus the ``RDPlot`` diagnostic below. Cluster-robust
-   variance, weights, kink estimands, weak-IV-robust fuzzy inference, a
-   packaged covariate-balance helper, and the density-test diagnostic
-   are documented follow-ups - see the methodology registry for the full
-   deviations and seams list.
+   default), plus the ``RDPlot`` and ``RDDensityTest`` diagnostics
+   below. Cluster-robust variance, weights, kink estimands,
+   weak-IV-robust fuzzy inference, and a packaged covariate-balance
+   helper are documented follow-ups - see the methodology registry for
+   the full deviations and seams list.
 
 **RD plots** (``RDPlot``; Calonico, Cattaneo & Titiunik 2015, parity with
 R's ``rdplot()``): the standard exploratory companion - per-side global
@@ -93,6 +93,35 @@ RDPlotResult
 ------------
 
 .. autoclass:: diff_diff.RDPlotResult
+   :no-index:
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+**Manipulation testing** (``RDDensityTest``; Cattaneo, Jansson & Ma 2020,
+parity with R's ``rddensity()`` 3.0): the density-discontinuity
+(McCrary-style) manipulation test - the running variable's density is
+estimated on each side of the cutoff with the CJM boundary-adaptive local
+polynomial density estimator and the difference is t-tested with robust
+bias-corrected inference. Unrestricted and restricted models, jackknife
+(default) and plug-in variances, the full ``each``/``diff``/``sum``/``comb``
+data-driven bandwidth menu, and R-parity mass-point adjustment via the
+RD-family ``masspoints=`` surface.
+
+RDDensityTest
+-------------
+
+.. autoclass:: diff_diff.RDDensityTest
+   :no-index:
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :inherited-members:
+
+RDDensityTestResult
+-------------------
+
+.. autoclass:: diff_diff.RDDensityTestResult
    :no-index:
    :members:
    :undoc-members:

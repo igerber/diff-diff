@@ -224,6 +224,10 @@ from diff_diff.rdd import (
     RegressionDiscontinuity,
     RegressionDiscontinuityResults,
 )
+from diff_diff.rddensity import (
+    RDDensityTest,
+    RDDensityTestResult,
+)
 from diff_diff.rdplot import (
     RDPlot,
     RDPlotResult,
@@ -571,6 +575,9 @@ __all__ = [
     # RDPlot (data-driven RD plots, rdplot parity)
     "RDPlot",
     "RDPlotResult",
+    # RDDensityTest (manipulation testing, rddensity parity)
+    "RDDensityTest",
+    "RDDensityTestResult",
     # HeterogeneousAdoptionDiD pre-test diagnostics (Phase 3)
     "qug_test",
     "stute_test",

@@ -33,6 +33,7 @@ This document provides the academic foundations and key implementation requireme
 4. [Regression Discontinuity](#regression-discontinuity)
    - [RegressionDiscontinuity](#regressiondiscontinuity)
    - [RDPlot](#rdplot)
+   - [RDDensityTest](#rddensitytest)
 5. [Diagnostics and Sensitivity](#diagnostics-and-sensitivity)
    - [PlaceboTests](#placebotests)
    - [BaconDecomposition](#bacondecomposition)
@@ -4428,9 +4429,10 @@ per-side and comb chains.
   ships; `hc0`-`hc3` and cluster modes raise `NotImplementedError`.
   Weights, kink estimands (`deriv`), `scalepar`, `stdvars`, per-side
   manual bandwidths, weak-IV-robust fuzzy inference
-  (Feir-Lemieux-Marmer), the density/manipulation-test diagnostic, and a
+  (Feir-Lemieux-Marmer), and a
   packaged covariate-balance helper are documented follow-ups (the
-  rdplot diagnostic ships as `RDPlot` - see its section below);
+  rdplot diagnostic ships as `RDPlot` and the density/manipulation-test
+  diagnostic as `RDDensityTest` - see their sections below);
   cluster/weights are not parameters at all. The port's `deriv` machinery is
   golden-covered for `deriv in {0, 1}` only.
 - **Note (p/q surface, R-exact):** public `p`/`q` validation mirrors
@@ -4513,8 +4515,9 @@ rdrobust software reference this port parity-targets),
 adjustment, implemented),
 `cattaneo-jansson-ma-2020-review.md` (JASA - boundary-adaptive local
 polynomial density estimators + the density-discontinuity manipulation test;
-the rddensity methodology. Review only - the packaged density test remains a
-documented v1 seam pending implementation).
+the rddensity methodology, implemented as `RDDensityTest` - see its section
+below and the software-source notes in
+`docs/methodology/rddensity-source-notes.md`).
 
 ## RDPlot
 
@@ -4661,6 +4664,181 @@ esmvpr golden, masspoints remap/check, zero-variance rescue, fallback-ladder
 overflow config with integer-only assertions plus a finite-singular
 no-downgrade companion, deviation locks for fractional/pair scale, API
 contracts, and the matplotlib ImportError path).
+
+## RDDensityTest
+
+**Primary source:** [Cattaneo, M. D., Jansson, M., & Ma, X. (2020). Simple
+Local Polynomial Density Estimators. *JASA*, 115(531),
+1449-1455.](https://doi.org/10.1080/01621459.2019.1635480) (+ Supplemental
+Appendix). Full formula extraction in
+`docs/methodology/papers/cattaneo-jansson-ma-2020-review.md`; software-level
+behaviors (not specified by the paper) documented from the pinned R source in
+`docs/methodology/rddensity-source-notes.md`. Software companion: Cattaneo,
+Jansson & Ma (2018), *Stata Journal*, 18(1), 234-261.
+
+**What it is:** the manipulation (density-discontinuity) test for RD designs
+(`diff_diff/rddensity.py`) - a DIAGNOSTIC like `RDPlot`, not a
+treatment-effect estimator. The running variable's density is estimated just
+below and just above the cutoff with the CJM 2020 boundary-adaptive local
+polynomial density estimator (a kernel-weighted local polynomial regression
+of the empirical distribution function; the density is the slope
+coefficient) and the difference is t-tested against the standard normal. The
+reported test is ROBUST BIAS-CORRECTED: estimators of order `q = p + 1`
+evaluated at bandwidths MSE-optimal for the order-`p` estimator (the CCT
+2014 / CCF 2018 logic). Defaults reproduce R `rddensity(X)`: `p=2`,
+triangular kernel, jackknife variance, unrestricted model,
+`bwselect="comb"`, mass-point adjustment on.
+
+**Parity pin:** CRAN `rddensity` 3.0 (tarball sha256
+`a9c45ab0f6b86ead4d91084db16513d4156b7f59b0472510b63deb5dee6f305d`). Golden
+suite: `benchmarks/R/generate_rddensity_golden.R` ->
+`benchmarks/data/rddensity_golden.json` (47 configs across 5 synthetic DGPs
+with embedded R-drawn samples + the vendored senate and Head Start CSVs;
+per-config the full result surface AND the standalone `rdbwdensity`
+h-table), verified by `tests/test_rddensity.py` at rtol 1e-8 (the pipeline
+chains selector pilots + estimation; documented per-config overrides for two
+conditioning-limited classes: `p=7` whose order-9 pilot Gram sits at
+condition ~1e15, and the `nUniqueMin=0` floor configs on tied fixtures).
+Head Start anchors: R 3.0 reproduces the published CJM 2020 Table 1 p=1/p=2
+rows at display precision (`x_bar=59.1984`, `n_-=2504`, `n_+=300`); the p=3
+rows drifted across package versions (published `h_left=32.487` vs 3.0's
+`22.135`) - the tests pin the published p=1/p=2 values and the R-3.0
+behavior at p=3, with the drift documented in the test docstring.
+
+**Model variants:** `fitselect="unrestricted"` (default; duplicated
+interleaved per-side basis, additive per-side variances) and
+`fitselect="restricted"` (shared `R^{p+2}` basis - CDF and higher
+derivatives continuous at the cutoff, only the density may jump; requires
+equal bandwidths, forbids `bwselect="each"`, and couples the plugin
+variance through the density-weighted combined Gram with the Psi reflection
+matrix per SA Lemma 13).
+
+- **Note (rank-based EDF, matches R):** the regressand is R's
+  `Y = (0:(N-1))/(N-1)` on the sorted full sample, NOT the CJM 2020 paper's
+  `(1/n) * sum 1[x_i <= x]` display (they differ by up to `1/N` pointwise).
+  Under this EDF the joint-vs-separate conversion factor is
+  `(N-1)/(n_side - 1)` (locked by a methodology test), not the paper's
+  `n/n_side`.
+- **Note (window-restricted jackknife, matches R):** the default jackknife
+  variance builds its leave-one-out projection from the estimation-window
+  rows only, exactly as R does - this differs from the SA Section 5.2
+  literal `U_hat` double sum, in which out-of-window observations remain
+  eligible as the non-localized pair member. The difference is locked by a
+  methodology test (`test_jackknife_window_vs_literal`).
+- **Note (vce surface, matches R):** only `vcov_type="jackknife"` (R's
+  default) and `"plugin"` ship - R 3.0 implements exactly these two; the SA
+  Theorem-2 "automatic" triple-sum variance estimator is not in the parity
+  target. The jackknife is the SA-Section-5.2-sanctioned construction and
+  consistent under the same conditions.
+- **Note (restricted plugin uses the uncorrected reflection, matches R and
+  SA Lemma 13):** the minus-side second-moment matrix is
+  `Psi %*% G_plus %*% Psi`; the SA proof 7.17 corrected `Gamma_minus` (with
+  two rank-one correction terms) is never used by any estimation path (R's
+  `Gminusgenerate` is dead code). The generator-level reflection identity -
+  including the corrections - is locked by a methodology test that guards
+  the moment integrators, not the variance sandwich.
+- **Note (closed-form moment matrices):** `S`/`C`/`G` are computed by exact
+  polynomial integration over [0, 1] (every supported kernel is a plain
+  polynomial there) instead of R's adaptive quadrature; R's quadrature is
+  itself exact-to-machine-precision on these polynomial integrands, so the
+  two agree within the golden tolerance.
+- **Note (preliminary-floor quirk, matches R):** the bandwidth selector's
+  preliminary stage has two regularization gates (`nLocalMin > 0`,
+  `nUniqueMin > 0`); EACH gate floors BOTH preliminary bandwidths with
+  HARD-CODED counts (`20+p+3` for `bn`, `20+p+1` for `cn`), differing only
+  in the sample quantiled (full vs unique values). User floor VALUES enter
+  only the final-stage regularization; zero disables a gate. Golden configs
+  on tied fixtures lock each gate independently.
+- **Note (q sentinel):** R uses `q=0` meaning "default to p+1"; the port
+  uses `q=None`. `q == p` is accepted and equals the conventional
+  (uncorrected) fit, matching R (this deliberately differs from
+  `RegressionDiscontinuity`, which requires `q > p` - the estimator's RBC
+  construction has no conventional-report mode, while the density test
+  exposes it via `report_all`).
+- **Note (conventional inference at data-driven bandwidths):** the
+  conventional order-`p` test (`q == p`, and the `report_all=True`
+  conventional block) over-rejects at MSE-optimal bandwidths (CJM 2020
+  Section 4; undersmoothing or RBC are the two remedies). R reports these
+  numbers without comment; the port keeps the R-parity values (golden-
+  pinned via the `q_equals_p` and `all=TRUE` configs) and emits a fit-time
+  warning naming the undersmoothing requirement - a manually undersmoothed
+  `h=` is the caller's responsibility and cannot be verified by the
+  library.
+- **Deviation from R (summary labeling):** R's summary labels the headline
+  row "Robust" unconditionally - including `q == p`, where the statistic
+  is the conventional test - and with `all=TRUE` in that mode prints the
+  identical conventional statistic twice; the port's `summary()` labels
+  the headline by the actual procedure (`Robust` iff `q > p`) and prints a
+  single `Conventional` row when `q == p`. Display only - all numeric
+  result fields are unchanged (golden-pinned).
+- **Deviation from R (masspoints surface):** R's `massPoints` is a boolean;
+  the port exposes the RD-family string domain - `"adjust"` = R `TRUE`
+  (EDF-on-unique adjustment + fit-time warning), `"check"` = detect and warn
+  WITHOUT adjusting (estimation equals R `FALSE`), `"off"` = R `FALSE`
+  silent. Estimation numbers match R exactly in the corresponding modes.
+- **Deviation from R (fail-loud degenerate designs):** R solves with
+  `tol=0` (rank check disabled) and either throws internally (returning an
+  all-NA frame) or silently returns numerically meaningless finite
+  estimates on rank-deficient-but-solvable designs (e.g. a side of only
+  repeated values). The port raises `ValueError` instead, via a
+  unique-support precondition (each side of every estimation window - pilot
+  and final - must hold at least order+1 unique values with POSITIVE kernel
+  weight; a polynomial basis on that many distinct nodes is full rank, so
+  the precondition is complete and threshold-free. The positive-weight
+  qualifier matters: the triangular/epanechnikov kernels assign weight
+  exactly 0 at the bandwidth boundary `|x| = h`, which the regularization
+  range clamp hits exactly, so boundary support points identify nothing)
+  plus solve-failure/non-finite-output guards.
+- **Deviation from R (degenerate selected bandwidths):** an NaN-variance
+  selector row makes R error opaquely (NA in an `if`); the port raises a
+  descriptive `ValueError` at the same point - BEFORE the `NaN -> 0`
+  bandwidth cleanup and the regularization floors, which could otherwise
+  rescue such a row into a positive bandwidth whose MSE objective is
+  undefined. A bias-squared row of exactly 0 yields `h=Inf` which R leaves
+  unclamped under `regularize=FALSE`; the port additionally requires each
+  SELECTED bandwidth to be finite and strictly positive, else `ValueError`
+  naming the manual `h=` override as the remedy (the
+  Inf-passes-to-range-clamp behavior under `regularize=TRUE` is replicated
+  exactly - see the restricted sum row on the dgp_disc golden).
+- **Deviation from R (per-side minimum):** the port requires at least 2
+  observations on each side of the cutoff up front; R validates only that
+  the cutoff lies inside the data range and fails downstream otherwise.
+- **Deviation from R (input coercion):** R warns on and drops NA values
+  only; the port additionally coerces non-numeric values and drops +-inf
+  (RDPlot precedent), with a counting warning.
+- **Deviation from R (finite negative densities warn):** on
+  solvable-but-degenerate data R silently reports finite negative side
+  densities with finite standard errors; the port reports the same numbers
+  (goldens match) but emits a `UserWarning` naming the negative estimate
+  and its likely cause.
+- **Note (degraded inference):** negative, zero, or non-finite VARIANCE
+  estimates degrade the affected standard errors and the test inference to
+  NaN jointly (`safe_inference` gating) with a warning, in both the robust
+  and conventional blocks; point estimates stand. An invalid ONE-SIDED
+  variance also degrades the composed difference SE and the test inference
+  (R composes the difference variance from the raw one-sided contributions
+  BEFORE clearing negatives, so a finite understated `sd_diff` can survive
+  an invalid side there; the port never reports inference built on an
+  invalid component). Non-finite POINT
+  estimates are unreachable (the fail-loud guards above raise first). The
+  restricted-plugin combined-Gram degeneracy (singular exactly at a zero
+  one-sided density) takes the same degraded path, unit-tested by direct
+  injection (`_restricted_plugin_variance(f_l=0, ...)`).
+- **Note (v1 scope seams):** the binomial windows test (R's `bino=` block;
+  methodology from Cattaneo-Frandsen-Titiunik 2015 / CFVB 2017, not the
+  reviewed paper) and `rdplotdensity` (needs an lpdensity port) are not
+  implemented - tracked in `DEFERRED.md`. The bandwidth selector is
+  internal (no public helper).
+
+**Regression tests:** `tests/test_rddensity.py` - golden parity over all 47
+configs + the rdbwdensity h-tables; Head Start paper anchors; methodology
+locks (reflection identity for p=1..7, joint-vs-separate rescaling,
+jackknife window-vs-literal, affine equivariance, mass-point idempotence,
+repeated-values design guard, restricted-H0, q-resolution, floor
+behavioral); validation/warning contracts (all constructor rejects, the
+degenerate fixtures, the three fit-time warnings, `masspoints="off"`
+suppression); API contracts (result schema, `to_dataframe` shapes in both
+`report_all` modes, behavioral `summary()`, `set_params(p=...)` staleness).
 
 
 
@@ -5276,6 +5454,7 @@ should be a deliberate user choice.
 | ChangesInChanges | Bootstrap (replicate-SD SEs, normal-approx CIs) | Sup-t uniform bands (fixed 95%, qte parity) |
 | QDiD | Bootstrap (replicate-SD SEs, normal-approx CIs) | Sup-t uniform bands (fixed 95%, qte parity) |
 | BaconDecomposition | N/A (exact decomposition) | Individual 2×2 SEs |
+| RDDensityTest | Jackknife (leave-one-out, window-restricted; rddensity default) | Plug-in asymptotic (`vcov_type="plugin"`) |
 | HonestDiD | Inherited from event study | FLCI, C-LF |
 | PreTrendsPower | Exact (analytical) | - |
 | PowerAnalysis | Exact (analytical) | Simulation-based |
@@ -5303,6 +5482,7 @@ should be a deliberate user choice.
 | BaconDecomposition | bacondecomp | `bacon()` |
 | HonestDiD | HonestDiD | `createSensitivityResults()` |
 | RegressionDiscontinuity | rdrobust | `rdrobust()` + `rdbwselect()` (4.0.0; sharp + fuzzy + covariate-adjusted, nn path; `takeup` = R's `fuzzy=`, `covariates` = R's `covs=`) |
+| RDDensityTest | rddensity | `rddensity()` + `rdbwdensity()` (3.0; unrestricted + restricted, jackknife/plugin; `vcov_type` = R's `vce=`, `masspoints` strings map R's `massPoints` boolean; `bino=` windows out of scope) |
 | PreTrendsPower | pretrends | `pretrends()` |
 | PowerAnalysis | pwr / DeclareDesign / pcpanel | `pwr::pwr.norm.test` (analytical, normal-based — D1) + `pcpanel` (Burlig 2020 panel, equicorrelated case) + simulation. The analytical multiplier is normal (z), so `pwr.t.test` is **not** the faithful parity target. |
 

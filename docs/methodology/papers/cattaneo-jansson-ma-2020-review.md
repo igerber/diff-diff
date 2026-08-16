@@ -280,21 +280,29 @@ estimator surface.
   Cattaneo, Jansson & Ma 2019, cited companion)
 
 **Requirements checklist (for the implementation PR):**
-- [ ] EDF-based local polynomial fit with one-sided/two-sample bases
+- [x] EDF-based local polynomial fit with one-sided/two-sample bases
       (unrestricted `R^{2p+2}` and restricted `R^{p+2}`)
-- [ ] Boundary-adaptive Theorem 2 variance + plug-in and jackknife variants
-- [ ] MSE-optimal bandwidth plug-in (difference objective + per-side),
+- [x] Boundary-adaptive variance estimation - shipped as the jackknife
+      (default) and plug-in variants, the surface R rddensity 3.0
+      implements; the Theorem-2 automatic triple-sum estimator is NOT
+      implemented (documented Note in REGISTRY.md, see the Implementation
+      status block below)
+- [x] MSE-optimal bandwidth plug-in (difference objective + per-side),
       pilot-bandwidth chain per SA Lemma 6 / Theorem 3
-- [ ] RBC test `T_{p+1}(h_hat_p)` with default `p = 2` (`T_3(h_hat_2)`),
+- [x] RBC test `T_{p+1}(h_hat_p)` with default `p = 2` (`T_3(h_hat_2)`),
       common and distinct bandwidths
-- [ ] Joint-vs-separate estimation identity (SA Remarks 5-6) as a test anchor
-- [ ] Moore-Penrose handling of singular one-sided Gram matrices; reflection
-      identity as a computation shortcut and/or test anchor
-- [ ] Fail-closed mass-point gate (duplicated-support detection before any
+- [x] Joint-vs-separate estimation identity (SA Remarks 5-6) as a test anchor
+- [x] Singular-Gram handling - resolved as not-applicable-to-R: the SA's
+      Moore-Penrose pseudo-inverse is a proof device on the one-sided
+      embedded matrices, while R's joint bases use plain `solve(tol=0)`;
+      the port uses ordinary solves behind fail-loud design guards
+      (documented Deviation in REGISTRY.md). Reflection identity shipped
+      as a generator-level test anchor
+- [x] Fail-closed mass-point gate (duplicated-support detection before any
       inference; tests must cover a rounded running variable and a side of
       only repeated values)
-- [ ] Head Start empirical anchors (Table 1 of the main text; below)
-- [ ] R `rddensity` golden parity (generator + committed JSON, per the
+- [x] Head Start empirical anchors (Table 1 of the main text; below)
+- [x] R `rddensity` golden parity (generator + committed JSON, per the
       rdrobust/rdplot precedent) - requires consulting the rddensity software
       paper/source, out of scope for this review
 
@@ -442,3 +450,50 @@ the effective sample size of McCrary's prebinned test is far smaller
    `rddensity`. Whether diff-diff should expose the generic estimator surface
    (evaluation grids, CDF/derivatives) or only the test is a scoping decision
    for the implementation plan, not settled by the paper.
+
+
+---
+
+## Implementation status (PR-B) - *this block is implementation commentary, not paper-sourced*
+
+The methodology above is implemented as `RDDensityTest`
+(`diff_diff/rddensity.py`), parity-targeting R `rddensity` 3.0 (CRAN tarball
+sha256 `a9c45ab0f6b86ead4d91084db16513d4156b7f59b0472510b63deb5dee6f305d`).
+Software-level behaviors the paper does not specify are documented from the
+pinned R source in `docs/methodology/rddensity-source-notes.md`, and every
+implementation choice carries a REGISTRY Note/Deviation label (REGISTRY
+section "RDDensityTest"). Resolutions of this review's flagged items:
+
+- **The fail-closed mass-point gate** (assumption checks + checklist): its
+  condition - "until a reviewed rddensity-compatible mass-point procedure
+  exists" - is now met. The R 3.0 adjustment (EDF on unique values,
+  replication via last-occurrence indices, first-occurrence replication in
+  the jackknife) is documented in the source-notes and shipped with a
+  fit-time warning and an RD-family `masspoints="adjust"/"check"/"off"`
+  surface.
+- **The Theorem-2 "automatic" SE** (tuning table row "SE flavor"): R 3.0
+  implements only the jackknife (its default) and the plug-in variance; the
+  triple-sum automatic estimator is not in the parity target. The port
+  matches R (REGISTRY Note).
+- **The jackknife localization note** (Computational Considerations): R's
+  construction is WINDOW-RESTRICTED - it drops the out-of-window
+  non-localized pair members the SA literal formula keeps. The port ships
+  R's construction; the divergence from the SA formula is locked by
+  `test_jackknife_window_vs_literal` and documented in the source-notes.
+- **The Moore-Penrose checklist item**: resolved as not-applicable-to-R -
+  the SA's pseudo-inverse is a proof device on the one-sided embedded
+  matrices; R's joint bases use plain `solve(..., tol=0)`. The port replaces
+  R's silent degenerate modes with fail-loud design guards (REGISTRY
+  Deviations).
+- **The difference-objective bandwidth recipe** (Gaps item 2): R selects via
+  the `each`/`diff`/`sum` h-table rows and the `comb` combination rules
+  (median per side unrestricted; min(diff, sum) restricted), documented in
+  the source-notes and pinned by the golden suite.
+- **The rank-based EDF** (estimator display above): R implements
+  `(0:(N-1))/(N-1)`, not the displayed `(1/n)*sum` form; see the
+  source-notes and the REGISTRY Note. The SA Remarks 5-6 rescaling factors
+  become `(N-1)/(n_side-1)` under R's EDF.
+- **Head Start Table 1**: R 3.0 reproduces the published p=1/p=2 rows at
+  display precision; the p=3 bandwidths drifted across package versions
+  (published h_left=32.487 vs 3.0's 22.135). The anchor tests pin the
+  published p=1/p=2 values and the R-3.0 p=3 behavior, drift documented.

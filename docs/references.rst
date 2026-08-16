@@ -95,6 +95,18 @@ Nonparametric Bias-Corrected Inference
 
   Covariate-adjusted RD (additive common-coefficient specification and its consistency conditions) - the methodology behind :class:`diff_diff.RegressionDiscontinuity`'s ``fit(..., covariates=[...])`` adjustment (same estimand, covariate-aware bandwidths, balance as the operative testable condition).
 
+- **Cattaneo, M. D., Jansson, M., & Ma, X. (2020).** "Simple Local Polynomial Density Estimators." *Journal of the American Statistical Association*, 115(531), 1449-1455. https://doi.org/10.1080/01621459.2019.1635480
+
+  Source of the :class:`diff_diff.RDDensityTest` manipulation-test diagnostic: the boundary-adaptive local polynomial density estimator (EDF smoothing), its jackknife/plug-in variances, and the robust bias-corrected density-discontinuity test.
+
+- **Cattaneo, M. D., Jansson, M., & Ma, X. (2018).** "Manipulation Testing Based on Density Discontinuity." *The Stata Journal*, 18(1), 234-261. https://doi.org/10.1177/1536867X1801800115
+
+  The rddensity software companion that :class:`diff_diff.RDDensityTest` parity-targets (CRAN 3.0): the ``each``/``diff``/``sum``/``comb`` bandwidth menu, mass-point adjustment, and the unrestricted/restricted model surface.
+
+- **McCrary, J. (2008).** "Manipulation of the Running Variable in the Regression Discontinuity Design: A Density Test." *Journal of Econometrics*, 142(2), 698-714. https://doi.org/10.1016/j.jeconom.2007.05.005
+
+  The original density-discontinuity manipulation test; :class:`diff_diff.RDDensityTest` implements the CJM (2020) local polynomial refinement of McCrary's idea.
+
 - **Feir, D., Lemieux, T., & Marmer, V. (2016).** "Weak Identification in Fuzzy Regression Discontinuity Designs." *Journal of Business & Economic Statistics*, 34(2), 185-196. https://doi.org/10.1080/07350015.2015.1024836
 
   The weak-identification analysis behind :class:`diff_diff.RegressionDiscontinuity`'s fuzzy weak-first-stage warning (CCT 2014 cites the working-paper version); FLM's weak-IV-robust confidence sets are a documented follow-up seam.
