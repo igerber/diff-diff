@@ -42,7 +42,7 @@ from diff_diff.conley import (
 from diff_diff.linalg import _rank_guarded_inv, solve_ols
 from diff_diff.results import SpilloverDiDResults
 from diff_diff.two_stage import _compute_gmm_corrected_meat, _LSMRUnconvergedError
-from diff_diff.utils import _iterative_fe_solve, safe_inference
+from diff_diff.utils import _iterative_fe_solve, safe_inference, validate_anticipation
 
 if TYPE_CHECKING:
     from diff_diff.survey import SurveyDesign
@@ -1695,7 +1695,8 @@ class SpilloverDiD(BaseEstimator):
         Number of pre-treatment periods where effects may occur. Treatment
         and ring-membership clocks both shift by ``-anticipation`` so the
         stage-1 untreated-and-unexposed subsample correctly excludes
-        anticipation rows.
+        anticipation rows. Must be a non-negative integer; ``bool`` is
+        rejected.
     event_study : bool, default=False
         If ``True``, emit per-event-time × ring coefficients (Butts Table
         2 staggered specification). The result's ``spillover_effects``
@@ -1768,7 +1769,7 @@ class SpilloverDiD(BaseEstimator):
         self.conley_lag_cutoff = conley_lag_cutoff
         self.cluster = cluster
         self.alpha = alpha
-        self.anticipation = anticipation
+        self.anticipation = validate_anticipation(anticipation)
         self.event_study = event_study
         self.horizon_max = horizon_max
         self.rank_deficient_action = rank_deficient_action
@@ -2186,19 +2187,15 @@ class SpilloverDiD(BaseEstimator):
         # injection); the gate cannot live up here because at this point
         # the user-supplied `cluster=<col>` has not yet been injected into
         # the survey design as the effective PSU.
-        # Validate `anticipation` up front: must be a non-negative integer.
-        # Accepting fractional or negative values would silently shift
-        # treatment timing and ring exposure beyond what the estimator's
-        # identification contract supports. Validated BEFORE the
-        # event_study / horizon_max checks because the ref_period
-        # compatibility check below computes `-1 - self.anticipation` and
-        # would otherwise raise a raw TypeError on non-numeric input
-        # (PR #456 R2 fix).
-        if not isinstance(self.anticipation, (int, np.integer)) or self.anticipation < 0:
-            raise ValueError(
-                f"anticipation must be a non-negative integer; got "
-                f"{self.anticipation!r} (type {type(self.anticipation).__name__})."
-            )
+        # In-fit `anticipation` re-check: __init__ and set_params now
+        # validate eagerly via the shared helper, so this re-assignment only
+        # catches DIRECT attribute mutation (est.anticipation = ...) — and
+        # normalizes a mutated numpy scalar to a Python int. It MUST stay
+        # ordered BEFORE the event_study / horizon_max checks because the
+        # ref_period compatibility check below computes
+        # `-1 - self.anticipation` and would otherwise raise a raw TypeError
+        # on non-numeric input (PR #456 R2 fix).
+        self.anticipation = validate_anticipation(self.anticipation)
         # Wave C: event-study path is now supported. Validate horizon_max
         # up front (fail-fast before any stage-1 work).
         if self.horizon_max is not None:

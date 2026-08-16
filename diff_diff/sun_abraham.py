@@ -42,6 +42,7 @@ from diff_diff.utils import (
     resolve_tail_df,
     safe_inference,
     snap_absorbed_regressors,
+    validate_anticipation,
     validate_df_convention,
     validate_n_bootstrap,
 )
@@ -530,6 +531,7 @@ class SunAbraham(BaseEstimator):
         - "not_yet_treated": Use never-treated and not-yet-treated units
     anticipation : int, default=0
         Number of periods before treatment where effects may occur.
+        Must be a non-negative integer; ``bool`` is rejected.
     alpha : float, default=0.05
         Significance level for confidence intervals.
     cluster : str, optional
@@ -727,7 +729,7 @@ class SunAbraham(BaseEstimator):
             )
 
         self.control_group = control_group
-        self.anticipation = anticipation
+        self.anticipation = validate_anticipation(anticipation)
         self.alpha = alpha
         self.cluster = cluster
         validate_n_bootstrap(n_bootstrap)
@@ -797,6 +799,12 @@ class SunAbraham(BaseEstimator):
         ValueError
             If required columns are missing or data validation fails.
         """
+        # Fit-time re-check: __init__ and set_params validate eagerly, so
+        # this only catches DIRECT attribute mutation (est.anticipation = ...)
+        # — an out-of-domain value silently changes the ESTIMAND. The
+        # assignment also re-normalizes a mutated numpy scalar to int.
+        self.anticipation = validate_anticipation(self.anticipation)
+
         # Validate inputs
         required_cols = [outcome, unit, time, first_treat]
         if covariates:

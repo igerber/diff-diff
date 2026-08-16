@@ -36,6 +36,7 @@ from diff_diff.utils import (
     resolve_tail_df,
     safe_inference,
     snap_absorbed_regressors,
+    validate_anticipation,
     validate_df_convention,
     validate_n_bootstrap,
     within_transform,
@@ -878,7 +879,8 @@ class WooldridgeDiD(BaseEstimator):
         comparison (tracked in ``TODO.md``).
     anticipation : int
         Number of periods before treatment onset to include as treatment cells
-        (anticipation effects).  0 means no anticipation.
+        (anticipation effects).  0 means no anticipation.  Must be a
+        non-negative integer; ``bool`` is rejected.
     demean_covariates : bool
         If True (jwdid default), ``xtvar`` covariates are demeaned within each
         cohort×period cell before entering the regression.  Set to False to
@@ -995,7 +997,6 @@ class WooldridgeDiD(BaseEstimator):
         self._validate_constructor_args(
             method=method,
             control_group=control_group,
-            anticipation=anticipation,
             bootstrap_weights=bootstrap_weights,
             vcov_type=vcov_type,
             cohort_trends=cohort_trends,
@@ -1004,7 +1005,7 @@ class WooldridgeDiD(BaseEstimator):
 
         self.method = method
         self.control_group = control_group
-        self.anticipation = anticipation
+        self.anticipation = validate_anticipation(anticipation)
         self.demean_covariates = demean_covariates
         self.alpha = alpha
         self.cluster = cluster
@@ -1037,7 +1038,6 @@ class WooldridgeDiD(BaseEstimator):
         *,
         method: str,
         control_group: str,
-        anticipation: int,
         bootstrap_weights: str,
         vcov_type: str,
         cohort_trends: bool = False,
@@ -1055,8 +1055,6 @@ class WooldridgeDiD(BaseEstimator):
             raise ValueError(
                 f"control_group must be one of {_VALID_CONTROL_GROUPS}, got {control_group!r}"
             )
-        if anticipation < 0:
-            raise ValueError(f"anticipation must be >= 0, got {anticipation}")
         if bootstrap_weights not in _VALID_BOOTSTRAP_WEIGHTS:
             raise ValueError(
                 f"bootstrap_weights must be one of {_VALID_BOOTSTRAP_WEIGHTS}, "
@@ -1145,6 +1143,16 @@ class WooldridgeDiD(BaseEstimator):
         require_arg("WooldridgeDiD.fit", "first_treat", first_treat)
         # Body-local name; the public parameter is first_treat (M-032).
         cohort = first_treat
+
+        # Fit-time re-check: __init__ and set_params validate eagerly, so
+        # this only catches DIRECT attribute mutation (est.anticipation = ...)
+        # — an out-of-domain value silently changes the ESTIMAND. The
+        # assignment also re-normalizes a mutated numpy scalar to int. Placed
+        # AFTER the cohort→first_treat rename shim so a caller who both
+        # mutated and passed the deprecated kwarg still sees the
+        # FutureWarning before the raise.
+        self.anticipation = validate_anticipation(self.anticipation)
+
         df = data.copy()
         df = _warn_and_fill_nan_cohort(df, cohort, stacklevel=2)
 

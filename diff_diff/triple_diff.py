@@ -477,7 +477,8 @@ class TripleDifference(
         deprecated ``StaggeredTripleDifference`` and die with it at 4.0.
     anticipation : int, default=0
         Number of periods before the enabling period in which units may
-        already respond. Must be a non-negative integer. Shifts each cohort's
+        already respond. Must be a non-negative integer; ``bool`` is
+        rejected. Shifts each cohort's
         base period earlier and excludes cohorts entering treatment within the
         window from the comparison group.
     base_period : str, default="varying"
@@ -636,9 +637,9 @@ class TripleDifference(
         # threshold to max(t, base) - 1, admitting cohorts treated at the
         # evaluation period as "clean" controls. Neither condition is
         # observable in the output. `bool` is rejected too - `True` would
-        # otherwise coerce to a silent one-period window. (The sibling
-        # estimators taking `anticipation` are not yet uniformly validated;
-        # aligning the family is tracked in TODO.md.)
+        # otherwise coerce to a silent one-period window. (The whole family
+        # now validates uniformly via the shared helper; see the family-wide
+        # adoption note, ledger row M-144, in REGISTRY.md.)
         validate_anticipation(anticipation)
         if base_period not in ("varying", "universal"):
             raise ValueError(f"base_period must be 'varying' or 'universal', got '{base_period}'")
@@ -708,7 +709,8 @@ class TripleDifference(
         # Staggered-mode config (M-013). Inert in 2x2x2 mode, and fit() rejects
         # any non-default value there rather than letting it pass unused.
         self.control_group = control_group
-        self.anticipation = anticipation
+        # Already validated above (early-validation ordering); normalize only.
+        self.anticipation = int(anticipation)
         self.base_period = base_period
         self.n_bootstrap = n_bootstrap
         self.bootstrap_weights = bootstrap_weights

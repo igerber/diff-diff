@@ -114,7 +114,8 @@ Variants for staggered designs:
 ### No-Anticipation
 Treatment does not affect outcomes before it is implemented. Violated when
 units adjust behavior in anticipation of future treatment. Set `anticipation=k`
-to allow k periods of anticipation.
+to allow k periods of anticipation (`k` a non-negative integer; `bool` is
+rejected).
 
 ---
 

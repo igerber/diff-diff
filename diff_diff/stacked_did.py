@@ -33,7 +33,12 @@ from diff_diff._deprecation import (
 from diff_diff.balancing import BalanceError, entropy_balance
 from diff_diff.linalg import effective_cluster_count, solve_ols
 from diff_diff.stacked_did_results import StackedDiDResults  # noqa: F401 (re-export)
-from diff_diff.utils import resolve_tail_df, safe_inference, validate_df_convention
+from diff_diff.utils import (
+    resolve_tail_df,
+    safe_inference,
+    validate_anticipation,
+    validate_df_convention,
+)
 
 __all__ = [
     "StackedDiD",
@@ -77,7 +82,8 @@ class StackedDiD(BaseEstimator):
     alpha : float, default=0.05
         Significance level for confidence intervals.
     anticipation : int, default=0
-        Number of anticipation periods. When anticipation > 0:
+        Number of anticipation periods. Must be a non-negative integer;
+        ``bool`` is rejected. When anticipation > 0:
         - Reference period shifts from e=-1 to e=-1-anticipation
         - Post-treatment includes anticipation periods (e >= -anticipation)
         - Event window expands by anticipation pre-periods
@@ -279,7 +285,7 @@ class StackedDiD(BaseEstimator):
         self.control_group = control_group
         self.cluster = cluster
         self.alpha = alpha
-        self.anticipation = anticipation
+        self.anticipation = validate_anticipation(anticipation)
         self.rank_deficient_action = rank_deficient_action
         self.vcov_type = vcov_type
         self.balance = balance
@@ -423,6 +429,14 @@ class StackedDiD(BaseEstimator):
             )
         else:
             aggregate = None
+
+        # Fit-time re-check: __init__ and set_params validate eagerly, so
+        # this only catches DIRECT attribute mutation (est.anticipation = ...)
+        # — an out-of-domain value silently changes the ESTIMAND. The
+        # assignment also re-normalizes a mutated numpy scalar to int. Placed
+        # AFTER the deprecation shim so a caller who both mutated and passed
+        # a deprecated argument still sees the FutureWarning before the raise.
+        self.anticipation = validate_anticipation(self.anticipation)
 
         # ---- Validate inputs ----
         if aggregate in ("group", "all"):

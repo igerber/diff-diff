@@ -45,7 +45,7 @@ from diff_diff.survey import (
     build_unit_first_row_index,
     compute_survey_vcov,
 )
-from diff_diff.utils import safe_inference, validate_n_bootstrap
+from diff_diff.utils import safe_inference, validate_anticipation, validate_n_bootstrap
 
 if TYPE_CHECKING:
     from diff_diff.survey import ResolvedSurveyDesign, SurveyDesign
@@ -182,7 +182,8 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
         ``P(D=d_L) > 0``) and no never-treated units present. Single-cohort only
         (multi-cohort and ``covariates=`` raise ``NotImplementedError``).
     anticipation : int, default=0
-        Number of periods of treatment anticipation.
+        Number of periods of treatment anticipation. Must be a
+        non-negative integer; ``bool`` is rejected.
     base_period : str, default="varying"
         ``"varying"`` or ``"universal"``.
     alpha : float, default=0.05
@@ -310,12 +311,18 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
         self._validate_constrained_params()
 
     def _validate_constrained_params(self) -> None:
-        """Validate control_group, base_period, and estimation_method values."""
+        """Validate control_group, base_period, and estimation_method values.
+
+        Also validates ``anticipation`` and re-assigns it as a normalized
+        Python ``int`` — idempotent on an already-normalized value, so a
+        re-run never changes fitted config.
+        """
         if self.control_group not in self._VALID_CONTROL_GROUPS:
             raise ValueError(
                 f"Invalid control_group: '{self.control_group}'. "
                 f"Must be one of {self._VALID_CONTROL_GROUPS}."
             )
+        self.anticipation = validate_anticipation(self.anticipation)
         if self.base_period not in self._VALID_BASE_PERIODS:
             raise ValueError(
                 f"Invalid base_period: '{self.base_period}'. "
@@ -441,6 +448,14 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
             )
         else:
             aggregate = None
+
+        # Fit-time re-check: __init__ and set_params validate eagerly, so
+        # this only catches DIRECT attribute mutation (est.anticipation = ...)
+        # — an out-of-domain value silently changes the ESTIMAND. The
+        # assignment also re-normalizes a mutated numpy scalar to int. Placed
+        # AFTER the deprecation shim so a caller who both mutated and passed
+        # a deprecated argument still sees the FutureWarning before the raise.
+        self.anticipation = validate_anticipation(self.anticipation)
 
         # 1. Validate & prepare
         _VALID_AGGREGATES = (None, "dose", "eventstudy")

@@ -83,6 +83,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   expression), pointing at `full_model_window=True` as the mroi route.
 
 ### Changed
+- **Family-wide `anticipation` domain validation ([M-144], landing at 4.0 —
+  the locked ladder's next release, with no warn-then-error window per the
+  M-096/M-142 precedent that validation tightenings ship immediately;
+  retires the TODO "library-wide anticipation domain validation" row).** All
+  nine anticipation-taking estimators (`CallawaySantAnna`, `SunAbraham`,
+  `ImputationDiD`, `TwoStageDiD`, `StackedDiD`, `ContinuousDiD`,
+  `EfficientDiD`, `WooldridgeDiD`, `SpilloverDiD`) now validate
+  `anticipation` at construction via the shared
+  `utils.validate_anticipation` (non-negative integer; `bool` rejected;
+  `set_params` transactional) AND re-check it on the fit path — the uniform
+  direct-mutation defense, in the assignment form that also normalizes
+  numpy scalars to built-in `int`. Previously seven of the nine accepted
+  anything, and an out-of-domain window silently changed the ESTIMAND:
+  measured, `CallawaySantAnna(anticipation=-1)` moved the overall ATT by
+  −85% and flipped its sign under `control_group="not_yet_treated"`;
+  `anticipation=True` fit bit-identically to `1` (a silent one-period
+  window); `SunAbraham(anticipation=1.5)` returned `att=nan` without
+  raising. `0` stays legal. The one break of previously-CORRECT code:
+  whole-valued floats (`anticipation=1.0`, `np.float64(1.0)`) previously
+  fit bit-identically to their integer value on
+  CS/SunAbraham/ImputationDiD/TwoStageDiD/EfficientDiD/WooldridgeDiD and
+  now raise — use the int (StackedDiD already crashed on floats via an
+  incidental `range()` TypeError, now a clear constructor `ValueError`;
+  ContinuousDiD's float behavior was fixture-dependent). Also visible:
+  accepted numpy integers are retyped — the public `anticipation`
+  attribute and `get_params()["anticipation"]` are now always built-in
+  `int`, not a numpy scalar; `WooldridgeDiD`'s message text changed to the
+  shared wording, its `None`/str raw `TypeError` became `ValueError`, and
+  its constructor error ordering moved (bad
+  `bootstrap_weights`/`vcov_type`/`df_convention` now report before a bad
+  `anticipation`); `SpilloverDiD`'s raise moved from fit to construction
+  (the fit-time re-check is retained, ordered before the ref-period
+  arithmetic), and its negative-int message dropped the `(type ...)`
+  suffix (shared text). `EfficientDiD.hausman_pretest` normalizes its own
+  `anticipation` argument (an unsigned numpy scalar previously wrapped its
+  event-time arithmetic and silently degraded the pretest to an all-NaN
+  inconclusive result). The deprecated `StaggeredTripleDifference` stays
+  construction-permissive by design (fit-validated via the shared engine).
+  Both LLM guides note the domain; policy suite:
+  `tests/test_anticipation_policy.py`.
 - **DiagnosticReport's event-study-gated checks now consume the post-fit
   `results.aggregate('event_study')` surface** (the 3.9 M-020 family;
   retires the TODO "diagnostic_report ES-gated checks" row): on a modern

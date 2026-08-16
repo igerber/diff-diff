@@ -64,7 +64,7 @@ from diff_diff.efficient_did_weights import (
     compute_omega_star_nocov,
     enumerate_valid_triples,
 )
-from diff_diff.utils import safe_inference, validate_n_bootstrap
+from diff_diff.utils import safe_inference, validate_anticipation, validate_n_bootstrap
 
 # Re-export for convenience
 __all__ = ["EfficientDiD", "EfficientDiDResults", "EDiDBootstrapResults"]
@@ -290,7 +290,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
         Random seed for reproducibility.
     anticipation : int, default 0
         Number of anticipation periods (shifts the effective treatment
-        boundary forward by this amount). When combined with
+        boundary forward by this amount). Must be a non-negative
+        integer; ``bool`` is rejected. When combined with
         ``control_group="last_cohort"``, also trims the pseudo-control
         period set at ``t >= last_g - anticipation`` (see REGISTRY.md).
     sieve_k_max : int or None
@@ -375,7 +376,12 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
         self._validate_params()
 
     def _validate_params(self) -> None:
-        """Validate constrained parameters."""
+        """Validate constrained parameters.
+
+        Also validates ``anticipation`` and re-assigns it as a normalized
+        Python ``int`` — idempotent on an already-normalized value, so the
+        fit-time re-run never changes fitted config.
+        """
         if self.pt_assumption not in ("all", "post"):
             raise ValueError(f"pt_assumption must be 'all' or 'post', got '{self.pt_assumption}'")
         if self.control_group not in ("never_treated", "last_cohort"):
@@ -383,6 +389,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
                 f"control_group must be 'never_treated' or 'last_cohort', "
                 f"got '{self.control_group}'"
             )
+        self.anticipation = validate_anticipation(self.anticipation)
         valid_weights = ("rademacher", "mammen", "webb")
         if self.bootstrap_weights not in valid_weights:
             raise ValueError(
@@ -1544,7 +1551,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
         cluster : str, optional
             Cluster column for cluster-robust covariance.
         anticipation : int
-            Anticipation periods.
+            Anticipation periods. Must be a non-negative integer; ``bool``
+            is rejected.
         control_group : str
             ``"never_treated"`` or ``"last_cohort"``.
         alpha : float
@@ -1557,6 +1565,12 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
         -------
         HausmanPretestResult
         """
+        # The classmethod uses `anticipation` in its OWN event-time
+        # arithmetic (`e < -ant` below), not just forwarding to the two
+        # constructed estimators — validate and normalize it here so an
+        # unsigned numpy scalar cannot wrap the comparison.
+        anticipation = validate_anticipation(anticipation)
+
         # Fit under both assumptions (analytical SEs only, no bootstrap)
         common_kwargs = dict(
             cluster=cluster,

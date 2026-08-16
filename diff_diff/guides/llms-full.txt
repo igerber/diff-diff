@@ -206,7 +206,7 @@ Callaway-Sant'Anna (2021) estimator for staggered DiD with heterogeneous treatme
 ```python
 CallawaySantAnna(
     control_group: str = "never_treated",        # "never_treated" or "not_yet_treated"
-    anticipation: int = 0,                       # Anticipation periods
+    anticipation: int = 0,                       # Anticipation periods (non-negative integer; bool rejected)
     estimation_method: str = "dr",               # "dr", "ipw", or "reg"
     alpha: float = 0.05,
     cluster: str | None = None,                  # Cluster col; activates CR1 on the IF via synthesized SurveyDesign(psu=col). None → per-unit IF.
@@ -383,7 +383,7 @@ Sun-Abraham (2021) interaction-weighted estimator for staggered DiD.
 ```python
 SunAbraham(
     control_group: str = "never_treated",        # "never_treated" or "not_yet_treated"
-    anticipation: int = 0,
+    anticipation: int = 0,  # non-negative integer; bool rejected
     alpha: float = 0.05,
     cluster: str | None = None,                  # Defaults to unit-level clustering (dropped on explicit vcov_type='hc2' / 'classical')
     n_bootstrap: int = 0,                        # 0 = analytical cluster-robust SEs
@@ -431,7 +431,7 @@ Borusyak-Jaravel-Spiess (2024) imputation DiD estimator. Efficient estimator pro
 
 ```python
 ImputationDiD(
-    anticipation: int = 0,
+    anticipation: int = 0,  # non-negative integer; bool rejected
     alpha: float = 0.05,
     cluster: str | None = None,                  # Defaults to unit-level clustering
     vcov_type: str = "hc1",                      # {"hc1"} only — IF-based variance per Borusyak et al. (2024) Theorem 3
@@ -484,7 +484,7 @@ Gardner (2022) two-stage DiD estimator. Point estimates match ImputationDiD; use
 
 ```python
 TwoStageDiD(
-    anticipation: int = 0,
+    anticipation: int = 0,  # non-negative integer; bool rejected
     alpha: float = 0.05,
     cluster: str | None = None,
     n_bootstrap: int = 0,
@@ -540,7 +540,7 @@ SpilloverDiD(
     conley_lag_cutoff: int | None = None,
     cluster: str | None = None,
     alpha: float = 0.05,
-    anticipation: int = 0,
+    anticipation: int = 0,  # non-negative integer; bool rejected
     event_study: bool = False,           # Wave C: per-event-time × ring decomposition (Butts Table 2)
     horizon_max: int | None = None,      # Bin event-times outside [-H,+H] into endpoint pools (event-study mode); H>=1 or None — H=0 rejected (use event_study=False for aggregate spec)
     rank_deficient_action: str = "warn",
@@ -709,6 +709,8 @@ TripleDifference(
 
 **Alias:** `DDD`
 
+Staggered mode (`fit(first_treat=...)`) adds constructor params not shown here — `anticipation` (non-negative integer; `bool` rejected), `control_group`, `base_period`, `n_bootstrap` (non-default values of these FOUR are rejected in 2x2x2 mode; the defaults are fine), plus `bootstrap_weights`/`seed`/`cband` (accepted but inert in 2x2x2 — unreachable without `n_bootstrap > 0`, per the M-013 ledger note).
+
 **fit() parameters:**
 
 ```python
@@ -743,7 +745,7 @@ ContinuousDiD(
     num_knots: int = 0,                       # Interior knots
     dvals: np.ndarray | None = None,          # Custom dose evaluation grid
     control_group: str = "never_treated",     # "never_treated", "not_yet_treated", or "lowest_dose" (Remark 3.1, P(D=0)=0)
-    anticipation: int = 0,
+    anticipation: int = 0,  # non-negative integer; bool rejected
     base_period: str = "varying",             # "varying" or "universal"
     alpha: float = 0.05,
     n_bootstrap: int = 0,
@@ -1047,7 +1049,7 @@ StackedDiD(
     clean_control: str | None = None,         # DEPRECATED alias for control_group= (M-043; FutureWarning, removed in 4.0)
     cluster: str = "unit",                    # "unit" or "unit_subexp"
     alpha: float = 0.05,
-    anticipation: int = 0,
+    anticipation: int = 0,  # non-negative integer; bool rejected
     rank_deficient_action: str = "warn",
     vcov_type: str = "hc1",                   # {"hc1","hc2_bm"}; classical/hc2 rejected (intrinsically clustered), conley deferred. survey_design=... requires hc1
     balance: str = "none",                    # {"none","entropy"}; "entropy" = CBWSDID covariate balancing (Ustyuzhanin 2026), requires fit(covariates=[...]) + weighting="aggregate", no survey_design
@@ -1099,7 +1101,7 @@ EfficientDiD(
     n_bootstrap: int = 0,                    # Multiplier bootstrap iterations
     bootstrap_weights: str = "rademacher",   # "rademacher", "mammen", or "webb"
     seed: int | None = None,
-    anticipation: int = 0,
+    anticipation: int = 0,  # non-negative integer; bool rejected
     omega_ridge: float = 1e-6,               # Ridge for the Omega* inversion behind the efficient weights (PT-All's overidentified moments make sample Omega* numerically singular); 0 = legacy exact-inverse/pseudoinverse path. See the Omega* ridge Note in the methodology registry.
 )
 ```
@@ -1352,7 +1354,7 @@ StaggeredTripleDifference(
     estimation_method: str = "dr",          # "dr", "ipw", or "reg"
     control_group: str = "notyettreated",   # "nevertreated" or "notyettreated"
     alpha: float = 0.05,
-    anticipation: int = 0,
+    anticipation: int = 0,  # validated at fit(); construction stays permissive (deprecated class, frozen shape)
     base_period: str = "varying",           # "varying" or "universal"
     n_bootstrap: int = 0,
     bootstrap_weights: str = "rademacher",
@@ -1405,7 +1407,7 @@ Wooldridge (2023, 2025) Extended Two-Way Fixed Effects (ETWFE) estimator. OLS pa
 WooldridgeDiD(
     method: str = "ols",                    # "ols", "logit", or "poisson"
     control_group: str = "not_yet_treated", # "not_yet_treated" or "never_treated"
-    anticipation: int = 0,                  # Number of anticipation periods
+    anticipation: int = 0,                  # Number of anticipation periods (non-negative integer; bool rejected)
     demean_covariates: bool = True,         # Demean covariates within cohort*period cells
     alpha: float = 0.05,
     cluster: str | None = None,

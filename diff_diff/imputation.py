@@ -48,6 +48,7 @@ from diff_diff.imputation_results import (  # noqa: F401 (re-export)
 )
 from diff_diff.utils import (
     safe_inference,
+    validate_anticipation,
     validate_df_convention,
     validate_n_bootstrap,
 )
@@ -82,6 +83,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
     ----------
     anticipation : int, default=0
         Number of periods before treatment where effects may occur.
+        Must be a non-negative integer; ``bool`` is rejected.
     alpha : float, default=0.05
         Significance level for confidence intervals.
     cluster : str, optional
@@ -234,7 +236,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
         self._validate_leave_one_out(leave_one_out)
         validate_df_convention(df_convention)
 
-        self.anticipation = anticipation
+        self.anticipation = validate_anticipation(anticipation)
         self.alpha = alpha
         self.cluster = cluster
         self.vcov_type = vcov_type
@@ -352,6 +354,10 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
         # attribute mutation (est.vcov_type = ...).
         self._validate_vcov_type(self.vcov_type)
         self._validate_leave_one_out(self.leave_one_out)
+        # Same direct-mutation defense for the anticipation window (an
+        # out-of-domain value silently changes the ESTIMAND); the assignment
+        # also re-normalizes a mutated numpy scalar to a Python int.
+        self.anticipation = validate_anticipation(self.anticipation)
 
         # Validate inputs
         required_cols = [outcome, unit, time, first_treat]

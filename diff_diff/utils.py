@@ -550,8 +550,14 @@ def staggered_ddd_ctor_offenders(estimator: Any) -> List[str]:
     ]
 
 
-def validate_anticipation(anticipation: Any) -> None:
-    """Raise ValueError unless ``anticipation`` is a non-negative integer.
+def validate_anticipation(anticipation: Any) -> int:
+    """Validate ``anticipation`` and return it as a normalized Python ``int``.
+
+    Raises ``ValueError`` unless the value is a non-negative integer; on
+    success returns ``int(anticipation)`` so numpy integers are normalized at
+    the assignment site (``self.anticipation = validate_anticipation(...)``)
+    before any ``-1 - anticipation``-style arithmetic can overflow on an
+    unsigned numpy scalar.
 
     An out-of-domain anticipation window does not fail loudly on its own — it
     silently changes the ESTIMAND. On the staggered DDD engine the value feeds
@@ -565,9 +571,14 @@ def validate_anticipation(anticipation: Any) -> None:
     one-period window. Numpy integers are accepted, matching
     :func:`validate_n_bootstrap`, whose shape this follows.
 
-    Adopted by ``TripleDifference`` and the shared staggered engine (so the
-    deprecated ``StaggeredTripleDifference`` fails closed too). The remaining
-    estimators taking ``anticipation`` are tracked for alignment in TODO.md.
+    Adopted at ``__init__`` by all nine anticipation-taking estimators
+    (CallawaySantAnna, SunAbraham, ImputationDiD, TwoStageDiD, StackedDiD,
+    ContinuousDiD, EfficientDiD, WooldridgeDiD, SpilloverDiD) plus
+    ``TripleDifference``, and RE-CHECKED on the fit path on all of them —
+    the uniform direct-mutation defense: manual re-assignments on seven,
+    EfficientDiD via its ``_validate_params`` re-run, SpilloverDiD via its
+    in-fit check, TripleDifference and the deprecated
+    ``StaggeredTripleDifference`` via the shared staggered engine.
     """
     if isinstance(anticipation, bool) or not isinstance(anticipation, (int, np.integer)):
         raise ValueError(
@@ -576,6 +587,7 @@ def validate_anticipation(anticipation: Any) -> None:
         )
     if anticipation < 0:
         raise ValueError(f"anticipation must be a non-negative integer; got {anticipation!r}.")
+    return int(anticipation)
 
 
 def resolve_tail_df(

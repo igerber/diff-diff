@@ -4,6 +4,7 @@ Step 1 surface: ring-construction helpers and the public class scaffold.
 Step 2+ surfaces are added incrementally as the implementation lands.
 """
 
+import re
 import warnings
 from typing import Dict, Optional
 
@@ -2433,18 +2434,43 @@ class TestSpilloverDiDOmega0Connectivity:
 
 class TestSpilloverDiDAnticipationValidation:
     """anticipation must be a non-negative integer. Round-9 codex review
-    caught that fractional / negative values silently shifted timing.
+    caught that fractional / negative values silently shifted timing; the
+    family-wide sweep (ledger row M-144) moved the raise to construction
+    via the shared ``utils.validate_anticipation``, keeping the in-fit
+    re-check as the direct-mutation defense.
     """
 
-    @pytest.mark.parametrize("bad_value", [-1, 0.5, 1.5, -0.1])
-    def test_invalid_anticipation_raises_treatment_path(self, bad_value):
+    @pytest.mark.parametrize(
+        ("bad_value", "message"),
+        [
+            # -1 takes the validator's NEGATIVE branch (no type suffix);
+            # the floats take the TYPE branch.
+            (-1, "anticipation must be a non-negative integer; got -1."),
+            (0.5, "anticipation must be a non-negative integer; got 0.5 (type float)."),
+            (1.5, "anticipation must be a non-negative integer; got 1.5 (type float)."),
+            (-0.1, "anticipation must be a non-negative integer; got -0.1 (type float)."),
+        ],
+    )
+    def test_invalid_anticipation_raises_at_construction(self, bad_value, message):
+        with pytest.raises(ValueError, match=re.escape(message)):
+            SpilloverDiD(
+                rings=[0.0, 100.0],
+                conley_coords=("lat", "lon"),
+                anticipation=bad_value,
+            )
+
+    def test_mutated_anticipation_raises_at_fit_treatment_path(self):
+        """Direct-mutation defense on the treatment path: ``True`` is the one
+        value the OLD inline fit check accepted (bool is an int subclass and
+        not ``< 0``), so this pin detects a failure to actually swap in the
+        shared helper — the in-fit re-check must reject it."""
         df = _make_butts_2period_dgp(seed=42)
         est = SpilloverDiD(
             rings=[0.0, 100.0],
             conley_coords=("lat", "lon"),
-            anticipation=bad_value,
         )
-        with pytest.raises(ValueError, match="anticipation"):
+        est.anticipation = True
+        with pytest.raises(ValueError, match="anticipation must be a non-negative integer"):
             est.fit(df, outcome="y", unit="unit", time="time", treatment="D")
 
 
@@ -3464,10 +3490,13 @@ class TestSpilloverDiDEventStudyValidation:
         with pytest.raises(ValueError, match="horizon_max=0 is not supported"):
             est.fit(df, outcome="y", unit="unit", time="time", first_treat="first_treat")
 
-    def test_non_numeric_anticipation_raises_targeted_value_error(self):
-        """PR #456 R2 P2: anticipation must be validated BEFORE the ref_period
-        compatibility check; otherwise `-1 - self.anticipation` would raise a
-        raw TypeError on non-numeric input instead of the targeted ValueError."""
+    def test_mutated_anticipation_raises_targeted_value_error(self):
+        """Direct-mutation defense on the event-study path (ledger row
+        M-144): construction now validates eagerly, so the value is mutated
+        AFTER construction. ``True`` is what the OLD inline fit check
+        accepted (bool is an int subclass and not ``< 0``), so this pin
+        detects a failure to actually swap the in-fit check for the shared
+        helper."""
         df = generate_butts_staggered_dgp(seed=1)
         est = SpilloverDiD(
             rings=[0.0, 50.0, 200.0],
@@ -3475,13 +3504,17 @@ class TestSpilloverDiDEventStudyValidation:
             conley_coords=("lat", "lon"),
             event_study=True,
             horizon_max=2,
-            anticipation="1",  # type: ignore[arg-type]
         )
+        est.anticipation = True
         with pytest.raises(ValueError, match="anticipation must be a non-negative integer"):
             est.fit(df, outcome="y", unit="unit", time="time", first_treat="first_treat")
 
     def test_none_anticipation_raises_targeted_value_error(self):
-        """Same P2 fix: None anticipation must surface the targeted ValueError."""
+        """PR #456 R2 ordering pin: the in-fit anticipation re-check must run
+        BEFORE the ref_period compatibility arithmetic. This test KEEPS
+        ``None`` deliberately — `-1 - None` would raise a raw TypeError if
+        the in-fit check ever moved after the ref-period arithmetic, whereas
+        ``True`` arithmetic evaluates cleanly and cannot detect reordering."""
         df = generate_butts_staggered_dgp(seed=1)
         est = SpilloverDiD(
             rings=[0.0, 50.0, 200.0],
@@ -3489,8 +3522,8 @@ class TestSpilloverDiDEventStudyValidation:
             conley_coords=("lat", "lon"),
             event_study=True,
             horizon_max=2,
-            anticipation=None,  # type: ignore[arg-type]
         )
+        est.anticipation = None
         with pytest.raises(ValueError, match="anticipation must be a non-negative integer"):
             est.fit(df, outcome="y", unit="unit", time="time", first_treat="first_treat")
 

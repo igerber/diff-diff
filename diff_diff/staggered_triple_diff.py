@@ -85,7 +85,9 @@ class StaggeredTripleDifference(
     alpha : float, default=0.05
         Significance level.
     anticipation : int, default=0
-        Number of anticipation periods.
+        Number of anticipation periods. Must be a non-negative integer;
+        ``bool`` is rejected - validated at ``fit()`` (construction stays
+        permissive on this deprecated class).
     base_period : str, default="varying"
         Base period selection: "varying" (consecutive comparisons) or
         "universal" (always vs g-1-anticipation).

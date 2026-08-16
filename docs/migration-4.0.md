@@ -216,8 +216,18 @@ each one with its target.
 ## Remaining 4.0 changes
 
 Smaller items that do not fit the families above — two inert `SyntheticDiD` constructor
-parameters, the `covariates=` constructor-to-`fit()` move, a retired transition warning, and the
-Bacon roster re-homing. See the appendix.
+parameters, the `covariates=` constructor-to-`fit()` move, a retired transition warning, the
+Bacon roster re-homing, and the family-wide `anticipation` validation below. The appendix lists
+the ledger-derived removals/flips; [M-144] is a behavior tightening with no removal/deprecation
+fields and appears here only.
+
+- `anticipation` is validated across the family ([M-144], landing at 4.0): whole-valued floats
+  that previously fit identically to their integer now raise — pass the `int`; bool and
+  negative/non-integer values raise too. Accepted numpy integers are normalized, so the public
+  `anticipation` attribute and `get_params()["anticipation"]` are now always built-in `int`
+  (previously a numpy scalar survived). WooldridgeDiD's error message text changed to the shared
+  wording, and its constructor now reports a bad `bootstrap_weights`/`vcov_type`/`df_convention`
+  before a bad `anticipation` (the ordering flipped).
 
 One pending decision: the `DIFF_DIFF_SOLVE_OLS_FASTPATH` environment default has a go/no-go due
 at 4.0 that has not been made. If it lands on, it is a numerics change and will be documented

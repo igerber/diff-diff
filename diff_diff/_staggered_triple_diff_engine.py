@@ -64,10 +64,13 @@ class _StaggeredTripleDiffEngineMixin:
     supply the constructor attributes and the CS aggregation/bootstrap mixins
     this core calls. The annotations below exist because mypy type-checks this
     class independently of its hosts (`attr-defined` is not disabled) - they are
-    declarations, never assignments.
+    declarations, never assignments — with ONE exception: `anticipation` is
+    re-assigned by the core's fit-time re-validation (the mutation-defense
+    re-check normalizes it to a Python int; see `_fit_staggered_core`).
     """
 
-    # Constructor attributes read from the host class.
+    # Constructor attributes read from the host class. (`anticipation` is
+    # additionally RE-ASSIGNED at fit — the validate-and-normalize re-check.)
     estimation_method: str
     control_group: str
     alpha: float
@@ -178,8 +181,10 @@ class _StaggeredTripleDiffEngineMixin:
             # the deprecated StaggeredTripleDifference (whose 3.x API SHAPE is
             # frozen through removal - that freeze was never a licence to emit
             # silently-biased numbers) and direct attribute mutation on either
-            # class, which bypasses __init__ and set_params alike.
-            validate_anticipation(self.anticipation)
+            # class, which bypasses __init__ and set_params alike. The
+            # assignment form also normalizes a numpy scalar to a Python int
+            # before any `g - 1 - anticipation` arithmetic can overflow.
+            self.anticipation = validate_anticipation(self.anticipation)
             from diff_diff.survey import (
                 _resolve_survey_for_fit,
                 _validate_unit_constant_survey,

@@ -38,7 +38,12 @@ from diff_diff.staggered_results import (
     CallawaySantAnnaResults,
     GroupTimeEffect,
 )
-from diff_diff.utils import safe_inference, safe_inference_batch, validate_n_bootstrap
+from diff_diff.utils import (
+    safe_inference,
+    safe_inference_batch,
+    validate_anticipation,
+    validate_n_bootstrap,
+)
 
 if TYPE_CHECKING:
     from diff_diff.survey import SurveyDesign
@@ -315,7 +320,8 @@ class CallawaySantAnna(
     anticipation : int, default=0
         Number of periods before treatment where effects may occur.
         Set to > 0 if treatment effects can begin before the official
-        treatment date.
+        treatment date. Must be a non-negative integer; ``bool`` is
+        rejected.
     estimation_method : str, default="dr"
         Estimation method:
         - "dr": Doubly robust (recommended)
@@ -608,7 +614,7 @@ class CallawaySantAnna(
         self._validate_vcov_type(vcov_type)
 
         self.control_group = control_group
-        self.anticipation = anticipation
+        self.anticipation = validate_anticipation(anticipation)
         self.estimation_method = estimation_method
         self.alpha = alpha
         self.cluster = cluster
@@ -1952,6 +1958,10 @@ class CallawaySantAnna(
         # second layer only catches DIRECT attribute mutation
         # (est.vcov_type = ...) before it propagates to Results metadata.
         self._validate_vcov_type(self.vcov_type)
+        # Same direct-mutation defense for the anticipation window (an
+        # out-of-domain value silently changes the ESTIMAND); the assignment
+        # also re-normalizes a mutated numpy scalar to a Python int.
+        self.anticipation = validate_anticipation(self.anticipation)
 
         # --- allow_unbalanced_panel routing (RC-on-panel = R's allow_unbalanced_panel) ---
         # Detect an unbalanced panel (some units unobserved in some periods).
