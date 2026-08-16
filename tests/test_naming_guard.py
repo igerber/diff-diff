@@ -1020,6 +1020,13 @@ CONSUMER_ALLOWLIST = {
         "canonical successor method; HAD-section fit-time mode mentions "
         "were migrated with M-027"
     ),
+    ("period_effects", "docs/methodology/REGISTRY.md"): (
+        "the LWDiD API-conformance/aggregation Notes name PR #588's "
+        "pre-release `period_effects` surface being RETIRED before it ever "
+        "ships - not a read of MultiPeriodDiDResults.period_effects (M-016), "
+        "whose reader inventory this registry entry documents rather than "
+        "consumes"
+    ),
     ("aggregate", "docs/methodology/REPORTING.md"): (
         "canonical post-fit aggregate() mention only (zero fit-time "
         "kwarg sites; the fit-time-population clause was reworded with "
