@@ -497,31 +497,29 @@ _TEXT_BLOCK_RE = re.compile(
 
 
 def test_quickstart_pinned_summary_output():
-    """quickstart.rst's pinned ``summary()`` output matches the seeded run.
+    """quickstart.rst's pinned ``summary()`` output matches its own example.
 
     The snippet harness executes python blocks but ignores
     ``code-block:: text``, so the documented output could otherwise drift
     silently while CI stays green. The example is fully seeded, so the
-    printed block is reproducible and can be pinned exactly; keep the
-    generator call here in sync with the quickstart basic example.
+    printed block is reproducible and can be pinned exactly. Executing the
+    quickstart's own leading blocks (rather than a duplicated setup) also
+    catches the converse drift: editing the example's generator arguments
+    without re-pinning the printed block.
     """
-    import diff_diff
-
-    text = (DOCS_DIR / "quickstart.rst").read_text()
-    blocks = [textwrap.dedent(m.group(1)) for m in _TEXT_BLOCK_RE.finditer(text)]
+    rst_path = DOCS_DIR / "quickstart.rst"
+    blocks = [textwrap.dedent(m.group(1)) for m in _TEXT_BLOCK_RE.finditer(rst_path.read_text())]
     assert len(blocks) == 1, "expected exactly one text block in quickstart.rst"
     documented = [ln.rstrip() for ln in blocks[0].strip().splitlines()]
 
-    data = diff_diff.generate_did_data(
-        n_units=100,
-        n_periods=10,
-        treatment_effect=5.0,
-        treatment_period=5,
-        treatment_fraction=0.5,
-        seed=42,
-    )
-    results = diff_diff.DifferenceInDifferences().fit(
-        data, outcome="outcome", treatment="treated", post="post"
-    )
-    actual = [ln.rstrip() for ln in results.summary().strip().splitlines()]
+    # Execute the quickstart's own blocks, in order, until the basic
+    # example's ``results`` exists (the imports + seeded generate/fit block).
+    ns: dict = {"__builtins__": __builtins__}
+    for _, code in _extract_snippets(rst_path):
+        exec(compile(code, "<quickstart-pinned>", "exec"), ns)
+        if "results" in ns:
+            break
+    assert "results" in ns, "quickstart basic example no longer defines 'results'"
+
+    actual = [ln.rstrip() for ln in ns["results"].summary().strip().splitlines()]
     assert actual == documented
