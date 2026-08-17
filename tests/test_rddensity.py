@@ -505,7 +505,11 @@ class TestMethodology:
         r1 = _fit_quiet(RDDensityTest(cutoff=0.0), x)
         r2 = _fit_quiet(RDDensityTest(cutoff=10.0), 3.5 * x + 10.0)
         assert r1.t_stat == pytest.approx(r2.t_stat, rel=1e-9)
-        assert r1.p_value == pytest.approx(r2.p_value, rel=1e-9)
+        # p inherits the t-stat's relative error amplified by t*phi(t)/p
+        # (~3x at this seed's |t|~2.26), so its tolerance must sit above the
+        # t-stat's or BLAS-kernel rounding differences across CI runners can
+        # trip it (run #3384: rel diff 1.15e-9 on ubuntu py3.14 only).
+        assert r1.p_value == pytest.approx(r2.p_value, rel=1e-8)
         # densities scale by 1/s
         assert r1.f_left == pytest.approx(r2.f_left * 3.5, rel=1e-9)
         assert df1 is not df2
