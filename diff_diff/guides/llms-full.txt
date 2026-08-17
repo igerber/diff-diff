@@ -2,7 +2,7 @@
 
 > A Python library for Difference-in-Differences causal inference analysis. Provides sklearn-like estimators with statsmodels-style output for econometric analysis.
 
-- Version: 3.9.0
+- Version: 3.9.1
 - Repository: https://github.com/igerber/diff-diff
 - License: MIT
 - Dependencies: numpy, pandas, scipy (no statsmodels dependency)
