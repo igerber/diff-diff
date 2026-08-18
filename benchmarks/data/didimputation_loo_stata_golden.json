@@ -3,9 +3,10 @@
     "estimator": "ImputationDiD leave-one-out (BJS 2024 App. A.9) SE - Stata did_imputation leaveout",
     "generator": "benchmarks/stata/generate_imputation_loo_golden.do",
     "source_panel": "benchmarks/data/didimputation_test_panel.csv",
-    "point_anchor": "benchmarks/data/didimputation_golden.json (overall.att, event_study.att)",
-    "cmd": "did_imputation y unit time Ei, [horizons(0/5)] leaveout avgeffectsby(Ei t) cluster(unit)",
-    "avgeffectsby": "Ei t (== library aux_partition=cohort_horizon; pinned explicitly)",
+    "point_anchor": "benchmarks/data/didimputation_golden.json (overall.att, event_study.att) for the balanced arms; library-computed (informational) for the unbalanced block",
+    "cmd": "did_imputation y unit time Ei, [horizons(0/5)] [leaveout] avgeffectsby(Ei t | Ei | K) cluster(unit); unbalanced block re-runs all three partitions on the subsample",
+    "avgeffectsby": "default arm: Ei t (== library aux_partition=cohort_horizon; pinned explicitly)",
+    "avgeffectsby_variants": "Ei == cohort, K == horizon (K = t - Ei); each pinned explicitly",
     "se_convention": "A.9 leave-one-out finite-sample variance; unit-clustered; se_nonloo is the non-leaveout cluster SE (== R didimputation).",
     "ssc_versions": {
       "did_imputation": "Version: November 22, 2023",
@@ -24,5 +25,26 @@
     "3": {"att": 2.4998545630646829, "se": 0.029299586939814812, "se_nonloo": 0.029048460851672311},
     "4": {"att": 2.9648169454740363, "se": 0.043460391002896281, "se_nonloo": 0.043064691747540094},
     "5": {"att": 3.4673514576204787, "se": 0.043504637171120686, "se_nonloo": 0.043073537575459654}
+  },
+  "variants": {
+    "cohort": {"overall": {"att": 2.0456679010334402, "se": 0.021041161683307705, "se_nonloo": 0.020879383567946323}},
+    "horizon": {
+      "overall": {"att": 2.0456678935832633, "se": 0.021135663550101814, "se_nonloo": 0.021029986100480732},
+      "event_study": {
+        "0": {"att": 0.99293657879682562, "se": 0.029291895495013806, "se_nonloo": 0.029142569815289478},
+        "1": {"att": 1.51296485612299, "se": 0.025851152972887623, "se_nonloo": 0.025729536673645869},
+        "2": {"att": 2.0064992950637248, "se": 0.03034366662276871, "se_nonloo": 0.030235883748585404},
+        "3": {"att": 2.4998545649099237, "se": 0.029638800366029311, "se_nonloo": 0.029508891639513458},
+        "4": {"att": 2.9648169169496308, "se": 0.043460391007636372, "se_nonloo": 0.043064691747399318},
+        "5": {"att": 3.4673514290960732, "se": 0.043504637175855947, "se_nonloo": 0.043073537575276655}
+      }
+    }
+  },
+  "unbalanced": {
+    "drop_rule": "mod(unit,4)==0 & time>=6",
+    "n_rows": 1305,
+    "cohort_horizon": {"att": 1.9647746285960803, "se": 0.023082924221374316, "se_nonloo": 0.022875332984551428},
+    "cohort": {"att": 1.9647746285960803, "se": 0.028488231748503588, "se_nonloo": 0.028263480747048431},
+    "horizon": {"att": 1.9647746382159736, "se": 0.023163427162940238, "se_nonloo": 0.023022816565355601}
   }
 }

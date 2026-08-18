@@ -146,15 +146,37 @@ regeneration is therefore scoped to a fixed Stata + fixed installed SSC versions
 ## What the generator does
 
 No clean-sample reconstruction: `did_imputation` consumes the raw committed R-arm panel
-`didimputation_test_panel.csv` (180 units, cohorts {3,5} + never-treated); the only
-mapping is `Ei = first_treat` (missing for never-treated). The partition is pinned
-`avgeffectsby(Ei t)` **explicitly** (== library `aux_partition="cohort_horizon"`). This
-is also `did_imputation`'s current default, but pinning it keeps the validation estimand
-self-describing and robust to a future default change. The per-horizon command is:
+`didimputation_test_panel.csv` (180 units, cohorts {3,5} + never-treated); the mappings
+are `Ei = first_treat` (missing for never-treated) and `K = time - Ei` (the relative
+time grouped on under `avgeffectsby(K)`). Every partition is pinned **explicitly**:
+`avgeffectsby(Ei t)` (== library `aux_partition="cohort_horizon"`, the default arm),
+`avgeffectsby(Ei)` (== `"cohort"`), `avgeffectsby(K)` (== `"horizon"`). `Ei t` is also
+`did_imputation`'s current default, but pinning each keeps the validation estimand
+self-describing and robust to a future default change. The default arm's per-horizon
+command is:
 
 ```stata
 did_imputation y unit time Ei, horizons(0/5) leaveout avgeffectsby(Ei t) cluster(unit)
 ```
+
+## Coarser-partition variants + unbalanced subsample
+
+The `variants` block anchors the coarser `aux_partition` values on the same balanced
+panel: `horizon` at the overall AND horizons 0..5 (its per-horizon SEs genuinely differ
+from the default at h=0..3 and coincide at the single-cohort horizons h=4,5), `cohort`
+at the overall only — because on a BALANCED panel the cohort partition is an
+**arithmetic identity** with the default (only `v != 0` rows contribute per group; the
+generator asserts the degeneracy at `reldif < 1e-6`, observed ~1e-12, and the Python
+gate 7 pins it committed-vs-committed at 1e-9). The `unbalanced` block is where
+`cohort` genuinely bites: a deterministic subsample (`drop if mod(unit,4)==0 &
+time>=6`, N=1305 — reconstructed identically in pandas by the test; the row count alone
+does not identify the subsample, the numeric parity gates do) re-runs all three
+partitions at the overall, with the cohort LOO SE measuring ~23% above the default's.
+The unbalanced point pin is **library-anchored** (no R anchor exists for the subsample;
+informational — the Python test is authoritative). Under `leave_one_out=True` the
+`horizon` partition's SE can be *smaller* than the default's (parity panel h=2), so
+"coarser ⇒ more conservative" is typical, not guaranteed — recorded in the REGISTRY
+ImputationDiD partition note.
 
 Agreement is cross-implementation, not bit-identical (`did_imputation` goes through
 `reghdfe`, the library through its own sparse IF solver): the **SE** agrees to ~1e-9 and
@@ -179,10 +201,20 @@ grep -E '^r\([0-9]+\);' generate_imputation_loo_golden.log   # must print nothin
 
 ```json
 {
-  "meta": { "...": "...", "avgeffectsby": "Ei t (== cohort_horizon)",
+  "meta": { "...": "...", "avgeffectsby": "default arm: Ei t (== cohort_horizon)",
+            "avgeffectsby_variants": "Ei == cohort, K == horizon (K = t - Ei)",
             "ssc_versions": {"did_imputation": "...", "reghdfe": "...", "...": "..."} },
   "overall": {"att": <f>, "se": <LOO>, "se_nonloo": <f>, "N": <int>},
-  "event_study": { "0": {"att": <f>, "se": <LOO>, "se_nonloo": <f>}, "...": "..." }
+  "event_study": { "0": {"att": <f>, "se": <LOO>, "se_nonloo": <f>}, "...": "..." },
+  "variants": {
+    "cohort":  {"overall": {"att": <f>, "se": <LOO>, "se_nonloo": <f>}},
+    "horizon": {"overall": {"...": "..."}, "event_study": {"0": {"...": "..."}, "...": "..."}}
+  },
+  "unbalanced": {
+    "drop_rule": "mod(unit,4)==0 & time>=6", "n_rows": 1305,
+    "cohort_horizon": {"att": <f>, "se": <LOO>, "se_nonloo": <f>},
+    "cohort": {"...": "..."}, "horizon": {"...": "..."}
+  }
 }
 ```
 

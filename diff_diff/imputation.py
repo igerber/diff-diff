@@ -114,9 +114,15 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
         computed for abs(h) <= horizon_max.
     aux_partition : str, default="cohort_horizon"
         Controls the auxiliary model partition for Theorem 3 variance:
-        - "cohort_horizon": Groups by cohort x relative time (tightest SEs)
-        - "cohort": Groups by cohort only (more conservative)
-        - "horizon": Groups by relative time only (more conservative)
+        - "cohort_horizon": Groups by cohort x relative time (finest)
+        - "cohort": Groups by cohort only (coarser)
+        - "horizon": Groups by relative time only (coarser)
+        Coarser partitions pool more observations per auxiliary group and are
+        typically -- but not necessarily -- more conservative: on a balanced
+        panel with uniform weights "cohort" coincides exactly with the default,
+        and per-horizon "horizon" SEs can be smaller than the default's under
+        ``leave_one_out=True`` (measured against Stata ``did_imputation
+        avgeffectsby()``; see the REGISTRY ImputationDiD partition note).
     pretrends : bool, default=False
         If True, event study includes pre-treatment horizons for visual
         pre-trends assessment. Pre-period effects should be ~0 under

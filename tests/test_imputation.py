@@ -827,36 +827,51 @@ class TestImputationVariance:
         )
         assert results.overall_se > 0
 
-    def test_coarser_partition_more_conservative(self):
-        """Test that coarser partition gives more conservative (larger) SEs."""
+    def test_cohort_partition_coincides_on_balanced_uniform_panel(self):
+        """On a BALANCED panel with uniform weights the cohort partition is an
+        arithmetic identity with the default cohort_horizon: only v != 0 rows
+        contribute to a group's Eq. 8 aggregate, and the uniform-weight overall
+        makes the cohort mean equal the mean of cell means. Coarser is therefore
+        "typically, not guaranteed" more conservative - see REGISTRY
+        ## ImputationDiD, Note (deviation from R). The identity is the strongest
+        pin on this DGP (the old ordering assertion was a one-sided band around
+        this exact equality); genuine divergence is asserted by the companion
+        test below on an unbalanced subsample.
+        """
         data = generate_test_data(n_units=200, seed=42)
 
-        est_fine = ImputationDiD(aux_partition="cohort_horizon")
-        results_fine = est_fine.fit(
-            data,
-            outcome="outcome",
-            unit="unit",
-            time="time",
-            first_treat="first_treat",
+        kwargs = dict(outcome="outcome", unit="unit", time="time", first_treat="first_treat")
+        results_fine = ImputationDiD(aux_partition="cohort_horizon").fit(data, **kwargs)
+        results_coarse = ImputationDiD(aux_partition="cohort").fit(data, **kwargs)
+
+        # rtol=0: numpy's default rtol=1e-7 would mask the identity pin.
+        np.testing.assert_allclose(
+            results_coarse.overall_se, results_fine.overall_se, rtol=0, atol=1e-12
         )
 
-        est_coarse = ImputationDiD(aux_partition="cohort")
-        results_coarse = est_coarse.fit(
-            data,
-            outcome="outcome",
-            unit="unit",
-            time="time",
-            first_treat="first_treat",
-        )
+    def test_coarser_partition_diverges_on_unbalanced_panel(self):
+        """Companion to the identity test: on an unbalanced subsample the coarse
+        partitions genuinely diverge from the default (a unit contributes several
+        observations to a group with non-uniform effective weighting). Margins are
+        measurement-derived on this DGP: cohort/fine = 1.0159, horizon/fine =
+        1.0051 (non-LOO; under leave_one_out=True the horizon ratio inverts to
+        0.9986 - the "coarser => more conservative" heuristic is typical, not
+        guaranteed). No golden dependency: this is the divergence coverage that
+        runs even where benchmarks/data/ is absent.
+        """
+        data = generate_test_data(n_units=200, seed=42)
+        # Drop the last 3 periods (t >= 7 on the t=0..9 panel) for every 4th unit;
+        # a 2-period drop does not clear the 1.01 margin (measured 1.0092).
+        sub = data.loc[(data["unit"] % 4 != 0) | (data["time"] < 7)]
+        assert len(sub) < len(data)
 
-        # Coarser partition pools more observations per group, so the
-        # conservative auxiliary model imposes equality over a larger set and the
-        # SE is >= the finer-partition SE. Tightened from the old 0.95 fudge: the
-        # unit-clustered Eq. 8 aggregator preserves the ordering exactly (a broken
-        # ordering would be a methodology finding, not a tolerance to relax).
-        # Meaningful coarse>fine divergence under non-uniform weights is covered
-        # in tests/test_methodology_imputation.py.
-        assert results_coarse.overall_se >= results_fine.overall_se - 1e-9
+        kwargs = dict(outcome="outcome", unit="unit", time="time", first_treat="first_treat")
+        se_fine = ImputationDiD(aux_partition="cohort_horizon").fit(sub, **kwargs).overall_se
+        se_cohort = ImputationDiD(aux_partition="cohort").fit(sub, **kwargs).overall_se
+        se_horizon = ImputationDiD(aux_partition="horizon").fit(sub, **kwargs).overall_se
+
+        assert se_cohort > se_fine * 1.01
+        assert se_horizon > se_fine * 1.002
 
     def test_invalid_aux_partition(self):
         """Test that invalid aux_partition raises ValueError."""

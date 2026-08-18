@@ -557,7 +557,7 @@ and covariate-adjusted specifications.)
 - **Untreated-residual hardening.** `_compute_residuals_untreated` now preserves NaN for missing FE (symmetric with the treated path) instead of a silent `fillna(0.0)` that could mask a rank-condition logic error (provably inert on valid data).
 
 **Deviations from the reference / library extensions** (see `REGISTRY.md` `## ImputationDiD`):
-- **Deviation from R:** `didimputation` computes the Equation 8 aggregator (`Σ v²τ̂/Σ v²`) at the cohort×event-time partition only (no partition control); at that partition it equals the unit-clustered Equation 8 = diff-diff's default `aux_partition="cohort_horizon"`. diff-diff additionally offers `aux_partition="cohort"`/`"horizon"` (validated by hand-calc, no R analogue).
+- **Deviation from R:** `didimputation` computes the Equation 8 aggregator (`Σ v²τ̂/Σ v²`) at the cohort×event-time partition only (no partition control); at that partition it equals the unit-clustered Equation 8 = diff-diff's default `aux_partition="cohort_horizon"`. diff-diff additionally offers `aux_partition="cohort"`/`"horizon"` (validated by hand-calc and Stata `avgeffectsby()` parity, no R analogue).
 - Multiplier bootstrap on the Theorem-3 influence function (library extension, not in the paper).
 - Survey-design TSL variance on the influence function (library extension).
 - NaN inference for undefined statistics; Proposition-5 refuse-to-estimate (NaN + warning).

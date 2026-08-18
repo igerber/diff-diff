@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **ImputationDiD `aux_partition` variants now anchored against Stata `did_imputation
+  avgeffectsby()` (no library behavior change beyond a docstring wording fix).** The
+  coarser `aux_partition="cohort"` / `"horizon"` groupings — previously the
+  least-validated ImputationDiD surface (no R analogue; hand-calc only) — are now
+  measured against the authors' Stata `avgeffectsby(Ei)` / `avgeffectsby(K)`
+  (`K = t − Ei`), extending the PR #712 arm
+  (`benchmarks/stata/generate_imputation_loo_golden.do` →
+  `didimputation_loo_stata_golden.json`; `tests/test_imputation_loo_stata_parity.py`
+  gates 6-10, max observed deviation ~1.3e-8 against the `abs=1e-7` gate; default-arm
+  golden values byte-identical). Coverage: `horizon` at the overall + all 6 event-study
+  horizons, `cohort` at the overall, plus a deterministic **unbalanced subsample**
+  (`mod(unit,4)==0 & time>=6`, 1305 rows) re-running all three partitions. Three
+  measured facts are now pinned: on a balanced uniform-weight panel the `cohort`
+  partition is an arithmetic identity with the default (the unbalanced block is where
+  it genuinely diverges, ~23% larger SE); the `horizon` partition genuinely differs
+  per-horizon at h=0..3 (coinciding only at the single-cohort horizons h=4,5); and
+  "coarser ⇒ more conservative" is typical but not guaranteed — under
+  `leave_one_out=True` a coarser SE can be *smaller* (h=2 inversion; every measured
+  non-LOO comparison keeps the weak ordering). The `aux_partition`
+  docstring/REGISTRY/tutorial wording was corrected accordingly, and the old
+  `test_coarser_partition_more_conservative` (whose DGP made the ordering an exact
+  equality) was replaced by an identity pin + a genuine unbalanced-divergence test.
+
 ## [3.9.1] - 2026-08-17
 
 ### Added

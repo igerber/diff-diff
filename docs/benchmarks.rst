@@ -48,7 +48,9 @@ where no runnable R reference exists:
      - Dube, Girardi, Jorda & Taylor (2025); no runnable R analogue
    * - ``ImputationDiD`` (leave-one-out SE)
      - Stata ``did_imputation, leaveout``
-     - Borusyak, Jaravel & Spiess (2024) Supp. App. A.9; no runnable R analogue
+     - Borusyak, Jaravel & Spiess (2024) Supp. App. A.9; no runnable R analogue.
+       Covers all three ``aux_partition`` values via ``avgeffectsby(Ei t | Ei | K)``,
+       plus an unbalanced subsample where the cohort partition genuinely diverges
    * - ``ETWFE`` / ``CallawaySantAnna`` (cross-check)
      - Stata ``jwdid`` / ``csdid``
      - Wooldridge (2021) ETWFE and CS via the authors' Stata implementations

@@ -298,6 +298,8 @@ sources:
         type: methodology
       - path: benchmarks/stata/README.md
         type: methodology
+      - path: docs/benchmarks.rst
+        type: performance
       - path: docs/api/imputation.rst
         type: api_reference
       - path: docs/tutorials/11_imputation_did.ipynb

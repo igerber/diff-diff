@@ -19,6 +19,10 @@
 *!
 *! Outputs (checked into the repo)
 *!   benchmarks/data/didimputation_loo_stata_golden.json
+*!     (default avgeffectsby(Ei t) arm: overall + horizons 0..5, LOO + non-LOO;
+*!      "variants" block: balanced-panel avgeffectsby(Ei) [== aux_partition="cohort",
+*!      overall] and avgeffectsby(K) [== "horizon", overall + horizons 0..5];
+*!      "unbalanced" block: deterministic subsample, all three partitions, overall)
 *!
 *! Usage (run from the repo root, AFTER benchmarks/stata/requirements.do)
 *!   /Applications/Stata/StataSE.app/Contents/MacOS/stata-se -b do \
@@ -31,15 +35,24 @@
 *!     sole owner is benchmarks/R/generate_didimputation_golden.R (180 units, cohorts
 *!     {3,5} + never-treated, t=1..8). If that panel is ever regenerated, the R golden
 *!     AND this Stata golden must both be regenerated.
-*!   - No clean-sample reconstruction: did_imputation consumes the raw panel; the only
-*!     mapping is Ei = first_treat (missing for never-treated).
-*!   - avgeffectsby(Ei t) is passed EXPLICITLY (== library aux_partition="cohort_horizon").
-*!     did_imputation currently defaults to avgeffectsby(Ei t) too; pinning it explicitly
-*!     makes the validation estimand self-describing and robust to a future default change.
-*!   - The in-.do point gate (1e-6, informational) checks the Stata coef against the
-*!     R-anchored points from didimputation_golden.json and aborts early on a gross bug.
-*!     The AUTHORITATIVE parity gate is tests/test_imputation_loo_stata_parity.py, which
-*!     compares the recomputed library output against this committed Stata golden.
+*!   - No clean-sample reconstruction: did_imputation consumes the raw panel; the
+*!     mappings are Ei = first_treat (missing for never-treated) and K = time - Ei
+*!     (the relative time did_imputation groups on under avgeffectsby(K)).
+*!   - Every avgeffectsby() partition is passed EXPLICITLY: Ei t (== library
+*!     aux_partition="cohort_horizon", the default arm), Ei (== "cohort"), K (==
+*!     "horizon"). did_imputation currently defaults to avgeffectsby(Ei t); pinning each
+*!     explicitly keeps the validation estimand self-describing and robust to a future
+*!     default change.
+*!   - The unbalanced block re-runs all three partitions on a deterministic subsample
+*!     (drop if mod(unit,4)==0 & time>=6; N=1305) because on the BALANCED panel the
+*!     cohort partition is an arithmetic identity with the default (only v!=0 rows
+*!     contribute per group), so only an unbalanced sample exercises it distinctly.
+*!   - The in-.do point gates (1e-6, informational) check the Stata coef against the
+*!     R-anchored points from didimputation_golden.json for the balanced arms, and
+*!     against a library-computed point for the unbalanced block (no R anchor exists for
+*!     the subsample) - both abort early on a gross bug. The AUTHORITATIVE parity gate is
+*!     tests/test_imputation_loo_stata_parity.py, which compares the recomputed library
+*!     output against this committed Stata golden.
 
 version 19
 clear all
@@ -149,6 +162,7 @@ quietly count
 assert r(N) == 1440          // 180 units x 8 periods
 gen Ei = first_treat
 replace Ei = . if first_treat == 0
+gen K = time - Ei
 
 * ------------------------------------------------------------------------------
 * Overall ATT: LOO + non-LOO. Coefficient is named `tau`.
@@ -177,6 +191,83 @@ forvalues h = 0/5 {
 }
 
 * ------------------------------------------------------------------------------
+* Balanced `horizon` variant: avgeffectsby(K) == library aux_partition="horizon".
+* Overall + horizons 0..5, LOO + non-LOO. Points are partition-invariant, so the
+* R-anchored rpt_* pins apply unchanged.
+* ------------------------------------------------------------------------------
+did_imputation y unit time Ei, leaveout avgeffectsby(K) cluster(unit)
+scalar att_hz_all = _b[tau]
+scalar se_hz_all  = _se[tau]
+assert reldif(att_hz_all, rpt_all) < 1e-6
+
+did_imputation y unit time Ei, avgeffectsby(K) cluster(unit)
+scalar se_hz_all_nl = _se[tau]
+
+did_imputation y unit time Ei, horizons(0/5) leaveout avgeffectsby(K) cluster(unit)
+forvalues h = 0/5 {
+    scalar att_hz_`h' = _b[tau`h']
+    scalar se_hz_`h'  = _se[tau`h']
+    assert reldif(att_hz_`h', rpt_`h') < 1e-6
+}
+did_imputation y unit time Ei, horizons(0/5) avgeffectsby(K) cluster(unit)
+forvalues h = 0/5 {
+    scalar se_hz_nl_`h' = _se[tau`h']
+}
+
+* ------------------------------------------------------------------------------
+* Balanced `cohort` variant: avgeffectsby(Ei) == library aux_partition="cohort".
+* Overall only - on this BALANCED panel the cohort partition is an arithmetic
+* identity with the default (only v!=0 rows contribute per group, and the
+* uniform-weight overall makes the cohort mean equal the mean of cell means), so
+* the assert below pins the degeneracy (observed ~1e-12; standard 1e-6 bound for
+* robustness to SSC solver drift). The distinct-cohort measurement lives in the
+* unbalanced block.
+* ------------------------------------------------------------------------------
+did_imputation y unit time Ei, leaveout avgeffectsby(Ei) cluster(unit)
+scalar att_co_all = _b[tau]
+scalar se_co_all  = _se[tau]
+assert reldif(att_co_all, rpt_all) < 1e-6
+assert reldif(se_co_all, se_all) < 1e-6
+
+did_imputation y unit time Ei, avgeffectsby(Ei) cluster(unit)
+scalar se_co_all_nl = _se[tau]
+
+* ------------------------------------------------------------------------------
+* Unbalanced subsample: drop the tail periods of every 4th unit, then re-run all
+* three partitions (overall only). This is where `cohort` genuinely diverges
+* from the default (~23% larger SE). The point pin is LIBRARY-anchored (no R
+* anchor exists for the subsample); informational - the Python test is
+* authoritative.
+* ------------------------------------------------------------------------------
+scalar rpt_ub = 1.9647746414090286
+preserve
+drop if mod(unit, 4) == 0 & time >= 6
+quietly count
+assert r(N) == 1305
+
+did_imputation y unit time Ei, leaveout avgeffectsby(Ei t) cluster(unit)
+scalar att_ub_ch = _b[tau]
+scalar se_ub_ch  = _se[tau]
+assert reldif(att_ub_ch, rpt_ub) < 1e-6
+did_imputation y unit time Ei, avgeffectsby(Ei t) cluster(unit)
+scalar se_ub_ch_nl = _se[tau]
+
+did_imputation y unit time Ei, leaveout avgeffectsby(Ei) cluster(unit)
+scalar att_ub_co = _b[tau]
+scalar se_ub_co  = _se[tau]
+assert reldif(att_ub_co, rpt_ub) < 1e-6
+did_imputation y unit time Ei, avgeffectsby(Ei) cluster(unit)
+scalar se_ub_co_nl = _se[tau]
+
+did_imputation y unit time Ei, leaveout avgeffectsby(K) cluster(unit)
+scalar att_ub_hz = _b[tau]
+scalar se_ub_hz  = _se[tau]
+assert reldif(att_ub_hz, rpt_ub) < 1e-6
+did_imputation y unit time Ei, avgeffectsby(K) cluster(unit)
+scalar se_ub_hz_nl = _se[tau]
+restore
+
+* ------------------------------------------------------------------------------
 * Emit JSON by hand at %21.17g. Reuses the LPDiD conventions: every STRING field
 * carries a trailing comma (the compound-quote `"' delimiter swallows a trailing
 * double-quote), so the meta block ENDS with a numeric field.
@@ -190,9 +281,10 @@ file write `fh' `"  "meta": {"' _n
 file write `fh' `"    "estimator": "ImputationDiD leave-one-out (BJS 2024 App. A.9) SE - Stata did_imputation leaveout","' _n
 file write `fh' `"    "generator": "benchmarks/stata/generate_imputation_loo_golden.do","' _n
 file write `fh' `"    "source_panel": "benchmarks/data/didimputation_test_panel.csv","' _n
-file write `fh' `"    "point_anchor": "benchmarks/data/didimputation_golden.json (overall.att, event_study.att)","' _n
-file write `fh' `"    "cmd": "did_imputation y unit time Ei, [horizons(0/5)] leaveout avgeffectsby(Ei t) cluster(unit)","' _n
-file write `fh' `"    "avgeffectsby": "Ei t (== library aux_partition=cohort_horizon; pinned explicitly)","' _n
+file write `fh' `"    "point_anchor": "benchmarks/data/didimputation_golden.json (overall.att, event_study.att) for the balanced arms; library-computed (informational) for the unbalanced block","' _n
+file write `fh' `"    "cmd": "did_imputation y unit time Ei, [horizons(0/5)] [leaveout] avgeffectsby(Ei t | Ei | K) cluster(unit); unbalanced block re-runs all three partitions on the subsample","' _n
+file write `fh' `"    "avgeffectsby": "default arm: Ei t (== library aux_partition=cohort_horizon; pinned explicitly)","' _n
+file write `fh' `"    "avgeffectsby_variants": "Ei == cohort, K == horizon (K = t - Ei); each pinned explicitly","' _n
 file write `fh' `"    "se_convention": "A.9 leave-one-out finite-sample variance; unit-clustered; se_nonloo is the non-leaveout cluster SE (== R didimputation).","' _n
 file write `fh' `"    "ssc_versions": {"' _n
 file write `fh' `"      "did_imputation": "`v_didimp'","' _n
@@ -215,7 +307,8 @@ _jnum N_all "%12.0f"
 local nn = r(s)
 file write `fh' `"  "overall": {"att": `a', "se": `s', "se_nonloo": `snl', "N": `nn'},"' _n
 
-* event_study block (comma-prefixed; no trailing comma, no blank first line)
+* event_study block (comma-prefixed entries, no blank first line; the block close
+* carries a trailing comma because the variants/unbalanced blocks follow)
 file write `fh' `"  "event_study": {"'
 local sep ""
 forvalues h = 0/5 {
@@ -228,8 +321,68 @@ forvalues h = 0/5 {
     file write `fh' "`sep'" _n `"    "`h'": {"att": `a', "se": `s', "se_nonloo": `snl'}"'
     local sep ","
 }
-file write `fh' _n "  }" _n
+file write `fh' _n "  }," _n
+
+* variants block: balanced-panel avgeffectsby(Ei) / avgeffectsby(K)
+file write `fh' `"  "variants": {"' _n
+_jnum att_co_all
+local a = r(s)
+_jnum se_co_all
+local s = r(s)
+_jnum se_co_all_nl
+local snl = r(s)
+file write `fh' `"    "cohort": {"overall": {"att": `a', "se": `s', "se_nonloo": `snl'}},"' _n
+_jnum att_hz_all
+local a = r(s)
+_jnum se_hz_all
+local s = r(s)
+_jnum se_hz_all_nl
+local snl = r(s)
+file write `fh' `"    "horizon": {"' _n
+file write `fh' `"      "overall": {"att": `a', "se": `s', "se_nonloo": `snl'},"' _n
+file write `fh' `"      "event_study": {"'
+local sep ""
+forvalues h = 0/5 {
+    _jnum att_hz_`h'
+    local a = r(s)
+    _jnum se_hz_`h'
+    local s = r(s)
+    _jnum se_hz_nl_`h'
+    local snl = r(s)
+    file write `fh' "`sep'" _n `"        "`h'": {"att": `a', "se": `s', "se_nonloo": `snl'}"'
+    local sep ","
+}
+file write `fh' _n "      }" _n
+file write `fh' "    }" _n
+file write `fh' "  }," _n
+
+* unbalanced block: deterministic subsample, all three partitions, overall only
+file write `fh' `"  "unbalanced": {"' _n
+file write `fh' `"    "drop_rule": "mod(unit,4)==0 & time>=6","' _n
+file write `fh' `"    "n_rows": 1305,"' _n
+_jnum att_ub_ch
+local a = r(s)
+_jnum se_ub_ch
+local s = r(s)
+_jnum se_ub_ch_nl
+local snl = r(s)
+file write `fh' `"    "cohort_horizon": {"att": `a', "se": `s', "se_nonloo": `snl'},"' _n
+_jnum att_ub_co
+local a = r(s)
+_jnum se_ub_co
+local s = r(s)
+_jnum se_ub_co_nl
+local snl = r(s)
+file write `fh' `"    "cohort": {"att": `a', "se": `s', "se_nonloo": `snl'},"' _n
+_jnum att_ub_hz
+local a = r(s)
+_jnum se_ub_hz
+local s = r(s)
+_jnum se_ub_hz_nl
+local snl = r(s)
+file write `fh' `"    "horizon": {"att": `a', "se": `s', "se_nonloo": `snl'}"' _n
+file write `fh' "  }" _n
 file write `fh' "}" _n
 file close `fh'
 
-display "Wrote benchmarks/data/didimputation_loo_stata_golden.json (overall + 6 horizons)"
+display "Wrote benchmarks/data/didimputation_loo_stata_golden.json (default arm + variants + unbalanced)"
