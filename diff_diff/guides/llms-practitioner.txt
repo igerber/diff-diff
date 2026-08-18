@@ -361,12 +361,14 @@ estimated pre-periods exist).
 
 - For CS: pass the post-fit container - `compute_honest_did(
   results.aggregate('event_study'))` - no refit needed (the fit-time
-  `aggregate=` route is deprecated since 3.9). EXCEPTION: on a
-  BOOTSTRAPPED fit (`n_bootstrap > 0`) the post-fit recompute levels
-  (`'event_study'`/`'group'`) raise, while `aggregate('simple')` and,
-  where supported, `aggregate('total')`
-  relay the stored bootstrap inference; use the retained fit-time
-  `aggregate='event_study'` for a bootstrapped event-study surface.
+  `aggregate=` route is deprecated since 3.9). BOOTSTRAPPED fits
+  (`n_bootstrap > 0`) included: the recompute levels REPLAY the
+  fit-time multiplier bootstrap from the kit-retained RNG state
+  (percentile inference; the container carries no joint covariance, so
+  HonestDiD uses its diagonal approximation), while
+  `aggregate('simple')`/`aggregate('total')` relay the stored
+  inference; only pre-replay legacy pickles and cross-weight-backend
+  artifacts fail closed with a refit message.
 - For dCDH: requires `L_max >= 1` (multi-horizon mode). Bounds use placebo
   estimates `DID^{pl}_l` as pre-period coefficients rather than standard
   event-study pre-treatment coefficients, and use diagonal variance (no
@@ -446,12 +448,13 @@ print(results.aggregate('event_study', balance_e=2).to_dataframe())
 # NEW in 3.10 - the estimator-owned TOTAL incremental outcome (exact
 # relay C x overall; single row; panel non-survey fits only):
 print(results.aggregate('total').to_dataframe())
-# EXCEPTION: on a BOOTSTRAPPED fit the RECOMPUTE levels
-# (event_study/group) raise on CS/EfficientDiD/ImputationDiD/TwoStageDiD
-# — aggregate('simple') and, where supported, aggregate('total') relay
-# the stored bootstrap inference; use the
-# deprecated fit-time aggregation for a bootstrapped ES/group surface:
-results = cs.fit(data, ..., aggregate='all')
+# BOOTSTRAPPED fits: CS's recompute levels (event_study/group) REPLAY
+# the fit-time multiplier bootstrap post-fit (percentile inference; no
+# refit needed) — but they still RAISE on EfficientDiD/ImputationDiD/
+# TwoStageDiD, where aggregate('simple') and, where supported,
+# aggregate('total') relay the stored bootstrap inference and the
+# deprecated fit-time aggregation remains the ES/group route:
+results = edid.fit(data, ..., aggregate='all')  # EfficientDiD et al. only
 ```
 
 ### For ContinuousDiD (MIXED post-fit `aggregate()`, row M-025)

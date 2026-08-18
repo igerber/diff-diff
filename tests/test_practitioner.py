@@ -293,6 +293,36 @@ class TestResultTypeDispatch:
         assert len(output["next_steps"]) > 0
         assert output["estimator"] == "CallawaySantAnna"
 
+    def test_cs_bootstrapped_results_advise_post_fit_aggregate(self, staggered_data):
+        """Bootstrapped CS fits are advised through the SAME post-fit
+        aggregate() route (the percentile-bootstrap replay) — never the
+        deprecated fit-time aggregate= kwarg the pre-replay guidance
+        steered them to."""
+        import warnings as _warnings
+
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("ignore")
+            boot = CallawaySantAnna(n_bootstrap=25, seed=3).fit(
+                staggered_data,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+            )
+        output = practitioner_next_steps(boot, verbose=False)
+        by_label = {s["label"]: s for s in output["next_steps"]}
+        sens = by_label["Run HonestDiD sensitivity analysis"]
+        het = by_label["Examine group and event study effects"]
+        assert "replays the fit-time multiplier bootstrap" in sens["why"]
+        assert "results.aggregate('event_study')" in sens["code"]
+        # Positive assertion on the heterogeneity code: BOTH post-fit levels.
+        assert "aggregate('group')" in het["code"]
+        assert "aggregate('event_study')" in het["code"]
+        # The fit-time kwarg form must be gone from the whole advice bundle.
+        for step in output["next_steps"]:
+            assert "aggregate='" not in step["code"], step["label"]
+            assert 'aggregate="' not in step["code"], step["label"]
+
     def test_bacon_results(self, bacon_results):
         output = practitioner_next_steps(bacon_results, verbose=False)
         assert len(output["next_steps"]) > 0

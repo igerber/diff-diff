@@ -6,7 +6,7 @@ group-time average treatment effects and their aggregations.
 """
 
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -17,15 +17,20 @@ from diff_diff.aggregation import (
     build_total_relay_row,
     resolve_inference_df,
 )
+from diff_diff.bootstrap_chunking import effective_weight_backend
 from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.results_base import BaseResults, build_event_study_surface
 from diff_diff.staggered_aggregation import (
     CallawaySantAnnaAggregationMixin,
     fixed_cohort_agg_weights,
 )
-
-if TYPE_CHECKING:
-    from diff_diff.staggered_bootstrap import CSBootstrapResults
+from diff_diff.staggered_bootstrap import (
+    CallawaySantAnnaBootstrapMixin,
+    CSBootstrapResults,
+    apply_bootstrap_event_study_overrides,
+    apply_bootstrap_group_overrides,
+    apply_cband_conf_ints,
+)
 
 
 class _KitAggregator(CallawaySantAnnaAggregationMixin):
@@ -45,6 +50,33 @@ class _KitAggregator(CallawaySantAnnaAggregationMixin):
     def __init__(self, alpha: float, anticipation: int) -> None:
         self.alpha = alpha
         self.anticipation = anticipation
+
+
+class _KitBootstrapAggregator(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin):
+    """Runs the fit-time multiplier bootstrap off a retained kit (replay).
+
+    Value-bound host for the post-fit bootstrap replay: it carries BY VALUE
+    everything ``_run_multiplier_bootstrap`` reads from its estimator host
+    (base order matches ``CallawaySantAnna`` — bootstrap mixin first), so the
+    replay is immune to post-fit ``set_params``/attribute mutation of the
+    estimator. The RNG is injected via ``_replay_bitgen_state`` rather than
+    seeded from ``self.seed``. Warning attribution note: the engine's
+    fit-tuned stacklevels resolve into library frames on this deeper
+    ``aggregate()`` chain (no ``_warn_frame_offset`` is set) — accepted as
+    cosmetic; the warnings themselves are accurate statements about the
+    replayed bootstrap.
+    """
+
+    _BOOTSTRAP_LABEL = "CallawaySantAnna"
+
+    def __init__(
+        self, alpha: float, anticipation: int, n_bootstrap: int, bootstrap_weights: str
+    ) -> None:
+        self.alpha = alpha
+        self.anticipation = anticipation
+        self.n_bootstrap = n_bootstrap
+        self.bootstrap_weights = bootstrap_weights
+        self.seed = None  # unused — the replay injects the captured state
 
 
 @dataclass
@@ -321,32 +353,82 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
         # M-027): 'simple' and 'total' are bit-exact RELAYS of the stored
         # overall inference - faithful under any inference regime, bootstrap
         # included (every SE branch is homogeneous of degree 1 in the x C
-        # scaling) - so they dispatch BEFORE the bootstrap gate. Only the
-        # RECOMPUTE levels below fail closed on bootstrapped fits.
+        # scaling) - so they dispatch BEFORE the bootstrap machinery. The
+        # RECOMPUTE levels below REPLAY the fit-time multiplier bootstrap on
+        # bootstrapped fits (kit-retained RNG state; fail-closed only for
+        # legacy pickles without the state and cross-backend artifacts).
         if level == "simple":
             return self._aggregate_simple_result(kit)
         if level == "total":
             return self._aggregate_total_result(kit)
-        if self.bootstrap_results is not None:
-            # Fail closed rather than silently handing back analytical numbers:
-            # a bootstrapped fit's se/p/CI are percentile statistics, and
-            # reproducing them post-fit needs retained draws (BootstrapReplaySpec).
-            raise NotImplementedError(
-                f"aggregate({level!r}) is not yet available on a bootstrapped "
-                "fit (n_bootstrap > 0): its inference is percentile-bootstrap "
-                "based and cannot be reproduced from the analytical state "
-                "retained here. aggregate('simple') and, where supported, "
-                "aggregate('total') relay the stored "
-                "bootstrap inference and remain available; otherwise re-fit "
-                "with the aggregation you need, or use n_bootstrap=0 for "
-                "analytical inference."
-            )
 
         # Shallow copy: shares every array (no data is duplicated) but gives the
         # aggregators a scratch dict to memoize `_agg_cache` into, so the kit
         # itself is never written to. Mirrors what StaggeredTripleDifference
-        # already does when it aggregates through a modified copy.
+        # already does when it aggregates through a modified copy. Shared by
+        # the bootstrap replay and the analytical aggregation below, exactly
+        # as fit shares one `precomputed` between them.
         precomputed = dict(kit.bookkeeping)
+
+        # Bootstrap replay: re-run the fit-time multiplier bootstrap from the
+        # kit-retained RNG state so the recompute levels carry percentile
+        # inference matching a fit-time aggregation (to BLAS reassociation,
+        # ~1 ULP on se/CI; p-values are count statistics). NOTE the cost: each
+        # replaying call regenerates the full weight stream and re-runs the
+        # fused GEMM over the per-cell + per-event-time influence columns -
+        # O(n_bootstrap x n_units x (n_gt + n_event_times)) FLOPs per call
+        # (no memoization:
+        # aggregate() returns a new object and never mutates self, and caching
+        # draws would retain matrices the kit design deliberately avoids).
+        boot_replay: Optional[CSBootstrapResults] = None
+        if self.bootstrap_results is not None:
+            spec = getattr(kit, "bootstrap", None)
+            if spec is None or getattr(spec, "bitgen_state", None) is None:
+                raise NotImplementedError(
+                    f"aggregate({level!r}) on this bootstrapped fit needs the "
+                    "fit-time bootstrap replay state, which this result "
+                    "predates - refit to enable the percentile-bootstrap "
+                    "replay. aggregate('simple') and, where supported, "
+                    "aggregate('total') relay the stored bootstrap inference "
+                    "and remain available."
+                )
+            current_backend = effective_weight_backend()
+            if spec.backend not in ("portable", current_backend):
+                # A different weight backend regenerates a DIFFERENT
+                # multiplier-weight matrix from the same bit-generator state
+                # (Rust row-seeds absolutely from one base seed; NumPy
+                # consumes the PCG64 stream), so replaying here would
+                # silently desynchronize from this artifact's stored
+                # 'simple'/'total' relay inference. "portable"-stamped
+                # artifacts (backend-independent generation branches) replay
+                # anywhere.
+                raise NotImplementedError(
+                    f"aggregate({level!r}) cannot replay this bootstrapped "
+                    f"fit here: its multiplier bootstrap was generated under "
+                    f"the {spec.backend!r} weight backend, but the current "
+                    f"backend is {current_backend!r}, and the two produce "
+                    "different draws from the same RNG state. Re-fit under "
+                    "the current backend, or restore the original one (the "
+                    "DIFF_DIFF_BACKEND environment variable / the Rust "
+                    "extension install)."
+                )
+            host = _KitBootstrapAggregator(
+                kit.alpha, kit.anticipation, spec.n_bootstrap, spec.weight_type
+            )
+            boot_replay = host._run_multiplier_bootstrap(
+                group_time_effects=self.group_time_effects,
+                influence_func_info=kit.influence,
+                aggregate=level,
+                balance_e=balance_e if level == "event_study" else None,
+                treatment_groups=self.groups,
+                time_periods=self.time_periods,
+                df=None,
+                unit=None,
+                precomputed=precomputed,
+                cband=kit.cband,
+                _replay_bitgen_state=spec.bitgen_state,
+            )
+
         agg = _KitAggregator(kit.alpha, kit.anticipation)
 
         if level == "group":
@@ -358,6 +440,11 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
                 df=None,
                 unit=None,
             )
+            if boot_replay is not None:
+                # Same shared override helper fit uses: percentile se/CI/p +
+                # recomputed t, df_used cleared (percentile inference never
+                # used the analytical df).
+                apply_bootstrap_group_overrides(effects, boot_replay, kit.alpha)
             return self._group_effects_to_aggregation(effects, kit)
 
         # event_study -> the unified EventStudyResults container (row M-092)
@@ -371,19 +458,30 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
             None,
             precomputed,
         )
+        if boot_replay is not None:
+            # Mirror fit's clearing rules exactly: percentile se/CI/p + t
+            # override, sup-t cband rows, vcov/vcov_index/df cleared (the
+            # percentile inference never used them - false provenance
+            # otherwise).
+            apply_bootstrap_event_study_overrides(es.effects, boot_replay, kit.alpha)
+            apply_cband_conf_ints(es.effects, boot_replay.cband_crit_value)
         # `build_event_study_surface` reads the surface off a RESULTS object.
         # Under the immutability contract we cannot populate `self`, so a
         # throwaway carrier holds the freshly computed values.
         carrier = replace(
             self,
             event_study_effects=es.effects,
-            event_study_vcov=es.vcov,
-            event_study_vcov_index=es.vcov_index,
-            event_study_df=es.df_used,
+            event_study_vcov=None if boot_replay is not None else es.vcov,
+            event_study_vcov_index=None if boot_replay is not None else es.vcov_index,
+            event_study_df=None if boot_replay is not None else es.df_used,
+            cband_crit_value=(
+                boot_replay.cband_crit_value if boot_replay is not None else self.cband_crit_value
+            ),
             # Surface-faithful common-reference provenance: the aggregation
             # recomputes it over the RETAINED cohorts (balance_e can drop
             # the cohort responsible for a second base; the fit-level
             # fit-wide tuple would over-restrict the balanced container).
+            # Applies to the bootstrap branch identically.
             reference_event_times=es.reference_event_times,
         )
         return build_event_study_surface(carrier)
@@ -514,7 +612,8 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
         overcount that keeps RC routings gated) and this raises rather than
         publishing an ambiguous mass. Empty post set or all-NaN effects
         return NaN WITHOUT re-emitting the fit-time UserWarnings (the
-        no-post-fit-re-warn convention; the NaN row is the signal).
+        RELAY-level no-re-warn convention - the NaN row is the signal; the
+        RECOMPUTE levels' bootstrap replay re-emits by design).
         """
         bk = kit.bookkeeping
         # TRAP: never bk["agg_total_weight"] - that is the RC all-units WIF

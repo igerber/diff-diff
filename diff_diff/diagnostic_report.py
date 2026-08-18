@@ -16,7 +16,10 @@ Design principles:
   recompute — for ImputationDiD a panel-backed recompute, for TwoStageDiD
   a fresh Stage-2 OLS + GMM sandwich over the retained frame; used only
   when the raw ``event_study_effects`` field is absent, and failing
-  closed to an explicit skip on bootstrapped / kit-less fits), or
+  closed to an explicit skip on kit-less/legacy-pickle fits, the sibling
+  estimators' bootstrap gates, and backend-mismatched CS bootstrap
+  replays — bootstrapped CS fits themselves derive successfully via the
+  percentile-bootstrap replay), or
   produced by an existing diff-diff utility. May call
   ``check_parallel_trends`` / ``BaconDecomposition`` /
   ``EfficientDiD.hausman_pretest`` when the caller supplies the panel +
@@ -840,8 +843,11 @@ class DiagnosticReport:
                         surface = candidate
                         surface_dict = _surface_to_event_study_dict(candidate)
             except Exception as exc:  # noqa: BLE001 — fail-soft by design:
-                # expected failures are NotImplementedError (bootstrap
-                # gates, pretrends+replicate) and ValueError (missing kit),
+                # expected failures are NotImplementedError (the sibling
+                # estimators' bootstrap gates, pretrends+replicate, CS
+                # legacy-pickle/backend-mismatch replay refusals — a
+                # bootstrapped CS fit itself now derives via the replay)
+                # and ValueError (missing kit),
                 # but the surface builder can raise bare TypeError and this
                 # resolver runs on the applicable_checks path with no outer
                 # guard; an escaped exception would hard-fail the report.

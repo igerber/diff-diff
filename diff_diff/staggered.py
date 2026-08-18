@@ -15,6 +15,7 @@ import pandas as pd
 from diff_diff._base import BaseEstimator
 from diff_diff.aggregation import (
     AggregationKit,
+    BootstrapReplaySpec,
 )
 from diff_diff.linalg import (
     _check_propensity_diagnostics,
@@ -31,6 +32,9 @@ from diff_diff.staggered_aggregation import (
 from diff_diff.staggered_bootstrap import (
     CallawaySantAnnaBootstrapMixin,
     CSBootstrapResults,
+    apply_bootstrap_event_study_overrides,
+    apply_bootstrap_group_overrides,
+    apply_cband_conf_ints,
 )
 
 # Import from split modules
@@ -1875,14 +1879,13 @@ class CallawaySantAnna(
             ``compute_honest_did``, ``compute_pretrends_power`` and
             ``plot_event_study`` all accept the post-fit container from
             ``results.aggregate('event_study')`` directly, so no consumer
-            requires the fit-time surface anymore - EXCEPT on bootstrapped
-            fits (``n_bootstrap > 0``), where the post-fit RECOMPUTE
-            levels (``'event_study'``/``'group'``) raise (percentile
-            inference cannot be reproduced from the retained analytical
-            state; ``aggregate('simple')`` and, where supported,
-            ``aggregate('total')`` relay the stored bootstrap
-            inference and stay available) and fit-time aggregation
-            remains the supported route for those levels. Otherwise it
+            requires the fit-time surface anymore. Bootstrapped fits
+            (``n_bootstrap > 0``) included: the post-fit RECOMPUTE levels
+            (``'event_study'``/``'group'``) REPLAY the fit-time multiplier
+            bootstrap from the kit-retained RNG state (percentile
+            inference matching a fit-time aggregation to floating-point
+            reassociation; ``aggregate('simple')``/``('total')`` still
+            relay the stored inference bit-exactly). This parameter
             remains only as the deprecated compatibility path through
             3.9.
         balance_e : int, optional
@@ -2849,74 +2852,23 @@ class CallawaySantAnna(
                     group_time_effects[gt]["p_value"] = bootstrap_results.group_time_p_values[gt]
                     group_time_effects[gt]["t_stat"] = float(gt_t_stats[idx])
 
-            # Update event study effects with bootstrap SEs (batched)
-            if (
-                event_study_effects is not None
-                and bootstrap_results.event_study_ses is not None
-                and bootstrap_results.event_study_cis is not None
-                and bootstrap_results.event_study_p_values is not None
-            ):
-                es_keys = [e for e in event_study_effects if e in bootstrap_results.event_study_ses]
-                if es_keys:
-                    es_effects_arr = np.array(
-                        [float(event_study_effects[e]["effect"]) for e in es_keys]
-                    )
-                    es_ses_arr = np.array(
-                        [float(bootstrap_results.event_study_ses[e]) for e in es_keys]
-                    )
-                    es_t_stats, _, _, _ = safe_inference_batch(
-                        es_effects_arr, es_ses_arr, alpha=self.alpha
-                    )
-                    for idx, e in enumerate(es_keys):
-                        event_study_effects[e]["se"] = bootstrap_results.event_study_ses[e]
-                        event_study_effects[e]["conf_int"] = bootstrap_results.event_study_cis[e]
-                        event_study_effects[e]["p_value"] = bootstrap_results.event_study_p_values[
-                            e
-                        ]
-                        event_study_effects[e]["t_stat"] = float(es_t_stats[idx])
+            # Update event study effects with bootstrap SEs (batched).
+            # Shared helper (verbatim extraction) so the post-fit aggregate()
+            # replay applies exactly the same overrides.
+            apply_bootstrap_event_study_overrides(
+                event_study_effects, bootstrap_results, self.alpha
+            )
 
-            # Update group effects with bootstrap SEs (batched)
-            if (
-                group_effects is not None
-                and bootstrap_results.group_effect_ses is not None
-                and bootstrap_results.group_effect_cis is not None
-                and bootstrap_results.group_effect_p_values is not None
-            ):
-                grp_keys = [g for g in group_effects if g in bootstrap_results.group_effect_ses]
-                if grp_keys:
-                    grp_effects_arr = np.array(
-                        [float(group_effects[g]["effect"]) for g in grp_keys]
-                    )
-                    grp_ses_arr = np.array(
-                        [float(bootstrap_results.group_effect_ses[g]) for g in grp_keys]
-                    )
-                    grp_t_stats, _, _, _ = safe_inference_batch(
-                        grp_effects_arr, grp_ses_arr, alpha=self.alpha
-                    )
-                    for idx, g in enumerate(grp_keys):
-                        group_effects[g]["se"] = bootstrap_results.group_effect_ses[g]
-                        group_effects[g]["conf_int"] = bootstrap_results.group_effect_cis[g]
-                        group_effects[g]["p_value"] = bootstrap_results.group_effect_p_values[g]
-                        group_effects[g]["t_stat"] = float(grp_t_stats[idx])
-                        # Same clearing rule the ES df provenance follows below:
-                        # these se/p/CI are now percentile-bootstrap values that
-                        # never used the analytical df, so keeping df_used would
-                        # claim a t-reference that governed nothing.
-                        group_effects[g]["df_used"] = None
+            # Update group effects with bootstrap SEs (batched) — same shared
+            # helper, including the df_used clearing rule.
+            apply_bootstrap_group_overrides(group_effects, bootstrap_results, self.alpha)
 
         # Compute simultaneous confidence band CIs if cband is available
         cband_crit_value = None
         if bootstrap_results is not None:
             cband_crit_value = bootstrap_results.cband_crit_value
 
-        if cband_crit_value is not None and event_study_effects is not None:
-            for e, eff_data in event_study_effects.items():
-                se_val = eff_data["se"]
-                if np.isfinite(se_val) and se_val > 0:
-                    eff_data["cband_conf_int"] = (
-                        eff_data["effect"] - cband_crit_value * se_val,
-                        eff_data["effect"] + cband_crit_value * se_val,
-                    )
+        apply_cband_conf_ints(event_study_effects, cband_crit_value)
 
         # Consolidated _safe_inv rank-guard warning (sibling of PR #9
         # finding #17). Rank-deficient PS Hessian / OR bread matrices in the
@@ -3049,6 +3001,7 @@ class CallawaySantAnna(
             influence_func_info,
             group_time_effects,
             is_survey_fit=survey_metadata is not None,
+            bootstrap_results=bootstrap_results,
         )
 
         self.is_fitted_ = True
@@ -5112,7 +5065,11 @@ class CallawaySantAnna(
 
 #: `precomputed` keys the aggregation machinery actually reads. Verified by
 #: enumerating every `precomputed[...]` / `.get(...)` access in
-#: `staggered_aggregation.py`. Everything else - notably `outcome_matrix`,
+#: `staggered_aggregation.py` AND, since the post-fit bootstrap replay landed,
+#: in `staggered_bootstrap.py` (`_run_multiplier_bootstrap` reads `all_units`,
+#: `unit_to_idx`, `canonical_size`, `survey_weights`, `resolved_survey_unit`
+#: through the kit) - any future prune audit must cover BOTH consumers.
+#: Everything else - notably `outcome_matrix`,
 #: `covariate_matrix`, `obs_outcome`, `obs_covariates` - is DATA and is
 #: deliberately not retained, so a results object never holds the source panel.
 #: `_agg_cache` is excluded too: it is derived memoization, rebuilt on demand.
@@ -5139,6 +5096,7 @@ def _build_aggregation_kit(
     group_time_effects: Optional[Dict[Any, Any]],
     *,
     is_survey_fit: bool = False,
+    bootstrap_results: Optional["CSBootstrapResults"] = None,
 ) -> Optional["AggregationKit"]:
     """Distil the fit-time state post-fit re-aggregation needs.
 
@@ -5186,19 +5144,33 @@ def _build_aggregation_kit(
         if bookkeeping.get("unit_to_idx") is not None:
             bookkeeping["unit_to_idx"] = {i: i for i in range(n_kit_units)}
 
+    # Bootstrap replay: on a bootstrapped fit, retain the multiplier
+    # bootstrap's RNG state BY VALUE (plus the run parameters and the
+    # generation-branch backend identity) so aggregate('event_study'/'group')
+    # can re-run the fit-time bootstrap post-fit — bit-identical weight
+    # stream, statistics matching to BLAS reassociation. Values come off the
+    # returned CSBootstrapResults, never live estimator attributes, so a
+    # post-fit set_params/attribute mutation cannot alter the replay.
+    bootstrap_spec = None
+    if (
+        bootstrap_results is not None
+        and bootstrap_results._replay_bitgen_state is not None
+        and precomputed is not None
+    ):
+        n_gen_units = int(precomputed.get("canonical_size", len(precomputed["all_units"])))
+        bootstrap_spec = BootstrapReplaySpec(
+            bitgen_state=bootstrap_results._replay_bitgen_state,
+            n_bootstrap=bootstrap_results.n_bootstrap,
+            n_units=n_gen_units,
+            weight_type=bootstrap_results.weight_type,
+            backend=bootstrap_results._replay_backend,
+        )
+
     return AggregationKit(
         bookkeeping=bookkeeping,
         influence=influence_func_info,
         alpha=estimator.alpha,
         anticipation=estimator.anticipation,
         cband=bool(estimator.cband),
-        # Bootstrap replay is not wired: a bootstrapped fit's percentile
-        # inference cannot be reproduced from analytical state, so the
-        # RECOMPUTE levels (event_study/group) fail closed on one rather than
-        # silently substituting analytical numbers ('simple' and, where
-        # supported, 'total' relay the stored bootstrap inference and stay
-        # available - the per-level policy converged with row M-027).
-        # BootstrapReplaySpec (diff_diff/aggregation.py) is the verified
-        # mechanism for the follow-up.
-        bootstrap=None,
+        bootstrap=bootstrap_spec,
     )

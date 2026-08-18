@@ -15,6 +15,7 @@ import numpy as np
 from diff_diff.bootstrap_chunking import (
     ReplayableWeightStream,
     compute_block_size,
+    effective_weight_backend,
     iter_survey_multiplier_weight_blocks,
     iter_weight_blocks,
     tiled_if_matmul,
@@ -31,6 +32,7 @@ from diff_diff.bootstrap_utils import (
 from diff_diff.bootstrap_utils import (
     compute_percentile_ci as _compute_percentile_ci_func,
 )
+from diff_diff.utils import safe_inference_batch
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -112,6 +114,19 @@ class CSBootstrapResults:
     overall_att_es_ci: Optional[Tuple[float, float]] = None
     overall_att_es_p_value: Optional[float] = None
 
+    def __post_init__(self) -> None:
+        # Post-fit replay bookkeeping, attached as PLAIN attributes (never
+        # dataclass fields) so the exported class's __init__ signature,
+        # dataclasses.fields() and asdict() stay unchanged — the same
+        # private-carrier pattern the results objects use for retained
+        # state. `_replay_bitgen_state` is the RNG snapshot taken at
+        # weight-stream construction; `_replay_backend` is the
+        # generation-branch identity ("rust"/"numpy", or "portable" for
+        # provably backend-independent branches). Both are populated by
+        # _run_multiplier_bootstrap on every run and pickle via __dict__.
+        self._replay_bitgen_state: Optional[Dict[str, Any]] = None
+        self._replay_backend: Optional[str] = None
+
 
 # =============================================================================
 # Bootstrap Mixin Class
@@ -175,9 +190,20 @@ class CallawaySantAnnaBootstrapMixin:
         unit: Optional[str] = None,
         precomputed: Any = None,
         cband: bool = True,
+        *,
+        _replay_bitgen_state: Optional[Dict[str, Any]] = None,
     ) -> CSBootstrapResults:
         """
         Run multiplier bootstrap for inference on all parameters.
+
+        ``_replay_bitgen_state`` (keyword-only, package-internal): a
+        bit-generator state captured by a previous run. When given, the RNG
+        is restored to it instead of seeding from ``self.seed``, so the
+        multiplier-weight stream replays bit-identically — the post-fit
+        ``aggregate()`` replay path. Valid only under the SAME weight
+        backend that captured it (see
+        :func:`diff_diff.bootstrap_chunking.effective_weight_backend`);
+        the caller enforces the backend guard.
 
         This implements the multiplier bootstrap procedure from Callaway & Sant'Anna (2021).
         The key idea is to perturb the influence function contributions with random
@@ -218,6 +244,11 @@ class CallawaySantAnnaBootstrapMixin:
             )
 
         rng = np.random.default_rng(self.seed)
+        if _replay_bitgen_state is not None:
+            # Post-fit replay: restore the exact state the fit-time run
+            # captured at weight-stream construction. Nothing below consumes
+            # the rng before that point, so the stream is bit-identical.
+            rng.bit_generator.state = _replay_bitgen_state
 
         # Use global unit set for correct pg = n_g / N_total scaling.
         # Without this, pg is overestimated in unbalanced panels where some
@@ -463,6 +494,31 @@ class CallawaySantAnnaBootstrapMixin:
             ) -> Iterator[Tuple[int, np.ndarray]]:
                 return iter_weight_blocks(self.n_bootstrap, n_units, self.bootstrap_weights, rng_)
 
+        # Snapshot the rng state HERE — the value that fully determines the
+        # weight stream (nothing above consumed the rng; the survey psu
+        # resolution deliberately avoids it). Retained on the returned
+        # container for the post-fit aggregate() replay. `_replay_backend`
+        # records the generation-branch identity: "portable" for branches
+        # whose draws are provably identical under either weight backend —
+        # the stratified / single-PSU survey generator draws through the
+        # NumPy generator unconditionally, and the unstratified census-FPC
+        # case (fpc[0] <= n_psu, mirroring iter_survey_multiplier_weight_
+        # blocks' fpc_zero) replaces every block with zeros — else the
+        # current effective backend, because Rust and NumPy produce
+        # DIFFERENT draws from the same bit-generator state.
+        replay_bitgen_state = dict(rng.bit_generator.state)
+        _backend_independent = False
+        if _use_survey_bootstrap:
+            assert resolved_survey_unit is not None
+            _fpc = getattr(resolved_survey_unit, "fpc", None)
+            _n_psu = len(psu_ids)  # bound above in the survey branch
+            _backend_independent = (
+                resolved_survey_unit.strata is not None
+                or _n_psu < 2
+                or (_fpc is not None and _n_psu / _fpc[0] >= 1.0)
+            )
+        replay_backend = "portable" if _backend_independent else effective_weight_backend()
+
         # Re-iterable stream: each column tile of the fused perturbation GEMM
         # below makes its own full pass over the bit-identical weight stream.
         weight_stream = ReplayableWeightStream(_make_weight_iter, rng)
@@ -640,7 +696,13 @@ class CallawaySantAnnaBootstrapMixin:
         group_effect_cis = None
         group_effect_p_values = None
 
-        if bootstrap_group is not None and group_agg_info is not None:
+        # ``group_list`` can be EMPTY when no cohort has a post-treatment cell
+        # (e.g. every treated cohort's onset lies beyond the observed panel):
+        # np.column_stack([]) would raise "need at least one array to
+        # concatenate", so guard it exactly as the event-study block guards
+        # empty ``rel_periods`` above — the group stats stay None and the
+        # aggregation returns its supported zero-row result.
+        if bootstrap_group is not None and group_agg_info is not None and group_list:
             grp_effects = np.array([group_agg_info[g]["effect"] for g in group_list])
             grp_boot_matrix = np.column_stack([bootstrap_group[g] for g in group_list])
             grp_ses, grp_ci_lo, grp_ci_hi, grp_pv = _compute_effect_bootstrap_stats_batch_func(
@@ -718,7 +780,7 @@ class CallawaySantAnnaBootstrapMixin:
                 group_effect_p_values = {k: np.nan for k in group_effect_p_values}
             cband_crit_value = None
 
-        return CSBootstrapResults(
+        result = CSBootstrapResults(
             n_bootstrap=self.n_bootstrap,
             weight_type=self.bootstrap_weights,
             alpha=self.alpha,
@@ -740,6 +802,9 @@ class CallawaySantAnnaBootstrapMixin:
             overall_att_es_ci=overall_att_es_ci,
             overall_att_es_p_value=overall_att_es_p_value,
         )
+        result._replay_bitgen_state = replay_bitgen_state
+        result._replay_backend = replay_backend
+        return result
 
     def _prepare_event_study_aggregation(
         self,
@@ -835,8 +900,13 @@ class CallawaySantAnnaBootstrapMixin:
                 "effect": agg_effect,
             }
 
-            # Compute combined IF for this event time if args available
-            if influence_func_info is not None and df is not None and unit is not None:
+            # Compute combined IF for this event time if args available.
+            # `precomputed` alone suffices for the in-package fast path
+            # (kit-backed post-fit replay threads df=None/unit=None); the
+            # df/unit pair remains for direct callers without precomputed.
+            if influence_func_info is not None and (
+                precomputed is not None or (df is not None and unit is not None)
+            ):
                 gt_pairs_for_e = [gt_pairs[i] for i in indices]
                 groups_for_gt = np.array([gt_pairs[i][0] for i in indices])
                 combined_if, _ = self._compute_combined_influence_function(
@@ -939,3 +1009,99 @@ class CallawaySantAnnaBootstrapMixin:
         return _compute_effect_bootstrap_stats_func(
             original_effect, boot_dist, alpha=self.alpha, context=context
         )
+
+
+# =============================================================================
+# Bootstrap override helpers (shared by fit and the post-fit replay)
+# =============================================================================
+# Extracted verbatim from CallawaySantAnna.fit()'s inline blocks so the
+# post-fit aggregate() replay applies EXACTLY the same percentile overrides
+# the fit-time path applies — one implementation, no twin drift. (The
+# deprecated StaggeredTripleDifference keeps its OWN copy of the group
+# replacement loop; unifying it is sequenced with the M-014 container port.)
+# Note on warning attribution: when these run under the post-fit replay the
+# engine's fit-tuned stacklevels resolve into library frames rather than the
+# user's aggregate() call — accepted as cosmetic (recorded decision).
+
+
+def apply_bootstrap_event_study_overrides(
+    event_study_effects: Optional[Dict[int, Dict[str, Any]]],
+    bootstrap_results: CSBootstrapResults,
+    alpha: float,
+) -> None:
+    """Overwrite per-event-time se/CI/p with percentile-bootstrap values.
+
+    Mutates ``event_study_effects`` in place; t is recomputed from the
+    percentile SE via ``safe_inference_batch``. No-op when either side has
+    no event-study surface.
+    """
+    if (
+        event_study_effects is not None
+        and bootstrap_results.event_study_ses is not None
+        and bootstrap_results.event_study_cis is not None
+        and bootstrap_results.event_study_p_values is not None
+    ):
+        es_keys = [e for e in event_study_effects if e in bootstrap_results.event_study_ses]
+        if es_keys:
+            es_effects_arr = np.array([float(event_study_effects[e]["effect"]) for e in es_keys])
+            es_ses_arr = np.array([float(bootstrap_results.event_study_ses[e]) for e in es_keys])
+            es_t_stats, _, _, _ = safe_inference_batch(es_effects_arr, es_ses_arr, alpha=alpha)
+            for idx, e in enumerate(es_keys):
+                event_study_effects[e]["se"] = bootstrap_results.event_study_ses[e]
+                event_study_effects[e]["conf_int"] = bootstrap_results.event_study_cis[e]
+                event_study_effects[e]["p_value"] = bootstrap_results.event_study_p_values[e]
+                event_study_effects[e]["t_stat"] = float(es_t_stats[idx])
+
+
+def apply_bootstrap_group_overrides(
+    group_effects: Optional[Dict[Any, Dict[str, Any]]],
+    bootstrap_results: CSBootstrapResults,
+    alpha: float,
+) -> None:
+    """Overwrite per-group se/CI/p with percentile-bootstrap values.
+
+    Mutates ``group_effects`` in place and clears each row's ``df_used``
+    (the percentile inference never used the analytical df, so keeping it
+    would claim a t-reference that governed nothing). No-op when either
+    side has no group surface.
+    """
+    if (
+        group_effects is not None
+        and bootstrap_results.group_effect_ses is not None
+        and bootstrap_results.group_effect_cis is not None
+        and bootstrap_results.group_effect_p_values is not None
+    ):
+        grp_keys = [g for g in group_effects if g in bootstrap_results.group_effect_ses]
+        if grp_keys:
+            grp_effects_arr = np.array([float(group_effects[g]["effect"]) for g in grp_keys])
+            grp_ses_arr = np.array([float(bootstrap_results.group_effect_ses[g]) for g in grp_keys])
+            grp_t_stats, _, _, _ = safe_inference_batch(grp_effects_arr, grp_ses_arr, alpha=alpha)
+            for idx, g in enumerate(grp_keys):
+                group_effects[g]["se"] = bootstrap_results.group_effect_ses[g]
+                group_effects[g]["conf_int"] = bootstrap_results.group_effect_cis[g]
+                group_effects[g]["p_value"] = bootstrap_results.group_effect_p_values[g]
+                group_effects[g]["t_stat"] = float(grp_t_stats[idx])
+                # Same clearing rule the ES df provenance follows: these
+                # se/p/CI are now percentile-bootstrap values that never used
+                # the analytical df, so keeping df_used would claim a
+                # t-reference that governed nothing.
+                group_effects[g]["df_used"] = None
+
+
+def apply_cband_conf_ints(
+    event_study_effects: Optional[Dict[int, Dict[str, Any]]],
+    cband_crit_value: Optional[float],
+) -> None:
+    """Attach simultaneous-band CIs per event time from the sup-t critical value.
+
+    Mutates ``event_study_effects`` in place; no-op when the critical value
+    or the surface is absent.
+    """
+    if cband_crit_value is not None and event_study_effects is not None:
+        for _e, eff_data in event_study_effects.items():
+            se_val = eff_data["se"]
+            if np.isfinite(se_val) and se_val > 0:
+                eff_data["cband_conf_int"] = (
+                    eff_data["effect"] - cband_crit_value * se_val,
+                    eff_data["effect"] + cband_crit_value * se_val,
+                )

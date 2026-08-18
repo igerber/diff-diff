@@ -396,35 +396,36 @@ def _handle_multi_period(results: Any):
 
 
 def _handle_cs(results: Any):
-    # The post-fit RECOMPUTE levels raise on a bootstrapped fit
-    # (percentile statistics are not retained for re-aggregation;
-    # 'simple'/'total' relay the stored quintet and stay available), so the
-    # event-study guidance must route those fits through the retained
-    # fit-time aggregation instead of advice that cannot run.
+    # The post-fit RECOMPUTE levels work on bootstrapped fits too: they
+    # REPLAY the fit-time multiplier bootstrap from the kit-retained RNG
+    # state (percentile inference matching a fit-time aggregation), so the
+    # advice is the same post-fit route on both regimes - only the caveats
+    # differ. Static guidance with a refit remedy is this module's
+    # convention; a legacy pickle without the replay state gets the refit
+    # message from aggregate() itself.
     is_bootstrap = getattr(results, "bootstrap_results", None) is not None
     if is_bootstrap:
         sensitivity_why = (
             "Bounds the treatment effect under plausible violations of "
-            "parallel trends. This fit is BOOTSTRAPPED, and the post-fit "
-            "event-study/group recompute levels raise on bootstrap fits "
-            "(aggregate('simple') and, where supported, aggregate('total') "
-            "still relay the stored inference) - "
-            "refit with the fit-time aggregation to populate the "
-            "event-study surface."
+            "parallel trends. This fit is BOOTSTRAPPED: "
+            "aggregate('event_study') replays the fit-time multiplier "
+            "bootstrap post-fit (percentile inference; the container "
+            "carries no joint covariance, so HonestDiD uses its diagonal "
+            "approximation). A result predating the replay state asks for "
+            "a refit."
         )
         sensitivity_code = (
             "from diff_diff import compute_honest_did\n"
-            "# Bootstrap fit: the post-fit ES recompute raises - use the\n"
-            "# fit-time aggregation for the event-study surface:\n"
-            "results = cs.fit(data, ..., aggregate='event_study')\n"
-            "honest = compute_honest_did(results, method='relative_magnitude', M=1.0)\n"
+            "# Bootstrapped fit: aggregate post-fit - the replay reproduces\n"
+            "# the fit-time percentile inference (no refit needed):\n"
+            "es = results.aggregate('event_study')\n"
+            "honest = compute_honest_did(es, method='relative_magnitude', M=1.0)\n"
             "print(honest.summary())"
         )
         heterogeneity_code = (
-            "# Bootstrap fit: aggregate at fit time:\n"
-            "results = cs.fit(data, ..., aggregate='all')\n"
-            "print(results.group_effects)        # Per-cohort ATTs\n"
-            "print(results.event_study_effects)  # Dynamic effects"
+            "# Bootstrapped fit: aggregate post-fit - no refit needed:\n"
+            "print(results.aggregate('group').to_dataframe())        # Per-cohort ATTs\n"
+            "print(results.aggregate('event_study').to_dataframe())  # Dynamic effects"
         )
     else:
         sensitivity_why = (

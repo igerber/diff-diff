@@ -38,10 +38,17 @@ kit is a panel-backed Theorem-3 recompute from the retained working
 panel, and TwoStageDiD's runs a fresh Stage-2 OLS + GMM sandwich over
 a retained frame copy (ledger rows M-021/M-022) — so those two
 producers DO recompute variance from their retained kits, exactly as
-their own post-fit `aggregate()` does. Bootstrapped and kit-less fits
-fail closed: the derivation exception is caught and surfaced as an
-explicit per-check skip reason, never substituted with analytical
-numbers. The raw field, when present — including the
+their own post-fit `aggregate()` does. Bootstrapped CS fits derive
+successfully too: `aggregate('event_study')` replays the fit-time
+multiplier bootstrap (percentile inference; the derived container
+carries `vcov=None`, so parallel_trends rides the Bonferroni fallback
+and pretrends_power/sensitivity the diagonal-covariance fallback, and
+the replay's re-emitted fit-time warnings are recorded and
+republished per section). Kit-less/legacy-pickle fits,
+backend-mismatched CS bootstrap replays, and the other estimators'
+bootstrap gates still fail closed: the derivation exception is caught
+and surfaced as an explicit per-check skip reason, never substituted
+with analytical numbers. The raw field, when present — including the
 requested-but-empty `{}` sentinel, which encodes fit-time
 configuration such as a `balance_e=` that emptied the window — always
 takes precedence and is never re-derived. When the caller

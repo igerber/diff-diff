@@ -243,9 +243,9 @@ cs.fit(
 ```python
 from diff_diff import CallawaySantAnna, plot_event_study
 
-# NOTE: no n_bootstrap here - post-fit aggregate() is ANALYTICAL-ONLY and
-# recompute levels raise NotImplementedError on a bootstrapped fit
-# ('simple' relays the stored bootstrap inference - see below).
+# NOTE: works on bootstrapped fits too - the recompute levels REPLAY the
+# fit-time multiplier bootstrap from the kit-retained RNG state
+# (percentile inference; 'simple' relays the stored inference - see below).
 cs = CallawaySantAnna(estimation_method="dr")
 results = cs.fit(data, outcome='outcome', unit='unit', time='period',
                  first_treat='first_treat')
@@ -260,10 +260,13 @@ Fit-time `aggregate=` / `balance_e=` are DEPRECATED since 3.9 (removed in 4.0,
 ledger rows M-020 / M-117) and emit a `FutureWarning`. The downstream consumers
 all accept the post-fit container directly - `plot_event_study`,
 `compute_honest_did` and `compute_pretrends_power` each take
-`results.aggregate('event_study')` - so the only case still requiring the
-fit-time path is **bootstrap inference**: CallawaySantAnna's `aggregate()`
-fails closed on a bootstrapped fit's RECOMPUTE levels ('event_study'/'group') rather than substituting analytical inference for
-percentile-bootstrap statistics.
+`results.aggregate('event_study')` - bootstrapped fits included: the
+RECOMPUTE levels ('event_study'/'group') REPLAY the fit-time multiplier
+bootstrap from the kit-retained RNG state (percentile se/CI/cband matching a
+fit-time aggregation to floating-point reassociation; the container carries
+vcov=None). Only pre-replay legacy pickles and artifacts moved across the
+Rust/NumPy weight backend fail closed with a refit message - never a silent
+substitution of analytical inference for percentile statistics.
 
 ```python
 # Post-fit route (recommended): aggregate once, feed any consumer.
@@ -1711,10 +1714,11 @@ only: repeated-cross-section-routed and declared-`survey_design` fits raise
 `NotImplementedError` with the reason, as do bare-`cluster=` fits whose
 cohort-mass weighting diverges from the complete-case count).
 `balance_e=` applies to `"event_study"` only. Raises on
-`"calendar"` (CS has no calendar aggregator) and, on a bootstrapped fit, on
-the recompute levels (`"event_study"`/`"group"`) rather than substituting
-analytical inference for percentile-bootstrap statistics - `"simple"` and,
-where supported, `"total"` relay
+`"calendar"` (CS has no calendar aggregator). On a bootstrapped fit the
+recompute levels (`"event_study"`/`"group"`) replay the fit-time multiplier
+bootstrap (percentile inference; re-emits the fit-time bootstrap warnings;
+fails closed only for pre-replay legacy pickles and cross-weight-backend
+artifacts) - `"simple"` and, where supported, `"total"` relay
 the stored bootstrap inference with a NaN df column (the per-level rule).
 
 ### SunAbrahamResults
@@ -2925,7 +2929,9 @@ BR and DR do no estimator fitting — every effect, SE, p-value, CI, and
 sensitivity bound is read from the fitted result, derived from the
 result's own post-fit `aggregate('event_study')` surface (a view or
 retained-kit recompute, used only when the raw `event_study_effects`
-field is absent; bootstrapped / kit-less fits fail closed to an
+field is absent; bootstrapped CS fits derive via the percentile-bootstrap
+replay, while kit-less/legacy-pickle fits, backend-mismatched replays, and
+the sibling estimators' bootstrap gates fail closed to an
 explicit skip), or produced by an existing diff-diff
 utility (may call `check_parallel_trends`, `BaconDecomposition.fit`, or
 `EfficientDiD.hausman_pretest` when the panel + column kwargs are

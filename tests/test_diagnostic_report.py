@@ -3562,14 +3562,42 @@ class TestDerivedEventStudySurface:
         assert "pre_period_source" not in d_raw["pretrends_power"]
         assert "pre_period_source" not in d_raw["sensitivity"]
 
-    def test_bootstrap_plain_cs_skips_with_honest_reason(self, cs_bootstrap_plain_fit):
+    def test_bootstrap_plain_cs_derives_and_runs(self, cs_bootstrap_plain_fit):
+        """Bootstrapped plain CS fits now DERIVE the event-study surface via
+        the post-fit percentile-bootstrap replay (previously an explicit
+        skip). Expected oracle, confirmed empirically: the derived container
+        carries vcov=None (fit's bootstrap clearing rule), so
+        parallel_trends runs via the Bonferroni per-period fallback and
+        pretrends_power/sensitivity ride the diagonal-covariance fallback
+        (`_extract_container_vcov_subblock` returns
+        (np.diag(ses**2), "diag_fallback") when surface.vcov is None)."""
         cs, _ = cs_bootstrap_plain_fit
-        skipped = DiagnosticReport(cs).run_all().skipped_checks
+        rep = DiagnosticReport(cs).run_all()
+        schema = rep.schema
         for check in ("parallel_trends", "pretrends_power", "sensitivity"):
-            assert check in skipped, skipped
-            assert "aggregate('event_study')" in skipped[check]
-            assert "bootstrap" in skipped[check]
-            assert "deprecated" not in skipped[check]
+            assert check not in rep.skipped_checks, rep.skipped_checks
+            sec = schema[check]
+            assert sec.get("status") == "ran"
+            assert sec.get("pre_period_source") == "aggregate_event_study"
+            assert "deprecated" not in str(sec)
+        assert schema["parallel_trends"]["method"] == "bonferroni"
+
+    def test_bootstrap_plain_cs_republishes_replay_warnings(self):
+        """The replay re-emits the fit-time bootstrap warnings; the derived
+        route records and republishes them per consuming section. Dedicated
+        49-draw fixture: the low-draws warning gate is strictly < 50, so the
+        shared 50-draw module fixture cannot exercise republication."""
+        sdf = generate_staggered_data(n_units=100, n_periods=6, treatment_effect=1.5, seed=7)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            cs = CallawaySantAnna(base_period="universal", n_bootstrap=49, seed=1).fit(
+                sdf, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
+            )
+            rep = DiagnosticReport(cs).run_all()
+        sec = rep.schema["parallel_trends"]
+        assert sec.get("status") == "ran"
+        republished = " ".join(str(w) for w in (sec.get("warnings") or []))
+        assert "n_bootstrap=49 is low" in republished
 
     def test_missing_kit_value_error_leg(self, cs_plain_fit):
         import copy

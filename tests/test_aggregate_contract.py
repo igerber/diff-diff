@@ -301,20 +301,6 @@ class TestFailClosed:
         with pytest.raises(ValueError, match="balance_e"):
             fitted.aggregate(level, balance_e=2)
 
-    def test_bootstrap_recompute_levels_fail_closed(self, panel):
-        """Percentile-bootstrap inference cannot be reproduced from the
-        analytical state retained here, so the RECOMPUTE levels must not
-        substitute analytical numbers silently."""
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            boot = CallawaySantAnna(n_bootstrap=49, seed=42).fit(panel, **FIT_KW)
-        for level in ("event_study", "group"):
-            with pytest.raises(NotImplementedError, match="bootstrap") as exc:
-                boot.aggregate(level)
-            assert "aggregate('simple') and, where supported, aggregate('total') relay" in str(
-                exc.value
-            )
-
     def test_bootstrap_simple_relays_stored_quintet(self, panel):
         """Per-level policy (converged with M-027): 'simple' is a bit-exact
         relay of the stored overall row, faithful under the bootstrap regime,
@@ -346,6 +332,359 @@ class TestFailClosed:
         assert boot.survey_metadata is not None
         assert boot.survey_metadata.df_survey is not None
         _assert_bootstrap_simple_relay(boot)
+
+
+# --------------------------------------------------------------------------- #
+# Bootstrap replay: recompute levels on bootstrapped fits
+# --------------------------------------------------------------------------- #
+
+
+def _boot_fit(data, *, seed=42, n_bootstrap=50, fit_kwargs=None, **ctor):
+    """A plain bootstrapped fit (modern route: no fit-time aggregate=)."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return CallawaySantAnna(n_bootstrap=n_bootstrap, seed=seed, **ctor).fit(
+            data, **FIT_KW, **(fit_kwargs or {})
+        )
+
+
+def _boot_fit_time(data, *, seed=42, n_bootstrap=50, aggregate="all", fit_kwargs=None, **ctor):
+    """The parity REFERENCE: the deprecated fit-time aggregation route.
+
+    The reference is the NATIVE fit-time surface (`event_study_effects` /
+    `group_effects` dict entries + `cband_crit_value`), never a second
+    aggregate() call — the kit is attached unconditionally at the end of
+    fit(), so a fit-time-aggregated result's own aggregate() would ALSO
+    replay, and replay-vs-replay proves nothing.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return CallawaySantAnna(n_bootstrap=n_bootstrap, seed=seed, **ctor).fit(
+            data, aggregate=aggregate, **FIT_KW, **(fit_kwargs or {})
+        )
+
+
+def _assert_es_replay_parity(es, ref, n_bootstrap=50):
+    """Replayed EventStudyResults vs the native fit-time bootstrap surface.
+
+    Tolerance note (reconciling with this file's 1e-14 analytical-parity
+    convention): the replayed weight stream is bit-identical, and only the
+    fused GEMM's tile-boundary/column-count reassociation differs between
+    the fit-time and replay passes — ~1 ULP relative — so 1e-13 is the same
+    contract with one order of headroom for quantile-interpolation
+    arithmetic; any real desynchronization is O(1), not O(1e-13). p-values
+    are COUNT statistics (a draw within a ULP of the point estimate can
+    flip one count), hence the additional 2/n_bootstrap atol.
+    """
+    ref_es = ref.event_study_effects
+    p_atol = 2.0 / n_bootstrap
+    for i, e in enumerate(es.event_time):
+        if bool(es.is_reference[i]):
+            continue
+        r = ref_es[int(e)]
+        assert float(es.att[i]) == float(r["effect"])  # same analytical point path
+        np.testing.assert_allclose(es.se[i], r["se"], rtol=1e-13, atol=1e-13)
+        np.testing.assert_allclose(es.t_stat[i], r["t_stat"], rtol=1e-13, atol=1e-13)
+        np.testing.assert_allclose(es.p_value[i], r["p_value"], rtol=1e-13, atol=p_atol)
+        np.testing.assert_allclose(
+            [es.conf_int_lower[i], es.conf_int_upper[i]],
+            list(r["conf_int"]),
+            rtol=1e-13,
+            atol=1e-13,
+        )
+        cb = r.get("cband_conf_int")
+        if cb is not None:
+            np.testing.assert_allclose(
+                [es.cband_lower[i], es.cband_upper[i]], list(cb), rtol=1e-13, atol=1e-13
+            )
+    # Percentile provenance: no joint covariance, no analytical df.
+    assert es.vcov is None
+    assert np.all(np.isnan(np.asarray(es.df, dtype=float)))
+    if ref.cband_crit_value is not None:
+        np.testing.assert_allclose(es.cband_crit_value, ref.cband_crit_value, rtol=1e-13)
+
+
+def _assert_group_replay_parity(agg, ref, n_bootstrap=50):
+    gdf = agg.to_dataframe()
+    p_atol = 2.0 / n_bootstrap
+    for _, row in gdf.iterrows():
+        r = ref.group_effects[row["label"]]
+        assert float(row["att"]) == float(r["effect"])
+        if np.isnan(r["se"]):
+            assert np.isnan(row["se"])
+            continue
+        np.testing.assert_allclose(row["se"], r["se"], rtol=1e-13, atol=1e-13)
+        np.testing.assert_allclose(row["t_stat"], r["t_stat"], rtol=1e-13, atol=1e-13)
+        np.testing.assert_allclose(row["p_value"], r["p_value"], rtol=1e-13, atol=p_atol)
+        # df cleared: percentile inference never used the analytical df.
+        assert np.isnan(row["df"])
+
+
+class TestBootstrapReplay:
+    """Recompute levels replay the fit-time multiplier bootstrap.
+
+    Warning-coverage note (recorded decision, not a deferral): of the
+    warnings the wholesale re-run can re-emit, the two cheaply reachable
+    representatives — n_bootstrap<50 and G<2-PSU — are pinned below; the
+    degenerate-path warnings ("No post-treatment effects for bootstrap
+    aggregation", "Too few valid sup-t bootstrap samples") have no cheap
+    fixture (the first needs a fit whose every surviving cell is
+    pre-treatment, the second >50% non-finite sup-t draws) and are covered
+    by the convention, not pinned individually.
+    """
+
+    def test_event_study_parity_with_fit_time(self, panel):
+        ref = _boot_fit_time(panel, aggregate="event_study")
+        plain = _boot_fit(panel)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            es = plain.aggregate("event_study")
+        assert isinstance(es, EventStudyResults)
+        _assert_es_replay_parity(es, ref)
+
+    def test_group_parity_with_fit_time(self, panel):
+        ref = _boot_fit_time(panel, aggregate="group")
+        plain = _boot_fit(panel)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            agg = plain.aggregate("group")
+        _assert_group_replay_parity(agg, ref)
+
+    def test_balance_e_parity_with_fit_time(self, panel):
+        ref = _boot_fit_time(panel, aggregate="event_study", fit_kwargs={"balance_e": 1})
+        plain = _boot_fit(panel)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            es = plain.aggregate("event_study", balance_e=1)
+        _assert_es_replay_parity(es, ref)
+
+    def test_seedless_fit_replays_and_is_idempotent(self, panel):
+        """seed=None fits replay too — the spec captures the actual RNG
+        state by value — and repeated calls restore the same stream."""
+        plain = _boot_fit(panel, seed=None)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            a = plain.aggregate("event_study")
+            b = plain.aggregate("event_study")
+        np.testing.assert_array_equal(a.se, b.se)
+        np.testing.assert_array_equal(a.p_value, b.p_value)
+
+    def test_set_params_and_mutation_immunity(self, panel):
+        """The spec is by-value: post-fit set_params / direct attribute
+        mutation of the estimator cannot change the replay."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            est = CallawaySantAnna(n_bootstrap=50, seed=42)
+            res = est.fit(panel, **FIT_KW)
+            before = res.aggregate("event_study")
+            est.set_params(n_bootstrap=5, bootstrap_weights="webb")
+            est.seed = 7
+            after = res.aggregate("event_study")
+        np.testing.assert_array_equal(before.se, after.se)
+
+    def test_pickle_round_trip_replays(self, panel):
+        """The PCG64 state dict pickles; an unpickled result replays
+        identically in the same environment (same weight backend)."""
+        plain = _boot_fit(panel)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            es = plain.aggregate("event_study")
+            rt = pickle.loads(pickle.dumps(plain))
+            es_rt = rt.aggregate("event_study")
+        np.testing.assert_array_equal(es.se, es_rt.se)
+
+    def test_relays_unchanged_and_order_independent(self, panel):
+        """'simple' still relays the stored quintet bit-exactly AFTER an ES
+        replay call (the replay writes nothing back to the results)."""
+        plain = _boot_fit(panel, n_bootstrap=49)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            plain.aggregate("event_study")
+        _assert_bootstrap_simple_relay(plain)
+
+    def test_legacy_kit_without_spec_fails_closed(self, panel):
+        plain = _boot_fit(panel)
+        plain._aggregation_kit.bootstrap = None  # simulate a pre-replay pickle
+        for level in ("event_study", "group"):
+            with pytest.raises(NotImplementedError, match="predates") as exc:
+                plain.aggregate(level)
+            assert "refit" in str(exc.value)
+
+    def test_backend_mismatch_fails_closed(self, panel):
+        """A different weight backend regenerates different draws from the
+        same RNG state — the replay must refuse, deterministically under
+        either installed backend."""
+        import dataclasses
+
+        from diff_diff.bootstrap_chunking import effective_weight_backend
+
+        plain = _boot_fit(panel)
+        spec = plain._aggregation_kit.bootstrap
+        assert spec.backend == effective_weight_backend()
+        other = "numpy" if spec.backend == "rust" else "rust"
+        plain._aggregation_kit.bootstrap = dataclasses.replace(spec, backend=other)
+        with pytest.raises(NotImplementedError, match="weight backend"):
+            plain.aggregate("event_study")
+        # None means UNKNOWN and also fails closed (fail-open default on a
+        # safety discriminator would disarm the guard for future callers).
+        plain._aggregation_kit.bootstrap = dataclasses.replace(spec, backend=None)
+        with pytest.raises(NotImplementedError, match="weight backend"):
+            plain.aggregate("group")
+
+    def test_low_bootstrap_warning_re_emitted_on_replay(self, panel):
+        """The replay re-runs the fit-time engine, so its warnings re-fire
+        (the recompute-level re-warn convention; relays stay silent)."""
+        plain = _boot_fit(panel, n_bootstrap=49)
+        with pytest.warns(UserWarning, match="n_bootstrap=49 is low"):
+            plain.aggregate("event_study")
+
+    def test_no_post_treatment_cells_group_returns_zero_rows(self):
+        """A fit whose every treated cohort's onset lies beyond the observed
+        panel has NO post-treatment cells: overall inference is NaN, only
+        pre-treatment cells exist, and the group aggregation is empty. The
+        bootstrapped group path must return the supported zero-row result on
+        BOTH routes (they share `_run_multiplier_bootstrap`, whose group
+        stats block would otherwise np.column_stack an empty list)."""
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(30):
+            g = 8 if u % 3 else 0  # onset beyond the 5-period panel
+            for t in range(1, 6):
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "first_treat": g,
+                        "y": 0.3 * t + rng.normal(0, 0.3),
+                    }
+                )
+        data = pd.DataFrame(rows)
+        plain = _boot_fit(data, n_bootstrap=25, seed=1)
+        assert np.isnan(plain.overall_att)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            agg = plain.aggregate("group")
+        assert len(agg.to_dataframe()) == 0
+        assert np.isnan(plain.overall_att)  # unchanged by the replay
+        # The deprecated fit-time route rides the same helper — it must
+        # survive too (the crash was reachable there pre-replay).
+        ref = _boot_fit_time(data, n_bootstrap=25, seed=1, aggregate="group")
+        assert ref.group_effects in (None, {})
+
+
+class TestBootstrapReplayDesigns:
+    """Replay parity on the engine branches the plain panel never reaches."""
+
+    def test_bare_cluster_psu_expansion(self, panel):
+        d = panel.copy()
+        d["psu"] = d["unit"] % 7
+        ref = _boot_fit_time(d, cluster="psu")
+        plain = _boot_fit(d, cluster="psu")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            _assert_es_replay_parity(plain.aggregate("event_study"), ref)
+            _assert_group_replay_parity(plain.aggregate("group"), ref)
+
+    def test_stratified_survey_is_portable_and_matches(self, panel):
+        from diff_diff import SurveyDesign
+
+        d = panel.copy()
+        rng = np.random.default_rng(5)
+        wmap = {u: rng.uniform(0.5, 2.0) for u in d["unit"].unique()}
+        d["w"] = d["unit"].map(wmap)
+        d["psu"] = d["unit"] % 7
+        d["stratum"] = d["unit"] % 2
+        sd = SurveyDesign(weights="w", strata="stratum", psu="psu", nest=True)
+        ref = _boot_fit_time(d, fit_kwargs={"survey_design": sd})
+        plain = _boot_fit(d, fit_kwargs={"survey_design": sd})
+        # The stratified survey generator draws through NumPy regardless of
+        # the installed backend — provably backend-independent, stamped
+        # "portable" so the artifact replays anywhere.
+        assert plain._aggregation_kit.bootstrap.backend == "portable"
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            _assert_es_replay_parity(plain.aggregate("event_study"), ref)
+            _assert_group_replay_parity(plain.aggregate("group"), ref)
+
+    def test_fpc_survey_matches(self, panel):
+        from diff_diff import SurveyDesign
+
+        d = panel.copy()
+        rng = np.random.default_rng(6)
+        wmap = {u: rng.uniform(0.5, 2.0) for u in d["unit"].unique()}
+        d["w"] = d["unit"].map(wmap)
+        d["psu"] = d["unit"] % 7
+        d["fpc"] = 100  # non-census: the fpc_scale branch
+        sd = SurveyDesign(weights="w", psu="psu", fpc="fpc")
+        ref = _boot_fit_time(d, fit_kwargs={"survey_design": sd})
+        plain = _boot_fit(d, fit_kwargs={"survey_design": sd})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            _assert_es_replay_parity(plain.aggregate("event_study"), ref)
+
+    def test_repeated_cross_sections_match(self):
+        data = _rcs()
+        ref = _boot_fit_time(data, panel=False)
+        plain = _boot_fit(data, panel=False)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            _assert_es_replay_parity(plain.aggregate("event_study"), ref)
+            _assert_group_replay_parity(plain.aggregate("group"), ref)
+
+    def test_unbalanced_panel_matches(self, panel):
+        thinned = panel.drop(panel.index[::13]).reset_index(drop=True)
+        ref = _boot_fit_time(thinned, allow_unbalanced_panel=True)
+        plain = _boot_fit(thinned, allow_unbalanced_panel=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            _assert_es_replay_parity(plain.aggregate("event_study"), ref)
+
+    def test_single_psu_nan_surfaces_and_warning(self, panel):
+        from diff_diff import SurveyDesign
+
+        d = panel.copy()
+        rng = np.random.default_rng(8)
+        wmap = {u: rng.uniform(0.5, 2.0) for u in d["unit"].unique()}
+        d["w"] = d["unit"].map(wmap)
+        d["one_psu"] = 1
+        single = _boot_fit(
+            d, fit_kwargs={"survey_design": SurveyDesign(weights="w", psu="one_psu")}
+        )
+        # Single-PSU generation is backend-independent (degenerate branch).
+        assert single._aggregation_kit.bootstrap.backend == "portable"
+        with pytest.warns(UserWarning, match="PSU"):
+            es = single.aggregate("event_study")
+        nonref = ~np.asarray(es.is_reference, dtype=bool)
+        assert np.all(~np.isfinite(np.asarray(es.se, dtype=float)[nonref]))
+        assert es.cband_crit_value is None
+
+
+class TestBootstrapReplayConsumers:
+    """The newly-reachable public path: a bootstrapped-CS derived container
+    (vcov=None) flowing into the event-study consumers."""
+
+    def test_pretrends_power_rides_diag_fallback(self, panel):
+        from diff_diff import compute_pretrends_power
+
+        plain = _boot_fit(panel)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            es = plain.aggregate("event_study")
+            power = compute_pretrends_power(es)
+        # Silent by design on the pretrends side: the diagonal fallback is
+        # the container contract for vcov=None surfaces.
+        assert power is not None
+
+    def test_honest_did_warns_then_uses_diagonal(self, panel):
+        from diff_diff import compute_honest_did
+
+        plain = _boot_fit(panel)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            es = plain.aggregate("event_study")
+        with pytest.warns(UserWarning, match="no full covariance"):
+            honest = compute_honest_did(es, method="relative_magnitude", M=1.0)
+        assert honest is not None
 
 
 # --------------------------------------------------------------------------- #
@@ -4205,7 +4544,8 @@ class TestTotalCallawaySantAnna:
 
     def test_zero_c_arms_emit_all_nan_row_without_warning(self, panel):
         """Empty post set / all-NaN effects -> all-NaN row, NO UserWarning
-        (the no-post-fit-re-warn convention), on the plain-panel branch AND
+        (the RELAY-level no-re-warn convention; the recompute levels'
+        bootstrap replay re-emits by design), on the plain-panel branch AND
         the cohort-mass (bare-cluster) branch - the isfinite(C) guard must
         run BEFORE the coincidence comparison (NaN != 0.0 is True)."""
         for ctor in ({}, {"cluster": "unit"}):

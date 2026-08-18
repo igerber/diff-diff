@@ -30,6 +30,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   docstring/REGISTRY/tutorial wording was corrected accordingly, and the old
   `test_coarser_partition_more_conservative` (whose DGP made the ordering an exact
   equality) was replaced by an identity pin + a genuine unbalanced-divergence test.
+- **Post-fit `aggregate('event_study')`/`aggregate('group')` now work on bootstrapped
+  CallawaySantAnna fits** ([M-020] notes amendment; retires the TODO bootstrap
+  re-aggregation row). The recompute levels REPLAY the fit-time multiplier bootstrap
+  from a fit-retained `BootstrapReplaySpec` (the RNG state captured at weight-stream
+  construction, plus the run parameters BY VALUE): percentile se/CI and the sup-t
+  simultaneous band match a fit-time `fit(aggregate=...)` aggregation to
+  floating-point reassociation (`assert_allclose`, ~1 ULP — never bit-identity; the
+  discrete percentile p-value is a count statistic compared at `2/n_bootstrap`), the
+  container publishes no analytical provenance (`vcov`/`df` cleared), and
+  `balance_e=` composes. Properties: `seed=None` fits replay (the state is captured
+  by value); pickled results replay; post-fit `set_params`/attribute mutation of the
+  estimator cannot alter the replay. Caveats: each replaying call regenerates the
+  full weight stream and re-runs the fused perturbation GEMM over the per-cell
+  and per-event-time influence columns — O(n_bootstrap x n_units x (n_gt +
+  n_event_times)) FLOPs per call, no memoization by the aggregate()
+  immutability design; the replay re-runs the fit-time warning sites,
+  so warnings like the low-`n_bootstrap` notice can re-fire (the relay levels
+  'simple'/'total' stay silent as before); and the spec is stamped with the
+  weight-generation backend — an artifact unpickled under the OTHER backend
+  (`DIFF_DIFF_BACKEND` flip, missing Rust extension, another machine) fails closed
+  with a refit message rather than silently regenerating a different bootstrap
+  realization (stratified/single-PSU survey and census-FPC generation is
+  backend-independent and stays portable). Pre-replay legacy pickles fail closed
+  with a refit message. Ripples: `DiagnosticReport`'s ES-gated checks now RUN on
+  bootstrapped plain CS fits (parallel trends via the Bonferroni fallback,
+  pretrends-power/sensitivity via the diagonal-covariance fallback, replay warnings
+  republished per section), and `practitioner_next_steps` advises the post-fit
+  route on bootstrapped CS fits instead of the deprecated fit-time kwarg. The
+  sibling estimators' (EfficientDiD/ImputationDiD/TwoStageDiD/ContinuousDiD)
+  bootstrapped recompute gates are unchanged.
 
 ## [3.9.1] - 2026-08-17
 

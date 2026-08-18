@@ -70,6 +70,22 @@ if TYPE_CHECKING:
 _TARGET_BLOCK_BYTES = 256 * 1024 * 1024
 
 
+def effective_weight_backend() -> str:
+    """The weight-generation backend :func:`iter_weight_blocks` would use NOW.
+
+    Returns ``"rust"`` exactly when the generator branch below does — the
+    predicate must stay identical to :func:`iter_weight_blocks`'s own
+    ``rust_gen`` resolution. The two backends produce DIFFERENT draws from
+    the same bit-generator state (Rust draws one base seed and row-seeds
+    Xoshiro absolutely; the NumPy fallback consumes the PCG64 stream
+    directly), so a captured RNG state replays bit-identically only within
+    one backend. Post-fit bootstrap replay (CallawaySantAnna's
+    ``BootstrapReplaySpec``) stamps this value at fit and fails closed on a
+    mismatch rather than silently regenerating a different realization.
+    """
+    return "rust" if (HAS_RUST_BACKEND and _rust_bootstrap_weights is not None) else "numpy"
+
+
 def compute_block_size(
     n_units: int, n_bootstrap: int, target_bytes: int = _TARGET_BLOCK_BYTES
 ) -> int:

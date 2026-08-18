@@ -209,20 +209,17 @@ Staggered Adoption Issues
    # Check cohort sizes
    print(data.groupby('first_treat')['unit_id'].nunique())
 
-   # Use bootstrap for better inference. On a BOOTSTRAPPED fit, post-fit
-   # results.aggregate('event_study') raises - the percentile draws are not
-   # retained - so the deprecated fit-time aggregate= remains the documented
-   # route for this case until 4.0. (results.aggregate('simple') - and,
-   # where supported, results.aggregate('total') - relays the stored
-   # bootstrap inference.)
+   # Use bootstrap for better inference. Post-fit aggregation works on
+   # BOOTSTRAPPED fits too: results.aggregate('event_study') replays the
+   # fit-time multiplier bootstrap from the retained RNG state (percentile
+   # inference - no refit and no deprecated fit-time aggregate= needed).
    cs = CallawaySantAnna(n_bootstrap=999)
    results = cs.fit(data, outcome='y', unit='unit_id',
-                    time='period', first_treat='first_treat',
-                    aggregate='event_study')
+                    time='period', first_treat='first_treat')
 
    # Access aggregated results
-   print(results.overall_att)  # Overall ATT
-   print(results.event_study_effects)  # Event study effects
+   print(results.overall_att)                             # Overall ATT
+   print(results.aggregate('event_study').to_dataframe())  # Event study
 
 Visualization Issues
 --------------------

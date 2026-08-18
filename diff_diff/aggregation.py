@@ -553,7 +553,11 @@ class AggregationKit:
         ``cband_crit_value`` is ``None`` both when bands were disabled and
         when no aggregation ran, so it cannot distinguish the two.
     bootstrap : AggregationKit.BootstrapReplaySpec or None
-        Value-bound bootstrap replay description; ``None`` on analytical fits.
+        Value-bound bootstrap replay description. Populated on
+        CallawaySantAnna bootstrapped fits (the recompute levels replay the
+        fit-time multiplier bootstrap from it); ``None`` on analytical fits
+        and on pre-replay legacy artifacts (whose bootstrapped recompute
+        levels fail closed with a refit message).
     """
 
     bookkeeping: Dict[str, Any]
@@ -574,9 +578,27 @@ class BootstrapReplaySpec:
     ``set_params(n_bootstrap=...)`` silently changes - and can truncate - the
     replayed stream.
 
-    This records the generator state plus the parameters BY VALUE and rebuilds
-    the stream through a module-level factory, which replays bit-identically,
-    pickles, and is immune to later mutation of the estimator.
+    This records the generator state plus the parameters BY VALUE, which
+    pickles and is immune to later mutation of the estimator. Two usage
+    modes:
+
+    - ``rebuild()`` reconstructs the plain unit-level stream via
+      ``iter_weight_blocks`` (it does NOT cover the survey/FPC/PSU-expansion
+      branches).
+    - CallawaySantAnna's post-fit replay is STATE-ONLY: it consumes
+      ``bitgen_state``/``n_bootstrap``/``weight_type``/``backend`` and lets
+      ``_run_multiplier_bootstrap`` re-derive the generation branch from the
+      kit bookkeeping - one branch-selection implementation, no drift.
+
+    ``backend`` records the weight-generation backend identity at capture
+    (``"rust"``/``"numpy"`` per
+    :func:`diff_diff.bootstrap_chunking.effective_weight_backend`, or
+    ``"portable"`` for provably backend-independent generation branches).
+    The Rust and NumPy generators produce DIFFERENT draws from the same
+    bit-generator state, so a replay under a different backend must FAIL
+    CLOSED rather than silently regenerate another realization. ``None``
+    means unknown and also fails closed - a permissive default on a safety
+    discriminator would let a future constructor silently bypass the guard.
     """
 
     bitgen_state: Dict[str, Any]
@@ -585,6 +607,7 @@ class BootstrapReplaySpec:
     weight_type: str
     block_size: Optional[int] = None
     expand_index: Optional[np.ndarray] = None
+    backend: Optional[str] = None
 
     def rebuild(self) -> Any:
         """Reconstruct the replayable weight stream."""

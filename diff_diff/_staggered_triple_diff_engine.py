@@ -145,6 +145,8 @@ class _StaggeredTripleDiffEngineMixin:
             unit: Optional[str] = None,
             precomputed: Any = None,
             cband: bool = True,
+            *,
+            _replay_bitgen_state: Optional[Dict[str, Any]] = None,
         ) -> Any: ...
 
     def _fit_staggered_core(

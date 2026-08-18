@@ -987,7 +987,8 @@ five recorded deviations:
 - **No `Available since` column.** Considered and rejected: it cannot be derived.
   `introduced_in` tracks the dataclass storage flip, so the nine `field-flip` rows
   say `4.0` while `.att` already resolves today; and a successor that exists can
-  still raise (the five bootstrapped-fit `aggregate()` families). Availability is
+  still raise (the bootstrapped-fit `aggregate()` recompute gates — four families
+  since CS's percentile-bootstrap replay landed). Availability is
   stated in prose where it is verifiable instead.
 - **§7b "Remaining 4.0 changes"** was added: §§2-8 as skeletoned cover only 102 of
   the 108 qualifying rows, leaving `obligation-sdid-params`, `constructor-hygiene`,

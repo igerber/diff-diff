@@ -882,3 +882,39 @@ class TestHADBootstrapChunkInvariance:
         monkeypatch.setattr("diff_diff.bootstrap_chunking.compute_block_size", lambda *a, **k: 9)
         tiny = _crit()
         assert tiny == pytest.approx(base, rel=1e-8, abs=1e-10)
+
+
+class TestEffectiveWeightBackend:
+    """The backend discriminator behind the post-fit bootstrap replay guard.
+
+    Its predicate must stay IDENTICAL to iter_weight_blocks' own rust_gen
+    resolution — a degenerate helper (e.g. always "numpy") would silently
+    disarm the fail-closed backend-mismatch guard in
+    CallawaySantAnnaResults.aggregate(), so the return value is pinned
+    directly here rather than only through the guard.
+    """
+
+    def test_matches_the_iter_weight_blocks_predicate(self):
+        import diff_diff.bootstrap_chunking as bc
+
+        expected = (
+            "rust" if (bc.HAS_RUST_BACKEND and bc._rust_bootstrap_weights is not None) else "numpy"
+        )
+        assert bc.effective_weight_backend() == expected
+
+    def test_numpy_when_rust_unavailable(self, monkeypatch):
+        import diff_diff.bootstrap_chunking as bc
+
+        monkeypatch.setattr(bc, "HAS_RUST_BACKEND", False)
+        monkeypatch.setattr(bc, "_rust_bootstrap_weights", None)
+        assert bc.effective_weight_backend() == "numpy"
+
+    def test_rust_requires_both_flag_and_symbol(self, monkeypatch):
+        import diff_diff.bootstrap_chunking as bc
+
+        # A stale-extension environment can have the flag without the
+        # symbol; the generator falls back to NumPy there, so the
+        # discriminator must too.
+        monkeypatch.setattr(bc, "HAS_RUST_BACKEND", True)
+        monkeypatch.setattr(bc, "_rust_bootstrap_weights", None)
+        assert bc.effective_weight_backend() == "numpy"
