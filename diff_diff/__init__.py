@@ -160,6 +160,8 @@ from diff_diff.local_linear import (
 )
 from diff_diff.lpdid import LPDiD
 from diff_diff.lpdid_results import LPDiDResults
+from diff_diff.lwdid import LWDiD
+from diff_diff.lwdid_results import LWDiDResults
 from diff_diff.mmm import (
     MeridianROIPrior,
     meridian_calibration_mask,
@@ -459,6 +461,9 @@ __all__ = [
     # LPDiD (Local Projections DiD)
     "LPDiD",
     "LPDiDResults",
+    # LWDiD (Lee & Wooldridge rolling transformation DiD)
+    "LWDiD",
+    "LWDiDResults",
     # Visualization
     "plot_bacon",
     "plot_event_study",

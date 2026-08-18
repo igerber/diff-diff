@@ -261,3 +261,9 @@ def assert_nan_inference(inference_dict):
     ci = inference_dict["conf_int"]
     assert np.isnan(ci[0]), f"ci_lower should be NaN when SE={se}, got {ci[0]}"
     assert np.isnan(ci[1]), f"ci_upper should be NaN when SE={se}, got {ci[1]}"
+
+
+@pytest.fixture
+def require_lwdid():
+    """Skip test if lwdid package not installed (optional for equivalence tests)."""
+    pytest.importorskip("lwdid", reason="lwdid package required for equivalence tests")

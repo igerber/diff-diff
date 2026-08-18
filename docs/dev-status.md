@@ -67,8 +67,10 @@ Target: ideally < 1000 lines per module; modules ≥3000 lines are candidates fo
 ## Standard Error Consistency
 
 `vcov_type` has subsumed the previously-proposed `se_type` knob. `DifferenceInDifferences`
-and `TwoWayFixedEffects` accept `vcov_type ∈ {classical, hc1, hc2, hc2_bm, conley}`
-(the validated set in `linalg.py::_VALID_VCOV_TYPES`); cluster-robust variance comes from
+and `TwoWayFixedEffects` accept `vcov_type ∈ {classical, hc1, hc2, hc2_bm, hc3, conley}`
+(the validated set in `linalg.py::_VALID_VCOV_TYPES`); `hc3` is one-way only (it cannot
+be combined with `cluster=`) and applies the jackknife-style leverage correction matching
+`sandwich::vcovHC(type = "HC3")`; cluster-robust variance comes from
 `cluster=` alongside the heteroscedasticity kind (`hc1+cluster` ⇒ CR1 Liang-Zeger;
 `hc2_bm+cluster` ⇒ CR2 Bell-McCaffrey, including the weighted WLS-CR2 port; the N>1
 absorbed-FE + weights composition is supported via iterative alternating-projection demeaning, #586);

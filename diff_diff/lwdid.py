@@ -1,0 +1,3305 @@
+"""LWDiD: Lee & Wooldridge (2025, 2026) rolling-transformation DiD.
+
+Converts panel DiD into cross-sectional estimation via unit-specific
+rolling transformations of the outcome variable. Supports common timing
+and staggered adoption designs with regression adjustment ('reg'),
+inverse probability weighting ('ipw'), doubly robust ('dr'), and
+propensity score matching ('psm') estimation.
+
+References
+----------
+Lee, S. J. & Wooldridge, J. M. (2025). "A Simple Transformation Approach
+  to Difference-in-Differences Estimation for Panel Data." SSRN 4516518.
+Lee, S. J. & Wooldridge, J. M. (2026). "Simple Approaches to Inference
+  with Difference-in-Differences Estimators with Small Cross-Sectional
+  Sample Sizes." SSRN 5325686.
+"""
+
+from __future__ import annotations
+
+import warnings
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+import numpy as np
+import pandas as pd
+from scipy import linalg as scipy_linalg
+
+from diff_diff._base import BaseEstimator
+from diff_diff.linalg import solve_logit, solve_ols
+from diff_diff.lwdid_results import LWDiDResults
+from diff_diff.utils import safe_inference, validate_binary
+
+_VALID_ROLLING = ("demean", "detrend", "demeanq", "detrendq")
+_VALID_ESTIMATION_METHODS = ("reg", "ipw", "dr", "psm")
+_VALID_VCOV_TYPES = ("classical", "hc1", "hc2", "hc3")
+_VALID_CONTROL_GROUPS = ("never_treated", "not_yet_treated")
+
+# Propensity score trimming bounds for numerical stability
+_PS_TRIM_LOWER = 0.01
+_PS_TRIM_UPPER = 0.99
+
+
+def _check_treatment_design(
+    df: pd.DataFrame,
+    unit: str,
+    time: str,
+    treatment: str,
+    first_treat: Optional[str] = None,
+) -> None:
+    """Validate the treatment design in a single vectorized pass.
+
+    One sort + groupby covers three checks:
+
+    1. Absorbing treatment: within each unit the sequence D_it must be
+       non-decreasing over time (once treated, always treated).
+    2. Common timing (``first_treat is None``): every treated unit must
+       first switch to D_it = 1 in the same period; heterogeneous onsets
+       require the staggered interface (``first_treat`` cohort column).
+    3. Staggered (``first_treat`` given): each treated unit's first
+       period with D_it = 1 must equal its cohort value g_i, so that
+       D_it = 1[t >= g_i]; units with cohort NaN/0 (never treated by
+       cohort) must have no D_it = 1 rows, and cohorts inside the
+       observed window must actually switch on.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Panel data in long format.
+    unit, time, treatment : str
+        Column names of the unit identifier, time period, and binary
+        treatment indicator.
+    first_treat : str or None, default None
+        Cohort (first-treatment-time) column for staggered designs.
+
+    Raises
+    ------
+    ValueError
+        If any applicable design check fails.
+    """
+    cols = [unit, time, treatment]
+    if first_treat is not None:
+        cols.append(first_treat)
+    ordered = df[cols].sort_values([unit, time], kind="stable")
+
+    # (1) Absorbing treatment: within-unit first difference must never
+    # be negative (a 1 -> 0 switch).
+    diffs = ordered.groupby(unit, sort=False)[treatment].diff()
+    non_absorbing = (diffs < 0).to_numpy()
+    if non_absorbing.any():
+        bad_units = pd.unique(ordered.loc[non_absorbing, unit])
+        preview = ", ".join(repr(u) for u in bad_units[:5])
+        suffix = "" if len(bad_units) <= 5 else f", ... ({len(bad_units)} units total)"
+        raise ValueError(
+            f"Non-absorbing treatment detected for unit(s) {preview}{suffix}: "
+            f"treatment switches from 1 to 0. LWDiD requires absorbing treatment."
+        )
+
+    # First observed treatment period per treated unit (rows are already
+    # time-sorted within unit, so first() is the onset).
+    treated_rows = ordered.loc[ordered[treatment] == 1]
+    onset = treated_rows.groupby(unit, sort=False)[time].first()
+
+    if first_treat is None:
+        # (2) Common timing: a single onset shared by all treated units.
+        if onset.nunique() > 1:
+            onsets = sorted(onset.unique().tolist())
+            raise ValueError(
+                f"Treated units have heterogeneous first-treatment periods "
+                f"{onsets} but no cohort column was given. Common-timing "
+                f"LWDiD requires a single treatment onset; pass first_treat= "
+                f"to use the staggered (cohort) interface."
+            )
+        return
+
+    # (3) Staggered: onset must equal the unit's cohort value g_i.
+    cohort_by_unit = ordered.groupby(unit, sort=False)[first_treat].first()
+    onset_cohort = cohort_by_unit.reindex(onset.index)
+    never_by_cohort = onset_cohort.isna() | (onset_cohort == 0)
+    mismatch = never_by_cohort.to_numpy() | (onset_cohort.to_numpy() != onset.to_numpy())
+    if mismatch.any():
+        bad_units = onset.index[mismatch]
+        preview = ", ".join(repr(u) for u in bad_units[:5])
+        suffix = "" if len(bad_units) <= 5 else f", ... ({len(bad_units)} units total)"
+        raise ValueError(
+            f"Treatment column '{treatment}' is inconsistent with cohort "
+            f"column '{first_treat}' for unit(s) {preview}{suffix}: the first "
+            f"period with treatment=1 must equal the unit's cohort value, and "
+            f"never-treated units (cohort NaN or 0) must have no treatment=1 rows."
+        )
+
+    # Cohorts inside the observed window must have observed onsets;
+    # cohorts beyond the last period are vacuously consistent.
+    max_time = ordered[time].max()
+    in_window = cohort_by_unit.notna() & (cohort_by_unit > 0) & (cohort_by_unit <= max_time)
+    silent = in_window.to_numpy() & ~cohort_by_unit.index.isin(onset.index)
+    if silent.any():
+        bad_units = cohort_by_unit.index[silent]
+        preview = ", ".join(repr(u) for u in bad_units[:5])
+        suffix = "" if len(bad_units) <= 5 else f", ... ({len(bad_units)} units total)"
+        raise ValueError(
+            f"Treatment column '{treatment}' is inconsistent with cohort "
+            f"column '{first_treat}' for unit(s) {preview}{suffix}: cohort "
+            f"value lies within the observed window but the unit has no "
+            f"treatment=1 rows."
+        )
+
+
+def _encode_staggered_time_scale(
+    df: pd.DataFrame,
+    time: str,
+    first_treat: str,
+) -> Tuple[pd.DataFrame, str, str, Optional[Dict[str, Dict[int, Any]]]]:
+    """Re-encode datetime/Period time scales as integer positions.
+
+    The staggered machinery relies on integer time semantics: cohort
+    eligibility comparisons (``g > 0``, ``g > t``), event times ``t - g``,
+    and the never-treated sentinel 0. Datetime and Period panels are
+    therefore mapped onto the ordered support of observed time values --
+    the k-th observed period becomes position k (1-based, so 0 stays free
+    for the never-treated sentinel, coded NaT in datetime panels). Cohort
+    values between observed periods map to the next observed position and
+    cohorts beyond the window map to T + 1, preserving the onset
+    consistency checks. Numeric panels are returned unchanged.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Panel data (a private copy owned by the caller; encoded position
+        columns are added in place).
+    time, first_treat : str
+        Time and cohort column names.
+
+    Returns
+    -------
+    tuple
+        ``(df, time_column, cohort_column, label_maps)`` where
+        ``label_maps`` is None for numeric panels and otherwise maps
+        integer positions back to the original time/cohort labels.
+
+    Raises
+    ------
+    ValueError
+        If the two columns do not share the same time family: exactly one
+        of them is date-like, one is datetime64 while the other is Period
+        (either direction), or both are Period with different frequencies.
+    """
+    time_is_datetime = pd.api.types.is_datetime64_any_dtype(df[time])
+    cohort_is_datetime = pd.api.types.is_datetime64_any_dtype(df[first_treat])
+    time_is_period = isinstance(df[time].dtype, pd.PeriodDtype)
+    cohort_is_period = isinstance(df[first_treat].dtype, pd.PeriodDtype)
+    if not (time_is_datetime or time_is_period or cohort_is_datetime or cohort_is_period):
+        return df, time, first_treat, None
+    # datetime64 and Period are distinct time families: position lookups
+    # (searchsorted, dict membership) crash inside pandas when mixed, so
+    # both directions are rejected up front with the documented ValueError.
+    if time_is_datetime != cohort_is_datetime or time_is_period != cohort_is_period:
+        raise ValueError(
+            f"Columns '{time}' (time) and '{first_treat}' (first_treat) must "
+            f"share the same time scale; got dtypes {df[time].dtype} and "
+            f"{df[first_treat].dtype}. Encode both as datetime64, both as "
+            f"Period with the same frequency, or both as numeric."
+        )
+    if time_is_period and df[time].dtype.freq != df[first_treat].dtype.freq:
+        raise ValueError(
+            f"Columns '{time}' (time) and '{first_treat}' (first_treat) are "
+            f"Period columns with different frequencies ({df[time].dtype} vs "
+            f"{df[first_treat].dtype}). Convert them to a common frequency "
+            f"before fitting."
+        )
+
+    support = pd.Index(pd.unique(df[time])).sort_values()
+    time_pos: Dict[Any, int] = {value: index + 1 for index, value in enumerate(support)}
+
+    def cohort_pos(value: Any) -> int:
+        if value in time_pos:
+            return time_pos[value]
+        # Between observed periods -> next observed position; beyond the
+        # window -> T + 1 (vacuously consistent, like numeric cohorts
+        # past the last observed period).
+        return int(support.searchsorted(value, side="left")) + 1
+
+    cohort_map: Dict[Any, int] = {
+        value: cohort_pos(value)
+        for value in pd.Index(pd.unique(df[first_treat]))
+        if pd.notna(value)
+    }
+    df["_lwdid_time_pos"] = df[time].map(time_pos).astype(int)
+    df["_lwdid_cohort_pos"] = df[first_treat].map(cohort_map).fillna(0).astype(int)
+    label_maps = {
+        "time": {position: value for value, position in time_pos.items()},
+        "cohort": {position: value for value, position in cohort_map.items()},
+    }
+    return df, "_lwdid_time_pos", "_lwdid_cohort_pos", label_maps
+
+
+def _relabel_staggered_results(
+    results: LWDiDResults,
+    label_maps: Dict[str, Dict[int, Any]],
+) -> LWDiDResults:
+    """Map integer time positions in staggered results back to original labels.
+
+    Cohort and calendar-time keys (and the nested ``'cohort'``/``'time'``
+    entries) are restored to the user's datetime/Period labels. Relative
+    event times remain integers: they are position differences on the
+    ordered time support.
+    """
+    time_labels = label_maps["time"]
+    cohort_labels = label_maps["cohort"]
+    if results.cohort_effects is not None:
+        relabeled_cohorts: Dict[Any, Dict[str, Any]] = {}
+        for g, info in results.cohort_effects.items():
+            info["cohort"] = cohort_labels.get(info["cohort"], info["cohort"])
+            relabeled_cohorts[cohort_labels.get(g, g)] = info
+        results.cohort_effects = relabeled_cohorts
+    if results.cohort_time_effects is not None:
+        relabeled_cells: Dict[Any, Dict[str, Any]] = {}
+        for (g, t), info in results.cohort_time_effects.items():
+            info["cohort"] = cohort_labels.get(info["cohort"], info["cohort"])
+            info["time"] = time_labels.get(info["time"], info["time"])
+            relabeled_cells[(cohort_labels.get(g, g), time_labels.get(t, t))] = info
+        results.cohort_time_effects = relabeled_cells
+    return results
+
+
+class LWDiD(BaseEstimator):
+    """Lee & Wooldridge rolling-transformation DiD estimator.
+
+    Parameters
+    ----------
+    rolling : {'demean', 'detrend', 'demeanq', 'detrendq'}, default 'demean'
+        Unit-specific transformation method.
+        'demean': subtract pre-treatment mean
+        'detrend': subtract pre-treatment linear trend
+        'demeanq': subtract unit-specific seasonal (quarterly) means
+        'detrendq': subtract unit-specific linear trend + seasonal effects
+    estimation_method : {'reg', 'ipw', 'dr', 'psm'}, default 'reg'
+        Treatment effect estimation method.
+        'reg': regression adjustment (OLS)
+        'ipw': inverse probability weighting
+        'dr': doubly robust (augmented IPW)
+        'psm': propensity score matching (1:1 nearest-neighbor)
+    vcov_type : {'classical', 'hc1', 'hc2', 'hc3'}, default 'hc1'
+        Variance-covariance estimator.
+        'hc2': leverage-corrected (u_i^2 / (1-h_ii))
+        'hc3': jackknife-style leverage correction (u_i^2 / (1-h_ii)^2)
+        Cluster-robust (CR1) inference activates via the ``cluster=``
+        parameter, not through a ``vcov_type`` value.
+    cluster : str or None, default None
+        Column name for cluster-robust (CR1) standard errors. When set,
+        clustered inference is active for the whole fit.
+    control_group : {'never_treated', 'not_yet_treated'}, default 'not_yet_treated'
+        Control group definition for staggered designs. Both options
+        require never-treated units: 'never_treated' needs at least two,
+        and 'not_yet_treated' needs at least one so that every cohort-time
+        cell keeps a valid control pool. Panels where all units are
+        eventually treated are rejected with a ValueError.
+    alpha : float, default 0.05
+        Significance level for confidence intervals.
+    n_bootstrap : int, default 0
+        Number of bootstrap replications (0 = analytical inference).
+    seed : int or None, default None
+        Random seed for bootstrap inference.
+    pscore_trim : float, default 0.01
+        Propensity score trimming threshold. Scores below this value
+        or above (1 - pscore_trim) are clipped. Used by IPW/DR/PSM.
+    n_neighbors : int, default 1
+        Number of nearest neighbors for PSM matching.
+    caliper : float or None, default None
+        Maximum allowable distance for PSM matches. Unmatched treated
+        units (no control within caliper) receive NaN.
+    with_replacement : bool, default True
+        Whether PSM matching is done with replacement.
+
+    Notes
+    -----
+    **Parameter mapping from lwdid-py to diff-diff:**
+
+    The standalone ``lwdid-py`` package (``from lwdid import lwdid``) uses a
+    functional interface with separate ``d`` (ever-treated indicator) and
+    ``post`` (post-period indicator) columns.  In diff-diff, the ``treatment``
+    column is the time-varying binary indicator ``D_i * post_t``—i.e., the
+    product of the two lwdid-py columns.
+
+    .. code-block:: python
+
+        # lwdid-py (functional API):
+        lwdid(data, y='y', d='d', ivar='unit', tvar='time', post='post',
+              rolling='demean', estimator='ra', vce=None)
+
+        # Equivalent in diff-diff (class-based API):
+        LWDiD(rolling='demean', estimation_method='reg',
+              vcov_type='classical').fit(
+            data, outcome='y', unit='unit', time='time', treatment='treat')
+        # where data['treat'] == data['d'] * data['post']
+
+    Parameter correspondence:
+
+    =================  ==================  ====================================
+    lwdid-py           diff-diff           Notes
+    =================  ==================  ====================================
+    y                  outcome             Outcome column name
+    d + post           treatment           Binary D_it (ever-treated × post)
+    ivar               unit                Unit identifier
+    tvar               time                Time variable
+    gvar               first_treat         Cohort (first treatment period)
+    rolling            rolling             Same values
+    estimator='ra'     estimation_method   'ra' -> 'reg', 'ipwra' -> 'dr'
+    vce=None           vcov_type           Homoskedastic == 'classical'
+    vce='hc1'          vcov_type='hc1'     Heteroskedasticity-robust
+    vce='cluster'      cluster=<column>    Constructor cluster= parameter
+    cluster_var        cluster             Cluster variable name
+    controls           controls            Covariates
+    control_group      control_group       Same values
+    =================  ==================  ====================================
+
+    **Results mapping:**
+
+    ==================  =========================  ==============================
+    lwdid-py            diff-diff                  Notes
+    ==================  =========================  ==============================
+    result.att          result.att                 ATT point estimate
+    result.se_att       result.se                  Standard error
+    result.t_stat       result.t_stat              t-statistic
+    result.pvalue       result.p_value             p-value (note underscore)
+    result.ci_lower     result.conf_int[0]         CI lower bound
+    result.ci_upper     result.conf_int[1]         CI upper bound
+    result.nobs         result.n_obs               Number of observations
+    result.n_treated    result.n_treated           Treated units
+    result.n_control    result.n_control           Control units
+    result.vce_type     result.vcov_type           Variance family
+    result.cluster_var  result.cluster_name        Cluster variable name
+    result.n_clusters   result.n_clusters          Number of clusters
+    ==================  =========================  ==============================
+
+    Examples
+    --------
+    >>> import numpy as np, pandas as pd
+    >>> from diff_diff.lwdid import LWDiD
+    >>> from diff_diff import generate_staggered_data
+    >>> data = generate_staggered_data(n_units=100, n_periods=8, seed=0)
+    >>> model = LWDiD(rolling='demean', estimation_method='reg')
+    >>> result = model.fit(data, outcome='outcome', unit='unit',
+    ...                    time='period', treatment='treated',
+    ...                    first_treat='first_treat')
+    >>> result.att != 0
+    True
+    """
+
+    def __init__(
+        self,
+        rolling: str = "demean",
+        estimation_method: str = "reg",
+        vcov_type: str = "hc1",
+        cluster: Optional[str] = None,
+        control_group: str = "not_yet_treated",
+        alpha: float = 0.05,
+        n_bootstrap: int = 0,
+        seed: Optional[int] = None,
+        # Engineering parameters:
+        pscore_trim: float = 0.01,
+        n_neighbors: int = 1,
+        caliper: Optional[float] = None,
+        with_replacement: bool = True,
+        n_jobs: int = 1,
+    ) -> None:
+        # Validate rolling
+        if rolling not in _VALID_ROLLING:
+            raise ValueError(f"rolling must be one of {_VALID_ROLLING}, got '{rolling}'")
+        # Validate estimation_method
+        if estimation_method not in _VALID_ESTIMATION_METHODS:
+            raise ValueError(
+                f"estimation_method must be one of {_VALID_ESTIMATION_METHODS}, "
+                f"got '{estimation_method}'"
+            )
+        # Validate vcov_type ('cluster' is retired as a MODE value: clustering
+        # activates via the cluster= constructor parameter)
+        if vcov_type == "cluster":
+            raise ValueError(
+                "vcov_type='cluster' is retired; pass the cluster= constructor "
+                "parameter (column name) to activate cluster-robust inference."
+            )
+        if vcov_type not in _VALID_VCOV_TYPES:
+            raise ValueError(f"vcov_type must be one of {_VALID_VCOV_TYPES}, got '{vcov_type}'")
+        # Validate control_group
+        if control_group not in _VALID_CONTROL_GROUPS:
+            raise ValueError(
+                f"control_group must be one of {_VALID_CONTROL_GROUPS}, " f"got '{control_group}'"
+            )
+        # Validate alpha
+        if not (0 < alpha < 1):
+            raise ValueError(f"alpha must be in (0, 1), got {alpha}")
+        # Validate n_bootstrap
+        if not isinstance(n_bootstrap, (int, np.integer)) or n_bootstrap < 0:
+            raise ValueError(f"n_bootstrap must be a non-negative integer, " f"got {n_bootstrap}")
+
+        self.rolling = rolling
+        self.estimation_method = estimation_method
+        self.vcov_type = vcov_type
+        self.cluster = cluster
+        self.control_group = control_group
+        self.alpha = alpha
+        self.n_bootstrap = int(n_bootstrap)
+        self.seed = seed
+
+        # Engineering parameters
+        self.pscore_trim = float(pscore_trim)
+        if not (0.0 < self.pscore_trim < 0.5):
+            raise ValueError("pscore_trim must be between 0 and 0.5")
+        self.n_neighbors = int(n_neighbors)
+        if self.n_neighbors < 1:
+            raise ValueError("n_neighbors must be >= 1")
+        self.caliper = float(caliper) if caliper is not None else None
+        self.with_replacement = bool(with_replacement)
+        if not isinstance(n_jobs, (int, np.integer)) or n_jobs < 1:
+            raise ValueError(f"n_jobs must be a positive integer, got {n_jobs}")
+        self.n_jobs = int(n_jobs)
+
+    def fit(
+        self,
+        data: pd.DataFrame,
+        outcome: str,
+        unit: str,
+        time: str,
+        treatment: str,
+        first_treat: Optional[str] = None,
+        covariates: Optional[List[str]] = None,
+    ) -> LWDiDResults:
+        """Fit the LWDiD estimator.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Panel dataset in long format.
+        outcome : str
+            Column name of the outcome variable.
+        unit : str
+            Column name of the unit identifier.
+        time : str
+            Column name of the time period variable.
+        treatment : str
+            Column name of the binary treatment indicator (0/1).
+        first_treat : str, optional
+            Column name of the first-treatment-time (cohort) variable.
+            If None, assumes common timing (all treated units adopt
+            treatment simultaneously).
+        covariates : list of str, optional
+            Column names for control variables (covariates). Every LWDiD
+            path requires unit-constant (time-invariant) covariates;
+            time-varying columns raise a ValueError. The same
+            unit-constancy contract applies to the constructor's
+            ``cluster=`` column.
+
+        Returns
+        -------
+        LWDiDResults
+            Object containing ATT estimates, standard errors, and
+            inference results.
+
+        Raises
+        ------
+        ValueError
+            If required columns are missing, treatment is not binary,
+            or panel structure is invalid.
+        """
+        # --- Input validation ---
+        df = data.copy()
+        cluster = self.cluster
+        self._validate_inputs(df, outcome, unit, time, treatment, first_treat, cluster, covariates)
+
+        # Validate treatment is binary
+        validate_binary(df[treatment].values, treatment)
+
+        # Datetime/Period time scales are re-encoded as integer positions
+        # before design validation: the staggered checks and estimation
+        # compare cohorts against the never-treated sentinel 0 and build
+        # event times as t - g, which are undefined for datetime values.
+        label_maps = None
+        if first_treat is not None:
+            df, time, first_treat, label_maps = _encode_staggered_time_scale(df, time, first_treat)
+
+        # Unified treatment-design validation (absorbing + timing
+        # consistency) covering both dispatch paths
+        _check_treatment_design(df, unit, time, treatment, first_treat)
+
+        # Normalize covariates
+        if covariates is None:
+            covariates = []
+
+        # Dispatch to common timing or staggered
+        if first_treat is None:
+            return self._fit_common_timing(df, outcome, unit, time, treatment, cluster, covariates)
+        from diff_diff.lwdid_staggered import fit_staggered
+
+        results = fit_staggered(self, df, outcome, unit, time, first_treat, cluster, covariates)
+        if label_maps is not None:
+            _relabel_staggered_results(results, label_maps)
+        return results
+
+    def get_transformation_diagnostics(
+        self,
+        data: pd.DataFrame,
+        outcome: str,
+        unit: str,
+        time: str,
+        treatment: str,
+        first_treat: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Run the transformation step and return diagnostics without full estimation.
+
+        This is useful for inspecting pre-treatment fit quality before running
+        the full estimator.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Panel data.
+        outcome : str
+            Name of the outcome column.
+        unit : str
+            Name of the unit identifier column.
+        time : str
+            Name of the time period column.
+        treatment : str
+            Name of the treatment indicator column.
+        first_treat : str or None, default None
+            Name of the first-treatment-time (cohort) column, for
+            staggered designs.
+
+        Returns
+        -------
+        dict
+            Common timing: transformation diagnostics (see _transform_*
+            docstrings). Staggered: per-cohort diagnostics organized as
+            ``{'method': ..., 'design': 'staggered', 'by_cohort': {g:
+            diagnostics_g}}`` where each cohort g uses its own pre-period
+            definition ``time < g`` and the same unit subset as estimation
+            (cohort-g treated units plus the control superset implied by
+            ``control_group``).
+        """
+        df = data.copy()
+
+        if first_treat is not None:
+            # Staggered: each cohort g has its own pre-period t < g,
+            # mirroring _transform_for_cohort in estimation. Datetime and
+            # Period panels use the same integer-position encoding as fit().
+            df, time, first_treat, label_maps = _encode_staggered_time_scale(df, time, first_treat)
+            cohort_by_unit = df.drop_duplicates(subset=[unit], keep="first").set_index(unit)[
+                first_treat
+            ]
+            never_mask = cohort_by_unit.isna() | (cohort_by_unit == 0)
+            never_units = cohort_by_unit.index[never_mask].to_list()
+            treated_cohorts = sorted(
+                value for value in pd.unique(df[first_treat]) if pd.notna(value) and value > 0
+            )
+            by_cohort: Dict[Any, Dict[str, Any]] = {}
+            for g in treated_cohorts:
+                treated_units = cohort_by_unit.index[cohort_by_unit == g].to_list()
+                if self.control_group == "never_treated":
+                    control_superset = never_units
+                else:
+                    later = cohort_by_unit.index[cohort_by_unit > g].to_list()
+                    control_superset = never_units + later
+                relevant_units = list(dict.fromkeys(treated_units + control_superset))
+                cohort_frame = df.loc[df[unit].isin(relevant_units)].copy()
+                pre_mask = cohort_frame[time] < g
+                by_cohort[g] = self._run_transformation_diagnostics(
+                    cohort_frame, outcome, unit, time, pre_mask
+                )
+            if label_maps is not None:
+                cohort_labels = label_maps["cohort"]
+                by_cohort = {cohort_labels.get(g, g): value for g, value in by_cohort.items()}
+            return {
+                "method": self.rolling,
+                "design": "staggered",
+                "by_cohort": by_cohort,
+            }
+
+        # Common timing: pre-treatment periods are those where NO unit
+        # is treated (same logic as _fit_common_timing)
+        time_treatment = df.groupby(time)[treatment].max()
+        pre_periods = time_treatment[time_treatment == 0].index.tolist()
+        pre_mask = df[time].isin(pre_periods)
+        return self._run_transformation_diagnostics(df, outcome, unit, time, pre_mask)
+
+    def _run_transformation_diagnostics(
+        self,
+        df: pd.DataFrame,
+        outcome: str,
+        unit: str,
+        time: str,
+        pre_mask: Union[pd.Series, np.ndarray],
+    ) -> Dict[str, Any]:
+        """Dispatch to the configured transformation with diagnostics enabled."""
+        if self.rolling == "demean":
+            _, diagnostics = self._transform_demean(
+                df, outcome, unit, pre_mask, return_diagnostics=True
+            )
+        elif self.rolling == "detrend":
+            _, diagnostics = self._transform_detrend(
+                df, outcome, unit, time, pre_mask, return_diagnostics=True
+            )
+        elif self.rolling == "demeanq":
+            _, diagnostics = self._transform_demeanq(
+                df, outcome, unit, time, pre_mask, return_diagnostics=True
+            )
+        elif self.rolling == "detrendq":
+            _, diagnostics = self._transform_detrendq(
+                df, outcome, unit, time, pre_mask, return_diagnostics=True
+            )
+        else:
+            _, diagnostics = self._transform_detrend(
+                df, outcome, unit, time, pre_mask, return_diagnostics=True
+            )
+
+        return diagnostics
+
+    def _validate_inputs(
+        self,
+        df: pd.DataFrame,
+        outcome: str,
+        unit: str,
+        time: str,
+        treatment: str,
+        cohort: Optional[str],
+        cluster: Optional[str],
+        controls: Optional[List[str]],
+    ) -> None:
+        """Validate that all required columns exist and data is valid.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The input dataframe.
+        outcome, unit, time, treatment : str
+            Required column names.
+        cohort, cluster : str or None
+            Optional column names.
+        controls : list of str or None
+            Optional control variable column names.
+
+        Raises
+        ------
+        ValueError
+            If any specified column is not in the dataframe.
+        """
+        required_cols = [outcome, unit, time, treatment]
+        if cohort is not None:
+            required_cols.append(cohort)
+        if cluster is not None:
+            required_cols.append(cluster)
+        if controls:
+            required_cols.extend(controls)
+
+        missing = [c for c in required_cols if c not in df.columns]
+        if missing:
+            raise ValueError(f"Columns not found in data: {missing}")
+
+        # Check for NaN in key columns
+        for col in [outcome, unit, time, treatment]:
+            if df[col].isna().any():
+                raise ValueError(
+                    f"Column '{col}' contains missing values. "
+                    f"Please handle missing data before fitting."
+                )
+
+        # Check panel structure: each unit-time pair should be unique
+        duplicates = df.duplicated(subset=[unit, time], keep=False)
+        if duplicates.any():
+            n_dup = duplicates.sum()
+            raise ValueError(
+                f"Panel is not balanced: {n_dup} duplicate "
+                f"unit-time observations found. Each (unit, time) "
+                f"pair must be unique."
+            )
+
+        # Panel balance check
+        obs_per_unit = df.groupby(unit)[time].nunique()
+        if obs_per_unit.nunique() > 1:
+            n_short = (obs_per_unit < obs_per_unit.max()).sum()
+            warnings.warn(
+                f"Unbalanced panel: {n_short} of {obs_per_unit.shape[0]} units have "
+                f"fewer than {obs_per_unit.max()} time periods. LWDiD assumes balanced "
+                "panels for optimal performance.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        # Unit-constancy contracts, shared by BOTH dispatch paths: LWDiD
+        # collapses the panel to one row per unit, reading unit-level
+        # covariate and cluster values. A time-varying column would make
+        # the estimate depend on the row order of the input frame (and,
+        # in staggered designs, silently pull post-treatment covariate
+        # values into the cohort-time cells), so it is rejected here.
+        for column in controls or []:
+            varying = df.groupby(unit)[column].nunique(dropna=False)
+            if (varying > 1).any():
+                raise ValueError(
+                    f"Covariate '{column}' is not unit-constant; time-varying "
+                    "covariates are not supported by LWDiD. Aggregate the "
+                    "column to one value per unit (e.g. its pre-treatment "
+                    "value) before fitting."
+                )
+        if cluster is not None and cluster != unit:
+            varying = df.groupby(unit)[cluster].nunique(dropna=False)
+            if (varying > 1).any():
+                raise ValueError(
+                    f"Cluster column '{cluster}' is not unit-constant; each "
+                    "unit must belong to exactly one cluster. Assign one "
+                    "cluster value per unit before fitting."
+                )
+
+    def _fit_common_timing(
+        self,
+        df: pd.DataFrame,
+        outcome: str,
+        unit: str,
+        time: str,
+        treatment: str,
+        cluster: Optional[str],
+        controls: List[str],
+    ) -> LWDiDResults:
+        """Estimate ATT under common treatment timing.
+
+        All treated units adopt treatment at the same time period.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Panel data.
+        outcome : str
+            Outcome variable column.
+        unit : str
+            Unit identifier column.
+        time : str
+            Time period column.
+        treatment : str
+            Binary treatment indicator column.
+        cluster : str or None
+            Cluster variable for cluster-robust SEs.
+        controls : list of str
+            Control variable columns.
+
+        Returns
+        -------
+        LWDiDResults
+            Estimation results.
+        """
+        # Treatment-design validation (absorbing + common timing) is
+        # performed by _check_treatment_design in fit() before dispatch.
+
+        # Step 1: Identify pre/post periods from treatment column
+        # Pre-treatment: periods where NO unit is treated
+        # Post-treatment: periods where at least one unit is treated
+        time_treatment = df.groupby(time)[treatment].max()
+        pre_periods = time_treatment[time_treatment == 0].index.tolist()
+        post_periods = time_treatment[time_treatment > 0].index.tolist()
+
+        if len(pre_periods) == 0:
+            raise ValueError(
+                "No pre-treatment periods found. At least one period "
+                "with all treatment=0 is required."
+            )
+        if len(post_periods) == 0:
+            raise ValueError(
+                "No post-treatment periods found. At least one period "
+                "with some treatment=1 is required."
+            )
+
+        # Identify treated and control units
+        unit_ever_treated = df.groupby(unit)[treatment].max()
+        treated_units = unit_ever_treated[unit_ever_treated == 1].index.tolist()
+        control_units = unit_ever_treated[unit_ever_treated == 0].index.tolist()
+        treated_set = set(treated_units)
+
+        if len(treated_units) == 0:
+            raise ValueError("No treated units found in the data.")
+        if len(control_units) == 0:
+            raise ValueError(
+                "No control units found. At least one never-treated " "unit is required."
+            )
+
+        # Step 2: Apply transformation
+        pre_mask = df[time].isin(pre_periods)
+
+        if self.rolling == "demean":
+            df = self._transform_demean(df, outcome, unit, pre_mask)
+        elif self.rolling == "detrend":
+            df = self._transform_detrend(df, outcome, unit, time, pre_mask)
+        elif self.rolling == "demeanq":
+            df = self._transform_demeanq(df, outcome, unit, time, pre_mask)
+        elif self.rolling == "detrendq":
+            df = self._transform_detrendq(df, outcome, unit, time, pre_mask)
+        else:
+            df = self._transform_detrend(df, outcome, unit, time, pre_mask)
+
+        # Per-period event-study surface (LW 2026 eq. 2.20): each post
+        # period is one small cross-sectional regression on the transformed
+        # outcome, so the surface is populated at fit time, exactly like
+        # the staggered path.
+        (
+            event_effects,
+            reference_periods,
+            event_vcov,
+            event_vcov_index,
+            event_study_df,
+            cband_method,
+            cband_crit_value,
+            cband_n_bootstrap,
+        ) = self._common_timing_event_study(
+            df, unit, time, cluster, controls, post_periods, treated_set
+        )
+
+        # Step 3: Take post-treatment cross-section of transformed outcomes
+        # Average transformed outcome over post-treatment periods per unit
+        post_mask = df[time].isin(post_periods)
+        post_df = df.loc[post_mask].copy()
+
+        # Compute unit-level average of transformed outcome in post periods
+        unit_post_avg = post_df.groupby(unit)["_ydot"].mean().reset_index()
+        unit_post_avg.columns = [unit, "_ydot_avg"]
+
+        # Build cross-sectional dataset
+        # Take first observation per unit for controls
+        cs_df = df.drop_duplicates(subset=[unit], keep="first")[[unit] + controls].copy()
+        # Treatment indicator: 1 if unit is ever-treated
+        cs_df["_treat"] = cs_df[unit].isin(treated_set).astype(float)
+        if cluster is not None:
+            # Get cluster from original data
+            if cluster == unit:
+                cs_df[cluster] = cs_df[unit]
+            else:
+                cluster_map = df.drop_duplicates(subset=[unit], keep="first").set_index(unit)[
+                    cluster
+                ]
+                cs_df[cluster] = cs_df[unit].map(cluster_map)
+
+        cs_df = cs_df.merge(unit_post_avg, on=unit, how="inner")
+
+        # After merge, drop units whose transformation produced NaN
+        n_before_drop = len(cs_df)
+        cs_df = cs_df.dropna(subset=["_ydot_avg"])
+        n_dropped = n_before_drop - len(cs_df)
+        if n_dropped > 0 and len(cs_df) > 0:
+            warnings.warn(
+                f"LWDiD: {n_dropped} unit(s) dropped due to NaN transformed outcomes "
+                f"(insufficient pre-treatment periods for '{self.rolling}' transformation).",
+                UserWarning,
+                stacklevel=2,
+            )
+        if len(cs_df) == 0:
+            nan = float("nan")
+            warnings.warn(
+                f"All units have NaN transformed outcomes for rolling='{self.rolling}'. "
+                "Likely insufficient pre-treatment periods. Cannot estimate ATT.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return LWDiDResults(
+                att=nan,
+                se=nan,
+                t_stat=nan,
+                p_value=nan,
+                conf_int=(nan, nan),
+                n_obs=0,
+                n_treated=0,
+                n_control=0,
+                rolling=self.rolling,
+                estimation_method=self.estimation_method,
+                vcov_type=self.vcov_type,
+                alpha=self.alpha,
+                event_study_effects=event_effects,
+                event_study_vcov=event_vcov,
+                event_study_vcov_index=event_vcov_index,
+                event_study_df=event_study_df,
+                reference_periods=reference_periods,
+                cband_method=cband_method,
+                cband_crit_value=cband_crit_value,
+                cband_n_bootstrap=cband_n_bootstrap,
+            )
+
+        # Step 4: Estimate ATT
+        y = cs_df["_ydot_avg"].values.astype(np.float64)
+        treat = cs_df["_treat"].values.astype(np.float64)
+        n_obs = len(y)
+        n_treated = int(treat.sum())
+        n_control = n_obs - n_treated
+
+        # Guard: if transformation produced all-NaN outcomes, return NaN result
+        if np.all(np.isnan(y)):
+            warnings.warn(
+                f"All transformed outcomes are NaN (likely insufficient "
+                f"pre-treatment periods for '{self.rolling}' transformation). "
+                f"Cannot estimate ATT.",
+                UserWarning,
+                stacklevel=2,
+            )
+            nan = float("nan")
+            return LWDiDResults(
+                att=nan,
+                se=nan,
+                t_stat=nan,
+                p_value=nan,
+                conf_int=(nan, nan),
+                n_obs=n_obs,
+                n_treated=n_treated,
+                n_control=n_control,
+                rolling=self.rolling,
+                estimation_method=self.estimation_method,
+                vcov_type=self.vcov_type,
+                alpha=self.alpha,
+                event_study_effects=event_effects,
+                event_study_vcov=event_vcov,
+                event_study_vcov_index=event_vcov_index,
+                event_study_df=event_study_df,
+                reference_periods=reference_periods,
+                cband_method=cband_method,
+                cband_crit_value=cband_crit_value,
+                cband_n_bootstrap=cband_n_bootstrap,
+            )
+
+        # Build controls matrix
+        controls_matrix = None
+        if controls:
+            controls_matrix = cs_df[controls].values.astype(np.float64)
+
+        # Get cluster ids (clustered inference activates via the cluster=
+        # constructor parameter)
+        cluster_ids = None
+        if cluster is not None:
+            cluster_ids = cs_df[cluster].values
+
+        # Estimate
+        att, se, coefs, vcov, n_params, _ = self._dispatch_estimator(
+            y, treat, controls_matrix, cluster_ids, n_obs
+        )
+
+        # Step 5: Compute inference
+        # n_params is the fitted design's parameter count, so the residual
+        # df is design-coherent (LW 2026 Section 2): T_{N-2} without
+        # controls, T_{N-K-2} for the plain design and T_{N-2K-2} when the
+        # treatment-covariate interaction is active.
+        df_dof = max(n_obs - n_params, 1)
+
+        # Issue 3: Cluster-robust inference uses df = G-1
+        if cluster_ids is not None:
+            df_dof = max(int(len(np.unique(cluster_ids))) - 1, 1)
+
+        t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha, df=df_dof)
+
+        # Step 6: Bootstrap if requested
+        if self.n_bootstrap > 0:
+            att, se, t_stat, p_value, conf_int = self._bootstrap(
+                df,
+                outcome,
+                unit,
+                time,
+                treatment,
+                cluster,
+                controls,
+                pre_periods,
+                post_periods,
+                treated_units,
+                control_units,
+            )
+
+        result = LWDiDResults(
+            att=att,
+            se=se,
+            t_stat=t_stat,
+            p_value=p_value,
+            conf_int=conf_int,
+            n_obs=n_obs,
+            n_treated=n_treated,
+            n_control=n_control,
+            rolling=self.rolling,
+            estimation_method=self.estimation_method,
+            vcov_type=self.vcov_type,
+            alpha=self.alpha,
+            cluster_name=cluster if cluster_ids is not None else None,
+            n_clusters=int(len(np.unique(cluster_ids))) if cluster_ids is not None else None,
+            cohort_effects=None,
+            params=coefs,
+            vcov=vcov,
+            df_inference=df_dof,
+            event_study_effects=event_effects,
+            event_study_vcov=event_vcov,
+            event_study_vcov_index=event_vcov_index,
+            event_study_df=event_study_df,
+            reference_periods=reference_periods,
+            cband_method=cband_method,
+            cband_crit_value=cband_crit_value,
+            cband_n_bootstrap=cband_n_bootstrap,
+        )
+
+        # Final safety net: warn if result has NaN ATT
+        if np.isnan(result.att):
+            warnings.warn(
+                f"LWDiD estimation returned NaN ATT. This typically indicates "
+                f"insufficient data for the '{self.rolling}' transformation or "
+                f"numerical issues in estimation. Check your data structure and "
+                f"consider using a simpler transformation (e.g., rolling='demean').",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        return result
+
+    def _common_timing_event_study(
+        self,
+        df: pd.DataFrame,
+        unit: str,
+        time: str,
+        cluster: Optional[str],
+        controls: List[str],
+        post_periods: List[Any],
+        treated_set: set,
+    ) -> Tuple[
+        Dict[int, Dict[str, Any]],
+        Tuple[int, ...],
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+        Dict[int, Any],
+        Optional[str],
+        Optional[float],
+        Optional[int],
+    ]:
+        """Per-period event-study surface for a common-timing fit.
+
+        LW (2026) eq. (2.20): after the rolling transformation, the effect
+        for post period t is the coefficient on D in the cross-sectional
+        regression of the transformed outcome at t -- numerically identical
+        to a standard DiD on the subset panel {1, ..., S-1, t}. Each post
+        period is therefore one small regression run through the same
+        ``_dispatch_estimator`` path as the overall ATT, and the surface
+        follows the staggered storage contract (integer event-time keys,
+        position-difference convention).
+
+        Reference anchors are the transformation's nominal anchors
+        (``-1`` for demean/demeanq, ``-2, -1`` for detrend/detrendq)
+        restricted to genuinely observed relative times: an unobserved
+        anchor is never synthesized.
+
+        Returns
+        -------
+        tuple
+            ``(event_effects, reference_periods, event_vcov,
+            event_vcov_index, event_study_df, cband_method,
+            cband_crit_value, cband_n_bootstrap)``.
+        """
+        from diff_diff.lwdid_staggered import (
+            _guard_standard_error,
+            compute_event_study_bands,
+        )
+
+        # Event time is the position difference on the ordered observed
+        # support (same convention as _encode_staggered_time_scale); the
+        # common-timing cohort g is the first post period.
+        all_times = sorted(pd.unique(df[time]))
+        time_pos = {value: index for index, value in enumerate(all_times)}
+        g_pos = min(time_pos[t] for t in post_periods)
+        nominal_anchors = (-1,) if self.rolling in ("demean", "demeanq") else (-2, -1)
+        observed_relative = {position - g_pos for position in time_pos.values()}
+        reference_periods = tuple(r for r in nominal_anchors if r in observed_relative)
+
+        unit_rows = df.drop_duplicates(subset=[unit], keep="first").set_index(unit)
+        all_units = unit_rows.index.to_list()
+        unit_to_index = {value: index for index, value in enumerate(all_units)}
+        global_cluster_ids = None
+        if cluster is not None:
+            if cluster == unit:
+                global_cluster_ids = unit_rows.index.to_numpy()
+            else:
+                global_cluster_ids = unit_rows.loc[all_units, cluster].to_numpy()
+
+        event_effects: Dict[int, Dict[str, Any]] = {}
+        event_influence: Dict[int, np.ndarray] = {}
+        skipped: List[Tuple[int, str]] = []
+        for t in post_periods:
+            relative_time = int(time_pos[t] - g_pos)
+            columns = [unit, "_ydot"] + controls
+            if cluster is not None and cluster not in columns:
+                columns.append(cluster)
+            cell = df.loc[df[time] == t, columns].drop_duplicates(subset=[unit], keep="first")
+            finite = np.isfinite(cell["_ydot"].to_numpy(dtype=float))
+            if controls:
+                finite &= np.all(np.isfinite(cell[controls].to_numpy(dtype=float)), axis=1)
+            cell = cell.loc[finite].copy()
+            treatment_vec = cell[unit].isin(treated_set).to_numpy(dtype=float)
+            n_treated = int(treatment_vec.sum())
+            n_control = int(len(treatment_vec) - n_treated)
+            if n_treated == 0 or n_control == 0:
+                skipped.append((relative_time, "zero_treated_control"))
+                continue
+
+            y = cell["_ydot"].to_numpy(dtype=float)
+            controls_matrix = cell[controls].to_numpy(dtype=float) if controls else None
+            cluster_ids = None
+            if cluster is not None:
+                cluster_ids = cell[cluster].to_numpy()
+            att, se, _, _, n_params, influence = self._dispatch_estimator(
+                y, treatment_vec, controls_matrix, cluster_ids, len(cell)
+            )
+            if not np.isfinite(att):
+                skipped.append((relative_time, "non_finite_estimate"))
+                continue
+
+            se = _guard_standard_error(att, se)
+            if cluster_ids is not None:
+                df_event = max(len(np.unique(cluster_ids)) - 1, 1)
+            else:
+                df_event = max(len(cell) - n_params, 1)
+            t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha, df=df_event)
+            event_effects[relative_time] = {
+                "effect": float(att),
+                "se": se,
+                "t_stat": t_stat,
+                "p_value": p_value,
+                "conf_int": conf_int,
+                "n_treated": n_treated,
+                "n_control": n_control,
+                "n_cells": 1,
+                "df": df_event,
+            }
+            if influence is not None and np.isfinite(se):
+                global_influence = np.zeros(len(all_units), dtype=float)
+                for local_index, unit_value in enumerate(cell[unit].to_list()):
+                    global_influence[unit_to_index[unit_value]] = influence[local_index]
+                event_influence[relative_time] = global_influence
+
+        if skipped:
+            preview = ", ".join(f"r={r}: {reason}" for r, reason in skipped[:6])
+            suffix = "" if len(skipped) <= 6 else f"; plus {len(skipped) - 6} more"
+            warnings.warn(
+                f"LWDiD skipped {len(skipped)} per-period effect(s): {preview}{suffix}. "
+                "The event-study surface omits these event times.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        (
+            event_vcov,
+            event_vcov_index,
+            cband_method,
+            cband_crit_value,
+            cband_n_bootstrap,
+        ) = compute_event_study_bands(self, event_effects, event_influence, global_cluster_ids)
+        event_study_df = {
+            label: value["df"]
+            for label, value in event_effects.items()
+            if value.get("df") is not None
+        }
+        return (
+            event_effects,
+            reference_periods,
+            event_vcov,
+            event_vcov_index,
+            event_study_df,
+            cband_method,
+            cband_crit_value,
+            cband_n_bootstrap,
+        )
+
+    def _composite_regression_aggregation(
+        self,
+        df: pd.DataFrame,
+        outcome: str,
+        unit: str,
+        time: str,
+        cohort: str,
+    ) -> Tuple[float, float, int]:
+        """Compute tau_omega via composite outcome regression (LW 2026 Eq 7.18/7.19).
+
+        For staggered designs, constructs a composite outcome vector:
+        - Treated units in cohort g: use their cohort's transformed outcome
+        - Never-treated units: weighted average of all cohort transformations
+        Then runs a single cross-sectional OLS: y_composite ~ [1, D_ever_treated]
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Full panel data.
+        outcome : str
+            Outcome variable column.
+        unit : str
+            Unit identifier column.
+        time : str
+            Time period column.
+        cohort : str
+            Cohort (first treatment time) column.
+
+        Returns
+        -------
+        att : float
+            ATT from composite regression coefficient on D.
+        se : float
+            Classical OLS SE from composite regression.
+        dof : int
+            Degrees of freedom (n_units - 2).
+        """
+        # Step 1: Identify cohorts and unit membership
+        fy = df.groupby(unit)[cohort].first()
+        cohorts = sorted([g for g in fy.unique() if g > 0 and not np.isnan(g)])
+        n_treat = int((fy > 0).sum())
+
+        if n_treat == 0:
+            return np.nan, np.nan, 0
+
+        # Step 2: For each cohort g, compute per-unit post-average transformed outcome
+        # using cohort g's pre-period for ALL units
+        ydot_by_cohort: Dict[Any, pd.Series] = {}
+        for g in cohorts:
+            # pre_mask: periods < g (i.e., time <= g-1)
+            pre_mask_g = df[time] < g
+            post_mask_g = df[time] >= g
+
+            # Apply transformation to full dataset
+            if self.rolling in ("demean", "demeanq"):
+                df_transformed = self._transform_demean(df, outcome, unit, pre_mask_g)
+            elif self.rolling in ("detrend", "detrendq"):
+                df_transformed = self._transform_detrend(df, outcome, unit, time, pre_mask_g)
+            else:
+                df_transformed = self._transform_demean(df, outcome, unit, pre_mask_g)
+
+            # Per-unit average of transformed outcome in post-periods (>= g)
+            post_data = df_transformed.loc[post_mask_g]  # type: ignore[union-attr]
+            unit_avg_g = post_data.groupby(unit)["_ydot"].mean()
+            ydot_by_cohort[g] = unit_avg_g
+
+        # Step 3: Assemble composite outcome vector
+        all_units = fy.index
+        n_units = len(all_units)
+        y_composite = np.empty(n_units, dtype=np.float64)
+        d_ever_treated = np.empty(n_units, dtype=np.float64)
+
+        # Compute cohort sizes for weights
+        cohort_sizes = {g: int((fy == g).sum()) for g in cohorts}
+
+        for i, u in enumerate(all_units):
+            g_u = fy[u]
+            if g_u > 0:  # Treated unit
+                y_composite[i] = ydot_by_cohort[g_u].get(u, np.nan)
+                d_ever_treated[i] = 1.0
+            else:  # Never-treated (control) unit
+                weighted_sum = 0.0
+                for g in cohorts:
+                    w_g = cohort_sizes[g] / n_treat
+                    weighted_sum += w_g * ydot_by_cohort[g].get(u, 0.0)
+                y_composite[i] = weighted_sum
+                d_ever_treated[i] = 0.0
+
+        # Step 4: Single OLS regression y_composite ~ [1, D]
+        # Drop any NaN observations
+        valid = np.isfinite(y_composite)
+        y_valid = y_composite[valid]
+        d_valid = d_ever_treated[valid]
+        n = len(y_valid)
+
+        if n < 3:
+            return np.nan, np.nan, 0
+
+        X = np.column_stack([np.ones(n, dtype=np.float64), d_valid])
+        beta, *_ = np.linalg.lstsq(X, y_valid, rcond=None)
+        resid = y_valid - X @ beta
+        k = 2
+        dof = n - k
+        sigma2 = float(resid @ resid) / dof
+        XtX_inv = np.linalg.inv(X.T @ X)
+        cov = sigma2 * XtX_inv
+
+        att = float(beta[1])
+        se = float(np.sqrt(cov[1, 1]))
+
+        return att, se, dof
+
+    def _transform_demean(
+        self,
+        df: pd.DataFrame,
+        outcome_col: str,
+        unit_col: str,
+        pre_mask: Union[pd.Series, np.ndarray],
+        return_diagnostics: bool = False,
+    ) -> Union[pd.DataFrame, Tuple[pd.DataFrame, Dict[str, Any]]]:
+        """Apply unit-specific demeaning transformation.
+
+        For each unit, compute the mean of the outcome in pre-treatment
+        periods, then subtract that mean from ALL periods (pre and post).
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Panel data.
+        outcome_col : str
+            Name of the outcome column.
+        unit_col : str
+            Name of the unit identifier column.
+        pre_mask : Series or ndarray of bool
+            Boolean mask indicating pre-treatment observations.
+        return_diagnostics : bool, default False
+            If True, return (df, diagnostics) tuple instead of just df.
+
+        Returns
+        -------
+        pd.DataFrame or (pd.DataFrame, dict)
+            Input data with '_ydot' column containing demeaned outcomes.
+            If return_diagnostics=True, also returns diagnostics dict.
+        """
+        df = df.copy()
+
+        # Compute pre-treatment mean for each unit
+        pre_df = df.loc[pre_mask, [unit_col, outcome_col]]
+        pre_means = pre_df.groupby(unit_col)[outcome_col].mean()
+
+        # Collect per-unit diagnostics if requested
+        per_unit: Dict[Any, Dict[str, Any]] = {}
+        if return_diagnostics:
+            pre_stds = pre_df.groupby(unit_col)[outcome_col].std()
+            pre_counts = pre_df.groupby(unit_col)[outcome_col].count()
+            post_mask_inv = ~pre_mask
+            post_df = df.loc[post_mask_inv, [unit_col, outcome_col]]
+            post_counts = post_df.groupby(unit_col)[outcome_col].count()
+            all_units = df[unit_col].unique()
+            for uid in all_units:
+                has_pre = uid in pre_means.index
+                info: Dict[str, Any] = {
+                    "pre_mean": float(pre_means[uid]) if has_pre else float("nan"),
+                    "pre_n_periods": int(pre_counts.get(uid, 0)),
+                    "pre_std": float(pre_stds.get(uid, float("nan"))),
+                    "post_n_periods": int(post_counts.get(uid, 0)),
+                    "valid": has_pre,
+                }
+                per_unit[uid] = info
+
+        # Map pre-means back to all observations
+        unit_means = df[unit_col].map(pre_means)
+
+        # Check for units with no pre-treatment obs (shouldn't happen
+        # after validation, but guard defensively)
+        no_pre = unit_means.isna()
+        if no_pre.any():
+            n_missing = df.loc[no_pre, unit_col].nunique()
+            warnings.warn(
+                f"{n_missing} unit(s) have no pre-treatment observations. "
+                f"Their transformed outcomes will be NaN.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        # Subtract pre-treatment mean from all periods
+        df["_ydot"] = df[outcome_col].values - unit_means.values
+
+        if return_diagnostics:
+            valid_units = [uid for uid, info in per_unit.items() if info["valid"]]
+            n_valid = len(valid_units)
+            n_total = len(per_unit)
+            pre_period_counts = [per_unit[uid]["pre_n_periods"] for uid in valid_units]
+            diagnostics: Dict[str, Any] = {
+                "method": "demean",
+                "description": "\u0232_{i,pre} subtracted from all periods (Procedure 2.1, Eq 2.12)",
+                "per_unit": per_unit,
+                "summary": {
+                    "n_units_total": n_total,
+                    "n_units_valid": n_valid,
+                    "n_units_dropped": n_total - n_valid,
+                    "mean_pre_periods": (
+                        float(np.mean(pre_period_counts)) if pre_period_counts else 0.0
+                    ),
+                    "min_pre_periods": int(np.min(pre_period_counts)) if pre_period_counts else 0,
+                    "max_pre_periods": int(np.max(pre_period_counts)) if pre_period_counts else 0,
+                },
+            }
+            return df, diagnostics
+
+        return df
+
+    def _transform_detrend(
+        self,
+        df: pd.DataFrame,
+        outcome_col: str,
+        unit_col: str,
+        time_col: str,
+        pre_mask: Union[pd.Series, np.ndarray],
+        return_diagnostics: bool = False,
+    ) -> Union[pd.DataFrame, Tuple[pd.DataFrame, Dict[str, Any]]]:
+        """Apply unit-specific linear detrending transformation.
+
+        For each unit, fit y = alpha + beta*t on pre-treatment periods
+        using scipy.linalg.lstsq, then subtract the fitted trend from
+        ALL periods.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Panel data.
+        outcome_col : str
+            Name of the outcome column.
+        unit_col : str
+            Name of the unit identifier column.
+        time_col : str
+            Name of the time period column.
+        pre_mask : Series or ndarray of bool
+            Boolean mask indicating pre-treatment observations.
+        return_diagnostics : bool, default False
+            If True, return (df, diagnostics) tuple instead of just df.
+
+        Returns
+        -------
+        pd.DataFrame or (pd.DataFrame, dict)
+            Input data with '_ydot' column containing detrended outcomes.
+            If return_diagnostics=True, also returns diagnostics dict.
+        """
+        df = df.copy()
+        df["_ydot"] = np.nan
+
+        # Pre-extract numpy arrays to avoid repeated df.loc[] overhead
+        unit_arr = df[unit_col].values
+        time_arr = df[time_col].values.astype(np.float64)
+        y_arr = df[outcome_col].values.astype(np.float64)
+        pre_arr = pre_mask.values if hasattr(pre_mask, "values") else np.asarray(pre_mask)
+
+        units = df[unit_col].unique()
+        per_unit: Dict[Any, Dict[str, Any]] = {}
+        ydot_out = np.full(len(df), np.nan)
+
+        for uid in units:
+            mask_u = unit_arr == uid
+            idx_u = np.where(mask_u)[0]
+            t_u = time_arr[idx_u]
+            y_u = y_arr[idx_u]
+            pre_u = pre_arr[idx_u]
+
+            # Pre-treatment data for this unit
+            pre_sel = pre_u.astype(bool)
+            n_pre = int(pre_sel.sum())
+
+            if n_pre < 2:
+                warnings.warn(
+                    f"Unit {uid}: detrend requires at least 2 "
+                    f"pre-treatment periods, found {n_pre}. "
+                    f"Transformed outcome set to NaN.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                if return_diagnostics:
+                    per_unit[uid] = {
+                        "alpha": float("nan"),
+                        "beta": float("nan"),
+                        "pre_n_periods": n_pre,
+                        "residual_std": float("nan"),
+                        "r_squared": float("nan"),
+                        "valid": False,
+                    }
+                continue
+
+            # Extract pre-treatment time and outcome
+            t_pre = t_u[pre_sel]
+            y_pre = y_u[pre_sel]
+
+            # Center time for numerical stability
+            t_mean = t_pre.mean()
+            t_pre_centered = t_pre - t_mean
+
+            # Build design matrix [intercept, centered_time]
+            X_pre = np.column_stack(
+                [
+                    np.ones(n_pre, dtype=np.float64),
+                    t_pre_centered,
+                ]
+            )
+
+            # Solve via scipy.linalg.lstsq
+            result = scipy_linalg.lstsq(X_pre, y_pre, cond=None)
+            coefs = result[0]  # [alpha, beta]
+
+            # Check for valid coefficients
+            if not np.all(np.isfinite(coefs)):
+                warnings.warn(
+                    f"Unit {uid}: detrending produced non-finite "
+                    f"coefficients. Transformed outcome set to NaN.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                if return_diagnostics:
+                    per_unit[uid] = {
+                        "alpha": float("nan"),
+                        "beta": float("nan"),
+                        "pre_n_periods": n_pre,
+                        "residual_std": float("nan"),
+                        "r_squared": float("nan"),
+                        "valid": False,
+                    }
+                continue
+
+            # Predict on ALL periods for this unit (using same centering)
+            t_all_centered = t_u - t_mean
+            y_hat = coefs[0] + coefs[1] * t_all_centered
+
+            # Residuals = outcome - fitted trend
+            ydot_out[idx_u] = y_u - y_hat
+
+            # Collect diagnostics for this unit
+            if return_diagnostics:
+                y_hat_pre = X_pre @ coefs
+                residuals_pre = y_pre - y_hat_pre
+                residual_std = float(np.std(residuals_pre, ddof=2)) if n_pre > 2 else float("nan")
+                ss_res = float(np.sum(residuals_pre**2))
+                ss_tot = float(np.sum((y_pre - y_pre.mean()) ** 2))
+                r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+                per_unit[uid] = {
+                    "alpha": float(coefs[0]),
+                    "beta": float(coefs[1]),
+                    "pre_n_periods": n_pre,
+                    "residual_std": residual_std,
+                    "r_squared": r_squared,
+                    "valid": True,
+                }
+
+        df["_ydot"] = ydot_out
+
+        if return_diagnostics:
+            valid_units = [uid for uid, info in per_unit.items() if info["valid"]]
+            n_valid = len(valid_units)
+            n_total = len(per_unit)
+            betas = [per_unit[uid]["beta"] for uid in valid_units]
+            r2s = [
+                per_unit[uid]["r_squared"]
+                for uid in valid_units
+                if np.isfinite(per_unit[uid]["r_squared"])
+            ]
+            diagnostics: Dict[str, Any] = {
+                "method": "detrend",
+                "description": "Y_{it} - (\u03b1\u0302_i + \u03b2\u0302_i * t) based on pre-treatment OLS (Procedure 3.1)",
+                "per_unit": per_unit,
+                "summary": {
+                    "n_units_total": n_total,
+                    "n_units_valid": n_valid,
+                    "n_units_dropped": n_total - n_valid,
+                    "mean_beta": float(np.mean(betas)) if betas else float("nan"),
+                    "std_beta": float(np.std(betas)) if betas else float("nan"),
+                    "mean_r_squared": float(np.mean(r2s)) if r2s else float("nan"),
+                },
+            }
+            return df, diagnostics
+
+        return df
+
+    def _transform_demeanq(
+        self,
+        df: pd.DataFrame,
+        outcome_col: str,
+        unit_col: str,
+        time_col: str,
+        pre_mask: Union[pd.Series, np.ndarray],
+        return_diagnostics: bool = False,
+    ) -> Union[pd.DataFrame, Tuple[pd.DataFrame, Dict[str, Any]]]:
+        """Apply unit-specific seasonal (quarterly) demeaning transformation.
+
+        For each unit, fit Y on [1, Q2, Q3, Q4] dummies using pre-treatment
+        periods only, then subtract fitted values from ALL periods.
+        Quarter is determined by time_col % 4.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Panel data.
+        outcome_col : str
+            Name of the outcome column.
+        unit_col : str
+            Name of the unit identifier column.
+        time_col : str
+            Name of the time period column.
+        pre_mask : Series or ndarray of bool
+            Boolean mask indicating pre-treatment observations.
+        return_diagnostics : bool, default False
+            If True, return (df, diagnostics) tuple instead of just df.
+
+        Returns
+        -------
+        pd.DataFrame or (pd.DataFrame, dict)
+            Input data with '_ydot' column containing seasonally-demeaned outcomes.
+            If return_diagnostics=True, also returns diagnostics dict.
+        """
+        df = df.copy()
+        df["_ydot"] = np.nan
+
+        # Determine quarter from time column (0-indexed modulo 4 → 1-4)
+        t_series = df[time_col]
+        if pd.api.types.is_datetime64_any_dtype(t_series):
+            quarters = t_series.dt.quarter.to_numpy()
+        elif hasattr(t_series.iloc[0], "quarter"):
+            quarters = np.array([v.quarter for v in t_series])
+        else:
+            t_vals = t_series.to_numpy()
+            quarters = (t_vals.astype(np.int64) - 1) % 4 + 1
+
+        # Pre-extract numpy arrays to avoid repeated df.loc[] overhead
+        unit_arr = df[unit_col].values
+        y_arr = df[outcome_col].values.astype(np.float64)
+        pre_arr = pre_mask.values if hasattr(pre_mask, "values") else np.asarray(pre_mask)
+
+        units = df[unit_col].unique()
+        per_unit: Dict[Any, Dict[str, Any]] = {}
+        ydot_out = np.full(len(df), np.nan)
+
+        for uid in units:
+            mask_u = unit_arr == uid
+            idx_u = np.where(mask_u)[0]
+            y_u = y_arr[idx_u]
+            q_u = quarters[idx_u]
+            pre_u = pre_arr[idx_u].astype(bool)
+
+            # Pre-treatment data for this unit
+            n_pre = int(pre_u.sum())
+
+            # Need at least as many pre-obs as parameters (intercept + up to 3 dummies)
+            q_pre = q_u[pre_u]
+            observed_seasons = sorted(np.unique(q_pre))
+            n_params = len(observed_seasons)  # intercept + (n_seasons - 1) dummies
+
+            if n_pre < n_params:
+                warnings.warn(
+                    f"Unit {uid}: demeanq requires at least as many pre-treatment "
+                    f"observations as seasonal parameters ({n_params}), "
+                    f"found {n_pre}. Transformed outcome set to NaN.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                if return_diagnostics:
+                    per_unit[uid] = {
+                        "intercept": float("nan"),
+                        "seasonal_effects": {},
+                        "pre_n_periods": n_pre,
+                        "valid": False,
+                    }
+                continue
+
+            # Build seasonal dummy design matrix for pre-treatment
+            y_pre = y_u[pre_u]
+
+            # Create dummies: drop first category (reference)
+            X_pre_parts = [np.ones(n_pre, dtype=np.float64)]
+            for s in observed_seasons[1:]:
+                X_pre_parts.append((q_pre == s).astype(np.float64))
+            X_pre = np.column_stack(X_pre_parts)
+
+            # Solve via scipy.linalg.lstsq
+            result = scipy_linalg.lstsq(X_pre, y_pre, cond=None)
+            coefs = result[0]
+
+            if not np.all(np.isfinite(coefs)):
+                warnings.warn(
+                    f"Unit {uid}: demeanq produced non-finite "
+                    f"coefficients. Transformed outcome set to NaN.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                if return_diagnostics:
+                    per_unit[uid] = {
+                        "intercept": float("nan"),
+                        "seasonal_effects": {},
+                        "pre_n_periods": n_pre,
+                        "valid": False,
+                    }
+                continue
+
+            # Predict on ALL periods for this unit
+            n_all = len(q_u)
+            X_all_parts = [np.ones(n_all, dtype=np.float64)]
+            for s in observed_seasons[1:]:
+                X_all_parts.append((q_u == s).astype(np.float64))
+            X_all = np.column_stack(X_all_parts)
+            y_hat = X_all @ coefs
+
+            # Residuals
+            ydot_out[idx_u] = y_u - y_hat
+
+            # Collect diagnostics for this unit
+            if return_diagnostics:
+                seasonal_effects = {
+                    int(s): float(coefs[idx + 1]) for idx, s in enumerate(observed_seasons[1:])
+                }
+                per_unit[uid] = {
+                    "intercept": float(coefs[0]),
+                    "seasonal_effects": seasonal_effects,
+                    "pre_n_periods": n_pre,
+                    "valid": True,
+                }
+
+        df["_ydot"] = ydot_out
+
+        if return_diagnostics:
+            valid_units = [uid for uid, info in per_unit.items() if info["valid"]]
+            n_valid = len(valid_units)
+            n_total = len(per_unit)
+            diagnostics: Dict[str, Any] = {
+                "method": "demeanq",
+                "description": "Remove unit-specific seasonal (quarterly) fixed effects from pre-treatment",
+                "per_unit": per_unit,
+                "summary": {
+                    "n_units_total": n_total,
+                    "n_units_valid": n_valid,
+                    "n_units_dropped": n_total - n_valid,
+                },
+            }
+            return df, diagnostics
+
+        return df
+
+    def _transform_detrendq(
+        self,
+        df: pd.DataFrame,
+        outcome_col: str,
+        unit_col: str,
+        time_col: str,
+        pre_mask: Union[pd.Series, np.ndarray],
+        return_diagnostics: bool = False,
+    ) -> Union[pd.DataFrame, Tuple[pd.DataFrame, Dict[str, Any]]]:
+        """Apply unit-specific linear detrending with seasonal adjustment.
+
+        For each unit, fit Y on [1, t, Q2, Q3, Q4] using pre-treatment
+        periods only, then subtract fitted values from ALL periods.
+        Quarter is determined by time_col % 4.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Panel data.
+        outcome_col : str
+            Name of the outcome column.
+        unit_col : str
+            Name of the unit identifier column.
+        time_col : str
+            Name of the time period column.
+        pre_mask : Series or ndarray of bool
+            Boolean mask indicating pre-treatment observations.
+        return_diagnostics : bool, default False
+            If True, return (df, diagnostics) tuple instead of just df.
+
+        Returns
+        -------
+        pd.DataFrame or (pd.DataFrame, dict)
+            Input data with '_ydot' column containing detrended+seasonally-adjusted outcomes.
+            If return_diagnostics=True, also returns diagnostics dict.
+        """
+        df = df.copy()
+        df["_ydot"] = np.nan
+
+        # Determine quarter from time column
+        t_series = df[time_col]
+        if pd.api.types.is_datetime64_any_dtype(t_series):
+            quarters = t_series.dt.quarter.to_numpy()
+        elif hasattr(t_series.iloc[0], "quarter"):
+            quarters = np.array([v.quarter for v in t_series])
+        else:
+            t_vals = t_series.to_numpy()
+            quarters = (t_vals.astype(np.int64) - 1) % 4 + 1
+
+        # Pre-extract numpy arrays to avoid repeated df.loc[] overhead
+        unit_arr = df[unit_col].values
+        time_arr = df[time_col].values.astype(np.float64)
+        y_arr = df[outcome_col].values.astype(np.float64)
+        pre_arr = pre_mask.values if hasattr(pre_mask, "values") else np.asarray(pre_mask)
+
+        units = df[unit_col].unique()
+        per_unit: Dict[Any, Dict[str, Any]] = {}
+        ydot_out = np.full(len(df), np.nan)
+
+        for uid in units:
+            mask_u = unit_arr == uid
+            idx_u = np.where(mask_u)[0]
+            t_u = time_arr[idx_u]
+            y_u = y_arr[idx_u]
+            q_u = quarters[idx_u]
+            pre_u = pre_arr[idx_u].astype(bool)
+
+            # Pre-treatment data for this unit
+            n_pre = int(pre_u.sum())
+
+            if n_pre < 2:
+                warnings.warn(
+                    f"Unit {uid}: detrendq requires at least 2 "
+                    f"pre-treatment periods, found {n_pre}. "
+                    f"Transformed outcome set to NaN.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                if return_diagnostics:
+                    per_unit[uid] = {
+                        "alpha": float("nan"),
+                        "beta": float("nan"),
+                        "seasonal_effects": {},
+                        "pre_n_periods": n_pre,
+                        "valid": False,
+                    }
+                continue
+
+            # Check seasonal parameters
+            q_pre = q_u[pre_u]
+            t_pre = t_u[pre_u]
+            observed_seasons = sorted(np.unique(q_pre))
+            # Parameters: intercept + slope + (n_seasons - 1) dummies
+            n_params = 1 + len(observed_seasons)
+
+            y_pre = y_u[pre_u]
+
+            # Center time for numerical stability
+            t_mean = t_pre.mean()
+            t_pre_centered = t_pre - t_mean
+
+            # If insufficient obs for full model, fall back to detrend-only
+            use_seasonal = n_pre >= n_params
+            if use_seasonal:
+                # Build design matrix: [1, t_centered, Q2, Q3, Q4]
+                X_pre_parts = [
+                    np.ones(n_pre, dtype=np.float64),
+                    t_pre_centered,
+                ]
+                for s in observed_seasons[1:]:
+                    X_pre_parts.append((q_pre == s).astype(np.float64))
+            else:
+                # Fallback: detrend only (intercept + slope)
+                X_pre_parts = [
+                    np.ones(n_pre, dtype=np.float64),
+                    t_pre_centered,
+                ]
+            X_pre = np.column_stack(X_pre_parts)
+
+            # Solve via scipy.linalg.lstsq
+            result = scipy_linalg.lstsq(X_pre, y_pre, cond=None)
+            coefs = result[0]
+
+            if not np.all(np.isfinite(coefs)):
+                warnings.warn(
+                    f"Unit {uid}: detrendq produced non-finite "
+                    f"coefficients. Transformed outcome set to NaN.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                if return_diagnostics:
+                    per_unit[uid] = {
+                        "alpha": float("nan"),
+                        "beta": float("nan"),
+                        "seasonal_effects": {},
+                        "pre_n_periods": n_pre,
+                        "valid": False,
+                    }
+                continue
+
+            # Predict on ALL periods for this unit
+            t_all_centered = t_u - t_mean
+            n_all = len(t_u)
+
+            X_all_parts = [
+                np.ones(n_all, dtype=np.float64),
+                t_all_centered,
+            ]
+            if use_seasonal:
+                for s in observed_seasons[1:]:
+                    X_all_parts.append((q_u == s).astype(np.float64))
+            X_all = np.column_stack(X_all_parts)
+            y_hat = X_all @ coefs
+
+            # Residuals
+            ydot_out[idx_u] = y_u - y_hat
+
+            # Collect diagnostics for this unit
+            if return_diagnostics:
+                if use_seasonal:
+                    seasonal_effects = {
+                        int(s): float(coefs[idx + 2]) for idx, s in enumerate(observed_seasons[1:])
+                    }
+                else:
+                    seasonal_effects = {}
+                per_unit[uid] = {
+                    "alpha": float(coefs[0]),
+                    "beta": float(coefs[1]),
+                    "seasonal_effects": seasonal_effects,
+                    "pre_n_periods": n_pre,
+                    "valid": True,
+                }
+
+        df["_ydot"] = ydot_out
+
+        if return_diagnostics:
+            valid_units = [uid for uid, info in per_unit.items() if info["valid"]]
+            n_valid = len(valid_units)
+            n_total = len(per_unit)
+            diagnostics: Dict[str, Any] = {
+                "method": "detrendq",
+                "description": "Remove unit-specific trend + seasonal effects (α̂_i + β̂_i*t + Σγ̂_q*Q_q)",
+                "per_unit": per_unit,
+                "summary": {
+                    "n_units_total": n_total,
+                    "n_units_valid": n_valid,
+                    "n_units_dropped": n_total - n_valid,
+                },
+            }
+            return df, diagnostics
+
+        return df
+
+    def _dispatch_estimator(
+        self,
+        y: np.ndarray,
+        treatment: np.ndarray,
+        controls_matrix: Optional[np.ndarray],
+        cluster_ids: Optional[np.ndarray],
+        n_obs: int,
+    ) -> Tuple[
+        float,
+        float,
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+        int,
+        Optional[np.ndarray],
+    ]:
+        """Dispatch estimation to the appropriate method based on self.estimation_method.
+
+        This is the central routing function that maps the user's estimation-method
+        choice to the corresponding implementation. After unit-specific rolling transformation
+        converts the panel into a cross-sectional dataset, this method applies the
+        chosen treatment-effect estimator to obtain the ATT.
+
+        Corresponds to Step 2 of the Lee & Wooldridge (2025, 2026) procedure:
+        after computing Ẏ_{ir} (transformed outcome), apply reg/ipw/dr/psm
+        to the cross-section {(Ẏ_{ir}, D_i, X_i)}.
+
+        Parameters
+        ----------
+        y : np.ndarray of shape (n,)
+            Transformed outcome variable (\u1e8e_{ir} in paper notation).
+            This is the post-transformation average residual for each unit.
+        treatment : np.ndarray of shape (n,)
+            Binary treatment indicator (D_i). 1 = treated, 0 = control.
+        controls_matrix : np.ndarray of shape (n, K) or None
+            Covariate matrix (X_i). None if no controls specified.
+            Used for regression adjustment, propensity score, and matching.
+        cluster_ids : np.ndarray of shape (n,) or None
+            Cluster identifiers for cluster-robust variance estimation.
+            None unless the cluster= constructor parameter is set.
+        n_obs : int
+            Number of cross-sectional observations (units).
+
+        Returns
+        -------
+        tuple of (att, se, coefs, vcov, n_params, influence)
+            att : float
+                Estimated average treatment effect on the treated (\u03c4\u0302 in paper).
+            se : float
+                Standard error of the ATT estimate.
+            coefs : np.ndarray or None
+                Full coefficient vector from the regression (RA/IPW paths).
+                None for PSM.
+            vcov : np.ndarray or None
+                Variance-covariance matrix of coefficients.
+                None for PSM.
+            n_params : int
+                Number of parameters in the fitted design, used for the
+                residual degrees of freedom: df = N - n_params. For the reg
+                path this is design-coherent (LW 2026 Section 2): N - 2
+                without controls, N - K - 2 for the plain design and
+                N - 2K - 2 when the treatment-covariate interaction is
+                active.
+            influence : np.ndarray or None
+                Observation-aligned influence contributions. Their unit-level
+                or cluster-level norm reproduces ``se`` and they can therefore
+                be combined across staggered cohort-time cells without assuming
+                independence. Matching returns ``None``.
+
+        Raises
+        ------
+        ValueError
+            If self.estimation_method is not in {'reg', 'ipw', 'dr', 'psm'}.
+            (Should not occur if __init__ validation passed.)
+
+        Notes
+        -----
+        Routing logic:
+        - 'reg'   → _estimate_reg(): OLS of Ẏ on [1, D, X, D*(X-X̄₁)]
+                    per Equation 3.3 in Lee & Wooldridge (2025)
+        - 'ipw'   → _estimate_ipw(): Inverse probability weighting via
+                    logit propensity score, Hajek-style normalization
+        - 'dr'    → _estimate_dr(): Doubly-robust augmented IPW
+                    combining outcome model and propensity weighting
+        - 'psm'   → _estimate_psm(): Nearest-neighbor propensity score
+                    matching (1:n with optional caliper)
+
+        When controls_matrix is None, IPW/DR/PSM fall back to regression
+        adjustment (simple difference in means) with a warning.
+
+        The variance family (self.vcov_type) determines which variance
+        estimator is used:
+        - 'classical': homoskedastic OLS variance
+        - 'hc1': HC1 (White) heteroskedasticity-robust
+        - 'hc2': HC2 (leverage-adjusted)
+        - 'hc3': HC3 (jackknife-style leverage adjustment)
+        Cluster-robust (Liang-Zeger CR1) inference activates via the
+        cluster= constructor parameter.
+
+        References
+        ----------
+        Lee, S. & Wooldridge, J. M. (2025). "A Simple Transformation Approach
+            to Difference-in-Differences Estimation for Panel Data."
+            Procedure 3.1, Equation 3.3.
+        Lee, S. & Wooldridge, J. M. (2026). "Simple Difference-in-Differences
+            Estimation in Panel Data." Procedure 2.1.
+        """
+        if self.estimation_method == "reg":
+            return self._estimate_reg(y, treatment, controls_matrix, cluster_ids, n_obs)
+        elif self.estimation_method == "ipw":
+            return self._estimate_ipw(y, treatment, controls_matrix, cluster_ids, n_obs)
+        elif self.estimation_method == "psm":
+            return self._estimate_psm(y, treatment, controls_matrix, cluster_ids, n_obs)
+        else:  # dr
+            return self._estimate_dr(y, treatment, controls_matrix, cluster_ids, n_obs)
+
+    @staticmethod
+    def _finalize_influence(
+        influence: np.ndarray,
+        se: float,
+    ) -> Optional[np.ndarray]:
+        """Drop influence contributions that cannot support joint inference."""
+        if not np.isfinite(se) or se <= 0 or not np.all(np.isfinite(influence)):
+            return None
+        return influence
+
+    def _ols_treatment_influence(
+        self,
+        X: np.ndarray,
+        xtx_inv: np.ndarray,
+        residuals: np.ndarray,
+        n_obs: int,
+        n_params: int,
+        cluster_ids: Optional[np.ndarray],
+    ) -> np.ndarray:
+        r"""Influence contributions for the OLS treatment coefficient.
+
+        The asymptotically linear representation of :math:`\hat\tau` is
+        :math:`\psi_i = e_2' (X'X)^{-1} x_i \varepsilon_i`. Each variance
+        estimator is a reweighting of those contributions, so applying the
+        estimator's own weights here makes the sum of squared contributions
+        (summed within clusters when clustering) reproduce the reported
+        standard error exactly, while preserving the per-unit structure that
+        cross-cell covariance needs. Every branch, including classical,
+        keeps the residual-based direction: replacing residuals by their
+        homoskedastic magnitude (``sigma * basis``) would fabricate
+        covariance between staggered cells that merely share control units.
+        """
+        basis = X @ xtx_inv[:, 1]
+        dof = max(n_obs - n_params, 1)
+        psi = basis * residuals
+
+        if cluster_ids is not None:
+            n_clusters = len(np.unique(cluster_ids))
+            if n_clusters > 1:
+                cr1 = (n_clusters / (n_clusters - 1)) * ((n_obs - 1) / dof)
+                return psi * float(np.sqrt(cr1))
+            # Degenerate single-cluster fallback that solve_ols resolves
+            # to hc1.
+            return psi * float(np.sqrt(n_obs / dof))
+
+        if self.vcov_type == "classical":
+            # Homoskedastic magnitude: sum_i sigma^2 (x_i' a)^2 = sigma^2
+            # (X'X)^{-1}_22, the textbook OLS variance. The contributions are
+            # the residual-based psi rescaled to that magnitude, so a single
+            # cell reproduces the classical SE exactly while cross-cell
+            # products retain the unit-level residual dependence.
+            sigma = float(np.sqrt(float(residuals @ residuals) / dof))
+            target = sigma * float(np.sqrt(float(basis @ basis)))
+            norm = float(np.sqrt(float(psi @ psi)))
+            if norm > 0.0 and np.isfinite(norm):
+                return psi * (target / norm)
+            return psi
+
+        if self.vcov_type in ("hc2", "hc3"):
+            leverage = np.clip(np.sum((X @ xtx_inv) * X, axis=1), 0.0, 1.0 - 1e-10)
+            if self.vcov_type == "hc2":
+                return psi / np.sqrt(1.0 - leverage)
+            return psi / (1.0 - leverage)
+
+        # hc1
+        return psi * float(np.sqrt(n_obs / dof))
+
+    def _moment_influence(
+        self,
+        psi_full: np.ndarray,
+        n_obs: int,
+        cluster_ids: Optional[np.ndarray],
+    ) -> np.ndarray:
+        """Rescale a semiparametric influence function to ATT scale.
+
+        Mirrors the variance formulas used by the IPW/IPWRA paths, so the
+        sum of squared contributions reproduces their reported variance.
+        """
+        if cluster_ids is not None:
+            n_clusters = len(np.unique(cluster_ids))
+            if n_clusters > 1:
+                return psi_full * float(np.sqrt(n_clusters / (n_clusters - 1))) / n_obs
+        return (psi_full - float(np.mean(psi_full))) / float(np.sqrt(n_obs * (n_obs - 1)))
+
+    def _estimate_reg(
+        self,
+        y: np.ndarray,
+        treatment: np.ndarray,
+        controls_matrix: Optional[np.ndarray],
+        cluster_ids: Optional[np.ndarray],
+        n_obs: int,
+    ) -> Tuple[
+        float,
+        float,
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+        int,
+        Optional[np.ndarray],
+    ]:
+        """Estimate ATT via regression adjustment (OLS).
+
+        Fits y = alpha + tau*D + X*beta + D*(X - X_bar_1)*gamma + epsilon
+        and returns tau as the ATT estimate (LW2025 Equation 3.3).
+
+        The interaction term D*(X - X_bar_1) allows covariate effects to
+        differ between treated and control groups. It is only included when
+        both N_treated > K+1 and N_control > K+1.
+
+        Parameters
+        ----------
+        y : ndarray of shape (n,)
+            Transformed outcome.
+        treatment : ndarray of shape (n,)
+            Binary treatment indicator.
+        controls_matrix : ndarray of shape (n, p) or None
+            Control variables.
+        cluster_ids : ndarray of shape (n,) or None
+            Cluster identifiers for cluster-robust SEs.
+        n_obs : int
+            Number of observations.
+
+        Returns
+        -------
+        att : float
+            Treatment effect coefficient.
+        se : float
+            Standard error of treatment coefficient.
+        coefs : ndarray
+            Full coefficient vector.
+        vcov : ndarray or None
+            Variance-covariance matrix.
+        n_params : int
+            Number of parameters in the regression.
+        """
+        # Build design matrix: [intercept, treatment, controls, interaction]
+        parts = [np.ones((n_obs, 1)), treatment.reshape(-1, 1)]
+        if controls_matrix is not None:
+            parts.append(controls_matrix)
+            # Add D*(X - X_bar_1) interaction term when sample sizes permit
+            # (LW2025 Eq 3.3: requires N_0 > K+1 and N_1 > K+1)
+            K = controls_matrix.shape[1]
+            treated_mask = treatment == 1
+            n_treated = int(treated_mask.sum())
+            n_control = n_obs - n_treated
+            if n_treated > K + 1 and n_control > K + 1:
+                X_bar_1 = controls_matrix[treated_mask].mean(axis=0)
+                interaction = treatment.reshape(-1, 1) * (controls_matrix - X_bar_1)
+                parts.append(interaction)
+        X = np.hstack(parts)
+        n_params = X.shape[1]
+
+        # Determine vcov_type for solve_ols (hc3 routes through the shared
+        # linalg backend; clustered fits resolve to CR1 via cluster_ids)
+        vcov_type = self._resolve_vcov_type()
+
+        # Call solve_ols
+        coefs, residuals, vcov = solve_ols(
+            X,
+            y,
+            cluster_ids=cluster_ids,
+            return_vcov=True,
+            vcov_type=vcov_type,
+        )
+
+        # ATT = coefficient on treatment (index 1)
+        att = float(coefs[1])
+        # SE from vcov diagonal
+        if vcov is not None and np.isfinite(vcov[1, 1]):
+            se = float(np.sqrt(max(vcov[1, 1], 0.0)))
+        else:
+            se = np.nan
+
+        # Return the fitted design's parameter count so callers compute a
+        # design-coherent residual df: N - 2 without controls, N - K - 2 for
+        # the plain design (1, D, X), and N - 2K - 2 when the interaction
+        # D*(X - X_bar_1) is active (LW 2026 Section 2).
+        xtx_inv = np.linalg.pinv(X.T @ X)
+        influence = self._finalize_influence(
+            self._ols_treatment_influence(X, xtx_inv, residuals, n_obs, n_params, cluster_ids),
+            se,
+        )
+        return att, se, coefs, vcov, n_params, influence
+
+    def _estimate_ipw(
+        self,
+        y: np.ndarray,
+        treatment: np.ndarray,
+        controls_matrix: Optional[np.ndarray],
+        cluster_ids: Optional[np.ndarray],
+        n_obs: int,
+    ) -> Tuple[
+        float,
+        float,
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+        int,
+        Optional[np.ndarray],
+    ]:
+        """Estimate ATT via inverse probability weighting.
+
+        Uses propensity scores to reweight control observations.
+
+        Parameters
+        ----------
+        y : ndarray of shape (n,)
+            Transformed outcome.
+        treatment : ndarray of shape (n,)
+            Binary treatment indicator.
+        controls_matrix : ndarray of shape (n, p) or None
+            Covariates for propensity score model.
+        cluster_ids : ndarray of shape (n,) or None
+            Cluster identifiers.
+        n_obs : int
+            Number of observations.
+
+        Returns
+        -------
+        att : float
+            IPW-estimated ATT.
+        se : float
+            Standard error.
+        coefs : ndarray or None
+            Not returned for IPW (None).
+        vcov : ndarray or None
+            Not returned for IPW (None).
+        n_params : int
+            Number of parameters in the underlying regression.
+        """
+        if controls_matrix is None or controls_matrix.shape[1] == 0:
+            # Without covariates, IPW reduces to simple difference
+            # in means (propensity score is constant)
+            warnings.warn(
+                "IPW without control variables reduces to a simple "
+                "difference in means. Consider using estimation_method='reg'.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return self._estimate_reg(
+                y, treatment, None, cluster_ids, n_obs
+            )  # returns 5-tuple including n_params
+
+        # Step 1: Estimate propensity score via logit
+        # solve_logit adds intercept automatically
+        coefs_logit, probs = solve_logit(controls_matrix, treatment)
+
+        # Convergence check: coefficients must be finite
+        if not np.all(np.isfinite(coefs_logit)):
+            warnings.warn(
+                "Logistic regression did not converge (non-finite coefficients). "
+                "Falling back to 'reg' estimation. Consider standardizing controls.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return self._estimate_reg(y, treatment, controls_matrix, cluster_ids, n_obs)
+
+        # Convergence check: complete/quasi-complete separation
+        if np.any(probs < 1e-8) or np.any(probs > 1 - 1e-8):
+            warnings.warn(
+                "Possible complete separation detected in propensity score model. "
+                "Some predicted probabilities are near 0 or 1. "
+                "Results may be unreliable.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        # Step 2: Trim propensity scores to [pscore_trim, 1 - pscore_trim]
+        trim_lo, trim_hi = self.pscore_trim, 1.0 - self.pscore_trim
+        n_trimmed = int((probs < trim_lo).sum() + (probs > trim_hi).sum())
+        if n_trimmed > 0:
+            warnings.warn(
+                f"LWDiD: {n_trimmed} observation(s) had propensity scores trimmed "
+                f"to [{self.pscore_trim:.3f}, {1-self.pscore_trim:.3f}].",
+                UserWarning,
+                stacklevel=2,
+            )
+        probs = np.clip(probs, trim_lo, trim_hi)
+
+        # Step 3: Compute IPW weights
+        # For treated: weight = 1
+        # For control: weight = p(x) / (1 - p(x))
+        # Normalized so control weights sum to n_treated
+        ipw_weights = np.where(
+            treatment == 1,
+            1.0,
+            probs / (1.0 - probs),
+        )
+
+        # Normalize weights: treated get weight 1/n_treated,
+        # control weights normalized to sum to 1
+        treat_mask = treatment == 1
+        ctrl_mask = treatment == 0
+
+        w_ctrl_sum = ipw_weights[ctrl_mask].sum()
+        if w_ctrl_sum <= 0:
+            warnings.warn(
+                "IPW control weights sum to zero. Falling back to " "unweighted 'reg' estimation.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return self._estimate_reg(y, treatment, controls_matrix, cluster_ids, n_obs)
+
+        # Hajek-style ATT estimator
+        att_treated = y[treat_mask].mean()
+        att_control = np.sum(ipw_weights[ctrl_mask] * y[ctrl_mask]) / w_ctrl_sum
+        att = float(att_treated - att_control)
+
+        # Step 4: Compute SE via semiparametric influence function
+        # Follows Lunceford & Davidian (2004), matching Stata lwdid and lwdid-py.
+        # The full IF consists of the Hajek main term plus a propensity score
+        # estimation uncertainty correction.
+        n_treated_f = float(treat_mask.sum())
+        p_bar = n_treated_f / n_obs  # P(D=1) estimate
+
+        # --- Hajek influence function (main term) ---
+        w_ctrl = ipw_weights[ctrl_mask]  # p/(1-p) for controls
+
+        psi_ht = np.zeros(n_obs)
+        psi_ht[treat_mask] = (y[treat_mask] - att_treated) / p_bar
+        psi_ht[ctrl_mask] = -w_ctrl * (y[ctrl_mask] - att_control) / p_bar
+
+        # --- Propensity score estimation uncertainty correction ---
+        # Design matrix with intercept (solve_logit adds intercept internally,
+        # so we reconstruct it here for the IF computation).
+        X_ps = np.column_stack([np.ones(n_obs), controls_matrix])
+
+        # Logit score: S_i = (D_i - p_i) * X_i
+        S_gamma = (treatment - probs)[:, np.newaxis] * X_ps
+
+        # Logit Hessian: H = -(1/n) * X' diag(p*(1-p)) X
+        W_ps = probs * (1 - probs)
+        H_gamma = -(X_ps.T * W_ps) @ X_ps / n_obs
+        try:
+            H_gamma_inv = np.linalg.inv(H_gamma)
+        except np.linalg.LinAlgError:
+            H_gamma_inv = np.linalg.pinv(H_gamma)
+
+        # Sensitivity: dATT/dgamma
+        # dw/dgamma_i = w_i * X_i (logit chain rule)
+        # dATT/dgamma = -(1/w_sum) * sum_ctrl(w_i * X_i * (Y_i - mu_0))
+        # The (Y_i - mu_0) centering comes from the quotient rule for the
+        # Hajek estimator (d/dgamma of Sigma(wY)/Sigma(w)) and ensures
+        # translation invariance of the resulting SE.
+        dw_dgamma_ctrl = w_ctrl[:, np.newaxis] * X_ps[ctrl_mask]
+        Y_ctrl_centered = y[ctrl_mask] - att_control
+        dATT_dgamma = -(dw_dgamma_ctrl * Y_ctrl_centered[:, np.newaxis]).sum(axis=0) / (
+            n_obs * p_bar
+        )
+
+        # PS adjustment: psi_adj_i = (S_i @ H^{-1}) @ dATT_dgamma
+        ps_adjustment = (S_gamma @ H_gamma_inv.T) @ dATT_dgamma
+
+        # Full IF = main term - PS correction
+        psi_full = psi_ht - ps_adjustment
+
+        # --- Variance estimation ---
+        if cluster_ids is not None:
+            cluster_df = pd.DataFrame({"psi": psi_full, "cluster": cluster_ids})
+            cluster_sums = cluster_df.groupby("cluster")["psi"].sum().values
+            n_clusters = len(cluster_sums)
+            if n_clusters <= 1:
+                warnings.warn(
+                    "Only 1 cluster found; falling back to non-clustered "
+                    "variance for IPW influence function.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                var_att = float(np.var(psi_full, ddof=1) / n_obs)
+            else:
+                var_att = float(
+                    (n_clusters / (n_clusters - 1)) * np.sum(cluster_sums**2) / n_obs**2
+                )
+        else:
+            var_att = float(np.var(psi_full, ddof=1) / n_obs)
+
+        se = float(np.sqrt(max(var_att, 0.0)))
+
+        # n_params: intercept + controls (propensity model)
+        n_params = 1 + controls_matrix.shape[1]
+        influence = self._finalize_influence(
+            self._moment_influence(psi_full, n_obs, cluster_ids), se
+        )
+        return att, se, None, None, n_params, influence
+
+    def _estimate_psm(
+        self,
+        y: np.ndarray,
+        treatment: np.ndarray,
+        controls_matrix: Optional[np.ndarray],
+        cluster_ids: Optional[np.ndarray],
+        n_obs: int,
+    ) -> Tuple[
+        float,
+        float,
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+        int,
+        Optional[np.ndarray],
+    ]:
+        """Estimate ATT via propensity score matching.
+
+        For each treated unit, find the nearest control unit by propensity
+        score (1:1 nearest-neighbor matching with replacement), then compute
+        ATT as the average difference between treated and matched control.
+
+        Parameters
+        ----------
+        y : ndarray of shape (n,)
+            Transformed outcome.
+        treatment : ndarray of shape (n,)
+            Binary treatment indicator.
+        controls_matrix : ndarray of shape (n, p) or None
+            Covariates for propensity score model.
+        cluster_ids : ndarray of shape (n,) or None
+            Cluster identifiers.
+        n_obs : int
+            Number of observations.
+
+        Returns
+        -------
+        att : float
+            PSM-estimated ATT.
+        se : float
+            Standard error (simple matching SE).
+        coefs : ndarray or None
+            Not returned for PSM (None).
+        vcov : ndarray or None
+            Not returned for PSM (None).
+        n_params : int
+            Effective number of parameters.
+        """
+        if controls_matrix is None or controls_matrix.shape[1] == 0:
+            # Without covariates, PSM reduces to simple difference in means
+            warnings.warn(
+                "PSM without control variables reduces to a simple "
+                "difference in means. Consider using estimation_method='reg'.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return self._estimate_reg(y, treatment, None, cluster_ids, n_obs)
+
+        treat_mask = treatment == 1
+        ctrl_mask = treatment == 0
+        n_treated = int(treat_mask.sum())
+        n_control = int(ctrl_mask.sum())
+
+        if n_treated == 0 or n_control == 0:
+            warnings.warn(
+                "PSM estimation failed: no treated or no control units available. "
+                "Returning NaN results.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return np.nan, np.nan, None, None, 2, None
+
+        # Step 1: Estimate propensity score via logit
+        coefs_logit, probs = solve_logit(controls_matrix, treatment)
+
+        # Convergence check: coefficients must be finite
+        if not np.all(np.isfinite(coefs_logit)):
+            warnings.warn(
+                "Logistic regression did not converge (non-finite coefficients). "
+                "Falling back to 'reg' estimation. Consider standardizing controls.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return self._estimate_reg(y, treatment, controls_matrix, cluster_ids, n_obs)
+
+        # Convergence check: complete/quasi-complete separation
+        if np.any(probs < 1e-8) or np.any(probs > 1 - 1e-8):
+            warnings.warn(
+                "Possible complete separation detected in propensity score model. "
+                "Some predicted probabilities are near 0 or 1. "
+                "Results may be unreliable.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        # Step 2: Trim propensity scores to [pscore_trim, 1 - pscore_trim]
+        trim_lo, trim_hi = self.pscore_trim, 1.0 - self.pscore_trim
+        n_trimmed = int((probs < trim_lo).sum() + (probs > trim_hi).sum())
+        if n_trimmed > 0:
+            warnings.warn(
+                f"LWDiD: {n_trimmed} observation(s) had propensity scores trimmed "
+                f"to [{self.pscore_trim:.3f}, {1-self.pscore_trim:.3f}].",
+                UserWarning,
+                stacklevel=2,
+            )
+        probs = np.clip(probs, trim_lo, trim_hi)
+
+        # Step 3: Nearest-neighbor matching (with replacement)
+        p_treated = probs[treat_mask]
+        p_control = probs[ctrl_mask]
+        y_treated = y[treat_mask]
+        y_control = y[ctrl_mask]
+
+        # For each treated unit, find n_neighbors nearest controls
+        matched_y_control = np.empty(n_treated)
+        available_mask = np.ones(n_control, dtype=bool)
+
+        for i in range(n_treated):
+            valid_control_idx = np.where(available_mask)[0]
+            if len(valid_control_idx) == 0:
+                matched_y_control[i] = np.nan
+                continue
+
+            distances = np.abs(p_treated[i] - p_control[valid_control_idx])
+
+            if self.caliper is not None:
+                within_caliper = distances <= self.caliper
+                if not within_caliper.any():
+                    matched_y_control[i] = np.nan
+                    continue
+                distances = np.where(within_caliper, distances, np.inf)
+
+            nearest_local = np.argsort(distances)[: self.n_neighbors]
+            nearest_global = valid_control_idx[nearest_local]
+            matched_y_control[i] = y_control[nearest_global].mean()
+
+            if not self.with_replacement:
+                available_mask[nearest_global] = False
+
+        # Step 4: Compute ATT = mean(Y_treated - Y_matched_control)
+        # Exclude NaN matches (from caliper)
+        valid_matches = np.isfinite(matched_y_control)
+        n_unmatched = int(np.isnan(matched_y_control).sum())
+        if n_unmatched > 0:
+            warnings.warn(
+                f"LWDiD PSM: {n_unmatched} treated unit(s) could not be matched "
+                f"within caliper={self.caliper}. ATT computed from {n_treated - n_unmatched} matches.",
+                UserWarning,
+                stacklevel=2,
+            )
+        if not valid_matches.any():
+            warnings.warn(
+                "PSM estimation failed: no valid matches found (all exceeded caliper). "
+                "Returning NaN results.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return np.nan, np.nan, None, None, 2, None
+        diffs = y_treated[valid_matches] - matched_y_control[valid_matches]
+        att = float(np.mean(diffs))
+
+        # Step 5: Compute SE
+        # Simple matching SE: SE = sqrt(Var(diffs) / N_treated)
+        n_matched = int(valid_matches.sum())
+        if n_matched > 1:
+            var_diffs = float(np.var(diffs, ddof=1))
+            se = float(np.sqrt(var_diffs / n_matched))
+        else:
+            se = np.nan
+
+        # Effective n_params: intercept + controls (for propensity model)
+        n_params = 1 + controls_matrix.shape[1]
+        return att, se, None, None, n_params, None
+
+    def _estimate_dr(
+        self,
+        y: np.ndarray,
+        treatment: np.ndarray,
+        controls_matrix: Optional[np.ndarray],
+        cluster_ids: Optional[np.ndarray],
+        n_obs: int,
+    ) -> Tuple[
+        float,
+        float,
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+        int,
+        Optional[np.ndarray],
+    ]:
+        """Estimate ATT via augmented IPW (doubly robust).
+
+        Combines regression adjustment with inverse probability weighting
+        for double robustness.
+
+        Parameters
+        ----------
+        y : ndarray of shape (n,)
+            Transformed outcome.
+        treatment : ndarray of shape (n,)
+            Binary treatment indicator.
+        controls_matrix : ndarray of shape (n, p) or None
+            Covariates.
+        cluster_ids : ndarray of shape (n,) or None
+            Cluster identifiers.
+        n_obs : int
+            Number of observations.
+
+        Returns
+        -------
+        att : float
+            Doubly-robust ATT estimate.
+        se : float
+            Standard error.
+        coefs : ndarray or None
+            Not returned for DR (None).
+        vcov : ndarray or None
+            Not returned for DR (None).
+        n_params : int
+            Effective number of parameters for df computation.
+
+        Notes
+        -----
+        **Variance form (paper mapping).** The reported SE and the influence
+        function consumed by the multiplier bootstrap use the AIPW efficient
+        influence function (Lunceford & Davidian 2004) — NOT the stacked
+        M-estimator form of Lee & Wooldridge (2026) Appendix E.3 that the
+        authors' Stata package implements. This is a documented,
+        independently anchored alternative, adjudicated in PR #588's final
+        round: the AIPW EIF is the standard doubly-robust influence function
+        in the causal-inference literature and is anchored by the RA config's
+        bootstrap-SE parity gate against the Stata golden plus the suite's
+        analytical/bootstrap cross-path pins. Measured on the Walmart
+        application (2026-08-16): DR point estimates agree with the authors'
+        package to ~1e-3, while DR (IPWRA) multiplier-bootstrap SEs diverge
+        systematically by ~15%; the RA config's SEs agree within Monte-Carlo
+        bounds. See the LWDiD IPWRA-variance note in
+        ``docs/methodology/REGISTRY.md``; implementing the E.3 stacked form
+        remains an available follow-up if package-form SE parity is preferred.
+        """
+        if controls_matrix is None or controls_matrix.shape[1] == 0:
+            # Without covariates, DR reduces to regression adjustment.
+            # Say so, matching the routing docstring and the ipw branch
+            # (no-silent-failures contract).
+            warnings.warn(
+                "DR (doubly robust) without control variables reduces to "
+                "regression adjustment. Consider using "
+                "estimation_method='reg'.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return self._estimate_reg(
+                y, treatment, None, cluster_ids, n_obs
+            )  # returns 5-tuple including n_params
+
+        treat_mask = treatment == 1
+        ctrl_mask = treatment == 0
+        n_treated = int(treat_mask.sum())
+        n_control = int(ctrl_mask.sum())
+
+        # Step 1: Get propensity scores
+        coefs_logit, probs = solve_logit(controls_matrix, treatment)
+
+        # Convergence check: coefficients must be finite
+        if not np.all(np.isfinite(coefs_logit)):
+            warnings.warn(
+                "Logistic regression did not converge (non-finite coefficients). "
+                "Falling back to 'reg' estimation. Consider standardizing controls.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return self._estimate_reg(y, treatment, controls_matrix, cluster_ids, n_obs)
+
+        # Convergence check: complete/quasi-complete separation
+        if np.any(probs < 1e-8) or np.any(probs > 1 - 1e-8):
+            warnings.warn(
+                "Possible complete separation detected in propensity score model. "
+                "Some predicted probabilities are near 0 or 1. "
+                "Results may be unreliable.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        trim_lo_dr, trim_hi_dr = self.pscore_trim, 1.0 - self.pscore_trim
+        n_trimmed_dr = int((probs < trim_lo_dr).sum() + (probs > trim_hi_dr).sum())
+        if n_trimmed_dr > 0:
+            warnings.warn(
+                f"LWDiD: {n_trimmed_dr} observation(s) had propensity scores trimmed "
+                f"to [{self.pscore_trim:.3f}, {1-self.pscore_trim:.3f}].",
+                UserWarning,
+                stacklevel=2,
+            )
+        probs = np.clip(probs, self.pscore_trim, 1.0 - self.pscore_trim)
+
+        # Step 2: Fit outcome model on control units only using WLS with IPW weights
+        # This matches the Stata/lwdid-py reference: outcome model is fitted on
+        # controls with weights w_i = p(X_i)/(1-p(X_i)) to target ATT.
+        X_ctrl = np.column_stack([np.ones(n_control), controls_matrix[ctrl_mask]])
+        y_ctrl = y[ctrl_mask]
+
+        # IPW weights for control units
+        ipw_ctrl = probs[ctrl_mask] / (1.0 - probs[ctrl_mask])
+        ipw_ctrl_sum = ipw_ctrl.sum()
+
+        if ipw_ctrl_sum <= 0:
+            # Fall back to RA if IPW weights degenerate
+            return self._estimate_reg(
+                y, treatment, controls_matrix, cluster_ids, n_obs
+            )  # returns 5-tuple including n_params
+
+        # WLS via sqrt(w) transformation: beta = (X'WX)^{-1} X'WY
+        sqrt_w = np.sqrt(ipw_ctrl)
+        X_ctrl_w = X_ctrl * sqrt_w[:, np.newaxis]
+        y_ctrl_w = y_ctrl * sqrt_w
+        try:
+            XtWX_inv = np.linalg.inv(X_ctrl_w.T @ X_ctrl_w)
+            coefs_outcome = XtWX_inv @ (X_ctrl_w.T @ y_ctrl_w)
+        except np.linalg.LinAlgError:
+            XtWX_inv = np.linalg.pinv(X_ctrl_w.T @ X_ctrl_w)
+            coefs_outcome = XtWX_inv @ (X_ctrl_w.T @ y_ctrl_w)
+
+        # Predict counterfactual for all units
+        X_all = np.column_stack([np.ones(n_obs), controls_matrix])
+        mu_0 = X_all @ coefs_outcome
+
+        # Step 3: Compute AIPW/IPWRA estimator (Hajek normalization)
+        # ATT = mean_{D=1}(Y - mu_0) - sum_{D=0}[w*(Y-mu_0)] / sum_{D=0}(w)
+        resid = y - mu_0
+        resid_ctrl = resid[ctrl_mask]
+
+        # Treated component
+        att_treated_part = resid[treat_mask].mean()
+
+        # Control component (Hajek: divide by sum of weights)
+        weights_sum = ipw_ctrl_sum
+        att_ctrl_part = np.sum(ipw_ctrl * resid_ctrl) / weights_sum
+
+        att = float(att_treated_part - att_ctrl_part)
+
+        # Step 4: Compute SE via full semiparametric influence function
+        # The IPWRA IF consists of 3 components (Cattaneo 2010, Lunceford & Davidian 2004):
+        # 1. Hajek main term (plug-in IF)
+        # 2. Propensity score estimation uncertainty correction
+        # 3. Outcome model estimation uncertainty correction
+        n_treated_f = float(n_treated)
+        p_bar = n_treated_f / n_obs  # P(D=1) estimate
+
+        # Control term (Hajek weighted mean of control residuals)
+        control_term = att_ctrl_part  # = sum(w*resid_C) / sum(w)
+
+        # ================================================================
+        # Component 1: Hajek influence function (main term)
+        # Hajek linearization for ATT = mean_T(resid) - sum_C(w*resid)/sum_C(w)
+        # ================================================================
+        psi = np.zeros(n_obs)
+        psi[treat_mask] = (resid[treat_mask] - att) / p_bar
+        psi[ctrl_mask] = -ipw_ctrl * (resid_ctrl - control_term) / weights_sum * n_obs
+
+        # ================================================================
+        # Component 2: Propensity score estimation uncertainty correction
+        # S_gamma_i = (D_i - p_i) * X_i (logit score)
+        # H_gamma = -(1/n) * X' diag(p*(1-p)) X (logit Hessian)
+        # dATT/dgamma = -sum_C[dw/dgamma * (resid - B)] / sum_C(w)
+        # ================================================================
+        X_ps = np.column_stack([np.ones(n_obs), controls_matrix])
+
+        # Logit score
+        S_gamma = (treatment - probs)[:, np.newaxis] * X_ps
+
+        # Logit Hessian
+        W_ps = probs * (1 - probs)
+        H_gamma = -(X_ps.T * W_ps) @ X_ps / n_obs
+        try:
+            H_gamma_inv = np.linalg.inv(H_gamma)
+        except np.linalg.LinAlgError:
+            H_gamma_inv = np.linalg.pinv(H_gamma)
+
+        # Sensitivity of ATT to propensity score parameters
+        # dw/dgamma_i = w_i * X_i; chain through the Hajek control term
+        r_minus_B = resid_ctrl - control_term
+        dw_dgamma_ctrl = ipw_ctrl[:, np.newaxis] * X_ps[ctrl_mask]
+        dATT_dgamma = -(dw_dgamma_ctrl * r_minus_B[:, np.newaxis]).sum(axis=0) / weights_sum
+
+        # PS adjustment
+        ps_adjustment = (S_gamma @ H_gamma_inv.T) @ dATT_dgamma
+
+        # ================================================================
+        # Component 3: Outcome model estimation uncertainty correction
+        # The outcome model is WLS fitted on controls with IPW weights:
+        #   E[Y|X, D=0] fitted by WLS with w_i = p/(1-p).
+        # S_beta_i = w_i * resid_i * X_i * I(D_i=0) (WLS score)
+        # H_beta = -(1/n) * X_ctrl' diag(w) X_ctrl (WLS Hessian)
+        # dATT/dbeta = -mean_T(X_i) + sum_C(w_i*X_i) / sum_C(w)
+        # ================================================================
+        X_om = np.column_stack([np.ones(n_obs), controls_matrix])
+        X_ctrl_om = X_om[ctrl_mask]
+
+        # WLS score (nonzero only for control units)
+        S_beta = np.zeros((n_obs, X_om.shape[1]))
+        S_beta[ctrl_mask] = ipw_ctrl[:, np.newaxis] * resid_ctrl[:, np.newaxis] * X_ctrl_om
+
+        # WLS Hessian: H_beta = -(1/n) * X_ctrl' diag(w) X_ctrl
+        H_beta = -(X_ctrl_om.T * ipw_ctrl) @ X_ctrl_om / n_obs
+        try:
+            H_beta_inv = np.linalg.inv(H_beta)
+        except np.linalg.LinAlgError:
+            H_beta_inv = np.linalg.pinv(H_beta)
+
+        # Sensitivity of ATT to outcome model parameters
+        # dATT/dbeta = -mean_T(X_i) + weighted_mean_C(X_i)
+        X_bar_treated = X_om[treat_mask].mean(axis=0)
+        X_bar_ctrl_w = (ipw_ctrl[:, np.newaxis] * X_ctrl_om).sum(axis=0) / weights_sum
+        dATT_dbeta = -X_bar_treated + X_bar_ctrl_w
+
+        # Outcome model adjustment
+        om_adjustment = (S_beta @ H_beta_inv.T) @ dATT_dbeta
+
+        # ================================================================
+        # Combine: full IF = main - PS correction - outcome correction
+        # ================================================================
+        psi_full = psi - ps_adjustment - om_adjustment
+
+        # --- Variance estimation ---
+        if cluster_ids is not None:
+            # Cluster-robust: sum phi within clusters, then outer product
+            cluster_df = pd.DataFrame({"psi": psi_full, "cluster": cluster_ids})
+            cluster_sums = cluster_df.groupby("cluster")["psi"].sum().values
+            n_clusters = len(cluster_sums)
+            if n_clusters <= 1:
+                warnings.warn(
+                    "Only 1 cluster found; falling back to non-clustered "
+                    "variance for DR influence function.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                var_att = float(np.var(psi_full, ddof=1) / n_obs)
+            else:
+                var_att = float(
+                    (n_clusters / (n_clusters - 1)) * np.sum(cluster_sums**2) / n_obs**2
+                )
+        else:
+            var_att = float(np.var(psi_full, ddof=1) / n_obs)
+
+        se = float(np.sqrt(max(var_att, 0.0)))
+
+        # Effective n_params: intercept + treatment + controls (outcome model)
+        # + propensity score parameters
+        K = controls_matrix.shape[1]
+        n_params = 2 + K
+        influence = self._finalize_influence(
+            self._moment_influence(psi_full, n_obs, cluster_ids), se
+        )
+        return att, se, None, None, n_params, influence
+
+    def _resolve_vcov_type(self) -> str:
+        """Map the requested variance family to a solve_ols vcov_type.
+
+        Returns
+        -------
+        str
+            The vcov_type string compatible with solve_ols. When the
+            cluster= constructor parameter is set, cluster-robust (CR1)
+            inference is requested via hc1 plus cluster_ids.
+        """
+        if self.cluster is not None:
+            return "hc1"  # cluster-robust uses hc1 with cluster_ids
+        return self.vcov_type
+
+    def _bootstrap(
+        self,
+        df: pd.DataFrame,
+        outcome: str,
+        unit: str,
+        time: str,
+        treatment: str,
+        cluster: Optional[str],
+        controls: List[str],
+        pre_periods: List[Any],
+        post_periods: List[Any],
+        treated_units: List[Any],
+        control_units: List[Any],
+    ) -> Tuple[float, float, float, float, Tuple[float, float]]:
+        """Compute bootstrap standard errors.
+
+        Uses unit-level block bootstrap for panel data.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Full panel data.
+        outcome : str
+            Outcome column name.
+        unit : str
+            Unit identifier column name.
+        time : str
+            Time period column name.
+        treatment : str
+            Treatment indicator column name.
+        cluster : str or None
+            Cluster column name.
+        controls : list of str
+            Control variable column names.
+        pre_periods : list
+            Pre-treatment period values.
+        post_periods : list
+            Post-treatment period values.
+        treated_units : list
+            Treated unit identifiers.
+        control_units : list
+            Control unit identifiers.
+
+        Returns
+        -------
+        att : float
+            Point estimate from full sample.
+        se : float
+            Bootstrap standard error.
+        t_stat : float
+            t-statistic.
+        p_value : float
+            Two-sided p-value.
+        conf_int : tuple of float
+            Confidence interval (lower, upper).
+        """
+        # Full-sample estimate
+        treated_set = set(treated_units)
+        pre_mask = df[time].isin(pre_periods)
+        if self.rolling == "demean":
+            df_t = self._transform_demean(df, outcome, unit, pre_mask)
+        elif self.rolling == "detrend":
+            df_t = self._transform_detrend(df, outcome, unit, time, pre_mask)
+        elif self.rolling == "demeanq":
+            df_t = self._transform_demeanq(df, outcome, unit, time, pre_mask)
+        elif self.rolling == "detrendq":
+            df_t = self._transform_detrendq(df, outcome, unit, time, pre_mask)
+        else:
+            df_t = self._transform_detrend(df, outcome, unit, time, pre_mask)
+
+        post_mask = df_t[time].isin(post_periods)  # type: ignore[union-attr, call-overload]
+        post_df = df_t.loc[post_mask]  # type: ignore[union-attr]
+        unit_post_avg = post_df.groupby(unit)["_ydot"].mean()
+
+        cs_df = df.drop_duplicates(subset=[unit], keep="first")[[unit] + controls].copy()
+        cs_df["_treat"] = cs_df[unit].isin(treated_set).astype(float)
+        cs_df["_ydot_avg"] = cs_df[unit].map(unit_post_avg)
+        cs_df = cs_df.dropna(subset=["_ydot_avg"])
+
+        y_full = cs_df["_ydot_avg"].values.astype(np.float64)
+        treat_full = cs_df["_treat"].values.astype(np.float64)
+        controls_mat = cs_df[controls].values.astype(np.float64) if controls else None
+
+        att_full, _, _, _, n_params_full, _ = self._dispatch_estimator(
+            y_full, treat_full, controls_mat, None, len(y_full)
+        )
+
+        # Bootstrap replications (unit-level block bootstrap)
+        treated_arr = np.array(treated_units)
+        control_arr = np.array(control_units)
+        n_treated = len(treated_arr)
+        n_control = len(control_arr)
+        n_units = n_treated + n_control
+        unit_counts = df.groupby(unit).size().to_dict()
+
+        if self.n_jobs == 1:
+            # --- Serial path (original implementation, unchanged) ---
+            rng = np.random.default_rng(seed=self.seed)
+            boot_atts = np.empty(self.n_bootstrap)
+            for b in range(self.n_bootstrap):
+                # Resample treated and control units SEPARATELY to preserve proportions
+                boot_treated = rng.choice(treated_arr, size=n_treated, replace=True)
+                boot_control = rng.choice(control_arr, size=n_control, replace=True)
+                boot_units = np.concatenate([boot_treated, boot_control])
+
+                # Build bootstrap sample (all periods for resampled units)
+                boot_indices = []
+                for i, u in enumerate(boot_units):
+                    idx = df.index[df[unit] == u].tolist()
+                    boot_indices.extend(idx)
+
+                boot_df = df.iloc[boot_indices].copy()
+                # Assign new unit IDs to handle duplicates (dict lookup, no sort needed)
+                repeat_counts = [unit_counts[u] for u in boot_units]
+                boot_df["_boot_unit"] = np.repeat(np.arange(n_units), repeat_counts)
+
+                # Treatment indicator from group membership (not from raw data column)
+                boot_treat_vec = np.array([1.0] * n_treated + [0.0] * n_control, dtype=np.float64)
+
+                # Apply transformation
+                pre_mask_b = boot_df[time].isin(pre_periods)
+                if self.rolling == "demean":
+                    boot_df = self._transform_demean(boot_df, outcome, "_boot_unit", pre_mask_b)
+                elif self.rolling == "detrend":
+                    boot_df = self._transform_detrend(
+                        boot_df, outcome, "_boot_unit", time, pre_mask_b
+                    )
+                elif self.rolling == "demeanq":
+                    boot_df = self._transform_demeanq(
+                        boot_df, outcome, "_boot_unit", time, pre_mask_b
+                    )
+                elif self.rolling == "detrendq":
+                    boot_df = self._transform_detrendq(
+                        boot_df, outcome, "_boot_unit", time, pre_mask_b
+                    )
+                else:
+                    boot_df = self._transform_detrend(
+                        boot_df, outcome, "_boot_unit", time, pre_mask_b
+                    )
+
+                # Cross-sectional estimate
+                post_mask_b = boot_df[time].isin(post_periods)  # type: ignore[union-attr, call-overload]
+                post_b = boot_df.loc[post_mask_b]  # type: ignore[union-attr]
+                unit_avg_b = post_b.groupby("_boot_unit")["_ydot"].mean()
+
+                cs_b = boot_df.drop_duplicates(subset=["_boot_unit"], keep="first")[  # type: ignore[union-attr]
+                    ["_boot_unit"]
+                ].copy()
+                if controls:
+                    for c in controls:
+                        cs_b[c] = boot_df.drop_duplicates(subset=["_boot_unit"], keep="first")[  # type: ignore[union-attr]
+                            c
+                        ].values
+
+                # Map treatment status from group membership
+                boot_treat_map = dict(zip(range(n_units), boot_treat_vec))
+                cs_b["_treat"] = cs_b["_boot_unit"].map(boot_treat_map)
+                cs_b["_ydot_avg"] = cs_b["_boot_unit"].map(unit_avg_b)
+                cs_b = cs_b.dropna(subset=["_ydot_avg"])
+
+                if len(cs_b) < 3:
+                    boot_atts[b] = np.nan
+                    continue
+
+                y_b = cs_b["_ydot_avg"].values.astype(np.float64)
+                treat_b = cs_b["_treat"].values.astype(np.float64)
+                ctrl_b = cs_b[controls].values.astype(np.float64) if controls else None
+
+                try:
+                    att_b, _, _, _, _, _ = self._dispatch_estimator(
+                        y_b, treat_b, ctrl_b, None, len(y_b)
+                    )
+                    boot_atts[b] = att_b
+                except (np.linalg.LinAlgError, ValueError):
+                    boot_atts[b] = np.nan
+        else:
+            # --- Parallel path (n_jobs > 1) ---
+            from concurrent.futures import ThreadPoolExecutor
+
+            warnings.warn(
+                "Parallel bootstrap (n_jobs > 1) is experimental. "
+                "ThreadPoolExecutor is used; speedup depends on "
+                "GIL-releasing operations in numpy/scipy.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+            # Pre-generate all bootstrap unit samples via SeedSequence spawning:
+            # seed=None draws fresh OS entropy (non-deterministic, matching the
+            # serial path), while an explicit integer seed remains reproducible.
+            seed_seq = np.random.SeedSequence(self.seed)
+            child_seqs = seed_seq.spawn(self.n_bootstrap)
+            boot_unit_samples = []
+            for b in range(self.n_bootstrap):
+                rng_b = np.random.default_rng(child_seqs[b])
+                boot_treated = rng_b.choice(treated_arr, size=n_treated, replace=True)
+                boot_control = rng_b.choice(control_arr, size=n_control, replace=True)
+                boot_unit_samples.append(np.concatenate([boot_treated, boot_control]))
+
+            def _run_replicate(b: int) -> float:
+                """Execute a single bootstrap replicate."""
+                boot_units = boot_unit_samples[b]
+
+                # Build bootstrap sample (all periods for resampled units)
+                boot_indices = []
+                for u in boot_units:
+                    idx = df.index[df[unit] == u].tolist()
+                    boot_indices.extend(idx)
+
+                boot_df = df.iloc[boot_indices].copy()
+                repeat_counts = [unit_counts[u] for u in boot_units]
+                boot_df["_boot_unit"] = np.repeat(np.arange(n_units), repeat_counts)
+
+                boot_treat_vec = np.array([1.0] * n_treated + [0.0] * n_control, dtype=np.float64)
+
+                # Apply transformation
+                pre_mask_b = boot_df[time].isin(pre_periods)
+                if self.rolling == "demean":
+                    boot_df = self._transform_demean(boot_df, outcome, "_boot_unit", pre_mask_b)
+                elif self.rolling == "detrend":
+                    boot_df = self._transform_detrend(
+                        boot_df, outcome, "_boot_unit", time, pre_mask_b
+                    )
+                elif self.rolling == "demeanq":
+                    boot_df = self._transform_demeanq(
+                        boot_df, outcome, "_boot_unit", time, pre_mask_b
+                    )
+                elif self.rolling == "detrendq":
+                    boot_df = self._transform_detrendq(
+                        boot_df, outcome, "_boot_unit", time, pre_mask_b
+                    )
+                else:
+                    boot_df = self._transform_detrend(
+                        boot_df, outcome, "_boot_unit", time, pre_mask_b
+                    )
+
+                # Cross-sectional estimate
+                post_mask_b = boot_df[time].isin(post_periods)  # type: ignore[union-attr, call-overload]
+                post_b = boot_df.loc[post_mask_b]  # type: ignore[union-attr]
+                unit_avg_b = post_b.groupby("_boot_unit")["_ydot"].mean()
+
+                cs_b = boot_df.drop_duplicates(subset=["_boot_unit"], keep="first")[  # type: ignore[union-attr]
+                    ["_boot_unit"]
+                ].copy()
+                if controls:
+                    for c in controls:
+                        cs_b[c] = boot_df.drop_duplicates(subset=["_boot_unit"], keep="first")[  # type: ignore[union-attr]
+                            c
+                        ].values
+
+                boot_treat_map = dict(zip(range(n_units), boot_treat_vec))
+                cs_b["_treat"] = cs_b["_boot_unit"].map(boot_treat_map)
+                cs_b["_ydot_avg"] = cs_b["_boot_unit"].map(unit_avg_b)
+                cs_b = cs_b.dropna(subset=["_ydot_avg"])
+
+                if len(cs_b) < 3:
+                    return np.nan
+
+                y_b = cs_b["_ydot_avg"].values.astype(np.float64)
+                treat_b = cs_b["_treat"].values.astype(np.float64)
+                ctrl_b = cs_b[controls].values.astype(np.float64) if controls else None
+
+                try:
+                    att_b, _, _, _, _, _ = self._dispatch_estimator(
+                        y_b, treat_b, ctrl_b, None, len(y_b)
+                    )
+                    return att_b
+                except (np.linalg.LinAlgError, ValueError):
+                    return np.nan
+
+            with ThreadPoolExecutor(max_workers=self.n_jobs) as executor:
+                boot_atts = np.array(list(executor.map(_run_replicate, range(self.n_bootstrap))))
+
+        # Compute bootstrap SE
+        n_failed = int(np.isnan(boot_atts).sum())
+        if n_failed > 0:
+            warnings.warn(
+                f"LWDiD bootstrap: {n_failed}/{self.n_bootstrap} replication(s) failed "
+                f"(returned NaN). Results based on {self.n_bootstrap - n_failed} valid replications.",
+                UserWarning,
+                stacklevel=2,
+            )
+        valid_boots = boot_atts[np.isfinite(boot_atts)]
+        if len(valid_boots) < 2:
+            se = np.nan
+        else:
+            se = float(np.std(valid_boots, ddof=1))
+
+        t_stat, p_value, conf_int = safe_inference(
+            att_full, se, alpha=self.alpha, df=max(len(y_full) - n_params_full, 1)
+        )
+
+        return att_full, se, t_stat, p_value, conf_int
+
+    def __repr__(self) -> str:
+        """Return string representation of the estimator."""
+        params = self.get_params()
+        params_str = ", ".join(f"{k}={v!r}" for k, v in params.items())
+        return f"LWDiD({params_str})"
+
+
+def validate_staggered_data(data, unit, time, cohort) -> Dict[str, Any]:
+    """Validate panel data structure for staggered DiD estimation.
+
+    Checks:
+    - Panel is complete (all unit×time combinations exist)
+    - Cohort is time-invariant within units
+    - At least one never-treated group exists (cohort==0)
+    - No missing values in key columns
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Panel dataset.
+    unit : str
+        Unit identifier column name.
+    time : str
+        Time period column name.
+    cohort : str
+        Cohort column name (0 or NaN = never-treated).
+
+    Returns
+    -------
+    dict
+        Validation results with keys: 'valid', 'warnings', 'errors',
+        'n_units', 'n_periods', 'n_cohorts', 'n_never_treated'.
+
+    Raises
+    ------
+    ValueError
+        If data structure is fundamentally invalid.
+    """
+
+    df = data.copy()
+
+    results: dict[str, Any] = {"valid": True, "warnings": [], "errors": []}
+
+    # Check required columns exist
+    for col in [unit, time, cohort]:
+        if col not in df.columns:
+            results["valid"] = False
+            results["errors"].append(f"Column '{col}' not found in data")
+            return results
+
+    # Check cohort time-invariance
+    cohort_per_unit = df.groupby(unit)[cohort].nunique()
+    varying = cohort_per_unit[cohort_per_unit > 1]
+    if len(varying) > 0:
+        results["valid"] = False
+        results["errors"].append(f"{len(varying)} units have time-varying cohort values")
+
+    # Check for never-treated. All-eventually-treated panels are rejected
+    # by fit() for staggered designs, so mirror that hard-error here
+    # instead of reporting a valid-with-warning contradiction.
+    never_treated = df[df[cohort] == 0][unit].nunique()
+    if never_treated == 0:
+        results["valid"] = False
+        results["errors"].append(
+            "No never-treated units found (cohort==0); staggered LWDiD "
+            "estimation requires a never-treated control group."
+        )
+
+    # Check panel balance
+    n_units = df[unit].nunique()
+    n_times = df[time].nunique()
+    expected_rows = n_units * n_times
+    if len(df) != expected_rows:
+        results["warnings"].append(f"Unbalanced panel: {len(df)} rows vs {expected_rows} expected")
+
+    # Check missing values
+    for col in [unit, time, cohort]:
+        n_missing = df[col].isna().sum()
+        if n_missing > 0:
+            results["warnings"].append(f"{n_missing} missing values in '{col}'")
+
+    results["n_units"] = n_units
+    results["n_periods"] = n_times
+    results["n_cohorts"] = df[df[cohort] > 0][cohort].nunique()
+    results["n_never_treated"] = never_treated
+
+    return results
+
+
+def is_never_treated(data, unit, cohort) -> np.ndarray:
+    """Identify never-treated units in staggered design.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Panel dataset.
+    unit : str
+        Unit identifier column name.
+    cohort : str
+        Cohort column name (0 = never treated).
+
+    Returns
+    -------
+    np.ndarray of bool
+        True for never-treated units (one entry per unique unit).
+    """
+    unit_cohort = data.groupby(unit)[cohort].first()
+    return np.array((unit_cohort == 0) | unit_cohort.isna())

@@ -488,6 +488,8 @@ _RULE1_TIME_SURFACES = (
     "HeterogeneousAdoptionDiD.fit[time]",
     "ImputationDiD.fit[time]",
     "LPDiD.fit[time]",
+    "LWDiD.fit[time]",
+    "LWDiD.get_transformation_diagnostics[time]",
     "SpilloverDiD.fit[time]",
     "StackedDiD.fit[time]",
     "SunAbraham.fit[time]",
@@ -1067,6 +1069,10 @@ CONSUMER_ALLOWLIST = {
     ),
     ("time", "docs/methodology/papers/wooldridge-2023-review.md"): (
         "canonical calendar column prose in the shipped-API description, not the M-030 overload"
+    ),
+    ("time", "diff_diff/lwdid_sensitivity.py"): (
+        "internal refits pass the canonical calendar column through to "
+        "LWDiD.fit[time] (rule-1), not the M-030 overload"
     ),
     ("cohort", "docs/methodology/papers/borusyak-jaravel-spiess-2024-review.md"): (
         "ImputationDiD partition-value prose, not the Wooldridge fit[cohort] kwarg"

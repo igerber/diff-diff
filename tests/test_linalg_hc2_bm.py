@@ -369,13 +369,14 @@ class TestInvalidInputs:
         X, y = small_ols_dataset
         _, resid, _ = _fit_unweighted(X, y)
         with pytest.raises(ValueError, match="vcov_type must be one of"):
-            compute_robust_vcov(X, resid, vcov_type="hc3")
+            compute_robust_vcov(X, resid, vcov_type="hc9")
 
     def test_hc0_not_accepted(self, small_ols_dataset):
-        """HC0/HC3/CR0 are out of scope for Phase 1a."""
+        """HC0/CR0 are out of scope for Phase 1a (HC3 joined the valid set
+        for the LWDiD canonical-vocabulary rename)."""
         X, y = small_ols_dataset
         _, resid, _ = _fit_unweighted(X, y)
-        for bad in ("hc0", "hc3", "cr0"):
+        for bad in ("hc0", "cr0"):
             with pytest.raises(ValueError, match="vcov_type must be one of"):
                 compute_robust_vcov(X, resid, vcov_type=bad)
 

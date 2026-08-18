@@ -71,6 +71,8 @@ def _format_vcov_label(
         return "HC1 heteroskedasticity-robust"
     if vcov_type == "hc2":
         return "HC2 leverage-corrected"
+    if vcov_type == "hc3":
+        return "HC3 jackknife-style leverage-corrected"
     if vcov_type == "hc2_bm":
         if cluster_name:
             suffix = f", G={n_clusters}" if n_clusters else ""

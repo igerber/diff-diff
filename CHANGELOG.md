@@ -60,6 +60,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   route on bootstrapped CS fits instead of the deprecated fit-time kwarg. The
   sibling estimators' (EfficientDiD/ImputationDiD/TwoStageDiD/ContinuousDiD)
   bootstrapped recompute gates are unchanged.
+- **`LWDiD` (Lee & Wooldridge 2025, 2026 rolling-transformation DiD).** Unit-specific
+  demean/detrend (plus quarterly `demeanq`/`detrendq`) converts panel data to
+  cross-sectional transformed outcomes; supports common timing and staggered
+  adoption with never-treated / not-yet-treated controls,
+  `estimation_method` in `'reg'`/`'ipw'`/`'dr'`/`'psm'`, analytical
+  (`vcov_type` in `'classical'`/`'hc1'`/`'hc2'`/`'hc3'`) and cluster-robust
+  (constructor `cluster=`) inference, multiplier bootstrap, wild cluster
+  bootstrap, and randomization inference. Common-timing fits expose the same
+  post-fit event-study surface as staggered ones —
+  `results.aggregate('event_study')` returns per-period effects on the
+  calendar-time axis, so no separate per-period fit option exists.
+
+### Changed
+- **`LWDiD` API canonicalized to the v4 vocabulary agreed in PR #588's review**
+  (renames relative to the PR's earlier review rounds; nothing here was ever
+  released): `estimator=` -> `estimation_method=` with values `'ra'` -> `'reg'`
+  and `'ipwra'` -> `'dr'`; `vce=` -> `vcov_type=` with no `'cluster'` value —
+  cluster-robust (CR1) inference activates via the constructor `cluster=`
+  column instead; `bootstrap_seed=` -> `seed=` (default `None`);
+  `trim_threshold=` -> `pscore_trim=`. `vcov_type='hc3'` is computed through
+  the shared `diff_diff.linalg` HC machinery used by the other estimators,
+  and the `'hc0'`/`'hc4'` values are removed from the surface.
+  Unit-constancy validation is centralized and applies uniformly to
+  covariates and the cluster column across all estimation paths.
+
+### Removed
+- **`LWDiD` pre-v4 review-round surface** (never released): the `LW` alias,
+  the functional `lwdid()` wrapper, the `lwdid_trend_diagnostics` module
+  (including `recommend_transformation`), and the `overall_att` /
+  `period_effects` result fields together with the `period_specific` fit
+  option — per-period effects are served by the post-fit
+  `results.aggregate('event_study')` surface instead.
+
+### Fixed
+- **`LWDiD` review-round fixes** (staggered contract and inference tightenings):
+  - Staggered classical/HC SEs now come from the joint influence function
+    across cohort-time cells (the LW 2026 eq. 7.19 pooled-regression basis),
+    accounting for correlation among cohort effects that share controls
+    instead of assuming independence.
+  - On unbalanced panels the overall ATT point estimate is unified to the
+    eq. (7.18) composite-regression estimand `tau_omega`; the joint
+    influence function contributes the standard error only, so switching
+    variance options no longer moves the point estimate (gated to
+    `rolling` in `'demean'`/`'detrend'` with `control_group='never_treated'`,
+    `estimation_method='reg'`, and no covariates; the quarterly variants
+    keep their previous behavior).
+  - t-test degrees of freedom are computed from one design-based rule across
+    common-timing and staggered paths instead of two inconsistent ones.
+  - All-eventually-treated panels under `control_group='not_yet_treated'`
+    raise `ValueError` instead of silently truncating the sample; staggered
+    `covariates` must be unit-constant, time-varying columns raise
+    `ValueError`.
+  - Randomization inference uses the inclusive Phipson-Smyth rule
+    p = (c+1)/(B+1) and counts ties as extreme (`>=`), so p is never 0 and
+    an all-tie permutation distribution yields p = 1.0.
+  - `estimation_method='dr'` without covariates warns (`UserWarning`) that it
+    reduces to regression adjustment instead of silently doing so.
+  - `sensitivity_analysis` gains a `not_estimable` robustness level (with a
+    warning) when the ratio cannot be computed — including the zero-baseline
+    case — instead of mislabeling it.
+  - `to_dict()` output is fully JSON-native, including datetime/Period
+    cohort and time labels (ISO-8601 / period strings, NaT -> None).
+  - Staggered fits accept datetime64 and Period time scales, and panels
+    mixing the two time families are rejected in both directions with a
+    clear `ValueError`; cluster variable equal to the unit column no longer
+    raises a spurious column-lookup error.
 
 ## [3.9.1] - 2026-08-17
 

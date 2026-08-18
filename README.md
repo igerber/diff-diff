@@ -120,6 +120,7 @@ Full guide: `diff_diff.get_llm_guide("practitioner")`.
 - [WooldridgeDiD](https://diff-diff.readthedocs.io/en/stable/api/wooldridge_etwfe.html) - Wooldridge (2023, 2025) ETWFE: saturated OLS, logit/Poisson QMLE (ASF-based ATT). Alias `ETWFE`.
 - [LPDiD](https://diff-diff.readthedocs.io/en/stable/api/lpdid.html) - Dube, Girardi, Jorda & Taylor (2025) Local Projections DiD: per-horizon long-difference event study on clean controls (no negative weighting), variance- or equally-weighted ATT, for absorbing or non-absorbing (reversible) treatment
 - [ChangesInChanges](https://diff-diff.readthedocs.io/en/stable/api/changes_in_changes.html) - Athey & Imbens (2006) nonlinear/distributional DiD for the 2x2 design: full counterfactual distribution and quantile treatment effects via CDF transformation, plus the QDiD comparison estimator via `method="qdid"`; bootstrap inference; R qte parity. Alias `CiC`
+- [LWDiD](https://diff-diff.readthedocs.io/en/stable/api/lwdid.html) - Lee & Wooldridge (2025, 2026) rolling-transformation DiD: unit-specific demean/detrend converts panel to cross-section, staggered adoption, `estimation_method` in `reg`/`ipw`/`dr`/`psm` (the papers' RA/IPW/IPWRA plus propensity-score matching), exact small-N inference
 - [BaconDecomposition](https://diff-diff.readthedocs.io/en/stable/api/bacon.html) - Goodman-Bacon (2021) decomposition for diagnosing TWFE bias in staggered settings
 
 ## Diagnostics & Sensitivity

@@ -74,7 +74,7 @@ class TestRobustAliasing:
 
     def test_unknown_vcov_type_raises(self):
         with pytest.raises(ValueError, match="vcov_type must be one of"):
-            DifferenceInDifferences(vcov_type="hc3")
+            DifferenceInDifferences(vcov_type="hc9")
 
     def test_hc0_not_accepted(self):
         for bad in ("hc0", "HC1", "CR2", "cr1", "hc2+bm"):
@@ -132,7 +132,7 @@ class TestParamsRoundTrip:
     def test_set_params_invalid_vcov_type_rejected(self):
         est = DifferenceInDifferences()
         with pytest.raises(ValueError, match="vcov_type must be one of"):
-            est.set_params(vcov_type="hc3")
+            est.set_params(vcov_type="hc9")
 
     def test_set_params_robust_true_then_back_to_hc1(self):
         """robust=True after construction restores hc1 when no explicit vcov_type."""
