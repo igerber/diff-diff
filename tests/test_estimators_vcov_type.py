@@ -3227,7 +3227,13 @@ class TestHC3SharedSurfaceHardening:
                 treat = int(treated_unit and t >= 3)
                 y = alpha + 0.3 * t + 1.5 * treat + rng.normal(0, 1.0)
                 rows.append(
-                    {"unit": u, "time": t, "treated": int(treated_unit), "post": int(t >= 3), "y": y}
+                    {
+                        "unit": u,
+                        "time": t,
+                        "treated": int(treated_unit),
+                        "post": int(t >= 3),
+                        "y": y,
+                    }
                 )
         return pd.DataFrame(rows)
 
@@ -3278,7 +3284,6 @@ class TestHC3SharedSurfaceHardening:
         # class that accepts the linalg vcov vocabulary (constructs with
         # vcov_type="hc1") must either be on the known-support allowlist or
         # reject vcov_type="hc3" with an informative error at construction.
-        import diff_diff
         from tests.test_base_estimator import DEFAULT_KWARGS, MIXIN_CLASSES
 
         # Foreign vcov_type vocabularies (not the linalg family namespace):
@@ -3311,8 +3316,8 @@ class TestHC3SharedSurfaceHardening:
             else:
                 with pytest.raises((ValueError, NotImplementedError)) as exc_info:
                     cls(vcov_type="hc3", **base_kwargs)
-                assert "hc3" in str(exc_info.value), (
-                    f"{name} rejected hc3 without naming it: {exc_info.value}"
-                )
+                assert "hc3" in str(
+                    exc_info.value
+                ), f"{name} rejected hc3 without naming it: {exc_info.value}"
         # The guard must actually be exercising a meaningful roster.
         assert len(checked) >= 8, f"roster unexpectedly small: {checked}"

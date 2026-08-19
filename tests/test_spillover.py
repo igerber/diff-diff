@@ -2289,9 +2289,7 @@ class TestSpilloverDiDHC2NotSupported:
     @pytest.mark.parametrize("vcov_type", ["hc2", "hc2_bm"])
     def test_hc2_paths_raise_not_implemented(self, vcov_type):
         with pytest.raises(NotImplementedError, match="hc2"):
-            SpilloverDiD(
-                rings=[0.0, 100.0], conley_coords=("lat", "lon"), vcov_type=vcov_type
-            )
+            SpilloverDiD(rings=[0.0, 100.0], conley_coords=("lat", "lon"), vcov_type=vcov_type)
 
     def test_hc3_raises_not_implemented_with_own_reason(self):
         with pytest.raises(NotImplementedError, match="hc3.*two-stage spillover"):

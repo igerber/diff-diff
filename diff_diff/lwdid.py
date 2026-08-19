@@ -632,9 +632,7 @@ class LWDiD(BaseEstimator):
             # only — datetime beyond-window cohorts arrive as T+1 and are
             # caught by the g > max_time rule) and BEFORE the design check
             # (which requires canonical never-treated encodings).
-            df[first_treat], _, _ = _normalize_cohorts(
-                df[first_treat], max_time=df[time].max()
-            )
+            df[first_treat], _, _ = _normalize_cohorts(df[first_treat], max_time=df[time].max())
 
         # Unified treatment-design validation (absorbing + timing
         # consistency) covering both dispatch paths
@@ -721,9 +719,7 @@ class LWDiD(BaseEstimator):
             # Same cohort normalization as fit(): inf and beyond-window
             # cohorts are recoded to never-treated here too, so the
             # diagnostics iterate the same cohort set estimation uses.
-            df[first_treat], _, _ = _normalize_cohorts(
-                df[first_treat], max_time=df[time].max()
-            )
+            df[first_treat], _, _ = _normalize_cohorts(df[first_treat], max_time=df[time].max())
             cohort_by_unit = df.drop_duplicates(subset=[unit], keep="first").set_index(unit)[
                 first_treat
             ]
@@ -1564,9 +1560,7 @@ class LWDiD(BaseEstimator):
         # Step 5: Single OLS regression y_composite ~ [1, D] via the house
         # linalg engine (classical SE from the same regression).
         X = np.column_stack([np.ones(n, dtype=np.float64), d_ever_treated])
-        coefs, _, vcov = solve_ols(
-            X, y_composite, return_vcov=True, vcov_type="classical"
-        )
+        coefs, _, vcov = solve_ols(X, y_composite, return_vcov=True, vcov_type="classical")
         att = float(coefs[1])
         dof = n - 2
         if vcov is not None and np.isfinite(vcov[1, 1]):
@@ -2535,7 +2529,6 @@ class LWDiD(BaseEstimator):
                 interaction = treatment.reshape(-1, 1) * (controls_matrix - X_bar_1)
                 parts.append(interaction)
         X = np.hstack(parts)
-        n_params = X.shape[1]
 
         # Determine vcov_type for solve_ols (hc3 routes through the shared
         # linalg backend; clustered fits resolve to CR1 via cluster_ids)
@@ -3438,9 +3431,7 @@ class LWDiD(BaseEstimator):
         # the wrong rows when labels were permuted relative to positions).
         unit_col_arr = df[unit].to_numpy()
         all_unit_ids = np.concatenate([treated_arr, control_arr])
-        unit_positions = {
-            u: np.flatnonzero(unit_col_arr == u) for u in all_unit_ids
-        }
+        unit_positions = {u: np.flatnonzero(unit_col_arr == u) for u in all_unit_ids}
 
         cluster_draw: Optional[Dict[Any, np.ndarray]] = None
         if cluster is not None:
@@ -3448,12 +3439,10 @@ class LWDiD(BaseEstimator):
             cluster_by_unit = df.drop_duplicates(subset=[unit], keep="first").set_index(unit)[
                 cluster
             ]
-            cluster_draw = {}
+            cluster_lists: Dict[Any, List[Any]] = {}
             for u in all_unit_ids:
-                cl = cluster_by_unit[u]
-                cluster_draw.setdefault(cl, [])
-                cluster_draw[cl].append(u)
-            cluster_draw = {cl: np.asarray(us) for cl, us in cluster_draw.items()}
+                cluster_lists.setdefault(cluster_by_unit[u], []).append(u)
+            cluster_draw = {cl: np.asarray(us) for cl, us in cluster_lists.items()}
         treated_set_all = set(treated_units)
 
         def _draw_units(rng_b: np.random.Generator) -> np.ndarray:
@@ -3495,9 +3484,7 @@ class LWDiD(BaseEstimator):
             elif self.rolling == "demeanq":
                 boot_df = self._transform_demeanq(boot_df, outcome, "_boot_unit", time, pre_mask_b)
             elif self.rolling == "detrendq":
-                boot_df = self._transform_detrendq(
-                    boot_df, outcome, "_boot_unit", time, pre_mask_b
-                )
+                boot_df = self._transform_detrendq(boot_df, outcome, "_boot_unit", time, pre_mask_b)
             else:
                 boot_df = self._transform_detrend(boot_df, outcome, "_boot_unit", time, pre_mask_b)
 
@@ -3557,8 +3544,7 @@ class LWDiD(BaseEstimator):
             seed_seq = np.random.SeedSequence(self.seed)
             child_seqs = seed_seq.spawn(self.n_bootstrap)
             boot_unit_samples = [
-                _draw_units(np.random.default_rng(child_seqs[b]))
-                for b in range(self.n_bootstrap)
+                _draw_units(np.random.default_rng(child_seqs[b])) for b in range(self.n_bootstrap)
             ]
 
             with ThreadPoolExecutor(max_workers=self.n_jobs) as executor:
@@ -3587,9 +3573,7 @@ class LWDiD(BaseEstimator):
             df_used = max(len(cluster_draw) - 1, 1)
         else:
             df_used = max(len(y_full) - n_params_full, 1)
-        t_stat, p_value, conf_int = safe_inference(
-            att_full, se, alpha=self.alpha, df=df_used
-        )
+        t_stat, p_value, conf_int = safe_inference(att_full, se, alpha=self.alpha, df=df_used)
 
         return att_full, se, t_stat, p_value, conf_int, df_used
 

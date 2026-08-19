@@ -157,9 +157,9 @@ class TestPlottingConventions:
         import matplotlib
 
         matplotlib.use("Agg")
-        from diff_diff.lwdid_visualization import plot_event_study
-
         from types import SimpleNamespace
+
+        from diff_diff.lwdid_visualization import plot_event_study
 
         results = SimpleNamespace(
             event_study_effects={

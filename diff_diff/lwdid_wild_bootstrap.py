@@ -282,9 +282,7 @@ def wild_cluster_bootstrap(
     beta_hat, *_ = np.linalg.lstsq(X, y, rcond=None)
     resid = y - X @ beta_hat
     att_point = float(beta_hat[1])
-    scores = np.array(
-        [X[cluster_ids == cl].T @ resid[cluster_ids == cl] for cl in unique_clusters]
-    )
+    scores = np.array([X[cluster_ids == cl].T @ resid[cluster_ids == cl] for cl in unique_clusters])
     score_scale = float(np.abs(X.T @ np.abs(resid)).max())
     if score_scale > 0 and float(np.abs(scores).max()) <= 1e-10 * score_scale:
         warnings.warn(

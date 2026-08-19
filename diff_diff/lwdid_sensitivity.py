@@ -32,8 +32,6 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-
-
 # =============================================================================
 # Constants
 # =============================================================================
@@ -336,9 +334,7 @@ def _fit_single_spec(
         return np.nan, np.nan, np.nan
 
 
-def _prevalidate_frame(
-    data, outcome, unit, time, treatment, cohort, cluster, controls
-) -> None:
+def _prevalidate_frame(data, outcome, unit, time, treatment, cohort, cluster, controls) -> None:
     """Run LWDiD's shared input validation on the full frame (raises)."""
     from diff_diff.lwdid import LWDiD
     from diff_diff.utils import validate_binary
@@ -444,8 +440,7 @@ def robustness_pre_periods(
     """
     if kwargs:
         raise TypeError(
-            f"robustness_pre_periods() got unexpected keyword argument(s): "
-            f"{sorted(kwargs)}"
+            f"robustness_pre_periods() got unexpected keyword argument(s): " f"{sorted(kwargs)}"
         )
     # Resolve lwdid-py aliases
     outcome = outcome or y

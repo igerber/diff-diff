@@ -360,7 +360,9 @@ class TestLWDiDVCEConsistency:
     def test_hc1_se_positive(self):
         """HC1 SE must be strictly positive when ATT is identified."""
         panel = _make_common_timing_panel()
-        res = LWDiD(vcov_type="hc1").fit(panel, outcome="y", unit="unit", time="time", treatment="treat")
+        res = LWDiD(vcov_type="hc1").fit(
+            panel, outcome="y", unit="unit", time="time", treatment="treat"
+        )
         assert res.se > 0
 
     def test_cluster_se_invariant_to_row_order(self):
@@ -389,14 +391,18 @@ class TestLWDiDVCEConsistency:
     def test_vcov_symmetric(self):
         """VCE matrix must be symmetric."""
         panel = _make_common_timing_panel()
-        res = LWDiD(vcov_type="hc1").fit(panel, outcome="y", unit="unit", time="time", treatment="treat")
+        res = LWDiD(vcov_type="hc1").fit(
+            panel, outcome="y", unit="unit", time="time", treatment="treat"
+        )
         if res.vcov is not None:
             np.testing.assert_allclose(res.vcov, res.vcov.T, atol=1e-14)
 
     def test_vcov_positive_semidefinite(self):
         """VCE matrix diagonal should be non-negative."""
         panel = _make_common_timing_panel()
-        res = LWDiD(vcov_type="hc1").fit(panel, outcome="y", unit="unit", time="time", treatment="treat")
+        res = LWDiD(vcov_type="hc1").fit(
+            panel, outcome="y", unit="unit", time="time", treatment="treat"
+        )
         if res.vcov is not None:
             diag = np.diag(res.vcov)
             assert np.all(diag >= -1e-15)  # allow small numerical error

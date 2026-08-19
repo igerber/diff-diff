@@ -99,13 +99,12 @@ pytest.importorskip(
     reason="LWDiD estimator not yet on main (arrives via PR #588)",
 )
 
-from diff_diff.lwdid import LWDiD  # noqa: E402
-
 from diff_diff import (  # noqa: E402
     DifferenceInDifferences,  # noqa: E402
     load_prop99,
     load_walmart,
 )
+from diff_diff.lwdid import LWDiD  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Published replication targets (LW 2026; see module docstring for provenance)
@@ -1776,8 +1775,7 @@ def _complete_case_tau_omega_reference(df):
     controls = [
         u
         for u in fy.index
-        if not fy[u] > 0
-        and all(np.isfinite(ydot[g].get(u, np.nan)) for g in weighted)
+        if not fy[u] > 0 and all(np.isfinite(ydot[g].get(u, np.nan)) for g in weighted)
     ]
     y, d = [], []
     for u in surviving_treated:
@@ -1998,18 +1996,17 @@ class TestInferenceDispatchPolicy:
                 for t in range(1, 7):
                     d = int(g > 0 and t >= g)
                     y = alpha + rng.normal(scale=0.4) + 1.2 * d
-                    rows.append(
-                        dict(unit=uid, time=t, first=g, treat=d, y=y, cl=cl_fn(uid))
-                    )
+                    rows.append(dict(unit=uid, time=t, first=g, treat=d, y=y, cl=cl_fn(uid)))
                 uid += 1
         df = pd.DataFrame(rows)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             res = LWDiD(
-                rolling="demean", estimation_method="reg", cluster="cl",
+                rolling="demean",
+                estimation_method="reg",
+                cluster="cl",
                 control_group="never_treated",
-            ).fit(df, outcome="y", unit="unit", time="time", treatment="treat",
-                  first_treat="first")
+            ).fit(df, outcome="y", unit="unit", time="time", treatment="treat", first_treat="first")
         # Cells contain treated (cluster 0) + controls (clusters 1-4): G=5
         # per cell, so this design is NOT degenerate; flip to a truly
         # degenerate one below.
@@ -2040,10 +2037,11 @@ class TestInferenceDispatchPolicy:
         df = pd.DataFrame(rows)
         with pytest.warns(UserWarning):
             res = LWDiD(
-                rolling="demean", estimation_method="reg", cluster="cl",
+                rolling="demean",
+                estimation_method="reg",
+                cluster="cl",
                 control_group="never_treated",
-            ).fit(df, outcome="y", unit="unit", time="time", treatment="treat",
-                  first_treat="first")
+            ).fit(df, outcome="y", unit="unit", time="time", treatment="treat", first_treat="first")
         assert np.isfinite(res.att)  # point retained
         assert np.isnan(res.se)  # fail-closed propagation
         assert np.isnan(res.p_value)
@@ -2055,9 +2053,10 @@ class TestInferenceDispatchPolicy:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             res = LWDiD(
-                rolling="demean", estimation_method="reg", vcov_type="hc1",
+                rolling="demean",
+                estimation_method="reg",
+                vcov_type="hc1",
                 control_group="never_treated",
-            ).fit(df, outcome="y", unit="unit", time="time", treatment="treat",
-                  first_treat="first")
+            ).fit(df, outcome="y", unit="unit", time="time", treatment="treat", first_treat="first")
         assert res.inference_basis == "joint_influence_function"
         assert res.df_inference is None

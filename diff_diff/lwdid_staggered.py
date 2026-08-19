@@ -379,7 +379,9 @@ def fit_staggered(
 
     if single_cluster_cells:
         listed = ", ".join(str(k) for k in single_cluster_cells[:6])
-        suffix = "" if len(single_cluster_cells) <= 6 else f"; plus {len(single_cluster_cells) - 6} more"
+        suffix = (
+            "" if len(single_cluster_cells) <= 6 else f"; plus {len(single_cluster_cells) - 6} more"
+        )
         warnings.warn(
             f"LWDiD: cohort-time cell(s) {listed}{suffix} contain fewer than "
             "2 clusters, so their cluster-robust inference is not identified. "
@@ -470,11 +472,7 @@ def fit_staggered(
         and not controls
         and estimator.rolling in ("demean", "detrend")
     )
-    use_composite = (
-        tau_omega_config
-        and estimator.vcov_type == "classical"
-        and cluster is None
-    )
+    use_composite = tau_omega_config and estimator.vcov_type == "classical" and cluster is None
     # Complete-case resolution: the composite is computed ONCE for every
     # tau_omega-eligible configuration. With ZERO complete-case drops the
     # composite point is reported on BOTH vcov routes (status quo: the

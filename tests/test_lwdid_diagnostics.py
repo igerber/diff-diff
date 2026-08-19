@@ -433,9 +433,7 @@ class TestMathematicalCorrectness:
     def test_cluster_uses_g_minus_1_df(self, simple_panel):
         """Verify cluster-robust uses df = G - 1."""
         est = LWDiD(rolling="demean", cluster="unit")
-        res = est.fit(
-            simple_panel, outcome="y", unit="unit", time="time", treatment="treat"
-        )
+        res = est.fit(simple_panel, outcome="y", unit="unit", time="time", treatment="treat")
         # G = 40 units as clusters → df = 39
         assert res.df_inference == 39
 

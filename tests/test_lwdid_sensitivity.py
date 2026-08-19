@@ -221,9 +221,7 @@ class TestNotEstimable:
         for i in range(20):
             d = int(i < 8)
             for t in range(1, 9):
-                records.append(
-                    {"unit": i, "time": t, "y": rng.normal(), "treat": d * int(t >= 5)}
-                )
+                records.append({"unit": i, "time": t, "y": rng.normal(), "treat": d * int(t >= 5)})
         return pd.DataFrame(records)
 
     def test_all_specs_fail_reports_not_estimable(self):
@@ -234,7 +232,11 @@ class TestNotEstimable:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = robustness_pre_periods(
-                df, outcome="y", unit="unit", time="time", treatment="treat",
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
                 rolling="detrendq",
             )
         assert r.robustness_level == "not_estimable"
@@ -263,7 +265,11 @@ class TestNotEstimable:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = sensitivity_no_anticipation(
-                df, outcome="y", unit="unit", time="time", treatment="treat",
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
                 rolling="detrendq",
             )
         assert r.robustness_level == "not_estimable"

@@ -591,7 +591,9 @@ class TestLWDiDCommonTiming:
         assert res.att > 0
 
     def test_hc1_se_positive(self, panel):
-        res = LWDiD(vcov_type="hc1").fit(panel, outcome="y", unit="unit", time="time", treatment="treat")
+        res = LWDiD(vcov_type="hc1").fit(
+            panel, outcome="y", unit="unit", time="time", treatment="treat"
+        )
         assert res.se > 0
 
     def test_classical_se_positive(self, panel):
@@ -2022,8 +2024,12 @@ class TestCohortNormalization:
         est = LWDiD(rolling="demean", estimation_method="reg", control_group="never_treated")
         with pytest.warns(UserWarning, match="first_treat=inf"):
             res = est.fit(
-                panel, outcome="y", unit="unit", time="time",
-                treatment="treat", first_treat="cohort",
+                panel,
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
+                first_treat="cohort",
             )
         assert np.isfinite(res.att)
         # inf never appears as a cohort anywhere in the results
@@ -2036,8 +2042,12 @@ class TestCohortNormalization:
         est = LWDiD(rolling="demean", estimation_method="reg", control_group="never_treated")
         with pytest.warns(UserWarning, match="exceed the last observed period"):
             res = est.fit(
-                panel, outcome="y", unit="unit", time="time",
-                treatment="treat", first_treat="cohort",
+                panel,
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
+                first_treat="cohort",
             )
         assert np.isfinite(res.att)
         assert all(g <= 5 for g in res.cohort_effects)
@@ -2051,8 +2061,12 @@ class TestCohortNormalization:
         est = LWDiD(rolling="demean", estimation_method="reg")
         with pytest.raises(ValueError, match="negative"):
             est.fit(
-                panel, outcome="y", unit="unit", time="time",
-                treatment="treat", first_treat="cohort",
+                panel,
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
+                first_treat="cohort",
             )
 
     def test_between_period_numeric_cohort_rejected_with_clear_message(self):
@@ -2066,8 +2080,12 @@ class TestCohortNormalization:
         est = LWDiD(rolling="demean", estimation_method="reg")
         with pytest.raises(ValueError, match="not observed time periods"):
             est.fit(
-                panel, outcome="y", unit="unit", time="time",
-                treatment="treat", first_treat="cohort",
+                panel,
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
+                first_treat="cohort",
             )
 
     def test_unobserved_onset_row_accepted(self):
@@ -2078,8 +2096,12 @@ class TestCohortNormalization:
         panel = panel.loc[~drop_mask].reset_index(drop=True)
         est = LWDiD(rolling="demean", estimation_method="reg")
         res = est.fit(
-            panel, outcome="y", unit="unit", time="time",
-            treatment="treat", first_treat="cohort",
+            panel,
+            outcome="y",
+            unit="unit",
+            time="time",
+            treatment="treat",
+            first_treat="cohort",
         )
         assert np.isfinite(res.att)
 
@@ -2095,8 +2117,12 @@ class TestCohortNormalization:
         est = LWDiD(rolling="demean", estimation_method="reg")
         with pytest.raises(ValueError, match="1\\[t >= cohort\\]"):
             est.fit(
-                panel, outcome="y", unit="unit", time="time",
-                treatment="treat", first_treat="cohort",
+                panel,
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
+                first_treat="cohort",
             )
 
     def test_validator_accepts_nan_coded_never_treated(self):
@@ -2173,8 +2199,12 @@ class TestCohortNormalization:
         est = LWDiD(rolling="demean", estimation_method="reg")
         with pytest.warns(UserWarning, match="first_treat=inf"):
             diag = est.get_transformation_diagnostics(
-                panel, outcome="y", unit="unit", time="time",
-                treatment="treat", first_treat="cohort",
+                panel,
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
+                first_treat="cohort",
             )
         assert set(diag["by_cohort"]) == {3, 4}
 
@@ -2274,10 +2304,12 @@ class TestBootstrapIntegrity:
 
     def test_bootstrap_invariant_to_index_labels_and_row_order(self):
         df = self._common_panel()
-        est = lambda: LWDiD(rolling="demean", estimation_method="reg", n_bootstrap=60, seed=1)  # noqa: E731
+
+        def est():
+            return LWDiD(rolling="demean", estimation_method="reg", n_bootstrap=60, seed=1)
+
         base = est().fit(df, **self.KW)
         shifted = est().fit(df.set_axis(df.index + 1000), **self.KW)  # offset labels
-        rng = np.random.default_rng(3)
         shuffled = df.sample(frac=1.0, random_state=5)  # permuted labels
         res_shuffled = est().fit(shuffled, **self.KW)
         assert np.isfinite(base.se)
@@ -2287,7 +2319,6 @@ class TestBootstrapIntegrity:
         # Same seed + same units resampled -> the SE must not move with
         # row order (pre-fix it more than doubled).
         np.testing.assert_allclose(res_shuffled.se, base.se, rtol=1e-10)
-        del rng
 
     def test_cluster_bootstrap_resamples_clusters(self, ci_params):
         df = self._common_panel()
@@ -2315,8 +2346,11 @@ class TestBootstrapIntegrity:
             df, **self.KW
         )
         boot = LWDiD(
-            rolling="demean", estimation_method="reg", cluster="cl",
-            n_bootstrap=n_boot, seed=13,
+            rolling="demean",
+            estimation_method="reg",
+            cluster="cl",
+            n_bootstrap=n_boot,
+            seed=13,
         ).fit(df, **self.KW)
         threshold = 0.40 if n_boot < 100 else 0.15
         assert abs(boot.se - analytical.se) / analytical.se < threshold, (boot.se, analytical.se)
@@ -2397,8 +2431,13 @@ class TestSilentDataHandling:
         df.loc[3, "x"] = np.nan
         with pytest.raises(ValueError, match="missing value"):
             LWDiD(rolling="demean", estimation_method="reg").fit(
-                df, outcome="y", unit="unit", time="time", treatment="treat",
-                first_treat="first", covariates=["x"],
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
+                first_treat="first",
+                covariates=["x"],
             )
 
     def test_nan_cluster_rejected_explicitly(self):
@@ -2408,7 +2447,11 @@ class TestSilentDataHandling:
         df.loc[df["unit"] == 2, "cl"] = np.nan
         with pytest.raises(ValueError, match="Cluster column .* missing"):
             LWDiD(rolling="demean", estimation_method="reg", cluster="cl").fit(
-                df, outcome="y", unit="unit", time="time", treatment="treat",
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
                 first_treat="first",
             )
 
@@ -2463,13 +2506,18 @@ class TestSilentDataHandling:
         # unit regardless of cell drops).
         df = self._staggered_panel()
         rng = np.random.default_rng(5)
-        extra = [dict(unit=99, time=t, first=0, treat=0, y=rng.normal(), x=0.0)
-                 for t in (1, 4, 5, 6)]  # ONE pre row (t=1) + post rows
+        extra = [
+            dict(unit=99, time=t, first=0, treat=0, y=rng.normal(), x=0.0) for t in (1, 4, 5, 6)
+        ]  # ONE pre row (t=1) + post rows
         df = pd.concat([df, pd.DataFrame(extra)], ignore_index=True)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             res = LWDiD(rolling="detrend", estimation_method="reg").fit(
-                df, outcome="y", unit="unit", time="time", treatment="treat",
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
                 first_treat="first",
             )
         assert res.n_obs == 24  # unit 99 contributed to no estimated cell
@@ -2514,16 +2562,18 @@ class TestResultsPolish:
             alpha = rng.normal()
             for t in range(1, 8):
                 d = int(g > 0 and t >= g)
-                rows.append(dict(unit=u, time=t, first=g, treat=d,
-                                 y=alpha + 0.1 * t + rng.normal() + d))
+                rows.append(
+                    dict(unit=u, time=t, first=g, treat=d, y=alpha + 0.1 * t + rng.normal() + d)
+                )
         df = pd.DataFrame(rows)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             res = LWDiD(
-                rolling="detrend", estimation_method="reg", vcov_type="classical",
+                rolling="detrend",
+                estimation_method="reg",
+                vcov_type="classical",
                 control_group="never_treated",
-            ).fit(df, outcome="y", unit="unit", time="time", treatment="treat",
-                  first_treat="first")
+            ).fit(df, outcome="y", unit="unit", time="time", treatment="treat", first_treat="first")
         assert np.isfinite(res.att)
         assert res.n_composite_treated_dropped == 4
 

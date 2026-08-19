@@ -16,8 +16,6 @@ from typing import Optional
 import numpy as np
 
 
-
-
 @dataclass
 class RandomizationResult:
     """Result container for randomization inference.
