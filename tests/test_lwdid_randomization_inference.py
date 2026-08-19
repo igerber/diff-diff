@@ -73,30 +73,16 @@ class TestPermutationPreservation:
         assert r.n_failed == 0
         assert r.failure_rate == 0.0
 
-    def test_bootstrap_may_not_preserve(self, cross_section_data):
-        y, treatment, _, _ = cross_section_data
-        # Bootstrap may produce degenerate draws but should not necessarily
-        r = randomization_inference(y, treatment, method="bootstrap", n_reps=500, seed=0)
-        # n_failed may be >= 0 (not guaranteed to be zero)
-        assert r.n_failed >= 0
-
-
-# ---------------------------------------------------------------------------
-# P-value properties
-# ---------------------------------------------------------------------------
-
-
-class TestPValueProperties:
-    """Test p-value is in valid range."""
+    def test_bootstrap_method_removed(self, cross_section_data):
+        # Fix-wave review finding: label resampling WITH replacement is not
+        # Fisher randomization inference; the mode is removed.
+        y, treatment, *_ = cross_section_data
+        with pytest.raises(ValueError, match="method='bootstrap' has been removed"):
+            randomization_inference(y, treatment, method="bootstrap", n_reps=100, seed=0)
 
     def test_pvalue_in_0_1_permutation(self, cross_section_data):
         y, treatment, _, _ = cross_section_data
         r = randomization_inference(y, treatment, method="permutation", n_reps=500, seed=42)
-        assert 0.0 <= r.pvalue <= 1.0
-
-    def test_pvalue_in_0_1_bootstrap(self, cross_section_data):
-        y, treatment, _, _ = cross_section_data
-        r = randomization_inference(y, treatment, method="bootstrap", n_reps=500, seed=42)
         assert 0.0 <= r.pvalue <= 1.0
 
     def test_clear_treatment_effect_detected(self, cross_section_data):

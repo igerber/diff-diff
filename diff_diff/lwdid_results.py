@@ -166,6 +166,17 @@ class LWDiDResults(BaseResults, AggregationMixin):
     n_clusters: Optional[int] = None
 
     # ------------------------------------------------------------------ #
+    # Fit provenance (estimand/inference-affecting configuration - review #
+    # finding: serialized results could not reconstruct what was fitted)  #
+    # ------------------------------------------------------------------ #
+    control_group: Optional[str] = None
+    n_bootstrap: int = 0
+    seed: Optional[int] = None
+    #: PSM matching settings (None unless estimation_method='psm'):
+    #: {'pscore_trim', 'n_neighbors', 'caliper', 'with_replacement'}
+    psm_config: Optional[Dict[str, Any]] = None
+
+    # ------------------------------------------------------------------ #
     # Staggered-specific (optional)                                       #
     # ------------------------------------------------------------------ #
     cohort_effects: Optional[Dict[Any, Dict]] = field(default=None, repr=False)
@@ -474,6 +485,13 @@ class LWDiDResults(BaseResults, AggregationMixin):
             }
         if self.inference_basis is not None:
             result["inference_basis"] = self.inference_basis
+        if self.control_group is not None:
+            result["control_group"] = self.control_group
+        result["n_bootstrap"] = self.n_bootstrap
+        if self.seed is not None:
+            result["seed"] = self.seed
+        if self.psm_config is not None:
+            result["psm_config"] = dict(self.psm_config)
         if self.att_tau_omega_complete_case is not None:
             result["att_tau_omega_complete_case"] = self.att_tau_omega_complete_case
         if self.n_composite_treated_dropped or self.n_composite_controls_dropped:

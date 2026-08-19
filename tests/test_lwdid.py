@@ -467,15 +467,22 @@ class TestLWDiDTransformations:
     """Test that rolling transformations are correctly applied."""
 
     def test_demean_subtracts_pre_mean(self):
-        """Construct simple 2-unit panel where pre-mean is known."""
-        # Unit 0 (control): y = [2, 4, 6] → pre_mean = 3
-        # Unit 1 (treated): y = [1, 3, 10] → pre_mean = 2
+        """Construct simple 3-unit panel where pre-means are known.
+
+        (Fix-wave update: the former 2-unit fixture is an INVALID exact
+        design - 2 collapsed observations for 2 parameters - which the
+        Registry small-sample guard now rejects; a second control keeps
+        the hand-computed arithmetic with a positive residual df.)
+        """
+        # Unit 0 (control): y = [2, 4, 6] -> pre_mean = 3, post ydot = 3
+        # Unit 2 (control): y = [4, 6, 8] -> pre_mean = 5, post ydot = 3
+        # Unit 1 (treated): y = [1, 3, 10] -> pre_mean = 2, post ydot = 8
         df = pd.DataFrame(
             {
-                "unit": [0, 0, 0, 1, 1, 1],
-                "time": [1, 2, 3, 1, 2, 3],
-                "y": [2.0, 4.0, 6.0, 1.0, 3.0, 10.0],
-                "treat": [0, 0, 0, 0, 0, 1],
+                "unit": [0, 0, 0, 1, 1, 1, 2, 2, 2],
+                "time": [1, 2, 3, 1, 2, 3, 1, 2, 3],
+                "y": [2.0, 4.0, 6.0, 1.0, 3.0, 10.0, 4.0, 6.0, 8.0],
+                "treat": [0, 0, 0, 0, 0, 1, 0, 0, 0],
             }
         )
         res = LWDiD(rolling="demean", estimation_method="reg").fit(
@@ -493,15 +500,16 @@ class TestLWDiDTransformations:
 
         After detrend, residuals should be ~0 in pre-period.
         """
-        # Need at least 2 pre periods for detrend
-        # Unit 0 (control): y = 1 + 2*t for all t
+        # Need at least 2 pre periods for detrend; a third unit keeps the
+        # collapsed design valid (fix-wave Registry small-sample guard).
+        # Units 0/2 (controls): y = 1 + 2*t (unit 2 offset by +2)
         # Unit 1 (treated): y = 1 + 2*t in pre, + 5 in post
         df = pd.DataFrame(
             {
-                "unit": [0, 0, 0, 0, 1, 1, 1, 1],
-                "time": [1, 2, 3, 4, 1, 2, 3, 4],
-                "y": [3.0, 5.0, 7.0, 9.0, 3.0, 5.0, 12.0, 14.0],
-                "treat": [0, 0, 0, 0, 0, 0, 1, 1],
+                "unit": [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2],
+                "time": [1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4],
+                "y": [3.0, 5.0, 7.0, 9.0, 3.0, 5.0, 12.0, 14.0, 5.0, 7.0, 9.0, 11.0],
+                "treat": [0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
             }
         )
         res = LWDiD(rolling="detrend", estimation_method="reg").fit(
@@ -2609,3 +2617,136 @@ class TestNonNumericTimeContract:
             LWDiD(rolling=rolling, estimation_method="reg").fit(
                 df, outcome="y", unit="unit", time="time", treatment="treat"
             )
+
+
+class TestReviewRound1Guards:
+    """Local-review round 1 (fix wave): execution-verified guards.
+
+    - HC3 with a leverage-one observation (single treated unit) fabricated
+      finite inference via a 1e-10 floor on 1 - h_ii
+    - N=2 / N=3,K=1 collapsed designs hit ZeroDivisionError or a coerced
+      df=1 instead of the Registry's small-sample guards
+    - n_bootstrap=1 was accepted; staggered PSM + bootstrap silently no-oped
+    - PSM's naive matched-pairs SE ignored control reuse and first-stage
+      uncertainty (now fail-closed NaN inference, point retained)
+    - the common-timing single-cluster fallback warned then raised
+    - Period time crashed detrend with a raw TypeError
+    """
+
+    @staticmethod
+    def _panel(n_units=12, n_treated=1, t_max=6, onset=4, seed=0, **cols):
+        rng = np.random.default_rng(seed)
+        rows = []
+        for u in range(n_units):
+            treated = u < n_treated
+            for t in range(1, t_max + 1):
+                d = int(treated and t >= onset)
+                row = dict(unit=u, time=t, treat=d, y=rng.normal() + d)
+                for k, fn in cols.items():
+                    row[k] = fn(u)
+                rows.append(row)
+        return pd.DataFrame(rows)
+
+    KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+    def test_hc3_leverage_one_fails_closed(self):
+        df = self._panel(n_units=12, n_treated=1)
+        with pytest.warns(UserWarning, match="HC3 variance is undefined"):
+            res = LWDiD(rolling="demean", estimation_method="reg", vcov_type="hc3").fit(
+                df, **self.KW
+            )
+        assert np.isfinite(res.att)
+        from tests.conftest import assert_nan_inference
+
+        assert_nan_inference(
+            {"se": res.se, "t_stat": res.t_stat, "p_value": res.p_value, "conf_int": res.conf_int}
+        )
+
+    def test_invalid_exact_designs_rejected(self):
+        df2 = self._panel(n_units=2, n_treated=1)
+        with pytest.raises(ValueError, match="Invalid exact-inference design"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                LWDiD(rolling="demean", estimation_method="reg", vcov_type="classical").fit(
+                    df2, **self.KW
+                )
+        df3 = self._panel(n_units=3, n_treated=1, x=lambda u: float(u))
+        with pytest.raises(ValueError, match="Invalid exact-inference design"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                LWDiD(rolling="demean", estimation_method="reg", vcov_type="classical").fit(
+                    df3, covariates=["x"], **self.KW
+                )
+
+    def test_n_bootstrap_one_rejected(self):
+        with pytest.raises(ValueError, match="n_bootstrap must be 0"):
+            LWDiD(n_bootstrap=1)
+
+    def test_staggered_psm_bootstrap_rejected(self):
+        df = self._panel(n_units=16, n_treated=6)
+        df["first"] = np.where(df["unit"] < 6, 4, 0)
+        est = LWDiD(estimation_method="psm", n_bootstrap=50)
+        with pytest.raises(ValueError, match="psm.*does not support n_bootstrap"):
+            est.fit(df, first_treat="first", **self.KW)
+
+    def test_psm_inference_fails_closed_point_retained(self):
+        df = self._panel(n_units=20, n_treated=8, x=lambda u: float(u % 4))
+        with pytest.warns(UserWarning, match="no valid matching variance"):
+            res = LWDiD(rolling="demean", estimation_method="psm").fit(
+                df, covariates=["x"], **self.KW
+            )
+        assert np.isfinite(res.att)
+        assert np.isnan(res.se) and np.isnan(res.p_value)
+        assert res.psm_config is not None
+        assert res.psm_config["n_neighbors"] == 1
+
+    def test_matching_params_strictly_validated(self):
+        with pytest.raises(ValueError, match="n_neighbors must be an integer"):
+            LWDiD(n_neighbors=1.5)
+        with pytest.raises(ValueError, match="with_replacement must be a boolean"):
+            LWDiD(with_replacement="yes")
+        with pytest.raises(ValueError, match="caliper must be a positive"):
+            LWDiD(caliper=-0.1)
+
+    def test_common_single_cluster_post_drop_point_retained(self):
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(10):
+            for t in range(1, 7):
+                d = int(u < 5 and t >= 4)
+                rows.append(dict(unit=u, time=t, treat=d, y=rng.normal() + d, cl=0 if u < 9 else 1))
+        df = pd.DataFrame(rows)
+        df = df.loc[~((df.unit == 9) & (df.time.isin([2, 3])))]
+        with pytest.warns(UserWarning, match="fewer than 2 clusters"):
+            res = LWDiD(rolling="detrend", estimation_method="reg", cluster="cl").fit(df, **self.KW)
+        assert np.isfinite(res.att)
+        assert np.isnan(res.se)
+
+    def test_period_time_detrend_rejected_informatively(self):
+        rng = np.random.default_rng(1)
+        times = pd.period_range("2020Q1", periods=8, freq="Q")
+        rows = []
+        for u in range(10):
+            for i, t in enumerate(times):
+                d = int(u < 5 and i >= 5)
+                rows.append(dict(unit=u, time=t, treat=d, y=rng.normal() + d))
+        df = pd.DataFrame(rows)
+        with pytest.raises(ValueError, match="does not support a Period"):
+            LWDiD(rolling="detrend", estimation_method="reg").fit(df, **self.KW)
+
+    def test_provenance_fields_round_trip(self):
+        df = self._panel(n_units=12, n_treated=5)
+        res = LWDiD(
+            rolling="demean",
+            estimation_method="reg",
+            control_group="never_treated",
+            n_bootstrap=0,
+            seed=7,
+        ).fit(df, **self.KW)
+        assert res.control_group == "never_treated"
+        assert res.n_bootstrap == 0
+        assert res.seed == 7
+        assert res.psm_config is None
+        d = res.to_dict()
+        assert d["control_group"] == "never_treated"
+        assert d["seed"] == 7

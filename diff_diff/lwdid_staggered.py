@@ -329,9 +329,19 @@ def fit_staggered(
                     # a CR1 label; reg raised mid-fit).
                     cell_single_cluster = True
                     cluster_ids = None
-            att, se, _, _, n_params, influence = estimator._dispatch_estimator(
-                y, treatment, controls_matrix, cluster_ids, len(cell)
-            )
+            try:
+                att, se, _, _, n_params, influence = estimator._dispatch_estimator(
+                    y, treatment, controls_matrix, cluster_ids, len(cell)
+                )
+            except ValueError as exc:
+                if "Invalid exact-inference design" in str(exc):
+                    # Non-estimable cell (Registry: NaN, not a mid-fit raise).
+                    cell_effects[key] = _empty_cell(
+                        g, t, "insufficient_sample", n_treated, n_control
+                    )
+                    skipped.append((g, t, "insufficient_sample"))
+                    continue
+                raise
             if not np.isfinite(att):
                 cell_effects[key] = _empty_cell(g, t, "non_finite_estimate", n_treated, n_control)
                 skipped.append((g, t, "non_finite_estimate"))
@@ -350,7 +360,9 @@ def fit_staggered(
             else:
                 # n_params is the fitted design's parameter count, so the
                 # residual df is design-coherent for every method.
-                df_cell = max(len(cell) - n_params, 1)
+                # Raw residual df: safe_inference fails the tuple closed
+                # when df <= 0 (no fabricated df=1 - review finding).
+                df_cell = len(cell) - n_params
             t_stat, p_value, conf_int = safe_inference(att, se, alpha=estimator.alpha, df=df_cell)
             cell_effects[key] = {
                 "cohort": g,
@@ -638,6 +650,19 @@ def fit_staggered(
         alpha=estimator.alpha,
         df_inference=overall_df,
         cluster_name=cluster,
+        control_group=estimator.control_group,
+        n_bootstrap=estimator.n_bootstrap,
+        seed=estimator.seed,
+        psm_config=(
+            {
+                "pscore_trim": estimator.pscore_trim,
+                "n_neighbors": estimator.n_neighbors,
+                "caliper": estimator.caliper,
+                "with_replacement": estimator.with_replacement,
+            }
+            if estimator.estimation_method == "psm"
+            else None
+        ),
         n_clusters=(
             len(np.unique(global_cluster_ids[overall_cluster_mask]))
             if global_cluster_ids is not None

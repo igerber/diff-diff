@@ -3606,6 +3606,28 @@ def _compute_robust_vcov_numpy(
                 vcov_type="hc1",
                 return_dof=return_dof,
             )
+        # Leverage-one observations make the HC3 leave-one-out residual
+        # undefined (and HC2 nearly so): flooring 1 - h_ii would fabricate
+        # an arbitrary finite variance for a perfectly-leveraged point
+        # (e.g. a single treated unit under [1, D]). HC3 fails closed with
+        # a NaN vcov instead (LWDiD fix-wave review finding); HC2/HC2-BM
+        # keep their long-standing floor behavior (released surface;
+        # pre-existing, tracked separately).
+        if vcov_type == "hc3" and np.any(h_diag >= 1.0 - 1e-8):
+            n_lev1 = int(np.sum(h_diag >= 1.0 - 1e-8))
+            warnings.warn(
+                f"HC3 variance is undefined: {n_lev1} observation(s) have "
+                f"hat-matrix leverage ~1 (a perfectly-leveraged design, "
+                f"e.g. a single treated unit). Returning NaN vcov; use "
+                f"vcov_type='classical' exact inference or add treated "
+                f"units.",
+                UserWarning,
+                stacklevel=3,
+            )
+            nan_vcov = np.full((X.shape[1], X.shape[1]), np.nan)
+            if return_dof:
+                return nan_vcov, None
+            return nan_vcov
         one_minus_h = np.maximum(1.0 - h_diag, 1e-10)
         # HC2 meat: sum_i (u_i^2 / (1 - h_ii)) x_i x_i'; HC3 squares the
         # leverage denominator (jackknife-style, sandwich::vcovHC type="HC3").

@@ -69,8 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (constructor `cluster=`) inference, multiplier bootstrap, wild cluster
   bootstrap, and randomization inference. Common-timing fits expose the same
   post-fit event-study surface as staggered ones —
-  `results.aggregate('event_study')` returns per-period effects on the
-  calendar-time axis, so no separate per-period fit option exists.
+  `results.aggregate('event_study')` returns per-period effects keyed by
+  event time relative to treatment onset, so no separate per-period fit
+  option exists.
 
 ### Changed
 - **`LWDiD` API canonicalized to the v4 vocabulary agreed in PR #588's review**

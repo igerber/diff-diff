@@ -38,7 +38,7 @@ class RandomizationResult:
     failure_rate : float
         Proportion of replications that failed (n_failed / n_reps).
     method : str
-        Resampling method used: 'permutation' or 'bootstrap'.
+        Resampling method used: always 'permutation'.
     seed : int or None
         Random seed used for reproducibility.
     n_dropped : int
@@ -75,8 +75,20 @@ def _validate_inputs(
     if n_reps is None or n_reps <= 0:
         raise ValueError("n_reps must be a positive integer")
 
-    if method not in ("permutation", "bootstrap"):
-        raise ValueError(f"method must be 'permutation' or 'bootstrap', got '{method}'")
+    if method == "bootstrap":
+        # Review finding: resampling treatment labels WITH replacement
+        # changes the treated count and is not the complete-randomization
+        # assignment mechanism of Fisher randomization inference - it was
+        # presented under the Fisher umbrella without a specified
+        # assignment design. The mode is removed (LWDiD is unreleased).
+        raise ValueError(
+            "method='bootstrap' has been removed: resampling treatment "
+            "labels with replacement is not Fisher randomization inference "
+            "(it changes the treated count and has no specified assignment "
+            "mechanism). Use method='permutation'."
+        )
+    if method != "permutation":
+        raise ValueError(f"method must be 'permutation', got '{method}'")
 
     if y.ndim != 1:
         raise ValueError(f"y must be a 1-d array, got shape {y.shape}")
@@ -267,7 +279,7 @@ def randomization_inference(
     """Fisher randomization inference for testing zero treatment effect.
 
     Tests the sharp null hypothesis H0: τ_i = 0 for all i by permuting
-    (or bootstrapping) treatment labels and computing a Monte Carlo p-value
+    treatment labels and computing a Monte Carlo p-value
     as the proportion of resampled test statistics at least as extreme as
     the observed statistic.
 
@@ -283,14 +295,12 @@ def randomization_inference(
         provided, ATT is estimated via OLS with controls (slow path).
     n_reps : int, default 1000
         Number of randomization replications for computing the p-value.
-    method : {'permutation', 'bootstrap'}, default 'permutation'
+    method : {'permutation'}, default 'permutation'
         Resampling method:
 
         - 'permutation': Classical Fisher randomization inference. Permutes
           treatment labels without replacement, preserving the original
           number of treated and control units.
-        - 'bootstrap': Resamples treatment labels with replacement. May
-          produce degenerate draws which are excluded from p-value.
 
     seed : int or None, optional
         Random seed for reproducibility.
@@ -387,18 +397,6 @@ def randomization_inference(
     # ------------------------------------------------------------------
     pvalue, n_valid, n_failed = _compute_pvalue(att_dist, att_obs)
     failure_rate = n_failed / n_reps
-
-    # Warn if failure rate is high (bootstrap only; permutation preserves
-    # treatment proportions and should never produce degenerate draws)
-    if method == "bootstrap" and failure_rate > 0.10:
-        warnings.warn(
-            f"Randomization inference: {n_failed}/{n_reps} replications "
-            f"produced degenerate treatment assignments "
-            f"({failure_rate:.1%} failure rate). "
-            f"Consider using method='permutation' or increasing sample size.",
-            UserWarning,
-            stacklevel=2,
-        )
 
     # Error if too few valid replications
     if n_valid < max(10, int(0.1 * n_reps)):

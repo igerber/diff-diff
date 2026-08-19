@@ -528,9 +528,16 @@ class LWDiD(BaseEstimator):
         # Validate alpha
         if not (0 < alpha < 1):
             raise ValueError(f"alpha must be in (0, 1), got {alpha}")
-        # Validate n_bootstrap
+        # Validate n_bootstrap (0 = analytical; a bootstrap needs >= 2
+        # replicates for a sample standard deviation - review finding:
+        # n_bootstrap=1 was accepted and produced NaN downstream)
         if not isinstance(n_bootstrap, (int, np.integer)) or n_bootstrap < 0:
             raise ValueError(f"n_bootstrap must be a non-negative integer, " f"got {n_bootstrap}")
+        if n_bootstrap == 1:
+            raise ValueError(
+                "n_bootstrap must be 0 (analytical inference) or >= 2 (a "
+                "bootstrap standard deviation needs at least 2 replicates)."
+            )
 
         self.rolling = rolling
         self.estimation_method = estimation_method
@@ -541,14 +548,28 @@ class LWDiD(BaseEstimator):
         self.n_bootstrap = int(n_bootstrap)
         self.seed = seed
 
-        # Engineering parameters
+        # Engineering parameters (validated, never silently coerced -
+        # review finding: fractional n_neighbors truncated, strings became
+        # with_replacement=True, negative calipers matched nothing)
         self.pscore_trim = float(pscore_trim)
         if not (0.0 < self.pscore_trim < 0.5):
             raise ValueError("pscore_trim must be between 0 and 0.5")
+        if not isinstance(n_neighbors, (int, np.integer)) or isinstance(n_neighbors, bool):
+            raise ValueError(f"n_neighbors must be an integer, got {n_neighbors!r}")
         self.n_neighbors = int(n_neighbors)
         if self.n_neighbors < 1:
             raise ValueError("n_neighbors must be >= 1")
-        self.caliper = float(caliper) if caliper is not None else None
+        if caliper is not None:
+            if not isinstance(caliper, (int, float, np.integer, np.floating)) or isinstance(
+                caliper, bool
+            ):
+                raise ValueError(f"caliper must be a positive number or None, got {caliper!r}")
+            caliper = float(caliper)
+            if not np.isfinite(caliper) or caliper <= 0:
+                raise ValueError(f"caliper must be a positive finite number, got {caliper}")
+        self.caliper = caliper
+        if not isinstance(with_replacement, (bool, np.bool_)):
+            raise ValueError(f"with_replacement must be a boolean, got {with_replacement!r}")
         self.with_replacement = bool(with_replacement)
         if not isinstance(n_jobs, (int, np.integer)) or n_jobs < 1:
             raise ValueError(f"n_jobs must be a positive integer, got {n_jobs}")
@@ -642,8 +663,32 @@ class LWDiD(BaseEstimator):
         if covariates is None:
             covariates = []
 
+        if first_treat is not None and self.estimation_method == "psm" and self.n_bootstrap > 0:
+            # Review finding: PSM has no influence-function representation,
+            # so the staggered multiplier bootstrap silently did nothing
+            # while a positive n_bootstrap suggested otherwise.
+            raise ValueError(
+                "estimation_method='psm' does not support n_bootstrap > 0 in "
+                "staggered designs: matching has no influence-function "
+                "representation for the multiplier bootstrap. Use "
+                "n_bootstrap=0, or estimation_method='dr'."
+            )
+
         # Dispatch to common timing or staggered
         if first_treat is None:
+            if self.rolling in ("detrend", "detrendq") and isinstance(
+                df[time].dtype, pd.PeriodDtype
+            ):
+                # Period values cannot be cast to float for the unit trend
+                # design (review finding: validation accepted PeriodDtype
+                # but the transform raised a raw TypeError). datetime64
+                # works (nanosecond ordinals).
+                raise ValueError(
+                    f"rolling='{self.rolling}' does not support a Period "
+                    f"time column on the common-timing path; convert with "
+                    f".dt.to_timestamp() or encode the time column "
+                    f"numerically."
+                )
             if self.rolling != "demean" and not (
                 pd.api.types.is_numeric_dtype(df[time])
                 or pd.api.types.is_datetime64_any_dtype(df[time])
@@ -1059,6 +1104,9 @@ class LWDiD(BaseEstimator):
                 rolling=self.rolling,
                 estimation_method=self.estimation_method,
                 vcov_type=self.vcov_type,
+                control_group=self.control_group,
+                n_bootstrap=self.n_bootstrap,
+                seed=self.seed,
                 alpha=self.alpha,
                 event_study_effects=event_effects,
                 event_study_vcov=event_vcov,
@@ -1099,6 +1147,9 @@ class LWDiD(BaseEstimator):
                 rolling=self.rolling,
                 estimation_method=self.estimation_method,
                 vcov_type=self.vcov_type,
+                control_group=self.control_group,
+                n_bootstrap=self.n_bootstrap,
+                seed=self.seed,
                 alpha=self.alpha,
                 event_study_effects=event_effects,
                 event_study_vcov=event_vcov,
@@ -1118,9 +1169,11 @@ class LWDiD(BaseEstimator):
         # Get cluster ids (clustered inference activates via the cluster=
         # constructor parameter)
         cluster_ids = None
+        collapsed_single_cluster = False
         if cluster is not None:
             cluster_ids = cs_df[cluster].values
             if len(np.unique(cluster_ids)) < 2:
+                collapsed_single_cluster = True
                 # The NaN-transformation dropna can reduce the collapsed
                 # cross-section below 2 clusters even when the raw panel
                 # passed the fit-level guard - fail closed rather than let
@@ -1133,12 +1186,13 @@ class LWDiD(BaseEstimator):
                     UserWarning,
                     stacklevel=2,
                 )
+                cluster_ids = None  # estimate the POINT unclustered
 
         # Estimate
         att, se, coefs, vcov, n_params, _ = self._dispatch_estimator(
             y, treat, controls_matrix, cluster_ids, n_obs
         )
-        if cluster_ids is not None and len(np.unique(cluster_ids)) < 2:
+        if collapsed_single_cluster:
             se = np.nan  # fail-closed (warned above); point retained
 
         # Step 5: Compute inference
@@ -1146,11 +1200,24 @@ class LWDiD(BaseEstimator):
         # df is design-coherent (LW 2026 Section 2): T_{N-2} without
         # controls, T_{N-K-2} for the plain design and T_{N-2K-2} when the
         # treatment-covariate interaction is active.
-        df_dof = max(n_obs - n_params, 1)
+        if n_obs < 3 or n_obs - n_params <= 0:
+            # Registry small-sample guards (N >= 3; N > K + 2 with controls):
+            # coercing the residual df to 1 fabricated exact inference on
+            # invalid designs, and N=2 reached sse/(n-k) division by zero
+            # (review finding).
+            raise ValueError(
+                f"Invalid exact-inference design: {n_obs} collapsed "
+                f"observation(s) with {n_params} fitted parameter(s). LWDiD "
+                f"requires at least 3 cross-sectional units and a positive "
+                f"residual df (N > K + 2 with controls)."
+            )
+        df_dof = n_obs - n_params
 
         # Issue 3: Cluster-robust inference uses df = G-1
         if cluster_ids is not None:
             df_dof = max(int(len(np.unique(cluster_ids))) - 1, 1)
+        elif collapsed_single_cluster:
+            df_dof = 0  # safe_inference fails the tuple closed
 
         t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha, df=df_dof)
 
@@ -1184,6 +1251,19 @@ class LWDiD(BaseEstimator):
             vcov_type=self.vcov_type,
             alpha=self.alpha,
             cluster_name=cluster if cluster_ids is not None else None,
+            control_group=self.control_group,
+            n_bootstrap=self.n_bootstrap,
+            seed=self.seed,
+            psm_config=(
+                {
+                    "pscore_trim": self.pscore_trim,
+                    "n_neighbors": self.n_neighbors,
+                    "caliper": self.caliper,
+                    "with_replacement": self.with_replacement,
+                }
+                if self.estimation_method == "psm"
+                else None
+            ),
             n_clusters=int(len(np.unique(cluster_ids))) if cluster_ids is not None else None,
             cohort_effects=None,
             params=coefs,
@@ -1302,6 +1382,7 @@ class LWDiD(BaseEstimator):
             y = cell["_ydot"].to_numpy(dtype=float)
             controls_matrix = cell[controls].to_numpy(dtype=float) if controls else None
             cluster_ids = None
+            single_cluster_period = False
             if cluster is not None:
                 cluster_ids = cell[cluster].to_numpy()
                 if len(np.unique(cluster_ids)) < 2:
@@ -1314,22 +1395,32 @@ class LWDiD(BaseEstimator):
                         stacklevel=2,
                     )
                     single_cluster_period = True
-                else:
-                    single_cluster_period = False
-            att, se, _, _, n_params, influence = self._dispatch_estimator(
-                y, treatment_vec, controls_matrix, cluster_ids, len(cell)
-            )
+                    cluster_ids = None  # estimate the POINT unclustered
+            try:
+                att, se, _, _, n_params, influence = self._dispatch_estimator(
+                    y, treatment_vec, controls_matrix, cluster_ids, len(cell)
+                )
+            except ValueError as exc:
+                if "Invalid exact-inference design" in str(exc):
+                    # Non-estimable period cell (Registry: NaN, not a
+                    # mid-fit raise; only the OVERALL design raises).
+                    skipped.append((relative_time, "insufficient_sample"))
+                    continue
+                raise
             if not np.isfinite(att):
                 skipped.append((relative_time, "non_finite_estimate"))
                 continue
 
             se = _guard_standard_error(att, se)
-            if cluster_ids is not None and single_cluster_period:
+            if single_cluster_period:
                 se = np.nan  # fail-closed (warned above); point retained
+                influence = None
             if cluster_ids is not None:
                 df_event = max(len(np.unique(cluster_ids)) - 1, 1)
             else:
-                df_event = max(len(cell) - n_params, 1)
+                # Raw residual df: safe_inference fails the tuple closed
+                # when df <= 0 (no fabricated df=1 - review finding).
+                df_event = len(cell) - n_params
             t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha, df=df_event)
             event_effects[relative_time] = {
                 "effect": float(att),
@@ -2529,6 +2620,17 @@ class LWDiD(BaseEstimator):
                 interaction = treatment.reshape(-1, 1) * (controls_matrix - X_bar_1)
                 parts.append(interaction)
         X = np.hstack(parts)
+        if X.shape[0] < 3 or X.shape[0] - X.shape[1] <= 0:
+            # Registry small-sample guards (N >= 3; positive residual df,
+            # i.e. N > K + 2 with controls / N > 2K + 2 interacted): the
+            # shared classical vcov divides by n - k, so an exactly-
+            # saturated design reached ZeroDivisionError (review finding).
+            raise ValueError(
+                f"Invalid exact-inference design: {X.shape[0]} "
+                f"observation(s) with {X.shape[1]} fitted parameter(s). "
+                f"LWDiD requires at least 3 cross-sectional units and a "
+                f"positive residual df (N > K + 2 with controls)."
+            )
 
         # Determine vcov_type for solve_ols (hc3 routes through the shared
         # linalg backend; clustered fits resolve to CR1 via cluster_ids)
@@ -2966,14 +3068,25 @@ class LWDiD(BaseEstimator):
         diffs = y_treated[valid_matches] - matched_y_control[valid_matches]
         att = float(np.mean(diffs))
 
-        # Step 5: Compute SE
-        # Simple matching SE: SE = sqrt(Var(diffs) / N_treated)
-        n_matched = int(valid_matches.sum())
-        if n_matched > 1:
-            var_diffs = float(np.var(diffs, ddof=1))
-            se = float(np.sqrt(var_diffs / n_matched))
-        else:
-            se = np.nan
+        # Step 5: Inference fails closed (review finding). The former
+        # sqrt(var(diffs)/n) treated matched differences as INDEPENDENT -
+        # with replacement matching a control can appear in many treated
+        # counterfactuals, so their common uncertainty cancels out of that
+        # formula - and it omits the propensity/matching first-stage
+        # uncertainty entirely. A valid matching variance (Abadie-Imbens)
+        # is tracked in DEFERRED.md; until it lands the point is retained
+        # and the inference tuple is NaN (same convention as the staggered
+        # 'unavailable_matching' basis).
+        warnings.warn(
+            "LWDiD PSM: no valid matching variance estimator is implemented "
+            "(the naive var(diffs)/n formula ignores matched-control reuse "
+            "and first-stage matching uncertainty). The ATT point estimate "
+            "is reported with NaN inference; use estimation_method='dr' for "
+            "a doubly robust alternative with valid inference.",
+            UserWarning,
+            stacklevel=2,
+        )
+        se = np.nan
 
         # Effective n_params: intercept + controls (for propensity model)
         n_params = 1 + controls_matrix.shape[1]
@@ -3572,7 +3685,7 @@ class LWDiD(BaseEstimator):
         if cluster_draw is not None:
             df_used = max(len(cluster_draw) - 1, 1)
         else:
-            df_used = max(len(y_full) - n_params_full, 1)
+            df_used = len(y_full) - n_params_full
         t_stat, p_value, conf_int = safe_inference(att_full, se, alpha=self.alpha, df=df_used)
 
         return att_full, se, t_stat, p_value, conf_int, df_used

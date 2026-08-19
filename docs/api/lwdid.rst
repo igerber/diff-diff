@@ -226,8 +226,25 @@ standard error (Davidson & MacKinnon, 1993) provides reliable inference
 without the homoskedasticity assumption, as shown by Simonsohn (2021).
 
 **Randomization inference** is also supported: under the sharp null of
-zero treatment effects, permutation of :math:`D_i` yields exact p-values
-without requiring normality (LW 2025, Section 2; LW 2026, Section 2.1).
+zero treatment effects, permutation of :math:`D_i` yields Monte Carlo
+p-values without requiring normality (LW 2025, Section 2; LW 2026,
+Section 2.1). Validity is conditional on the assignment mechanism the
+permutation encodes — complete randomization of the treatment labels
+(the treated count is held fixed); the implementation follows the
+authors' package convention (inclusive Phipson-Smyth counting; see the
+methodology registry's RI Note).
+
+**HC3 caveat** — HC3 requires the leverage of every observation to be
+bounded away from one; a perfectly-leveraged design (e.g. a single
+treated unit) has no defined HC3 variance and fails closed with a
+warning and NaN inference. Use classical exact inference there.
+
+**PSM inference** — ``estimation_method='psm'`` reports the matched ATT
+point estimate with NaN inference: no valid matching variance estimator
+is currently implemented (the naive matched-pairs formula ignores
+matched-control reuse and first-stage matching uncertainty; an
+Abadie-Imbens variance is tracked in ``DEFERRED.md``). Use
+``estimation_method='dr'`` for valid inference.
 
 LWDiD
 ------
@@ -490,7 +507,7 @@ Restrictions
 
    The following restrictions apply to the current implementation:
 
-- **Balanced panel required for detrend** — the ``detrend`` transformation
+- **At least 2 pre-treatment observations per unit for detrend** — the ``detrend`` transformation
   fits a unit-specific linear trend on pre-treatment observations; units
   with fewer than 2 pre-treatment periods cannot be detrended and are
   dropped with a ``UserWarning``.
