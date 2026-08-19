@@ -612,16 +612,28 @@ def fit_staggered(
         cband_n_bootstrap,
     ) = compute_event_study_bands(estimator, event_effects, event_influence, global_cluster_ids)
 
-    n_treated_total = int((~never_mask).sum())
+    # Sample metadata describes the CELL-ESTIMATION sample: units actually
+    # contributing to at least one estimated cell (campaign finding: the
+    # previous counts covered every input unit, overstating the sample
+    # whenever cell-level drops occurred). Complete-case composite drops
+    # are reported separately via n_composite_*_dropped.
+    contributing_units_mask = np.zeros(len(all_units), dtype=bool)
+    for member_mask in cell_members.values():
+        contributing_units_mask |= member_mask
+    contributing_index = np.flatnonzero(contributing_units_mask)
+    contributing_ids = [all_units[i] for i in contributing_index]
+    never_set = set(never_units)
+    n_contrib_control = sum(1 for u in contributing_ids if u in never_set)
+    n_contrib_treated = int((~never_mask.loc[contributing_ids]).sum())
     result = LWDiDResults(
         att=float(overall_effect),
         se=float(overall_se),
         t_stat=overall_t,
         p_value=overall_p,
         conf_int=overall_ci,
-        n_obs=len(all_units),
-        n_treated=n_treated_total,
-        n_control=len(never_units),
+        n_obs=int(contributing_units_mask.sum()),
+        n_treated=n_contrib_treated,
+        n_control=n_contrib_control,
         rolling=estimator.rolling,
         estimation_method=estimator.estimation_method,
         vcov_type=estimator.vcov_type,

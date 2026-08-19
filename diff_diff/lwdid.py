@@ -856,6 +856,16 @@ class LWDiD(BaseEstimator):
         # in staggered designs, silently pull post-treatment covariate
         # values into the cohort-time cells), so it is rejected here.
         for column in controls or []:
+            n_missing = int(df[column].isna().sum())
+            if n_missing > 0:
+                # Campaign finding: NaN covariates silently dropped units
+                # on the cell paths while poisoning the common-timing OLS
+                # into a NaN ATT - unify by rejecting up front.
+                raise ValueError(
+                    f"Covariate '{column}' contains {n_missing} missing "
+                    f"value(s). LWDiD does not silently drop or impute "
+                    f"covariate rows; remove or impute them before fitting."
+                )
             varying = df.groupby(unit)[column].nunique(dropna=False)
             if (varying > 1).any():
                 raise ValueError(
@@ -865,6 +875,12 @@ class LWDiD(BaseEstimator):
                     "value) before fitting."
                 )
         if cluster is not None and cluster != unit:
+            n_missing = int(df[cluster].isna().sum())
+            if n_missing > 0:
+                raise ValueError(
+                    f"Cluster column '{cluster}' contains {n_missing} missing "
+                    f"value(s); every observation must belong to a cluster."
+                )
             varying = df.groupby(unit)[cluster].nunique(dropna=False)
             if (varying > 1).any():
                 raise ValueError(
@@ -2365,8 +2381,15 @@ class LWDiD(BaseEstimator):
         n_obs: int,
         n_params: int,
         cluster_ids: Optional[np.ndarray],
+        coef_index: int = 1,
     ) -> np.ndarray:
         r"""Influence contributions for the OLS treatment coefficient.
+
+        ``coef_index`` is the treatment coefficient's position in the
+        (possibly rank-reduced) design actually passed in - the caller
+        remaps it when solve_ols dropped columns (fix-wave WS8: computing
+        the bread/leverage on the full-width design while only the df
+        moved left the influence function describing a min-norm fit).
 
         The asymptotically linear representation of :math:`\hat\tau` is
         :math:`\psi_i = e_2' (X'X)^{-1} x_i \varepsilon_i`. Each variance
@@ -2379,7 +2402,7 @@ class LWDiD(BaseEstimator):
         homoskedastic magnitude (``sigma * basis``) would fabricate
         covariance between staggered cells that merely share control units.
         """
-        basis = X @ xtx_inv[:, 1]
+        basis = X @ xtx_inv[:, coef_index]
         dof = max(n_obs - n_params, 1)
         psi = basis * residuals
 
@@ -2519,16 +2542,40 @@ class LWDiD(BaseEstimator):
         else:
             se = np.nan
 
-        # Return the fitted design's parameter count so callers compute a
-        # design-coherent residual df: N - 2 without controls, N - K - 2 for
-        # the plain design (1, D, X), and N - 2K - 2 when the interaction
-        # D*(X - X_bar_1) is active (LW 2026 Section 2).
-        xtx_inv = np.linalg.pinv(X.T @ X)
+        # Return the fitted design's EFFECTIVE parameter count so callers
+        # compute a design-coherent residual df: N - 2 without controls,
+        # N - K - 2 for the plain design (1, D, X), N - 2K - 2 when the
+        # interaction D*(X - X_bar_1) is active (LW 2026 Section 2) - and,
+        # under rank deficiency, the KEPT-column count (fix-wave WS8: the
+        # nominal count understated the df and the full-width pinv bread
+        # broke the IF == solve_ols SE identity).
+        nan_mask = np.isnan(coefs)
+        n_params_effective = int(np.sum(~nan_mask))
+        if nan_mask.any():
+            if nan_mask[1]:
+                # The treatment column itself was pivoted out: the ATT is
+                # unidentified (solve_ols already emitted the rank warning).
+                return np.nan, np.nan, coefs, vcov, n_params_effective, None
+            kept = np.flatnonzero(~nan_mask)
+            X_used = X[:, kept]
+            coef_index = int(np.flatnonzero(kept == 1)[0])
+        else:
+            X_used = X
+            coef_index = 1
+        xtx_inv = np.linalg.pinv(X_used.T @ X_used)
         influence = self._finalize_influence(
-            self._ols_treatment_influence(X, xtx_inv, residuals, n_obs, n_params, cluster_ids),
+            self._ols_treatment_influence(
+                X_used,
+                xtx_inv,
+                residuals,
+                n_obs,
+                n_params_effective,
+                cluster_ids,
+                coef_index=coef_index,
+            ),
             se,
         )
-        return att, se, coefs, vcov, n_params, influence
+        return att, se, coefs, vcov, n_params_effective, influence
 
     def _estimate_ipw(
         self,

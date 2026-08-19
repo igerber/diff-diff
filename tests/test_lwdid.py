@@ -2367,3 +2367,111 @@ class TestPSMCaliperContract:
         # far controls ydot = +100. Caliper-respecting match (c_near only):
         # ATT = 2.0. Contaminated pre-fix value: 2.0 - (0+100)/2 = -48.
         np.testing.assert_allclose(res.att, 2.0, atol=1e-10)
+
+
+class TestSilentDataHandling:
+    """LWDiD fix-wave WS8 (campaign findings): NaN covariates silently
+    dropped units on cell paths while poisoning the common-timing OLS;
+    staggered n_obs/n_treated counted every input unit regardless of cell
+    drops; rank-deficient designs used the NOMINAL parameter count for the
+    df and a full-width pinv bread, breaking the IF == solve_ols SE
+    identity the docstring claims.
+    """
+
+    @staticmethod
+    def _staggered_panel(seed=31):
+        rng = np.random.default_rng(seed)
+        rows = []
+        for u in range(24):
+            g = 3 if u < 5 else (4 if u < 10 else 0)
+            alpha = rng.normal()
+            x = rng.normal()
+            for t in range(1, 7):
+                d = int(g > 0 and t >= g)
+                y = alpha + 0.4 * x + rng.normal(scale=0.4) + 1.5 * d
+                rows.append(dict(unit=u, time=t, first=g, treat=d, y=y, x=x))
+        return pd.DataFrame(rows)
+
+    def test_nan_covariate_rejected_explicitly(self):
+        df = self._staggered_panel()
+        df.loc[3, "x"] = np.nan
+        with pytest.raises(ValueError, match="missing value"):
+            LWDiD(rolling="demean", estimation_method="reg").fit(
+                df, outcome="y", unit="unit", time="time", treatment="treat",
+                first_treat="first", covariates=["x"],
+            )
+
+    def test_nan_cluster_rejected_explicitly(self):
+        df = self._staggered_panel()
+        df["cl"] = df["unit"] % 4
+        df["cl"] = df["cl"].astype(float)
+        df.loc[df["unit"] == 2, "cl"] = np.nan
+        with pytest.raises(ValueError, match="Cluster column .* missing"):
+            LWDiD(rolling="demean", estimation_method="reg", cluster="cl").fit(
+                df, outcome="y", unit="unit", time="time", treatment="treat",
+                first_treat="first",
+            )
+
+    def test_rank_deficient_covariate_if_reproduces_solve_ols_se(self):
+        # A NON-trailing collinear covariate is dropped by solve_ols; the
+        # influence function must be rebuilt on the kept columns so its
+        # norm still reproduces the reported SE (docstring identity).
+        rng = np.random.default_rng(37)
+        n = 200
+        controls = rng.normal(size=(n, 3))
+        controls[:, 0] = 2.0 * controls[:, 2] + 1.0  # column 0 collinear
+        treatment = (rng.uniform(size=n) < 0.4).astype(float)
+        y = 1.0 + 2.0 * treatment + controls[:, 1] * 0.5 + rng.normal(size=n)
+        est = LWDiD(estimation_method="reg", vcov_type="hc1")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            att, se, coefs, _, n_params, influence = est._estimate_reg(
+                y, treatment, controls, None, n
+            )
+        assert np.isfinite(att) and np.isfinite(se)
+        assert np.isnan(coefs).any()  # a column really was dropped
+        assert n_params == int(np.sum(~np.isnan(coefs)))
+        assert influence is not None
+        assert float(np.sqrt(np.sum(influence**2))) == pytest.approx(se, rel=1e-10)
+
+    def test_treatment_column_dropped_yields_nan_att(self):
+        # If the treatment column itself is pivoted out (collinear with a
+        # control), the ATT is unidentified: NaN point + no influence.
+        rng = np.random.default_rng(41)
+        n = 120
+        treatment = (rng.uniform(size=n) < 0.5).astype(float)
+        controls = np.column_stack([treatment * 3.0, rng.normal(size=n)])
+        y = 1.0 + rng.normal(size=n)
+        est = LWDiD(estimation_method="reg", vcov_type="hc1")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            att, se, _, _, _, influence = est._estimate_reg(y, treatment, controls, None, n)
+        # Either the treatment or its collinear twin is dropped; if the
+        # treatment survives the ATT is finite - accept both resolutions
+        # but NEVER a finite ATT with se=0-style inference.
+        if np.isnan(att):
+            assert np.isnan(se) and influence is None
+        else:
+            assert np.isfinite(se) and se > 0
+
+    def test_staggered_metadata_counts_contributing_units(self):
+        # Under rolling='detrend', a unit with a single pre-period row has
+        # NaN transformed outcomes in EVERY cell (per-unit trend needs >= 2
+        # pre points), so it is dropped from every cell's finite filter and
+        # contributes nothing - the estimation-sample metadata must not
+        # count it (campaign finding: n_obs/n_treated covered every input
+        # unit regardless of cell drops).
+        df = self._staggered_panel()
+        rng = np.random.default_rng(5)
+        extra = [dict(unit=99, time=t, first=0, treat=0, y=rng.normal(), x=0.0)
+                 for t in (1, 4, 5, 6)]  # ONE pre row (t=1) + post rows
+        df = pd.concat([df, pd.DataFrame(extra)], ignore_index=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = LWDiD(rolling="detrend", estimation_method="reg").fit(
+                df, outcome="y", unit="unit", time="time", treatment="treat",
+                first_treat="first",
+            )
+        assert res.n_obs == 24  # unit 99 contributed to no estimated cell
+        assert res.n_control == 14
+        assert res.n_treated == 10
