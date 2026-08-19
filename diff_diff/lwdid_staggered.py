@@ -171,7 +171,15 @@ def compute_event_study_bands(
         ``(event_vcov, event_vcov_index, cband_method, cband_crit_value,
         cband_n_bootstrap)``.
     """
-    event_labels = sorted(event_influence)
+    # Defense in depth (round-16 review): a label whose accepted SE is
+    # non-finite must not contribute a covariance row - its inference is
+    # NaN and a 0.0 diagonal would present it as known without
+    # uncertainty.
+    event_labels = sorted(
+        label
+        for label in event_influence
+        if np.isfinite(event_effects.get(label, {}).get("se", np.nan))
+    )
     event_vcov = None
     event_vcov_index = None
     cband_method = None
@@ -694,7 +702,11 @@ def fit_staggered(
             "n_cells": len(keys),
             "df": df_event,
         }
-        if influence is not None:
+        if influence is not None and np.isfinite(se):
+            # Round-16 review: storing a degenerate-influence column
+            # (NaN-inference row) exposed a 0.0 covariance diagonal for a
+            # row whose se/t/p/CI are all NaN. Matches the common-timing
+            # guard (influence is not None AND finite se).
             event_influence[int(relative_time)] = influence
 
     (

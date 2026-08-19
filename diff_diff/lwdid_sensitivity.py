@@ -545,7 +545,17 @@ def robustness_pre_periods(
         k_max = n_pre
 
     k_max = min(k_max, n_pre)
-    k_min = max(k_min, 2)
+    # Transformation-aware minimum (round-16 review: the former
+    # unconditional max(k_min, 2) SILENTLY dropped an explicitly
+    # requested, methodologically valid k=1 demeaning specification -
+    # demeaning needs one pre-period, detrending two).
+    min_required = 1 if rolling in ("demean", "demeanq") else 2
+    if k_min < min_required:
+        raise ValueError(
+            f"k_min={k_min} is below the minimum pre-period requirement "
+            f"for rolling='{rolling}' ({min_required}; detrending needs "
+            f"two pre-periods for its rank condition)."
+        )
 
     if k_min > k_max:
         warnings.warn(

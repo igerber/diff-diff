@@ -3974,3 +3974,101 @@ class TestReviewRound14Guards:
         df["g"] = np.where(df["unit"] < 4, 4.0, 0.0)
         with pytest.raises(ValueError, match="Time column .* non-finite"):
             LWDiD(rolling="demean").fit(df, first_treat="g", **self.KW)
+
+
+class TestReviewRound16Guards:
+    """Local-review round 16: execution-verified guards.
+
+    - a degenerate staggered event row (NaN inference) still contributed
+      a 0.0-diagonal column to the ANALYTICAL event-study covariance
+    - k_min=1 was silently clamped to 2, dropping a valid demeaning spec
+    - the degenerate early-return results lost psm_config / cluster_name
+    """
+
+    KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+    def test_degenerate_event_row_excluded_from_analytical_vcov(self):
+        from types import SimpleNamespace
+
+        from diff_diff.lwdid_staggered import compute_event_study_bands
+
+        rng = np.random.default_rng(0)
+        estimator = SimpleNamespace(n_bootstrap=0, seed=None, alpha=0.05)
+        event_effects = {
+            0: {
+                "effect": 1.0,
+                "se": np.nan,
+                "t_stat": np.nan,
+                "p_value": np.nan,
+                "conf_int": (np.nan, np.nan),
+                "df": None,
+            },
+            1: {
+                "effect": 0.5,
+                "se": 0.1,
+                "t_stat": 5.0,
+                "p_value": 0.0,
+                "conf_int": (0.3, 0.7),
+                "df": None,
+            },
+        }
+        event_influence = {0: np.zeros(30), 1: rng.normal(size=30)}
+        vcov, index, *_ = compute_event_study_bands(estimator, event_effects, event_influence, None)
+        assert list(index) == [1]  # NaN-inference row excluded
+        assert vcov.shape == (1, 1) and np.isfinite(vcov[0, 0])
+
+    def test_k_min_one_honored_for_demean(self):
+        from diff_diff.lwdid_sensitivity import robustness_pre_periods
+
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(12):
+            for t in range(1, 9):
+                d = 1 if (u < 6 and t >= 6) else 0
+                rows.append(dict(unit=u, time=t, treat=d, y=rng.normal() + d))
+        df = pd.DataFrame(rows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = robustness_pre_periods(
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
+                rolling="demean",
+                k_min=1,
+            )
+        labels = [s.label for s in res.specifications]
+        assert "k=1_pre_periods" in labels
+        with pytest.raises(ValueError, match="minimum pre-period requirement"):
+            robustness_pre_periods(
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
+                rolling="detrend",
+                k_min=1,
+            )
+
+    def test_degenerate_return_keeps_psm_and_cluster_provenance(self):
+        # detrend with a single pre-period: every transformed outcome is
+        # NaN -> the degenerate early return must still carry the fit
+        # configuration.
+        rows = []
+        for u in range(8):
+            for t in range(2, 7):  # one pre-period (t=2), onset t=3
+                d = 1 if (u < 4 and t >= 3) else 0
+                rows.append(dict(unit=u, time=t, treat=d, cl=u % 3, x=float(u % 4), y=1.0 + d))
+        df = pd.DataFrame(rows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res_psm = LWDiD(rolling="detrend", estimation_method="psm", caliper=0.5).fit(
+                df, covariates=["x"], **self.KW
+            )
+            res_cl = LWDiD(rolling="detrend", cluster="cl").fit(df, **self.KW)
+        assert np.isnan(res_psm.att)
+        assert res_psm.psm_config is not None
+        assert res_psm.psm_config["caliper"] == 0.5
+        assert np.isnan(res_cl.att)
+        assert res_cl.cluster_name == "cl"

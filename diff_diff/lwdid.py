@@ -1338,8 +1338,19 @@ class LWDiD(BaseEstimator):
                 control_group=self.control_group,
                 n_bootstrap=self.n_bootstrap,
                 seed=self.seed,
+                cluster_name=cluster,
                 pscore_trim=(
                     self.pscore_trim if self.estimation_method in ("ipw", "dr", "psm") else None
+                ),
+                psm_config=(
+                    {
+                        "pscore_trim": self.pscore_trim,
+                        "n_neighbors": self.n_neighbors,
+                        "caliper": self.caliper,
+                        "with_replacement": self.with_replacement,
+                    }
+                    if self.estimation_method == "psm"
+                    else None
                 ),
                 alpha=self.alpha,
                 event_study_effects=event_effects,
@@ -1399,8 +1410,19 @@ class LWDiD(BaseEstimator):
                 control_group=self.control_group,
                 n_bootstrap=self.n_bootstrap,
                 seed=self.seed,
+                cluster_name=cluster,
                 pscore_trim=(
                     self.pscore_trim if self.estimation_method in ("ipw", "dr", "psm") else None
+                ),
+                psm_config=(
+                    {
+                        "pscore_trim": self.pscore_trim,
+                        "n_neighbors": self.n_neighbors,
+                        "caliper": self.caliper,
+                        "with_replacement": self.with_replacement,
+                    }
+                    if self.estimation_method == "psm"
+                    else None
                 ),
                 alpha=self.alpha,
                 event_study_effects=event_effects,
