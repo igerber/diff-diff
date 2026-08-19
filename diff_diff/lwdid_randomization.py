@@ -15,10 +15,7 @@ from typing import Optional
 
 import numpy as np
 
-from diff_diff.lwdid_exceptions import RandomizationWarning
 
-# Backward compat alias
-RandomizationError = ValueError
 
 
 @dataclass
@@ -46,6 +43,8 @@ class RandomizationResult:
         Resampling method used: 'permutation' or 'bootstrap'.
     seed : int or None
         Random seed used for reproducibility.
+    n_dropped : int
+        Observations dropped for non-finite y before estimation (warned).
     """
 
     pvalue: float
@@ -57,6 +56,8 @@ class RandomizationResult:
     failure_rate: float
     method: str
     seed: Optional[int]
+    #: Observations dropped for non-finite y before estimation (warned).
+    n_dropped: int = 0
 
 
 def _validate_inputs(
@@ -70,7 +71,7 @@ def _validate_inputs(
 
     Raises
     ------
-    RandomizationError
+    ValueError
         If any validation check fails.
     """
     if n_reps is None or n_reps <= 0:
@@ -304,7 +305,7 @@ def randomization_inference(
 
     Raises
     ------
-    RandomizationError
+    ValueError
         If inputs are invalid, sample size is too small, treatment is
         constant, or insufficient valid replications are produced.
 
@@ -348,10 +349,19 @@ def randomization_inference(
         if controls.ndim == 1:
             controls = controls.reshape(-1, 1)
 
-    # Handle NaN: drop observations with non-finite y
+    # Drop observations with non-finite y WITH a warning (campaign
+    # finding: silent drops) and record the count on the result.
+    n_dropped = 0
     if y.ndim == 1 and len(y) > 0:
         finite_mask = np.isfinite(y)
         if not finite_mask.all():
+            n_dropped = int((~finite_mask).sum())
+            warnings.warn(
+                f"randomization_inference: dropped {n_dropped} observation(s) "
+                f"with non-finite y before estimation.",
+                UserWarning,
+                stacklevel=2,
+            )
             y = y[finite_mask]
             treatment = treatment[finite_mask]
             if controls is not None:
@@ -388,7 +398,7 @@ def randomization_inference(
             f"produced degenerate treatment assignments "
             f"({failure_rate:.1%} failure rate). "
             f"Consider using method='permutation' or increasing sample size.",
-            RandomizationWarning,
+            UserWarning,
             stacklevel=2,
         )
 
@@ -410,4 +420,5 @@ def randomization_inference(
         failure_rate=failure_rate,
         method=method,
         seed=seed,
+        n_dropped=n_dropped,
     )

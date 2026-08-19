@@ -640,7 +640,7 @@ class LWDiDResults(BaseResults, AggregationMixin):
     def bootstrap_pvalue(self):
         """Wild cluster bootstrap p-value (None if not computed)."""
         if self._wcb_result is not None:
-            return self._wcb_result.pvalue
+            return self._wcb_result.p_value
         return None
 
     def wild_cluster_bootstrap(
@@ -649,14 +649,16 @@ class LWDiDResults(BaseResults, AggregationMixin):
         treatment,
         cluster_ids,
         covariates=None,
-        n_reps=999,
+        n_bootstrap=999,
         weight_type="rademacher",
         seed=None,
     ):
         """Run wild cluster bootstrap inference on the fitted results.
 
-        Delegates to diff_diff.lwdid_wild_bootstrap.wild_cluster_bootstrap().
-        Result is cached and accessible via the `bootstrap_pvalue` property.
+        Delegates to diff_diff.lwdid_wild_bootstrap.wild_cluster_bootstrap()
+        (house WCR engine; test-inversion CI, CR1 se, strict-exceedance
+        p-value). Result is cached and accessible via the
+        `bootstrap_pvalue` property.
         """
         from diff_diff.lwdid_wild_bootstrap import wild_cluster_bootstrap as _wcb
 
@@ -665,7 +667,7 @@ class LWDiDResults(BaseResults, AggregationMixin):
             treatment,
             cluster_ids,
             covariates,
-            n_reps=n_reps,
+            n_bootstrap=n_bootstrap,
             weight_type=weight_type,
             seed=seed,
         )

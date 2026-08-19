@@ -1,4 +1,12 @@
-"""Tests for lwdid_wild_bootstrap module."""
+"""Tests for lwdid_wild_bootstrap module (house-engine wrapper API).
+
+Rewritten in the LWDiD fix wave (WS4): wild_cluster_bootstrap now delegates
+to the house WCR engine ``diff_diff.utils.wild_bootstrap_se``. The former
+module-local implementation carried three execution-verified defects
+(1-ULP tie handling below the attainable p floor, an intercept-only
+restricted model that dropped controls from the null DGP, and a G=2
+zero-SE roundoff escape reporting t~5e15 with p=0.25).
+"""
 
 import numpy as np
 import pandas as pd
@@ -8,6 +16,7 @@ from diff_diff.lwdid_wild_bootstrap import (
     WildClusterBootstrapResult,
     wild_cluster_bootstrap,
 )
+from diff_diff.utils import wild_bootstrap_se
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -26,279 +35,219 @@ def cross_section_data():
 
 
 # ---------------------------------------------------------------------------
-# Result dataclass fields
+# Result schema (house-aligned)
 # ---------------------------------------------------------------------------
 
 
-class TestWildClusterBootstrapResultFields:
-    """Test that result has all expected fields."""
-
-    def test_result_has_att(self, cross_section_data):
-        y, treatment, cluster_ids, controls = cross_section_data
-        r = wild_cluster_bootstrap(y, treatment, cluster_ids, seed=0, n_reps=99)
-        assert hasattr(r, "att")
-        assert isinstance(r.att, float)
-
-    def test_result_has_se_bootstrap(self, cross_section_data):
-        y, treatment, cluster_ids, controls = cross_section_data
-        r = wild_cluster_bootstrap(y, treatment, cluster_ids, seed=0, n_reps=99)
-        assert hasattr(r, "se_bootstrap")
-
-    def test_result_has_ci(self, cross_section_data):
-        y, treatment, cluster_ids, controls = cross_section_data
-        r = wild_cluster_bootstrap(y, treatment, cluster_ids, seed=0, n_reps=99)
-        assert hasattr(r, "ci_lower")
-        assert hasattr(r, "ci_upper")
+class TestResultSchema:
+    def test_schema_fields(self, cross_section_data):
+        y, d, cl, _ = cross_section_data
+        r = wild_cluster_bootstrap(y, d, cl, seed=1, n_bootstrap=99)
+        assert isinstance(r, WildClusterBootstrapResult)
+        assert np.isfinite(r.att)
+        assert np.isfinite(r.se) and r.se > 0
+        assert np.isfinite(r.t_stat_original)
+        assert 0.0 <= r.p_value <= 1.0
         assert r.ci_lower <= r.ci_upper
-
-    def test_result_has_pvalue(self, cross_section_data):
-        y, treatment, cluster_ids, controls = cross_section_data
-        r = wild_cluster_bootstrap(y, treatment, cluster_ids, seed=0, n_reps=99)
-        assert hasattr(r, "pvalue")
-
-    def test_result_has_weight_type(self, cross_section_data):
-        y, treatment, cluster_ids, controls = cross_section_data
-        r = wild_cluster_bootstrap(y, treatment, cluster_ids, seed=0, n_reps=99)
-        assert hasattr(r, "weight_type")
-        assert r.weight_type == "rademacher"
-
-    def test_result_has_n_reps(self, cross_section_data):
-        y, treatment, cluster_ids, controls = cross_section_data
-        r = wild_cluster_bootstrap(y, treatment, cluster_ids, seed=0, n_reps=99)
-        assert hasattr(r, "n_reps")
-
-    def test_result_has_n_clusters(self, cross_section_data):
-        y, treatment, cluster_ids, controls = cross_section_data
-        r = wild_cluster_bootstrap(y, treatment, cluster_ids, seed=0, n_reps=99)
-        assert hasattr(r, "n_clusters")
         assert r.n_clusters == 20
-
-    def test_result_has_t_stats(self, cross_section_data):
-        y, treatment, cluster_ids, controls = cross_section_data
-        r = wild_cluster_bootstrap(y, treatment, cluster_ids, seed=0, n_reps=99)
-        assert hasattr(r, "t_stats")
-        assert isinstance(r.t_stats, np.ndarray)
+        assert r.n_bootstrap >= 99
+        assert r.weight_type == "rademacher"
+        assert r.alpha == 0.05
+        assert r.bootstrap_distribution is not None
+        assert len(r.bootstrap_distribution) <= r.n_bootstrap
+        assert r.n_dropped == 0
+        # Retired fields are gone (API break, LWDiD unreleased)
+        assert not hasattr(r, "se_bootstrap")
+        assert not hasattr(r, "pvalue")
+        assert not hasattr(r, "n_reps")
+        assert not hasattr(r, "t_stats")
 
     def test_summary_returns_string(self, cross_section_data):
-        y, treatment, cluster_ids, controls = cross_section_data
-        r = wild_cluster_bootstrap(y, treatment, cluster_ids, seed=0, n_reps=99)
+        y, d, cl, _ = cross_section_data
+        r = wild_cluster_bootstrap(y, d, cl, seed=1, n_bootstrap=99)
         s = r.summary()
         assert isinstance(s, str)
-        assert "ATT" in s
+        assert "Wild Cluster Bootstrap" in s
+        assert "CR1" in s
 
-
-# ---------------------------------------------------------------------------
-# Weight types
-# ---------------------------------------------------------------------------
+    def test_matches_house_engine_exactly(self, cross_section_data):
+        # The wrapper is a thin adapter: same X construction, same engine,
+        # same numbers as calling wild_bootstrap_se directly.
+        y, d, cl, controls = cross_section_data
+        r = wild_cluster_bootstrap(y, d, cl, controls, seed=7, n_bootstrap=199)
+        X = np.column_stack([np.ones(len(y)), d, controls])
+        beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+        house = wild_bootstrap_se(
+            X, y, y - X @ beta, cl, 1, n_bootstrap=199, seed=7, return_distribution=True
+        )
+        np.testing.assert_allclose(r.se, house.se, rtol=0, atol=0)
+        np.testing.assert_allclose(r.p_value, house.p_value, rtol=0, atol=0)
+        np.testing.assert_allclose(r.ci_lower, house.ci_lower, rtol=0, atol=0)
+        np.testing.assert_allclose(r.ci_upper, house.ci_upper, rtol=0, atol=0)
+        np.testing.assert_allclose(r.att, beta[1], rtol=1e-12)
 
 
 class TestWeightTypes:
-    """Test that all 3 weight types work correctly."""
-
-    def test_rademacher(self, cross_section_data):
-        y, treatment, cluster_ids, _ = cross_section_data
-        r = wild_cluster_bootstrap(
-            y, treatment, cluster_ids, weight_type="rademacher", seed=1, n_reps=199
-        )
-        assert r.weight_type == "rademacher"
-        assert 0.0 <= r.pvalue <= 1.0
-
-    def test_mammen(self, cross_section_data):
-        y, treatment, cluster_ids, _ = cross_section_data
-        r = wild_cluster_bootstrap(
-            y, treatment, cluster_ids, weight_type="mammen", seed=1, n_reps=199
-        )
-        assert r.weight_type == "mammen"
-        assert 0.0 <= r.pvalue <= 1.0
-
-    def test_webb(self, cross_section_data):
-        y, treatment, cluster_ids, _ = cross_section_data
-        r = wild_cluster_bootstrap(
-            y, treatment, cluster_ids, weight_type="webb", seed=1, n_reps=199
-        )
-        assert r.weight_type == "webb"
-        assert 0.0 <= r.pvalue <= 1.0
+    @pytest.mark.parametrize("wt", ["rademacher", "mammen", "webb"])
+    def test_weight_types_run(self, cross_section_data, wt):
+        y, d, cl, _ = cross_section_data
+        r = wild_cluster_bootstrap(y, d, cl, weight_type=wt, seed=3, n_bootstrap=99)
+        assert 0.0 <= r.p_value <= 1.0
+        assert r.weight_type == wt
 
     def test_invalid_weight_type_raises(self, cross_section_data):
-        y, treatment, cluster_ids, _ = cross_section_data
-        with pytest.raises(ValueError, match="Unknown weight_type"):
-            wild_cluster_bootstrap(y, treatment, cluster_ids, weight_type="invalid")
-
-
-# ---------------------------------------------------------------------------
-# P-value and SE properties
-# ---------------------------------------------------------------------------
+        y, d, cl, _ = cross_section_data
+        with pytest.raises(ValueError, match="weight_type"):
+            wild_cluster_bootstrap(y, d, cl, weight_type="gaussian")
 
 
 class TestStatisticalProperties:
-    """Test p-value range and SE positivity."""
-
-    def test_pvalue_in_0_1(self, cross_section_data):
-        y, treatment, cluster_ids, _ = cross_section_data
-        r = wild_cluster_bootstrap(y, treatment, cluster_ids, seed=42, n_reps=499)
-        assert 0.0 <= r.pvalue <= 1.0
-
-    def test_se_positive(self, cross_section_data):
-        y, treatment, cluster_ids, _ = cross_section_data
-        r = wild_cluster_bootstrap(y, treatment, cluster_ids, seed=42, n_reps=499)
-        assert r.se_bootstrap > 0
-
-    def test_with_controls(self, cross_section_data):
-        y, treatment, cluster_ids, controls = cross_section_data
-        r = wild_cluster_bootstrap(
-            y, treatment, cluster_ids, controls=controls, seed=42, n_reps=199
-        )
-        assert 0.0 <= r.pvalue <= 1.0
-        assert r.se_bootstrap > 0
-
-
-# ---------------------------------------------------------------------------
-# Full enumeration
-# ---------------------------------------------------------------------------
-
-
-class TestFullEnumeration:
-    """Test full enumeration with few clusters (G=5)."""
-
-    def test_full_enumeration_g5(self):
-        """With G=5, full enumeration should use 2^5=32 reps."""
-        rng = np.random.default_rng(99)
-        y = np.concatenate([rng.normal(3, 0.5, 10), rng.normal(0, 0.5, 40)])
-        treatment = np.array([1.0] * 10 + [0.0] * 40)
-        cluster_ids = np.repeat(np.arange(5), 10)
-
-        r = wild_cluster_bootstrap(y, treatment, cluster_ids, seed=0, full_enumeration=True)
-        assert r.n_reps == 2**5
-        assert r.n_clusters == 5
+    def test_null_imposition_keeps_controls(self):
+        # Campaign finding: the old restricted model was intercept-only,
+        # dumping covariate signal into the bootstrap residuals (Monte
+        # Carlo size 12.5% vs nominal 5% with a treatment-correlated
+        # control). The house engine drops ONLY the treatment column; on a
+        # null DGP with a strong treatment-correlated control the test must
+        # not over-reject.
+        rng = np.random.default_rng(0)
+        rejections = 0
+        n_sims = 40
+        for _ in range(n_sims):
+            G = 12
+            cl = np.repeat(np.arange(G), 10)
+            d = (cl < 4).astype(float)
+            x = 2.0 * d + rng.normal(size=cl.size)
+            y = 1.0 + 1.5 * x + rng.normal(size=cl.size)  # no treatment effect
+            r = wild_cluster_bootstrap(
+                y, d, cl, controls=x.reshape(-1, 1), n_bootstrap=199, seed=int(rng.integers(1e6))
+            )
+            rejections += int(r.p_value < 0.05)
+        # Binomial(40, 0.05): P(X >= 9) < 1e-4
+        assert rejections <= 8, rejections
 
     def test_full_enumeration_deterministic(self):
-        """Full enumeration should give same result every time."""
-        rng = np.random.default_rng(99)
-        y = np.concatenate([rng.normal(3, 0.5, 10), rng.normal(0, 0.5, 40)])
-        treatment = np.array([1.0] * 10 + [0.0] * 40)
-        cluster_ids = np.repeat(np.arange(5), 10)
+        rng = np.random.default_rng(5)
+        G = 8
+        cl = np.repeat(np.arange(G), 6)
+        d = (cl < 3).astype(float)
+        y = 0.5 * d + rng.normal(size=cl.size)
+        r1 = wild_cluster_bootstrap(y, d, cl, n_bootstrap=999, seed=1)
+        r2 = wild_cluster_bootstrap(y, d, cl, n_bootstrap=999, seed=2)
+        # 2**8 = 256 <= 999 -> full enumeration, independent of the seed
+        assert r1.n_bootstrap == 256 and r2.n_bootstrap == 256
+        assert r1.p_value == r2.p_value
 
-        r1 = wild_cluster_bootstrap(y, treatment, cluster_ids, full_enumeration=True)
-        r2 = wild_cluster_bootstrap(y, treatment, cluster_ids, full_enumeration=True)
-        assert r1.pvalue == r2.pvalue
-
-
-# ---------------------------------------------------------------------------
-# n_reps matches t_stats length
-# ---------------------------------------------------------------------------
-
-
-class TestNRepsConsistency:
-    """Test that n_reps matches the t_stats array length."""
-
-    def test_n_reps_matches_t_stats_length(self, cross_section_data):
-        y, treatment, cluster_ids, _ = cross_section_data
-        r = wild_cluster_bootstrap(y, treatment, cluster_ids, seed=0, n_reps=199)
-        assert len(r.t_stats) == r.n_reps
-
-    def test_full_enum_n_reps_matches(self):
-        rng = np.random.default_rng(10)
-        y = np.concatenate([rng.normal(2, 1, 10), rng.normal(0, 1, 40)])
-        treatment = np.array([1.0] * 10 + [0.0] * 40)
-        cluster_ids = np.repeat(np.arange(5), 10)
-        r = wild_cluster_bootstrap(y, treatment, cluster_ids, full_enumeration=True)
-        assert len(r.t_stats) == r.n_reps
+    def test_enumeration_p_is_exact_atom(self):
+        # The campaign's 1-ULP tie finding (reported p below the attainable
+        # floor of the OLD percentile-t enumeration) is resolved by
+        # ADOPTION of the house WCR convention, whose tie handling is
+        # pinned by the house R-parity goldens (tests/test_wild_bootstrap).
+        # Contract here: under enumeration the p-value is an exact atom
+        # k/2**G of the deterministic distribution.
+        rng = np.random.default_rng(9)
+        G = 4
+        cl = np.repeat(np.arange(G), 8)
+        d = (cl < 2).astype(float)
+        y = 3.0 * d + rng.normal(scale=0.2, size=cl.size)
+        with pytest.warns(UserWarning, match="fewer than 5 clusters"):
+            r = wild_cluster_bootstrap(y, d, cl, n_bootstrap=999, seed=11)
+        assert r.n_bootstrap == 16
+        k = r.p_value * 16
+        np.testing.assert_allclose(k, round(k), atol=1e-12)
 
 
-# ---------------------------------------------------------------------------
-# Numerical stability with extreme data
-# ---------------------------------------------------------------------------
-
-
-class TestNumericalStability:
-    """Test behaviour with extreme data."""
-
-    def test_extreme_large_values(self):
-        """Bootstrap should handle very large outcome values."""
-        rng = np.random.default_rng(7)
-        y = np.concatenate([rng.normal(1e6, 1e4, 15), rng.normal(0, 1e4, 45)])
-        treatment = np.array([1.0] * 15 + [0.0] * 45)
-        cluster_ids = np.repeat(np.arange(12), 5)
-
-        r = wild_cluster_bootstrap(y, treatment, cluster_ids, seed=0, n_reps=199)
+class TestDegenerateDesigns:
+    def test_g2_exactly_identified_fails_closed(self):
+        # Campaign finding: the canonical two-cluster design (cluster-
+        # invariant treatment) has cluster scores exactly ~0; BLAS roundoff
+        # gave a tiny-positive SE, t ~ 5e15, and p = 0.25 (below the G=2
+        # attainable floor of 0.5). Point retained; inference NaN.
+        rng = np.random.default_rng(2)
+        cl = np.repeat([0, 1], 12)
+        d = (cl == 0).astype(float)
+        y = 1.0 + 0.8 * d + rng.normal(scale=0.5, size=cl.size)
+        with pytest.warns(UserWarning, match="not identified"):
+            r = wild_cluster_bootstrap(y, d, cl, n_bootstrap=99, seed=4)
         assert np.isfinite(r.att)
-        assert 0.0 <= r.pvalue <= 1.0
+        assert np.isnan(r.se) and np.isnan(r.p_value)
+        assert np.isnan(r.ci_lower) and np.isnan(r.ci_upper)
+        assert r.bootstrap_distribution is None
 
-    def test_near_zero_variation(self):
-        """If outcome has near-zero variation within groups, should still return."""
+    def test_single_cluster_rejected(self):
         rng = np.random.default_rng(3)
-        # Very tight distribution
-        y = np.concatenate(
-            [
-                rng.normal(5, 1e-8, 15),
-                rng.normal(0, 1e-8, 45),
-            ]
-        )
-        treatment = np.array([1.0] * 15 + [0.0] * 45)
-        cluster_ids = np.repeat(np.arange(12), 5)
+        y = rng.normal(size=20)
+        d = np.r_[np.ones(10), np.zeros(10)]
+        cl = np.zeros(20)
+        with pytest.raises(ValueError, match="at least 2 clusters"):
+            wild_cluster_bootstrap(y, d, cl)
 
-        r = wild_cluster_bootstrap(y, treatment, cluster_ids, seed=0, n_reps=99)
-        # Should produce a result without raising
-        assert isinstance(r, WildClusterBootstrapResult)
+
+class TestInputContracts:
+    def test_nonfinite_y_dropped_with_warning_and_counted(self):
+        rng = np.random.default_rng(6)
+        G = 10
+        cl = np.repeat(np.arange(G), 8)
+        d = (cl < 4).astype(float)
+        y = 1.0 * d + rng.normal(size=cl.size)
+        y[3] = np.nan
+        y[40] = np.inf
+        with pytest.warns(UserWarning, match="dropped 2 observation"):
+            r = wild_cluster_bootstrap(y, d, cl, n_bootstrap=99, seed=8)
+        assert r.n_dropped == 2
+        assert np.isfinite(r.p_value)
+
+    def test_nonfinite_controls_raise(self, cross_section_data):
+        y, d, cl, controls = cross_section_data
+        controls = controls.copy()
+        controls[0, 0] = np.nan
+        with pytest.raises(ValueError, match="controls contains non-finite"):
+            wild_cluster_bootstrap(y, d, cl, controls)
+
+    def test_retired_parameters_rejected(self, cross_section_data):
+        y, d, cl, _ = cross_section_data
+        with pytest.raises(TypeError):
+            wild_cluster_bootstrap(y, d, cl, impose_null=False)
+        with pytest.raises(TypeError):
+            wild_cluster_bootstrap(y, d, cl, full_enumeration=True)
+        with pytest.raises(TypeError):
+            wild_cluster_bootstrap(y, d, cl, n_reps=99)
+        with pytest.raises(TypeError):
+            wild_cluster_bootstrap(y, d, cl, ci_level=0.9)
 
 
 class TestResultsConvenienceMethods:
-    """Test LWDiDResults.wild_cluster_bootstrap() and .randomization_test() wrappers."""
+    """LWDiDResults.wild_cluster_bootstrap() / .randomization_test() wrappers."""
+
+    @staticmethod
+    def _fitted_results():
+        from diff_diff import LWDiD
+
+        rng = np.random.default_rng(42)
+        records = []
+        for i in range(60):
+            d = int(i < 20)
+            for t in range(1, 7):
+                y = 1.0 + 0.1 * t + rng.normal(0, 0.3)
+                if d and t > 3:
+                    y += 2.0
+                records.append({"unit": i, "time": t, "y": y, "treat": d * int(t > 3)})
+        df = pd.DataFrame(records)
+        return LWDiD().fit(df, outcome="y", unit="unit", time="time", treatment="treat"), rng
 
     def test_results_wild_cluster_bootstrap(self):
-        """Convenience method delegates correctly."""
-        import numpy as np
-
-        from diff_diff import LWDiD
-
-        rng = np.random.default_rng(42)
-        n = 60
-        records = []
-        for i in range(n):
-            d = int(i < 20)
-            for t in range(1, 7):
-                y = 1.0 + 0.1 * t + rng.normal(0, 0.3)
-                if d and t > 3:
-                    y += 2.0
-                records.append({"unit": i, "time": t, "y": y, "treat": d * int(t > 3)})
-        df = pd.DataFrame(records)
-
-        res = LWDiD().fit(df, outcome="y", unit="unit", time="time", treatment="treat")
-
-        # Build cross-section for bootstrap test
-        y_cs = rng.normal(2, 0.5, 20).tolist() + rng.normal(0, 0.5, 40).tolist()
-        y_arr = np.array(y_cs)
-        d_arr = np.array([1.0] * 20 + [0.0] * 40)
-        c_arr = np.repeat(np.arange(12), 5)
-
-        wcb = res.wild_cluster_bootstrap(y_arr, d_arr, c_arr, n_reps=99, seed=42)
-        assert np.isfinite(wcb.att)
-        assert np.isfinite(wcb.pvalue)
-        assert 0 <= wcb.pvalue <= 1
-
-    def test_results_randomization_test(self):
-        """Convenience method delegates correctly."""
-        import numpy as np
-
-        from diff_diff import LWDiD
-
-        rng = np.random.default_rng(42)
-        n = 60
-        records = []
-        for i in range(n):
-            d = int(i < 20)
-            for t in range(1, 7):
-                y = 1.0 + 0.1 * t + rng.normal(0, 0.3)
-                if d and t > 3:
-                    y += 2.0
-                records.append({"unit": i, "time": t, "y": y, "treat": d * int(t > 3)})
-        df = pd.DataFrame(records)
-
-        res = LWDiD().fit(df, outcome="y", unit="unit", time="time", treatment="treat")
-
+        res, rng = self._fitted_results()
         y_arr = np.concatenate([rng.normal(2, 0.5, 20), rng.normal(0, 0.5, 40)])
         d_arr = np.array([1.0] * 20 + [0.0] * 40)
+        c_arr = np.repeat(np.arange(12), 5)
+        wcb = res.wild_cluster_bootstrap(y_arr, d_arr, c_arr, n_bootstrap=99, seed=42)
+        assert np.isfinite(wcb.att)
+        assert 0 <= wcb.p_value <= 1
+        assert res.bootstrap_pvalue == wcb.p_value
 
+    def test_results_randomization_test(self):
+        res, rng = self._fitted_results()
+        y_arr = np.concatenate([rng.normal(2, 0.5, 20), rng.normal(0, 0.5, 40)])
+        d_arr = np.array([1.0] * 20 + [0.0] * 40)
         ri = res.randomization_test(y_arr, d_arr, n_reps=199, seed=42)
         assert np.isfinite(ri.pvalue)
         assert 0 <= ri.pvalue <= 1
