@@ -8,6 +8,8 @@ restricted model that dropped controls from the null DGP, and a G=2
 zero-SE roundoff escape reporting t~5e15 with p=0.25).
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -216,38 +218,83 @@ class TestInputContracts:
 
 
 class TestResultsConvenienceMethods:
-    """LWDiDResults.wild_cluster_bootstrap() / .randomization_test() wrappers."""
+    """LWDiDResults.wild_cluster_bootstrap() / .randomization_test().
+
+    Round-5 review: these REPLAY the fitted estimation sample and RA
+    design (no data arguments) and assert their observed statistic equals
+    ``.att`` before caching - previously they accepted arbitrary caller
+    arrays and a non-interacted design, so the cached p-values could
+    describe a different estimand than the fitted ATT.
+    """
 
     @staticmethod
-    def _fitted_results():
+    def _fitted_results(cluster=None, covariate=False):
         from diff_diff import LWDiD
 
         rng = np.random.default_rng(42)
         records = []
         for i in range(60):
             d = int(i < 20)
+            x = float(i % 4) + (1.5 if d else 0.0)  # treatment-unbalanced
             for t in range(1, 7):
-                y = 1.0 + 0.1 * t + rng.normal(0, 0.3)
+                y = 1.0 + 0.1 * t + 0.4 * x + rng.normal(0, 0.3)
                 if d and t > 3:
-                    y += 2.0
-                records.append({"unit": i, "time": t, "y": y, "treat": d * int(t > 3)})
+                    y += 2.0 + 0.5 * x
+                records.append(
+                    {"unit": i, "time": t, "y": y, "treat": d * int(t > 3), "x": x, "cl": i % 12}
+                )
         df = pd.DataFrame(records)
-        return LWDiD().fit(df, outcome="y", unit="unit", time="time", treatment="treat"), rng
+        est = LWDiD(cluster=cluster)
+        return est.fit(
+            df,
+            outcome="y",
+            unit="unit",
+            time="time",
+            treatment="treat",
+            covariates=["x"] if covariate else None,
+        )
 
-    def test_results_wild_cluster_bootstrap(self):
-        res, rng = self._fitted_results()
-        y_arr = np.concatenate([rng.normal(2, 0.5, 20), rng.normal(0, 0.5, 40)])
-        d_arr = np.array([1.0] * 20 + [0.0] * 40)
-        c_arr = np.repeat(np.arange(12), 5)
-        wcb = res.wild_cluster_bootstrap(y_arr, d_arr, c_arr, n_bootstrap=99, seed=42)
-        assert np.isfinite(wcb.att)
+    def test_results_wild_cluster_bootstrap_replays_fit(self):
+        res = self._fitted_results(cluster="cl", covariate=True)
+        wcb = res.wild_cluster_bootstrap(n_bootstrap=99, seed=42)
+        # coherence: the replayed observed ATT IS the fitted ATT
+        np.testing.assert_allclose(wcb.att, res.att, rtol=1e-10)
         assert 0 <= wcb.p_value <= 1
         assert res.bootstrap_pvalue == wcb.p_value
 
-    def test_results_randomization_test(self):
-        res, rng = self._fitted_results()
-        y_arr = np.concatenate([rng.normal(2, 0.5, 20), rng.normal(0, 0.5, 40)])
-        d_arr = np.array([1.0] * 20 + [0.0] * 40)
-        ri = res.randomization_test(y_arr, d_arr, n_reps=199, seed=42)
-        assert np.isfinite(ri.pvalue)
+    def test_results_wcb_requires_clustered_fit(self):
+        res = self._fitted_results(cluster=None)
+        with pytest.raises(ValueError, match="requires a clustered fit"):
+            res.wild_cluster_bootstrap(n_bootstrap=99, seed=42)
+
+    def test_results_randomization_test_replays_fit(self):
+        res = self._fitted_results(covariate=True)
+        ri = res.randomization_test(n_reps=199, seed=42)
+        np.testing.assert_allclose(ri.att_observed, res.att, rtol=1e-10)
         assert 0 <= ri.pvalue <= 1
+        assert res.ri_pvalue == ri.pvalue
+
+    def test_results_methods_reject_non_reg_fits(self):
+        from diff_diff import LWDiD
+
+        rng = np.random.default_rng(0)
+        records = []
+        for i in range(40):
+            d = int(i < 20)
+            x = float(i % 5)
+            for t in range(1, 7):
+                y = 1.0 + 0.2 * x + rng.normal(0, 0.3) + (2.0 if d and t > 3 else 0.0)
+                records.append({"unit": i, "time": t, "y": y, "treat": d * int(t > 3), "x": x})
+        df = pd.DataFrame(records)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = LWDiD(estimation_method="ipw").fit(
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
+                covariates=["x"],
+            )
+        with pytest.raises(ValueError, match="only\\s+defined for estimation_method='reg'"):
+            res.randomization_test(n_reps=99, seed=0)

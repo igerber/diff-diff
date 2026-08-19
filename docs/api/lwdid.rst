@@ -460,6 +460,17 @@ automatically when :math:`2^G \le` ``n_bootstrap``. The result carries
 designs (cluster-invariant treatment with zero cluster scores) fail
 closed: the point estimate is retained with NaN inference.
 
+The RESULT-LEVEL methods ``LWDiDResults.wild_cluster_bootstrap()`` and
+``LWDiDResults.randomization_test()`` take no data arguments: they REPLAY
+the fit-time collapsed cross-section and the exact fitted RA design
+(including the treatment-centered covariate interactions; randomization
+draws recompute the treated covariate mean per assignment), and assert
+the replayed statistic equals ``.att`` before caching a p-value — so
+``bootstrap_pvalue``/``ri_pvalue`` always describe the fitted estimand.
+They are defined for common-timing ``estimation_method='reg'`` fits
+(``wild_cluster_bootstrap`` additionally requires a ``cluster=`` fit);
+use the standalone module functions above for generic arrays.
+
 
 Empirical Applications
 ----------------------

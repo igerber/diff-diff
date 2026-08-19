@@ -242,6 +242,11 @@ class LWDiDResults(BaseResults, AggregationMixin):
     #: recombines cohort effects, which would silently swap the composite
     #: regression's joint inference for a cohort-independence assumption.
     _AGGREGATE_SUPPORTED = ("simple", "event_study", "group")
+    #: balance_e is REJECTED (round-5 review: it was accepted but ignored,
+    #: silently returning the unbalanced event-study surface): LWDiD stores
+    #: no per-cohort estimation kit from which a balanced-cohort sample and
+    #: its joint influence-function covariance could be recomputed post fit.
+    _AGGREGATE_BALANCE_E_TYPES = ()
 
     def _aggregate_validate_weights(self, weights: Optional[str]) -> None:
         if weights is not None:
@@ -654,53 +659,119 @@ class LWDiDResults(BaseResults, AggregationMixin):
             return self._wcb_result.p_value
         return None
 
+    def _replay_arrays(self, method_name):
+        """Fitted-sample arrays for the post-fit advanced-inference methods.
+
+        Round-5 review: these methods previously accepted arbitrary caller
+        arrays and fit a non-interacted design, so the cached p-values
+        could describe a DIFFERENT estimand than ``.att`` (measured on a
+        covariate-unbalanced RA fit: fitted 3.98 vs tested 3.26). They now
+        REPLAY the fit-time collapsed cross-section and the exact RA
+        design; no data arguments are accepted.
+        """
+        spec = getattr(self, "_replay_spec", None)
+        if spec is None:
+            raise ValueError(
+                f"{method_name} replays the fitted common-timing estimation "
+                "sample, which this results object does not carry (staggered "
+                "and degenerate fits are not supported). Use the standalone "
+                "module function with explicit arrays instead."
+            )
+        if self.estimation_method != "reg":
+            raise ValueError(
+                f"{method_name} replays the fitted RA regression and is only "
+                f"defined for estimation_method='reg' (got "
+                f"'{self.estimation_method}'): re-estimating the "
+                f"{self.estimation_method} estimator per draw is not "
+                "implemented. Use the standalone module function on arrays "
+                "of your choosing (a generic [1, D, X] contrast, NOT the "
+                "fitted estimand)."
+            )
+        return spec
+
+    @staticmethod
+    def _interacted_controls(treatment, controls):
+        """LWDiD RA auxiliary columns [X, D*(X - Xbar_1)] (LW eq. E.1)."""
+        if controls is None:
+            return None
+        xbar1 = controls[treatment == 1].mean(axis=0)
+        return np.column_stack([controls, treatment[:, None] * (controls - xbar1)])
+
+    def _assert_replay_coherent(self, observed, method_name):
+        if not np.isclose(observed, self.att, rtol=1e-8, atol=1e-10):
+            raise RuntimeError(
+                f"{method_name}: the replayed observed ATT ({observed!r}) "
+                f"does not match the fitted .att ({self.att!r}); refusing to "
+                "cache inference for a different estimand (fail closed)."
+            )
+
     def wild_cluster_bootstrap(
         self,
-        y,
-        treatment,
-        cluster_ids,
-        covariates=None,
+        *,
         n_bootstrap=999,
         weight_type="rademacher",
         alpha=None,
         seed=None,
     ):
-        """Run wild cluster bootstrap inference on the fitted results.
+        """Run wild cluster bootstrap inference on the fitted estimation sample.
 
-        Delegates to diff_diff.lwdid_wild_bootstrap.wild_cluster_bootstrap()
-        (house WCR engine; test-inversion CI, CR1 se, strict-exceedance
-        p-value). ``alpha=None`` inherits the fitted result's confidence
-        level (round-4 review: the wrapper previously hard-defaulted to
-        0.05, silently ignoring a non-default fitted alpha); pass an
-        explicit value to override. Result is cached and accessible via
-        the `bootstrap_pvalue` property.
+        Replays the fit-time collapsed cross-section and the exact fitted
+        RA design (intercept, treatment, covariates, and the treatment-
+        centered interactions) through the house WCR engine
+        (test-inversion CI, CR1 se, strict-exceedance p-value); the
+        observed coefficient is asserted equal to ``.att`` before caching.
+        Requires a clustered (``cluster=``), common-timing,
+        ``estimation_method='reg'`` fit. ``alpha=None`` inherits the
+        fitted confidence level. Result is cached and accessible via the
+        ``bootstrap_pvalue`` property.
         """
         from diff_diff.lwdid_wild_bootstrap import wild_cluster_bootstrap as _wcb
 
+        spec = self._replay_arrays("wild_cluster_bootstrap")
+        if spec["cluster_ids"] is None:
+            raise ValueError(
+                "wild_cluster_bootstrap requires a clustered fit: construct "
+                "the estimator with cluster= and refit."
+            )
         result = _wcb(
-            y,
-            treatment,
-            cluster_ids,
-            covariates,
+            spec["y"],
+            spec["treatment"],
+            spec["cluster_ids"],
+            self._interacted_controls(spec["treatment"], spec["controls"]),
             n_bootstrap=n_bootstrap,
             weight_type=weight_type,
             alpha=self.alpha if alpha is None else alpha,
             seed=seed,
         )
+        self._assert_replay_coherent(result.att, "wild_cluster_bootstrap")
         object.__setattr__(self, "_wcb_result", result)
         return result
 
-    def randomization_test(
-        self, y, treatment, covariates=None, n_reps=1000, method="permutation", seed=None
-    ):
-        """Run Fisher randomization inference on the fitted results.
+    def randomization_test(self, *, n_reps=1000, method="permutation", seed=None):
+        """Run Fisher randomization inference on the fitted estimation sample.
 
-        Delegates to diff_diff.lwdid_randomization.randomization_inference().
-        Result is cached and accessible via the `ri_pvalue` property.
+        Replays the fit-time collapsed cross-section; with covariates the
+        RA design's treated covariate mean and interaction columns are
+        RECOMPUTED for every permuted assignment (``design='ra_interacted'``),
+        so each permutation tests the same estimator the fit reported. The
+        observed statistic is asserted equal to ``.att`` before caching.
+        Requires a common-timing ``estimation_method='reg'`` fit. Result is
+        cached and accessible via the ``ri_pvalue`` property.
         """
         from diff_diff.lwdid_randomization import randomization_inference as _ri
 
-        result = _ri(y, treatment, covariates, n_reps=n_reps, method=method, seed=seed)
+        spec = self._replay_arrays("randomization_test")
+        design = "ra_interacted" if spec["controls"] is not None else "linear"
+        result = _ri(
+            spec["y"],
+            spec["treatment"],
+            spec["controls"],
+            n_reps=n_reps,
+            method=method,
+            seed=seed,
+            design=design,
+        )
+        self._assert_replay_coherent(result.att_observed, "randomization_test")
         object.__setattr__(self, "_ri_result", result)
         return result
 

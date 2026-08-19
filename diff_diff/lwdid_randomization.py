@@ -141,10 +141,34 @@ def _validate_inputs(
             )
 
 
+def _build_design(
+    y: np.ndarray,
+    treatment: np.ndarray,
+    controls: np.ndarray,
+    design: str,
+) -> np.ndarray:
+    """Build the regression design for a given treatment assignment.
+
+    ``'linear'`` is the generic ``[1, D, X]`` covariate-adjusted contrast.
+    ``'ra_interacted'`` is the LWDiD RA design ``[1, D, X, D(X - Xbar_1)]``
+    (LW eq. E.1) with the treated covariate mean RECOMPUTED for the given
+    assignment - required so each permutation tests the same estimator the
+    fit reported (round-5 review).
+    """
+    n = len(y)
+    if design == "ra_interacted":
+        xbar1 = controls[treatment == 1].mean(axis=0)
+        return np.column_stack(
+            [np.ones(n), treatment, controls, treatment[:, None] * (controls - xbar1)]
+        )
+    return np.column_stack([np.ones(n), treatment, controls])
+
+
 def _compute_observed_att(
     y: np.ndarray,
     treatment: np.ndarray,
     controls: Optional[np.ndarray],
+    design: str = "linear",
 ) -> float:
     """Compute the observed ATT from the data.
 
@@ -155,10 +179,9 @@ def _compute_observed_att(
         mask1 = treatment == 1
         return float(y[mask1].mean() - y[~mask1].mean())
 
-    n = len(y)
     if controls.ndim == 1:
         controls = controls.reshape(-1, 1)
-    X = np.column_stack([np.ones(n), treatment, controls])
+    X = _build_design(y, treatment, controls, design)
     # Rank-aware shared solver (round-4 review: lstsq returned a finite
     # minimum-norm treatment coefficient when a control duplicated the
     # treatment column, so RI tested an unidentified statistic).
@@ -214,6 +237,7 @@ def _slow_path(
     n_reps: int,
     method: str,
     rng: np.random.Generator,
+    design: str = "linear",
 ) -> np.ndarray:
     """Slow path: with controls, OLS via pre-allocated design matrix.
 
@@ -230,8 +254,6 @@ def _slow_path(
     if controls.ndim == 1:
         controls = controls.reshape(-1, 1)
 
-    # Pre-allocate design matrix: [intercept, treatment, controls]
-    X = np.column_stack([np.ones(n), treatment, controls])
     att_dist = np.empty(n_reps)
 
     for b in range(n_reps):
@@ -245,8 +267,11 @@ def _slow_path(
             att_dist[b] = np.nan
             continue
 
-        # Update only the treatment column
-        X[:, 1] = d_b
+        # The design is rebuilt per assignment: under 'ra_interacted' the
+        # treated covariate mean (and the interaction columns) depend on
+        # the drawn assignment (round-5 review - the pre-fix code updated
+        # only the treatment column of a fixed [1, D, X] matrix).
+        X = _build_design(y, d_b, controls, design)
 
         try:
             with warnings.catch_warnings():
@@ -297,6 +322,7 @@ def randomization_inference(
     n_reps: int = 1000,
     method: str = "permutation",
     seed: Optional[int] = None,
+    design: str = "linear",
 ) -> RandomizationResult:
     """Fisher randomization inference for testing zero treatment effect.
 
@@ -326,6 +352,13 @@ def randomization_inference(
 
     seed : int or None, optional
         Random seed for reproducibility.
+    design : {'linear', 'ra_interacted'}, default 'linear'
+        Regression design used for the covariate-adjusted statistic.
+        ``'linear'`` fits ``[1, D, X]``. ``'ra_interacted'`` fits the LWDiD
+        RA design ``[1, D, X, D(X - Xbar_1)]`` and RECOMPUTES the treated
+        covariate mean for every permuted assignment, so the permuted
+        statistic is the same estimator as the observed one (used by
+        ``LWDiDResults.randomization_test`` to match the fitted ATT).
 
     Returns
     -------
@@ -403,7 +436,14 @@ def randomization_inference(
     # ------------------------------------------------------------------
     # Compute observed ATT
     # ------------------------------------------------------------------
-    att_obs = _compute_observed_att(y, treatment, controls)
+    if design not in ("linear", "ra_interacted"):
+        raise ValueError(f"design must be 'linear' or 'ra_interacted', got {design!r}")
+    if design == "ra_interacted" and controls is None:
+        raise ValueError(
+            "design='ra_interacted' requires controls (the design is [1, D, X, D(X - Xbar_1)])."
+        )
+
+    att_obs = _compute_observed_att(y, treatment, controls, design)
 
     # ------------------------------------------------------------------
     # Generate randomization distribution
@@ -413,7 +453,7 @@ def randomization_inference(
     if controls is None:
         att_dist = _fast_path(y, treatment, n_reps, method, rng)
     else:
-        att_dist = _slow_path(y, treatment, controls, n_reps, method, rng)
+        att_dist = _slow_path(y, treatment, controls, n_reps, method, rng, design)
 
     # ------------------------------------------------------------------
     # Compute p-value and diagnostics

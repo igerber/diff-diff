@@ -1323,7 +1323,19 @@ class LWDiD(BaseEstimator):
 
         # Step 6: Bootstrap if requested
         inference_basis = None
-        if self.n_bootstrap > 0:
+        if self.n_bootstrap > 0 and collapsed_single_cluster:
+            # Round-5 review: the unconditional bootstrap call overwrote
+            # the single-effective-cluster fail-closed NaN inference with a
+            # finite (near-zero) SE built from the raw cluster map. The
+            # fail-closed state wins; the earlier warning already fired.
+            warnings.warn(
+                "LWDiD: bootstrap skipped - fewer than 2 effective clusters "
+                "survive the transformation, so clustered inference is not "
+                "identified (the NaN inference tuple is retained).",
+                UserWarning,
+                stacklevel=2,
+            )
+        elif self.n_bootstrap > 0:
             att, se, t_stat, p_value, conf_int, df_dof = self._bootstrap(
                 df,
                 outcome,
@@ -1387,6 +1399,21 @@ class LWDiD(BaseEstimator):
             cband_method=cband_method,
             cband_crit_value=cband_crit_value,
             cband_n_bootstrap=cband_n_bootstrap,
+        )
+
+        # Fit-time replay spec for the post-fit advanced-inference methods
+        # (round-5 review: they previously accepted arbitrary caller arrays
+        # and a non-interacted design, caching p-values for a DIFFERENT
+        # estimand than .att on covariate-unbalanced RA fits).
+        object.__setattr__(
+            result,
+            "_replay_spec",
+            {
+                "y": y.copy(),
+                "treatment": treat.copy(),
+                "controls": controls_matrix.copy() if controls_matrix is not None else None,
+                "cluster_ids": cluster_ids.copy() if cluster_ids is not None else None,
+            },
         )
 
         # Final safety net: warn if result has NaN ATT
@@ -3661,9 +3688,13 @@ class LWDiD(BaseEstimator):
         # Bootstrap replications. Resampling level: units (default) or
         # whole CLUSTERS when cluster= is set (campaign finding: the
         # cluster parameter was silently ignored here, producing an iid
-        # unit bootstrap labeled as clustered).
-        treated_arr = np.array(treated_units)
-        control_arr = np.array(control_units)
+        # unit bootstrap labeled as clustered). The resampling population
+        # is restricted to units SURVIVING the transformation and finite
+        # filters (round-5 review: the raw-panel population let a raw
+        # cluster map claim G clusters when fewer contribute).
+        surviving = set(cs_df[unit])
+        treated_arr = np.array([u for u in treated_units if u in surviving])
+        control_arr = np.array([u for u in control_units if u in surviving])
         n_treated = len(treated_arr)
         n_control = len(control_arr)
         unit_counts = df.groupby(unit).size().to_dict()
@@ -3686,14 +3717,33 @@ class LWDiD(BaseEstimator):
             for u in all_unit_ids:
                 cluster_lists.setdefault(cluster_by_unit[u], []).append(u)
             cluster_draw = {cl: np.asarray(us) for cl, us in cluster_lists.items()}
+            if len(cluster_draw) < 2:
+                # Fewer than 2 effective clusters survive the
+                # transformation: clustered bootstrap inference is not
+                # identified (round-5 review - the raw cluster map
+                # previously produced a near-zero SE here). Point
+                # retained, inference NaN.
+                warnings.warn(
+                    "LWDiD bootstrap: fewer than 2 effective clusters "
+                    "survive the transformation; clustered bootstrap "
+                    "inference is not identified (NaN).",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                return att_full, np.nan, np.nan, np.nan, (np.nan, np.nan), 0
         treated_set_all = set(treated_units)
 
         def _draw_units(rng_b: np.random.Generator) -> np.ndarray:
             if cluster_draw is not None:
                 # Cluster-level draws (no treated/control stratification: a
-                # cluster may contain both arms).
+                # cluster may contain both arms). A draw collapsing onto a
+                # single distinct cluster carries no between-cluster
+                # variation - counted as a failed replicate (round-5
+                # review), signalled by an empty draw.
                 cluster_keys = list(cluster_draw)
                 picks = rng_b.choice(len(cluster_keys), size=len(cluster_keys), replace=True)
+                if len(set(picks.tolist())) < 2:
+                    return np.array([], dtype=object)
                 return np.concatenate([cluster_draw[cluster_keys[i]] for i in picks])
             boot_treated = rng_b.choice(treated_arr, size=n_treated, replace=True)
             boot_control = rng_b.choice(control_arr, size=n_control, replace=True)
@@ -3701,6 +3751,8 @@ class LWDiD(BaseEstimator):
 
         def _replicate_att(boot_units: np.ndarray) -> float:
             """Estimate one bootstrap replicate (shared serial/parallel)."""
+            if boot_units.size == 0:
+                return np.nan  # single-distinct-cluster draw (failed)
             boot_indices = np.concatenate([unit_positions[u] for u in boot_units])
             boot_df = df.iloc[boot_indices].copy()
             # Occurrence-specific synthetic unit ids keep duplicate draws

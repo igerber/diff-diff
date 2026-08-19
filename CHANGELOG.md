@@ -117,7 +117,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `wild_cluster_bootstrap` was rebuilt on the house WCR engine
     (test-inversion CI, CR1 se, strict-exceedance p; the intercept-only
     null model, ULP tie handling, and the G=2 zero-SE escape are gone;
-    API: `n_bootstrap`/`alpha`, result fields renamed).
+    API: `n_bootstrap`/`alpha`, result fields renamed). The result-level
+    `wild_cluster_bootstrap()`/`randomization_test()` methods now REPLAY
+    the fitted estimation sample and exact RA design (no data arguments;
+    RI recomputes the treated covariate mean per permutation; the
+    replayed statistic is asserted equal to `.att` before caching) - the
+    prior signatures accepted arbitrary arrays and could cache p-values
+    for a different estimand than the fitted ATT. The seeded bootstrap
+    draws identical streams for every `n_jobs`, resamples only units
+    surviving the transformation, and preserves fail-closed NaN inference
+    when fewer than 2 effective clusters survive; `aggregate(balance_e=)`
+    is rejected (was silently ignored); both RI/WCR fit through the
+    rank-aware shared solver (a duplicated treatment column previously
+    yielded a finite minimum-norm ATT).
   - Contracts: `vcov_type` is restricted to values with real behavior
     (`ipw`/`dr`/`psm` accept `hc1` only; `cluster=` composes only with
     `hc1`; `psm`+`cluster` rejected); NaN covariates/clusters are rejected

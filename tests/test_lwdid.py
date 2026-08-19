@@ -3090,16 +3090,14 @@ class TestReviewRound4Guards:
                 d = 1 if (u < 8 and t >= 4) else 0
                 rows.append(dict(unit=u, time=t, treat=d, y=1 + 2 * d + rng.normal(0, 0.5)))
         df = pd.DataFrame(rows)
+        df["cl"] = df["unit"] % 4
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            res = LWDiD(rolling="demean", alpha=0.10).fit(df, **self.KW)
-        y_arr = rng.normal(size=30)
-        t_arr = np.array([1.0] * 15 + [0.0] * 15)
-        cl_arr = np.arange(30) % 6
-        wb = res.wild_cluster_bootstrap(y_arr, t_arr, cl_arr, n_bootstrap=49, seed=1)
-        assert wb.alpha == 0.10
-        wb2 = res.wild_cluster_bootstrap(y_arr, t_arr, cl_arr, n_bootstrap=49, seed=1, alpha=0.05)
-        assert wb2.alpha == 0.05
+            res = LWDiD(rolling="demean", alpha=0.10, cluster="cl").fit(df, **self.KW)
+            wb = res.wild_cluster_bootstrap(n_bootstrap=49, seed=1)
+            assert wb.alpha == 0.10
+            wb2 = res.wild_cluster_bootstrap(n_bootstrap=49, seed=1, alpha=0.05)
+            assert wb2.alpha == 0.05
 
     def test_nt_only_cell_needs_two_surviving_controls(self):
         rng = np.random.default_rng(0)
@@ -3146,3 +3144,65 @@ class TestReviewRound4Guards:
                 df, first_treat="g", **self.KW
             )
         assert res.reference_periods == ()  # anchor r=-1 unobserved -> not emitted
+
+
+class TestReviewRound5Guards:
+    """Local-review round 5: execution-verified guards.
+
+    - post-fit WCR/RI accepted arbitrary arrays + a non-interacted design,
+      caching p-values for a DIFFERENT estimand than .att (probe: fitted
+      3.98 vs tested 3.26 on a covariate-unbalanced RA fit) - now replay
+      the fit spec (pinned in test_lwdid_wild_bootstrap.py)
+    - a requested bootstrap overwrote the single-effective-cluster
+      fail-closed NaN inference with a near-zero SE from the raw cluster
+      map
+    - aggregate(balance_e=) was accepted but silently ignored
+    """
+
+    KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+    def test_bootstrap_preserves_single_cluster_fail_closed(self):
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(12):
+            cl = 0 if u < 6 else 1
+            # cluster 1 units observe only ONE pre period: detrend needs 2,
+            # so their transformed outcomes are NaN and the whole cluster
+            # drops from the collapsed cross-section
+            times = range(3, 7) if cl == 1 else range(1, 7)
+            for t in times:
+                d = 1 if (u % 6 < 3 and t >= 4) else 0
+                rows.append(
+                    dict(unit=u, time=t, treat=d, cl=cl, y=1 + 0.5 * t + 2 * d + rng.normal(0, 0.3))
+                )
+        df = pd.DataFrame(rows)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = LWDiD(rolling="detrend", cluster="cl", n_bootstrap=49, seed=1).fit(df, **self.KW)
+        assert np.isfinite(res.att)
+        from tests.conftest import assert_nan_inference
+
+        assert_nan_inference(
+            {"se": res.se, "t_stat": res.t_stat, "p_value": res.p_value, "conf_int": res.conf_int}
+        )
+        assert any("bootstrap skipped" in str(x.message) for x in caught)
+        assert res.inference_basis is None  # no bootstrap ran
+
+    def test_balance_e_rejected(self):
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(16):
+            g = 4 if u < 4 else (5 if u < 8 else 0)
+            for t in range(1, 8):
+                d = int(g > 0 and t >= g)
+                rows.append(
+                    dict(unit=u, time=t, treat=d, g=g, y=1 + 0.3 * t + d + rng.normal(0, 0.3))
+                )
+        df = pd.DataFrame(rows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = LWDiD(rolling="demean").fit(df, first_treat="g", **self.KW)
+        with pytest.raises((ValueError, TypeError), match="balance_e"):
+            res.aggregate("event_study", balance_e=1)
+        # without balance_e the aggregation still works
+        assert res.aggregate("event_study") is not None
