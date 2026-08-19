@@ -204,14 +204,35 @@ def _check_treatment_design(
     onset = treated_rows.groupby(unit, sort=False)[time].first()
 
     if first_treat is None:
-        # (2) Common timing: a single onset shared by all treated units.
-        if onset.nunique() > 1:
-            onsets = sorted(onset.unique().tolist())
+        # (2) Common timing: every ever-treated unit's observed rows must
+        # satisfy D_it = 1[t >= S] for the single global onset
+        # S = min(first observed treated period). Comparing first OBSERVED
+        # treated rows directly would falsely reject a unit whose t = S
+        # row is simply missing (round-8 review; the staggered branch
+        # already permits an unobserved onset row). A genuinely
+        # heterogeneous unit (true onset S' > S) has an observed
+        # UNTREATED row at t >= S and is rejected.
+        if len(onset) == 0:
+            return
+        onset_s = onset.min()
+        ever_treated = set(onset.index)
+        ever_row = ordered[unit].isin(ever_treated).to_numpy()
+        late_zero = (
+            ever_row
+            & (ordered[time] >= onset_s).to_numpy()
+            & (ordered[treatment].to_numpy(dtype=float) == 0)
+        )
+        if late_zero.any():
+            bad_units = sorted(pd.unique(ordered.loc[late_zero, unit]).tolist())
+            preview = ", ".join(repr(u) for u in bad_units[:5])
+            suffix = "" if len(bad_units) <= 5 else f", ... ({len(bad_units)} units total)"
             raise ValueError(
-                f"Treated units have heterogeneous first-treatment periods "
-                f"{onsets} but no cohort column was given. Common-timing "
-                f"LWDiD requires a single treatment onset; pass first_treat= "
-                f"to use the staggered (cohort) interface."
+                f"Treated unit(s) {preview}{suffix} have untreated observed "
+                f"rows at or after the common onset {onset_s!r}: treated "
+                f"units have heterogeneous first-treatment periods, but no "
+                f"cohort column was given. Common-timing LWDiD requires a single "
+                f"treatment onset; pass first_treat= to use the staggered "
+                f"(cohort) interface."
             )
         return
 
@@ -1021,6 +1042,26 @@ class LWDiD(BaseEstimator):
                     f"value(s). LWDiD does not silently drop or impute "
                     f"covariate rows; remove or impute them before fitting."
                 )
+            # Round-8 review: Inf passed the NaN check and was silently
+            # filtered per staggered cell (changing the estimation sample)
+            # or crashed inside the solver on the common-timing path;
+            # non-numeric covariates crashed with a raw conversion error.
+            try:
+                column_values = df[column].to_numpy(dtype=float)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Covariate '{column}' is not numeric (dtype "
+                    f"{df[column].dtype}); encode it numerically before "
+                    f"fitting."
+                ) from exc
+            n_nonfinite = int((~np.isfinite(column_values)).sum())
+            if n_nonfinite > 0:
+                raise ValueError(
+                    f"Covariate '{column}' contains {n_nonfinite} "
+                    f"non-finite value(s) (Inf). LWDiD does not silently "
+                    f"drop covariate rows; remove or recode them before "
+                    f"fitting."
+                )
             varying = df.groupby(unit)[column].nunique(dropna=False)
             if (varying > 1).any():
                 raise ValueError(
@@ -1083,12 +1124,23 @@ class LWDiD(BaseEstimator):
         # Treatment-design validation (absorbing + common timing) is
         # performed by _check_treatment_design in fit() before dispatch.
 
-        # Step 1: Identify pre/post periods from treatment column
-        # Pre-treatment: periods where NO unit is treated
-        # Post-treatment: periods where at least one unit is treated
-        time_treatment = df.groupby(time)[treatment].max()
-        pre_periods = time_treatment[time_treatment == 0].index.tolist()
-        post_periods = time_treatment[time_treatment > 0].index.tolist()
+        # Step 1: Partition the calendar support at the single adoption
+        # period S (validated by _check_treatment_design): pre = t < S,
+        # post = t >= S. Round-8 review: the previous per-period
+        # `groupby(time)[treatment].max()` partition silently classified a
+        # post period with no observed TREATED rows (controls only) as
+        # pre-treatment, contaminating the rolling pre window and biasing
+        # a zero-effect trend panel to ATT ~ 0.75.
+        treated_times = df.loc[df[treatment] == 1, time]
+        if len(treated_times) == 0:
+            raise ValueError(
+                "No post-treatment periods found. At least one period "
+                "with some treatment=1 is required."
+            )
+        onset_s = treated_times.min()
+        support = sorted(pd.unique(df[time]))
+        pre_periods = [t for t in support if t < onset_s]
+        post_periods = [t for t in support if t >= onset_s]
 
         if len(pre_periods) == 0:
             raise ValueError(
@@ -1727,7 +1779,16 @@ class LWDiD(BaseEstimator):
                     f"dispatched here."
                 )
 
-            # Per-unit average of transformed outcome in post-periods (>= g)
+            # Per-unit average of transformed outcome in post-periods
+            # (>= g). Completeness semantics (ADJUDICATED, pinned by the
+            # acceptance suite's frozen reference oracle): a unit
+            # contributes cohort g's component iff its OBSERVED post-g
+            # rows yield a finite average - partial post windows are
+            # averaged over the observed rows, symmetrically for treated
+            # and control units. A stricter every-period window rule was
+            # considered in review round 8 and NOT adopted: it changes the
+            # estimand the acceptance oracle pins; the unbalanced
+            # composition caveat is documented in REGISTRY.
             post_data = df_transformed.loc[post_mask_g]  # type: ignore[union-attr]
             unit_avg_g = post_data.groupby(unit)["_ydot"].mean()
             ydot_by_cohort[g] = unit_avg_g
@@ -3977,17 +4038,32 @@ def validate_staggered_data(data, unit, time, cohort) -> Dict[str, Any]:
 
     # Dtype coherence + normalization (dtype-aware; mirrors fit()'s
     # encode-then-normalize pipeline without building position maps).
-    cohort_datelike = pd.api.types.is_datetime64_any_dtype(df[cohort]) or isinstance(
-        df[cohort].dtype, pd.PeriodDtype
-    )
-    time_datelike = pd.api.types.is_datetime64_any_dtype(df[time]) or isinstance(
-        df[time].dtype, pd.PeriodDtype
-    )
-    if cohort_datelike != time_datelike:
+    # Round-8 review: datetime64 and Period are DISTINCT families (mixing
+    # them crashes pandas position lookups), so both directions and
+    # Period-frequency mismatches are rejected exactly like
+    # _encode_staggered_time_scale - a single "datelike" flag previously
+    # let a datetime time column meet a Period cohort column in an
+    # invalid cross-family comparison below.
+    cohort_is_datetime = pd.api.types.is_datetime64_any_dtype(df[cohort])
+    time_is_datetime = pd.api.types.is_datetime64_any_dtype(df[time])
+    cohort_is_period = isinstance(df[cohort].dtype, pd.PeriodDtype)
+    time_is_period = isinstance(df[time].dtype, pd.PeriodDtype)
+    cohort_datelike = cohort_is_datetime or cohort_is_period
+    if time_is_datetime != cohort_is_datetime or time_is_period != cohort_is_period:
         results["valid"] = False
         results["errors"].append(
             f"Columns '{time}' (time) and '{cohort}' (cohort) must share the "
-            f"same time scale; got dtypes {df[time].dtype} and {df[cohort].dtype}."
+            f"same time scale; got dtypes {df[time].dtype} and {df[cohort].dtype}. "
+            f"Encode both as datetime64, both as Period with the same "
+            f"frequency, or both as numeric."
+        )
+        return results
+    if time_is_period and df[time].dtype.freq != df[cohort].dtype.freq:
+        results["valid"] = False
+        results["errors"].append(
+            f"Columns '{time}' (time) and '{cohort}' (cohort) are Period "
+            f"columns with different frequencies ({df[time].dtype} vs "
+            f"{df[cohort].dtype}). Convert them to a common frequency."
         )
         return results
     if cohort_datelike:

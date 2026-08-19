@@ -3386,3 +3386,126 @@ class TestReviewRound7Guards:
         df2 = pd.DataFrame(rows2)
         with pytest.raises(ValueError, match="common timing|first_treat|onset"):
             robustness_pre_periods(df2, outcome="y", unit="unit", time="time", treatment="treat")
+
+
+class TestReviewRound8Guards:
+    """Local-review round 8: execution-verified guards.
+
+    - the per-period max(D) partition classified a post period with no
+      observed treated rows as PRE-treatment (zero-effect trend probe:
+      ATT 0.75); the partition now derives from the single onset S
+    - the common-timing onset check rejected units missing their t = S
+      row as heterogeneous timing (the staggered branch permits it)
+    - the tau_omega completeness check accepted any finite post average,
+      so a control observing part of a cohort's window survived
+    - Inf covariates passed the NaN check; non-numeric covariates crashed
+      with raw conversion errors
+    """
+
+    KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+    @staticmethod
+    def _trend_panel(drop=lambda u, t: False, n_units=12, onset=4, t_max=6, effect=0.0):
+        rows = []
+        for u in range(n_units):
+            treated = u < n_units // 2
+            for t in range(1, t_max + 1):
+                if drop(u, t) and treated:
+                    continue
+                d = 1 if (treated and t >= onset) else 0
+                rows.append(dict(unit=u, time=t, treat=d, y=float(t) + effect * d))
+        return pd.DataFrame(rows)
+
+    def test_controls_only_post_period_not_misclassified(self):
+        # 2 of 6 treated units miss post period t=5: pre-fix that period
+        # was classified as pre (contaminating the pre window, ATT 0.75 on
+        # this zero-effect trend); now it stays post and the incomplete
+        # treated units are complete-case dropped.
+        df = self._trend_panel(drop=lambda u, t: u < 2 and t == 5)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = LWDiD(rolling="demean").fit(df, **self.KW)
+        np.testing.assert_allclose(res.att, 0.0, atol=1e-10)
+        assert res.n_treated == 4
+        # ALL treated missing the period -> no fixed-window comparison
+        df_all = self._trend_panel(drop=lambda u, t: t == 5)
+        with pytest.raises(ValueError, match="at\\s+least one of each"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                LWDiD(rolling="demean").fit(df_all, **self.KW)
+
+    def test_missing_onset_row_accepted_common_timing(self):
+        df = self._trend_panel(drop=lambda u, t: u == 0 and t == 4, effect=2.0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = LWDiD(rolling="demean").fit(df, **self.KW)
+        np.testing.assert_allclose(res.att, 2.0, atol=1e-10)
+        # genuinely heterogeneous onsets still rejected
+        rows = []
+        for u in range(8):
+            onset = 4 if u < 2 else (5 if u < 4 else 99)
+            for t in range(1, 7):
+                d = 1 if (u < 4 and t >= onset) else 0
+                rows.append(dict(unit=u, time=t, treat=d, y=float(t)))
+        with pytest.raises(ValueError, match="heterogeneous|common onset"):
+            LWDiD(rolling="demean").fit(pd.DataFrame(rows), **self.KW)
+
+    def test_tau_omega_partial_window_semantics_pinned(self):
+        # ADJUDICATED (round 8): completeness = a finite average over the
+        # OBSERVED post-g rows, symmetric across arms - a control missing
+        # one window period is RETAINED (its component averages observed
+        # rows); a control missing the ENTIRE window is dropped. The
+        # acceptance suite's frozen reference oracle pins the same rule.
+        def build(missing):
+            rows = []
+            for u in range(12):
+                g = 5 if u < 6 else 0
+                for t in range(1, 9):
+                    if u == 11 and t in missing:
+                        continue
+                    d = int(g > 0 and t >= g)
+                    rows.append(dict(unit=u, time=t, treat=d, g=g, y=float(t)))
+            return pd.DataFrame(rows)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            part = LWDiD(
+                rolling="demean", control_group="never_treated", vcov_type="classical"
+            ).fit(build({8}), first_treat="g", **self.KW)
+            whole = LWDiD(
+                rolling="demean", control_group="never_treated", vcov_type="classical"
+            ).fit(build({5, 6, 7, 8}), first_treat="g", **self.KW)
+        assert part.n_composite_controls_dropped == 0  # partial window retained
+        assert whole.n_composite_controls_dropped == 1  # entire window missing
+        # Documented composition caveat, pinned exactly: with y = t and
+        # demean (cohort-5 pre-mean 2.5), complete units average ydot
+        # over t=5..8 (=4.0) while the partial control averages t=5..7
+        # (=3.5), so tau_omega = 4.0 - (5*4.0 + 3.5)/6 = 1/12.
+        np.testing.assert_allclose(part.att, 1.0 / 12.0, atol=1e-10)
+        np.testing.assert_allclose(whole.att, 0.0, atol=1e-10)
+
+    def test_nonfinite_and_nonnumeric_covariates_rejected(self):
+        df = self._trend_panel()
+        df["x"] = 1.0
+        df.loc[df.index[3], "x"] = np.inf
+        with pytest.raises(ValueError, match="non-finite"):
+            LWDiD(rolling="demean").fit(df, covariates=["x"], **self.KW)
+        df["x2"] = "a"
+        with pytest.raises(ValueError, match="not numeric"):
+            df_ok = df.assign(x=1.0)
+            LWDiD(rolling="demean").fit(df_ok, covariates=["x2"], **self.KW)
+
+    def test_validate_staggered_data_rejects_mixed_families(self):
+        from diff_diff.lwdid import validate_staggered_data
+
+        rows = []
+        for u in range(6):
+            g = pd.Period("2020Q1", freq="Q") if u < 3 else pd.NaT
+            for i, ts in enumerate(pd.date_range("2019-01-01", periods=6, freq="QS")):
+                d = int(u < 3 and i >= 4)
+                rows.append(dict(unit=u, time=ts, treat=d, g=g, y=float(i)))
+        df = pd.DataFrame(rows)
+        df["g"] = pd.PeriodIndex(df["g"], freq="Q")
+        out = validate_staggered_data(df, unit="unit", time="time", cohort="g")
+        assert out["valid"] is False
+        assert any("same time scale" in e for e in out["errors"])
