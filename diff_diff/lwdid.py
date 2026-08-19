@@ -423,13 +423,19 @@ class LWDiD(BaseEstimator):
         'reg': regression adjustment (OLS)
         'ipw': inverse probability weighting
         'dr': doubly robust (augmented IPW)
-        'psm': propensity score matching (1:1 nearest-neighbor)
+        'psm': propensity score matching (1:1 nearest-neighbor);
+        POINT ESTIMATES ONLY - inference is NaN pending an
+        Abadie-Imbens matching variance (see DEFERRED.md)
     vcov_type : {'classical', 'hc1', 'hc2', 'hc3'}, default 'hc1'
         Variance-covariance estimator.
         'hc2': leverage-corrected (u_i^2 / (1-h_ii))
         'hc3': jackknife-style leverage correction (u_i^2 / (1-h_ii)^2)
+        The full set applies to ``estimation_method='reg'`` only:
+        'ipw'/'dr'/'psm' accept 'hc1' alone (the influence-function
+        variance on ipw/dr; psm reports NaN inference - see below).
         Cluster-robust (CR1) inference activates via the ``cluster=``
-        parameter, not through a ``vcov_type`` value.
+        parameter, not through a ``vcov_type`` value, composes only with
+        'hc1', and is rejected for 'psm'.
     cluster : str or None, default None
         Column name for cluster-robust (CR1) standard errors. When set,
         clustered inference is active for the whole fit.
@@ -455,6 +461,12 @@ class LWDiD(BaseEstimator):
         units (no control within caliper) receive NaN.
     with_replacement : bool, default True
         Whether PSM matching is done with replacement.
+    n_jobs : int, default 1
+        Execution parallelism for the common-timing bootstrap
+        (ThreadPoolExecutor when > 1; experimental). Purely an execution
+        setting: seeded bootstrap draws are identical for every value
+        (per-replicate SeedSequence streams), so it never affects any
+        reported number and is not stored in result provenance.
 
     Notes
     -----
@@ -3826,9 +3838,11 @@ class LWDiD(BaseEstimator):
         if estimation_method == "psm":
             if vcov_type != "hc1":
                 raise ValueError(
-                    f"estimation_method='psm' supports vcov_type='hc1' only "
-                    f"(the matching-variance SE). Got vcov_type='{vcov_type}', "
-                    f"which would be silently inert."
+                    f"estimation_method='psm' accepts vcov_type='hc1' only "
+                    f"(the accepted configuration; matching inference is "
+                    f"currently unavailable and reported as NaN - see "
+                    f"DEFERRED.md). Got vcov_type='{vcov_type}', which would "
+                    f"be silently inert."
                 )
             if cluster is not None:
                 raise ValueError(
