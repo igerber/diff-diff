@@ -3952,3 +3952,25 @@ class TestReviewRound13Guards:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 LWDiD(rolling="demean").fit(pd.DataFrame(rows2), covariates=["x"], **self.KW)
+
+
+class TestReviewRound14Guards:
+    """Local-review round 14: Inf time values raised a raw OverflowError
+    in event-time arithmetic instead of a validation error."""
+
+    KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+    @pytest.mark.parametrize("bad", [np.inf, -np.inf])
+    def test_nonfinite_time_rejected(self, bad):
+        rows = []
+        for u in range(8):
+            for t in range(1, 7):
+                d = 1 if (u < 4 and t >= 4) else 0
+                rows.append(dict(unit=u, time=float(t), treat=d, y=1.0 + d))
+        df = pd.DataFrame(rows)
+        df.loc[df.index[2], "time"] = bad
+        with pytest.raises(ValueError, match="Time column .* non-finite"):
+            LWDiD(rolling="demean").fit(df, **self.KW)
+        df["g"] = np.where(df["unit"] < 4, 4.0, 0.0)
+        with pytest.raises(ValueError, match="Time column .* non-finite"):
+            LWDiD(rolling="demean").fit(df, first_treat="g", **self.KW)

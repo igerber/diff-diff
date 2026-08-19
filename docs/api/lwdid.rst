@@ -484,7 +484,10 @@ studies:
   yields a per-period treatment trajectory that grows over time — from
   :math:`\hat{\tau}_{1989} = -0.043` (SE = 0.059) to
   :math:`\hat{\tau}_{2000} = -0.403` (SE = 0.152). The exact-inference
-  p-value (0.021) validates the normality assumption. (The paper's printed
+  p-value (0.021) is valid under the conditional-normality and
+  homoskedasticity assumptions — it tests the treatment-effect null, not
+  those assumptions themselves; randomization inference (below) serves as
+  an assumption-free robustness check. (The paper's printed
   randomization-inference p-value of 0.020 is not reproducible with the
   authors' own package, which implements the inclusive Phipson-Smyth rule
   and converges to ~0.051 at 100k replications — see the methodology

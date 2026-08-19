@@ -1025,6 +1025,19 @@ class LWDiD(BaseEstimator):
                 f"non-finite value(s) (Inf). LWDiD does not silently drop "
                 f"outcome rows; remove or recode them before fitting."
             )
+        # Numeric TIME values must be finite too (round-14 review: +/-Inf
+        # passed the NaN check and reached event-time arithmetic, raising
+        # a raw OverflowError). Datetime/Period/ordered-label columns are
+        # untouched.
+        if pd.api.types.is_numeric_dtype(df[time]):
+            time_values = df[time].to_numpy(dtype=float)
+            n_nonfinite_t = int((~np.isfinite(time_values)).sum())
+            if n_nonfinite_t > 0:
+                raise ValueError(
+                    f"Time column '{time}' contains {n_nonfinite_t} "
+                    f"non-finite value(s) (Inf). Time periods must be "
+                    f"finite; remove or recode them before fitting."
+                )
 
         # Check panel structure: each unit-time pair should be unique
         duplicates = df.duplicated(subset=[unit, time], keep=False)
