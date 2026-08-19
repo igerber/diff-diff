@@ -35,9 +35,6 @@ _VALID_VCOV_TYPES = ("classical", "hc1", "hc2", "hc3")
 _VALID_CONTROL_GROUPS = ("never_treated", "not_yet_treated")
 
 # Propensity score trimming bounds for numerical stability
-_PS_TRIM_LOWER = 0.01
-_PS_TRIM_UPPER = 0.99
-
 #: Column names written into internal estimation/plotting frames. A user
 #: role column with one of these names would be silently overwritten
 #: (e.g. cluster='_treat' turned the cluster labels into the treatment
@@ -3389,25 +3386,41 @@ class LWDiD(BaseEstimator):
         # Step 1: Estimate propensity score via logit
         coefs_logit, probs = solve_logit(controls_matrix, treatment)
 
-        # Convergence check: coefficients must be finite
-        if not np.all(np.isfinite(coefs_logit)):
-            # Review round 3: the pre-fix fallback returned the regression
-            # point WITH its finite OLS inference while the results
-            # metadata still said 'psm' - a bypass of the documented
-            # fail-closed contract. Point retained, inference NaN.
-            warnings.warn(
-                "Logistic regression did not converge (non-finite "
-                "coefficients); the point estimate falls back to regression "
-                "adjustment, and inference is NaN under the PSM fail-closed "
-                "contract. Consider standardizing controls or using "
-                "estimation_method='reg'.",
-                UserWarning,
-                stacklevel=2,
-            )
-            att_fb, _, _, _, n_params_fb, _ = self._estimate_reg(
-                y, treatment, controls_matrix, cluster_ids, n_obs
-            )
-            return att_fb, np.nan, None, None, n_params_fb, None
+        # Rank/convergence handling (round-19 review; mirrors ipw/dr):
+        # NaN coefficients with FINITE probabilities are a reduced-rank
+        # propensity fit - matching needs only the probabilities, so PSM
+        # continues (the pre-fix path substituted a regression-adjustment
+        # point under psm provenance). Only genuinely failed solves
+        # (non-finite probabilities) fall back, fail-closed.
+        kept_ps_match = np.isfinite(coefs_logit)
+        if not kept_ps_match.all():
+            if np.all(np.isfinite(probs)):
+                warnings.warn(
+                    f"Propensity model is rank-deficient: "
+                    f"{int((~kept_ps_match).sum())} collinear column(s) "
+                    f"dropped; continuing PSM with the reduced-rank "
+                    f"propensity fit.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            else:
+                # Review round 3: the pre-fix fallback returned the
+                # regression point WITH its finite OLS inference while the
+                # results metadata still said 'psm'. Point retained,
+                # inference NaN.
+                warnings.warn(
+                    "Logistic regression did not converge (non-finite "
+                    "probabilities); the point estimate falls back to "
+                    "regression adjustment, and inference is NaN under the "
+                    "PSM fail-closed contract. Consider standardizing "
+                    "controls or using estimation_method='reg'.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                att_fb, _, _, _, n_params_fb, _ = self._estimate_reg(
+                    y, treatment, controls_matrix, cluster_ids, n_obs
+                )
+                return att_fb, np.nan, None, None, n_params_fb, None
 
         # Convergence check: complete/quasi-complete separation
         if np.any(probs < 1e-8) or np.any(probs > 1 - 1e-8):

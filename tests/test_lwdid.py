@@ -2968,10 +2968,13 @@ class TestReviewRound3Guards:
         y = rng.normal(size=20)
         treatment = np.array([1.0] * 8 + [0.0] * 12)
         controls = rng.normal(size=(20, 1))
+        # Non-finite PROBABILITIES = genuine solver failure (round 19:
+        # NaN coefs with finite probs is now the reduced-rank
+        # continuation path, not the fallback).
         monkeypatch.setattr(
             lwdid_mod,
             "solve_logit",
-            lambda X, d: (np.array([np.nan, np.nan]), np.full(len(d), 0.5)),
+            lambda X, d: (np.array([np.nan, np.nan]), np.full(len(d), np.nan)),
         )
         with pytest.warns(UserWarning, match="PSM fail-closed"):
             att, se, coefs, vcov, _, influence = est._estimate_psm(y, treatment, controls, None, 20)
@@ -4156,3 +4159,45 @@ class TestReviewRound18Guards:
                 controls=np.zeros((2, 1)),
                 n_reps=9,
             )
+
+
+class TestReviewRound19Guards:
+    """Local-review round 19: PSM treated a rank-deficient (finite-
+    probability) propensity fit as non-convergence and substituted a
+    regression-adjustment point under psm provenance (ipw/dr already
+    continued reduced-rank)."""
+
+    KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+    @staticmethod
+    def _panel(extra=False):
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(24):
+            treated = u < 12
+            x = float(u % 5)
+            for t in range(1, 7):
+                d = 1 if (treated and t >= 4) else 0
+                row = dict(unit=u, time=t, treat=d, x=x, y=1 + 0.4 * x + 2 * d + rng.normal(0, 0.3))
+                if extra:
+                    row["x2"] = 2.0 * x
+                rows.append(row)
+        return pd.DataFrame(rows)
+
+    def test_psm_continues_reduced_rank(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            base = LWDiD(rolling="demean", estimation_method="psm").fit(
+                self._panel(), covariates=["x"], **self.KW
+            )
+            dup = LWDiD(rolling="demean", estimation_method="psm").fit(
+                self._panel(extra=True), covariates=["x", "x2"], **self.KW
+            )
+        assert any("reduced-rank" in str(x.message) for x in caught)
+        # identical propensity fit -> identical matches -> identical ATT
+        np.testing.assert_allclose(dup.att, base.att, rtol=1e-10)
+        from tests.conftest import assert_nan_inference
+
+        assert_nan_inference(
+            {"se": dup.se, "t_stat": dup.t_stat, "p_value": dup.p_value, "conf_int": dup.conf_int}
+        )
