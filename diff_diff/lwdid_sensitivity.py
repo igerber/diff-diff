@@ -283,6 +283,7 @@ def _fit_single_spec(
     vcov_type: str,
     cluster: Optional[str],
     controls: Optional[List[str]],
+    control_group: str = "not_yet_treated",
 ) -> Tuple[float, float, float]:
     """Fit a single LWDiD specification and return (att, se, pvalue).
 
@@ -318,6 +319,7 @@ def _fit_single_spec(
         estimation_method=estimation_method,
         vcov_type=vcov_type,
         cluster=cluster,
+        control_group=control_group,
     )
     try:
         res = est.fit(
@@ -387,6 +389,7 @@ def robustness_pre_periods(
     vcov_type: str = "hc1",
     cluster: Optional[str] = None,
     controls: Optional[List[str]] = None,
+    control_group: str = "not_yet_treated",
     k_min: int = 2,
     k_max: Optional[int] = None,
     # lwdid-py compatible aliases
@@ -495,6 +498,7 @@ def robustness_pre_periods(
             vcov_type,
             cluster,
             controls,
+            control_group=control_group,
         )
         degenerate_ratio = _compute_sensitivity_ratio(att, [att])
         return SensitivityResult(
@@ -520,6 +524,7 @@ def robustness_pre_periods(
         vcov_type,
         cluster,
         controls,
+        control_group=control_group,
     )
 
     post_periods = np.sort(data.loc[data[treatment] == 1, time].unique())
@@ -548,6 +553,7 @@ def robustness_pre_periods(
             vcov_type,
             cluster,
             controls,
+            control_group=control_group,
         )
 
         specs.append(
@@ -613,6 +619,7 @@ def sensitivity_no_anticipation(
     vcov_type: str = "hc1",
     cluster: Optional[str] = None,
     controls: Optional[List[str]] = None,
+    control_group: str = "not_yet_treated",
     # lwdid-py compatible aliases
     y: Optional[str] = None,
     ivar: Optional[str] = None,
@@ -705,6 +712,7 @@ def sensitivity_no_anticipation(
         vcov_type,
         cluster,
         controls,
+        control_group=control_group,
     )
 
     post_periods = np.sort(data.loc[data[treatment] == 1, time].unique())
@@ -738,6 +746,7 @@ def sensitivity_no_anticipation(
             vcov_type,
             cluster,
             controls,
+            control_group=control_group,
         )
 
         specs.append(
