@@ -2475,3 +2475,54 @@ class TestSilentDataHandling:
         assert res.n_obs == 24  # unit 99 contributed to no estimated cell
         assert res.n_control == 14
         assert res.n_treated == 10
+
+
+class TestResultsPolish:
+    """LWDiD fix-wave WS10 result-surface pins."""
+
+    def test_to_latex_removed(self):
+        from diff_diff.lwdid_results import LWDiDResults
+
+        assert not hasattr(LWDiDResults, "to_latex")
+
+    def test_staggered_to_dataframe_carries_config_columns(self):
+        rng = np.random.default_rng(19)
+        rows = []
+        for u in range(20):
+            g = 3 if u < 8 else 0
+            alpha = rng.normal()
+            for t in range(1, 6):
+                d = int(g > 0 and t >= g)
+                rows.append(dict(unit=u, time=t, first=g, treat=d, y=alpha + rng.normal() + d))
+        df = pd.DataFrame(rows)
+        res = LWDiD(rolling="demean", estimation_method="reg").fit(
+            df, outcome="y", unit="unit", time="time", treatment="treat", first_treat="first"
+        )
+        frame = res.to_dataframe()
+        for col in ("rolling", "estimation_method", "vcov_type"):
+            assert col in frame.columns
+            assert frame[col].nunique() == 1
+
+    def test_detrend_degenerate_cohort_composite_is_graceful(self):
+        # Campaign finding: a cohort with < 2 pre-periods crashed the
+        # composite with a raw LinAlgError under detrend + never_treated.
+        # The complete-case machinery now drops it with warnings.
+        rng = np.random.default_rng(2)
+        rows = []
+        for u in range(20):
+            g = 2 if u < 4 else (5 if u < 9 else 0)  # cohort 2: ONE pre period
+            alpha = rng.normal()
+            for t in range(1, 8):
+                d = int(g > 0 and t >= g)
+                rows.append(dict(unit=u, time=t, first=g, treat=d,
+                                 y=alpha + 0.1 * t + rng.normal() + d))
+        df = pd.DataFrame(rows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = LWDiD(
+                rolling="detrend", estimation_method="reg", vcov_type="classical",
+                control_group="never_treated",
+            ).fit(df, outcome="y", unit="unit", time="time", treatment="treat",
+                  first_treat="first")
+        assert np.isfinite(res.att)
+        assert res.n_composite_treated_dropped == 4

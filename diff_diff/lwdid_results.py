@@ -412,6 +412,9 @@ class LWDiDResults(BaseResults, AggregationMixin):
                     "ci_upper": ci[1] if ci else np.nan,
                     "n_treated": n_t,
                     "n_control": n_c,
+                    "rolling": self.rolling,
+                    "estimation_method": self.estimation_method,
+                    "vcov_type": self.vcov_type,
                 }
             )
         # Append overall row
@@ -426,6 +429,9 @@ class LWDiDResults(BaseResults, AggregationMixin):
                 "ci_upper": self.conf_int[1],
                 "n_treated": self.n_treated,
                 "n_control": self.n_control,
+                "rolling": self.rolling,
+                "estimation_method": self.estimation_method,
+                "vcov_type": self.vcov_type,
             }
         )
         return pd.DataFrame(rows_stag)
@@ -497,26 +503,6 @@ class LWDiDResults(BaseResults, AggregationMixin):
             File path for the CSV output.
         """
         self.to_dataframe().to_csv(path, index=False)
-
-    def to_latex(self, path: Optional[str] = None) -> str:
-        """Export results as LaTeX table.
-
-        Parameters
-        ----------
-        path : str or None, default None
-            If provided, write LaTeX to this file path.
-
-        Returns
-        -------
-        str
-            LaTeX table string.
-        """
-        df = self.to_dataframe()
-        latex_str = df.to_latex(index=False, float_format="%.4f")
-        if path is not None:
-            with open(path, "w") as f:
-                f.write(latex_str)
-        return latex_str
 
     # ------------------------------------------------------------------ #
     # Text summary                                                        #

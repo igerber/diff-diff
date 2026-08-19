@@ -4,7 +4,7 @@ Provides plotting functions for cohort trends, event studies,
 sensitivity analysis, and bootstrap distributions.
 
 Requires matplotlib (optional dependency). If not installed,
-raises VisualizationError with installation instructions.
+raises ImportError with installation instructions.
 
 Note
 ----
@@ -18,7 +18,7 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 
-from diff_diff.lwdid_exceptions import VisualizationError  # noqa: F401 - backward compat
+
 
 
 def _require_matplotlib():
@@ -85,9 +85,14 @@ def plot_cohort_trends(
     treated_times = data.loc[data[treatment] == 1, time]
     if len(treated_times) > 0:
         first_treat = treated_times.min()
-        ax.axvline(
-            first_treat - 0.5, color="gray", linestyle="--", alpha=0.7, label="Treatment onset"
-        )
+        # Datetime/Period/string time columns cannot take `- 0.5` (raw
+        # TypeError pre-fix); draw the marker AT the onset for
+        # non-numeric scales, offset by half a period for numeric ones.
+        if pd.api.types.is_numeric_dtype(data[time]):
+            onset_x = first_treat - 0.5
+        else:
+            onset_x = first_treat
+        ax.axvline(onset_x, color="gray", linestyle="--", alpha=0.7, label="Treatment onset")
 
     ax.set_xlabel("Time")
     ax.set_ylabel(outcome)
@@ -156,11 +161,14 @@ def plot_event_study(
         row = effects[r]
         atts.append(row.get("effect", np.nan))
         se_r = row.get("se", np.nan)
-        ses.append(0.0 if not np.isfinite(se_r) else se_r)
+        # House rule: plot the point, OMIT the interval when the SE is not
+        # finite (a zero-length bar would render an inference-unavailable
+        # effect as infinitely precise). Reference periods keep their
+        # deliberate zero bars above.
+        ses.append(np.nan if not np.isfinite(se_r) else se_r)
 
-    ax.errorbar(
-        event_times, atts, yerr=[1.96 * s for s in ses], fmt="o-", capsize=3, color="steelblue"
-    )
+    yerr = np.where(np.isfinite(ses), 1.96 * np.asarray(ses, dtype=float), np.nan)
+    ax.errorbar(event_times, atts, yerr=yerr, fmt="o-", capsize=3, color="steelblue")
     ax.axhline(0, color="gray", linestyle="--", alpha=0.5)
     ax.set_xlabel("Event time")
     ax.set_ylabel("ATT")
@@ -194,7 +202,12 @@ def plot_sensitivity(
     ses = [s.se for s in specs]
     labels = [s.label for s in specs]
 
-    ax.errorbar(x, atts, yerr=[1.96 * s for s in ses], fmt="o", capsize=3, color="steelblue")
+    yerr = np.where(
+        np.isfinite(np.asarray(ses, dtype=float)),
+        1.96 * np.asarray(ses, dtype=float),
+        np.nan,  # failed specs: point only, no fabricated interval
+    )
+    ax.errorbar(x, atts, yerr=yerr, fmt="o", capsize=3, color="steelblue")
     ax.axhline(
         sensitivity_result.baseline_att,
         color="red",

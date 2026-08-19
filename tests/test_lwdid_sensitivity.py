@@ -1,5 +1,7 @@
 """Tests for lwdid_sensitivity module."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -210,30 +212,60 @@ class TestNotEstimable:
     def test_classify_nan_ratio_not_estimable(self):
         assert _classify_robustness(float("nan")) == "not_estimable"
 
-    def test_all_specs_fail_reports_not_estimable(self):
-        """All-NaN outcome makes every fit fail; the result must be
-        'not_estimable' with a NaN ratio, not 'highly_robust'."""
+    @staticmethod
+    def _unestimable_but_valid_panel():
+        # Data fit() ACCEPTS but cannot estimate: rolling='detrendq' with
+        # 4 pre-periods covering all 4 seasons -> every unit is seasonal-
+        # unidentified (warn + NaN ATT on every spec).
+        rng = np.random.default_rng(3)
         records = []
         for i in range(20):
             d = int(i < 8)
-            for t in range(1, 7):
-                records.append({"unit": i, "time": t, "y": np.nan, "treat": d * int(t > 3)})
-        df = pd.DataFrame(records)
-        with pytest.warns(SensitivityWarning, match="could not be estimated"):
-            r = robustness_pre_periods(df, outcome="y", unit="unit", time="time", treatment="treat")
+            for t in range(1, 9):
+                records.append(
+                    {"unit": i, "time": t, "y": rng.normal(), "treat": d * int(t >= 5)}
+                )
+        return pd.DataFrame(records)
+
+    def test_all_specs_fail_reports_not_estimable(self):
+        """Every spec unestimable (fit accepts the data but NaNs) -> the
+        result must be 'not_estimable' with a NaN ratio, not
+        'highly_robust'."""
+        df = self._unestimable_but_valid_panel()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r = robustness_pre_periods(
+                df, outcome="y", unit="unit", time="time", treatment="treat",
+                rolling="detrendq",
+            )
         assert r.robustness_level == "not_estimable"
         assert np.isnan(r.sensitivity_ratio)
 
-    def test_all_specs_fail_no_anticipation_not_estimable(self):
+    def test_data_fit_would_reject_raises_not_silently_swallowed(self):
+        # Fix-wave WS10 (campaign finding): genuine specification errors
+        # were swallowed as per-spec 'failed fits'. Data that LWDiD.fit()
+        # itself rejects (all-NaN outcome) must RAISE from the sensitivity
+        # helpers too.
         records = []
         for i in range(20):
             d = int(i < 8)
             for t in range(1, 7):
                 records.append({"unit": i, "time": t, "y": np.nan, "treat": d * int(t > 3)})
         df = pd.DataFrame(records)
-        with pytest.warns(SensitivityWarning, match="could not be estimated"):
-            r = sensitivity_no_anticipation(
+        with pytest.raises(ValueError):
+            robustness_pre_periods(df, outcome="y", unit="unit", time="time", treatment="treat")
+        with pytest.raises(ValueError):
+            sensitivity_no_anticipation(
                 df, outcome="y", unit="unit", time="time", treatment="treat"
+            )
+
+    def test_all_specs_fail_no_anticipation_not_estimable(self):
+        df = self._unestimable_but_valid_panel()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r = sensitivity_no_anticipation(
+                df, outcome="y", unit="unit", time="time", treatment="treat",
+                rolling="detrendq",
             )
         assert r.robustness_level == "not_estimable"
         assert np.isnan(r.sensitivity_ratio)

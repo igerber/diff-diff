@@ -19,7 +19,6 @@
       ~LWDiDResults.to_csv
       ~LWDiDResults.to_dataframe
       ~LWDiDResults.to_dict
-      ~LWDiDResults.to_latex
       ~LWDiDResults.wild_cluster_bootstrap
 
 

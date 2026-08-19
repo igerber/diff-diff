@@ -32,10 +32,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from diff_diff.lwdid_exceptions import (
-    DiagnosticWarning,
-    SensitivityWarning,
-)
+
 
 # =============================================================================
 # Constants
@@ -84,9 +81,13 @@ class SpecificationResult:
     pvalue: float
 
     @property
-    def is_significant(self) -> bool:
-        """Whether estimate is significant at 5% level."""
-        return self.pvalue < 0.05
+    def is_significant(self) -> float:
+        """1.0 / 0.0 for a decidable 5%-level test, NaN when the p-value
+        is missing or non-finite (a failed specification must never
+        publish "not significant" - fix-wave WS10)."""
+        if self.pvalue is None or not np.isfinite(self.pvalue):
+            return float("nan")
+        return float(self.pvalue < 0.05)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for DataFrame construction."""
@@ -133,6 +134,9 @@ class SensitivityResult:
     sensitivity_ratio: float
     robustness_level: str
     n_specifications: int
+    #: Baseline specification's p-value (None only on legacy construction;
+    #: NaN when the baseline fit failed).
+    baseline_pvalue: Optional[float] = None
 
     def summary(self) -> str:
         """Return a formatted summary of sensitivity analysis results.
@@ -177,6 +181,12 @@ class SensitivityResult:
             DataFrame with columns: label, rolling, estimation_method,
             n_pre_periods, att, se, pvalue, significant_05.
         """
+        baseline_p = self.baseline_pvalue
+        if baseline_p is None or not np.isfinite(baseline_p):
+            baseline_sig = float("nan")
+            baseline_p = float("nan") if baseline_p is None else baseline_p
+        else:
+            baseline_sig = float(baseline_p < 0.05)
         rows = [
             {
                 "label": "baseline",
@@ -185,8 +195,8 @@ class SensitivityResult:
                 "n_pre_periods": -1,
                 "att": self.baseline_att,
                 "se": self.baseline_se,
-                "pvalue": np.nan,
-                "significant_05": True,
+                "pvalue": baseline_p,
+                "significant_05": baseline_sig,
             }
         ]
         for spec in self.specifications:
@@ -326,6 +336,20 @@ def _fit_single_spec(
         return np.nan, np.nan, np.nan
 
 
+def _prevalidate_frame(
+    data, outcome, unit, time, treatment, cohort, cluster, controls
+) -> None:
+    """Run LWDiD's shared input validation on the full frame (raises)."""
+    from diff_diff.lwdid import LWDiD
+    from diff_diff.utils import validate_binary
+
+    probe = LWDiD(cluster=cluster)
+    probe._validate_inputs(
+        data.copy(), outcome, unit, time, treatment, cohort, cluster, list(controls or [])
+    )
+    validate_binary(data[treatment].values, treatment)
+
+
 def _get_pre_periods(data: pd.DataFrame, time: str, treatment: str) -> np.ndarray:
     """Identify pre-treatment periods from the data.
 
@@ -418,6 +442,11 @@ def robustness_pre_periods(
         Sensitivity analysis result with per-specification ATT estimates
         and overall robustness classification.
     """
+    if kwargs:
+        raise TypeError(
+            f"robustness_pre_periods() got unexpected keyword argument(s): "
+            f"{sorted(kwargs)}"
+        )
     # Resolve lwdid-py aliases
     outcome = outcome or y
     unit = unit or ivar
@@ -435,6 +464,13 @@ def robustness_pre_periods(
     if treatment is None:
         raise ValueError("'treatment' (or 'd') parameter is required")
 
+    # Pre-validate the FULL frame once so genuine specification errors
+    # (missing/NaN key columns, non-binary treatment, malformed panels)
+    # RAISE here instead of being swallowed as per-spec "failed fits"
+    # inside _fit_single_spec (campaign finding: a string covariate's
+    # ValueError became a silent NaN spec).
+    _prevalidate_frame(data, outcome, unit, time, treatment, cohort, cluster, controls)
+
     pre_periods = _get_pre_periods(data, time, treatment)
     n_pre = len(pre_periods)
 
@@ -448,7 +484,7 @@ def robustness_pre_periods(
         warnings.warn(
             f"k_min ({k_min}) > k_max ({k_max}). "
             "Insufficient pre-treatment periods for robustness analysis.",
-            DiagnosticWarning,
+            UserWarning,
             stacklevel=2,
         )
         # Return degenerate result with baseline only
@@ -473,6 +509,7 @@ def robustness_pre_periods(
             sensitivity_ratio=degenerate_ratio,
             robustness_level=_classify_robustness(degenerate_ratio),
             n_specifications=1,
+            baseline_pvalue=pval,
         )
 
     # Baseline: use all pre-periods
@@ -526,7 +563,7 @@ def robustness_pre_periods(
                 n_pre_periods=k,
                 att=att,
                 se=se,
-                pvalue=pval if not np.isnan(pval) else 1.0,
+                pvalue=pval,
             )
         )
 
@@ -541,14 +578,14 @@ def robustness_pre_periods(
             "non-finite or fewer than two specifications produced finite "
             "estimates. Robustness to pre-period selection cannot be "
             "assessed.",
-            SensitivityWarning,
+            UserWarning,
             stacklevel=2,
         )
     elif level in ("sensitive", "highly_sensitive"):
         warnings.warn(
             f"ATT estimates are {level} to pre-period selection "
             f"(ratio={ratio:.3f}). Consider investigating data structure.",
-            SensitivityWarning,
+            UserWarning,
             stacklevel=2,
         )
 
@@ -559,6 +596,7 @@ def robustness_pre_periods(
         sensitivity_ratio=ratio,
         robustness_level=level,
         n_specifications=len(specs) + 1,
+        baseline_pvalue=baseline_pval,
     )
 
 
@@ -629,6 +667,11 @@ def sensitivity_no_anticipation(
         Sensitivity result with per-exclusion ATT estimates and
         overall robustness classification.
     """
+    if kwargs:
+        raise TypeError(
+            f"sensitivity_no_anticipation() got unexpected keyword argument(s): "
+            f"{sorted(kwargs)}"
+        )
     # Resolve lwdid-py aliases
     outcome = outcome or y
     unit = unit or ivar
@@ -645,6 +688,8 @@ def sensitivity_no_anticipation(
         raise ValueError("'time' (or 'tvar') parameter is required")
     if treatment is None:
         raise ValueError("'treatment' (or 'd') parameter is required")
+
+    _prevalidate_frame(data, outcome, unit, time, treatment, cohort, cluster, controls)
 
     if exclude_periods is None:
         exclude_periods = [1, 2, 3]
@@ -676,7 +721,7 @@ def sensitivity_no_anticipation(
             warnings.warn(
                 f"Cannot exclude {n_exclude} periods with only {n_pre} "
                 "pre-treatment periods. Skipping.",
-                DiagnosticWarning,
+                UserWarning,
                 stacklevel=2,
             )
             continue
@@ -708,7 +753,7 @@ def sensitivity_no_anticipation(
                 n_pre_periods=n_pre - n_exclude,
                 att=att,
                 se=se,
-                pvalue=pval if not np.isnan(pval) else 1.0,
+                pvalue=pval,
             )
         )
 
@@ -723,14 +768,14 @@ def sensitivity_no_anticipation(
             "non-finite or fewer than two specifications produced finite "
             "estimates. Robustness to anticipation exclusions cannot be "
             "assessed.",
-            SensitivityWarning,
+            UserWarning,
             stacklevel=2,
         )
     elif level in ("sensitive", "highly_sensitive"):
         warnings.warn(
             f"ATT estimates are {level} to anticipation exclusions "
             f"(ratio={ratio:.3f}). Potential anticipation effects detected.",
-            SensitivityWarning,
+            UserWarning,
             stacklevel=2,
         )
 
@@ -741,4 +786,5 @@ def sensitivity_no_anticipation(
         sensitivity_ratio=ratio,
         robustness_level=level,
         n_specifications=len(specs) + 1,
+        baseline_pvalue=baseline_pval,
     )
