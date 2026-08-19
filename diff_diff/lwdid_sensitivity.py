@@ -339,15 +339,36 @@ def _fit_single_spec(
 
 
 def _prevalidate_frame(data, outcome, unit, time, treatment, cohort, cluster, controls) -> None:
-    """Run LWDiD's shared input validation on the full frame (raises)."""
-    from diff_diff.lwdid import LWDiD
+    """Run LWDiD's shared input validation on the full frame (raises).
+
+    Includes the treatment-design check (absorbing treatment, common-
+    timing onset homogeneity, D_it/cohort consistency) with the same
+    encode-then-normalize ordering as ``fit()`` - round-7 review: without
+    it, a structurally invalid design (e.g. a 1 -> 0 treatment reversal)
+    was swallowed by the per-spec ValueError handler and reported as
+    ``robustness_level='not_estimable'`` instead of raising.
+    """
+    from diff_diff.lwdid import (
+        LWDiD,
+        _check_treatment_design,
+        _encode_staggered_time_scale,
+        _normalize_cohorts,
+    )
     from diff_diff.utils import validate_binary
 
     probe = LWDiD(cluster=cluster)
+    frame = data.copy()
     probe._validate_inputs(
-        data.copy(), outcome, unit, time, treatment, cohort, cluster, list(controls or [])
+        frame, outcome, unit, time, treatment, cohort, cluster, list(controls or [])
     )
-    validate_binary(data[treatment].values, treatment)
+    validate_binary(frame[treatment].values, treatment)
+    time_col, cohort_col = time, cohort
+    if cohort is not None:
+        frame, time_col, cohort_col, _ = _encode_staggered_time_scale(frame, time, cohort)
+        frame[cohort_col], _, _ = _normalize_cohorts(
+            frame[cohort_col], max_time=frame[time_col].max()
+        )
+    _check_treatment_design(frame, unit, time_col, treatment, cohort_col)
 
 
 def _reject_multi_cohort_staggered(data: pd.DataFrame, cohort: Optional[str]) -> None:

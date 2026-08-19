@@ -3313,3 +3313,76 @@ class TestReviewRound6Guards:
         res = LWDiD(rolling="demean").fit(pd.DataFrame(rows), **self.KW)
         d = res.to_dict()
         assert d["df_inference"] == res.df_inference
+
+
+class TestReviewRound7Guards:
+    """Local-review round 7: execution-verified guards.
+
+    - the post-fit replay always rebuilt the covariate interactions, but
+      the fit uses plain (1, D, X) when an arm has N <= K+1 (LW eq. 3.3
+      gate) - small-arm fits' replayed statistic mismatched .att and the
+      round-5 coherence assert made their inference unusable
+    - the sensitivity helpers swallowed treatment-design violations
+      (absorbing/onset/cohort-consistency) as not_estimable specs
+    """
+
+    KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+    def test_small_arm_plain_design_replay(self):
+        # K=1 covariate, exactly 2 treated units: n_treated <= K+1, so the
+        # fit uses the plain design; the replay must follow it.
+        rng = np.random.default_rng(3)
+        rows = []
+        for u in range(12):
+            treated = u < 2
+            x = float(u % 4)
+            for t in range(1, 7):
+                d = 1 if (treated and t >= 4) else 0
+                rows.append(
+                    dict(
+                        unit=u,
+                        time=t,
+                        treat=d,
+                        x=x,
+                        cl=u % 4,
+                        y=1 + 0.4 * x + 2 * d + rng.normal(0, 0.3),
+                    )
+                )
+        df = pd.DataFrame(rows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = LWDiD(rolling="demean", cluster="cl").fit(df, covariates=["x"], **self.KW)
+            ri = res.randomization_test(n_reps=99, seed=1)
+            wb = res.wild_cluster_bootstrap(n_bootstrap=49, seed=1)
+        np.testing.assert_allclose(ri.att_observed, res.att, rtol=1e-10)
+        np.testing.assert_allclose(wb.att, res.att, rtol=1e-10)
+
+    def test_sensitivity_rejects_design_violations(self):
+        from diff_diff.lwdid_sensitivity import (
+            robustness_pre_periods,
+            sensitivity_no_anticipation,
+        )
+
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(10):
+            for t in range(1, 9):
+                d = 1 if (u < 5 and t >= 6) else 0
+                if u == 0 and t == 7:
+                    d = 0  # 1 -> 0 reversal: non-absorbing treatment
+                rows.append(dict(unit=u, time=t, treat=d, y=rng.normal() + d))
+        df = pd.DataFrame(rows)
+        for fn in (robustness_pre_periods, sensitivity_no_anticipation):
+            with pytest.raises(ValueError, match="absorbing|revert"):
+                fn(df, outcome="y", unit="unit", time="time", treatment="treat")
+        # heterogeneous onsets without first_treat: also a raise, not
+        # a silent not_estimable
+        rows2 = []
+        for u in range(10):
+            onset = 5 if u < 3 else (6 if u < 5 else 99)
+            for t in range(1, 9):
+                d = 1 if (u < 5 and t >= onset) else 0
+                rows2.append(dict(unit=u, time=t, treat=d, y=rng.normal() + d))
+        df2 = pd.DataFrame(rows2)
+        with pytest.raises(ValueError, match="common timing|first_treat|onset"):
+            robustness_pre_periods(df2, outcome="y", unit="unit", time="time", treatment="treat")

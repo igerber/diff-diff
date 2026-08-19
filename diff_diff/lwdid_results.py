@@ -692,10 +692,28 @@ class LWDiDResults(BaseResults, AggregationMixin):
         return spec
 
     @staticmethod
-    def _interacted_controls(treatment, controls):
-        """LWDiD RA auxiliary columns [X, D*(X - Xbar_1)] (LW eq. E.1)."""
+    def _fit_used_interactions(treatment, controls):
+        """Mirror _estimate_reg's LW eq. 3.3 gate: interactions require
+        N_1 > K+1 and N_0 > K+1; otherwise the fit used plain (1, D, X)
+        (round-7 review: the replay always interacted, so small-arm fits'
+        replayed statistic mismatched .att and the coherence assert made
+        their post-fit inference unusable)."""
+        if controls is None:
+            return False
+        n_treated = int((treatment == 1).sum())
+        n_control = len(treatment) - n_treated
+        k = controls.shape[1]
+        return n_treated > k + 1 and n_control > k + 1
+
+    @classmethod
+    def _replay_controls(cls, treatment, controls):
+        """The exact auxiliary columns the fitted RA regression used:
+        [X, D*(X - Xbar_1)] when the interaction gate held, plain X
+        otherwise (LW eq. E.1 / eq. 3.3)."""
         if controls is None:
             return None
+        if not cls._fit_used_interactions(treatment, controls):
+            return controls
         xbar1 = controls[treatment == 1].mean(axis=0)
         return np.column_stack([controls, treatment[:, None] * (controls - xbar1)])
 
@@ -739,7 +757,7 @@ class LWDiDResults(BaseResults, AggregationMixin):
             spec["y"],
             spec["treatment"],
             spec["cluster_ids"],
-            self._interacted_controls(spec["treatment"], spec["controls"]),
+            self._replay_controls(spec["treatment"], spec["controls"]),
             n_bootstrap=n_bootstrap,
             weight_type=weight_type,
             alpha=self.alpha if alpha is None else alpha,
@@ -763,7 +781,15 @@ class LWDiDResults(BaseResults, AggregationMixin):
         from diff_diff.lwdid_randomization import randomization_inference as _ri
 
         spec = self._replay_arrays("randomization_test")
-        design = "ra_interacted" if spec["controls"] is not None else "linear"
+        # Match the fitted design exactly: 'ra_interacted' only when the
+        # fit's interaction gate held (round-7 review). NOTE the permuted
+        # draws under the plain design keep plain (1, D, X) too - each
+        # permutation tests the same estimator the fit reported.
+        design = (
+            "ra_interacted"
+            if self._fit_used_interactions(spec["treatment"], spec["controls"])
+            else "linear"
+        )
         result = _ri(
             spec["y"],
             spec["treatment"],
