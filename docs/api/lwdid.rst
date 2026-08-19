@@ -243,7 +243,13 @@ warning and NaN inference. Use classical exact inference there.
 point estimate with NaN inference: no valid matching variance estimator
 is currently implemented (the naive matched-pairs formula ignores
 matched-control reuse and first-stage matching uncertainty; an
-Abadie-Imbens variance is tracked in ``DEFERRED.md``). Use
+Abadie-Imbens variance is tracked in ``DEFERRED.md``). The contract is
+enforced on every route: PSM requires ``covariates`` (there is no
+propensity score without them), rejects ``n_bootstrap > 0`` in BOTH
+common-timing and staggered designs (the standard bootstrap is invalid
+for nearest-neighbor matching estimators — Abadie & Imbens 2008), and a
+propensity-model failure falls back to a regression-adjustment POINT with
+NaN inference rather than finite OLS standard errors. Use
 ``estimation_method='dr'`` for valid inference.
 
 LWDiD
@@ -339,10 +345,14 @@ transformation is applied. Eight requirements are enforced:
 .. note::
 
    **Bootstrap scope and reproducibility.** In common-timing fits
-   ``n_bootstrap`` activates a unit-resampling bootstrap for the overall
-   ATT; the per-replicate RNG streams are ``SeedSequence``-spawned
-   identically for every ``n_jobs``, so a seeded fit reproduces exactly
-   across serial and parallel execution. In STAGGERED fits
+   ``n_bootstrap`` activates a unit-resampling (or cluster-resampling,
+   under ``cluster=``) bootstrap for the overall ATT; the headline
+   se/p-value/CI then come from the bootstrap while ``params``/``vcov``
+   remain the analytical regression quantities, recorded via
+   ``inference_basis`` (``'unit_bootstrap'``/``'cluster_bootstrap'``) and
+   rendered by ``summary()``. The per-replicate RNG streams are
+   ``SeedSequence``-spawned identically for every ``n_jobs``, so a seeded
+   fit reproduces exactly across serial and parallel execution. In STAGGERED fits
    ``n_bootstrap`` governs the event-study multiplier bootstrap only
    (sup-t simultaneous bands); the overall and cohort aggregates keep
    analytical influence-function inference, with the per-surface basis

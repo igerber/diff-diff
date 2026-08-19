@@ -1177,6 +1177,11 @@ def solve_ols(
           ``fweight`` raise ``NotImplementedError`` (port matches the
           ``pweight`` convention only; aweight/fweight derivations are a
           separate methodology task).
+        - ``"hc3"``: jackknife-style leverage correction, meat
+          ``e_i^2 / (1 - h_ii)^2``. One-way only; raises with
+          ``cluster_ids``. An observation with leverage ``h_ii ~ 1`` has no
+          defined HC3 variance and the vcov fails closed (warning + NaN)
+          rather than flooring ``1 - h_ii``.
         - ``"conley"``: Conley (1999) spatial-HAC sandwich. Requires
           ``conley_coords`` (n × 2 array) and ``conley_cutoff_km`` (positive
           bandwidth, no default per Conley 1999 Section 5's sensitivity-grid

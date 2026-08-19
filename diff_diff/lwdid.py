@@ -51,6 +51,7 @@ _RESERVED_INTERNAL_COLUMNS = frozenset(
         "_boot_unit",
         "_lwdid_time_pos",
         "_lwdid_cohort_pos",
+        "_lwdid_season",
     }
 )
 
@@ -340,6 +341,15 @@ def _encode_staggered_time_scale(
     }
     df["_lwdid_time_pos"] = df[time].map(time_pos).astype(int)
     df["_lwdid_cohort_pos"] = df[first_treat].map(cohort_map).fillna(0).astype(int)
+    # Preserve the CALENDAR season before time values become dense
+    # positions: the seasonal transforms' numeric fallback derives quarter
+    # as (t - 1) % 4 + 1, which relabels every season after a globally
+    # missing calendar period (review round 3 P0 - silent seasonal
+    # mixing). The q-variant transforms prefer this column when present.
+    if time_is_datetime:
+        df["_lwdid_season"] = df[time].dt.quarter.to_numpy()
+    else:
+        df["_lwdid_season"] = np.array([value.quarter for value in df[time]])
     label_maps = {
         "time": {position: value for value, position in time_pos.items()},
         "cohort": {position: value for value, position in cohort_map.items()},
@@ -679,15 +689,33 @@ class LWDiD(BaseEstimator):
         if covariates is None:
             covariates = []
 
-        if first_treat is not None and self.estimation_method == "psm" and self.n_bootstrap > 0:
-            # Review finding: PSM has no influence-function representation,
-            # so the staggered multiplier bootstrap silently did nothing
-            # while a positive n_bootstrap suggested otherwise.
+        if self.estimation_method == "psm" and self.n_bootstrap > 0:
+            # Review findings (rounds 1-3): the staggered multiplier
+            # bootstrap silently did nothing for PSM (no influence-function
+            # representation), and the common-timing unit bootstrap
+            # replaced the documented fail-closed NaN inference with a
+            # naive pairs-bootstrap SE - invalid for nearest-neighbor
+            # matching with replacement (Abadie & Imbens 2008, "On the
+            # Failure of the Bootstrap for Matching Estimators").
             raise ValueError(
-                "estimation_method='psm' does not support n_bootstrap > 0 in "
-                "staggered designs: matching has no influence-function "
-                "representation for the multiplier bootstrap. Use "
-                "n_bootstrap=0, or estimation_method='dr'."
+                "estimation_method='psm' does not support n_bootstrap > 0: "
+                "matching has no influence-function representation for the "
+                "staggered multiplier bootstrap, and the standard bootstrap "
+                "is invalid for nearest-neighbor matching estimators "
+                "(Abadie & Imbens 2008). Use n_bootstrap=0, or "
+                "estimation_method='dr'."
+            )
+        if self.estimation_method == "psm" and not covariates:
+            # Review round 3: without covariates there is no propensity
+            # model to match on; the silent delegation to regression
+            # adjustment returned a finite OLS SE while the results
+            # metadata reported method 'psm' under its documented
+            # fail-closed NaN-inference contract.
+            raise ValueError(
+                "estimation_method='psm' requires covariates: without them "
+                "there is no propensity score to match on (PSM would reduce "
+                "to a difference in means). Use estimation_method='reg', or "
+                "supply covariates."
             )
 
         # Dispatch to common timing or staggered
@@ -772,6 +800,12 @@ class LWDiD(BaseEstimator):
         """
         df = data.copy()
 
+        # Same front-door validation as fit() (review round 3: diagnostics
+        # previously accepted designs fit() rejects - non-binary treatment,
+        # reserved-name collisions, duplicate panels, incoherent cohorts).
+        self._validate_inputs(df, outcome, unit, time, treatment, first_treat, None, None)
+        validate_binary(df[treatment].values, treatment)
+
         if first_treat is not None:
             # Staggered: each cohort g has its own pre-period t < g,
             # mirroring _transform_for_cohort in estimation. Datetime and
@@ -781,6 +815,7 @@ class LWDiD(BaseEstimator):
             # cohorts are recoded to never-treated here too, so the
             # diagnostics iterate the same cohort set estimation uses.
             df[first_treat], _, _ = _normalize_cohorts(df[first_treat], max_time=df[time].max())
+            _check_treatment_design(df, unit, time, treatment, first_treat)
             cohort_by_unit = df.drop_duplicates(subset=[unit], keep="first").set_index(unit)[
                 first_treat
             ]
@@ -814,6 +849,7 @@ class LWDiD(BaseEstimator):
 
         # Common timing: pre-treatment periods are those where NO unit
         # is treated (same logic as _fit_common_timing)
+        _check_treatment_design(df, unit, time, treatment, None)
         time_treatment = df.groupby(time)[treatment].max()
         pre_periods = time_treatment[time_treatment == 0].index.tolist()
         pre_mask = df[time].isin(pre_periods)
@@ -921,6 +957,13 @@ class LWDiD(BaseEstimator):
             raise ValueError(
                 f"Covariate column(s) {sorted(overlap)} are already supplied "
                 f"as outcome/unit/time/treatment/first_treat columns."
+            )
+        if controls and len(set(controls)) != len(controls):
+            duplicated = sorted({c for c in controls if controls.count(c) > 1})
+            raise ValueError(
+                f"Covariate list contains duplicate column(s): {duplicated} "
+                f"(a repeated covariate makes the design matrix rank-"
+                f"deficient by construction)."
             )
 
         missing = [c for c in required_cols if c not in df.columns]
@@ -1279,6 +1322,7 @@ class LWDiD(BaseEstimator):
         t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha, df=df_dof)
 
         # Step 6: Bootstrap if requested
+        inference_basis = None
         if self.n_bootstrap > 0:
             att, se, t_stat, p_value, conf_int, df_dof = self._bootstrap(
                 df,
@@ -1293,8 +1337,14 @@ class LWDiD(BaseEstimator):
                 treated_units,
                 control_units,
             )
+            # Provenance (review round 3): the headline se/p/CI now come
+            # from the resampling bootstrap while params/vcov remain the
+            # analytical regression quantities - record which family backs
+            # the headline so consumers (and summary()) can tell.
+            inference_basis = "cluster_bootstrap" if cluster is not None else "unit_bootstrap"
 
         result = LWDiDResults(
+            inference_basis=inference_basis,
             att=att,
             se=se,
             t_stat=t_stat,
@@ -2031,9 +2081,14 @@ class LWDiD(BaseEstimator):
         df = df.copy()
         df["_ydot"] = np.nan
 
-        # Determine quarter from time column (0-indexed modulo 4 → 1-4)
+        # Determine quarter from time column (0-indexed modulo 4 → 1-4).
+        # Encoded staggered frames carry the CALENDAR season in
+        # _lwdid_season (the time column holds dense positions there, and
+        # (pos - 1) % 4 + 1 would relabel seasons after a calendar gap).
         t_series = df[time_col]
-        if pd.api.types.is_datetime64_any_dtype(t_series):
+        if "_lwdid_season" in df.columns:
+            quarters = df["_lwdid_season"].to_numpy()
+        elif pd.api.types.is_datetime64_any_dtype(t_series):
             quarters = t_series.dt.quarter.to_numpy()
         elif hasattr(t_series.iloc[0], "quarter"):
             quarters = np.array([v.quarter for v in t_series])
@@ -2215,9 +2270,12 @@ class LWDiD(BaseEstimator):
         df = df.copy()
         df["_ydot"] = np.nan
 
-        # Determine quarter from time column
+        # Determine quarter from time column. Encoded staggered frames
+        # carry the CALENDAR season in _lwdid_season (see _transform_demeanq).
         t_series = df[time_col]
-        if pd.api.types.is_datetime64_any_dtype(t_series):
+        if "_lwdid_season" in df.columns:
+            quarters = df["_lwdid_season"].to_numpy()
+        elif pd.api.types.is_datetime64_any_dtype(t_series):
             quarters = t_series.dt.quarter.to_numpy()
         elif hasattr(t_series.iloc[0], "quarter"):
             quarters = np.array([v.quarter for v in t_series])
@@ -2996,14 +3054,13 @@ class LWDiD(BaseEstimator):
             Effective number of parameters.
         """
         if controls_matrix is None or controls_matrix.shape[1] == 0:
-            # Without covariates, PSM reduces to simple difference in means
-            warnings.warn(
-                "PSM without control variables reduces to a simple "
-                "difference in means. Consider using estimation_method='reg'.",
-                UserWarning,
-                stacklevel=2,
+            # Unreachable from fit() (config guard rejects covariate-less
+            # PSM); kept as defense in depth for direct callers.
+            raise ValueError(
+                "estimation_method='psm' requires covariates: without them "
+                "there is no propensity score to match on. Use "
+                "estimation_method='reg', or supply covariates."
             )
-            return self._estimate_reg(y, treatment, None, cluster_ids, n_obs)
 
         treat_mask = treatment == 1
         ctrl_mask = treatment == 0
@@ -3024,13 +3081,23 @@ class LWDiD(BaseEstimator):
 
         # Convergence check: coefficients must be finite
         if not np.all(np.isfinite(coefs_logit)):
+            # Review round 3: the pre-fix fallback returned the regression
+            # point WITH its finite OLS inference while the results
+            # metadata still said 'psm' - a bypass of the documented
+            # fail-closed contract. Point retained, inference NaN.
             warnings.warn(
-                "Logistic regression did not converge (non-finite coefficients). "
-                "Falling back to 'reg' estimation. Consider standardizing controls.",
+                "Logistic regression did not converge (non-finite "
+                "coefficients); the point estimate falls back to regression "
+                "adjustment, and inference is NaN under the PSM fail-closed "
+                "contract. Consider standardizing controls or using "
+                "estimation_method='reg'.",
                 UserWarning,
                 stacklevel=2,
             )
-            return self._estimate_reg(y, treatment, controls_matrix, cluster_ids, n_obs)
+            att_fb, _, _, _, n_params_fb, _ = self._estimate_reg(
+                y, treatment, controls_matrix, cluster_ids, n_obs
+            )
+            return att_fb, np.nan, None, None, n_params_fb, None
 
         # Convergence check: complete/quasi-complete separation
         if np.any(probs < 1e-8) or np.any(probs > 1 - 1e-8):

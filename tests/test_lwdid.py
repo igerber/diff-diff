@@ -2866,3 +2866,149 @@ class TestReviewRound2Guards:
         assert event_effects[0]["effect"] == 1.0  # point retained
         assert np.isfinite(event_effects[1]["se"])  # valid cell bootstrapped
         assert "cband_conf_int" in event_effects[1]
+
+
+class TestReviewRound3Guards:
+    """Local-review round 3: execution-verified guards.
+
+    - encoded staggered panels fed dense POSITIONS to the seasonal
+      transforms' (t-1)%4+1 fallback, so a globally missing calendar
+      quarter silently relabeled every later season (probe: zero-effect
+      gapped quarterly panel with treated/control-differential
+      seasonality biased demeanq ATT to ~0.12)
+    - PSM bypassed its fail-closed NaN-inference contract via the
+      covariate-less delegation, the common-timing pairs bootstrap, and
+      the logit-failure regression fallback
+    - common-timing bootstrap fits reported bootstrap headline inference
+      with no provenance while params/vcov stayed analytical
+    """
+
+    KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+    @staticmethod
+    def _gapped_quarterly(as_period=True):
+        rng = np.random.default_rng(5)
+        periods = pd.period_range("2018Q1", "2023Q4", freq="Q")
+        periods = periods[periods != pd.Period("2020Q3", freq="Q")]
+        seas = {1: 2.0, 2: -1.0, 3: 0.5, 4: -1.5}
+        onset = pd.Period("2022Q1", freq="Q")
+        rows = []
+        for u in range(24):
+            treated_unit = u < 12
+            amp = 3.0 if treated_unit else 1.0
+            for p in periods:
+                d = int(treated_unit and p >= onset)
+                y = 1.0 + amp * seas[p.quarter] + rng.normal(0, 0.1)
+                rows.append(dict(unit=u, p=p, y=y, treat=d, g=onset if treated_unit else pd.NaT))
+        df = pd.DataFrame(rows)
+        if as_period:
+            df["time"] = pd.PeriodIndex(df["p"], freq="Q")
+            df["gv"] = pd.PeriodIndex(df["g"], freq="Q")
+        else:
+            # ordinal numeric encoding preserves calendar-quarter identity
+            # under (t-1)%4+1 (Q ordinals advance one per quarter), so the
+            # numeric path is the correct-season oracle
+            df["time"] = pd.PeriodIndex(df["p"], freq="Q").map(lambda v: v.ordinal + 1)
+            df["gv"] = [pd.Period(v, freq="Q").ordinal + 1 if pd.notna(v) else 0 for v in df["g"]]
+        return df.drop(columns=["p", "g"])
+
+    def test_gapped_calendar_seasonal_parity(self):
+        # Period path (encoded to dense positions) must match the
+        # ordinal-numeric oracle on the SAME gapped data. demeanq is
+        # trend-free, so seasonal-grouping parity is exact. detrendq
+        # additionally uses the time values as its trend coordinate
+        # (dense positions on the encoded path vs calendar ordinals on
+        # the numeric path - a documented encoding choice), so its pin is
+        # the no-seasonal-leakage bound, not bitwise parity.
+        got, want = {}, {}
+        for rolling in ("demeanq", "detrendq"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                r_period = LWDiD(rolling=rolling).fit(
+                    self._gapped_quarterly(True), first_treat="gv", **self.KW
+                )
+                r_numeric = LWDiD(rolling=rolling).fit(
+                    self._gapped_quarterly(False), first_treat="gv", **self.KW
+                )
+            got[rolling], want[rolling] = r_period.att, r_numeric.att
+        np.testing.assert_allclose(got["demeanq"], want["demeanq"], rtol=1e-10)
+        for rolling in got:
+            # zero-effect DGP with 3x treated seasonal amplitude: the
+            # pre-fix position-modulo labeling biased this to ~0.12
+            assert abs(got[rolling]) < 0.06, rolling
+
+    @staticmethod
+    def _panel(n_units=16, x=True):
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(n_units):
+            for t in range(1, 7):
+                d = 1 if (u < n_units // 2 and t >= 4) else 0
+                row = dict(unit=u, time=t, treat=d, y=1 + 0.5 * t + 2 * d + rng.normal(0, 0.5))
+                if x:
+                    row["x"] = float(u % 4)
+                rows.append(row)
+        return pd.DataFrame(rows)
+
+    def test_psm_requires_covariates(self):
+        with pytest.raises(ValueError, match="requires covariates"):
+            LWDiD(rolling="demean", estimation_method="psm").fit(self._panel(x=False), **self.KW)
+
+    def test_psm_bootstrap_rejected_common_timing(self):
+        with pytest.raises(ValueError, match="does not support n_bootstrap"):
+            LWDiD(rolling="demean", estimation_method="psm", n_bootstrap=50).fit(
+                self._panel(), covariates=["x"], **self.KW
+            )
+
+    def test_psm_logit_failure_fails_closed(self, monkeypatch):
+        import diff_diff.lwdid as lwdid_mod
+
+        est = LWDiD(rolling="demean", estimation_method="psm")
+        rng = np.random.default_rng(1)
+        y = rng.normal(size=20)
+        treatment = np.array([1.0] * 8 + [0.0] * 12)
+        controls = rng.normal(size=(20, 1))
+        monkeypatch.setattr(
+            lwdid_mod,
+            "solve_logit",
+            lambda X, d: (np.array([np.nan, np.nan]), np.full(len(d), 0.5)),
+        )
+        with pytest.warns(UserWarning, match="PSM fail-closed"):
+            att, se, coefs, vcov, _, influence = est._estimate_psm(y, treatment, controls, None, 20)
+        assert np.isfinite(att)
+        assert np.isnan(se)
+        assert coefs is None and vcov is None and influence is None
+
+    def test_bootstrap_inference_basis_provenance(self):
+        df = self._panel(x=False)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            plain = LWDiD(rolling="demean").fit(df, **self.KW)
+            boot = LWDiD(rolling="demean", n_bootstrap=49, seed=3).fit(df, **self.KW)
+        assert plain.inference_basis is None
+        assert boot.inference_basis == "unit_bootstrap"
+        assert "bootstrap" in boot.summary()
+        assert boot.to_dict()["inference_basis"] == "unit_bootstrap"
+        df["cl"] = df["unit"] % 4
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            cboot = LWDiD(rolling="demean", n_bootstrap=49, seed=3, cluster="cl").fit(df, **self.KW)
+        assert cboot.inference_basis == "cluster_bootstrap"
+
+    def test_diagnostics_shares_fit_validation(self):
+        df = self._panel(x=False)
+        bad = df.copy()
+        bad["treat"] = bad["treat"] * 2  # non-binary
+        with pytest.raises(ValueError):
+            LWDiD(rolling="demean").get_transformation_diagnostics(
+                bad, outcome="y", unit="unit", time="time", treatment="treat"
+            )
+        dup = pd.concat([df, df.iloc[:6]])  # duplicate unit-time rows
+        with pytest.raises(ValueError, match="duplicate"):
+            LWDiD(rolling="demean").get_transformation_diagnostics(
+                dup, outcome="y", unit="unit", time="time", treatment="treat"
+            )
+
+    def test_duplicate_covariates_rejected(self):
+        with pytest.raises(ValueError, match="duplicate column"):
+            LWDiD(rolling="demean").fit(self._panel(), covariates=["x", "x"], **self.KW)

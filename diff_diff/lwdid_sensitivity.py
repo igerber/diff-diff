@@ -511,6 +511,12 @@ def robustness_pre_periods(
     _prevalidate_frame(data, outcome, unit, time, treatment, cohort, cluster, controls)
     _reject_multi_cohort_staggered(data, cohort)
 
+    for name, value in (("k_min", k_min), ("k_max", k_max)):
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value < 1:
+            raise ValueError(f"{name} must be a positive integer; got {value!r}.")
+
     pre_periods = _get_pre_periods(data, time, treatment)
     n_pre = len(pre_periods)
 
@@ -742,6 +748,20 @@ def sensitivity_no_anticipation(
 
     if exclude_periods is None:
         exclude_periods = [1, 2, 3]
+    validated_exclusions: List[int] = []
+    for value in exclude_periods:
+        # Round-3 review: exclude 0 sliced pre_periods[:-0] == EMPTY
+        # (dropping every pre-period instead of none); negative values
+        # selected the wrong window; bool is an int subclass.
+        if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value < 1:
+            raise ValueError(
+                f"exclude_periods entries must be positive integers "
+                f"(number of trailing pre-periods to drop); got {value!r}."
+            )
+        validated_exclusions.append(int(value))
+    if len(set(validated_exclusions)) != len(validated_exclusions):
+        raise ValueError(f"exclude_periods contains duplicate entries: {exclude_periods!r}.")
+    exclude_periods = validated_exclusions
 
     pre_periods = _get_pre_periods(data, time, treatment)
     n_pre = len(pre_periods)

@@ -26,6 +26,8 @@ _INFERENCE_BASIS_LABELS = {
     "joint_influence_function": "joint influence function across cohort-time cells",
     "unavailable_matching": "unavailable (matching has no influence function)",
     "unavailable_degenerate_cells": "unavailable (degenerate cohort-time cells)",
+    "unit_bootstrap": "unit-resampling bootstrap (params/vcov remain analytical)",
+    "cluster_bootstrap": "cluster-resampling bootstrap (params/vcov remain analytical)",
 }
 
 
@@ -624,7 +626,7 @@ class LWDiDResults(BaseResults, AggregationMixin):
             )
 
         lines.append(bar)
-        if self.is_staggered and self.inference_basis is not None:
+        if self.inference_basis is not None:
             label = _INFERENCE_BASIS_LABELS.get(self.inference_basis, self.inference_basis)
             lines.append(f"Overall inference: {label}")
         lines.append("Signif. codes: *** p<0.001, ** p<0.01, * p<0.05")

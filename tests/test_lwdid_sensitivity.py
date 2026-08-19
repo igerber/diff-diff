@@ -337,3 +337,61 @@ class TestMultiCohortRejection:
                 df, outcome="y", unit="unit", time="time", treatment="treat", cohort="g"
             )
         assert np.isfinite(res.baseline_att)
+
+
+class TestParameterValidation:
+    """Round-3: strict validation of exclusion/window parameters
+    (exclude_periods=0 previously sliced pre_periods[:-0] == EMPTY,
+    silently dropping every pre-period)."""
+
+    @staticmethod
+    def _panel():
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(12):
+            for t in range(1, 9):
+                d = 1 if (u < 6 and t >= 6) else 0
+                rows.append(dict(unit=u, time=t, treat=d, y=rng.normal() + d))
+        return pd.DataFrame(rows)
+
+    def test_exclude_periods_zero_rejected(self):
+        with pytest.raises(ValueError, match="positive integers"):
+            sensitivity_no_anticipation(
+                self._panel(),
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
+                exclude_periods=[0],
+            )
+
+    def test_exclude_periods_duplicates_and_types_rejected(self):
+        with pytest.raises(ValueError, match="duplicate"):
+            sensitivity_no_anticipation(
+                self._panel(),
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
+                exclude_periods=[1, 1],
+            )
+        with pytest.raises(ValueError, match="positive integers"):
+            sensitivity_no_anticipation(
+                self._panel(),
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
+                exclude_periods=[True],
+            )
+
+    def test_k_bounds_validated(self):
+        with pytest.raises(ValueError, match="k_min must be"):
+            robustness_pre_periods(
+                self._panel(),
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
+                k_min=2.5,
+            )
