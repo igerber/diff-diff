@@ -286,6 +286,7 @@ def _fit_single_spec(
     cluster: Optional[str],
     controls: Optional[List[str]],
     control_group: str = "not_yet_treated",
+    raise_errors: bool = False,
 ) -> Tuple[float, float, float]:
     """Fit a single LWDiD specification and return (att, se, pvalue).
 
@@ -295,6 +296,12 @@ def _fit_single_spec(
     degenerate specification, e.g. no remaining pre-periods, or a
     LinAlgError from a singular design) are mapped to (nan, nan, nan);
     any other exception is a programming error and propagates.
+
+    ``raise_errors=True`` (the BASELINE fit in both public helpers, on
+    the full frame) propagates every fit error: a full-frame failure is
+    a configuration/support problem (e.g. covariate-free PSM), not a
+    restricted-specification non-estimability, and must not be reported
+    as ``not_estimable`` (round-10 review).
     """
     from diff_diff.lwdid import LWDiD
 
@@ -335,6 +342,8 @@ def _fit_single_spec(
         )
         return res.att, res.se, res.p_value
     except (ValueError, np.linalg.LinAlgError):
+        if raise_errors:
+            raise
         return np.nan, np.nan, np.nan
 
 
@@ -365,45 +374,31 @@ def _prevalidate_frame(data, outcome, unit, time, treatment, cohort, cluster, co
     time_col, cohort_col = time, cohort
     if cohort is not None:
         frame, time_col, cohort_col, _ = _encode_staggered_time_scale(frame, time, cohort)
-        frame[cohort_col], _, _ = _normalize_cohorts(
-            frame[cohort_col], max_time=frame[time_col].max()
-        )
+        with warnings.catch_warnings():
+            # fit() re-normalizes and re-warns; suppress the duplicate here.
+            warnings.simplefilter("ignore")
+            frame[cohort_col], _, _ = _normalize_cohorts(
+                frame[cohort_col], max_time=frame[time_col].max()
+            )
     _check_treatment_design(frame, unit, time_col, treatment, cohort_col)
-
-
-def _reject_multi_cohort_staggered(data: pd.DataFrame, cohort: Optional[str]) -> None:
-    """Reject multi-cohort staggered inputs (raises ValueError).
-
-    Both public sensitivity functions define their pre-period window
-    globally: periods before the EARLIEST adoption anywhere in the panel
-    (``_get_pre_periods``). With more than one treated cohort, later
-    cohorts' own pre-treatment periods fall inside the global post window
-    and survive every "exclude/keep k pre-periods" restriction, so the
-    reported specifications would not describe the samples actually used
-    (review round 2). Cohort-relative exclusions are a tracked follow-up
-    (DEFERRED.md); until then multi-cohort inputs fail closed. A single
-    treated cohort is exactly the global rule, so it stays supported.
-    """
-    if cohort is None:
-        return
-    treated: set = set()
-    for value in pd.unique(data[cohort].dropna()):
-        try:
-            numeric = float(value)
-        except (TypeError, ValueError):
-            treated.add(value)  # datetime/Period labels: non-null = treated
-            continue
-        if np.isfinite(numeric) and numeric > 0:
-            treated.add(value)
-    if len(treated) > 1:
-        raise ValueError(
-            f"Sensitivity analyses currently support a single treated "
-            f"cohort; found {len(treated)} distinct cohorts in '{cohort}'. "
-            f"Pre-period exclusions are defined relative to the earliest "
-            f"adoption, which would mislabel the samples used for later "
-            f"cohorts' transformations. Run the analysis per cohort, or "
-            f"see DEFERRED.md (cohort-relative sensitivity exclusions)."
-        )
+    if cohort is not None:
+        # Multi-cohort rejection on the NORMALIZED cohorts (round-10
+        # review: counting raw values rejected valid single-cohort
+        # designs whose beyond-window/inf encodings normalize to
+        # never-treated).
+        values = frame[cohort_col].to_numpy(dtype=float)
+        treated_cohorts = np.unique(values[np.isfinite(values) & (values > 0)])
+        if len(treated_cohorts) > 1:
+            raise ValueError(
+                f"Sensitivity analyses currently support a single treated "
+                f"cohort; found {len(treated_cohorts)} distinct cohorts in "
+                f"'{cohort}' (after never-treated normalization). "
+                f"Pre-period exclusions are defined relative to the "
+                f"earliest adoption, which would mislabel the samples used "
+                f"for later cohorts' transformations. Run the analysis per "
+                f"cohort, or see DEFERRED.md (cohort-relative sensitivity "
+                f"exclusions)."
+            )
 
 
 def _get_pre_periods(data: pd.DataFrame, time: str, treatment: str) -> np.ndarray:
@@ -536,7 +531,6 @@ def robustness_pre_periods(
     # inside _fit_single_spec (campaign finding: a string covariate's
     # ValueError became a silent NaN spec).
     _prevalidate_frame(data, outcome, unit, time, treatment, cohort, cluster, controls)
-    _reject_multi_cohort_staggered(data, cohort)
 
     for name, value in (("k_min", k_min), ("k_max", k_max)):
         if value is None:
@@ -574,6 +568,7 @@ def robustness_pre_periods(
             cluster,
             controls,
             control_group=control_group,
+            raise_errors=True,
         )
         degenerate_ratio = _compute_sensitivity_ratio(att, [att])
         return SensitivityResult(
@@ -600,6 +595,7 @@ def robustness_pre_periods(
         cluster,
         controls,
         control_group=control_group,
+        raise_errors=True,
     )
 
     # ALL observed periods >= S are post (round-9 review: the any-unit-
@@ -774,7 +770,6 @@ def sensitivity_no_anticipation(
         raise ValueError("'treatment' (or 'd') parameter is required")
 
     _prevalidate_frame(data, outcome, unit, time, treatment, cohort, cluster, controls)
-    _reject_multi_cohort_staggered(data, cohort)
 
     if exclude_periods is None:
         exclude_periods = [1, 2, 3]
@@ -810,6 +805,7 @@ def sensitivity_no_anticipation(
         cluster,
         controls,
         control_group=control_group,
+        raise_errors=True,
     )
 
     # ALL observed periods >= S are post (round-9 review: the any-unit-

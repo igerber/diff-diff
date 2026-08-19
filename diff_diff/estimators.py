@@ -116,6 +116,12 @@ class DifferenceInDifferences(BaseEstimator):
           post-period-average ATT (see ``_compute_cr2_bm_contrast_dof`` in
           ``linalg.py`` and the REGISTRY.md note). Weighted CR2-BM
           (``survey_design=`` paths) is a separate gate.
+        - ``"hc3"``: jackknife-style leverage correction, meat
+          ``e_i^2 / (1 - h_ii)^2`` (one-way only; errors with ``cluster=``).
+          A leverage-one observation has no defined HC3 variance and the
+          vcov fails closed (warning + NaN inference) rather than flooring
+          ``1 - h_ii``. With ``absorb=``, routes through the full-dummy
+          design like hc2.
         - ``"conley"``: Conley 1999 spatial-HAC sandwich. Pass
           ``conley_coords=(lat_col, lon_col)``, ``conley_cutoff_km=<float>``,
           and ``conley_lag_cutoff=<int>`` on the constructor; pass
@@ -2513,6 +2519,12 @@ class MultiPeriodDiD(DifferenceInDifferences):
           CR2 cluster-robust with a Bell-McCaffrey Satterthwaite contrast DOF
           on the post-period average (see ``cluster`` above for parity
           details). Weighted CR2-BM (``survey_design=``) is still gated.
+        - ``"hc3"``: jackknife-style leverage correction, meat
+          ``e_i^2 / (1 - h_ii)^2`` (one-way only; errors with ``cluster=``).
+          A leverage-one observation has no defined HC3 variance and the
+          vcov fails closed (warning + NaN inference) rather than flooring
+          ``1 - h_ii``. With ``absorb=``, routes through the full-dummy
+          design like hc2.
         - ``"conley"``: Conley 1999 spatial-HAC sandwich via the panel
           block-decomposed form (matches R ``conleyreg`` with
           ``lag_cutoff > 0``). Pass ``conley_coords=(lat_col, lon_col)``,

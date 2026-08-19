@@ -3600,3 +3600,91 @@ class TestReviewRound9Guards:
         df["g"] = np.where(df["unit"] < 4, 4, 0)
         with pytest.raises(ValueError, match="non-finite"):
             LWDiD(rolling="demean").fit(df, first_treat="g", **self.KW)
+
+
+class TestReviewRound10Guards:
+    """Local-review round 10: execution-verified guards.
+
+    - the generic over-one-leverage HC1 fallback ran BEFORE hc3's
+      fail-closed check, so numerically over-one designs got an HC1
+      result still labeled hc3 (and a clipped hc3 influence vector)
+    - the sensitivity multi-cohort count used RAW cohorts, rejecting
+      valid single-cohort designs with beyond-window encodings
+    - zero-post-row units evaded the fixed-window drop warning
+    - baseline sensitivity fits swallowed config errors as not_estimable
+    """
+
+    KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+    def test_hc3_over_one_leverage_fails_closed(self):
+        from diff_diff.linalg import compute_robust_vcov
+
+        rng = np.random.default_rng(0)
+        # near-duplicate rows -> numerically over-one leverage is hard to
+        # force deterministically; drive the guard directly with h >= 1
+        X = np.column_stack([np.ones(4), np.array([0.0, 0.0, 0.0, 1.0])])
+        y = np.array([1.0, 1.1, 0.9, 5.0])
+        resid = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        with pytest.warns(UserWarning, match="HC3 variance is undefined"):
+            v = compute_robust_vcov(X, resid, vcov_type="hc3")
+        assert np.all(np.isnan(v))
+        del rng
+
+    def test_sensitivity_accepts_beyond_window_single_cohort(self):
+        from diff_diff.lwdid_sensitivity import robustness_pre_periods
+
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(16):
+            # one real cohort (5); 4 units carry a beyond-window encoding
+            # (99) that normalizes to never-treated; rest never-treated
+            g = 5 if u < 6 else (99 if u < 10 else 0)
+            for t in range(1, 10):
+                d = int(g == 5 and t >= 5)
+                rows.append(dict(unit=u, time=t, treat=d, g=g, y=rng.normal() + d))
+        df = pd.DataFrame(rows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = robustness_pre_periods(
+                df, outcome="y", unit="unit", time="time", treatment="treat", cohort="g"
+            )
+        assert np.isfinite(res.baseline_att)
+
+    def test_zero_post_unit_counted_in_drop_warning(self):
+        rows = []
+        for u in range(12):
+            treated = u < 6
+            t_range = range(1, 4) if u == 11 else range(1, 7)  # unit 11: pre rows only
+            for t in t_range:
+                d = 1 if (treated and t >= 4) else 0
+                rows.append(dict(unit=u, time=t, treat=d, y=float(t) + 2 * d))
+        df = pd.DataFrame(rows)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = LWDiD(rolling="demean").fit(df, **self.KW)
+        assert any("fixed-window" in str(x.message) for x in caught)
+        assert res.n_control == 5  # unit 11 dropped and accounted for
+
+    def test_sensitivity_baseline_config_errors_raise(self):
+        from diff_diff.lwdid_sensitivity import (
+            robustness_pre_periods,
+            sensitivity_no_anticipation,
+        )
+
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(12):
+            for t in range(1, 9):
+                d = 1 if (u < 6 and t >= 6) else 0
+                rows.append(dict(unit=u, time=t, treat=d, y=rng.normal() + d))
+        df = pd.DataFrame(rows)
+        for fn in (robustness_pre_periods, sensitivity_no_anticipation):
+            with pytest.raises(ValueError, match="requires covariates"):
+                fn(
+                    df,
+                    outcome="y",
+                    unit="unit",
+                    time="time",
+                    treatment="treat",
+                    estimation_method="psm",
+                )

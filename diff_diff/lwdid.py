@@ -1232,7 +1232,17 @@ class LWDiD(BaseEstimator):
         post_mask = df[time].isin(post_periods)
         post_df = df.loc[post_mask].copy()
 
-        post_counts = post_df.loc[np.isfinite(post_df["_ydot"])].groupby(unit)["_ydot"].size()
+        # Reindex over EVERY panel unit so zero-post-row units are counted
+        # as incomplete too (round-10 review: they were absent from the
+        # counts, silently vanished in the merge, and the documented
+        # fixed-window drop warning never fired for them).
+        all_panel_units = pd.Index(pd.unique(df[unit]))
+        post_counts = (
+            post_df.loc[np.isfinite(post_df["_ydot"])]
+            .groupby(unit)["_ydot"]
+            .size()
+            .reindex(all_panel_units, fill_value=0)
+        )
         complete_units = set(post_counts.index[post_counts == len(post_periods)])
         n_incomplete = int((post_counts < len(post_periods)).sum())
         if n_incomplete > 0:
@@ -2830,7 +2840,14 @@ class LWDiD(BaseEstimator):
             return psi
 
         if self.vcov_type in ("hc2", "hc3"):
-            leverage = np.clip(np.sum((X @ xtx_inv) * X, axis=1), 0.0, 1.0 - 1e-10)
+            raw_leverage = np.sum((X @ xtx_inv) * X, axis=1)
+            if self.vcov_type == "hc3" and np.any(raw_leverage >= 1.0 - 1e-8):
+                # Match the shared linalg fail-closed contract (round-10
+                # review: clipping fabricated a finite HC3 influence
+                # vector for a design whose HC3 vcov is NaN, so aggregate
+                # inference disagreed with the cell's own).
+                return np.full_like(psi, np.nan)
+            leverage = np.clip(raw_leverage, 0.0, 1.0 - 1e-10)
             if self.vcov_type == "hc2":
                 return psi / np.sqrt(1.0 - leverage)
             return psi / (1.0 - leverage)

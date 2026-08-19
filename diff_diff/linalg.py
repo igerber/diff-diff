@@ -3607,29 +3607,16 @@ def _compute_robust_vcov_numpy(
             bread_matrix,
             weights=None if weight_type == "fweight" else weights,
         )
-        if np.any(h_diag > 1.0 + 1e-6):
-            warnings.warn(
-                f"Hat-matrix diagonal exceeds 1 (max={h_diag.max():.6f}); "
-                "the design is near-singular. Falling back to HC1.",
-                UserWarning,
-                stacklevel=3,
-            )
-            return _compute_robust_vcov_numpy(
-                X,
-                residuals,
-                cluster_ids=None,
-                weights=weights,
-                weight_type=weight_type,
-                vcov_type="hc1",
-                return_dof=return_dof,
-            )
         # Leverage-one observations make the HC3 leave-one-out residual
         # undefined (and HC2 nearly so): flooring 1 - h_ii would fabricate
         # an arbitrary finite variance for a perfectly-leveraged point
         # (e.g. a single treated unit under [1, D]). HC3 fails closed with
         # a NaN vcov instead (LWDiD fix-wave review finding); HC2/HC2-BM
         # keep their long-standing floor behavior (released surface;
-        # pre-existing, tracked separately).
+        # pre-existing, tracked separately). This check runs BEFORE the
+        # generic over-one HC1 fallback below (round-10 review: numerically
+        # over-one leverage previously escaped into an HC1 result still
+        # labeled hc3 - h >= 1 - 1e-8 covers h > 1 + 1e-6 entirely).
         if vcov_type == "hc3" and np.any(h_diag >= 1.0 - 1e-8):
             n_lev1 = int(np.sum(h_diag >= 1.0 - 1e-8))
             warnings.warn(
@@ -3645,6 +3632,24 @@ def _compute_robust_vcov_numpy(
             if return_dof:
                 return nan_vcov, None
             return nan_vcov
+        if np.any(h_diag > 1.0 + 1e-6):
+            # hc2/hc2_bm only: hc3 designs with over-one leverage are
+            # already caught by the fail-closed guard above.
+            warnings.warn(
+                f"Hat-matrix diagonal exceeds 1 (max={h_diag.max():.6f}); "
+                "the design is near-singular. Falling back to HC1.",
+                UserWarning,
+                stacklevel=3,
+            )
+            return _compute_robust_vcov_numpy(
+                X,
+                residuals,
+                cluster_ids=None,
+                weights=weights,
+                weight_type=weight_type,
+                vcov_type="hc1",
+                return_dof=return_dof,
+            )
         one_minus_h = np.maximum(1.0 - h_diag, 1e-10)
         # HC2 meat: sum_i (u_i^2 / (1 - h_ii)) x_i x_i'; HC3 squares the
         # leverage denominator (jackknife-style, sandwich::vcovHC type="HC3").
