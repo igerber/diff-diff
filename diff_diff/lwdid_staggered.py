@@ -386,42 +386,72 @@ def fit_staggered(
     overall_effect = float(
         np.dot(cohort_weights, [cohort_effects[g]["att"] for g in valid_cohorts])
     )
-    use_composite = (
-        estimator.control_group == "never_treated"
-        and estimator.estimation_method == "reg"
-        and not controls
-        and estimator.vcov_type == "classical"
-        and cluster is None
-    )
     # LW 2026 (7.16)/(7.18): with never-treated controls, regression
     # adjustment and no covariates, the overall estimand is tau_omega --
     # the coefficient on D in the composite-outcome cross-sectional
     # regression, which averages each unit's transformed outcome over its
-    # OBSERVED post periods. On unbalanced panels the two-stage cell-mass
-    # weighting below does not reproduce that weighting (the weightings
-    # coincide only under balance), so the point estimate is always taken
-    # from the composite regression under this configuration: a variance
-    # option must never move the point.
+    # OBSERVED post periods. The composite is defined for the plain
+    # demean/detrend transforms only (the q variants have no seasonal
+    # composite; their overall is the cohort-mass-weighted average of
+    # seasonal cohort ATTs).
     tau_omega_config = (
         estimator.control_group == "never_treated"
         and estimator.estimation_method == "reg"
         and not controls
         and estimator.rolling in ("demean", "detrend")
     )
-    if use_composite:
-        overall_effect, overall_se, overall_df = estimator._composite_regression_aggregation(
-            df, outcome, unit, time, cohort
-        )
-        overall_se = _guard_standard_error(overall_effect, overall_se)
+    use_composite = (
+        tau_omega_config
+        and estimator.vcov_type == "classical"
+        and cluster is None
+    )
+    # Complete-case resolution: the composite is computed ONCE for every
+    # tau_omega-eligible configuration. With ZERO complete-case drops the
+    # composite point is reported on BOTH vcov routes (status quo: the
+    # classical route pairs it with the composite's own SE, hc1/clustered
+    # with the joint-IF SE -- the documented approximation in REGISTRY).
+    # With ANY drops, `.att` is the IF-weighted cohort-mass point on ALL
+    # routes (the same point under every vcov setting -- a variance
+    # selection must never move the point) and the complete-case composite
+    # is exposed as the diagnostic `att_tau_omega_complete_case`.
+    att_tau_omega_complete_case: Optional[float] = None
+    n_composite_treated_dropped = 0
+    n_composite_controls_dropped = 0
+    composite_is_att = False
+    comp_att = comp_se = np.nan
+    comp_df = 0
+    if tau_omega_config:
+        (
+            comp_att,
+            comp_se,
+            comp_df,
+            n_composite_treated_dropped,
+            n_composite_controls_dropped,
+        ) = estimator._composite_regression_aggregation(df, outcome, unit, time, cohort)
+        composite_drops = n_composite_treated_dropped + n_composite_controls_dropped
+        if composite_drops == 0 and np.isfinite(comp_att):
+            composite_is_att = True
+        else:
+            att_tau_omega_complete_case = float(comp_att) if np.isfinite(comp_att) else None
+            warnings.warn(
+                "LWDiD: the tau_omega composite required complete-case "
+                f"drops ({n_composite_treated_dropped} treated, "
+                f"{n_composite_controls_dropped} control unit(s)) on this "
+                "unbalanced panel, so `.att` reports the influence-weighted "
+                "cohort-mass point (identical under every vcov setting) "
+                "instead of tau_omega. The complete-case composite is "
+                "available as `att_tau_omega_complete_case`. See "
+                "docs/methodology/REGISTRY.md (LWDiD).",
+                UserWarning,
+                stacklevel=2,
+            )
+    if composite_is_att:
+        overall_effect = float(comp_att)
+    if use_composite and composite_is_att:
+        overall_se = _guard_standard_error(overall_effect, comp_se)
+        overall_df = comp_df
         inference_basis = "composite_regression"
     else:
-        if tau_omega_config:
-            # Same tau_omega point as the composite gate; only the SE
-            # machinery differs (joint influence function below).
-            overall_effect, _, _ = estimator._composite_regression_aggregation(
-                df, outcome, unit, time, cohort
-            )
-            overall_effect = float(overall_effect)
         overall_influence = None
         missing = [g for g in valid_cohorts if g not in cohort_influence]
         if not missing:
@@ -517,6 +547,9 @@ def fit_staggered(
         cohort_effects=cohort_effects,
         cohort_time_effects=cell_effects,
         inference_basis=inference_basis,
+        att_tau_omega_complete_case=att_tau_omega_complete_case,
+        n_composite_treated_dropped=n_composite_treated_dropped,
+        n_composite_controls_dropped=n_composite_controls_dropped,
         event_study_effects=event_effects,
         event_study_vcov=event_vcov,
         event_study_vcov_index=event_vcov_index,

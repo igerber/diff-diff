@@ -171,6 +171,13 @@ class LWDiDResults(BaseResults, AggregationMixin):
     cohort_effects: Optional[Dict[Any, Dict]] = field(default=None, repr=False)
     cohort_time_effects: Optional[Dict[Tuple[Any, Any], Dict]] = field(default=None, repr=False)
     inference_basis: Optional[str] = None
+    #: Complete-case tau_omega composite point, exposed as a diagnostic when
+    #: complete-case drops prevented it from being ``.att`` (None otherwise).
+    att_tau_omega_complete_case: Optional[float] = None
+    #: Treated / control units dropped by the tau_omega complete-case
+    #: resolution (0 when the composite path did not run or dropped none).
+    n_composite_treated_dropped: int = 0
+    n_composite_controls_dropped: int = 0
 
     # ------------------------------------------------------------------ #
     # Event study (Appendix D) fields                                     #
@@ -461,6 +468,11 @@ class LWDiDResults(BaseResults, AggregationMixin):
             }
         if self.inference_basis is not None:
             result["inference_basis"] = self.inference_basis
+        if self.att_tau_omega_complete_case is not None:
+            result["att_tau_omega_complete_case"] = self.att_tau_omega_complete_case
+        if self.n_composite_treated_dropped or self.n_composite_controls_dropped:
+            result["n_composite_treated_dropped"] = self.n_composite_treated_dropped
+            result["n_composite_controls_dropped"] = self.n_composite_controls_dropped
         if self.params is not None:
             result["params"] = self.params.tolist()
         if self.bse is not None:

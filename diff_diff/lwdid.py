@@ -1318,7 +1318,7 @@ class LWDiD(BaseEstimator):
         unit: str,
         time: str,
         cohort: str,
-    ) -> Tuple[float, float, int]:
+    ) -> Tuple[float, float, int, int, int]:
         """Compute tau_omega via composite outcome regression (LW 2026 Eq 7.18/7.19).
 
         For staggered designs, constructs a composite outcome vector:
@@ -1346,7 +1346,11 @@ class LWDiD(BaseEstimator):
         se : float
             Classical OLS SE from composite regression.
         dof : int
-            Degrees of freedom (n_units - 2).
+            Degrees of freedom (n_complete_case_units - 2).
+        n_treated_dropped : int
+            Treated units dropped by the complete-case resolution.
+        n_controls_dropped : int
+            Control units dropped by the complete-case resolution.
         """
         # Step 1: Identify cohorts and unit membership
         fy = df.groupby(unit)[cohort].first()
@@ -1354,7 +1358,7 @@ class LWDiD(BaseEstimator):
         n_treat = int((fy > 0).sum())
 
         if n_treat == 0:
-            return np.nan, np.nan, 0
+            return np.nan, np.nan, 0, 0, 0
 
         # Step 2: For each cohort g, compute per-unit post-average transformed outcome
         # using cohort g's pre-period for ALL units
@@ -1364,64 +1368,139 @@ class LWDiD(BaseEstimator):
             pre_mask_g = df[time] < g
             post_mask_g = df[time] >= g
 
-            # Apply transformation to full dataset
-            if self.rolling in ("demean", "demeanq"):
+            # Apply transformation to full dataset. The composite (tau_omega)
+            # estimand is defined for the plain demean/detrend transforms
+            # only; the routing gate in lwdid_staggered restricts rolling,
+            # and this raise keeps a future gate change from silently
+            # substituting a non-seasonal transform for a q-variant again
+            # (campaign finding: demeanq/detrendq were mapped to
+            # demean/detrend here, moving the point by ~8% silently).
+            if self.rolling == "demean":
                 df_transformed = self._transform_demean(df, outcome, unit, pre_mask_g)
-            elif self.rolling in ("detrend", "detrendq"):
+            elif self.rolling == "detrend":
                 df_transformed = self._transform_detrend(df, outcome, unit, time, pre_mask_g)
             else:
-                df_transformed = self._transform_demean(df, outcome, unit, pre_mask_g)
+                raise ValueError(
+                    f"Internal error: composite (tau_omega) aggregation is "
+                    f"only defined for rolling in ('demean', 'detrend'); got "
+                    f"{self.rolling!r}. The routing gate should not have "
+                    f"dispatched here."
+                )
 
             # Per-unit average of transformed outcome in post-periods (>= g)
             post_data = df_transformed.loc[post_mask_g]  # type: ignore[union-attr]
             unit_avg_g = post_data.groupby(unit)["_ydot"].mean()
             ydot_by_cohort[g] = unit_avg_g
 
-        # Step 3: Assemble composite outcome vector
+        # Step 3: Complete-case resolution (deterministic, one-directional).
+        # Fixed cohort weights omega_g = N_g / N_treat are defined on the
+        # ESTIMATION sample: units that cannot contribute their required
+        # transformed outcomes are dropped with a warning (never silently
+        # zero-filled or asymmetrically reweighted by the OLS finite mask).
         all_units = fy.index
-        n_units = len(all_units)
-        y_composite = np.empty(n_units, dtype=np.float64)
-        d_ever_treated = np.empty(n_units, dtype=np.float64)
 
-        # Compute cohort sizes for weights
-        cohort_sizes = {g: int((fy == g).sum()) for g in cohorts}
-
-        for i, u in enumerate(all_units):
+        # 3.1: Treated units must have a finite post-window average for
+        # their OWN cohort (missing post rows or a NaN transform both
+        # count - the pre-fix code silently NaN'd these out of the OLS,
+        # implicitly reweighting the treated side).
+        surviving_treated: List[Any] = []
+        n_treated_dropped = 0
+        for u in all_units:
             g_u = fy[u]
-            if g_u > 0:  # Treated unit
-                y_composite[i] = ydot_by_cohort[g_u].get(u, np.nan)
+            if not (g_u > 0):
+                continue
+            value = ydot_by_cohort[g_u].get(u, np.nan)
+            if np.isfinite(value):
+                surviving_treated.append(u)
+            else:
+                n_treated_dropped += 1
+        if n_treated_dropped:
+            warnings.warn(
+                f"LWDiD tau_omega composite: dropped {n_treated_dropped} "
+                f"treated unit(s) with no finite post-window transformed "
+                f"outcome for their cohort (complete-case estimation; cohort "
+                f"weights are recomputed on the surviving sample).",
+                UserWarning,
+                stacklevel=3,
+            )
+
+        # 3.2: Recompute cohort masses on the surviving treated sample.
+        fy_surviving = fy.loc[surviving_treated]
+        cohort_sizes = {g: int((fy_surviving == g).sum()) for g in cohorts}
+        weighted_cohorts = [g for g in cohorts if cohort_sizes[g] > 0]
+        n_treat_cc = len(surviving_treated)
+
+        # 3.3: Control units must observe every surviving-weight cohort's
+        # post window with a finite transformed outcome (the pre-fix code
+        # injected a literal 0.0 for missing entries, biasing the
+        # composite control mean toward zero).
+        control_units = [u for u in all_units if not (fy[u] > 0)]
+        surviving_controls: List[Any] = []
+        n_controls_dropped = 0
+        for u in control_units:
+            vals = [ydot_by_cohort[g].get(u, np.nan) for g in weighted_cohorts]
+            if vals and np.all(np.isfinite(vals)):
+                surviving_controls.append(u)
+            else:
+                n_controls_dropped += 1
+        if n_controls_dropped:
+            warnings.warn(
+                f"LWDiD tau_omega composite: dropped {n_controls_dropped} "
+                f"control unit(s) not observing every treated cohort's post "
+                f"window with a finite transformed outcome (complete-case "
+                f"estimation with fixed cohort weights).",
+                UserWarning,
+                stacklevel=3,
+            )
+
+        # 3.4: Empty-arm fail-closed guard (the pre-drop n_treat check
+        # does not cover drops emptying an arm).
+        if n_treat_cc == 0 or not surviving_controls:
+            warnings.warn(
+                "LWDiD tau_omega composite: complete-case filtering left an "
+                "empty treated or control arm; the composite ATT and its "
+                "inference are NaN.",
+                UserWarning,
+                stacklevel=3,
+            )
+            return np.nan, np.nan, 0, n_treated_dropped, n_controls_dropped
+
+        # Step 4: Assemble composite outcome vector on the complete-case
+        # sample (finite by construction).
+        included = surviving_treated + surviving_controls
+        n = len(included)
+        y_composite = np.empty(n, dtype=np.float64)
+        d_ever_treated = np.empty(n, dtype=np.float64)
+        for i, u in enumerate(included):
+            g_u = fy[u]
+            if g_u > 0:
+                y_composite[i] = float(ydot_by_cohort[g_u][u])
                 d_ever_treated[i] = 1.0
-            else:  # Never-treated (control) unit
+            else:
                 weighted_sum = 0.0
-                for g in cohorts:
-                    w_g = cohort_sizes[g] / n_treat
-                    weighted_sum += w_g * ydot_by_cohort[g].get(u, 0.0)
+                for g in weighted_cohorts:
+                    w_g = cohort_sizes[g] / n_treat_cc
+                    weighted_sum += w_g * float(ydot_by_cohort[g][u])
                 y_composite[i] = weighted_sum
                 d_ever_treated[i] = 0.0
 
-        # Step 4: Single OLS regression y_composite ~ [1, D]
-        # Drop any NaN observations
-        valid = np.isfinite(y_composite)
-        y_valid = y_composite[valid]
-        d_valid = d_ever_treated[valid]
-        n = len(y_valid)
-
         if n < 3:
-            return np.nan, np.nan, 0
+            return np.nan, np.nan, 0, n_treated_dropped, n_controls_dropped
 
-        X = np.column_stack([np.ones(n, dtype=np.float64), d_valid])
-        beta, *_ = np.linalg.lstsq(X, y_valid, rcond=None)
-        resid = y_valid - X @ beta
-        k = 2
-        dof = n - k
-        sigma2 = float(resid @ resid) / dof
-        XtX_inv = np.linalg.inv(X.T @ X)
-        cov = sigma2 * XtX_inv
+        # Step 5: Single OLS regression y_composite ~ [1, D] via the house
+        # linalg engine (classical SE from the same regression).
+        X = np.column_stack([np.ones(n, dtype=np.float64), d_ever_treated])
+        coefs, _, vcov = solve_ols(
+            X, y_composite, return_vcov=True, vcov_type="classical"
+        )
+        att = float(coefs[1])
+        dof = n - 2
+        if vcov is not None and np.isfinite(vcov[1, 1]):
+            se = float(np.sqrt(max(vcov[1, 1], 0.0)))
+        else:
+            se = np.nan
 
-        att = float(beta[1])
-        se = float(np.sqrt(cov[1, 1]))
-
-        return att, se, dof
+        return att, se, dof, n_treated_dropped, n_controls_dropped
 
     def _transform_demean(
         self,
