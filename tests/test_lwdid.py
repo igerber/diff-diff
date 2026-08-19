@@ -3688,3 +3688,96 @@ class TestReviewRound10Guards:
                     treatment="treat",
                     estimation_method="psm",
                 )
+
+
+class TestReviewRound11Guards:
+    """Local-review round 11: execution-verified guards.
+
+    - the IPW/DR logit score/Hessian used CLIPPED propensities, breaking
+      the estimating-equation linearization whenever trimming fired (the
+      MLE's score is ~0 in the RAW fitted probabilities only), and clipped
+      observations kept a nonzero weight-derivative
+    - NaN logit coefficients from a rank-deficient (collinear) propensity
+      model were treated as non-convergence and silently substituted
+      regression adjustment under ipw/dr provenance
+    - the RA interaction gate counted NOMINAL covariate columns, so a
+      perfectly collinear control flipped the eq. 3.3 design off and
+      changed the ATT
+    """
+
+    KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+    @staticmethod
+    def _panel(x_fn, n_units=24, extra=None):
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(n_units):
+            treated = u < n_units // 2
+            x = x_fn(u)
+            for t in range(1, 7):
+                d = 1 if (treated and t >= 4) else 0
+                row = dict(unit=u, time=t, treat=d, x=x, y=1 + 0.4 * x + 2 * d + rng.normal(0, 0.3))
+                if extra is not None:
+                    row["x2"] = extra(x)
+                rows.append(row)
+        return pd.DataFrame(rows)
+
+    def test_rank_deficient_propensity_stays_ipw(self):
+        # x2 = 2x: the logit drops a column (NaN coef) but the fitted
+        # probabilities are valid - the fit must REMAIN IPW (pre-fix it
+        # silently became regression adjustment under ipw provenance).
+        df_full = self._panel(lambda u: float(u % 5))
+        df_dup = self._panel(lambda u: float(u % 5), extra=lambda x: 2.0 * x)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            r_dup = LWDiD(rolling="demean", estimation_method="ipw").fit(
+                df_dup, covariates=["x", "x2"], **self.KW
+            )
+            r_ipw = LWDiD(rolling="demean", estimation_method="ipw").fit(
+                df_full, covariates=["x"], **self.KW
+            )
+            r_reg = LWDiD(rolling="demean", estimation_method="reg").fit(
+                df_dup, covariates=["x", "x2"], **self.KW
+            )
+        assert any("reduced-rank propensity" in str(x.message) for x in caught)
+        # the duplicated-column IPW fit equals the identified IPW fit,
+        # NOT the regression-adjustment fit
+        np.testing.assert_allclose(r_dup.att, r_ipw.att, rtol=1e-10)
+        assert abs(r_dup.att - r_reg.att) > 1e-12 or abs(r_dup.se - r_reg.se) > 1e-12
+
+    def test_redundant_control_does_not_change_ra_estimand(self):
+        df_full = self._panel(lambda u: float(u % 3), n_units=8)
+        df_dup = self._panel(lambda u: float(u % 3), n_units=8, extra=lambda x: 2.0 * x)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            base = LWDiD(rolling="demean", estimation_method="reg").fit(
+                df_full, covariates=["x"], **self.KW
+            )
+            dup = LWDiD(rolling="demean", estimation_method="reg").fit(
+                df_dup, covariates=["x", "x2"], **self.KW
+            )
+        # identical identified design -> identical ATT (pre-fix: the
+        # nominal K flipped the interaction gate and moved the point)
+        np.testing.assert_allclose(dup.att, base.att, rtol=1e-10)
+
+    def test_trimmed_propensity_score_uses_raw_fit(self):
+        # Strong-heterogeneity DGP that activates trimming: the logit
+        # score at the MLE, as constructed by the IF code path, must be
+        # ~0 (raw probabilities), not the clipped-probability residual.
+        from diff_diff.linalg import solve_logit
+
+        rng = np.random.default_rng(3)
+        n = 300
+        x = rng.normal(0, 2.5, n)
+        p = 1 / (1 + np.exp(-2.5 * x))
+        d = (rng.random(n) < p).astype(float)
+        X = x.reshape(-1, 1)
+        coefs, probs_raw = solve_logit(X, d)
+        trim_lo, trim_hi = 0.01, 0.99
+        assert ((probs_raw < trim_lo) | (probs_raw > trim_hi)).any()  # trimming active
+        X_ps = np.column_stack([np.ones(n), X])
+        score_raw = ((d - probs_raw)[:, None] * X_ps).sum(axis=0)
+        probs_clipped = np.clip(probs_raw, trim_lo, trim_hi)
+        score_clipped = ((d - probs_clipped)[:, None] * X_ps).sum(axis=0)
+        assert np.abs(score_raw).max() < 1e-6  # MLE estimating equation
+        assert np.abs(score_clipped).max() > 1e-2  # the pre-fix construction

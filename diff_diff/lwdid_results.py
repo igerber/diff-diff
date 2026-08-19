@@ -702,7 +702,10 @@ class LWDiDResults(BaseResults, AggregationMixin):
             return False
         n_treated = int((treatment == 1).sum())
         n_control = len(treatment) - n_treated
-        k = controls.shape[1]
+        # IDENTIFIED control dimension, mirroring _estimate_reg exactly
+        # (round-11 review: the nominal column count diverged from the
+        # fit's gate under collinear controls).
+        k = int(np.linalg.matrix_rank(np.column_stack([np.ones(len(treatment)), controls])) - 1)
         return n_treated > k + 1 and n_control > k + 1
 
     @classmethod

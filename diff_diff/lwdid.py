@@ -2927,8 +2927,11 @@ class LWDiD(BaseEstimator):
         if controls_matrix is not None:
             parts.append(controls_matrix)
             # Add D*(X - X_bar_1) interaction term when sample sizes permit
-            # (LW2025 Eq 3.3: requires N_0 > K+1 and N_1 > K+1)
-            K = controls_matrix.shape[1]
+            # (LW2025 Eq 3.3: requires N_0 > K+1 and N_1 > K+1). K is the
+            # IDENTIFIED control dimension (round-11 review: the nominal
+            # column count let a perfectly collinear control flip the gate
+            # off and silently change the ATT while adding no information).
+            K = int(np.linalg.matrix_rank(np.column_stack([np.ones(n_obs), controls_matrix])) - 1)
             treated_mask = treatment == 1
             n_treated = int(treated_mask.sum())
             n_control = n_obs - n_treated
@@ -3067,15 +3070,31 @@ class LWDiD(BaseEstimator):
         # solve_logit adds intercept automatically
         coefs_logit, probs = solve_logit(controls_matrix, treatment)
 
-        # Convergence check: coefficients must be finite
-        if not np.all(np.isfinite(coefs_logit)):
-            warnings.warn(
-                "Logistic regression did not converge (non-finite coefficients). "
-                "Falling back to 'reg' estimation. Consider standardizing controls.",
-                UserWarning,
-                stacklevel=2,
-            )
-            return self._estimate_reg(y, treatment, controls_matrix, cluster_ids, n_obs)
+        # Rank/convergence handling (round-11 review): the shared solver
+        # marks DROPPED collinear columns with NaN coefficients while the
+        # fitted probabilities remain valid - that reduced-rank fit stays
+        # an IPW fit (the pre-fix code silently substituted regression
+        # adjustment under ipw provenance). Only a genuinely failed solve
+        # (non-finite probabilities) falls back.
+        kept_ps = np.isfinite(coefs_logit)
+        if not kept_ps.all():
+            if np.all(np.isfinite(probs)):
+                warnings.warn(
+                    f"Propensity model is rank-deficient: "
+                    f"{int((~kept_ps).sum())} collinear column(s) dropped; "
+                    f"continuing IPW with the reduced-rank propensity fit.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            else:
+                warnings.warn(
+                    "Logistic regression did not converge (non-finite "
+                    "probabilities). Falling back to 'reg' estimation. "
+                    "Consider standardizing controls.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                return self._estimate_reg(y, treatment, controls_matrix, cluster_ids, n_obs)
 
         # Convergence check: complete/quasi-complete separation
         if np.any(probs < 1e-8) or np.any(probs > 1 - 1e-8):
@@ -3097,7 +3116,13 @@ class LWDiD(BaseEstimator):
                 UserWarning,
                 stacklevel=2,
             )
-        probs = np.clip(probs, trim_lo, trim_hi)
+        probs_raw = probs
+        probs = np.clip(probs_raw, trim_lo, trim_hi)
+        # Observations at the clip boundary have ZERO weight-derivative in
+        # gamma (round-11 review: using clipped probabilities in the logit
+        # score/Hessian broke the estimating-equation linearization - the
+        # score at the MLE is ~0 in the RAW fitted probabilities only).
+        unclipped = (probs_raw > trim_lo) & (probs_raw < trim_hi)
 
         # Step 3: Compute IPW weights
         # For treated: weight = 1
@@ -3144,14 +3169,17 @@ class LWDiD(BaseEstimator):
 
         # --- Propensity score estimation uncertainty correction ---
         # Design matrix with intercept (solve_logit adds intercept internally,
-        # so we reconstruct it here for the IF computation).
-        X_ps = np.column_stack([np.ones(n_obs), controls_matrix])
+        # so we reconstruct it here for the IF computation), restricted to
+        # the KEPT (identified) propensity columns under rank deficiency.
+        X_ps = np.column_stack([np.ones(n_obs), controls_matrix])[:, kept_ps]
 
-        # Logit score: S_i = (D_i - p_i) * X_i
-        S_gamma = (treatment - probs)[:, np.newaxis] * X_ps
+        # Logit score: S_i = (D_i - p_i) * X_i, at the RAW fitted
+        # probabilities (the score of the actual MLE; clipped probabilities
+        # are a weighting choice, not the estimating equation).
+        S_gamma = (treatment - probs_raw)[:, np.newaxis] * X_ps
 
-        # Logit Hessian: H = -(1/n) * X' diag(p*(1-p)) X
-        W_ps = probs * (1 - probs)
+        # Logit Hessian: H = -(1/n) * X' diag(p*(1-p)) X (raw fit)
+        W_ps = probs_raw * (1 - probs_raw)
         H_gamma = -(X_ps.T * W_ps) @ X_ps / n_obs
         try:
             H_gamma_inv = np.linalg.inv(H_gamma)
@@ -3159,12 +3187,13 @@ class LWDiD(BaseEstimator):
             H_gamma_inv = np.linalg.pinv(H_gamma)
 
         # Sensitivity: dATT/dgamma
-        # dw/dgamma_i = w_i * X_i (logit chain rule)
+        # dw/dgamma_i = w_i * X_i (logit chain rule) for UNCLIPPED
+        # observations; a clipped weight is locally constant in gamma.
         # dATT/dgamma = -(1/w_sum) * sum_ctrl(w_i * X_i * (Y_i - mu_0))
         # The (Y_i - mu_0) centering comes from the quotient rule for the
         # Hajek estimator (d/dgamma of Sigma(wY)/Sigma(w)) and ensures
         # translation invariance of the resulting SE.
-        dw_dgamma_ctrl = w_ctrl[:, np.newaxis] * X_ps[ctrl_mask]
+        dw_dgamma_ctrl = (w_ctrl * unclipped[ctrl_mask])[:, np.newaxis] * X_ps[ctrl_mask]
         Y_ctrl_centered = y[ctrl_mask] - att_control
         dATT_dgamma = -(dw_dgamma_ctrl * Y_ctrl_centered[:, np.newaxis]).sum(axis=0) / (
             n_obs * p_bar
@@ -3509,15 +3538,29 @@ class LWDiD(BaseEstimator):
         # Step 1: Get propensity scores
         coefs_logit, probs = solve_logit(controls_matrix, treatment)
 
-        # Convergence check: coefficients must be finite
-        if not np.all(np.isfinite(coefs_logit)):
-            warnings.warn(
-                "Logistic regression did not converge (non-finite coefficients). "
-                "Falling back to 'reg' estimation. Consider standardizing controls.",
-                UserWarning,
-                stacklevel=2,
-            )
-            return self._estimate_reg(y, treatment, controls_matrix, cluster_ids, n_obs)
+        # Rank/convergence handling (round-11 review; mirrors _estimate_ipw):
+        # NaN coefficients with finite probabilities = a reduced-rank
+        # propensity fit that remains a DR fit; only non-finite
+        # probabilities fall back to regression adjustment.
+        kept_ps = np.isfinite(coefs_logit)
+        if not kept_ps.all():
+            if np.all(np.isfinite(probs)):
+                warnings.warn(
+                    f"Propensity model is rank-deficient: "
+                    f"{int((~kept_ps).sum())} collinear column(s) dropped; "
+                    f"continuing DR with the reduced-rank propensity fit.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            else:
+                warnings.warn(
+                    "Logistic regression did not converge (non-finite "
+                    "probabilities). Falling back to 'reg' estimation. "
+                    "Consider standardizing controls.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                return self._estimate_reg(y, treatment, controls_matrix, cluster_ids, n_obs)
 
         # Convergence check: complete/quasi-complete separation
         if np.any(probs < 1e-8) or np.any(probs > 1 - 1e-8):
@@ -3538,7 +3581,11 @@ class LWDiD(BaseEstimator):
                 UserWarning,
                 stacklevel=2,
             )
-        probs = np.clip(probs, self.pscore_trim, 1.0 - self.pscore_trim)
+        probs_raw = probs
+        probs = np.clip(probs_raw, self.pscore_trim, 1.0 - self.pscore_trim)
+        # Zero weight-derivative at the clip boundary; score/Hessian use
+        # the RAW fitted probabilities (round-11 review; see _estimate_ipw).
+        unclipped = (probs_raw > trim_lo_dr) & (probs_raw < trim_hi_dr)
 
         # Step 2: Fit outcome model on control units only using WLS with IPW weights
         # This matches the Stata/lwdid-py reference: outcome model is fitted on
@@ -3610,13 +3657,14 @@ class LWDiD(BaseEstimator):
         # H_gamma = -(1/n) * X' diag(p*(1-p)) X (logit Hessian)
         # dATT/dgamma = -sum_C[dw/dgamma * (resid - B)] / sum_C(w)
         # ================================================================
-        X_ps = np.column_stack([np.ones(n_obs), controls_matrix])
+        X_ps = np.column_stack([np.ones(n_obs), controls_matrix])[:, kept_ps]
 
-        # Logit score
-        S_gamma = (treatment - probs)[:, np.newaxis] * X_ps
+        # Logit score (RAW fitted probabilities - the actual MLE's
+        # estimating equation; clipping is a weighting choice)
+        S_gamma = (treatment - probs_raw)[:, np.newaxis] * X_ps
 
-        # Logit Hessian
-        W_ps = probs * (1 - probs)
+        # Logit Hessian (raw fit)
+        W_ps = probs_raw * (1 - probs_raw)
         H_gamma = -(X_ps.T * W_ps) @ X_ps / n_obs
         try:
             H_gamma_inv = np.linalg.inv(H_gamma)
@@ -3624,9 +3672,11 @@ class LWDiD(BaseEstimator):
             H_gamma_inv = np.linalg.pinv(H_gamma)
 
         # Sensitivity of ATT to propensity score parameters
-        # dw/dgamma_i = w_i * X_i; chain through the Hajek control term
+        # dw/dgamma_i = w_i * X_i for UNCLIPPED observations (a clipped
+        # weight is locally constant in gamma); chain through the Hajek
+        # control term
         r_minus_B = resid_ctrl - control_term
-        dw_dgamma_ctrl = ipw_ctrl[:, np.newaxis] * X_ps[ctrl_mask]
+        dw_dgamma_ctrl = (ipw_ctrl * unclipped[ctrl_mask])[:, np.newaxis] * X_ps[ctrl_mask]
         dATT_dgamma = -(dw_dgamma_ctrl * r_minus_B[:, np.newaxis]).sum(axis=0) / weights_sum
 
         # PS adjustment
@@ -4183,12 +4233,25 @@ def validate_staggered_data(data, unit, time, cohort) -> Dict[str, Any]:
         results["valid"] = False
         results["errors"].append("No treated cohorts found.")
 
+    # Duplicate (unit, time) cells are INVALID (fit() rejects them), and
+    # a duplicate can mask a missing cell in the row-count balance check
+    # below (round-11 review).
+    n_dup_cells = int(df.duplicated(subset=[unit, time]).sum())
+    if n_dup_cells > 0:
+        results["valid"] = False
+        results["errors"].append(
+            f"{n_dup_cells} duplicate (unit, time) observation(s); each " f"pair must be unique."
+        )
+
     # Check panel balance
     n_units = df[unit].nunique()
     n_times = df[time].nunique()
     expected_rows = n_units * n_times
-    if len(df) != expected_rows:
-        results["warnings"].append(f"Unbalanced panel: {len(df)} rows vs {expected_rows} expected")
+    if len(df) - n_dup_cells != expected_rows:
+        results["warnings"].append(
+            f"Unbalanced panel: {len(df) - n_dup_cells} distinct cell(s) vs "
+            f"{expected_rows} expected"
+        )
 
     # Check missing values in unit/time (cohort NaN/NaT is a documented
     # never-treated encoding, not a data problem).
