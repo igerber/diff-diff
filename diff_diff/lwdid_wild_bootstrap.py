@@ -234,8 +234,13 @@ def wild_cluster_bootstrap(
         raise ValueError(
             f"Unknown weight_type '{weight_type}'. Must be one of: {_VALID_WEIGHT_TYPES}"
         )
-    if not (0.0 < alpha < 1.0):
-        raise ValueError(f"alpha must be in (0, 1), got {alpha}.")
+    if (
+        isinstance(alpha, bool)
+        or not isinstance(alpha, (int, float, np.integer, np.floating))
+        or not np.isfinite(alpha)
+        or not (0.0 < alpha < 1.0)
+    ):
+        raise ValueError(f"alpha must be a scalar in (0, 1), got {alpha!r}.")
     if (
         isinstance(n_bootstrap, bool)
         or not isinstance(n_bootstrap, (int, np.integer))

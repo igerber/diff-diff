@@ -583,8 +583,16 @@ class LWDiD(BaseEstimator):
                 f"control_group must be one of {_VALID_CONTROL_GROUPS}, " f"got '{control_group}'"
             )
         # Validate alpha
-        if not (0 < alpha < 1):
-            raise ValueError(f"alpha must be in (0, 1), got {alpha}")
+        if (
+            isinstance(alpha, bool)
+            or not isinstance(alpha, (int, float, np.integer, np.floating))
+            or not np.isfinite(alpha)
+            or not (0 < alpha < 1)
+        ):
+            # Round-22 review: a one-element array passed the range check
+            # and failed later inside inference with a raw TypeError.
+            raise ValueError(f"alpha must be a scalar in (0, 1), got {alpha!r}")
+        alpha = float(alpha)
         # Validate n_bootstrap (0 = analytical; a bootstrap needs >= 2
         # replicates for a sample standard deviation - review finding:
         # n_bootstrap=1 was accepted and produced NaN downstream)

@@ -4378,3 +4378,22 @@ class TestReviewRound21Guards:
         import matplotlib.pyplot as plt
 
         plt.close(fig)
+
+
+class TestReviewRound22Guards:
+    """Local-review round 22: array-valued alpha passed construction and
+    failed later with a raw TypeError."""
+
+    @pytest.mark.parametrize(
+        "bad", [np.array([0.05]), "0.05", None, complex(0.05), np.nan, np.inf, True]
+    )
+    def test_alpha_scalar_validation(self, bad):
+        with pytest.raises((ValueError, TypeError)):
+            LWDiD(alpha=bad)
+        from diff_diff.lwdid_wild_bootstrap import wild_cluster_bootstrap
+
+        y = np.random.default_rng(0).normal(size=20)
+        d = np.array([1.0] * 10 + [0.0] * 10)
+        cl = np.arange(20) % 5
+        with pytest.raises((ValueError, TypeError)):
+            wild_cluster_bootstrap(y, d, cl, alpha=bad, n_bootstrap=19)
