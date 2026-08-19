@@ -423,11 +423,17 @@ def _get_pre_periods(data: pd.DataFrame, time: str, treatment: str) -> np.ndarra
     np.ndarray
         Sorted array of pre-treatment period values.
     """
+    # Partition at the single onset S = min(observed treated period),
+    # matching fit()'s calendar rule (round-9 review: the former
+    # any-unit-treated rule classified a controls-only post period as
+    # pre-treatment, so exclusions could remove a POST period while
+    # labeling it an excluded pre-period).
     all_periods = np.sort(data[time].unique())
-    # Post-treatment periods are those where any unit is treated
-    post_periods = data.loc[data[treatment] == 1, time].unique()
-    pre_periods = np.array([p for p in all_periods if p not in post_periods])
-    return np.sort(pre_periods)
+    treated_times = data.loc[data[treatment] == 1, time]
+    if len(treated_times) == 0:
+        return all_periods
+    onset_s = treated_times.min()
+    return np.array([p for p in all_periods if p < onset_s])
 
 
 # =============================================================================
@@ -596,7 +602,10 @@ def robustness_pre_periods(
         control_group=control_group,
     )
 
-    post_periods = np.sort(data.loc[data[treatment] == 1, time].unique())
+    # ALL observed periods >= S are post (round-9 review: the any-unit-
+    # treated rule dropped controls-only post periods from the subset).
+    _onset_s = data.loc[data[treatment] == 1, time].min()
+    post_periods = np.sort(data.loc[data[time] >= _onset_s, time].unique())
 
     specs: List[SpecificationResult] = []
 
@@ -803,7 +812,10 @@ def sensitivity_no_anticipation(
         control_group=control_group,
     )
 
-    post_periods = np.sort(data.loc[data[treatment] == 1, time].unique())
+    # ALL observed periods >= S are post (round-9 review: the any-unit-
+    # treated rule dropped controls-only post periods from the subset).
+    _onset_s = data.loc[data[treatment] == 1, time].min()
+    post_periods = np.sort(data.loc[data[time] >= _onset_s, time].unique())
 
     specs: List[SpecificationResult] = []
 

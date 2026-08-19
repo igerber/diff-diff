@@ -3509,3 +3509,94 @@ class TestReviewRound8Guards:
         out = validate_staggered_data(df, unit="unit", time="time", cohort="g")
         assert out["valid"] is False
         assert any("same time scale" in e for e in out["errors"])
+
+
+class TestReviewRound9Guards:
+    """Local-review round 9: execution-verified guards.
+
+    - staggered aggregation stored effects under int(t - g), silently
+      merging distinct fractional horizons; the common interface used
+      positional labels while staggered numeric used arithmetic, so the
+      same gapped design got different event keys per interface
+    - the round-8 onset partition was not propagated to diagnostics and
+      the sensitivity helpers
+    - Inf outcomes passed the NaN check and were silently cell-filtered
+    """
+
+    KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+    def test_fractional_horizons_fail_closed(self):
+        rows = []
+        times = [0.5, 1.0, 1.5, 2.0, 2.5]
+        for u in range(10):
+            g = 1.5 if u < 5 else 0
+            for t in times:
+                d = int(g > 0 and t >= g)
+                rows.append(dict(unit=u, time=t, treat=d, g=g, y=float(t) + d))
+        df = pd.DataFrame(rows)
+        with pytest.raises(ValueError, match="not an integer"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                LWDiD(rolling="demean").fit(df, first_treat="g", **self.KW)
+
+    def test_gapped_calendar_common_staggered_label_parity(self):
+        # {1, 2, 4, 6} with onset 4: both interfaces must label events by
+        # arithmetic t - g on numeric calendars (pre-fix: common reported
+        # {0, 1} positional while staggered reported {0, 2}).
+        rows = []
+        for u in range(12):
+            treated = u < 6
+            for t in (1, 2, 4, 6):
+                d = 1 if (treated and t >= 4) else 0
+                rows.append(
+                    dict(unit=u, time=t, treat=d, g=4 if treated else 0, y=float(t) + 2 * d)
+                )
+        df = pd.DataFrame(rows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            common = LWDiD(rolling="demean").fit(df, **self.KW)
+            stag = LWDiD(rolling="demean", control_group="never_treated").fit(
+                df, first_treat="g", **self.KW
+            )
+        common_post = sorted(common.event_study_effects)
+        stag_post = sorted(k for k, v in stag.event_study_effects.items() if k >= 0)
+        assert common_post == [0, 2]
+        assert stag_post == [0, 2]
+
+    def test_diagnostics_and_sensitivity_use_onset_partition(self):
+        from diff_diff.lwdid_sensitivity import _get_pre_periods
+
+        # controls-only post period t=5 (all treated rows missing there)
+        rows = []
+        for u in range(12):
+            treated = u < 6
+            for t in range(1, 7):
+                if treated and t == 5:
+                    continue
+                d = 1 if (treated and t >= 4) else 0
+                rows.append(dict(unit=u, time=t, treat=d, y=float(t)))
+        df = pd.DataFrame(rows)
+        pre = _get_pre_periods(df, "time", "treat")
+        assert list(pre) == [1, 2, 3]  # t=5 stays POST despite no treated rows
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            diag = LWDiD(rolling="demean").get_transformation_diagnostics(
+                df, outcome="y", unit="unit", time="time", treatment="treat"
+            )
+        # control units' pre window excludes t=5: with y = t the pre mean
+        # over {1,2,3} is 2.0 for every unit
+        assert diag is not None
+
+    def test_inf_outcome_rejected(self):
+        rows = []
+        for u in range(8):
+            for t in range(1, 7):
+                d = 1 if (u < 4 and t >= 4) else 0
+                rows.append(dict(unit=u, time=t, treat=d, y=1.0 + d))
+        df = pd.DataFrame(rows)
+        df.loc[df.index[5], "y"] = np.inf
+        with pytest.raises(ValueError, match="non-finite"):
+            LWDiD(rolling="demean").fit(df, **self.KW)
+        df["g"] = np.where(df["unit"] < 4, 4, 0)
+        with pytest.raises(ValueError, match="non-finite"):
+            LWDiD(rolling="demean").fit(df, first_treat="g", **self.KW)

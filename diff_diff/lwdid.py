@@ -872,12 +872,17 @@ class LWDiD(BaseEstimator):
                 "by_cohort": by_cohort,
             }
 
-        # Common timing: pre-treatment periods are those where NO unit
-        # is treated (same logic as _fit_common_timing)
+        # Common timing: partition at the single onset S, same as
+        # _fit_common_timing (round-9 review: the per-period max(D) rule
+        # here still classified a controls-only post period as pre).
         _check_treatment_design(df, unit, time, treatment, None)
-        time_treatment = df.groupby(time)[treatment].max()
-        pre_periods = time_treatment[time_treatment == 0].index.tolist()
-        pre_mask = df[time].isin(pre_periods)
+        treated_times = df.loc[df[treatment] == 1, time]
+        if len(treated_times) == 0:
+            raise ValueError(
+                "No post-treatment periods found. At least one period "
+                "with some treatment=1 is required."
+            )
+        pre_mask = df[time] < treated_times.min()
         return self._run_transformation_diagnostics(df, outcome, unit, time, pre_mask)
 
     def _run_transformation_diagnostics(
@@ -1002,6 +1007,24 @@ class LWDiD(BaseEstimator):
                     f"Column '{col}' contains missing values. "
                     f"Please handle missing data before fitting."
                 )
+        # Round-9 review: Inf outcomes passed the NaN check and were
+        # silently np.isfinite-filtered inside staggered cells (changing
+        # the estimation sample with no warning); non-numeric outcomes
+        # crashed with raw conversion errors.
+        try:
+            outcome_values = df[outcome].to_numpy(dtype=float)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Outcome column '{outcome}' is not numeric (dtype "
+                f"{df[outcome].dtype}); encode it numerically before fitting."
+            ) from exc
+        n_nonfinite_y = int((~np.isfinite(outcome_values)).sum())
+        if n_nonfinite_y > 0:
+            raise ValueError(
+                f"Outcome column '{outcome}' contains {n_nonfinite_y} "
+                f"non-finite value(s) (Inf). LWDiD does not silently drop "
+                f"outcome rows; remove or recode them before fitting."
+            )
 
         # Check panel structure: each unit-time pair should be unique
         duplicates = df.duplicated(subset=[unit, time], keep=False)
@@ -1570,14 +1593,40 @@ class LWDiD(BaseEstimator):
             compute_event_study_bands,
         )
 
-        # Event time is the position difference on the ordered observed
-        # support (same convention as _encode_staggered_time_scale); the
-        # common-timing cohort g is the first post period.
+        # Event-time convention, shared with the staggered path (round-9
+        # review: the interfaces previously disagreed on gapped numeric
+        # calendars - common used ordered-support positions while
+        # staggered used arithmetic t - g): NUMERIC calendars use the
+        # Registry's arithmetic r = t - S (validated integral so distinct
+        # horizons can never merge under the integer storage keys);
+        # datetime/Period calendars use position differences (matching
+        # _encode_staggered_time_scale, which encodes them to positions
+        # before the staggered machinery runs).
         all_times = sorted(pd.unique(df[time]))
-        time_pos = {value: index for index, value in enumerate(all_times)}
-        g_pos = min(time_pos[t] for t in post_periods)
+        onset_s = min(post_periods)
+        if not pd.api.types.is_numeric_dtype(df[time]):
+            # datetime/Period (position-encoded on the staggered path) and
+            # ordered string labels (demean-only contract): position
+            # differences on the ordered support.
+            time_pos = {value: index for index, value in enumerate(all_times)}
+            g_pos = time_pos[onset_s]
+            relative_of = {t: int(time_pos[t] - g_pos) for t in all_times}
+        else:
+            relative_of = {}
+            for t in all_times:
+                rel = float(t) - float(onset_s)
+                if abs(rel - round(rel)) > 1e-9:
+                    raise ValueError(
+                        f"Event time t - S = {rel!r} for period {t!r} is not "
+                        f"an integer: the event-study surface stores integer "
+                        f"event-time keys and cannot represent fractional "
+                        f"horizons without silently merging them. Encode the "
+                        f"time column as consecutive integer periods or as "
+                        f"datetime/Period values."
+                    )
+                relative_of[t] = int(round(rel))
         nominal_anchors = (-1,) if self.rolling in ("demean", "demeanq") else (-2, -1)
-        observed_relative = {position - g_pos for position in time_pos.values()}
+        observed_relative = set(relative_of.values())
         reference_periods = tuple(r for r in nominal_anchors if r in observed_relative)
 
         unit_rows = df.drop_duplicates(subset=[unit], keep="first").set_index(unit)
@@ -1594,7 +1643,7 @@ class LWDiD(BaseEstimator):
         event_influence: Dict[int, np.ndarray] = {}
         skipped: List[Tuple[int, str]] = []
         for t in post_periods:
-            relative_time = int(time_pos[t] - g_pos)
+            relative_time = relative_of[t]
             columns = [unit, "_ydot"] + controls
             if cluster is not None and cluster not in columns:
                 columns.append(cluster)

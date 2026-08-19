@@ -281,6 +281,24 @@ def fit_staggered(
 
     all_times = sorted(pd.unique(df[time]))
     observed_time_set = set(all_times)
+    # Integer event-time contract (round-9 review): aggregation stores
+    # effects under int(t - g), so a fractional horizon (numeric calendar
+    # with non-integer spacing relative to a cohort) would silently MERGE
+    # distinct event times, overwriting estimates and covariance entries.
+    # Datetime/Period panels are already position-encoded (integral by
+    # construction); numeric panels are validated here and fail closed.
+    for g in treated_cohorts:
+        for t in all_times:
+            rel = float(t) - float(g)
+            if abs(rel - round(rel)) > 1e-9:
+                raise ValueError(
+                    f"Event time t - g = {rel!r} (period {t!r}, cohort "
+                    f"{g!r}) is not an integer: the event-study surface "
+                    f"stores integer event-time keys and cannot represent "
+                    f"fractional horizons without silently merging them. "
+                    f"Encode the time and cohort columns as consecutive "
+                    f"integer periods or as datetime/Period values."
+                )
     reference_periods = (-1,) if estimator.rolling in ("demean", "demeanq") else (-2, -1)
     global_cluster_ids = None
     if cluster is not None:
