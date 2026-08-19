@@ -646,6 +646,22 @@ class LWDiD(BaseEstimator):
 
         # Dispatch to common timing or staggered
         if first_treat is None:
+            if self.rolling != "demean" and not (
+                pd.api.types.is_numeric_dtype(df[time])
+                or pd.api.types.is_datetime64_any_dtype(df[time])
+                or isinstance(df[time].dtype, pd.PeriodDtype)
+            ):
+                # Campaign finding: detrend/demeanq/detrendq cast the time
+                # column to float for the trend/quarter design and raised a
+                # raw numpy conversion error on string times (while demean,
+                # which never touches the time values, succeeded).
+                raise ValueError(
+                    f"rolling='{self.rolling}' requires a numeric or "
+                    f"datetime/Period time column (the unit-specific trend/"
+                    f"seasonal design uses the time values); column "
+                    f"'{time}' has dtype {df[time].dtype}. Encode the time "
+                    f"column numerically, or use rolling='demean'."
+                )
             return self._fit_common_timing(df, outcome, unit, time, treatment, cluster, covariates)
         from diff_diff.lwdid_staggered import fit_staggered
 

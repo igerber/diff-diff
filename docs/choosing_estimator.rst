@@ -629,8 +629,9 @@ alternative to propensity-score reweighting under staggered adoption.
   transformations (demean or detrend) applied to pre-treatment outcomes
 - Supports both common timing and staggered adoption designs
   (never-treated / not-yet-treated controls)
-- Doubly-robust estimation (``estimation_method='dr'``) with multiple
-  variance options: classical, HC1, HC2, HC3; cluster-robust inference via
+- Doubly-robust estimation (``estimation_method='dr'``) with
+  influence-function inference (``vcov_type='hc1'``; the ``reg`` path
+  additionally offers classical/HC2/HC3); cluster-robust inference via
   the constructor's ``cluster=`` parameter
 - Built-in specification robustness: compare demean vs detrend as an
   informal pre-test for sensitivity to trend assumptions

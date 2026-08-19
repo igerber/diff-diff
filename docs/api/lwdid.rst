@@ -273,7 +273,7 @@ Input Contract
 --------------
 
 :meth:`~diff_diff.LWDiD.fit` validates the treatment design before any
-transformation is applied. Five requirements are enforced:
+transformation is applied. Seven requirements are enforced:
 
 - **Absorbing treatment** — within each unit the ``treatment`` indicator
   must be non-decreasing over time: once a unit switches from 0 to 1 it
@@ -283,10 +283,24 @@ transformation is applied. Five requirements are enforced:
   are rejected with a ``ValueError`` pointing to the staggered interface
   (pass ``first_treat``).
 - **Staggered consistency** — when ``first_treat`` is supplied, the
-  ``treatment`` indicator must satisfy :math:`D_{it} = 1[t \ge g_i]`,
-  where :math:`g_i` is the unit's first-treatment period. Units that are
-  never treated (``first_treat`` coded NaN or 0) must have no treated
-  rows.
+  ``treatment`` indicator must satisfy :math:`D_{it} = 1[t \ge g_i]` over
+  each unit's OBSERVED rows, where :math:`g_i` is the unit's
+  first-treatment period; the row at :math:`t = g_i` itself may be
+  unobserved (unbalanced panels with a missing onset row are accepted).
+  Units that are never treated must have no treated rows.
+- **Never-treated encodings** — ``first_treat`` coded ``0``, ``NaN``/
+  ``NaT``, or ``np.inf`` means never-treated; ``inf`` and finite cohorts
+  BEYOND the last observed period are recoded to never-treated with a
+  warning (beyond-window units never switch on inside the sample).
+  Negative cohorts raise. NUMERIC cohorts strictly between observed
+  periods are rejected; datetime/Period cohorts map to the next observed
+  period — a dtype-dependent contract documented in the methodology
+  registry.
+- **Variance configuration** — ``estimation_method='reg'`` accepts
+  ``vcov_type`` in ``{'classical', 'hc1', 'hc2', 'hc3'}``; ``'ipw'``/
+  ``'dr'``/``'psm'`` accept ``'hc1'`` only (the influence-function /
+  matching variance is always used on those paths); ``cluster=`` composes
+  only with ``'hc1'`` (CR1) and is rejected for ``'psm'``.
 - **Never-treated units under not-yet-treated control** — when
   ``first_treat`` is supplied and ``control_group='not_yet_treated'``,
   at least one never-treated unit (``first_treat`` coded NaN or 0) must
@@ -370,6 +384,28 @@ sensitivity):**
                           first_treat="first_treat")
        print(f"{transform}: ATT={res.att:.4f} (SE={res.se:.4f})")
 
+Wild cluster bootstrap
+----------------------
+
+``diff_diff.lwdid_wild_bootstrap.wild_cluster_bootstrap(y, treatment,
+cluster_ids, controls=None, *, n_bootstrap=999, weight_type='rademacher',
+alpha=0.05, seed=None)`` provides few-cluster inference on a collapsed
+cross-section. It delegates to the house Wild Cluster Restricted engine
+(:func:`diff_diff.wild_bootstrap_se`, matched to R's
+``fwildclusterboot::boottest``): the null is imposed by dropping the
+treatment column while keeping the controls, the confidence interval is
+obtained by test inversion, and Rademacher weights are fully enumerated
+automatically when :math:`2^G \le` ``n_bootstrap``. The result carries
+``att``, the analytical CR1 ``se``, ``t_stat_original``, ``p_value``
+(strict-exceedance house convention), the test-inversion
+``ci_lower``/``ci_upper``, ``n_clusters``, ``n_bootstrap``,
+``weight_type``, ``alpha``, the finite-filtered ``bootstrap_distribution``
+(``None`` when the degenerate-design guard fires), and ``n_dropped``
+(non-finite outcome rows dropped with a warning). Exactly-identified
+designs (cluster-invariant treatment with zero cluster scores) fail
+closed: the point estimate is retained with NaN inference.
+
+
 Empirical Applications
 ----------------------
 
@@ -382,8 +418,11 @@ studies:
   yields a per-period treatment trajectory that grows over time — from
   :math:`\hat{\tau}_{1989} = -0.043` (SE = 0.059) to
   :math:`\hat{\tau}_{2000} = -0.403` (SE = 0.152). The exact-inference
-  p-value (0.021) and randomization-inference p-value (0.020) are nearly
-  identical, validating the normality assumption. This demonstrates the
+  p-value (0.021) validates the normality assumption. (The paper's printed
+  randomization-inference p-value of 0.020 is not reproducible with the
+  authors' own package, which implements the inclusive Phipson-Smyth rule
+  and converges to ~0.051 at 100k replications — see the methodology
+  registry's RI Note; the implementation follows the package convention.) This demonstrates the
   method works with as few as one treated unit.
 
 - **Walmart minimum-wage study** (LW 2025, Section 6): A balanced panel of

@@ -3,7 +3,6 @@
 import numpy as np
 import pytest
 
-from diff_diff.lwdid_exceptions import RandomizationError
 from diff_diff.lwdid_randomization import (
     _compute_pvalue,
     randomization_inference,
@@ -139,24 +138,24 @@ class TestDegenerateData:
     def test_all_treated_raises(self):
         y = np.array([1.0, 2.0, 3.0, 4.0])
         treatment = np.array([1.0, 1.0, 1.0, 1.0])
-        with pytest.raises(RandomizationError):
+        with pytest.raises(ValueError):
             randomization_inference(y, treatment, n_reps=100)
 
     def test_all_control_raises(self):
         y = np.array([1.0, 2.0, 3.0, 4.0])
         treatment = np.array([0.0, 0.0, 0.0, 0.0])
-        with pytest.raises(RandomizationError):
+        with pytest.raises(ValueError):
             randomization_inference(y, treatment, n_reps=100)
 
     def test_too_small_sample_raises(self):
         y = np.array([1.0, 2.0])
         treatment = np.array([1.0, 0.0])
-        with pytest.raises(RandomizationError):
+        with pytest.raises(ValueError):
             randomization_inference(y, treatment, n_reps=100)
 
     def test_invalid_method_raises(self, cross_section_data):
         y, treatment, _, _ = cross_section_data
-        with pytest.raises(RandomizationError):
+        with pytest.raises(ValueError):
             randomization_inference(y, treatment, method="invalid", n_reps=100)
 
 

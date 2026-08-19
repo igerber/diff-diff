@@ -94,18 +94,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `results.aggregate('event_study')` surface instead.
 
 ### Fixed
+- **`LWDiD` maintainer fix wave** (post-acceptance validation campaign: 43
+  execution-verified findings, all resolved):
+  - Estimand: the `tau_omega` composite is complete-case with FIXED cohort
+    weights (treated units without a finite own-cohort post average and
+    controls not observing every surviving cohort's post window are
+    dropped with warnings and counters; the pre-fix code zero-filled
+    missing control entries and silently reweighted the treated side);
+    with any drops, `.att` is the influence-weighted cohort-mass point on
+    every variance route and the composite is exposed as
+    `att_tau_omega_complete_case`. `demeanq`/`detrendq` overall ATTs now
+    aggregate seasonal cohort ATTs (the composite silently substituted
+    the non-seasonal transforms); the seasonal transforms fail closed on
+    insufficient pre-periods and unobserved seasons.
+  - Inference: one reference-distribution policy per surface (one-cell
+    aggregates use the cell's residual t; multi-cell unclustered stay
+    large-sample; clustered use contributing-cluster G-1); sub-samples
+    with <2 clusters fail closed; the common-timing bootstrap resamples
+    positionally (row order/index labels no longer corrupt SEs), honors
+    `cluster=` via whole-cluster resampling, and reports the df it used;
+    `wild_cluster_bootstrap` was rebuilt on the house WCR engine
+    (test-inversion CI, CR1 se, strict-exceedance p; the intercept-only
+    null model, ULP tie handling, and the G=2 zero-SE escape are gone;
+    API: `n_bootstrap`/`alpha`, result fields renamed).
+  - Contracts: `vcov_type` is restricted to values with real behavior
+    (`ipw`/`dr`/`psm` accept `hc1` only; `cluster=` composes only with
+    `hc1`; `psm`+`cluster` rejected); NaN covariates/clusters are rejected
+    explicitly; PSM calipers never average out-of-caliper controls;
+    cohort encodings are normalized once (`inf`/beyond-window recode with
+    warnings, negative cohorts raise, validator and `fit()` agree);
+    sensitivity results are NaN-honest (`baseline_pvalue`, NaN
+    `significant_05` for failed specs, full-frame pre-validation, unknown
+    kwargs raise); staggered sample metadata counts contributing units;
+    rank-deficient designs rebuild the influence function on kept columns.
+  - Shared surfaces: `hc3` escapes closed across siblings (DiD/MP-DiD
+    `absorb=` now full-dummy-routes hc3 like hc2; TWFE no longer crashes
+    misleadingly; SpilloverDiD rejects hc3 at construction with its own
+    reason) plus a structural roster guard. `LWDiDResults.to_latex()` and
+    the `lwdid_exceptions` shim removed (unreleased API).
 - **`LWDiD` review-round fixes** (staggered contract and inference tightenings):
   - Staggered classical/HC SEs now come from the joint influence function
     across cohort-time cells (the LW 2026 eq. 7.19 pooled-regression basis),
     accounting for correlation among cohort effects that share controls
     instead of assuming independence.
-  - On unbalanced panels the overall ATT point estimate is unified to the
-    eq. (7.18) composite-regression estimand `tau_omega`; the joint
-    influence function contributes the standard error only, so switching
-    variance options no longer moves the point estimate (gated to
-    `rolling` in `'demean'`/`'detrend'` with `control_group='never_treated'`,
-    `estimation_method='reg'`, and no covariates; the quarterly variants
-    keep their previous behavior).
+  - On unbalanced panels the overall ATT point estimate is unified so a
+    variance selection never moves it (gated to `rolling` in
+    `'demean'`/`'detrend'` with `control_group='never_treated'`,
+    `estimation_method='reg'`, and no covariates). Superseded in detail by
+    the maintainer fix wave below: the composite `tau_omega` is now
+    complete-case with fixed cohort weights, reported as `.att` only when
+    no unit is dropped, and the quarterly variants now aggregate SEASONAL
+    cohort ATTs on every variance route.
   - t-test degrees of freedom are computed from one design-based rule across
     common-timing and staggered paths instead of two inconsistent ones.
   - All-eventually-treated panels under `control_group='not_yet_treated'`

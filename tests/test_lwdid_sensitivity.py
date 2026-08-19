@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from diff_diff.lwdid_exceptions import SensitivityWarning
 from diff_diff.lwdid_sensitivity import (
     _classify_robustness,
     _compute_sensitivity_ratio,

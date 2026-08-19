@@ -83,7 +83,6 @@ groups:
   lwdid:
     - diff_diff/lwdid.py
     - diff_diff/lwdid_results.py
-    - diff_diff/lwdid_exceptions.py
     - diff_diff/lwdid_wild_bootstrap.py
     - diff_diff/lwdid_randomization.py
     - diff_diff/lwdid_sensitivity.py
@@ -862,12 +861,6 @@ sources:
         type: user_guide
 
   # ── LWDiD (lwdid group) ───────────────────────────────────────────
-
-  diff_diff/lwdid_exceptions.py:
-    drift_risk: low
-    docs:
-      - path: docs/api/lwdid.rst
-        type: api_reference
 
   diff_diff/lwdid_wild_bootstrap.py:
     drift_risk: medium

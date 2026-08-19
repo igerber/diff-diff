@@ -137,7 +137,7 @@ output).
   since the M-021 migration — and carries the K_reference increment there
   (+6, the [time, unit] no-intercept
   increment on df_0 — pinned via expected_adjustment on its matrix row).
-- **L4 — hc2/hc2_bm** (leverage / Satterthwaite DOF — no CR1 factor),
+- **L4 — hc2/hc2_bm/hc3** (leverage / Satterthwaite DOF — no CR1 factor; hc3 squares the leverage denominator and is one-way only),
   **survey TSL** (n_PSU - n_strata over the full design), and **Wooldridge
   cohort_trends full-dummy** (documented opt-in landing on the L1
   convention). **conley** is out of this matrix by decision: the spatial-HAC

@@ -2526,3 +2526,36 @@ class TestResultsPolish:
                   first_treat="first")
         assert np.isfinite(res.att)
         assert res.n_composite_treated_dropped == 4
+
+
+class TestNonNumericTimeContract:
+    """LWDiD fix-wave (campaign finding): string time columns made
+    detrend/demeanq/detrendq raise raw numpy conversion errors while
+    demean succeeded - now an informative ValueError states the contract.
+    """
+
+    @staticmethod
+    def _string_time_panel():
+        rng = np.random.default_rng(1)
+        rows = []
+        labels = ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6"]
+        for u in range(10):
+            for i, t in enumerate(labels):
+                d = int(u < 5 and i >= 3)
+                rows.append(dict(unit=u, time=t, treat=d, y=rng.normal() + d))
+        return pd.DataFrame(rows)
+
+    def test_demean_accepts_string_time(self):
+        df = self._string_time_panel()
+        res = LWDiD(rolling="demean", estimation_method="reg").fit(
+            df, outcome="y", unit="unit", time="time", treatment="treat"
+        )
+        assert np.isfinite(res.att)
+
+    @pytest.mark.parametrize("rolling", ["detrend", "demeanq", "detrendq"])
+    def test_trend_seasonal_transforms_reject_string_time_informatively(self, rolling):
+        df = self._string_time_panel()
+        with pytest.raises(ValueError, match="numeric or datetime"):
+            LWDiD(rolling=rolling, estimation_method="reg").fit(
+                df, outcome="y", unit="unit", time="time", treatment="treat"
+            )

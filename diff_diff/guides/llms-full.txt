@@ -52,7 +52,7 @@ Basic 2x2 Difference-in-Differences estimator.
 
 ```python
 DifferenceInDifferences(
-    vcov_type: str | None = None,           # Variance family: "hc1" (default), "classical", "hc2", "hc2_bm", "conley"
+    vcov_type: str | None = None,           # Variance family: "hc1" (default), "classical", "hc2", "hc2_bm", "hc3", "conley"
     cluster: str | None = None,             # Column for cluster-robust SEs
     alpha: float = 0.05,                    # Significance level
     inference: str = "analytical",          # "analytical" or "wild_bootstrap" (wild_bootstrap requires cluster=)
