@@ -14,6 +14,7 @@ Covers the Phase 1a commitments in the approved plan:
 
 from __future__ import annotations
 
+import inspect
 import warnings
 
 import numpy as np
@@ -3204,3 +3205,114 @@ class TestDfConventionNormal:
         for ctor in (DifferenceInDifferences, TwoWayFixedEffects, MultiPeriodDiD):
             est = ctor(df_convention="normal")
             assert est.get_params()["df_convention"] == "normal"
+
+
+class TestHC3SharedSurfaceHardening:
+    """LWDiD fix-wave WS7: the PR's linalg widening admitted "hc3" to the
+    shared vcov vocabulary, but pre-existing per-estimator guard lists let
+    it escape. Campaign finding (execution-verified): hc3 + absorb= computed
+    leverage on the within-transformed reduced design, silently understating
+    DiD/MP-DiD SEs ~11% vs the full-dummy computation; TWFE crashed with a
+    misleading "hc3 is one-way only ... cluster-robust" error for users who
+    never passed cluster=.
+    """
+
+    def _staggered_fe_panel(self, seed: int = 20260819) -> pd.DataFrame:
+        rng = np.random.default_rng(seed)
+        rows = []
+        for u in range(24):
+            alpha = rng.normal(0, 1.0)
+            treated_unit = u < 12
+            for t in range(6):
+                treat = int(treated_unit and t >= 3)
+                y = alpha + 0.3 * t + 1.5 * treat + rng.normal(0, 1.0)
+                rows.append(
+                    {"unit": u, "time": t, "treated": int(treated_unit), "post": int(t >= 3), "y": y}
+                )
+        return pd.DataFrame(rows)
+
+    def test_did_hc3_absorb_matches_full_dummy(self):
+        # hc3 must route absorb= through the full-dummy design exactly like
+        # hc2/hc2_bm (leverage families need the FULL FE projection).
+        df = self._staggered_fe_panel()
+        r_absorb = DifferenceInDifferences(vcov_type="hc3").fit(
+            df, outcome="y", treatment="treated", post="post", absorb=["unit"]
+        )
+        r_fe = DifferenceInDifferences(vcov_type="hc3").fit(
+            df, outcome="y", treatment="treated", post="post", fixed_effects=["unit"]
+        )
+        np.testing.assert_allclose(r_absorb.att, r_fe.att, rtol=1e-10)
+        np.testing.assert_allclose(r_absorb.se, r_fe.se, rtol=1e-10)
+
+    def test_mpd_hc3_absorb_matches_full_dummy(self):
+        df = self._staggered_fe_panel()
+        kw = dict(outcome="y", treatment="treated", time="time", post_periods=[3, 4, 5])
+        r_absorb = MultiPeriodDiD(vcov_type="hc3").fit(df, absorb=["unit"], **kw)
+        r_fe = MultiPeriodDiD(vcov_type="hc3").fit(df, fixed_effects=["unit"], **kw)
+        for period in r_absorb.period_effects:
+            np.testing.assert_allclose(
+                r_absorb.period_effects[period].effect,
+                r_fe.period_effects[period].effect,
+                rtol=1e-10,
+            )
+            np.testing.assert_allclose(
+                r_absorb.period_effects[period].se,
+                r_fe.period_effects[period].se,
+                rtol=1e-10,
+            )
+
+    def test_twfe_hc3_fits_without_misleading_cluster_error(self):
+        # Pre-fix: explicit hc3 kept the unit auto-cluster, and solve_ols
+        # raised "hc3 is one-way only ... for cluster-robust" although the
+        # user never passed cluster=.
+        df = self._staggered_fe_panel()
+        df["treat_it"] = df["treated"] * df["post"]
+        res = TwoWayFixedEffects(vcov_type="hc3").fit(
+            df, outcome="y", treatment="treat_it", unit="unit", time="time"
+        )
+        assert np.isfinite(res.att) and np.isfinite(res.se) and res.se > 0
+
+    def test_roster_every_vcov_estimator_supports_or_rejects_hc3(self):
+        # Structural guard: the next vcov-vocabulary widening must not
+        # escape a sibling's hardcoded list. Every BaseEstimator-roster
+        # class that accepts the linalg vcov vocabulary (constructs with
+        # vcov_type="hc1") must either be on the known-support allowlist or
+        # reject vcov_type="hc3" with an informative error at construction.
+        import diff_diff
+        from tests.test_base_estimator import DEFAULT_KWARGS, MIXIN_CLASSES
+
+        # Foreign vcov_type vocabularies (not the linalg family namespace):
+        # RDDensityTest uses {jackknife, plugin}; RegressionDiscontinuity
+        # uses the rdrobust vce namespace.
+        FOREIGN_VOCAB = {"RDDensityTest", "RegressionDiscontinuity"}
+        HC3_SUPPORTED = {
+            "DifferenceInDifferences",
+            "TwoWayFixedEffects",
+            "MultiPeriodDiD",
+            "LWDiD",  # reg path only; ipw/dr/psm restricted by its own validator
+        }
+        checked = []
+        for cls in MIXIN_CLASSES:
+            name = cls.__name__
+            if name in FOREIGN_VOCAB:
+                continue
+            base_kwargs = dict(DEFAULT_KWARGS.get(name, {}))
+            sig = inspect.signature(cls.__init__)
+            if "vcov_type" not in sig.parameters:
+                continue
+            try:
+                cls(vcov_type="hc1", **base_kwargs)
+            except (ValueError, NotImplementedError, TypeError):
+                # hc1 itself not accepted at construction -> out of scope
+                continue
+            checked.append(name)
+            if name in HC3_SUPPORTED:
+                cls(vcov_type="hc3", **base_kwargs)  # must construct cleanly
+            else:
+                with pytest.raises((ValueError, NotImplementedError)) as exc_info:
+                    cls(vcov_type="hc3", **base_kwargs)
+                assert "hc3" in str(exc_info.value), (
+                    f"{name} rejected hc3 without naming it: {exc_info.value}"
+                )
+        # The guard must actually be exercising a meaningful roster.
+        assert len(checked) >= 8, f"roster unexpectedly small: {checked}"

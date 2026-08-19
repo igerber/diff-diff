@@ -1760,6 +1760,29 @@ class SpilloverDiD(BaseEstimator):
                 f"rank_deficient_action must be 'warn', 'error', or 'silent', "
                 f"got '{rank_deficient_action}'"
             )
+        # Never-supported leverage families fail at construction (not fit):
+        # hc2/hc2_bm need per-coefficient Bell-McCaffrey/CR2 dof the stage-2
+        # path does not supply; hc3 is simply not implemented for the
+        # two-stage spillover variance. Other values keep fit-time checks.
+        if vcov_type in ("hc2", "hc2_bm"):
+            raise NotImplementedError(
+                f"SpilloverDiD does not yet support vcov_type='{vcov_type}'. "
+                "The current stage-2 inference uses a generic residual df "
+                "(n - effective_rank) for t-distribution lookups, but "
+                "hc2 / hc2_bm require per-coefficient Bell-McCaffrey / CR2 "
+                "degrees of freedom for correct p-values and CIs. Routing "
+                "stage 2 through LinearRegression (which supplies the "
+                "per-coefficient DOF metadata) is queued as a follow-up "
+                "extension. Use vcov_type='hc1' or 'conley', or "
+                "leave default; combine with cluster=<col> for CR1."
+            )
+        if vcov_type == "hc3":
+            raise NotImplementedError(
+                "SpilloverDiD does not support vcov_type='hc3': hc3 is not "
+                "implemented for the two-stage spillover variance. Use "
+                "vcov_type='hc1' or 'conley', or leave default; combine "
+                "with cluster=<col> for CR1."
+            )
         self.rings = rings
         self.d_bar = d_bar
         self.vcov_type = vcov_type
@@ -2258,6 +2281,15 @@ class SpilloverDiD(BaseEstimator):
                 "panels with time-varying covariates. The full covariate "
                 "path mirroring TwoStageDiD._fit_untreated_model is queued as "
                 "a follow-up extension. See DEFERRED.md."
+            )
+        if self.vcov_type == "hc3":
+            # Defense-in-depth mirror of the constructor guard (set_params
+            # bypass); hc3 has its own reason distinct from hc2/hc2_bm.
+            raise NotImplementedError(
+                "SpilloverDiD does not support vcov_type='hc3': hc3 is not "
+                "implemented for the two-stage spillover variance. Use "
+                "vcov_type='hc1' or 'conley', or leave default; combine "
+                "with cluster=<col> for CR1."
             )
         if self.vcov_type in ("hc2", "hc2_bm"):
             raise NotImplementedError(

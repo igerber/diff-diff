@@ -54,11 +54,11 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         DifferenceInDifferences where cluster=None means no clustering.
 
         **Exception (one-way analytical):** when
-        ``vcov_type in {"classical", "hc2"}`` is explicit AND
+        ``vcov_type in {"classical", "hc2", "hc3"}`` is explicit AND
         ``inference="analytical"``, the unit auto-cluster is dropped
         because these families are by construction one-way only and the
-        validator rejects ``cluster_ids + classical`` / ``cluster_ids +
-        hc2``. The user's explicit one-way choice wins over the TWFE
+        validator rejects ``cluster_ids`` with these one-way families. The
+        user's explicit one-way choice wins over the TWFE
         default. Under ``inference="wild_bootstrap"`` the auto-cluster
         is preserved regardless of ``vcov_type`` (the bootstrap uses the
         cluster structure to resample residuals). On ``hc2_bm`` the
@@ -117,7 +117,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
     Because TWFE's within-transformation preserves coefficients but not the
     hat matrix, HC2 leverage and CR2 Bell-McCaffrey corrections on the
     demeaned design would produce wrong small-sample SEs. When
-    ``vcov_type in {"hc2","hc2_bm"}``, TWFE bypasses the within-transform
+    ``vcov_type in {"hc2","hc2_bm","hc3"}``, TWFE bypasses the within-transform
     and builds the full-dummy design ``[intercept, treated×post,
     covariates, unit_dummies, time_dummies]`` directly, so the leverage
     correction and BM DOF compute on the full FE projection. Under this
@@ -126,8 +126,8 @@ class TwoWayFixedEffects(DifferenceInDifferences):
     full-dummy fit rather than the within-transformed reduced fit; the
     ATT coefficient, its SE, and analytical inference are unchanged.
     Auto-cluster-at-unit is preserved on ``hc2_bm`` (routes to CR2-BM at
-    unit) and on ``hc2`` + ``wild_bootstrap``; dropped on explicit ``hc2``
-    + ``analytical`` to match the one-way contract. **This wording applies
+    unit) and on ``hc2``/``hc3`` + ``wild_bootstrap``; dropped on explicit
+    ``hc2``/``hc3`` + ``analytical`` to match the one-way contract. **This wording applies
     to the non-survey analytical path**: under ``survey_design=`` with no
     explicit ``cluster=``, TWFE intentionally keeps the documented
     implicit-PSU path (auto-cluster is NOT injected into the survey PSU
@@ -330,7 +330,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         # with explicit unit + time dummies routes through ``solve_ols``'s
         # full-design hat matrix. HC1/CR1 paths remain on the demeaned
         # design (no leverage term).
-        use_full_dummy = self.vcov_type in ("hc2", "hc2_bm")
+        use_full_dummy = self.vcov_type in ("hc2", "hc2_bm", "hc3")
 
         # Phase 2 panel block-decomposed Conley (matches R conleyreg).
         # FWL composability: the within-transformed scores S = X_demeaned *
@@ -443,7 +443,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         if self.cluster is not None:
             cluster_var: Optional[str] = self.cluster
         elif (
-            self.vcov_type in ("classical", "hc2")
+            self.vcov_type in ("classical", "hc2", "hc3")
             and self._vcov_type_explicit
             and self.inference == "analytical"
         ):
@@ -508,7 +508,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                     f"~{_design_entries * 8 / 1e9:.2f} GB). For panels with "
                     f"many units/periods, consider vcov_type='hc1' (within-"
                     "transform path; no leverage term, lower memory) unless "
-                    "small-sample HC2/HC2-BM inference is required.",
+                    "leverage-corrected HC2/HC2-BM/HC3 inference is required.",
                     UserWarning,
                     stacklevel=2,
                 )
@@ -1116,7 +1116,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             # rule): the auto-cluster is never injected as a survey PSU;
             # only user-explicit cluster= becomes one.
             cluster_override = None
-        elif self.vcov_type in ("classical", "hc2") and self._vcov_type_explicit:
+        elif self.vcov_type in ("classical", "hc2", "hc3") and self._vcov_type_explicit:
             # The explicit one-way analytical exception (mirrors the static
             # cluster_var block; inference is always analytical here - wild
             # raised above).
@@ -1134,7 +1134,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             assert unit_resolved is not None
             absorb_arg: Optional[List[str]] = [unit_resolved]
             if (
-                self.vcov_type in ("hc2", "hc2_bm")
+                self.vcov_type in ("hc2", "hc2_bm", "hc3")
                 and unit_resolved in data.columns
                 and time in data.columns
             ):
@@ -1159,11 +1159,11 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                         f"{_design_cols} full-dummy design "
                         f"(~{_design_entries / 1e6:.1f}M float64 entries, "
                         f"~{_design_entries * 8 / 1e9:.2f} GB) for the "
-                        "leverage-corrected HC2/HC2-BM path. For panels with "
+                        "leverage-corrected HC2/HC2-BM/HC3 path. For panels with "
                         "many units, consider vcov_type='hc1' (absorbed "
                         "within-transform path; no leverage term, lower "
-                        "memory) unless small-sample HC2/HC2-BM inference is "
-                        "required.",
+                        "memory) unless leverage-corrected HC2/HC2-BM/HC3 inference "
+                        "is required.",
                         UserWarning,
                         stacklevel=3,
                     )

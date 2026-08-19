@@ -2280,16 +2280,22 @@ class TestSpilloverDiDRingsStartAtZero:
 
 class TestSpilloverDiDHC2NotSupported:
     """vcov_type='hc2' and 'hc2_bm' require per-coefficient BM/CR2 DOF
-    that the inline stage-2 inference doesn't provide. Round-8 codex
-    review caught that we'd silently return wrong p-values/CIs.
+    that the inline stage-2 inference doesn't provide; hc3 is not
+    implemented for the two-stage spillover variance at all. All three
+    now fail closed at CONSTRUCTION (LWDiD fix-wave hc3 hardening) so a
+    never-supported family cannot silently reach fit-time state.
     """
 
     @pytest.mark.parametrize("vcov_type", ["hc2", "hc2_bm"])
     def test_hc2_paths_raise_not_implemented(self, vcov_type):
-        df = _make_butts_2period_dgp(seed=42)
-        est = SpilloverDiD(rings=[0.0, 100.0], conley_coords=("lat", "lon"), vcov_type=vcov_type)
         with pytest.raises(NotImplementedError, match="hc2"):
-            est.fit(df, outcome="y", unit="unit", time="time", treatment="D")
+            SpilloverDiD(
+                rings=[0.0, 100.0], conley_coords=("lat", "lon"), vcov_type=vcov_type
+            )
+
+    def test_hc3_raises_not_implemented_with_own_reason(self):
+        with pytest.raises(NotImplementedError, match="hc3.*two-stage spillover"):
+            SpilloverDiD(rings=[0.0, 100.0], conley_coords=("lat", "lon"), vcov_type="hc3")
 
 
 class TestSpilloverDiDRankDeficientActionValidation:

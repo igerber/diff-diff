@@ -1161,7 +1161,7 @@ def solve_ols(
         Type of weights: "pweight" (inverse selection probability),
         "fweight" (frequency), or "aweight" (inverse variance).
         Affects variance estimation but not coefficient computation.
-    vcov_type : {"classical", "hc1", "hc2", "hc2_bm", "conley"}, default "hc1"
+    vcov_type : {"classical", "hc1", "hc2", "hc2_bm", "hc3", "conley"}, default "hc1"
         Variance-covariance family forwarded to :func:`compute_robust_vcov`:
 
         - ``"classical"``: non-robust OLS SE, ``sigma_hat^2 * (X'X)^{-1}``.
@@ -4336,7 +4336,7 @@ class LinearRegression:
         Resolved survey design for Taylor Series Linearization variance
         estimation. When provided, weights and weight_type are canonicalized
         from this object.
-    vcov_type : {"classical", "hc1", "hc2", "hc2_bm", "conley"}, optional
+    vcov_type : {"classical", "hc1", "hc2", "hc2_bm", "hc3", "conley"}, optional
         Variance-covariance family. Defaults to the ``robust`` alias
         (``robust=True`` -> ``"hc1"``, ``robust=False`` -> ``"classical"``).
         Passing an explicit ``vcov_type`` overrides ``robust`` unless the
