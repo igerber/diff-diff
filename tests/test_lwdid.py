@@ -2214,3 +2214,80 @@ class TestSeasonalTransformFailClosed:
         with pytest.warns(UserWarning, match="cannot predict quarter"):
             res = est.fit(df, outcome="y", unit="unit", time="time", treatment="treat")
         assert np.isnan(res.att)
+
+
+class TestBootstrapIntegrity:
+    """LWDiD fix-wave WS3: common-timing bootstrap resampling integrity.
+
+    Campaign findings (execution-verified): the bootstrap collected index
+    LABELS but fetched rows POSITIONALLY (raw IndexError on offset indexes;
+    silently doubled SEs on row-shuffled frames); cluster= was accepted but
+    dead inside _bootstrap (iid unit bootstrap labeled clustered); the
+    reported df_inference was G-1 while the bootstrap p-value used N-k.
+    """
+
+    @staticmethod
+    def _common_panel(n_units=40, t_max=6, onset=4, seed=11, n_clusters=8):
+        rng = np.random.default_rng(seed)
+        rows = []
+        for u in range(n_units):
+            alpha = rng.normal()
+            cl = u % n_clusters
+            cl_shock = np.sin(cl)  # cluster-correlated level
+            treated = u < n_units // 2
+            for t in range(1, t_max + 1):
+                d = int(treated and t >= onset)
+                y = alpha + cl_shock + 0.1 * t + rng.normal(scale=0.4) + 1.3 * d
+                rows.append(dict(unit=u, time=t, treat=d, y=y, cl=cl))
+        return pd.DataFrame(rows)
+
+    KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+    def test_bootstrap_invariant_to_index_labels_and_row_order(self):
+        df = self._common_panel()
+        est = lambda: LWDiD(rolling="demean", estimation_method="reg", n_bootstrap=60, seed=1)  # noqa: E731
+        base = est().fit(df, **self.KW)
+        shifted = est().fit(df.set_axis(df.index + 1000), **self.KW)  # offset labels
+        rng = np.random.default_rng(3)
+        shuffled = df.sample(frac=1.0, random_state=5)  # permuted labels
+        res_shuffled = est().fit(shuffled, **self.KW)
+        assert np.isfinite(base.se)
+        np.testing.assert_allclose(shifted.att, base.att, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(shifted.se, base.se, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(res_shuffled.att, base.att, rtol=0, atol=1e-12)
+        # Same seed + same units resampled -> the SE must not move with
+        # row order (pre-fix it more than doubled).
+        np.testing.assert_allclose(res_shuffled.se, base.se, rtol=1e-10)
+        del rng
+
+    def test_cluster_bootstrap_resamples_clusters(self, ci_params):
+        df = self._common_panel()
+        n_boot = ci_params.bootstrap(120)
+        iid = LWDiD(rolling="demean", estimation_method="reg", n_bootstrap=n_boot, seed=7).fit(
+            df, **self.KW
+        )
+        clustered = LWDiD(
+            rolling="demean", estimation_method="reg", n_bootstrap=n_boot, seed=7, cluster="cl"
+        ).fit(df, **self.KW)
+        # Points identical (resampling never moves the full-sample point)
+        np.testing.assert_allclose(clustered.att, iid.att, rtol=0, atol=1e-12)
+        # SEs genuinely differ on a cluster-correlated DGP
+        assert np.isfinite(clustered.se) and clustered.se > 0
+        assert abs(clustered.se - iid.se) / iid.se > 1e-3
+        # df matches the analytical clustered rule (G-1), not N-k
+        assert clustered.df_inference == 8 - 1
+        assert clustered.cluster_name == "cl"
+        assert clustered.n_clusters == 8
+
+    def test_cluster_bootstrap_concords_with_analytical_cr1(self, ci_params):
+        df = self._common_panel(n_units=80, n_clusters=16)
+        n_boot = ci_params.bootstrap(300, min_n=199)
+        analytical = LWDiD(rolling="demean", estimation_method="reg", cluster="cl").fit(
+            df, **self.KW
+        )
+        boot = LWDiD(
+            rolling="demean", estimation_method="reg", cluster="cl",
+            n_bootstrap=n_boot, seed=13,
+        ).fit(df, **self.KW)
+        threshold = 0.40 if n_boot < 100 else 0.15
+        assert abs(boot.se - analytical.se) / analytical.se < threshold, (boot.se, analytical.se)

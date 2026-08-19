@@ -1100,7 +1100,7 @@ class LWDiD(BaseEstimator):
 
         # Step 6: Bootstrap if requested
         if self.n_bootstrap > 0:
-            att, se, t_stat, p_value, conf_int = self._bootstrap(
+            att, se, t_stat, p_value, conf_int, df_dof = self._bootstrap(
                 df,
                 outcome,
                 unit,
@@ -3167,10 +3167,13 @@ class LWDiD(BaseEstimator):
         post_periods: List[Any],
         treated_units: List[Any],
         control_units: List[Any],
-    ) -> Tuple[float, float, float, float, Tuple[float, float]]:
+    ) -> Tuple[float, float, float, float, Tuple[float, float], int]:
         """Compute bootstrap standard errors.
 
-        Uses unit-level block bootstrap for panel data.
+        Uses unit-level block bootstrap for panel data; when ``cluster`` is
+        set, whole clusters are resampled instead (a cluster may contain
+        both treated and control units, so replicates with an empty arm are
+        counted as failed).
 
         Parameters
         ----------
@@ -3209,6 +3212,9 @@ class LWDiD(BaseEstimator):
             Two-sided p-value.
         conf_int : tuple of float
             Confidence interval (lower, upper).
+        df_used : int
+            Degrees of freedom the p-value/CI actually used (G-1 when
+            clustered, N-k otherwise) - stored as ``df_inference``.
         """
         # Full-sample estimate
         treated_set = set(treated_units)
@@ -3241,94 +3247,123 @@ class LWDiD(BaseEstimator):
             y_full, treat_full, controls_mat, None, len(y_full)
         )
 
-        # Bootstrap replications (unit-level block bootstrap)
+        # Bootstrap replications. Resampling level: units (default) or
+        # whole CLUSTERS when cluster= is set (campaign finding: the
+        # cluster parameter was silently ignored here, producing an iid
+        # unit bootstrap labeled as clustered).
         treated_arr = np.array(treated_units)
         control_arr = np.array(control_units)
         n_treated = len(treated_arr)
         n_control = len(control_arr)
-        n_units = n_treated + n_control
         unit_counts = df.groupby(unit).size().to_dict()
 
+        # Positional row map computed ONCE (campaign finding: the previous
+        # code collected index LABELS then fetched rows POSITIONALLY via
+        # .iloc - crashing on non-default indexes and silently resampling
+        # the wrong rows when labels were permuted relative to positions).
+        unit_col_arr = df[unit].to_numpy()
+        all_unit_ids = np.concatenate([treated_arr, control_arr])
+        unit_positions = {
+            u: np.flatnonzero(unit_col_arr == u) for u in all_unit_ids
+        }
+
+        cluster_draw: Optional[Dict[Any, np.ndarray]] = None
+        if cluster is not None:
+            # cluster is unit-constant (validated); map cluster -> units.
+            cluster_by_unit = df.drop_duplicates(subset=[unit], keep="first").set_index(unit)[
+                cluster
+            ]
+            cluster_draw = {}
+            for u in all_unit_ids:
+                cl = cluster_by_unit[u]
+                cluster_draw.setdefault(cl, [])
+                cluster_draw[cl].append(u)
+            cluster_draw = {cl: np.asarray(us) for cl, us in cluster_draw.items()}
+        treated_set_all = set(treated_units)
+
+        def _draw_units(rng_b: np.random.Generator) -> np.ndarray:
+            if cluster_draw is not None:
+                # Cluster-level draws (no treated/control stratification: a
+                # cluster may contain both arms).
+                cluster_keys = list(cluster_draw)
+                picks = rng_b.choice(len(cluster_keys), size=len(cluster_keys), replace=True)
+                return np.concatenate([cluster_draw[cluster_keys[i]] for i in picks])
+            boot_treated = rng_b.choice(treated_arr, size=n_treated, replace=True)
+            boot_control = rng_b.choice(control_arr, size=n_control, replace=True)
+            return np.concatenate([boot_treated, boot_control])
+
+        def _replicate_att(boot_units: np.ndarray) -> float:
+            """Estimate one bootstrap replicate (shared serial/parallel)."""
+            boot_indices = np.concatenate([unit_positions[u] for u in boot_units])
+            boot_df = df.iloc[boot_indices].copy()
+            # Occurrence-specific synthetic unit ids keep duplicate draws
+            # distinct through the transform step.
+            repeat_counts = [unit_counts[u] for u in boot_units]
+            boot_df["_boot_unit"] = np.repeat(np.arange(len(boot_units)), repeat_counts)
+
+            # Treatment is EVER-TREATED MEMBERSHIP of the source unit, not
+            # the collapsed row's time-varying D (with unsorted input the
+            # drop_duplicates(keep="first") row is arbitrary - typically
+            # pre-treatment, which would zero the treatment vector).
+            boot_treat_vec = np.array(
+                [1.0 if u in treated_set_all else 0.0 for u in boot_units], dtype=np.float64
+            )
+            if boot_treat_vec.sum() == 0 or boot_treat_vec.sum() == len(boot_units):
+                return np.nan  # invalid replicate: an arm is empty
+
+            # Apply transformation
+            pre_mask_b = boot_df[time].isin(pre_periods)
+            if self.rolling == "demean":
+                boot_df = self._transform_demean(boot_df, outcome, "_boot_unit", pre_mask_b)
+            elif self.rolling == "detrend":
+                boot_df = self._transform_detrend(boot_df, outcome, "_boot_unit", time, pre_mask_b)
+            elif self.rolling == "demeanq":
+                boot_df = self._transform_demeanq(boot_df, outcome, "_boot_unit", time, pre_mask_b)
+            elif self.rolling == "detrendq":
+                boot_df = self._transform_detrendq(
+                    boot_df, outcome, "_boot_unit", time, pre_mask_b
+                )
+            else:
+                boot_df = self._transform_detrend(boot_df, outcome, "_boot_unit", time, pre_mask_b)
+
+            # Cross-sectional estimate
+            post_mask_b = boot_df[time].isin(post_periods)  # type: ignore[union-attr, call-overload]
+            post_b = boot_df.loc[post_mask_b]  # type: ignore[union-attr]
+            unit_avg_b = post_b.groupby("_boot_unit")["_ydot"].mean()
+
+            first_rows = boot_df.drop_duplicates(subset=["_boot_unit"], keep="first")  # type: ignore[union-attr]
+            cs_b = first_rows[["_boot_unit"]].copy()
+            if controls:
+                for c in controls:
+                    cs_b[c] = first_rows[c].values
+
+            cs_b["_treat"] = cs_b["_boot_unit"].map(
+                dict(zip(range(len(boot_units)), boot_treat_vec))
+            )
+            cs_b["_ydot_avg"] = cs_b["_boot_unit"].map(unit_avg_b)
+            cs_b = cs_b.dropna(subset=["_ydot_avg"])
+
+            if len(cs_b) < 3:
+                return np.nan
+
+            y_b = cs_b["_ydot_avg"].values.astype(np.float64)
+            treat_b = cs_b["_treat"].values.astype(np.float64)
+            ctrl_b = cs_b[controls].values.astype(np.float64) if controls else None
+
+            try:
+                att_b, _, _, _, _, _ = self._dispatch_estimator(
+                    y_b, treat_b, ctrl_b, None, len(y_b)
+                )
+                return float(att_b)
+            except (np.linalg.LinAlgError, ValueError):
+                return np.nan
+
         if self.n_jobs == 1:
-            # --- Serial path (original implementation, unchanged) ---
+            # --- Serial path ---
             rng = np.random.default_rng(seed=self.seed)
             boot_atts = np.empty(self.n_bootstrap)
             for b in range(self.n_bootstrap):
-                # Resample treated and control units SEPARATELY to preserve proportions
-                boot_treated = rng.choice(treated_arr, size=n_treated, replace=True)
-                boot_control = rng.choice(control_arr, size=n_control, replace=True)
-                boot_units = np.concatenate([boot_treated, boot_control])
-
-                # Build bootstrap sample (all periods for resampled units)
-                boot_indices = []
-                for i, u in enumerate(boot_units):
-                    idx = df.index[df[unit] == u].tolist()
-                    boot_indices.extend(idx)
-
-                boot_df = df.iloc[boot_indices].copy()
-                # Assign new unit IDs to handle duplicates (dict lookup, no sort needed)
-                repeat_counts = [unit_counts[u] for u in boot_units]
-                boot_df["_boot_unit"] = np.repeat(np.arange(n_units), repeat_counts)
-
-                # Treatment indicator from group membership (not from raw data column)
-                boot_treat_vec = np.array([1.0] * n_treated + [0.0] * n_control, dtype=np.float64)
-
-                # Apply transformation
-                pre_mask_b = boot_df[time].isin(pre_periods)
-                if self.rolling == "demean":
-                    boot_df = self._transform_demean(boot_df, outcome, "_boot_unit", pre_mask_b)
-                elif self.rolling == "detrend":
-                    boot_df = self._transform_detrend(
-                        boot_df, outcome, "_boot_unit", time, pre_mask_b
-                    )
-                elif self.rolling == "demeanq":
-                    boot_df = self._transform_demeanq(
-                        boot_df, outcome, "_boot_unit", time, pre_mask_b
-                    )
-                elif self.rolling == "detrendq":
-                    boot_df = self._transform_detrendq(
-                        boot_df, outcome, "_boot_unit", time, pre_mask_b
-                    )
-                else:
-                    boot_df = self._transform_detrend(
-                        boot_df, outcome, "_boot_unit", time, pre_mask_b
-                    )
-
-                # Cross-sectional estimate
-                post_mask_b = boot_df[time].isin(post_periods)  # type: ignore[union-attr, call-overload]
-                post_b = boot_df.loc[post_mask_b]  # type: ignore[union-attr]
-                unit_avg_b = post_b.groupby("_boot_unit")["_ydot"].mean()
-
-                cs_b = boot_df.drop_duplicates(subset=["_boot_unit"], keep="first")[  # type: ignore[union-attr]
-                    ["_boot_unit"]
-                ].copy()
-                if controls:
-                    for c in controls:
-                        cs_b[c] = boot_df.drop_duplicates(subset=["_boot_unit"], keep="first")[  # type: ignore[union-attr]
-                            c
-                        ].values
-
-                # Map treatment status from group membership
-                boot_treat_map = dict(zip(range(n_units), boot_treat_vec))
-                cs_b["_treat"] = cs_b["_boot_unit"].map(boot_treat_map)
-                cs_b["_ydot_avg"] = cs_b["_boot_unit"].map(unit_avg_b)
-                cs_b = cs_b.dropna(subset=["_ydot_avg"])
-
-                if len(cs_b) < 3:
-                    boot_atts[b] = np.nan
-                    continue
-
-                y_b = cs_b["_ydot_avg"].values.astype(np.float64)
-                treat_b = cs_b["_treat"].values.astype(np.float64)
-                ctrl_b = cs_b[controls].values.astype(np.float64) if controls else None
-
-                try:
-                    att_b, _, _, _, _, _ = self._dispatch_estimator(
-                        y_b, treat_b, ctrl_b, None, len(y_b)
-                    )
-                    boot_atts[b] = att_b
-                except (np.linalg.LinAlgError, ValueError):
-                    boot_atts[b] = np.nan
+                boot_atts[b] = _replicate_att(_draw_units(rng))
         else:
             # --- Parallel path (n_jobs > 1) ---
             from concurrent.futures import ThreadPoolExecutor
@@ -3346,86 +3381,13 @@ class LWDiD(BaseEstimator):
             # serial path), while an explicit integer seed remains reproducible.
             seed_seq = np.random.SeedSequence(self.seed)
             child_seqs = seed_seq.spawn(self.n_bootstrap)
-            boot_unit_samples = []
-            for b in range(self.n_bootstrap):
-                rng_b = np.random.default_rng(child_seqs[b])
-                boot_treated = rng_b.choice(treated_arr, size=n_treated, replace=True)
-                boot_control = rng_b.choice(control_arr, size=n_control, replace=True)
-                boot_unit_samples.append(np.concatenate([boot_treated, boot_control]))
-
-            def _run_replicate(b: int) -> float:
-                """Execute a single bootstrap replicate."""
-                boot_units = boot_unit_samples[b]
-
-                # Build bootstrap sample (all periods for resampled units)
-                boot_indices = []
-                for u in boot_units:
-                    idx = df.index[df[unit] == u].tolist()
-                    boot_indices.extend(idx)
-
-                boot_df = df.iloc[boot_indices].copy()
-                repeat_counts = [unit_counts[u] for u in boot_units]
-                boot_df["_boot_unit"] = np.repeat(np.arange(n_units), repeat_counts)
-
-                boot_treat_vec = np.array([1.0] * n_treated + [0.0] * n_control, dtype=np.float64)
-
-                # Apply transformation
-                pre_mask_b = boot_df[time].isin(pre_periods)
-                if self.rolling == "demean":
-                    boot_df = self._transform_demean(boot_df, outcome, "_boot_unit", pre_mask_b)
-                elif self.rolling == "detrend":
-                    boot_df = self._transform_detrend(
-                        boot_df, outcome, "_boot_unit", time, pre_mask_b
-                    )
-                elif self.rolling == "demeanq":
-                    boot_df = self._transform_demeanq(
-                        boot_df, outcome, "_boot_unit", time, pre_mask_b
-                    )
-                elif self.rolling == "detrendq":
-                    boot_df = self._transform_detrendq(
-                        boot_df, outcome, "_boot_unit", time, pre_mask_b
-                    )
-                else:
-                    boot_df = self._transform_detrend(
-                        boot_df, outcome, "_boot_unit", time, pre_mask_b
-                    )
-
-                # Cross-sectional estimate
-                post_mask_b = boot_df[time].isin(post_periods)  # type: ignore[union-attr, call-overload]
-                post_b = boot_df.loc[post_mask_b]  # type: ignore[union-attr]
-                unit_avg_b = post_b.groupby("_boot_unit")["_ydot"].mean()
-
-                cs_b = boot_df.drop_duplicates(subset=["_boot_unit"], keep="first")[  # type: ignore[union-attr]
-                    ["_boot_unit"]
-                ].copy()
-                if controls:
-                    for c in controls:
-                        cs_b[c] = boot_df.drop_duplicates(subset=["_boot_unit"], keep="first")[  # type: ignore[union-attr]
-                            c
-                        ].values
-
-                boot_treat_map = dict(zip(range(n_units), boot_treat_vec))
-                cs_b["_treat"] = cs_b["_boot_unit"].map(boot_treat_map)
-                cs_b["_ydot_avg"] = cs_b["_boot_unit"].map(unit_avg_b)
-                cs_b = cs_b.dropna(subset=["_ydot_avg"])
-
-                if len(cs_b) < 3:
-                    return np.nan
-
-                y_b = cs_b["_ydot_avg"].values.astype(np.float64)
-                treat_b = cs_b["_treat"].values.astype(np.float64)
-                ctrl_b = cs_b[controls].values.astype(np.float64) if controls else None
-
-                try:
-                    att_b, _, _, _, _, _ = self._dispatch_estimator(
-                        y_b, treat_b, ctrl_b, None, len(y_b)
-                    )
-                    return att_b
-                except (np.linalg.LinAlgError, ValueError):
-                    return np.nan
+            boot_unit_samples = [
+                _draw_units(np.random.default_rng(child_seqs[b]))
+                for b in range(self.n_bootstrap)
+            ]
 
             with ThreadPoolExecutor(max_workers=self.n_jobs) as executor:
-                boot_atts = np.array(list(executor.map(_run_replicate, range(self.n_bootstrap))))
+                boot_atts = np.array(list(executor.map(_replicate_att, boot_unit_samples)))
 
         # Compute bootstrap SE
         n_failed = int(np.isnan(boot_atts).sum())
@@ -3442,11 +3404,19 @@ class LWDiD(BaseEstimator):
         else:
             se = float(np.std(valid_boots, ddof=1))
 
+        # df matches the analytical path's rule (campaign finding: the
+        # reported df_inference was G-1 under cluster= while the bootstrap
+        # p-value used N-k): G-1 when clustered, N-k otherwise. The df
+        # actually used is returned so the caller can store it.
+        if cluster_draw is not None:
+            df_used = max(len(cluster_draw) - 1, 1)
+        else:
+            df_used = max(len(y_full) - n_params_full, 1)
         t_stat, p_value, conf_int = safe_inference(
-            att_full, se, alpha=self.alpha, df=max(len(y_full) - n_params_full, 1)
+            att_full, se, alpha=self.alpha, df=df_used
         )
 
-        return att_full, se, t_stat, p_value, conf_int
+        return att_full, se, t_stat, p_value, conf_int, df_used
 
     def __repr__(self) -> str:
         """Return string representation of the estimator."""
