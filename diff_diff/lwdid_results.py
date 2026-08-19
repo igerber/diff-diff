@@ -705,7 +705,11 @@ class LWDiDResults(BaseResults, AggregationMixin):
         # IDENTIFIED control dimension, mirroring _estimate_reg exactly
         # (round-11 review: the nominal column count diverged from the
         # fit's gate under collinear controls).
-        k = int(np.linalg.matrix_rank(np.column_stack([np.ones(len(treatment)), controls])) - 1)
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        k = int(
+            _detect_rank_deficiency(np.column_stack([np.ones(len(treatment)), controls]))[0] - 1
+        )
         return n_treated > k + 1 and n_control > k + 1
 
     @classmethod

@@ -4072,3 +4072,48 @@ class TestReviewRound16Guards:
         assert res_psm.psm_config["caliper"] == 0.5
         assert np.isnan(res_cl.att)
         assert res_cl.cluster_name == "cl"
+
+
+class TestReviewRound17Guards:
+    """Local-review round 17: the RA gates used matrix_rank's looser
+    default tolerance, disagreeing with solve_ols's pivoted-QR 1e-7
+    convention on NEAR-collinear controls (x2 = x + 1e-10): the gate
+    could count two identified controls, turn the interacted design off,
+    and move the ATT while the solver fit the identified single-control
+    model."""
+
+    KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+    @staticmethod
+    def _panel(near=False, n_units=8):
+        rng = np.random.default_rng(4)
+        rows = []
+        for u in range(n_units):
+            treated = u < n_units // 2
+            x = float(u % 4)
+            for t in range(1, 7):
+                d = 1 if (treated and t >= 4) else 0
+                row = dict(unit=u, time=t, treat=d, x=x, y=1 + 0.4 * x + 2 * d + rng.normal(0, 0.3))
+                if near:
+                    row["x2"] = x + 1e-10
+                rows.append(row)
+        return pd.DataFrame(rows)
+
+    def test_near_collinear_control_matches_identified_design(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            base = LWDiD(rolling="demean", estimation_method="reg").fit(
+                self._panel(), covariates=["x"], **self.KW
+            )
+            near = LWDiD(rolling="demean", estimation_method="reg").fit(
+                self._panel(near=True), covariates=["x", "x2"], **self.KW
+            )
+        # same identified design under the SHARED rank convention: the
+        # near-duplicate is dropped, the interaction gate stays on, and
+        # the ATT matches the single-control fit
+        np.testing.assert_allclose(near.att, base.att, rtol=1e-6)
+        # replay coherence (the mirror uses the same shared detector)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ri = near.randomization_test(n_reps=49, seed=1)
+        np.testing.assert_allclose(ri.att_observed, near.att, rtol=1e-10)

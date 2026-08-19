@@ -25,7 +25,7 @@ import pandas as pd
 from scipy import linalg as scipy_linalg
 
 from diff_diff._base import BaseEstimator
-from diff_diff.linalg import solve_logit, solve_ols
+from diff_diff.linalg import _detect_rank_deficiency, solve_logit, solve_ols
 from diff_diff.lwdid_results import LWDiDResults
 from diff_diff.utils import safe_inference, validate_binary
 
@@ -2812,8 +2812,9 @@ class LWDiD(BaseEstimator):
         Lee, S. & Wooldridge, J. M. (2025). "A Simple Transformation Approach
             to Difference-in-Differences Estimation for Panel Data."
             Procedure 3.1, Equation 3.3.
-        Lee, S. & Wooldridge, J. M. (2026). "Simple Difference-in-Differences
-            Estimation in Panel Data." Procedure 2.1.
+        Lee, S. J. & Wooldridge, J. M. (2026). "Simple Approaches to
+            Inference with Difference-in-Differences Estimators with
+            Small Cross-Sectional Sample Sizes." Procedure 2.1.
         """
         if self.estimation_method == "reg":
             return self._estimate_reg(y, treatment, controls_matrix, cluster_ids, n_obs)
@@ -2981,7 +2982,9 @@ class LWDiD(BaseEstimator):
             # IDENTIFIED control dimension (round-11 review: the nominal
             # column count let a perfectly collinear control flip the gate
             # off and silently change the ATT while adding no information).
-            K = int(np.linalg.matrix_rank(np.column_stack([np.ones(n_obs), controls_matrix])) - 1)
+            K = int(
+                _detect_rank_deficiency(np.column_stack([np.ones(n_obs), controls_matrix]))[0] - 1
+            )
             treated_mask = treatment == 1
             n_treated = int(treated_mask.sum())
             n_control = n_obs - n_treated
@@ -2995,9 +2998,11 @@ class LWDiD(BaseEstimator):
         # redundant columns the rank-aware solver drops, e.g. N=4 with
         # [1, D, x, 2x] has rank 3 and one residual df; equilibration
         # keeps the rank decision scale-invariant).
-        col_scales = np.linalg.norm(X, axis=0)
-        col_scales[col_scales == 0] = 1.0
-        rank_eff = int(np.linalg.matrix_rank(X / col_scales))
+        # Round-17 review: matrix_rank's looser default tolerance
+        # disagreed with solve_ols's scale-invariant pivoted-QR 1e-7
+        # convention on near-collinear columns, so the gate and the fit
+        # could select different designs - use the SHARED detector.
+        rank_eff = int(_detect_rank_deficiency(X)[0])
         if X.shape[0] < 3 or X.shape[0] - rank_eff <= 0:
             # Registry small-sample guards (N >= 3; positive residual df,
             # i.e. N > K + 2 with controls / N > 2K + 2 interacted): the
