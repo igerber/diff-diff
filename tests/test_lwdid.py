@@ -3781,3 +3781,83 @@ class TestReviewRound11Guards:
         score_clipped = ((d - probs_clipped)[:, None] * X_ps).sum(axis=0)
         assert np.abs(score_raw).max() < 1e-6  # MLE estimating equation
         assert np.abs(score_clipped).max() > 1e-2  # the pre-fix construction
+
+
+class TestReviewRound12Guards:
+    """Local-review round 12: execution-verified guards.
+
+    - the DR outcome WLS inverted the raw nominal Gram (not rank-aware /
+      scale-equilibrated): an exactly redundant 1e12-rescaled duplicate
+      changed the DR SE by ~2.5x
+    - IPW/DR returned NOMINAL parameter counts, so a redundant control
+      shrank residual df and moved p-values/CIs with ATT/SE unchanged
+    - the drops-route staggered aggregation weighted cohorts by RAW
+      masses, keeping dropped treated units in the cohort weights
+    """
+
+    KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+    @staticmethod
+    def _panel(extra_scale=None, n_units=24):
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(n_units):
+            treated = u < n_units // 2
+            x = float(u % 5)
+            for t in range(1, 7):
+                d = 1 if (treated and t >= 4) else 0
+                row = dict(unit=u, time=t, treat=d, x=x, y=1 + 0.4 * x + 2 * d + rng.normal(0, 0.3))
+                if extra_scale is not None:
+                    row["x2"] = extra_scale * x
+                rows.append(row)
+        return pd.DataFrame(rows)
+
+    @pytest.mark.parametrize("method", ["ipw", "dr"])
+    @pytest.mark.parametrize("scale", [2.0, 1e12])
+    def test_redundant_control_full_inference_invariance(self, method, scale):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            base = LWDiD(rolling="demean", estimation_method=method).fit(
+                self._panel(), covariates=["x"], **self.KW
+            )
+            dup = LWDiD(rolling="demean", estimation_method=method).fit(
+                self._panel(extra_scale=scale), covariates=["x", "x2"], **self.KW
+            )
+        np.testing.assert_allclose(dup.att, base.att, rtol=1e-8, err_msg=f"{method} att")
+        np.testing.assert_allclose(dup.se, base.se, rtol=1e-8, err_msg=f"{method} se")
+        assert dup.df_inference == base.df_inference, f"{method} df"
+        np.testing.assert_allclose(dup.p_value, base.p_value, rtol=1e-8)
+        np.testing.assert_allclose(dup.conf_int, base.conf_int, rtol=1e-8)
+
+    def test_drops_route_uses_survivor_cohort_masses(self):
+        # Independent oracle: cohorts {3: 4 units, 5: 4 units}; ONE
+        # cohort-5 treated unit observes only t=1..4 (missing its own post
+        # window entirely) -> dropped. Survivor masses 4/7 and 3/7 must
+        # weight the cohort effects (raw masses would use 4/8, 4/8).
+        rng = np.random.default_rng(1)
+        rows = []
+        uid = 0
+        spec = [(0, 8, None), (3, 4, None), (5, 3, None), (5, 1, (1, 2, 3, 4))]
+        for g, n, keep in spec:
+            for _ in range(n):
+                alpha = rng.normal()
+                for t in range(1, 7):
+                    if keep is not None and t not in keep:
+                        continue
+                    d = int(g > 0 and t >= g)
+                    y = alpha + 0.2 * t + rng.normal(scale=0.3) + (1.5 + 0.4 * (g == 5)) * d
+                    rows.append(dict(unit=uid, time=t, treat=d, g=g, y=y))
+                uid += 1
+        df = pd.DataFrame(rows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = LWDiD(rolling="demean", control_group="never_treated", vcov_type="classical").fit(
+                df, first_treat="g", **self.KW
+            )
+        assert res.n_composite_treated_dropped == 1
+        att3 = res.cohort_effects[3]["att"]
+        att5 = res.cohort_effects[5]["att"]
+        expected = (4.0 * att3 + 3.0 * att5) / 7.0  # SURVIVOR masses
+        raw_weighted = (4.0 * att3 + 4.0 * att5) / 8.0
+        np.testing.assert_allclose(res.att, expected, rtol=1e-12)
+        assert abs(res.att - raw_weighted) > 1e-6  # distinguishes the rules

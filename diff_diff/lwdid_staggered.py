@@ -565,6 +565,7 @@ def fit_staggered(
     comp_att = comp_se = np.nan
     comp_df = 0
     comp_scale = 0.0
+    comp_surviving_sizes: Dict[Any, int] = {}
     if tau_omega_config:
         (
             comp_att,
@@ -573,6 +574,7 @@ def fit_staggered(
             n_composite_treated_dropped,
             n_composite_controls_dropped,
             comp_scale,
+            comp_surviving_sizes,
         ) = estimator._composite_regression_aggregation(df, outcome, unit, time, cohort)
         composite_drops = n_composite_treated_dropped + n_composite_controls_dropped
         if composite_drops == 0 and np.isfinite(comp_att):
@@ -590,6 +592,21 @@ def fit_staggered(
                 "docs/methodology/REGISTRY.md (LWDiD).",
                 UserWarning,
                 stacklevel=2,
+            )
+    if tau_omega_config and not composite_is_att and comp_surviving_sizes:
+        # DROPS route: the Registry complete-case rule fixes cohort masses
+        # on the SURVIVING treated sample (round-12 review: the raw masses
+        # still weighted dropped treated units into `.att` and its
+        # combined influence function).
+        surviving_masses = np.array(
+            [comp_surviving_sizes.get(g, 0) for g in valid_cohorts], dtype=float
+        )
+        if surviving_masses.sum() > 0:
+            cohort_weights = surviving_masses / surviving_masses.sum()
+            for g, weight in zip(valid_cohorts, cohort_weights):
+                cohort_effects[g]["weight"] = float(weight)
+            overall_effect = float(
+                np.dot(cohort_weights, [cohort_effects[g]["att"] for g in valid_cohorts])
             )
     if composite_is_att:
         overall_effect = float(comp_att)

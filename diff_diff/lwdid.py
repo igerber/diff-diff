@@ -1769,7 +1769,7 @@ class LWDiD(BaseEstimator):
         unit: str,
         time: str,
         cohort: str,
-    ) -> Tuple[float, float, int, int, int, float]:
+    ) -> Tuple[float, float, int, int, int, float, Dict[Any, int]]:
         """Compute tau_omega via composite outcome regression (LW 2026 Eq 7.18/7.19).
 
         For staggered designs, constructs a composite outcome vector:
@@ -1809,7 +1809,7 @@ class LWDiD(BaseEstimator):
         n_treat = int((fy > 0).sum())
 
         if n_treat == 0:
-            return np.nan, np.nan, 0, 0, 0, 0.0
+            return np.nan, np.nan, 0, 0, 0, 0.0, {}
 
         # Step 2: For each cohort g, compute per-unit post-average transformed outcome
         # using cohort g's pre-period for ALL units
@@ -1923,7 +1923,7 @@ class LWDiD(BaseEstimator):
                 UserWarning,
                 stacklevel=3,
             )
-            return np.nan, np.nan, 0, n_treated_dropped, n_controls_dropped, 0.0
+            return np.nan, np.nan, 0, n_treated_dropped, n_controls_dropped, 0.0, dict(cohort_sizes)
 
         # Step 4: Assemble composite outcome vector on the complete-case
         # sample (finite by construction).
@@ -1945,7 +1945,7 @@ class LWDiD(BaseEstimator):
                 d_ever_treated[i] = 0.0
 
         if n < 3:
-            return np.nan, np.nan, 0, n_treated_dropped, n_controls_dropped, 0.0
+            return np.nan, np.nan, 0, n_treated_dropped, n_controls_dropped, 0.0, dict(cohort_sizes)
 
         # Step 5: Single OLS regression y_composite ~ [1, D] via the house
         # linalg engine (classical SE from the same regression).
@@ -1961,7 +1961,10 @@ class LWDiD(BaseEstimator):
         # Data scale for the degenerate-SE guard (scale-equivariant
         # roundoff reference - see _guard_standard_error).
         y_scale = float(np.max(np.abs(y_composite))) if len(y_composite) else 0.0
-        return att, se, dof, n_treated_dropped, n_controls_dropped, y_scale
+        # Survivor cohort masses (round-12 review: the drops-route
+        # aggregation needs these - raw masses left dropped treated
+        # units in the cohort weights).
+        return att, se, dof, n_treated_dropped, n_controls_dropped, y_scale, dict(cohort_sizes)
 
     def _transform_demean(
         self,
@@ -3227,8 +3230,9 @@ class LWDiD(BaseEstimator):
 
         se = float(np.sqrt(max(var_att, 0.0)))
 
-        # n_params: intercept + controls (propensity model)
-        n_params = 1 + controls_matrix.shape[1]
+        # n_params: IDENTIFIED propensity-model rank (round-12 review:
+        # the nominal count let a redundant control shrink residual df).
+        n_params = int(kept_ps.sum())
         influence = self._finalize_influence(
             self._moment_influence(psi_full, n_obs, cluster_ids), se
         )
@@ -3603,19 +3607,31 @@ class LWDiD(BaseEstimator):
                 y, treatment, controls_matrix, cluster_ids, n_obs
             )  # returns 5-tuple including n_params
 
-        # WLS via sqrt(w) transformation: beta = (X'WX)^{-1} X'WY
+        # WLS via sqrt(w) transformation through the shared RANK-AWARE
+        # solver (round-12 review: the raw inv/pinv Gram on the nominal
+        # columns was not scale-invariant - an exactly redundant
+        # 1e12-rescaled duplicate changed the DR SE by ~2.5x). Dropped
+        # collinear columns get NaN coefficients; the identified mask is
+        # reused for prediction and every outcome-model IF term.
         sqrt_w = np.sqrt(ipw_ctrl)
         X_ctrl_w = X_ctrl * sqrt_w[:, np.newaxis]
         y_ctrl_w = y_ctrl * sqrt_w
-        try:
-            XtWX_inv = np.linalg.inv(X_ctrl_w.T @ X_ctrl_w)
-            coefs_outcome = XtWX_inv @ (X_ctrl_w.T @ y_ctrl_w)
-        except np.linalg.LinAlgError:
-            XtWX_inv = np.linalg.pinv(X_ctrl_w.T @ X_ctrl_w)
-            coefs_outcome = XtWX_inv @ (X_ctrl_w.T @ y_ctrl_w)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # rank warning surfaced below
+            coefs_full, _, _ = solve_ols(X_ctrl_w, y_ctrl_w)
+        kept_om = np.isfinite(coefs_full)
+        if not kept_om.all():
+            warnings.warn(
+                f"DR outcome model is rank-deficient: "
+                f"{int((~kept_om).sum())} collinear column(s) dropped; "
+                f"continuing with the identified outcome design.",
+                UserWarning,
+                stacklevel=2,
+            )
+        coefs_outcome = coefs_full[kept_om]
 
-        # Predict counterfactual for all units
-        X_all = np.column_stack([np.ones(n_obs), controls_matrix])
+        # Predict counterfactual for all units (identified columns only)
+        X_all = np.column_stack([np.ones(n_obs), controls_matrix])[:, kept_om]
         mu_0 = X_all @ coefs_outcome
 
         # Step 3: Compute AIPW/IPWRA estimator (Hajek normalization)
@@ -3690,7 +3706,7 @@ class LWDiD(BaseEstimator):
         # H_beta = -(1/n) * X_ctrl' diag(w) X_ctrl (WLS Hessian)
         # dATT/dbeta = -mean_T(X_i) + sum_C(w_i*X_i) / sum_C(w)
         # ================================================================
-        X_om = np.column_stack([np.ones(n_obs), controls_matrix])
+        X_om = np.column_stack([np.ones(n_obs), controls_matrix])[:, kept_om]
         X_ctrl_om = X_om[ctrl_mask]
 
         # WLS score (nonzero only for control units)
@@ -3741,10 +3757,11 @@ class LWDiD(BaseEstimator):
 
         se = float(np.sqrt(max(var_att, 0.0)))
 
-        # Effective n_params: intercept + treatment + controls (outcome model)
-        # + propensity score parameters
-        K = controls_matrix.shape[1]
-        n_params = 2 + K
+        # Effective n_params: treatment dimension + the IDENTIFIED
+        # outcome-model rank (round-12 review: the nominal count let an
+        # exactly redundant control shrink residual df and move
+        # p-values/CIs while ATT and SE were unchanged).
+        n_params = 1 + int(kept_om.sum())
         influence = self._finalize_influence(
             self._moment_influence(psi_full, n_obs, cluster_ids), se
         )
