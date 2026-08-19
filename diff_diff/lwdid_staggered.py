@@ -180,14 +180,34 @@ def compute_event_study_bands(
                 cband_crit_value = float(np.quantile(sup_t, 1 - estimator.alpha))
                 cband_method = "multiplier_bootstrap_sup_t"
                 cband_n_bootstrap = estimator.n_bootstrap
-                for index, label in enumerate(event_labels):
-                    if not valid[index]:
-                        continue
-                    row = event_effects[label]
-                    row["se"] = float(bootstrap_se[index])
+            invalid_labels = [label for index, label in enumerate(event_labels) if not valid[index]]
+            if invalid_labels:
+                # Fail closed: a requested-bootstrap cell whose draws are
+                # degenerate must not silently keep its analytical SE (an
+                # undocumented mixture of inference families - review
+                # round 2). Point retained, inference NaN.
+                warnings.warn(
+                    f"Multiplier bootstrap produced degenerate draws for "
+                    f"event time(s) {invalid_labels}; their inference is "
+                    f"set to NaN (points retained) rather than silently "
+                    f"reverting to analytical standard errors.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+            for index, label in enumerate(event_labels):
+                row = event_effects[label]
+                if not valid[index]:
+                    row["se"] = float("nan")
                     row["t_stat"], row["p_value"], row["conf_int"] = safe_inference(
-                        row["effect"], row["se"], alpha=estimator.alpha, df=row.get("df")
+                        row["effect"], float("nan"), alpha=estimator.alpha
                     )
+                    row["inference_status"] = "degenerate_bootstrap"
+                    continue
+                row["se"] = float(bootstrap_se[index])
+                row["t_stat"], row["p_value"], row["conf_int"] = safe_inference(
+                    row["effect"], row["se"], alpha=estimator.alpha, df=row.get("df")
+                )
+                if cband_crit_value is not None:
                     row["cband_conf_int"] = (
                         row["effect"] - cband_crit_value * row["se"],
                         row["effect"] + cband_crit_value * row["se"],
@@ -653,6 +673,9 @@ def fit_staggered(
         control_group=estimator.control_group,
         n_bootstrap=estimator.n_bootstrap,
         seed=estimator.seed,
+        pscore_trim=(
+            estimator.pscore_trim if estimator.estimation_method in ("ipw", "dr", "psm") else None
+        ),
         psm_config=(
             {
                 "pscore_trim": estimator.pscore_trim,

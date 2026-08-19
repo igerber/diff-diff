@@ -172,6 +172,9 @@ class LWDiDResults(BaseResults, AggregationMixin):
     control_group: Optional[str] = None
     n_bootstrap: int = 0
     seed: Optional[int] = None
+    #: Propensity-score trim bound used by the ipw/dr/psm paths (None for
+    #: estimation_method='reg', where no propensity model is fitted).
+    pscore_trim: Optional[float] = None
     #: PSM matching settings (None unless estimation_method='psm'):
     #: {'pscore_trim', 'n_neighbors', 'caliper', 'with_replacement'}
     psm_config: Optional[Dict[str, Any]] = None
@@ -490,6 +493,8 @@ class LWDiDResults(BaseResults, AggregationMixin):
         result["n_bootstrap"] = self.n_bootstrap
         if self.seed is not None:
             result["seed"] = self.seed
+        if self.pscore_trim is not None:
+            result["pscore_trim"] = self.pscore_trim
         if self.psm_config is not None:
             result["psm_config"] = dict(self.psm_config)
         if self.att_tau_omega_complete_case is not None:

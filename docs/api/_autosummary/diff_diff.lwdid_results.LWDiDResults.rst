@@ -33,10 +33,12 @@
       ~LWDiDResults.cband_crit_value
       ~LWDiDResults.cband_method
       ~LWDiDResults.cband_n_bootstrap
+      ~LWDiDResults.att_tau_omega_complete_case
       ~LWDiDResults.ci
       ~LWDiDResults.cluster_name
       ~LWDiDResults.cohort_effects
       ~LWDiDResults.cohort_time_effects
+      ~LWDiDResults.control_group
       ~LWDiDResults.df_inference
       ~LWDiDResults.event_study_df
       ~LWDiDResults.event_study_effects
@@ -44,9 +46,15 @@
       ~LWDiDResults.event_study_vcov_index
       ~LWDiDResults.inference_basis
       ~LWDiDResults.is_staggered
+      ~LWDiDResults.n_bootstrap
       ~LWDiDResults.n_clusters
+      ~LWDiDResults.n_composite_controls_dropped
+      ~LWDiDResults.n_composite_treated_dropped
       ~LWDiDResults.params
+      ~LWDiDResults.pscore_trim
+      ~LWDiDResults.psm_config
       ~LWDiDResults.pvalue
+      ~LWDiDResults.seed
       ~LWDiDResults.ri_pvalue
       ~LWDiDResults.vcov
       ~LWDiDResults.att

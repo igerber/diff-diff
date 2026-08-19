@@ -18,6 +18,7 @@ Target: ideally < 1000 lines per module; modules ≥3000 lines are candidates fo
 | `had.py` | 4906 | Consider splitting (continuous / mass-point / event-study / survey paths) |
 | `had_pretests.py` | 4769 | Consider splitting (Stute / Yatchew / QUG / joint pretests) |
 | `diagnostic_report.py` | 4135 | Consider splitting (per-method renderers + provenance) |
+| `lwdid.py` | 3925 | Consider splitting (PR #588 fix wave; validation + transforms + 4 cross-sectional estimators + bootstrap orchestration — the transform contracts and estimator dispatch are the natural seams) |
 | `spillover.py` | 3655 | Consider splitting |
 | `two_stage.py` | 2430 | Monitor — exited the splitting band when the M-022 aggregate() migration extracted the Stage-2/GMM engine into `two_stage_aggregation.py` |
 | `power.py` | 3488 | Consider splitting (power analysis + MDE + sample size) |

@@ -523,8 +523,10 @@ The six scenarios above cover the most common business use cases.
 - **Want rolling-transformation approach?** → :class:`~diff_diff.LWDiD` (Lee & Wooldridge 2025, 2026)
 
   Converts panel data into cross-sectional estimation via unit-specific demeaning
-  or detrending of pre-treatment outcomes. Supports RA, IPW, IPWRA, and PSM
-  estimators with HC0–HC4 and cluster-robust inference. Works for both common
+  or detrending of pre-treatment outcomes. Supports RA (``vcov_type`` in
+  ``classical``/``hc1``/``hc2``/``hc3``), IPW, IPWRA, and PSM estimators
+  (influence-function/matching variance, ``hc1``) with cluster-robust
+  inference via ``cluster=``. Works for both common
   timing and staggered adoption designs. Compare ``rolling='demean'`` vs
   ``rolling='detrend'`` as a built-in specification robustness check.
 

@@ -5,7 +5,9 @@ theoretical grounding in Lee & Wooldridge (2025, 2026):
 - Pre-period selection sensitivity (T0-robustness)
 - No-anticipation assumption sensitivity
 
-Classification thresholds (per Lee & Wooldridge 2025 recommendations):
+Classification thresholds (a diff-diff LIBRARY HEURISTIC — the Lee &
+Wooldridge papers recommend the diagnostics but define no categorical
+robustness scale; see docs/methodology/REGISTRY.md, LWDiD):
   sensitivity_ratio < 10%  → 'highly_robust'
   10% ≤ ratio < 25%       → 'moderately_robust'
   25% ≤ ratio < 50%       → 'sensitive'
@@ -348,6 +350,41 @@ def _prevalidate_frame(data, outcome, unit, time, treatment, cohort, cluster, co
     validate_binary(data[treatment].values, treatment)
 
 
+def _reject_multi_cohort_staggered(data: pd.DataFrame, cohort: Optional[str]) -> None:
+    """Reject multi-cohort staggered inputs (raises ValueError).
+
+    Both public sensitivity functions define their pre-period window
+    globally: periods before the EARLIEST adoption anywhere in the panel
+    (``_get_pre_periods``). With more than one treated cohort, later
+    cohorts' own pre-treatment periods fall inside the global post window
+    and survive every "exclude/keep k pre-periods" restriction, so the
+    reported specifications would not describe the samples actually used
+    (review round 2). Cohort-relative exclusions are a tracked follow-up
+    (DEFERRED.md); until then multi-cohort inputs fail closed. A single
+    treated cohort is exactly the global rule, so it stays supported.
+    """
+    if cohort is None:
+        return
+    treated: set = set()
+    for value in pd.unique(data[cohort].dropna()):
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            treated.add(value)  # datetime/Period labels: non-null = treated
+            continue
+        if np.isfinite(numeric) and numeric > 0:
+            treated.add(value)
+    if len(treated) > 1:
+        raise ValueError(
+            f"Sensitivity analyses currently support a single treated "
+            f"cohort; found {len(treated)} distinct cohorts in '{cohort}'. "
+            f"Pre-period exclusions are defined relative to the earliest "
+            f"adoption, which would mislabel the samples used for later "
+            f"cohorts' transformations. Run the analysis per cohort, or "
+            f"see DEFERRED.md (cohort-relative sensitivity exclusions)."
+        )
+
+
 def _get_pre_periods(data: pd.DataFrame, time: str, treatment: str) -> np.ndarray:
     """Identify pre-treatment periods from the data.
 
@@ -419,7 +456,11 @@ def robustness_pre_periods(
     treatment : str
         Binary treatment indicator column name. (alias: d)
     cohort : str, optional
-        Cohort variable for staggered designs. (alias: gvar)
+        Cohort variable for staggered designs. (alias: gvar) At most ONE
+        distinct treated cohort is supported: the exclusion windows are
+        defined relative to the earliest adoption, which would mislabel
+        later cohorts' transformation samples (multi-cohort inputs raise
+        ValueError; see DEFERRED.md, cohort-relative exclusions).
     rolling : str, default 'demean'
         Transformation method.
     estimation_method : str, default 'reg'
@@ -468,6 +509,7 @@ def robustness_pre_periods(
     # inside _fit_single_spec (campaign finding: a string covariate's
     # ValueError became a silent NaN spec).
     _prevalidate_frame(data, outcome, unit, time, treatment, cohort, cluster, controls)
+    _reject_multi_cohort_staggered(data, cohort)
 
     pre_periods = _get_pre_periods(data, time, treatment)
     n_pre = len(pre_periods)
@@ -648,7 +690,11 @@ def sensitivity_no_anticipation(
     treatment : str
         Binary treatment indicator column name. (alias: d)
     cohort : str, optional
-        Cohort variable for staggered designs. (alias: gvar)
+        Cohort variable for staggered designs. (alias: gvar) At most ONE
+        distinct treated cohort is supported: the exclusion windows are
+        defined relative to the earliest adoption, which would mislabel
+        later cohorts' transformation samples (multi-cohort inputs raise
+        ValueError; see DEFERRED.md, cohort-relative exclusions).
     exclude_periods : list of int, optional
         Number of pre-treatment periods to exclude in each test.
         Default is [1, 2, 3].
@@ -692,6 +738,7 @@ def sensitivity_no_anticipation(
         raise ValueError("'treatment' (or 'd') parameter is required")
 
     _prevalidate_frame(data, outcome, unit, time, treatment, cohort, cluster, controls)
+    _reject_multi_cohort_staggered(data, cohort)
 
     if exclude_periods is None:
         exclude_periods = [1, 2, 3]

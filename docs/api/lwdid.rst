@@ -290,7 +290,7 @@ Input Contract
 --------------
 
 :meth:`~diff_diff.LWDiD.fit` validates the treatment design before any
-transformation is applied. Seven requirements are enforced:
+transformation is applied. Eight requirements are enforced:
 
 - **Absorbing treatment** — within each unit the ``treatment`` indicator
   must be non-decreasing over time: once a unit switches from 0 to 1 it
@@ -326,6 +326,34 @@ transformation is applied. Seven requirements are enforced:
 - **Unit-constant covariates (staggered)** — in staggered designs,
   ``covariates`` must be constant within each unit; time-varying
   covariate columns raise ``ValueError``.
+- **Distinct, non-reserved column names** — the core role columns
+  (outcome/unit/time/treatment/``first_treat``) must be pairwise
+  distinct, covariates may not repeat a core role, and no role column
+  may use an LWDiD-internal working name (``_treat``, ``_ydot``,
+  ``_ydot_avg``, ``_ever_treated``, ``_boot_unit``, ``_lwdid_time_pos``,
+  ``_lwdid_cohort_pos``) — a collision would silently overwrite the
+  internal column (e.g. ``cluster='_treat'`` previously reported the
+  cluster labels' coefficient as the ATT). ``cluster=`` equal to the
+  unit column remains supported.
+
+.. note::
+
+   **Bootstrap scope and reproducibility.** In common-timing fits
+   ``n_bootstrap`` activates a unit-resampling bootstrap for the overall
+   ATT; the per-replicate RNG streams are ``SeedSequence``-spawned
+   identically for every ``n_jobs``, so a seeded fit reproduces exactly
+   across serial and parallel execution. In STAGGERED fits
+   ``n_bootstrap`` governs the event-study multiplier bootstrap only
+   (sup-t simultaneous bands); the overall and cohort aggregates keep
+   analytical influence-function inference, with the per-surface basis
+   recorded on the results object (``cband_method``,
+   ``cband_n_bootstrap``, ``inference_basis``). Event cells whose
+   multiplier draws are degenerate fail closed (point retained, NaN
+   inference) rather than silently reverting to analytical standard
+   errors. The common-timing event-study surface covers post periods
+   only; pre-treatment placebo cells are produced by the staggered path
+   (pass ``first_treat=``, which for a single cohort matches the
+   common-timing regression on single-post-period panels).
 
 .. note::
 

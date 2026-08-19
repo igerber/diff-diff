@@ -2750,3 +2750,119 @@ class TestReviewRound1Guards:
         d = res.to_dict()
         assert d["control_group"] == "never_treated"
         assert d["seed"] == 7
+
+
+class TestReviewRound2Guards:
+    """Local-review round 2: execution-verified guards.
+
+    - cluster='_treat' with numeric labels silently reported the cluster
+      labels' coefficient as the ATT (reserved-name collision)
+    - the same seed produced different bootstrap SEs across n_jobs (the
+      serial path consumed one sequential RNG stream while the parallel
+      path spawned per-replicate streams)
+    - pscore_trim was absent from ipw/dr result provenance
+    - an event cell with degenerate multiplier-bootstrap draws silently
+      kept its analytical SE (undocumented mixture of inference families)
+    """
+
+    @staticmethod
+    def _panel(n_units=12, n_treated=6, t_max=6, onset=4, seed=0, **cols):
+        rng = np.random.default_rng(seed)
+        rows = []
+        for u in range(n_units):
+            treated = u < n_treated
+            for t in range(1, t_max + 1):
+                d = int(treated and t >= onset)
+                row = dict(unit=u, time=t, treat=d, y=rng.normal() + 2 * d + 0.5 * t)
+                for k, fn in cols.items():
+                    row[k] = fn(u)
+                rows.append(row)
+        return pd.DataFrame(rows)
+
+    KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+    def test_reserved_internal_names_rejected(self):
+        df = self._panel(cl=lambda u: float(u % 3)).rename(columns={"cl": "_treat"})
+        with pytest.raises(ValueError, match="reserved for LWDiD internal use"):
+            LWDiD(rolling="demean", cluster="_treat").fit(df, **self.KW)
+        df2 = self._panel(x=lambda u: float(u)).rename(columns={"x": "_ydot"})
+        with pytest.raises(ValueError, match="reserved for LWDiD internal use"):
+            LWDiD(rolling="demean").fit(df2, covariates=["_ydot"], **self.KW)
+        df3 = self._panel().rename(columns={"unit": "_boot_unit"})
+        with pytest.raises(ValueError, match="reserved for LWDiD internal use"):
+            LWDiD(rolling="demean").fit(
+                df3, outcome="y", unit="_boot_unit", time="time", treatment="treat"
+            )
+
+    def test_duplicate_role_columns_rejected(self):
+        df = self._panel()
+        with pytest.raises(ValueError, match="distinct column"):
+            LWDiD(rolling="demean").fit(df, outcome="y", unit="unit", time="time", treatment="y")
+        df2 = self._panel(x=lambda u: float(u))
+        with pytest.raises(ValueError, match="already supplied"):
+            LWDiD(rolling="demean").fit(df2, covariates=["y"], **self.KW)
+        # cluster == unit stays supported (documented intentional case)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = LWDiD(rolling="demean", cluster="unit").fit(df, **self.KW)
+        assert np.isfinite(res.att)
+
+    def test_seeded_bootstrap_invariant_to_n_jobs(self):
+        df = self._panel(n_units=20, n_treated=10)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r1 = LWDiD(rolling="demean", n_bootstrap=49, seed=7, n_jobs=1).fit(df, **self.KW)
+            r2 = LWDiD(rolling="demean", n_bootstrap=49, seed=7, n_jobs=2).fit(df, **self.KW)
+        assert r1.se == r2.se
+        assert r1.att == r2.att
+
+    def test_pscore_trim_provenance(self):
+        df = self._panel(x=lambda u: float(u % 4))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ipw = LWDiD(rolling="demean", estimation_method="ipw", pscore_trim=0.02).fit(
+                df, covariates=["x"], **self.KW
+            )
+            reg = LWDiD(rolling="demean", estimation_method="reg").fit(df, **self.KW)
+        assert ipw.pscore_trim == 0.02
+        assert ipw.to_dict()["pscore_trim"] == 0.02
+        assert reg.pscore_trim is None
+        assert "pscore_trim" not in reg.to_dict()
+
+    def test_degenerate_bootstrap_event_cell_fails_closed(self):
+        from types import SimpleNamespace
+
+        from diff_diff.lwdid_staggered import compute_event_study_bands
+
+        rng = np.random.default_rng(0)
+        estimator = SimpleNamespace(n_bootstrap=199, seed=3, alpha=0.05)
+        event_effects = {
+            0: {
+                "effect": 1.0,
+                "se": 0.2,
+                "t_stat": 5.0,
+                "p_value": 0.0,
+                "conf_int": (0.6, 1.4),
+                "df": None,
+            },
+            1: {
+                "effect": 0.5,
+                "se": 0.1,
+                "t_stat": 5.0,
+                "p_value": 0.0,
+                "conf_int": (0.3, 0.7),
+                "df": None,
+            },
+        }
+        event_influence = {
+            0: np.zeros(30),  # degenerate: zero influence column
+            1: rng.normal(size=30),
+        }
+        with pytest.warns(UserWarning, match="degenerate draws"):
+            compute_event_study_bands(estimator, event_effects, event_influence, None)
+        assert np.isnan(event_effects[0]["se"])
+        assert np.isnan(event_effects[0]["p_value"])
+        assert event_effects[0]["inference_status"] == "degenerate_bootstrap"
+        assert event_effects[0]["effect"] == 1.0  # point retained
+        assert np.isfinite(event_effects[1]["se"])  # valid cell bootstrapped
+        assert "cband_conf_int" in event_effects[1]

@@ -38,6 +38,22 @@ _VALID_CONTROL_GROUPS = ("never_treated", "not_yet_treated")
 _PS_TRIM_LOWER = 0.01
 _PS_TRIM_UPPER = 0.99
 
+#: Column names written into internal estimation/plotting frames. A user
+#: role column with one of these names would be silently overwritten
+#: (e.g. cluster='_treat' turned the cluster labels into the treatment
+#: regressor), so they are rejected up front by _validate_inputs.
+_RESERVED_INTERNAL_COLUMNS = frozenset(
+    {
+        "_treat",
+        "_ydot",
+        "_ydot_avg",
+        "_ever_treated",
+        "_boot_unit",
+        "_lwdid_time_pos",
+        "_lwdid_cohort_pos",
+    }
+)
+
 
 def _normalize_cohorts(
     cohort_series: pd.Series,
@@ -872,6 +888,41 @@ class LWDiD(BaseEstimator):
         if controls:
             required_cols.extend(controls)
 
+        # Internal working columns are written into the estimation frames;
+        # a user role column bearing one of these names is silently
+        # overwritten (review round 2: cluster='_treat' reported the
+        # cluster labels' coefficient as the ATT).
+        reserved = _RESERVED_INTERNAL_COLUMNS.intersection(required_cols)
+        if reserved:
+            raise ValueError(
+                f"Column name(s) {sorted(reserved)} are reserved for LWDiD "
+                f"internal use and cannot be supplied as outcome, unit, "
+                f"time, treatment, first_treat, cluster, or covariate "
+                f"columns. Rename the column(s) before fitting."
+            )
+        core_roles = {
+            "outcome": outcome,
+            "unit": unit,
+            "time": time,
+            "treatment": treatment,
+        }
+        if cohort is not None:
+            core_roles["first_treat"] = cohort
+        seen: Dict[str, str] = {}
+        for role, name in core_roles.items():
+            if name in seen:
+                raise ValueError(
+                    f"Column '{name}' was supplied as both '{seen[name]}' and "
+                    f"'{role}'; each role requires a distinct column."
+                )
+            seen[name] = role
+        overlap = set(controls or []).intersection(core_roles.values())
+        if overlap:
+            raise ValueError(
+                f"Covariate column(s) {sorted(overlap)} are already supplied "
+                f"as outcome/unit/time/treatment/first_treat columns."
+            )
+
         missing = [c for c in required_cols if c not in df.columns]
         if missing:
             raise ValueError(f"Columns not found in data: {missing}")
@@ -1107,6 +1158,9 @@ class LWDiD(BaseEstimator):
                 control_group=self.control_group,
                 n_bootstrap=self.n_bootstrap,
                 seed=self.seed,
+                pscore_trim=(
+                    self.pscore_trim if self.estimation_method in ("ipw", "dr", "psm") else None
+                ),
                 alpha=self.alpha,
                 event_study_effects=event_effects,
                 event_study_vcov=event_vcov,
@@ -1150,6 +1204,9 @@ class LWDiD(BaseEstimator):
                 control_group=self.control_group,
                 n_bootstrap=self.n_bootstrap,
                 seed=self.seed,
+                pscore_trim=(
+                    self.pscore_trim if self.estimation_method in ("ipw", "dr", "psm") else None
+                ),
                 alpha=self.alpha,
                 event_study_effects=event_effects,
                 event_study_vcov=event_vcov,
@@ -1254,6 +1311,9 @@ class LWDiD(BaseEstimator):
             control_group=self.control_group,
             n_bootstrap=self.n_bootstrap,
             seed=self.seed,
+            pscore_trim=(
+                self.pscore_trim if self.estimation_method in ("ipw", "dr", "psm") else None
+            ),
             psm_config=(
                 {
                     "pscore_trim": self.pscore_trim,
@@ -3633,12 +3693,22 @@ class LWDiD(BaseEstimator):
             except (np.linalg.LinAlgError, ValueError):
                 return np.nan
 
+        # Per-replicate RNG streams via SeedSequence spawning, IDENTICAL for
+        # every n_jobs: replicate b always draws from child stream b, so a
+        # seeded fit is reproducible regardless of the execution mode
+        # (review round 2: the serial path consumed one sequential stream
+        # while the parallel path spawned, so the same seed produced
+        # different bootstrap SEs across n_jobs). seed=None still draws
+        # fresh OS entropy (non-deterministic).
+        seed_seq = np.random.SeedSequence(self.seed)
+        child_seqs = seed_seq.spawn(self.n_bootstrap)
+        boot_unit_samples = [
+            _draw_units(np.random.default_rng(child_seqs[b])) for b in range(self.n_bootstrap)
+        ]
+
         if self.n_jobs == 1:
             # --- Serial path ---
-            rng = np.random.default_rng(seed=self.seed)
-            boot_atts = np.empty(self.n_bootstrap)
-            for b in range(self.n_bootstrap):
-                boot_atts[b] = _replicate_att(_draw_units(rng))
+            boot_atts = np.array([_replicate_att(sample) for sample in boot_unit_samples])
         else:
             # --- Parallel path (n_jobs > 1) ---
             from concurrent.futures import ThreadPoolExecutor
@@ -3650,15 +3720,6 @@ class LWDiD(BaseEstimator):
                 UserWarning,
                 stacklevel=2,
             )
-
-            # Pre-generate all bootstrap unit samples via SeedSequence spawning:
-            # seed=None draws fresh OS entropy (non-deterministic, matching the
-            # serial path), while an explicit integer seed remains reproducible.
-            seed_seq = np.random.SeedSequence(self.seed)
-            child_seqs = seed_seq.spawn(self.n_bootstrap)
-            boot_unit_samples = [
-                _draw_units(np.random.default_rng(child_seqs[b])) for b in range(self.n_bootstrap)
-            ]
 
             with ThreadPoolExecutor(max_workers=self.n_jobs) as executor:
                 boot_atts = np.array(list(executor.map(_replicate_att, boot_unit_samples)))

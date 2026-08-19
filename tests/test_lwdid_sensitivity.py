@@ -295,3 +295,45 @@ class TestNotEstimable:
                 treatment="treat",
                 controls=["no_such_control"],
             )
+
+
+class TestMultiCohortRejection:
+    """Round-2 finding: pre-period windows are earliest-adoption-relative,
+    so multi-cohort staggered inputs would mislabel later cohorts'
+    transformation samples. They fail closed; a single treated cohort is
+    exactly the global rule and stays supported."""
+
+    @staticmethod
+    def _staggered(n_cohorts=2):
+        rng = np.random.default_rng(0)
+        rows = []
+        onsets = [5, 7][:n_cohorts]
+        for u in range(16):
+            if u < 4 * n_cohorts:
+                g = onsets[u % n_cohorts]
+            else:
+                g = 0
+            for t in range(1, 10):
+                d = int(g > 0 and t >= g)
+                rows.append(dict(unit=u, time=t, treat=d, g=g, y=rng.normal() + d))
+        return pd.DataFrame(rows)
+
+    def test_multi_cohort_rejected_both_functions(self):
+        df = self._staggered(n_cohorts=2)
+        with pytest.raises(ValueError, match="single treated\\s+cohort"):
+            robustness_pre_periods(
+                df, outcome="y", unit="unit", time="time", treatment="treat", cohort="g"
+            )
+        with pytest.raises(ValueError, match="single treated\\s+cohort"):
+            sensitivity_no_anticipation(
+                df, outcome="y", unit="unit", time="time", treatment="treat", cohort="g"
+            )
+
+    def test_single_cohort_still_supported(self):
+        df = self._staggered(n_cohorts=1)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = robustness_pre_periods(
+                df, outcome="y", unit="unit", time="time", treatment="treat", cohort="g"
+            )
+        assert np.isfinite(res.baseline_att)
