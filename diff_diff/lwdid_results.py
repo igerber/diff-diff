@@ -495,6 +495,8 @@ class LWDiDResults(BaseResults, AggregationMixin):
             }
         if self.inference_basis is not None:
             result["inference_basis"] = self.inference_basis
+        if self.df_inference is not None:
+            result["df_inference"] = self.df_inference
         if self.control_group is not None:
             result["control_group"] = self.control_group
         result["n_bootstrap"] = self.n_bootstrap

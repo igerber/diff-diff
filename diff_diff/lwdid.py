@@ -577,8 +577,12 @@ class LWDiD(BaseEstimator):
         # Engineering parameters (validated, never silently coerced -
         # review finding: fractional n_neighbors truncated, strings became
         # with_replacement=True, negative calipers matched nothing)
+        if not isinstance(pscore_trim, (int, float, np.integer, np.floating)) or isinstance(
+            pscore_trim, bool
+        ):
+            raise ValueError(f"pscore_trim must be a number, got {pscore_trim!r}")
         self.pscore_trim = float(pscore_trim)
-        if not (0.0 < self.pscore_trim < 0.5):
+        if not np.isfinite(self.pscore_trim) or not (0.0 < self.pscore_trim < 0.5):
             raise ValueError("pscore_trim must be between 0 and 0.5")
         if not isinstance(n_neighbors, (int, np.integer)) or isinstance(n_neighbors, bool):
             raise ValueError(f"n_neighbors must be an integer, got {n_neighbors!r}")
@@ -597,8 +601,8 @@ class LWDiD(BaseEstimator):
         if not isinstance(with_replacement, (bool, np.bool_)):
             raise ValueError(f"with_replacement must be a boolean, got {with_replacement!r}")
         self.with_replacement = bool(with_replacement)
-        if not isinstance(n_jobs, (int, np.integer)) or n_jobs < 1:
-            raise ValueError(f"n_jobs must be a positive integer, got {n_jobs}")
+        if isinstance(n_jobs, bool) or not isinstance(n_jobs, (int, np.integer)) or n_jobs < 1:
+            raise ValueError(f"n_jobs must be a positive integer, got {n_jobs!r}")
         self.n_jobs = int(n_jobs)
 
     def fit(
@@ -1142,9 +1146,32 @@ class LWDiD(BaseEstimator):
         )
 
         # Step 3: Take post-treatment cross-section of transformed outcomes
-        # Average transformed outcome over post-treatment periods per unit
+        # Average transformed outcome over the FIXED post window per unit.
+        # The estimand is the paper's fixed-window post average (LW 2026,
+        # denominator T - S + 1): units not observing EVERY post period are
+        # dropped as complete cases with a warning (round-6 review: the
+        # previous per-unit mean over whichever post periods a unit
+        # observed let calendar composition masquerade as treatment effect
+        # - a zero-effect panel where treated units observed one extra
+        # post period reported that period's trend as ATT).
         post_mask = df[time].isin(post_periods)
         post_df = df.loc[post_mask].copy()
+
+        post_counts = post_df.loc[np.isfinite(post_df["_ydot"])].groupby(unit)["_ydot"].size()
+        complete_units = set(post_counts.index[post_counts == len(post_periods)])
+        n_incomplete = int((post_counts < len(post_periods)).sum())
+        if n_incomplete > 0:
+            warnings.warn(
+                f"LWDiD: {n_incomplete} unit(s) dropped from the collapsed "
+                f"cross-section for lacking a finite transformed outcome in "
+                f"every post-treatment period (missing rows or failed "
+                f"transformation): the headline ATT is the fixed-window "
+                f"post average over complete cases. See "
+                f"docs/methodology/REGISTRY.md (LWDiD).",
+                UserWarning,
+                stacklevel=2,
+            )
+        post_df = post_df.loc[post_df[unit].isin(complete_units)]
 
         # Compute unit-level average of transformed outcome in post periods
         unit_post_avg = post_df.groupby(unit)["_ydot"].mean().reset_index()
@@ -1221,6 +1248,21 @@ class LWDiD(BaseEstimator):
         n_obs = len(y)
         n_treated = int(treat.sum())
         n_control = n_obs - n_treated
+
+        if n_treated == 0 or n_control == 0:
+            # Round-6 review: the raw-panel arm counts are checked before
+            # the transformation, but complete-case/NaN drops can empty an
+            # arm - the pre-fix code dispatched a one-arm design into the
+            # estimators (rank warnings, NaN arithmetic, and the IPW family
+            # entered propensity fitting with an empty group).
+            raise ValueError(
+                f"After the transformation and complete-case drops, the "
+                f"collapsed cross-section has {n_treated} treated and "
+                f"{n_control} control unit(s); estimation requires at "
+                f"least one of each. Likely insufficient pre-treatment "
+                f"periods or incomplete post-period coverage for one arm "
+                f"under rolling='{self.rolling}'."
+            )
 
         # Guard: if transformation produced all-NaN outcomes, return NaN result
         if np.all(np.isnan(y)):
@@ -1548,7 +1590,7 @@ class LWDiD(BaseEstimator):
                 skipped.append((relative_time, "non_finite_estimate"))
                 continue
 
-            se = _guard_standard_error(att, se)
+            se = _guard_standard_error(att, se, scale=float(np.max(np.abs(y))))
             if single_cluster_period:
                 se = np.nan  # fail-closed (warned above); point retained
                 influence = None
@@ -1616,7 +1658,7 @@ class LWDiD(BaseEstimator):
         unit: str,
         time: str,
         cohort: str,
-    ) -> Tuple[float, float, int, int, int]:
+    ) -> Tuple[float, float, int, int, int, float]:
         """Compute tau_omega via composite outcome regression (LW 2026 Eq 7.18/7.19).
 
         For staggered designs, constructs a composite outcome vector:
@@ -1656,7 +1698,7 @@ class LWDiD(BaseEstimator):
         n_treat = int((fy > 0).sum())
 
         if n_treat == 0:
-            return np.nan, np.nan, 0, 0, 0
+            return np.nan, np.nan, 0, 0, 0, 0.0
 
         # Step 2: For each cohort g, compute per-unit post-average transformed outcome
         # using cohort g's pre-period for ALL units
@@ -1761,7 +1803,7 @@ class LWDiD(BaseEstimator):
                 UserWarning,
                 stacklevel=3,
             )
-            return np.nan, np.nan, 0, n_treated_dropped, n_controls_dropped
+            return np.nan, np.nan, 0, n_treated_dropped, n_controls_dropped, 0.0
 
         # Step 4: Assemble composite outcome vector on the complete-case
         # sample (finite by construction).
@@ -1783,7 +1825,7 @@ class LWDiD(BaseEstimator):
                 d_ever_treated[i] = 0.0
 
         if n < 3:
-            return np.nan, np.nan, 0, n_treated_dropped, n_controls_dropped
+            return np.nan, np.nan, 0, n_treated_dropped, n_controls_dropped, 0.0
 
         # Step 5: Single OLS regression y_composite ~ [1, D] via the house
         # linalg engine (classical SE from the same regression).
@@ -1796,7 +1838,10 @@ class LWDiD(BaseEstimator):
         else:
             se = np.nan
 
-        return att, se, dof, n_treated_dropped, n_controls_dropped
+        # Data scale for the degenerate-SE guard (scale-equivariant
+        # roundoff reference - see _guard_standard_error).
+        y_scale = float(np.max(np.abs(y_composite))) if len(y_composite) else 0.0
+        return att, se, dof, n_treated_dropped, n_controls_dropped, y_scale
 
     def _transform_demean(
         self,
@@ -3670,6 +3715,11 @@ class LWDiD(BaseEstimator):
 
         post_mask = df_t[time].isin(post_periods)  # type: ignore[union-attr, call-overload]
         post_df = df_t.loc[post_mask]  # type: ignore[union-attr]
+        # Same fixed-window complete-case rule as _fit_common_timing (the
+        # bootstrap must estimate the same estimand as the point path).
+        post_counts = post_df.loc[np.isfinite(post_df["_ydot"])].groupby(unit)["_ydot"].size()
+        complete_units = set(post_counts.index[post_counts == len(post_periods)])
+        post_df = post_df.loc[post_df[unit].isin(complete_units)]
         unit_post_avg = post_df.groupby(unit)["_ydot"].mean()
 
         cs_df = df.drop_duplicates(subset=[unit], keep="first")[[unit] + controls].copy()

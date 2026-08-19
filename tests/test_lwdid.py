@@ -3206,3 +3206,110 @@ class TestReviewRound5Guards:
             res.aggregate("event_study", balance_e=1)
         # without balance_e the aggregation still works
         assert res.aggregate("event_study") is not None
+
+
+class TestReviewRound6Guards:
+    """Local-review round 6: execution-verified guards.
+
+    - fweight + HC2/HC3 used the WLS-hat (weighted) leverage, so the
+      compressed variance was up to ~5x the literal np.repeat expansion
+      (fweights are replicated data by definition)
+    - the common-timing headline averaged whichever post periods each
+      unit observed, letting calendar composition masquerade as ATT
+    - the degenerate-SE guard's max(1, |effect|) floor NaN'd valid
+      inference under outcome rescaling
+    - complete-case drops could empty an arm and dispatch a one-arm design
+    """
+
+    KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+    def test_fweight_hc2_hc3_expansion_parity(self):
+        from diff_diff.linalg import solve_ols
+
+        X = np.column_stack([np.ones(5), np.arange(5.0)])
+        y = np.array([1.0, 2.2, 2.9, 4.1, 5.3])
+        w = np.array([3.0, 1.0, 2.0, 1.0, 4.0])
+        Xe = np.repeat(X, w.astype(int), axis=0)
+        ye = np.repeat(y, w.astype(int))
+        for vt in ("hc2", "hc3"):
+            _, _, v_c = solve_ols(
+                X, y, return_vcov=True, vcov_type=vt, weights=w, weight_type="fweight"
+            )
+            _, _, v_e = solve_ols(Xe, ye, return_vcov=True, vcov_type=vt)
+            np.testing.assert_allclose(np.diag(v_c), np.diag(v_e), rtol=1e-12, err_msg=vt)
+
+    def test_fixed_window_complete_case_headline(self):
+        # Zero-effect panel, Y_it = t: half the controls miss the last
+        # post period. Pre-fix their shorter post average biased the
+        # headline; complete-case drops them (warned) and ATT ~ 0.
+        rows = []
+        for u in range(12):
+            treated = u < 6
+            t_max = 6 if (treated or u < 9) else 5  # controls 9-11 miss t=6
+            for t in range(1, t_max + 1):
+                d = 1 if (treated and t >= 4) else 0
+                rows.append(dict(unit=u, time=t, treat=d, y=float(t)))
+        df = pd.DataFrame(rows)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = LWDiD(rolling="demean").fit(df, **self.KW)
+        assert any("fixed-window" in str(x.message) for x in caught)
+        np.testing.assert_allclose(res.att, 0.0, atol=1e-10)
+        assert res.n_control == 3  # complete controls only
+
+    def test_se_guard_scale_equivariant(self):
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(16):
+            g = 4 if u < 8 else 0
+            for t in range(1, 7):
+                d = int(g > 0 and t >= g)
+                rows.append(
+                    dict(unit=u, time=t, treat=d, g=g, y=1 + 0.3 * t + d + rng.normal(0, 0.3))
+                )
+        df = pd.DataFrame(rows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r1 = LWDiD(rolling="demean").fit(df, first_treat="g", **self.KW)
+            df2 = df.assign(y=df["y"] * 1e-10)
+            r2 = LWDiD(rolling="demean").fit(df2, first_treat="g", **self.KW)
+        # t-statistic is invariant to outcome rescaling
+        np.testing.assert_allclose(r2.t_stat, r1.t_stat, rtol=1e-8)
+        np.testing.assert_allclose(r2.att, r1.att * 1e-10, rtol=1e-8)
+        assert np.isfinite(r2.se)
+
+    def test_empty_arm_after_drops_raises(self):
+        # All treated units observe only one pre period -> detrend NaNs
+        # every treated unit; pre-fix a one-arm design was dispatched.
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(8):
+            treated = u < 4
+            times = range(3, 7) if treated else range(1, 7)
+            for t in times:
+                d = 1 if (treated and t >= 4) else 0
+                rows.append(dict(unit=u, time=t, treat=d, y=1 + 0.5 * t + rng.normal(0, 0.3)))
+        df = pd.DataFrame(rows)
+        with pytest.raises(ValueError, match="at\\s+least one of each"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                LWDiD(rolling="detrend").fit(df, **self.KW)
+
+    def test_constructor_numeric_validation(self):
+        with pytest.raises(ValueError, match="pscore_trim"):
+            LWDiD(pscore_trim=True)
+        with pytest.raises(ValueError, match="pscore_trim"):
+            LWDiD(pscore_trim="0.1")
+        with pytest.raises(ValueError, match="n_jobs"):
+            LWDiD(n_jobs=True)
+
+    def test_df_inference_serializes(self):
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(12):
+            for t in range(1, 7):
+                d = 1 if (u < 6 and t >= 4) else 0
+                rows.append(dict(unit=u, time=t, treat=d, y=1 + 2 * d + rng.normal(0, 0.4)))
+        res = LWDiD(rolling="demean").fit(pd.DataFrame(rows), **self.KW)
+        d = res.to_dict()
+        assert d["df_inference"] == res.df_inference

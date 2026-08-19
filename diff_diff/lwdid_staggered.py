@@ -14,10 +14,24 @@ from diff_diff.utils import safe_inference
 CellKey = Tuple[Any, Any]
 
 
-def _guard_standard_error(effect: float, se: float) -> float:
-    """Return NaN for numerically degenerate finite standard errors."""
-    tolerance = np.sqrt(np.finfo(float).eps) * max(1.0, abs(effect))
-    if not np.isfinite(se) or se <= tolerance:
+def _guard_standard_error(effect: float, se: float, scale: float = 0.0) -> float:
+    """Return NaN for numerically degenerate finite standard errors.
+
+    The tolerance is RELATIVE to the problem's magnitude - the larger of
+    the effect and the caller-supplied data ``scale`` (e.g. the cell's
+    max |transformed outcome|). Round-6 review: the former
+    ``max(1, |effect|)`` floor made inference depend on the outcome's
+    UNITS - rescaling a valid fit by 1e-10 turned its finite SE into NaN
+    while the t-statistic is scale-invariant. Because every reference
+    (effect, scale, se) scales linearly with the outcome, the decision is
+    scale-equivariant; an exactly-fitting design (residuals at roundoff
+    of the DATA scale, e.g. the pure-trend zero-effect panel, or the G=2
+    exactly-identified case that reported t ~ 5e15 pre-guard) still fails
+    closed because its se is roundoff RELATIVE TO ``scale``. Non-positive
+    and non-finite SEs are always rejected.
+    """
+    tolerance = np.sqrt(np.finfo(float).eps) * max(abs(effect), abs(scale))
+    if not np.isfinite(se) or se <= tolerance or se <= 0.0:
         return np.nan
     return float(se)
 
@@ -379,7 +393,7 @@ def fit_staggered(
                 skipped.append((g, t, "non_finite_estimate"))
                 continue
 
-            se = _guard_standard_error(att, se)
+            se = _guard_standard_error(att, se, scale=float(np.max(np.abs(y))))
             if cell_single_cluster:
                 # Fail closed: point retained, inference NaN; aggregates
                 # that include this cell inherit NaN inference (deliberate
@@ -532,6 +546,7 @@ def fit_staggered(
     composite_is_att = False
     comp_att = comp_se = np.nan
     comp_df = 0
+    comp_scale = 0.0
     if tau_omega_config:
         (
             comp_att,
@@ -539,6 +554,7 @@ def fit_staggered(
             comp_df,
             n_composite_treated_dropped,
             n_composite_controls_dropped,
+            comp_scale,
         ) = estimator._composite_regression_aggregation(df, outcome, unit, time, cohort)
         composite_drops = n_composite_treated_dropped + n_composite_controls_dropped
         if composite_drops == 0 and np.isfinite(comp_att):
@@ -560,7 +576,7 @@ def fit_staggered(
     if composite_is_att:
         overall_effect = float(comp_att)
     if use_composite and composite_is_att:
-        overall_se = _guard_standard_error(overall_effect, comp_se)
+        overall_se = _guard_standard_error(overall_effect, comp_se, scale=comp_scale)
         overall_df = comp_df
         inference_basis = "composite_regression"
     else:

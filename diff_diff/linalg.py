@@ -3594,7 +3594,19 @@ def _compute_robust_vcov_numpy(
             if return_dof:
                 return vcov_cr2, dof_cr2
             return vcov_cr2
-        h_diag = _compute_hat_diagonals(X, bread_matrix, weights=weights)
+        # fweight semantics are REPLICATED DATA (Registry: integer counts,
+        # df = sum(w) - k, HC1 expansion parity): each replicate row's
+        # leverage in the expanded design is x_i'(X'WX)^{-1}x_i WITHOUT the
+        # w multiplier, so the leverage denominator uses the unweighted
+        # quadratic form against the weighted bread. The WLS-hat convention
+        # (w * quadform, R sandwich::vcovHC) applies to aweight/pweight
+        # only (review round 6: the weighted hat under fweight produced
+        # HC2/HC3 variances up to ~5x the literal np.repeat expansion).
+        h_diag = _compute_hat_diagonals(
+            X,
+            bread_matrix,
+            weights=None if weight_type == "fweight" else weights,
+        )
         if np.any(h_diag > 1.0 + 1e-6):
             warnings.warn(
                 f"Hat-matrix diagonal exceeds 1 (max={h_diag.max():.6f}); "
