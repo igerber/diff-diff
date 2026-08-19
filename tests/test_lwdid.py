@@ -2603,12 +2603,24 @@ class TestNonNumericTimeContract:
                 rows.append(dict(unit=u, time=t, treat=d, y=rng.normal() + d))
         return pd.DataFrame(rows)
 
-    def test_demean_accepts_string_time(self):
+    def test_demean_accepts_ordered_categorical_time(self):
+        # Round-20 review: plain string labels sort lexicographically
+        # ('Q10' < 'Q2'), so the chronology must be DECLARED - demean
+        # accepts an ordered categorical and rejects plain object labels.
         df = self._string_time_panel()
+        labels = ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6"]
+        df_cat = df.assign(time=pd.Categorical(df["time"], categories=labels, ordered=True))
         res = LWDiD(rolling="demean", estimation_method="reg").fit(
-            df, outcome="y", unit="unit", time="time", treatment="treat"
+            df_cat, outcome="y", unit="unit", time="time", treatment="treat"
         )
         assert np.isfinite(res.att)
+
+    def test_demean_rejects_plain_string_time(self):
+        df = self._string_time_panel()
+        with pytest.raises(ValueError, match="ORDERED categorical"):
+            LWDiD(rolling="demean", estimation_method="reg").fit(
+                df, outcome="y", unit="unit", time="time", treatment="treat"
+            )
 
     @pytest.mark.parametrize("rolling", ["detrend", "demeanq", "detrendq"])
     def test_trend_seasonal_transforms_reject_string_time_informatively(self, rolling):
@@ -4201,3 +4213,81 @@ class TestReviewRound19Guards:
         assert_nan_inference(
             {"se": dup.se, "t_stat": dup.t_stat, "p_value": dup.p_value, "conf_int": dup.conf_int}
         )
+
+
+class TestReviewRound20Guards:
+    """Local-review round 20: PSM was rejected by the exact-OLS df guard;
+    staggered diagnostics returned an empty success on all-never-treated
+    panels; ordered chronology enforced for non-numeric common time."""
+
+    KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+    def test_psm_point_only_exempt_from_residual_df_guard(self):
+        # 2 treated + 2 controls with 3 redundant unit-constant
+        # covariates: nominal width exhausts an OLS df count PSM never
+        # uses - the point-only matching fit must still run.
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(4):
+            x = float(u)
+            for t in range(1, 7):
+                d = 1 if (u < 2 and t >= 4) else 0
+                rows.append(
+                    dict(
+                        unit=u,
+                        time=t,
+                        treat=d,
+                        x=x,
+                        x2=2 * x,
+                        x3=3 * x,
+                        y=1 + 0.3 * x + 2 * d + rng.normal(0, 0.2),
+                    )
+                )
+        df = pd.DataFrame(rows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = LWDiD(rolling="demean", estimation_method="psm").fit(
+                df, covariates=["x", "x2", "x3"], **self.KW
+            )
+        assert np.isfinite(res.att)
+        assert res.df_inference is None
+        from tests.conftest import assert_nan_inference
+
+        assert_nan_inference(
+            {"se": res.se, "t_stat": res.t_stat, "p_value": res.p_value, "conf_int": res.conf_int}
+        )
+
+    def test_diagnostics_reject_all_never_treated(self):
+        rows = []
+        for u in range(6):
+            for t in range(1, 7):
+                rows.append(dict(unit=u, time=t, treat=0, g=0, y=float(t)))
+        df = pd.DataFrame(rows)
+        with pytest.raises(ValueError, match="No treated cohorts"):
+            LWDiD(rolling="demean").get_transformation_diagnostics(
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
+                first_treat="g",
+            )
+
+    def test_ordered_categorical_nonlexicographic_chronology(self):
+        # 'Q10' sorts before 'Q2' lexicographically; the declared order
+        # must win (zero-effect trend panel -> att 0 under the correct
+        # chronology).
+        labels = [f"Q{i}" for i in range(1, 11)]  # Q1..Q10
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(10):
+            for i, lab in enumerate(labels):
+                d = 1 if (u < 5 and i >= 7) else 0
+                rows.append(dict(unit=u, time=lab, treat=d, y=float(i)))
+        df = pd.DataFrame(rows)
+        df["time"] = pd.Categorical(df["time"], categories=labels, ordered=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = LWDiD(rolling="demean").fit(df, **self.KW)
+        np.testing.assert_allclose(res.att, 0.0, atol=1e-12)
+        del rng

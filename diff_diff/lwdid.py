@@ -754,6 +754,10 @@ class LWDiD(BaseEstimator):
 
         # Dispatch to common timing or staggered
         if first_treat is None:
+            if isinstance(df[time].dtype, pd.CategoricalDtype) and df[time].dtype.ordered:
+                # Ordered categoricals declare the chronology; encode to
+                # codes so every comparison/sort respects it (round-20).
+                df[time] = df[time].cat.codes.astype(int)
             self._validate_common_time_scale(df, time)
             return self._fit_common_timing(df, outcome, unit, time, treatment, cluster, covariates)
         from diff_diff.lwdid_staggered import fit_staggered
@@ -795,6 +799,26 @@ class LWDiD(BaseEstimator):
                 f"'{time}' has dtype {df[time].dtype}. Encode the time "
                 f"column numerically, or use rolling='demean'."
             )
+        if self.rolling == "demean" and not (
+            pd.api.types.is_numeric_dtype(df[time])
+            or pd.api.types.is_datetime64_any_dtype(df[time])
+            or isinstance(df[time].dtype, pd.PeriodDtype)
+        ):
+            # Round-20 review: plain object labels sort LEXICOGRAPHICALLY
+            # ('Q10' < 'Q2'), silently corrupting the pre/post partition
+            # and event-time positions; an ordered categorical declares
+            # the chronology explicitly and is encoded to its codes.
+            dtype = df[time].dtype
+            if not (isinstance(dtype, pd.CategoricalDtype) and dtype.ordered):
+                raise ValueError(
+                    f"rolling='demean' with a non-numeric, non-datetime "
+                    f"time column requires an ORDERED categorical (the "
+                    f"chronology cannot be inferred from labels - "
+                    f"lexicographic order breaks at e.g. 'Q10' < 'Q2'). "
+                    f"Column '{time}' has dtype {dtype}. Use "
+                    f"pd.Categorical(values, categories=..., ordered=True) "
+                    f"or encode the time column numerically."
+                )
 
     def get_transformation_diagnostics(
         self,
@@ -863,6 +887,11 @@ class LWDiD(BaseEstimator):
             treated_cohorts = sorted(
                 value for value in pd.unique(df[first_treat]) if pd.notna(value) and value > 0
             )
+            if not treated_cohorts:
+                # Round-20 review: an all-never-treated panel returned an
+                # empty {'by_cohort': {}} that read as successful
+                # diagnostics; fit_staggered rejects the same input.
+                raise ValueError("No treated cohorts found.")
             by_cohort: Dict[Any, Dict[str, Any]] = {}
             for g in treated_cohorts:
                 treated_units = cohort_by_unit.index[cohort_by_unit == g].to_list()
@@ -889,6 +918,8 @@ class LWDiD(BaseEstimator):
         # Common timing: partition at the single onset S, same as
         # _fit_common_timing (round-9 review: the per-period max(D) rule
         # here still classified a controls-only post period as pre).
+        if isinstance(df[time].dtype, pd.CategoricalDtype) and df[time].dtype.ordered:
+            df[time] = df[time].cat.codes.astype(int)
         self._validate_common_time_scale(df, time)
         _check_treatment_design(df, unit, time, treatment, None)
         treated_times = df.loc[df[treatment] == 1, time]
@@ -1477,7 +1508,13 @@ class LWDiD(BaseEstimator):
         # df is design-coherent (LW 2026 Section 2): T_{N-2} without
         # controls, T_{N-K-2} for the plain design and T_{N-2K-2} when the
         # treatment-covariate interaction is active.
-        if n_obs < 3 or n_obs - n_params <= 0:
+        if self.estimation_method == "psm":
+            # PSM inference is NaN by contract and uses no residual df
+            # (round-20 review: the exact-OLS residual-df guard below
+            # rejected valid point-only matching fits whose nominal
+            # propensity width exhausted an OLS df count PSM never uses).
+            df_dof = None
+        elif n_obs < 3 or n_obs - n_params <= 0:
             # Registry small-sample guards (N >= 3; N > K + 2 with controls):
             # coercing the residual df to 1 fabricated exact inference on
             # invalid designs, and N=2 reached sse/(n-k) division by zero
@@ -1488,7 +1525,8 @@ class LWDiD(BaseEstimator):
                 f"requires at least 3 cross-sectional units and a positive "
                 f"residual df (N > K + 2 with controls)."
             )
-        df_dof = n_obs - n_params
+        else:
+            df_dof = n_obs - n_params
 
         # Issue 3: Cluster-robust inference uses df = G-1
         if cluster_ids is not None:
