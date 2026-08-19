@@ -2943,14 +2943,22 @@ class LWDiD(BaseEstimator):
                 interaction = treatment.reshape(-1, 1) * (controls_matrix - X_bar_1)
                 parts.append(interaction)
         X = np.hstack(parts)
-        if X.shape[0] < 3 or X.shape[0] - X.shape[1] <= 0:
+        # EFFECTIVE design rank on the column-equilibrated matrix
+        # (round-13 review: the nominal width rejected designs whose
+        # redundant columns the rank-aware solver drops, e.g. N=4 with
+        # [1, D, x, 2x] has rank 3 and one residual df; equilibration
+        # keeps the rank decision scale-invariant).
+        col_scales = np.linalg.norm(X, axis=0)
+        col_scales[col_scales == 0] = 1.0
+        rank_eff = int(np.linalg.matrix_rank(X / col_scales))
+        if X.shape[0] < 3 or X.shape[0] - rank_eff <= 0:
             # Registry small-sample guards (N >= 3; positive residual df,
             # i.e. N > K + 2 with controls / N > 2K + 2 interacted): the
             # shared classical vcov divides by n - k, so an exactly-
             # saturated design reached ZeroDivisionError (review finding).
             raise ValueError(
                 f"Invalid exact-inference design: {X.shape[0]} "
-                f"observation(s) with {X.shape[1]} fitted parameter(s). "
+                f"observation(s) with {rank_eff} identified parameter(s). "
                 f"LWDiD requires at least 3 cross-sectional units and a "
                 f"positive residual df (N > K + 2 with controls)."
             )
@@ -2996,7 +3004,16 @@ class LWDiD(BaseEstimator):
         else:
             X_used = X
             coef_index = 1
-        xtx_inv = np.linalg.pinv(X_used.T @ X_used)
+        # Scale-equilibrated bread (round-13 review: the raw-Gram pinv
+        # silently dropped low-scale directions at large covariate units -
+        # cell coefficients/SEs from solve_ols were invariant while the
+        # reconstructed influence, and therefore every aggregate SE and
+        # multiplier-bootstrap input, was not). With column scales D,
+        # (X'X)^{-1} = D^{-1} (Xs'Xs)^{-1} D^{-1} for Xs = X D^{-1}.
+        used_scales = np.linalg.norm(X_used, axis=0)
+        used_scales[used_scales == 0] = 1.0
+        X_scaled = X_used / used_scales
+        xtx_inv = np.linalg.pinv(X_scaled.T @ X_scaled) / np.outer(used_scales, used_scales)
         influence = self._finalize_influence(
             self._ols_treatment_influence(
                 X_used,

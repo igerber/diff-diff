@@ -3861,3 +3861,94 @@ class TestReviewRound12Guards:
         raw_weighted = (4.0 * att3 + 4.0 * att5) / 8.0
         np.testing.assert_allclose(res.att, expected, rtol=1e-12)
         assert abs(res.att - raw_weighted) > 1e-6  # distinguishes the rules
+
+
+class TestReviewRound13Guards:
+    """Local-review round 13: execution-verified guards.
+
+    - the RA influence bread was rebuilt with a RAW-Gram pinv after
+      solve_ols's scale-equilibrated fit: at large covariate units the
+      pinv silently dropped low-scale directions, so cell ATT/SE were
+      invariant while every AGGREGATE SE/p/CI (and the multiplier-
+      bootstrap inputs) depended on covariate units
+    - the exact-inference guard counted nominal columns, rejecting
+      redundant-column designs with positive effective residual df
+    """
+
+    KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+    def test_aggregate_inference_invariant_to_covariate_units(self):
+        rng = np.random.default_rng(2)
+
+        def build(scale):
+            rows = []
+            for u in range(20):
+                g = 4 if u < 5 else (5 if u < 10 else 0)
+                x = float(u % 4) * scale
+                for t in range(1, 8):
+                    d = int(g > 0 and t >= g)
+                    rows.append(
+                        dict(
+                            unit=u,
+                            time=t,
+                            treat=d,
+                            g=g,
+                            x=x,
+                            y=1 + 0.2 * t + 0.3 * (x / scale) + 1.5 * d + rng.normal(0, 0.3),
+                        )
+                    )
+            return pd.DataFrame(rows)
+
+        df1 = build(1.0)
+        rng = np.random.default_rng(2)  # same noise stream
+        df2 = build(10.0**7.25)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r1 = LWDiD(rolling="demean").fit(df1, first_treat="g", covariates=["x"], **self.KW)
+            r2 = LWDiD(rolling="demean").fit(df2, first_treat="g", covariates=["x"], **self.KW)
+        np.testing.assert_allclose(r2.att, r1.att, rtol=1e-8)
+        np.testing.assert_allclose(r2.se, r1.se, rtol=1e-6)  # aggregate IF SE
+        np.testing.assert_allclose(r2.p_value, r1.p_value, rtol=1e-5, atol=1e-300)
+        for k in r1.event_study_effects:
+            np.testing.assert_allclose(
+                r2.event_study_effects[k]["se"],
+                r1.event_study_effects[k]["se"],
+                rtol=1e-6,
+                err_msg=f"event {k}",
+            )
+
+    def test_redundant_column_small_sample_fits(self):
+        # 4 collapsed units, design [1, D, x, 2x]: effective rank 3,
+        # residual df 1 -> must FIT (pre-fix: nominal width 4 raised).
+        rows = []
+        for u in range(4):
+            x = float(u)
+            for t in range(1, 5):
+                d = 1 if (u < 2 and t >= 3) else 0
+                rows.append(
+                    dict(
+                        unit=u,
+                        time=t,
+                        treat=d,
+                        x=x,
+                        x2=2.0 * x,
+                        y=1 + 0.5 * t + 0.3 * x + 2 * d + 0.01 * u * t,
+                    )
+                )
+        df = pd.DataFrame(rows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = LWDiD(rolling="demean").fit(df, covariates=["x", "x2"], **self.KW)
+        assert np.isfinite(res.att)
+        # a genuinely saturated full-rank design still raises
+        rows2 = []
+        for u in range(3):
+            for t in range(1, 5):
+                d = 1 if (u < 1 and t >= 3) else 0
+                rows2.append(
+                    dict(unit=u, time=t, treat=d, x=float(u**2), y=1 + 0.5 * t + 2 * d + 0.01 * u)
+                )
+        with pytest.raises(ValueError, match="Invalid exact-inference design"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                LWDiD(rolling="demean").fit(pd.DataFrame(rows2), covariates=["x"], **self.KW)
