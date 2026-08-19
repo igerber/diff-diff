@@ -55,14 +55,34 @@ def _inference_from_influence(
     influence: Optional[np.ndarray],
     alpha: float,
     cluster_ids: Optional[np.ndarray],
+    *,
+    df_unclustered: Optional[int] = None,
+    contributing_mask: Optional[np.ndarray] = None,
 ) -> Tuple[float, float, float, Tuple[float, float], Optional[int]]:
+    """Aggregate-level inference from a combined influence vector.
+
+    Reference-distribution policy (fix-wave WS6): clustered aggregates use
+    ``G - 1`` where G counts the clusters CONTRIBUTING to the aggregate
+    (``contributing_mask``; clusters supplying no estimated cell must not
+    inflate the df); unclustered aggregates composed of EXACTLY ONE cell
+    use that cell's residual df (``df_unclustered`` - matching the
+    common-timing rules, so a single-post-period staggered fit and the
+    common-timing fit of the same data agree); unclustered multi-cell
+    aggregates keep the large-sample normal reference (units recur across
+    cells with overlapping influence functions, so no residual-df pooling
+    is valid - documented in REGISTRY).
+    """
     if influence is None:
         return np.nan, np.nan, np.nan, (np.nan, np.nan), None
     effective = _effective_influence(influence[:, None], cluster_ids)[:, 0]
     se = _guard_standard_error(effect, float(np.sqrt(np.sum(effective**2))))
     if not np.isfinite(se):
         return np.nan, np.nan, np.nan, (np.nan, np.nan), None
-    df = max(len(np.unique(cluster_ids)) - 1, 1) if cluster_ids is not None else None
+    if cluster_ids is not None:
+        ids = cluster_ids if contributing_mask is None else cluster_ids[contributing_mask]
+        df: Optional[int] = max(len(np.unique(ids)) - 1, 1)
+    else:
+        df = df_unclustered
     t_stat, p_value, conf_int = safe_inference(effect, se, alpha=alpha, df=df)
     return se, t_stat, p_value, conf_int, df
 
@@ -166,7 +186,7 @@ def compute_event_study_bands(
                     row = event_effects[label]
                     row["se"] = float(bootstrap_se[index])
                     row["t_stat"], row["p_value"], row["conf_int"] = safe_inference(
-                        row["effect"], row["se"], alpha=estimator.alpha, df=None
+                        row["effect"], row["se"], alpha=estimator.alpha, df=row.get("df")
                     )
                     row["cband_conf_int"] = (
                         row["effect"] - cband_crit_value * row["se"],
@@ -237,6 +257,8 @@ def fit_staggered(
 
     cell_effects: Dict[CellKey, Dict[str, Any]] = {}
     cell_influence: Dict[CellKey, np.ndarray] = {}
+    cell_members: Dict[CellKey, np.ndarray] = {}
+    single_cluster_cells: List[CellKey] = []
     skipped: List[Tuple[Any, Any, str]] = []
     cohort_sizes: Dict[Any, int] = {}
 
@@ -295,8 +317,18 @@ def fit_staggered(
             y = cell["_ydot"].to_numpy(dtype=float)
             controls_matrix = cell[controls].to_numpy(dtype=float) if controls else None
             cluster_ids = None
+            cell_single_cluster = False
             if cluster is not None:
                 cluster_ids = cell[cluster].to_numpy()
+                if len(np.unique(cluster_ids)) < 2:
+                    # Cluster ids are re-derived per cell, so a cell whose
+                    # units share one cluster can exist with G >= 2
+                    # globally. Estimate the POINT unclustered and fail the
+                    # inference closed below (campaign finding: ipw/dr
+                    # silently fell back to unclustered variance here under
+                    # a CR1 label; reg raised mid-fit).
+                    cell_single_cluster = True
+                    cluster_ids = None
             att, se, _, _, n_params, influence = estimator._dispatch_estimator(
                 y, treatment, controls_matrix, cluster_ids, len(cell)
             )
@@ -306,6 +338,13 @@ def fit_staggered(
                 continue
 
             se = _guard_standard_error(att, se)
+            if cell_single_cluster:
+                # Fail closed: point retained, inference NaN; aggregates
+                # that include this cell inherit NaN inference (deliberate
+                # - see the aggregated warning below and REGISTRY).
+                single_cluster_cells.append(key)
+                se = np.nan
+                influence = None
             if cluster_ids is not None:
                 df_cell = max(len(np.unique(cluster_ids)) - 1, 1)
             else:
@@ -328,12 +367,27 @@ def fit_staggered(
                 "skip_reason": None,
                 "inference_status": "ok" if np.isfinite(se) else "degenerate",
             }
+            member_mask = np.zeros(len(all_units), dtype=bool)
+            for unit_value in cell[unit].unique():
+                member_mask[unit_to_index[unit_value]] = True
+            cell_members[key] = member_mask
             if influence is not None and np.isfinite(se):
                 global_influence = np.zeros(len(all_units), dtype=float)
                 for local_index, unit_value in enumerate(cell[unit].to_list()):
                     global_influence[unit_to_index[unit_value]] = influence[local_index]
                 cell_influence[key] = global_influence
 
+    if single_cluster_cells:
+        listed = ", ".join(str(k) for k in single_cluster_cells[:6])
+        suffix = "" if len(single_cluster_cells) <= 6 else f"; plus {len(single_cluster_cells) - 6} more"
+        warnings.warn(
+            f"LWDiD: cohort-time cell(s) {listed}{suffix} contain fewer than "
+            "2 clusters, so their cluster-robust inference is not identified. "
+            "Cell points are retained with NaN inference; any aggregate that "
+            "includes such a cell reports NaN inference as well (fail-closed).",
+            UserWarning,
+            stacklevel=2,
+        )
     if skipped:
         preview = ", ".join(f"({g}, {t}): {reason}" for g, t, reason in skipped[:6])
         suffix = "" if len(skipped) <= 6 else f"; plus {len(skipped) - 6} more"
@@ -357,8 +411,16 @@ def fit_staggered(
         weights = masses / masses.sum()
         effect = float(np.dot(weights, [cell_effects[key]["att"] for key in keys]))
         influence = _combine_influence(keys, weights, cell_influence, len(all_units))
+        mask = np.zeros(len(all_units), dtype=bool)
+        for key in keys:
+            mask |= cell_members.get(key, False)
         se, t_stat, p_value, conf_int, df_group = _inference_from_influence(
-            effect, influence, estimator.alpha, global_cluster_ids
+            effect,
+            influence,
+            estimator.alpha,
+            global_cluster_ids,
+            df_unclustered=(cell_effects[keys[0]]["df"] if len(keys) == 1 else None),
+            contributing_mask=mask,
         )
         cohort_effects[g] = {
             "cohort": g,
@@ -379,6 +441,14 @@ def fit_staggered(
         raise ValueError("No supported post-treatment cohort-time cells were estimable.")
 
     valid_cohorts = list(cohort_effects)
+    overall_keys = [
+        key
+        for key, value in cell_effects.items()
+        if key[0] in cohort_effects and key[1] >= key[0] and np.isfinite(value["att"])
+    ]
+    overall_cluster_mask = np.zeros(len(all_units), dtype=bool)
+    for key in overall_keys:
+        overall_cluster_mask |= cell_members.get(key, False)
     cohort_masses = np.array([cohort_sizes[g] for g in valid_cohorts], dtype=float)
     cohort_weights = cohort_masses / cohort_masses.sum()
     for g, weight in zip(valid_cohorts, cohort_weights):
@@ -460,7 +530,14 @@ def fit_staggered(
                 for g, weight in zip(valid_cohorts, cohort_weights)
             )
         overall_se, _, _, _, overall_df = _inference_from_influence(
-            overall_effect, overall_influence, estimator.alpha, global_cluster_ids
+            overall_effect,
+            overall_influence,
+            estimator.alpha,
+            global_cluster_ids,
+            df_unclustered=(
+                cell_effects[overall_keys[0]]["df"] if len(overall_keys) == 1 else None
+            ),
+            contributing_mask=overall_cluster_mask,
         )
         if overall_influence is not None:
             inference_basis = "joint_influence_function"
@@ -503,8 +580,16 @@ def fit_staggered(
         weights = masses / masses.sum()
         effect = float(np.dot(weights, [cell_effects[key]["att"] for key in keys]))
         influence = _combine_influence(keys, weights, cell_influence, len(all_units))
+        mask = np.zeros(len(all_units), dtype=bool)
+        for key in keys:
+            mask |= cell_members.get(key, False)
         se, t_stat, p_value, conf_int, df_event = _inference_from_influence(
-            effect, influence, estimator.alpha, global_cluster_ids
+            effect,
+            influence,
+            estimator.alpha,
+            global_cluster_ids,
+            df_unclustered=(cell_effects[keys[0]]["df"] if len(keys) == 1 else None),
+            contributing_mask=mask,
         )
         event_effects[int(relative_time)] = {
             "effect": effect,
@@ -543,7 +628,11 @@ def fit_staggered(
         alpha=estimator.alpha,
         df_inference=overall_df,
         cluster_name=cluster,
-        n_clusters=(len(np.unique(global_cluster_ids)) if global_cluster_ids is not None else None),
+        n_clusters=(
+            len(np.unique(global_cluster_ids[overall_cluster_mask]))
+            if global_cluster_ids is not None
+            else None
+        ),
         cohort_effects=cohort_effects,
         cohort_time_effects=cell_effects,
         inference_basis=inference_basis,

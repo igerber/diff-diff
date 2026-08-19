@@ -519,6 +519,7 @@ class LWDiD(BaseEstimator):
             )
         if vcov_type not in _VALID_VCOV_TYPES:
             raise ValueError(f"vcov_type must be one of {_VALID_VCOV_TYPES}, got '{vcov_type}'")
+        self._validate_vcov_config(vcov_type, estimation_method, cluster)
         # Validate control_group
         if control_group not in _VALID_CONTROL_GROUPS:
             raise ValueError(
@@ -603,7 +604,19 @@ class LWDiD(BaseEstimator):
         # --- Input validation ---
         df = data.copy()
         cluster = self.cluster
+        # Re-check the vcov configuration at fit time (set_params probe
+        # re-init covers most mutations; this closes direct-attribute edits).
+        self._validate_vcov_config(self.vcov_type, self.estimation_method, cluster)
         self._validate_inputs(df, outcome, unit, time, treatment, first_treat, cluster, covariates)
+        if cluster is not None:
+            from diff_diff.linalg import effective_cluster_count
+
+            n_cl = effective_cluster_count(df[cluster].to_numpy())
+            if n_cl < 2:
+                raise ValueError(
+                    f"cluster='{cluster}' has {n_cl} effective cluster(s); "
+                    f"cluster-robust inference requires at least 2."
+                )
 
         # Validate treatment is binary
         validate_binary(df[treatment].values, treatment)
@@ -1079,11 +1092,26 @@ class LWDiD(BaseEstimator):
         cluster_ids = None
         if cluster is not None:
             cluster_ids = cs_df[cluster].values
+            if len(np.unique(cluster_ids)) < 2:
+                # The NaN-transformation dropna can reduce the collapsed
+                # cross-section below 2 clusters even when the raw panel
+                # passed the fit-level guard - fail closed rather than let
+                # a single-cluster CR1 SE through on roundoff.
+                warnings.warn(
+                    "LWDiD: after transformation drops, the collapsed "
+                    "cross-section contains fewer than 2 clusters; "
+                    "cluster-robust inference is not identified. The point "
+                    "estimate is retained with NaN inference.",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
         # Estimate
         att, se, coefs, vcov, n_params, _ = self._dispatch_estimator(
             y, treat, controls_matrix, cluster_ids, n_obs
         )
+        if cluster_ids is not None and len(np.unique(cluster_ids)) < 2:
+            se = np.nan  # fail-closed (warned above); point retained
 
         # Step 5: Compute inference
         # n_params is the fitted design's parameter count, so the residual
@@ -1248,6 +1276,18 @@ class LWDiD(BaseEstimator):
             cluster_ids = None
             if cluster is not None:
                 cluster_ids = cell[cluster].to_numpy()
+                if len(np.unique(cluster_ids)) < 2:
+                    warnings.warn(
+                        "LWDiD: a common-timing event-study period cell "
+                        "contains fewer than 2 clusters; its cluster-robust "
+                        "inference is not identified (point retained, "
+                        "inference NaN).",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    single_cluster_period = True
+                else:
+                    single_cluster_period = False
             att, se, _, _, n_params, influence = self._dispatch_estimator(
                 y, treatment_vec, controls_matrix, cluster_ids, len(cell)
             )
@@ -1256,6 +1296,8 @@ class LWDiD(BaseEstimator):
                 continue
 
             se = _guard_standard_error(att, se)
+            if cluster_ids is not None and single_cluster_period:
+                se = np.nan  # fail-closed (warned above); point retained
             if cluster_ids is not None:
                 df_event = max(len(np.unique(cluster_ids)) - 1, 1)
             else:
@@ -3160,6 +3202,53 @@ class LWDiD(BaseEstimator):
         )
         return att, se, None, None, n_params, influence
 
+    @staticmethod
+    def _validate_vcov_config(vcov_type, estimation_method, cluster) -> None:
+        """Config-only vcov coherence checks (called from __init__ AND fit).
+
+        Accepted sets (campaign finding: vcov_type was silently inert for
+        ipw/dr/psm - the influence-function / matching variance is always
+        used there, so only the value whose behavior is real is accepted):
+
+        - ``reg``: {classical, hc1, hc2, hc3}
+        - ``ipw`` / ``dr``: {hc1} only (the default; implemented as the
+          heteroskedasticity-robust influence-function sandwich)
+        - ``psm``: {hc1} only, and ``cluster=`` is rejected (the matching
+          SE has no clustered form - pre-fix it presented a non-clustered
+          SE under cluster-robust metadata)
+
+        ``cluster=`` composes ONLY with hc1 (for any method): pre-fix,
+        classical/hc2/hc3 + cluster were silently remapped to CR1 while
+        the results object kept the requested label.
+        """
+        if estimation_method in ("ipw", "dr") and vcov_type != "hc1":
+            raise ValueError(
+                f"estimation_method='{estimation_method}' supports "
+                f"vcov_type='hc1' only (the influence-function sandwich; "
+                f"heteroskedasticity-robust by construction). Got "
+                f"vcov_type='{vcov_type}', which would be silently inert."
+            )
+        if estimation_method == "psm":
+            if vcov_type != "hc1":
+                raise ValueError(
+                    f"estimation_method='psm' supports vcov_type='hc1' only "
+                    f"(the matching-variance SE). Got vcov_type='{vcov_type}', "
+                    f"which would be silently inert."
+                )
+            if cluster is not None:
+                raise ValueError(
+                    "estimation_method='psm' does not support cluster=: the "
+                    "matching SE has no cluster-robust form. Use "
+                    "estimation_method='dr' for a doubly robust alternative "
+                    "with clustered inference."
+                )
+        if cluster is not None and vcov_type not in ("hc1",):
+            raise ValueError(
+                f"cluster= composes only with vcov_type='hc1' (CR1); got "
+                f"vcov_type='{vcov_type}'. Cluster-robust leverage-corrected "
+                f"families are not implemented for LWDiD."
+            )
+
     def _resolve_vcov_type(self) -> str:
         """Map the requested variance family to a solve_ols vcov_type.
 
@@ -3170,8 +3259,11 @@ class LWDiD(BaseEstimator):
             cluster= constructor parameter is set, cluster-robust (CR1)
             inference is requested via hc1 plus cluster_ids.
         """
+        # Post fix-wave WS6, the config validator guarantees cluster only
+        # composes with hc1, so the requested family IS the resolved family
+        # on every path (no silent remap can occur).
         if self.cluster is not None:
-            return "hc1"  # cluster-robust uses hc1 with cluster_ids
+            assert self.vcov_type == "hc1", "validator invariant violated"
         return self.vcov_type
 
     def _bootstrap(

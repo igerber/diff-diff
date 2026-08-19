@@ -1282,8 +1282,23 @@ class TestInfluenceFunctionReconciliation:
         clusters = rng.integers(0, 12, size=n)
         return y, treatment, controls, clusters, n
 
-    @pytest.mark.parametrize("estimation_method", ["reg", "ipw", "dr"])
-    @pytest.mark.parametrize("vcov", ["classical", "hc1", "hc2", "hc3", "cluster"])
+    # Fix-wave WS6: ipw/dr accept vcov_type='hc1' ONLY (the IF sandwich);
+    # other families were silently inert and are now rejected at
+    # construction, so the reconciliation grid enumerates real configs.
+    @pytest.mark.parametrize(
+        "estimation_method,vcov",
+        [
+            ("reg", "classical"),
+            ("reg", "hc1"),
+            ("reg", "hc2"),
+            ("reg", "hc3"),
+            ("reg", "cluster"),
+            ("ipw", "hc1"),
+            ("ipw", "cluster"),
+            ("dr", "hc1"),
+            ("dr", "cluster"),
+        ],
+    )
     def test_influence_reproduces_standard_error(self, sample, estimation_method, vcov):
         y, treatment, controls, clusters, n = sample
         cluster_ids = clusters if vcov == "cluster" else None
@@ -1299,6 +1314,20 @@ class TestInfluenceFunctionReconciliation:
         assert influence is not None
         effective = influence if cluster_ids is None else _cluster_sums(influence, cluster_ids)
         assert float(np.sqrt(np.sum(effective**2))) == pytest.approx(se, rel=1e-10)
+
+    @pytest.mark.parametrize("estimation_method", ["ipw", "dr", "psm"])
+    @pytest.mark.parametrize("vcov", ["classical", "hc2", "hc3"])
+    def test_inert_vcov_values_rejected(self, estimation_method, vcov):
+        with pytest.raises(ValueError, match="silently inert"):
+            LWDiD(estimation_method=estimation_method, vcov_type=vcov)
+
+    def test_cluster_composes_only_with_hc1(self):
+        with pytest.raises(ValueError, match="composes only with vcov_type='hc1'"):
+            LWDiD(estimation_method="reg", vcov_type="hc3", cluster="cl")
+
+    def test_psm_cluster_rejected(self):
+        with pytest.raises(ValueError, match="psm.*does not support cluster"):
+            LWDiD(estimation_method="psm", cluster="cl")
 
     @pytest.mark.parametrize("vcov", ["classical", "hc1", "hc2", "hc3", "cluster"])
     def test_influence_reproduces_standard_error_without_controls(self, sample, vcov):
