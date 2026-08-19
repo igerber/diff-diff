@@ -2803,6 +2803,7 @@ class LWDiD(BaseEstimator):
         # For each treated unit, find n_neighbors nearest controls
         matched_y_control = np.empty(n_treated)
         available_mask = np.ones(n_control, dtype=bool)
+        n_partial_matches = 0
 
         for i in range(n_treated):
             valid_control_idx = np.where(available_mask)[0]
@@ -2820,6 +2821,16 @@ class LWDiD(BaseEstimator):
                 distances = np.where(within_caliper, distances, np.inf)
 
             nearest_local = np.argsort(distances)[: self.n_neighbors]
+            # Caliper contract: only within-caliper controls may be
+            # averaged. argsort places np.inf (out-of-caliper) LAST but
+            # still returns it, so a partial shortfall (>=1 but
+            # < n_neighbors controls inside the caliper) used to average
+            # arbitrarily distant controls into the counterfactual
+            # (campaign finding: deterministic ATT of -49 vs the correct
+            # caliper-respecting 1.0 on the repro fixture).
+            nearest_local = nearest_local[np.isfinite(distances[nearest_local])]
+            if len(nearest_local) < self.n_neighbors:
+                n_partial_matches += 1
             nearest_global = valid_control_idx[nearest_local]
             matched_y_control[i] = y_control[nearest_global].mean()
 
@@ -2834,6 +2845,15 @@ class LWDiD(BaseEstimator):
             warnings.warn(
                 f"LWDiD PSM: {n_unmatched} treated unit(s) could not be matched "
                 f"within caliper={self.caliper}. ATT computed from {n_treated - n_unmatched} matches.",
+                UserWarning,
+                stacklevel=2,
+            )
+        if n_partial_matches > 0:
+            warnings.warn(
+                f"LWDiD PSM: {n_partial_matches} treated unit(s) had fewer "
+                f"than n_neighbors={self.n_neighbors} control(s) within "
+                f"caliper={self.caliper}; their matches average the "
+                f"within-caliper control(s) only.",
                 UserWarning,
                 stacklevel=2,
             )

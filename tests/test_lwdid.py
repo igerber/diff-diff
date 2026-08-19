@@ -2291,3 +2291,50 @@ class TestBootstrapIntegrity:
         ).fit(df, **self.KW)
         threshold = 0.40 if n_boot < 100 else 0.15
         assert abs(boot.se - analytical.se) / analytical.se < threshold, (boot.se, analytical.se)
+
+
+class TestPSMCaliperContract:
+    """LWDiD fix-wave WS5 (campaign finding, deterministic repro): with a
+    caliper and n_neighbors > 1, argsort kept selecting np.inf-distance
+    (out-of-caliper) controls whenever fewer than n_neighbors controls fell
+    inside the caliper, silently averaging arbitrarily distant controls
+    into the counterfactual (ATT -49 vs the correct 1.0 on this fixture).
+    """
+
+    @staticmethod
+    def _fixture():
+        # 2 treated (pscore ~0.64-0.69), 1 near control (~0.67, ydot=0
+        # effect scale), 3 far controls (pscore ~0) whose transformed
+        # outcome is +100.
+        rows = []
+        units = [
+            ("t1", 1, 5.0, 1.0),
+            ("t2", 1, 4.6, 1.0),
+            ("c_near", 0, 4.8, 0.0),
+            ("c_far1", 0, -9.0, 100.0),
+            ("c_far2", 0, -9.4, 100.0),
+            ("c_far3", 0, -9.8, 100.0),
+        ]
+        for name, d, x, post_shift in units:
+            for t in (1, 2):
+                y = 1.0 if d and t == 2 else 0.0
+                y += post_shift if t == 2 else 0.0
+                rows.append(dict(unit=name, time=t, treat=d * int(t == 2), y=y, x=x))
+        return pd.DataFrame(rows)
+
+    def test_partial_caliper_shortfall_averages_survivors_only(self):
+        df = self._fixture()
+        est = LWDiD(
+            rolling="demean",
+            estimation_method="psm",
+            n_neighbors=2,
+            caliper=0.05,
+        )
+        with pytest.warns(UserWarning, match="fewer than n_neighbors"):
+            res = est.fit(
+                df, outcome="y", unit="unit", time="time", treatment="treat", covariates=["x"]
+            )
+        # Demeaned outcomes: treated ydot = 2.0, near control ydot = 0,
+        # far controls ydot = +100. Caliper-respecting match (c_near only):
+        # ATT = 2.0. Contaminated pre-fix value: 2.0 - (0+100)/2 = -48.
+        np.testing.assert_allclose(res.att, 2.0, atol=1e-10)
