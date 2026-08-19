@@ -439,14 +439,24 @@ class TestTreatmentDesignValidation:
         )
         assert np.isfinite(res.att)
 
-    def test_cohort_beyond_window_vacuously_consistent(self):
-        """Cohorts after the last observed period have no onset to compare."""
-        from diff_diff.lwdid import _check_treatment_design
+    def test_cohort_beyond_window_recoded_to_never_treated(self):
+        """Beyond-window cohorts are recoded to never-treated by the
+        normalizer (with a warning), then pass the design check as
+        never-treated units. The design check itself now documents a
+        normalized-input precondition, so direct callers normalize first.
+        """
+        from diff_diff.lwdid import _check_treatment_design, _normalize_cohorts
 
         cohorts = self._cohorts()
         cohorts[0] = 9  # beyond n_periods=5: all treat rows are 0
         panel = _make_design_panel(cohorts)
-        # Must not raise: no observed onset is expected for cohort 9
+        with pytest.warns(UserWarning, match="exceed the last observed period"):
+            panel["cohort"], n_inf, n_beyond = _normalize_cohorts(
+                panel["cohort"], max_time=panel["time"].max()
+            )
+        assert n_inf == 0 and n_beyond > 0
+        assert (panel.loc[panel["unit"] == 0, "cohort"] == 0).all()
+        # Must not raise: the recoded unit is never-treated with no D=1 rows
         _check_treatment_design(panel, "unit", "time", "treat", "cohort")
 
 
@@ -1960,3 +1970,181 @@ class TestDatetimeTimeScale:
         )
         assert diagnostics["design"] == "staggered"
         assert all(isinstance(g, pd.Timestamp) for g in diagnostics["by_cohort"])
+
+
+class TestCohortNormalization:
+    """LWDiD fix-wave WS9: one shared cohort normalizer (`_normalize_cohorts`)
+    applied after time-scale encoding and before the design check, making
+    every downstream never-treated predicate coherent. Campaign findings
+    (execution-verified): first_treat=inf was iterated as a real cohort that
+    consumed tau_omega weight mass; beyond-window cohorts distorted the
+    composite; unbalanced panels missing the onset row were falsely
+    rejected; validator and fit() disagreed on the never-treated encoding.
+    """
+
+    def _cohorts(self):
+        # 8 treated across two cohorts + 12 never-treated
+        return {u: (3 if u < 4 else (4 if u < 8 else 0)) for u in range(20)}
+
+    def test_inf_cohort_recoded_to_never_treated(self):
+        cohorts = self._cohorts()
+        cohorts[19] = np.inf
+        panel = _make_design_panel(cohorts)
+        est = LWDiD(rolling="demean", estimation_method="reg", control_group="never_treated")
+        with pytest.warns(UserWarning, match="first_treat=inf"):
+            res = est.fit(
+                panel, outcome="y", unit="unit", time="time",
+                treatment="treat", first_treat="cohort",
+            )
+        assert np.isfinite(res.att)
+        # inf never appears as a cohort anywhere in the results
+        assert all(np.isfinite(g) and g > 0 for g in res.cohort_effects)
+
+    def test_beyond_window_cohort_recoded_and_counts_as_control(self):
+        cohorts = self._cohorts()
+        cohorts[19] = 9  # beyond n_periods=5
+        panel = _make_design_panel(cohorts)
+        est = LWDiD(rolling="demean", estimation_method="reg", control_group="never_treated")
+        with pytest.warns(UserWarning, match="exceed the last observed period"):
+            res = est.fit(
+                panel, outcome="y", unit="unit", time="time",
+                treatment="treat", first_treat="cohort",
+            )
+        assert np.isfinite(res.att)
+        assert all(g <= 5 for g in res.cohort_effects)
+
+    def test_negative_cohort_rejected(self):
+        cohorts = self._cohorts()
+        cohorts[19] = -2
+        panel = _make_design_panel(cohorts)
+        # treat rows for a negative cohort: 1[t >= -2] would be all-1; keep 0
+        panel.loc[panel["unit"] == 19, "treat"] = 0
+        est = LWDiD(rolling="demean", estimation_method="reg")
+        with pytest.raises(ValueError, match="negative"):
+            est.fit(
+                panel, outcome="y", unit="unit", time="time",
+                treatment="treat", first_treat="cohort",
+            )
+
+    def test_between_period_numeric_cohort_rejected_with_clear_message(self):
+        cohorts = self._cohorts()
+        cohorts[0] = 3.5  # between observed periods 3 and 4
+        panel = _make_design_panel(cohorts)
+        # D_it = 1[t >= 3.5] -> treated at t=4,5
+        panel.loc[panel["unit"] == 0, "treat"] = (
+            panel.loc[panel["unit"] == 0, "time"] >= 3.5
+        ).astype(int)
+        est = LWDiD(rolling="demean", estimation_method="reg")
+        with pytest.raises(ValueError, match="not observed time periods"):
+            est.fit(
+                panel, outcome="y", unit="unit", time="time",
+                treatment="treat", first_treat="cohort",
+            )
+
+    def test_unobserved_onset_row_accepted(self):
+        # Campaign finding: requiring the onset row itself to be observed
+        # falsely rejected valid unbalanced panels.
+        panel = _make_design_panel(self._cohorts())
+        drop_mask = (panel["unit"] == 0) & (panel["time"] == 3)  # unit 0's onset row
+        panel = panel.loc[~drop_mask].reset_index(drop=True)
+        est = LWDiD(rolling="demean", estimation_method="reg")
+        res = est.fit(
+            panel, outcome="y", unit="unit", time="time",
+            treatment="treat", first_treat="cohort",
+        )
+        assert np.isfinite(res.att)
+
+    def test_untreated_observed_row_after_onset_rejected(self):
+        # Review-caught hole: a first-observed-treated-row inequality alone
+        # would ACCEPT a unit whose observed post-onset rows are all D=0
+        # (no D=1 rows anywhere, onset row unobserved). The equality
+        # predicate D_it == 1[t >= g_i] over observed rows must reject it.
+        panel = _make_design_panel(self._cohorts())
+        u0 = panel["unit"] == 0  # cohort 3
+        panel = panel.loc[~(u0 & (panel["time"] == 3))]  # onset row unobserved
+        panel.loc[panel["unit"] == 0, "treat"] = 0  # observed t=4,5 stay D=0
+        est = LWDiD(rolling="demean", estimation_method="reg")
+        with pytest.raises(ValueError, match="1\\[t >= cohort\\]"):
+            est.fit(
+                panel, outcome="y", unit="unit", time="time",
+                treatment="treat", first_treat="cohort",
+            )
+
+    def test_validator_accepts_nan_coded_never_treated(self):
+        # Validator/fit split: fit() accepts NaN never-treated; the
+        # validator previously required cohort==0 and rejected it.
+        from diff_diff.lwdid import validate_staggered_data
+
+        panel = _make_design_panel(self._cohorts())
+        panel["cohort"] = panel["cohort"].astype(float).replace(0.0, np.nan)
+        out = validate_staggered_data(panel, "unit", "time", "cohort")
+        assert out["valid"], out["errors"]
+        assert out["n_never_treated"] == 12
+        assert out["n_cohorts"] == 2
+
+    def test_validator_flags_nat_mixed_with_finite_cohort(self):
+        # nunique() excluded missing values, so a unit mixing NaT/NaN with
+        # a finite cohort passed validation then raised inside fit().
+        from diff_diff.lwdid import validate_staggered_data
+
+        panel = _make_design_panel(self._cohorts())
+        panel["cohort"] = panel["cohort"].astype(float)
+        mix = (panel["unit"] == 0) & (panel["time"] == 1)
+        panel.loc[mix, "cohort"] = np.nan
+        out = validate_staggered_data(panel, "unit", "time", "cohort")
+        assert not out["valid"]
+        assert any("time-varying cohort" in e for e in out["errors"])
+
+    def test_validator_reports_no_treated_cohorts(self):
+        from diff_diff.lwdid import validate_staggered_data
+
+        panel = _make_design_panel({u: 0 for u in range(6)})
+        out = validate_staggered_data(panel, "unit", "time", "cohort")
+        assert not out["valid"]
+        assert any("No treated cohorts found" in e for e in out["errors"])
+
+    def test_validator_handles_datetime_cohorts_without_raw_errors(self):
+        # Previously df[cohort] > 0 raised a raw pandas TypeError on
+        # datetime cohorts and df[cohort] == 0 silently reported "no
+        # never-treated units".
+        from diff_diff.lwdid import validate_staggered_data
+
+        base = _make_design_panel(self._cohorts())
+        time_map = {t: pd.Timestamp(f"2020-0{t}-01") for t in range(1, 6)}
+        panel = base.assign(
+            time=base["time"].map(time_map),
+            cohort=base["cohort"].map(lambda g: time_map.get(g, pd.NaT)),
+        )
+        out = validate_staggered_data(panel, "unit", "time", "cohort")
+        assert out["valid"], out["errors"]
+        assert out["n_never_treated"] == 12
+        assert out["n_cohorts"] == 2
+
+    def test_is_never_treated_time_aware(self):
+        from diff_diff.lwdid import is_never_treated
+
+        cohorts = self._cohorts()
+        cohorts[18] = np.inf
+        cohorts[19] = 9  # beyond the window
+        panel = _make_design_panel(cohorts)
+        panel.loc[panel["unit"].isin([18, 19]), "treat"] = 0
+        base = is_never_treated(panel, "unit", "cohort")
+        aware = is_never_treated(panel, "unit", "cohort", time="time")
+        units = panel.drop_duplicates("unit")["unit"].to_numpy()
+        base_map = dict(zip(units, base))
+        aware_map = dict(zip(units, aware))
+        assert base_map[18] and aware_map[18]  # inf is never-treated either way
+        assert not base_map[19]  # beyond-window needs the time support
+        assert aware_map[19]
+
+    def test_diagnostics_iterate_normalized_cohorts_only(self):
+        cohorts = self._cohorts()
+        cohorts[19] = np.inf
+        panel = _make_design_panel(cohorts)
+        est = LWDiD(rolling="demean", estimation_method="reg")
+        with pytest.warns(UserWarning, match="first_treat=inf"):
+            diag = est.get_transformation_diagnostics(
+                panel, outcome="y", unit="unit", time="time",
+                treatment="treat", first_treat="cohort",
+            )
+        assert set(diag["by_cohort"]) == {3, 4}

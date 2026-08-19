@@ -39,6 +39,83 @@ _PS_TRIM_LOWER = 0.01
 _PS_TRIM_UPPER = 0.99
 
 
+def _normalize_cohorts(
+    cohort_series: pd.Series,
+    *,
+    max_time: Any,
+) -> Tuple[pd.Series, int, int]:
+    """Canonicalize NUMERIC-encoded cohort values to the house convention.
+
+    Never-treated is encoded as ``NaN`` or ``0`` downstream. Two additional
+    encodings are recoded here with a warning (no silent reinterpretation):
+
+    - ``np.inf`` -> ``0`` (CallawaySantAnna convention: CS recodes exactly
+      ``0``/``inf``; the NaN limb accepted downstream is an LWDiD-only
+      extension needed for datetime scales, documented in REGISTRY).
+    - finite ``g > max_time`` (beyond-window) -> ``0``: a unit that never
+      switches on inside the observed window is within-sample
+      never-treated. This is a documented DEVIATION from CS (which keeps
+      finite cohorts out of never-treated); under
+      ``control_group='never_treated'`` recoded units join the control
+      pool and contribute no pre-period event cells.
+
+    Negative finite values and ``-inf`` are nonsensical cohort encodings
+    and raise ``ValueError`` (never silently classified).
+
+    Parameters
+    ----------
+    cohort_series : pd.Series
+        Row-level cohort column, already numeric (datetime/Period panels
+        must be encoded to integer positions first — see
+        ``_encode_staggered_time_scale``).
+    max_time : scalar
+        Largest observed time value on the same numeric scale.
+
+    Returns
+    -------
+    tuple
+        ``(normalized_series, n_inf_rows_recoded, n_beyond_rows_recoded)``.
+    """
+    values = pd.to_numeric(cohort_series, errors="raise")
+    finite = np.isfinite(values.to_numpy(dtype=float, na_value=np.nan))
+    negative = finite & (values.to_numpy(dtype=float, na_value=np.nan) < 0)
+    neg_inf = np.isneginf(values.to_numpy(dtype=float, na_value=np.nan))
+    if negative.any() or neg_inf.any():
+        bad = sorted(pd.unique(values[negative | neg_inf]).tolist())
+        raise ValueError(
+            f"Cohort column contains negative value(s) {bad[:5]}: cohort "
+            f"values must be 0/NaN (never-treated), np.inf (recoded to "
+            f"never-treated), or an observed treatment period."
+        )
+    inf_mask = np.isposinf(values.to_numpy(dtype=float, na_value=np.nan))
+    n_inf = int(inf_mask.sum())
+    if n_inf:
+        warnings.warn(
+            f"first_treat=inf found on {n_inf} row(s); recoding to 0 "
+            f"(never-treated). Use first_treat=0 to suppress this warning.",
+            UserWarning,
+            stacklevel=3,
+        )
+    beyond_mask = finite & (values.to_numpy(dtype=float, na_value=np.nan) > 0)
+    beyond_mask &= values.to_numpy(dtype=float, na_value=np.nan) > float(max_time)
+    n_beyond = int(beyond_mask.sum())
+    if n_beyond:
+        bad_vals = sorted(pd.unique(values[beyond_mask]).tolist())
+        warnings.warn(
+            f"Cohort value(s) {bad_vals[:5]} exceed the last observed period "
+            f"({max_time}); units in these cohorts never switch on within "
+            f"the sample and are recoded to never-treated (0). This deviates "
+            f"from CallawaySantAnna, which keeps finite cohorts out of "
+            f"never-treated; see docs/methodology/REGISTRY.md (LWDiD).",
+            UserWarning,
+            stacklevel=3,
+        )
+    if n_inf or n_beyond:
+        values = values.copy()
+        values[inf_mask | beyond_mask] = 0
+    return values, n_inf, n_beyond
+
+
 def _check_treatment_design(
     df: pd.DataFrame,
     unit: str,
@@ -55,11 +132,21 @@ def _check_treatment_design(
     2. Common timing (``first_treat is None``): every treated unit must
        first switch to D_it = 1 in the same period; heterogeneous onsets
        require the staggered interface (``first_treat`` cohort column).
-    3. Staggered (``first_treat`` given): each treated unit's first
-       period with D_it = 1 must equal its cohort value g_i, so that
-       D_it = 1[t >= g_i]; units with cohort NaN/0 (never treated by
-       cohort) must have no D_it = 1 rows, and cohorts inside the
-       observed window must actually switch on.
+    3. Staggered (``first_treat`` given): over each unit's OBSERVED rows,
+       the treatment indicator must equal ``1[t >= g_i]`` exactly — no
+       D_it = 1 before the cohort value and no D_it = 0 at or after it;
+       units with cohort NaN/0 (never treated) must have no D_it = 1
+       rows. The row at ``t == g_i`` itself may be unobserved (unbalanced
+       panels with a missing onset row are accepted). Finite positive
+       cohort values must be members of the observed time support —
+       numeric between-period cohorts are rejected (datetime/Period
+       cohorts are mapped to the next observed period by the encoding
+       step before this check).
+
+    Precondition: on the staggered path the cohort column is expected to
+    be already normalized+encoded (``_encode_staggered_time_scale`` +
+    ``_normalize_cohorts``) so that never-treated is NaN/0 and
+    beyond-window/inf sentinels no longer occur.
 
     Parameters
     ----------
@@ -111,36 +198,48 @@ def _check_treatment_design(
             )
         return
 
-    # (3) Staggered: onset must equal the unit's cohort value g_i.
+    # (3a) Support membership: finite positive cohorts must be observed
+    # time values. Post-normalization, beyond-window sentinels no longer
+    # occur, so this targets exactly numeric BETWEEN-period cohorts
+    # (e.g. g=4.5 with observed times {4, 5}).
     cohort_by_unit = ordered.groupby(unit, sort=False)[first_treat].first()
-    onset_cohort = cohort_by_unit.reindex(onset.index)
-    never_by_cohort = onset_cohort.isna() | (onset_cohort == 0)
-    mismatch = never_by_cohort.to_numpy() | (onset_cohort.to_numpy() != onset.to_numpy())
-    if mismatch.any():
-        bad_units = onset.index[mismatch]
-        preview = ", ".join(repr(u) for u in bad_units[:5])
-        suffix = "" if len(bad_units) <= 5 else f", ... ({len(bad_units)} units total)"
+    observed_times = pd.Index(pd.unique(ordered[time]))
+    positive = cohort_by_unit.notna() & (cohort_by_unit > 0)
+    off_support = positive & ~cohort_by_unit.isin(observed_times)
+    if off_support.to_numpy().any():
+        bad_vals = sorted(pd.unique(cohort_by_unit[off_support]).tolist())
         raise ValueError(
-            f"Treatment column '{treatment}' is inconsistent with cohort "
-            f"column '{first_treat}' for unit(s) {preview}{suffix}: the first "
-            f"period with treatment=1 must equal the unit's cohort value, and "
-            f"never-treated units (cohort NaN or 0) must have no treatment=1 rows."
+            f"Cohort value(s) {bad_vals[:5]} in column '{first_treat}' are "
+            f"not observed time periods. Numeric between-period cohorts are "
+            f"not supported; use an observed period value (datetime/Period "
+            f"cohorts are mapped to the next observed period automatically)."
         )
 
-    # Cohorts inside the observed window must have observed onsets;
-    # cohorts beyond the last period are vacuously consistent.
-    max_time = ordered[time].max()
-    in_window = cohort_by_unit.notna() & (cohort_by_unit > 0) & (cohort_by_unit <= max_time)
-    silent = in_window.to_numpy() & ~cohort_by_unit.index.isin(onset.index)
-    if silent.any():
-        bad_units = cohort_by_unit.index[silent]
+    # (3b) Per unit, over OBSERVED rows, D_it must equal 1[t >= g_i]:
+    # never-treated units (cohort NaN/0) have no D=1 rows; treated-cohort
+    # units have no D=1 before g and no D=0 at/after g. The onset row
+    # itself may be unobserved (unbalanced panels are accepted).
+    g_by_row = ordered[unit].map(cohort_by_unit)
+    g_arr = g_by_row.to_numpy(dtype=float, na_value=np.nan)
+    never_row = np.isnan(g_arr) | (g_arr == 0)
+    d_arr = ordered[treatment].to_numpy(dtype=float)
+    t_arr = ordered[time].to_numpy(dtype=float)
+    with np.errstate(invalid="ignore"):
+        premature = ~never_row & (t_arr < g_arr) & (d_arr == 1)
+        untreated_post = ~never_row & (t_arr >= g_arr) & (d_arr == 0)
+    never_treated_rows = never_row & (d_arr == 1)
+    violation = premature | untreated_post | never_treated_rows
+    if violation.any():
+        bad_units = pd.unique(ordered.loc[violation, unit])
         preview = ", ".join(repr(u) for u in bad_units[:5])
         suffix = "" if len(bad_units) <= 5 else f", ... ({len(bad_units)} units total)"
         raise ValueError(
             f"Treatment column '{treatment}' is inconsistent with cohort "
-            f"column '{first_treat}' for unit(s) {preview}{suffix}: cohort "
-            f"value lies within the observed window but the unit has no "
-            f"treatment=1 rows."
+            f"column '{first_treat}' for unit(s) {preview}{suffix}: over "
+            f"observed rows, treatment must equal 1[t >= cohort] — no "
+            f"treatment=1 before the cohort period, no treatment=0 at or "
+            f"after it, and never-treated units (cohort NaN or 0) must have "
+            f"no treatment=1 rows."
         )
 
 
@@ -516,6 +615,13 @@ class LWDiD(BaseEstimator):
         label_maps = None
         if first_treat is not None:
             df, time, first_treat, label_maps = _encode_staggered_time_scale(df, time, first_treat)
+            # Cohort normalization runs AFTER encoding (numeric positions
+            # only — datetime beyond-window cohorts arrive as T+1 and are
+            # caught by the g > max_time rule) and BEFORE the design check
+            # (which requires canonical never-treated encodings).
+            df[first_treat], _, _ = _normalize_cohorts(
+                df[first_treat], max_time=df[time].max()
+            )
 
         # Unified treatment-design validation (absorbing + timing
         # consistency) covering both dispatch paths
@@ -583,6 +689,12 @@ class LWDiD(BaseEstimator):
             # mirroring _transform_for_cohort in estimation. Datetime and
             # Period panels use the same integer-position encoding as fit().
             df, time, first_treat, label_maps = _encode_staggered_time_scale(df, time, first_treat)
+            # Same cohort normalization as fit(): inf and beyond-window
+            # cohorts are recoded to never-treated here too, so the
+            # diagnostics iterate the same cohort set estimation uses.
+            df[first_treat], _, _ = _normalize_cohorts(
+                df[first_treat], max_time=df[time].max()
+            )
             cohort_by_unit = df.drop_duplicates(subset=[unit], keep="first").set_index(unit)[
                 first_treat
             ]
@@ -3205,11 +3317,16 @@ class LWDiD(BaseEstimator):
 def validate_staggered_data(data, unit, time, cohort) -> Dict[str, Any]:
     """Validate panel data structure for staggered DiD estimation.
 
-    Checks:
+    Checks (using the same never-treated definition as ``fit()``:
+    cohort ``NaN``/``NaT``, ``0``, ``np.inf`` (recoded), or a finite value
+    beyond the last observed period (recoded)):
+
     - Panel is complete (all unit×time combinations exist)
-    - Cohort is time-invariant within units
-    - At least one never-treated group exists (cohort==0)
-    - No missing values in key columns
+    - Cohort is time-invariant within units (missing values included,
+      matching ``fit_staggered``'s ``nunique(dropna=False)`` check)
+    - At least one never-treated unit exists
+    - At least one treated cohort remains after normalization
+    - Time and cohort columns share the same time family
 
     Parameters
     ----------
@@ -3220,18 +3337,15 @@ def validate_staggered_data(data, unit, time, cohort) -> Dict[str, Any]:
     time : str
         Time period column name.
     cohort : str
-        Cohort column name (0 or NaN = never-treated).
+        Cohort column name (``0``/``NaN``/``NaT`` = never-treated;
+        ``np.inf`` and beyond-window values are recoded to never-treated
+        with a warning, as in ``fit()``).
 
     Returns
     -------
     dict
         Validation results with keys: 'valid', 'warnings', 'errors',
         'n_units', 'n_periods', 'n_cohorts', 'n_never_treated'.
-
-    Raises
-    ------
-    ValueError
-        If data structure is fundamentally invalid.
     """
 
     df = data.copy()
@@ -3245,8 +3359,48 @@ def validate_staggered_data(data, unit, time, cohort) -> Dict[str, Any]:
             results["errors"].append(f"Column '{col}' not found in data")
             return results
 
-    # Check cohort time-invariance
-    cohort_per_unit = df.groupby(unit)[cohort].nunique()
+    # Dtype coherence + normalization (dtype-aware; mirrors fit()'s
+    # encode-then-normalize pipeline without building position maps).
+    cohort_datelike = pd.api.types.is_datetime64_any_dtype(df[cohort]) or isinstance(
+        df[cohort].dtype, pd.PeriodDtype
+    )
+    time_datelike = pd.api.types.is_datetime64_any_dtype(df[time]) or isinstance(
+        df[time].dtype, pd.PeriodDtype
+    )
+    if cohort_datelike != time_datelike:
+        results["valid"] = False
+        results["errors"].append(
+            f"Columns '{time}' (time) and '{cohort}' (cohort) must share the "
+            f"same time scale; got dtypes {df[time].dtype} and {df[cohort].dtype}."
+        )
+        return results
+    if cohort_datelike:
+        # Datetime/Period: NaT = never-treated; beyond-window recodes to
+        # NaT via a same-dtype comparison (no numeric sentinel exists).
+        max_time = df[time].max()
+        beyond = df[cohort].notna() & (df[cohort] > max_time)
+        if beyond.to_numpy().any():
+            results["warnings"].append(
+                f"{int(beyond.sum())} row(s) have cohort values beyond the "
+                f"last observed period ({max_time}); treated as never-treated."
+            )
+            df.loc[beyond, cohort] = pd.NaT
+        never_mask_series = df[cohort].isna()
+        treated_vals = df.loc[~never_mask_series, cohort]
+    else:
+        try:
+            df[cohort], _, _ = _normalize_cohorts(df[cohort], max_time=df[time].max())
+        except ValueError as exc:
+            results["valid"] = False
+            results["errors"].append(str(exc))
+            return results
+        never_mask_series = df[cohort].isna() | (df[cohort] == 0)
+        treated_vals = df.loc[~never_mask_series, cohort]
+
+    # Check cohort time-invariance (missing values included, matching
+    # fit_staggered's nunique(dropna=False) — a unit mixing NaT/NaN with a
+    # finite cohort must fail here, not later inside fit).
+    cohort_per_unit = df.groupby(unit)[cohort].nunique(dropna=False)
     varying = cohort_per_unit[cohort_per_unit > 1]
     if len(varying) > 0:
         results["valid"] = False
@@ -3255,13 +3409,21 @@ def validate_staggered_data(data, unit, time, cohort) -> Dict[str, Any]:
     # Check for never-treated. All-eventually-treated panels are rejected
     # by fit() for staggered designs, so mirror that hard-error here
     # instead of reporting a valid-with-warning contradiction.
-    never_treated = df[df[cohort] == 0][unit].nunique()
+    never_treated = df.loc[never_mask_series, unit].nunique()
     if never_treated == 0:
         results["valid"] = False
         results["errors"].append(
-            "No never-treated units found (cohort==0); staggered LWDiD "
-            "estimation requires a never-treated control group."
+            "No never-treated units found (cohort NaN/NaT or 0); staggered "
+            "LWDiD estimation requires a never-treated control group."
         )
+
+    # Treated-cohort coherence: if normalization recoded every cohort,
+    # fit_staggered would raise "No treated cohorts found." — report the
+    # same failure here instead of valid-with-zero-cohorts.
+    n_cohorts = int(treated_vals.nunique())
+    if n_cohorts == 0:
+        results["valid"] = False
+        results["errors"].append("No treated cohorts found.")
 
     # Check panel balance
     n_units = df[unit].nunique()
@@ -3270,21 +3432,22 @@ def validate_staggered_data(data, unit, time, cohort) -> Dict[str, Any]:
     if len(df) != expected_rows:
         results["warnings"].append(f"Unbalanced panel: {len(df)} rows vs {expected_rows} expected")
 
-    # Check missing values
-    for col in [unit, time, cohort]:
+    # Check missing values in unit/time (cohort NaN/NaT is a documented
+    # never-treated encoding, not a data problem).
+    for col in [unit, time]:
         n_missing = df[col].isna().sum()
         if n_missing > 0:
             results["warnings"].append(f"{n_missing} missing values in '{col}'")
 
     results["n_units"] = n_units
     results["n_periods"] = n_times
-    results["n_cohorts"] = df[df[cohort] > 0][cohort].nunique()
+    results["n_cohorts"] = n_cohorts
     results["n_never_treated"] = never_treated
 
     return results
 
 
-def is_never_treated(data, unit, cohort) -> np.ndarray:
+def is_never_treated(data, unit, cohort, time=None) -> np.ndarray:
     """Identify never-treated units in staggered design.
 
     Parameters
@@ -3294,7 +3457,14 @@ def is_never_treated(data, unit, cohort) -> np.ndarray:
     unit : str
         Unit identifier column name.
     cohort : str
-        Cohort column name (0 = never treated).
+        Cohort column name. Never-treated encodings: ``0``, ``NaN``/``NaT``,
+        and ``np.inf``.
+    time : str or None, default None
+        Time column name. When provided, beyond-window classification also
+        applies (dtype-aware): a finite cohort value greater than the last
+        observed period counts as never-treated, matching ``fit()``'s
+        normalization. Without it, only the sentinel encodings above are
+        classified.
 
     Returns
     -------
@@ -3302,4 +3472,10 @@ def is_never_treated(data, unit, cohort) -> np.ndarray:
         True for never-treated units (one entry per unique unit).
     """
     unit_cohort = data.groupby(unit)[cohort].first()
-    return np.array((unit_cohort == 0) | unit_cohort.isna())
+    never = (unit_cohort == 0) | unit_cohort.isna()
+    if pd.api.types.is_numeric_dtype(unit_cohort):
+        never |= np.isposinf(unit_cohort.to_numpy(dtype=float, na_value=np.nan))
+    if time is not None:
+        max_time = data[time].max()
+        never |= unit_cohort.notna() & (unit_cohort > max_time)
+    return np.asarray(never)
