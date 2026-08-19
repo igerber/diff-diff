@@ -4440,12 +4440,14 @@ def validate_staggered_data(data, unit, time, cohort) -> Dict[str, Any]:
             f"{expected_rows} expected"
         )
 
-    # Check missing values in unit/time (cohort NaN/NaT is a documented
-    # never-treated encoding, not a data problem).
+    # Missing unit/time values are ERRORS (fit() rejects the same frame;
+    # round-23 review: warning-only let 'valid: True' disagree with fit).
+    # Cohort NaN/NaT stays a documented never-treated encoding.
     for col in [unit, time]:
         n_missing = df[col].isna().sum()
         if n_missing > 0:
-            results["warnings"].append(f"{n_missing} missing values in '{col}'")
+            results["valid"] = False
+            results["errors"].append(f"{n_missing} missing values in '{col}'")
 
     results["n_units"] = n_units
     results["n_periods"] = n_times

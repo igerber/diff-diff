@@ -485,6 +485,17 @@ def fit_staggered(
 
     cohort_effects: Dict[Any, Dict[str, Any]] = {}
     cohort_influence: Dict[Any, np.ndarray] = {}
+    # Treated-unit positions per cohort, for CONTRIBUTING-mass weighting
+    # (round-23 review: cohort_sizes counts RAW cohort members, so a
+    # treated unit contributing to no estimable post cell still raised
+    # its cohort's overall weight on non-tau_omega paths).
+    treated_positions_by_cohort: Dict[Any, np.ndarray] = {}
+    for g in treated_cohorts:
+        positions = np.zeros(len(all_units), dtype=bool)
+        for u in cohort_by_unit.index[cohort_by_unit == g]:
+            positions[unit_to_index[u]] = True
+        treated_positions_by_cohort[g] = positions
+    contributing_sizes: Dict[Any, int] = {}
     for g in treated_cohorts:
         keys = [
             key
@@ -508,6 +519,7 @@ def fit_staggered(
             df_unclustered=(cell_effects[keys[0]]["df"] if len(keys) == 1 else None),
             contributing_mask=mask,
         )
+        contributing_sizes[g] = int((mask & treated_positions_by_cohort[g]).sum())
         cohort_effects[g] = {
             "cohort": g,
             "att": effect,
@@ -515,7 +527,7 @@ def fit_staggered(
             "t_stat": t_stat,
             "p_value": p_value,
             "conf_int": conf_int,
-            "n_treated": cohort_sizes[g],
+            "n_treated": contributing_sizes[g],
             "n_control": max(cell_effects[key]["n_control"] for key in keys),
             "n_cells": len(keys),
             "df": df_group,
@@ -535,7 +547,10 @@ def fit_staggered(
     overall_cluster_mask = np.zeros(len(all_units), dtype=bool)
     for key in overall_keys:
         overall_cluster_mask |= cell_members.get(key, False)
-    cohort_masses = np.array([cohort_sizes[g] for g in valid_cohorts], dtype=float)
+    # Overall masses from treated units CONTRIBUTING to each cohort's
+    # estimable post cells (the Registry's contributing-sample rule; raw
+    # cohort membership previously weighted non-contributing units in).
+    cohort_masses = np.array([contributing_sizes[g] for g in valid_cohorts], dtype=float)
     cohort_weights = cohort_masses / cohort_masses.sum()
     for g, weight in zip(valid_cohorts, cohort_weights):
         cohort_effects[g]["weight"] = float(weight)

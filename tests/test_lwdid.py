@@ -4397,3 +4397,93 @@ class TestReviewRound22Guards:
         cl = np.arange(20) % 5
         with pytest.raises((ValueError, TypeError)):
             wild_cluster_bootstrap(y, d, cl, alpha=bad, n_bootstrap=19)
+
+
+class TestReviewRound23Guards:
+    """Local-review round 23: raw cohort masses weighted non-contributing
+    treated units into staggered overall aggregates outside the tau_omega
+    route; plot_cohort_trends silently ignored cohort=; validator
+    reported missing unit/time as warnings only."""
+
+    KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+    def test_overall_weights_use_contributing_treated_units(self):
+        # Two cohorts under NOT_YET_TREATED (non-tau_omega route): 3 of 4
+        # cohort-5 treated units observe NO post rows -> only 1
+        # contributes. Overall masses must be 4 (cohort 3) and 1
+        # (cohort 5), not the raw 4 and 4.
+        rng = np.random.default_rng(2)
+        rows = []
+        uid = 0
+        spec = [(0, 8, None), (3, 4, None), (5, 1, None), (5, 3, (1, 2, 3, 4))]
+        for g, n, keep in spec:
+            for _ in range(n):
+                alpha = rng.normal()
+                for t in range(1, 7):
+                    if keep is not None and t not in keep:
+                        continue
+                    d = int(g > 0 and t >= g)
+                    rows.append(
+                        dict(
+                            unit=uid,
+                            time=t,
+                            treat=d,
+                            g=g,
+                            y=alpha + 0.2 * t + 1.5 * d + rng.normal(0, 0.3),
+                        )
+                    )
+                uid += 1
+        df = pd.DataFrame(rows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = LWDiD(rolling="demean", control_group="not_yet_treated").fit(
+                df, first_treat="g", **self.KW
+            )
+        assert res.cohort_effects[3]["n_treated"] == 4
+        assert res.cohort_effects[5]["n_treated"] == 1  # contributing only
+        att3 = res.cohort_effects[3]["att"]
+        att5 = res.cohort_effects[5]["att"]
+        expected = (4.0 * att3 + 1.0 * att5) / 5.0
+        raw = (4.0 * att3 + 4.0 * att5) / 8.0
+        np.testing.assert_allclose(res.att, expected, rtol=1e-12)
+        assert abs(res.att - raw) > 1e-9
+
+    def test_plot_cohort_trends_honors_cohort(self):
+        pytest.importorskip("matplotlib")
+        import matplotlib
+
+        matplotlib.use("Agg")
+        from diff_diff.lwdid_visualization import plot_cohort_trends
+
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(12):
+            g = 3 if u < 4 else (5 if u < 8 else 0)
+            for t in range(1, 7):
+                d = int(g > 0 and t >= g)
+                rows.append(dict(unit=u, time=t, treat=d, g=g, y=rng.normal() + d))
+        df = pd.DataFrame(rows)
+        fig = plot_cohort_trends(
+            df, outcome="y", unit="unit", time="time", treatment="treat", cohort="g"
+        )
+        labels = [line.get_label() for ax in fig.axes for line in ax.get_lines()]
+        assert any("Cohort 3" in lab for lab in labels)
+        assert any("Cohort 5" in lab for lab in labels)
+        assert any(lab == "Control" for lab in labels)
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
+
+    def test_validator_missing_unit_time_invalid(self):
+        from diff_diff.lwdid import validate_staggered_data
+
+        rows = []
+        for u in range(6):
+            g = 4 if u < 3 else 0
+            for t in range(1, 7):
+                rows.append(dict(unit=u, time=t, g=g, y=1.0))
+        df = pd.DataFrame(rows)
+        df.loc[df.index[3], "unit"] = np.nan
+        out = validate_staggered_data(df, unit="unit", time="time", cohort="g")
+        assert out["valid"] is False
+        assert any("missing values" in e for e in out["errors"])

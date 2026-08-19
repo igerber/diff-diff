@@ -329,15 +329,17 @@ transformation is applied. Eight requirements are enforced:
   at least one never-treated unit (``first_treat`` coded NaN or 0) must
   be present. A panel in which every unit is eventually treated raises
   ``ValueError`` rather than silently truncating the estimation sample.
-- **Unit-constant covariates (staggered)** — in staggered designs,
-  ``covariates`` must be constant within each unit; time-varying
-  covariate columns raise ``ValueError``.
+- **Unit-constant covariates** — ``covariates`` (and a non-unit
+  ``cluster=`` column) must be constant within each unit on BOTH timing
+  paths; time-varying columns raise ``ValueError`` (LWDiD collapses the
+  panel to one row per unit, so a time-varying value would make the
+  estimate depend on row order).
 - **Distinct, non-reserved column names** — the core role columns
   (outcome/unit/time/treatment/``first_treat``) must be pairwise
   distinct, covariates may not repeat a core role, and no role column
   may use an LWDiD-internal working name (``_treat``, ``_ydot``,
   ``_ydot_avg``, ``_ever_treated``, ``_boot_unit``, ``_lwdid_time_pos``,
-  ``_lwdid_cohort_pos``) — a collision would silently overwrite the
+  ``_lwdid_cohort_pos``, ``_lwdid_season``) — a collision would silently overwrite the
   internal column (e.g. ``cluster='_treat'`` previously reported the
   cluster labels' coefficient as the ATT). ``cluster=`` equal to the
   unit column remains supported.

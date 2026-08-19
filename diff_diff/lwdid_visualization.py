@@ -43,10 +43,14 @@ def plot_cohort_trends(
     show_ci: bool = True,
     ax=None,
 ):
-    """Plot pre/post outcome trajectories by treatment group (or cohort).
+    """Plot pre/post outcome trajectories by treatment group or cohort.
 
-    Shows average outcomes over time for treated vs control groups,
-    with optional confidence intervals.
+    Without ``cohort=``, shows average outcomes over time for the
+    ever-treated vs control groups. With ``cohort=`` (round-23 review:
+    the parameter was previously accepted but silently ignored), one
+    trajectory is drawn PER treated cohort (never-treated encodings
+    0/NaN form the control line) with a per-cohort onset marker.
+    Optional confidence bands in both modes.
     """
     plt = _require_matplotlib()
 
@@ -55,20 +59,33 @@ def plot_cohort_trends(
     else:
         fig = ax.get_figure()
 
-    # Compute group means by time
-    # Identify ever-treated units
-    treated_units = data.loc[data[treatment] == 1, unit].unique()
     data = data.copy()
-    data["_ever_treated"] = data[unit].isin(treated_units).astype(int)
+    if cohort is not None:
+        cohort_by_unit = data.drop_duplicates(subset=[unit], keep="first").set_index(unit)[cohort]
+        never_mask = cohort_by_unit.isna() | (cohort_by_unit == 0)
+        data["_plot_group"] = data[unit].map(
+            {
+                u: ("Control" if never_mask[u] else f"Cohort {cohort_by_unit[u]}")
+                for u in cohort_by_unit.index
+            }
+        )
+        group_order = sorted({g for g in data["_plot_group"].unique() if g != "Control"}) + (
+            ["Control"] if (data["_plot_group"] == "Control").any() else []
+        )
+    else:
+        treated_units = data.loc[data[treatment] == 1, unit].unique()
+        data["_plot_group"] = np.where(data[unit].isin(treated_units), "Treated", "Control")
+        group_order = ["Treated", "Control"]
 
-    # Group averages
     group_means = (
-        data.groupby([time, "_ever_treated"])[outcome].agg(["mean", "std", "count"]).reset_index()
+        data.groupby([time, "_plot_group"])[outcome].agg(["mean", "std", "count"]).reset_index()
     )
     group_means["se"] = group_means["std"] / np.sqrt(group_means["count"])
 
-    for grp, label, color in [(1, "Treated", "steelblue"), (0, "Control", "coral")]:
-        gdf = group_means[group_means["_ever_treated"] == grp]
+    colors = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["steelblue", "coral"])
+    for i, label in enumerate(group_order):
+        gdf = group_means[group_means["_plot_group"] == label]
+        color = "coral" if label == "Control" else colors[i % len(colors)]
         ax.plot(gdf[time], gdf["mean"], "o-", label=label, color=color)
         if show_ci:
             ax.fill_between(
@@ -79,18 +96,33 @@ def plot_cohort_trends(
                 color=color,
             )
 
-    # Mark treatment onset
-    treated_times = data.loc[data[treatment] == 1, time]
-    if len(treated_times) > 0:
-        first_treat = treated_times.min()
-        # Datetime/Period/string time columns cannot take `- 0.5` (raw
-        # TypeError pre-fix); draw the marker AT the onset for
-        # non-numeric scales, offset by half a period for numeric ones.
-        if pd.api.types.is_numeric_dtype(data[time]):
-            onset_x = first_treat - 0.5
-        else:
-            onset_x = first_treat
-        ax.axvline(onset_x, color="gray", linestyle="--", alpha=0.7, label="Treatment onset")
+    # Onset markers: one per cohort when cohort= is given, else the
+    # common onset. Datetime/Period/string time columns cannot take
+    # `- 0.5` (raw TypeError pre-fix); draw AT the onset for non-numeric
+    # scales, offset by half a period for numeric ones.
+    def _onset_x(value):
+        return value - 0.5 if pd.api.types.is_numeric_dtype(data[time]) else value
+
+    if cohort is not None:
+        onsets = sorted({v for v in cohort_by_unit.dropna().unique() if not (pd.isna(v) or v == 0)})
+        for i, g in enumerate(onsets):
+            ax.axvline(
+                _onset_x(g),
+                color="gray",
+                linestyle="--",
+                alpha=0.7,
+                label="Cohort onsets" if i == 0 else None,
+            )
+    else:
+        treated_times = data.loc[data[treatment] == 1, time]
+        if len(treated_times) > 0:
+            ax.axvline(
+                _onset_x(treated_times.min()),
+                color="gray",
+                linestyle="--",
+                alpha=0.7,
+                label="Treatment onset",
+            )
 
     ax.set_xlabel("Time")
     ax.set_ylabel(outcome)
