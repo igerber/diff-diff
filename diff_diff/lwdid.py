@@ -473,7 +473,7 @@ class LWDiD(BaseEstimator):
     vce='hc1'          vcov_type='hc1'     Heteroskedasticity-robust
     vce='cluster'      cluster=<column>    Constructor cluster= parameter
     cluster_var        cluster             Cluster variable name
-    controls           controls            Covariates
+    controls           covariates          fit() covariates= parameter
     control_group      control_group       Same values
     =================  ==================  ====================================
 
@@ -3045,7 +3045,10 @@ class LWDiD(BaseEstimator):
         att : float
             PSM-estimated ATT.
         se : float
-            Standard error (simple matching SE).
+            Always NaN (fail-closed): no valid matching variance is
+            implemented (the naive matched-pairs formula ignored control
+            reuse and first-stage uncertainty; an Abadie-Imbens variance
+            is tracked in DEFERRED.md).
         coefs : ndarray or None
             Not returned for PSM (None).
         vcov : ndarray or None

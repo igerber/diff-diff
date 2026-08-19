@@ -3012,3 +3012,137 @@ class TestReviewRound3Guards:
     def test_duplicate_covariates_rejected(self):
         with pytest.raises(ValueError, match="duplicate column"):
             LWDiD(rolling="demean").fit(self._panel(), covariates=["x", "x"], **self.KW)
+
+
+class TestReviewRound4Guards:
+    """Local-review round 4: execution-verified guards.
+
+    - RI and the WCR wrapper fit via np.linalg.lstsq, so a control
+      duplicating treatment returned a finite MINIMUM-NORM ATT (probe:
+      true ATT 2.0 reported as 0.877 with finite p-values in both)
+    - staggered NT-only cells could estimate on a single surviving
+      control after transformation drops
+    - unobserved staggered anchors were synthesized as zero-valued
+      reference rows
+    - the standalone WCR wrapper accepted n_bootstrap=1; the result-level
+      wrapper ignored the fitted alpha
+    """
+
+    KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+    @staticmethod
+    def _arrays(seed=0, n=40):
+        rng = np.random.default_rng(seed)
+        treat = np.array([1.0] * (n // 2) + [0.0] * (n // 2))
+        y = 2.0 * treat + rng.normal(0, 1, n)
+        cl = np.arange(n) % 8
+        return y, treat, cl, rng
+
+    def test_collinear_control_identified_in_ri_and_wcb(self):
+        # Pre-fix, lstsq split the effect across the duplicate columns
+        # (minimum-norm: true ATT 2.0 reported as ~0.88). The shared
+        # rank-aware solver pivots, keeps the treatment column, drops the
+        # duplicate control, and reports the IDENTIFIED ATT (here exactly
+        # the difference in means) with a rank warning. The raise branch
+        # remains as a backstop should the treatment column itself be
+        # pivoted out.
+        from diff_diff.lwdid_randomization import randomization_inference
+        from diff_diff.lwdid_wild_bootstrap import wild_cluster_bootstrap
+
+        y, treat, cl, rng = self._arrays()
+        dup = treat.reshape(-1, 1).copy()
+        truth = y[treat == 1].mean() - y[treat == 0].mean()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            ri = randomization_inference(y, treat, controls=dup, n_reps=49, seed=3)
+            wb = wild_cluster_bootstrap(y, treat, cl, controls=dup, n_bootstrap=49, seed=3)
+        np.testing.assert_allclose(ri.att_observed, truth, rtol=1e-12)
+        np.testing.assert_allclose(wb.att, truth, rtol=1e-12)
+        assert any("rank" in str(x.message).lower() for x in caught)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            # valid controls: studentization stays coherent
+            x = rng.normal(size=(len(y), 1))
+            wb2 = wild_cluster_bootstrap(y, treat, cl, controls=x, n_bootstrap=49, seed=3)
+            np.testing.assert_allclose(wb2.t_stat_original, wb2.att / wb2.se)
+
+    def test_wcb_n_bootstrap_validation(self):
+        from diff_diff.lwdid_wild_bootstrap import wild_cluster_bootstrap
+
+        y, treat, cl, _ = self._arrays()
+        for bad in (1, 0, -3, 2.5, True):
+            with pytest.raises(ValueError, match="integer >= 2"):
+                wild_cluster_bootstrap(y, treat, cl, n_bootstrap=bad)
+
+    def test_ri_n_reps_validation(self):
+        from diff_diff.lwdid_randomization import randomization_inference
+
+        y, treat, _, _ = self._arrays()
+        for bad in (0, -1, 99.5, True):
+            with pytest.raises(ValueError, match="n_reps must be"):
+                randomization_inference(y, treat, n_reps=bad)
+
+    def test_results_wcb_inherits_fitted_alpha(self):
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(16):
+            for t in range(1, 7):
+                d = 1 if (u < 8 and t >= 4) else 0
+                rows.append(dict(unit=u, time=t, treat=d, y=1 + 2 * d + rng.normal(0, 0.5)))
+        df = pd.DataFrame(rows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = LWDiD(rolling="demean", alpha=0.10).fit(df, **self.KW)
+        y_arr = rng.normal(size=30)
+        t_arr = np.array([1.0] * 15 + [0.0] * 15)
+        cl_arr = np.arange(30) % 6
+        wb = res.wild_cluster_bootstrap(y_arr, t_arr, cl_arr, n_bootstrap=49, seed=1)
+        assert wb.alpha == 0.10
+        wb2 = res.wild_cluster_bootstrap(y_arr, t_arr, cl_arr, n_bootstrap=49, seed=1, alpha=0.05)
+        assert wb2.alpha == 0.05
+
+    def test_nt_only_cell_needs_two_surviving_controls(self):
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(8):
+            g = 4 if u < 6 else 0  # 6 treated, exactly 2 never-treated
+            for t in range(1, 7):
+                d = int(g > 0 and t >= g)
+                y = 1 + 0.5 * t + d + rng.normal(0, 0.3)
+                if u == 6 and t == 5:
+                    y = np.nan  # one NT control loses its t=5 outcome
+                rows.append(dict(unit=u, time=t, treat=d, g=g, y=y))
+        df = pd.DataFrame(rows).dropna(subset=[]).copy()
+        df.loc[(df.unit == 6) & (df.time == 5), "y"] = np.nan
+        df = df.dropna(subset=["y"]) if False else df
+        # NaN y raises in validation; drop the row instead (unbalanced panel)
+        df = df[~((df.unit == 6) & (df.time == 5))]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = LWDiD(rolling="demean", control_group="never_treated").fit(
+                df, first_treat="g", **self.KW
+            )
+        cell = res.cohort_time_effects[(4, 5)]
+        assert cell["skip_reason"] == "insufficient_never_treated_controls"
+        assert np.isnan(cell["att"])
+        # other post cells still estimated with both controls
+        assert np.isfinite(res.cohort_time_effects[(4, 4)]["att"])
+
+    def test_unobserved_anchor_not_synthesized(self):
+        rng = np.random.default_rng(0)
+        rows = []
+        times = [1, 2, 3, 5, 6]  # time 4 (= g-1 anchor for g=5) missing
+        for u in range(10):
+            g = 5 if u < 5 else 0
+            for t in times:
+                d = int(g > 0 and t >= g)
+                rows.append(
+                    dict(unit=u, time=t, treat=d, g=g, y=1 + 0.3 * t + d + rng.normal(0, 0.3))
+                )
+        df = pd.DataFrame(rows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = LWDiD(rolling="demean", control_group="never_treated").fit(
+                df, first_treat="g", **self.KW
+            )
+        assert res.reference_periods == ()  # anchor r=-1 unobserved -> not emitted

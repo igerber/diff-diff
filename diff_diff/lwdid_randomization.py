@@ -15,6 +15,8 @@ from typing import Optional
 
 import numpy as np
 
+from diff_diff.linalg import solve_ols
+
 
 @dataclass
 class RandomizationResult:
@@ -72,8 +74,13 @@ def _validate_inputs(
     ValueError
         If any validation check fails.
     """
-    if n_reps is None or n_reps <= 0:
-        raise ValueError("n_reps must be a positive integer")
+    if (
+        n_reps is None
+        or isinstance(n_reps, bool)
+        or not isinstance(n_reps, (int, np.integer))
+        or n_reps <= 0
+    ):
+        raise ValueError(f"n_reps must be a positive integer, got {n_reps!r}")
 
     if method == "bootstrap":
         # Review finding: resampling treatment labels WITH replacement
@@ -141,7 +148,7 @@ def _compute_observed_att(
 ) -> float:
     """Compute the observed ATT from the data.
 
-    When controls are present, uses OLS via lstsq.
+    When controls are present, uses OLS via the shared solve_ols.
     Otherwise computes the simple mean difference.
     """
     if controls is None:
@@ -152,7 +159,17 @@ def _compute_observed_att(
     if controls.ndim == 1:
         controls = controls.reshape(-1, 1)
     X = np.column_stack([np.ones(n), treatment, controls])
-    coefs, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
+    # Rank-aware shared solver (round-4 review: lstsq returned a finite
+    # minimum-norm treatment coefficient when a control duplicated the
+    # treatment column, so RI tested an unidentified statistic).
+    coefs, _, _ = solve_ols(X, y)
+    if not np.isfinite(coefs[1]):
+        raise ValueError(
+            "The treatment coefficient is not identified: the design is "
+            "rank-deficient and the shared solver dropped the treatment "
+            "column (e.g. a control collinear with treatment). Remove the "
+            "collinear control(s) before running randomization inference."
+        )
     return float(coefs[1])
 
 
@@ -232,9 +249,14 @@ def _slow_path(
         X[:, 1] = d_b
 
         try:
-            coefs, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
-            att_dist[b] = coefs[1]
-        except np.linalg.LinAlgError:
+            with warnings.catch_warnings():
+                # Rank warnings per draw would flood; a dropped treatment
+                # coefficient is recorded as a failed replication (NaN)
+                # and surfaced through the failed-rep accounting.
+                warnings.simplefilter("ignore")
+                coefs, _, _ = solve_ols(X, y)
+            att_dist[b] = coefs[1] if np.isfinite(coefs[1]) else np.nan
+        except (np.linalg.LinAlgError, ValueError):
             att_dist[b] = np.nan
 
     return att_dist
@@ -331,8 +353,9 @@ def randomization_inference(
 
     When controls are absent, ATT is computed directly as the difference
     in means between treated and control groups. With controls, a
-    pre-allocated design matrix is used with ``np.linalg.lstsq`` for
-    efficiency.
+    pre-allocated design matrix is refit through the shared rank-aware
+    ``solve_ols`` solver (draws whose treatment coefficient is dropped
+    count as failed replications).
 
     Examples
     --------

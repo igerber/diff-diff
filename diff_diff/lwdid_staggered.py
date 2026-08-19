@@ -266,6 +266,7 @@ def fit_staggered(
         )
 
     all_times = sorted(pd.unique(df[time]))
+    observed_time_set = set(all_times)
     reference_periods = (-1,) if estimator.rolling in ("demean", "demeanq") else (-2, -1)
     global_cluster_ids = None
     if cluster is not None:
@@ -332,6 +333,17 @@ def fit_staggered(
             if n_treated == 0 or n_control == 0:
                 cell_effects[key] = _empty_cell(g, t, "zero_treated_control", n_treated, n_control)
                 skipped.append((g, t, "zero_treated_control"))
+                continue
+            if estimator.control_group == "never_treated" and n_control < 2:
+                # Registry: the NT-only design requires at least 2
+                # never-treated controls. The raw-unit guard runs pre-fit,
+                # but transformation drops / unbalanced availability can
+                # leave a single control in a cell (round-4 review) - mark
+                # it non-estimable rather than estimate on one control.
+                cell_effects[key] = _empty_cell(
+                    g, t, "insufficient_never_treated_controls", n_treated, n_control
+                )
+                skipped.append((g, t, "insufficient_never_treated_controls"))
                 continue
 
             y = cell["_ydot"].to_numpy(dtype=float)
@@ -705,7 +717,15 @@ def fit_staggered(
             for label, value in event_effects.items()
             if value.get("df") is not None
         },
-        reference_periods=reference_periods,
+        # Only OBSERVED anchors are emitted (Registry: the zero-valued
+        # is_reference rows are a display convention for anchors that
+        # exist in the panel; round-4 review - a numeric time gap could
+        # otherwise synthesize a zero effect at a nonexistent event time).
+        reference_periods=tuple(
+            r
+            for r in reference_periods
+            if any((g + r) in observed_time_set for g in treated_cohorts)
+        ),
         cband_method=cband_method,
         cband_crit_value=cband_crit_value,
         cband_n_bootstrap=cband_n_bootstrap,

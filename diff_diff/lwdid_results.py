@@ -662,14 +662,18 @@ class LWDiDResults(BaseResults, AggregationMixin):
         covariates=None,
         n_bootstrap=999,
         weight_type="rademacher",
+        alpha=None,
         seed=None,
     ):
         """Run wild cluster bootstrap inference on the fitted results.
 
         Delegates to diff_diff.lwdid_wild_bootstrap.wild_cluster_bootstrap()
         (house WCR engine; test-inversion CI, CR1 se, strict-exceedance
-        p-value). Result is cached and accessible via the
-        `bootstrap_pvalue` property.
+        p-value). ``alpha=None`` inherits the fitted result's confidence
+        level (round-4 review: the wrapper previously hard-defaulted to
+        0.05, silently ignoring a non-default fitted alpha); pass an
+        explicit value to override. Result is cached and accessible via
+        the `bootstrap_pvalue` property.
         """
         from diff_diff.lwdid_wild_bootstrap import wild_cluster_bootstrap as _wcb
 
@@ -680,6 +684,7 @@ class LWDiDResults(BaseResults, AggregationMixin):
             covariates,
             n_bootstrap=n_bootstrap,
             weight_type=weight_type,
+            alpha=self.alpha if alpha is None else alpha,
             seed=seed,
         )
         object.__setattr__(self, "_wcb_result", result)

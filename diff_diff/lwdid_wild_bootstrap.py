@@ -42,6 +42,7 @@ from typing import Optional
 
 import numpy as np
 
+from diff_diff.linalg import solve_ols
 from diff_diff.utils import wild_bootstrap_se
 
 _VALID_WEIGHT_TYPES = ("rademacher", "mammen", "webb")
@@ -235,8 +236,14 @@ def wild_cluster_bootstrap(
         )
     if not (0.0 < alpha < 1.0):
         raise ValueError(f"alpha must be in (0, 1), got {alpha}.")
-    if n_bootstrap < 1:
-        raise ValueError(f"n_bootstrap must be >= 1, got {n_bootstrap}.")
+    if (
+        isinstance(n_bootstrap, bool)
+        or not isinstance(n_bootstrap, (int, np.integer))
+        or n_bootstrap < 2
+    ):
+        # Round-4 review: one draw cannot estimate a bootstrap dispersion
+        # or support test inversion (matches the estimator's 0-or->=2 rule).
+        raise ValueError(f"n_bootstrap must be an integer >= 2, got {n_bootstrap!r}.")
 
     # Drop non-finite y WITH a warning (campaign finding: silent drops).
     finite_mask = np.isfinite(y)
@@ -279,8 +286,18 @@ def wild_cluster_bootstrap(
     # BLAS roundoff yields a tiny-positive SE instead of 0 - pre-fix this
     # reported t ~ 5e15 with p = 0.25 (below the attainable G=2 floor of
     # 0.5). Point retained; inference NaN (house fail-closed pattern).
-    beta_hat, *_ = np.linalg.lstsq(X, y, rcond=None)
-    resid = y - X @ beta_hat
+    # Rank-aware fit through the shared solver (round-4 review: lstsq
+    # returned a finite minimum-norm treatment coefficient when a control
+    # duplicated the treatment column, so an unidentified ATT was reported
+    # with finite bootstrap inference).
+    beta_hat, resid, _ = solve_ols(X, y)
+    if not np.isfinite(beta_hat[1]):
+        raise ValueError(
+            "The treatment coefficient is not identified: the design is "
+            "rank-deficient and the shared solver dropped the treatment "
+            "column (e.g. a control collinear with treatment). Remove the "
+            "collinear control(s) before bootstrapping."
+        )
     att_point = float(beta_hat[1])
     scores = np.array([X[cluster_ids == cl].T @ resid[cluster_ids == cl] for cl in unique_clusters])
     score_scale = float(np.abs(X.T @ np.abs(resid)).max())
