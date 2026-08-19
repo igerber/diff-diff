@@ -150,22 +150,33 @@ def plot_event_study(
     reference_periods = set(getattr(results, "reference_periods", ()) or ())
     event_times = sorted(set(effects) | reference_periods)
     atts = []
-    ses = []
+    err_lo = []
+    err_hi = []
     for r in event_times:
         if r in reference_periods and r not in effects:
             atts.append(0.0)
-            ses.append(0.0)
+            err_lo.append(0.0)
+            err_hi.append(0.0)
             continue
         row = effects[r]
-        atts.append(row.get("effect", np.nan))
-        se_r = row.get("se", np.nan)
-        # House rule: plot the point, OMIT the interval when the SE is not
-        # finite (a zero-length bar would render an inference-unavailable
-        # effect as infinitely precise). Reference periods keep their
-        # deliberate zero bars above.
-        ses.append(np.nan if not np.isfinite(se_r) else se_r)
+        att_r = row.get("effect", np.nan)
+        atts.append(att_r)
+        # Round-21 review: render the FITTED interval endpoints (t-based
+        # per-row df, fitted alpha, cband/bootstrap intervals), not a
+        # fabricated normal-theory +/-1.96*SE. Preference: simultaneous
+        # cband when present, else the stored conf_int. House rule: OMIT
+        # the interval when unavailable/non-finite (a zero-length bar
+        # would render an inference-unavailable effect as infinitely
+        # precise); reference periods keep their deliberate zero bars.
+        interval = row.get("cband_conf_int") or row.get("conf_int")
+        if interval is not None and np.all(np.isfinite(interval)) and np.isfinite(att_r):
+            err_lo.append(att_r - float(interval[0]))
+            err_hi.append(float(interval[1]) - att_r)
+        else:
+            err_lo.append(np.nan)
+            err_hi.append(np.nan)
 
-    yerr = np.where(np.isfinite(ses), 1.96 * np.asarray(ses, dtype=float), np.nan)
+    yerr = np.vstack([err_lo, err_hi])
     ax.errorbar(event_times, atts, yerr=yerr, fmt="o-", capsize=3, color="steelblue")
     ax.axhline(0, color="gray", linestyle="--", alpha=0.5)
     ax.set_xlabel("Event time")
@@ -197,14 +208,22 @@ def plot_sensitivity(
     specs = sensitivity_result.specifications
     x = range(len(specs))
     atts = [s.att for s in specs]
-    ses = [s.se for s in specs]
     labels = [s.label for s in specs]
 
-    yerr = np.where(
-        np.isfinite(np.asarray(ses, dtype=float)),
-        1.96 * np.asarray(ses, dtype=float),
-        np.nan,  # failed specs: point only, no fabricated interval
-    )
+    # Round-21 review: render each specification's FITTED interval
+    # endpoints when stored; failed/legacy specs show the point only
+    # (no fabricated normal-theory interval).
+    err_lo = []
+    err_hi = []
+    for s_ in specs:
+        interval = getattr(s_, "conf_int", None)
+        if interval is not None and np.all(np.isfinite(interval)) and np.isfinite(s_.att):
+            err_lo.append(s_.att - float(interval[0]))
+            err_hi.append(float(interval[1]) - s_.att)
+        else:
+            err_lo.append(np.nan)
+            err_hi.append(np.nan)
+    yerr = np.vstack([err_lo, err_hi])
     ax.errorbar(x, atts, yerr=yerr, fmt="o", capsize=3, color="steelblue")
     ax.axhline(
         sensitivity_result.baseline_att,

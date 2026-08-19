@@ -420,7 +420,8 @@ class LWDiD(BaseEstimator):
         'reg': regression adjustment (OLS)
         'ipw': inverse probability weighting
         'dr': doubly robust (augmented IPW)
-        'psm': propensity score matching (1:1 nearest-neighbor);
+        'psm': propensity score matching (1:n_neighbors nearest-neighbor,
+        1:1 by default);
         POINT ESTIMATES ONLY - inference is NaN pending an
         Abadie-Imbens matching variance (see DEFERRED.md)
     vcov_type : {'classical', 'hc1', 'hc2', 'hc3'}, default 'hc1'
@@ -1533,6 +1534,13 @@ class LWDiD(BaseEstimator):
             df_dof = max(int(len(np.unique(cluster_ids))) - 1, 1)
         elif collapsed_single_cluster:
             df_dof = 0  # safe_inference fails the tuple closed
+
+        # Scale-equivariant degenerate-SE guard, same rule as the
+        # staggered/event surfaces (round-21 review: an exactly fitted
+        # panel produced se ~ 1e-16 and t ~ 1e16 on the common headline).
+        from diff_diff.lwdid_staggered import _guard_standard_error
+
+        se = _guard_standard_error(att, se, scale=float(np.max(np.abs(y))) if len(y) else 0.0)
 
         t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha, df=df_dof)
 
@@ -2933,7 +2941,7 @@ class LWDiD(BaseEstimator):
 
         if self.vcov_type in ("hc2", "hc3"):
             raw_leverage = np.sum((X @ xtx_inv) * X, axis=1)
-            if self.vcov_type == "hc3" and np.any(raw_leverage >= 1.0 - 1e-8):
+            if self.vcov_type in ("hc2", "hc3") and np.any(raw_leverage >= 1.0 - 1e-8):
                 # Match the shared linalg fail-closed contract (round-10
                 # review: clipping fabricated a finite HC3 influence
                 # vector for a design whose HC3 vcov is NaN, so aggregate
@@ -3107,6 +3115,25 @@ class LWDiD(BaseEstimator):
         used_scales[used_scales == 0] = 1.0
         X_scaled = X_used / used_scales
         xtx_inv = np.linalg.pinv(X_scaled.T @ X_scaled) / np.outer(used_scales, used_scales)
+        if self.vcov_type == "hc2" and cluster_ids is None:
+            # Round-21 review: the shared hc2 kernel keeps its RELEASED
+            # 1 - h floor (tracked separately), but the NEW LWDiD surface
+            # must not report a fabricated finite variance for a
+            # perfectly-leveraged design - fail closed HERE, mirroring
+            # hc3 (point retained, inference NaN).
+            leverage_used = np.sum((X_used @ xtx_inv) * X_used, axis=1)
+            if np.any(leverage_used >= 1.0 - 1e-8):
+                n_lev1 = int(np.sum(leverage_used >= 1.0 - 1e-8))
+                warnings.warn(
+                    f"HC2 variance is undefined for this design: {n_lev1} "
+                    f"observation(s) have hat-matrix leverage ~1 (e.g. a "
+                    f"single treated unit). Returning NaN inference (point "
+                    f"retained); use vcov_type='classical' exact inference "
+                    f"or add treated units.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                se = np.nan
         influence = self._finalize_influence(
             self._ols_treatment_influence(
                 X_used,
@@ -3365,9 +3392,10 @@ class LWDiD(BaseEstimator):
     ]:
         """Estimate ATT via propensity score matching.
 
-        For each treated unit, find the nearest control unit by propensity
-        score (1:1 nearest-neighbor matching with replacement), then compute
-        ATT as the average difference between treated and matched control.
+        For each treated unit, find the nearest control unit(s) by
+        propensity score (1:n_neighbors nearest-neighbor matching, 1:1 by
+        default, with replacement by default), then compute ATT as the
+        average difference between treated and matched controls.
 
         Parameters
         ----------
@@ -4231,7 +4259,13 @@ class LWDiD(BaseEstimator):
         if len(valid_boots) < 2:
             se = np.nan
         else:
-            se = float(np.std(valid_boots, ddof=1))
+            from diff_diff.lwdid_staggered import _guard_standard_error
+
+            se = _guard_standard_error(
+                att_full,
+                float(np.std(valid_boots, ddof=1)),
+                scale=float(np.max(np.abs(y_full))) if len(y_full) else 0.0,
+            )
 
         # df matches the analytical path's rule (campaign finding: the
         # reported df_inference was G-1 under cluster= while the bootstrap

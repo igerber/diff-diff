@@ -79,6 +79,9 @@ class SpecificationResult:
     att: float
     se: float
     pvalue: float
+    #: Fitted confidence interval endpoints (round-21 review: plots must
+    #: render the fitted interval, not a normal-theory +/-1.96*SE).
+    conf_int: Optional[Tuple[float, float]] = None
 
     @property
     def is_significant(self) -> float:
@@ -99,6 +102,7 @@ class SpecificationResult:
             "att": self.att,
             "se": self.se,
             "pvalue": self.pvalue,
+            "conf_int": self.conf_int,
             "significant_05": self.is_significant,
         }
 
@@ -287,8 +291,9 @@ def _fit_single_spec(
     controls: Optional[List[str]],
     control_group: str = "not_yet_treated",
     raise_errors: bool = False,
-) -> Tuple[float, float, float]:
-    """Fit a single LWDiD specification and return (att, se, pvalue).
+) -> Tuple[float, float, float, Tuple[float, float]]:
+    """Fit a single LWDiD specification and return
+    (att, se, pvalue, conf_int).
 
     Column existence is validated eagerly: missing columns raise
     ValueError instead of being silently converted to NaN. Only
@@ -340,11 +345,11 @@ def _fit_single_spec(
             first_treat=cohort,
             covariates=controls,
         )
-        return res.att, res.se, res.p_value
+        return res.att, res.se, res.p_value, res.conf_int
     except (ValueError, np.linalg.LinAlgError):
         if raise_errors:
             raise
-        return np.nan, np.nan, np.nan
+        return np.nan, np.nan, np.nan, (np.nan, np.nan)
 
 
 def _prevalidate_frame(data, outcome, unit, time, treatment, cohort, cluster, controls) -> None:
@@ -565,7 +570,7 @@ def robustness_pre_periods(
             stacklevel=2,
         )
         # Return degenerate result with baseline only
-        att, se, pval = _fit_single_spec(
+        att, se, pval, spec_ci = _fit_single_spec(
             data,
             outcome,
             unit,
@@ -592,7 +597,7 @@ def robustness_pre_periods(
         )
 
     # Baseline: use all pre-periods
-    baseline_att, baseline_se, baseline_pval = _fit_single_spec(
+    baseline_att, baseline_se, baseline_pval, _baseline_ci = _fit_single_spec(
         data,
         outcome,
         unit,
@@ -625,7 +630,7 @@ def robustness_pre_periods(
         keep_periods = np.concatenate([keep_pre, post_periods])
         subset = data[data[time].isin(keep_periods)].copy()
 
-        att, se, pval = _fit_single_spec(
+        att, se, pval, spec_ci = _fit_single_spec(
             subset,
             outcome,
             unit,
@@ -649,6 +654,7 @@ def robustness_pre_periods(
                 att=att,
                 se=se,
                 pvalue=pval,
+                conf_int=spec_ci,
             )
         )
 
@@ -802,7 +808,7 @@ def sensitivity_no_anticipation(
     n_pre = len(pre_periods)
 
     # Baseline: no exclusion
-    baseline_att, baseline_se, baseline_pval = _fit_single_spec(
+    baseline_att, baseline_se, baseline_pval, _baseline_ci = _fit_single_spec(
         data,
         outcome,
         unit,
@@ -840,7 +846,7 @@ def sensitivity_no_anticipation(
         keep_periods = np.concatenate([remaining_pre, post_periods])
         subset = data[data[time].isin(keep_periods)].copy()
 
-        att, se, pval = _fit_single_spec(
+        att, se, pval, spec_ci = _fit_single_spec(
             subset,
             outcome,
             unit,
@@ -864,6 +870,7 @@ def sensitivity_no_anticipation(
                 att=att,
                 se=se,
                 pvalue=pval,
+                conf_int=spec_ci,
             )
         )
 

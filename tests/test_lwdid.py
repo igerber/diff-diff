@@ -4291,3 +4291,90 @@ class TestReviewRound20Guards:
             res = LWDiD(rolling="demean").fit(df, **self.KW)
         np.testing.assert_allclose(res.att, 0.0, atol=1e-12)
         del rng
+
+
+class TestReviewRound21Guards:
+    """Local-review round 21: hc2 fabricated finite inference at leverage
+    one on the new LWDiD surface; the common-timing headline bypassed the
+    degenerate-SE guard; plots rendered +/-1.96*SE instead of the fitted
+    intervals."""
+
+    KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+    def test_hc2_leverage_one_fails_closed_on_lwdid(self):
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(12):
+            for t in range(1, 7):
+                d = 1 if (u < 1 and t >= 4) else 0  # single treated unit
+                rows.append(dict(unit=u, time=t, treat=d, y=rng.normal() + d))
+        df = pd.DataFrame(rows)
+        with pytest.warns(UserWarning, match="HC2 variance is undefined"):
+            res = LWDiD(rolling="demean", vcov_type="hc2").fit(df, **self.KW)
+        assert np.isfinite(res.att)
+        from tests.conftest import assert_nan_inference
+
+        assert_nan_inference(
+            {"se": res.se, "t_stat": res.t_stat, "p_value": res.p_value, "conf_int": res.conf_int}
+        )
+
+    @pytest.mark.parametrize("vcov", ["classical", "hc1"])
+    def test_exact_fit_headline_fails_closed(self, vcov):
+        # y = t exactly: the collapsed regression fits exactly, so the SE
+        # is roundoff of zero - pre-fix t ~ 1e16 was reported.
+        rows = []
+        for u in range(6):
+            for t in range(1, 7):
+                d = 1 if (u < 3 and t >= 4) else 0
+                rows.append(dict(unit=u, time=t, treat=d, y=float(t)))
+        df = pd.DataFrame(rows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = LWDiD(rolling="demean", vcov_type=vcov).fit(df, **self.KW)
+        np.testing.assert_allclose(res.att, 0.0, atol=1e-12)
+        from tests.conftest import assert_nan_inference
+
+        assert_nan_inference(
+            {"se": res.se, "t_stat": res.t_stat, "p_value": res.p_value, "conf_int": res.conf_int}
+        )
+
+    def test_event_plot_uses_fitted_interval_endpoints(self):
+        pytest.importorskip("matplotlib")
+        import matplotlib
+
+        matplotlib.use("Agg")
+        from diff_diff.lwdid_visualization import plot_event_study
+
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(14):
+            g = 4 if u < 7 else 0
+            for t in range(1, 8):
+                d = int(g > 0 and t >= g)
+                rows.append(
+                    dict(unit=u, time=t, treat=d, g=g, y=1 + 0.2 * t + d + rng.normal(0, 0.4))
+                )
+        df = pd.DataFrame(rows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = LWDiD(rolling="demean", alpha=0.10).fit(df, first_treat="g", **self.KW)
+        fig = plot_event_study(res)
+        ax = fig.axes[0]
+        # the rendered whiskers must match the FITTED interval endpoints
+        # (alpha=0.10 t-intervals), not +/-1.96*SE
+        seg_ys = sorted(
+            y
+            for coll in ax.collections
+            for seg in coll.get_segments()
+            for y in (seg[0][1], seg[-1][1])
+        )
+        row = res.event_study_effects[max(res.event_study_effects)]
+        lo, hi = row["conf_int"]
+        assert any(abs(y - lo) < 1e-9 for y in seg_ys)
+        assert any(abs(y - hi) < 1e-9 for y in seg_ys)
+        naive = 1.96 * row["se"]
+        fitted_half = row["effect"] - lo
+        assert abs(naive - fitted_half) > 1e-6  # the two conventions differ here
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
