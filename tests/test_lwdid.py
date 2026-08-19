@@ -4117,3 +4117,42 @@ class TestReviewRound17Guards:
             warnings.simplefilter("ignore")
             ri = near.randomization_test(n_reps=49, seed=1)
         np.testing.assert_allclose(ri.att_observed, near.att, rtol=1e-10)
+
+
+class TestReviewRound18Guards:
+    """Local-review round 18: diagnostics bypassed the common-timing
+    time-scale checks; RI applied the finite mask before shape checks."""
+
+    def test_diagnostics_reject_period_detrend_and_string_time(self):
+        est = LWDiD(rolling="detrend")
+        periods = pd.period_range("2020Q1", periods=6, freq="Q")
+        rows = []
+        for u in range(6):
+            for i, p in enumerate(periods):
+                d = 1 if (u < 3 and i >= 4) else 0
+                rows.append(dict(unit=u, time=p, treat=d, y=float(i) + d))
+        df = pd.DataFrame(rows)
+        df["time"] = pd.PeriodIndex(df["time"], freq="Q")
+        with pytest.raises(ValueError, match="Period"):
+            est.get_transformation_diagnostics(
+                df, outcome="y", unit="unit", time="time", treatment="treat"
+            )
+        df2 = df.assign(time=[f"P{i%6}" for i in range(len(df))])
+        with pytest.raises(ValueError, match="numeric or"):
+            est.get_transformation_diagnostics(
+                df2, outcome="y", unit="unit", time="time", treatment="treat"
+            )
+
+    def test_ri_shape_checks_precede_finite_mask(self):
+        from diff_diff.lwdid_randomization import randomization_inference
+
+        y = np.array([1.0, np.inf, 2.0, 3.0])
+        with pytest.raises(ValueError, match="same length"):
+            randomization_inference(y, np.array([1.0, 0.0]), n_reps=9)
+        with pytest.raises(ValueError, match="controls must have"):
+            randomization_inference(
+                y,
+                np.array([1.0, 0.0, 1.0, 0.0]),
+                controls=np.zeros((2, 1)),
+                n_reps=9,
+            )

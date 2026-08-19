@@ -757,35 +757,7 @@ class LWDiD(BaseEstimator):
 
         # Dispatch to common timing or staggered
         if first_treat is None:
-            if self.rolling in ("detrend", "detrendq") and isinstance(
-                df[time].dtype, pd.PeriodDtype
-            ):
-                # Period values cannot be cast to float for the unit trend
-                # design (review finding: validation accepted PeriodDtype
-                # but the transform raised a raw TypeError). datetime64
-                # works (nanosecond ordinals).
-                raise ValueError(
-                    f"rolling='{self.rolling}' does not support a Period "
-                    f"time column on the common-timing path; convert with "
-                    f".dt.to_timestamp() or encode the time column "
-                    f"numerically."
-                )
-            if self.rolling != "demean" and not (
-                pd.api.types.is_numeric_dtype(df[time])
-                or pd.api.types.is_datetime64_any_dtype(df[time])
-                or isinstance(df[time].dtype, pd.PeriodDtype)
-            ):
-                # Campaign finding: detrend/demeanq/detrendq cast the time
-                # column to float for the trend/quarter design and raised a
-                # raw numpy conversion error on string times (while demean,
-                # which never touches the time values, succeeded).
-                raise ValueError(
-                    f"rolling='{self.rolling}' requires a numeric or "
-                    f"datetime/Period time column (the unit-specific trend/"
-                    f"seasonal design uses the time values); column "
-                    f"'{time}' has dtype {df[time].dtype}. Encode the time "
-                    f"column numerically, or use rolling='demean'."
-                )
+            self._validate_common_time_scale(df, time)
             return self._fit_common_timing(df, outcome, unit, time, treatment, cluster, covariates)
         from diff_diff.lwdid_staggered import fit_staggered
 
@@ -793,6 +765,39 @@ class LWDiD(BaseEstimator):
         if label_maps is not None:
             _relabel_staggered_results(results, label_maps)
         return results
+
+    def _validate_common_time_scale(self, df: pd.DataFrame, time: str) -> None:
+        """Common-timing time-scale contract, SHARED by fit() and
+        get_transformation_diagnostics() (round-18 review: diagnostics
+        bypassed these checks and reached the transforms' raw float
+        conversion errors)."""
+        if self.rolling in ("detrend", "detrendq") and isinstance(df[time].dtype, pd.PeriodDtype):
+            # Period values cannot be cast to float for the unit trend
+            # design (review finding: validation accepted PeriodDtype
+            # but the transform raised a raw TypeError). datetime64
+            # works (nanosecond ordinals).
+            raise ValueError(
+                f"rolling='{self.rolling}' does not support a Period "
+                f"time column on the common-timing path; convert with "
+                f".dt.to_timestamp() or encode the time column "
+                f"numerically."
+            )
+        if self.rolling != "demean" and not (
+            pd.api.types.is_numeric_dtype(df[time])
+            or pd.api.types.is_datetime64_any_dtype(df[time])
+            or isinstance(df[time].dtype, pd.PeriodDtype)
+        ):
+            # Campaign finding: detrend/demeanq/detrendq cast the time
+            # column to float for the trend/quarter design and raised a
+            # raw numpy conversion error on string times (while demean,
+            # which never touches the time values, succeeded).
+            raise ValueError(
+                f"rolling='{self.rolling}' requires a numeric or "
+                f"datetime/Period time column (the unit-specific trend/"
+                f"seasonal design uses the time values); column "
+                f"'{time}' has dtype {df[time].dtype}. Encode the time "
+                f"column numerically, or use rolling='demean'."
+            )
 
     def get_transformation_diagnostics(
         self,
@@ -887,6 +892,7 @@ class LWDiD(BaseEstimator):
         # Common timing: partition at the single onset S, same as
         # _fit_common_timing (round-9 review: the per-period max(D) rule
         # here still classified a controls-only post period as pre).
+        self._validate_common_time_scale(df, time)
         _check_treatment_design(df, unit, time, treatment, None)
         treated_times = df.loc[df[treatment] == 1, time]
         if len(treated_times) == 0:

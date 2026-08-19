@@ -227,8 +227,8 @@ without the homoskedasticity assumption, as shown by Simonsohn (2021).
 
 **Randomization inference** is also supported: under the sharp null of
 zero treatment effects, permutation of :math:`D_i` yields Monte Carlo
-p-values without requiring normality (LW 2025, Section 2; LW 2026,
-Section 2.1). Validity is conditional on the assignment mechanism the
+p-values without requiring normality (LW 2026, the small-sample
+inference paper). Validity is conditional on the assignment mechanism the
 permutation encodes — complete randomization of the treatment labels
 (the treated count is held fixed); the implementation follows the
 authors' package convention (inclusive Phipson-Smyth counting; see the
@@ -486,8 +486,9 @@ studies:
   :math:`\hat{\tau}_{2000} = -0.403` (SE = 0.152). The exact-inference
   p-value (0.021) is valid under the conditional-normality and
   homoskedasticity assumptions — it tests the treatment-effect null, not
-  those assumptions themselves; randomization inference (below) serves as
-  an assumption-free robustness check. (The paper's printed
+  those assumptions themselves; randomization inference (below) is a
+  robustness check that does not require normality, conditional on the
+  complete-randomization assignment mechanism. (The paper's printed
   randomization-inference p-value of 0.020 is not reproducible with the
   authors' own package, which implements the inclusive Phipson-Smyth rule
   and converges to ~0.051 at 100k replications — see the methodology

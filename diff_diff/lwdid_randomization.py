@@ -6,7 +6,10 @@ hypothesis H0: τ_i = 0 for all i (no individual treatment effect).
 References
 ----------
 Fisher, R. A. (1935). The Design of Experiments.
-Lee, S. J. & Wooldridge, J. M. (2025). Section 5. SSRN 4516518.
+Lee, S. J. & Wooldridge, J. M. (2026). "Simple Approaches to Inference
+  with Difference-in-Differences Estimators with Small Cross-Sectional
+  Sample Sizes." SSRN 5325686 (randomization inference for small-N
+  designs; implemented per the authors'-package inclusive convention).
 """
 
 import warnings
@@ -413,10 +416,25 @@ def randomization_inference(
         if controls.ndim == 1:
             controls = controls.reshape(-1, 1)
 
+    # Shape/length coherence FIRST (round-18 review: applying the finite
+    # mask before these checks turned a mismatched treatment/controls
+    # length into a raw boolean-index IndexError instead of the
+    # documented ValueError).
+    if y.ndim != 1:
+        raise ValueError(f"y must be a 1-d array, got shape {y.shape}")
+    if treatment.ndim != 1:
+        raise ValueError(f"treatment must be a 1-d array, got shape {treatment.shape}")
+    if len(y) != len(treatment):
+        raise ValueError(
+            f"y and treatment must have the same length, got {len(y)} and {len(treatment)}"
+        )
+    if controls is not None and controls.shape[0] != len(y):
+        raise ValueError(f"controls must have {len(y)} rows, got {controls.shape[0]}")
+
     # Drop observations with non-finite y WITH a warning (campaign
     # finding: silent drops) and record the count on the result.
     n_dropped = 0
-    if y.ndim == 1 and len(y) > 0:
+    if len(y) > 0:
         finite_mask = np.isfinite(y)
         if not finite_mask.all():
             n_dropped = int((~finite_mask).sum())
