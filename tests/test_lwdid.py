@@ -2148,3 +2148,69 @@ class TestCohortNormalization:
                 treatment="treat", first_treat="cohort",
             )
         assert set(diag["by_cohort"]) == {3, 4}
+
+
+class TestSeasonalTransformFailClosed:
+    """LWDiD fix-wave WS2: the seasonal transforms fail closed. Campaign
+    findings: detrendq silently fit intercept+trend (plain detrend) per
+    unit when pre-periods < seasonal parameter count - with quarterly data
+    and <=5 pre-periods EVERY unit fell back, so the whole fit was
+    numerically identical to rolling='detrend' while reporting 'detrendq';
+    both q transforms silently extrapolated quarters unobserved in the
+    pre-period at the reference-season level.
+    """
+
+    @staticmethod
+    def _quarterly_common_panel(n_pre, t_max=12, n_units=30, seed=5):
+        rng = np.random.default_rng(seed)
+        season = np.array([1.0, -0.5, 0.8, -1.3])
+        rows = []
+        onset = n_pre + 1
+        for u in range(n_units):
+            alpha = rng.normal()
+            treated = u < n_units // 2
+            for t in range(1, t_max + 1):
+                d = int(treated and t >= onset)
+                y = alpha + season[(t - 1) % 4] + 0.05 * t + rng.normal(scale=0.3) + 1.2 * d
+                rows.append(dict(unit=u, time=t, treat=d, y=y))
+        return pd.DataFrame(rows)
+
+    def test_detrendq_insufficient_pre_fails_closed_not_silent_detrend(self):
+        # 4 pre-periods cover all 4 seasons -> n_params = 1 + 1 + 3 = 5 > 4:
+        # every unit is unidentified. Pre-fix this silently produced the
+        # detrend numbers; now the fit warns and the ATT is NaN with a
+        # consistent inference tuple.
+        df = self._quarterly_common_panel(n_pre=4)
+        est = LWDiD(rolling="detrendq", estimation_method="reg")
+        with pytest.warns(UserWarning, match="detrendq requires at least"):
+            res = est.fit(df, outcome="y", unit="unit", time="time", treatment="treat")
+        assert np.isnan(res.att)
+        from tests.conftest import assert_nan_inference
+
+        assert_nan_inference(
+            {"se": res.se, "t_stat": res.t_stat, "p_value": res.p_value, "conf_int": res.conf_int}
+        )
+
+    def test_detrendq_identified_differs_from_detrend(self):
+        # With enough pre-periods the seasonal fit is identified and must
+        # NOT equal plain detrend on a seasonal DGP.
+        df = self._quarterly_common_panel(n_pre=8, t_max=16)
+        kw = dict(outcome="y", unit="unit", time="time", treatment="treat")
+        rq = LWDiD(rolling="detrendq", estimation_method="reg").fit(df, **kw)
+        rp = LWDiD(rolling="detrend", estimation_method="reg").fit(df, **kw)
+        assert np.isfinite(rq.att)
+        assert abs(rq.att - rp.att) > 1e-8
+
+    @pytest.mark.parametrize("rolling", ["demeanq", "detrendq"])
+    def test_unobserved_pre_season_fails_closed(self, rolling):
+        # Pre-period covers quarters 1-3 only; post includes quarter 4 ->
+        # out-of-support prediction must warn + NaN, never extrapolate.
+        df = self._quarterly_common_panel(n_pre=7, t_max=8)
+        # onset at t=8 (quarter 4); pre t=1..7 covers quarters 1,2,3,4?
+        # t=1..7 -> quarters 1,2,3,4,1,2,3: quarter 4 IS observed. Drop
+        # every pre row in quarter 4 instead.
+        df = df.loc[~((df["time"] == 4))].reset_index(drop=True)
+        est = LWDiD(rolling=rolling, estimation_method="reg")
+        with pytest.warns(UserWarning, match="cannot predict quarter"):
+            res = est.fit(df, outcome="y", unit="unit", time="time", treatment="treat")
+        assert np.isnan(res.att)

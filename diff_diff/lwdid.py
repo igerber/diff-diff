@@ -1844,7 +1844,7 @@ class LWDiD(BaseEstimator):
             # Need at least as many pre-obs as parameters (intercept + up to 3 dummies)
             q_pre = q_u[pre_u]
             observed_seasons = sorted(np.unique(q_pre))
-            n_params = len(observed_seasons)  # intercept + (n_seasons - 1) dummies
+            n_params = len(observed_seasons)  # = 1 intercept + (n_seasons-1) dummies
 
             if n_pre < n_params:
                 warnings.warn(
@@ -1880,6 +1880,28 @@ class LWDiD(BaseEstimator):
                 warnings.warn(
                     f"Unit {uid}: demeanq produced non-finite "
                     f"coefficients. Transformed outcome set to NaN.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                if return_diagnostics:
+                    per_unit[uid] = {
+                        "intercept": float("nan"),
+                        "seasonal_effects": {},
+                        "pre_n_periods": n_pre,
+                        "valid": False,
+                    }
+                continue
+
+            # Season coverage: a quarter never observed in the unit's
+            # pre-period has no estimated effect; predicting it at the
+            # reference-season level is a silent out-of-support
+            # extrapolation (campaign finding) -> warn + NaN the unit.
+            unobserved_seasons = sorted(set(q_u.tolist()) - set(observed_seasons))
+            if unobserved_seasons:
+                warnings.warn(
+                    f"Unit {uid}: demeanq cannot predict quarter(s) "
+                    f"{unobserved_seasons} that never appear in the unit's "
+                    f"pre-treatment periods. Transformed outcome set to NaN.",
                     UserWarning,
                     stacklevel=2,
                 )
@@ -2036,22 +2058,62 @@ class LWDiD(BaseEstimator):
             t_mean = t_pre.mean()
             t_pre_centered = t_pre - t_mean
 
-            # If insufficient obs for full model, fall back to detrend-only
-            use_seasonal = n_pre >= n_params
-            if use_seasonal:
-                # Build design matrix: [1, t_centered, Q2, Q3, Q4]
-                X_pre_parts = [
-                    np.ones(n_pre, dtype=np.float64),
-                    t_pre_centered,
-                ]
-                for s in observed_seasons[1:]:
-                    X_pre_parts.append((q_pre == s).astype(np.float64))
-            else:
-                # Fallback: detrend only (intercept + slope)
-                X_pre_parts = [
-                    np.ones(n_pre, dtype=np.float64),
-                    t_pre_centered,
-                ]
+            # Insufficient pre-observations for the seasonal model: fail
+            # closed like demeanq (warn + NaN the unit). The pre-fix code
+            # silently fit intercept+trend only (per-unit detrend) while
+            # the fit still reported rolling='detrendq' - with quarterly
+            # data and <= 5 pre-periods EVERY unit fell back, making the
+            # whole fit numerically identical to detrend with no trace
+            # (campaign finding).
+            if n_pre < n_params:
+                warnings.warn(
+                    f"Unit {uid}: detrendq requires at least as many "
+                    f"pre-treatment observations as seasonal parameters "
+                    f"({n_params}), found {n_pre}. Transformed outcome set "
+                    f"to NaN.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                if return_diagnostics:
+                    per_unit[uid] = {
+                        "alpha": float("nan"),
+                        "beta": float("nan"),
+                        "seasonal_effects": {},
+                        "pre_n_periods": n_pre,
+                        "valid": False,
+                    }
+                continue
+
+            # Season coverage: quarters unobserved in the pre-period have
+            # no estimated effect; predicting them at the reference-season
+            # level is silent extrapolation (campaign finding).
+            unobserved_seasons = sorted(set(q_u.tolist()) - set(observed_seasons))
+            if unobserved_seasons:
+                warnings.warn(
+                    f"Unit {uid}: detrendq cannot predict quarter(s) "
+                    f"{unobserved_seasons} that never appear in the unit's "
+                    f"pre-treatment periods. Transformed outcome set to NaN.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                if return_diagnostics:
+                    per_unit[uid] = {
+                        "alpha": float("nan"),
+                        "beta": float("nan"),
+                        "seasonal_effects": {},
+                        "pre_n_periods": n_pre,
+                        "valid": False,
+                    }
+                continue
+
+            use_seasonal = True
+            # Build design matrix: [1, t_centered, Q2, Q3, Q4]
+            X_pre_parts = [
+                np.ones(n_pre, dtype=np.float64),
+                t_pre_centered,
+            ]
+            for s in observed_seasons[1:]:
+                X_pre_parts.append((q_pre == s).astype(np.float64))
             X_pre = np.column_stack(X_pre_parts)
 
             # Solve via scipy.linalg.lstsq
