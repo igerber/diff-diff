@@ -1457,27 +1457,41 @@ class TestStataGeneratorPinSync:
             pins[name] = m.group(1)
         return pins
 
-    @pytest.mark.parametrize(
-        "relpath",
-        [
-            "benchmarks/stata/generate_lwdid_golden.do",
-            "benchmarks/stata/README.md",
-        ],
-    )
-    def test_regeneration_pins_match_loaders(self, relpath):
-        import re
-
+    def _read(self, relpath):
         path = Path(__file__).resolve().parents[1] / relpath
         if not path.exists():
             pytest.skip(f"{relpath} not present in this checkout")
-        text = path.read_text()
+        return path.read_text()
+
+    def test_generator_warmup_and_emitted_pins_match_loaders(self):
+        """The .do file carries TWO independent copies per dataset - the
+        fail-closed warm-up dict and the provenance metadata it EMITS into
+        new goldens. Each is asserted separately, exactly once, so deleting
+        either copy fails (review finding: a set union passed on either)."""
+        import re
+
+        text = self._read("benchmarks/stata/generate_lwdid_golden.do")
         pins = self._loader_pins()
         for name, fname in [("prop99", "lw_smoking"), ("walmart", "lw_walmart")]:
-            found = set(re.findall(rf"{fname}[^\n]*?({self._HEX})", text)) | set(
-                re.findall(rf"'{name}':\s*'({self._HEX})'", text)
+            warmup = re.findall(rf"'{name}':\s*'({self._HEX})'", text)
+            assert warmup == [pins[name]], (
+                f"generator warm-up pin for {name}: {warmup} != "
+                f"exactly one loader pin {pins[name]}"
             )
-            assert found, f"no {name} pin found in {relpath}"
-            assert found == {pins[name]}, (
-                f"{relpath} carries stale current-input pin(s) for {name}: "
-                f"{found} != loader {pins[name]}"
+            emitted = re.findall(rf"{fname}\.dta[^\n]*?({self._HEX})", text)
+            assert emitted == [pins[name]], (
+                f"generator emitted-provenance pin for {name}: {emitted} != "
+                f"exactly one loader pin {pins[name]}"
+            )
+
+    def test_readme_warmup_pins_match_loaders(self):
+        import re
+
+        text = self._read("benchmarks/stata/README.md")
+        pins = self._loader_pins()
+        for name in ("prop99", "walmart"):
+            warmup = re.findall(rf"'{name}':\s*'({self._HEX})'", text)
+            assert warmup == [pins[name]], (
+                f"README warm-up pin for {name}: {warmup} != "
+                f"exactly one loader pin {pins[name]}"
             )
