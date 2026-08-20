@@ -587,8 +587,6 @@ Restrictions
 
 .. seealso::
 
-   :doc:`../tutorials/27_lwdid`
-      Tutorial demonstrating the full LWDiD workflow on simulated and real data.
    :class:`~diff_diff.CallawaySantAnna`
       Propensity-score reweighting using long differences (Equation 4.13, LW 2025).
    :class:`~diff_diff.WooldridgeDiD`

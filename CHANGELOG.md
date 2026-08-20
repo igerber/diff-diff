@@ -140,6 +140,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `significant_05` for failed specs, full-frame pre-validation, unknown
     kwargs raise); staggered sample metadata counts contributing units;
     rank-deficient designs rebuild the influence function on kept columns.
+  - Tutorial: the contribution's `27_lwdid.ipynb` is WITHDRAWN (its
+    Walmart narrative was built on a fabricated common onset with jobs
+    figures inconsistent with the staggered estimate; a fresh notebook
+    is a tracked follow-up).
   - Shared surfaces: `hc3` escapes closed across siblings (DiD/MP-DiD
     `absorb=` now full-dummy-routes hc3 like hc2; TWFE no longer crashes
     misleadingly; SpilloverDiD rejects hc3 at construction with its own

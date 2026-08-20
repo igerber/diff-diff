@@ -238,12 +238,6 @@ Modern estimators for designs the basic toolkit cannot handle.
       Sharp and fuzzy RD from plot to estimate, when a naive cutoff
       comparison overstates the effect fivefold.
 
-   .. grid-item-card:: LWDiD Rolling Transformation
-      :link: 27_lwdid
-      :link-type: doc
-
-      Lee & Wooldridge rolling-transformation DiD for heterogeneous
-      pre-treatment trends.
 
 .. toctree::
    :maxdepth: 1
@@ -260,7 +254,6 @@ Modern estimators for designs the basic toolkit cannot handle.
    Wooldridge ETWFE <16_wooldridge_etwfe>
    Synthetic Control for Policy <25_synthetic_control_policy>
    Regression Discontinuity (RDD) <28_rdd_scholarship_illusion>
-   LWDiD Rolling Transformation <27_lwdid>
 
 Study Design
 ------------
