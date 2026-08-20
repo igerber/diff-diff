@@ -134,7 +134,9 @@ MAPPING = (
 ALWAYS_TREATED_UNITS = list(range(31, 41))  # convention class 1
 EXACT_L_RESPELL_UNITS = [24, 25, 27]  # convention class 2
 SUBSAMPLE_N_ROWS = 658
-# Every fail-closed generator dependency (guard set == version set).
+# Every fail-closed generator dependency (guard set == version set; both guarded
+# egenmore files carry their own drift signal - _gfilter under "egenmore",
+# _gclsst under "egenmore_gclsst").
 SSC_VERSION_KEYS = {
     "lpdid",
     "reghdfe",
@@ -143,6 +145,7 @@ SSC_VERSION_KEYS = {
     "boottest",
     "listreg",
     "egenmore",
+    "egenmore_gclsst",
 }
 
 

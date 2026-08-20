@@ -175,14 +175,18 @@ foreach p in lpdid reghdfe ftools require boottest listreg _gfilter _gclsst {
 }
 
 * Record installed SSC versions for every fail-closed dependency (guard set ==
-* version set, matching the ETWFE-arm contract). egenmore is recorded via the
-* _gfilter.ado file this arm actually executes.
+* version set, matching the ETWFE-arm contract). Both guarded egenmore files are
+* recorded: `egenmore` via _gfilter.ado (executed by the pooled spec) and
+* `egenmore_gclsst` via _gclsst.ado (lpdid's startup which-check) - a change to
+* either file must move the drift metadata.
 foreach p in lpdid reghdfe ftools require boottest listreg {
     _adover `p'
     local v_`p' = r(v)
 }
 _adover _gfilter
 local v_egenmore = r(v)
+_adover _gclsst
+local v_egenmore_gclsst = r(v)
 
 * ------------------------------------------------------------------------------
 * Informational in-.do point pins (fatal asserts at reldif < 1e-6, loose enough
@@ -335,7 +339,8 @@ file write `fh' `"      "ftools": "`v_ftools'","' _n
 file write `fh' `"      "require": "`v_require'","' _n
 file write `fh' `"      "boottest": "`v_boottest'","' _n
 file write `fh' `"      "listreg": "`v_listreg'","' _n
-file write `fh' `"      "egenmore": "`v_egenmore'""' _n
+file write `fh' `"      "egenmore": "`v_egenmore'","' _n
+file write `fh' `"      "egenmore_gclsst": "`v_egenmore_gclsst'""' _n
 file write `fh' "    }," _n
 file write `fh' `"    "dropped_units": [24, 25, 27, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40],"' _n
 file write `fh' `"    "stata_edition": "`sedition'","' _n

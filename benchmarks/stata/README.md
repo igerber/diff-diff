@@ -175,10 +175,11 @@ python -m json.tool benchmarks/data/lpdid_nonabsorbing_stata_golden.json > /dev/
 ```
 
 The generator fails closed (`exit 111`) if any run-time dependency is missing and
-records every one in `meta.ssc_versions` (guard set == version set; egenmore is
-probed and versioned via `_gfilter.ado`, the file the pooled spec executes). Each
-version string also embeds the ado file's `checksum:`/`len:` so a same-version-string
-upstream replacement still moves the drift metadata.
+records every one in `meta.ssc_versions` (guard set == version set; both guarded
+egenmore files carry their own entry — `egenmore` via `_gfilter.ado`, the file the
+pooled spec executes, and `egenmore_gclsst` via `_gclsst.ado`, lpdid's startup
+which-check). Each version string also embeds the ado file's `checksum:`/`len:` so
+a same-version-string upstream replacement still moves the drift metadata.
 
 ## JSON schema
 

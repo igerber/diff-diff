@@ -17,7 +17,8 @@
       "require": "version 1.3.1 19sep2023 [checksum:1262842970 len:34415]",
       "boottest": "boottest 4.5.3 5 June 2026 [checksum:2334657244 len:63528]",
       "listreg": "version 1.0.3  26apr2025  Ben Jann [checksum:1074534106 len:23815]",
-      "egenmore": "1.1.1 NJC 19 March 2006 [checksum:2753673312 len:1164]"
+      "egenmore": "1.1.1 NJC 19 March 2006 [checksum:2753673312 len:1164]",
+      "egenmore_gclsst": "1.0.0 NJC 11 January 2000 [checksum:885642367 len:916]"
     },
     "dropped_units": [24, 25, 27, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40],
     "stata_edition": "SE",
