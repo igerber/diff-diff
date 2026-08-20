@@ -598,13 +598,37 @@ class CallawaySantAnnaBootstrapMixin:
 
             # Group aggregation: fixed-weight re-aggregation of the completed
             # perturbed cell draws (matches at reassociation level).
+            # Degenerate weight streams (census-FPC zeroes every block) leave
+            # every replicate row of the cell draws IDENTICAL; this per-row
+            # matvec can then reduce different row positions in different
+            # BLAS orders — identical rows in, ~1-ULP-different rows out —
+            # leaking a roundoff SE past the zero/constant guards. When rows
+            # are identical, compute each reduction ONCE and broadcast so
+            # the group distribution is exactly constant on every platform
+            # (the fused-GEMM cell/overall/ES columns are exact and need no
+            # such handling).
             bootstrap_group: Optional[Dict[Any, np.ndarray]] = None
             if group_agg_info is not None:
-                bootstrap_group = {
-                    g: bootstrap_atts_gt[:, group_agg_info[g]["gt_indices"]]
-                    @ group_agg_info[g]["weights"]
-                    for g in group_list
-                }
+                _gt_rows_identical = self.n_bootstrap > 1 and bool(
+                    np.all(bootstrap_atts_gt == bootstrap_atts_gt[0:1])
+                )
+                if _gt_rows_identical:
+                    bootstrap_group = {
+                        g: np.full(
+                            self.n_bootstrap,
+                            float(
+                                bootstrap_atts_gt[0, group_agg_info[g]["gt_indices"]]
+                                @ group_agg_info[g]["weights"]
+                            ),
+                        )
+                        for g in group_list
+                    }
+                else:
+                    bootstrap_group = {
+                        g: bootstrap_atts_gt[:, group_agg_info[g]["gt_indices"]]
+                        @ group_agg_info[g]["weights"]
+                        for g in group_list
+                    }
 
         # Batch compute bootstrap statistics for ATT(g,t)
         batch_ses, batch_ci_lo, batch_ci_hi, batch_pv = _compute_effect_bootstrap_stats_batch_func(

@@ -307,6 +307,23 @@ class EfficientDiDBootstrapMixin:
         with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
             bootstrap_atts = original_atts[None, :] + perturbations
 
+        # Degenerate weight streams (census-FPC zeroes every block) leave
+        # every replicate row IDENTICAL — zero information. The per-cell
+        # columns are then exactly constant and NaN out via the stats
+        # guards, but the second-stage re-aggregations below reduce each
+        # ROW separately, and BLAS kernels may use different reduction
+        # orders for different row positions: identical rows in, rows
+        # differing by ~1 ULP out — enough to leak a roundoff SE past the
+        # zero/constant guards. When rows are identical, compute each
+        # reduction ONCE and broadcast, keeping the distribution exactly
+        # constant on every platform.
+        _rows_identical = self.n_bootstrap > 1 and bool(np.all(perturbations == perturbations[0:1]))
+
+        def _replicate_reduce(cols: np.ndarray, w: np.ndarray) -> np.ndarray:
+            if _rows_identical:
+                return np.full(self.n_bootstrap, float(cols[0] @ w))
+            return cols @ w
+
         # Post-treatment mask — also exclude NaN effects
         post_mask = np.array(
             [
@@ -332,7 +349,7 @@ class EfficientDiDBootstrapMixin:
             agg_w = pg / pg.sum() if pg.sum() > 0 else np.ones(len(pg)) / len(pg)
             original_overall = float(np.sum(agg_w * original_atts[post_mask]))
             with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                bootstrap_overall = bootstrap_atts[:, post_indices] @ agg_w
+                bootstrap_overall = _replicate_reduce(bootstrap_atts[:, post_indices], agg_w)
 
         # Event study: fixed-weight re-aggregation (same pattern as overall).
         # See note above re: WIF — analytical WIF is not needed in bootstrap.
@@ -347,7 +364,7 @@ class EfficientDiDBootstrapMixin:
                 idx = info["gt_indices"]
                 w = info["weights"]
                 with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                    bootstrap_event_study[e] = bootstrap_atts[:, idx] @ w
+                    bootstrap_event_study[e] = _replicate_reduce(bootstrap_atts[:, idx], w)
 
         # Group aggregation
         bootstrap_group = None
@@ -359,7 +376,7 @@ class EfficientDiDBootstrapMixin:
                 idx = info["gt_indices"]
                 w = info["weights"]
                 with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                    bootstrap_group[g] = bootstrap_atts[:, idx] @ w
+                    bootstrap_group[g] = _replicate_reduce(bootstrap_atts[:, idx], w)
 
         # Compute statistics
         gt_ses: Dict[Tuple[Any, Any], float] = {}
