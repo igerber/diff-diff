@@ -154,7 +154,7 @@ class TestPlottingConventions:
     """
 
     def test_event_study_nan_se_omits_interval(self):
-        import matplotlib
+        matplotlib = pytest.importorskip("matplotlib")
 
         matplotlib.use("Agg")
         from types import SimpleNamespace
@@ -173,7 +173,7 @@ class TestPlottingConventions:
         assert fig is not None
 
     def test_cohort_trends_accepts_datetime_time(self):
-        import matplotlib
+        matplotlib = pytest.importorskip("matplotlib")
 
         matplotlib.use("Agg")
         from diff_diff.lwdid_visualization import plot_cohort_trends
