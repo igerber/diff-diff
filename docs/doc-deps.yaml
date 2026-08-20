@@ -867,12 +867,16 @@ sources:
     docs:
       - path: docs/api/lwdid.rst
         type: api_reference
+      - path: docs/tutorials/31_lwdid.ipynb
+        type: tutorial
 
   diff_diff/lwdid_randomization.py:
     drift_risk: medium
     docs:
       - path: docs/api/lwdid.rst
         type: api_reference
+      - path: docs/tutorials/31_lwdid.ipynb
+        type: tutorial
 
   diff_diff/lwdid_sensitivity.py:
     drift_risk: medium
@@ -885,6 +889,8 @@ sources:
     docs:
       - path: docs/api/lwdid.rst
         type: api_reference
+      - path: docs/tutorials/31_lwdid.ipynb
+        type: tutorial
 
   diff_diff/lwdid_staggered.py:
     drift_risk: medium
@@ -894,6 +900,8 @@ sources:
       - path: docs/methodology/REGISTRY.md
         section: "LWDiD"
         type: methodology
+      - path: docs/tutorials/31_lwdid.ipynb
+        type: tutorial
 
   diff_diff/lwdid.py:
     drift_risk: medium
@@ -910,6 +918,8 @@ sources:
         type: user_guide
       - path: docs/choosing_estimator.rst
         type: user_guide
+      - path: docs/tutorials/31_lwdid.ipynb
+        type: tutorial
 
   # ── TROP (trop group) ──────────────────────────────────────────────
 
@@ -1043,6 +1053,9 @@ sources:
       - path: docs/tutorials/02_staggered_did.ipynb
         type: tutorial
         note: "Bacon decomposition diagnostics for staggered DiD"
+      - path: docs/tutorials/31_lwdid.ipynb
+        type: tutorial
+        note: "TWFE failure-mode demonstration"
       - path: README.md
         section: "Estimators (one-line catalog entry)"
         type: user_guide
@@ -1381,6 +1394,9 @@ sources:
         type: api_reference
       - path: docs/tutorials/09_real_world_examples.ipynb
         type: tutorial
+      - path: docs/tutorials/31_lwdid.ipynb
+        type: tutorial
+        note: "Prop 99 / Walmart replication (provenance-asserted)"
       - path: docs/methodology/REGISTRY.md
         section: "Castle Doctrine treatment coding"
         type: methodology

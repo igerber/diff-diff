@@ -238,6 +238,13 @@ Modern estimators for designs the basic toolkit cannot handle.
       Sharp and fuzzy RD from plot to estimate, when a naive cutoff
       comparison overstates the effect fivefold.
 
+   .. grid-item-card:: LWDiD Rolling Transformations
+      :link: 31_lwdid
+      :link-type: doc
+
+      Turn the panel into a cross-section, get exact small-sample
+      inference, and replicate the Prop 99 and Walmart applications.
+
 
 .. toctree::
    :maxdepth: 1
@@ -254,6 +261,7 @@ Modern estimators for designs the basic toolkit cannot handle.
    Wooldridge ETWFE <16_wooldridge_etwfe>
    Synthetic Control for Policy <25_synthetic_control_policy>
    Regression Discontinuity (RDD) <28_rdd_scholarship_illusion>
+   LWDiD Rolling Transformations <31_lwdid>
 
 Study Design
 ------------

@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **LWDiD tutorial notebook** (`docs/tutorials/31_lwdid.ipynb`): the replacement for
+  the tutorial withdrawn from PR #588, authored via the numbers-locked workflow (every
+  cited number prototyped in scripts first, notebook assembled and executed once).
+  Builds the method from the TWFE failure mode (Goodman-Bacon decomposition on a
+  synthetic staggered panel) through demeaning/detrending and exact small-sample
+  inference, then replicates both papers' applications on the authors' SSC data: Prop
+  99 (LW 2026 Table 3: demean -0.422, detrend -0.227, exact p 0.021; RI under the
+  package's Phipson-Smyth convention) and Walmart entry fitted as the honest
+  staggered design with real first-entry cohorts (WATT(1) = 0.032 vs Appendix Table
+  A4), plus cluster/wild-bootstrap inference and transformation diagnostics.
 - **ImputationDiD `aux_partition` variants now anchored against Stata `did_imputation
   avgeffectsby()` (no library behavior change beyond a docstring wording fix).** The
   coarser `aux_partition="cohort"` / `"horizon"` groupings — previously the
