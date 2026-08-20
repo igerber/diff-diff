@@ -35,8 +35,12 @@ already-treated cohorts.
 
 A second contribution (LW 2026) demonstrates that this representation
 enables *exact* small-sample inference: under homoskedastic normality of
-the cross-sectional error, the t-statistic follows an exact
-:math:`\mathcal{T}_{N-K-2}` distribution — valid even with a single
+the cross-sectional error, the t-statistic follows an exact Student-t
+distribution with the fitted design's residual degrees of freedom —
+:math:`\mathcal{T}_{N-2}` without covariates,
+:math:`\mathcal{T}_{N-K-2}` for the plain covariate design, and
+:math:`\mathcal{T}_{N-2K-2}` when the automatically selected
+treatment-covariate interaction is active — valid even with a single
 treated unit (:math:`N_1 = 1`). When :math:`T_0` or :math:`T_1` is large,
 the central limit theorem across time justifies the normality assumption
 without requiring a large cross section.
@@ -406,12 +410,16 @@ Example Usage
 
    # DR (IPWRA) combines propensity score weighting with regression adjustment
    # on the transformed outcome — doubly robust as in Wooldridge (2007).
+   # DR needs unit-level covariates for the propensity model; without
+   # covariates it warns and reduces to regression adjustment.
    # Cluster-robust inference activates via the constructor's cluster= parameter.
    data["state"] = data["unit"] % 40  # cluster identifier
+   data["size"] = data["unit"] % 5  # unit-constant covariate (e.g. firm size class)
    lw_dr = LWDiD(rolling="demean", estimation_method="dr", cluster="state")
    results_dr = lw_dr.fit(data, outcome="outcome", unit="unit",
                           time="period", treatment="treated",
-                          first_treat="first_treat")
+                          first_treat="first_treat",
+                          covariates=["size"])
    print(f"ATT: {results_dr.att:.4f} (SE={results_dr.se:.4f})")
 
 **Staggered adoption with detrending (Procedure 4.1 + 5.1):**
