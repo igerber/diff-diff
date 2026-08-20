@@ -370,7 +370,12 @@ def compute_effect_bootstrap_stats(
     se = float(np.std(valid_dist, ddof=1))
 
     # Guard: if SE is not finite or zero, all inference fields must be NaN.
-    if not np.isfinite(se) or se <= 0:
+    # An EXACTLY CONSTANT distribution is degenerate too, even when its
+    # np.std comes back tiny-positive from mean-subtraction roundoff at a
+    # non-zero constant level (e.g. census-FPC zero-weight draws leave every
+    # replicate at the original effect): a t built on that roundoff SE would
+    # be astronomically large and silently "significant".
+    if not np.isfinite(se) or se <= 0 or float(valid_dist.max()) == float(valid_dist.min()):
         warnings.warn(
             f"Bootstrap SE is non-finite or zero (n_valid={n_valid}) in {context}. "
             "Returning NaN for SE/CI/p-value.",
@@ -476,8 +481,13 @@ def compute_effect_bootstrap_stats_batch(
         batch_p = np.minimum(2 * batch_p, 1.0)
         batch_p = np.maximum(batch_p, 1 / (n_bootstrap + 1))
 
-        # Guard: SE must be positive and finite
-        se_valid = np.isfinite(batch_ses) & (batch_ses > 0)
+        # Guard: SE must be positive and finite, and the distribution must
+        # not be EXACTLY CONSTANT (a constant non-zero level can produce a
+        # tiny-positive np.std from mean-subtraction roundoff - e.g.
+        # census-FPC zero-weight draws - which would otherwise leak a
+        # roundoff SE and an astronomically large t past the zero check).
+        is_constant = sub.max(axis=0) == sub.min(axis=0)
+        se_valid = np.isfinite(batch_ses) & (batch_ses > 0) & ~is_constant
         n_bad_se = int(np.sum(~se_valid))
         if n_bad_se > 0:
             warnings.warn(

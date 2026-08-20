@@ -6297,6 +6297,16 @@ ContinuousDiD, EfficientDiD):
   stamped `"portable"` and replay under either backend. Within one backend the chunked
   weight stream remains bit-identical and replayable per column tile
   (`ReplayableWeightStream`); downstream GEMMs match to BLAS reassociation (~1 ULP).
+- **Note (exactly-constant bootstrap distributions NaN out):** census-FPC zero-weight
+  draws leave every multiplier-bootstrap replicate at the original effect, an EXACTLY
+  CONSTANT distribution. `np.std` of a constant non-zero level can come back
+  tiny-positive from mean-subtraction roundoff, which would slip past a `se <= 0`
+  check and publish an astronomically large, silently "significant" t. The shared
+  percentile-statistic helpers (`compute_effect_bootstrap_stats` scalar and batch,
+  consumed by every multiplier-bootstrap engine) therefore detect
+  `max(draws) == min(draws)` and return the full NaN inference tuple with the zero-SE
+  RuntimeWarning — a defensive enhancement of the zero-SE-means-NaN contract, exact
+  by construction (genuinely varying draws are never affected).
 
 **Rao-Wu Rescaled Bootstrap** (SunAbraham, TROP):
 

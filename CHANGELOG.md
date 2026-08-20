@@ -117,6 +117,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `results.aggregate('event_study')` surface instead.
 
 ### Fixed
+- **Exactly-constant bootstrap distributions now NaN out instead of leaking a
+  roundoff SE.** Census-FPC zero-weight draws leave every multiplier-bootstrap
+  replicate at the original effect; `np.std` of a constant non-zero level can
+  return a tiny positive value from mean-subtraction roundoff, slipping past the
+  `se <= 0` guard and publishing an astronomically large, silently "significant"
+  t-statistic with a degenerate point CI. The shared percentile-statistic helpers
+  (scalar and batch, used by every multiplier-bootstrap engine — CallawaySantAnna
+  and EfficientDiD included) now detect exactly-constant distributions and return
+  the full NaN inference tuple with the existing zero-SE RuntimeWarning. Genuinely
+  varying draws are unaffected (the check is exact, not a tolerance).
 - **EfficientDiD fractional-period event-study bucketing.** The bootstrap ES prep
   keyed horizons by raw `t - g` while the analytical aggregator buckets by
   `int(t - g)` (truncation toward zero), so on fractional-period panels a strict

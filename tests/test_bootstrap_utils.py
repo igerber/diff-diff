@@ -33,6 +33,43 @@ class TestBootstrapStatsNaNPropagation:
         assert np.isnan(ci[1])
         assert np.isnan(p_value)
 
+    def test_bootstrap_stats_constant_nonzero_distribution_nans(self):
+        """EXACTLY constant non-zero draws (census-FPC zero weights leave every
+        replicate at the original effect): np.std can return a tiny POSITIVE
+        value from mean-subtraction roundoff (measured ~2.8e-17 at level 0.1),
+        which would slip past `se <= 0` and publish a huge finite t. The
+        constant-distribution guard must NaN the full tuple instead."""
+        for level in (0.1, 1.0 / 3.0, 100.7):
+            boot_dist = np.full(50, level)
+            with pytest.warns(RuntimeWarning, match="non-finite or zero"):
+                se, ci, p_value = compute_effect_bootstrap_stats(
+                    original_effect=level, boot_dist=boot_dist
+                )
+            assert np.isnan(se) and np.isnan(p_value)
+            assert np.isnan(ci[0]) and np.isnan(ci[1])
+
+    def test_bootstrap_stats_near_constant_distribution_unaffected(self):
+        """The guard is EXACT-constant only: genuinely varying draws (even by
+        1e-9) keep finite inference."""
+        boot_dist = np.full(50, 0.1)
+        boot_dist[0] = 0.1 + 1e-9
+        se, ci, p_value = compute_effect_bootstrap_stats(original_effect=0.1, boot_dist=boot_dist)
+        assert np.isfinite(se) and se > 0
+        assert np.isfinite(p_value)
+
+    def test_batch_constant_column_nans_healthy_column_intact(self):
+        """Batch twin of the constant-distribution guard: the constant column
+        NaNs out (with the zero-SE warning) while a genuinely varying column
+        keeps finite inference."""
+        from diff_diff.bootstrap_utils import compute_effect_bootstrap_stats_batch
+
+        rng = np.random.default_rng(0)
+        mat = np.column_stack([np.full(50, 0.1), rng.normal(size=50)])
+        with pytest.warns(RuntimeWarning, match="non-finite or zero"):
+            ses, lo, hi, pv = compute_effect_bootstrap_stats_batch(np.array([0.1, 0.05]), mat)
+        assert np.isnan(ses[0]) and np.isnan(lo[0]) and np.isnan(hi[0]) and np.isnan(pv[0])
+        assert np.isfinite(ses[1]) and np.isfinite(pv[1])
+
     def test_bootstrap_stats_all_nonfinite(self):
         """All non-finite samples: fails 50% validity check -> all NaN."""
         boot_dist = np.array([np.nan, np.nan, np.inf])

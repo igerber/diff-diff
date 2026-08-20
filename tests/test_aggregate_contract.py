@@ -2461,6 +2461,12 @@ def _assert_edid_group_replay_parity(grp, fit_time, n_boot=_EDID_NBOOT):
         np.testing.assert_allclose(row["se"], ref["se"], rtol=1e-13, atol=1e-13)
         np.testing.assert_allclose(row["t_stat"], ref["t_stat"], rtol=1e-13, atol=1e-13)
         np.testing.assert_allclose(row["p_value"], ref["p_value"], rtol=1e-13, atol=p_atol)
+        np.testing.assert_allclose(
+            [row["conf_int_lower"], row["conf_int_upper"]],
+            list(ref["conf_int"]),
+            rtol=1e-13,
+            atol=1e-13,
+        )
 
 
 def _efficient_fractional_panel(cohorts=(3.0, 2.25), seed=0, n_units=90):
@@ -2655,21 +2661,41 @@ class TestEfficientBootstrapReplayDesigns:
         _assert_edid_es_replay_parity(res.aggregate("event_study"), ftime)
 
     def test_census_fpc_portable(self):
-        # Census FPC (fpc == n_psu): every weight block is zeroed, so the
-        # discarded draws' backend is irrelevant - stamped portable; the
-        # replay reproduces the same degenerate surfaces.
+        # Census FPC (fpc == n_psu): every weight block is zeroed, so every
+        # bootstrap distribution is EXACTLY CONSTANT at the original effect
+        # - the discarded draws' backend is irrelevant (stamped portable),
+        # and the constant-distribution guard must NaN ALL inference fields
+        # on BOTH routes (a tiny-positive roundoff np.std at a non-zero
+        # constant level must never leak a huge finite t - CI review P0).
         d, sd = self._psu_survey_frame(fpc=20.0)  # 120 units // 6 = 20 PSUs
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             res = _efficient_boot_fit(d, survey_design=sd)
             ftime = _efficient_boot_fit_time(d, survey_design=sd)
         assert res._aggregation_kit.bootstrap.backend == "portable"
+        # Fit-time surfaces: full-NaN inference beside finite effects.
+        for surface in (ftime.event_study_effects, ftime.group_effects):
+            assert surface
+            for row in surface.values():
+                assert np.isfinite(row["effect"])
+                assert np.isnan(row["se"]) and np.isnan(row["t_stat"])
+                assert np.isnan(row["p_value"])
+                assert np.isnan(row["conf_int"][0]) and np.isnan(row["conf_int"][1])
+        # Replayed surfaces reproduce the same degenerate state.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            df = res.aggregate("event_study").to_dataframe()
-        for _, row in df.iterrows():
-            ref = ftime.event_study_effects[int(row["event_time"])]
-            np.testing.assert_array_equal(row["se"], ref["se"])  # NaN == NaN via array_equal
+            es_df = res.aggregate("event_study").to_dataframe()
+            g_df = res.aggregate("group").to_dataframe()
+        for frame in (es_df, g_df):
+            att = frame["att"].to_numpy(dtype=float)
+            ref_mask = (
+                frame["is_reference"].to_numpy(dtype=bool)
+                if "is_reference" in frame
+                else np.zeros(len(frame), dtype=bool)
+            )
+            assert np.all(np.isfinite(att[~ref_mask]))
+            for col in ("se", "t_stat", "p_value", "conf_int_lower", "conf_int_upper"):
+                assert np.all(np.isnan(frame[col].to_numpy(dtype=float)[~ref_mask])), col
 
     def test_single_psu_nan_surfaces_and_warning(self):
         # n_psu < 2 early-returns the NaN container BEFORE any generation:
