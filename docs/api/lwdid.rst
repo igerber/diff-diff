@@ -22,7 +22,8 @@ and forms the transformed outcome:
    \dot{Y}_{it} = Y_{it} - \bar{Y}_{i,\text{pre}}, \quad t = S, \ldots, T
    \qquad \text{(Equation 2.12, LW 2026)}
 
-Under Assumption 2.1 (conditional parallel trends), this transformation
+Under Assumption CPTC (Conditional Parallel Trends, Common Timing;
+Equation 2.10, LW 2025), this transformation
 removes unit-specific fixed effects, and the ATT is identified as the
 coefficient on the treatment indicator in a cross-sectional regression of
 :math:`\dot{Y}_{it}` on :math:`D_i` and covariates. Because the panel
@@ -43,7 +44,7 @@ without requiring a large cross section.
 .. note::
 
    **Why rolling transformation works.** The parallel trends assumption
-   (Equation 2.15, LW 2025/2026) implies that :math:`\Delta\bar{Y}_i(0)`
+   (Equation 2.15, LW 2026) implies that :math:`\Delta\bar{Y}_i(0)`
    — the difference between post-treatment and pre-treatment means of
    control potential outcomes — is mean-independent of the treatment
    indicator :math:`D_i`. This is precisely the unconfoundedness condition
@@ -181,7 +182,7 @@ Key Assumptions
 
    Treatment effects are zero on average before the intervention.
 
-   **Assumption 4.6 — Conditional PT, Staggered** (Equation 4.6, LW 2025):
+   **Assumption CPTS — Conditional PT, Staggered** (Equation 4.6, LW 2025):
 
    .. math::
 
