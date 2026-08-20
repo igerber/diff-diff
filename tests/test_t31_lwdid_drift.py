@@ -290,6 +290,8 @@ class TestRenderedSurface:
         the ETWFE impact-cell equivalence is calendar t=g / event r=0."""
         md = notebook_markdown(NB)
         assert "systematically by treatment status or cohort" in md
+        assert "*sensitivity to the trend specification*" in md
+        assert "not\nas a test that unit-specific trends exist" in md
         assert "multi-cell influence-function aggregates use a normal reference" in md
         assert "t_{G-1}" in md
         assert "CR1 normal" not in md
