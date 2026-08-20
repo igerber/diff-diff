@@ -2273,14 +2273,26 @@ class TestEfficientAggregate:
         res.aggregate("group")
         assert res.survey_metadata.df_survey == before
 
-    def test_bootstrap_recompute_levels_fail_closed(self, efficient_panel):
-        res = _fit_efficient(efficient_panel, est_kw={"n_bootstrap": 20, "seed": 1})
-        for level in ("event_study", "group"):
-            with pytest.raises(NotImplementedError, match="bootstrap") as exc:
-                res.aggregate(level)
-            assert "aggregate('simple') and, where supported, aggregate('total') relay" in str(
-                exc.value
-            )
+    def test_retention_bootstrapped_spec_no_leak(self, efficient_panel):
+        # The BootstrapReplaySpec adds only the RNG state dict + scalars to
+        # the kit; a bootstrapped fit's kit must keep the no-DataFrame /
+        # no-unit-label retention contract and pickle round-trip its replay.
+        import pickle
+
+        import pandas as pd
+
+        d = efficient_panel.copy()
+        sentinel = {u: f"SENTINEL-ID-{u}@example.invalid" for u in d["unit"].unique()}
+        d["unit"] = d["unit"].map(sentinel)
+        res = _fit_efficient(d, est_kw={"n_bootstrap": 20, "seed": 1})
+        kit = res._aggregation_kit
+        assert kit.bootstrap is not None and kit.bootstrap.bitgen_state is not None
+        for v in kit.bookkeeping.values():
+            assert not isinstance(v, pd.DataFrame)
+        blob = pickle.dumps(res)
+        assert b"SENTINEL-ID" not in blob
+        res2 = pickle.loads(blob)
+        np.testing.assert_array_equal(res.aggregate("group").se, res2.aggregate("group").se)
 
     def test_bootstrap_simple_relays_stored_quintet(self, efficient_panel):
         res = _fit_efficient(efficient_panel, est_kw={"n_bootstrap": 20, "seed": 1})
@@ -2384,6 +2396,474 @@ class TestEfficientAggregate:
         with pytest.warns(UserWarning, match="anchor horizon"):
             es = efficient_fitted.aggregate("event_study", balance_e=99)
         assert len(es.event_time) == 0
+
+
+# --------------------------------------------------------------------------- #
+# EfficientDiD bootstrap REPLAY (the CS BootstrapReplaySpec mechanism):
+# post-fit aggregate('event_study'/'group') on bootstrapped fits replays the
+# fit-time multiplier bootstrap from the kit-retained RNG state. The parity
+# REFERENCE is always the NATIVE fit-time surface (the kit attaches
+# unconditionally, so a fit-time-aggregated result's own aggregate() would
+# ALSO replay - replay-vs-replay proves nothing).
+# Tolerances: se/ci/t at 1e-13 (the replayed draws are bit-identical; only
+# GEMM tile-boundary reassociation differs - ~1 ULP, with headroom for
+# quantile interpolation); percentile p-values are COUNT statistics, so a
+# draw within a ULP of the point estimate could flip one count - compared
+# at atol=2/n_bootstrap.
+# --------------------------------------------------------------------------- #
+
+_EDID_NBOOT = 50
+
+
+def _efficient_boot_fit(data, **fit_kw):
+    est_kw = fit_kw.pop("est_kw", {})
+    return _fit_efficient(data, est_kw={"n_bootstrap": _EDID_NBOOT, "seed": 42, **est_kw}, **fit_kw)
+
+
+def _efficient_boot_fit_time(data, *, aggregate="all", **fit_kw):
+    est_kw = fit_kw.pop("est_kw", {})
+    return _fit_efficient(
+        data,
+        est_kw={"n_bootstrap": _EDID_NBOOT, "seed": 42, **est_kw},
+        aggregate=aggregate,
+        **fit_kw,
+    )
+
+
+def _assert_edid_es_replay_parity(es, fit_time, n_boot=_EDID_NBOOT):
+    df = es.to_dataframe()
+    assert es.vcov is None
+    assert np.all(np.isnan(df["df"].to_numpy(dtype=float)))
+    assert len(df) == len(fit_time.event_study_effects)
+    p_atol = 2.0 / n_boot
+    for _, row in df.iterrows():
+        ref = fit_time.event_study_effects[int(row["event_time"])]
+        assert row["att"] == ref["effect"]
+        np.testing.assert_allclose(row["se"], ref["se"], rtol=1e-13, atol=1e-13)
+        np.testing.assert_allclose(row["t_stat"], ref["t_stat"], rtol=1e-13, atol=1e-13)
+        np.testing.assert_allclose(row["p_value"], ref["p_value"], rtol=1e-13, atol=p_atol)
+        np.testing.assert_allclose(
+            [row["conf_int_lower"], row["conf_int_upper"]],
+            list(ref["conf_int"]),
+            rtol=1e-13,
+            atol=1e-13,
+        )
+
+
+def _assert_edid_group_replay_parity(grp, fit_time, n_boot=_EDID_NBOOT):
+    df = grp.to_dataframe()
+    assert np.all(np.isnan(df["df"].to_numpy(dtype=float)))
+    assert len(df) == len(fit_time.group_effects)
+    p_atol = 2.0 / n_boot
+    for _, row in df.iterrows():
+        ref = fit_time.group_effects[float(row["label"])]
+        assert row["att"] == ref["effect"]
+        np.testing.assert_allclose(row["se"], ref["se"], rtol=1e-13, atol=1e-13)
+        np.testing.assert_allclose(row["t_stat"], ref["t_stat"], rtol=1e-13, atol=1e-13)
+        np.testing.assert_allclose(row["p_value"], ref["p_value"], rtol=1e-13, atol=p_atol)
+
+
+def _efficient_fractional_panel(cohorts=(3.0, 2.25), seed=0, n_units=90):
+    """0.5-spaced panel; cohorts may sit ON the grid or OFF it (e.g. 2.25)."""
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.default_rng(seed)
+    periods = np.arange(1.0, 5.0, 0.5)
+    per_cohort = n_units // (len(cohorts) + 2)
+    rows = []
+    for u in range(n_units):
+        idx = u // per_cohort
+        g = cohorts[idx] if idx < len(cohorts) else 0.0
+        for t in periods:
+            y = rng.normal() + u * 0.01 + t * 0.1 + (0.5 if g > 0 and t >= g else 0.0)
+            rows.append((u, t, g, y))
+    return pd.DataFrame(rows, columns=["unit", "period", "first_treat", "outcome"])
+
+
+class TestEfficientBootstrapReplay:
+    def test_event_study_parity_with_fit_time(self, efficient_panel):
+        res = _efficient_boot_fit(efficient_panel)
+        ftime = _efficient_boot_fit_time(efficient_panel)
+        _assert_edid_es_replay_parity(res.aggregate("event_study"), ftime)
+
+    def test_group_parity_with_fit_time(self, efficient_panel):
+        res = _efficient_boot_fit(efficient_panel)
+        ftime = _efficient_boot_fit_time(efficient_panel)
+        _assert_edid_group_replay_parity(res.aggregate("group"), ftime)
+
+    def test_balance_e_parity_with_fit_time(self, efficient_panel):
+        res = _efficient_boot_fit(efficient_panel)
+        ftime = _efficient_boot_fit_time(efficient_panel, aggregate="event_study", balance_e=1)
+        _assert_edid_es_replay_parity(res.aggregate("event_study", balance_e=1), ftime)
+
+    def test_balance_e_empty_anchor_replay_warns_zero_rows(self, efficient_panel):
+        # The replay re-emits the fit-time anchor warning and returns the
+        # LEGAL zero-row surface (the analytical twin of
+        # test_zero_row_balance_e_surface, now on the replay route).
+        res = _efficient_boot_fit(efficient_panel)
+        with pytest.warns(UserWarning, match="anchor horizon"):
+            es = res.aggregate("event_study", balance_e=99)
+        assert len(es.event_time) == 0
+
+    def test_pt_post_parity_with_fit_time(self, efficient_panel):
+        # PT-Post: the bootstrap prep DOES key the finite effect=0.0 anchor
+        # at e=-1 and the override NaNs its inference (zero-SE draws); the
+        # is_reference marking is label-based and survives. Parity holds
+        # row-for-row, the anchor included.
+        res = _efficient_boot_fit(efficient_panel, est_kw={"pt_assumption": "post"})
+        ftime = _efficient_boot_fit_time(efficient_panel, est_kw={"pt_assumption": "post"})
+        es = res.aggregate("event_study")
+        df = es.to_dataframe()
+        anchor = df[df["is_reference"]]
+        assert len(anchor) == 1
+        assert float(anchor["att"].iloc[0]) == 0.0
+        assert np.isnan(float(anchor["se"].iloc[0]))
+        # Non-reference rows hit full parity; the reference row's fit-time
+        # DICT entry is also NaN'd by the override (same applier), so the
+        # container/dict split is exercised on the fractional fixture below.
+        _assert_edid_es_replay_parity(es, ftime)
+
+    def test_covariates_parity_with_fit_time(self, efficient_panel):
+        d = efficient_panel.copy()
+        rng = np.random.default_rng(3)
+        xmap = {u: rng.normal() for u in d["unit"].unique()}
+        d["x1"] = d["unit"].map(xmap)
+        res = _efficient_boot_fit(d, covariates=["x1"])
+        ftime = _efficient_boot_fit_time(d, covariates=["x1"])
+        _assert_edid_es_replay_parity(res.aggregate("event_study"), ftime)
+        _assert_edid_group_replay_parity(res.aggregate("group"), ftime)
+
+    def test_seedless_fit_replays_and_is_idempotent(self, efficient_panel):
+        res = _fit_efficient(efficient_panel, est_kw={"n_bootstrap": _EDID_NBOOT})
+        a = res.aggregate("event_study").to_dataframe()
+        b = res.aggregate("event_study").to_dataframe()
+        np.testing.assert_array_equal(a["se"].to_numpy(), b["se"].to_numpy())
+
+    def test_set_params_and_mutation_immunity(self, efficient_panel):
+        from diff_diff import EfficientDiD
+
+        est = EfficientDiD(n_bootstrap=_EDID_NBOOT, seed=42)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = est.fit(efficient_panel, **EFFICIENT_KW)
+        before = res.aggregate("event_study").to_dataframe()
+        est.set_params(n_bootstrap=5, seed=1, bootstrap_weights="mammen")
+        est.n_bootstrap = 3
+        after = res.aggregate("event_study").to_dataframe()
+        np.testing.assert_array_equal(before["se"].to_numpy(), after["se"].to_numpy())
+
+    def test_pickle_round_trip_replays(self, efficient_panel):
+        import pickle
+
+        res = _efficient_boot_fit(efficient_panel)
+        before = res.aggregate("group").to_dataframe()
+        res2 = pickle.loads(pickle.dumps(res))
+        after = res2.aggregate("group").to_dataframe()
+        np.testing.assert_array_equal(before["se"].to_numpy(), after["se"].to_numpy())
+
+    def test_relays_unchanged_and_order_independent(self, efficient_panel):
+        res = _efficient_boot_fit(efficient_panel)
+        s_before = res.aggregate("simple")
+        res.aggregate("event_study")
+        s_after = res.aggregate("simple")
+        assert float(s_before.att[0]) == float(s_after.att[0]) == res.overall_att
+        assert float(s_before.se[0]) == float(s_after.se[0]) == res.overall_se
+
+    def test_legacy_kit_without_spec_fails_closed(self, efficient_panel):
+        res = _efficient_boot_fit(efficient_panel)
+        object.__setattr__(res._aggregation_kit, "bootstrap", None)
+        for level in ("event_study", "group"):
+            with pytest.raises(NotImplementedError, match="predates"):
+                res.aggregate(level)
+
+    def test_backend_mismatch_fails_closed(self, efficient_panel):
+        import dataclasses as dc
+
+        from diff_diff.bootstrap_chunking import effective_weight_backend
+
+        res = _efficient_boot_fit(efficient_panel)
+        kit = res._aggregation_kit
+        current = effective_weight_backend()
+        other = "numpy" if current == "rust" else "rust"
+        assert kit.bootstrap.backend == current  # plain fits stamp the live backend
+        object.__setattr__(kit, "bootstrap", dc.replace(kit.bootstrap, backend=other))
+        for level in ("event_study", "group"):
+            with pytest.raises(NotImplementedError, match="weight backend"):
+                res.aggregate(level)
+        # None (unknown) also fails closed - a permissive default on a
+        # safety discriminator would disarm the guard.
+        object.__setattr__(kit, "bootstrap", dc.replace(kit.bootstrap, backend=None))
+        with pytest.raises(NotImplementedError, match="weight backend"):
+            res.aggregate("event_study")
+
+    def test_low_bootstrap_warning_re_emitted_on_replay(self, efficient_panel):
+        res = _fit_efficient(efficient_panel, est_kw={"n_bootstrap": 49, "seed": 7})
+        with pytest.warns(UserWarning, match="n_bootstrap=49 is low"):
+            res.aggregate("event_study")
+
+
+class TestEfficientBootstrapReplayDesigns:
+    def test_cluster_parity(self):
+        d = _efficient_clustered_panel()
+        res = _efficient_boot_fit(d, est_kw={"cluster": "cl"})
+        ftime = _efficient_boot_fit_time(d, est_kw={"cluster": "cl"})
+        _assert_edid_es_replay_parity(res.aggregate("event_study"), ftime)
+        _assert_edid_group_replay_parity(res.aggregate("group"), ftime)
+
+    def test_weights_only_survey_parity(self):
+        # Weights-only design: unit weight PATH + survey EIF scaling.
+        d, _ = _efficient_survey_panel()
+        sd = _efficient_survey_design()
+        res = _efficient_boot_fit(d, survey_design=sd)
+        ftime = _efficient_boot_fit_time(d, survey_design=sd)
+        assert res._aggregation_kit.bootstrap.backend != "portable"
+        _assert_edid_es_replay_parity(res.aggregate("event_study"), ftime)
+
+    @staticmethod
+    def _psu_survey_frame(strata=False, fpc=None):
+        from diff_diff import SurveyDesign
+
+        d, _ = _efficient_survey_panel()
+        d = d.copy()
+        d["psu"] = (d["unit"] // 6).astype(int)
+        kw = dict(weights="w", psu="psu")
+        if strata:
+            d["stratum"] = (d["unit"] // 60).astype(int)
+            kw["strata"] = "stratum"
+            kw["nest"] = True
+        if fpc is not None:
+            d["fpc_col"] = float(fpc)
+            kw["fpc"] = "fpc_col"
+        return d, SurveyDesign(**kw)
+
+    def test_stratified_survey_portable_stamp_and_parity(self):
+        d, sd = self._psu_survey_frame(strata=True)
+        res = _efficient_boot_fit(d, survey_design=sd)
+        assert res._aggregation_kit.bootstrap.backend == "portable"
+        ftime = _efficient_boot_fit_time(d, survey_design=sd)
+        _assert_edid_es_replay_parity(res.aggregate("event_study"), ftime)
+        _assert_edid_group_replay_parity(res.aggregate("group"), ftime)
+
+    def test_fpc_parity(self):
+        # Non-census FPC (population 10x the PSU count): fpc_scale on top of
+        # the backend-dependent generator.
+        d, sd = self._psu_survey_frame(fpc=200.0)
+        res = _efficient_boot_fit(d, survey_design=sd)
+        assert res._aggregation_kit.bootstrap.backend != "portable"
+        ftime = _efficient_boot_fit_time(d, survey_design=sd)
+        _assert_edid_es_replay_parity(res.aggregate("event_study"), ftime)
+
+    def test_census_fpc_portable(self):
+        # Census FPC (fpc == n_psu): every weight block is zeroed, so the
+        # discarded draws' backend is irrelevant - stamped portable; the
+        # replay reproduces the same degenerate surfaces.
+        d, sd = self._psu_survey_frame(fpc=20.0)  # 120 units // 6 = 20 PSUs
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = _efficient_boot_fit(d, survey_design=sd)
+            ftime = _efficient_boot_fit_time(d, survey_design=sd)
+        assert res._aggregation_kit.bootstrap.backend == "portable"
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            df = res.aggregate("event_study").to_dataframe()
+        for _, row in df.iterrows():
+            ref = ftime.event_study_effects[int(row["event_time"])]
+            np.testing.assert_array_equal(row["se"], ref["se"])  # NaN == NaN via array_equal
+
+    def test_single_psu_nan_surfaces_and_warning(self):
+        # n_psu < 2 early-returns the NaN container BEFORE any generation:
+        # stamped portable; the replay re-hits the return deterministically
+        # and re-emits the PSU warning; inference NaNs on both levels.
+        from diff_diff import SurveyDesign
+
+        d, _ = _efficient_survey_panel()
+        d = d.copy()
+        d["psu"] = 0
+        sd = SurveyDesign(weights="w", psu="psu")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = _efficient_boot_fit(d, survey_design=sd)
+        assert res._aggregation_kit.bootstrap.backend == "portable"
+        with pytest.warns(UserWarning, match="n_psu=1"):
+            es = res.aggregate("event_study")
+        assert np.all(np.isnan(es.se))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            grp = res.aggregate("group").to_dataframe()
+        assert np.all(np.isnan(grp["se"].to_numpy(dtype=float)))
+
+    def test_anticipation_parity(self, efficient_panel):
+        # Pins the replay host's anticipation wiring (shifts the engine's
+        # post-treatment mask and the group prep's inclusion rule); a
+        # defaulted host attribute would pass every anticipation=0 arm.
+        res = _efficient_boot_fit(efficient_panel, est_kw={"anticipation": 1})
+        ftime = _efficient_boot_fit_time(efficient_panel, est_kw={"anticipation": 1})
+        _assert_edid_es_replay_parity(res.aggregate("event_study"), ftime)
+        _assert_edid_group_replay_parity(res.aggregate("group"), ftime)
+
+    def test_alpha_and_mammen_parity(self, efficient_panel):
+        # Pins the host/spec wiring of alpha and weight_type - a host that
+        # hard-codes the defaults passes every other arm.
+        kw = {"alpha": 0.10, "bootstrap_weights": "mammen"}
+        res = _efficient_boot_fit(efficient_panel, est_kw=kw)
+        ftime = _efficient_boot_fit_time(efficient_panel, est_kw=kw)
+        _assert_edid_es_replay_parity(res.aggregate("event_study"), ftime)
+        _assert_edid_group_replay_parity(res.aggregate("group"), ftime)
+
+
+class TestEfficientFractionalPeriods:
+    """Decision-10 pins: int(t - g) truncation-bucketing on fractional panels.
+
+    The published fit-time key set is int-bucketed by the ANALYTICAL
+    aggregator regardless of the bootstrap prep's keying, so the
+    discriminating surfaces are (a) the prep's own key set and (b) the
+    off-grid-onset arm, where pre-fix NO raw key intersected the analytical
+    buckets and the fit-time rows kept analytical inference.
+    """
+
+    def test_prep_keys_match_analytical_buckets_and_warns(self):
+        from diff_diff import EfficientDiD
+
+        d = _efficient_fractional_panel()
+        # _fit_efficient suppresses warnings, so fit directly to pin the
+        # fractional-truncation warning alongside the prep-key assertion.
+        with pytest.warns(UserWarning, match="bucketed by int"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", FutureWarning)
+                res = EfficientDiD(n_bootstrap=_EDID_NBOOT, seed=42).fit(
+                    d, aggregate="all", **EFFICIENT_KW
+                )
+        assert set(res.bootstrap_results.event_study_ses) >= set(res.event_study_effects)
+        assert all(isinstance(e, int) for e in res.bootstrap_results.event_study_ses)
+
+    def test_offgrid_rows_carry_percentile_inference(self):
+        # EVERY treated cohort off-grid: raw t-g is never an integer, so
+        # pre-fix no override would land and the fit-time rows would keep
+        # ANALYTICAL inference - the end-to-end discriminator.
+        d = _efficient_fractional_panel(cohorts=(2.25, 3.75))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            boot = _efficient_boot_fit_time(d)
+            ana = _fit_efficient(d, aggregate="all")
+        for e, row in boot.event_study_effects.items():
+            assert row["se"] != ana.event_study_effects[e]["se"]
+
+    def test_replay_parity_on_fractional_panel(self):
+        d = _efficient_fractional_panel()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = _efficient_boot_fit(d)
+            ftime = _efficient_boot_fit_time(d)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            es = res.aggregate("event_study")
+        _assert_edid_es_replay_parity(es, ftime)
+
+    def test_n_groups_counts_distinct_cohorts(self):
+        # Fractional buckets pool multiple cells per cohort; n_groups must
+        # count DISTINCT cohorts, not cells.
+        d = _efficient_fractional_panel()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = _fit_efficient(d, aggregate="event_study")
+        for e, row in res.event_study_effects.items():
+            assert row["n_groups"] <= 2, (e, row["n_groups"])
+
+    def test_integer_panel_n_groups_regression(self, efficient_fit_time):
+        # Identity claim: on integer panels one cell per cohort per bucket,
+        # so distinct-cohort counting equals the old cell count. Pin the
+        # exact values on the standard 2-cohort fixture (cohorts 4 and 6 on
+        # an 8-period panel: both cohorts share buckets -1..1 given cohort
+        # 6's horizons span -5..1, cohort 4's -3..3).
+        expected = {
+            e: len({g for (g, t) in efficient_fit_time.group_time_effects if int(t - g) == e})
+            for e in efficient_fit_time.event_study_effects
+        }
+        for e, row in efficient_fit_time.event_study_effects.items():
+            assert row["n_groups"] == expected[e]
+        assert max(expected.values()) == 2  # both cohorts pool somewhere
+
+    def test_integer_panel_never_warns(self, efficient_panel):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = _fit_efficient(efficient_panel)
+            res.aggregate("event_study")
+        assert not any("bucketed by int" in str(w.message) for w in caught)
+
+    def test_fractional_balance_e_offgrid_anchor(self):
+        # Cohort 2.25 reaches the integer anchor bucket 1 only via raw
+        # horizons 1.25/1.75 - the :403 anchor-filter pin: the bootstrap
+        # balanced cohort set must match the analytical one.
+        d = _efficient_fractional_panel()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            boot = _efficient_boot_fit_time(d, aggregate="event_study", balance_e=1)
+            ana = _fit_efficient(d, aggregate="event_study", balance_e=1)
+        assert set(boot.bootstrap_results.event_study_ses) >= set(ana.event_study_effects)
+        assert ana.event_study_effects[1]["n_groups"] == 2  # both cohorts anchored
+        for e, row in boot.event_study_effects.items():
+            assert row["se"] != ana.event_study_effects[e]["se"] or np.isnan(row["se"])
+
+    def test_bucket_pooled_att_cell_mass_weighting(self):
+        # Hand-computed oracle for the REGISTRY Note's weighting clause: a
+        # bucket's ATT is the CELL-MASS weighted mean - one pi_g term per
+        # CELL, normalized within the bucket (a cohort with k cells carries
+        # k*pi_g mass) - not one term per cohort.
+        d = _efficient_fractional_panel()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = _fit_efficient(d, aggregate="event_study")
+        kit = res._aggregation_kit
+        fracs = kit.bookkeeping["cohort_fractions"]
+        gt = kit.bookkeeping["group_time_effects"]
+        for e, row in res.event_study_effects.items():
+            cells = [
+                (d_["effect"], fracs.get(g, 0.0))
+                for (g, t), d_ in gt.items()
+                if int(t - g) == e and np.isfinite(d_["effect"])
+            ]
+            w = np.array([c[1] for c in cells])
+            effs = np.array([c[0] for c in cells])
+            w = w / w.sum() if w.sum() > 0 else np.ones(len(w)) / len(w)
+            np.testing.assert_allclose(row["effect"], float(np.sum(w * effs)), rtol=1e-12)
+
+    def test_fractional_pt_post_reference_collision(self):
+        # Note clause (iii), PER-ROUTE oracles: reference normalization is
+        # CONTAINER-only. The bucket at -1-anticipation pools a genuine
+        # fractional pre-treatment estimate with the mechanical zero anchor;
+        # the container publishes it as the reference (att=0, NaN
+        # inference), while the fit-time DICT keeps the pooled effect with
+        # percentile inference. Parity asserted on NON-reference rows only.
+        d = _efficient_fractional_panel()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = _efficient_boot_fit(d, est_kw={"pt_assumption": "post"})
+            ftime = _efficient_boot_fit_time(d, est_kw={"pt_assumption": "post"})
+            es = res.aggregate("event_study")
+        df = es.to_dataframe()
+        anchor = df[df["is_reference"]]
+        assert len(anchor) == 1 and int(anchor["event_time"].iloc[0]) == -1
+        assert float(anchor["att"].iloc[0]) == 0.0
+        assert np.isnan(float(anchor["se"].iloc[0]))
+        # The fit-time DICT entry for the same bucket is NOT rewritten.
+        dict_row = ftime.event_study_effects[-1]
+        assert dict_row["effect"] != 0.0 or not np.isnan(dict_row["se"])
+        for _, row in df[~df["is_reference"]].iterrows():
+            ref = ftime.event_study_effects[int(row["event_time"])]
+            assert row["att"] == ref["effect"]
+            np.testing.assert_allclose(row["se"], ref["se"], rtol=1e-13, atol=1e-13)
+
+    def test_hausman_pretest_fractional_warns(self):
+        d = _efficient_fractional_panel()
+        from diff_diff import EfficientDiD
+
+        est = EfficientDiD()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            est.fit(d, **EFFICIENT_KW)
+        with pytest.warns(UserWarning, match="Hausman pre-test horizons are bucketed"):
+            est.hausman_pretest(d, **EFFICIENT_KW)
 
 
 class TestEfficientInternalCallers:

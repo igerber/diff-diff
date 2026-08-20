@@ -30,7 +30,11 @@ import pandas as pd
 
 from diff_diff._base import BaseEstimator
 from diff_diff._deprecation import NOT_SUPPLIED
-from diff_diff.aggregation import AggregationKit
+from diff_diff.aggregation import AggregationKit, BootstrapReplaySpec
+from diff_diff.bootstrap_utils import (
+    apply_bootstrap_event_study_overrides,
+    apply_bootstrap_group_overrides,
+)
 from diff_diff.efficient_did_aggregation import (
     _cluster_aggregate,
     _compute_se_from_eif,
@@ -118,6 +122,7 @@ def _build_edid_aggregation_kit(
     df_survey: Optional[float],
     alpha: float,
     anticipation: int,
+    bootstrap_results: Optional[EDiDBootstrapResults] = None,
 ) -> Optional[AggregationKit]:
     """Bundle the retained EIF payload + bookkeeping for post-fit aggregate().
 
@@ -138,6 +143,21 @@ def _build_edid_aggregation_kit(
         # Unreachable after fit()'s empty-effects raise; kept for the CS
         # guard shape (a kit with nothing to re-aggregate is not attached).
         return None
+    # STATE-ONLY replay carrier (the CS contract): the spec retains the RNG
+    # snapshot + generation-branch identity the run recorded, BY VALUE, so
+    # post-fit aggregate() can replay the fit-time multiplier bootstrap
+    # through the same engine. Its rebuild() factory is unused here — the
+    # engine re-derives the generation branch from the kit bookkeeping.
+    # None on analytical fits, where the recompute levels stay analytical.
+    replay_spec = None
+    if bootstrap_results is not None and bootstrap_results._replay_bitgen_state is not None:
+        replay_spec = BootstrapReplaySpec(
+            bitgen_state=bootstrap_results._replay_bitgen_state,
+            n_bootstrap=bootstrap_results.n_bootstrap,
+            n_units=int(n_units),
+            weight_type=bootstrap_results.weight_type,
+            backend=bootstrap_results._replay_backend,
+        )
     return AggregationKit(
         bookkeeping={
             # PRIVATE SNAPSHOTS of the aggregation inputs (CI review P0):
@@ -165,7 +185,7 @@ def _build_edid_aggregation_kit(
         alpha=alpha,
         anticipation=anticipation,
         cband=False,
-        bootstrap=None,
+        bootstrap=replay_spec,
     )
 
 
@@ -513,20 +533,23 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
             ``.aggregate('group')`` / ``.aggregate('simple')`` /
             ``.aggregate('total')``.  On
             bootstrapped fits (``n_bootstrap > 0``) the post-fit
-            RECOMPUTE levels (``'event_study'``/``'group'``) fail closed
-            — the deprecated fit-time path remains the supported route
-            for those bootstrapped aggregated surfaces —  while
-            ``aggregate('simple')`` and, where supported,
-            ``aggregate('total')`` relay the stored bootstrap
-            inference and stay available (the per-level policy
-            converged with row M-027).
+            RECOMPUTE levels (``'event_study'``/``'group'``) REPLAY the
+            fit-time multiplier bootstrap from the kit-retained RNG
+            state (percentile inference, allclose to a fit-time
+            aggregation; no refit needed), while ``aggregate('simple')``
+            and, where supported, ``aggregate('total')`` relay the
+            stored bootstrap inference (the per-level policy converged
+            with row M-027).
         balance_e : int, optional
             DEPRECATED (3.9, removed in 4.0, row M-120): moves onto
             post-fit ``aggregate()`` —
             ``results.aggregate('event_study', balance_e=2)``.  EDiD's
             balance rule is the ANCHOR-HORIZON rule (keep cohorts with a
-            finite effect at ``e == balance_e``), the same rule
-            CallawaySantAnna uses.
+            finite effect at the anchor horizon), the same rule shape
+            CallawaySantAnna uses — with one keying-granularity
+            difference: EDiD anchors on the ``int(t - g)`` bucket while
+            CS keys raw ``t - g`` (identical on integer-period panels;
+            see the REGISTRY truncation Note).
         survey_design : SurveyDesign, optional
             Survey design specification for design-based inference.
             Applies survey weights to all means, covariances, and cohort
@@ -1364,46 +1387,14 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
                     se = float(group_time_effects[gt]["se"])
                     group_time_effects[gt]["t_stat"] = safe_inference(eff, se, alpha=self.alpha)[0]
 
-            es_cis = bootstrap_results.event_study_cis
-            es_pvs = bootstrap_results.event_study_p_values
-            if (
-                event_study_effects is not None
-                and bootstrap_results.event_study_ses is not None
-                and es_cis is not None
-                and es_pvs is not None
-            ):
-                for e in event_study_effects:
-                    if e in bootstrap_results.event_study_ses:
-                        event_study_effects[e]["se"] = bootstrap_results.event_study_ses[e]
-                        event_study_effects[e]["conf_int"] = es_cis[e]
-                        event_study_effects[e]["p_value"] = es_pvs[e]
-                        eff = float(event_study_effects[e]["effect"])
-                        se = float(event_study_effects[e]["se"])
-                        event_study_effects[e]["t_stat"] = safe_inference(
-                            eff, se, alpha=self.alpha
-                        )[0]
-
-            g_cis = bootstrap_results.group_effect_cis
-            g_pvs = bootstrap_results.group_effect_p_values
-            if (
-                group_effects is not None
-                and bootstrap_results.group_effect_ses is not None
-                and g_cis is not None
-                and g_pvs is not None
-            ):
-                for g in group_effects:
-                    if g in bootstrap_results.group_effect_ses:
-                        group_effects[g]["se"] = bootstrap_results.group_effect_ses[g]
-                        group_effects[g]["conf_int"] = g_cis[g]
-                        group_effects[g]["p_value"] = g_pvs[g]
-                        eff = float(group_effects[g]["effect"])
-                        se = float(group_effects[g]["se"])
-                        group_effects[g]["t_stat"] = safe_inference(eff, se, alpha=self.alpha)[0]
-                        # Percentile-bootstrap inference has no analytical df;
-                        # clear the provenance key the analytical pass recorded
-                        # (the CS precedent) so bootstrap rows never publish an
-                        # analytical survey df beside percentile p/CI.
-                        group_effects[g]["df_used"] = None
+            # ES/group percentile overrides via the shared appliers (the same
+            # implementations the post-fit aggregate() replay runs — one
+            # code path, no fit-vs-replay drift). The appliers carry the
+            # availability guards and the group df_used clearing internally.
+            apply_bootstrap_event_study_overrides(
+                event_study_effects, bootstrap_results, self.alpha
+            )
+            apply_bootstrap_group_overrides(group_effects, bootstrap_results, self.alpha)
 
         # ----- Build results -----
         self.results_ = EfficientDiDResults(
@@ -1487,6 +1478,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
             df_survey=_survey_df_post_overall,
             alpha=self.alpha,
             anticipation=self.anticipation,
+            bootstrap_results=bootstrap_results,
         )
         self.is_fitted_ = True
         return self.results_
@@ -1637,8 +1629,12 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
         ) -> Dict[int, Tuple[float, np.ndarray]]:
             """Aggregate (g,t) effects to post-treatment ES(e) with WIF-corrected EIF."""
             by_e: Dict[int, List[Tuple[Tuple, float, float, np.ndarray]]] = {}
+            _has_fractional = False
             for (g, t), d in gt_effects.items():
-                e = int(t - g)
+                raw_e = t - g
+                e = int(raw_e)
+                if raw_e != e:
+                    _has_fractional = True
                 if e < -ant:
                     continue
                 if not np.isfinite(d["effect"]):
@@ -1652,6 +1648,15 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
                 if e not in by_e:
                     by_e[e] = []
                 by_e[e].append(((g, t), d["effect"], pg, eif_vec))
+
+            if _has_fractional:
+                warnings.warn(
+                    "Fractional relative times detected: Hausman pre-test "
+                    "horizons are bucketed by int(t - g) (truncation toward "
+                    "zero). See the EfficientDiD REGISTRY truncation Note.",
+                    UserWarning,
+                    stacklevel=3,
+                )
 
             result: Dict[int, Tuple[float, np.ndarray]] = {}
             for e, items in by_e.items():

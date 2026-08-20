@@ -155,14 +155,15 @@ surface (nothing to derive), and ChaisemartinDHaultfoeuille's pre-period
 checks read `placebo_event_study` directly.
 
 ```{warning}
-**Bootstrapped fits: CallawaySantAnna is covered; the other recompute adopters are not yet.**
-On `CallawaySantAnna`, the post-fit recompute levels now REPLAY the fit-time multiplier
-bootstrap from the fit-retained RNG state (percentile inference matching a fit-time
-aggregation to floating-point reassociation) — no fit-time keyword needed; only pre-replay
-legacy pickles and artifacts moved across the Rust/NumPy weight backend fail closed with a
-refit message. On `ImputationDiD`, `TwoStageDiD`, `EfficientDiD` and `ContinuousDiD`, the
-recompute levels still raise `NotImplementedError` when the fit used `n_bootstrap > 0` —
-keep the fit-time call there for now and track their open `TODO.md` rows.
+**Bootstrapped fits: CallawaySantAnna and EfficientDiD are covered; the remaining recompute adopters are not yet.**
+On `CallawaySantAnna` and `EfficientDiD`, the post-fit recompute levels now REPLAY the
+fit-time multiplier bootstrap from the fit-retained RNG state (percentile inference
+matching a fit-time aggregation to floating-point reassociation) — no fit-time keyword
+needed; only pre-replay legacy pickles and artifacts moved across the Rust/NumPy weight
+backend fail closed with a refit message. On `ImputationDiD`, `TwoStageDiD` and
+`ContinuousDiD`, the recompute levels still raise `NotImplementedError` when the fit used
+`n_bootstrap > 0` — keep the fit-time call there for now and track their open `TODO.md`
+rows.
 `aggregate("simple")` — and, on its four adopters, `aggregate("total")` (3.10) — does relay,
 and `StackedDiD`, `ChaisemartinDHaultfoeuille` and `HeterogeneousAdoptionDiD` are unaffected —
 their `aggregate()` is a pure view over stored fields.
@@ -303,7 +304,7 @@ does not mean no action is required, so read the `Fix` cell.
 | M-020 | aggregate-postfit | `diff_diff:CallawaySantAnna.fit[aggregate]` | `diff_diff:CallawaySantAnnaResults.aggregate` | Move `aggregate=` off `fit()` onto post-fit `results.aggregate(...)`. Bootstrapped fits replay the fit-time bootstrap post-fit - see the aggregation section. |
 | M-021 | aggregate-postfit | `diff_diff:ImputationDiD.fit[aggregate]` | `diff_diff:ImputationDiDResults.aggregate` | Move `aggregate=` off `fit()` onto post-fit `results.aggregate(...)`. On a bootstrapped fit the recompute levels raise today - see the aggregation section. |
 | M-022 | aggregate-postfit | `diff_diff:TwoStageDiD.fit[aggregate]` | `diff_diff:TwoStageDiDResults.aggregate` | Move `aggregate=` off `fit()` onto post-fit `results.aggregate(...)`. On a bootstrapped fit the recompute levels raise today - see the aggregation section. |
-| M-023 | aggregate-postfit | `diff_diff:EfficientDiD.fit[aggregate]` | `diff_diff:EfficientDiDResults.aggregate` | Move `aggregate=` off `fit()` onto post-fit `results.aggregate(...)`. On a bootstrapped fit the recompute levels raise today - see the aggregation section. |
+| M-023 | aggregate-postfit | `diff_diff:EfficientDiD.fit[aggregate]` | `diff_diff:EfficientDiDResults.aggregate` | Move `aggregate=` off `fit()` onto post-fit `results.aggregate(...)`. Bootstrapped fits replay the fit-time bootstrap post-fit - see the aggregation section. |
 | M-024 | aggregate-postfit | `diff_diff:StackedDiD.fit[aggregate]` | `diff_diff:StackedDiDResults.aggregate` | Move `aggregate=` off `fit()` onto post-fit `results.aggregate(...)`. |
 | M-025 | aggregate-postfit | `diff_diff:ContinuousDiD.fit[aggregate]` | `diff_diff:ContinuousDiDResults.aggregate` | Move `aggregate=` off `fit()` onto post-fit `results.aggregate(...)`. On a bootstrapped fit the recompute levels raise today - see the aggregation section. |
 | M-026 | aggregate-postfit | `diff_diff:ChaisemartinDHaultfoeuille.fit[aggregate]` | `diff_diff:ChaisemartinDHaultfoeuilleResults.aggregate` | Move `aggregate=` off `fit()` onto post-fit `results.aggregate(...)`. |
@@ -311,7 +312,7 @@ does not mean no action is required, so read the `Fix` cell.
 | M-117 | aggregate-postfit | `diff_diff:CallawaySantAnna.fit[balance_e]` | `diff_diff:CallawaySantAnnaResults.aggregate[balance_e]` | Move `balance_e=` off `fit()` onto post-fit `results.aggregate(...)`. Bootstrapped fits replay the fit-time bootstrap post-fit - see the aggregation section. |
 | M-118 | aggregate-postfit | `diff_diff:ImputationDiD.fit[balance_e]` | `diff_diff:ImputationDiDResults.aggregate[balance_e]` | Move `balance_e=` off `fit()` onto post-fit `results.aggregate(...)`. On a bootstrapped fit the recompute levels raise today - see the aggregation section. |
 | M-119 | aggregate-postfit | `diff_diff:TwoStageDiD.fit[balance_e]` | `diff_diff:TwoStageDiDResults.aggregate[balance_e]` | Move `balance_e=` off `fit()` onto post-fit `results.aggregate(...)`. On a bootstrapped fit the recompute levels raise today - see the aggregation section. |
-| M-120 | aggregate-postfit | `diff_diff:EfficientDiD.fit[balance_e]` | `diff_diff:EfficientDiDResults.aggregate[balance_e]` | Move `balance_e=` off `fit()` onto post-fit `results.aggregate(...)`. On a bootstrapped fit the recompute levels raise today - see the aggregation section. |
+| M-120 | aggregate-postfit | `diff_diff:EfficientDiD.fit[balance_e]` | `diff_diff:EfficientDiDResults.aggregate[balance_e]` | Move `balance_e=` off `fit()` onto post-fit `results.aggregate(...)`. Bootstrapped fits replay the fit-time bootstrap post-fit - see the aggregation section. |
 | M-139 | aggregate-postfit | `diff_diff:did_had_pretest_workflow[aggregate]` | — | Remove `aggregate=`; the battery is inferred from panel shape - two periods select the overall battery, more than two select the event-study battery. It is not selected post-fit (`HADPretestReport.aggregate` is a metadata field, not a method). |
 | M-060 | alias-table | `EventStudy` | — | Import `TwoWayFixedEffects(...).fit(..., event_study=True)` - the alias is dropped, not retargeted instead of the `EventStudy` alias. |
 | M-061 | alias-table | `QDiDResults` | — | Import `ChangesInChangesResults` instead of the `QDiDResults` alias. |

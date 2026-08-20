@@ -448,13 +448,13 @@ print(results.aggregate('event_study', balance_e=2).to_dataframe())
 # NEW in 3.10 - the estimator-owned TOTAL incremental outcome (exact
 # relay C x overall; single row; panel non-survey fits only):
 print(results.aggregate('total').to_dataframe())
-# BOOTSTRAPPED fits: CS's recompute levels (event_study/group) REPLAY
-# the fit-time multiplier bootstrap post-fit (percentile inference; no
-# refit needed) — but they still RAISE on EfficientDiD/ImputationDiD/
-# TwoStageDiD, where aggregate('simple') and, where supported,
-# aggregate('total') relay the stored bootstrap inference and the
-# deprecated fit-time aggregation remains the ES/group route:
-results = edid.fit(data, ..., aggregate='all')  # EfficientDiD et al. only
+# BOOTSTRAPPED fits: the CS and EfficientDiD recompute levels
+# (event_study/group) REPLAY the fit-time multiplier bootstrap post-fit
+# (percentile inference; no refit needed) — but they still RAISE on
+# ImputationDiD/TwoStageDiD, where aggregate('simple') and, where
+# supported, aggregate('total') relay the stored bootstrap inference and
+# the deprecated fit-time aggregation remains the ES/group route:
+results = imp.fit(data, ..., aggregate='all')  # ImputationDiD/TwoStageDiD only
 ```
 
 ### For ContinuousDiD (MIXED post-fit `aggregate()`, row M-025)

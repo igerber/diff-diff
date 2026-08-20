@@ -982,21 +982,20 @@ def _handle_efficient(results: Any):
                 "EfficientDiD aggregates post-fit from retained EIFs " "(M-023) - no refit needed."
                 if getattr(results, "bootstrap_results", None) is None
                 else "This fit is BOOTSTRAPPED: the post-fit event-study/group "
-                "recompute levels raise on bootstrap fits, while "
-                "aggregate('simple') and, where supported, "
-                "aggregate('total') relay the stored inference - "
-                "refit with the deprecated fit-time aggregation (or "
-                "n_bootstrap=0) to obtain the recomputed surfaces."
+                "recompute levels REPLAY the fit-time multiplier "
+                "bootstrap from the retained RNG state (percentile "
+                "inference, no refit needed), while aggregate('simple') "
+                "and, where supported, aggregate('total') relay the "
+                "stored inference."
             ),
             code=(
                 "# Aggregate post-fit - no refit needed:\n"
                 "print(results.aggregate('group').to_dataframe())        # Per-cohort ATTs\n"
                 "print(results.aggregate('event_study').to_dataframe())  # Dynamic effects"
                 if getattr(results, "bootstrap_results", None) is None
-                else "# Bootstrap fit: aggregate at fit time (deprecated kwarg):\n"
-                "results = edid.fit(data, ..., aggregate='all')\n"
-                "print(results.group_effects)        # Per-cohort ATTs\n"
-                "print(results.event_study_effects)  # Dynamic effects"
+                else "# Bootstrap fit: post-fit aggregation replays the fit-time bootstrap:\n"
+                "print(results.aggregate('group').to_dataframe())        # Per-cohort ATTs\n"
+                "print(results.aggregate('event_study').to_dataframe())  # Dynamic effects"
             ),
             priority="medium",
             # NON-STEPS key (the M-024 "sub_experiment_balance" lesson):

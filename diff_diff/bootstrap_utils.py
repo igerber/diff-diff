@@ -1,16 +1,18 @@
 """
 Shared bootstrap utilities for multiplier bootstrap inference.
 
-Provides weight generation, percentile CI, and p-value helpers used by
-both CallawaySantAnna and ContinuousDiD estimators.
+Provides weight generation, percentile statistics (CI / p-value / per-effect
+stats), and the percentile-override appliers shared across the estimator
+bootstrap engines.
 """
 
 import warnings
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Protocol, Tuple
 
 import numpy as np
 
 from diff_diff._backend import HAS_RUST_BACKEND, _rust_bootstrap_weights
+from diff_diff.utils import safe_inference_batch
 
 if TYPE_CHECKING:
     from diff_diff.survey import ResolvedSurveyDesign
@@ -29,6 +31,8 @@ __all__ = [
     "compute_effect_bootstrap_stats_batch",
     "warn_bootstrap_failure_rate",
     "stratified_bootstrap_indices",
+    "apply_bootstrap_event_study_overrides",
+    "apply_bootstrap_group_overrides",
 ]
 
 
@@ -948,3 +952,96 @@ def generate_rao_wu_weights_batch(
     for b in range(n_bootstrap):
         result[b] = generate_rao_wu_weights(resolved_survey, rng)
     return result
+
+
+# =============================================================================
+# Bootstrap override helpers (shared by fit and the post-fit replay)
+# =============================================================================
+# Extracted verbatim from CallawaySantAnna.fit()'s inline blocks (and adopted
+# by EfficientDiD's fit/replay) so the post-fit aggregate() replay applies
+# EXACTLY the same percentile overrides the fit-time path applies — one
+# implementation, no twin drift. (The deprecated StaggeredTripleDifference
+# keeps its OWN copy of the group replacement loop; unifying it is sequenced
+# with the M-014 container port.) Note on warning attribution: when the
+# engines run under the post-fit replay their fit-tuned stacklevels resolve
+# into library frames rather than the user's aggregate() call — accepted as
+# cosmetic (recorded decision).
+
+
+class _BootstrapOverrideSource(Protocol):
+    """Structural contract for bootstrap containers the appliers consume.
+
+    Both ``CSBootstrapResults`` and ``EDiDBootstrapResults`` satisfy it by
+    field name; a Protocol keeps this module free of estimator imports.
+    """
+
+    event_study_ses: Optional[Dict[Any, float]]
+    event_study_cis: Optional[Dict[Any, Tuple[float, float]]]
+    event_study_p_values: Optional[Dict[Any, float]]
+    group_effect_ses: Optional[Dict[Any, float]]
+    group_effect_cis: Optional[Dict[Any, Tuple[float, float]]]
+    group_effect_p_values: Optional[Dict[Any, float]]
+
+
+def apply_bootstrap_event_study_overrides(
+    event_study_effects: Optional[Dict[int, Dict[str, Any]]],
+    bootstrap_results: _BootstrapOverrideSource,
+    alpha: float,
+) -> None:
+    """Overwrite per-event-time se/CI/p with percentile-bootstrap values.
+
+    Mutates ``event_study_effects`` in place; t is recomputed from the
+    percentile SE via ``safe_inference_batch``. No-op when either side has
+    no event-study surface.
+    """
+    if (
+        event_study_effects is not None
+        and bootstrap_results.event_study_ses is not None
+        and bootstrap_results.event_study_cis is not None
+        and bootstrap_results.event_study_p_values is not None
+    ):
+        es_keys = [e for e in event_study_effects if e in bootstrap_results.event_study_ses]
+        if es_keys:
+            es_effects_arr = np.array([float(event_study_effects[e]["effect"]) for e in es_keys])
+            es_ses_arr = np.array([float(bootstrap_results.event_study_ses[e]) for e in es_keys])
+            es_t_stats, _, _, _ = safe_inference_batch(es_effects_arr, es_ses_arr, alpha=alpha)
+            for idx, e in enumerate(es_keys):
+                event_study_effects[e]["se"] = bootstrap_results.event_study_ses[e]
+                event_study_effects[e]["conf_int"] = bootstrap_results.event_study_cis[e]
+                event_study_effects[e]["p_value"] = bootstrap_results.event_study_p_values[e]
+                event_study_effects[e]["t_stat"] = float(es_t_stats[idx])
+
+
+def apply_bootstrap_group_overrides(
+    group_effects: Optional[Dict[Any, Dict[str, Any]]],
+    bootstrap_results: _BootstrapOverrideSource,
+    alpha: float,
+) -> None:
+    """Overwrite per-group se/CI/p with percentile-bootstrap values.
+
+    Mutates ``group_effects`` in place and clears each row's ``df_used``
+    (the percentile inference never used the analytical df, so keeping it
+    would claim a t-reference that governed nothing). No-op when either
+    side has no group surface.
+    """
+    if (
+        group_effects is not None
+        and bootstrap_results.group_effect_ses is not None
+        and bootstrap_results.group_effect_cis is not None
+        and bootstrap_results.group_effect_p_values is not None
+    ):
+        grp_keys = [g for g in group_effects if g in bootstrap_results.group_effect_ses]
+        if grp_keys:
+            grp_effects_arr = np.array([float(group_effects[g]["effect"]) for g in grp_keys])
+            grp_ses_arr = np.array([float(bootstrap_results.group_effect_ses[g]) for g in grp_keys])
+            grp_t_stats, _, _, _ = safe_inference_batch(grp_effects_arr, grp_ses_arr, alpha=alpha)
+            for idx, g in enumerate(grp_keys):
+                group_effects[g]["se"] = bootstrap_results.group_effect_ses[g]
+                group_effects[g]["conf_int"] = bootstrap_results.group_effect_cis[g]
+                group_effects[g]["p_value"] = bootstrap_results.group_effect_p_values[g]
+                group_effects[g]["t_stat"] = float(grp_t_stats[idx])
+                # Same clearing rule the ES df provenance follows: these
+                # se/p/CI are now percentile-bootstrap values that never used
+                # the analytical df, so keeping df_used would claim a
+                # t-reference that governed nothing.
+                group_effects[g]["df_used"] = None

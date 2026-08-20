@@ -586,9 +586,10 @@ relay is exact under percentile inference too; all of
 dCDH/StackedDiD/HAD) is faithful under any inference regime and stays
 available on bootstrapped fits, with the df COLUMN NaN'd there - no df
 governs percentile inference, so a relay never publishes analytical
-provenance beside percentile statistics; where bootstrap draws are not
-retained, a RECOMPUTE level on a bootstrapped fit RAISES rather than
-silently returning analytical inference. **View-relay exception (Phase 2b PRs 1-2):**
+provenance beside percentile statistics; a RECOMPUTE level on a
+bootstrapped fit either REPLAYS the fit-time bootstrap from retained RNG
+state (CS [M-020], EfficientDiD [M-023]) or RAISES - it never silently
+returns analytical inference. **View-relay exception (Phase 2b PRs 1-2):**
 estimators whose `aggregate()` RELAYS stored fields without recomputation
 need no influence-function kit - there is nothing to re-weight. The
 retention requirement binds RECOMPUTING estimators (the CallawaySantAnna
@@ -987,8 +988,8 @@ five recorded deviations:
 - **No `Available since` column.** Considered and rejected: it cannot be derived.
   `introduced_in` tracks the dataclass storage flip, so the nine `field-flip` rows
   say `4.0` while `.att` already resolves today; and a successor that exists can
-  still raise (the bootstrapped-fit `aggregate()` recompute gates — four families
-  since CS's percentile-bootstrap replay landed). Availability is
+  still raise (the bootstrapped-fit `aggregate()` recompute gates — three families
+  since the CS and EfficientDiD percentile-bootstrap replays landed). Availability is
   stated in prose where it is verifiable instead.
 - **§7b "Remaining 4.0 changes"** was added: §§2-8 as skeletoned cover only 102 of
   the 108 qualifying rows, leaving `obligation-sdid-params`, `constructor-hygiene`,

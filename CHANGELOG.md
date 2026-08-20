@@ -58,8 +58,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pretrends-power/sensitivity via the diagonal-covariance fallback, replay warnings
   republished per section), and `practitioner_next_steps` advises the post-fit
   route on bootstrapped CS fits instead of the deprecated fit-time kwarg. The
-  sibling estimators' (EfficientDiD/ImputationDiD/TwoStageDiD/ContinuousDiD)
-  bootstrapped recompute gates are unchanged.
+  sibling estimators' (ImputationDiD/TwoStageDiD/ContinuousDiD) bootstrapped
+  recompute gates are unchanged (EfficientDiD adopted the replay in this release —
+  see its own entry).
+- **Post-fit `aggregate('event_study')`/`aggregate('group')` now work on bootstrapped
+  EfficientDiD fits** ([M-023] notes amendment; the CS replay mechanism transplanted).
+  The recompute levels REPLAY the fit-time multiplier bootstrap from a fit-retained
+  `BootstrapReplaySpec` (the RNG state captured at weight-stream construction, plus
+  the run parameters BY VALUE): percentile se/CI/t match a fit-time
+  `fit(aggregate=...)` aggregation to floating-point reassociation
+  (`assert_allclose`, ~1 ULP — never bit-identity; the discrete percentile p-value is
+  a count statistic compared at `2/n_bootstrap`), `seed=None` fits replay (the state
+  is retained regardless of seeding), post-fit `set_params`/attribute mutation cannot
+  alter a replay, and pickles carry the state. Replays re-emit the fit-time bootstrap
+  warnings for the replayed configuration; the `'simple'`/`'total'` relays stay
+  silent and unchanged. The spec stamps the weight-generation backend at capture —
+  an artifact replayed under the other Rust/NumPy weight backend fails closed
+  naming both backends rather than silently regenerating a different realization
+  (stratified-survey, census-FPC, and single-PSU degenerate fits are stamped
+  `"portable"` and replay anywhere). Pre-replay legacy pickles fail closed with a
+  refit message. The ES/group percentile-override appliers moved to
+  `diff_diff.bootstrap_utils` and are now shared verbatim by the CS and EfficientDiD
+  fit paths and replays (internal relocation; verified bit-inert).
+  `practitioner_next_steps` now advises the post-fit route on bootstrapped
+  EfficientDiD fits instead of the deprecated fit-time kwarg.
 - **`LWDiD` (Lee & Wooldridge 2025, 2026 rolling-transformation DiD).** Unit-specific
   demean/detrend (plus quarterly `demeanq`/`detrendq`) converts panel data to
   cross-sectional transformed outcomes; supports common timing and staggered
@@ -95,6 +117,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `results.aggregate('event_study')` surface instead.
 
 ### Fixed
+- **EfficientDiD fractional-period event-study bucketing.** The bootstrap ES prep
+  keyed horizons by raw `t - g` while the analytical aggregator buckets by
+  `int(t - g)` (truncation toward zero), so on fractional-period panels a strict
+  sub-aggregate's percentile inference was attached to the pooled analytical row
+  (and the `balance_e` anchor filter could miss cohorts anchoring at fractional
+  horizons). The bootstrap prep now keys all three sites by the analytical
+  expression — a no-op on integer-period panels. Companion changes on BOTH the
+  analytical and bootstrap paths for fractional panels: `n_groups` now counts
+  DISTINCT cohorts per bucket (previously a cell count that over-counted once
+  buckets pool multiple cells per cohort — this also moves the event-study `n`
+  column on analytical fractional-period fits), and any aggregation that
+  truncation-buckets a fractional horizon (fit-time, post-fit, replay, and
+  `hausman_pretest`) now emits a `UserWarning` naming the new REGISTRY truncation
+  Note, which documents the full convention (double-width bucket 0, the PT-Post
+  reference collision, cell-mass weighting).
 - **`LWDiD` maintainer fix wave** (post-acceptance validation campaign: 43
   execution-verified findings, all resolved):
   - Estimand: the `tau_omega` composite is complete-case with FIXED cohort

@@ -18,6 +18,10 @@ from diff_diff.aggregation import (
     resolve_inference_df,
 )
 from diff_diff.bootstrap_chunking import effective_weight_backend
+from diff_diff.bootstrap_utils import (
+    apply_bootstrap_event_study_overrides,
+    apply_bootstrap_group_overrides,
+)
 from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.results_base import BaseResults, build_event_study_surface
 from diff_diff.staggered_aggregation import (
@@ -27,8 +31,6 @@ from diff_diff.staggered_aggregation import (
 from diff_diff.staggered_bootstrap import (
     CallawaySantAnnaBootstrapMixin,
     CSBootstrapResults,
-    apply_bootstrap_event_study_overrides,
-    apply_bootstrap_group_overrides,
     apply_cband_conf_ints,
 )
 

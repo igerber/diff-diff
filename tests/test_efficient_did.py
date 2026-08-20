@@ -1563,8 +1563,8 @@ class TestClusterRobustSE:
         """Clustered bootstrap with aggregate='all' should produce finite results."""
         n_boot = ci_params.bootstrap(99)
         df = self._make_clustered_panel(n_clusters=60, units_per_cluster=3)
-        # Bootstrapped fits keep the fit-time kwarg: post-fit aggregate()
-        # fails closed on n_bootstrap > 0.
+        # Deprecated fit-time kwarg kept as the parity REFERENCE: post-fit
+        # aggregate() now REPLAYS the fit-time bootstrap on n_bootstrap > 0.
         with pytest.warns(FutureWarning):
             result = EfficientDiD(cluster="cluster_id", n_bootstrap=n_boot, seed=42).fit(
                 df, "y", "unit", "time", "first_treat", aggregate="all"
@@ -1837,8 +1837,8 @@ class TestBalanceE:
         """Bootstrap balance_e should produce finite SEs."""
         n_boot = ci_params.bootstrap(99)
         df = _make_staggered_panel(n_per_group=80, n_control=80, groups=(3, 5))
-        # Bootstrapped fits keep the fit-time kwargs: post-fit aggregate()
-        # fails closed on n_bootstrap > 0.
+        # Deprecated fit-time kwargs kept as the parity REFERENCE: post-fit
+        # aggregate() now REPLAYS the fit-time bootstrap on n_bootstrap > 0.
         with pytest.warns(FutureWarning):
             result = EfficientDiD(n_bootstrap=n_boot, seed=42).fit(
                 df,
@@ -1916,8 +1916,8 @@ class TestBootstrap:
     def test_bootstrap_with_aggregation(self, ci_params):
         n_boot = ci_params.bootstrap(99)
         df = _make_simple_panel()
-        # Bootstrapped fits keep the fit-time kwarg: post-fit aggregate()
-        # fails closed on n_bootstrap > 0.
+        # Deprecated fit-time kwarg kept as the parity REFERENCE: post-fit
+        # aggregate() now REPLAYS the fit-time bootstrap on n_bootstrap > 0.
         with pytest.warns(FutureWarning):
             result = EfficientDiD(n_bootstrap=n_boot, seed=42).fit(
                 df, "y", "unit", "time", "first_treat", aggregate="all"
@@ -1927,6 +1927,28 @@ class TestBootstrap:
             for e, d in result.event_study_effects.items():
                 if np.isfinite(d["effect"]):
                     assert np.isfinite(d["se"])
+
+    def test_bootstrap_override_t_is_effect_over_se(self, ci_params):
+        # Committed pin for the t-recompute semantics of the shared
+        # percentile-override appliers (bootstrap_utils): on every ES and
+        # group row, t == effect/se where se is finite-positive, NaN
+        # otherwise (the two clauses of the safe_inference contract).
+        # Portable across OS/backends - it pins the relationship, not the
+        # draw values - and catches a misaligned or altered t routine.
+        n_boot = ci_params.bootstrap(99)
+        df = _make_simple_panel()
+        with pytest.warns(FutureWarning):
+            result = EfficientDiD(n_bootstrap=n_boot, seed=42).fit(
+                df, "y", "unit", "time", "first_treat", aggregate="all"
+            )
+        rows = list(result.event_study_effects.values()) + list(result.group_effects.values())
+        assert rows
+        for d in rows:
+            se = float(d["se"])
+            if np.isfinite(se) and se > 0:
+                assert d["t_stat"] == pytest.approx(float(d["effect"]) / se, rel=1e-15)
+            else:
+                assert np.isnan(d["t_stat"])
 
     def test_bootstrap_coverage_basic(self, ci_params):
         """Rough coverage check: true effect should be in CI."""
@@ -2642,8 +2664,8 @@ class TestCovariatesBootstrap:
     def test_covariates_pt_all_bootstrap(self):
         """PT-All + bootstrap + covariates end-to-end."""
         df = _make_covariate_panel(n_units=300)
-        # Bootstrapped fits keep the fit-time kwarg: post-fit aggregate()
-        # fails closed on n_bootstrap > 0.
+        # Deprecated fit-time kwarg kept as the parity REFERENCE: post-fit
+        # aggregate() now REPLAYS the fit-time bootstrap on n_bootstrap > 0.
         with pytest.warns(FutureWarning):
             result = EfficientDiD(pt_assumption="all", n_bootstrap=99, seed=42).fit(
                 df,

@@ -13,7 +13,13 @@ import numpy as np
 import pandas as pd
 
 from diff_diff.aggregation import AggregationMixin, AggregationResult, build_total_relay_row
+from diff_diff.bootstrap_chunking import effective_weight_backend
+from diff_diff.bootstrap_utils import (
+    apply_bootstrap_event_study_overrides,
+    apply_bootstrap_group_overrides,
+)
 from diff_diff.efficient_did_aggregation import _EfficientAggregationMixin
+from diff_diff.efficient_did_bootstrap import EfficientDiDBootstrapMixin
 from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.results_base import BaseResults, build_event_study_surface
 
@@ -83,6 +89,35 @@ class _EDiDKitAggregator(_EfficientAggregationMixin):
         self._survey_df = survey_df
         self._unit_resolved_survey = resolved_survey_unit
         self._unit_level_weights = unit_level_weights
+
+
+class _EDiDKitBootstrapAggregator(EfficientDiDBootstrapMixin):
+    """Value-bound host that replays the fit-time multiplier bootstrap.
+
+    ``_run_multiplier_bootstrap`` reads exactly five attributes off its
+    host (the mixin's typed contract): ``n_bootstrap``,
+    ``bootstrap_weights``, ``alpha``, ``seed``, ``anticipation`` — all
+    carried here BY VALUE from the kit/spec so post-fit ``set_params`` or
+    attribute mutation on the estimator can never desynchronize a replay.
+    ``seed`` is None because the replay injects the fit-captured
+    bit-generator state directly. Warning attribution note: the engine's
+    fit-tuned stacklevels resolve into library frames under the deeper
+    ``aggregate()`` chain — accepted as cosmetic (the CS-recorded
+    decision).
+    """
+
+    def __init__(
+        self,
+        alpha: float,
+        anticipation: int,
+        n_bootstrap: int,
+        bootstrap_weights: str,
+    ) -> None:
+        self.alpha = alpha
+        self.anticipation = anticipation
+        self.n_bootstrap = n_bootstrap
+        self.bootstrap_weights = bootstrap_weights
+        self.seed = None  # unused — the replay injects the captured state
 
 
 @dataclass
@@ -298,27 +333,72 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
         # Per-level bootstrap policy (v4-design section 6, converged with row
         # M-027): 'simple' is a bit-exact RELAY of the stored overall row -
         # faithful under any inference regime, bootstrap included - so it
-        # dispatches BEFORE the bootstrap gate. Only the RECOMPUTE levels
-        # below fail closed on bootstrapped fits. (This supersedes the
-        # uniform-conservatism decision recorded with M-023; its rationale -
-        # never publish analytical provenance beside percentile inference -
-        # is honored by the relay's NaN df column.)
+        # dispatches BEFORE the bootstrap branch. On bootstrapped fits the
+        # RECOMPUTE levels below REPLAY the fit-time multiplier bootstrap
+        # from the kit's BootstrapReplaySpec state (percentile inference,
+        # allclose to a fit-time aggregation); the M-023 rationale - never
+        # publish analytical provenance beside percentile inference - is
+        # honored by the percentile overrides + the NaN df channels.
         if level == "simple":
             return self._aggregate_simple_result(kit)
         if level == "total":
             return self._aggregate_total_result(kit)
+        boot_replay = None
         if self.bootstrap_results is not None:
-            raise NotImplementedError(
-                f"aggregate({level!r}) is not yet available on a bootstrapped "
-                "fit (n_bootstrap > 0): the per-horizon bootstrap draws are "
-                "not retained, so post-fit re-aggregation cannot replay "
-                "percentile inference and analytical inference would "
-                "misrepresent the fit. aggregate('simple') and, where "
-                "supported, aggregate('total') relay the stored "
-                "bootstrap inference and remain available; otherwise re-fit "
-                "with the aggregation you need, or use n_bootstrap=0."
-            )
+            spec = getattr(kit, "bootstrap", None)
+            if spec is None or spec.bitgen_state is None:
+                raise NotImplementedError(
+                    f"aggregate({level!r}): this bootstrapped result predates "
+                    "the fit-time bootstrap replay state (its kit carries no "
+                    "BootstrapReplaySpec) - refit with diff-diff >= 3.10 to "
+                    "enable the post-fit replay. aggregate('simple') and, "
+                    "where supported, aggregate('total') relay the stored "
+                    "bootstrap inference and remain available."
+                )
+            current_backend = effective_weight_backend()
+            if spec.backend not in ("portable", current_backend):
+                raise NotImplementedError(
+                    f"aggregate({level!r}): this fit's bootstrap weights were "
+                    f"generated under the {spec.backend!r} weight backend, but "
+                    f"the current install uses {current_backend!r} - the two "
+                    "backends produce DIFFERENT draws from the same RNG "
+                    "state, so replaying here would publish a different "
+                    "bootstrap realization beside the stored fit-time "
+                    "inference. Re-fit under the current backend, or restore "
+                    "the original one (DIFF_DIFF_BACKEND / the Rust "
+                    "extension). aggregate('simple') and, where supported, "
+                    "aggregate('total') relay the stored inference."
+                )
         bk = dict(kit.bookkeeping)
+        if self.bootstrap_results is not None:
+            spec = kit.bootstrap
+            host = _EDiDKitBootstrapAggregator(
+                alpha=kit.alpha,
+                anticipation=kit.anticipation,
+                n_bootstrap=spec.n_bootstrap,
+                bootstrap_weights=spec.weight_type,
+            )
+            # Per-call cost: O(n_bootstrap x n_units x n_gt) - the fused GEMM
+            # carries the n_gt per-cell EIF columns; ES/group targets
+            # re-aggregate cheaply from the dense (n_bootstrap, n_gt) matrix.
+            # No memoization (the recompute convention; the kit deliberately
+            # retains no draws). The engine re-derives the generation branch
+            # from the kit bookkeeping and re-emits the fit-time bootstrap
+            # warnings for the replayed configuration.
+            boot_replay = host._run_multiplier_bootstrap(
+                group_time_effects=bk["group_time_effects"],
+                eif_by_gt=kit.influence,
+                n_units=bk["n_units"],
+                aggregate=level,
+                balance_e=(balance_e if level == "event_study" else None),
+                treatment_groups=bk["treatment_groups"],
+                cohort_fractions=bk["cohort_fractions"],
+                cluster_indices=bk["cluster_indices"],
+                n_clusters=bk["n_clusters"],
+                resolved_survey=bk["resolved_survey_unit"],
+                unit_level_weights=bk["unit_level_weights"],
+                _replay_bitgen_state=spec.bitgen_state,
+            )
         agg = _EDiDKitAggregator(
             alpha=kit.alpha,
             anticipation=kit.anticipation,
@@ -337,6 +417,10 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
                 cluster_indices=bk["cluster_indices"],
                 n_clusters=bk["n_clusters"],
             )
+            if boot_replay is not None:
+                # Same applier as fit-time (clears each row's df_used, so
+                # _group_effects_to_aggregation publishes an all-NaN df).
+                apply_bootstrap_group_overrides(effects, boot_replay, kit.alpha)
             return self._group_effects_to_aggregation(effects, kit)
         # level == "event_study" (the mixin validated the vocabulary)
         es = agg._aggregate_event_study(
@@ -351,6 +435,13 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
             cluster_indices=bk["cluster_indices"],
             n_clusters=bk["n_clusters"],
         )
+        if boot_replay is not None:
+            # Same applier as fit-time. The carrier below needs NO field
+            # clearing: this class has no vcov/cband/df fields for the ES
+            # surface (its published df column is all-NaN by construction),
+            # and the non-None bootstrap_results it retains keeps the
+            # container's inference provenance honest.
+            apply_bootstrap_event_study_overrides(es, boot_replay, kit.alpha)
         # Carrier + shared builder: EDiD is a _from_relative_dict producer,
         # so the recomputed dict rides the same route as the fit-time
         # surface. The carrier's survey_metadata is a COPY whose df_survey
@@ -698,10 +789,10 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
                 raise ValueError(
                     "Event study effects not computed at fit time. Use "
                     "results.aggregate('event_study') for the post-fit "
-                    "event-study container (on bootstrapped fits, re-fit "
-                    "with n_bootstrap=0 or use the deprecated fit-time "
-                    "aggregate=); a result unpickled from a pre-3.9 "
-                    "release carries no aggregation kit and must be refit."
+                    "event-study container (bootstrapped fits replay the "
+                    "fit-time multiplier bootstrap - no refit needed); a "
+                    "result unpickled from a pre-3.9 release carries no "
+                    "aggregation kit and must be refit."
                 )
             rows = []
             for rel_t, data in sorted(self.event_study_effects.items()):
@@ -723,10 +814,10 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
                 raise ValueError(
                     "Group effects not computed at fit time. Use "
                     "results.aggregate('group') for the post-fit group "
-                    "container (on bootstrapped fits, re-fit with "
-                    "n_bootstrap=0 or use the deprecated fit-time "
-                    "aggregate=); a result unpickled from a pre-3.9 "
-                    "release carries no aggregation kit and must be refit."
+                    "container (bootstrapped fits replay the fit-time "
+                    "multiplier bootstrap - no refit needed); a result "
+                    "unpickled from a pre-3.9 release carries no "
+                    "aggregation kit and must be refit."
                 )
             rows = []
             for group, data in sorted(self.group_effects.items()):

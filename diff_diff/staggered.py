@@ -17,6 +17,10 @@ from diff_diff.aggregation import (
     AggregationKit,
     BootstrapReplaySpec,
 )
+from diff_diff.bootstrap_utils import (
+    apply_bootstrap_event_study_overrides,
+    apply_bootstrap_group_overrides,
+)
 from diff_diff.linalg import (
     _check_propensity_diagnostics,
     _detect_rank_deficiency,
@@ -32,8 +36,6 @@ from diff_diff.staggered_aggregation import (
 from diff_diff.staggered_bootstrap import (
     CallawaySantAnnaBootstrapMixin,
     CSBootstrapResults,
-    apply_bootstrap_event_study_overrides,
-    apply_bootstrap_group_overrides,
     apply_cband_conf_ints,
 )
 

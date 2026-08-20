@@ -15,6 +15,7 @@ import numpy as np
 from diff_diff.bootstrap_chunking import (
     ReplayableWeightStream,
     compute_block_size,
+    effective_weight_backend,
     iter_survey_multiplier_weight_blocks,
     iter_weight_blocks,
     tiled_if_matmul,
@@ -48,6 +49,20 @@ class EDiDBootstrapResults:
     group_effect_p_values: Optional[Dict[Any, float]] = None
     bootstrap_distribution: Optional[np.ndarray] = field(default=None, repr=False)
 
+    def __post_init__(self) -> None:
+        # Post-fit replay bookkeeping, attached as PLAIN attributes (never
+        # dataclass fields) so the exported class's __init__ signature,
+        # dataclasses.fields() and asdict() stay unchanged — the CS
+        # precedent (CSBootstrapResults). `_replay_bitgen_state` is the RNG
+        # snapshot that fully determines the weight stream;
+        # `_replay_backend` is the generation-branch identity
+        # ("rust"/"numpy", or "portable" for provably backend-independent
+        # branches). Both are populated by _run_multiplier_bootstrap on
+        # every run (the single-PSU degenerate path included) and pickle
+        # via __dict__.
+        self._replay_bitgen_state: Optional[Dict[str, Any]] = None
+        self._replay_backend: Optional[str] = None
+
 
 class EfficientDiDBootstrapMixin:
     """Mixin providing multiplier bootstrap for EfficientDiD."""
@@ -71,6 +86,8 @@ class EfficientDiDBootstrapMixin:
         n_clusters: Optional[int] = None,
         resolved_survey: Optional["ResolvedSurveyDesign"] = None,
         unit_level_weights: Optional[np.ndarray] = None,
+        *,
+        _replay_bitgen_state: Optional[Dict[str, Any]] = None,
     ) -> EDiDBootstrapResults:
         """Run multiplier bootstrap on stored EIF values.
 
@@ -100,6 +117,16 @@ class EfficientDiDBootstrapMixin:
             )
 
         rng = np.random.default_rng(self.seed)
+        if _replay_bitgen_state is not None:
+            # Post-fit replay: restore the fit-captured state so the weight
+            # stream below reproduces the fit-time draws bit-for-bit.
+            rng.bit_generator.state = _replay_bitgen_state
+        # Snapshot HERE — nothing below consumes the rng before the
+        # ReplayableWeightStream construction (the survey psu resolution is
+        # deliberately rng-free), so this value fully determines the weight
+        # stream within one weight backend. Taken before the single-PSU
+        # degenerate early return so that path is stamped too.
+        replay_bitgen_state = dict(rng.bit_generator.state)
 
         gt_pairs = list(group_time_effects.keys())
 
@@ -150,13 +177,21 @@ class EfficientDiDBootstrapMixin:
                     UserWarning,
                     stacklevel=3,
                 )
-                return self._build_nan_bootstrap_results(
+                nan_result = self._build_nan_bootstrap_results(
                     group_time_effects,
                     aggregate,
                     balance_e,
                     treatment_groups,
                     cohort_fractions,
                 )
+                # No weights are ever generated on this path, so the
+                # artifact is backend-independent: the replay re-runs the
+                # engine, deterministically re-hits this return (the psu
+                # resolution is rng-free and kit-determined), re-emits the
+                # warning above, and reproduces the NaN surfaces anywhere.
+                nan_result._replay_bitgen_state = replay_bitgen_state
+                nan_result._replay_backend = "portable"
+                return nan_result
             # Build unit -> PSU column map
             if resolved_survey.psu is not None:
                 psu_id_to_col = {int(p): c for c, p in enumerate(psu_ids)}
@@ -213,6 +248,25 @@ class EfficientDiDBootstrapMixin:
             ) -> Iterator[Tuple[int, np.ndarray]]:
                 return iter_weight_blocks(self.n_bootstrap, n_units, self.bootstrap_weights, rng_)
 
+        # Generation-branch identity for the post-fit replay: "portable" for
+        # branches whose draws are provably identical under either weight
+        # backend — the stratified survey generator draws through the NumPy
+        # generator unconditionally, and the unstratified census-FPC case
+        # (fpc[0] <= n_psu, mirroring iter_survey_multiplier_weight_blocks'
+        # fpc_zero) replaces every block with zeros — else the current
+        # effective backend, because Rust and NumPy produce DIFFERENT draws
+        # from the same bit-generator state. (The n_psu < 2 case stamped
+        # "portable" at its early return above and never reaches here.)
+        _backend_independent = False
+        if _use_survey_bootstrap:
+            assert resolved_survey is not None
+            _fpc = getattr(resolved_survey, "fpc", None)
+            _n_psu = len(psu_ids)  # bound above in the survey branch
+            _backend_independent = resolved_survey.strata is not None or (
+                _fpc is not None and _n_psu / _fpc[0] >= 1.0
+            )
+        replay_backend = "portable" if _backend_independent else effective_weight_backend()
+
         # Re-iterable stream: each column tile of the fused perturbation GEMM
         # below makes its own full pass over the bit-identical weight stream.
         weight_stream = ReplayableWeightStream(_make_weight_iter, rng)
@@ -263,8 +317,8 @@ class EfficientDiDBootstrapMixin:
         post_indices = np.where(post_mask)[0]
 
         # Overall ATT: fixed-weight re-aggregation of perturbed cell ATTs.
-        # This matches CallawaySantAnna._run_multiplier_bootstrap
-        # (staggered_bootstrap.py:281). The analytical path includes a WIF
+        # This matches CallawaySantAnna._run_multiplier_bootstrap's overall
+        # aggregation (staggered_bootstrap.py). The analytical path includes a WIF
         # correction; bootstrap captures sampling variability through per-cell
         # EIF perturbation without re-estimating weights — this is standard
         # in both this library's CS implementation and the R did package.
@@ -360,7 +414,7 @@ class EfficientDiDBootstrapMixin:
                 g_cis[g] = ci
                 g_pvs[g] = pv
 
-        return EDiDBootstrapResults(
+        result = EDiDBootstrapResults(
             n_bootstrap=self.n_bootstrap,
             weight_type=self.bootstrap_weights,
             alpha=self.alpha,
@@ -378,6 +432,9 @@ class EfficientDiDBootstrapMixin:
             group_effect_p_values=g_pvs,
             bootstrap_distribution=bootstrap_overall,
         )
+        result._replay_bitgen_state = replay_bitgen_state
+        result._replay_backend = replay_backend
+        return result
 
     def _prepare_es_agg_boot(
         self,
@@ -386,12 +443,20 @@ class EfficientDiDBootstrapMixin:
         cohort_fractions: Dict[float, float],
         balance_e: Optional[int],
     ) -> Dict[int, Dict[str, Any]]:
-        """Prepare event-study aggregation info for bootstrap."""
+        """Prepare event-study aggregation info for bootstrap.
+
+        Horizons are keyed by the ANALYTICAL aggregator's expression
+        ``int(t - g)`` (truncation toward zero) so the percentile draws pool
+        exactly the cells each published analytical bucket pools — on
+        fractional-period panels a raw ``t - g`` key would attach a strict
+        sub-aggregate's inference to the pooled row (see the EfficientDiD
+        REGISTRY truncation Note).
+        """
         effects_by_e: Dict[int, List[Tuple[int, float, float]]] = {}
         for j, (g, t) in enumerate(gt_pairs):
             if not np.isfinite(original_atts[j]):
                 continue  # Skip NaN cells
-            e = t - g
+            e = int(t - g)
             if e not in effects_by_e:
                 effects_by_e[e] = []
             effects_by_e[e].append((j, original_atts[j], cohort_fractions.get(g, 0.0)))
@@ -400,14 +465,14 @@ class EfficientDiDBootstrapMixin:
             groups_at_e = {
                 gt_pairs[j][0]
                 for j, (g, t) in enumerate(gt_pairs)
-                if t - g == balance_e and np.isfinite(original_atts[j])
+                if int(t - g) == balance_e and np.isfinite(original_atts[j])
             }
             balanced: Dict[int, List[Tuple[int, float, float]]] = {}
             for j, (g, t) in enumerate(gt_pairs):
                 if g in groups_at_e:
                     if not np.isfinite(original_atts[j]):
                         continue  # Skip NaN cells even in balanced set
-                    e = t - g
+                    e = int(t - g)
                     if e not in balanced:
                         balanced[e] = []
                     balanced[e].append((j, original_atts[j], cohort_fractions.get(g, 0.0)))
@@ -473,14 +538,16 @@ class EfficientDiDBootstrapMixin:
         Used when survey-PSU bootstrap collapses to G<2 PSUs and would
         otherwise produce ≈0 SE from BLAS roundoff. Each NaN dict is keyed
         to the same (g,t)/event-time/group reductions the downstream
-        override loop at ``efficient_did.py:1078-1115`` expects, so the
-        override finds each key and overwrites analytical SE with NaN.
+        override appliers (``apply_bootstrap_event_study_overrides`` /
+        ``apply_bootstrap_group_overrides`` in ``bootstrap_utils``, plus the
+        inline per-(g,t) loop in ``EfficientDiD.fit``) expect, so each
+        override finds its key and overwrites analytical SE with NaN.
         Setting these dicts to ``None`` instead would let the analytical
         SE leak through, defeating the NaN-propagation contract; keying
         an empty dict would silently no-op the override for every key.
         ``event_study_ses``/``group_effect_ses`` are ``None`` (not empty)
-        when ``aggregate`` does not request them, matching the
-        ``is not None`` gates at ``efficient_did.py:1090, 1109``.
+        when ``aggregate`` does not request them, matching the appliers'
+        ``is not None`` gates.
         """
         gt_pairs = list(group_time_effects.keys())
         gt_ses: Dict[Tuple[Any, Any], float] = {gt: np.nan for gt in gt_pairs}

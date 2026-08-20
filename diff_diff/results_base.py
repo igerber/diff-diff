@@ -209,7 +209,8 @@ class EventStudyResults(BaseResults):
         (e = t - g; first treated period at e=0) or ``"l1_first_switch"``
         (de Chaisemartin-D'Haultfoeuille: instantaneous effect at l=1,
         placebos at negative keys). Horizons are documented, not
-        renumbered.
+        renumbered. (EfficientDiD buckets fractional-period horizons by
+        ``int(t - g)`` — see its REGISTRY truncation Note.)
     vcov : np.ndarray or None
         Full event-study variance-covariance matrix where the RESULT
         CONTAINER exposes one (e.g. CallawaySantAnna, SunAbraham,
@@ -717,7 +718,7 @@ _ABSENT_SURFACE_HINTS: Dict[str, str] = {
     # materialize the surface (row M-024).
     "StackedDiDResults": "re-fit with diff-diff >= 3.9, which always computes the surface",
     "StaggeredTripleDiffResults": "refit with aggregate='event_study' (or 'all')",
-    "EfficientDiDResults": "call results.aggregate('event_study') (on a bootstrapped fit, re-fit with n_bootstrap=0 or the deprecated fit-time aggregate=)",
+    "EfficientDiDResults": "call results.aggregate('event_study')",
     "ContinuousDiDResults": (
         "call results.aggregate('event_study') (on a bootstrapped fit, "
         "re-fit with n_bootstrap=0 or the deprecated fit-time aggregate=)"

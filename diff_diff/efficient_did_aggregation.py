@@ -22,10 +22,13 @@ Contents:
   is what keeps ``aggregate()`` off an ``_estimator_ref``.
 
 The numerical content of every function in this module is byte-identical to
-its pre-extraction form, with ONE additive exception recorded in the M-023
-ledger notes: ``_aggregate_by_group`` records a per-row ``df_used`` key (the
+its pre-extraction form, with the exceptions recorded in the M-023 ledger
+notes: ``_aggregate_by_group`` records a per-row ``df_used`` key (the
 ``self._survey_df`` value at that row's ``safe_inference`` call) so the
-post-fit group relay can publish exact per-row df provenance.
+post-fit group relay can publish exact per-row df provenance;
+``_aggregate_event_study`` counts DISTINCT cohorts in ``n_groups`` (identity
+on integer panels) and warns once when fractional horizons are truncation-
+bucketed (see the EfficientDiD REGISTRY truncation Note).
 """
 
 import warnings
@@ -325,7 +328,12 @@ class _EfficientAggregationMixin:
         cluster_indices: Optional[np.ndarray] = None,
         n_clusters: Optional[int] = None,
     ) -> Dict[int, Dict[str, Any]]:
-        """Aggregate ATT(g,t) by relative time e = t - g.
+        """Aggregate ATT(g,t) by relative time ``e = int(t - g)``.
+
+        On integer-period panels the ``int()`` is the identity. Fractional-
+        period panels are truncation-bucketed toward zero (a documented
+        deviation from the exact-relative-time equation — see the
+        EfficientDiD REGISTRY truncation Note) and emit a ``UserWarning``.
 
         Parameters
         ----------
@@ -346,15 +354,30 @@ class _EfficientAggregationMixin:
         unit_cohorts : ndarray, optional
             Cohort assignment for each unit (for WIF correction).
         """
-        # Organize by relative time
+        # Organize by relative time. Fractional horizons truncation-bucket
+        # (int() toward zero) — a lossy, documented convention that must not
+        # stay invisible to the user (no-silent-failures).
+        _has_fractional = False
         effects_by_e: Dict[int, List[Tuple[Tuple[Any, Any], float, float]]] = {}
         for (g, t), data in group_time_effects.items():
             if not np.isfinite(data["effect"]):
                 continue
-            e = int(t - g)
+            raw_e = t - g
+            e = int(raw_e)
+            if raw_e != e:
+                _has_fractional = True
             if e not in effects_by_e:
                 effects_by_e[e] = []
             effects_by_e[e].append(((g, t), data["effect"], cohort_fractions.get(g, 0.0)))
+        if _has_fractional:
+            warnings.warn(
+                "Fractional relative times detected: event-study horizons are "
+                "bucketed by int(t - g) (truncation toward zero), pooling "
+                "fractional horizons into integer buckets. See the "
+                "EfficientDiD REGISTRY truncation Note.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # Balance if requested
         if balance_e is not None:
@@ -441,7 +464,13 @@ class _EfficientAggregationMixin:
                 "t_stat": t_stat,
                 "p_value": p_val,
                 "conf_int": ci,
-                "n_groups": len(elist),
+                # DISTINCT cohorts in the bucket (the cohort-count n column): identity
+                # with len(elist) on integer panels (one cell per cohort per
+                # bucket); on fractional panels truncation-bucketing pools
+                # multiple cells per cohort and a raw cell count would
+                # over-count. Weights above remain per-cell (cell-mass within
+                # the bucket — see the REGISTRY truncation Note).
+                "n_groups": len({gt[0] for gt in gt_pairs}),
             }
 
         return result

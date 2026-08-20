@@ -582,14 +582,18 @@ class TestEfficientDiDHandler:
         assert "no refit needed" in steps[0]["why"]
 
     def test_aggregation_step_bootstrap_branch(self, mock_efficient_results):
-        # Bootstrapped fit: post-fit aggregate() fails closed, so the
-        # guidance routes through the deprecated fit-time aggregation.
+        # Bootstrapped fit: the recompute levels now REPLAY the fit-time
+        # multiplier bootstrap, so the guidance routes through the post-fit
+        # aggregate() calls, never the deprecated fit-time kwarg.
         mock_efficient_results.bootstrap_results = object()
         output = practitioner_next_steps(mock_efficient_results, verbose=False)
         steps = self._agg_step(output)
         assert len(steps) == 1
         assert "BOOTSTRAPPED" in steps[0]["why"]
-        assert "aggregate='all'" in steps[0]["code"]
+        assert "REPLAY" in steps[0]["why"]
+        assert "aggregate('event_study')" in steps[0]["code"]
+        assert "aggregate('group')" in steps[0]["code"]
+        assert "aggregate='" not in steps[0]["code"]
 
     def test_aggregation_step_name_is_non_steps_key(self, mock_efficient_results):
         # The "aggregation" key is deliberately OUTSIDE the STEPS

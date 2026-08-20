@@ -554,10 +554,10 @@ class AggregationKit:
         when no aggregation ran, so it cannot distinguish the two.
     bootstrap : AggregationKit.BootstrapReplaySpec or None
         Value-bound bootstrap replay description. Populated on
-        CallawaySantAnna bootstrapped fits (the recompute levels replay the
-        fit-time multiplier bootstrap from it); ``None`` on analytical fits
-        and on pre-replay legacy artifacts (whose bootstrapped recompute
-        levels fail closed with a refit message).
+        CallawaySantAnna and EfficientDiD bootstrapped fits (their recompute
+        levels replay the fit-time multiplier bootstrap from it); ``None``
+        on analytical fits and on pre-replay legacy artifacts (whose
+        bootstrapped recompute levels fail closed with a refit message).
     """
 
     bookkeeping: Dict[str, Any]
@@ -585,10 +585,12 @@ class BootstrapReplaySpec:
     - ``rebuild()`` reconstructs the plain unit-level stream via
       ``iter_weight_blocks`` (it does NOT cover the survey/FPC/PSU-expansion
       branches).
-    - CallawaySantAnna's post-fit replay is STATE-ONLY: it consumes
-      ``bitgen_state``/``n_bootstrap``/``weight_type``/``backend`` and lets
-      ``_run_multiplier_bootstrap`` re-derive the generation branch from the
-      kit bookkeeping - one branch-selection implementation, no drift.
+    - The CallawaySantAnna and EfficientDiD post-fit replays are
+      STATE-ONLY: they consume
+      ``bitgen_state``/``n_bootstrap``/``weight_type``/``backend`` and let
+      each engine's ``_run_multiplier_bootstrap`` re-derive the generation
+      branch from the kit bookkeeping - one branch-selection implementation
+      per engine, no drift.
 
     ``backend`` records the weight-generation backend identity at capture
     (``"rust"``/``"numpy"`` per
