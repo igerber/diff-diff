@@ -647,9 +647,11 @@ identification strategy with analytical (non-bootstrap) inference.
 **Example**::
 
     from diff_diff import LWDiD
+    data['size'] = data['id'] % 5  # unit-constant covariate for the DR propensity model
     est = LWDiD(rolling='demean', estimation_method='dr', cluster='state')
     results = est.fit(data, outcome='y', unit='id', time='time',
-                      treatment='treated', first_treat='first_treat')
+                      treatment='treated', first_treat='first_treat',
+                      covariates=['size'])  # DR needs covariates; without them it reduces to RA
 
 Bacon Decomposition
 ~~~~~~~~~~~~~~~~~~~

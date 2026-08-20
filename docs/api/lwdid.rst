@@ -449,11 +449,13 @@ sensitivity):**
    # Comparing demean vs detrend provides a specification robustness check.
    # If results differ substantially, it suggests unit-specific trends matter
    # (see LW 2025, Section 6 — Walmart application, Figure 1 panels b vs c)
+   data["size"] = data["unit"] % 5  # unit-constant covariate for the DR propensity model
    for transform in ("demean", "detrend"):
        lw_check = LWDiD(rolling=transform, estimation_method="dr", vcov_type="hc1")
        res = lw_check.fit(data, outcome="outcome", unit="unit",
                           time="period", treatment="treated",
-                          first_treat="first_treat")
+                          first_treat="first_treat",
+                          covariates=["size"])
        print(f"{transform}: ATT={res.att:.4f} (SE={res.se:.4f})")
 
 Wild cluster bootstrap

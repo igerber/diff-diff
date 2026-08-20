@@ -42,6 +42,7 @@ RST_FILES = [
     "api/business_report.rst",
     "api/diagnostic_report.rst",
     "api/estimators.rst",
+    "api/lwdid.rst",
     "api/mmm.rst",
     "api/triple_diff.rst",
     "practitioner_decision_tree.rst",
@@ -523,3 +524,47 @@ def test_quickstart_pinned_summary_output():
 
     actual = [ln.rstrip() for ln in ns["results"].summary().strip().splitlines()]
     assert actual == documented
+
+
+# ---------------------------------------------------------------------------
+# Targeted regression: documented LWDiD DR examples exercise genuine DR
+# ---------------------------------------------------------------------------
+def test_lwdid_dr_examples_exercise_dr_path():
+    """Every documented LWDiD ``estimation_method="dr"`` snippet runs real DR.
+
+    PR #782 review finding: the API DR example supplied no covariates, so it
+    warned and silently reduced to regression adjustment. The generic snippet
+    harness passes on warnings, so this pins the stronger contract for each
+    dr-containing block in api/lwdid.rst: no "reduces to regression
+    adjustment" warning, and finite ATT/SE from any fitted results object.
+    """
+    import warnings
+
+    rst_path = DOCS_DIR / "api" / "lwdid.rst"
+    dr_blocks = [
+        (idx, code)
+        for idx, code in _extract_snippets(rst_path)
+        if re.search(r"estimation_method=[\"']dr[\"']", code)
+    ]
+    assert dr_blocks, "api/lwdid.rst no longer contains a dr example"
+
+    for idx, code in dr_blocks:
+        ns = _build_namespace()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            exec(compile(code, f"<api_lwdid:dr-block{idx}>", "exec"), ns)
+        reductions = [w for w in caught if "reduces to regression adjustment" in str(w.message)]
+        assert not reductions, (
+            f"api/lwdid.rst dr block{idx} reduced to regression adjustment "
+            f"instead of exercising DR - add covariates to the example"
+        )
+        fitted = [
+            v
+            for v in ns.values()
+            if hasattr(v, "att") and hasattr(v, "se") and np.isscalar(getattr(v, "att"))
+        ]
+        assert fitted, f"api/lwdid.rst dr block{idx} produced no fitted results"
+        for res in fitted:
+            assert np.isfinite(res.att) and np.isfinite(
+                res.se
+            ), f"api/lwdid.rst dr block{idx} produced non-finite inference"
