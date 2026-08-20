@@ -1681,7 +1681,11 @@ def load_walmart(force_download: bool = False) -> pd.DataFrame:
     ... )
     """
     url = "http://fmwww.bc.edu/repec/bocode/l/lw_walmart.dta"
-    sha256 = "410885572143dceb9daa643a8097768f1bc3493f9437451a9e4d1d5dc1e18d14"
+    # Re-pinned 2026-08-20: upstream re-saved the .dta (container bytes
+    # changed); every shared column verified numerically identical to the
+    # previously pinned copy (29,371 rows, 1,277 counties) before adopting.
+    # The Stata golden's provenance block keeps the capture-time hash.
+    sha256 = "cf1b2d4aee396f0858fb315d0413ff82359e16e84dad68ce1d9be51e8c3e35ac"
 
     source = "lwdid_ssc_ancillary"
     try:
