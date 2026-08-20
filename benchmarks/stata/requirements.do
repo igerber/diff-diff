@@ -25,11 +25,34 @@
 *!                       (both consumed by generate_etwfe_cs_golden.do)
 *!   lwdid             - Lee & Wooldridge rolling DiD, the authors' reference
 *!                       implementation (consumed by generate_lwdid_golden.do)
+*!   lpdid             - Dube-Girardi-Jorda-Taylor LP-DiD, the authors' reference
+*!                       implementation (consumed by
+*!                       generate_lpdid_nonabsorbing_golden.do)
+*!   boottest, egenmore, listreg
+*!                     - lpdid startup dependencies (lpdid `which`-checks all three
+*!                       and exits without them; egenmore's filter() runs in every
+*!                       lpdid pooled spec). egenmore installs no `egenmore.ado` -
+*!                       only `_g*.ado` helpers - so the loop probes BOTH
+*!                       `_gfilter` (executed by the pooled spec) and `_gclsst`
+*!                       (lpdid's own startup which-check) and reinstalls the
+*!                       `egenmore` package if either is missing; requiring both
+*!                       means an incomplete egenmore install is repaired by
+*!                       rerunning this script.
 
 version 19
-foreach p in ftools require reghdfe did_imputation drdid csdid hdfe jwdid lwdid {
-    capture which `p'
-    if _rc {
+foreach p in ftools require reghdfe did_imputation drdid csdid hdfe jwdid lwdid boottest egenmore listreg lpdid {
+    local missing 0
+    if "`p'" == "egenmore" {
+        foreach probe in _gfilter _gclsst {
+            capture which `probe'
+            if _rc local missing 1
+        }
+    }
+    else {
+        capture which `p'
+        if _rc local missing 1
+    }
+    if `missing' {
         di as txt "Installing `p' from SSC ..."
         ssc install `p', replace
     }

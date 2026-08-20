@@ -326,10 +326,12 @@ message(sprintf("Wrote golden: %s", golden_path))
 #    and ~1e-15 on SE for the variance-weighted variants (reweighted: point ~1e-13,
 #    SE has a small feols-weighted-cluster convention difference, pinned on the
 #    Python side). alexCardazzi::lpdid()'s `nonabsorbing_lag` is NOT a faithful
-#    Eq.13 (it clamps off-switches via treat_diff[<0]<-0 and uses a non-paper
-#    boundary/window convention; it diverges ~0.01-0.05 from Eq.13 even on a
-#    monotone no-off-switch panel) -> recorded in `meta` as a divergent third-party
-#    reference, NOT a parity gate (the B2 alexCardazzi-pooled precedent).
+#    Eq.13 (it clamps off-switches via treat_diff[<0]<-0, violating Eq.13's stated
+#    both-directions control condition; it also holds different boundary/placebo-
+#    window conventions on surfaces the paper does not specify; it diverges
+#    ~0.01-0.05 from Eq.13 even on a monotone no-off-switch panel) -> recorded in
+#    `meta` as a divergent third-party reference, NOT a parity gate (the B2
+#    alexCardazzi-pooled precedent).
 #
 #    APPENDED after the absorbing write_json with its OWN set.seed and distinct
 #    object names; setFixest_ssc is NOT re-called -> the absorbing panel + golden
@@ -431,8 +433,9 @@ effect_stab_rw_es <- na_es("eq13", reweight = TRUE)
 
 # ---- monotone (no-off-switch) slice: PIN the "alex diverges even without off-switches"
 # claim with committed evidence. On units whose treatment never decreases, alex's
-# off-switch clamp is inert, yet alex still diverges from the paper-faithful Eq.13 (its
-# non-paper boundary/window convention), so the recorded max post-horizon |alex - Eq.13|
+# off-switch clamp is inert, yet alex still diverges from the library's Eq.13
+# implementation (their boundary/placebo-window conventions differ on surfaces the
+# paper does not specify), so the recorded max post-horizon |alex - Eq.13|
 # is well above 0 -> documents that the divergence is NOT only off-switch handling.
 na_mono <- na_dt[, if (all(diff(treat) >= 0L)) .SD, by = unit]   # drop units with any turn-off
 na_mode <<- "eq13"

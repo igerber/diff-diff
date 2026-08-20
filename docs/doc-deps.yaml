@@ -802,8 +802,12 @@ sources:
       - path: docs/methodology/REGISTRY.md
         section: "LPDiD"
         type: methodology
+      - path: docs/methodology/papers/dube-2025-review.md
+        type: methodology
       - path: benchmarks/stata/README.md
         type: methodology
+      - path: docs/benchmarks.rst
+        type: performance
       - path: docs/api/lpdid.rst
         type: api_reference
       - path: README.md

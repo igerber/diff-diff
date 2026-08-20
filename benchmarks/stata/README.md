@@ -1,7 +1,8 @@
 # Stata parity benchmarks
 
-Stata golden generators live here (five arms: LPDiD `teffects ra`,
-ImputationDiD leave-one-out, ETWFE/CS, reghdfe K_reference, LWDiD); the
+Stata golden generators live here (six arms: LPDiD `teffects ra`, LPDiD
+non-absorbing `lpdid`, ImputationDiD leave-one-out, ETWFE/CS, reghdfe
+K_reference, LWDiD); the
 pattern mirrors `benchmarks/R/` (a `generate_*` script writes a committed
 golden JSON that a skip-guarded test reads, so CI never needs Stata). Stata
 is node-locked single-user, so — exactly like the R arm — goldens are
@@ -118,6 +119,87 @@ sample. No timestamp — the golden regenerates byte-identically.
 
 ---
 
+# `lpdid` parity for the LPDiD non-absorbing modes
+
+`benchmarks/stata/generate_lpdid_nonabsorbing_golden.do` produces
+`benchmarks/data/lpdid_nonabsorbing_stata_golden.json`, consumed by
+`tests/test_lpdid_nonabsorbing_stata_parity.py`. Unlike the `teffects` arm above, this
+arm runs the authors' SSC **`lpdid`** package (Busch & Girardi, in collaboration with
+Dube, Jorda & Taylor) **end-to-end** — the package builds its own clean samples — on
+the committed `benchmarks/data/lpdid_nonabsorbing_panel.csv` (owner:
+`benchmarks/R/generate_lpdid_golden.R`; 60 units x 14 periods, balanced, gap-free).
+First external anchors: the non-absorbing **reweighted SE** (previously pinned-only
+via `RW_SE_PIN`), the non-absorbing **pooled windows** (points and SEs), and the
+Eq. 12 reweighted point.
+
+## Option-to-mode mapping
+
+| Stata `lpdid` | diff-diff |
+|---|---|
+| `nonabsorbing(, firsttreat notyet)` | `LPDiD(non_absorbing="first_entry")` (Eq. 12) |
+| `nonabsorbing(L)` | `LPDiD(non_absorbing="effect_stabilization", stabilization_window=L)` (Eq. 13) |
+
+## Parity scoping and the convention-neutral subsample
+
+Eq. 12 agrees on EVERY surface of the full panel (all event-study horizons incl.
+placebos + both pooled windows, vw and rw; att ~1e-14/1.3e-8, SE ~6e-17/2.3e-9).
+Eq. 13 agrees at post horizons + pooled post only, and only on a 47-unit subsample,
+because the package's sample construction differs on three measured conventions
+(REGISTRY `## LPDiD` Deviation 4): (1) missing-lag boundary semantics admit
+always-treated units as early-`t` controls (paper-silent surface); (2) its
+switch-free lag window effectively requires `L+1` untreated periods before re-entry
+where the paper's Eq. 13 states a levels condition over `[t-L, t-1]` (the package is
+stricter than the paper); (3) placebo samples are built by recursive lagged
+intersection of its `CCS_0` rather than the library's backward window (paper-silent).
+The subsample removes what (1)+(2) admit differently — always-treated units
+(`min(treat)==1`: 31–40) plus exact-`L`-respell units (any `t` with
+`dD_t==1 & dD_{t-L}==-1`: 24, 25, 27) — making the Eq. 13 post samples row-identical
+(658 rows). Convention (3) is not neutralized by THIS subsample (a dedicated
+late-entry/never-treated subsample could in principle align the two placebo
+constructions — a possible follow-up), so Eq. 13
+placebo/pooled-pre rows and the Eq. 13 full-panel event study are recorded as
+measured DIVERGENCE documentation (att + obs only) and gated as such
+(divergence-floor + sample-size-mismatch asserts), never as parity.
+
+## Regenerating
+
+```bash
+# once: install lpdid + deps (boottest, egenmore, listreg) from SSC
+/Applications/Stata/StataSE.app/Contents/MacOS/stata-se -b do benchmarks/stata/requirements.do
+# from the repo root
+/Applications/Stata/StataSE.app/Contents/MacOS/stata-se -b do \
+    benchmarks/stata/generate_lpdid_nonabsorbing_golden.do
+# batch mode ALWAYS exits 0 — verify the log has no Stata errors:
+grep -E '^r\([0-9]+\);' generate_lpdid_nonabsorbing_golden.log
+python -m json.tool benchmarks/data/lpdid_nonabsorbing_stata_golden.json > /dev/null
+```
+
+The generator fails closed (`exit 111`) if any run-time dependency is missing and
+records every one in `meta.ssc_versions` (guard set == version set; egenmore is
+probed and versioned via `_gfilter.ado`, the file the pooled spec executes). Each
+version string also embeds the ado file's `checksum:`/`len:` so a same-version-string
+upstream replacement still moves the drift metadata.
+
+## JSON schema
+
+```json
+{"meta": {"...provenance...", "mapping": "...", "drop_rule": "...",
+          "dropped_units": [...], "source_sha256": "...", "ssc_versions": {...}},
+ "first_entry":     {"vw": {"es": {"-3".."4": {"att", "se", "N"}},
+                            "pooled": {"pre": {...}, "post": {...}}}, "rw": {...}},
+ "effect_stab_sub": {"n_rows": 658,
+                     "vw": {"es": {"post rows: {att, se, N}; pre rows: {att, N}"},
+                            "pooled": {"pre": {"att", "N"}, "post": {"att", "se", "N"}}},
+                     "rw": {...}},
+ "effect_stab_full_vw": {"es": {"0".."4": {"att", "N"}}}}
+```
+
+Divergent rows deliberately omit `se` — every recorded numeric value is covered by a
+Python gate, and no gate anchors those SEs. No timestamp — byte-identical
+regeneration under fixed Stata + fixed installed SSC versions.
+
+---
+
 # `did_imputation, leaveout` parity for ImputationDiD LOO SE
 
 `benchmarks/stata/generate_imputation_loo_golden.do` produces
@@ -134,11 +216,12 @@ The A.9 leave-one-out (LOO) variance has **no runnable R reference** — R
 internal psi-identity + hand-calc + MC coverage. The authors' own Stata `did_imputation`
 (Borusyak) ships the same option (`leaveout`); this arm turns it into a measured anchor.
 
-## SSC dependence (vs the native-`teffects` LPDiD arm)
+## SSC dependence (vs the native-`teffects` LPDiD RA arm)
 
-Unlike the native-`teffects` LPDiD arm, `did_imputation` is an SSC package with a
+Unlike the native-`teffects` LPDiD RA arm, `did_imputation` is an SSC package with a
 dependency chain `did_imputation → reghdfe → require + ftools`, none pinned by
-`version 19`. (The ETWFE/CS and LWDiD arms are SSC-dependent in the same way.) The generator does **not** install them — run
+`version 19`. (The ETWFE/CS, LWDiD and LPDiD non-absorbing arms are SSC-dependent
+in the same way.) The generator does **not** install them — run
 `benchmarks/stata/requirements.do` once first — and it records each package's version
 in `meta.ssc_versions` (the `*!` ado header line) so drift is detectable. Byte-identical
 regeneration is therefore scoped to a fixed Stata + fixed installed SSC versions.
@@ -392,10 +475,10 @@ explicit missing branch).
 ## Known constraints
 
 - **Batch mode always exits 0**, even on a hard error (`r(NNN);`). Never trust the
-  shell exit code — parse the `.log` for `^r\([0-9]+\);`. The LPDiD, ImputationDiD
-  and LWDiD generators also run informational in-`.do` smoke gates (LPDiD 1e-8,
-  ImputationDiD 1e-6, LWDiD 1e-10/1e-6 on its SMALL-N blocks; the LWDiD Walmart
-  block gates schema/cardinality/nonmissing only) that surface as `r(9);` on a
+  shell exit code — parse the `.log` for `^r\([0-9]+\);`. The LPDiD (RA arm 1e-8;
+  non-absorbing arm 1e-6), ImputationDiD (1e-6) and LWDiD generators (1e-10/1e-6 on
+  its SMALL-N blocks; the LWDiD Walmart block gates schema/cardinality/nonmissing
+  only) also run informational in-`.do` smoke gates that surface as `r(9);` on a
   gross bug; the Python parity tests are authoritative.
 - **`c(flavor)` misreports the edition** as `IC` on StataSE, and `c(edition)` is
   unreliable. The generator derives the edition from the `c(MP)` / `c(SE)` 0/1 flags,
@@ -403,7 +486,7 @@ explicit missing branch).
   eagerly, so it must not be referenced). `"SE"` is simply the committed golden's
   current value.
 - **SSC has no version history.** `ssc install` always fetches latest and there is
-  no lockfile / archive to pin against. The LPDiD arm is exempt (`teffects` is native,
-  pinned by `version 19`); the SSC arms (ImputationDiD, ETWFE/CS, LWDiD) record their
-  SSC package versions in `meta.ssc_versions` so drift is at least detectable — new
-  SSC arms should do the same.
+  no lockfile / archive to pin against. The LPDiD RA arm is exempt (`teffects` is
+  native, pinned by `version 19`); the SSC arms (ImputationDiD, ETWFE/CS, LWDiD,
+  LPDiD non-absorbing) record their SSC package versions in `meta.ssc_versions` so
+  drift is at least detectable — new SSC arms should do the same.

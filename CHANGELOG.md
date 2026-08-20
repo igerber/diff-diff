@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **LPDiD non-absorbing SEs now anchored against the authors' Stata `lpdid` package
+  end-to-end (no library behavior change).** New committed-golden arm
+  (`benchmarks/stata/generate_lpdid_nonabsorbing_golden.do` →
+  `benchmarks/data/lpdid_nonabsorbing_stata_golden.json`, consumed by
+  `tests/test_lpdid_nonabsorbing_stata_parity.py`) running SSC `lpdid` v1.0.3 —
+  the package builds its own clean samples, unlike the hand-reconstructed
+  `teffects` RA arm. First external anchors for the non-absorbing REWEIGHTED SE
+  (previously pinned-only via `RW_SE_PIN` with a documented ~5e-5 feols
+  weighted-cluster convention gap — the package matches the library convention to
+  ~1e-9), the non-absorbing POOLED windows (points and SEs), and the Eq. 12
+  reweighted point. Scoping: `first_entry` (Eq. 12 ==
+  `nonabsorbing(, firsttreat notyet)`) agrees on every surface of the committed
+  panel (all event-study horizons incl. placebos + both pooled windows; att
+  ~1e-14 vw / ~1.3e-8 rw, SE ~6e-17 vw / ~2.3e-9 rw); `effect_stabilization`
+  (Eq. 13 == `nonabsorbing(L)`) agrees at post horizons + pooled post on a
+  convention-neutral 47-unit subsample (att ~1.1e-14 / ~1.9e-8, SE ~1.8e-16 /
+  ~1.6e-9). Three reference-package convention differences were measured,
+  adjudicated against the paper's Eq. 13 text, and locked by
+  divergence-documentation gates: the package effectively requires L+1 untreated
+  periods before re-entry (stricter than Eq. 13's stated levels condition, which
+  the library implements), admits always-treated units as early-period controls
+  via missing-lag boundary semantics (paper-silent surface), and builds placebo
+  samples by recursive lagged intersection rather than the library's backward
+  window (paper-silent). Eq. 13 full-panel and placebo/pooled-pre inference
+  remain outside the Stata anchor and are documented as such (REGISTRY `## LPDiD`
+  Deviation 4; `DEFERRED.md` non-absorbing row narrowed to the RA +
+  placebo/pooled-pre residuals).
 - **LWDiD tutorial notebook** (`docs/tutorials/31_lwdid.ipynb`): the replacement for
   the tutorial withdrawn from PR #588, authored via the numbers-locked workflow (every
   cited number prototyped in scripts first, notebook assembled and executed once).

@@ -1,5 +1,5 @@
 .. meta::
-   :description: Validation benchmarks comparing diff-diff against R packages (did, synthdid, fixest) and Stata (teffects, did_imputation, jwdid/csdid, reghdfe, lwdid). Coefficient accuracy, standard error comparison, and performance metrics.
+   :description: Validation benchmarks comparing diff-diff against R packages (did, synthdid, fixest) and Stata (teffects, lpdid, did_imputation, jwdid/csdid, reghdfe, lwdid). Coefficient accuracy, standard error comparison, and performance metrics.
    :keywords: difference-in-differences benchmark, DiD validation R, DiD validation Stata, python econometrics accuracy, did package comparison
 
 Benchmarks
@@ -46,6 +46,13 @@ where no runnable R reference exists:
    * - ``LPDiD`` (regression-adjustment SE)
      - Stata ``teffects ra ... atet``
      - Dube, Girardi, Jorda & Taylor (2025); no runnable R analogue
+   * - ``LPDiD`` (non-absorbing SEs)
+     - Stata ``lpdid, nonabsorbing(...)`` (the authors' package, end-to-end)
+     - Dube, Girardi, Jorda & Taylor (2025) §4.2; first external anchor for the
+       non-absorbing reweighted SE and pooled windows. Eq. 12 on all surfaces;
+       Eq. 13 at post horizons + pooled post on a convention-neutral subsample
+       (three package convention differences measured and divergence-gated — see
+       the methodology registry, LPDiD Deviation 4)
    * - ``ImputationDiD`` (leave-one-out SE)
      - Stata ``did_imputation, leaveout``
      - Borusyak, Jaravel & Spiess (2024) Supp. App. A.9; no runnable R analogue.
@@ -1025,13 +1032,14 @@ Prerequisites
       pip install -e ".[dev]"
 
 4. (Optional) Stata, only to regenerate the committed Stata goldens (``LPDiD``
-   regression-adjustment SE, ``ImputationDiD`` leave-one-out SE, the ETWFE/CS
-   cross-check, the ``reghdfe`` K_reference convention, and the LWDiD
-   authors'-package parity). The goldens are committed, so this is not needed to
-   run the test suite. The ``LPDiD`` arm uses the **native** ``teffects`` command;
-   the other arms depend on SSC packages
+   regression-adjustment SE, ``LPDiD`` non-absorbing SEs, ``ImputationDiD``
+   leave-one-out SE, the ETWFE/CS cross-check, the ``reghdfe`` K_reference
+   convention, and the LWDiD authors'-package parity). The goldens are committed,
+   so this is not needed to run the test suite. The ``LPDiD`` RA arm uses the
+   **native** ``teffects`` command; the other arms depend on SSC packages
    (``did_imputation``/``reghdfe``/``ftools``/``require``,
-   ``drdid``/``csdid``/``jwdid``/``hdfe``, ``lwdid``) — install them once via
+   ``drdid``/``csdid``/``jwdid``/``hdfe``, ``lwdid``,
+   ``lpdid``/``boottest``/``egenmore``/``listreg``) — install them once via
    ``benchmarks/stata/requirements.do`` (the generators do not auto-install):
 
    .. code-block:: bash
@@ -1040,6 +1048,7 @@ Prerequisites
       STATA=/Applications/Stata/StataSE.app/Contents/MacOS/stata-se
       $STATA -b do benchmarks/stata/requirements.do            # one-time SSC install
       $STATA -b do benchmarks/stata/generate_lpdid_ra_golden.do
+      $STATA -b do benchmarks/stata/generate_lpdid_nonabsorbing_golden.do
       $STATA -b do benchmarks/stata/generate_imputation_loo_golden.do
       $STATA -b do benchmarks/stata/generate_etwfe_cs_golden.do
       $STATA -b do benchmarks/stata/generate_reghdfe_kref_golden.do

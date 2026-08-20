@@ -26,9 +26,18 @@ estimand is a strictly non-negatively-weighted average of cohort effects.
    never-treated units). Non-absorbing modes require a gap-free panel within
    each unit's observed span and cover the entry-effect estimands. The
    non-absorbing entry-effect paths are R-parity-validated against an independent
-   ``fixest::feols`` reconstruction of the paper's Eq. 12/13 (see
-   ``docs/methodology/REGISTRY.md``); the Appendix-C exit-event dynamics and the
-   Stata canonical SE remain planned follow-ups.
+   ``fixest::feols`` reconstruction of the paper's Eq. 12/13 and anchored against
+   the authors' Stata ``lpdid`` package end-to-end — ``first_entry`` (Eq. 12) on
+   all surfaces including placebos and both pooled windows;
+   ``effect_stabilization`` (Eq. 13) at post horizons + pooled post on a
+   convention-neutral subsample. Outside that anchor sit the Eq. 13
+   placebo/pooled-pre inference (the package builds placebo samples with a
+   different window construction) and full-panel Eq. 13 inference (the two
+   implementations' boundary/re-entry sample conventions differ there; the
+   subsample is what makes the samples coincide) - see
+   ``docs/methodology/REGISTRY.md``, LPDiD Deviation 4.
+   The Appendix-C exit-event dynamics and the non-absorbing RA path remain
+   planned follow-ups.
    Complex-survey designs (probability weights + stratified-PSU
    Taylor-linearization standard errors with optional finite-population
    correction and lonely-PSU handling) are supported on the variance-weighted

@@ -52,7 +52,9 @@ _R_FIXTURE_AVAILABLE = GOLDEN_PATH.is_file() and PANEL_PATH.is_file()
 # INDEPENDENT fixest::feols reconstruction of the paper's Eq. 12 (first_entry) and
 # Eq. 13 (effect_stabilization) clean-sample restrictions; alexCardazzi's
 # nonabsorbing_lag is recorded in the golden meta as a divergent reference, NOT a
-# parity gate (it clamps off-switches + uses a non-paper boundary/window convention).
+# parity gate (its off-switch clamp violates Eq. 13's stated both-directions control
+# condition, and its boundary/placebo-window conventions differ on surfaces the
+# paper does not specify - see REGISTRY ## LPDiD Deviation 4).
 NA_GOLDEN_PATH = _DATA / "lpdid_nonabsorbing_golden.json"
 NA_PANEL_PATH = _DATA / "lpdid_nonabsorbing_panel.csv"
 _NONABSORB_FIXTURE_AVAILABLE = NA_GOLDEN_PATH.is_file() and NA_PANEL_PATH.is_file()
@@ -91,6 +93,14 @@ POOLED_RA_SE_PIN = {"post": 0.35917407532121975, "pre": 0.3785290141761256}
 # the reweighted POINT matches the independent feols recipe to ~1e-13, but the
 # weighted-cluster SE has a small feols convention difference (~5e-5), so the library
 # value is pinned as a regression guard (the variance-weighted SEs ARE feols-parity).
+# The rw SE *convention* is now Stata-anchored (authors' `lpdid` package, ~1e-9) at
+# POST horizons + pooled post via the convention-neutral subsample in
+# tests/test_lpdid_nonabsorbing_stata_parity.py - but the FULL-panel values pinned
+# HERE are not that surface: the full panel diverges from the package by the
+# boundary/exact-L-respell sample conventions (its gate 6a), and the h=-3/-2 entries
+# sit on the placebo-window convention difference, not anchored by the Stata arm
+# (REGISTRY ## LPDiD Deviation 4). This pin therefore stays as the CI-runnable guard
+# for the full-panel surface (RA_SE_PIN pattern); Stata is not available in CI.
 # Refresh from the library if the committed non-absorbing panel changes: fit
 # LPDiD(pre_window=3, post_window=4, reweight=True, cluster="unit",
 # non_absorbing="effect_stabilization", stabilization_window=3) on
@@ -309,9 +319,14 @@ class TestLPDiDNonAbsorbingParityR:
     """Pin the C1 non-absorbing modes against the independent feols Eq. 12/13 recipes.
 
     The variance-weighted variants match the feols golden on point AND SE; the
-    reweighted point matches feols while its SE is a pinned regression guard
-    (documented weighted-cluster convention difference). alexCardazzi's
-    ``nonabsorbing_lag`` is recorded in the golden meta as a divergent reference only.
+    reweighted point matches feols while its SE has a documented weighted-cluster
+    feols convention difference (~5e-5) and is held here by the ``RW_SE_PIN``
+    regression guard. The rw SE convention is externally anchored against the
+    authors' Stata ``lpdid`` package (~1e-9) on its parity surfaces in
+    ``tests/test_lpdid_nonabsorbing_stata_parity.py`` - see the ``RW_SE_PIN``
+    comment for why the full-panel/placebo values pinned here remain pinned-only.
+    alexCardazzi's ``nonabsorbing_lag`` is recorded in the golden meta as a
+    divergent reference only.
     """
 
     def _meta(self, na_golden: dict):
@@ -365,7 +380,9 @@ class TestLPDiDNonAbsorbingParityR:
 
     def test_alex_recorded_as_divergent_reference(self, na_golden: dict) -> None:
         """alexCardazzi nonabsorbing_lag is recorded (meta), NOT a parity gate: it
-        diverges from the paper-faithful Eq.13 even on this panel."""
+        diverges from the library's Eq.13 implementation even on this panel (the
+        off-switch clamp violates Eq.13's stated control condition; its boundary/
+        placebo-window conventions differ on paper-silent surfaces)."""
         alex = na_golden["alex_nonabsorbing_lag"]
         assert "error" not in alex, f"alex reference failed to generate: {alex}"
         es = na_golden["effect_stab"]

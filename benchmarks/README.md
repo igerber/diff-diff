@@ -54,17 +54,19 @@ and CI never needs Stata. Generators live in `stata/` and are run headless:
 STATA=/Applications/Stata/StataSE.app/Contents/MacOS/stata-se
 $STATA -b do benchmarks/stata/requirements.do            # one-time SSC install
 $STATA -b do benchmarks/stata/generate_lpdid_ra_golden.do
+$STATA -b do benchmarks/stata/generate_lpdid_nonabsorbing_golden.do
 $STATA -b do benchmarks/stata/generate_imputation_loo_golden.do
 $STATA -b do benchmarks/stata/generate_etwfe_cs_golden.do
 $STATA -b do benchmarks/stata/generate_reghdfe_kref_golden.do
 $STATA -b do benchmarks/stata/generate_lwdid_golden.do   # see stata/README.md for its warm-up step
 ```
 
-The `LPDiD` arm uses only **native** Stata commands (`teffects`), pinned by
+The `LPDiD` RA arm uses only **native** Stata commands (`teffects`), pinned by
 `version 19`. The `ImputationDiD` arm depends on SSC packages
 (`did_imputation`/`reghdfe`/`ftools`/`require`), the ETWFE/CS arm on
 `drdid`/`csdid`/`jwdid`/`hdfe`, the reghdfe K_reference arm on `reghdfe`,
-and the LWDiD arm on the authors' `lwdid`;
+the LWDiD arm on the authors' `lwdid`, and the LPDiD non-absorbing arm on the
+authors' `lpdid` (+ `boottest`/`egenmore`/`listreg`);
 `version 19` does NOT pin SSC packages
 (SSC has no version history) — install them once via `requirements.do` (the
 generators do not auto-install) and each golden records version/checksum
@@ -87,6 +89,7 @@ benchmarks/
 │   ├── README.md                          # Stata arm docs
 │   ├── requirements.do                    # one-time SSC install (did_imputation etc.)
 │   ├── generate_lpdid_ra_golden.do        # LPDiD RA SE vs teffects ra
+│   ├── generate_lpdid_nonabsorbing_golden.do  # LPDiD non-absorbing SEs vs the authors' lpdid
 │   ├── generate_imputation_loo_golden.do  # ImputationDiD LOO SE vs did_imputation leaveout
 │   ├── generate_etwfe_cs_golden.do        # ETWFE/CS vs jwdid + csdid (+ subsample ladder)
 │   ├── generate_reghdfe_kref_golden.do    # clustered CR1 K_reference vs reghdfe (disconnected panel)
@@ -113,6 +116,7 @@ benchmarks/
 | `SyntheticDiD` | `synthdid::synthdid_estimate` | Arkhangelsky et al. (2021) | ✓ Integrated |
 | `DifferenceInDifferences` | `fixest::feols` | Standard DiD | ✓ Integrated |
 | `LPDiD` (RA SE) | Stata `teffects ra ... atet` | Dube, Girardi, Jorda & Taylor (2025) | ✓ Integrated |
+| `LPDiD` (non-absorbing SEs) | Stata `lpdid, nonabsorbing(...)` (authors' package) | Dube, Girardi, Jorda & Taylor (2025) §4.2 | ✓ Integrated |
 | `ImputationDiD` (LOO SE) | Stata `did_imputation, leaveout` | Borusyak, Jaravel & Spiess (2024) App. A.9 | ✓ Integrated |
 | `WooldridgeDiD` / `CallawaySantAnna` | Stata `jwdid` / `csdid` (+ G≈20..500 SE ladder) | Wooldridge (2025) / Callaway & Sant'Anna (2021) | ✓ Integrated |
 | Clustered CR1 `K_reference` | Stata `reghdfe` + R `fixest` (disconnected-panel arms) | reghdfe/fixest ssc conventions | ✓ Integrated |
