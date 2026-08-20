@@ -368,9 +368,19 @@ def _encode_staggered_time_scale(
         df["_lwdid_season"] = df[time].dt.quarter.to_numpy()
     else:
         df["_lwdid_season"] = np.array([value.quarter for value in df[time]])
+    time_reverse = {position: value for value, position in time_pos.items()}
+    # Cohort positions relabel to the CANONICAL observed period at that
+    # position (round-24 review: reversing cohort_map let two raw
+    # between-period labels mapping to the same onset collide, with the
+    # surviving label depending on input row order); off-support
+    # positions (beyond-window T+1) keep a deterministic raw label and
+    # are normalized to never-treated downstream anyway.
     label_maps = {
-        "time": {position: value for value, position in time_pos.items()},
-        "cohort": {position: value for value, position in cohort_map.items()},
+        "time": time_reverse,
+        "cohort": {
+            position: time_reverse.get(position, value)
+            for value, position in sorted(cohort_map.items(), key=lambda kv: str(kv[0]))
+        },
     }
     return df, "_lwdid_time_pos", "_lwdid_cohort_pos", label_maps
 

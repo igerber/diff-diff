@@ -3630,7 +3630,10 @@ def _compute_robust_vcov_numpy(
             )
             nan_vcov = np.full((X.shape[1], X.shape[1]), np.nan)
             if return_dof:
-                return nan_vcov, None
+                # Contract: a length-k DOF vector (round-24 review: None
+                # broke direct consumers indexing the result); NaN keeps
+                # the fail-closed semantics through safe_inference.
+                return nan_vcov, np.full(X.shape[1], np.nan)
             return nan_vcov
         if np.any(h_diag > 1.0 + 1e-6):
             # hc2/hc2_bm only: hc3 designs with over-one leverage are

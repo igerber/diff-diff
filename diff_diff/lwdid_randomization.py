@@ -81,9 +81,15 @@ def _validate_inputs(
         n_reps is None
         or isinstance(n_reps, bool)
         or not isinstance(n_reps, (int, np.integer))
-        or n_reps <= 0
+        or n_reps < 10
     ):
-        raise ValueError(f"n_reps must be a positive integer, got {n_reps!r}")
+        # Round-24 review: the valid-replication floor below is
+        # max(10, ...), so n_reps < 10 can NEVER satisfy it - reject up
+        # front instead of failing after the permutation loop.
+        raise ValueError(
+            f"n_reps must be an integer >= 10 (the reliable-inference "
+            f"floor requires at least 10 valid replications), got {n_reps!r}"
+        )
 
     if method == "bootstrap":
         # Review finding: resampling treatment labels WITH replacement
@@ -484,7 +490,8 @@ def randomization_inference(
         raise ValueError(
             f"Insufficient valid replications for reliable inference: "
             f"{n_valid}/{n_reps} valid (failure rate {failure_rate:.1%}). "
-            f"Use method='permutation' to avoid degenerate draws."
+            f"Increase n_reps, or check for near-constant treatment/"
+            f"outcome configurations that make draws degenerate."
         )
 
     return RandomizationResult(

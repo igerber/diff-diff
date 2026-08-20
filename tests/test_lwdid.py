@@ -4487,3 +4487,70 @@ class TestReviewRound23Guards:
         out = validate_staggered_data(df, unit="unit", time="time", cohort="g")
         assert out["valid"] is False
         assert any("missing values" in e for e in out["errors"])
+
+
+class TestReviewRound24Guards:
+    """Local-review round 24 P2s: unusable small n_reps rejected up
+    front; HC3 fail-closed keeps the length-k DOF contract; datetime
+    cohort relabeling is canonical (collision/row-order independent)."""
+
+    def test_ri_small_n_reps_rejected_up_front(self):
+        from diff_diff.lwdid_randomization import randomization_inference
+
+        y = np.random.default_rng(0).normal(size=20)
+        d = np.array([1.0] * 10 + [0.0] * 10)
+        with pytest.raises(ValueError, match="integer >= 10"):
+            randomization_inference(y, d, n_reps=9)
+        res = randomization_inference(y, d, n_reps=10, seed=0)
+        assert 0 < res.pvalue <= 1
+
+    def test_hc3_fail_closed_dof_vector(self):
+        from diff_diff.linalg import compute_robust_vcov
+
+        X = np.column_stack([np.ones(4), np.array([0.0, 0.0, 0.0, 1.0])])
+        y = np.array([1.0, 1.1, 0.9, 5.0])
+        resid = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        with pytest.warns(UserWarning, match="HC3 variance is undefined"):
+            vcov, dof = compute_robust_vcov(X, resid, vcov_type="hc3", return_dof=True)
+        assert np.all(np.isnan(vcov))
+        assert dof.shape == (2,) and np.all(np.isnan(dof))
+
+    def test_datetime_cohort_relabel_canonical(self):
+        # Two raw between-period cohort dates map to the SAME observed
+        # onset; the reported cohort key must be the canonical observed
+        # period regardless of row order.
+        rng = np.random.default_rng(0)
+        times = pd.date_range("2020-01-01", periods=6, freq="QS")
+        onset = times[4]
+        raw_a = onset - pd.Timedelta(days=10)
+        raw_b = onset - pd.Timedelta(days=20)
+
+        def build(order):
+            rows = []
+            for idx, u in enumerate(order):
+                g = {0: raw_a, 1: raw_b}.get(u, pd.NaT) if u < 2 else pd.NaT
+                for i, ts in enumerate(times):
+                    d = int(u < 2 and ts >= onset)
+                    rows.append(dict(unit=u, time=ts, treat=d, g=g, y=rng.normal() + d))
+            return pd.DataFrame(rows)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r1 = LWDiD(rolling="demean").fit(
+                build([0, 1, 2, 3, 4, 5]),
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
+                first_treat="g",
+            )
+            r2 = LWDiD(rolling="demean").fit(
+                build([1, 0, 2, 3, 4, 5]),
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
+                first_treat="g",
+            )
+        assert list(r1.cohort_effects) == [onset]
+        assert list(r2.cohort_effects) == [onset]
