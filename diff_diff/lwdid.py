@@ -3312,7 +3312,9 @@ class LWDiD(BaseEstimator):
         att = float(att_treated - att_control)
 
         # Step 4: Compute SE via semiparametric influence function
-        # Follows Lunceford & Davidian (2004), matching Stata lwdid and lwdid-py.
+        # (Lunceford & Davidian 2004 AIPW form - the documented,
+        # adjudicated alternative to the papers'/Stata package's stacked
+        # E.3/E.4 form; see the REGISTRY IPWRA-variance Note).
         # The full IF consists of the Hajek main term plus a propensity score
         # estimation uncertainty correction.
         n_treated_f = float(treat_mask.sum())
