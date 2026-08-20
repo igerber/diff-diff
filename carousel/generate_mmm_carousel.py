@@ -832,11 +832,18 @@ class MMMCarouselPDF(FPDF):
         self.centered_text(50, "It writes the", size=40)
         self.centered_text(78, "Meridian code for you.", size=40, color=VIOLET)
 
-        self.set_xy(0, 100)
-        self.set_font("Courier", "B", 15)
+        # The displayed call is the tutorial's ACTUAL invocation - to_code()
+        # deliberately fails closed without channel + time scope, so a bare
+        # prior.to_code() would raise (CI review R1).
+        self.set_xy(0, 98)
+        self.set_font("Courier", "B", 12.5)
         self.set_text_color(*NAVY)
-        self.cell(WIDTH, 8, "prior.to_code()", align="C")
-        self.set_xy(0, 110)
+        self.cell(
+            WIDTH, 7, 'prior.to_code(channel="search", media_channels=["search", "tv"],', align="C"
+        )
+        self.set_xy(0, 106)
+        self.cell(WIDTH, 7, "roi_calibration_period=mask)", align="C")
+        self.set_xy(0, 116)
         self.set_font("Helvetica", "I", 12)
         self.set_text_color(*GRAY)
         self.cell(
@@ -847,7 +854,7 @@ class MMMCarouselPDF(FPDF):
         )
 
         margin = 32
-        code_y = 124
+        code_y = 130
         token_lines = []
         for line in SNIPPET_LINES:
             stripped = line.strip()

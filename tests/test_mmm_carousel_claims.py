@@ -159,6 +159,25 @@ class TestMeridianSpineMatchesNotebook:
         for line in deck_constants["SNIPPET_LINES"]:
             assert line in mer_output, f"snippet line not verbatim in tutorial 30: {line!r}"
 
+    def test_slide4_displays_scoped_to_code_invocation(self, visible_strings):
+        # CI review R1: to_code() fails closed without channel + time scope,
+        # so the "Paste and Run" slide must display the tutorial's scoped
+        # invocation - a bare prior.to_code() raises ValueError. Pin the
+        # scoping kwargs on the displayed call and confirm the same kwargs
+        # appear in the tutorial's own to_code() cell.
+        assert 'prior.to_code(channel="search", media_channels=["search", "tv"],' in visible_strings
+        assert "roi_calibration_period=mask)" in visible_strings
+        assert (
+            "prior.to_code()" not in visible_strings
+        ), "bare prior.to_code() is back on the deck - it raises ValueError"
+        code = _notebook_code(NB_MER)
+        for kwarg in (
+            'channel="search"',
+            'media_channels=["search", "tv"]',
+            "roi_calibration_period=mask",
+        ):
+            assert kwarg in code, f"tutorial 30's to_code() call lost {kwarg!r}"
+
     def test_design_facts_match_notebook_code(self, deck_constants):
         c = deck_constants
         code = _notebook_code(NB_MER)
