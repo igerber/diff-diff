@@ -1427,3 +1427,57 @@ class TestDatasetIntegration:
 
         assert hasattr(results, "group_time_effects")
         assert len(results.group_time_effects) > 0
+
+
+class TestStataGeneratorPinSync:
+    """The lwdid Stata golden generator downloads the SAME SSC files the
+    loaders pin, and its fail-closed warm-up + emitted provenance carry
+    their own copies of those checksums. An upstream re-pin applied only
+    to the loader (PR #784 review finding) leaves the regeneration recipe
+    permanently failing - or, bypassed, writing stale metadata into new
+    goldens. This ties every CURRENT-INPUT pin to the loader's. The
+    committed golden's provenance block is deliberately NOT tied: it
+    records the capture-time hash of the file the golden was generated
+    from.
+    """
+
+    _HEX = r"[0-9a-f]{64}"
+
+    def _loader_pins(self):
+        import re
+
+        src = (Path(__file__).resolve().parents[1] / "diff_diff" / "datasets.py").read_text()
+        pins = {}
+        for name, fname in [("prop99", "lw_smoking.dta"), ("walmart", "lw_walmart.dta")]:
+            m = re.search(
+                rf'{re.escape(fname)}"\s*\n(?:\s*#.*\n)*\s*sha256 = "({self._HEX})"',
+                src,
+            )
+            assert m, f"loader pin for {fname} not found"
+            pins[name] = m.group(1)
+        return pins
+
+    @pytest.mark.parametrize(
+        "relpath",
+        [
+            "benchmarks/stata/generate_lwdid_golden.do",
+            "benchmarks/stata/README.md",
+        ],
+    )
+    def test_regeneration_pins_match_loaders(self, relpath):
+        import re
+
+        path = Path(__file__).resolve().parents[1] / relpath
+        if not path.exists():
+            pytest.skip(f"{relpath} not present in this checkout")
+        text = path.read_text()
+        pins = self._loader_pins()
+        for name, fname in [("prop99", "lw_smoking"), ("walmart", "lw_walmart")]:
+            found = set(re.findall(rf"{fname}[^\n]*?({self._HEX})", text)) | set(
+                re.findall(rf"'{name}':\s*'({self._HEX})'", text)
+            )
+            assert found, f"no {name} pin found in {relpath}"
+            assert found == {pins[name]}, (
+                f"{relpath} carries stale current-input pin(s) for {name}: "
+                f"{found} != loader {pins[name]}"
+            )

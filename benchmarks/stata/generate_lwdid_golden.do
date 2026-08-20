@@ -26,7 +26,7 @@
 *!          dfs = {'prop99': load_prop99(), 'walmart': load_walmart()}; \
 *!          assert all(df.attrs.get('source') != 'synthetic_fallback' for df in dfs.values()); \
 *!          pins = {'prop99': '16c3ac1da351788817433fc890ec2f502a8bdfcb46cbc8d693653330e71d5a65', \
-*!                  'walmart': '410885572143dceb9daa643a8097768f1bc3493f9437451a9e4d1d5dc1e18d14'}; \
+*!                  'walmart': 'cf1b2d4aee396f0858fb315d0413ff82359e16e84dad68ce1d9be51e8c3e35ac'}; \
 *!          cache = pathlib.Path.home() / '.cache' / 'diff_diff' / 'datasets'; \
 *!          [1/0 for n, w in pins.items() if hashlib.sha256((cache / (n + '.dta')).read_bytes()).hexdigest() != w]"
 *!   2. /Applications/Stata/StataSE.app/Contents/MacOS/stata-se -b do \
@@ -235,7 +235,7 @@ file write `fh' `"    "ssc_versions": {"lwdid": "`lwdid_ver'"},"' _n
 file write `fh' `"    "stata_edition": "`sedition'","' _n
 file write `fh' `"    "bootstrap_scheme": "lwdid large-N multiplier bootstrap (package default; reps() draws with set seed); compared against diff-diff's unit-level Rademacher multiplier bootstrap at B=999","' _n
 file write `fh' `"    "control_pool": {"small_N": "composite regression, never-treated-based by construction (no control option exists); equivalent to Python control_group='never_treated'", "large_N": "never-treated + not-yet-treated default (the 'never' option is NOT passed); matches Python default control_group='not_yet_treated'"},"' _n
-file write `fh' `"    "datasets": {"prop99": {"url": "http://fmwww.bc.edu/repec/bocode/l/lw_smoking.dta", "sha256": "16c3ac1da351788817433fc890ec2f502a8bdfcb46cbc8d693653330e71d5a65"}, "walmart": {"url": "http://fmwww.bc.edu/repec/bocode/l/lw_walmart.dta", "sha256": "410885572143dceb9daa643a8097768f1bc3493f9437451a9e4d1d5dc1e18d14"}, "castle": {"path": "benchmarks/data/real/castle_lw_subset.csv"}},"' _n
+file write `fh' `"    "datasets": {"prop99": {"url": "http://fmwww.bc.edu/repec/bocode/l/lw_smoking.dta", "sha256": "16c3ac1da351788817433fc890ec2f502a8bdfcb46cbc8d693653330e71d5a65"}, "walmart": {"url": "http://fmwww.bc.edu/repec/bocode/l/lw_walmart.dta", "sha256": "cf1b2d4aee396f0858fb315d0413ff82359e16e84dad68ce1d9be51e8c3e35ac"}, "castle": {"path": "benchmarks/data/real/castle_lw_subset.csv"}},"' _n
 file write `fh' `"    "stata_version": `sver',"' _n
 file write `fh' `"    "rireps": `RIREPS',"' _n
 file write `fh' `"    "riseed": `RISEED',"' _n

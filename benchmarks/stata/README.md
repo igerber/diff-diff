@@ -361,7 +361,7 @@ python -c "from diff_diff import load_prop99, load_walmart; \
   dfs = {'prop99': load_prop99(), 'walmart': load_walmart()}; \
   assert all(df.attrs.get('source') != 'synthetic_fallback' for df in dfs.values()); \
   pins = {'prop99': '16c3ac1da351788817433fc890ec2f502a8bdfcb46cbc8d693653330e71d5a65', \
-          'walmart': '410885572143dceb9daa643a8097768f1bc3493f9437451a9e4d1d5dc1e18d14'}; \
+          'walmart': 'cf1b2d4aee396f0858fb315d0413ff82359e16e84dad68ce1d9be51e8c3e35ac'}; \
   cache = pathlib.Path.home() / '.cache' / 'diff_diff' / 'datasets'; \
   [1/0 for n, w in pins.items() if hashlib.sha256((cache / (n + '.dta')).read_bytes()).hexdigest() != w]"
 # 2. generate (about 15 minutes; six B=9,999 bootstrap runs dominate)
