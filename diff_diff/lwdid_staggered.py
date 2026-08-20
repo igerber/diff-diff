@@ -504,6 +504,12 @@ def fit_staggered(
         ]
         if not keys:
             continue
+        # Within-cohort CELL-MASS convention (documented deviation from
+        # LW 2026 eq. 7.10 on unbalanced panels - see the REGISTRY
+        # within-cohort aggregation Note): cells weight by contributing
+        # treated mass, the same convention as the WATT(r) event axis
+        # (E.1) and the package's Post_avg display; equals the eq. 7.10
+        # unit-average estimand on balanced NT designs.
         masses = np.array([cell_effects[key]["n_treated"] for key in keys], dtype=float)
         weights = masses / masses.sum()
         effect = float(np.dot(weights, [cell_effects[key]["att"] for key in keys]))

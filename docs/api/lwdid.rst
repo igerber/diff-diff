@@ -8,7 +8,7 @@ that converts panel data into cross-sectional regressions (Lee & Wooldridge
 The key insight from the Lee & Wooldridge papers is that, under parallel
 trends and no anticipation, a unit-specific time-series transformation of
 the outcome eliminates the need for two-way fixed effects entirely. For
-each unit *i* with treatment onset at period *S*, Procedure 2.1 (LW 2025)
+each unit *i* with treatment onset at period *S*, Procedure 2.1 (LW 2026)
 computes the pre-treatment mean:
 
 .. math::
@@ -20,7 +20,7 @@ and forms the transformed outcome:
 .. math::
 
    \dot{Y}_{it} = Y_{it} - \bar{Y}_{i,\text{pre}}, \quad t = S, \ldots, T
-   \qquad \text{(Equation 2.12, LW 2025)}
+   \qquad \text{(Equation 2.12, LW 2026)}
 
 Under Assumption 2.1 (conditional parallel trends), this transformation
 removes unit-specific fixed effects, and the ATT is identified as the
@@ -58,7 +58,7 @@ without requiring a large cross section.
 Methodology
 -----------
 
-**Procedure 2.1 — Unit-Specific Demeaning (LW 2025, Section 2)**
+**Procedure 2.1 — Unit-Specific Demeaning (LW 2026, Section 2)**
 
 For common timing with intervention at period *S*:
 
@@ -71,7 +71,7 @@ For common timing with intervention at period *S*:
 
       \dot{Y}_{it} = Y_{it} - \bar{Y}_{i,\text{pre}}, \quad t = S, \ldots, T
 
-3. Estimate the ATT from the cross-sectional regression (Equation 2.13):
+3. Estimate the ATT from the cross-sectional regression (Equation 2.13, LW 2026):
 
    .. math::
 
@@ -160,7 +160,8 @@ Key Assumptions
 
    The LWDiD estimator requires the following assumptions for identification:
 
-   **Assumption 2.1 — Conditional Parallel Trends** (Equation 2.17, LW 2025):
+   **Assumption CPTC — Conditional Parallel Trends, Common Timing**
+   (Equation 2.10, LW 2025):
 
    .. math::
 
@@ -172,7 +173,7 @@ Key Assumptions
    unconditional parallel trends — assignment can be correlated with
    *levels* :math:`Y_{i1}(0)`, but not with *trends*.
 
-   **No Anticipation** (Equation 2.14, LW 2025):
+   **Assumption NAC — No Anticipation, Common Timing** (Equation 2.7, LW 2025):
 
    .. math::
 
@@ -422,7 +423,12 @@ Example Usage
    results_stag = lw_stag.fit(data, outcome="outcome", unit="unit",
                               time="period", treatment="treated",
                               first_treat="first_treat")
-   # Cohort-specific ATT(g) estimates (Equation 7.1, LW 2026)
+   # Cohort-specific ATT(g) estimates (Equations 7.2/7.10, LW 2026).
+   # Aggregation convention: each cohort's estimable cells weight by
+   # their contributing treated mass (cell-mass, matching the WATT(r)
+   # axis); this equals the eq. 7.10 unit-average estimand on balanced
+   # never-treated designs and deviates on unbalanced panels (see the
+   # methodology registry's within-cohort aggregation Note).
    df_cohorts = results_stag.to_dataframe()
    print(df_cohorts)
 

@@ -4554,3 +4554,50 @@ class TestReviewRound24Guards:
             )
         assert list(r1.cohort_effects) == [onset]
         assert list(r2.cohort_effects) == [onset]
+
+
+class TestReviewRoundCI7Guards:
+    """CI review round 7: pin the DOCUMENTED within-cohort cell-mass
+    convention on an unbalanced panel where it provably differs from the
+    LW 2026 eq. 7.10 unit-average estimand (a treated unit observing
+    more post periods carries more cell-mass weight)."""
+
+    KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+    def test_cohort_effect_cell_mass_oracle_unbalanced(self):
+        # One cohort (g=4), 2 treated units: unit 0 observes post {4,5,6},
+        # unit 1 observes post {4} only. 6 never-treated controls observe
+        # everything. Deterministic outcomes.
+        rows = []
+        for u in range(8):
+            g = 4 if u < 2 else 0
+            times = range(1, 7)
+            for t in times:
+                if u == 1 and t > 4:
+                    continue  # unit 1 misses post periods 5, 6
+                d = int(g > 0 and t >= g)
+                # unit-specific level + zero noise; treated add u-dependent effect
+                y = 10.0 * u + 0.0 * t + (2.0 + 3.0 * u) * d
+                rows.append(dict(unit=u, time=t, treat=d, g=g, y=y))
+        df = pd.DataFrame(rows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = LWDiD(rolling="demean", control_group="never_treated", vcov_type="hc1").fit(
+                df, first_treat="g", **self.KW
+            )
+        # Independent oracle. Demean: pre-mean = level (zero trend), so
+        # ydot = effect for treated rows, 0 for controls.
+        # Cell ATTs: t=4 has units {0,1} -> mean(2, 5) = 3.5, n_treated=2;
+        # t=5, t=6 have unit 0 only -> 2.0, n_treated=1.
+        # CELL-MASS cohort effect = (2*3.5 + 1*2 + 1*2) / 4 = 2.75.
+        # eq. 7.10 UNIT-AVERAGE estimand: unit post-averages are 2.0
+        # (unit 0) and 5.0 (unit 1) -> cohort effect 3.5. The documented
+        # convention is cell-mass.
+        cell_mass = res.cohort_effects[4]["att"]
+        np.testing.assert_allclose(cell_mass, 2.75, atol=1e-10)
+        assert abs(cell_mass - 3.5) > 0.5  # distinguishes eq. 7.10
+        # .att on this NT/reg route is the tau_omega COMPOSITE (7.18),
+        # built from unit post-averages - here exactly the eq. 7.10
+        # unit-average value (3.5). The two surfaces answer different,
+        # separately documented estimands on unbalanced panels.
+        np.testing.assert_allclose(res.att, 3.5, atol=1e-10)
