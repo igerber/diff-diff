@@ -4271,23 +4271,7 @@ class TestLWDiDBackendParity:
 
         def _counting(symbol_name, real_fn, *args, **kwargs):
             result = real_fn(*args, **kwargs)
-            # Count only ACCEPTED results: the dispatcher discards a Rust
-            # result whose vcov (or any member) is non-finite and re-runs
-            # NumPy (linalg.py `_nonfinite_vcov_needs_python_rerun`), and a
-            # declining Cholesky kernel signals the same way - counting the
-            # raw call would re-open the Python-vs-Python tautology this
-            # spy exists to close. The test fixtures are full-rank, so
-            # EVERY returned array being fully finite marks a genuinely
-            # accepted Rust-backed solve. (Full provenance would need
-            # solve_ols to expose its backend - out of scope here.)
-            members = result if isinstance(result, tuple) else (result,)
-            try:
-                accepted = all(
-                    bool(np.all(np.isfinite(np.asarray(m)))) for m in members if m is not None
-                )
-            except (TypeError, ValueError):
-                accepted = False
-            if accepted:
+            if TestLWDiDBackendParity._spy_accepts(result):
                 counts[symbol_name] += 1
             return result
 
@@ -4299,6 +4283,46 @@ class TestLWDiDBackendParity:
                 patch.object(linalg_module, symbol, partial(_counting, symbol, real))
             )
         return stack, counts
+
+    @staticmethod
+    def _spy_accepts(result):
+        """Whether a raw kernel result counts as an ACCEPTED Rust dispatch.
+
+        The dispatcher discards a Rust result whose vcov (or any member)
+        is non-finite and re-runs NumPy (linalg.py
+        `_nonfinite_vcov_needs_python_rerun`), and a declining Cholesky
+        kernel returns None outright - counting either would re-open the
+        Python-vs-Python tautology the spy exists to close. The test
+        fixtures are full-rank, so an accepted result is: non-None, with
+        at least one non-None member, and EVERY non-None array fully
+        finite. (Full provenance would need solve_ols to expose its
+        backend - out of scope here.)"""
+        if result is None:
+            return False
+        members = result if isinstance(result, tuple) else (result,)
+        present = [m for m in members if m is not None]
+        if not present:
+            return False
+        try:
+            return all(bool(np.all(np.isfinite(np.asarray(m)))) for m in present)
+        except (TypeError, ValueError):
+            return False
+
+    def test_spy_acceptance_rejects_declined_and_nonfinite_results(self):
+        """Regression (CI review): a declining Cholesky kernel returns
+        None, and `all([])` is vacuously True - neither a None result,
+        an all-None tuple, nor a tuple carrying a non-finite array may
+        count as an accepted Rust dispatch."""
+        accepts = self._spy_accepts
+        assert not accepts(None)
+        assert not accepts((None,))
+        assert not accepts((None, None))
+        finite = np.ones(3)
+        assert accepts(finite)
+        assert accepts((finite, finite, None))
+        nonfinite = np.array([1.0, np.nan])
+        assert not accepts((finite, nonfinite))
+        assert not accepts((finite, np.array([np.inf])))
 
     @staticmethod
     def _assert_headline_parity(res_rust, res_py):
