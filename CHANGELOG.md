@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Internal DML infrastructure for the upcoming `DMLDiD` estimator (zero
+  behavior change).** Private modules `diff_diff/_crossfit.py` (replayable
+  unit/cluster-level K-fold assignment + out-of-fold nuisance prediction,
+  `BootstrapReplaySpec`-style by-value state capture), `diff_diff/_learners.py`
+  (duck-typed `RegressorLearner`/`ClassifierLearner` protocol + native
+  linear/ridge/logit learners), and `diff_diff/_dr_scores.py` (shared DR panel
+  scores). `ContinuousDiD`'s DRDID-parity influence function relocated verbatim
+  to `_dr_scores.drdid_panel_inf_func`, pinned by committed two-tier oracles
+  (`tests/test_dr_scores.py`); the Chang (2020) Neyman-orthogonal Case 1 score
+  pair ships alongside, anchored to DoubleML at machine precision by the
+  committed parity spike (`benchmarks/doubleml/chang_case1_parity.py`). New
+  `linalg.solve_ridge` (unpenalized-intercept ridge, glmnet-style standardized
+  penalty, closed-form frozen-preprocessing LOOCV, `p >= n` support). See the
+  new REGISTRY section "Cross-fitting, DR-score, and ridge infrastructure
+  (DML)".
 - **LPDiD non-absorbing SEs now anchored against the authors' Stata `lpdid` package
   end-to-end (no library behavior change).** New committed-golden arm
   (`benchmarks/stata/generate_lpdid_nonabsorbing_golden.do` →

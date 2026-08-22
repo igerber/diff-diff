@@ -5728,3 +5728,267 @@ def solve_poisson(
         beta = beta_full
 
     return beta, mu_final
+
+
+@overload
+def solve_ridge(
+    X: np.ndarray,
+    y: np.ndarray,
+    alpha: Union[float, str] = ...,
+    *,
+    weights: Optional[np.ndarray] = ...,
+    alphas: Optional[np.ndarray] = ...,
+    check_finite: bool = ...,
+    return_fitted: Literal[False] = ...,
+    rank_deficient_action: str = ...,
+    diagnostics_out: Optional[dict] = ...,
+) -> np.ndarray: ...
+
+
+@overload
+def solve_ridge(
+    X: np.ndarray,
+    y: np.ndarray,
+    alpha: Union[float, str] = ...,
+    *,
+    weights: Optional[np.ndarray] = ...,
+    alphas: Optional[np.ndarray] = ...,
+    check_finite: bool = ...,
+    return_fitted: Literal[True],
+    rank_deficient_action: str = ...,
+    diagnostics_out: Optional[dict] = ...,
+) -> Tuple[np.ndarray, np.ndarray]: ...
+
+
+def solve_ridge(
+    X: np.ndarray,
+    y: np.ndarray,
+    alpha: Union[float, str] = 1.0,
+    *,
+    weights: Optional[np.ndarray] = None,
+    alphas: Optional[np.ndarray] = None,
+    check_finite: bool = True,
+    return_fitted: bool = False,
+    rank_deficient_action: str = "warn",
+    diagnostics_out: Optional[dict] = None,
+) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
+    """Ridge regression with an automatic, UNPENALIZED intercept.
+
+    Objective: minimize ``sum_i w_i (y_i - b0 - x_i' beta)^2 +
+    alpha * ||beta_std||^2`` — a glmnet-style penalty on the STANDARDIZED
+    coefficients combined with an un-normalized (sum, not mean) loss. This is
+    NOT sklearn's ``Ridge`` objective (sklearn penalizes raw-scale
+    coefficients). Consequences, stated plainly: at FIXED numeric ``alpha``
+    integer weights are exactly equivalent to row replication, and a fixed
+    ``alpha`` shrinks LESS as the sample grows (the fit term grows with n
+    while the penalty does not). The replication equivalence does NOT extend
+    to ``alpha="loocv"``: its leave-one-out unit is the WHOLE weighted row
+    (case deletion — a weight-w row is held out at once), whereas replicated
+    data would hold out one replicate at a time, so the selected alpha can
+    differ between the two encodings.
+
+    Parameters
+    ----------
+    X : np.ndarray
+        Design matrix (n, p) WITHOUT an intercept column — ``solve_ridge``
+        adds the (unpenalized) intercept itself.
+    y : np.ndarray
+        Response vector (n,).
+    alpha : float or "loocv"
+        Penalty. Must be strictly positive — unpenalized fits belong to
+        :func:`solve_ols` (``alpha == 0`` raises). ``"loocv"`` selects alpha
+        from ``alphas`` by closed-form leave-one-out CV with the
+        standardization FROZEN on the full sample (the standard efficient
+        LOOCV definition; the LOO residuals are exact for the frozen
+        preprocessing, not for per-fit re-standardization).
+    weights : np.ndarray, optional
+        Nonnegative finite observation weights (1-D, positive sum).
+    alphas : np.ndarray, optional
+        Grid for ``alpha="loocv"`` (default ``np.logspace(-4, 4, 41)``).
+        Ignored for numeric ``alpha``.
+    check_finite : bool
+        Validate X/y finiteness (default True).
+    return_fitted : bool
+        Also return fitted values ``b0 + X @ beta`` (NaN-dropped columns
+        contribute nothing — prediction uses the identified columns only).
+    rank_deficient_action : str
+        Handling for ZERO-VARIANCE columns: "warn" (default; warn + NaN
+        coefficient), "error", or "silent" (NaN, no warning). For
+        ``alpha > 0`` all remaining (non-constant) columns are retained even
+        if collinear — the penalty makes the system nonsingular, which is why
+        ridge supports ``p >= n``.
+    diagnostics_out : dict, optional
+        For ``alpha="loocv"``: receives ``{"alpha": chosen, "loo_mse":
+        per-grid array}``. If every column is zero-variance (intercept-only
+        fit) no penalty is selected and BOTH entries are the ``None`` sentinel
+        — consumers must handle it.
+
+    Returns
+    -------
+    np.ndarray
+        Coefficients ``(p + 1,)`` with the intercept FIRST, on the original
+        scale of X. With ``return_fitted=True``, also the fitted values.
+    """
+    X = np.asarray(X, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    if X.ndim == 1:
+        X = X.reshape(-1, 1)
+    if X.ndim != 2:
+        raise ValueError(f"X must be 2-dimensional, got ndim={X.ndim}")
+    n, p = X.shape
+    if y.ndim != 1 or y.shape[0] != n:
+        raise ValueError(
+            f"y must be 1-dimensional with length matching X rows ({n}), " f"got shape {y.shape}"
+        )
+    if n == 0:
+        raise ValueError("solve_ridge requires at least 2 observations, got an empty X")
+
+    valid_actions = {"warn", "error", "silent"}
+    if rank_deficient_action not in valid_actions:
+        raise ValueError(
+            f"rank_deficient_action must be one of {valid_actions}, "
+            f"got '{rank_deficient_action}'"
+        )
+
+    if check_finite:
+        if not np.isfinite(X).all():
+            raise ValueError("X contains NaN or Inf values")
+        if not np.isfinite(y).all():
+            raise ValueError("y contains NaN or Inf values")
+
+    if weights is not None:
+        weights = np.asarray(weights, dtype=np.float64)
+        if weights.ndim != 1:
+            raise ValueError(
+                f"weights must be 1-dimensional, got ndim={weights.ndim} "
+                "(a column vector like (n, 1) is not accepted)"
+            )
+        if weights.shape[0] != n:
+            raise ValueError(f"weights length ({weights.shape[0]}) must match X rows ({n})")
+        if not np.isfinite(weights).all():
+            raise ValueError("weights contain NaN or Inf values")
+        if np.any(weights < 0):
+            raise ValueError("weights must be non-negative")
+        if np.sum(weights) <= 0:
+            raise ValueError(
+                "weights sum to zero — no observations have positive weight. "
+                "Cannot fit a model on an empty effective sample."
+            )
+    w = np.ones(n) if weights is None else weights
+    n_pos = int(np.sum(w > 0))
+    if n_pos < 2:
+        raise ValueError(
+            f"solve_ridge requires at least 2 positive-weight observations, got {n_pos} "
+            "(weighted standardization is undefined below that)"
+        )
+
+    loocv = isinstance(alpha, str)
+    if loocv:
+        if alpha != "loocv":
+            raise ValueError(f"alpha must be a positive float or 'loocv', got {alpha!r}")
+        if alphas is None:
+            alphas = np.logspace(-4, 4, 41)
+        alphas = np.asarray(alphas, dtype=np.float64)
+        if alphas.ndim != 1 or alphas.size == 0:
+            raise ValueError("alphas grid must be a non-empty 1-D array")
+        if not np.isfinite(alphas).all() or np.any(alphas <= 0):
+            raise ValueError("alphas grid values must be finite and strictly positive")
+        if n_pos < 3:
+            raise ValueError(
+                "alpha='loocv' requires at least 3 positive-weight observations, " f"got {n_pos}"
+            )
+    else:
+        alpha_f = float(alpha)
+        if not np.isfinite(alpha_f) or alpha_f <= 0:
+            raise ValueError(
+                f"alpha must be strictly positive (got {alpha!r}); "
+                "unpenalized fits belong to solve_ols"
+            )
+
+    # Weighted standardization (frozen on the full sample; ddof=0 weighted std).
+    w_sum = float(np.sum(w))
+    x_mean = (w @ X) / w_sum
+    y_mean = float(w @ y) / w_sum
+    Xc = X - x_mean
+    yc = y - y_mean
+    x_std = np.sqrt((w @ (Xc**2)) / w_sum)
+
+    if not (
+        np.isfinite(w_sum)
+        and np.isfinite(y_mean)
+        and np.all(np.isfinite(x_mean))
+        and np.all(np.isfinite(x_std))
+    ):
+        raise ValueError(
+            "solve_ridge: weighted standardization overflowed to non-finite "
+            "values (inputs are finite but too large in magnitude); rescale "
+            "X/y before fitting"
+        )
+
+    zero_var = x_std <= 0.0
+    if np.any(zero_var):
+        cols = np.flatnonzero(zero_var)
+        msg = (
+            f"solve_ridge: {cols.size} zero-variance column(s) at index "
+            f"{cols.tolist()} — coefficients set to NaN (constant columns are "
+            "collinear with the intercept)."
+        )
+        if rank_deficient_action == "error":
+            raise ValueError(msg)
+        if rank_deficient_action == "warn":
+            warnings.warn(msg, RuntimeWarning, stacklevel=2)
+    kept = np.flatnonzero(~zero_var)
+
+    coefs = np.full(p + 1, np.nan)
+    if kept.size == 0:
+        # Intercept-only model.
+        coefs[0] = y_mean
+        fitted = np.full(n, y_mean)
+        if loocv and diagnostics_out is not None:
+            diagnostics_out["alpha"] = None
+            diagnostics_out["loo_mse"] = None
+        return (coefs, fitted) if return_fitted else coefs
+
+    Z = Xc[:, kept] / x_std[kept]
+    sqrt_w = np.sqrt(w)
+    Zw = Z * sqrt_w[:, np.newaxis]
+    yw = yc * sqrt_w
+
+    # Thin SVD of the weight-transformed standardized design.
+    U, d, Vt = np.linalg.svd(Zw, full_matrices=False)
+    Uty = U.T @ yw
+
+    if loocv:
+        assert alphas is not None
+        pos = w > 0
+        # Intercept hat contribution: weighted centering makes the transformed
+        # ones column orthogonal to Zw, so h_ii = w_i / sum(w) + h_Z,ii(alpha).
+        h_int = w / w_sum
+        U2 = U**2
+        loo_mse = np.empty(alphas.size)
+        for j, a in enumerate(alphas):
+            shrink = d**2 / (d**2 + a)
+            h = h_int + U2 @ shrink
+            resid = yw - U @ (shrink * Uty)
+            loo = resid[pos] / (1.0 - h[pos])
+            loo_mse[j] = float(np.mean(loo**2))
+        best = int(np.argmin(loo_mse))
+        alpha_f = float(alphas[best])
+        if diagnostics_out is not None:
+            diagnostics_out["alpha"] = alpha_f
+            diagnostics_out["loo_mse"] = loo_mse
+
+    beta_std = Vt.T @ ((d / (d**2 + alpha_f)) * Uty)
+    beta_orig = beta_std / x_std[kept]
+    coefs[1 + kept] = beta_orig
+    coefs[0] = y_mean - float(x_mean[kept] @ beta_orig)
+    if not np.isfinite(coefs[0]) or not np.all(np.isfinite(beta_orig)):
+        raise ValueError(
+            "solve_ridge: the fit produced non-finite coefficients (numerical "
+            "overflow); rescale X/y before fitting"
+        )
+
+    if return_fitted:
+        fitted = coefs[0] + X[:, kept] @ beta_orig
+        return coefs, fitted
+    return coefs

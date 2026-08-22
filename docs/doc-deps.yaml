@@ -1257,6 +1257,10 @@ sources:
       - path: docs/methodology/REGISTRY.md
         section: "Variance Estimation, Cluster-Robust SE"
         type: methodology
+      - path: docs/methodology/REGISTRY.md
+        section: "Cross-fitting, DR-score, and ridge infrastructure (DML)"
+        type: methodology
+        note: "solve_ridge conventions: glmnet-style standardized penalty + un-normalized (sum) loss, unpenalized intercept, alpha > 0 domain, zero-variance NaN contract, frozen-preprocessing closed-form LOOCV"
       - path: docs/performance-plan.md
         type: performance
         note: "Opt-in DIFF_DIFF_SOLVE_OLS_FASTPATH normal-equations Cholesky fast path (certified twin + stage-0 Gram reuse)"
@@ -1374,6 +1378,33 @@ sources:
         section: "Bootstrap, Survey Bootstrap"
         type: methodology
         note: "Memory-bounded multiplier-bootstrap machinery: draw-block chunking of weight generation/consumption (shared by CallawaySantAnna, EfficientDiD, and HAD), plus the fused column-tiled scatter-GEMM perturbation kernel (tiled_if_matmul + ReplayableWeightStream, v3.7 Phase 2 — used by CallawaySantAnna and EfficientDiD; HAD consumes whole-matrix GEMMs directly and does not use the tiled kernel). Implementation detail — numerically equivalent (~1 ULP, BLAS reassociation) to the per-column GEMV path; weight stream bit-identical, replayable per column tile."
+
+  diff_diff/_crossfit.py:
+    drift_risk: low
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "Cross-fitting, DR-score, and ridge infrastructure (DML)"
+        type: methodology
+        note: "Unit/cluster-level replayable K-fold assignment (assign_folds/FoldAssignment: state captured by value pre-draw, BootstrapReplaySpec discipline; global fold cursor across sorted strata) + out-of-fold nuisance prediction (cross_fit_predict: fit on complement & fit_mask, predict every unit; DegenerateFoldError contract; loss-only log-loss clip, oof predictions unclipped)."
+
+  diff_diff/_learners.py:
+    drift_risk: low
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "Cross-fitting, DR-score, and ridge infrastructure (DML)"
+        type: methodology
+        note: "Duck-typed learner protocol (RegressorLearner/ClassifierLearner Protocols, validate_learner, _validate_predictions) + native learners (LinearLearner/RidgeLearner/LogitLearner) wrapping linalg solvers. Contracts documented in REGISTRY: raw-X-no-intercept input, fit-reset semantics (documented limitation for stateful user learners), identified-columns prediction under rank deficiency."
+
+  diff_diff/_dr_scores.py:
+    drift_risk: low
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "Cross-fitting, DR-score, and ridge infrastructure (DML)"
+        type: methodology
+        note: "Shared DR panel scores: drdid_panel_inf_func (Sant'Anna-Zhao locally efficient IF, relocated verbatim from ContinuousDiD._dr_cell_inf_func, oracle-pinned in tests/test_dr_scores.py) and the Chang (2020) Case 1 orthogonal score pair (chang_panel_score / chang_panel_score_augmented) for the upcoming DMLDiD estimator. The two families are NOT interchangeable (Chang normalizes by the unconditional treated share; SZ is self-normalized)."
+      - path: docs/methodology/papers/chang-2020-review.md
+        type: methodology
+        note: "The paper review's 'Relation to Existing diff-diff Estimators' section names drdid_panel_inf_func as the DRDID-parity score location; keep the cross-reference current if functions move."
 
   diff_diff/prep.py:
     drift_risk: low

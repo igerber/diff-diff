@@ -292,6 +292,17 @@ Multi-Period and Staggered Adoption
 
   Source for the 8-step practitioner workflow surfaced via ``diff_diff.get_llm_guide("practitioner")`` and the README ``## Practitioner Workflow`` section. See ``docs/methodology/REGISTRY.md`` for the diff-diff renumbering and per-step deviations.
 
+Double/Debiased Machine Learning
+--------------------------------
+
+- **Chang, N.-C. (2020).** "Double/Debiased Machine Learning for Difference-in-Differences Models." *The Econometrics Journal*, 23(2), 177-191. https://doi.org/10.1093/ectj/utaa001
+
+  Neyman-orthogonal DiD scores with DML2 cross-fitting for ML first stages. The Case 1 (repeated outcomes) orthogonal score and its augmented-variance companion ship as ``chang_panel_score`` / ``chang_panel_score_augmented`` in ``diff_diff/_dr_scores.py`` (infrastructure for the upcoming ``DMLDiD`` estimator); paper review on file at ``docs/methodology/papers/chang-2020-review.md``, and the DoubleML parity anchor is committed at ``benchmarks/doubleml/chang_case1_parity.py``.
+
+- **Chernozhukov, V., Chetverikov, D., Demirer, M., Duflo, E., Hansen, C., Newey, W., & Robins, J. (2018).** "Double/Debiased Machine Learning for Treatment and Structural Parameters." *The Econometrics Journal*, 21(1), C1-C68. https://doi.org/10.1111/ectj.12097
+
+  The DML2 cross-fitting algorithm and Neyman-orthogonality framework that ``diff_diff/_crossfit.py`` implements at the fold level (unit/cluster-level replayable K-fold assignment, out-of-fold nuisance prediction).
+
 Local Projections DiD
 ---------------------
 

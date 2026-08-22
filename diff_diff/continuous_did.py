@@ -18,6 +18,7 @@ import pandas as pd
 
 from diff_diff._base import BaseEstimator
 from diff_diff._deprecation import NOT_SUPPLIED, warn_deprecated_kwarg
+from diff_diff._dr_scores import drdid_panel_inf_func
 from diff_diff.aggregation import AggregationKit
 from diff_diff.bootstrap_utils import (
     compute_effect_bootstrap_stats,
@@ -1412,7 +1413,7 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
             odds_c = ps[n_t:] / (1 - ps[n_t:])
             eta_cont = float(np.sum(odds_c * or_resid_c) / np.sum(odds_c))
             dY_all = np.concatenate([delta_y_treated, delta_y_control])
-            dr_inf = self._dr_cell_inf_func(dY_all, D, np.vstack([Xt, Xc]), gamma, ps)
+            dr_inf = drdid_panel_inf_func(dY_all, D, np.vstack([Xt, Xc]), gamma, ps)
 
         return {
             "mu_0_vec": mu_treated + eta_cont,  # per-treated counterfactual
@@ -1423,46 +1424,6 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
             "dr_inf": dr_inf,  # (n_total,) DRDID att.inf.func, treated-then-control
             "n_total": n_total,
         }
-
-    def _dr_cell_inf_func(
-        self,
-        dY: np.ndarray,
-        D: np.ndarray,
-        X: np.ndarray,
-        gamma: np.ndarray,
-        ps: np.ndarray,
-    ) -> np.ndarray:
-        """DRDID ``drdid_panel`` doubly-robust per-unit influence function.
-
-        Direct port of ``DRDID::drdid_panel$att.inf.func`` (unit weights = 1,
-        propensity already clipped so no drop-trimming). Units are ordered
-        treated-then-control. Validated to ~1e-13 against DRDID in the spike.
-        """
-        n = len(D)
-        out_delta = X @ gamma
-        w_treat = D
-        w_cont = ps * (1 - D) / (1 - ps)
-        dr_treat = w_treat * (dY - out_delta)
-        dr_cont = w_cont * (dY - out_delta)
-        eta_treat = dr_treat.mean() / w_treat.mean()
-        eta_cont = dr_cont.mean() / w_cont.mean()
-        weights_ols = 1.0 - D
-        wols_eX = (weights_ols * (dY - out_delta))[:, np.newaxis] * X
-        XpX = ((weights_ols[:, np.newaxis] * X).T @ X) / n
-        XpX_inv, _, _ = _rank_guarded_inv(XpX)
-        asy_wols = wols_eX @ XpX_inv
-        W = ps * (1 - ps)
-        score_ps = (D - ps)[:, np.newaxis] * X
-        Hess, _, _ = _rank_guarded_inv((X.T @ (W[:, np.newaxis] * X)) / n)
-        asy_ps = score_ps @ Hess
-        inf_treat_1 = dr_treat - w_treat * eta_treat
-        M1 = (w_treat[:, np.newaxis] * X).mean(axis=0)
-        inf_treat = (inf_treat_1 - asy_wols @ M1) / w_treat.mean()
-        inf_cont_1 = dr_cont - w_cont * eta_cont
-        M2 = (w_cont[:, np.newaxis] * (dY - out_delta - eta_cont)[:, np.newaxis] * X).mean(axis=0)
-        M3 = (w_cont[:, np.newaxis] * X).mean(axis=0)
-        inf_control = (inf_cont_1 + asy_ps @ M2 - asy_wols @ M3) / w_cont.mean()
-        return inf_treat - inf_control
 
     def _covariate_cell_influence(
         self,

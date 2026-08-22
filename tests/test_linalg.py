@@ -16,6 +16,7 @@ from diff_diff.linalg import (
     solve_logit,
     solve_ols,
     solve_poisson,
+    solve_ridge,
 )
 
 
@@ -3664,3 +3665,243 @@ class TestClusterKAdjustmentSeam:
         monkeypatch.setattr(lmod, "HAS_RUST_BACKEND", False)
         _, _, v_py = solve_ols(X, y, cluster_ids=cl, cluster_k_adjustment=5)
         np.testing.assert_allclose(v_rust, v_py, rtol=1e-12)
+
+
+class TestSolveRidge:
+    """solve_ridge: glmnet-style standardized penalty, sum loss, unpenalized
+    intercept added by the solver (intercept-first coefficient layout)."""
+
+    def _xy(self, n=60, p=3, seed=0):
+        rng = np.random.default_rng(seed)
+        X = rng.standard_normal((n, p))
+        beta = np.array([1.5, -2.0, 0.5][:p])
+        y = 0.7 + X @ beta + rng.normal(scale=0.3, size=n)
+        return X, y
+
+    def test_small_alpha_limit_matches_solve_ols(self):
+        X, y = self._xy()
+        ridge = solve_ridge(X, y, alpha=1e-10)
+        Xi = np.column_stack([np.ones(len(y)), X])
+        ols_coefs, _, _ = solve_ols(Xi, y, return_vcov=False)
+        np.testing.assert_allclose(ridge, ols_coefs, atol=1e-6, rtol=0)
+
+    @pytest.mark.parametrize("bad_alpha", [0.0, -1.0, np.inf, np.nan])
+    def test_nonpositive_alpha_raises_naming_solve_ols(self, bad_alpha):
+        X, y = self._xy()
+        with pytest.raises(ValueError, match="solve_ols"):
+            solve_ridge(X, y, alpha=bad_alpha)
+
+    def test_closed_form_small_case(self):
+        # Hand-computed: coefficients solve (Zw'Zw + a I) b_std = Zw' yw in
+        # weighted-standardized coordinates, mapped back to original scale.
+        X, y = self._xy(n=12, p=2, seed=3)
+        a = 2.5
+        coefs = solve_ridge(X, y, alpha=a)
+        xm = X.mean(axis=0)
+        ym = y.mean()
+        xs = np.sqrt(((X - xm) ** 2).mean(axis=0))
+        Z = (X - xm) / xs
+        b_std = np.linalg.solve(Z.T @ Z + a * np.eye(2), Z.T @ (y - ym))
+        b = b_std / xs
+        b0 = ym - xm @ b
+        np.testing.assert_allclose(coefs, np.concatenate([[b0], b]), atol=1e-10, rtol=0)
+
+    def test_intercept_not_penalized(self):
+        X, y = self._xy()
+        base = solve_ridge(X, y, alpha=5.0)
+        shifted = solve_ridge(X, y + 100.0, alpha=5.0)
+        np.testing.assert_allclose(shifted[0], base[0] + 100.0, atol=1e-8)
+        np.testing.assert_allclose(shifted[1:], base[1:], atol=1e-10)
+
+    def test_scale_equivariant_predictions(self):
+        # Standardized penalty => rescaling a column rescales its coefficient
+        # inversely, leaving predictions unchanged.
+        X, y = self._xy()
+        X2 = X.copy()
+        X2[:, 0] *= 10.0
+        c1, f1 = solve_ridge(X, y, alpha=3.0, return_fitted=True)
+        c2, f2 = solve_ridge(X2, y, alpha=3.0, return_fitted=True)
+        np.testing.assert_allclose(f1, f2, atol=1e-10)
+        np.testing.assert_allclose(c2[1], c1[1] / 10.0, atol=1e-12)
+
+    def test_zero_variance_column_rank_action_matrix(self):
+        X, y = self._xy()
+        Xz = np.column_stack([X, np.full(len(y), 7.0)])
+        with pytest.warns(RuntimeWarning, match="zero-variance"):
+            coefs = solve_ridge(Xz, y, alpha=1.0)
+        assert np.isnan(coefs[-1]) and np.isfinite(coefs[:-1]).all()
+        with pytest.raises(ValueError, match="zero-variance"):
+            solve_ridge(Xz, y, alpha=1.0, rank_deficient_action="error")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            coefs_silent = solve_ridge(Xz, y, alpha=1.0, rank_deficient_action="silent")
+        assert np.isnan(coefs_silent[-1])
+        with pytest.raises(ValueError, match="rank_deficient_action"):
+            solve_ridge(Xz, y, alpha=1.0, rank_deficient_action="bogus")
+
+    def test_collinear_nonconstant_columns_retained_finite(self):
+        X, y = self._xy(p=2)
+        Xc = np.column_stack([X, X[:, 0] + X[:, 1]])  # exact collinearity
+        coefs = solve_ridge(Xc, y, alpha=1.0)
+        assert np.isfinite(coefs).all()
+
+    def test_p_geq_n_supported(self):
+        rng = np.random.default_rng(5)
+        n, p = 20, 35
+        X = rng.standard_normal((n, p))
+        y = X[:, 0] - X[:, 1] + rng.normal(scale=0.1, size=n)
+        coefs, fitted = solve_ridge(X, y, alpha=1.0, return_fitted=True)
+        assert np.isfinite(coefs).all() and np.isfinite(fitted).all()
+        assert np.corrcoef(fitted, y)[0, 1] > 0.5
+
+    def test_empty_and_single_row_raise(self):
+        with pytest.raises(ValueError, match="at least 2"):
+            solve_ridge(np.empty((0, 2)), np.empty(0), alpha=1.0)
+        with pytest.raises(ValueError, match="at least 2"):
+            solve_ridge(np.ones((1, 2)), np.ones(1), alpha=1.0)
+
+    def _brute_force_loo(self, X, y, w, alphas):
+        # Frozen preprocessing: standardize ONCE on the full sample, then for
+        # each grid point and each positive-weight row, refit the penalized
+        # system without that row (in transformed coordinates, intercept as an
+        # explicit unpenalized ones column) and predict the held-out row.
+        n = len(y)
+        w_sum = w.sum()
+        xm = (w @ X) / w_sum
+        ym = (w @ y) / w_sum
+        xs = np.sqrt((w @ ((X - xm) ** 2)) / w_sum)
+        Z = (X - xm) / xs
+        sw = np.sqrt(w)
+        A = np.column_stack([np.ones(n), Z]) * sw[:, np.newaxis]
+        b = (y - ym) * sw
+        P = np.eye(A.shape[1])
+        P[0, 0] = 0.0
+        pos = np.flatnonzero(w > 0)
+        mses = []
+        for a in alphas:
+            errs = []
+            for i in pos:
+                mask = np.ones(n, dtype=bool)
+                mask[i] = False
+                coef = np.linalg.solve(A[mask].T @ A[mask] + a * P, A[mask].T @ b[mask])
+                errs.append(b[i] - A[i] @ coef)
+            mses.append(np.mean(np.array(errs) ** 2))
+        return np.array(mses)
+
+    def test_loocv_p_geq_n(self):
+        # The default RidgeLearner path (alpha='loocv') in the high-dimensional
+        # setting: selection works, predictions finite, and the losses match
+        # the brute-force frozen-preprocessing reconstruction.
+        rng = np.random.default_rng(17)
+        n, p = 12, 20
+        X = rng.standard_normal((n, p))
+        y = X[:, 0] - X[:, 1] + rng.normal(scale=0.1, size=n)
+        alphas = np.array([0.5, 5.0, 50.0])
+        diag = {}
+        coefs = solve_ridge(X, y, alpha="loocv", alphas=alphas, diagnostics_out=diag)
+        assert np.isfinite(coefs).all()
+        assert diag["alpha"] in alphas
+        brute = self._brute_force_loo(X, y, np.ones(n), alphas)
+        np.testing.assert_allclose(diag["loo_mse"], brute, atol=1e-9, rtol=0)
+
+    def test_loocv_matches_brute_force_unweighted(self):
+        X, y = self._xy(n=25, p=2, seed=7)
+        alphas = np.array([0.1, 1.0, 10.0])
+        diag = {}
+        solve_ridge(X, y, alpha="loocv", alphas=alphas, diagnostics_out=diag)
+        brute = self._brute_force_loo(X, y, np.ones(len(y)), alphas)
+        np.testing.assert_allclose(diag["loo_mse"], brute, atol=1e-10, rtol=0)
+        assert diag["alpha"] == alphas[int(np.argmin(brute))]
+
+    def test_loocv_matches_brute_force_weighted(self):
+        X, y = self._xy(n=25, p=2, seed=8)
+        rng = np.random.default_rng(9)
+        w = rng.uniform(0.5, 2.0, size=len(y))
+        w[:3] = 0.0  # zero-weight rows are excluded from LOO
+        alphas = np.array([0.5, 5.0])
+        diag = {}
+        solve_ridge(X, y, alpha="loocv", alphas=alphas, weights=w, diagnostics_out=diag)
+        brute = self._brute_force_loo(X, y, w, alphas)
+        np.testing.assert_allclose(diag["loo_mse"], brute, atol=1e-10, rtol=0)
+
+    def test_overflowing_finite_inputs_fail_closed(self):
+        # Finite but huge inputs overflow the weighted standardization; the
+        # fit must raise a targeted error, never return a silent zero model.
+        y = np.full(6, 1e308)
+        X = np.arange(12.0).reshape(6, 2)
+        with pytest.raises(ValueError, match="overflowed|non-finite coefficients"):
+            solve_ridge(X, y * 1e0, alpha=1.0, weights=np.full(6, 1e10))
+
+    def test_loocv_intercept_only_none_sentinel(self):
+        # All-constant design: no penalty is selectable; documented None
+        # sentinel for both diagnostics entries, intercept-only coefficients.
+        y = np.array([1.0, 2.0, 3.0, 4.0])
+        Xc = np.full((4, 2), 5.0)
+        diag = {}
+        with pytest.warns(RuntimeWarning, match="zero-variance"):
+            coefs = solve_ridge(Xc, y, alpha="loocv", diagnostics_out=diag)
+        assert diag["alpha"] is None and diag["loo_mse"] is None
+        np.testing.assert_allclose(coefs[0], y.mean())
+        assert np.isnan(coefs[1:]).all()
+
+    def test_loocv_diagnostics_out_populated(self):
+        X, y = self._xy()
+        diag = {}
+        solve_ridge(X, y, alpha="loocv", diagnostics_out=diag)
+        assert diag["alpha"] > 0 and len(diag["loo_mse"]) == 41
+
+    def test_integer_weights_equal_row_replication(self):
+        X, y = self._xy(n=15, p=2, seed=11)
+        w = np.array([1.0, 2.0, 3.0] * 5)
+        rep_idx = np.repeat(np.arange(15), w.astype(int))
+        weighted = solve_ridge(X, y, alpha=2.0, weights=w)
+        replicated = solve_ridge(X[rep_idx], y[rep_idx], alpha=2.0)
+        np.testing.assert_allclose(weighted, replicated, atol=1e-10, rtol=0)
+
+    def test_return_fitted(self):
+        X, y = self._xy()
+        coefs, fitted = solve_ridge(X, y, alpha=1.0, return_fitted=True)
+        np.testing.assert_allclose(fitted, coefs[0] + X @ coefs[1:], atol=1e-12)
+
+    def test_check_finite_false_skips_validation(self):
+        X, y = self._xy()
+        Xn = X.copy()
+        Xn[0, 0] = np.nan
+        with pytest.raises(ValueError, match="NaN or Inf"):
+            solve_ridge(Xn, y, alpha=1.0)
+        # check_finite=False skips OUR up-front validation; the NaN then trips
+        # a downstream guard (standardization-overflow ValueError or LAPACK
+        # LinAlgError) or produces NaN output — any is acceptable, as long as
+        # the skipped up-front message is not the one raised (precedent:
+        # TestSolveOLS.test_check_finite_false_skips_validation).
+        try:
+            out = solve_ridge(Xn, y, alpha=1.0, check_finite=False)
+            assert np.isnan(out).any()
+        except np.linalg.LinAlgError:
+            pass
+        except ValueError as e:
+            assert "X contains NaN" not in str(e)
+
+    def test_shape_and_weight_validation(self):
+        X, y = self._xy()
+        with pytest.raises(ValueError, match="y must be 1-dimensional"):
+            solve_ridge(X, y[:-1], alpha=1.0)
+        with pytest.raises(ValueError, match="1-dimensional"):
+            solve_ridge(X, y, alpha=1.0, weights=np.ones((len(y), 1)))
+        with pytest.raises(ValueError, match="NaN or Inf"):
+            solve_ridge(X, y, alpha=1.0, weights=np.full(len(y), np.inf))
+        with pytest.raises(ValueError, match="non-negative"):
+            solve_ridge(X, y, alpha=1.0, weights=-np.ones(len(y)))
+        with pytest.raises(ValueError, match="sum to zero"):
+            solve_ridge(X, y, alpha=1.0, weights=np.zeros(len(y)))
+
+    def test_loocv_grid_and_floor_validation(self):
+        X, y = self._xy()
+        with pytest.raises(ValueError, match="non-empty"):
+            solve_ridge(X, y, alpha="loocv", alphas=np.array([]))
+        with pytest.raises(ValueError, match="strictly positive"):
+            solve_ridge(X, y, alpha="loocv", alphas=np.array([0.0, 1.0]))
+        w = np.zeros(len(y))
+        w[:2] = 1.0
+        with pytest.raises(ValueError, match="at least 3 positive-weight"):
+            solve_ridge(X, y, alpha="loocv", weights=w)

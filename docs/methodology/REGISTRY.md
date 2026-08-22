@@ -734,6 +734,122 @@ methodology is introduced.
 
 ---
 
+## Cross-fitting, DR-score, and ridge infrastructure (DML)
+
+**Primary sources:** Chang, N.-C. (2020). Double/debiased machine learning for
+difference-in-differences models. *The Econometrics Journal*, 23(2), 177-191.
+https://doi.org/10.1093/ectj/utaa001 (paper review on file:
+`docs/methodology/papers/chang-2020-review.md`, numbering pinned to
+arXiv:1812.10846v3). Sant'Anna, P. H. C., & Zhao, J. (2020). Doubly robust
+difference-in-differences estimators. *Journal of Econometrics*, 219(1),
+101-122. Chernozhukov et al. (2018), *The Econometrics Journal* (DML2
+cross-fitting).
+
+Private infrastructure modules (`diff_diff/_crossfit.py`,
+`diff_diff/_dr_scores.py`, `diff_diff/_learners.py`; `solve_ridge` in
+`diff_diff/linalg.py`) for the upcoming `DMLDiD` estimator. Not exported;
+no estimator behavior changes in the PR that introduced them.
+
+**Two DISTINCT doubly-robust panel score families** (per the Chang review:
+"Chang's Case-1 score normalizes by the unconditional `p_0` … whereas the SZ
+DR score is self-normalized; the two are not interchangeable"):
+
+- `drdid_panel_inf_func(dY, D, X, gamma, ps)` — the Sant'Anna-Zhao locally
+  efficient DR influence function, a direct port of
+  `DRDID::drdid_panel$att.inf.func` (validated ~1e-13 vs DRDID), including the
+  first-stage nuisance-correction IF terms. Algebra-preserving relocation from
+  `ContinuousDiD._dr_cell_inf_func` (fail-closed input validation added; the
+  mathematical body is unchanged); the relocation is pinned by committed
+  two-tier oracles in `tests/test_dr_scores.py` (function-tier IF vector at
+  atol=1e-10; estimator-tier `ContinuousDiD` DR covariate path at atol=1e-8;
+  python-backend-guarded literals).
+- `chang_panel_score(dY, D, m_hat, ps, p_hat)` — Chang (2020) Equation 3.1's
+  Neyman-orthogonal Case 1 score as the per-unit UNCENTERED summand
+  `(D − ps(1−D)/(1−ps))·(dY − m_hat)/p_hat`, whose mean is the ATT; for
+  cross-fitted (out-of-fold) nuisances, NO first-stage correction terms.
+  `chang_panel_score_augmented(summand, D, theta, p_hat)` is the augmented
+  score `ψ̄ = summand − D·θ/p̂` carrying the finite-dimensional treated-share
+  variance correction (`Ĝ_1p = −θ̃/p̂`, Chang Theorem 2); the variance
+  estimator is `SE = sqrt(mean(ψ̄²)/N)`. Both validate inputs (non-empty, binary `D`,
+  `ps ∈ [0,1)`, `0 < p̂ < 1` strictly — `p̂ = 1` means no comparison
+  population and is rejected as unidentified — finiteness) and never emit
+  silent inf.
+
+- **Note:** p̂ convention (documented deviation). Chang's arXiv text is
+  internally contradictory about the fold-level scalar nuisance: the printed
+  algorithms show `p̂_k = (1/n)Σ_{i∈I_k^c} D_i` (an invalid normalizer) while
+  the Theorem 1-2 proofs use fold means over `I_k` (see the review's Gaps).
+  The score functions take `p_hat` as a CALLER-supplied argument; the LIBRARY
+  convention — adopted for `DMLDiD` and used in all fixtures — is the
+  FULL-SAMPLE treated share `p̂ = mean(D)`, a third self-consistent reading,
+  chosen for exact DoubleML parity (committed spike
+  `benchmarks/doubleml/chang_case1_parity.py`: ATT diff 4.4e-16, SE diff
+  5.6e-17 vs `DoubleMLDID(score="observational",
+  in_sample_normalization=False)` under doubleml 0.11.4 with shared folds)
+  and asymptotic equivalence to both printed readings. The published
+  *Econometrics Journal* version has not yet been cross-checked against the
+  arXiv typo (tracked in DEFERRED.md).
+
+**Cross-fitting (`_crossfit.py`)** — DML2-style unit-level K-fold machinery:
+`assign_folds` captures the generator's bit-generator state BY VALUE before
+any draw (the `BootstrapReplaySpec` replay discipline) so
+`FoldAssignment.replay()` reproduces the assignment exactly; members are units
+(or clusters when `cluster_ids` is given — all units of a cluster share a
+fold; stratum labels must be constant within cluster); within each stratum
+(sorted order) members are permuted and dealt with a single global fold cursor
+carrying across strata, so member counts per fold differ ≤ 1 and no fold is
+empty whenever `n_folds ≤ n_members`. `cross_fit_predict` fits each fold's
+learner on `train_mask(k) & fit_mask` and predicts EVERY unit in the fold;
+fold-time degeneracy raises `DegenerateFoldError` (pre-checks plus chained
+wrapping of learner `ValueError`s with the fold index and the original message
+quoted); log-loss diagnostics clip probabilities to `[1e-15, 1−1e-15]` for the
+LOSS ONLY — out-of-fold predictions are returned unclipped (nuisance trimming
+is estimator policy, applied by the consuming estimator).
+
+**Learner contract (`_learners.py`)** — duck-typed `RegressorLearner` /
+`ClassifierLearner` Protocols (sklearn-compatible `fit`/`predict`/
+`predict_proba`); learners always receive raw `X` with NO intercept column and
+manage the intercept internally; `fit` fully re-initializes (fit-reset
+semantics). Cross-fitting fits a DEEP COPY of the user's never-fit learner
+template in every fold, so no state — nested estimators and container
+parameters included — can carry across folds; an un-deep-copyable learner is
+reused with a loud `UserWarning` (the only residual reliance on fit-reset). Native
+learners (`"linear"`, `"ridge"`, `"logit"`) wrap `solve_ols` / `solve_ridge` /
+`solve_logit`. Rank deficiency: the unpenalized learners `LinearLearner` and
+`LogitLearner` FAIL CLOSED (an unpenalized rank-deficient fit has no
+well-defined out-of-sample prediction — the retained collinear column can
+impersonate the intercept in-fold); `RidgeLearner` predicts from the
+identified (non-NaN-coefficient) columns (the penalty keeps the fit
+well-posed and the intercept is preserved structurally; use ridge when
+rank-deficient folds are expected).
+
+**`solve_ridge` conventions (`linalg.py`)** — objective
+`Σ w_i(y_i − b0 − x_i'β)² + α·‖β_std‖²`: glmnet-style penalty on the
+(weighted, ddof=0) STANDARDIZED coefficients with an un-normalized (sum, not
+mean) loss — NOT sklearn's raw-scale penalty; at FIXED numeric α integer
+weights are exactly row replication (the equivalence does NOT extend to
+`alpha="loocv"`, whose leave-one-out unit is the whole weighted row — case
+deletion, not replicate deletion — so the selected α can differ between the
+two encodings), and a fixed α shrinks less as n grows. Intercept added by the
+solver and unpenalized. Domain `α > 0` strictly (unpenalized fits belong to
+`solve_ols`); zero-variance columns follow the module rank-deficiency contract
+(warn/error/silent → NaN coefficient); other collinearity is resolved by the
+penalty, which is what supports `p ≥ n`. `alpha="loocv"` freezes the
+(weighted) standardization on the full sample, then computes closed-form LOO
+residuals from one SVD — hat matrix includes the unpenalized intercept via the
+weighted-centering orthogonality; the selection objective is the unweighted
+mean of squared TRANSFORMED LOO residuals over positive-weight rows (equal to
+the w-weighted mean of squared raw-scale LOO residuals; re-weighting would
+double-weight).
+
+**Reference implementation(s):**
+- Python (panel-lane oracle): `doubleml.DoubleMLDID` (version-pinned; see the
+  committed parity spike). Not oracles: `DoubleMLDIDCS` (different RCS score),
+  `DoubleMLDIDMulti` (staggered timing, not Chang Case 3 intensity).
+- R: none for Chang's estimator; `DRDID::drdid_panel` for the SZ score.
+
+---
+
 ## CallawaySantAnna
 
 **Primary source:** [Callaway, B., & Sant'Anna, P.H.C. (2021). Difference-in-Differences with multiple time periods. *Journal of Econometrics*, 225(2), 200-230.](https://doi.org/10.1016/j.jeconom.2020.12.001)
