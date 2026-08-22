@@ -348,6 +348,7 @@ supported / out of scope; `warn` supported but with documented caveats;
 | `TwoStageDiD` | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ |
 | `StackedDiD` | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ |
 | `WooldridgeDiD` (ETWFE) | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ |
+| `LWDiD` | ✓ | ✓ | ✗ | ✗ | ✓ | warn | partial | ✗ | ✓ |
 | `EfficientDiD` | ✓ | ✓ | ✗ | ✗ | partial | ✓ | ✗ | ✗ | ✓ |
 | `SyntheticDiD` | ✓ | ✗ | ✗ | ✗ | ✓ | ✓ | ✓ | ✗ | partial |
 | `TROP` | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | partial |
@@ -358,6 +359,18 @@ supported / out of scope; `warn` supported but with documented caveats;
 | `RegressionDiscontinuity` | ✗ (cross-sectional; sharp: treatment = running >= cutoff; fuzzy: observed take-up via `takeup=`) | ✗ | ✗ | ✗ | ✗ | ✓ (precision only - estimand unchanged, unlike the DiD conditional-PT role; `covariates=`) | ✗ | ✗ | ✗ (follow-up) |
 
 **Footnotes.**
+- `LWDiD` + never-treated: requires at least one never-treated unit under
+  `control_group='not_yet_treated'` and at least two under
+  `'never_treated'`; all-eventually-treated designs raise under both
+  control strategies.
+- `LWDiD` + covariate adjustment (`warn`): unit-constant covariates only;
+  time-varying covariate columns raise `ValueError` (the rolling
+  transformation collapses the panel to one row per unit).
+- `LWDiD` + few-treated (`partial`): supports few or even a single treated
+  unit, but the mechanism is exact small-sample inference on the collapsed
+  regression (classical exact t / randomization inference, valid at one
+  treated unit) - NOT synthetic weighting; the column's synthetic-control
+  reading applies to `SyntheticDiD`/`TROP`.
 - `TwoWayFixedEffects` + staggered: fits but mixes positive and negative
   cohort-weights that violate the ATT interpretation; consult
   `BaconDecomposition` to quantify. Prefer any staggered-robust
@@ -494,6 +507,12 @@ estimators:
   under either `PT-All` or `PT-Post`; use `EfficientDiD.hausman_pretest`
   to pick. Requires a balanced panel (`PanelProfile.is_balanced ==
   True`); `fit()` raises `ValueError` on unbalanced input.
+- `LWDiD` (Lee & Wooldridge 2025, 2026) - unit-specific rolling
+  demeaning/detrending converts the panel into per-(cohort, period)
+  cross-sectional problems. Control pool selectable
+  (`control_group='not_yet_treated'` default, or `'never_treated'`);
+  covariates must be unit-constant; the only staggered option with an
+  exact small-sample inference layer (see §4.8).
 
 Diagnostic: `BaconDecomposition().fit(df, ...)` shows the weight allocation of a
 TWFE fit to 2×2 comparison types. Forbidden-comparison weight > 10% is a
@@ -656,11 +675,32 @@ but derivable from `cohort_sizes` + `has_never_treated`):
   unit untreated at period `t` as the donor pool (via the absorbing-state
   D matrix); supports staggered adoption and more complex factor
   structures. No covariate-adjustment surface on `fit()`.
+- `LWDiD` - exact small-sample inference on the collapsed cross-sectional
+  regression: `vcov_type='classical'` (with `n_bootstrap=0`; a positive
+  `n_bootstrap` replaces the common-timing headline inference with the
+  unit/cluster bootstrap) gives an exact t reference
+  distribution valid down to a single treated unit. Causal only under the
+  LWDiD identifying assumptions (no anticipation + parallel trends - the
+  heterogeneous-linear-trends variant for `rolling='detrend'` - +
+  overlap) and exact only under the classical error assumptions; the
+  canonical contract (which surfaces get the exact t, covariate designs)
+  is the LWDiD section of `get_llm_guide("full")` / the REGISTRY "LWDiD"
+  section. Common-timing `estimation_method='reg'` fits offer post-fit
+  `randomization_test()` (any such fit) and `wild_cluster_bootstrap()`
+  (additionally requires a `cluster=` fit; unclustered fits raise).
+  Randomization inference relaxes the classical error assumptions, but
+  it tests Fisher's SHARP null and is valid only when the observed
+  treatment assignment is exchangeable under a credible assignment
+  mechanism (the implementation permutes treatment labels) - in
+  observational settings without that justification, the permutation
+  p-value is not valid inference.
 
 Classical DiD estimators will still produce estimates, but inference is
 unreliable with very small treated groups; cluster-robust SE relies on
 the number of clusters, not the number of treated units. Bootstrap
-methods in the library are preferred.
+methods in the library are one mitigation; `LWDiD`'s exact t /
+randomization inference is the direct small-N answer when its classical
+assumptions are acceptable.
 
 ### §4.9 Heterogeneous adoption intensity
 

@@ -115,7 +115,11 @@ Variants for staggered designs:
 Treatment does not affect outcomes before it is implemented. Violated when
 units adjust behavior in anticipation of future treatment. Set `anticipation=k`
 to allow k periods of anticipation (`k` a non-negative integer; `bool` is
-rejected).
+rejected). EXCEPTION: `LWDiD` has no `anticipation=` parameter (passing it
+raises TypeError) - no-anticipation is maintained at estimation time; for a
+SINGLE treated cohort, diagnose it post hoc with
+`diff_diff.lwdid_sensitivity.sensitivity_no_anticipation` (and
+`robustness_pre_periods`); both reject multi-cohort staggered inputs.
 
 ---
 
@@ -232,7 +236,24 @@ Is treatment adoption staggered (multiple cohorts, different timing)?
 |          and TROP(non_absorbing=True, no-dynamic-effects) under stronger assumptions
 |
 |-- Few treated units (< 20)?
-|   \-- SyntheticDiD (SDiD)    -- synthetic control + DiD hybrid
+|   |-- SyntheticDiD (SDiD)    -- synthetic control + DiD hybrid
+|   \-- LWDiD                  -- exact small-sample inference on the
+|                                 collapsed regression, valid at N1 = 1.
+|                                 Construct it as
+|                                 LWDiD(estimation_method="reg",
+|                                 vcov_type="classical") - the DEFAULT
+|                                 vcov_type="hc1" is asymptotic robust
+|                                 inference, NOT the exact t. Causal
+|                                 only under the LWDiD identifying
+|                                 assumptions (no anticipation +
+|                                 parallel trends - the heterogeneous-
+|                                 linear-trends variant for detrend - +
+|                                 overlap) and exact only under the
+|                                 classical error assumptions; the
+|                                 CANONICAL contract - which exact-t
+|                                 surfaces, covariate designs, RI
+|                                 exchangeability - is the LWDiD
+|                                 section of get_llm_guide("full").
 |
 |-- Suspected factor confounding / interactive fixed effects?
 |   \-- TROP                   -- triply robust with nuclear norm factor adjustment

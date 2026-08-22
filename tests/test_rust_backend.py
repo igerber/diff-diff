@@ -4206,3 +4206,321 @@ class TestSolveOLSSaturatedDefaultPath:
             _warnings.simplefilter("error")  # no warning may fire
             coef, resid, vcov = lmod.solve_ols(X, y, skip_rank_check=True)
         assert np.all(np.isnan(vcov)), "NaN sentinel must pass through on the skip route"
+
+
+@pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
+class TestLWDiDBackendParity:
+    """LWDiD Rust-vs-Python backend equivalence at the estimator level.
+
+    LWDiD reaches Rust only through ``diff_diff.linalg.solve_ols`` (and its
+    internal vcov dispatch), and only on the ``weights=None`` +
+    ``vcov_type='hc1'`` gates - so the parity surface is ``reg``/``hc1``
+    fits (plain and clustered CR1), the staggered per-cell fits, the
+    post-fit RI/WCB replay modules, and the dr weighted-design
+    ``solve_ols`` call (ipw has NO Rust-eligible OLS stage - its
+    propensity + direct-weighting path is pure Python). ``classical``/``hc2``/``hc3`` fits never touch Rust
+    (solve_ols's non-hc1 paths call ``_compute_robust_vcov_numpy``
+    directly), and ``solve_logit`` (the ipw/dr/psm propensity step) is pure
+    Python - no Rust symbol exists for it.
+    """
+
+    @staticmethod
+    def _rust_disabled():
+        """ExitStack disabling every linalg-level Rust symbol (never
+        importlib.reload - it breaks isinstance identity for other tests)."""
+        import sys
+        from contextlib import ExitStack
+        from unittest.mock import patch
+
+        linalg_module = sys.modules["diff_diff.linalg"]
+        stack = ExitStack()
+        stack.enter_context(patch.object(linalg_module, "HAS_RUST_BACKEND", False))
+        for symbol in (
+            "_rust_solve_ols",
+            "_rust_solve_ols_chol",
+            "_rust_compute_robust_vcov",
+            "_rust_compute_robust_vcov_hc2",
+        ):
+            stack.enter_context(patch.object(linalg_module, symbol, None))
+        return stack
+
+    @staticmethod
+    def _rust_call_spy():
+        """ExitStack wrapping the Rust-eligible solver symbols with counting
+        delegates, so each test can PROVE its nominal Rust fit actually
+        dispatched to Rust (a dispatch regression would otherwise turn the
+        parity assertions into a Python-vs-Python tautology). Returns
+        (stack, counts) - enter the stack, run the fit, then assert
+        sum(counts.values()) > 0."""
+        import sys
+        from contextlib import ExitStack
+        from functools import partial
+        from unittest.mock import patch
+
+        linalg_module = sys.modules["diff_diff.linalg"]
+        # Measured (probe, review round 12): LWDiD's Rust-eligible routes
+        # reach ONLY _rust_solve_ols / _rust_solve_ols_chol - the Rust
+        # solve_ols kernel returns coefficients AND the hc1/CR1 vcov from
+        # the same call, and _rust_compute_robust_vcov(_hc2) is reachable
+        # only via the public compute_robust_vcov, which LWDiD never
+        # calls. Counting the solver therefore IS the variance-dispatch
+        # proof on these routes; adding the vcov symbols would assert on
+        # calls that can never occur.
+        counts = {"_rust_solve_ols": 0, "_rust_solve_ols_chol": 0}
+        stack = ExitStack()
+
+        def _counting(symbol_name, real_fn, *args, **kwargs):
+            result = real_fn(*args, **kwargs)
+            # Count only ACCEPTED-looking results: a kernel that declines
+            # (e.g. the Cholesky certification path) signals via
+            # non-finite output and the dispatcher falls back to NumPy -
+            # counting the raw call would re-open the tautology this spy
+            # exists to close. The test fixtures are full-rank, so a
+            # finite first array marks a genuinely Rust-backed solve.
+            # (Full provenance would need solve_ols to expose its backend
+            # - out of scope here.)
+            head = result[0] if isinstance(result, tuple) else result
+            try:
+                if head is not None and bool(np.all(np.isfinite(np.asarray(head)))):
+                    counts[symbol_name] += 1
+            except (TypeError, ValueError):
+                pass
+            return result
+
+        for symbol in counts:
+            real = getattr(linalg_module, symbol)
+            if real is None:
+                continue
+            stack.enter_context(
+                patch.object(linalg_module, symbol, partial(_counting, symbol, real))
+            )
+        return stack, counts
+
+    @staticmethod
+    def _assert_headline_parity(res_rust, res_py):
+        assert res_rust.att == pytest.approx(res_py.att, abs=1e-10)
+        assert res_rust.se == pytest.approx(res_py.se, rel=1e-8)
+        np.testing.assert_allclose(
+            res_rust.t_stat, res_py.t_stat, rtol=1e-8, atol=1e-12, equal_nan=True
+        )
+        np.testing.assert_allclose(
+            res_rust.p_value, res_py.p_value, rtol=1e-8, atol=1e-12, equal_nan=True
+        )
+        np.testing.assert_allclose(res_rust.conf_int, res_py.conf_int, rtol=1e-8, atol=1e-12)
+        assert res_rust.df_inference == res_py.df_inference
+        assert res_rust.inference_basis == res_py.inference_basis
+        if res_rust.params is not None and res_py.params is not None:
+            np.testing.assert_allclose(res_rust.params, res_py.params, rtol=1e-8, atol=1e-12)
+        if res_rust.vcov is not None and res_py.vcov is not None:
+            np.testing.assert_allclose(res_rust.vcov, res_py.vcov, rtol=1e-8, atol=1e-12)
+
+    def test_common_timing_reg_hc1_parity(self):
+        """Common-timing reg/hc1 - the canonical Rust-eligible fit."""
+        from diff_diff import LWDiD
+        from tests.test_lwdid import _make_common_timing_panel
+
+        df = _make_common_timing_panel(seed=7)
+
+        def fit():
+            return LWDiD(rolling="demean", vcov_type="hc1").fit(
+                df, outcome="y", unit="unit", time="time", treatment="treat"
+            )
+
+        spy, rust_calls = self._rust_call_spy()
+        with spy:
+            res_rust = fit()
+        assert sum(rust_calls.values()) > 0, (
+            "the nominal Rust fit never dispatched to a Rust solver - "
+            "the parity comparison would be a Python-vs-Python tautology"
+        )
+        with self._rust_disabled():
+            res_py = fit()
+        self._assert_headline_parity(res_rust, res_py)
+
+    def test_common_timing_reg_cluster_cr1_parity(self):
+        """Clustered CR1 (cluster= + hc1) exercises the Rust cluster vcov path."""
+        from diff_diff import LWDiD
+        from tests.test_lwdid import _make_common_timing_panel
+
+        df = _make_common_timing_panel(seed=11)
+        df["grp"] = df["unit"] % 6  # unit-constant cluster column
+
+        def fit():
+            return LWDiD(rolling="demean", vcov_type="hc1", cluster="grp").fit(
+                df, outcome="y", unit="unit", time="time", treatment="treat"
+            )
+
+        spy, rust_calls = self._rust_call_spy()
+        with spy:
+            res_rust = fit()
+        assert sum(rust_calls.values()) > 0, (
+            "the nominal Rust fit never dispatched to a Rust solver - "
+            "the parity comparison would be a Python-vs-Python tautology"
+        )
+        with self._rust_disabled():
+            res_py = fit()
+        self._assert_headline_parity(res_rust, res_py)
+        assert res_rust.n_clusters == res_py.n_clusters
+
+    def test_post_fit_ri_and_wcb_parity(self):
+        """Post-fit randomization_test / wild_cluster_bootstrap replay parity.
+
+        Both preconditions are load-bearing: wild_cluster_bootstrap raises
+        on an unclustered fit, and covariate-less RI takes a pure-numpy
+        fast path that exercises no solve_ols at all - the unit-constant
+        covariate forces the Rust-eligible controls path. The p-values are
+        discrete exceedance counts (a boundary draw can flip under ~1-ULP
+        backend divergence), so they get an absolute 2/replicates
+        tolerance, never exact comparison.
+        """
+        import warnings as _w
+
+        from diff_diff import LWDiD
+        from tests.test_lwdid import _make_common_timing_panel
+
+        n_reps = 499
+        n_boot = 199
+        df = _make_common_timing_panel(seed=13)
+        rng = np.random.default_rng(3)
+        x_by_unit = rng.normal(size=df["unit"].nunique())
+        df["x"] = x_by_unit[df["unit"].to_numpy()]  # unit-constant covariate
+        df["grp"] = df["unit"] % 6
+
+        def fit_only():
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")
+                return LWDiD(rolling="demean", vcov_type="hc1", cluster="grp").fit(
+                    df,
+                    outcome="y",
+                    unit="unit",
+                    time="time",
+                    treatment="treat",
+                    covariates=["x"],
+                )
+
+        # Each Rust-live stage carries its own dispatch proof, so the fit,
+        # the RI replay, and the WCB replay are independently verified to
+        # reach a Rust solver.
+        spy, rust_calls = self._rust_call_spy()
+        with spy:
+            res_rust = fit_only()
+        assert sum(rust_calls.values()) > 0, "fit never dispatched to Rust"
+        spy_ri, ri_calls = self._rust_call_spy()
+        with spy_ri, _w.catch_warnings():
+            _w.simplefilter("ignore")
+            ri_rust = res_rust.randomization_test(n_reps=n_reps, seed=42)
+        assert sum(ri_calls.values()) > 0, "RI replay never dispatched to Rust"
+        spy_wcb, wcb_calls = self._rust_call_spy()
+        with spy_wcb, _w.catch_warnings():
+            _w.simplefilter("ignore")
+            wcb_rust = res_rust.wild_cluster_bootstrap(n_bootstrap=n_boot, seed=42)
+        assert sum(wcb_calls.values()) > 0, "WCB replay never dispatched to Rust"
+        with self._rust_disabled():
+            res_py = fit_only()
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")
+                ri_py = res_py.randomization_test(n_reps=n_reps, seed=42)
+                wcb_py = res_py.wild_cluster_bootstrap(n_bootstrap=n_boot, seed=42)
+        self._assert_headline_parity(res_rust, res_py)
+        assert ri_rust.pvalue == pytest.approx(ri_py.pvalue, abs=2.0 / n_reps)
+        # Discrete tolerance from the EFFECTIVE replicate count (with few
+        # clusters WCB full-enumerates 2^G draws, so the result's
+        # n_bootstrap can be far below the requested count).
+        assert wcb_rust.n_bootstrap == wcb_py.n_bootstrap
+        wcb_tol = 2.0 / wcb_rust.n_bootstrap
+        assert wcb_rust.p_value == pytest.approx(wcb_py.p_value, abs=wcb_tol)
+        assert wcb_rust.att == pytest.approx(wcb_py.att, abs=1e-10)
+        assert wcb_rust.se == pytest.approx(wcb_py.se, rel=1e-8)
+        assert wcb_rust.t_stat_original == pytest.approx(wcb_py.t_stat_original, rel=1e-8)
+        # Test-inversion CI endpoints are grid/count statistics - allow the
+        # same discrete slack as the p-value, scaled by the se magnitude.
+        assert wcb_rust.ci_lower == pytest.approx(
+            wcb_py.ci_lower, abs=wcb_tol * max(abs(wcb_rust.se), 1e-12) + 1e-10
+        )
+        assert wcb_rust.ci_upper == pytest.approx(
+            wcb_py.ci_upper, abs=wcb_tol * max(abs(wcb_rust.se), 1e-12) + 1e-10
+        )
+        assert wcb_rust.n_clusters == wcb_py.n_clusters
+
+    def test_staggered_reg_hc1_event_study_parity(self):
+        """Staggered reg/hc1: per-cell fits, headline, and event-study arrays."""
+        import warnings as _w
+
+        from diff_diff import LWDiD
+        from tests.test_lwdid import _make_staggered_panel
+
+        df = _make_staggered_panel(seed=17)
+
+        def fit():
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")
+                res = LWDiD(rolling="demean", vcov_type="hc1").fit(
+                    df,
+                    outcome="y",
+                    unit="unit",
+                    time="time",
+                    treatment="treat",
+                    first_treat="cohort",
+                )
+                es = res.aggregate("event_study")
+            return res, es
+
+        spy, rust_calls = self._rust_call_spy()
+        with spy:
+            res_rust, es_rust = fit()
+        assert (
+            sum(rust_calls.values()) > 0
+        ), "the nominal Rust staggered fit never dispatched to a Rust solver"
+        with self._rust_disabled():
+            res_py, es_py = fit()
+        assert res_rust.att == pytest.approx(res_py.att, abs=1e-10)
+        assert res_rust.se == pytest.approx(res_py.se, rel=1e-8)
+        np.testing.assert_array_equal(es_rust.event_time, es_py.event_time)
+        # Reference rows carry NaN inference under BOTH engines (equal_nan).
+        for field in ("att", "se", "t_stat", "p_value", "conf_int_lower", "conf_int_upper"):
+            np.testing.assert_allclose(
+                getattr(es_rust, field),
+                getattr(es_py, field),
+                rtol=1e-8,
+                atol=1e-12,
+                equal_nan=True,
+                err_msg=f"event-study {field} diverges across backends",
+            )
+
+    def test_common_timing_dr_parity(self):
+        """Doubly robust (ipw/dr family): the propensity step (solve_logit)
+        is pure Python - no Rust symbol exists - so Rust is reached only
+        via the downstream weighted-design solve_ols call (weights folded
+        into the matrices, weights=None at the solve_ols boundary)."""
+        import warnings as _w
+
+        from diff_diff import LWDiD
+        from tests.test_lwdid import _make_common_timing_panel
+
+        df = _make_common_timing_panel(seed=19)
+        rng = np.random.default_rng(5)
+        x_by_unit = rng.normal(size=df["unit"].nunique())
+        df["x"] = x_by_unit[df["unit"].to_numpy()]  # unit-constant covariate
+
+        def fit():
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")
+                return LWDiD(rolling="demean", estimation_method="dr").fit(
+                    df,
+                    outcome="y",
+                    unit="unit",
+                    time="time",
+                    treatment="treat",
+                    covariates=["x"],
+                )
+
+        spy, rust_calls = self._rust_call_spy()
+        with spy:
+            res_rust = fit()
+        assert sum(rust_calls.values()) > 0, (
+            "the nominal Rust fit never dispatched to a Rust solver - "
+            "the parity comparison would be a Python-vs-Python tautology"
+        )
+        with self._rust_disabled():
+            res_py = fit()
+        self._assert_headline_parity(res_rust, res_py)

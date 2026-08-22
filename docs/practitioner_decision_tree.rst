@@ -375,6 +375,24 @@ This method constructs a weighted blend of control markets that closely tracks y
 markets before the campaign. The "synthetic control" provides a better counterfactual than
 a simple average of all controls.
 
+**Exact-inference alternative:** :class:`~diff_diff.LWDiD` with
+``vcov_type='classical'`` gives exact small-sample t inference on the collapsed
+cross-sectional regression — valid down to a *single* test market, **provided
+the identifying and classical assumptions hold**. The identifying assumptions
+(no anticipation, parallel trends — or its heterogeneous-trends variant for
+``rolling='detrend'`` — and overlap) are what make the answer *causal*;
+without them the exact t-test cleanly measures a biased association. The
+classical error assumptions are what make it *exact*. The complete contract —
+which fits get the exact t, the covariate-design fallback that keeps a single
+test market covariate-compatible, and the large-sample inference used by
+staggered aggregates — is on the :doc:`LWDiD API page <api/lwdid>` (Key
+Assumptions and Small-Sample Inference). Common-timing
+``estimation_method='reg'`` fits also offer post-fit ``randomization_test()``,
+which tests Fisher's sharp null and is justified by the treatment-assignment
+mechanism rather than the normality assumptions. Prefer LWDiD when the question
+is "is this effect statistically real with so few treated units?" rather than
+"what is the best counterfactual trajectory?".
+
 .. code-block:: python
 
    from diff_diff import SyntheticDiD, generate_did_data
@@ -419,8 +437,10 @@ Survey Data
 satisfaction, NPS, or similar. The survey uses stratified sampling, clustering (e.g.,
 by geography), or probability weights.
 
-**Answer:** Use any of the methods above, combined with
-:class:`~diff_diff.SurveyDesign`.
+**Answer:** Use a survey-capable method above, combined with
+:class:`~diff_diff.SurveyDesign`. (:class:`~diff_diff.LWDiD` is the
+exception: it accepts no ``survey_design`` parameter at all — see the
+:ref:`survey-design-support` matrix.)
 
 Ignoring survey weights and clustering makes your confidence intervals too narrow -
 you will be overconfident about the result. Passing a ``SurveyDesign`` to ``fit()``
@@ -504,11 +524,11 @@ At a Glance
      - ``HeterogeneousAdoptionDiD``
      - Targets WAS / WAS_{d_lower} when no holdout exists
    * - Only a few test markets
-     - ``SyntheticDiD``
-     - Optimal with few treated units
+     - ``SyntheticDiD`` or ``LWDiD``
+     - ``SyntheticDiD`` builds a synthetic counterfactual; ``LWDiD`` adds exact small-sample inference (under classical error assumptions — see :ref:`section-few-markets`)
    * - Survey data (any design above)
-     - Any + ``SurveyDesign``
-     - Correct confidence intervals
+     - Any survey-capable estimator above (not ``LWDiD``) + ``SurveyDesign``
+     - Correct confidence intervals; see the :ref:`survey-design-support` matrix
 
 
 What About the Other Estimators?
@@ -530,7 +550,16 @@ The six scenarios above cover the most common business use cases.
   via ``cluster=`` on those paths; PSM provides point estimates only
   (inference is NaN pending an Abadie-Imbens matching variance, and
   ``cluster=`` is rejected). Works for both common
-  timing and staggered adoption designs. Compare ``rolling='demean'`` vs
+  timing and staggered adoption designs, and uniquely offers exact
+  small-sample inference (``vcov_type='classical'`` exact t, valid down to
+  a single treated unit; causal only under the LWDiD identifying
+  assumptions — no anticipation, parallel trends or its
+  heterogeneous-trends variant for detrending, and overlap — and exact
+  only under the classical error assumptions; full contract on the
+  :doc:`LWDiD API page <api/lwdid>`) plus post-fit randomization
+  inference on common-timing ``reg`` fits. Staggered aggregates other
+  than the eligible never-treated composite use large-sample
+  influence-function inference, not the exact t. Compare ``rolling='demean'`` vs
   ``rolling='detrend'`` as a built-in specification robustness check.
 
 For the full academic decision tree with all estimators, see :doc:`choosing_estimator`.

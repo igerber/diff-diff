@@ -978,3 +978,247 @@ class TestLLMsFullEfficientDiDShimLine:
                 and "DEPRECATED" not in line
             ]
             assert offending == [], offending
+
+
+# ---------------------------------------------------------------------------
+# Guide coverage — LWDiD (release-audit docs pass)
+# ---------------------------------------------------------------------------
+class TestLWDiDGuideSection:
+    """Lock the LWDiD guide additions against deletion or drift: the
+    llms-full estimator section (signatures introspected against the real
+    API), the Choosing-an-Estimator row, the scope-limitation caveats, and
+    the llms-practitioner / llms-autonomous mentions."""
+
+    def _lwdid_slice(self):
+        text = get_llm_guide("full")
+        start = text.index("### LWDiD")
+        end = text.index("### TROP", start)
+        return text[start:end]
+
+    @staticmethod
+    def _documented_defaults(block):
+        # Parse "name: type = default," lines into {name: default_literal}.
+        # Comments after # are stripped; defaults that are not Python
+        # literals are skipped (none exist in the LWDiD blocks today).
+        import ast
+        import re
+
+        defaults = {}
+        for line in block.splitlines()[1:]:
+            code = line.split("#", 1)[0]
+            m = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*:[^=]*=\s*(.+?),?\s*$", code)
+            if not m:
+                continue
+            try:
+                defaults[m.group(1)] = ast.literal_eval(m.group(2))
+            except (ValueError, SyntaxError):
+                continue
+        return defaults
+
+    @staticmethod
+    def _documented_params(block):
+        # Signature-block lines are "    name: type = default,  # comment"
+        # (first line is the "ClassName(" / "obj.fit(" opener). Collect
+        # every documented top-level parameter name so the caller can
+        # assert set EQUALITY against the real signature - rejecting both
+        # omissions and invented keywords.
+        import re
+
+        names = set()
+        for line in block.splitlines()[1:]:
+            m = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*:", line)
+            if m:
+                names.add(m.group(1))
+        return names
+
+    def test_guides_have_lwdid_coverage(self):
+        assert "### LWDiD" in get_llm_guide("full")
+        assert "### LWDiDResults" in get_llm_guide("full")
+        assert "LWDiD" in get_llm_guide("practitioner")
+        assert "LWDiD" in get_llm_guide("autonomous")
+
+    def test_llms_full_lwdid_constructor_signature_matches_real_api(self):
+        import inspect
+
+        from diff_diff import LWDiD
+
+        sig_params = set(inspect.signature(LWDiD.__init__).parameters)
+        sig_params.discard("self")
+        lwdid_text = self._lwdid_slice()
+        block_start = lwdid_text.index("LWDiD(")
+        block_end = lwdid_text.index("\n)", block_start)
+        ctor_block = lwdid_text[block_start:block_end]
+        documented = self._documented_params(ctor_block)
+        assert documented == sig_params, (
+            f"Constructor block in the LWDiD guide section drifted from the "
+            f"real LWDiD.__init__ signature: "
+            f"missing={sorted(sig_params - documented)}, "
+            f"invented={sorted(documented - sig_params)}."
+        )
+        # EVERY documented default must equal the real signature's default -
+        # a wrong default (e.g. showing classical as the vcov_type default)
+        # would mislead an agent about which inference mode a bare
+        # constructor produces.
+        real_defaults = {
+            name: param.default
+            for name, param in inspect.signature(LWDiD.__init__).parameters.items()
+            if name != "self" and param.default is not inspect.Parameter.empty
+        }
+        documented_defaults = self._documented_defaults(ctor_block)
+        assert documented_defaults == real_defaults, (
+            f"LWDiD constructor block defaults drifted from the real "
+            f"signature: documented={documented_defaults!r}, "
+            f"real={real_defaults!r}."
+        )
+
+    def test_llms_full_lwdid_fit_signature_matches_real_api(self):
+        import inspect
+
+        from diff_diff import LWDiD
+
+        sig_params = set(inspect.signature(LWDiD.fit).parameters)
+        sig_params.discard("self")
+        lwdid_text = self._lwdid_slice()
+        block_start = lwdid_text.index("lw.fit(")
+        block_end = lwdid_text.index(") -> ", block_start)
+        fit_block = lwdid_text[block_start:block_end]
+        documented = self._documented_params(fit_block)
+        # Set EQUALITY (not subset): an invented kwarg such as
+        # survey_design= would fail here - an agent copying it would hit
+        # a TypeError on the real API.
+        assert documented == sig_params, (
+            f"fit() block in the LWDiD guide section drifted from the real "
+            f"LWDiD.fit signature: "
+            f"missing={sorted(sig_params - documented)}, "
+            f"invented={sorted(documented - sig_params)}."
+        )
+
+    def test_llms_full_lwdid_choosing_row(self):
+        text = get_llm_guide("full")
+        start = text.index("## Choosing an Estimator")
+        end = text.index("## ", start + 2)
+        choosing = text[start:end]
+        row = [line for line in choosing.splitlines() if "`LWDiD`" in line]
+        assert row, "Choosing-an-Estimator table has no LWDiD row"
+        assert "exact" in row[0], (
+            "The LWDiD Choosing row must name its niche: exact " "small-sample inference."
+        )
+
+    def test_lwdid_scope_caveats_pinned(self):
+        # The scope-limitation content is the reason the LWDiD guide
+        # section exists; pin the load-bearing phrases INSIDE the caveats
+        # block itself (not anywhere in the section, where the constructor
+        # comments would satisfy them even after the caveat is deleted).
+        lwdid_text = self._lwdid_slice()
+        caveats = lwdid_text[lwdid_text.index("Caveats and contracts:") :]
+        for needle in (
+            "survey_design",
+            "anticipation",
+            "honest_did",
+            "PSM is point-only",
+            "panel data only",
+        ):
+            assert needle in caveats, (
+                f"LWDiD guide caveats block lost its scope-limitation "
+                f"caveat mentioning {needle!r}."
+            )
+        autonomous = get_llm_guide("autonomous")
+        matrix_rows = [
+            line for line in autonomous.splitlines() if "`LWDiD`" in line and line.count("|") >= 11
+        ]
+        assert matrix_rows, "llms-autonomous §3 matrix lost its LWDiD row"
+        few_start = autonomous.index("§4.8 Few treated units")
+        few_end = autonomous.index("§4.9", few_start)
+        assert (
+            "LWDiD" in autonomous[few_start:few_end]
+        ), "llms-autonomous §4.8 (few treated units) lost its LWDiD entry"
+
+    def test_lwdid_inference_contracts_pinned(self):
+        # Local-review round-2 contracts: (M1) the practitioner few-treated
+        # branch must construct the exact-inference variant explicitly and
+        # flag that the hc1 DEFAULT is not exact; (D1) the practitioner
+        # anticipation instruction must carry the LWDiD exception; (M2) the
+        # autonomous RI guidance must state the assignment-exchangeability
+        # requirement; (D2) WCB's cluster= requirement must be documented.
+        practitioner = get_llm_guide("practitioner")
+        few_start = practitioner.index("Few treated units")
+        few_slice = practitioner[few_start : few_start + 1500]
+        assert 'vcov_type="classical"' in few_slice, (
+            "Practitioner few-treated branch must construct "
+            'LWDiD(..., vcov_type="classical") explicitly - the hc1 '
+            "default is not the exact t."
+        )
+        assert "hc1" in few_slice, (
+            "Practitioner few-treated branch must warn that the DEFAULT "
+            "vcov_type='hc1' is asymptotic, not exact."
+        )
+        anticipation_start = practitioner.index("### No-Anticipation")
+        anticipation_slice = practitioner[anticipation_start : anticipation_start + 1200]
+        assert "sensitivity_no_anticipation" in anticipation_slice, (
+            "Practitioner No-Anticipation step lost the LWDiD exception "
+            "(no anticipation= parameter; sensitivity helper is the "
+            "single-cohort diagnostic)."
+        )
+        autonomous = get_llm_guide("autonomous")
+        few_auto_start = autonomous.index("§4.8 Few treated units")
+        few_auto = autonomous[few_auto_start : autonomous.index("§4.9", few_auto_start)]
+        assert "exchangeable" in few_auto, (
+            "llms-autonomous §4.8 lost the assignment-exchangeability "
+            "requirement for LWDiD randomization inference."
+        )
+        full = get_llm_guide("full")
+        lwdid_results_start = full.index("### LWDiDResults")
+        results_slice = full[lwdid_results_start : full.index("### ", lwdid_results_start + 4)]
+        assert "cluster=" in results_slice, (
+            "LWDiDResults guide entry lost wild_cluster_bootstrap's " "cluster= fit requirement."
+        )
+        # Covariate exact-inference contract (review round 4): the guide
+        # must document BOTH controlled designs - the plain (1, D, X)
+        # design (N > K+2, supports a single treated unit) and the
+        # interacted design gated by the per-arm guards - never presenting
+        # the per-arm guards as universal.
+        lwdid_section = self._lwdid_slice()
+        assert "N > K+2" in lwdid_section, (
+            "LWDiD guide section lost the plain controlled design's " "N > K+2 requirement."
+        )
+        assert "N0 > K+1" in lwdid_section and "N1 > K+1" in lwdid_section, (
+            "LWDiD guide section lost the interacted design's per-arm "
+            "guards (N0 > K+1, N1 > K+1)."
+        )
+        # The exact-t claim is CAUSAL only under the complete identifying
+        # contract (review rounds 6+9). The llms-full LWDiD section is the
+        # CANONICAL statement: it must carry the full family enumeration -
+        # no-anticipation, parallel trends, the detrending CHT
+        # (heterogeneous-linear-trends) variant, overlap, and the
+        # collapsed-regression equivalence - plus the common-timing
+        # event-study multiplier-bootstrap behavior. Every other small-N
+        # surface carries the short qualifier: it must at least name
+        # overlap alongside no-anticipation/parallel-trends and point back
+        # to the canonical statement rather than restating it.
+        for needle in (
+            "E[U|D,X] = 0",
+            "parallel trends",
+            "overlap",
+            "heterogeneous-linear-trends",
+            "multiplier",
+            # The eligible never-treated composite is the staggered
+            # exact-t EXCEPTION (T_{n-2}); blanket "staggered aggregates
+            # are large-sample" wording must not return.
+            "T_{n-2}",
+        ):
+            assert needle in lwdid_section, (
+                f"LWDiD guide section (the canonical identification/"
+                f"inference contract) lost {needle!r}."
+            )
+        for surface_name, surface_text in (
+            ("practitioner few-treated branch", few_slice),
+            ("llms-autonomous §4.8", few_auto),
+        ):
+            assert "overlap" in surface_text, (
+                f"{surface_name} lost 'overlap' from its short identifying-"
+                f"assumptions qualifier."
+            )
+            assert "parallel trends" in surface_text, (
+                f"{surface_name} lost 'parallel trends' from its short "
+                f"identifying-assumptions qualifier."
+            )

@@ -270,6 +270,7 @@ the limitation and suggested alternative.
 
 | Estimator | Limitation | Alternative |
 |-----------|-----------|-------------|
+| LWDiD | Any `survey_design` / sampling weights | No weight argument exists on any path, so the failure mode is a bare `TypeError: unexpected keyword argument` rather than a descriptive error (the exception to the preamble above). The LW papers derive the transformation and exact-inference layer for unweighted panels; a weighted counterpart is DEFERRED pending user demand. Use `CallawaySantAnna` (or another survey-capable staggered estimator) when design-based variance is required. |
 | SyntheticDiD | Replicate weights | Pre-existing limitation: no replicate-weight survey support on SDID. All three variance methods (bootstrap, placebo, jackknife) now support pweight-only and strata/PSU/FPC designs; replicate-weight designs remain rejected. |
 | TROP | Replicate weights | Use strata/PSU/FPC design with Rao-Wu rescaled bootstrap |
 | BaconDecomposition | Replicate weights | Diagnostic only, no inference |

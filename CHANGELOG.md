@@ -35,6 +35,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remain outside the Stata anchor and are documented as such (REGISTRY `## LPDiD`
   Deviation 4; `DEFERRED.md` non-absorbing row narrowed to the RA +
   placebo/pooled-pre residuals).
+- **LWDiD guide coverage + scope-limitation docs + Rust parity tests** (pre-release
+  audit). The estimator was missing from the full, practitioner, and autonomous
+  wheel-shipped AI guides (only the `llms.txt` catalog line existed): `llms-full.txt`
+  gains an `LWDiD` section (introspection-pinned constructor/fit signatures, estimand-
+  by-timing-mode caveats, a Choosing-an-Estimator row) and an `LWDiDResults` entry;
+  `llms-practitioner.txt`'s few-treated branch and `llms-autonomous.txt`'s support
+  matrix / §4.3 / §4.8 now route to LWDiD's exact small-N inference niche. Scope
+  limitations are now documented on every relevant surface (panel-only, no sampling
+  weights / `survey_design=`, no `anticipation=`, HonestDiD non-admission): `lwdid.rst`
+  Scope-limitations note, a REGISTRY Edge-cases Note, the survey-support and SE-method
+  matrices in `choosing_estimator.rst`, `survey-roadmap.md`, and
+  `practitioner_decision_tree.rst`, with the anticipation offset, HonestDiD admission,
+  and survey weights recorded as DEFERRED rows (and practitioner-code-surface routing
+  as a TODO row). New `TestLWDiDBackendParity` (5 Rust-vs-Python estimator-level
+  equivalence tests: reg/hc1 plain + CR1, post-fit RI/WCB replay, staggered
+  event-study, dr) and `TestLWDiDGuideSection` guide pins. `doc-deps.yaml` maps
+  `lwdid.py` to all new surfaces; stale pre-merge wording ("forthcoming", "in
+  review") retired from `references.rst` and the REGISTRY section.
 - **LWDiD tutorial notebook** (`docs/tutorials/31_lwdid.ipynb`): the replacement for
   the tutorial withdrawn from PR #588, authored via the numbers-locked workflow (every
   cited number prototyped in scripts first, notebook assembled and executed once).

@@ -200,7 +200,14 @@ Key Assumptions
    LW 2025): When using ``detrend``, the parallel trends assumption is
    relaxed to allow unit-specific linear trends
    :math:`\eta_g \cdot t` that vary by cohort. Detrending removes these
-   heterogeneous trends, restoring unconfoundedness.
+   heterogeneous trends, restoring unconfoundedness. Under CHT, demeaning
+   is inconsistent — ``rolling='detrend'`` is the consistent route.
+
+   **Overlap** (Assumption OVLC, Equations 2.14–2.15, common timing;
+   Assumption OVLS, Equation 4.10, staggered): each treated cohort must
+   have comparison support in its control pool — covariate patterns of
+   treated units must occur among controls with positive probability.
+   Full-rank and residual-df guards do not substitute for overlap.
 
 Small-Sample Inference
 ----------------------
@@ -349,6 +356,29 @@ transformation is applied. Eight requirements are enforced:
   internal column (e.g. ``cluster='_treat'`` previously reported the
   cluster labels' coefficient as the ATT). ``cluster=`` equal to the
   unit column remains supported.
+
+.. note::
+
+   **Scope limitations** (structural exclusions, distinct from the validated
+   requirements above). (1) Panel data only — the unit-specific rolling
+   transformation requires repeated observation of each unit, so there is
+   no direct repeated-cross-section API (contrast ``CallawaySantAnna``'s
+   ``panel=False`` mode). LW 2026 does permit repeated cross-sections
+   after aggregating microdata to assignment-unit-by-period cell means;
+   such a pre-aggregated panel can be fitted here, but the library does
+   not propagate within-cell sampling uncertainty — the route is only
+   appropriate when cell sizes justify treating cell means as population
+   means. (2) No sampling weights and
+   no ``survey_design=`` parameter on any path — passing ``survey_design=``
+   raises ``TypeError``; see the Survey Design Support matrix in
+   :doc:`../choosing_estimator`. (3) No ``anticipation=`` parameter — the
+   no-anticipation assumption is maintained at estimation time;
+   ``diff_diff.lwdid_sensitivity.sensitivity_no_anticipation`` is the
+   post-hoc diagnostic (single treated cohort only), whereas
+   ``CallawaySantAnna`` offers an estimation-time offset. (4)
+   ``compute_honest_did`` does not accept LWDiD event studies — admitting
+   the transformation-based pre-period placebos as Rambachan–Roth inputs is
+   a deferred methodology decision (see DEFERRED.md).
 
 .. note::
 

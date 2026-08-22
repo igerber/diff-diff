@@ -920,8 +920,25 @@ sources:
       - path: diff_diff/guides/llms.txt
         section: "Estimators"
         type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "LWDiD"
+        type: user_guide
+      - path: diff_diff/guides/llms-practitioner.txt
+        section: "Step 4 decision tree (few treated units branch)"
+        type: user_guide
+      - path: diff_diff/guides/llms-autonomous.txt
+        section: "Estimator-support matrix + §4.3/§4.8"
+        type: user_guide
       - path: docs/choosing_estimator.rst
         type: user_guide
+      - path: docs/practitioner_decision_tree.rst
+        type: user_guide
+      - path: docs/survey-roadmap.md
+        section: "Current Limitations"
+        type: user_guide
+      - path: docs/methodology/REGISTRY.md
+        section: "LWDiD"
+        type: methodology
       - path: docs/tutorials/31_lwdid.ipynb
         type: tutorial
 

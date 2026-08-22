@@ -1314,6 +1314,87 @@ qdid = ChangesInChanges(method='qdid', n_bootstrap=200, seed=42)
 results = qdid.fit(data, outcome='y', treatment='treated', time='post')
 ```
 
+### LWDiD
+
+Lee & Wooldridge (2025, 2026) rolling-transformation DiD. Unit-specific demeaning/detrending over each unit's pre-treatment window converts the panel into per-(cohort, period) cross-sectional treatment-effects problems, estimated on the collapsed cross-section. Unique capability in this library: exact small-sample inference (classical exact t on the collapsed regression), valid down to a SINGLE treated unit.
+
+**Identification and inference contract** (the CANONICAL statement - other guide surfaces reference this paragraph rather than restating it; full equations in `docs/methodology/REGISTRY.md` "LWDiD" and `docs/api/lwdid.rst` "Key Assumptions"):
+
+1. CAUSAL identification (what makes the estimand the ATT; equivalently a correctly specified collapsed regression with E[U|D,X] = 0 - without these the exact t cleanly tests a biased association): common timing needs no-anticipation (NAC) + conditional parallel trends (CPTC) + overlap (OVLC); staggered needs their staggered counterparts (CNAS + CPTS + OVLS). `rolling='detrend'` replaces the parallel-trends leg with the heterogeneous-linear-trends assumption (CHT): under unit-specific linear trends demeaning is INCONSISTENT and detrending is the consistent route. Overlap is a population comparison-support condition - the full-rank/residual-df guards do not substitute for it.
+2. EXACT inference: common-timing `vcov_type='classical'` fits (with `n_bootstrap=0` - a positive `n_bootstrap` REPLACES the common-timing headline inference with unit/cluster-bootstrap inference) and the eligible never-treated composite (zero-drop tau_omega: plain demean/detrend + never-treated controls + RA + no covariates + classical/unclustered; reference T_{n-2}) get the exact t, under the classical error assumptions - independent units; conditionally normal, homoskedastic collapsed errors; positive residual df. Staggered aggregates OTHER than that eligible composite use large-sample influence-function inference (unclustered multi-cell: normal reference; clustered: T_{G-1}; a single-cell aggregate inherits its cell's residual t). Post-fit randomization inference (common-timing reg fits only) tests Fisher's sharp null and needs assignment exchangeability, not normality.
+3. Covariate-adjusted exact fits use TWO designs (LW 2026): the interacted design `(1, D, X, D(X - Xbar_1))` (exact T_{N-2K-2}) when the per-arm guards N0 > K+1 AND N1 > K+1 hold, else the implementation falls back to the plain design `(1, D, X)` (exact T_{N-K-2}; full rank + N > K+2) - so a single treated unit still supports covariate-adjusted exact inference via the plain design; the per-arm guards apply only to the interacted one.
+
+```python
+LWDiD(
+    rolling: str = "demean",             # "demean", "detrend", "demeanq", "detrendq" (q = seasonal variants). Demeaning needs >= 1 pre period per cohort; detrending >= 2. Detrending stays consistent under unit-specific linear trends (CHT) where demeaning is inconsistent.
+    estimation_method: str = "reg",      # "reg" (papers' RA), "ipw", "dr" (papers' IPWRA, doubly robust), "psm" (LWDiD-only extra; POINT ONLY - inference is NaN, see below)
+    vcov_type: str = "hc1",              # reg: {"classical", "hc1", "hc2", "hc3"} - "classical" enables the exact small-N t; ipw/dr: {"hc1"} only (influence-function variance); psm: {"hc1"} as configuration only. NO "cluster" value - clustering activates via cluster= below.
+    cluster: str | None = None,          # Unit-constant cluster column; CR1, composes with vcov_type="hc1" only; rejected for psm.
+    control_group: str = "not_yet_treated",  # "not_yet_treated" (OVLS default) or "never_treated". All-eventually-treated designs raise under BOTH.
+    alpha: float = 0.05,
+    n_bootstrap: int = 0,                # 0 = analytical. Common timing: unit/cluster bootstrap for the HEADLINE inference AND a Rademacher multiplier bootstrap with sup-t bands for the post-period event-study surface. Staggered: multiplier bootstrap for the EVENT-STUDY surface only (overall/cohort stay analytical). Rejected (>0) for psm - the standard bootstrap is invalid for matching (Abadie & Imbens 2008).
+    seed: int | None = None,
+    pscore_trim: float = 0.01,           # Propensity clipping bound (ipw/dr/psm)
+    n_neighbors: int = 1,                # PSM: 1:k nearest-neighbor matching
+    caliper: float | None = None,        # PSM: max match distance; unmatched treated dropped with warning
+    with_replacement: bool = True,       # PSM matching with replacement
+    n_jobs: int = 1,                     # Execution only; seeded results identical for every n_jobs
+)
+```
+
+**fit() parameters:**
+
+```python
+lw.fit(
+    data: pd.DataFrame,
+    outcome: str,
+    unit: str,
+    time: str,
+    treatment: str,            # Binary 0/1, absorbing: D_it == 1[t >= g_i] over observed rows
+    first_treat: str = None,   # Cohort column for staggered adoption; None = common timing. Never-treated encodings: 0, NaN/NaT, or inf.
+    covariates: list[str] = None,  # UNIT-CONSTANT columns only; time-varying covariates raise ValueError (the panel collapses to one row per unit)
+) -> LWDiDResults
+```
+
+**Usage (staggered):**
+
+```python
+from diff_diff import LWDiD
+
+lw = LWDiD(rolling='demean', estimation_method='dr')
+results = lw.fit(data, outcome='y', unit='unit', time='period',
+                 treatment='treated', first_treat='first_treat')
+results.print_summary()
+
+# Per-event-time effects - post-fit, no refit:
+es = results.aggregate('event_study')
+```
+
+**Usage (small-N exact inference - common timing, reg only):**
+
+```python
+# Valid down to one treated unit: classical exact t on the collapsed regression
+lw_small = LWDiD(rolling='demean', vcov_type='classical')
+res = lw_small.fit(small_panel, outcome='y', unit='unit', time='period',
+                   treatment='treated')   # common timing: no first_treat
+
+# Randomization inference / wild cluster bootstrap REPLAY the fitted design.
+# COMMON-TIMING estimation_method='reg' fits ONLY - staggered/ipw/dr/psm
+# fits reject these methods informatively. Do not chain them onto a
+# staggered fit. wild_cluster_bootstrap() ADDITIONALLY requires a cluster=
+# fit (unclustered fits raise). RI tests Fisher's SHARP null and is valid
+# only when the observed assignment is exchangeable under a credible
+# assignment mechanism (labels are permuted).
+ri = res.randomization_test(n_reps=999, seed=42)
+```
+
+Caveats and contracts:
+
+- **`.att` estimand differs by timing mode.** Common timing: the papers' fixed-window post average (units lacking any finite post outcome are complete-case dropped with a warning). Staggered: `.att` is the papers' composite `tau_omega` ONLY on the composite gate (`rolling` demean/detrend + `control_group='never_treated'` + `estimation_method='reg'` + no covariates + zero complete-case drops); on every other route - including the DEFAULT `control_group='not_yet_treated'` - it is the influence-weighted cohort-mass point. A cell-mass overall comparable to CallawaySantAnna's `"simple"` convention is not yet exposed (TODO). Do not compare `LWDiD.att` to `CallawaySantAnna.aggregate('simple')` as if they were the same estimand.
+- **PSM is point-only.** `estimation_method='psm'` reports NaN for the full inference tuple (no valid matching variance is implemented - Abadie-Imbens is deferred), rejects `n_bootstrap > 0`, and requires covariates.
+- **Sensitivity helpers are single-cohort.** `diff_diff.lwdid_sensitivity.robustness_pre_periods` / `sensitivity_no_anticipation` accept a single treated cohort only; multi-cohort staggered inputs are rejected.
+- **Scope limits:** panel data only - no direct repeated-cross-section API (the transformation requires repeated observation of each unit; LW 2026 permits pre-aggregating microdata to assignment-unit-by-period cell means, which can then be fitted here, but within-cell sampling uncertainty is NOT propagated); no sampling weights or `survey_design=` on any path; no `anticipation=` parameter (no-anticipation is assumed; the sensitivity helper above is the diagnostic); `compute_honest_did` does NOT accept LWDiD event studies.
+
 ### TROP
 
 Triply Robust Panel estimator (Athey, Imbens, Qu & Viviano 2025). Combines nuclear norm regularization, distance-based unit weights, and time decay weights.
@@ -2012,6 +2093,10 @@ Per-horizon event-study results container for `HeterogeneousAdoptionDiD`'s event
 
 Results container shared by `ChangesInChanges` and `QDiD` (the `method` field is `"cic"` or `"qdid"`; the pre-3.9 name `estimator` still reads it with a FutureWarning until 4.0; `QDiDResults` is an alias of this class). Flat-native headline fields `att`, `se`, `t_stat`, `p_value`, `conf_int`; `quantile_effects` is a DataFrame with columns `quantile`, `qte`, `se`, `t_stat`, `p_value`, `conf_low`, `conf_high`. `q_lower`/`q_upper` bound the point-identified interior quantile range for unconditional CiC fits (NaN for QDiD and for covariate fits); `sup_t_crit` is the qte sup-t critical value backing `uniform_bands()` (fixed 95% level). Also carries `n_obs`, `cell_sizes`, `n_bootstrap`, `n_bootstrap_valid`, `panel`, `quantiles`, `alpha`, and `covariates` (the covariate columns of a conditional fit, else None). Methods: `summary()`, `print_summary()`, `to_dict()`, `to_dataframe(level="quantiles"|"att")`, `uniform_bands()`. All inference flows through `safe_inference`/`safe_inference_batch` (joint-NaN contract; `n_bootstrap=0` yields NaN inference everywhere).
 
+### LWDiDResults
+
+Results from `LWDiD.fit()` (both timing modes). Flat-native headline fields `att`, `se`, `t_stat`, `p_value`, `conf_int` (when inference is unavailable - e.g. psm, degenerate designs - `se`/`t_stat`/`p_value` and both CI bounds are jointly NaN while `att` is RETAINED: the fail-closed contract), plus `n_obs`, `n_treated`, `n_control`, `df_inference`, `cluster_name`/`n_clusters`, and fit provenance (`rolling`, `estimation_method`, `vcov_type`, `alpha`, `control_group`, `n_bootstrap`, `seed`, `pscore_trim`, `psm_config`, `inference_basis`). Staggered fits also carry `cohort_effects` and `cohort_time_effects` dicts. Methods: `summary()`, `print_summary()`, `to_dict()`, `to_dataframe()`, `aggregate(level)` with levels `'simple'` (view-relay of the fitted headline -> AggregationResult), `'event_study'` (per-event-time effects -> EventStudyResults), and `'group'` (per-cohort effects -> AggregationResult; staggered fits only - common-timing fits raise), and - common-timing `estimation_method='reg'` fits ONLY - `randomization_test()` and `wild_cluster_bootstrap()` (the latter ADDITIONALLY requires a `cluster=` fit - unclustered fits raise; both REPLAY the fitted collapsed design; no data arguments accepted; other fits reject informatively). NOTE: there is NO `overall_att` or `period_effects` attribute - those surfaces were retired pre-release (unlike the shared staggered pattern above); use `.att` for the overall effect and `aggregate('event_study')` for per-period effects.
+
 ### TROPResults
 
 | Attribute | Type | Description |
@@ -2529,7 +2614,7 @@ clear_cache()
 
 ## Survey Support
 
-Most estimators accept an optional `survey_design` parameter in `fit()` (`SyntheticControl` rejects it as not yet supported); depth of support varies by estimator - see the compatibility matrix in `docs/choosing_estimator.rst` (Survey Design Support). Pass a `SurveyDesign` object to get design-based variance estimation.
+Most estimators accept an optional `survey_design` parameter in `fit()` (`SyntheticControl` rejects it as not yet supported; `LWDiD` accepts no `survey_design` parameter at all - passing it raises `TypeError`); depth of support varies by estimator - see the compatibility matrix in `docs/choosing_estimator.rst` (Survey Design Support). Pass a `SurveyDesign` object to get design-based variance estimation.
 
 ```python
 from diff_diff import SurveyDesign, CallawaySantAnna
@@ -2785,6 +2870,7 @@ DIFF_DIFF_BACKEND=rust pytest     # Force Rust (fail if unavailable)
 | Event study with multiple periods (simultaneous adoption) | `TwoWayFixedEffects` with `event_study=True` (`spec="pooled"` reproduces the deprecated `MultiPeriodDiD`) |
 | Staggered treatment timing | `CallawaySantAnna`, `ImputationDiD`, or `SunAbraham` |
 | Few treated units / synthetic control | `SyntheticDiD` |
+| Very few treated units, exact small-sample inference (valid down to one treated unit) | `LWDiD` |
 | Interactive fixed effects / factor confounding | `TROP` |
 | Continuous treatment intensity, per-dose ATT(d) / ACRT(d) (needs zero-dose controls, or `control_group="lowest_dose"` for Remark 3.1 when P(D=0)=0) | `ContinuousDiD` |
 | Continuous treatment intensity, WAS at dose support boundary (compatible with universal rollout or small never-treated share) | `HeterogeneousAdoptionDiD` |

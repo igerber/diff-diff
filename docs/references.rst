@@ -308,7 +308,7 @@ Rolling-Transformation DiD (Lee-Wooldridge)
 
 - **Lee, S. J., & Wooldridge, J. M. (2025).** "A Simple Transformation Approach to Difference-in-Differences Estimation for Panel Data." SSRN Working Paper No. 4516518 (61-page revision, cover page June 8, 2026). https://ssrn.com/abstract=4516518 | https://doi.org/10.2139/ssrn.4516518
 
-  Estimation core for the forthcoming ``LWDiD`` estimator: unit-specific rolling demeaning/detrending converts panel DiD into per-(cohort, period) cross-sectional treatment-effects problems (RA, IPW, doubly robust IPWRA, matching), with contributing-treated-unit weighted event-study aggregation (simplifying to cohort-size weights in balanced panels) and influence-function multiplier-bootstrap inference. Paper review on file at ``docs/methodology/papers/lee-wooldridge-2025-review.md``.
+  Estimation core for the ``LWDiD`` estimator: unit-specific rolling demeaning/detrending converts panel DiD into per-(cohort, period) cross-sectional treatment-effects problems (RA, IPW, doubly robust IPWRA, matching), with contributing-treated-unit weighted event-study aggregation (simplifying to cohort-size weights in balanced panels) and influence-function multiplier-bootstrap inference. Paper review on file at ``docs/methodology/papers/lee-wooldridge-2025-review.md``.
 
 - **Lee, S. J., & Wooldridge, J. M. (2026).** "Simple Approaches to Inference with Difference-in-Differences Estimators with Small Cross-Sectional Sample Sizes." SSRN Working Paper No. 5325686 (36 pages, cover page February 3, 2026). https://ssrn.com/abstract=5325686 | https://doi.org/10.2139/ssrn.5325686
 

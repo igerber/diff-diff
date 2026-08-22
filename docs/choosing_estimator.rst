@@ -773,6 +773,9 @@ differences helps interpret results and choose appropriate inference.
    * - ``EfficientDiD``
      - Analytical (EIF-based)
      - Uses efficient influence function SE = sqrt(mean(EIF^2) / n). Use ``n_bootstrap`` for multiplier bootstrap.
+   * - ``LWDiD``
+     - HC1 on the collapsed regression
+     - ``estimation_method='reg'`` accepts ``classical`` (exact small-sample t with ``n_bootstrap=0`` — a positive ``n_bootstrap`` replaces the headline inference with the unit/cluster bootstrap — valid down to one treated unit; causal only under the LWDiD identifying assumptions — no anticipation, parallel trends or its heterogeneous-linear-trends variant for ``rolling='detrend'``, and overlap — and exact only under the classical error assumptions; the complete contract, including the covariate-design fallback, is in :doc:`api/lwdid` Key Assumptions / Small-Sample Inference; staggered aggregates other than the eligible never-treated composite use large-sample IF inference instead), ``hc1``, ``hc2``, ``hc3``; ``cluster=`` gives CR1 (composes with ``hc1`` only). ``ipw``/``dr`` use the influence-function variance (``hc1`` only). Post-fit ``randomization_test()`` and ``wild_cluster_bootstrap()`` on common-timing ``reg`` fits. ``psm`` reports NaN inference (no valid matching variance implemented).
    * - ``BaconDecomposition``
      - N/A (diagnostic)
      - Diagnostic tool only; does not produce standard errors.
@@ -830,7 +833,9 @@ Survey Design Support
 ---------------------
 
 Most estimators support an optional ``survey_design`` parameter in ``fit()``
-(``SyntheticControl`` accepts the parameter but raises ``NotImplementedError``).
+(``SyntheticControl`` accepts the parameter but raises ``NotImplementedError``;
+``LWDiD`` accepts no ``survey_design`` parameter at all — passing it raises
+``TypeError``).
 Pass a :class:`~diff_diff.SurveyDesign` object to get design-based variance
 estimation. The depth of support varies by estimator and variance method:
 
@@ -954,6 +959,11 @@ estimation. The depth of support varies by estimator and variance method:
    * - ``LPDiD``
      - pweight only
      - Full (Binder TSL)
+     - --
+     - --
+   * - ``LWDiD``
+     - N/A (no survey support)
+     - N/A
      - --
      - --
    * - ``ChangesInChanges`` / ``QDiD``
