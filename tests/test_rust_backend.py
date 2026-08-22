@@ -4271,20 +4271,24 @@ class TestLWDiDBackendParity:
 
         def _counting(symbol_name, real_fn, *args, **kwargs):
             result = real_fn(*args, **kwargs)
-            # Count only ACCEPTED-looking results: a kernel that declines
-            # (e.g. the Cholesky certification path) signals via
-            # non-finite output and the dispatcher falls back to NumPy -
-            # counting the raw call would re-open the tautology this spy
-            # exists to close. The test fixtures are full-rank, so a
-            # finite first array marks a genuinely Rust-backed solve.
-            # (Full provenance would need solve_ols to expose its backend
-            # - out of scope here.)
-            head = result[0] if isinstance(result, tuple) else result
+            # Count only ACCEPTED results: the dispatcher discards a Rust
+            # result whose vcov (or any member) is non-finite and re-runs
+            # NumPy (linalg.py `_nonfinite_vcov_needs_python_rerun`), and a
+            # declining Cholesky kernel signals the same way - counting the
+            # raw call would re-open the Python-vs-Python tautology this
+            # spy exists to close. The test fixtures are full-rank, so
+            # EVERY returned array being fully finite marks a genuinely
+            # accepted Rust-backed solve. (Full provenance would need
+            # solve_ols to expose its backend - out of scope here.)
+            members = result if isinstance(result, tuple) else (result,)
             try:
-                if head is not None and bool(np.all(np.isfinite(np.asarray(head)))):
-                    counts[symbol_name] += 1
+                accepted = all(
+                    bool(np.all(np.isfinite(np.asarray(m)))) for m in members if m is not None
+                )
             except (TypeError, ValueError):
-                pass
+                accepted = False
+            if accepted:
+                counts[symbol_name] += 1
             return result
 
         for symbol in counts:
