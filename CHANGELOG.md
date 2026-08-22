@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.10.0] - 2026-08-22
 
 ### Added
 - **LPDiD non-absorbing SEs now anchored against the authors' Stata `lpdid` package
@@ -5347,6 +5347,7 @@ for the full feature history leading to this release.
 [2.1.2]: https://github.com/igerber/diff-diff/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/igerber/diff-diff/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/igerber/diff-diff/compare/v2.0.3...v2.1.0
+[3.10.0]: https://github.com/igerber/diff-diff/compare/v3.9.1...v3.10.0
 [3.9.1]: https://github.com/igerber/diff-diff/compare/v3.9.0...v3.9.1
 [3.9.0]: https://github.com/igerber/diff-diff/compare/v3.8.0...v3.9.0
 [3.8.0]: https://github.com/igerber/diff-diff/compare/v3.7.0...v3.8.0

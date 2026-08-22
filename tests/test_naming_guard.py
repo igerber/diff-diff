@@ -100,10 +100,14 @@ _TERMINAL_STATUSES = {"done", "removed"}
 # test_ship_version_map_matches_table).
 _SHIP_VERSION = {2: "3.9", 3: "3.9", 4: "3.9", 5: "4.0", 6: "4.1"}
 
-# Release ladder (v4-design section 2): maps the CURRENT (major, minor) to the
-# NEXT release. Keyed off diff_diff.__version__ so the Duty C lifecycle gate
-# re-arms mechanically at each version bump; a missing key fails loudly.
-_NEXT_RELEASE = {(3, 8): "3.9", (3, 9): "4.0", (4, 0): "4.1"}
+# Enforcement horizon (v4-design section 2 release ladder): maps the CURRENT
+# (major, minor) to the version whose deprecation windows must already be
+# enforced — NOT necessarily the literal next release (interim minors like
+# 3.10 keep the 4.0 horizon; "fixing" an entry to a nearer version would
+# silently disarm 4.0-window checks). Keyed off diff_diff.__version__ so the
+# Duty C lifecycle gate re-arms mechanically at each version bump; a missing
+# key fails loudly.
+_NEXT_RELEASE = {(3, 8): "3.9", (3, 9): "4.0", (3, 10): "4.0", (4, 0): "4.1"}
 
 # Section-8 vocabulary predicate (Duty A). Every param/field rename token in
 # the ledger - current and lifecycle-gated - must be matched here
@@ -1542,6 +1546,8 @@ def test_lifecycle_gate_windows_and_loud_keyerror():
     assert _version_tuple("4.0") > horizon_38, "4.0-window rows defer at 3.8.x"
     horizon_39 = _version_tuple(_NEXT_RELEASE[(3, 9)])
     assert _version_tuple("4.0") <= horizon_39, "4.0-window rows arm at the 3.9 bump"
+    horizon_310 = _version_tuple(_NEXT_RELEASE[(3, 10)])
+    assert _version_tuple("4.0") <= horizon_310, "4.0-window rows stay armed at 3.10.x"
     assert (99, 99) not in _NEXT_RELEASE, "unknown versions must fail the gate loudly"
     current = _version_tuple(diff_diff.__version__)[:2]
     assert current in _NEXT_RELEASE, f"extend _NEXT_RELEASE for __version__ {diff_diff.__version__}"
