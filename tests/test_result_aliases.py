@@ -28,6 +28,7 @@ from diff_diff.chaisemartin_dhaultfoeuille_results import (
     ChaisemartinDHaultfoeuilleResults,
 )
 from diff_diff.continuous_did_results import ContinuousDiDResults
+from diff_diff.dml_did_results import DMLDiDResults
 from diff_diff.efficient_did_results import EfficientDiDResults
 from diff_diff.imputation_results import ImputationDiDResults
 from diff_diff.results import MultiPeriodDiDResults
@@ -157,7 +158,7 @@ _CI = (1.0, 2.0)
 
 
 # ============================================================================
-# Pattern B (9 classes) — direct-construction alias mechanics
+# Pattern B (10 classes) — direct-construction alias mechanics
 # ============================================================================
 
 
@@ -165,6 +166,7 @@ _CI = (1.0, 2.0)
     "cls",
     [
         CallawaySantAnnaResults,
+        DMLDiDResults,
         StackedDiDResults,
         EfficientDiDResults,
         ChaisemartinDHaultfoeuilleResults,
@@ -193,6 +195,7 @@ def test_pattern_b_aliases_match_overall(cls):
     "cls",
     [
         CallawaySantAnnaResults,
+        DMLDiDResults,
         StackedDiDResults,
         EfficientDiDResults,
         ChaisemartinDHaultfoeuilleResults,

@@ -96,7 +96,9 @@ _CONTAINER_LEVELS = ("simple", "group", "total")
 # admitted (the "already scaled" claim is provenance-gated like "auto" -
 # StackedDiD is staged out and unknown provenance could be any hand-built
 # container). A new adopter extends this set in the PR that ships its total.
-_TOTAL_ESTIMATORS = frozenset({"CallawaySantAnna", "EfficientDiD", "ImputationDiD", "TwoStageDiD"})
+_TOTAL_ESTIMATORS = frozenset(
+    {"CallawaySantAnna", "DMLDiD", "EfficientDiD", "ImputationDiD", "TwoStageDiD"}
+)
 
 # Why scale="auto" is refused, per audited non-allowlisted producer. The generic
 # closing prescription in the error is an EXAMPLE for the unweighted additive case,
@@ -114,6 +116,18 @@ _SCALE_HINTS = {
         "declared survey_design, cluster-mass fits with incomplete treated "
         "cells, or pre-upgrade results) - there, pass a numeric scale (a "
         "caller-defined estimand, not the estimator-owned complete-case total)."
+    ),
+    "DMLDiD": (
+        "DMLDiD's n is not a treated unit-period count: the 'simple' container "
+        "reports treated+control units and the 'group' container reports "
+        "contributing (g, t) cells (n_kind='cells'). Use "
+        "results.aggregate('total') instead - its single row is the "
+        "estimator-owned total incremental outcome over the per-cell "
+        "complete-case treated units and needs no scale; DMLDiD fits are "
+        "panel-only with no survey support, so the total route is available "
+        "on every fit (bootstrapped fits replay). If you need a different "
+        "estimand (e.g. full-cohort exposure on a panel with missing cells), "
+        "pass a numeric scale."
     ),
     "EfficientDiD": (
         "EfficientDiD's n counts disjoint treated+control units ('simple') or "

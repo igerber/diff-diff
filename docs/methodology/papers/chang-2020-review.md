@@ -54,7 +54,7 @@ The conventional plug-in of (2.1) fails with ML first stages (p. 8): the score h
 Gateaux derivative in `g_0`, and ML nuisances converge slower than `N^{-1/2}` due to
 regularization bias.
 
-*Estimator equation — orthogonal scores (Equations 3.1-3.3 in paper; proposed implementation target — no `DMLDiD` estimator exists yet):*
+*Estimator equation — orthogonal scores (Equations 3.1-3.3 in paper; Case 1 SHIPPED as the staggered `DMLDiD` estimator — see REGISTRY.md "DMLDiD"; Cases 2-3 remain unimplemented):*
 
 Each score = Abadie's score + a mean-zero adjustment term (`c_1`, `c_2`, `c_w`), so the same ATT is identified.
 
@@ -177,27 +177,29 @@ the same variance estimators remain consistent under kernel first stages.
 - Python (validation oracle — **panel lane only**): `doubleml.DoubleMLDID` implements a Chang/Zimmert-style orthogonal panel score and is the closest parity anchor for Case 1 — but only under a specific configuration (its `in_sample_normalization` option changes the score's normalization; pin the config and verify score equivalence at the equation level before treating any run as an oracle). **Version caveat:** `DoubleMLDID` is deprecated upstream ("will be removed with version 0.12.0. Please use DoubleMLDIDBinary instead", verified 2026-08-22) — pin the exact DoubleML version used for golden-fixture generation, archive the fixtures in-repo, and verify `DoubleMLDIDBinary`'s score/normalization equivalence separately before adopting it as the replacement anchor. **Scope caveat:** treat DoubleML as an **equation-level score oracle**, not a full-estimator finite-sample oracle, unless the fixture supplies identical fold assignments and scalar-nuisance normalization: upstream uses the global treated share and treatment-stratified sample splitting, while Chang specifies random folds and leaves the fold-level `p̂_k` convention ambiguous (see Gaps). Full-estimator comparisons under differing conventions are approximate/asymptotic — a finite-sample mismatch there does not falsify a paper-faithful implementation, and exact-parity fixtures must not silently import DoubleML's normalization as if it were Chang's. Add independent fixtures for whichever `p̂_k` convention is selected.
 - **Not oracles:** `doubleml.DoubleMLDIDCS` uses a Sant'Anna-Zhao-style repeated-cross-section score with four treatment-by-period outcome regressions and different normalizations — a *related* estimator, not an implementation of Chang's single-`ℓ_20` Equation 3.2 score or its `λ`-corrected variance. `DoubleMLDIDMulti` handles **staggered treatment timing**, not Chang's Case 3 multilevel treatment *intensity* — it is not a Case 3 anchor. For Cases 2-3, validation must rest on independent equation-level fixtures (Equations 3.2/3.3 and their variance corrections) plus recovery tests on the paper's simulation DGPs (Section 4).
 
-**Requirements checklist:**
-- [ ] Neyman-orthogonal scores (3.1)/(3.2)/(3.3) implemented exactly (Abadie score + mean-zero adjustment)
-- [ ] DML2 cross-fitting: K-fold random partition, nuisances fit on fold complements, never on the evaluation fold
-- [ ] Outcome nuisances `ℓ̂` fit on the UNTREATED subsample of the auxiliary fold only (`I_kz^c`)
-- [ ] Scalar nuisances `p̂_k`, `λ̂_k` computed as sample means (resolve the I_k vs I_k^c contradiction — see Gaps)
-- [ ] Final estimator `θ̃` is the simple average of per-fold estimates
-- [ ] Variance from the AUGMENTED score: `Ĝ_1p = Ĝ_2p = -θ̃/p̂_k` correction always; `Ĝ_2λ (T - λ̂_k)` additionally for repeated cross sections
-- [ ] Strict-overlap enforcement on fitted propensity scores (clip to `[κ, 1-κ]` or refuse — document as deviation, paper gives no rule)
-- [ ] Per-fold degenerate-share guards: fold with (near-)zero treated units, or (Case 2) near-empty pre/post period
-- [ ] Auxiliary-sample feasibility guards (Cases 1-2): an auxiliary sample `I_k^c` with no (or learner-infeasibly few) untreated observations (`I_kz^c = ∅`) makes `ℓ̂_1k`/`ℓ̂_2k` unfittable — and for Case 2 the untreated auxiliary subset must span both pre and post periods; fail with a targeted error before invoking the nuisance learner
-- [ ] Normal-approximation inference: SE = `sqrt(Σ̂/N)`, z critical values, all inference fields via `safe_inference()`
-- [ ] Multilevel treatment: separate ATT per level `w` vs never-treated `W = 0`; no cross-level aggregation
-- [ ] Case 3 guards: strict comparison-group overlap `ĝ_z ≥ κ_z` enforced; positive `W = w` and `W = 0` counts per fold/auxiliary sample; `p̂_w` = sample mean of `I(W = w)`; `ℓ̂_3` fit on `W = 0` rows only
-- [ ] Validation: Case 1 vs `doubleml.DoubleMLDID` (DoubleML VERSION + config pinned — the class is deprecated upstream in favor of `DoubleMLDIDBinary`; archive golden fixtures in-repo); Cases 2-3 via independent equation-level fixtures + paper simulation-DGP recovery (Section 4) — `DoubleMLDIDCS`/`DoubleMLDIDMulti` are NOT oracles for Chang's scores
+**Requirements checklist** (Case 1 items SHIPPED as `DMLDiD` — the
+per-item conventions/deviations are the REGISTRY "DMLDiD" Notes; Case 2-3
+items remain open, tracked in ROADMAP/DEFERRED):
+- [x] Neyman-orthogonal Case 1 score (3.1) implemented exactly (Abadie score + mean-zero adjustment); [ ] scores (3.2)/(3.3) — Cases 2-3 open
+- [x] DML2 cross-fitting: K-fold partition (D-stratified — documented deviation), nuisances fit on fold complements, never on the evaluation fold
+- [x] Outcome nuisance `ℓ̂` fit on the UNTREATED subsample of the auxiliary fold only (`I_kz^c`)
+- [x] Scalar nuisance p̂: the global (full-sample-within-cell) convention adopted and documented (the I_k vs I_k^c printing contradiction is thereby sidestepped — see Gaps); [ ] `λ̂_k` — Case 2 open
+- [x] Final estimator: pooled mean (equals the paper's `1/K` average at equal fold sizes — documented deviation)
+- [x] Variance from the AUGMENTED score: `Ĝ_1p = -θ̃/p̂` folded in; [ ] `Ĝ_2λ (T - λ̂_k)` — Case 2 open
+- [x] Strict-overlap enforcement: fitted propensities clipped to `[trim, 1-trim]` (documented deviation; paper gives no rule)
+- [x] Per-fold/per-cell degenerate guards (zero treated/control, cell < K, singleton stratum) — closed skip vocabulary; [ ] Case 2 pre/post-share guards — open
+- [x] Auxiliary-sample feasibility: an empty untreated training complement raises `DegenerateFoldError` (targeted, before the learner) → `cross_fit_degenerate` cell
+- [x] Normal-approximation inference via `safe_inference()`
+- [ ] Multilevel treatment (Case 3): open — DEFERRED
+- [ ] Case 3 guards: open — DEFERRED (see the Case 3 caution above)
+- [x] Validation (Case 1): `doubleml.DoubleMLDID` (2-period) + `DoubleMLDIDBinary` (staggered per-cell, end-to-end public fit) parity spikes, doubleml==0.11.4 pinned, golden literals in-repo; [ ] Cases 2-3 equation-level fixtures — open
 
 ---
 
 ## Implementation Notes
 
 ### Data Structure Requirements
-- **Repeated outcomes (panel, primary target):** one row per unit with `(Y(0), Y(1), D, X)` — equivalently a 2-period balanced panel converted to differences `ΔY = Y(1) - Y(0)`. Two periods only; treatment only at `t = 1`.
+- **Repeated outcomes (panel, primary target — SHIPPED as `DMLDiD`):** one row per unit with `(Y(0), Y(1), D, X)` — equivalently a 2-period panel converted to differences `ΔY = Y(1) - Y(0)`. The paper's design is 2-period with treatment only at `t = 1`; the shipped estimator applies it per Callaway-Sant'Anna (g, t) cell over staggered timing (a documented library extension — REGISTRY.md "DMLDiD").
 - **Repeated cross sections:** pooled rows `(Y, D, T, X)` with `T ∈ {0,1}` the post-period sampling indicator; i.i.d. within each period (Assumption 2.3).
 - **Multilevel treatment:** `(Y(0), Y(1), W, X)` with `W ∈ {0, w_1, ..., w_J}`; `W = 0` is the comparison group for every level.
 - Covariates `X ∈ R^d` may have `d > N` (the headline setting); no factor-structure or panel-index requirements beyond the above.
@@ -223,9 +225,9 @@ the same variance estimators remain consistent under kernel first stages.
 ### Relation to Existing diff-diff Estimators
 - **Abadie (2005) IPW-DiD lineage:** the scores are orthogonalized versions of the Abadie IPW score; the same `(D - g(X)) / (p(1 - g(X)))` weighting with a regression adjustment `ℓ` appears in the Sant'Anna-Zhao (2020) doubly robust scores already implemented in `CallawaySantAnna` (`diff_diff/staggered.py`) and in the DRDID-parity cell score `drdid_panel_inf_func` in `diff_diff/_dr_scores.py` (relocated from `ContinuousDiD` in PR-B0, oracle-pinned) — those are the closest existing score implementations and natural code-sharing targets. Note the structural difference: Chang's Case-1 score normalizes by the unconditional `p_0` (with an explicit `G_1p (D - p̂)` variance correction), whereas the SZ DR score is self-normalized; the two are not interchangeable.
 - **Nuisance estimation:** `solve_logit` in `diff_diff/linalg.py` provides the (unpenalized) logistic propensity fit; the sieve nuisance machinery in `diff_diff/efficient_did_covariates.py` is the existing precedent for flexible outcome-regression nuisances. Lasso/Logit-Lasso penalized fits do not yet exist in the library (scipy-only constraint — coordinate descent or proximal gradient would need to be written, or the learner made pluggable).
-- **Cross-fitting machinery now exists as private infrastructure** (PR-B0): `diff_diff/_crossfit.py` provides the replayable fold partition and per-fold out-of-fold nuisance prediction, with the Chang scores in `diff_diff/_dr_scores.py` and pluggable learners in `diff_diff/_learners.py` — see the REGISTRY "Cross-fitting, DR-score, and ridge infrastructure (DML)" section. No public estimator consumes it yet; `DMLDiD` (PR-B1) will.
+- **Cross-fitting machinery now exists as private infrastructure** (PR-B0): `diff_diff/_crossfit.py` provides the replayable fold partition and per-fold out-of-fold nuisance prediction, with the Chang scores in `diff_diff/_dr_scores.py` and pluggable learners in `diff_diff/_learners.py` — see the REGISTRY "Cross-fitting, DR-score, and ridge infrastructure (DML)" section. The shipped `DMLDiD` estimator (PR-B1) consumes it — see REGISTRY.md "DMLDiD" and the parity spikes in `benchmarks/doubleml/`.
 - Inference should route through `safe_inference()` (`diff_diff/utils.py`) per library convention; the augmented-score variance is a per-fold empirical second moment, structurally similar to the influence-function variances used across the staggered family.
-- The two-period restriction places this next to `DifferenceInDifferences` in scope, but with ML/high-dimensional covariates — complementary to, not overlapping with, the staggered estimators.
+- The PAPER's two-period design sits next to `DifferenceInDifferences` in scope, but with ML/high-dimensional covariates; the shipped `DMLDiD` applies it per (g, t) cell over staggered timing (documented library extension), so in practice it sits beside the staggered estimators.
 
 ---
 

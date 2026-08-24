@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`DMLDiD` — Chang (2020) double/debiased machine learning DiD** (staggered
+  panel ATT(g,t)): per-(g,t)-cell DML2 cross-fitting of configurable nuisance
+  learners (string names or any sklearn-style object; the adaptive polynomial
+  `SieveLearner` is newly exported) with Neyman-orthogonal scores and the
+  augmented-score plug-in variance, anchored to DoubleML at machine precision
+  (committed 2-period + staggered parity spikes, doubleml==0.11.4). Covariates
+  required (conditional parallel trends); post-fit
+  `results.aggregate('event_study'/'group'/'simple'/'total')` with sup-t bands
+  and bootstrap replay via the inherited Callaway-Sant'Anna machinery;
+  HonestDiD / PreTrendsPower / DiagnosticReport / BusinessReport / MMM totals
+  integration. See the REGISTRY "DMLDiD" section for equations and documented
+  implementation choices.
+
 ## [3.10.0] - 2026-08-22
 
 ### Added

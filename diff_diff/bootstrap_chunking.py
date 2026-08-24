@@ -79,7 +79,7 @@ def effective_weight_backend() -> str:
     the same bit-generator state (Rust draws one base seed and row-seeds
     Xoshiro absolutely; the NumPy fallback consumes the PCG64 stream
     directly), so a captured RNG state replays bit-identically only within
-    one backend. Post-fit bootstrap replay (the CallawaySantAnna and
+    one backend. Post-fit bootstrap replay (the CallawaySantAnna, DMLDiD, and
     EfficientDiD ``BootstrapReplaySpec``) stamps this value at fit and fails
     closed on a mismatch rather than silently regenerating a different
     realization.

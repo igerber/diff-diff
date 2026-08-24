@@ -38,6 +38,7 @@ import diff_diff
 from diff_diff import (
     CallawaySantAnna,
     ContinuousDiD,
+    DMLDiD,
     EfficientDiD,
     ImputationDiD,
     SpilloverDiD,
@@ -57,9 +58,10 @@ from diff_diff._base import BaseEstimator
 
 ANTICIPATION_MSG_PREFIX = "anticipation must be a non-negative integer"
 
-# The nine sweep adopters + TripleDifference (validated since birth).
+# The ten sweep adopters + TripleDifference (validated since birth).
 VALIDATED_CLASSES = [
     CallawaySantAnna,
+    DMLDiD,
     SunAbraham,
     ImputationDiD,
     TwoStageDiD,
@@ -71,7 +73,7 @@ VALIDATED_CLASSES = [
     TripleDifference,
 ]
 
-_CTOR_KWARGS = {SpilloverDiD: {"rings": [0.0, 100.0]}}
+_CTOR_KWARGS = {SpilloverDiD: {"rings": [0.0, 100.0]}, DMLDiD: {"seed": 0}}
 
 # The full nine-value set from test_v4_merge_ddd.py's staggered-DDD pin.
 BAD_VALUES = [-1, -5, 1.5, 0.5, "1", None, True, False, np.float64(2.0)]
@@ -194,6 +196,7 @@ class TestSetParamsTransactional:
 # partition column; covered in lane 4b instead).
 _FIT_MUTATION_CLASSES = [
     CallawaySantAnna,
+    DMLDiD,
     SunAbraham,
     ImputationDiD,
     TwoStageDiD,
@@ -243,6 +246,7 @@ class TestFitNormalization:
         "cls",
         [
             CallawaySantAnna,
+            DMLDiD,
             SunAbraham,
             ImputationDiD,
             TwoStageDiD,
@@ -272,6 +276,15 @@ class TestFitNormalization:
         fit_kwargs = dict(_PANEL_FIT_KWARGS)
         if cls is ContinuousDiD:
             fit_kwargs["dose"] = "dose"
+        if cls is DMLDiD:
+            # DMLDiD requires covariates. Deterministic non-degenerate column
+            # that does NOT separate treatment: the modulo interleaves values
+            # across the fixture's contiguous never-treated block so the
+            # cross-fitted logit is non-saturated, while still varying within
+            # every cell (fail-closed LinearLearner stays full-rank).
+            df = df.copy()
+            df["x0"] = (df["unit"] % 7) * 0.1 + df["period"] * 0.01
+            fit_kwargs["covariates"] = ["x0"]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             est.fit(df, **fit_kwargs)

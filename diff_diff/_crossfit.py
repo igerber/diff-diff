@@ -75,9 +75,14 @@ def _fresh_learner(learner: Any) -> Any:
     try:
         return copy.deepcopy(learner)
     except Exception as exc:  # noqa: BLE001 - loud fallback, never silent
+        # Exception CLASS only, never the message: a foreign learner's
+        # __deepcopy__ error text can embed credentials/paths/data excerpts,
+        # and this warning lands in notebook/CI logs (the same boundary as
+        # DMLDiD's persisted-diagnostics sanitization).
         warnings.warn(
             f"cross_fit_predict: could not deep-copy the "
-            f"{type(learner).__name__} template for this fold ({exc}); "
+            f"{type(learner).__name__} template for this fold "
+            f"({type(exc).__name__}); "
             "REUSING the same instance and relying on its fit-reset behavior. "
             "A warm-start/stateful learner in this situation can leak data "
             "across folds.",
@@ -543,13 +548,22 @@ def cross_fit_predict(
         # (b) Learner errors during the fold -> DegenerateFoldError, chained.
         try:
             fold_learner = _fresh_learner(learner)
+            # Unweighted path calls fit(X, y) WITHOUT the keyword: the
+            # advertised duck-typed contract is fit/predict(_proba), so a
+            # learner whose fit signature is only (X, y) must work when no
+            # weights are in play. sample_weight= is passed only on
+            # genuinely weighted paths, where an unsupported signature
+            # raises TypeError — a caller protocol violation that PROPAGATES
+            # (the DegenerateFoldError wrapper below catches ValueError
+            # only; fold-data degeneracy, not signature bugs).
+            fit_kwargs = {} if w_fit is None else {"sample_weight": w_fit}
             if kind == "regressor":
                 reg = cast(RegressorLearner, fold_learner)
-                reg.fit(X[fit_idx], y[fit_idx], sample_weight=w_fit)
+                reg.fit(X[fit_idx], y[fit_idx], **fit_kwargs)
                 raw_pred = reg.predict(X[test_idx])
             else:
                 clf = cast(ClassifierLearner, fold_learner)
-                clf.fit(X[fit_idx], y[fit_idx], sample_weight=w_fit)
+                clf.fit(X[fit_idx], y[fit_idx], **fit_kwargs)
                 raw_pred = clf.predict_proba(X[test_idx])
             pred = _validate_predictions(
                 raw_pred,

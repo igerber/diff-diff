@@ -3844,6 +3844,7 @@ def solve_logit(
     epv_threshold: float = _DEFAULT_EPV_THRESHOLD,
     context_label: str = "",
     diagnostics_out: Optional[dict] = None,
+    epv_remedy: Optional[str] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Fit logistic regression via IRLS (Fisher scoring).
@@ -4034,7 +4035,11 @@ def solve_logit(
             f"Peduzzi et al. (1996) recommend EPV >= {epv_threshold:.0f}. "
             f"Estimates may be unreliable (overfitting, biased coefficients, "
             f"inflated standard errors). "
-            f"Consider estimation_method='reg' to avoid propensity scores."
+            + (
+                epv_remedy
+                if epv_remedy is not None
+                else "Consider estimation_method='reg' to avoid propensity scores."
+            )
         )
         if rank_deficient_action == "error":
             raise ValueError(msg)

@@ -43,6 +43,7 @@ RST_FILES = [
     "api/diagnostic_report.rst",
     "api/estimators.rst",
     "api/lwdid.rst",
+    "api/dml_did.rst",
     "api/mmm.rst",
     "api/triple_diff.rst",
     "practitioner_decision_tree.rst",

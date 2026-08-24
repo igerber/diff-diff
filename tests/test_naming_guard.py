@@ -466,6 +466,7 @@ _RULE1_TIME = "rule-1 canonical calendar column (v4-design section 8 rule 1)"
 _CS_GROUPS_CLASSES = (
     "CallawaySantAnnaResults",
     "ContinuousDiDResults",
+    "DMLDiDResults",
     "EfficientDiDResults",
     "ImputationDiDResults",
     "StackedDiDResults",
@@ -483,6 +484,7 @@ _RULE1_TIME_SURFACES = (
     "CallawaySantAnna.diagnose_propensity[time]",
     "CallawaySantAnna.fit[time]",
     "ChaisemartinDHaultfoeuille.fit[time]",
+    "DMLDiD.fit[time]",
     "ChangesInChanges.fit[time]",
     "ContinuousDiD.fit[time]",
     "DiagnosticReport.__init__[time]",
@@ -545,6 +547,13 @@ SURFACE_ALLOWLIST = {
         "modes survive 4.0 - only the routing param dies"
     ),
     "plot_group_effects[groups]": _CS_COHORT + " - cohort selector on the plotting surface",
+    "DMLDiDResults.overall_att": (
+        "INHERITED CallawaySantAnnaResults dataclass field, not an "
+        "independent surface: the M-050 storage flip applies through "
+        "subclassing automatically, and the DMLDiDResults construction "
+        "site is in M-050's code_refs (diff_diff/dml_did.py) so the flip "
+        "PR rewrites it"
+    ),
     "TripleDifference.fit[group]": (
         "rule-3 reserved treated-group 0/1 indicator (v4-design section 8 rule 3)"
     ),

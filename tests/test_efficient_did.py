@@ -3463,6 +3463,31 @@ class TestSieveBasisCache:
         assert c is not a
         np.testing.assert_array_equal(c, _polynomial_sieve_basis(X, 3))
 
+    def test_default_call_byte_identical_after_stats_kwargs(self):
+        # PR-B1 added keyword-only center/scale/return_stats to
+        # _polynomial_sieve_basis; the DEFAULT call path must stay
+        # byte-identical, and the returned stats must reproduce it exactly.
+        from diff_diff.efficient_did_covariates import _polynomial_sieve_basis
+
+        rng = np.random.default_rng(7)
+        X = rng.normal(size=(60, 3))
+        base = _polynomial_sieve_basis(X, 3)
+        with_stats, center, scale = _polynomial_sieve_basis(X, 3, return_stats=True)
+        np.testing.assert_array_equal(base, with_stats)
+        # Returned scale carries the zero-variance guard applied; feeding the
+        # stats back reproduces the basis bit-for-bit.
+        np.testing.assert_array_equal(
+            base, _polynomial_sieve_basis(X, 3, center=center, scale=scale)
+        )
+        # Zero-variance column: guard applied in the RETURNED scale too.
+        Xc = X.copy()
+        Xc[:, 1] = 5.0
+        _, _, scale_c = _polynomial_sieve_basis(Xc, 2, return_stats=True)
+        assert scale_c[1] == 1.0
+        # Supplying only one of center/scale is rejected.
+        with pytest.raises(ValueError, match="both center and scale"):
+            _polynomial_sieve_basis(X, 2, center=center)
+
     def test_cache_none_is_plain_passthrough(self):
         from diff_diff.efficient_did_covariates import (
             _polynomial_sieve_basis,

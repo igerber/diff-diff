@@ -14,11 +14,13 @@ by ``CallawaySantAnnaResults.aggregate('event_study')``. The gates:
   multivariate-normal CDF is internally randomized (two native calls on
   identical inputs differ at ~1e-5), so power equality at 1e-14 is not a
   property even of the native route.
-- SOURCE-SCOPED ADMISSION: honest/pretrends accept CS- and Stacked-sourced
-  containers (the latter widened with row M-024; ``kappa_pre >= 2``
-  required); dCDH l1 containers, calendar containers, other-producer/e0
-  containers and hand-built source=None containers fail closed. The
-  plotters take no source guard (label-faithful rendering).
+- SOURCE-SCOPED ADMISSION: honest/pretrends accept CS-, DMLDiD- and
+  Stacked-sourced containers (Stacked widened with row M-024,
+  ``kappa_pre >= 2`` required; DMLDiD with the M-093 seventh amendment —
+  its container is built by the inherited CS kit channel); dCDH l1
+  containers, calendar containers, other-producer/e0 containers and
+  hand-built source=None containers fail closed. The plotters take no
+  source guard (label-faithful rendering).
 """
 
 import warnings
@@ -2099,3 +2101,49 @@ class TestHADContainerRejection:
             compute_honest_did(surface, M=1.0)
         with pytest.raises(TypeError, match="coefficients ARE reference-normalized"):
             compute_pretrends_power(surface, M=1.0)
+
+
+class TestDMLDiDContainerAdmission:
+    """DMLDiD-sourced containers are admitted (M-093 seventh amendment)."""
+
+    @pytest.fixture(scope="class")
+    def dml_universal(self):
+        import numpy as np
+        import pandas as pd
+
+        from diff_diff import DMLDiD
+
+        rng = np.random.default_rng(5)
+        rows = []
+        for i in range(90):
+            cohort = [0, 3, 4][i % 3]
+            x1 = rng.normal()
+            for t in range(1, 7):
+                y = 0.5 * x1 + 0.1 * t + rng.normal(scale=0.4)
+                if cohort > 0 and t >= cohort:
+                    y += 1.5
+                rows.append((i, t, cohort, y, x1))
+        df = pd.DataFrame(rows, columns=["unit", "time", "first_treat", "y", "x1"])
+        return DMLDiD(seed=0, base_period="universal").fit(
+            df,
+            outcome="y",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            covariates=["x1"],
+        )
+
+    def test_honest_did_accepts_dml_container(self, dml_universal):
+        from diff_diff import compute_honest_did
+
+        es = dml_universal.aggregate("event_study")
+        assert es.source == "DMLDiDResults"
+        honest = compute_honest_did(es, method="relative_magnitude", M=0.5)
+        assert honest is not None
+
+    def test_pretrends_accepts_dml_container(self, dml_universal):
+        from diff_diff import compute_pretrends_power
+
+        es = dml_universal.aggregate("event_study")
+        power = compute_pretrends_power(es, M=0.1)
+        assert power is not None

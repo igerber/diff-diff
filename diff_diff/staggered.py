@@ -262,6 +262,38 @@ def _safe_inv(
     return inv
 
 
+def select_base_period(
+    base_period: str, anticipation: int, g: Any, t: Any, observed_sorted: List
+) -> Optional[Any]:
+    """Positional base period for cell ``(g, t)`` — R ``did::att_gt`` parity.
+
+    Pure module-level form of :meth:`CallawaySantAnna._select_base_period`
+    (which delegates here), shared with ``DMLDiD`` so the two estimators
+    cannot drift. See the method docstring for the positional-base contract.
+    """
+    if base_period == "universal" or t >= g:
+        threshold = g - anticipation
+    else:  # varying pre-treatment
+        threshold = t
+    idx = bisect.bisect_left(observed_sorted, threshold)
+    return observed_sorted[idx - 1] if idx > 0 else None
+
+
+def valid_periods_for_group(
+    base_period: str, anticipation: int, g: Any, time_periods: List, observed_sorted: List
+) -> List:
+    """Evaluation periods to attempt as ``ATT(g, t)`` for cohort ``g``.
+
+    Pure module-level form of :meth:`CallawaySantAnna._valid_periods_for_group`
+    (which delegates here), shared with ``DMLDiD``.
+    """
+    if base_period == "universal":
+        universal_base = select_base_period(base_period, anticipation, g, g, observed_sorted)
+        return [t for t in time_periods if t != universal_base]
+    min_period = observed_sorted[0]
+    return [t for t in time_periods if t >= g - anticipation or t > min_period]
+
+
 def _nan_gt_entry(
     n_treated: int = 0,
     n_control: int = 0,
@@ -276,7 +308,9 @@ def _nan_gt_entry(
     inspectable (``to_dataframe`` / direct dict access) and the reason is
     machine-readable via ``skip_reason`` (one of ``"missing_period"``,
     ``"zero_treated_control"``, ``"zero_weight_mass"``,
-    ``"non_finite_regression"``; estimable cells carry ``None``).
+    ``"non_finite_regression"``, or — DMLDiD cells only —
+    ``"cross_fit_degenerate"``, ``"non_finite_score"``; estimable cells
+    carry ``None``).
 
     The cell carries NO ``influence_func_info`` entry: every aggregation and
     bootstrap consumer finite-masks (``np.isfinite(effect)``) or filters to IF
@@ -938,15 +972,9 @@ class CallawaySantAnna(
         - ``varying`` pre-treatment (``t < g``): base is the immediately
           preceding observed period, i.e. the largest observed ``p < t``.
         """
-        if self.base_period == "universal" or t >= g:
-            threshold = g - self.anticipation
-        else:  # varying pre-treatment
-            threshold = t
-        # Largest observed period strictly below `threshold` (positional
-        # neighbor). bisect_left gives the insertion index of `threshold`; the
-        # element just before it is the largest observed value < threshold.
-        idx = bisect.bisect_left(observed_sorted, threshold)
-        return observed_sorted[idx - 1] if idx > 0 else None
+        # Delegates to the shared module-level helper (also used by DMLDiD)
+        # so the positional-base contract cannot drift between estimators.
+        return select_base_period(self.base_period, self.anticipation, g, t, observed_sorted)
 
     def _valid_periods_for_group(self, g: Any, time_periods: List, observed_sorted: List) -> List:
         """Evaluation periods ``t`` to attempt as ``ATT(g, t)`` for cohort ``g``.
@@ -965,11 +993,9 @@ class CallawaySantAnna(
         Cells that remain non-estimable (``_select_base_period`` returns
         ``None``) are pruned downstream as ``missing_period`` NaNs.
         """
-        if self.base_period == "universal":
-            universal_base = self._select_base_period(g, g, observed_sorted)
-            return [t for t in time_periods if t != universal_base]
-        min_period = observed_sorted[0]
-        return [t for t in time_periods if t >= g - self.anticipation or t > min_period]
+        return valid_periods_for_group(
+            self.base_period, self.anticipation, g, time_periods, observed_sorted
+        )
 
     def _compute_att_gt_fast(
         self,

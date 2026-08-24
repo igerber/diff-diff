@@ -38,6 +38,7 @@ produced wrong figures three separate times while this inventory was drafted).
 | `imputation_pretrends_event_study` | unpinned | 157, 157, 157, None, None, None, None, None | **legitimate** | pretrends lead regression: CR1 k = K_reference (D2 fixed); tail df converged in 3.9 (M-127): leads use t(residual df) via the df_convention knob (was silent normal theory); the None calls are the knob-independent BJS aggregates (L3) |
 | `two_stage_default` | — | None | **legitimate** | L3: Gardner two-stage variance, not the shared CR1 sandwich |
 | `callaway_santanna_default` | — | None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None | **legitimate** | L3: influence-function variance anchored to Stata csdid |
+| `dml_did` | — | None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None | **legitimate** | L3: Chang (2020) Thm 2 augmented-score plug-in variance (per-unit influence function; normal-theory safe_inference throughout, no cluster surface) |
 
 cr1_k is the sorted multiset of K_reference counts reaching the shared
 clustered CR1 denominator — visible columns + the signed cluster_k_adjustment
@@ -128,9 +129,10 @@ output).
   the library-wide v4 target — bit-identical, no numbers moved), with
   "residual"/"normal" as opt-ins; the degenerate lanes (unclustered refit,
   RA G<=1, saturated early return) keep literal df=None under every value.
-- **L3 — CallawaySantAnna / TwoStageDiD / ImputationDiD (default)**: different
-  variance theory (influence functions / two-stage / BJS imputation), never the
-  shared CR1 sandwich. CS is anchored to Stata csdid outright.
+- **L3 — CallawaySantAnna / DMLDiD / TwoStageDiD / ImputationDiD (default)**:
+  different variance theory (influence functions / Chang (2020) augmented-score
+  plug-in / two-stage / BJS imputation), never the shared CR1 sandwich. CS is
+  anchored to Stata csdid outright; DMLDiD to DoubleML.
   **ImputationDiD is conditional**: its pretrends=True lead regression DOES
   run the shared clustered CR1 — surfaced fit-time via the deprecated
   aggregate="event_study" or post-fit via results.aggregate('event_study')

@@ -814,7 +814,9 @@ def _extract_container_params(
     """Container branch of ``_extract_event_study_params``.
 
     Consumes the unified ``EventStudyResults`` surface produced by
-    ``CallawaySantAnnaResults.aggregate('event_study')`` or
+    ``CallawaySantAnnaResults.aggregate('event_study')``,
+    ``DMLDiDResults.aggregate('event_study')`` (row M-093 amendment; same
+    staggered ATT(g,t) payload and semantics as CS), or
     ``StackedDiDResults.aggregate('event_study')`` (row M-024; Stacked
     containers require ``kappa_pre >= 2`` so estimated pre-periods
     exist, and a non-singular FULL retained event-study covariance
@@ -838,10 +840,15 @@ def _extract_container_params(
     if surface.time_scale == "calendar":
         return _extract_calendar_container_params(surface)
 
-    if surface.source not in ("CallawaySantAnnaResults", "StackedDiDResults"):
+    if surface.source not in (
+        "CallawaySantAnnaResults",
+        "StackedDiDResults",
+        "DMLDiDResults",
+    ):
         raise TypeError(
             "HonestDiD accepts EventStudyResults containers produced by "
             "CallawaySantAnnaResults.aggregate('event_study'), "
+            "DMLDiDResults.aggregate('event_study'), "
             "StackedDiDResults.aggregate('event_study'), or the "
             "TwoWayFixedEffects event-study mode (calendar-scale "
             "surfaces) only "
@@ -909,8 +916,8 @@ def _extract_container_params(
             f"at event times {sorted(set(_ref_e))}. Coefficients "
             "normalized against different bases are not jointly "
             "interpretable under Rambachan-Roth's delta_0 = 0 "
-            "normalization. For CallawaySantAnna this arises from "
-            "base_period='universal' on a gapped time grid - "
+            "normalization. For CallawaySantAnna and DMLDiD this arises "
+            "from base_period='universal' on a gapped time grid - "
             "re-estimate on a consecutive (ungapped) time grid so every "
             "cohort's base falls at the same event time."
         )
@@ -928,14 +935,18 @@ def _extract_container_params(
             "use consecutive comparisons (not a common reference period), "
             "which changes the meaning of the parallel trends restriction. "
         )
-        # Remedy is producer-conditional: only CallawaySantAnna exposes a
-        # base_period knob (StackedDiD is single-reference by construction
-        # and always records "universal", so a Stacked-sourced container
-        # can only land here hand-built/modified).
+        # Remedy is producer-conditional: CallawaySantAnna and DMLDiD
+        # expose a base_period knob (StackedDiD is single-reference by
+        # construction and always records "universal", so a Stacked-sourced
+        # container can only land here hand-built/modified).
+        _bp_producer = {
+            "CallawaySantAnnaResults": "CallawaySantAnna",
+            "DMLDiDResults": "DMLDiD",
+        }.get(surface.source)
         remedy_clause = (
-            "Re-run with CallawaySantAnna(base_period='universal') for "
+            f"Re-run with {_bp_producer}(base_period='universal') for "
             "methodologically valid HonestDiD bounds."
-            if surface.source == "CallawaySantAnnaResults"
+            if _bp_producer is not None
             else "Rebuild the container from the fitted results object "
             "(producer-built containers record the true regime)."
         )
@@ -1002,8 +1013,8 @@ def _extract_container_params(
             "HonestDiD cannot consume an event-study container with "
             f"multiple reference rows ({sorted(ref_rows)}): its "
             "consecutive-grid contract is defined around a single omitted "
-            "reference. For CallawaySantAnna, multiple references arise "
-            "from base_period='universal' on a gapped time grid, where "
+            "reference. For CallawaySantAnna and DMLDiD, multiple references "
+            "arise from base_period='universal' on a gapped time grid, where "
             "each cohort's positional base is its own reference-only "
             "horizon - re-estimate on a consecutive (ungapped) time grid "
             "so a single common reference is materialized."
@@ -1053,7 +1064,7 @@ def _extract_container_params(
         _gap_remedy = (
             "Ensure all event-study periods have valid estimates, "
             "or use balance_e to restrict to a balanced subset."
-            if surface.source == "CallawaySantAnnaResults"
+            if surface.source in ("CallawaySantAnnaResults", "DMLDiDResults")
             else "Ensure all event-study periods have valid estimates "
             "(for StackedDiD, an interior horizon with a non-finite SE "
             "indicates a rank-dropped event-time column - inspect the "
@@ -1142,8 +1153,9 @@ def _extract_event_study_params(
     results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
         Estimation results with event study structure, or the unified
         event-study container produced by
-        ``CallawaySantAnnaResults.aggregate('event_study')`` or
-        ``StackedDiDResults.aggregate('event_study')`` (CS- and
+        ``CallawaySantAnnaResults.aggregate('event_study')``,
+        ``DMLDiDResults.aggregate('event_study')``, or
+        ``StackedDiDResults.aggregate('event_study')`` (CS-, DML-, and
         Stacked-sourced containers only; see
         ``_extract_container_params``. Stacked containers need
         ``kappa_pre >= 2`` so estimated pre-periods exist).
@@ -1306,11 +1318,12 @@ def _extract_event_study_params(
             if isinstance(results, CallawaySantAnnaResults):
                 if results.event_study_effects is None:
                     raise ValueError(
-                        "CallawaySantAnnaResults must have event_study_effects for "
-                        "HonestDiD. Either pass the post-fit container "
-                        "(compute_honest_did(results.aggregate('event_study'))) or "
-                        "fit with the deprecated aggregate='event_study' to "
-                        "populate the fit-time surface."
+                        f"{type(results).__name__} must have event_study_effects "
+                        "for HonestDiD. Pass the post-fit container "
+                        "(compute_honest_did(results.aggregate('event_study')))"
+                        " instead; CallawaySantAnna fits can alternatively use "
+                        "the deprecated aggregate='event_study' to populate "
+                        "the fit-time surface."
                     )
 
                 # Common-reference guard, mirroring the container branch:
@@ -1717,7 +1730,8 @@ def _extract_event_study_params(
             f"Unsupported results type: {type(results)}. "
             "Expected MultiPeriodDiDResults, CallawaySantAnnaResults, "
             "ChaisemartinDHaultfoeuilleResults, or an EventStudyResults "
-            "container from CallawaySantAnnaResults.aggregate('event_study') "
+            "container from CallawaySantAnnaResults.aggregate('event_study'), "
+            "DMLDiDResults.aggregate('event_study'), "
             "or StackedDiDResults.aggregate('event_study')."
         )
 
@@ -3149,7 +3163,8 @@ class HonestDiD(BaseEstimator):
         results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
             Results from event study estimation, or the unified event-study
             container from
-            ``CallawaySantAnnaResults.aggregate('event_study')`` or
+            ``CallawaySantAnnaResults.aggregate('event_study')``,
+            ``DMLDiDResults.aggregate('event_study')``, or
             ``StackedDiDResults.aggregate('event_study')`` (Stacked
             containers require ``kappa_pre >= 2`` so estimated
             pre-periods exist, and a non-singular FULL retained event-study
@@ -3537,7 +3552,8 @@ class HonestDiD(BaseEstimator):
         results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
             Results from event study estimation, or the unified
             event-study container from
-            ``CallawaySantAnnaResults.aggregate('event_study')`` or
+            ``CallawaySantAnnaResults.aggregate('event_study')``,
+            ``DMLDiDResults.aggregate('event_study')``, or
             ``StackedDiDResults.aggregate('event_study')`` (Stacked
             containers require ``kappa_pre >= 2``).
         M_grid : list of float, optional
@@ -3643,7 +3659,8 @@ class HonestDiD(BaseEstimator):
         results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
             Results from event study estimation, or the unified
             event-study container from
-            ``CallawaySantAnnaResults.aggregate('event_study')`` or
+            ``CallawaySantAnnaResults.aggregate('event_study')``,
+            ``DMLDiDResults.aggregate('event_study')``, or
             ``StackedDiDResults.aggregate('event_study')`` (Stacked
             containers require ``kappa_pre >= 2``).
         tol : float
@@ -3703,7 +3720,8 @@ def compute_honest_did(
     ----------
     results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
         Results from event study estimation, or the unified event-study
-        container from ``CallawaySantAnnaResults.aggregate('event_study')``
+        container from ``CallawaySantAnnaResults.aggregate('event_study')``,
+        ``DMLDiDResults.aggregate('event_study')``,
         or ``StackedDiDResults.aggregate('event_study')`` (Stacked
         containers require ``kappa_pre >= 2``).
     method : str
@@ -3748,7 +3766,8 @@ def sensitivity_plot(
     ----------
     results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
         Results from event study estimation, or the unified event-study
-        container from ``CallawaySantAnnaResults.aggregate('event_study')``
+        container from ``CallawaySantAnnaResults.aggregate('event_study')``,
+        ``DMLDiDResults.aggregate('event_study')``,
         or ``StackedDiDResults.aggregate('event_study')`` (Stacked
         containers require ``kappa_pre >= 2``).
     method : str

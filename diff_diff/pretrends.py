@@ -1048,8 +1048,9 @@ class PreTrendsPower(BaseEstimator):
         results : MultiPeriodDiDResults, CallawaySantAnnaResults, SunAbrahamResults, or EventStudyResults
             Results object from event study estimation, or the unified
             event-study container from
-            ``CallawaySantAnnaResults.aggregate('event_study')`` or
-            ``StackedDiDResults.aggregate('event_study')`` (CS- and
+            ``CallawaySantAnnaResults.aggregate('event_study')``,
+            ``DMLDiDResults.aggregate('event_study')``, or
+            ``StackedDiDResults.aggregate('event_study')`` (CS-, DML-, and
             Stacked-sourced containers only; Stacked containers require
             ``kappa_pre >= 2`` so estimated pre-periods exist).
         pre_periods : list of int, optional
@@ -1174,10 +1175,11 @@ class PreTrendsPower(BaseEstimator):
             if isinstance(results, CallawaySantAnnaResults):
                 if results.event_study_effects is None:
                     raise ValueError(
-                        "CallawaySantAnnaResults must have event_study_effects. "
-                        "Either pass the post-fit container "
+                        f"{type(results).__name__} must have "
+                        "event_study_effects. Pass the post-fit container "
                         "(compute_pretrends_power(results.aggregate("
-                        "'event_study'), ...)) or fit with the deprecated "
+                        "'event_study'), ...)) instead; CallawaySantAnna "
+                        "fits can alternatively use the deprecated "
                         "aggregate='event_study' to populate the fit-time "
                         "surface."
                     )
@@ -1413,7 +1415,8 @@ class PreTrendsPower(BaseEstimator):
             f"Unsupported results type: {type(results)}. "
             "Expected MultiPeriodDiDResults, CallawaySantAnnaResults, "
             "SunAbrahamResults, or an EventStudyResults container from "
-            "CallawaySantAnnaResults.aggregate('event_study') or "
+            "CallawaySantAnnaResults.aggregate('event_study'), "
+            "DMLDiDResults.aggregate('event_study'), or "
             "StackedDiDResults.aggregate('event_study')."
         )
 
@@ -1565,7 +1568,9 @@ class PreTrendsPower(BaseEstimator):
         """Container branch of ``_extract_pre_period_params``.
 
         Consumes the unified ``EventStudyResults`` surface produced by
-        ``CallawaySantAnnaResults.aggregate('event_study')`` or
+        ``CallawaySantAnnaResults.aggregate('event_study')``,
+        ``DMLDiDResults.aggregate('event_study')`` (row M-093 amendment;
+        same staggered ATT(g,t) payload and semantics as CS), or
         ``StackedDiDResults.aggregate('event_study')`` (row M-024;
         Stacked containers require ``kappa_pre >= 2`` so estimated
         pre-periods exist). Admission is
@@ -1584,11 +1589,16 @@ class PreTrendsPower(BaseEstimator):
         if surface.time_scale == "calendar":
             return self._extract_calendar_container_pre_period_params(surface, pre_periods)
 
-        if surface.source not in ("CallawaySantAnnaResults", "StackedDiDResults"):
+        if surface.source not in (
+            "CallawaySantAnnaResults",
+            "StackedDiDResults",
+            "DMLDiDResults",
+        ):
             raise TypeError(
                 "PreTrendsPower accepts EventStudyResults containers "
                 "produced by CallawaySantAnnaResults.aggregate("
-                "'event_study'), StackedDiDResults.aggregate("
+                "'event_study'), DMLDiDResults.aggregate('event_study'), "
+                "StackedDiDResults.aggregate("
                 "'event_study'), or the TwoWayFixedEffects event-study "
                 "mode (calendar-scale surfaces) only "
                 f"(got source={surface.source!r}). For other estimators "
@@ -1662,8 +1672,8 @@ class PreTrendsPower(BaseEstimator):
                 f"{sorted(set(_ref_e))}. The hypothesized violation "
                 "delta is defined relative to one reference, so "
                 "power/MDV over mixed-base coefficients target an "
-                "ill-defined alternative. For CallawaySantAnna this "
-                "arises from base_period='universal' on a gapped time "
+                "ill-defined alternative. For CallawaySantAnna and DMLDiD "
+                "this arises from base_period='universal' on a gapped time "
                 "grid - re-estimate on a consecutive (ungapped) time "
                 "grid so every cohort's base falls at the same event "
                 "time."
@@ -1690,10 +1700,14 @@ class PreTrendsPower(BaseEstimator):
                 "against a common reference period, so linear power/MDV "
                 "target a different violation shape. "
             )
+            _bp_producer = {
+                "CallawaySantAnnaResults": "CallawaySantAnna",
+                "DMLDiDResults": "DMLDiD",
+            }.get(surface.source)
             remedy_clause = (
-                "Re-run with CallawaySantAnna(base_period='universal') "
+                f"Re-run with {_bp_producer}(base_period='universal') "
                 "for Roth-faithful linear benchmarks."
-                if surface.source == "CallawaySantAnnaResults"
+                if _bp_producer is not None
                 else "Rebuild the container from the fitted results "
                 "object (producer-built containers record the true "
                 "regime)."
@@ -2110,7 +2124,8 @@ class PreTrendsPower(BaseEstimator):
         results : MultiPeriodDiDResults, CallawaySantAnnaResults, SunAbrahamResults, or EventStudyResults
             Results from an event study estimation, or the unified
             event-study container from
-            ``CallawaySantAnnaResults.aggregate('event_study')`` or
+            ``CallawaySantAnnaResults.aggregate('event_study')``,
+            ``DMLDiDResults.aggregate('event_study')``, or
             ``StackedDiDResults.aggregate('event_study')`` (Stacked
             containers require ``kappa_pre >= 2``).
         M : float, optional
@@ -2368,7 +2383,8 @@ def compute_pretrends_power(
     ----------
     results : results object
         Event study results (MPD / CS / SA), or the unified event-study
-        container from ``CallawaySantAnnaResults.aggregate('event_study')``
+        container from ``CallawaySantAnnaResults.aggregate('event_study')``,
+        ``DMLDiDResults.aggregate('event_study')``,
         or ``StackedDiDResults.aggregate('event_study')`` (Stacked
         containers require ``kappa_pre >= 2``).
     M : float, optional
@@ -2435,7 +2451,8 @@ def compute_mdv(
     ----------
     results : results object
         Event study results (MPD / CS / SA), or the unified event-study
-        container from ``CallawaySantAnnaResults.aggregate('event_study')``
+        container from ``CallawaySantAnnaResults.aggregate('event_study')``,
+        ``DMLDiDResults.aggregate('event_study')``,
         or ``StackedDiDResults.aggregate('event_study')`` (Stacked
         containers require ``kappa_pre >= 2``).
     alpha : float, default=0.05

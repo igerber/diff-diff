@@ -438,8 +438,9 @@ satisfaction, NPS, or similar. The survey uses stratified sampling, clustering (
 by geography), or probability weights.
 
 **Answer:** Use a survey-capable method above, combined with
-:class:`~diff_diff.SurveyDesign`. (:class:`~diff_diff.LWDiD` is the
-exception: it accepts no ``survey_design`` parameter at all — see the
+:class:`~diff_diff.SurveyDesign`. (:class:`~diff_diff.LWDiD` and
+:class:`~diff_diff.DMLDiD` are the exceptions: they accept no
+``survey_design`` parameter at all — see the
 :ref:`survey-design-support` matrix.)
 
 Ignoring survey weights and clustering makes your confidence intervals too narrow -
@@ -534,7 +535,7 @@ At a Glance
 What About the Other Estimators?
 --------------------------------
 
-diff-diff has 23 estimators covering advanced scenarios: Sun-Abraham for
+diff-diff has 24 estimators covering advanced scenarios: Sun-Abraham for
 interaction-weighted estimation, Imputation DiD and Two-Stage DiD for alternative
 staggered approaches, Local Projections DiD, Stacked DiD, Efficient DiD,
 Triple Difference, TROP, Changes-in-Changes for distributional/quantile effects, and more.
@@ -561,6 +562,17 @@ The six scenarios above cover the most common business use cases.
   than the eligible never-treated composite use large-sample
   influence-function inference, not the exact t. Compare ``rolling='demean'`` vs
   ``rolling='detrend'`` as a built-in specification robustness check.
+
+- **Need flexible / high-dimensional covariate adjustment?** → :class:`~diff_diff.DMLDiD` (Chang 2020)
+
+  Double/debiased machine learning DiD: per-(g, t)-cell cross-fitted
+  nuisance learners (any sklearn-style object, or the exported
+  :class:`~diff_diff.SieveLearner`) with Neyman-orthogonal scores, so the
+  ATT is first-order insensitive to ML regularization bias. Covariates are
+  REQUIRED (conditional parallel trends); aggregation is post-fit
+  (``results.aggregate('event_study')`` feeds HonestDiD/PreTrendsPower);
+  set ``seed=`` for reproducible fold draws. Panel only; no
+  survey/cluster support (per-unit influence-function variance).
 
 For the full academic decision tree with all estimators, see :doc:`choosing_estimator`.
 

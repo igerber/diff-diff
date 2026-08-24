@@ -1,5 +1,5 @@
 """
-Bootstrap inference for Callaway-Sant'Anna estimator.
+Bootstrap inference for CallawaySantAnna and the other staggered payload producers.
 
 This module provides the bootstrap results container and the mixin class
 with bootstrap inference methods. Weight generation and statistical helpers
@@ -134,11 +134,12 @@ class CSBootstrapResults:
 
 class CallawaySantAnnaBootstrapMixin:
     """
-    Mixin class providing bootstrap inference methods for CallawaySantAnna.
+    Mixin class providing bootstrap inference for the staggered family.
 
     This class is not intended to be used standalone. It provides methods
-    that are used by the main CallawaySantAnna class for multiplier bootstrap
-    inference.
+    used by CallawaySantAnna and the other staggered payload producers
+    (the DDD engine hosts, DMLDiD, and the kit aggregators) for multiplier
+    bootstrap inference.
     """
 
     # Type hints for attributes accessed from the main class

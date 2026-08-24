@@ -653,6 +653,44 @@ identification strategy with analytical (non-bootstrap) inference.
                       treatment='treated', first_treat='first_treat',
                       covariates=['size'])  # DR needs covariates; without them it reduces to RA
 
+DMLDiD (Chang 2020)
+~~~~~~~~~~~~~~~~~~~
+
+**When to use**: Staggered (or 2-period) panel designs where parallel trends
+is plausible only CONDITIONAL on covariates and the covariate adjustment
+must be flexible or high-dimensional — double/debiased machine learning
+(DML2 cross-fitting + Neyman-orthogonal scores) makes the ATT first-order
+insensitive to the nuisance learners' regularization bias.
+
+**Key features**:
+
+- Per-(g, t) cell Chang (2020) Case 1 estimation on the Callaway-Sant'Anna
+  cell architecture; the 2-period design is the degenerate single-cell case
+- Configurable nuisance learners: string names (``'logit'``; ``'linear'``,
+  ``'ridge'``, ``'sieve'``) or any object with ``fit``/``predict``
+  (``predict_proba``) — sklearn estimators plug in directly;
+  :class:`~diff_diff.SieveLearner` is the exported adaptive-degree option
+- Covariates are REQUIRED (the no-covariates case routes to
+  :class:`~diff_diff.CallawaySantAnna`)
+- Post-fit aggregation (``results.aggregate('event_study'/'group'/'simple'/
+  'total')``) with sup-t bands and bootstrap replay; HonestDiD /
+  PreTrendsPower consume the event-study container
+- Analytical augmented-score inference anchored to DoubleML at machine
+  precision (committed parity spikes)
+
+**vs Callaway-Sant'Anna**: same cell architecture and aggregation surface;
+DMLDiD replaces CS's parametric nuisances with cross-fitted ML learners —
+prefer it when the covariate relationship is nonlinear/high-dimensional,
+prefer CS otherwise (fewer moving parts, survey/cluster support).
+
+**Example**::
+
+    from diff_diff import DMLDiD
+    est = DMLDiD(outcome_learner='sieve', seed=42)
+    results = est.fit(data, outcome='y', unit='id', time='time',
+                      first_treat='first_treat', covariates=['x1', 'x2'])
+    print(results.aggregate('event_study').to_dataframe())
+
 Bacon Decomposition
 ~~~~~~~~~~~~~~~~~~~
 
@@ -834,8 +872,8 @@ Survey Design Support
 
 Most estimators support an optional ``survey_design`` parameter in ``fit()``
 (``SyntheticControl`` accepts the parameter but raises ``NotImplementedError``;
-``LWDiD`` accepts no ``survey_design`` parameter at all — passing it raises
-``TypeError``).
+``LWDiD`` and ``DMLDiD`` accept no ``survey_design`` parameter at all —
+passing it raises ``TypeError``).
 Pass a :class:`~diff_diff.SurveyDesign` object to get design-based variance
 estimation. The depth of support varies by estimator and variance method:
 
@@ -962,6 +1000,11 @@ estimation. The depth of support varies by estimator and variance method:
      - --
      - --
    * - ``LWDiD``
+     - N/A (no survey support)
+     - N/A
+     - --
+     - --
+   * - ``DMLDiD``
      - N/A (no survey support)
      - N/A
      - --

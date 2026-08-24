@@ -35,6 +35,7 @@ regression discontinuity, and the Goodman-Bacon decomposition diagnostic:
    diff_diff.ChangesInChanges
    diff_diff.QDiD
    diff_diff.LWDiD
+   diff_diff.DMLDiD
    diff_diff.BaconDecomposition
    diff_diff.StaggeredTripleDifference
    diff_diff.RegressionDiscontinuity
@@ -79,6 +80,7 @@ Result containers returned by estimators:
    diff_diff.lpdid_results.LPDiDResults
    diff_diff.changes_in_changes_results.ChangesInChangesResults
    diff_diff.lwdid_results.LWDiDResults
+   diff_diff.dml_did_results.DMLDiDResults
    diff_diff.Comparison2x2
    diff_diff.StaggeredTripleDiffResults
    diff_diff.TWFEWeightsResult
@@ -89,6 +91,18 @@ Result containers returned by estimators:
    diff_diff.Diagnostic
    diff_diff.EventStudyResults
    diff_diff.AggregationResult
+
+Learners
+--------
+
+Nuisance learners for the DML estimators (duck-typed protocol; any object
+with ``fit``/``predict`` or ``fit``/``predict_proba`` also plugs in):
+
+.. autosummary::
+   :toctree: _autosummary
+   :nosignatures:
+
+   diff_diff.SieveLearner
 
 Visualization
 -------------
@@ -357,6 +371,7 @@ Estimators
    lpdid
    changes_in_changes
    lwdid
+   dml_did
    bacon
 
 Infrastructure

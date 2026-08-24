@@ -431,6 +431,29 @@ ROWS = [
         status="legitimate",
         reason="L3: influence-function variance anchored to Stata csdid",
     ),
+    dict(
+        key="dml_did",
+        # Deterministic covariate via df.assign (LPDiD precedent), leaving
+        # the shared make_panel() fixture-builder output identical for every
+        # other row; seed=0 pins the fold draw so the tail_df literal cannot
+        # rest on OS entropy.
+        fit=lambda df: diff_diff.DMLDiD(seed=0).fit(
+            df.assign(x0=(df["unit"] % 7) * 0.1 + df["time"] * 0.01),
+            outcome="y",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            covariates=["x0"],
+        ),
+        cr1_k=(),
+        tail_df=(None,) * 16,
+        status="legitimate",
+        reason=(
+            "L3: Chang (2020) Thm 2 augmented-score plug-in variance "
+            "(per-unit influence function; normal-theory safe_inference "
+            "throughout, no cluster surface)"
+        ),
+    ),
 ]
 
 _FAST_KEYS = {

@@ -275,7 +275,7 @@ class TestGuardrailPhrases:
             "any estimate exports",
             "catches every",
             # aggregate()/export are NOT universal estimator methods
-            # (round-3 review): the four totals adopters own aggregate();
+            # (round-3 review): the five totals adopters own aggregate();
             # the exporters are module functions.
             "one pattern across every estimator",
         ):
@@ -294,12 +294,12 @@ class TestGuardrailPhrases:
         assert f"# scale = {c['N_BOOSTED']} boosted geos" in visible_strings
 
     def test_totals_adopter_card_matches_source(self, visible_strings):
-        # Slide 9 names the four aggregate('total') adopters; each named
+        # Slide 9 names the five aggregate('total') adopters; each named
         # estimator's results module must actually list "total" in its
         # _AGGREGATE_SUPPORTED tuple, so the card cannot outlive a de-adoption
         # (or miss staying in sync if the deck's list is ever edited).
         assert (
-            "aggregate('total') on Callaway-Sant'Anna, EfficientDiD, ImputationDiD, TwoStageDiD"
+            "aggregate('total') on Callaway-Sant'Anna, DML DiD, EfficientDiD, ImputationDiD, TwoStageDiD"
             in visible_strings
         ), "slide-9 totals-adopter card wording changed - re-sync this test"
         repo = Path(__file__).resolve().parents[1]
@@ -317,6 +317,16 @@ class TestGuardrailPhrases:
             assert m and '"total"' in m.group(
                 1
             ), f"{module} no longer advertises aggregate('total') - slide 9 overclaims"
+        # DMLDiDResults INHERITS _AGGREGATE_SUPPORTED (its module carries no
+        # literal assignment for the source grep) — pin it by import, behind
+        # the suite's availability convention.
+        if not (repo / "diff_diff" / "dml_did_results.py").exists():
+            pytest.skip("dml_did_results.py not available in this CI environment.")
+        from diff_diff.dml_did_results import DMLDiDResults
+
+        assert (
+            "total" in DMLDiDResults._AGGREGATE_SUPPORTED
+        ), "DMLDiDResults no longer advertises aggregate('total') - slide 9 overclaims"
 
     FORBIDDEN_FRAMEWORKS = (
         "meridian",

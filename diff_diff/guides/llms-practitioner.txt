@@ -221,6 +221,13 @@ Is treatment adoption staggered (multiple cohorts, different timing)?
 |   |-- TwoStageDiD            -- two-stage with GMM variance
 |   |-- StackedDiD             -- sub-experiment approach
 |   |-- EfficientDiD (EDiD)    -- optimal weighting for tighter SEs
+|   |-- DMLDiD                 -- double/debiased ML (Chang 2020) when
+|   |                             covariate adjustment must be flexible or
+|   |                             high-dimensional: cross-fitted nuisance
+|   |                             learners + orthogonal scores per (g,t)
+|   |                             cell; covariates REQUIRED, aggregation
+|   |                             post-fit, set seed= for reproducible
+|   |                             fold draws
 |   \-- WooldridgeDiD (ETWFE)  -- nonlinear outcomes (logit/Poisson) or saturated OLS
 |
 |-- NO, simple 2x2 design:
@@ -469,7 +476,7 @@ print(results.aggregate('event_study', balance_e=2).to_dataframe())
 # NEW in 3.10 - the estimator-owned TOTAL incremental outcome (exact
 # relay C x overall; single row; panel non-survey fits only):
 print(results.aggregate('total').to_dataframe())
-# BOOTSTRAPPED fits: the CS and EfficientDiD recompute levels
+# BOOTSTRAPPED fits: the CS, DMLDiD, and EfficientDiD recompute levels
 # (event_study/group) REPLAY the fit-time multiplier bootstrap post-fit
 # (percentile inference; no refit needed) — but they still RAISE on
 # ImputationDiD/TwoStageDiD, where aggregate('simple') and, where

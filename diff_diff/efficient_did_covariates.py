@@ -21,7 +21,7 @@ All functions are pure (no state), operating on pre-pivoted numpy arrays.
 import warnings
 from itertools import combinations_with_replacement
 from math import comb
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple, Union, overload
 
 import numpy as np
 from scipy.spatial.distance import cdist
@@ -262,7 +262,36 @@ def estimate_outcome_regression(
 # ---------------------------------------------------------------------------
 
 
-def _polynomial_sieve_basis(X: np.ndarray, degree: int) -> np.ndarray:
+@overload
+def _polynomial_sieve_basis(
+    X: np.ndarray,
+    degree: int,
+    *,
+    center: Optional[np.ndarray] = ...,
+    scale: Optional[np.ndarray] = ...,
+    return_stats: Literal[False] = ...,
+) -> np.ndarray: ...
+
+
+@overload
+def _polynomial_sieve_basis(
+    X: np.ndarray,
+    degree: int,
+    *,
+    center: Optional[np.ndarray] = ...,
+    scale: Optional[np.ndarray] = ...,
+    return_stats: Literal[True],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]: ...
+
+
+def _polynomial_sieve_basis(
+    X: np.ndarray,
+    degree: int,
+    *,
+    center: Optional[np.ndarray] = None,
+    scale: Optional[np.ndarray] = None,
+    return_stats: bool = False,
+) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray, np.ndarray]]:
     """Build polynomial sieve basis up to total degree K.
 
     For d covariates and degree K, includes all monomials
@@ -270,6 +299,10 @@ def _polynomial_sieve_basis(X: np.ndarray, degree: int) -> np.ndarray:
     including the intercept term (degree 0).
 
     Standardizes X to zero mean, unit variance for numerical stability.
+    Supplying ``center``/``scale`` (e.g. fit-time statistics for an
+    out-of-fold prediction basis) skips the internal computation; the
+    returned ``scale`` already carries the zero-variance guard, so it can
+    be passed back verbatim.
 
     Parameters
     ----------
@@ -277,20 +310,34 @@ def _polynomial_sieve_basis(X: np.ndarray, degree: int) -> np.ndarray:
         Covariate matrix.
     degree : int
         Maximum total polynomial degree.
+    center, scale : ndarray of shape (d,), optional (keyword-only)
+        Standardization statistics to apply instead of computing them from
+        ``X``. Supply both or neither.
+    return_stats : bool, keyword-only
+        When True, return ``(basis, center, scale)`` with the statistics
+        actually applied (guard included) instead of the bare basis.
 
     Returns
     -------
     basis : ndarray, shape (n, n_basis)
-        Sieve basis matrix. ``n_basis = C(K+d, d)``.
+        Sieve basis matrix. ``n_basis = C(K+d, d)``. With
+        ``return_stats=True``, the tuple ``(basis, center, scale)``.
     """
     n, d = X.shape
 
-    # Standardize for numerical stability (unweighted mean/std intentional —
-    # this is only for conditioning, not for the statistical estimand; with
-    # survey weights the sieve basis is the same, only the objective changes)
-    X_mean = X.mean(axis=0)
-    X_std = X.std(axis=0)
-    X_std[X_std < 1e-10] = 1.0  # avoid division by zero for constant columns
+    if (center is None) != (scale is None):
+        raise ValueError("_polynomial_sieve_basis: supply both center and scale, or neither")
+
+    if center is None or scale is None:
+        # Standardize for numerical stability (unweighted mean/std intentional —
+        # this is only for conditioning, not for the statistical estimand; with
+        # survey weights the sieve basis is the same, only the objective changes)
+        X_mean = X.mean(axis=0)
+        X_std = X.std(axis=0)
+        X_std[X_std < 1e-10] = 1.0  # avoid division by zero for constant columns
+    else:
+        X_mean = np.asarray(center, dtype=np.float64)
+        X_std = np.asarray(scale, dtype=np.float64)
     X_s = (X - X_mean) / X_std
 
     # Build monomials: enumerate all (a_1, ..., a_d) with sum <= degree
@@ -302,7 +349,10 @@ def _polynomial_sieve_basis(X: np.ndarray, degree: int) -> np.ndarray:
                 col = col * X_s[:, idx]
             columns.append(col)
 
-    return np.column_stack(columns)
+    basis = np.column_stack(columns)
+    if return_stats:
+        return basis, X_mean, X_std
+    return basis
 
 
 def _sieve_basis_cached(

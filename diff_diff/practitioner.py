@@ -34,6 +34,7 @@ _ESTIMATOR_NAMES: Dict[str, str] = {
     "DiDResults": "DifferenceInDifferences",
     "MultiPeriodDiDResults": "MultiPeriodDiD (Event Study)",
     "CallawaySantAnnaResults": "CallawaySantAnna",
+    "DMLDiDResults": "DMLDiD (Chang 2020 double/debiased ML)",
     "SunAbrahamResults": "SunAbraham",
     "ImputationDiDResults": "ImputationDiD (Borusyak-Jaravel-Spiess)",
     "TwoStageDiDResults": "TwoStageDiD",
@@ -467,6 +468,85 @@ def _handle_cs(results: Any):
         ),
         _robustness_compare_step("SunAbraham, ImputationDiD, or TwoStageDiD"),
         _covariates_step(),
+    ]
+    warnings = _check_nan_att(results)
+    return steps, warnings
+
+
+def _handle_dml_did(results: Any):
+    # Mirrors _handle_cs's post-fit aggregation advice (the DML container
+    # inherits the CS kit machinery) MINUS the covariates step: _handle_cs
+    # closes by recommending a refit with covariates=None, a call DMLDiD
+    # hard-rejects (covariates are required). Adds a learner-sensitivity
+    # robustness step instead.
+    is_bootstrap = getattr(results, "bootstrap_results", None) is not None
+    if is_bootstrap:
+        sensitivity_why = (
+            "Bounds the treatment effect under plausible violations of "
+            "(conditional) parallel trends. This fit is BOOTSTRAPPED: "
+            "aggregate('event_study') replays the fit-time multiplier "
+            "bootstrap post-fit (percentile inference; the container "
+            "carries no joint covariance, so HonestDiD uses its diagonal "
+            "approximation)."
+        )
+    else:
+        sensitivity_why = (
+            "Bounds the treatment effect under plausible violations of "
+            "(conditional) parallel trends. Aggregate the event study "
+            "post-fit — no refit needed."
+        )
+    sensitivity_code = (
+        "from diff_diff import compute_honest_did\n"
+        "# Aggregate post-fit; the container feeds HonestDiD directly:\n"
+        "es = results.aggregate('event_study')\n"
+        "honest = compute_honest_did(es, method='relative_magnitude', M=1.0)\n"
+        "print(honest.summary())"
+    )
+    heterogeneity_code = (
+        "# Aggregate post-fit - no refit needed:\n"
+        "print(results.aggregate('group').to_dataframe())        # Per-cohort ATTs\n"
+        "print(results.aggregate('event_study').to_dataframe())  # Dynamic effects"
+    )
+    steps = [
+        _parallel_trends_step(staggered=True),
+        _step(
+            baker_step=6,
+            label="Run HonestDiD sensitivity analysis",
+            why=sensitivity_why,
+            code=sensitivity_code,
+            step_name="sensitivity",
+        ),
+        _step(
+            baker_step=7,
+            label="Examine group and event study effects",
+            why=(
+                "Aggregate ATT may mask heterogeneity across cohorts or "
+                "dynamic effects over time. Inspect group and event study "
+                "aggregations."
+            ),
+            code=heterogeneity_code,
+            step_name="heterogeneity",
+        ),
+        _robustness_compare_step("CallawaySantAnna, SunAbraham, or ImputationDiD"),
+        _step(
+            baker_step=8,
+            label="Check learner sensitivity",
+            why=(
+                "DML estimates plug in cross-fitted nuisance functions; a "
+                "conclusion that survives a different outcome learner "
+                "(e.g. the adaptive polynomial sieve, or a penalized "
+                "ridge) is more credible than one that depends on the "
+                "default linear specification."
+            ),
+            code=(
+                "# Refit with alternative nuisance learners:\n"
+                "alt = DMLDiD(outcome_learner='sieve', seed=0).fit(\n"
+                "    df, outcome=..., unit=..., time=..., first_treat=...,\n"
+                "    covariates=[...])\n"
+                "print(alt.att, results.att)  # should be close"
+            ),
+            step_name="learner_sensitivity",
+        ),
     ]
     warnings = _check_nan_att(results)
     return steps, warnings
@@ -2210,6 +2290,7 @@ _HANDLERS = {
     "DiDResults": _handle_did,
     "MultiPeriodDiDResults": _handle_multi_period,
     "CallawaySantAnnaResults": _handle_cs,
+    "DMLDiDResults": _handle_dml_did,
     "SunAbrahamResults": _handle_sa,
     "ImputationDiDResults": _handle_imputation,
     "TwoStageDiDResults": _handle_two_stage,

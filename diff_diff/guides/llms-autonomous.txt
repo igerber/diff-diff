@@ -349,6 +349,7 @@ supported / out of scope; `warn` supported but with documented caveats;
 | `StackedDiD` | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ |
 | `WooldridgeDiD` (ETWFE) | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ |
 | `LWDiD` | ✓ | ✓ | ✗ | ✗ | ✓ | warn | partial | ✗ | ✓ |
+| `DMLDiD` | ✓ | ✓ | ✗ | ✗ | partial | ✓ (REQUIRED) | ✗ | ✗ | ✗ (per-unit IF variance IS unit clustering; no coarser cluster=) |
 | `EfficientDiD` | ✓ | ✓ | ✗ | ✗ | partial | ✓ | ✗ | ✗ | ✓ |
 | `SyntheticDiD` | ✓ | ✗ | ✗ | ✗ | ✓ | ✓ | ✓ | ✗ | partial |
 | `TROP` | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | partial |
@@ -513,6 +514,15 @@ estimators:
   (`control_group='not_yet_treated'` default, or `'never_treated'`);
   covariates must be unit-constant; the only staggered option with an
   exact small-sample inference layer (see §4.8).
+- `DMLDiD` (Chang 2020) - double/debiased ML DiD per (g, t) cell:
+  cross-fitted nuisance learners (DML2) + Neyman-orthogonal score, for
+  conditional parallel trends with flexible/high-dimensional covariate
+  adjustment. Covariates are REQUIRED (`fit(covariates=...)`; the
+  no-covariates case routes to `CallawaySantAnna`). `partial`
+  never-treated: same CS rule (not_yet_treated needs never-treated units
+  or >= 2 cohorts). Aggregation is post-fit
+  (`results.aggregate('event_study'/...)`); with `seed=None` point
+  estimates vary across fits (random folds) - set `seed`.
 
 Diagnostic: `BaconDecomposition().fit(df, ...)` shows the weight allocation of a
 TWFE fit to 2×2 comparison types. Forbidden-comparison weight > 10% is a

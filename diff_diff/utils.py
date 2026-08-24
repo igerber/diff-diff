@@ -492,7 +492,7 @@ def validate_n_bootstrap(n_bootstrap: Any) -> None:
     bootstrap off wherever a ``> 0`` gate exists — the zero-default
     estimators (CallawaySantAnna, SunAbraham, EfficientDiD, ImputationDiD,
     TwoStageDiD, WooldridgeDiD, ContinuousDiD, StaggeredTripleDifference,
-    TripleDifference)
+    TripleDifference, DMLDiD)
     and every analytical lane. On the DiD/TWFE wild-bootstrap lane 0 never
     meant off (the routing consults only ``inference=``); their fit-level
     floor rejects ``n_bootstrap < 2`` under ``inference="wild_bootstrap"``.
@@ -571,11 +571,11 @@ def validate_anticipation(anticipation: Any) -> int:
     one-period window. Numpy integers are accepted, matching
     :func:`validate_n_bootstrap`, whose shape this follows.
 
-    Adopted at ``__init__`` by all nine anticipation-taking estimators
+    Adopted at ``__init__`` by all ten anticipation-taking estimators
     (CallawaySantAnna, SunAbraham, ImputationDiD, TwoStageDiD, StackedDiD,
-    ContinuousDiD, EfficientDiD, WooldridgeDiD, SpilloverDiD) plus
+    ContinuousDiD, EfficientDiD, WooldridgeDiD, SpilloverDiD, DMLDiD) plus
     ``TripleDifference``, and RE-CHECKED on the fit path on all of them —
-    the uniform direct-mutation defense: manual re-assignments on seven,
+    the uniform direct-mutation defense: manual re-assignments on eight,
     EfficientDiD via its ``_validate_params`` re-run, SpilloverDiD via its
     in-fit check, TripleDifference and the deprecated
     ``StaggeredTripleDifference`` via the shared staggered engine.

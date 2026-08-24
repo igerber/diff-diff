@@ -1,5 +1,5 @@
 """
-Aggregation methods mixin for Callaway-Sant'Anna estimator.
+Aggregation methods mixin for CallawaySantAnna and the other staggered payload producers.
 
 This module provides the mixin class containing methods for aggregating
 group-time average treatment effects into summary measures.
@@ -91,11 +91,12 @@ def fixed_cohort_agg_weights(
 
 class CallawaySantAnnaAggregationMixin:
     """
-    Mixin class providing aggregation methods for CallawaySantAnna estimator.
+    Mixin class providing aggregation methods for the staggered family.
 
     This class is not intended to be used standalone. It provides methods
-    that are used by the main CallawaySantAnna class to aggregate group-time
-    effects into summary measures.
+    used by CallawaySantAnna and the other staggered payload producers
+    (the DDD engine hosts, DMLDiD, and the kit aggregators) to aggregate
+    group-time effects into summary measures.
     """
 
     # Type hints for attributes accessed from the main class

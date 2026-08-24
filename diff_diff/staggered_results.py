@@ -103,8 +103,10 @@ class GroupTimeEffect:
     skip_reason : str or None
         ``None`` for an estimable cell; otherwise a machine-readable reason the
         cell is non-estimable (``"missing_period"``, ``"zero_treated_control"``,
-        ``"zero_weight_mass"``, ``"non_finite_regression"``) and ``effect``/``se``
-        are NaN. Non-estimable cells are excluded from all aggregation.
+        ``"zero_weight_mass"``, ``"non_finite_regression"``, or — DMLDiD
+        cells only — ``"cross_fit_degenerate"``, ``"non_finite_score"``) and
+        ``effect``/``se`` are NaN. Non-estimable cells are excluded from all
+        aggregation.
     """
 
     group: Any
@@ -348,8 +350,9 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
         if kit is None:
             raise ValueError(
                 "This result carries no aggregation kit, so it cannot be "
-                "re-aggregated. Kits are attached by CallawaySantAnna.fit(); a "
-                "result unpickled from an older release will not have one."
+                "re-aggregated. Kits are attached at fit time by the "
+                "estimator; a result unpickled from an older release will "
+                "not have one."
             )
         # Per-level bootstrap policy (v4-design section 6, converged with row
         # M-027): 'simple' and 'total' are bit-exact RELAYS of the stored

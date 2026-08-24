@@ -66,7 +66,7 @@ Claim discipline (verified against the committed executed notebooks
   snippet exactly as printed" claim is backed by the notebook's exec cell.
 - "interval 6x narrower" (slide 8) derives from committed widths
   3.59 -> 0.59; the claims test recomputes the ratio and requires >= 6.
-- Slide-9 capability claims are source-pinned by the claims test: the four
+- Slide-9 capability claims are source-pinned by the claims test: the five
   named ``aggregate('total')`` adopters must each list ``"total"`` in their
   results class's ``_AGGREGATE_SUPPORTED``, and the "Zero new dependencies"
   claim is backed by an import scan of ``diff_diff/mmm.py`` (no framework
@@ -1102,7 +1102,7 @@ class MMMCarouselPDF(FPDF):
         features = [
             (
                 "One-line totals",
-                "aggregate('total') on Callaway-Sant'Anna, EfficientDiD, ImputationDiD, TwoStageDiD",
+                "aggregate('total') on Callaway-Sant'Anna, DML DiD, EfficientDiD, ImputationDiD, TwoStageDiD",
             ),
             (
                 "Bring your own estimator",

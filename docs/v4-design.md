@@ -529,11 +529,13 @@ joins the closed set: the estimator-owned total incremental outcome, an
 exact relay `C x overall` CONDITIONAL on the realized aggregation mass,
 where `C` is the adopter's finite-masked complete-case aggregation support
 (CallawaySantAnna: the kept post-anticipation finite cells' mass, replayed
-from a fit-time kit snapshot; ImputationDiD: the finite-tau support -
+from a fit-time kit snapshot; DMLDiD: the same kit-snapshot replay via the
+inherited CS channel over its per-cell complete-case `n_treated`;
+ImputationDiD: the finite-tau support -
 fixing the documented raw-|Omega_1| overcount of the MMM `scale="auto"`
 route for total exports; TwoStageDiD: the post-filter treatment-indicator
 support; EfficientDiD: the kept cells' integer `n_treated` sum). Adopters:
-those four, panel non-survey fits only - repeated-cross-section-routed
+those five, panel non-survey fits only - repeated-cross-section-routed
 fits, fits declaring a `survey_design=`, and CS bare-`cluster=` fits whose
 cohort-mass weighting diverges from the complete-case count all raise
 `NotImplementedError` naming the reason (DEFERRED tracks the survey/RC
@@ -581,14 +583,15 @@ estimand follows the fit's inference method, and the bootstrap gate is
 PER-LEVEL (converged with [M-027] across CS/EDiD/Imputation/TwoStage,
 which previously failed closed on every level): a level that RELAYS the
 fit's stored inference verbatim (`'simple'` on every adopter; `'total'`
-on its four adopters - the x C scaling is homogeneous of degree 1, so the
+on its five adopters - the x C scaling is homogeneous of degree 1, so the
 relay is exact under percentile inference too; all of
 dCDH/StackedDiD/HAD) is faithful under any inference regime and stays
 available on bootstrapped fits, with the df COLUMN NaN'd there - no df
 governs percentile inference, so a relay never publishes analytical
 provenance beside percentile statistics; a RECOMPUTE level on a
 bootstrapped fit either REPLAYS the fit-time bootstrap from retained RNG
-state (CS [M-020], EfficientDiD [M-023]) or RAISES - it never silently
+state (CS [M-020], EfficientDiD [M-023], DMLDiD via the inherited CS kit
+channel [M-093 seventh amendment]) or RAISES - it never silently
 returns analytical inference. **View-relay exception (Phase 2b PRs 1-2):**
 estimators whose `aggregate()` RELAYS stored fields without recomputation
 need no influence-function kit - there is nothing to re-weight. The
@@ -989,7 +992,8 @@ five recorded deviations:
   `introduced_in` tracks the dataclass storage flip, so the nine `field-flip` rows
   say `4.0` while `.att` already resolves today; and a successor that exists can
   still raise (the bootstrapped-fit `aggregate()` recompute gates — three families
-  since the CS and EfficientDiD percentile-bootstrap replays landed). Availability is
+  since the CS, EfficientDiD, and (inheriting the CS replay) DMLDiD
+  percentile-bootstrap replays landed). Availability is
   stated in prose where it is verifiable instead.
 - **§7b "Remaining 4.0 changes"** was added: §§2-8 as skeletoned cover only 102 of
   the 108 qualifying rows, leaving `obligation-sdid-params`, `constructor-hygiene`,

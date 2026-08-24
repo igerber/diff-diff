@@ -27,10 +27,11 @@ when a fit's raw `event_study_effects` field is absent (the modern,
 no-fit-time-`aggregate=` path), `DiagnosticReport` resolves
 `results.aggregate('event_study')` once (cached) and consumes the
 returned `EventStudyResults` container, where applicable per
-estimator: CallawaySantAnna for parallel_trends / pretrends_power /
-sensitivity, ImputationDiD and TwoStageDiD for parallel_trends
-(`pretrends=True` fits) and heterogeneity, ContinuousDiD for
-heterogeneity. StackedDiD, SunAbraham, and dCDH never reach the
+estimator: CallawaySantAnna and DMLDiD for parallel_trends /
+pretrends_power / sensitivity (DMLDiD ALWAYS derives — it never
+populates a fit-time surface by design), ImputationDiD and TwoStageDiD
+for parallel_trends (`pretrends=True` fits) and heterogeneity,
+ContinuousDiD for heterogeneity. StackedDiD, SunAbraham, and dCDH never reach the
 derived route (raw surface always populated, or the
 `placebo_event_study` branch). For CS the derivation is an
 influence-kit recompute; ImputationDiD's
@@ -122,7 +123,7 @@ Field semantics:
   branch on. Complete enumeration per estimator:
   - `"did_or_twfe"` (DiDResults / TwoWayFixedEffects both route here — neutral tag; ambiguous at the result-class level until estimator provenance is persisted)
   - `"event_study"` (MultiPeriodDiDResults)
-  - `"simple"` (CallawaySantAnna / Imputation / TwoStage / Wooldridge)
+  - `"simple"` (CallawaySantAnna / DMLDiD / Imputation / TwoStage / Wooldridge)
   - `"iw"` (SunAbraham)
   - `"stacked"` (StackedDiD)
   - `"pt_all_combined"` / `"pt_post_single_baseline"` (EfficientDiD
@@ -347,7 +348,11 @@ a library setting.
   ship a `compute_pretrends_power` adapter: `MultiPeriodDiDResults`,
   `CallawaySantAnnaResults`, and `SunAbrahamResults` (see
   `_APPLICABILITY["pretrends_power"]` in
-  `diff_diff/diagnostic_report.py`). Other staggered families with
+  `diff_diff/diagnostic_report.py`). `DMLDiDResults` reaches power via
+  the DERIVED route instead: it ships no native adapter (its native
+  isinstance route raises on the absent fit-time surface), and DR hands
+  `compute_pretrends_power` its admitted `aggregate('event_study')`
+  container (M-093 seventh amendment). Other staggered families with
   event-study output (`ImputationDiDResults`, `TwoStageDiDResults`,
   `SpilloverDiDResults`, `StackedDiDResults`, `EfficientDiDResults`,
   `StaggeredTripleDiffResults`, `WooldridgeDiDResults`,
@@ -396,7 +401,7 @@ a library setting.
   sub-block when it is available — non-bootstrap CS fits
   (`staggered_results.py` populates the matrix), non-bootstrap SA
   fits (`sun_abraham.py` builds it via `W @ vcov_cohort @ W.T`), and
-  admitted CS-/Stacked-sourced `aggregate('event_study')` containers
+  admitted CS-/DMLDiD-/Stacked-sourced `aggregate('event_study')` containers
   carrying `vcov` (row M-024; StackedDiD persists its ES VCV in every
   inference mode, so Stacked containers always take this tier). The
   `PreTrendsPowerResults.covariance_source` field records the actual

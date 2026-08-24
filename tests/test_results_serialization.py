@@ -34,6 +34,7 @@ ESTIMATOR_RESULTS = [
     "MultiPeriodDiDResults",
     "SyntheticDiDResults",
     "CallawaySantAnnaResults",
+    "DMLDiDResults",
     "SunAbrahamResults",
     "ImputationDiDResults",
     "TwoStageDiDResults",

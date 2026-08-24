@@ -117,6 +117,26 @@ _APPLICABILITY: Dict[str, FrozenSet[str]] = {
             "epv",
         }
     ),
+    # DMLDiD (Chang 2020) mirrors the CS staggered ATT(g,t) surface via
+    # the DERIVED post-fit event-study container (fit-time
+    # event_study_effects is never populated): ``pretrends_power`` and
+    # ``sensitivity`` run through the admitted derived route;
+    # ``heterogeneity`` reads the group_time_effects scalars directly;
+    # ``bacon`` refits BaconDecomposition from the panel independently of
+    # the estimator (every staggered binary-treatment peer carries it);
+    # ``design_effect`` follows the 17-of-18 convention (instance-gated on
+    # survey_metadata, which DMLDiD never sets -> informative skip). Only
+    # ``epv`` is excluded: no in-cell unpenalized-logit EPV diagnostics.
+    "DMLDiDResults": frozenset(
+        {
+            "parallel_trends",
+            "pretrends_power",
+            "sensitivity",
+            "bacon",
+            "design_effect",
+            "heterogeneity",
+        }
+    ),
     "SunAbrahamResults": frozenset(
         {
             "parallel_trends",
@@ -247,6 +267,7 @@ _PT_METHOD: Dict[str, str] = {
     "DiDResults": "two_x_two",
     "MultiPeriodDiDResults": "event_study",
     "CallawaySantAnnaResults": "event_study",
+    "DMLDiDResults": "event_study",
     "SunAbrahamResults": "event_study",
     "ImputationDiDResults": "event_study",
     "TwoStageDiDResults": "event_study",
@@ -264,13 +285,17 @@ _PT_METHOD: Dict[str, str] = {
 
 # Producers whose DERIVED post-fit ``aggregate('event_study')`` container may
 # be handed to the external consumers (``compute_pretrends_power`` /
-# ``HonestDiD.sensitivity_analysis``). Ledger row M-093 admits containers
-# from CS + Stacked (relative route) + TWFE (calendar route) only; Stacked
-# never reaches the derived route (its raw event-study surface is always
-# populated since M-024) and TWFE is not a DiagnosticReport input, so CS is
-# the whole set. Widening admission is a per-estimator methodology decision
-# (M-093), never a report-layer convenience.
-_DERIVED_SURFACE_CONSUMER_SOURCES: FrozenSet[str] = frozenset({"CallawaySantAnnaResults"})
+# ``HonestDiD.sensitivity_analysis``). Ledger row M-093 (as amended) admits
+# containers from CS + DMLDiD (relative route; DMLDiD's container carries
+# the same staggered ATT(g,t) payload and semantics as CS) + Stacked
+# (relative route) + TWFE (calendar route); Stacked never reaches the
+# derived route (its raw event-study surface is always populated since
+# M-024) and TWFE is not a DiagnosticReport input, so CS + DMLDiD is the
+# set. Widening admission is a per-estimator methodology decision (M-093),
+# never a report-layer convenience.
+_DERIVED_SURFACE_CONSUMER_SOURCES: FrozenSet[str] = frozenset(
+    {"CallawaySantAnnaResults", "DMLDiDResults"}
+)
 
 
 @dataclass(frozen=True)
@@ -594,12 +619,16 @@ class DiagnosticReport:
         # does not match the bounds' provenance. Reject at
         # construction so users get the error up-front rather than a
         # late skip in the schema.
-        if _result_name == "CallawaySantAnnaResults" and "sensitivity" in self._precomputed:
+        if (
+            _result_name in ("CallawaySantAnnaResults", "DMLDiDResults")
+            and "sensitivity" in self._precomputed
+        ):
             _base_period = getattr(self._results, "base_period", "universal")
             if _base_period != "universal":
+                _est_name = _result_name.removesuffix("Results")
                 raise ValueError(
                     "precomputed['sensitivity'] on "
-                    "CallawaySantAnnaResults requires "
+                    f"{_result_name} requires "
                     "``base_period='universal'`` on the displayed fit — "
                     "HonestDiD Rambachan-Roth bounds are not valid for "
                     "interpretation on the consecutive-comparison "
@@ -608,7 +637,7 @@ class DiagnosticReport:
                     "bounds as robustness alongside a varying-base fit "
                     "mixes provenance the bounds don't support. Re-fit "
                     "the main estimator with "
-                    "``CallawaySantAnna(base_period='universal')`` "
+                    f"``{_est_name}(base_period='universal')`` "
                     "before passing precomputed sensitivity."
                 )
 
@@ -1065,9 +1094,9 @@ class DiagnosticReport:
             self._derived_es_consulted.add("pretrends_power")
             surface, surface_dict, why = self._resolve_event_study_surface()
             if surface is not None and surface.source not in _DERIVED_SURFACE_CONSUMER_SOURCES:
-                # Fail closed on a non-admitted producer (M-093). Unreachable
-                # under the current applicability set (MPD/CS/SA); locals
-                # only — never mutate the cache.
+                # Fail closed on a non-admitted producer (M-093).
+                # Unreachable under the current applicability set
+                # (MPD/CS/DMLDiD/SA); locals only — never mutate the cache.
                 surface = None
                 surface_dict = None
             if not (has_vcov or has_event_vcov or has_event_es or surface is not None):
@@ -1109,16 +1138,17 @@ class DiagnosticReport:
             # through the same guard, so the correct remediation is to
             # re-fit the main estimator with ``base_period='universal'``
             # or to consult HonestDiD outside the report layer.
-            if name == "CallawaySantAnnaResults":
+            if name in ("CallawaySantAnnaResults", "DMLDiDResults"):
                 base_period = getattr(r, "base_period", "universal")
                 if base_period != "universal":
+                    _est_name = name.removesuffix("Results")
                     return (
-                        "HonestDiD on CallawaySantAnna requires "
+                        f"HonestDiD on {_est_name} requires "
                         "``base_period='universal'`` for valid interpretation "
                         "(Rambachan-Roth bounds are not comparable across the "
                         "consecutive pre-period comparisons produced by "
                         f"``base_period={base_period!r}``). Re-fit with "
-                        "``CallawaySantAnna(base_period='universal')``; "
+                        f"``{_est_name}(base_period='universal')``; "
                         "``precomputed={'sensitivity': ...}`` is rejected here "
                         "because the precomputed bounds would be narrated as "
                         "robustness for a displayed fit whose pre-period "
@@ -1965,8 +1995,9 @@ class DiagnosticReport:
 
         # Derived-route substitution: when the raw event-study surface is
         # absent and the resolver produced a container from an M-093-admitted
-        # producer (CS only), hand the container to the consumer — it accepts
-        # EventStudyResults directly, with pinned parity to the raw route.
+        # producer (CS or DMLDiD), hand the container to the consumer — it
+        # accepts EventStudyResults directly, with pinned parity to the raw
+        # route.
         surface, _surface_dict, _why = self._resolve_event_study_surface()
         target: Any = self._results
         pt_derived = False
@@ -2153,6 +2184,7 @@ class DiagnosticReport:
         """
         is_event_study_type = type(source_fit).__name__ in {
             "CallawaySantAnnaResults",
+            "DMLDiDResults",
             "SunAbrahamResults",
             "ImputationDiDResults",
             "StackedDiDResults",
@@ -2235,7 +2267,7 @@ class DiagnosticReport:
 
         # Derived-route substitution: hand HonestDiD the post-fit
         # container when the raw event-study surface is absent and the
-        # producer is M-093-admitted (CS only); HonestDiD accepts
+        # producer is M-093-admitted (CS or DMLDiD); HonestDiD accepts
         # EventStudyResults directly with pinned raw-route parity.
         # Resolved OUTSIDE the try so ``sens_derived`` is always bound in
         # the except handler (the resolver itself never raises).

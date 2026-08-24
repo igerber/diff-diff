@@ -706,6 +706,8 @@ class EventStudyResults(BaseResults):
 _ABSENT_SURFACE_HINTS: Dict[str, str] = {
     # Migrated to the post-fit surface (row M-020): no refit needed.
     "CallawaySantAnnaResults": "call results.aggregate('event_study')",
+    # Post-fit only by design (no fit-time surface ever exists).
+    "DMLDiDResults": "call results.aggregate('event_study')",
     "ImputationDiDResults": (
         "call results.aggregate('event_study') (on a bootstrapped fit, "
         "re-fit with n_bootstrap=0 or the deprecated fit-time aggregate=)"
@@ -882,7 +884,8 @@ def _materialize_cband(
 def _from_relative_dict(results: Any) -> EventStudyResults:
     """Adapter for ``event_study_effects: Dict[int, Dict]`` producers.
 
-    Covers CallawaySantAnna, SunAbraham, ImputationDiD, TwoStageDiD,
+    Covers CallawaySantAnna, DMLDiD (via its inherited CS container
+    channel), SunAbraham, ImputationDiD, TwoStageDiD,
     StackedDiD, SpilloverDiD, ContinuousDiD, EfficientDiD, Wooldridge
     (``att`` inner key normalized here), and StaggeredTripleDiff.
 
@@ -1356,7 +1359,7 @@ def build_event_study_surface(results: Any) -> EventStudyResults:
         return _from_relative_dict(results)
     raise TypeError(
         f"{type(results).__name__} does not expose an event-study surface. "
-        "Supported producers: CallawaySantAnna, SunAbraham, ImputationDiD, "
+        "Supported producers: CallawaySantAnna, DMLDiD, SunAbraham, ImputationDiD, "
         "TwoStageDiD, StackedDiD, SpilloverDiD, ContinuousDiD, EfficientDiD, "
         "WooldridgeDiD, StaggeredTripleDifference, MultiPeriodDiD, LPDiD, "
         "ChaisemartinDHaultfoeuille, and HeterogeneousAdoptionDiD "

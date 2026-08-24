@@ -80,6 +80,9 @@ groups:
   changes_in_changes:
     - diff_diff/changes_in_changes.py
     - diff_diff/changes_in_changes_results.py
+  dml_did:
+    - diff_diff/dml_did.py
+    - diff_diff/dml_did_results.py
   lwdid:
     - diff_diff/lwdid.py
     - diff_diff/lwdid_results.py
@@ -942,6 +945,51 @@ sources:
       - path: docs/tutorials/31_lwdid.ipynb
         type: tutorial
 
+  # ── DMLDiD (dml_did group) ─────────────────────────────────────────
+
+  diff_diff/dml_did.py:
+    drift_risk: medium
+    docs:
+      - path: docs/api/dml_did.rst
+        type: api_reference
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "DMLDiD"
+        type: user_guide
+      - path: diff_diff/guides/llms-practitioner.txt
+        section: "Step 4 decision tree (high-dimensional covariates branch)"
+        type: user_guide
+      - path: diff_diff/guides/llms-autonomous.txt
+        section: "Estimator-support matrix"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/practitioner_decision_tree.rst
+        type: user_guide
+      - path: docs/survey-roadmap.md
+        section: "Current Limitations"
+        type: user_guide
+      - path: docs/methodology/REGISTRY.md
+        section: "DMLDiD"
+        type: methodology
+
+  diff_diff/dml_did_results.py:
+    drift_risk: low
+    docs:
+      - path: docs/api/dml_did.rst
+        type: api_reference
+      - path: docs/methodology/REGISTRY.md
+        section: "DMLDiD"
+        type: methodology
+        note: "DMLDiDResults subclasses CallawaySantAnnaResults (kit-based post-fit aggregate(), bootstrap replay); adds learner/fold/cross-fit provenance and the seed/n_bootstrap/bootstrap_weights/cband inference-provenance fields."
+
   # ── TROP (trop group) ──────────────────────────────────────────────
 
   diff_diff/trop.py:
@@ -1377,7 +1425,7 @@ sources:
       - path: docs/methodology/REGISTRY.md
         section: "Bootstrap, Survey Bootstrap"
         type: methodology
-        note: "Memory-bounded multiplier-bootstrap machinery: draw-block chunking of weight generation/consumption (shared by CallawaySantAnna, EfficientDiD, and HAD), plus the fused column-tiled scatter-GEMM perturbation kernel (tiled_if_matmul + ReplayableWeightStream, v3.7 Phase 2 — used by CallawaySantAnna and EfficientDiD; HAD consumes whole-matrix GEMMs directly and does not use the tiled kernel). Implementation detail — numerically equivalent (~1 ULP, BLAS reassociation) to the per-column GEMV path; weight stream bit-identical, replayable per column tile."
+        note: "Memory-bounded multiplier-bootstrap machinery: draw-block chunking of weight generation/consumption (shared by CallawaySantAnna, DMLDiD via the CS bootstrap mixin, EfficientDiD, and HAD), plus the fused column-tiled scatter-GEMM perturbation kernel (tiled_if_matmul + ReplayableWeightStream, v3.7 Phase 2 — used by CallawaySantAnna and EfficientDiD; HAD consumes whole-matrix GEMMs directly and does not use the tiled kernel). Implementation detail — numerically equivalent (~1 ULP, BLAS reassociation) to the per-column GEMV path; weight stream bit-identical, replayable per column tile."
 
   diff_diff/_crossfit.py:
     drift_risk: low
@@ -1390,10 +1438,13 @@ sources:
   diff_diff/_learners.py:
     drift_risk: low
     docs:
+      - path: docs/api/dml_did.rst
+        type: api_reference
+        note: "SieveLearner is publicly exported (DMLDiD nuisance configuration); documented on the DMLDiD API page + the docs/api/index.rst Learners autosummary block."
       - path: docs/methodology/REGISTRY.md
         section: "Cross-fitting, DR-score, and ridge infrastructure (DML)"
         type: methodology
-        note: "Duck-typed learner protocol (RegressorLearner/ClassifierLearner Protocols, validate_learner, _validate_predictions) + native learners (LinearLearner/RidgeLearner/LogitLearner) wrapping linalg solvers. Contracts documented in REGISTRY: raw-X-no-intercept input, fit-reset semantics (documented limitation for stateful user learners), identified-columns prediction under rank deficiency."
+        note: "Duck-typed learner protocol (RegressorLearner/ClassifierLearner Protocols, validate_learner, _validate_predictions) + native learners (LinearLearner/RidgeLearner/LogitLearner/SieveLearner) wrapping linalg solvers. Contracts documented in REGISTRY: raw-X-no-intercept input, fit-reset semantics (documented limitation for stateful user learners), identified-columns prediction under rank deficiency."
 
   diff_diff/_dr_scores.py:
     drift_risk: low
@@ -1401,7 +1452,7 @@ sources:
       - path: docs/methodology/REGISTRY.md
         section: "Cross-fitting, DR-score, and ridge infrastructure (DML)"
         type: methodology
-        note: "Shared DR panel scores: drdid_panel_inf_func (Sant'Anna-Zhao locally efficient IF, relocated verbatim from ContinuousDiD._dr_cell_inf_func, oracle-pinned in tests/test_dr_scores.py) and the Chang (2020) Case 1 orthogonal score pair (chang_panel_score / chang_panel_score_augmented) for the upcoming DMLDiD estimator. The two families are NOT interchangeable (Chang normalizes by the unconditional treated share; SZ is self-normalized)."
+        note: "Shared DR panel scores: drdid_panel_inf_func (Sant'Anna-Zhao locally efficient IF, relocated verbatim from ContinuousDiD._dr_cell_inf_func, oracle-pinned in tests/test_dr_scores.py) and the Chang (2020) Case 1 orthogonal score pair (chang_panel_score / chang_panel_score_augmented) consumed by the DMLDiD estimator. The two families are NOT interchangeable (Chang normalizes by the unconditional treated share; SZ is self-normalized)."
       - path: docs/methodology/papers/chang-2020-review.md
         type: methodology
         note: "The paper review's 'Relation to Existing diff-diff Estimators' section names drdid_panel_inf_func as the DRDID-parity score location; keep the cross-reference current if functions move."

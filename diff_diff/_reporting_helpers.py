@@ -149,6 +149,28 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
             "reference": "Callaway & Sant'Anna (2021); REGISTRY.md Sec. CallawaySantAnna",
         }
 
+    if name == "DMLDiDResults":
+        return {
+            "name": "overall ATT (valid-treated-count-weighted average of ATT(g,t))",
+            "definition": (
+                "A per-cell valid-treated-count-weighted average of "
+                "group-time ATTs ``ATT(g, t)`` across post-anticipation "
+                "cells (``t >= g - anticipation``; ``t >= g`` when "
+                "anticipation=0) — cell weights are the per-cell "
+                "complete-case ``n_treated`` (full cohort masses enter only "
+                "the aggregation weight influence function; REGISTRY DMLDiD "
+                "complete-case Note) — "
+                "where each cell is a conditional-on-covariates ATT "
+                "estimated by Chang (2020)'s cross-fitted Neyman-orthogonal "
+                "score (DML2). ``overall_att`` is the simple-aggregation "
+                "headline; event-study and group tables are produced "
+                "post-fit via ``results.aggregate('event_study'/'group')``."
+            ),
+            "aggregation": "simple",
+            "headline_attribute": "overall_att",
+            "reference": "Chang (2020); REGISTRY.md Sec. DMLDiD",
+        }
+
     if name == "SunAbrahamResults":
         return {
             "name": "overall ATT (interaction-weighted average of CATT(g, e))",

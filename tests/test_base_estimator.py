@@ -44,6 +44,10 @@ NON_PARTICIPANTS = {
     # get_params/set_params is a NEW surface tracked in TODO.md, not part of
     # the 2(c)-i refactor.
     "LinearRegression",
+    # Nuisance LEARNER, not an estimator: SieveLearner has fit()/predict()
+    # (the duck-typed learner protocol DMLDiD consumes) but no DiD estimand,
+    # results container, or estimator-contract surface.
+    "SieveLearner",
 }
 
 
@@ -76,6 +80,7 @@ DEFAULT_KWARGS = {
 # unknown-key atomicity lane.
 BAD_VALUES = {
     "DifferenceInDifferences": {"vcov_type": "hc99"},
+    "DMLDiD": {"n_folds": 0},
     "TwoWayFixedEffects": {"vcov_type": "hc99"},
     "MultiPeriodDiD": {"vcov_type": "hc99"},
     "SyntheticDiD": {"variance_method": "not_a_method"},
@@ -139,7 +144,8 @@ estimators = pytest.mark.parametrize("cls", MIXIN_CLASSES, ids=_params_id)
 
 
 def test_roster_discovered_nontrivially():
-    # 25 defining classes + TwoWayFixedEffects/MultiPeriodDiD inheritors.
+    # 28 defining classes (DMLDiD included) + TwoWayFixedEffects/
+    # MultiPeriodDiD inheritors.
     assert len(MIXIN_CLASSES) >= 27
 
 

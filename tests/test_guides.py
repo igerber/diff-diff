@@ -766,6 +766,59 @@ class TestLLMsFullHADCoverage:
                     )
 
 
+class TestLLMsFullDMLDiDCoverage:
+    """Pin the DMLDiD section of llms-full.txt to the real API.
+
+    Adding a public parameter to DMLDiD.__init__ or DMLDiD.fit() requires
+    updating diff_diff/guides/llms-full.txt — these tests catch drift.
+    """
+
+    def _dml_section(self):
+        text = get_llm_guide("full")
+        start = text.index("### DMLDiD")
+        nxt = text.index("\n### ", start + 1)
+        return text[start:nxt]
+
+    def test_llms_full_has_dml_section(self):
+        assert "### DMLDiD" in get_llm_guide("full")
+
+    def test_llms_full_dml_constructor_signature_matches_real_api(self):
+        import inspect
+
+        from diff_diff import DMLDiD
+
+        sig_params = set(inspect.signature(DMLDiD.__init__).parameters)
+        sig_params.discard("self")
+        section = self._dml_section()
+        block_start = section.index("DMLDiD(")
+        block_end = section.index("\n)", block_start)
+        ctor_block = section[block_start:block_end]
+        for param in sig_params:
+            assert f"{param}=" in ctor_block, (
+                f"DMLDiD constructor block in llms-full.txt is missing the real "
+                f"public parameter {param!r} (adding a public param requires "
+                f"updating the guide)."
+            )
+
+    def test_llms_full_dml_fit_documents_covariates_required(self):
+        import inspect
+
+        from diff_diff import DMLDiD
+
+        assert "covariates" in inspect.signature(DMLDiD.fit).parameters
+        section = self._dml_section()
+        fit_start = section.index(").fit(")
+        fit_block = section[fit_start : section.index("DMLDiDResults", fit_start)]
+        assert "covariates" in fit_block
+        assert "REQUIRED" in section  # the covariates-required contract
+
+    def test_llms_full_dml_documents_post_fit_aggregation_and_seed(self):
+        section = self._dml_section()
+        assert "aggregate('event_study'" in section
+        assert "seed" in section
+        assert "SieveLearner" in section
+
+
 class TestLLMsFullStackedDiDCoverage:
     """Pin the StackedDiD section of llms-full.txt to the real API.
 

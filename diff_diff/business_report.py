@@ -272,9 +272,10 @@ class BusinessReport:
         # before the auto-DR is built, matching the existing
         # SDiD/TROP UX. REGISTRY.md §CallawaySantAnna line 410,
         # §HonestDiD line 2458.
-        _cs_with_varying_base = type(results).__name__ == "CallawaySantAnnaResults" and (
-            getattr(results, "base_period", "universal") != "universal"
-        )
+        _cs_with_varying_base = type(results).__name__ in (
+            "CallawaySantAnnaResults",
+            "DMLDiDResults",
+        ) and (getattr(results, "base_period", "universal") != "universal")
         if _cs_with_varying_base:
             _rejected_inputs: List[str] = []
             if honest_did_results is not None:
@@ -283,8 +284,9 @@ class BusinessReport:
                 _rejected_inputs.append("precomputed['sensitivity']")
             if _rejected_inputs:
                 _base_period = getattr(results, "base_period", "universal")
+                _est_name = type(results).__name__.removesuffix("Results")
                 raise ValueError(
-                    f"CallawaySantAnnaResults with "
+                    f"{type(results).__name__} with "
                     f"``base_period={_base_period!r}`` cannot be "
                     "summarized alongside a precomputed HonestDiD "
                     "sensitivity object. The Rambachan-Roth bounds are "
@@ -293,7 +295,7 @@ class BusinessReport:
                     "(REGISTRY.md §CallawaySantAnna / §HonestDiD). "
                     "Rejected inputs: " + ", ".join(_rejected_inputs) + ". "
                     "Re-fit the main estimator with "
-                    "``CallawaySantAnna(base_period='universal')`` "
+                    f"``{_est_name}(base_period='universal')`` "
                     "before passing precomputed sensitivity, or drop "
                     "the sensitivity passthrough to let BR skip the "
                     "section with a methodology-critical reason."
@@ -782,6 +784,7 @@ class BusinessReport:
         n_control: Optional[int] = n_control_units
         _never_treated_count_contract = name in {
             "CallawaySantAnnaResults",
+            "DMLDiDResults",
             "SunAbrahamResults",
             "ImputationDiDResults",
             "TwoStageDiDResults",
@@ -1571,6 +1574,24 @@ def _describe_assumption(estimator_name: str, results: Any = None) -> Dict[str, 
                 "and absorbing / irreversible treatment."
             ),
         }
+    if estimator_name == "DMLDiDResults":
+        return {
+            "parallel_trends_variant": "conditional_on_covariates",
+            "no_anticipation": True,
+            "description": (
+                "Identification relies on CONDITIONAL parallel trends "
+                "(Abadie 2005 / Chang 2020): untreated potential-outcome "
+                "trends are parallel only after conditioning on the "
+                "supplied covariates, per treatment cohort and period "
+                "(group-time ATT), plus no anticipation. The "
+                "Neyman-orthogonal score makes the estimate first-order "
+                "insensitive to machine-learning regularization bias, with "
+                "cross-fitting (DML2) removing own-observation overfitting; "
+                "valid normal inference additionally requires the nuisance "
+                "learners to satisfy Chang (2020)'s rate conditions "
+                "(Assumption 3.1(f))."
+            ),
+        }
     if estimator_name in {
         "CallawaySantAnnaResults",
         "SunAbrahamResults",
@@ -1953,6 +1974,14 @@ def _references_for(estimator_name: str) -> List[Dict[str, str]]:
             "citation": (
                 "Sun, L., & Abraham, S. (2021). Estimating dynamic treatment "
                 "effects in event studies. Journal of Econometrics."
+            ),
+        },
+        "DMLDiDResults": {
+            "role": "estimator",
+            "citation": (
+                "Chang, N.-C. (2020). Double/debiased machine learning for "
+                "difference-in-differences models. The Econometrics "
+                "Journal, 23(2), 177-191."
             ),
         },
         "ImputationDiDResults": {

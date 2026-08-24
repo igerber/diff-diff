@@ -21,6 +21,7 @@ This document provides the academic foundations and key implementation requireme
    - [WooldridgeDiD (ETWFE)](#wooldridgedid-etwfe)
    - [LPDiD](#lpdid)
    - [LWDiD](#lwdid)
+   - [DMLDiD](#dmldid)
 3. [Advanced Estimators](#advanced-estimators)
    - [SyntheticDiD](#syntheticdid)
    - [SyntheticControl](#syntheticcontrol)
@@ -747,8 +748,9 @@ cross-fitting).
 
 Private infrastructure modules (`diff_diff/_crossfit.py`,
 `diff_diff/_dr_scores.py`, `diff_diff/_learners.py`; `solve_ridge` in
-`diff_diff/linalg.py`) for the upcoming `DMLDiD` estimator. Not exported;
-no estimator behavior changes in the PR that introduced them.
+`diff_diff/linalg.py`) consumed by the shipped `DMLDiD` estimator (see the
+"DMLDiD" section). `SieveLearner` is publicly exported for DMLDiD nuisance
+configuration; the other learners and modules stay private.
 
 **Two DISTINCT doubly-robust panel score families** (per the Chang review:
 "Chang's Case-1 score normalizes by the unconditional `p_0` … whereas the SZ
@@ -814,14 +816,22 @@ semantics). Cross-fitting fits a DEEP COPY of the user's never-fit learner
 template in every fold, so no state — nested estimators and container
 parameters included — can carry across folds; an un-deep-copyable learner is
 reused with a loud `UserWarning` (the only residual reliance on fit-reset). Native
-learners (`"linear"`, `"ridge"`, `"logit"`) wrap `solve_ols` / `solve_ridge` /
-`solve_logit`. Rank deficiency: the unpenalized learners `LinearLearner` and
+learners (`"linear"`, `"ridge"`, `"logit"`, `"sieve"`) wrap `solve_ols` /
+`solve_ridge` / `solve_logit` and the EfficientDiD polynomial sieve basis.
+Rank deficiency: the unpenalized fixed-design learners `LinearLearner` and
 `LogitLearner` FAIL CLOSED (an unpenalized rank-deficient fit has no
 well-defined out-of-sample prediction — the retained collinear column can
 impersonate the intercept in-fold); `RidgeLearner` predicts from the
 identified (non-NaN-coefficient) columns (the penalty keeps the fit
 well-posed and the intercept is preserved structurally; use ridge when
-rank-deficient folds are expected).
+rank-deficient folds are expected). `SieveLearner` (exported) selects its
+polynomial degree ADAPTIVELY — AIC/BIC over admissible degrees on the
+positive-weight support, condition-number skips consolidated into one
+warning — and falls back to an intercept-only (weighted-mean) fit, loudly,
+only when every degree is inadmissible on a non-empty support; genuinely
+degenerate inputs (empty data, < 2 positive-weight rows) fail closed. Its
+standardization stats are UNWEIGHTED (conditioning-only) and reused for
+out-of-fold prediction bases.
 
 **`solve_ridge` conventions (`linalg.py`)** — objective
 `Σ w_i(y_i − b0 − x_i'β)² + α·‖β_std‖²`: glmnet-style penalty on the
@@ -843,9 +853,14 @@ the w-weighted mean of squared raw-scale LOO residuals; re-weighting would
 double-weight).
 
 **Reference implementation(s):**
-- Python (panel-lane oracle): `doubleml.DoubleMLDID` (version-pinned; see the
-  committed parity spike). Not oracles: `DoubleMLDIDCS` (different RCS score),
-  `DoubleMLDIDMulti` (staggered timing, not Chang Case 3 intensity).
+- Python (2-period panel oracle): `doubleml.DoubleMLDID` via
+  `benchmarks/doubleml/chang_case1_parity.py` (doubleml==0.11.4 pinned; the
+  parity numbers above stand). Python (staggered per-cell anchor):
+  `doubleml.DoubleMLDIDBinary` via
+  `benchmarks/doubleml/chang_staggered_parity.py` (same pin);
+  `DoubleMLDIDMulti` orchestrates the same per-cell estimator over staggered
+  timing. Not oracles: `DoubleMLDIDCS` (different RCS score),
+  `DoubleMLDIDMulti` for Chang Cases 2-3.
 - R: none for Chang's estimator; `DRDID::drdid_panel` for the SZ score.
 
 ---
@@ -1289,7 +1304,7 @@ Dynamic placebos `DID^{pl}_l` look backward from each group's reference period, 
 
 - **Note (Phase 2 cost-benefit delta SE):** When `L_max >= 2`, `overall_att` holds the cost-benefit `delta`. Its SE is computed via the delta method from per-horizon SEs: `SE(delta) = sqrt(sum w_l^2 * SE(DID_l)^2)`, treating horizons as independent (conservative under Assumption 8). When bootstrap is enabled, per-horizon bootstrap SEs flow through the delta-method formula, so `overall_se` reflects bootstrap-derived per-horizon uncertainty but the delta aggregation itself uses normal-theory (not bootstrap percentile). This is an intentional exception to the general bootstrap-inference-surface contract: `overall_p_value` and `overall_conf_int` for `delta` use `safe_inference(delta, delta_se)`, not percentile bootstrap, because the delta is a derived aggregate rather than a directly bootstrapped estimand.
 
-- **Note (post-fit `aggregate()` is a view - row M-026):** `results.aggregate('event_study')` and `results.aggregate('simple')` are pure VIEWS over stored fields - nothing is recomputed. `'event_study'` returns the unified `EventStudyResults` container (Phase-1 `L_max=None` fits: the 2-row l=1 view; `L_max >= 1`: the multi-horizon `l1_first_switch` surface); `'simple'` a one-row `AggregationResult` relaying `overall_att/se/t/p/CI` bit-exactly with the estimand-aware `target` label (DID_M / DID_1 / delta, or the trends-linear first-difference label whose overall row is all-NaN by design). Because it is a view, BOOTSTRAP FITS ARE PERMITTED - the library-wide per-level relay rule (since M-027 the recompute adopters' 'simple' relays are permitted on bootstrap fits too; their kit-based recompute levels REPLAY the fit-time multiplier bootstrap on CallawaySantAnna and EfficientDiD and stay closed on the remaining adopters - a recompute must never silently substitute analytical inference); here each row relays exactly the inference the fit stored, including the delta's analytical-with-df numbers under bootstrap per the `Note (Phase 2 cost-benefit delta SE)` above (the view's `df` column resolves from the actual inference path, not the bootstrap-cleared `event_study_df` channel). The dCDH event-study CONTAINER is deliberately rejected by `compute_honest_did`/`compute_pretrends_power` - its l1 placebo semantics need HonestDiD's native dCDH branch (mandatory reinterpretation warning + horizon trimming); pass the results object itself.
+- **Note (post-fit `aggregate()` is a view - row M-026):** `results.aggregate('event_study')` and `results.aggregate('simple')` are pure VIEWS over stored fields - nothing is recomputed. `'event_study'` returns the unified `EventStudyResults` container (Phase-1 `L_max=None` fits: the 2-row l=1 view; `L_max >= 1`: the multi-horizon `l1_first_switch` surface); `'simple'` a one-row `AggregationResult` relaying `overall_att/se/t/p/CI` bit-exactly with the estimand-aware `target` label (DID_M / DID_1 / delta, or the trends-linear first-difference label whose overall row is all-NaN by design). Because it is a view, BOOTSTRAP FITS ARE PERMITTED - the library-wide per-level relay rule (since M-027 the recompute adopters' 'simple' relays are permitted on bootstrap fits too; their kit-based recompute levels REPLAY the fit-time multiplier bootstrap on CallawaySantAnna, DMLDiD (via the inherited CS kit channel), and EfficientDiD and stay closed on the remaining adopters - a recompute must never silently substitute analytical inference); here each row relays exactly the inference the fit stored, including the delta's analytical-with-df numbers under bootstrap per the `Note (Phase 2 cost-benefit delta SE)` above (the view's `df` column resolves from the actual inference path, not the bootstrap-cleared `event_study_df` channel). The dCDH event-study CONTAINER is deliberately rejected by `compute_honest_did`/`compute_pretrends_power` - its l1 placebo semantics need HonestDiD's native dCDH branch (mandatory reinterpretation warning + horizon trimming); pass the results object itself.
 
 - **Note (dynamic placebo SE - library extension):** Dynamic placebos `DID^{pl}_l` (negative horizons in `placebo_event_study`) now have analytical SE and bootstrap SE when `L_max >= 1`. The placebo IF uses the same cohort-recentered structure as positive horizons, applied to backward outcome differences `Y_{g, F_g-1-l} - Y_{g, F_g-1}` with the dual-eligibility control pool (forward + backward observation required). The paper's Theorem 1 variance result is stated for `DID_l`, not `DID^{pl}_l` - this extension applies the same IF/variance structure to the placebo estimand as a library enhancement. The single-period placebo `DID_M^pl` (`L_max=None`) retains NaN SE because the per-period aggregation path has no IF derivation.
 
@@ -2767,6 +2782,192 @@ Event-study/placebo transformations over ALL periods (Appendix D): demeaning (D.
 
 ---
 
+## DMLDiD
+
+**Primary source:** Chang, N.-C. (2020). Double/debiased machine learning for difference-in-differences models. *The Econometrics Journal*, 23(2), 177-191. https://doi.org/10.1093/ectj/utaa001 (reviewed as arXiv:1812.10846v3, `docs/methodology/papers/chang-2020-review.md`; equation numbering follows the arXiv version)
+
+Chang (2020) extends Abadie (2005)'s semiparametric DiD to settings where the
+control-variable dimension `d` may exceed the sample size `N`, by constructing
+**Neyman-orthogonal scores** (each = Abadie's score + a mean-zero adjustment
+term) and estimating with the **Chernozhukov et al. (2018) DML cross-fitting
+algorithm (DML2 variant)**. The shipped `DMLDiD` estimator implements **Case 1
+(repeated outcomes / panel)** as a STAGGERED ATT(g,t) estimator: each
+Callaway-Sant'Anna style `(g, t)` cell is a 2-period Chang problem on the
+cell's `ΔY = Y_t − Y_base`, treated indicator `D = 1{cohort = g}`, and
+base-period covariates; the classic 2-period design is the degenerate
+single-cell case. Case 2 (repeated cross sections; Equation 3.2 score +
+λ-corrected variance) is a planned follow-up; Case 3 (multilevel treatment
+intensity) is deferred (`DEFERRED.md`).
+
+- **Note:** Staggered extension framing. Chang (2020) is a 2-period,
+  common-timing paper (treatment occurs only at the second period).
+  `DMLDiD` applies the Case 1 score PER (g, t) CELL under the
+  Callaway-Sant'Anna cell architecture (positional base periods, R `did`
+  parity; never-treated / not-yet-treated control semantics; per-cell
+  complete cases), which is a library extension of the paper's design, not a
+  result the paper proves. Cell-level asymptotics are Chang's; the aggregation
+  layer is CS's (below).
+
+**Key implementation requirements:**
+
+*Assumption checks / warnings:*
+- **Conditional parallel trends (Assumption 2.1, Abadie 2005):** `E[Y^0(1) - Y^0(0) | X, D = 1] = E[Y^0(1) - Y^0(0) | X, D = 0]` per cell. Untestable; the estimator adds **no identification assumptions beyond Abadie (2005)** (Section 2, p. 8).
+- **Overlap (Assumption 2.2):** `P(D = 1) > 0` and `P(D = 1 | X) < 1` a.s. Regularity Assumptions 3.1(a) strengthen this to **strict overlap**: `Pr(κ ≤ g_0(X) ≤ 1 - κ) = 1` for some fixed `κ > 0`, imposed on the **estimated** propensity too (pp. 28, 37). The theory does not cover fitted propensities approaching 0 or 1 — see the trimming Note below.
+- **First-stage rate condition (Assumptions 3.1(f) + Theorem 1):** BOTH conditions hold jointly — the bundle envelope `‖η̂_k - η_0‖_{P,2} ≤ ε_N` with `ε_N = o(N^{-1/4})` (each nuisance component must meet the rate; a fast learner cannot compensate a slow one), AND the product bound `‖ĝ - g_0‖²_{P,2} + ‖ĝ - g_0‖_{P,2}·‖ℓ̂ - ℓ_0‖_{P,2} ≤ ε_N²`. Not detectable at runtime; documented.
+
+*Estimator equation (Equation 3.1, per cell, as implemented — `chang_panel_score`):*
+
+    summand_i = (D_i - ĝ(X_i) (1 - D_i) / (1 - ĝ(X_i))) · (ΔY_i - ℓ̂(X_i)) / p̂
+    θ̂(g,t)   = mean_i(summand_i)
+
+where `ĝ` is the cross-fitted out-of-fold propensity (classifier learner),
+`ℓ̂` the cross-fitted control-only outcome-change regression (regressor
+learner trained on the cell's `D = 0` units — Chang's `I_kz^c`), and `p̂` the
+treated share. Equation 3.1's `ψ_1` equals `summand − θ`; Lemma 1 (p. 13):
+the score is Neyman-orthogonal in the infinite-dimensional nuisances only —
+the finite-dimensional `p_0` is handled by the variance correction below.
+
+*Standard errors (Theorem 2, pp. 14-15; proof p. 47 — `chang_panel_score_augmented`):*
+- Default (and only paper method): **analytical plug-in variance from the
+  augmented score** `ψ̄_i = summand_i − D_i θ̂ / p̂` (the `Ĝ_1p = −θ̂/p̂`
+  treated-share correction folded exactly into the score);
+  `SE = sqrt(mean(ψ̄²) / n)`, normal critical values, all inference fields via
+  `safe_inference()`. No degrees-of-freedom or small-sample correction.
+- Clustering: not discussed in the paper (i.i.d. sampling assumed). See the
+  M-080 Note below for the library position.
+
+*Cross-fitting (Algorithm 1, pp. 10-11 — DML2):*
+1. Per-cell K-fold partition (constructor `n_folds`, default 5; K ≥ 2
+   enforced); nuisances fit on fold complements, never the evaluation fold.
+2. `ĝ_k` on the auxiliary sample; `ℓ̂_k` on its untreated subsample only.
+3. Pooled score mean and pooled squared-augmented-score variance.
+
+**Implementation choices / deviations (Notes):**
+
+- **Note:** Global p̂ convention — `p̂` is the FULL-SAMPLE-within-cell treated
+  share (`n_treated / n_cell`), matching DoubleML, not the paper's per-fold
+  `p̂_k` (whose `I_k` vs `I_k^c` printing is itself contradictory — see the
+  paper review's Gaps). Cross-referenced from the infrastructure section's
+  global-p̂ Note; the committed parity spikes anchor this convention to
+  DoubleML at machine precision.
+- **Note:** D-stratified fold assignment — folds are stratified by the cell's
+  treatment indicator (DoubleML's treatment-stratified splitting), a deviation
+  from Chang's plain random partition. Consequence: a cell with a SINGLE
+  treated (or single control) unit is a singleton stratum → `assign_folds`
+  raises → the cell is recorded as a `cross_fit_degenerate` NaN cell where
+  CS would have estimated it. Rationale: one treated unit cannot be
+  cross-fitted; CS is the right tool there.
+- **Note:** Pooled θ̂ AND pooled Σ̂ — both the point estimate and the variance
+  are computed as POOLED means over all cell members rather than the paper's
+  `1/K` equal-fold averages. With fold sizes differing by ±1 the pooled forms
+  weight folds by size; this matches DoubleML and the committed parity spikes
+  (the two conventions coincide at equal fold sizes).
+- **Note:** Trimming policy — fitted propensities are CLIPPED to
+  `[pscore_trim, 1 − pscore_trim]` (default 0.01) after the extremeness
+  warning (`_check_propensity_diagnostics` BEFORE `np.clip`); clip, never
+  drop. The paper gives no trimming rule (strict overlap is assumed), so this
+  is an implementation choice; the upper clip also satisfies
+  `chang_panel_score`'s strict `ps < 1` input contract.
+- **Note:** Reproducibility contract — with `seed=None`, POINT ESTIMATES vary
+  across fits (cross-fitting draws random folds; DoubleML-consistent
+  behavior). `seed` pins the per-cell fold draws
+  (`SeedSequence(entropy=seed, spawn_key=(g_idx, t_idx))` over sorted
+  cohort/period roster positions, invariant to other cells' estimability) and
+  the bootstrap stream separately. A user-supplied STOCHASTIC learner object
+  must be seeded by the user (the cross-fitting deep-copies the template
+  where copyable but never seeds its internal RNG).
+- **Note:** Label normalization + magnitude bound (hardening beyond CS's bare
+  `pd.to_numeric`) — `time`/`first_treat` are normalized to ONE canonical
+  dtype (int64 when losslessly castable, else float64, both certified by
+  round-trips), with (i) an ELEMENTWISE exact raw-vs-normalized comparison
+  (numeric strings parsed exactly in Python) that rejects any precision the
+  coercion itself destroyed, and (ii) a `2**62` magnitude bound (with
+  anticipation headroom, compared exactly in the source dtype) that closes
+  the uint64 double-wrap and int64 cohort-arithmetic overflow lanes.
+  Realistic labels (years, YYYYMMDD, unix s/ms, ns timestamps) all pass.
+- **Note:** Inference extensions beyond the paper — the multiplier bootstrap
+  (`n_bootstrap > 0`, per-cell + overall percentile inference) and the sup-t
+  uniform bands on the post-fit event-study replay, plus the CS aggregation
+  variance (the within-influence-function group-weight term in
+  simple/event-study/group SEs), are LIBRARY extensions via the inherited
+  CallawaySantAnna machinery; the paper's only inference method is the
+  analytical plug-in above.
+- **Note:** Per-cell complete-case weighting split (CS convention) — cell
+  point weights use per-cell valid `n_treated` while the aggregation WIF's
+  `pg` uses FULL cohort masses; this is CS's own documented default-path
+  convention (point-weight side: the CS "Unbalanced panels" Note; WIF /
+  full-cohort-`pg` side: the CS aggregation-variance subsections). A
+  consolidated fit-level UserWarning reports every unit excluded from a cell
+  it would otherwise join (missing/non-finite outcome, non-finite base-period
+  covariate, or a ΔY overflow from two finite outcomes — the errstate
+  boundaries make the warning the only user-visible trace of the latter).
+- **Note:** Skip-reason vocabulary — DMLDiD cells carry `skip_reason ∈`
+  {`missing_period`, `zero_treated_control`, `cross_fit_degenerate`,
+  `non_finite_score`}: the first two are the CS meanings; `cross_fit_degenerate`
+  = fold assignment or a fail-closed learner made the cell un-cross-fittable
+  (chained learner message quoted in the consolidated skip warning);
+  `non_finite_score` = the score/variance computation produced or received
+  non-finite values. NaN cells carry NO influence-function payload entry.
+- **Note:** Covariates REQUIRED — `fit(covariates=None/[])` raises with a
+  routing error naming `CallawaySantAnna`: Chang's estimator exists for the
+  conditional-on-covariates (high-dimensional X) setting, and an
+  unconditional DMLDiD would be CS with extra variance.
+- **Note:** `vcov_type="hc1"` — DMLDiD's augmented-score SE is exactly a
+  per-unit influence-function variance, and in this library `hc1` with
+  `cluster=None` IS the per-unit IF variance by definition (see "IF-based
+  variance estimators vs analytical-sandwich estimators"); the inherited
+  value is family-consistent and truthful. No vocabulary widening.
+- **Note:** M-080 position (auto-cluster policy) — DMLDiD's per-unit
+  influence-function variance IS unit-level clustering, so the 4.0
+  auto-cluster DEFAULT flip is inert for it — mirroring how CallawaySantAnna
+  is absent from M-080's `code_refs` and how M-010 pre-empted M-080 for the
+  TWFE event-study mode. CS additionally exposes `cluster=` for
+  COARSER-than-unit clustering, a surface DMLDiD ships without: the paper
+  assumes i.i.d. sampling, and the survey/cluster follow-up is the tracked
+  `DEFERRED.md` row.
+
+*Edge cases:*
+- Propensity near 0/1: clipped per the trimming Note (error bounds blow up as
+  `κ^{-2}`; the paper rules extreme propensities out by assumption).
+- Few treated units per cell: all bounds carry powers of `1/p_0`; a one-treated
+  cell dies as `cross_fit_degenerate` (singleton stratum) — see the
+  D-stratification Note.
+- Cell smaller than `n_folds`: `assign_folds` raises → `cross_fit_degenerate`.
+- Empty untreated training complement: `cross_fit_predict` raises
+  `DegenerateFoldError` → `cross_fit_degenerate`.
+- All-pre-treatment estimable cells: the fit survives (≥1 finite cell) but the
+  simple aggregation's empty-post-treatment branch NaNs the overall ATT behind
+  its own UserWarning; per-cell pre-treatment estimates stay reported.
+- Missing data: per-cell complete cases (see the weighting-split Note); the
+  paper does not address missing data.
+
+**Reference implementation(s):**
+- Python (2-period anchor): `doubleml.DoubleMLDID` via
+  `benchmarks/doubleml/chang_case1_parity.py` (doubleml==0.11.4 pinned; the
+  infrastructure section's parity numbers stand — ATT/SE at ~6e-17).
+- Python (staggered per-cell anchor): `doubleml.DoubleMLDIDBinary` via
+  `benchmarks/doubleml/chang_staggered_parity.py` (same doubleml==0.11.4 pin;
+  every cell's ATT and SE at <1e-15 under shared folds and pinned config).
+  `DoubleMLDIDMulti` orchestrates the same per-cell estimator over staggered
+  timing (and remains NOT an oracle for Chang Cases 2-3).
+- R / Stata: none — the paper ships no companion package.
+
+**Requirements checklist (shipped Case 1 / staggered lane):**
+- [x] Neyman-orthogonal Case 1 score (3.1) implemented exactly (Abadie score + mean-zero adjustment; `chang_panel_score`)
+- [x] DML2 cross-fitting: per-cell K-fold partition, nuisances fit on fold complements, never on the evaluation fold
+- [x] Outcome nuisance `ℓ̂` fit on the UNTREATED subsample of the training complement only (`I_kz^c` → `fit_mask=(D==0)`)
+- [x] Scalar nuisance p̂ = full-sample-within-cell treated share (global-p̂ Note; the paper's per-fold printing is contradictory — see Gaps)
+- [x] Variance from the AUGMENTED score (`Ĝ_1p = −θ̂/p̂` folded in; `chang_panel_score_augmented`)
+- [x] Strict-overlap enforcement on fitted propensities (clip to `[trim, 1−trim]`, documented deviation — paper gives no rule)
+- [x] Per-cell degenerate guards (zero treated/control, cell < K, singleton stratum, empty untreated complement) — closed skip vocabulary, consolidated warning
+- [x] Normal-approximation inference via `safe_inference()`
+- [x] Validation: 2-period DoubleMLDID + staggered per-cell DoubleMLDIDBinary parity spikes (version-pinned, committed, golden literals consumed in-tests) + oracle-nuisance closed-form equivalence + degenerate-cell bit-for-bit hand-pipeline equivalence + Monte Carlo coverage sanity
+- [ ] Case 2 (repeated cross sections): Equation 3.2 score + λ-corrected variance — planned follow-up (ROADMAP)
+- [ ] Case 3 (multilevel treatment): deferred (`DEFERRED.md`; implementation-required overlap conditions per the paper review's Case 3 caution)
+
+---
+
+
 # Advanced Estimators
 
 ## SyntheticDiD
@@ -3389,10 +3590,10 @@ shared verbatim.
   signature contract is untouched) and FIT raises, because this is an
   identification guard rather than an API change. The engine-level call also
   covers direct attribute mutation, which bypasses `__init__` and `set_params`
-  alike. **Family-wide adoption (ledger row [M-144]):** all nine
+  alike. **Family-wide adoption (ledger row [M-144]):** all ten
   anticipation-taking estimators (CallawaySantAnna, SunAbraham, ImputationDiD,
   TwoStageDiD, StackedDiD, ContinuousDiD, EfficientDiD, WooldridgeDiD,
-  SpilloverDiD) now call the shared `utils.validate_anticipation` at `__init__`
+  SpilloverDiD, DMLDiD) now call the shared `utils.validate_anticipation` at `__init__`
   (transactional `set_params` inherits via the BaseEstimator probe re-init) AND
   re-check it on the fit path via the assignment form `self.anticipation =
   validate_anticipation(self.anticipation)` — the uniform direct-mutation
@@ -6727,7 +6928,7 @@ estimator-focused:
 - **Note:** `scale="auto"` allowlist and routing. Auto-derivation (`scale_i = n_i`) is honored ONLY for container `estimator` provenance in `{ImputationDiD, TwoStageDiD}`, the audited producers whose `n` is the treated observations (unit-periods) the ATT averages over at both supported levels. Routing keys on the `estimator` field, never on `n_kind` alone - CallawaySantAnna repeated-cross-section fits report `n_kind="obs"` with `n` = treated+control observations - and `n_kind == "obs"` serves only as a schema-drift sanity guard on the allowlist path. CallawaySantAnna (`simple`: treated+control units/obs; `group`: contributing (g, t) cells) and EfficientDiD (units/cells) are refused with hints naming their `n` semantics AND the successor route - where supported, `results.aggregate('total')` needs no scale at all; StackedDiD is refused because its `n` is a deduplicated distinct-treated-UNIT count (no per-observation mass) and its `weighting="population"`/`"sample_share"` estimands make raw treated exposure the wrong multiplier.
 - **Note:** `scale="auto"` is an explicit caller acknowledgement of three assumptions the container cannot verify: the outcome is in additive levels (no outcome-scale provenance exists on the container); the fit is unweighted (survey-weighted fits pair a weighted `att` with a raw-count `n` and carry no survey marker - pass a numeric `scale` there); and every treated observation's effect is identified. On the identification point, ImputationDiD averages finite tau-hat only while `n` stays the raw treated-obs count at BOTH levels, and TwoStageDiD's `simple` ATT support excludes rows whose first-stage residual is non-finite while `n` reports the pre-filter count (its `group` `n` IS post-filter) - both estimators warn at fit time on the degenerate branch, and `"auto"` on such a fit overcounts (behaviorally pinned in `tests/test_mmm.py::TestAggregationWorkflow`). For OVERALL-TOTAL exports, `results.aggregate('total')` supersedes `scale="auto"` - its finite-masked support eliminates this overcount for that use; `group`-level containers remain a supported `"auto"` route (a 'total' emits ONE row and cannot substitute per-cohort exports, and ImputationDiD's `group` `n` keeps its documented raw-support caveat there).
 - **Note:** `group` containers carry correlated cohorts, both exporters: all cohort rows come from ONE fit sharing controls/windows, and the container stores only per-row SEs (joint-covariance off-diagonals are discarded upstream). Meridian pooling treats rows as independent (see the pooling Note below) and PyMC-Marketing scores each lift row independently with its marginal `sigma`; the omitted cross-cohort covariance can misstate the joint/pooled uncertainty - anti-conservatively when the net weighted covariance is positive (shared controls typically induce positive correlation) - and its direction cannot be determined from marginal SEs alone. `se_widening > 1` is a conservative heuristic, not an exact correction (docstring-noted on both exporters).
-- **Note (`total` container admission, 3.10):** a `results.aggregate('total')` container - the estimator-owned total incremental outcome on CallawaySantAnna/EfficientDiD/ImputationDiD/TwoStageDiD (panel non-survey fits; see each estimator's post-fit total Note) - is admitted ALONE: its single `target="total"` row is already `C x overall`, so ANY `scale` (numeric or `"auto"`) is rejected as double-counting. Admission is PROVENANCE-GATED like `scale="auto"` (`_TOTAL_ESTIMATORS`, exactly the four adopters): "already scaled" is a producer claim, so a hand-built or altered container with unknown/missing/StackedDiD provenance is rejected rather than silently exported unscaled; the full producer contract is validated too (`label="total"`, `n_kind="obs"`, `weight=[1.0]` - schema drift fails closed), and the multi-row / wrong-target / non-finite guards reject the container whole. The additive-levels assumption is NOT dissolved by this route: the total is meaningful only for outcomes additive in levels (log/rate/share outcomes are not additive) - the same caveat the numeric and `"auto"` routes carry, stated in the exporters' docstrings; the container likewise carries no outcome-scale provenance, so it remains the caller's acknowledgement. On the routings totals do not support (repeated-cross-section, declared survey_design, divergent bare-cluster masses, pre-upgrade kits) `aggregate('total')` raises with the reason and the caller falls back to a numeric `scale` - a CALLER-DEFINED estimand, not the estimator-owned complete-case total (a single scalar cannot reweight an already-mass-averaged ATT).
+- **Note (`total` container admission, 3.10):** a `results.aggregate('total')` container - the estimator-owned total incremental outcome on CallawaySantAnna/DMLDiD/EfficientDiD/ImputationDiD/TwoStageDiD (panel non-survey fits; see each estimator's post-fit total Note) - is admitted ALONE: its single `target="total"` row is already `C x overall`, so ANY `scale` (numeric or `"auto"`) is rejected as double-counting. Admission is PROVENANCE-GATED like `scale="auto"` (`_TOTAL_ESTIMATORS`, exactly the five adopters): "already scaled" is a producer claim, so a hand-built or altered container with unknown/missing/StackedDiD provenance is rejected rather than silently exported unscaled; the full producer contract is validated too (`label="total"`, `n_kind="obs"`, `weight=[1.0]` - schema drift fails closed), and the multi-row / wrong-target / non-finite guards reject the container whole. The additive-levels assumption is NOT dissolved by this route: the total is meaningful only for outcomes additive in levels (log/rate/share outcomes are not additive) - the same caveat the numeric and `"auto"` routes carry, stated in the exporters' docstrings; the container likewise carries no outcome-scale provenance, so it remains the caller's acknowledgement. On the routings totals do not support (repeated-cross-section, declared survey_design, divergent bare-cluster masses, pre-upgrade kits) `aggregate('total')` raises with the reason and the caller falls back to a numeric `scale` - a CALLER-DEFINED estimand, not the estimator-owned complete-case total (a single scalar cannot reweight an already-mass-averaged ATT).
 
 *Lift-test frame (`to_pymc_marketing_lift_test`):*
 - Assembles one row per experiment with the exact schema `[channel, *dims, x, delta_x, delta_y, sigma]` from caller-supplied values. `delta_y`/`sigma` are the scoped incremental outcome and its SE; all four numeric columns must describe the SAME calibration observation (same channel, population, period span, additive-level outcome) - stated in the docstring, not machine-checkable, since spend and scope are user input.

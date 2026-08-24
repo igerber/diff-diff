@@ -4,6 +4,7 @@ No sklearn import anywhere in this file — the duck-typed acceptance test uses
 a tiny local class, proving the protocol carries no dependency.
 """
 
+import copy
 import pickle
 import warnings
 
@@ -14,6 +15,7 @@ from diff_diff._learners import (
     LinearLearner,
     LogitLearner,
     RidgeLearner,
+    SieveLearner,
     _validate_predictions,
     make_learner,
     validate_learner,
@@ -246,3 +248,165 @@ class TestFitResetAndPickle:
     def test_unfitted_predict_raises(self):
         with pytest.raises(ValueError, match="not fitted"):
             LinearLearner().predict(np.ones((2, 2)))
+
+
+class TestSieveLearner:
+    """SieveLearner: adaptive-degree sieve regressor (PR-B1)."""
+
+    def _quad_data(self, n=200, seed=3):
+        rng = np.random.default_rng(seed)
+        X = rng.standard_normal((n, 2))
+        y = 1.0 + X[:, 0] + 0.5 * X[:, 0] ** 2 - X[:, 1] + rng.normal(scale=0.1, size=n)
+        return X, y
+
+    def test_make_learner_sieve_returns_sieve(self):
+        # Regression for the make_learner fall-through: once "sieve" passes
+        # the name check, the final `return LogitLearner(...)` would silently
+        # hand back a classifier without the explicit branch.
+        learner = make_learner("sieve", kind="regressor", k_max=2, criterion="aic")
+        assert isinstance(learner, SieveLearner)
+        assert learner.k_max == 2
+        assert learner.criterion == "aic"
+
+    def test_ic_selects_quadratic_on_quadratic_dgp(self):
+        X, y = self._quad_data()
+        learner = SieveLearner(k_max=4).fit(X, y)
+        assert learner.degree_ == 2
+        resid = y - learner.predict(X)
+        assert float(np.std(resid)) < 0.15
+
+    def test_eager_validation(self):
+        with pytest.raises(ValueError, match="criterion"):
+            SieveLearner(criterion="mdl")
+        for bad in (0, -1, True, 2.5):
+            with pytest.raises(ValueError, match="k_max"):
+                SieveLearner(k_max=bad)
+
+    def test_center_scale_out_of_fold_correctness(self):
+        # Predictions on shifted out-of-fold data must reuse FIT-time
+        # standardization stats, matching a hand-built basis exactly.
+        from diff_diff.efficient_did_covariates import _polynomial_sieve_basis
+
+        X, y = self._quad_data()
+        learner = SieveLearner(k_max=3).fit(X, y)
+        X_new = X[:20] + 4.0
+        basis = _polynomial_sieve_basis(
+            X_new, learner.degree_, center=learner.center_, scale=learner.scale_
+        )
+        np.testing.assert_allclose(learner.predict(X_new), basis @ learner._coefs, atol=1e-12)
+
+    def test_sieve_sample_weight_forwarded(self):
+        # Zero-weight rows must be fully inert: corrupting them cannot move
+        # the fit relative to dropping them outright.
+        X, y = self._quad_data(n=120)
+        w = np.ones(len(y))
+        w[:30] = 0.0
+        y_bad = y.copy()
+        y_bad[:30] += 100.0
+        weighted = SieveLearner(k_max=2).fit(X, y_bad, sample_weight=w)
+        dropped = SieveLearner(k_max=2).fit(X[30:], y[30:])
+        np.testing.assert_allclose(weighted.predict(X[:10]), dropped.predict(X[:10]), atol=1e-8)
+
+    def test_fail_closed_on_degenerate_support(self):
+        with pytest.raises(ValueError, match="at least 2 positive-weight rows"):
+            SieveLearner().fit(np.zeros((0, 2)), np.zeros(0))
+        X, y = self._quad_data(n=5)
+        w = np.array([1.0, 0.0, 0.0, 0.0, 0.0])
+        with pytest.raises(ValueError, match="at least 2 positive-weight rows"):
+            SieveLearner().fit(X, y, sample_weight=w)
+
+    def test_intercept_only_fallback_state_pinned(self):
+        # Constant covariates: every degree is inadmissible (ill-conditioned
+        # Gram) on a non-empty support -> weighted-mean fallback, complete
+        # fitted state, and a predict branch that never touches the basis.
+        X = np.zeros((6, 2))
+        y = np.array([1.0, 2.0, 3.0, 1.0, 2.0, 3.0])
+        with pytest.warns(UserWarning, match="intercept-only"):
+            learner = SieveLearner().fit(X, y)
+        assert learner.degree_ == 0
+        assert learner.coef_.size == 0
+        assert learner.center_ is None and learner.scale_ is None
+        np.testing.assert_allclose(learner.intercept_, np.mean(y))
+        np.testing.assert_allclose(learner.predict(np.ones((3, 2))), np.full(3, np.mean(y)))
+
+    def test_sieve_unfitted_predict_raises(self):
+        # The suite's test_unfitted_predict_raises is LinearLearner-hardcoded;
+        # SieveLearner pins the same sibling contract explicitly.
+        with pytest.raises(ValueError, match="not fitted"):
+            SieveLearner().predict(np.ones((2, 2)))
+
+    def test_sieve_fit_fully_reinitializes(self):
+        # A fallback fit after a normal fit must fully reset ALL fitted state
+        # (degree_/coef_/intercept_/center_/scale_), and vice versa.
+        X, y = self._quad_data()
+        learner = SieveLearner(k_max=2).fit(X, y)
+        assert learner.degree_ > 0 and learner.center_ is not None
+        with pytest.warns(UserWarning, match="intercept-only"):
+            learner.fit(np.zeros((6, 2)), np.arange(6.0))
+        assert learner.degree_ == 0
+        assert learner.center_ is None and learner.scale_ is None
+        learner.fit(X, y)  # back to a normal fit
+        fresh = SieveLearner(k_max=2).fit(X, y)
+        np.testing.assert_allclose(learner.predict(X), fresh.predict(X), atol=1e-12)
+
+    def test_sieve_deepcopy_and_pickle(self):
+        X, y = self._quad_data()
+        learner = SieveLearner(k_max=2).fit(X, y)
+        for clone in (copy.deepcopy(learner), pickle.loads(pickle.dumps(learner))):
+            np.testing.assert_allclose(clone.predict(X), learner.predict(X))
+
+    def test_repr_is_configuration_aware(self):
+        # DMLDiDResults stores the learner spec AS its repr — it must be
+        # deterministic and carry the estimate-moving config.
+        assert repr(SieveLearner(k_max=3)) == "SieveLearner(k_max=3, criterion='bic')"
+        assert repr(SieveLearner()) == "SieveLearner(k_max=None, criterion='bic')"
+
+    def test_zero_weight_covariate_rows_fully_inert(self):
+        # Standardization stats come from the positive-weight support, so
+        # adding extreme zero-weight COVARIATE rows is exactly equivalent to
+        # dropping them (fit, degree selection, and predictions).
+        X, y = self._quad_data(n=120)
+        X_bad = np.vstack([X, np.full((5, 2), 1e9)])  # extreme covariates
+        y_bad = np.concatenate([y, np.zeros(5)])
+        w = np.concatenate([np.ones(len(y)), np.zeros(5)])
+        padded = SieveLearner(k_max=3).fit(X_bad, y_bad, sample_weight=w)
+        dropped = SieveLearner(k_max=3).fit(X, y, sample_weight=np.ones(len(y)))
+        assert padded.degree_ == dropped.degree_
+        np.testing.assert_allclose(padded.predict(X[:10]), dropped.predict(X[:10]), atol=1e-9)
+
+    def test_weight_scale_invariance_three_scales(self):
+        # Under w -> c*w the weighted IC shifts by a K-independent constant
+        # and the RSS floor scales with the weighted objective, so degree
+        # selection, coefficients, and predictions are invariant to the
+        # weight scale (regression for the fixed unweighted-variance floor,
+        # which bound under tiny scales and changed the selected degree).
+        X, y = self._quad_data(n=200, seed=3)
+        w = np.ones(len(y))
+        fits = [SieveLearner(k_max=3).fit(X, y, sample_weight=w * s) for s in (1.0, 1e-12, 1e12)]
+        assert len({f.degree_ for f in fits}) == 1
+        for f in fits[1:]:
+            np.testing.assert_allclose(f.predict(X[:10]), fits[0].predict(X[:10]), rtol=1e-9)
+
+    def test_failed_refit_clears_previous_model(self):
+        # Fit-reset must run BEFORE validation: a failed refit leaves the
+        # learner unfitted, never serving the previous model.
+        X, y = self._quad_data()
+        learner = SieveLearner(k_max=2).fit(X, y)
+        with pytest.raises(ValueError):
+            learner.fit(np.zeros((0, 2)), np.zeros(0))  # degenerate refit
+        with pytest.raises(ValueError, match="not fitted"):
+            learner.predict(X[:5])
+
+    def test_extreme_and_nonfinite_zero_weight_rows_inert(self):
+        # The weighted fit operates entirely on the positive-weight support:
+        # 1e100 (basis-power overflow territory) and even non-finite
+        # zero-weight padding rows change nothing.
+        X, y = self._quad_data(n=120)
+        for pad in (1e100, np.nan):
+            X_bad = np.vstack([X, np.full((5, 2), pad)])
+            y_bad = np.concatenate([y, np.zeros(5)])
+            w = np.concatenate([np.ones(len(y)), np.zeros(5)])
+            padded = SieveLearner(k_max=3).fit(X_bad, y_bad, sample_weight=w)
+            plain = SieveLearner(k_max=3).fit(X, y)
+            assert padded.degree_ == plain.degree_
+            np.testing.assert_allclose(padded.predict(X[:10]), plain.predict(X[:10]), atol=1e-9)

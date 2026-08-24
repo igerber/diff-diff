@@ -32,6 +32,7 @@ htmlcov/
 # Environments
 .env
 .venv
+.venv-doubleml/
 env/
 venv/
 ENV/

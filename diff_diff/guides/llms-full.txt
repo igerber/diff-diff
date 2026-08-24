@@ -1395,6 +1395,34 @@ Caveats and contracts:
 - **Sensitivity helpers are single-cohort.** `diff_diff.lwdid_sensitivity.robustness_pre_periods` / `sensitivity_no_anticipation` accept a single treated cohort only; multi-cohort staggered inputs are rejected.
 - **Scope limits:** panel data only - no direct repeated-cross-section API (the transformation requires repeated observation of each unit; LW 2026 permits pre-aggregating microdata to assignment-unit-by-period cell means, which can then be fitted here, but within-cell sampling uncertainty is NOT propagated); no sampling weights or `survey_design=` on any path; no `anticipation=` parameter (no-anticipation is assumed; the sensitivity helper above is the diagnostic); `compute_honest_did` does NOT accept LWDiD event studies.
 
+### DMLDiD
+
+Chang (2020, The Econometrics Journal 23(2)) double/debiased machine learning DiD, extended to staggered adoption: each Callaway-Sant'Anna style (g, t) cell is a 2-period Chang Case 1 problem with cross-fitted ML nuisances (DML2, per-cell D-stratified K-fold) and the Neyman-orthogonal score, so the ATT is first-order insensitive to nuisance regularization bias. Covariates are REQUIRED (conditional parallel trends per Abadie 2005; for unconditional staggered DiD use CallawaySantAnna). Per-cell SE = sqrt(mean(psi_bar^2)/n) from Chang's Theorem-2 augmented score; the analytical anchor is DoubleML (committed machine-precision parity spikes, doubleml==0.11.4).
+
+```python
+DMLDiD(
+    propensity_learner="logit",   # or any object with fit/predict_proba
+    outcome_learner="linear",     # "linear"/"ridge"/"sieve", or any object with fit/predict
+    n_folds=5,                    # DML2 cross-fitting folds (per cell)
+    control_group="never_treated",  # or "not_yet_treated" (CS semantics)
+    anticipation=0,
+    alpha=0.05,
+    n_bootstrap=0,                # multiplier bootstrap (0 = analytical)
+    bootstrap_weights=None,       # "rademacher" (default) / "mammen" / "webb"
+    seed=None,                    # None -> POINT ESTIMATES vary (random folds)
+    base_period="varying",        # or "universal" (CS semantics)
+    cband=True,                   # sup-t bands on the event-study replay
+    pscore_trim=0.01,             # clip fitted propensities (never drop)
+).fit(data, outcome, unit, time, first_treat, covariates) -> DMLDiDResults
+```
+
+Key contracts:
+- Aggregation is POST-FIT ONLY: `results.aggregate('event_study'/'group'/'simple'/'total')` (the fit-time `event_study_effects` surface is never populated by design; `plot_event_study(results.aggregate('event_study'))`). Bootstrapped fits replay the fit-time bootstrap on the recompute levels.
+- HonestDiD / PreTrendsPower consume the aggregate('event_study') container (admitted source); the native `compute_honest_did(results)` route raises with the container instruction. Varying-base containers warn; use base_period='universal' for clean Rambachan-Roth interpretation.
+- `SieveLearner(k_max=None, criterion="bic")` is the exported configurable learner (adaptive polynomial degree by IC); any sklearn-style estimator object also plugs in (seed stochastic learners yourself — the library seed pins folds, not learner internals).
+- Per-cell complete cases (one consolidated unbalanced-input warning); degenerate cells (fewer members than folds, singleton treated stratum, fail-closed learner) become NaN cells with machine-readable skip_reason and a consolidated warning; surviving cells still aggregate.
+- Panel only; no survey_design=/cluster= (Chang assumes i.i.d.; per-unit IF variance IS unit-level clustering). Reproducibility: set seed (fold draws move point estimates).
+
 ### TROP
 
 Triply Robust Panel estimator (Athey, Imbens, Qu & Viviano 2025). Combines nuclear norm regularization, distance-based unit weights, and time decay weights.
@@ -2659,7 +2687,7 @@ sd_female, data_female = sd.subpopulation(data, mask=lambda df: df['sex'] == 'F'
 
 **Key features:**
 - Taylor Series Linearization (TSL) variance with strata + PSU + FPC
-- Replicate weight variance: BRR, Fay's BRR, JK1, JKn, SDR (13 of 23 estimators, including dCDH)
+- Replicate weight variance: BRR, Fay's BRR, JK1, JKn, SDR (13 of 24 estimators, including dCDH)
 - Survey-aware bootstrap: multiplier at PSU (Hall-Mammen wild; dCDH, staggered) or Rao-Wu rescaled (SunAbraham, SyntheticDiD, TROP). SyntheticDiD bootstrap composes Rao-Wu rescaled per-draw weights with the weighted Frank-Wolfe variant of `_sc_weight_fw` (PR #355): each draw solves `min ||A·diag(rw)·ω - b||² + ζ²·Σ rw_i ω_i²` and composes `ω_eff = rw·ω/Σ(rw·ω)` for the SDID estimator. Pweight-only fits use constant `rw = w_control`; full designs use Rao-Wu. SDID's placebo (stratified permutation + weighted FW) and jackknife (PSU-level LOO with stratum aggregation, Rust & Rao 1996) paths also support pweight-only and full strata/PSU/FPC designs
 - DEFF diagnostics, subpopulation analysis, weight trimming (`trim_weights`)
 - Repeated cross-sections: `CallawaySantAnna(panel=False)`

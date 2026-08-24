@@ -32,6 +32,7 @@ from diff_diff._backend import (
     _rust_solve_ols,
 )
 from diff_diff._guides_api import get_llm_guide
+from diff_diff._learners import SieveLearner
 from diff_diff.agent_workflow import agent_workflow
 from diff_diff.aggregation import (
     AggregationResult,
@@ -95,6 +96,8 @@ from diff_diff.diagnostics import (
     run_all_placebo_tests,
     run_placebo_test,
 )
+from diff_diff.dml_did import DMLDiD
+from diff_diff.dml_did_results import DMLDiDResults
 from diff_diff.efficient_did import (
     EDiDBootstrapResults,
     EfficientDiD,
@@ -464,6 +467,10 @@ __all__ = [
     # LWDiD (Lee & Wooldridge rolling transformation DiD)
     "LWDiD",
     "LWDiDResults",
+    # DMLDiD (Chang 2020 double/debiased ML DiD)
+    "DMLDiD",
+    "DMLDiDResults",
+    "SieveLearner",
     # Visualization
     "plot_bacon",
     "plot_event_study",

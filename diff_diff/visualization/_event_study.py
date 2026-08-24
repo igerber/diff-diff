@@ -1054,7 +1054,10 @@ def _extract_plot_data(
         f"Cannot extract plot data from {type(results).__name__}. "
         "Expected MultiPeriodDiDResults, CallawaySantAnnaResults, "
         "SunAbrahamResults, ImputationDiDResults, "
-        "ChaisemartinDHaultfoeuilleResults, EventStudyResults, or DataFrame."
+        "ChaisemartinDHaultfoeuilleResults, EventStudyResults, or DataFrame. "
+        "For DMLDiDResults (no fit-time event-study surface), plot the "
+        "post-fit container: plot_event_study(results.aggregate("
+        "'event_study'))."
     )
 
 

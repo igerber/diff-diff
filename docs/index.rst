@@ -185,6 +185,8 @@ Supported Estimators
      - Athey & Imbens (2006) distributional DiD with quantile treatment effects
    * - :class:`~diff_diff.LWDiD`
      - Lee & Wooldridge (2025, 2026) rolling-transformation DiD; ``rolling='detrend'`` handles heterogeneous linear trends
+   * - :class:`~diff_diff.DMLDiD`
+     - Chang (2020) double/debiased ML DiD; staggered ATT(g,t) with cross-fitted nuisance learners
    * - :class:`~diff_diff.QDiD`
      - Quantile DiD comparison estimator applying DiD quantile-by-quantile (deprecated 3.9 - use :class:`~diff_diff.ChangesInChanges` with ``method="qdid"``)
    * - :class:`~diff_diff.RegressionDiscontinuity`
