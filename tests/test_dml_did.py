@@ -1243,14 +1243,23 @@ class TestFloatLaneAnticipationExactness:
             warnings.simplefilter("ignore")
             res = DMLDiD(anticipation=1, seed=0).fit(df, **FIT_KW, **COV)
         assert np.isfinite(res.att)
+        # Distinct horizons stay distinct on the exact float lane: the
+        # half-integer t - g differences are exact, so the event-study
+        # carries one row per horizon (no silent merge).
+        es = res.aggregate("event_study")
+        es_times = list(es.to_dataframe()["event_time"])
+        assert len(es_times) == len(set(es_times))
+        assert len(es_times) > 1
 
-    def test_anticipation_zero_float_lane_unaffected(self):
-        # anticipation=0 does no +/- arithmetic: the reviewer's labels are
-        # exact float64 values and comparisons of exact values are exact.
+    def test_anticipation_zero_mixed_magnitudes_rejected(self):
+        # Even at anticipation=0 the mixed-magnitude frame is rejected by the
+        # event-time subtraction certificate: with g = 2**62 - 2048, the
+        # periods 0.5 / 2**62-2048 / 2**62-1536 produce t - g values that
+        # ROUND (0.5 - g collapses onto -g), silently merging distinct
+        # event-study horizons in the analytical and bootstrap aggregations.
         df = self._mixed_label_frame()
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            res = DMLDiD(seed=0, n_folds=2).fit(
+        with pytest.raises(ValueError, match="event-time arithmetic"):
+            DMLDiD(seed=0, n_folds=2).fit(
                 df,
                 outcome="y",
                 unit="unit",
@@ -1258,7 +1267,6 @@ class TestFloatLaneAnticipationExactness:
                 first_treat="first_treat",
                 covariates=["x1"],
             )
-        assert np.isfinite(res.att)
 
 
 class TestNativeLearnerTrustBoundary:

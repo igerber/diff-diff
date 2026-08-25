@@ -645,6 +645,17 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 candidates.append(cast_f)
         time_norm, ft_norm = candidates
 
+        # (1) elementwise exact raw comparison (catches precision
+        # pd.to_numeric ITSELF destroyed: merges AND pure shifts). Runs
+        # BEFORE the float-lane arithmetic certificates: a coerced object
+        # column with genuinely lost precision should surface the
+        # precision diagnosis, not a downstream-arithmetic one.
+        for col_label, raw, norm, recoded in (
+            (time, raw_time, time_norm, None),
+            (first_treat, raw_ft, ft_norm, ft_inf_mask),
+        ):
+            self._verify_raw_labels(col_label, raw, norm, recoded)
+
         # Float-lane anticipation-arithmetic exactness certificate: the
         # magnitude bound alone does not make float64 label +/- anticipation
         # EXACT — e.g. labels that are multiples of 512 near 2**62 pass every
@@ -653,9 +664,10 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         # (and `g - anticipation` base-period arithmetic rounds the same
         # way). Verify, per unique label, that v +/- anticipation is exact
         # in float64 (Fraction comparison is exact); reject otherwise.
-        if not int_ok and self.anticipation > 0:
+        if not int_ok:
             from fractions import Fraction
 
+        if not int_ok and self.anticipation > 0:
             a = int(self.anticipation)
             for col_label, norm in ((time, time_norm), (first_treat, ft_norm)):
                 for v in np.unique(norm):
@@ -670,13 +682,31 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                             "rescale the labels (e.g. to period indices)"
                         )
 
-        # (1) elementwise exact raw comparison (catches precision
-        # pd.to_numeric ITSELF destroyed: merges AND pure shifts).
-        for col_label, raw, norm, recoded in (
-            (time, raw_time, time_norm, None),
-            (first_treat, raw_ft, ft_norm, ft_inf_mask),
-        ):
-            self._verify_raw_labels(col_label, raw, norm, recoded)
+        # Float-lane event-time subtraction certificate (ungated on
+        # anticipation): every event time e = t - g (base - g included; the
+        # base period is itself an observed period) must be EXACT in
+        # float64. Mixed-magnitude label sets — e.g. periods 0.5/1.0/1.5
+        # with a cohort at 2**62 - 2048 — pass every per-label certificate,
+        # yet t - g rounds all of them to the SAME event-time key, silently
+        # merging distinct horizons in the analytical and bootstrap
+        # aggregations. Exact subtraction is also injective, so distinct
+        # exact differences keep distinct keys.
+        if not int_ok:
+            period_fracs = [(float(v), Fraction(float(v))) for v in np.unique(time_norm)]
+            for gval in np.unique(ft_norm):
+                if not gval > 0:
+                    continue
+                fg = float(gval)
+                exact_g = Fraction(fg)
+                for ft_v, exact_t in period_fracs:
+                    if Fraction(ft_v - fg) != exact_t - exact_g:
+                        raise ValueError(
+                            f"event-time arithmetic is not exact in float64 for "
+                            f"period {ft_v!r} and cohort {fg!r} (t - g rounds), "
+                            "so distinct event-study horizons would silently "
+                            "merge — rescale the labels (e.g. to period indices)"
+                        )
+
         return time_norm, ft_norm
 
     @staticmethod

@@ -2894,7 +2894,12 @@ the finite-dimensional `p_0` is handled by the variance correction below.
   exact rational comparison) — otherwise the not-yet-treated threshold
   `max(t, base) + anticipation` (and the base-period `g - anticipation`)
   could round onto a neighboring cohort and silently shift eligibility;
-  inexact combinations are rejected with a targeted error.
+  inexact combinations are rejected with a targeted error. The float64 lane
+  additionally certifies EXACT event-time subtraction `t - g` for every
+  (period, cohort) pair (any anticipation) — mixed-magnitude label sets
+  otherwise round distinct horizons onto one event-time key and silently
+  merge them in the aggregations; exact subtraction is injective, so
+  distinct differences keep distinct keys.
   Realistic labels (years, YYYYMMDD, unix s/ms, ns timestamps) all pass.
 - **Note:** Inference extensions beyond the paper — the multiplier bootstrap
   (`n_bootstrap > 0`, per-cell + overall percentile inference) and the sup-t
