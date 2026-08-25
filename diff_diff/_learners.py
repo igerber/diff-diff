@@ -187,6 +187,10 @@ def _predict_identified(X_aug: np.ndarray, coefs: np.ndarray) -> np.ndarray:
 class LinearLearner:
     """OLS regressor (``solve_ols``); intercept prepended internally."""
 
+    # Config attrs audited by DMLDiD's native-trust predicate (exact
+    # primitive types required for the verbatim repr/error path).
+    _CONFIG_ATTRS: Tuple[str, ...] = ()
+
     def __init__(self) -> None:
         self.coef_: Optional[np.ndarray] = None
         self.intercept_: Optional[float] = None
@@ -243,6 +247,8 @@ class RidgeLearner:
     default ``"loocv"`` selects the penalty by closed-form leave-one-out CV.
     """
 
+    _CONFIG_ATTRS: Tuple[str, ...] = ("alpha",)
+
     def __init__(self, alpha: Union[float, str] = "loocv") -> None:
         self.alpha = alpha
         self.coef_: Optional[np.ndarray] = None
@@ -278,6 +284,8 @@ class RidgeLearner:
 
 class LogitLearner:
     """IRLS logistic classifier (``solve_logit``); intercept added by the solver."""
+
+    _CONFIG_ATTRS: Tuple[str, ...] = ("max_iter", "tol")
 
     def __init__(self, max_iter: int = 25, tol: float = 1e-8) -> None:
         self.max_iter = max_iter
@@ -357,6 +365,8 @@ class SieveLearner:
     Fitted state is plain floats/ndarrays (deep-copyable, picklable);
     ``fit`` fully re-initializes it (sklearn fit-reset semantics).
     """
+
+    _CONFIG_ATTRS: Tuple[str, ...] = ("k_max", "criterion")
 
     def __init__(self, k_max: Optional[int] = None, criterion: str = "bic") -> None:
         if criterion not in ("aic", "bic"):

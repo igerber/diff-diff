@@ -156,19 +156,40 @@ def _raise_if_conversion_created_inf(col_label: str, raw: np.ndarray, inf_mask: 
             )
 
 
+_PRIMITIVE_CONFIG_TYPES = (bool, int, float, str, type(None))
+
+
+def _config_value_is_primitive(value: Any) -> bool:
+    """EXACT primitive type check for a native learner's config value.
+
+    A subclass of ``float``/``str``/``int`` carries user code — its
+    ``__repr__`` fires inside the learner's configuration repr and its
+    value is interpolated into library error messages — so trust only
+    exact builtins (plus numpy scalars, whose reprs are library-controlled).
+    """
+    if type(value) in _PRIMITIVE_CONFIG_TYPES:
+        return True
+    return isinstance(value, (np.integer, np.floating)) and type(value).__module__ == np.__name__
+
+
 def _is_native_learner_spec(spec: Any) -> bool:
     # EXACT type check, not isinstance: a user-defined SUBCLASS of a native
     # learner carries arbitrary user code (overridden __repr__, raised
     # exception text) and must stay on the untrusted/foreign path — the
     # sanitization contract (_learner_spec_label, _sanitize_learner_error)
-    # keys off this predicate.
+    # keys off this predicate. The CONFIG VALUES must be exact primitives
+    # too: a float/str subclass stored as e.g. ridge ``alpha`` would fire
+    # its own __repr__ inside the native configuration repr and can seep
+    # into library error text, re-opening the nested leak the outer type
+    # check closes.
     from diff_diff._learners import LinearLearner, LogitLearner, RidgeLearner, SieveLearner
 
-    return isinstance(spec, str) or type(spec) in (
-        LinearLearner,
-        LogitLearner,
-        RidgeLearner,
-        SieveLearner,
+    if isinstance(spec, str):
+        return True
+    if type(spec) not in (LinearLearner, LogitLearner, RidgeLearner, SieveLearner):
+        return False
+    return all(
+        _config_value_is_primitive(getattr(spec, attr, None)) for attr in type(spec)._CONFIG_ATTRS
     )
 
 
@@ -623,6 +644,31 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     )
                 candidates.append(cast_f)
         time_norm, ft_norm = candidates
+
+        # Float-lane anticipation-arithmetic exactness certificate: the
+        # magnitude bound alone does not make float64 label +/- anticipation
+        # EXACT — e.g. labels that are multiples of 512 near 2**62 pass every
+        # round-trip, yet `max(t, base) + anticipation` can round ONTO a
+        # later cohort and silently flip its not-yet-treated eligibility
+        # (and `g - anticipation` base-period arithmetic rounds the same
+        # way). Verify, per unique label, that v +/- anticipation is exact
+        # in float64 (Fraction comparison is exact); reject otherwise.
+        if not int_ok and self.anticipation > 0:
+            from fractions import Fraction
+
+            a = int(self.anticipation)
+            for col_label, norm in ((time, time_norm), (first_treat, ft_norm)):
+                for v in np.unique(norm):
+                    fv = float(v)
+                    exact = Fraction(fv)
+                    if Fraction(fv + a) != exact + a or Fraction(fv - a) != exact - a:
+                        raise ValueError(
+                            f"column {col_label!r}: label {fv!r} does not support "
+                            f"exact anticipation arithmetic in float64 "
+                            f"(+/- {a} rounds), so cohort-threshold and "
+                            "base-period comparisons would silently shift — "
+                            "rescale the labels (e.g. to period indices)"
+                        )
 
         # (1) elementwise exact raw comparison (catches precision
         # pd.to_numeric ITSELF destroyed: merges AND pure shifts).

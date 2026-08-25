@@ -2889,6 +2889,12 @@ the finite-dimensional `p_0` is handled by the variance correction below.
   label (e.g. `Decimal("1e400")` or the string `"1e400"`) whose float64
   conversion overflows to `inf` is rejected with a targeted error, never
   silently reclassified as never-treated.
+  On the float64 lane with `anticipation > 0`, each unique label must
+  additionally support EXACT `± anticipation` arithmetic (verified via
+  exact rational comparison) — otherwise the not-yet-treated threshold
+  `max(t, base) + anticipation` (and the base-period `g - anticipation`)
+  could round onto a neighboring cohort and silently shift eligibility;
+  inexact combinations are rejected with a targeted error.
   Realistic labels (years, YYYYMMDD, unix s/ms, ns timestamps) all pass.
 - **Note:** Inference extensions beyond the paper — the multiplier bootstrap
   (`n_bootstrap > 0`, per-cell + overall percentile inference) and the sup-t

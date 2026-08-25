@@ -1195,6 +1195,72 @@ class TestConversionCreatedInfinity:
             DMLDiD().fit(df, **FIT_KW, **COV)
 
 
+class TestFloatLaneAnticipationExactness:
+    """Float-lane labels must support EXACT +/- anticipation arithmetic:
+    labels that are multiples of 512 near 2**62 pass the magnitude and
+    round-trip certificates, yet max(t, base) + anticipation can round ONTO
+    a later cohort and silently flip its not-yet-treated eligibility."""
+
+    def _mixed_label_frame(self):
+        # Reviewer's construction: t = 2**62 - 2048, later cohort at
+        # 2**62 - 1536, anticipation 257 -> exact threshold is 255 below the
+        # cohort but float64 rounds it onto the cohort exactly. A fractional
+        # early period forces the float64 lane.
+        rng = np.random.default_rng(5)
+        t_lo, t_mid, t_hi = 0.5, float(2**62 - 2048), float(2**62 - 1536)
+        rows = []
+        for u in range(45):
+            if u < 12:
+                ft = t_mid  # cohort treated at t_mid
+            elif u < 24:
+                ft = t_hi  # later cohort: the eligibility-flip victim
+            else:
+                ft = 0.0
+            for tt in (t_lo, t_mid, t_hi):
+                rows.append((u, tt, ft, rng.normal(), rng.normal()))
+        return pd.DataFrame(rows, columns=["unit", "time", "first_treat", "y", "x1"])
+
+    def test_inexact_anticipation_rejected(self):
+        df = self._mixed_label_frame()
+        with pytest.raises(ValueError, match="exact anticipation arithmetic"):
+            DMLDiD(anticipation=257, control_group="not_yet_treated", seed=0).fit(
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1"],
+            )
+
+    def test_exact_float_lane_still_fits(self, data):
+        # Half-integer labels with small anticipation are exact in float64
+        # and must keep fitting on the float lane.
+        df = data.copy()
+        df["time"] = df["time"].astype(float) + 0.5
+        df["first_treat"] = df["first_treat"].astype(float)
+        df.loc[df["first_treat"] > 0, "first_treat"] += 0.5
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = DMLDiD(anticipation=1, seed=0).fit(df, **FIT_KW, **COV)
+        assert np.isfinite(res.att)
+
+    def test_anticipation_zero_float_lane_unaffected(self):
+        # anticipation=0 does no +/- arithmetic: the reviewer's labels are
+        # exact float64 values and comparisons of exact values are exact.
+        df = self._mixed_label_frame()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = DMLDiD(seed=0, n_folds=2).fit(
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1"],
+            )
+        assert np.isfinite(res.att)
+
+
 class TestNativeLearnerTrustBoundary:
     """The trusted-repr / verbatim-error path admits EXACT native learner
     types only: a user-defined subclass carries arbitrary code and must take
@@ -1252,6 +1318,47 @@ class TestNativeLearnerTrustBoundary:
         assert any(
             "withheld" in str(e.get("error", "")) for e in res.cross_fit_diagnostics.values()
         )
+
+    def test_secret_bearing_config_value_not_published(self, data):
+        # A float SUBCLASS as a native config value fires its own __repr__
+        # inside the native configuration repr — the trust predicate must
+        # demote the learner to the foreign path (class-name label).
+        from diff_diff._learners import RidgeLearner
+
+        class SecretFloat(float):
+            def __repr__(self):
+                return "token=SECRET-NESTED /home/user/private.csv"
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = DMLDiD(outcome_learner=RidgeLearner(alpha=SecretFloat(2.5)), seed=0).fit(
+                data, **FIT_KW, **COV
+            )
+        import json
+
+        blob = json.dumps(res.to_dict())
+        assert "SECRET-NESTED" not in blob
+        assert "SECRET-NESTED" not in res.summary()
+        assert "RidgeLearner" in res.outcome_learner  # class-name label
+
+    def test_secret_bearing_config_error_text_withheld(self, data):
+        # An INVALID str-subclass config makes the native learner raise with
+        # the value interpolated into library error text; the demoted-trust
+        # path must withhold that text from warnings and diagnostics.
+        from diff_diff._learners import RidgeLearner
+
+        class SecretStr(str):
+            def __repr__(self):
+                return "token=SECRET-CFGERR /home/user/private.csv"
+
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            with pytest.raises(ValueError):
+                # every cell degenerate -> the no-estimable-cells ValueError
+                DMLDiD(outcome_learner=RidgeLearner(alpha=SecretStr("bogus")), seed=0).fit(
+                    data, **FIT_KW, **COV
+                )
+        assert not any("SECRET-CFGERR" in str(w.message) for w in rec)
 
     def test_exact_native_objects_store_config_reprs(self, data):
         from diff_diff._learners import LogitLearner, RidgeLearner
