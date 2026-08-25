@@ -139,9 +139,14 @@ class TestOracleEquivalence:
         np.testing.assert_allclose(res.att, theta, rtol=0, atol=1e-12)
         np.testing.assert_allclose(res.se, se, rtol=0, atol=1e-12)
 
-    def test_two_period_degenerate_cell_bit_for_bit(self):
+    def test_two_period_degenerate_cell_equivalence(self):
         # The DMLDiD single-cell fit must equal the hand computation built
         # from the SAME spawned fold seed + cross_fit_predict + chang scores.
+        # Tolerance 1e-14, not bit-for-bit: the hand pipeline materializes X
+        # via pandas pivot/reindex while the estimator uses its own
+        # precompute, and BLAS reduces differently-laid-out (but equal)
+        # matrices in different orders per platform — ~1-ULP divergence on
+        # Linux/Windows that macOS/Accelerate masks.
         df, _ = chang_2period_panel(n=300, seed=5)
         seed = 9
         res = DMLDiD(seed=seed).fit(df, **FIT_KW, covariates=XCOLS)
@@ -166,8 +171,8 @@ class TestOracleEquivalence:
         theta = float(np.mean(summand))
         psi_bar = chang_panel_score_augmented(summand, D, theta, p_hat)
         se = float(np.sqrt(np.mean(psi_bar**2) / n))
-        assert res.att == theta  # bit-for-bit
-        assert res.se == se
+        np.testing.assert_allclose(res.att, theta, rtol=1e-14, atol=0.0)
+        np.testing.assert_allclose(res.se, se, rtol=1e-14, atol=0.0)
         cells = [e for e in res.group_time_effects.values() if e["skip_reason"] is None]
         assert len(cells) == 1 and res.att == cells[0]["effect"]
 

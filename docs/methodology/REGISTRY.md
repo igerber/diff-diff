@@ -2977,7 +2977,7 @@ the finite-dimensional `p_0` is handled by the variance correction below.
 - [x] Strict-overlap enforcement on fitted propensities (clip to `[trim, 1−trim]`, documented deviation — paper gives no rule)
 - [x] Per-cell degenerate guards (zero treated/control, cell < K, singleton stratum, empty untreated complement) — closed skip vocabulary, consolidated warning
 - [x] Normal-approximation inference via `safe_inference()`
-- [x] Validation: 2-period DoubleMLDID + staggered per-cell DoubleMLDIDBinary parity spikes (version-pinned, committed, golden literals consumed in-tests) + oracle-nuisance closed-form equivalence + degenerate-cell bit-for-bit hand-pipeline equivalence + Monte Carlo coverage sanity
+- [x] Validation: 2-period DoubleMLDID + staggered per-cell DoubleMLDIDBinary parity spikes (version-pinned, committed, golden literals consumed in-tests) + oracle-nuisance closed-form equivalence + degenerate-cell hand-pipeline equivalence (rtol 1e-14 — BLAS reduces differently-laid-out inputs in platform-dependent order, so bit identity does not hold cross-platform) + Monte Carlo coverage sanity
 - [ ] Case 2 (repeated cross sections): Equation 3.2 score + λ-corrected variance — planned follow-up (ROADMAP)
 - [ ] Case 3 (multilevel treatment): deferred (`DEFERRED.md`; implementation-required overlap conditions per the paper review's Case 3 caution)
 

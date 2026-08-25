@@ -1163,8 +1163,12 @@ class TestConversionCreatedInfinity:
             DMLDiD().fit(df, **FIT_KW, **COV)
 
     def test_oversized_numeric_string_first_treat_rejected(self):
+        # Newer pandas parses "1e400" to inf (rejected by the
+        # conversion-created-infinity guard); the py3.9-floor pandas'
+        # to_numeric raises its own "Unable to parse" instead, wrapped in
+        # the targeted numeric-castable error. Both lanes reject loudly.
         df = self._with_oversized_cohort("1e400")
-        with pytest.raises(ValueError, match="overflows float64|2\\*\\*62"):
+        with pytest.raises(ValueError, match="overflows float64|2\\*\\*62|numeric-castable"):
             DMLDiD().fit(df, **FIT_KW, **COV)
 
     def test_oversized_decimal_time_rejected(self):
