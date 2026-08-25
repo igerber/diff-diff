@@ -361,6 +361,16 @@ class TestSieveLearner:
         assert repr(SieveLearner(k_max=3)) == "SieveLearner(k_max=3, criterion='bic')"
         assert repr(SieveLearner()) == "SieveLearner(k_max=None, criterion='bic')"
 
+    def test_all_native_learner_reprs_deterministic(self):
+        # Every native learner needs a configuration-aware repr (results
+        # provenance stores the spec AS its repr; the default address-based
+        # object.__repr__ would be non-deterministic and hide config).
+        assert repr(LinearLearner()) == "LinearLearner()"
+        assert repr(RidgeLearner(alpha=2.5)) == "RidgeLearner(alpha=2.5)"
+        assert repr(RidgeLearner()) == "RidgeLearner(alpha='loocv')"
+        assert repr(LogitLearner()) == "LogitLearner(max_iter=25, tol=1e-08)"
+        assert repr(LogitLearner(max_iter=30)) == "LogitLearner(max_iter=30, tol=1e-08)"
+
     def test_zero_weight_covariate_rows_fully_inert(self):
         # Standardization stats come from the positive-weight support, so
         # adding extreme zero-weight COVARIATE rows is exactly equivalent to

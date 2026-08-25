@@ -108,26 +108,82 @@ def _validate_learner_spec(spec: Any, *, kind: str, param_name: str) -> None:
     validate_learner(spec, kind=kind, param_name=param_name)
 
 
+def _raw_label_is_infinite(value: Any) -> bool:
+    """True iff the RAW label element is itself infinite (either sign).
+
+    Distinguishes a genuine ``inf`` sentinel (recodable / rejectable as
+    non-finite) from a FINITE oversized value — ``Decimal("1e400")`` or the
+    string ``"1e400"`` — that ``pd.to_numeric``'s float64 conversion
+    overflowed to ``inf``. Exact semantics: Python cross-type comparison for
+    numerics (Decimal == inf is exact), exact ``int``/``Decimal`` parsing
+    for strings; non-numeric non-string elements cannot be infinite.
+    """
+    import numbers
+
+    if isinstance(value, numbers.Number) and not isinstance(value, complex):
+        try:
+            return bool(value == float("inf")) or bool(value == float("-inf"))
+        except (TypeError, decimal.InvalidOperation):  # pragma: no cover - defensive
+            return False
+    if isinstance(value, str):
+        try:
+            int(value)
+            return False
+        except ValueError:
+            try:
+                return bool(decimal.Decimal(value).is_infinite())
+            except decimal.InvalidOperation:
+                return False
+    return False
+
+
+def _raise_if_conversion_created_inf(col_label: str, raw: np.ndarray, inf_mask: np.ndarray) -> None:
+    """Reject float-conversion overflow of FINITE oversized raw labels.
+
+    ``inf_mask`` flags the positions whose float64 conversion is infinite;
+    any such position whose RAW element is finite carries a label far above
+    the 2**62 magnitude bound and must fail loudly (the +inf recode and the
+    non-finite rejection would otherwise misclassify it).
+    """
+    for pos in np.flatnonzero(inf_mask):
+        value = raw[int(pos)]
+        if not _raw_label_is_infinite(value):
+            raise ValueError(
+                f"column {col_label!r} carries label {value!r} whose numeric "
+                "conversion overflows float64 to infinity; such labels are far "
+                "above the 2**62 magnitude bound for cohort arithmetic — "
+                "rescale them (e.g. to period indices)"
+            )
+
+
 def _is_native_learner_spec(spec: Any) -> bool:
+    # EXACT type check, not isinstance: a user-defined SUBCLASS of a native
+    # learner carries arbitrary user code (overridden __repr__, raised
+    # exception text) and must stay on the untrusted/foreign path — the
+    # sanitization contract (_learner_spec_label, _sanitize_learner_error)
+    # keys off this predicate.
     from diff_diff._learners import LinearLearner, LogitLearner, RidgeLearner, SieveLearner
 
-    return isinstance(spec, (str, LinearLearner, LogitLearner, RidgeLearner, SieveLearner))
+    return isinstance(spec, str) or type(spec) in (
+        LinearLearner,
+        LogitLearner,
+        RidgeLearner,
+        SieveLearner,
+    )
 
 
 def _learner_spec_label(spec: Any) -> str:
     """Results-facing label for a learner spec (repr-of-spec contract).
 
-    String names verbatim; library-native learner objects keep their
-    controlled configuration repr; foreign objects publish only the
-    qualified class name — an arbitrary ``__repr__`` could embed
-    credentials, private paths, or large payloads into ``summary()`` /
-    ``to_dict()`` exports.
+    String names verbatim; EXACT library-native learner objects keep their
+    controlled configuration repr; everything else — subclasses of the
+    natives included — publishes only the qualified class name, since an
+    arbitrary user-defined ``__repr__`` could embed credentials, private
+    paths, or large payloads into ``summary()`` / ``to_dict()`` exports.
     """
-    from diff_diff._learners import LinearLearner, LogitLearner, RidgeLearner, SieveLearner
-
     if isinstance(spec, str):
         return spec
-    if isinstance(spec, (LinearLearner, LogitLearner, RidgeLearner, SieveLearner)):
+    if _is_native_learner_spec(spec):
         return repr(spec)
     cls = type(spec)
     return f"<{cls.__module__}.{cls.__qualname__}>"
@@ -384,13 +440,28 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 raise ValueError(f"column {col_label!r} is complex-valued; labels must be real")
 
         # ±inf time is rejected (it would corrupt base-period arithmetic).
+        # Conversion-CREATED infinity (a finite raw label like
+        # Decimal("1e400") or "1e400" that pd.to_numeric overflowed to inf)
+        # gets its own targeted magnitude error — "non-finite values" would
+        # misdescribe a finite input.
         time_vals = time_numeric.to_numpy()
-        if not np.all(np.isfinite(time_vals.astype(np.float64))):
+        time_float = time_vals.astype(np.float64)
+        time_inf = ~np.isfinite(time_float)
+        if time_inf.any():
+            _raise_if_conversion_created_inf(time, raw_time, time_inf)
             raise ValueError(f"time column {time!r} contains non-finite values")
 
         # first_treat: +inf -> 0 recode (CS parity), negative -> hard error.
+        # The recode applies ONLY to genuinely infinite RAW values: a finite
+        # oversized label whose conversion overflowed to +inf must NOT be
+        # silently reclassified as never-treated (the raw-verification guard
+        # masks recoded positions, so the recode is the one door around the
+        # exact-label certificate — gate it on the raw values).
         ft_vals = ft_numeric.to_numpy()
         ft_float = ft_vals.astype(np.float64)
+        ft_any_inf = np.isinf(ft_float)
+        if ft_any_inf.any():
+            _raise_if_conversion_created_inf(first_treat, raw_ft, ft_any_inf)
         inf_mask = np.isposinf(ft_float)
         if inf_mask.any():
             n_inf_units = df.loc[inf_mask, unit].nunique()

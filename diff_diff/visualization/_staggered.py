@@ -110,9 +110,16 @@ def plot_group_effects(
                 # there would present a defined (zero-width) interval for
                 # undefined inference — the prohibited partial-NaN pattern.
                 lo, hi = float(ci[0]), float(ci[1])
-            else:
+            elif np.isfinite(eff) and np.isfinite(se) and se > 0:
                 lo = eff - critical_value * se
                 hi = eff + critical_value * se
+            else:
+                # Undefined inference stays undefined at ANY requested
+                # alpha: a zero/non-finite SE has all-NaN stored inference
+                # (safe_inference), and eff +/- z*0 would draw a finite
+                # zero-width interval for it — the same prohibited
+                # partial-NaN pattern the stored-CI branch guards against.
+                lo = hi = float("nan")
             # Error bars are deviations from the effect and must be
             # non-negative; a heavily skewed percentile CI can exclude the
             # point estimate — clip LOUDLY rather than crash or misdraw.

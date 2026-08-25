@@ -2884,6 +2884,11 @@ the finite-dimensional `p_0` is handled by the variance correction below.
   coercion itself destroyed, and (ii) a `2**62` magnitude bound (with
   anticipation headroom, compared exactly in the source dtype) that closes
   the uint64 double-wrap and int64 cohort-arithmetic overflow lanes.
+  The `+inf -> 0` never-treated recode applies only to GENUINELY infinite
+  raw labels (checked exactly in the source values): a finite oversized
+  label (e.g. `Decimal("1e400")` or the string `"1e400"`) whose float64
+  conversion overflows to `inf` is rejected with a targeted error, never
+  silently reclassified as never-treated.
   Realistic labels (years, YYYYMMDD, unix s/ms, ns timestamps) all pass.
 - **Note:** Inference extensions beyond the paper — the multiplier bootstrap
   (`n_bootstrap > 0`, per-cell + overall percentile inference) and the sup-t

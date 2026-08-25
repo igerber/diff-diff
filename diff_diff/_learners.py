@@ -192,6 +192,12 @@ class LinearLearner:
         self.intercept_: Optional[float] = None
         self._coefs: Optional[np.ndarray] = None
 
+    def __repr__(self) -> str:
+        # Configuration-aware repr: DMLDiDResults stores the learner spec AS
+        # its repr, so the default address-based object.__repr__ would make
+        # results serialization non-deterministic.
+        return "LinearLearner()"
+
     def fit(
         self, X: np.ndarray, y: np.ndarray, sample_weight: Optional[np.ndarray] = None
     ) -> "LinearLearner":
@@ -243,6 +249,11 @@ class RidgeLearner:
         self.intercept_: Optional[float] = None
         self._coefs: Optional[np.ndarray] = None
 
+    def __repr__(self) -> str:
+        # Configuration-aware repr (estimate-moving config surfaces in
+        # results provenance; no address-based object.__repr__).
+        return f"RidgeLearner(alpha={self.alpha!r})"
+
     def fit(
         self, X: np.ndarray, y: np.ndarray, sample_weight: Optional[np.ndarray] = None
     ) -> "RidgeLearner":
@@ -275,6 +286,11 @@ class LogitLearner:
         self.coef_: Optional[np.ndarray] = None
         self.intercept_: Optional[float] = None
         self._coefs: Optional[np.ndarray] = None
+
+    def __repr__(self) -> str:
+        # Configuration-aware repr (estimate-moving config surfaces in
+        # results provenance; no address-based object.__repr__).
+        return f"LogitLearner(max_iter={self.max_iter!r}, tol={self.tol!r})"
 
     def fit(
         self, X: np.ndarray, y: np.ndarray, sample_weight: Optional[np.ndarray] = None

@@ -1140,6 +1140,134 @@ class TestNumericStringPrecision:
             DMLDiD().fit(df, **FIT_KW, **COV)
 
 
+class TestConversionCreatedInfinity:
+    """Finite oversized raw labels whose float64 conversion overflows to inf
+    must be REJECTED, never recoded as the +inf never-treated sentinel (the
+    raw-verification guard masks recoded positions, so the recode is the one
+    door around the exact-label certificate)."""
+
+    def _with_oversized_cohort(self, label):
+        base = make_staggered_dml_data(n_units=40, periods=(1, 2, 3), cohorts=(0, 2), seed=3)
+        df = base.copy()
+        units = df.groupby("unit")["first_treat"].first()
+        victims = [u for u, c in units.items() if c == 0][:3]
+        df["first_treat"] = df["first_treat"].astype(object)
+        df.loc[df["unit"].isin(victims), "first_treat"] = label
+        return df
+
+    def test_oversized_decimal_first_treat_rejected(self):
+        from decimal import Decimal
+
+        df = self._with_oversized_cohort(Decimal("1e400"))
+        with pytest.raises(ValueError, match="overflows float64|2\\*\\*62"):
+            DMLDiD().fit(df, **FIT_KW, **COV)
+
+    def test_oversized_numeric_string_first_treat_rejected(self):
+        df = self._with_oversized_cohort("1e400")
+        with pytest.raises(ValueError, match="overflows float64|2\\*\\*62"):
+            DMLDiD().fit(df, **FIT_KW, **COV)
+
+    def test_oversized_decimal_time_rejected(self):
+        from decimal import Decimal
+
+        base = make_staggered_dml_data(n_units=40, periods=(1, 2, 3), cohorts=(0, 2), seed=3)
+        df = base.copy()
+        df["time"] = df["time"].astype(object)
+        df.loc[df["time"] == 3, "time"] = Decimal("1e400")
+        with pytest.raises(ValueError, match="overflows float64|2\\*\\*62"):
+            DMLDiD().fit(df, **FIT_KW, **COV)
+
+    def test_genuine_decimal_infinity_still_recodes(self):
+        # A raw label that IS +inf (Decimal("Infinity") here, np.inf covered
+        # in TestInputValidation) keeps the CS-parity recode-with-warning.
+        from decimal import Decimal
+
+        df = self._with_oversized_cohort(Decimal("Infinity"))
+        with pytest.warns(UserWarning, match="first_treat=inf"):
+            res = DMLDiD(seed=0).fit(df, **FIT_KW, **COV)
+        assert np.isfinite(res.att)
+
+    def test_negative_oversized_decimal_first_treat_rejected(self):
+        from decimal import Decimal
+
+        df = self._with_oversized_cohort(Decimal("-1e400"))
+        with pytest.raises(ValueError, match="overflows float64|2\\*\\*62"):
+            DMLDiD().fit(df, **FIT_KW, **COV)
+
+
+class TestNativeLearnerTrustBoundary:
+    """The trusted-repr / verbatim-error path admits EXACT native learner
+    types only: a user-defined subclass carries arbitrary code and must take
+    the foreign path (class-name label, withheld exception text)."""
+
+    def test_native_subclass_repr_not_published(self, data):
+        from diff_diff._learners import LinearLearner
+
+        class SubclassedLinear(LinearLearner):
+            def __repr__(self):
+                return "token=SECRET-REPR /home/user/private.csv"
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = DMLDiD(outcome_learner=SubclassedLinear(), seed=0).fit(data, **FIT_KW, **COV)
+        import json
+
+        blob = json.dumps(res.to_dict())
+        assert "SECRET-REPR" not in blob
+        assert "SECRET-REPR" not in res.summary()
+        assert "SubclassedLinear" in res.outcome_learner  # class-name label
+
+    def test_native_subclass_error_text_withheld(self, data):
+        from diff_diff._learners import LinearLearner
+
+        class RaisingSubclass(LinearLearner):
+            def fit(self, X, y, sample_weight=None):
+                raise ValueError("token=SECRET-SUBEXC /home/user/private.csv")
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError):
+                DMLDiD(outcome_learner=RaisingSubclass(), seed=0).fit(data, **FIT_KW, **COV)
+        # Partial-failure route persists diagnostics: assert the withheld form.
+
+        class RaisingOnceSubclass(LinearLearner):
+            calls = [0]
+
+            def fit(self, X, y, sample_weight=None):
+                self.calls[0] += 1
+                if self.calls[0] <= 5:
+                    raise ValueError("token=SECRET-SUBEXC")
+                self.m = float(np.mean(y))
+                return self
+
+            def predict(self, X):
+                return np.full(len(X), self.m)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = DMLDiD(outcome_learner=RaisingOnceSubclass(), seed=0).fit(data, **FIT_KW, **COV)
+        import json
+
+        assert "SECRET-SUBEXC" not in json.dumps(res.to_dict())
+        assert any(
+            "withheld" in str(e.get("error", "")) for e in res.cross_fit_diagnostics.values()
+        )
+
+    def test_exact_native_objects_store_config_reprs(self, data):
+        from diff_diff._learners import LogitLearner, RidgeLearner
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = DMLDiD(
+                propensity_learner=LogitLearner(max_iter=30),
+                outcome_learner=RidgeLearner(alpha=2.5),
+                seed=0,
+            ).fit(data, **FIT_KW, **COV)
+        assert res.propensity_learner == "LogitLearner(max_iter=30, tol=1e-08)"
+        assert res.outcome_learner == "RidgeLearner(alpha=2.5)"
+        assert "0x" not in res.propensity_learner  # deterministic, no address
+
+
 class TestEmpiricalOverlapWarning:
     def test_sparse_treated_share_warns_per_cell(self):
         # Two treated units among many controls: min(p_hat, 1-p_hat) <
@@ -1201,6 +1329,93 @@ class TestBootstrapPlotUsesStoredCI:
                     matched += 1
                     break
         assert matched >= len(stored) * 0.8  # stored CIs drawn, not z*SE
+
+
+class TestPlotAlternateAlphaZeroSE:
+    """A zero/non-finite-SE cell has all-NaN stored inference; the
+    alternate-alpha z*SE reconstruction must NOT resurrect it as a finite
+    zero-width interval (all-or-nothing inference)."""
+
+    class _FakeResults:
+        alpha = 0.05
+        bootstrap_results = None
+        survey_metadata = None
+        df_inference = None
+
+        def __init__(self):
+            nan = float("nan")
+            self.group_time_effects = {
+                (2, 2): {
+                    "effect": 1.5,
+                    "se": 0.0,
+                    "t_stat": nan,
+                    "p_value": nan,
+                    "conf_int": (nan, nan),
+                    "n_treated": 5,
+                    "n_control": 5,
+                    "skip_reason": None,
+                },
+                (2, 3): {
+                    "effect": 1.0,
+                    "se": 0.5,
+                    "t_stat": 2.0,
+                    "p_value": 0.045,
+                    "conf_int": (0.02, 1.98),
+                    "n_treated": 5,
+                    "n_control": 5,
+                    "skip_reason": None,
+                },
+            }
+
+    def _yerr_devs(self, ax):
+        segs = []
+        for coll in ax.collections:
+            if hasattr(coll, "get_segments"):
+                segs.extend(coll.get_segments())
+        return segs
+
+    @pytest.mark.parametrize("bootstrap_flag", [False, True])
+    def test_zero_se_cell_nan_gated_mpl(self, bootstrap_flag):
+        pytest.importorskip("matplotlib")
+        import matplotlib
+
+        matplotlib.use("Agg")
+        from diff_diff.visualization import plot_group_effects
+
+        res = self._FakeResults()
+        if bootstrap_flag:
+            res.bootstrap_results = object()  # triggers the reconstruction warning
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ax = plot_group_effects(res, alpha=0.10, show=False)
+        # Only the finite-SE cell may contribute a drawn error bar; the
+        # zero-SE cell's reconstructed bounds are NaN (nothing at width 0).
+        for seg in self._yerr_devs(ax):
+            if len(seg) == 2 and abs(float(seg[0][0]) - 2.0) < 1e-9:  # x == t of zero-SE cell
+                lo_y, hi_y = float(seg[0][1]), float(seg[1][1])
+                assert not (
+                    abs(lo_y - 1.5) < 1e-12 and abs(hi_y - 1.5) < 1e-12
+                ), "zero-SE cell drawn with a finite zero-width CI"
+
+    def test_zero_se_cell_nan_gated_plotly(self):
+        pytest.importorskip("plotly")
+        from diff_diff.visualization import plot_group_effects
+
+        res = self._FakeResults()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fig = plot_group_effects(res, alpha=0.10, backend="plotly", show=False)
+        checked = 0
+        for trace in fig.data:
+            err = getattr(trace, "error_y", None)
+            if err is None or err.array is None:
+                continue
+            for x, dev in zip(trace.x, err.array):
+                if abs(float(x) - 2.0) < 1e-9:  # t of the zero-SE cell
+                    checked += 1
+                    # dev must be NaN, never a finite zero-width bar
+                    assert dev is None or not np.isfinite(float(dev))
+        assert checked > 0
 
 
 class TestForeignLearnerErrorSanitized:
