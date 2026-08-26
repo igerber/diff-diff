@@ -4,19 +4,26 @@ DMLDiD — Double/Debiased Machine Learning DiD
 Chang (2020)'s double/debiased machine learning (DML) estimator for
 Difference-in-Differences with covariates, extended to staggered adoption:
 each Callaway-Sant'Anna style group-time cell :math:`(g, t)` is estimated
-as a 2-period Chang Case 1 problem with cross-fitted machine-learning
-nuisance functions and a Neyman-orthogonal score, so the ATT estimate is
+as a 2-period Chang problem with cross-fitted machine-learning nuisance
+functions and a Neyman-orthogonal score, so the ATT estimate is
 first-order insensitive to the regularization bias of the nuisance
-learners. The classic 2-period design is the degenerate single-cell case.
+learners. ``panel=True`` (the default) runs Case 1 (repeated outcomes) on
+panel data; ``panel=False`` runs Case 2 (repeated cross sections) on
+declared cross-sectional data — one observation per row. The classic
+2-period design is the degenerate single-cell case of either lane.
 
 Identification follows Abadie (2005): CONDITIONAL parallel trends — the
 untreated potential-outcome trend is parallel across treated and control
 units only after conditioning on covariates :math:`X`. Chang's
 contribution is valid :math:`\sqrt{n}` inference when the two nuisance
-functions (the propensity score :math:`g_0(X) = P(D=1|X)` and the control
-outcome-change regression :math:`\ell_0(X) = E[\Delta Y | X, D=0]`) are
+functions — the propensity score :math:`g_0(X) = P(D=1|X)` plus, on panel
+fits, the control outcome-change regression
+:math:`\ell_0(X) = E[\Delta Y | X, D=0]` (Case 1) or, on RCS fits, the
+control level regression
+:math:`\ell_{20}(X) = E[(T - \lambda) Y | X, D=0]` (Case 2) — are
 estimated by machine learning under DML2 cross-fitting — PROVIDED the
-learners satisfy Chang's rate conditions (Assumption 3.1(f): each
+learners satisfy Chang's rate conditions (Assumption 3.1(f) for Case 1 /
+3.2(h) for Case 2: each
 nuisance at :math:`o_p(n^{-1/4})` in the :math:`L_2` norm, plus a product
 remainder bound). Cross-fitting removes overfitting bias but cannot
 substitute for the rate conditions, and the reported fold losses do not
@@ -55,10 +62,34 @@ error is the plug-in :math:`\sqrt{\overline{\bar\psi^2} / n}`. This exact
 object was matched to DoubleML at machine precision in the committed
 parity spikes (``benchmarks/doubleml/``).
 
+**Case 2 — repeated cross sections (Chang 2020, Equation 3.2;**
+``panel=False``\ **).** The cell pools the two periods' rows (post indicator
+:math:`T_i = 1\{\text{time}_i = t\}`) and scores LEVEL outcomes:
+
+.. math::
+
+   \text{summand}_i = \frac{D_i - \hat g(X_i)}{\hat p\,\hat\lambda(1-\hat\lambda)\,(1 - \hat g(X_i))}\,\bigl((T_i - \hat\lambda)Y_i - \hat\ell_2(X_i)\bigr)
+
+with :math:`\hat\lambda = \text{mean}(T)` the post-period sampling share and
+:math:`\hat\ell_2` the SINGLE cross-fitted control-only regression of
+:math:`(T - \hat\lambda)Y` on :math:`X` (Chang's :math:`I_{kz}^c`) — one
+regression, deliberately different from the Sant'Anna-Zhao/DoubleML
+four-regression RCS score. The Theorem 2 variance carries BOTH
+finite-dimensional corrections: the treated-share fold-in plus an explicit
+:math:`\hat G_{2\lambda}(T_i - \hat\lambda)` term (the λ-correction the
+paper's proof structure warns is easy to omit), with
+:math:`\hat G_{2\lambda}` the sample mean of the closed-form
+:math:`\partial_\lambda \psi_2`. Folds are stratified on the four
+:math:`D \times T` classes so every training fold carries control rows in
+both periods. RCS aggregation weights are FIXED cohort row masses (the
+CS-RCS convention, keeping the variance the influence function of the
+reported aggregate); ``aggregate('total')`` is unavailable on RCS fits.
+
 **Aggregation.** ``DMLDiD`` writes the CallawaySantAnna per-cell
 influence-function payload and inherits the CS aggregation and
-multiplier-bootstrap machinery: event-study / group / simple / total
-aggregations are produced **post-fit** via ``results.aggregate(...)``,
+multiplier-bootstrap machinery: event-study / group / simple aggregations
+(plus total on panel fits — RCS fits fail ``total`` closed) are produced
+**post-fit** via ``results.aggregate(...)``,
 with sup-t uniform bands and bootstrap replay on bootstrapped fits.
 
 See ``docs/methodology/REGISTRY.md`` "DMLDiD" for the full equations,
@@ -135,18 +166,33 @@ Restrictions
 
 - **Covariates required** — ``fit(covariates=None)`` or an empty list
   raises, directing to :class:`~diff_diff.CallawaySantAnna`.
-- **Panel only** — repeated cross sections are not supported (Chang's
-  Case 2 score is a planned follow-up).
+- **Declared designs only** — ``panel=True`` needs one row per
+  (unit, period); ``panel=False`` needs ROW-UNIQUE unit IDs (one
+  observation per row) and additionally assumes STATIONARY cross-sectional
+  sampling (Chang Assumption 2.3: each wave samples the same target
+  population — the composition of :math:`(D, X)` is stable across waves
+  while outcomes are the period-specific potential outcomes; warned at
+  fit, not data-checkable).
+  ``aggregate('total')`` is unavailable on RCS fits (fails closed).
+  NOTE: repeated-cross-section data is typically SURVEY data (BRFSS / ACS /
+  CPS), and ``DMLDiD`` carries NO survey weights — use
+  :class:`~diff_diff.CallawaySantAnna` ``(panel=False, survey_design=...)``
+  for weighted RCS designs.
 - **No survey/cluster support** — Chang (2020) assumes i.i.d. sampling;
-  ``fit()`` accepts no ``survey_design=`` or ``cluster=``. The per-unit
-  influence-function variance IS unit-level clustering; coarser
+  ``fit()`` accepts no ``survey_design=`` or ``cluster=``. The
+  per-sampling-unit influence-function variance — per unit on panel fits,
+  per observation on repeated-cross-section fits — IS unit-level
+  clustering; coarser
   clustering is a tracked follow-up (``DEFERRED.md``).
 - **Propensity clipping, never dropping** — fitted propensities are
   clipped to ``[pscore_trim, 1 - pscore_trim]`` after an extremeness
   warning (the paper gives no trimming rule).
-- **Per-cell complete cases** — a unit with a missing/non-finite outcome
-  or a non-finite base-period covariate at a cell is excluded from that
-  cell only (one consolidated ``UserWarning`` reports the drops).
+- **Per-cell complete cases** — on panel fits, a unit with a
+  missing/non-finite outcome or a non-finite base-period covariate at a
+  cell is excluded from that cell only; on RCS fits the exclusion is
+  row-level (a non-finite outcome or covariate on the row — there is no
+  base-period covariate). One consolidated ``UserWarning`` reports the
+  drops.
 - **Degenerate cells skip loudly** — a cell that cannot be cross-fitted
   (fewer members than folds, a singleton treated/control stratum, a
   fail-closed learner error) is recorded as a NaN cell with a

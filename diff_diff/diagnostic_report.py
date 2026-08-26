@@ -1265,6 +1265,24 @@ class DiagnosticReport:
                     "``precomputed={'bacon': ...}`` with a survey-aware "
                     "decomposition."
                 )
+            # Declared repeated-cross-section fits (panel=False on any
+            # panel-attribute-bearing producer — DMLDiD and CS alike):
+            # BaconDecomposition refits a TWFE decomposition that needs a
+            # real panel. On one-observation-per-unit data it does not
+            # raise — treatment is collinear with the absorbed unit fixed
+            # effects and it returns a meaningless twfe_estimate of 0.0 —
+            # so skip with an explicit reason. Placed AFTER the precomputed
+            # passthrough above: a user-supplied precomputed Bacon result
+            # (e.g. computed against a real panel elsewhere) stays honored.
+            if getattr(r, "panel", True) is False:
+                return (
+                    "Goodman-Bacon decomposition requires panel data; this "
+                    "fit used a declared repeated cross section "
+                    "(panel=False), where the TWFE replay is degenerate "
+                    "(treatment collinear with unit fixed effects). Supply "
+                    "``precomputed={'bacon': ...}`` computed on a real "
+                    "panel if one exists."
+                )
             return None
         if check == "heterogeneity":
             # Needs multiple group or event-study effects. Use len() rather than

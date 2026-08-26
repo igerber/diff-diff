@@ -979,6 +979,9 @@ sources:
       - path: docs/methodology/REGISTRY.md
         section: "DMLDiD"
         type: methodology
+      - path: docs/index.rst
+        section: "Supported Estimators (one-line catalog row)"
+        type: user_guide
 
   diff_diff/dml_did_results.py:
     drift_risk: low
@@ -1452,7 +1455,7 @@ sources:
       - path: docs/methodology/REGISTRY.md
         section: "Cross-fitting, DR-score, and ridge infrastructure (DML)"
         type: methodology
-        note: "Shared DR panel scores: drdid_panel_inf_func (Sant'Anna-Zhao locally efficient IF, relocated verbatim from ContinuousDiD._dr_cell_inf_func, oracle-pinned in tests/test_dr_scores.py) and the Chang (2020) Case 1 orthogonal score pair (chang_panel_score / chang_panel_score_augmented) consumed by the DMLDiD estimator. The two families are NOT interchangeable (Chang normalizes by the unconditional treated share; SZ is self-normalized)."
+        note: "Shared DR panel scores: drdid_panel_inf_func (Sant'Anna-Zhao locally efficient IF, relocated verbatim from ContinuousDiD._dr_cell_inf_func, oracle-pinned in tests/test_dr_scores.py) and the Chang (2020) Case 1 orthogonal score pair (chang_panel_score / chang_panel_score_augmented) and Case 2 RCS family (chang_rcs_score / chang_rcs_lambda_slope / chang_rcs_score_augmented, lambda-corrected Theorem 2 variance) consumed by the DMLDiD estimator (panel=True/False). The two families are NOT interchangeable (Chang normalizes by the unconditional treated share; SZ is self-normalized)."
       - path: docs/methodology/papers/chang-2020-review.md
         type: methodology
         note: "The paper review's 'Relation to Existing diff-diff Estimators' section names drdid_panel_inf_func as the DRDID-parity score location; keep the cross-reference current if functions move."

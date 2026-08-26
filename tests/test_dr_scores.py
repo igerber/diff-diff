@@ -222,3 +222,101 @@ class TestChangScoreValidation:
             chang_panel_score_augmented(summand, np.array([0.0, 2.0, 0.0, 1.0]), 1.0, 0.5)
         with pytest.raises(ValueError, match="length"):
             chang_panel_score_augmented(summand[:-1], D, 1.0, 0.5)
+
+
+class TestChangRCSScoreValidation:
+    """Both sides of every stated Case 2 domain raise targeted errors."""
+
+    def _inputs(self, n=24):
+        rng = np.random.default_rng(5)
+        y = rng.normal(size=n)
+        D = (rng.uniform(size=n) < 0.5).astype(float)
+        T = (rng.uniform(size=n) < 0.5).astype(float)
+        m2_hat = rng.normal(size=n)
+        ps = np.clip(rng.uniform(size=n), 0.1, 0.9)
+        return y, D, T, m2_hat, ps
+
+    def test_ps_bounds_raise(self):
+        from diff_diff._dr_scores import chang_rcs_score
+
+        y, D, T, m2, ps = self._inputs()
+        for bad in (1.0, -0.01):
+            p = ps.copy()
+            p[0] = bad
+            with pytest.raises(ValueError, match=r"ps must lie in \[0, 1\)"):
+                chang_rcs_score(y, D, T, m2, p, 0.5, 0.5)
+
+    @pytest.mark.parametrize("lam_hat", [0.0, 1.0, -0.2, 1.5, np.nan])
+    def test_lam_hat_domain_raises(self, lam_hat):
+        from diff_diff._dr_scores import chang_rcs_score
+
+        y, D, T, m2, ps = self._inputs()
+        with pytest.raises(ValueError, match="lam_hat"):
+            chang_rcs_score(y, D, T, m2, ps, 0.5, lam_hat)
+
+    @pytest.mark.parametrize("p_hat", [0.0, 1.0, np.nan])
+    def test_p_hat_domain_raises(self, p_hat):
+        from diff_diff._dr_scores import chang_rcs_score
+
+        y, D, T, m2, ps = self._inputs()
+        with pytest.raises(ValueError, match="p_hat"):
+            chang_rcs_score(y, D, T, m2, ps, p_hat, 0.5)
+
+    def test_non_binary_T_raises(self):
+        from diff_diff._dr_scores import chang_rcs_score
+
+        y, D, T, m2, ps = self._inputs()
+        T[0] = 0.5
+        with pytest.raises(ValueError, match="T must be strictly binary"):
+            chang_rcs_score(y, D, T, m2, ps, 0.5, 0.5)
+
+    def test_non_binary_D_raises(self):
+        from diff_diff._dr_scores import chang_rcs_score
+
+        y, D, T, m2, ps = self._inputs()
+        D[0] = 2.0
+        with pytest.raises(ValueError, match="D must be strictly binary"):
+            chang_rcs_score(y, D, T, m2, ps, 0.5, 0.5)
+
+    def test_shape_empty_scalar_nonfinite_raise(self):
+        from diff_diff._dr_scores import chang_rcs_score
+
+        y, D, T, m2, ps = self._inputs()
+        with pytest.raises(ValueError, match="length"):
+            chang_rcs_score(y, D, T, m2[:-1], ps, 0.5, 0.5)
+        empty = np.empty(0)
+        with pytest.raises(ValueError, match="empty"):
+            chang_rcs_score(empty, empty, empty, empty, empty, 0.5, 0.5)
+        with pytest.raises(ValueError, match="1-dimensional"):
+            chang_rcs_score(1.0, 1.0, 1.0, 1.0, 0.5, 0.5, 0.5)
+        y_bad = y.copy()
+        y_bad[0] = np.inf
+        with pytest.raises(ValueError, match="non-finite"):
+            chang_rcs_score(y_bad, D, T, m2, ps, 0.5, 0.5)
+
+    def test_lambda_slope_shares_validator(self):
+        from diff_diff._dr_scores import chang_rcs_lambda_slope
+
+        y, D, T, m2, ps = self._inputs()
+        with pytest.raises(ValueError, match="lam_hat"):
+            chang_rcs_lambda_slope(y, D, T, m2, ps, 0.5, 1.0)
+
+    def test_augmented_validation(self):
+        from diff_diff._dr_scores import chang_rcs_score_augmented
+
+        y, D, T, m2, ps = self._inputs(n=6)
+        summand = np.zeros(6)
+        with pytest.raises(ValueError, match="lam_hat"):
+            chang_rcs_score_augmented(summand, D, T, y, m2, ps, 1.0, 0.5, 0.0)
+        with pytest.raises(ValueError, match="theta"):
+            chang_rcs_score_augmented(summand, D, T, y, m2, ps, np.nan, 0.5, 0.5)
+        with pytest.raises(ValueError, match="summand contains non-finite"):
+            bad = summand.copy()
+            bad[0] = np.nan
+            chang_rcs_score_augmented(bad, D, T, y, m2, ps, 1.0, 0.5, 0.5)
+        with pytest.raises(ValueError, match="summand has length"):
+            chang_rcs_score_augmented(summand[:-1], D, T, y, m2, ps, 1.0, 0.5, 0.5)
+        with pytest.raises(ValueError, match="T must be strictly binary"):
+            T_bad = T.copy()
+            T_bad[0] = 3.0
+            chang_rcs_score_augmented(summand, D, T_bad, y, m2, ps, 1.0, 0.5, 0.5)

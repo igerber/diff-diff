@@ -656,32 +656,41 @@ identification strategy with analytical (non-bootstrap) inference.
 DMLDiD (Chang 2020)
 ~~~~~~~~~~~~~~~~~~~
 
-**When to use**: Staggered (or 2-period) panel designs where parallel trends
-is plausible only CONDITIONAL on covariates and the covariate adjustment
+**When to use**: Staggered (or 2-period) designs — panel data or declared
+repeated cross sections (``panel=False``) — where parallel trends is
+plausible only CONDITIONAL on covariates and the covariate adjustment
 must be flexible or high-dimensional — double/debiased machine learning
 (DML2 cross-fitting + Neyman-orthogonal scores) makes the ATT first-order
 insensitive to the nuisance learners' regularization bias.
 
 **Key features**:
 
-- Per-(g, t) cell Chang (2020) Case 1 estimation on the Callaway-Sant'Anna
-  cell architecture; the 2-period design is the degenerate single-cell case
+- Per-(g, t) cell Chang (2020) estimation on the Callaway-Sant'Anna cell
+  architecture — Case 1 (outcome changes) on panel data, Case 2 (level
+  outcomes with the λ-corrected variance) on declared repeated cross
+  sections; the 2-period design is the degenerate single-cell case
 - Configurable nuisance learners: string names (``'logit'``; ``'linear'``,
   ``'ridge'``, ``'sieve'``) or any object with ``fit``/``predict``
   (``predict_proba``) — sklearn estimators plug in directly;
   :class:`~diff_diff.SieveLearner` is the exported adaptive-degree option
 - Covariates are REQUIRED (the no-covariates case routes to
   :class:`~diff_diff.CallawaySantAnna`)
-- Post-fit aggregation (``results.aggregate('event_study'/'group'/'simple'/
-  'total')``) with sup-t bands and bootstrap replay; HonestDiD /
+- Post-fit aggregation (``results.aggregate('event_study'/'group'/
+  'simple')``, plus ``'total'`` on panel fits — RCS fits fail ``total``
+  closed) with sup-t bands and bootstrap replay; HonestDiD /
   PreTrendsPower consume the event-study container
-- Analytical augmented-score inference anchored to DoubleML at machine
-  precision (committed parity spikes)
+- Analytical augmented-score inference: the panel lane is anchored to
+  DoubleML at machine precision (committed parity spikes); the RCS lane
+  has no DoubleML oracle (different score) and is validated by equation
+  fixtures + a committed characterization spike
 
 **vs Callaway-Sant'Anna**: same cell architecture and aggregation surface;
 DMLDiD replaces CS's parametric nuisances with cross-fitted ML learners —
 prefer it when the covariate relationship is nonlinear/high-dimensional,
-prefer CS otherwise (fewer moving parts, survey/cluster support).
+prefer CS otherwise (fewer moving parts, survey/cluster support). Both
+handle declared repeated cross sections via ``panel=False``, but only CS
+carries survey weights there — RCS data is typically survey data, so
+weighted RCS belongs to CS.
 
 **Example**::
 

@@ -571,8 +571,11 @@ The six scenarios above cover the most common business use cases.
   ATT is first-order insensitive to ML regularization bias. Covariates are
   REQUIRED (conditional parallel trends); aggregation is post-fit
   (``results.aggregate('event_study')`` feeds HonestDiD/PreTrendsPower);
-  set ``seed=`` for reproducible fold draws. Panel only; no
-  survey/cluster support (per-unit influence-function variance).
+  set ``seed=`` for reproducible fold draws. Panel data by default;
+  ``panel=False`` runs declared repeated cross sections (Chang Case 2,
+  λ-corrected variance). No survey/cluster support on either lane
+  (per-sampling-unit influence-function variance) — weighted RCS belongs
+  to ``CallawaySantAnna(panel=False, survey_design=...)``.
 
 For the full academic decision tree with all estimators, see :doc:`choosing_estimator`.
 

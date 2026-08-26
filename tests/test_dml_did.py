@@ -1628,3 +1628,516 @@ class TestSummaryAlphaContract:
         s = boot.summary()
         assert "Boot. p" in s and "P>|z|" not in s
         assert "PERCENTILE" in s
+
+
+# ===========================================================================
+# Repeated cross sections (Chang Case 2, panel=False)
+# ===========================================================================
+
+
+def make_rcs_dml_data(n_rows=1500, periods=(1, 2, 3), cohorts=(0, 2, 3), seed=7, effect=2.0):
+    """Declared-RCS frame: one observation per row, row-unique unit IDs."""
+    rng = np.random.default_rng(seed)
+    cohort_arr = rng.choice(
+        cohorts, size=n_rows, p=[0.5] + [0.5 / (len(cohorts) - 1)] * (len(cohorts) - 1)
+    )
+    tt = rng.choice(periods, size=n_rows)
+    x1 = rng.normal(size=n_rows)
+    x2 = rng.normal(size=n_rows)
+    y = 1.0 + 0.5 * x1 - 0.3 * x2 + 0.2 * tt + rng.normal(scale=0.5, size=n_rows)
+    post = (cohort_arr > 0) & (tt >= cohort_arr)
+    y = y + effect * post
+    return pd.DataFrame(
+        {
+            "unit": np.arange(n_rows),
+            "time": tt,
+            "first_treat": cohort_arr,
+            "y": y,
+            "x1": x1,
+            "x2": x2,
+        }
+    )
+
+
+@pytest.fixture(scope="module")
+def rcs_data():
+    return make_rcs_dml_data()
+
+
+@pytest.fixture(scope="module")
+def rcs_fitted(rcs_data):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return DMLDiD(panel=False, seed=0).fit(rcs_data, **FIT_KW, **COV)
+
+
+class TestRCSConstruction:
+    @pytest.mark.parametrize("bad", ["False", 0.0, 1, None, [True]])
+    def test_panel_strict_bool(self, bad):
+        with pytest.raises(ValueError, match="panel must be a bool"):
+            DMLDiD(panel=bad)
+
+    def test_get_set_params_roundtrip(self):
+        est = DMLDiD(panel=False, seed=3)
+        params = est.get_params()
+        assert params["panel"] is False
+        est2 = DMLDiD().set_params(**params)
+        assert est2.panel is False
+
+    def test_mutated_panel_rejected_at_fit(self, rcs_data):
+        est = DMLDiD(panel=False, seed=0)
+        est.panel = "nope"
+        with pytest.raises(ValueError, match="panel must be a bool"):
+            est.fit(rcs_data, **FIT_KW, **COV)
+
+
+class TestRCSInputValidation:
+    def test_duplicate_unit_ids_rejected(self, rcs_data):
+        df = rcs_data.copy()
+        df.loc[df.index[1], "unit"] = df.loc[df.index[0], "unit"]
+        with pytest.raises(ValueError, match="unique unit IDs"):
+            DMLDiD(panel=False).fit(df, **FIT_KW, **COV)
+
+    def test_panel_frame_under_rcs_hits_unique_id_error(self, data):
+        # The panel duplicate-(unit,time) fixture frame has repeated unit
+        # IDs — under panel=False it hits the unique-ID error, not the
+        # duplicate-(unit,time) one.
+        with pytest.raises(ValueError, match="unique unit IDs"):
+            DMLDiD(panel=False).fit(data, **FIT_KW, **COV)
+
+    def test_stationarity_warning_fires_only_under_rcs(self, rcs_data, data):
+        # The warning must state the CORRECT Assumption 2.3 interpretation:
+        # stable (D, X) wave composition with period-specific potential
+        # outcomes — NOT a stable observed-outcome distribution (trends and
+        # treatment effects are expected, not violations).
+        with pytest.warns(UserWarning, match="composition of .D, X. is stable"):
+            DMLDiD(panel=False, seed=0).fit(rcs_data, **FIT_KW, **COV)
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            DMLDiD(seed=0).fit(data, **FIT_KW, **COV)
+        assert not any("stationary cross-sectional" in str(w.message) for w in rec)
+
+    def test_covariates_still_required(self, rcs_data):
+        with pytest.raises(ValueError, match="CallawaySantAnna"):
+            DMLDiD(panel=False).fit(rcs_data, **FIT_KW, covariates=None)
+
+    def test_label_pipeline_witness_string_labels(self, rcs_data):
+        # The label pipeline is mode-independent — one witness on RCS.
+        df = rcs_data.copy()
+        df["time"] = df["time"].astype(str)
+        df["first_treat"] = df["first_treat"].astype(str)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = DMLDiD(panel=False, seed=0).fit(df, **FIT_KW, **COV)
+        assert np.isfinite(res.att)
+
+
+class TestRCSEstimation:
+    def test_finite_att_se_and_recovery(self, rcs_fitted):
+        assert np.isfinite(rcs_fitted.att) and np.isfinite(rcs_fitted.se)
+        assert abs(rcs_fitted.att - 2.0) < 0.6  # DGP effect = 2.0
+
+    def test_determinism_same_seed(self, rcs_data):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            a = DMLDiD(panel=False, seed=5).fit(rcs_data, **FIT_KW, **COV)
+            b = DMLDiD(panel=False, seed=5).fit(rcs_data, **FIT_KW, **COV)
+        assert a.att == b.att and a.se == b.se
+
+    def test_seed_none_entropy_surfaced(self, rcs_data):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            a = DMLDiD(panel=False).fit(rcs_data, **FIT_KW, **COV)
+            b = DMLDiD(panel=False).fit(rcs_data, **FIT_KW, **COV)
+        ent_a = {e["fold_seed"]["entropy"] for e in a.cross_fit_diagnostics.values()}
+        ent_b = {e["fold_seed"]["entropy"] for e in b.cross_fit_diagnostics.values()}
+        assert ent_a and ent_b and ent_a != ent_b
+
+
+class TestRCSPayloadContract:
+    def test_if_payload_matches_cell_se(self, rcs_fitted):
+        kit = rcs_fitted._aggregation_kit
+        checked = 0
+        for (g, t), entry in rcs_fitted.group_time_effects.items():
+            if entry["skip_reason"] is not None or entry.get("is_reference"):
+                continue
+            ii = kit.influence[(g, t)]
+            se = np.sqrt(np.sum(ii["treated_inf"] ** 2) + np.sum(ii["control_inf"] ** 2))
+            np.testing.assert_allclose(se, entry["se"], rtol=1e-12, atol=0)
+            checked += 1
+        assert checked > 0
+
+    def test_index_arrays_disjoint_increasing_both_periods(self, rcs_fitted, rcs_data):
+        kit = rcs_fitted._aggregation_kit
+        obs_time = rcs_data["time"].to_numpy()
+        for (g, t), ii in kit.influence.items():
+            ti, ci = ii["treated_idx"], ii["control_idx"]
+            if len(ti) == 0 and len(ci) == 0:
+                continue  # universal reference cells
+            assert np.all(np.diff(ti) > 0) and np.all(np.diff(ci) > 0)
+            assert len(np.intersect1d(ti, ci)) == 0
+            union_times = set(obs_time[np.concatenate([ti, ci])].tolist())
+            assert len(union_times) == 2  # rows from BOTH periods
+            # A base-period treated row IS in treated_idx.
+            assert len(set(obs_time[ti].tolist())) == 2
+
+    def test_aggregate_replay_leaves_payload_bit_identical(self, rcs_fitted):
+        kit = rcs_fitted._aggregation_kit
+        before = {
+            k: {kk: np.array(vv, copy=True) for kk, vv in v.items()}
+            for k, v in kit.influence.items()
+        }
+        rcs_fitted.aggregate("event_study")
+        for k, v in kit.influence.items():
+            for kk in v:
+                np.testing.assert_array_equal(v[kk], before[k][kk])
+
+
+class TestRCSDegenerateHandling:
+    def test_empty_four_group_zero_treated_control(self):
+        from tests.conftest import assert_nan_inference
+
+        # Cohort 3 has NO control rows at its base period 2 under
+        # never_treated?? — construct directly: remove every control row in
+        # period 1 so any cell with base 1 has an empty control-base group.
+        df = make_rcs_dml_data(n_rows=800, seed=9)
+        drop = (df["first_treat"] == 0) & (df["time"] == 1)
+        df = df[~drop].reset_index(drop=True)
+        df["unit"] = np.arange(len(df))
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            res = DMLDiD(panel=False, seed=0).fit(df, **FIT_KW, **COV)
+        skipped = [
+            (k, e)
+            for k, e in res.group_time_effects.items()
+            if e["skip_reason"] == "zero_treated_control"
+        ]
+        assert skipped
+        for _k, e in skipped:
+            assert_nan_inference(e)
+        assert any("could not be estimated" in str(w.message) for w in rec)
+
+    def test_singleton_stratum_cross_fit_degenerate(self):
+        from tests.conftest import assert_nan_inference
+
+        # Exactly ONE treated row of cohort 2 in the base period 1: the
+        # D x T stratum is a singleton -> assign_folds raises -> skip.
+        df = make_rcs_dml_data(n_rows=600, seed=11)
+        mask = (df["first_treat"] == 2) & (df["time"] == 1)
+        keep_one = df.index[mask][:1]
+        df = df[~mask | df.index.isin(keep_one)].reset_index(drop=True)
+        df["unit"] = np.arange(len(df))
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            res = DMLDiD(panel=False, seed=0).fit(df, **FIT_KW, **COV)
+        degen = [
+            e for e in res.group_time_effects.values() if e["skip_reason"] == "cross_fit_degenerate"
+        ]
+        assert degen
+        for e in degen:
+            assert_nan_inference(e)
+        assert any("could not be estimated" in str(w.message) for w in rec)
+
+    def test_learner_failure_maps_to_cross_fit_degenerate(self):
+        from tests.conftest import assert_nan_inference
+
+        # A covariate CONSTANT within one cell's rows: the fail-closed
+        # LinearLearner raises rank-deficiency -> DegenerateFoldError ->
+        # cross_fit_degenerate in the RCS branch.
+        df = make_rcs_dml_data(n_rows=900, seed=13)
+        cell_rows = df["time"].isin([1, 2])
+        df.loc[cell_rows, "x2"] = 1.0
+        df.loc[cell_rows, "x1"] = 1.0
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            res = DMLDiD(panel=False, seed=0).fit(df, **FIT_KW, **COV)
+        degen = [
+            e for e in res.group_time_effects.values() if e["skip_reason"] == "cross_fit_degenerate"
+        ]
+        assert degen
+        for e in degen:
+            assert_nan_inference(e)
+        assert any("could not be estimated" in str(w.message) for w in rec)
+
+    def test_injected_overflow_non_finite_score(self, rcs_data):
+        from tests.conftest import assert_nan_inference
+
+        class OverflowRegressor:
+            def fit(self, X, y):
+                return self
+
+            def predict(self, X):
+                return np.full(len(X), 1e308)
+
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            try:
+                res = DMLDiD(panel=False, outcome_learner=OverflowRegressor(), seed=0).fit(
+                    rcs_data, **FIT_KW, **COV
+                )
+            except ValueError:
+                return  # all cells degenerate: loud failure is acceptable
+        nf = [e for e in res.group_time_effects.values() if e["skip_reason"] == "non_finite_score"]
+        assert nf
+        for e in nf:
+            assert_nan_inference(e)
+        assert any("non_finite_score" in str(w.message) for w in rec)
+
+    def test_all_degenerate_raises_before_reference_cells(self):
+        df = make_rcs_dml_data(n_rows=40, seed=15)
+        # Too few rows for any cell to cross-fit with K=5 strata.
+        df = df.iloc[:16].reset_index(drop=True)
+        df["unit"] = np.arange(len(df))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match="Could not estimate any"):
+                DMLDiD(panel=False, base_period="universal", seed=0).fit(df, **FIT_KW, **COV)
+
+    def test_lam_hat_extremeness_warning(self):
+        # Lopsided periods: keep exactly two period-1 rows per cohort, so
+        # every base-1 cell has lam_hat far above 1 - pscore_trim while the
+        # four-group guard still passes.
+        df = make_rcs_dml_data(n_rows=3000, seed=17)
+        keep = np.zeros(len(df), dtype=bool)
+        at1 = df["time"] == 1
+        keep[~at1.to_numpy()] = True
+        for cohort in (0, 2, 3):
+            idx = df.index[at1 & (df["first_treat"] == cohort)][:2]
+            keep[idx] = True
+        df = df[keep].reset_index(drop=True)
+        df["unit"] = np.arange(len(df))
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            try:
+                DMLDiD(panel=False, seed=0).fit(df, **FIT_KW, **COV)
+            except ValueError:
+                pass
+        assert any("lam_hat" in str(w.message) for w in rec)
+
+
+class TestRCSAggregationBootstrap:
+    def test_event_study_group_simple(self, rcs_fitted):
+        es = rcs_fitted.aggregate("event_study")
+        assert len(es.to_dataframe()) > 1
+        gr = rcs_fitted.aggregate("group")
+        assert len(gr.to_dataframe()) >= 1
+        si = rcs_fitted.aggregate("simple")
+        np.testing.assert_allclose(si.to_dataframe()["att"].iloc[0], rcs_fitted.att)
+
+    def test_total_fails_closed(self, rcs_fitted):
+        with pytest.raises(NotImplementedError, match="repeated-cross-section"):
+            rcs_fitted.aggregate("total")
+
+    def test_bootstrap_runs_with_per_row_weights(self, rcs_data):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            boot = DMLDiD(panel=False, seed=0, n_bootstrap=49).fit(rcs_data, **FIT_KW, **COV)
+        assert np.isfinite(boot.att)
+        assert boot.bootstrap_results is not None
+        es = boot.aggregate("event_study")
+        df_es = es.to_dataframe()
+        assert any("cband" in c for c in df_es.columns) or es.cband_crit_value is not None
+
+
+class TestRCSAggWeights:
+    def test_weights_are_fixed_cohort_row_masses(self, rcs_fitted, rcs_data):
+        # aggregate('simple') equals the hand-computed agg_weight-weighted
+        # combination of post-treatment finite cells (WIF-consistency
+        # decision: fixed cohort row masses, never per-cell counts).
+        cohort_mass = rcs_data.groupby("first_treat").size().to_dict()
+        num = 0.0
+        den = 0.0
+        for (g, t), e in rcs_fitted.group_time_effects.items():
+            if e["skip_reason"] is not None or e.get("is_reference"):
+                continue
+            if t < g - rcs_fitted.anticipation:
+                continue
+            if not np.isfinite(e["effect"]):
+                continue
+            w = e["agg_weight"]
+            assert w == cohort_mass[g]
+            num += w * e["effect"]
+            den += w
+        np.testing.assert_allclose(rcs_fitted.att, num / den, rtol=1e-12)
+
+    def test_large_int64_cohort_labels_aggregate_and_replay(self):
+        # >2**53 int64 cohort labels: the float-key hazard that motivated
+        # leaving agg_cohort_masses unset stays off the shipped path —
+        # aggregation and bootstrap replay run end-to-end.
+        big = 2**60
+        df = make_rcs_dml_data(n_rows=1200, seed=19)
+        tmap = {1: big + 1, 2: big + 2, 3: big + 3}
+        df["time"] = df["time"].map(tmap)
+        df["first_treat"] = df["first_treat"].map({0: 0, 2: big + 2, 3: big + 3})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = DMLDiD(panel=False, seed=0, n_bootstrap=29).fit(df, **FIT_KW, **COV)
+        assert np.isfinite(res.att)
+        assert sorted(res.groups) == [big + 2, big + 3]
+        es = res.aggregate("event_study")
+        ets = list(es.to_dataframe()["event_time"])
+        assert len(ets) == len(set(ets)) and len(ets) > 1
+
+
+class TestRCSResultsSurface:
+    def test_panel_flag_and_summary(self, rcs_fitted, fitted):
+        assert rcs_fitted.panel is False
+        s = rcs_fitted.summary()
+        assert "repeated cross sections" in s
+        assert "obs:" in s
+        assert "repeated cross sections" not in fitted.summary()
+
+    def test_to_dict_json_roundtrip(self, rcs_fitted):
+        d = rcs_fitted.to_dict()
+        blob = json.dumps(d)
+        assert d["panel"] is False
+        parsed = json.loads(blob)
+        any_cell = next(iter(parsed["cross_fit_diagnostics"].values()))
+        assert "lam_hat" in any_cell and "g2_lambda" in any_cell
+
+    def test_business_report_rcs_semantics(self, rcs_fitted, rcs_data):
+        from diff_diff import BusinessReport
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            rep = BusinessReport(
+                rcs_fitted,
+                data=rcs_data,
+                outcome="y",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            ).full_report()
+        assert "observations" in rep
+        assert "stationary" in rep.lower()
+        # Correct Assumption 2.3 interpretation (stable wave composition,
+        # not a stable observed-Y distribution).
+        assert "composition of (D, X) is stable" in rep
+        assert "period-specific potential" in rep
+
+    def test_target_parameter_design_aware(self, rcs_fitted, fitted):
+        from diff_diff._reporting_helpers import describe_target_parameter
+
+        rcs_block = describe_target_parameter(rcs_fitted)
+        assert "cohort-mass-weighted" in rcs_block["name"]
+        panel_block = describe_target_parameter(fitted)
+        assert "valid-treated-count-weighted" in panel_block["name"]
+
+    def test_diagnostic_report_bacon_skipped_on_rcs(self, rcs_fitted, rcs_data):
+        from diff_diff import DiagnosticReport
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            dr = DiagnosticReport(
+                rcs_fitted,
+                data=rcs_data,
+                outcome="y",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+            rep = dr.run_all()
+        assert "bacon" in rep.skipped_checks
+        assert "requires panel data" in rep.skipped_checks["bacon"]
+        # Panel fits keep running the decomposition (no skip).
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            panel_df = make_staggered_dml_data()
+            panel_res = DMLDiD(seed=0).fit(panel_df, **FIT_KW, **COV)
+            panel_rep = DiagnosticReport(
+                panel_res,
+                data=panel_df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            ).run_all()
+        assert "bacon" not in panel_rep.skipped_checks
+
+    def test_practitioner_snippet_carries_panel_false(self, rcs_fitted, fitted):
+        from diff_diff import practitioner_next_steps
+
+        steps = practitioner_next_steps(rcs_fitted)
+        text = str(steps)
+        assert "panel=False" in text
+        assert "panel=False" not in str(practitioner_next_steps(fitted))
+
+    def test_plot_smoke(self, rcs_fitted):
+        pytest.importorskip("matplotlib")
+        import matplotlib
+
+        matplotlib.use("Agg")
+        from diff_diff import plot_event_study, plot_group_effects
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            plot_group_effects(rcs_fitted, show=False)
+            plot_event_study(rcs_fitted.aggregate("event_study"), show=False)
+
+
+class TestRCSSemantics:
+    def test_not_yet_treated_differs(self, rcs_data):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            nt = DMLDiD(panel=False, seed=0).fit(rcs_data, **FIT_KW, **COV)
+            nyt = DMLDiD(panel=False, seed=0, control_group="not_yet_treated").fit(
+                rcs_data, **FIT_KW, **COV
+            )
+        assert nt.att != nyt.att
+
+    def test_anticipation_shifts_base(self, rcs_data):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            a0 = DMLDiD(panel=False, seed=0).fit(rcs_data, **FIT_KW, **COV)
+            a1 = DMLDiD(panel=False, seed=0, anticipation=1).fit(rcs_data, **FIT_KW, **COV)
+        assert set(a0.group_time_effects) != set(a1.group_time_effects)
+
+    def test_universal_base_reference_cells(self, rcs_data):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = DMLDiD(panel=False, seed=0, base_period="universal").fit(
+                rcs_data, **FIT_KW, **COV
+            )
+        refs = [e for e in res.group_time_effects.values() if e.get("is_reference")]
+        assert refs
+        for e in refs:
+            assert e["effect"] == 0.0 and "agg_weight" in e
+        assert res.reference_event_times is not None
+
+
+class TestRCSCompleteCases:
+    def test_missing_outcome_row_drops_from_cell_only(self):
+        df = make_rcs_dml_data(n_rows=1200, seed=21)
+        victim = df.index[(df["first_treat"] == 2) & (df["time"] == 2)][0]
+        df.loc[victim, "y"] = np.nan
+        with pytest.warns(UserWarning, match="observation.s. were excluded"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("always")
+                res = DMLDiD(panel=False, seed=0).fit(df, **FIT_KW, **COV)
+        assert np.isfinite(res.att)
+
+    def test_non_finite_covariate_row_excluded(self):
+        df = make_rcs_dml_data(n_rows=1200, seed=23)
+        victim = df.index[(df["first_treat"] == 0) & (df["time"] == 3)][0]
+        df.loc[victim, "x1"] = np.inf
+        with pytest.warns(UserWarning, match="observation.s. were excluded"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("always")
+                res = DMLDiD(panel=False, seed=0).fit(df, **FIT_KW, **COV)
+        assert np.isfinite(res.att)
+
+    def test_inf_outcome_handled(self):
+        df = make_rcs_dml_data(n_rows=1200, seed=25)
+        victim = df.index[(df["first_treat"] == 3) & (df["time"] == 3)][0]
+        df.loc[victim, "y"] = -np.inf
+        with pytest.warns(UserWarning, match="observation.s. were excluded"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("always")
+                res = DMLDiD(panel=False, seed=0).fit(df, **FIT_KW, **COV)
+        assert np.isfinite(res.att)
+
+    def test_no_warning_on_clean_input(self, rcs_data):
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            DMLDiD(panel=False, seed=0).fit(rcs_data, **FIT_KW, **COV)
+        assert not any("were excluded" in str(w.message) for w in rec)

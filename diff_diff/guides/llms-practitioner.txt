@@ -227,7 +227,10 @@ Is treatment adoption staggered (multiple cohorts, different timing)?
 |   |                             learners + orthogonal scores per (g,t)
 |   |                             cell; covariates REQUIRED, aggregation
 |   |                             post-fit, set seed= for reproducible
-|   |                             fold draws
+|   |                             fold draws; panel=False = declared
+|   |                             repeated cross sections (Case 2,
+|   |                             lambda-corrected variance; no survey
+|   |                             weights)
 |   \-- WooldridgeDiD (ETWFE)  -- nonlinear outcomes (logit/Poisson) or saturated OLS
 |
 |-- NO, simple 2x2 design:

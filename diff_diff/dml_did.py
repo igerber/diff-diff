@@ -1,21 +1,27 @@
-"""DMLDiD: Double/Debiased Machine Learning DiD (Chang 2020), staggered panel.
+"""DMLDiD: Double/Debiased Machine Learning DiD (Chang 2020), staggered.
 
-Implements Chang (2020, The Econometrics Journal 23(2), 177-191) Case 1
-(panel) as a staggered ATT(g,t) estimator: each Callaway-Sant'Anna style
-(g, t) cell is a 2-period Chang problem — cross-fitted nuisances
-(propensity ``g_hat`` and control outcome-change regression ``m_hat``),
-the Neyman-orthogonal score ``psi_1`` (``chang_panel_score``), and the
-augmented-score plug-in variance (``chang_panel_score_augmented``;
-``SE = sqrt(mean(psi_bar**2)/n)``). The classic 2-period design is the
-degenerate single-cell case. Covariates are REQUIRED (Chang's estimator
-exists for the high-dimensional-X setting; use CallawaySantAnna without
-covariates).
+Implements Chang (2020, The Econometrics Journal 23(2), 177-191) as a
+staggered ATT(g,t) estimator: each Callaway-Sant'Anna style (g, t) cell is
+a 2-period Chang problem. ``panel=True`` (default) runs Case 1 (repeated
+outcomes) — cross-fitted nuisances (propensity ``g_hat`` and control
+outcome-change regression ``m_hat``), the Neyman-orthogonal score
+``psi_1`` (``chang_panel_score``), and the augmented-score plug-in
+variance (``chang_panel_score_augmented``;
+``SE = sqrt(mean(psi_bar**2)/n)``). ``panel=False`` runs Case 2 (declared
+repeated cross sections) — level outcomes, the single control-only
+``(T - lam_hat) * Y`` outcome nuisance (``chang_rcs_score``), and the
+λ-corrected Theorem 2 variance (``chang_rcs_score_augmented``). The
+classic 2-period design is the degenerate single-cell case. Covariates
+are REQUIRED (Chang's estimator exists for the high-dimensional-X
+setting; use CallawaySantAnna without covariates).
 
 ``DMLDiD`` writes the CallawaySantAnna per-(g,t) ``influence_func_info``
-payload (per-unit entries ``psi_bar_i / n_cell``, so ``sqrt(sum(if**2))``
-IS the cell SE) and inherits the CS aggregation + multiplier-bootstrap
-mixins: event study with sup-t bands, group/simple/total aggregation, and
-post-fit ``results.aggregate()`` with bootstrap replay.
+payload (per-sampling-unit entries ``psi_bar_i / n_cell`` — per unit on
+panel fits, per observation on RCS fits — so ``sqrt(sum(if**2))`` IS the
+cell SE) and inherits the CS aggregation + multiplier-bootstrap mixins:
+event study with sup-t bands, group/simple aggregation (plus total on
+panel fits only; RCS fits fail ``total`` closed), and post-fit
+``results.aggregate()`` with bootstrap replay.
 
 See docs/methodology/REGISTRY.md "DMLDiD" for equations, implementation
 Notes (global p-hat, D-stratified folds, pooled fold weighting, trimming,
@@ -32,7 +38,13 @@ import pandas as pd
 
 from diff_diff._base import BaseEstimator
 from diff_diff._crossfit import DegenerateFoldError, assign_folds, cross_fit_predict
-from diff_diff._dr_scores import chang_panel_score, chang_panel_score_augmented
+from diff_diff._dr_scores import (
+    chang_panel_score,
+    chang_panel_score_augmented,
+    chang_rcs_lambda_slope,
+    chang_rcs_score,
+    chang_rcs_score_augmented,
+)
 from diff_diff._learners import (
     _CLASSIFIER_NAMES,
     _REGRESSOR_NAMES,
@@ -221,14 +233,23 @@ def _validate_seed(seed: Any) -> Optional[int]:
 
 
 class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, BaseEstimator):
-    """Chang (2020) DML DiD: staggered panel ATT(g,t) with cross-fitted ML nuisances.
+    """Chang (2020) DML DiD: staggered ATT(g,t) with cross-fitted ML nuisances.
 
-    Per (g, t) cell: D-stratified K-fold cross-fitting of the propensity
+    ``panel=True`` (default) estimates Case 1 on panel data; ``panel=False``
+    estimates Case 2 on declared repeated cross sections (level outcomes,
+    λ-corrected variance).
+
+    Per (g, t) cell: K-fold cross-fitting of the propensity
     (``propensity_learner``, out-of-fold ``predict_proba``) and the
-    control-only outcome-change regression (``outcome_learner``, trained on
-    the cell's controls, Chang's ``I_kz^c``), then the pooled orthogonal
-    score mean and the augmented-score plug-in SE. Aggregation (event study,
-    group, simple, total) is POST-FIT via ``results.aggregate()``.
+    control-only outcome regression (``outcome_learner``, trained on the
+    cell's controls, Chang's ``I_kz^c``), then the pooled orthogonal score
+    mean and the augmented-score plug-in SE. On panel fits the folds are
+    D-stratified and the outcome nuisance is the outcome-change regression
+    ``E[dY | X, D=0]``; on RCS fits the folds are D x T stratified and the
+    nuisance is the level regression ``E[(T - lam)Y | X, D=0]`` with the
+    lambda-corrected variance. Aggregation (event study, group, simple;
+    plus total on panel fits — RCS fits fail ``total`` closed) is POST-FIT
+    via ``results.aggregate()``.
 
     Parameters
     ----------
@@ -271,6 +292,20 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         Propensity clip bound: fitted propensities are clipped to
         ``[pscore_trim, 1 - pscore_trim]`` after the extremeness warning
         (clip, never drop; Chang's paper gives no trimming rule).
+    panel : bool, default True
+        ``True`` estimates Chang's Case 1 (repeated outcomes) on panel data
+        (one row per unit-period, cell score on outcome CHANGES). ``False``
+        estimates Case 2 (repeated cross sections) on DECLARED
+        cross-sectional data — one observation per row with a row-unique
+        ``unit`` ID, cell score on outcome LEVELS with the post-period
+        sampling share λ̂ and the λ-corrected Theorem 2 variance. Case 2
+        additionally assumes stationary cross-sectional sampling (Chang
+        Assumption 2.3: each wave samples the SAME target population —
+        the composition of ``(D, X)`` is stable across waves, while
+        outcomes are the period-specific potential outcomes, so trends
+        and treatment effects are expected, not violations), which is not
+        data-checkable — ``fit()`` warns. ``aggregate('total')`` is unavailable on RCS fits (fails
+        closed, the library-wide RC convention).
     """
 
     _BOOTSTRAP_LABEL: ClassVar[str] = "DMLDiD"
@@ -289,6 +324,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         base_period: str = "varying",
         cband: bool = True,
         pscore_trim: float = 0.01,
+        panel: bool = True,
     ) -> None:
         # Raw assignment, then ONE shared validator (also re-run at the top
         # of fit() as the direct-mutation defense) validates and normalizes
@@ -305,6 +341,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         self.base_period = base_period
         self.cband = cband
         self.pscore_trim = pscore_trim
+        self.panel = panel
         self._revalidate_config()
 
         # Fitted-state lifecycle (house convention; not inherited under this MRO).
@@ -363,6 +400,13 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             )
         self.cband = bool(self.cband)
         self.pscore_trim = _validate_pscore_trim(self.pscore_trim)
+        if not isinstance(self.panel, (bool, np.bool_)):
+            raise ValueError(
+                f"panel must be a bool, got {self.panel!r} (type "
+                f"{type(self.panel).__name__}) — truthy strings like 'False' "
+                "would silently select the panel lane"
+            )
+        self.panel = bool(self.panel)
 
     # ------------------------------------------------------------------
     # Input validation
@@ -534,6 +578,38 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 )
             df[col] = converted.astype(np.float64)
 
+        # Structural design guards. Panel: one row per (unit, time) and a
+        # time-invariant cohort label. Declared RCS: one row per unit — with
+        # row-unique IDs the two panel guards below are subsumed (duplicate
+        # (unit, time) is impossible and per-row first_treat is trivially
+        # unit-constant).
+        if not self.panel:
+            if df[unit].duplicated().any():
+                raise ValueError(
+                    "panel=False requires unique unit IDs (one observation per "
+                    "unit). Found duplicate unit IDs. If your data is a panel, "
+                    "use panel=True."
+                )
+            self._check_control_group_availability(df, unit, first_treat)
+            # Emit only AFTER the declared-RCS structure has fully
+            # validated — a failing call raises without the misleading
+            # suggestion that estimation began.
+            warnings.warn(
+                "panel=False uses Chang (2020) Case 2 repeated-cross-section "
+                "scores, which assume stationary cross-sectional sampling "
+                "(Assumption 2.3): each wave samples the SAME target "
+                "population — conditional on the period, rows are i.i.d. "
+                "draws from the distribution of (Y(0), D, X) (pre) or "
+                "(Y(1), D, X) (post), so the composition of (D, X) is stable "
+                "across waves while outcomes are the period-specific "
+                "potential outcomes (trends and treatment effects are "
+                "expected, not violations). This assumption is not "
+                "data-checkable.",
+                UserWarning,
+                stacklevel=3,
+            )
+            return df, covariates
+
         # Duplicate (unit, time) rows.
         dup_mask = df.duplicated(subset=[unit, time], keep=False)
         if dup_mask.any():
@@ -552,7 +628,18 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 "must be constant per unit"
             )
 
-        # Control-group availability (CS parity, incl. the NESTING).
+        self._check_control_group_availability(df, unit, first_treat)
+
+        return df, covariates
+
+    def _check_control_group_availability(
+        self, df: pd.DataFrame, unit: str, first_treat: str
+    ) -> None:
+        """Control-group availability (CS parity, incl. the NESTING).
+
+        Shared by both design lanes: on declared RCS the groupby-first
+        degenerates correctly to per-row under the unique-row-ID guard.
+        """
         unit_cohorts_series = df.groupby(unit)[first_treat].first()
         n_never = int((unit_cohorts_series == 0).sum())
         n_cohorts = int(unit_cohorts_series[unit_cohorts_series > 0].nunique())
@@ -567,8 +654,6 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     "not_yet_treated control group requires at least 2 treatment "
                     "cohorts when there are no never-treated units."
                 )
-
-        return df, covariates
 
     def _normalize_label_columns(
         self,
@@ -839,6 +924,63 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             "n_units": n_units,
         }
 
+    def _precompute_rcs(
+        self,
+        df: pd.DataFrame,
+        outcome: str,
+        unit: str,
+        time: str,
+        first_treat: str,
+        covariates: List[str],
+    ) -> Dict[str, Any]:
+        """Declared-RCS bookkeeping: rows ARE the sampling units.
+
+        Mirrors the minimal CS RCS precompute contract: ``all_units`` =
+        observation positions, ``unit_to_idx`` = None, per-ROW
+        ``unit_cohorts``, ``canonical_size`` = n_obs — the aggregation and
+        bootstrap mixins branch off exactly these (per-row multiplier
+        weights; per-obs cohort bincount pg basis; ``aggregate('total')``
+        fails closed on ``is_panel: False``).
+
+        ``agg_cohort_masses`` is deliberately NOT set: under unique row IDs
+        the aggregation cache's bincount fallback yields exactly the fixed
+        per-cohort row masses (never-treated included, denominator = n_obs),
+        so the WIF pg basis is already the fixed-cohort-mass one and the
+        per-cell ``agg_weight`` (from ``rcs_cohort_masses``, int-keyed by the
+        canonical labels) aligns the point-estimate weights with it.
+        Supplying the key would be a numeric no-op that routes lookups
+        through float()-keyed dict access, where distinct int64 cohorts
+        above 2**53 (admissible through 2**62 by the label pipeline)
+        collide. ``obs_per_unit`` and survey keys likewise omitted (true RCS
+        is one row per unit — a non-None obs_per_unit would divide the WIF).
+        """
+        n_obs = len(df)
+        unit_cohorts = df[first_treat].to_numpy()
+        treatment_groups = sorted(g for g in df[first_treat].unique() if g > 0)
+        time_periods = sorted(df[time].unique())
+        period_to_col = {t: i for i, t in enumerate(time_periods)}
+        return {
+            "all_units": np.arange(n_obs),
+            "unit_to_idx": None,
+            "unit_cohorts": unit_cohorts,
+            "obs_time": df[time].to_numpy(),
+            "obs_outcome": df[outcome].to_numpy(),
+            "obs_covariates": df[covariates].to_numpy(dtype=np.float64),
+            "cohort_masks": {g: unit_cohorts == g for g in treatment_groups},
+            # +inf cohorts were recoded to 0 upstream, so == 0 is complete.
+            "never_treated_mask": unit_cohorts == 0,
+            "period_to_col": period_to_col,
+            "observed_sorted": sorted(period_to_col),
+            "time_periods": time_periods,
+            "treatment_groups": treatment_groups,
+            "is_panel": False,
+            "canonical_size": n_obs,
+            "n_units": n_obs,
+            "rcs_cohort_masses": {
+                g: int(np.count_nonzero(unit_cohorts == g)) for g in treatment_groups
+            },
+        }
+
     def _sanitize_learner_error(self, exc: BaseException) -> str:
         """Persisted error text for cross_fit_diagnostics / to_dict exports.
 
@@ -1082,6 +1224,273 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         }
         return gt_entry, if_entry, diagnostics
 
+    def _compute_dml_rcs_gt(
+        self,
+        precomputed: Dict[str, Any],
+        g: Any,
+        t: Any,
+        g_idx: int,
+        t_idx: int,
+        root_entropy: int,
+        dropped_units_out: Optional[set] = None,
+    ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """One RCS (g, t) cell — Chang Case 2. Same return contract as the
+        panel cell: (gt_entry, if_entry|None, diagnostics|None).
+
+        Pooled two-period cell on LEVEL outcomes: four disjoint row groups
+        (treated/control x {t, base}), one cross-fit propensity on the pooled
+        rows, and the SINGLE Case 2 outcome nuisance — a control-only (both
+        periods, Chang's I_kz^c) regression of (T - lam_hat) * y on X.
+        """
+        observed_sorted = precomputed["observed_sorted"]
+        period_to_col = precomputed["period_to_col"]
+        base = _select_base_period_impl(self.base_period, self.anticipation, g, t, observed_sorted)
+        if base is None or base not in period_to_col or t not in period_to_col:
+            return _nan_gt_entry(skip_reason="missing_period"), None, None
+
+        unit_cohorts = precomputed["unit_cohorts"]
+        treated_mask = precomputed["cohort_masks"][g]
+        if self.control_group == "never_treated":
+            control_mask = precomputed["never_treated_mask"]
+        else:  # not_yet_treated (CS semantics: untreated at max(t, base) + k)
+            nyt_threshold = max(t, base) + self.anticipation
+            control_mask = precomputed["never_treated_mask"] | (
+                (unit_cohorts > nyt_threshold) & (unit_cohorts != g)
+            )
+
+        obs_time = precomputed["obs_time"]
+        y_obs = precomputed["obs_outcome"]
+        X_obs = precomputed["obs_covariates"]
+        at_t = obs_time == t
+        at_base = obs_time == base
+        # Per-ROW complete cases (RCS covariates live on the row itself; no
+        # base-period X exists).
+        valid = np.isfinite(y_obs) & np.all(np.isfinite(X_obs), axis=1)
+
+        treated_t = treated_mask & at_t & valid
+        treated_b = treated_mask & at_base & valid
+        control_t = control_mask & at_t & valid
+        control_b = control_mask & at_base & valid
+        if dropped_units_out is not None:
+            dropped_units_out.update(
+                np.flatnonzero((treated_mask | control_mask) & (at_t | at_base) & ~valid).tolist()
+            )
+        n_treated = int(np.sum(treated_t | treated_b))
+        n_control = int(np.sum(control_t | control_b))
+        # FOUR-group guard (CS RCS precedent): the Case 2 estimand needs
+        # treated AND control rows in BOTH periods; skip vocabulary reuses
+        # zero_treated_control for any empty group.
+        if (
+            min(
+                int(treated_t.sum()),
+                int(treated_b.sum()),
+                int(control_t.sum()),
+                int(control_b.sum()),
+            )
+            == 0
+        ):
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="zero_treated_control",
+                ),
+                None,
+                None,
+            )
+
+        cell_mask = treated_t | treated_b | control_t | control_b
+        cell_idx = np.flatnonzero(cell_mask)
+        n_cell = cell_idx.shape[0]
+        D_cell = treated_mask[cell_idx].astype(np.float64)
+        T_cell = at_t[cell_idx].astype(np.float64)
+        y_cell = y_obs[cell_idx]
+        X_cell = X_obs[cell_idx]
+        # Global-within-cell shares (REGISTRY convention: mirrors the Case 1
+        # global p_hat and DoubleML's d.mean()/t.mean()); strictly interior
+        # BY the four-group guard.
+        p_hat = float(D_cell.mean())
+        lam_hat = float(T_cell.mean())
+        if min(p_hat, 1.0 - p_hat) < self.pscore_trim:
+            warnings.warn(
+                f"DMLDiD cell (g={g}, t={t}): empirical treated share "
+                f"p_hat={p_hat:.4f} over the pooled two-period rows "
+                f"({n_treated} treated / {n_control} control) is extreme "
+                f"(min(p, 1-p) < pscore_trim={self.pscore_trim}); the Chang "
+                "score and variance scale with powers of 1/p_hat, so this "
+                "cell's estimate may be unstable.",
+                UserWarning,
+                stacklevel=3,
+            )
+        if min(lam_hat, 1.0 - lam_hat) < self.pscore_trim:
+            warnings.warn(
+                f"DMLDiD cell (g={g}, t={t}): post-period sampling share "
+                f"lam_hat={lam_hat:.4f} is extreme (min(lam, 1-lam) < "
+                f"pscore_trim={self.pscore_trim}); Chang's Case 2 bounds "
+                "carry powers of 1/(lam*(1-lam)) up to cubes, so this cell's "
+                "estimate may be unstable.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+        # Per-cell fold draw seeded exactly like the panel lane; strata are
+        # the FOUR D x T classes (DoubleML's d + 2t encoding — REGISTRY
+        # deviation Note): every training complement then carries control
+        # rows in both periods by construction, Chang's fold-composition
+        # requirement for fitting l_2 on I_kz^c.
+        seed_seq = np.random.SeedSequence(entropy=root_entropy, spawn_key=(g_idx, t_idx))
+        rng = np.random.default_rng(seed_seq)
+        diagnostics: Dict[str, Any] = {
+            "propensity": None,
+            "outcome": None,
+            "p_hat": float(p_hat),
+            "lam_hat": float(lam_hat),
+            "n_clipped_ps": None,
+            "fold_seed": {"entropy": int(root_entropy), "spawn_key": [int(g_idx), int(t_idx)]},
+        }
+
+        try:
+            folds = assign_folds(n_cell, self.n_folds, rng=rng, stratify=D_cell + 2.0 * T_cell)
+        except ValueError as exc:
+            # Cell smaller than n_folds, or a singleton D x T stratum (e.g.
+            # ONE treated row in the base period cannot be cross-fitted).
+            diagnostics["skip_reason"] = "cross_fit_degenerate"
+            diagnostics["error"] = str(exc)
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="cross_fit_degenerate",
+                ),
+                None,
+                diagnostics,
+            )
+
+        context = f"DMLDiD (g={g}, t={t})"
+        try:
+            with np.errstate(over="ignore", invalid="ignore"):
+                ps_res = cross_fit_predict(
+                    make_learner(self.propensity_learner, kind="classifier"),
+                    X_cell,
+                    D_cell,
+                    folds,
+                    predict_method="predict_proba",
+                    context_label=f"{context} propensity",
+                )
+                r_cell = (T_cell - lam_hat) * y_cell
+                or_res = cross_fit_predict(
+                    make_learner(self.outcome_learner, kind="regressor"),
+                    X_cell,
+                    r_cell,
+                    folds,
+                    predict_method="predict",
+                    fit_mask=(D_cell == 0.0),
+                    context_label=f"{context} outcome",
+                )
+        except DegenerateFoldError as exc:
+            diagnostics["skip_reason"] = "cross_fit_degenerate"
+            diagnostics["error"] = self._sanitize_learner_error(exc)
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="cross_fit_degenerate",
+                ),
+                None,
+                diagnostics,
+            )
+
+        ps_raw = ps_res.oof_predictions
+        _check_propensity_diagnostics(ps_raw, self.pscore_trim)
+        ps = np.clip(ps_raw, self.pscore_trim, 1.0 - self.pscore_trim)
+        n_clipped = int(np.sum((ps_raw < self.pscore_trim) | (ps_raw > 1.0 - self.pscore_trim)))
+        m2_hat = or_res.oof_predictions
+
+        diagnostics["propensity"] = {
+            "fold_losses": [float(v) for v in ps_res.fold_losses],
+            "n_fit_per_fold": [int(v) for v in ps_res.n_fit_per_fold],
+        }
+        diagnostics["outcome"] = {
+            "fold_losses": [float(v) for v in or_res.fold_losses],
+            "n_fit_per_fold": [int(v) for v in or_res.n_fit_per_fold],
+        }
+        diagnostics["n_clipped_ps"] = n_clipped
+
+        try:
+            with np.errstate(over="ignore", invalid="ignore"):
+                summand = chang_rcs_score(y_cell, D_cell, T_cell, m2_hat, ps, p_hat, lam_hat)
+                theta = float(np.mean(summand))
+                psi_bar = chang_rcs_score_augmented(
+                    summand, D_cell, T_cell, y_cell, m2_hat, ps, theta, p_hat, lam_hat
+                )
+                g2_lambda = chang_rcs_lambda_slope(
+                    y_cell, D_cell, T_cell, m2_hat, ps, p_hat, lam_hat
+                )
+                se = float(np.sqrt(np.mean(psi_bar**2) / n_cell))
+        except ValueError as exc:
+            diagnostics["skip_reason"] = "non_finite_score"
+            diagnostics["error"] = self._sanitize_learner_error(exc)
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="non_finite_score",
+                ),
+                None,
+                diagnostics,
+            )
+        if not (
+            np.isfinite(theta)
+            and np.isfinite(se)
+            and np.isfinite(g2_lambda)
+            and np.all(np.isfinite(psi_bar))
+        ):
+            diagnostics["skip_reason"] = "non_finite_score"
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="non_finite_score",
+                ),
+                None,
+                diagnostics,
+            )
+        diagnostics["g2_lambda"] = float(g2_lambda)
+
+        t_stat, p_value, conf_int = safe_inference(theta, se, alpha=self.alpha)
+        gt_entry = {
+            "effect": theta,
+            "se": se,
+            "t_stat": t_stat,
+            "p_value": p_value,
+            "conf_int": conf_int,
+            # DISPLAY counts: pooled two-period valid rows. Aggregation
+            # weights come from agg_weight below (fixed cohort row mass, the
+            # CS-RCS convention) — never from these counts.
+            "n_treated": n_treated,
+            "n_control": n_control,
+            "skip_reason": None,
+            "agg_weight": precomputed["rcs_cohort_masses"][g],
+        }
+
+        # Payload: per-OBS entries psi_bar_i / n_cell over BOTH periods'
+        # rows, so sqrt(sum(if^2)) IS the cell SE. cell_idx is a flatnonzero
+        # of one mask => strictly increasing and duplicate-free, and the
+        # D-partition keeps treated_idx/control_idx disjoint (the fancy-+=
+        # scatter contract in the aggregation layer).
+        n_units = precomputed["n_units"]
+        inf_full = np.zeros(n_units)
+        inf_full[cell_idx] = psi_bar / n_cell
+        treated_idx = cell_idx[D_cell == 1.0].astype(np.int64)
+        control_idx = cell_idx[D_cell == 0.0].astype(np.int64)
+        if_entry = {
+            "treated_idx": treated_idx,
+            "control_idx": control_idx,
+            "treated_inf": inf_full[treated_idx],
+            "control_inf": inf_full[control_idx],
+        }
+        return gt_entry, if_entry, diagnostics
+
     # ------------------------------------------------------------------
     # Fit
     # ------------------------------------------------------------------
@@ -1099,7 +1508,12 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         df, covariates = self._validate_and_prepare(
             data, outcome, unit, time, first_treat, covariates
         )
-        precomputed = self._precompute(df, outcome, unit, time, first_treat, covariates)
+        if self.panel:
+            precomputed = self._precompute(df, outcome, unit, time, first_treat, covariates)
+            cell_fn = self._compute_dml_gt
+        else:
+            precomputed = self._precompute_rcs(df, outcome, unit, time, first_treat, covariates)
+            cell_fn = self._compute_dml_rcs_gt
         treatment_groups = precomputed["treatment_groups"]
         time_periods = precomputed["time_periods"]
         observed_sorted = precomputed["observed_sorted"]
@@ -1119,7 +1533,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 self.base_period, self.anticipation, g, time_periods, observed_sorted
             ):
                 t_idx = time_periods.index(t)
-                gt_entry, if_entry, diagnostics = self._compute_dml_gt(
+                gt_entry, if_entry, diagnostics = cell_fn(
                     precomputed, g, t, g_idx, t_idx, root_entropy, dropped_units
                 )
                 group_time_effects[(g, t)] = gt_entry
@@ -1168,17 +1582,29 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         # the sole user-visible trace). Accumulated per cell during the
         # estimation loop — no second O(n_units x n_cells) sweep.
         if dropped_units:
-            warnings.warn(
-                f"{len(dropped_units)} unit(s) were excluded from at least one "
-                "(group, time) cell they would otherwise join, due to a "
-                "missing or NON-FINITE outcome, a non-finite covariate at the "
-                "cell's base period, or an outcome difference overflowing to "
-                "non-finite. DMLDiD estimates each cell on its complete cases "
-                "(point weights use per-cell valid counts; aggregation cohort "
-                "masses use full cohorts — see REGISTRY.md).",
-                UserWarning,
-                stacklevel=2,
-            )
+            if self.panel:
+                warnings.warn(
+                    f"{len(dropped_units)} unit(s) were excluded from at least one "
+                    "(group, time) cell they would otherwise join, due to a "
+                    "missing or NON-FINITE outcome, a non-finite covariate at the "
+                    "cell's base period, or an outcome difference overflowing to "
+                    "non-finite. DMLDiD estimates each cell on its complete cases "
+                    "(point weights use per-cell valid counts; aggregation cohort "
+                    "masses use full cohorts — see REGISTRY.md).",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            else:
+                warnings.warn(
+                    f"{len(dropped_units)} observation(s) were excluded from a "
+                    "(group, time) cell they would otherwise join, due to a "
+                    "missing or NON-FINITE outcome or a non-finite covariate "
+                    "on the row. DMLDiD estimates each cell on its complete "
+                    "cases (aggregation weights use fixed cohort row masses — "
+                    "see REGISTRY.md).",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
         # Universal base period: per-cohort zero reference cells (full
         # nine-key CS dict; the kit hard-reads effect AND n_treated, the
@@ -1194,7 +1620,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 cohort_mass = float(np.count_nonzero(unit_cohorts == g))
                 if cohort_mass <= 0:
                     continue
-                group_time_effects[(g, base)] = {
+                ref_entry: Dict[str, Any] = {
                     "effect": 0.0,
                     "se": np.nan,
                     "t_stat": np.nan,
@@ -1205,6 +1631,13 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     "skip_reason": None,
                     "is_reference": True,
                 }
+                if not self.panel:
+                    # Keep the RCS pg basis uniform: reference cells carry the
+                    # same fixed cohort row mass as estimated cells.
+                    ref_entry["agg_weight"] = precomputed["rcs_cohort_masses"].get(
+                        g, int(round(cohort_mass))
+                    )
+                group_time_effects[(g, base)] = ref_entry
                 influence_func_info[(g, base)] = {
                     "treated_idx": np.array([], dtype=np.int64),
                     "control_idx": np.array([], dtype=np.int64),
@@ -1313,6 +1746,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             n_bootstrap=self.n_bootstrap,
             bootstrap_weights=self.bootstrap_weights,
             cband=self.cband,
+            panel=self.panel,
         )
         results._aggregation_kit = _build_aggregation_kit(
             cast(Any, self),  # duck-typed host contract (alpha/anticipation/cband)

@@ -39,7 +39,7 @@ produced wrong figures three separate times while this inventory was drafted).
 | `two_stage_default` | — | None | **legitimate** | L3: Gardner two-stage variance, not the shared CR1 sandwich |
 | `callaway_santanna_default` | — | None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None | **legitimate** | L3: influence-function variance anchored to Stata csdid |
 | `dml_did` | — | None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None | **legitimate** | L3: Chang (2020) Thm 2 augmented-score plug-in variance (per-unit influence function; normal-theory safe_inference throughout, no cluster surface) |
-
+| `dml_did_rcs` | — | None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None | **legitimate** | L3: Chang (2020) Thm 2 lambda-corrected augmented-score plug-in variance (Case 2; per-observation influence function; normal-theory safe_inference throughout, no cluster surface) |
 cr1_k is the sorted multiset of K_reference counts reaching the shared
 clustered CR1 denominator — visible columns + the signed cluster_k_adjustment
 (linalg._compute_robust_vcov_numpy with
@@ -132,7 +132,10 @@ output).
 - **L3 — CallawaySantAnna / DMLDiD / TwoStageDiD / ImputationDiD (default)**:
   different variance theory (influence functions / Chang (2020) augmented-score
   plug-in / two-stage / BJS imputation), never the shared CR1 sandwich. CS is
-  anchored to Stata csdid outright; DMLDiD to DoubleML.
+  anchored to Stata csdid outright; DMLDiD's panel lane to DoubleML at
+  machine precision, while its repeated-cross-section lane (panel=False) is
+  characterization-anchored only (DoubleML's RCS score differs and omits the
+  Chang lambda-correction; equation-level fixtures validate the variance).
   **ImputationDiD is conditional**: its pretrends=True lead regression DOES
   run the shared clustered CR1 — surfaced fit-time via the deprecated
   aggregate="event_study" or post-fit via results.aggregate('event_study')

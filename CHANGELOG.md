@@ -20,6 +20,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   HonestDiD / PreTrendsPower / DiagnosticReport / BusinessReport / MMM totals
   integration. See the REGISTRY "DMLDiD" section for equations and documented
   implementation choices.
+- **`DMLDiD(panel=False)` — Chang (2020) Case 2 repeated cross sections**:
+  the same staggered per-(g,t)-cell architecture on DECLARED cross-sectional
+  data (one observation per row, row-unique unit IDs): pooled two-period
+  cells on level outcomes, the single control-only `(T - λ̂)·Y` outcome
+  nuisance (`chang_rcs_score`), D×T-stratified folds, and the λ-corrected
+  Theorem 2 variance (`chang_rcs_score_augmented` with the explicit
+  `Ĝ₂λ(T − λ̂)` term). Per-observation influence functions; aggregation
+  weights are fixed cohort row masses (WIF-consistent SEs);
+  `aggregate('total')` fails closed on RCS fits; no survey weights (weighted
+  RCS belongs to `CallawaySantAnna(panel=False, survey_design=...)`).
+  Validated by equation-level fixtures, oracle closed forms,
+  derivative-identity checks, double robustness in both directions, and a
+  committed `DoubleMLDIDCSBinary` characterization spike (no parity oracle
+  exists — DoubleML's RCS score differs and omits the λ term).
 
 ## [3.10.0] - 2026-08-22
 

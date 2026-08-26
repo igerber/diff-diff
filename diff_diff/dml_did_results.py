@@ -1,18 +1,20 @@
-"""Results container for the DMLDiD estimator (Chang 2020, staggered panel).
+"""Results container for the DMLDiD estimator (Chang 2020, staggered).
 
 ``DMLDiDResults`` subclasses :class:`~diff_diff.staggered_results.CallawaySantAnnaResults`
 and inherits its kit-based post-fit ``aggregate()`` machinery (event study
-with sup-t bands, group/simple/total aggregation, bootstrap replay). The
-subclass adds the cross-fitting provenance the parent has no concept of:
-learner specs, fold count, per-cell cross-fit diagnostics, and the
-inference-provenance fields (``seed``/``n_bootstrap``/``bootstrap_weights``/
-``cband``) that move estimates or inference.
+with sup-t bands, group/simple aggregation, bootstrap replay; ``total`` on
+panel fits — repeated-cross-section fits fail it closed). The subclass adds
+the cross-fitting provenance the parent has no concept of: learner specs,
+fold count, per-cell cross-fit diagnostics, and the inference-provenance
+fields (``seed``/``n_bootstrap``/``bootstrap_weights``/``cband``) that move
+estimates or inference.
 
 ``vcov_type`` stays at the inherited ``"hc1"``: in this library ``hc1`` with
-``cluster=None`` IS the per-unit influence-function variance by definition
-(REGISTRY.md "IF-based variance estimators..." — the default), and DMLDiD's
-augmented-score SE ``sqrt(mean(psi_bar**2)/n)`` is exactly a per-unit IF
-variance, so ``"hc1"`` is the family-consistent, truthful value.
+``cluster=None`` IS the per-sampling-unit influence-function variance by
+definition (REGISTRY.md "IF-based variance estimators..." — the default),
+and DMLDiD's augmented-score SE ``sqrt(mean(psi_bar**2)/n)`` is exactly
+that — per UNIT on panel fits, per OBSERVATION on repeated-cross-section
+fits (rows are the sampling units there).
 """
 
 from dataclasses import dataclass, field
@@ -53,11 +55,12 @@ def _serialize_cross_fit_diagnostics(
 
 @dataclass
 class DMLDiDResults(CallawaySantAnnaResults):
-    """Results from DMLDiD (Chang 2020 DML DiD, staggered panel ATT(g,t)).
+    """Results from DMLDiD (Chang 2020 DML DiD, staggered ATT(g,t)).
 
     Inherits the full Callaway-Sant'Anna results surface — ``att``/``se``
     aliases, ``to_dataframe``, post-fit ``aggregate()`` (simple / event_study
-    / group / total) with bootstrap replay — and adds the DML provenance
+    / group, plus total on panel fits; repeated-cross-section fits fail
+    ``total`` closed) with bootstrap replay — and adds the DML provenance
     fields below. Every inherited CS-only field that DMLDiD never populates
     (``epv_*``, ``pscore_fallback``, ``allow_unbalanced_panel``,
     ``used_rc_on_unbalanced_panel``, ``cluster_name``, ``n_clusters``,
@@ -66,8 +69,10 @@ class DMLDiDResults(CallawaySantAnnaResults):
     ``event_study_df``) stays at its inherited default and is inert.
     ``group_effects`` stays ``None`` permanently — ``aggregate("group")``
     returns a separate container and never mutates this object. ``panel``
-    is NOT inert (report rendering reads it for the sample-count label);
-    its inherited ``True`` is correct for the panel-only design.
+    is NOT inert: it carries the fit's DECLARED design — ``True`` for the
+    Case 1 panel lane, ``False`` for the Case 2 repeated-cross-section lane
+    (``DMLDiD(panel=False)``) — and report rendering plus the aggregation
+    ``n_kind`` read it for "units" vs "observations" semantics.
 
     Attributes
     ----------
@@ -169,7 +174,12 @@ class DMLDiDResults(CallawaySantAnnaResults):
                 for entry in self.cross_fit_diagnostics.values()
                 if entry.get("skip_reason") is not None
             )
-        header = [
+        header = []
+        if self.panel is False:
+            # Conditional line only (panel output stays byte-stable): the
+            # declared design changes score, variance, and count semantics.
+            header.append(f"{'Design:':<30} {'repeated cross sections':>10}")
+        header += [
             f"{'Propensity learner:':<30} {self.propensity_learner!r:>10}",
             f"{'Outcome learner:':<30} {self.outcome_learner!r:>10}",
             f"{'Cross-fitting folds (K):':<30} {self.n_folds:>10}",

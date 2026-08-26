@@ -540,7 +540,9 @@ def _handle_dml_did(results: Any):
             ),
             code=(
                 "# Refit with alternative nuisance learners:\n"
-                "alt = DMLDiD(outcome_learner='sieve', seed=0).fit(\n"
+                "alt = DMLDiD(outcome_learner='sieve', seed=0"
+                + (", panel=False" if getattr(results, "panel", True) is False else "")
+                + ").fit(\n"
                 "    df, outcome=..., unit=..., time=..., first_treat=...,\n"
                 "    covariates=[...])\n"
                 "print(alt.att, results.att)  # should be close"

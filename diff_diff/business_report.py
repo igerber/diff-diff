@@ -1575,6 +1575,26 @@ def _describe_assumption(estimator_name: str, results: Any = None) -> Dict[str, 
             ),
         }
     if estimator_name == "DMLDiDResults":
+        is_rcs = getattr(results, "panel", True) is False
+        if is_rcs:
+            tail = (
+                "cross-fitting (DML2) removing own-observation overfitting. "
+                "The repeated-cross-section design (Chang Case 2) "
+                "additionally assumes STATIONARY cross-sectional sampling "
+                "(Assumption 2.3: each wave samples the same target "
+                "population, so the composition of (D, X) is stable across "
+                "waves while outcomes are the period-specific potential "
+                "outcomes — not data-checkable), and valid "
+                "normal inference requires the nuisance learners to satisfy "
+                "Chang (2020)'s Case 2 rate conditions (Assumption 3.2(h))."
+            )
+        else:
+            tail = (
+                "cross-fitting (DML2) removing own-observation overfitting; "
+                "valid normal inference additionally requires the nuisance "
+                "learners to satisfy Chang (2020)'s rate conditions "
+                "(Assumption 3.1(f))."
+            )
         return {
             "parallel_trends_variant": "conditional_on_covariates",
             "no_anticipation": True,
@@ -1585,11 +1605,7 @@ def _describe_assumption(estimator_name: str, results: Any = None) -> Dict[str, 
                 "supplied covariates, per treatment cohort and period "
                 "(group-time ATT), plus no anticipation. The "
                 "Neyman-orthogonal score makes the estimate first-order "
-                "insensitive to machine-learning regularization bias, with "
-                "cross-fitting (DML2) removing own-observation overfitting; "
-                "valid normal inference additionally requires the nuisance "
-                "learners to satisfy Chang (2020)'s rate conditions "
-                "(Assumption 3.1(f))."
+                "insensitive to machine-learning regularization bias, with " + tail
             ),
         }
     if estimator_name in {

@@ -150,16 +150,28 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
         }
 
     if name == "DMLDiDResults":
-        return {
-            "name": "overall ATT (valid-treated-count-weighted average of ATT(g,t))",
-            "definition": (
-                "A per-cell valid-treated-count-weighted average of "
-                "group-time ATTs ``ATT(g, t)`` across post-anticipation "
-                "cells (``t >= g - anticipation``; ``t >= g`` when "
-                "anticipation=0) — cell weights are the per-cell "
+        if getattr(results, "panel", True) is False:
+            weight_name = "cohort-mass-weighted"
+            weight_clause = (
+                "cell weights are FIXED cohort row masses (the CS-RCS "
+                "convention, WIF-consistent; the per-cell complete-case "
+                "``n_treated`` is display-only; REGISTRY DMLDiD RCS Note)"
+            )
+        else:
+            weight_name = "valid-treated-count-weighted"
+            weight_clause = (
+                "cell weights are the per-cell "
                 "complete-case ``n_treated`` (full cohort masses enter only "
                 "the aggregation weight influence function; REGISTRY DMLDiD "
-                "complete-case Note) — "
+                "complete-case Note)"
+            )
+        return {
+            "name": f"overall ATT ({weight_name} average of ATT(g,t))",
+            "definition": (
+                f"A per-cell {weight_name} average of "
+                "group-time ATTs ``ATT(g, t)`` across post-anticipation "
+                "cells (``t >= g - anticipation``; ``t >= g`` when "
+                "anticipation=0) — " + weight_clause + " — "
                 "where each cell is a conditional-on-covariates ATT "
                 "estimated by Chang (2020)'s cross-fitted Neyman-orthogonal "
                 "score (DML2). ``overall_att`` is the simple-aggregation "

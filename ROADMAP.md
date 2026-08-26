@@ -105,16 +105,6 @@ Unified framework encompassing synthetic control and regression approaches via l
 
 **Reference**: Athey et al. (2021), *Journal of the American Statistical Association*.
 
-### Double / Debiased ML for DiD — repeated cross sections
-
-The panel lane shipped as `DMLDiD` (Chang 2020 Case 1, staggered ATT(g,t)).
-Remaining scope: Chang's Case 2 repeated-cross-section score (Equation 3.2)
-with the lambda-corrected variance (a proposed `chang_rcs_score` helper
-alongside the existing panel scores in `diff_diff/_dr_scores.py`), and its
-staggered RCS lane.
-
-**Reference**: Chang, N.-C. (2020), *The Econometrics Journal* 23(2), 177-191.
-
 ### Alternative Inference Methods
 
 - **Randomization inference**: exact p-values for small samples.

@@ -278,6 +278,18 @@ a library setting.
   weighted estimate; users can alternatively pass
   `precomputed={'bacon': ...}` with a survey-aware result.
 
+- **Note:** Declared repeated-cross-section fits skip Bacon. Any
+  panel-attribute-bearing producer fitted with `panel=False` (DMLDiD
+  and CallawaySantAnna alike) skips the Goodman-Bacon check with an
+  explicit reason instead of replaying: `BaconDecomposition` on
+  one-observation-per-unit data is degenerate (treatment collinear
+  with the absorbed unit fixed effects — it returns a meaningless
+  `twfe_estimate` of 0.0 rather than raising). The gate sits AFTER the
+  precomputed-Bacon passthrough, so `precomputed={'bacon': ...}`
+  computed on a real panel stays honored. BusinessReport's DMLDiD
+  identification narrative is likewise design-aware: RCS fits cite the
+  stationary-sampling Assumption 2.3 and the Case 2 rate package.
+
   The simple 2x2 parallel-trends helper (`utils.check_parallel_trends`)
   has no survey-aware variant. On a survey-backed `DiDResults` the
   check is skipped **unconditionally**, regardless of whether

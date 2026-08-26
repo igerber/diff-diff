@@ -1397,7 +1397,7 @@ Caveats and contracts:
 
 ### DMLDiD
 
-Chang (2020, The Econometrics Journal 23(2)) double/debiased machine learning DiD, extended to staggered adoption: each Callaway-Sant'Anna style (g, t) cell is a 2-period Chang Case 1 problem with cross-fitted ML nuisances (DML2, per-cell D-stratified K-fold) and the Neyman-orthogonal score, so the ATT is first-order insensitive to nuisance regularization bias. Covariates are REQUIRED (conditional parallel trends per Abadie 2005; for unconditional staggered DiD use CallawaySantAnna). Per-cell SE = sqrt(mean(psi_bar^2)/n) from Chang's Theorem-2 augmented score; the analytical anchor is DoubleML (committed machine-precision parity spikes, doubleml==0.11.4).
+Chang (2020, The Econometrics Journal 23(2)) double/debiased machine learning DiD, extended to staggered adoption: each Callaway-Sant'Anna style (g, t) cell is a 2-period Chang problem with cross-fitted ML nuisances (DML2) and a Neyman-orthogonal score, so the ATT is first-order insensitive to nuisance regularization bias. panel=True (default) runs Case 1 on panel data (outcome-change score, D-stratified folds); panel=False runs Case 2 on DECLARED repeated cross sections (level outcomes, one row per unit, D-x-period-stratified folds, the single control-only (T-lambda)*Y outcome nuisance, and the lambda-corrected Theorem 2 variance). Covariates are REQUIRED (conditional parallel trends per Abadie 2005; for unconditional staggered DiD use CallawaySantAnna). Per-cell SE = sqrt(mean(psi_bar^2)/n) from Chang's Theorem-2 augmented score; the panel anchor is DoubleML (committed machine-precision parity spikes, doubleml==0.11.4), while the RCS lane has NO parity oracle (DoubleMLDIDCSBinary uses a different score and omits the lambda term — a committed characterization spike documents the divergence).
 
 ```python
 DMLDiD(
@@ -1413,15 +1413,16 @@ DMLDiD(
     base_period="varying",        # or "universal" (CS semantics)
     cband=True,                   # sup-t bands on the event-study replay
     pscore_trim=0.01,             # clip fitted propensities (never drop)
+    panel=True,                   # False = declared repeated cross sections (Chang Case 2)
 ).fit(data, outcome, unit, time, first_treat, covariates) -> DMLDiDResults
 ```
 
 Key contracts:
-- Aggregation is POST-FIT ONLY: `results.aggregate('event_study'/'group'/'simple'/'total')` (the fit-time `event_study_effects` surface is never populated by design; `plot_event_study(results.aggregate('event_study'))`). Bootstrapped fits replay the fit-time bootstrap on the recompute levels.
+- Aggregation is POST-FIT ONLY: `results.aggregate('event_study'/'group'/'simple')`, plus `'total'` on panel fits — RCS fits fail `aggregate('total')` closed (the fit-time `event_study_effects` surface is never populated by design; `plot_event_study(results.aggregate('event_study'))`). Bootstrapped fits replay the fit-time bootstrap on the recompute levels.
 - HonestDiD / PreTrendsPower consume the aggregate('event_study') container (admitted source); the native `compute_honest_did(results)` route raises with the container instruction. Varying-base containers warn; use base_period='universal' for clean Rambachan-Roth interpretation.
 - `SieveLearner(k_max=None, criterion="bic")` is the exported configurable learner (adaptive polynomial degree by IC); any sklearn-style estimator object also plugs in (seed stochastic learners yourself — the library seed pins folds, not learner internals).
 - Per-cell complete cases (one consolidated unbalanced-input warning); degenerate cells (fewer members than folds, singleton treated stratum, fail-closed learner) become NaN cells with machine-readable skip_reason and a consolidated warning; surviving cells still aggregate.
-- Panel only; no survey_design=/cluster= (Chang assumes i.i.d.; per-unit IF variance IS unit-level clustering). Reproducibility: set seed (fold draws move point estimates).
+- No survey_design=/cluster= on EITHER design (Chang assumes i.i.d.; the per-sampling-unit IF variance IS unit-level clustering — per unit on panel, per observation on RCS). panel=False requires row-unique unit IDs and assumes stationary cross-sectional sampling (Assumption 2.3, warned, not data-checkable) — note RCS data is typically survey data (BRFSS/ACS/CPS) and DMLDiD carries NO survey weights; use CallawaySantAnna(panel=False, survey_design=...) for weighted RCS. Reproducibility: set seed (fold draws move point estimates).
 
 ### TROP
 

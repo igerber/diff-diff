@@ -164,7 +164,7 @@ backend fail closed with a refit message. On `ImputationDiD`, `TwoStageDiD` and
 `ContinuousDiD`, the recompute levels still raise `NotImplementedError` when the fit used
 `n_bootstrap > 0` — keep the fit-time call there for now and track their open `TODO.md`
 rows.
-`aggregate("simple")` — and, on its five adopters, `aggregate("total")` (3.10; DMLDiD joined in 3.11) — does relay,
+`aggregate("simple")` — and, on its five adopters, `aggregate("total")` (3.10; DMLDiD joined in 3.11 — panel fits only, RCS fits fail `total` closed) — does relay,
 and `StackedDiD`, `ChaisemartinDHaultfoeuille` and `HeterogeneousAdoptionDiD` are unaffected —
 their `aggregate()` is a pure view over stored fields.
 ```

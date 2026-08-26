@@ -349,7 +349,7 @@ supported / out of scope; `warn` supported but with documented caveats;
 | `StackedDiD` | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ |
 | `WooldridgeDiD` (ETWFE) | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ |
 | `LWDiD` | ✓ | ✓ | ✗ | ✗ | ✓ | warn | partial | ✗ | ✓ |
-| `DMLDiD` | ✓ | ✓ | ✗ | ✗ | partial | ✓ (REQUIRED) | ✗ | ✗ | ✗ (per-unit IF variance IS unit clustering; no coarser cluster=) |
+| `DMLDiD` | ✓ | ✓ | ✗ | ✗ | partial | ✓ (REQUIRED) | ✗ | ✗ | ✗ (per-sampling-unit IF variance IS unit clustering; no coarser cluster=; panel=False = declared RCS) |
 | `EfficientDiD` | ✓ | ✓ | ✗ | ✗ | partial | ✓ | ✗ | ✗ | ✓ |
 | `SyntheticDiD` | ✓ | ✗ | ✗ | ✗ | ✓ | ✓ | ✓ | ✗ | partial |
 | `TROP` | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | partial |
@@ -763,6 +763,14 @@ Explicit RCS support in this library:
 
 - `CallawaySantAnna(panel=False)` - repeated-cross-section mode per
   REGISTRY.md §CallawaySantAnna; use this variant on RCS data.
+- `DMLDiD(panel=False)` - Chang (2020) Case 2 declared-RCS mode
+  (row-unique unit IDs; level-outcome orthogonal scores with the
+  lambda-corrected variance; REGISTRY.md §DMLDiD). CAVEATS: it carries
+  NO survey weights even though RCS data is typically survey data
+  (weighted RCS -> CallawaySantAnna(panel=False, survey_design=...)),
+  and NO cluster= - the generic cluster-on-the-unit-proxy instruction
+  below CANNOT be followed on DMLDiD (its per-observation IF variance
+  is the only inference surface); aggregate('total') fails closed.
 - `TripleDifference` - DDD cross-sectional use cases are documented
   in `docs/choosing_estimator.rst`; the two-period DDD estimator does
   not require within-unit tracking when the third comparison axis

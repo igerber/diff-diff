@@ -859,8 +859,11 @@ double-weight).
   `doubleml.DoubleMLDIDBinary` via
   `benchmarks/doubleml/chang_staggered_parity.py` (same pin);
   `DoubleMLDIDMulti` orchestrates the same per-cell estimator over staggered
-  timing. Not oracles: `DoubleMLDIDCS` (different RCS score),
-  `DoubleMLDIDMulti` for Chang Cases 2-3.
+  timing. Not oracles: `DoubleMLDIDCS`/`DoubleMLDIDCSBinary` (different RCS
+  score, no λ-correction — the committed characterization spike
+  `benchmarks/doubleml/chang_rcs_characterization.py` documents the
+  divergence for the shipped Case 2 lane), `DoubleMLDIDMulti` for Chang
+  Case 3.
 - R: none for Chang's estimator; `DRDID::drdid_panel` for the SZ score.
 
 ---
@@ -2791,17 +2794,34 @@ control-variable dimension `d` may exceed the sample size `N`, by constructing
 **Neyman-orthogonal scores** (each = Abadie's score + a mean-zero adjustment
 term) and estimating with the **Chernozhukov et al. (2018) DML cross-fitting
 algorithm (DML2 variant)**. The shipped `DMLDiD` estimator implements **Case 1
-(repeated outcomes / panel)** as a STAGGERED ATT(g,t) estimator: each
-Callaway-Sant'Anna style `(g, t)` cell is a 2-period Chang problem on the
-cell's `ΔY = Y_t − Y_base`, treated indicator `D = 1{cohort = g}`, and
-base-period covariates; the classic 2-period design is the degenerate
-single-cell case. Case 2 (repeated cross sections; Equation 3.2 score +
-λ-corrected variance) is a planned follow-up; Case 3 (multilevel treatment
-intensity) is deferred (`DEFERRED.md`).
+(repeated outcomes / panel; `panel=True`, the default)** and **Case 2
+(repeated cross sections; `panel=False`)** as a STAGGERED ATT(g,t) estimator:
+each Callaway-Sant'Anna style `(g, t)` cell is a 2-period Chang problem. On
+the panel lane the cell score runs on `ΔY = Y_t − Y_base`, treated indicator
+`D = 1{cohort = g}`, and base-period covariates. On the declared-RCS lane
+(one observation per row, row-unique unit IDs) the cell pools the two
+periods' rows and runs Equation 3.2 on LEVEL outcomes with the post-period
+sampling share `λ̂` and the λ-corrected Theorem 2 variance; the classic
+2-period design is the degenerate single-cell case of either lane. Case 3
+(multilevel treatment intensity) is deferred (`DEFERRED.md`).
+
+**Case 2 equations (as implemented).** Per cell with pooled two-period rows,
+post indicator `T = 1{time = t}`, `p̂ = mean(D)` and `λ̂ = mean(T)` (global
+within cell)::
+
+    summand_i = (D_i − ĝ(X_i)) / (p̂ λ̂ (1−λ̂)(1−ĝ(X_i))) · ((T_i − λ̂) Y_i − ℓ̂₂(X_i))
+    θ̂ = mean(summand)                                   (Equation 3.2: ψ₂ = summand − θ)
+    ψ̄_i = summand_i − D_i θ̂ / p̂ + Ĝ₂λ (T_i − λ̂)        (Theorem 2, BOTH corrections)
+    SE = sqrt(mean(ψ̄²) / n_cell)
+
+where `ℓ̂₂` is the SINGLE cross-fitted control-only regression of
+`(T − λ̂)·Y` on X (Chang's `I_kz^c`) and `Ĝ₂λ` is the sample mean of the
+closed-form `∂λψ₂` (`chang_rcs_lambda_slope`).
 
 - **Note:** Staggered extension framing. Chang (2020) is a 2-period,
   common-timing paper (treatment occurs only at the second period).
-  `DMLDiD` applies the Case 1 score PER (g, t) CELL under the
+  `DMLDiD` applies the corresponding Case 1 (panel) or Case 2 (RCS) score
+  PER (g, t) CELL under the
   Callaway-Sant'Anna cell architecture (positional base periods, R `did`
   parity; never-treated / not-yet-treated control semantics; per-cell
   complete cases), which is a library extension of the paper's design, not a
@@ -2812,8 +2832,9 @@ intensity) is deferred (`DEFERRED.md`).
 
 *Assumption checks / warnings:*
 - **Conditional parallel trends (Assumption 2.1, Abadie 2005):** `E[Y^0(1) - Y^0(0) | X, D = 1] = E[Y^0(1) - Y^0(0) | X, D = 0]` per cell. Untestable; the estimator adds **no identification assumptions beyond Abadie (2005)** (Section 2, p. 8).
-- **Overlap (Assumption 2.2):** `P(D = 1) > 0` and `P(D = 1 | X) < 1` a.s. Regularity Assumptions 3.1(a) strengthen this to **strict overlap**: `Pr(κ ≤ g_0(X) ≤ 1 - κ) = 1` for some fixed `κ > 0`, imposed on the **estimated** propensity too (pp. 28, 37). The theory does not cover fitted propensities approaching 0 or 1 — see the trimming Note below.
-- **First-stage rate condition (Assumptions 3.1(f) + Theorem 1):** BOTH conditions hold jointly — the bundle envelope `‖η̂_k - η_0‖_{P,2} ≤ ε_N` with `ε_N = o(N^{-1/4})` (each nuisance component must meet the rate; a fast learner cannot compensate a slow one), AND the product bound `‖ĝ - g_0‖²_{P,2} + ‖ĝ - g_0‖_{P,2}·‖ℓ̂ - ℓ_0‖_{P,2} ≤ ε_N²`. Not detectable at runtime; documented.
+- **Overlap (Assumption 2.2):** `P(D = 1) > 0` and `P(D = 1 | X) < 1` a.s. Regularity Assumptions 3.1(a) (Case 1) / 3.2(a) (Case 2) strengthen this to **strict overlap**: `Pr(κ ≤ g_0(X) ≤ 1 - κ) = 1` for some fixed `κ > 0`, imposed on the **estimated** propensity too (pp. 28, 37). The theory does not cover fitted propensities approaching 0 or 1 — see the trimming Note below.
+- **Stationary RCS sampling (Assumption 2.3, `panel=False` only):** conditional on `T = 0` (resp. `T = 1`), rows are i.i.d. draws from the distribution of `(Y(0), D, X)` (resp. `(Y(1), D, X)`) — each wave samples the same target population, so the composition of `(D, X)` is stable across waves while outcomes are the period-specific potential outcomes (trends and treatment effects are expected, not violations). Not data-checkable; surfaced as a fit-time `UserWarning` after the declared-RCS structure validates.
+- **First-stage rate condition (Assumptions 3.1(f) (Case 1) / 3.2(h) (Case 2) + Theorem 1):** BOTH conditions hold jointly — the bundle envelope `‖η̂_k - η_0‖_{P,2} ≤ ε_N` with `ε_N = o(N^{-1/4})` (each nuisance component must meet the rate; a fast learner cannot compensate a slow one), AND the product bound `‖ĝ - g_0‖²_{P,2} + ‖ĝ - g_0‖_{P,2}·‖ℓ̂ - ℓ_0‖_{P,2} ≤ ε_N²`. Not detectable at runtime; documented.
 
 *Estimator equation (Equation 3.1, per cell, as implemented — `chang_panel_score`):*
 
@@ -2941,6 +2962,51 @@ the finite-dimensional `p_0` is handled by the variance correction below.
   COARSER-than-unit clustering, a surface DMLDiD ships without: the paper
   assumes i.i.d. sampling, and the survey/cluster follow-up is the tracked
   `DEFERRED.md` row.
+- **Note:** Global λ̂ convention (Case 2) — `λ̂` is the FULL-SAMPLE-within-cell
+  post-period sampling share `mean(T)` over the pooled two-period rows,
+  mirroring the global-p̂ convention above and DoubleML's `t.mean()` (the
+  paper's per-fold `λ̂_k` printing carries the same contradiction as `p̂_k` —
+  see Gaps in the paper review).
+- **Note:** Ĝ₂λ estimator (Case 2) — the paper prints NO explicit estimator
+  for the λ-slope `G_2λ0`; `chang_rcs_lambda_slope` uses the natural sample
+  analogue — the mean of the closed-form `∂λψ₂` (recovered from the Theorem 2
+  proof, p. 55 display) at the plug-in nuisances. Theorem 2 requires only
+  consistency of this estimator, no rate.
+- **Note:** λ-correction is MANDATORY in the Case 2 variance — the review
+  warns verbatim that "omitting the λ-correction term is a plausible
+  implementation bug the proof structure warns against";
+  `TestLambdaCorrectionRegression` pins at the estimator level that the
+  reported SE differs from the λ-term-omitted recomputation.
+- **Note:** D×T fold stratification (Case 2) — RCS cells stratify the fold
+  draw on the FOUR D×period classes (`D + 2T`, DoubleML's `d + 2t` encoding),
+  a deviation from Chang's plain random partition that structurally
+  guarantees control rows in BOTH periods in every training complement
+  (Chang's `I_kz^c` fold-composition requirement). Consequence: any singleton
+  D×T stratum (e.g. ONE treated row in the base period) dies as
+  `cross_fit_degenerate`.
+- **Note:** Case 2 four-group guard — a cell needs treated AND control rows
+  in BOTH periods; any empty group skips as `zero_treated_control` (the
+  vocabulary is reused, not widened). A new λ̂-extremeness warning mirrors
+  the empirical-p̂ one (Case 2 bounds carry `1/(λ(1−λ))` up to cubes).
+- **Note:** RCS aggregation weights (Case 2) — event-study/group/simple
+  aggregation weights each estimated cell by its FIXED cohort row mass
+  (per-cell `agg_weight`, the CS-RCS convention), so the aggregation WIF
+  variance is the influence function of the reported aggregate (the pg basis
+  is the per-row cohort bincount, identical under unique row IDs);
+  `n_treated`/`n_control` on RCS cells are pooled two-period valid-row
+  DISPLAY counts only, never weights. `agg_cohort_masses` is deliberately
+  NOT set in the precompute: it would be a numeric no-op that routes lookups
+  through `float()`-keyed dict access, where distinct int64 cohorts above
+  2^53 (admissible through 2^62 by the label pipeline) collide.
+- **Note:** `aggregate('total')` fails closed on RCS fits (the library-wide
+  repeated-cross-section convention; `is_panel: False` kit bookkeeping);
+  panel fits keep the total route. Per-observation IF entries make
+  `vcov_type="hc1"` the per-SAMPLING-UNIT variance on RCS (rows are the
+  sampling units).
+- **Note:** Case-2-only moment conditions — Assumption 3.2's level-outcome
+  bounds (`E[Y²|X] ≤ C`, `|E[YU]| ≤ C`) belong to the repeated-cross-section
+  case ONLY and are NOT imposed on the panel path; stationary sampling
+  (Assumption 2.3) is warned at fit (not data-checkable).
 
 *Edge cases:*
 - Propensity near 0/1: clipped per the trimming Note (error bounds blow up as
@@ -2966,9 +3032,17 @@ the finite-dimensional `p_0` is handled by the variance correction below.
   every cell's ATT and SE at <1e-15 under shared folds and pinned config).
   `DoubleMLDIDMulti` orchestrates the same per-cell estimator over staggered
   timing (and remains NOT an oracle for Chang Cases 2-3).
+- Case 2 (RCS): NO parity oracle exists — `DoubleMLDIDCSBinary` implements
+  the Sant'Anna-Zhao four-regression RCS score and its variance omits
+  Chang's λ-correction. The committed CHARACTERIZATION spike
+  `benchmarks/doubleml/chang_rcs_characterization.py` (same doubleml==0.11.4
+  pin) documents the per-cell divergence under shared folds, isolates the
+  λ-term's SE effect, and anchors the shipped estimator by SELF-parity
+  (public `DMLDiD(panel=False)` == the hand-rolled Eq 3.2 / Thm 2 pipeline
+  at 0.0 observed diff under identical folds and sklearn learners).
 - R / Stata: none — the paper ships no companion package.
 
-**Requirements checklist (shipped Case 1 / staggered lane):**
+**Requirements checklist (shipped Case 1 panel + Case 2 RCS staggered lanes):**
 - [x] Neyman-orthogonal Case 1 score (3.1) implemented exactly (Abadie score + mean-zero adjustment; `chang_panel_score`)
 - [x] DML2 cross-fitting: per-cell K-fold partition, nuisances fit on fold complements, never on the evaluation fold
 - [x] Outcome nuisance `ℓ̂` fit on the UNTREATED subsample of the training complement only (`I_kz^c` → `fit_mask=(D==0)`)
@@ -2978,7 +3052,7 @@ the finite-dimensional `p_0` is handled by the variance correction below.
 - [x] Per-cell degenerate guards (zero treated/control, cell < K, singleton stratum, empty untreated complement) — closed skip vocabulary, consolidated warning
 - [x] Normal-approximation inference via `safe_inference()`
 - [x] Validation: 2-period DoubleMLDID + staggered per-cell DoubleMLDIDBinary parity spikes (version-pinned, committed, golden literals consumed in-tests) + oracle-nuisance closed-form equivalence + degenerate-cell hand-pipeline equivalence (rtol 1e-14 — BLAS reduces differently-laid-out inputs in platform-dependent order, so bit identity does not hold cross-platform) + Monte Carlo coverage sanity
-- [ ] Case 2 (repeated cross sections): Equation 3.2 score + λ-corrected variance — planned follow-up (ROADMAP)
+- [x] Case 2 (repeated cross sections): Equation 3.2 score + λ-corrected Theorem 2 variance — SHIPPED as `DMLDiD(panel=False)` (`chang_rcs_score` / `chang_rcs_lambda_slope` / `chang_rcs_score_augmented`; equation-level fixtures, oracle closed forms, derivative-identity checks, DR both directions, characterization spike, MC coverage). The paper's own §4 RCS simulation DGPs are NOT replicated (tracked TODO row — needs the paper PDF pp. 17-21); the shipped recovery tests use a library-authored RCS design.
 - [ ] Case 3 (multilevel treatment): deferred (`DEFERRED.md`; implementation-required overlap conditions per the paper review's Case 3 caution)
 
 ---

@@ -791,7 +791,8 @@ def test_guide_api_strings_resolve_against_public_api():
 
     # Repeated-cross-section (§4.10) must not claim broad
     # applicability. The documented RCS-capable estimators are
-    # CallawaySantAnna(panel=False), TripleDifference, and
+    # CallawaySantAnna(panel=False), DMLDiD(panel=False),
+    # TripleDifference, and
     # StaggeredTripleDifference; EfficientDiD and
     # HeterogeneousAdoptionDiD explicitly reject RCS per REGISTRY.md.
     assert "most estimators remain applicable" not in text, (

@@ -454,6 +454,31 @@ ROWS = [
             "throughout, no cluster surface)"
         ),
     ),
+    dict(
+        key="dml_did_rcs",
+        # Declared repeated cross sections: every ROW becomes its own
+        # sampling unit (row-unique IDs), turning the shared panel fixture
+        # into a valid RCS frame; seed=0 pins the fold draw.
+        fit=lambda df: diff_diff.DMLDiD(seed=0, panel=False).fit(
+            df.assign(
+                x0=(df["unit"] % 7) * 0.1 + df["time"] * 0.01,
+                unit=np.arange(len(df)),
+            ),
+            outcome="y",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            covariates=["x0"],
+        ),
+        cr1_k=(),
+        tail_df=(None,) * 16,
+        status="legitimate",
+        reason=(
+            "L3: Chang (2020) Thm 2 lambda-corrected augmented-score "
+            "plug-in variance (Case 2; per-observation influence function; "
+            "normal-theory safe_inference throughout, no cluster surface)"
+        ),
+    ),
 ]
 
 _FAST_KEYS = {
