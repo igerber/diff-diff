@@ -1709,8 +1709,23 @@ class TestCovariateAPI:
             try:
                 r = validate_pscore_trim(x)
             except ValueError:
-                continue  # underflowed to 0.0 and was rejected - correct
+                continue  # underflowed / sub-ulp and was rejected - correct
             assert type(r) is float and 0.0 < r < 0.5
+            # The derived upper clip bound must remain strictly below 1.
+            assert 1.0 - r < 1.0
+
+    def test_pscore_trim_sub_ulp_rejected(self):
+        """Binary64 cancellation guard (CI review): a positive trim below
+        half an ulp of 1.0 makes 1 - trim round to exactly 1.0, so np.clip
+        would retain pscore == 1 - reject it like trim=0."""
+        from diff_diff.utils import validate_pscore_trim
+
+        assert 1.0 - 1e-20 == 1.0  # the failure mode being guarded
+        for bad in (1e-20, 5e-17, 2.0**-54):
+            with pytest.raises(ValueError, match="pscore_trim must be in"):
+                validate_pscore_trim(bad)
+        r = validate_pscore_trim(2.0**-52)  # representable: 1 - 2**-52 < 1
+        assert 1.0 - r < 1.0
 
     def test_pscore_trim_huge_int_raises_valueerror(self):
         """An out-of-float-range Python int raises the documented ValueError,

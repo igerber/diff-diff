@@ -533,6 +533,15 @@ def validate_pscore_trim(value: Any) -> float:
         raise ValueError(f"pscore_trim must be in (0, 0.5), got {value}") from None
     if not np.isfinite(coerced) or not 0 < coerced < 0.5:
         raise ValueError(f"pscore_trim must be in (0, 0.5), got {value}")
+    # A trim below half an ulp of 1.0 makes the upper clip bound
+    # 1 - trim round to exactly 1.0 in binary64, so np.clip would retain
+    # pscore == 1 and 1/(1-p) weights could divide by zero - the same
+    # disabled-overlap-guard failure trim=0 is rejected for.
+    if 1.0 - coerced == 1.0:
+        raise ValueError(
+            f"pscore_trim must be in (0, 0.5) and large enough that "
+            f"1 - pscore_trim < 1 in float64, got {value}"
+        )
     return coerced
 
 
