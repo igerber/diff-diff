@@ -2156,6 +2156,15 @@ class TestHonestRawRouteZeroSE:
     normalization-only anchor, and there is deliberately NO -1 reference
     fallback on marker-less surfaces."""
 
+    @pytest.fixture(autouse=True)
+    def _agg_backend(self):
+        matplotlib = pytest.importorskip("matplotlib")
+        matplotlib.use("Agg")
+        yield
+        import matplotlib.pyplot as plt
+
+        plt.close("all")
+
     @staticmethod
     def _honest(original, bounds=None):
         from types import SimpleNamespace
@@ -2292,6 +2301,15 @@ class TestContainerExplicitReferenceZeroSE:
     reference_period= discards both override channels, so rows fall to the
     reconstruction gate: a zero-SE non-reference row must not resurface as
     a finite zero-width interval (round-5 review finding)."""
+
+    @pytest.fixture(autouse=True)
+    def _agg_backend(self):
+        matplotlib = pytest.importorskip("matplotlib")
+        matplotlib.use("Agg")
+        yield
+        import matplotlib.pyplot as plt
+
+        plt.close("all")
 
     def test_zero_se_row_nan_gated_after_explicit_normalization(self):
         from diff_diff.visualization import plot_event_study
