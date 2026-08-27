@@ -2330,6 +2330,59 @@ class TestHonestRawRouteZeroSE:
                 self._honest(original), reference_period=2, periods=[1, 2], show=False
             )
 
+    def test_explicit_reference_label_zero_effect_estimated_row_not_promoted(self):
+        # CI review round-6 P0: effect == 0.0 alone is not the anchor
+        # signature - an ESTIMATED row with effect exactly 0.0, se 0.0 and
+        # POSITIVE n_groups labeled via reference_period= must still be
+        # excluded (implicit) / rejected (explicit periods=), not promoted
+        # to a constraint with a [0, 0] CI and a suppressed honest
+        # interval. Anchor verification requires zero count.
+        from types import SimpleNamespace
+
+        from diff_diff.visualization import plot_honest_event_study
+
+        original = SimpleNamespace(
+            event_study_effects={
+                0: {"effect": 1.0, "se": 0.5, "n_groups": 3},
+                1: {"effect": 0.0, "se": 0.0, "n_groups": 3},
+            }
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ax = plot_honest_event_study(self._honest(original), reference_period=1, show=False)
+        ticks = self._ticks(ax)
+        assert "0" in ticks and "1" not in ticks
+
+        with pytest.raises(ValueError, match="undefined inference"):
+            plot_honest_event_study(
+                self._honest(original), reference_period=1, periods=[0, 1], show=False
+            )
+
+    def test_explicit_reference_label_zero_effect_mpd_row_not_promoted(self):
+        # MPD twin of the round-6 case: period_effects rows carry no
+        # constraint signature, so a caller label never verifies unless it
+        # matches the result's own reference_period metadata.
+        from types import SimpleNamespace
+
+        from diff_diff.visualization import plot_honest_event_study
+
+        original = SimpleNamespace(
+            period_effects={
+                1: SimpleNamespace(effect=1.0, se=0.5),
+                2: SimpleNamespace(effect=0.0, se=0.0),
+            }
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ax = plot_honest_event_study(self._honest(original), reference_period=2, show=False)
+        ticks = self._ticks(ax)
+        assert "1" in ticks and "2" not in ticks
+
+        with pytest.raises(ValueError, match="undefined inference"):
+            plot_honest_event_study(
+                self._honest(original), reference_period=2, periods=[1, 2], show=False
+            )
+
     def test_explicit_reference_with_anchor_signature_still_retained(self):
         # The tightened exemption must not break the legitimate case: an
         # explicit reference_period naming a true anchor row (effect 0.0).

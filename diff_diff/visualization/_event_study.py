@@ -1076,7 +1076,7 @@ def _honest_raw_route_periods(
     periods: Optional[List[Any]],
     effects_dict: Dict[Any, float],
     se_dict: Dict[Any, float],
-    reference_period: Optional[Any],
+    anchor_period: Optional[Any],
 ) -> List[Any]:
     """Period roster for the raw (non-container) honest-plot routes.
 
@@ -1085,10 +1085,11 @@ def _honest_raw_route_periods(
     and would otherwise be painted with a zero-width original CI plus the
     aggregate honest interval (or KeyError on per-period bounds), so they
     are excluded up front; the reference row is kept as a
-    normalization-only anchor - but only when it carries the anchor
-    signature (effect exactly 0.0), so a caller-supplied
-    ``reference_period`` label cannot promote an estimated zero-SE row
-    past the gate.
+    normalization-only anchor. ``anchor_period`` is the VERIFIED anchor
+    (result metadata or the producer's constraint-row signature, resolved
+    by the caller) - a bare ``reference_period=`` label is never passed
+    through, so it cannot promote an estimated zero-SE row past the gate,
+    even one with effect exactly 0.0.
     """
 
     def _defined(p: Any) -> bool:
@@ -1096,13 +1097,7 @@ def _honest_raw_route_periods(
         return bool(np.isfinite(s) and float(s) > 0)
 
     def _is_anchor(p: Any) -> bool:
-        # The reference exemption requires the anchor SIGNATURE (effect
-        # exactly 0.0 - every producer's true normalization row), not just
-        # the caller's label: an explicit reference_period= pointing at an
-        # ESTIMATED zero-SE row must not promote it past the gate (it
-        # would draw a zero-width CI at a nonzero effect and suppress its
-        # honest interval).
-        return p == reference_period and effects_dict.get(p) == 0.0
+        return anchor_period is not None and p == anchor_period
 
     if periods is None:
         retained = [p for p in sorted(effects_dict.keys()) if _defined(p) or _is_anchor(p)]
@@ -1247,6 +1242,9 @@ def plot_honest_event_study(
         _ref_labels = [keys[i] for i, r in enumerate(original_results.is_reference) if r]
         if reference_period is None and len(_ref_labels) == 1:
             reference_period = _ref_labels[0]
+        # Verified anchor: the container's own is_reference metadata, not
+        # the caller's label.
+        _anchor_period = reference_period if reference_period in _ref_labels else None
         if periods is None:
             periods = sorted(effects_dict.keys())
         else:
@@ -1265,7 +1263,17 @@ def plot_honest_event_study(
         se_dict = {p: pe.se for p, pe in original_results.period_effects.items()}
         if reference_period is None:
             reference_period = getattr(original_results, "reference_period", None)
-        periods = _honest_raw_route_periods(periods, effects_dict, se_dict, reference_period)
+        # Verified anchor: only the result's own reference_period metadata
+        # - a caller label that does not match it is never an anchor on
+        # this route (period_effects rows carry no constraint signature to
+        # verify against).
+        _anchor_period = (
+            reference_period
+            if reference_period is not None
+            and reference_period == getattr(original_results, "reference_period", None)
+            else None
+        )
+        periods = _honest_raw_route_periods(periods, effects_dict, se_dict, _anchor_period)
     elif hasattr(original_results, "event_study_effects"):
         # CallawaySantAnnaResults (fit-time dict surface)
         effects_dict = {
@@ -1288,7 +1296,22 @@ def plot_honest_event_study(
                 ):
                     reference_period = t
                     break
-        periods = _honest_raw_route_periods(periods, effects_dict, se_dict, reference_period)
+        # Verified anchor: the resolved reference (attribute, signature
+        # match, or caller label) counts only if its row carries the
+        # producers' constraint signature - zero group/obs count, effect
+        # exactly 0.0, and no defined SE (NaN for CS, 0.0 for the
+        # Imputation/TwoStage/Stacked-style markers). An estimated row
+        # (positive count) is never an anchor, even at effect 0, se 0.
+        _anchor_period = None
+        _ref_data = original_results.event_study_effects.get(reference_period)
+        if (
+            _ref_data is not None
+            and _ref_data.get("n_groups", _ref_data.get("n_obs", 1)) == 0
+            and _ref_data["effect"] == 0.0
+            and not (np.isfinite(_ref_data["se"]) and float(_ref_data["se"]) > 0)
+        ):
+            _anchor_period = reference_period
+        periods = _honest_raw_route_periods(periods, effects_dict, se_dict, _anchor_period)
     else:
         raise TypeError("Cannot extract event study data from original_results")
 
@@ -1320,7 +1343,9 @@ def plot_honest_event_study(
         original_ci_lower = [effects_dict[p] - z * se_dict[p] for p in periods]
         original_ci_upper = [effects_dict[p] + z * se_dict[p] for p in periods]
 
-    # Get honest bounds if available for each period
+    # Get honest bounds if available for each period. Suppression is keyed
+    # on the VERIFIED anchor, not the caller's reference_period label - a
+    # mislabeled estimated row keeps its computed honest interval.
     _nan_bounds = {"ci_lb": np.nan, "ci_ub": np.nan}
     if honest_results.event_study_bounds:
         # The reference row is a normalization constraint with no honest
@@ -1329,7 +1354,7 @@ def plot_honest_event_study(
         honest_ci_lower = [
             (
                 honest_results.event_study_bounds.get(p, _nan_bounds)
-                if p == reference_period
+                if p == _anchor_period
                 else honest_results.event_study_bounds[p]
             )["ci_lb"]
             for p in periods
@@ -1337,7 +1362,7 @@ def plot_honest_event_study(
         honest_ci_upper = [
             (
                 honest_results.event_study_bounds.get(p, _nan_bounds)
-                if p == reference_period
+                if p == _anchor_period
                 else honest_results.event_study_bounds[p]
             )["ci_ub"]
             for p in periods
@@ -1345,12 +1370,8 @@ def plot_honest_event_study(
     else:
         # Scalar bounds apply to every ESTIMATED period; the reference is
         # a constraint, never painted with the aggregate honest interval.
-        honest_ci_lower = [
-            np.nan if p == reference_period else honest_results.ci_lb for p in periods
-        ]
-        honest_ci_upper = [
-            np.nan if p == reference_period else honest_results.ci_ub for p in periods
-        ]
+        honest_ci_lower = [np.nan if p == _anchor_period else honest_results.ci_lb for p in periods]
+        honest_ci_upper = [np.nan if p == _anchor_period else honest_results.ci_ub for p in periods]
 
     if backend == "plotly":
         return _render_honest_event_study_plotly(

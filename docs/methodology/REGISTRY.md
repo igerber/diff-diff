@@ -5911,9 +5911,14 @@ should be a deliberate user choice.
   auto-inferred on raw routes from a `reference_period` attribute or HonestDiD's own
   constraint signature, never a bare `-1` fallback - is kept as a normalization anchor,
   and an all-undefined surface raises instead of rendering a blank figure. The reference
-  exemption requires the anchor signature (`effect` exactly 0.0), so an explicit
-  `reference_period=` label pointing at an estimated zero-SE row cannot promote it past
-  the gate (it is excluded on implicit selection and raises when explicitly requested).
+  exemption (and honest-bound suppression) applies only to a VERIFIED anchor, never a bare
+  `reference_period=` label: on dict surfaces the labeled row must carry the producers'
+  full constraint signature (zero `n_groups`/`n_obs` count, `effect` exactly 0.0, no
+  defined SE - NaN for CS, 0.0 for the Imputation/TwoStage/Stacked-style markers); on MPD
+  surfaces only the result's own `reference_period` metadata verifies; on the container
+  route only `is_reference`-marked rows do. An estimated zero-SE row - even one with
+  effect exactly 0.0 but a positive count - cannot be promoted past the gate (it is
+  excluded on implicit selection and raises when explicitly requested).
 
 **Reference implementation(s):**
 - R: `fixest::coefplot()` with reference category shown at 0 with no CI
