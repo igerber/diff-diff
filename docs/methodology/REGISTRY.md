@@ -5910,7 +5910,10 @@ should be a deliberate user choice.
   rows are excluded up front (explicitly requesting one raises), the reference row - now
   auto-inferred on raw routes from a `reference_period` attribute or HonestDiD's own
   constraint signature, never a bare `-1` fallback - is kept as a normalization anchor,
-  and an all-undefined surface raises instead of rendering a blank figure.
+  and an all-undefined surface raises instead of rendering a blank figure. The reference
+  exemption requires the anchor signature (`effect` exactly 0.0), so an explicit
+  `reference_period=` label pointing at an estimated zero-SE row cannot promote it past
+  the gate (it is excluded on implicit selection and raises when explicitly requested).
 
 **Reference implementation(s):**
 - R: `fixest::coefplot()` with reference category shown at 0 with no CI

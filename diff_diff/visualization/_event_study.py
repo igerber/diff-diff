@@ -1085,17 +1085,29 @@ def _honest_raw_route_periods(
     and would otherwise be painted with a zero-width original CI plus the
     aggregate honest interval (or KeyError on per-period bounds), so they
     are excluded up front; the reference row is kept as a
-    normalization-only anchor.
+    normalization-only anchor - but only when it carries the anchor
+    signature (effect exactly 0.0), so a caller-supplied
+    ``reference_period`` label cannot promote an estimated zero-SE row
+    past the gate.
     """
 
     def _defined(p: Any) -> bool:
         s = se_dict.get(p, float("nan"))
         return bool(np.isfinite(s) and float(s) > 0)
 
+    def _is_anchor(p: Any) -> bool:
+        # The reference exemption requires the anchor SIGNATURE (effect
+        # exactly 0.0 - every producer's true normalization row), not just
+        # the caller's label: an explicit reference_period= pointing at an
+        # ESTIMATED zero-SE row must not promote it past the gate (it
+        # would draw a zero-width CI at a nonzero effect and suppress its
+        # honest interval).
+        return p == reference_period and effects_dict.get(p) == 0.0
+
     if periods is None:
-        retained = [p for p in sorted(effects_dict.keys()) if _defined(p) or p == reference_period]
+        retained = [p for p in sorted(effects_dict.keys()) if _defined(p) or _is_anchor(p)]
     else:
-        _bad = [p for p in periods if p in se_dict and not _defined(p) and p != reference_period]
+        _bad = [p for p in periods if p in se_dict and not _defined(p) and not _is_anchor(p)]
         if _bad:
             raise ValueError(
                 f"Requested periods {_bad} have undefined inference "
