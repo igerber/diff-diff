@@ -523,9 +523,17 @@ def validate_pscore_trim(value: Any) -> float:
             f"pscore_trim must be a real number in (0, 0.5), got {value!r} "
             f"(type {type(value).__name__})"
         )
-    if not np.isfinite(value) or not 0 < value < 0.5:
+    # Coerce BEFORE the range check: an extended-precision np.longdouble can
+    # be positive in its own precision yet underflow to 0.0 as binary64,
+    # which would silently disable the overlap clip; an out-of-range Python
+    # int would raise a raw TypeError/OverflowError from np.isfinite/float.
+    try:
+        coerced = float(value)
+    except OverflowError:
+        raise ValueError(f"pscore_trim must be in (0, 0.5), got {value}") from None
+    if not np.isfinite(coerced) or not 0 < coerced < 0.5:
         raise ValueError(f"pscore_trim must be in (0, 0.5), got {value}")
-    return float(value)
+    return coerced
 
 
 # The staggered-only TripleDifference constructor params that genuinely select

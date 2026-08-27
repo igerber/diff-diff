@@ -2233,6 +2233,26 @@ class TestHonestRawRouteZeroSE:
         ticks = self._ticks(ax)
         assert "-1" not in ticks and "0" in ticks
 
+    def test_reference_only_surface_raises_not_anchor_figure(self):
+        # CI review P1: a retained reference row must not satisfy the
+        # empty-result guard on its own - a surface whose every ESTIMATED
+        # row has undefined inference raises rather than rendering an
+        # anchor-only figure (REGISTRY all-undefined rejection).
+        from types import SimpleNamespace
+
+        from diff_diff.visualization import plot_honest_event_study
+
+        nan = float("nan")
+        original = SimpleNamespace(
+            event_study_effects={
+                -1: {"effect": 0.0, "se": nan, "n_groups": 0},
+                0: {"effect": 1.0, "se": 0.0, "n_groups": 3},
+                1: {"effect": 1.2, "se": nan, "n_groups": 3},
+            }
+        )
+        with pytest.raises(ValueError, match="No valid data to plot"):
+            plot_honest_event_study(self._honest(original), show=False)
+
     def test_all_rows_undefined_raises_not_blank_figure(self):
         from types import SimpleNamespace
 

@@ -1694,6 +1694,34 @@ class TestCovariateAPI:
     def test_pscore_trim_numpy_float_coerced(self):
         assert type(ContinuousDiD(pscore_trim=np.float32(0.01)).pscore_trim) is float
 
+    def test_pscore_trim_never_stores_zero_after_coercion(self):
+        """Coercion-underflow guard (CI review): an extended-precision
+        np.longdouble positive in its own precision can underflow to 0.0 as
+        binary64, which would silently disable the overlap clip. The helper
+        validates the COERCED value, so it either raises or returns a
+        strictly positive float - on every longdouble width."""
+        from diff_diff.utils import validate_pscore_trim
+
+        for x in (
+            np.longdouble(np.finfo(np.longdouble).smallest_subnormal),
+            np.longdouble(np.finfo(np.longdouble).tiny),
+        ):
+            try:
+                r = validate_pscore_trim(x)
+            except ValueError:
+                continue  # underflowed to 0.0 and was rejected - correct
+            assert type(r) is float and 0.0 < r < 0.5
+
+    def test_pscore_trim_huge_int_raises_valueerror(self):
+        """An out-of-float-range Python int raises the documented ValueError,
+        not a raw OverflowError/TypeError from float()/np.isfinite."""
+        from diff_diff.utils import validate_pscore_trim
+
+        with pytest.raises(ValueError, match=r"pscore_trim must be in \(0, 0.5\)"):
+            validate_pscore_trim(10**400)
+        with pytest.raises(ValueError, match=r"pscore_trim must be in \(0, 0.5\)"):
+            validate_pscore_trim(10**20)
+
     def test_covariate_metadata_on_results(self):
         data = _cov_data()
         est = ContinuousDiD(
