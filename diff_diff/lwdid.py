@@ -27,7 +27,7 @@ from scipy import linalg as scipy_linalg
 from diff_diff._base import BaseEstimator
 from diff_diff.linalg import _detect_rank_deficiency, solve_logit, solve_ols
 from diff_diff.lwdid_results import LWDiDResults
-from diff_diff.utils import safe_inference, validate_binary
+from diff_diff.utils import safe_inference, validate_binary, validate_pscore_trim
 
 _VALID_ROLLING = ("demean", "detrend", "demeanq", "detrendq")
 _VALID_ESTIMATION_METHODS = ("reg", "ipw", "dr", "psm")
@@ -626,13 +626,7 @@ class LWDiD(BaseEstimator):
         # Engineering parameters (validated, never silently coerced -
         # review finding: fractional n_neighbors truncated, strings became
         # with_replacement=True, negative calipers matched nothing)
-        if not isinstance(pscore_trim, (int, float, np.integer, np.floating)) or isinstance(
-            pscore_trim, bool
-        ):
-            raise ValueError(f"pscore_trim must be a number, got {pscore_trim!r}")
-        self.pscore_trim = float(pscore_trim)
-        if not np.isfinite(self.pscore_trim) or not (0.0 < self.pscore_trim < 0.5):
-            raise ValueError("pscore_trim must be between 0 and 0.5")
+        self.pscore_trim = validate_pscore_trim(pscore_trim)
         if not isinstance(n_neighbors, (int, np.integer)) or isinstance(n_neighbors, bool):
             raise ValueError(f"n_neighbors must be an integer, got {n_neighbors!r}")
         self.n_neighbors = int(n_neighbors)

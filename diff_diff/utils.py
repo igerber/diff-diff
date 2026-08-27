@@ -503,6 +503,31 @@ def validate_n_bootstrap(n_bootstrap: Any) -> None:
         raise ValueError(f"n_bootstrap must be a non-negative integer, got '{n_bootstrap}'")
 
 
+def validate_pscore_trim(value: Any) -> float:
+    """Validate ``pscore_trim`` and return it coerced to ``float``.
+
+    Shared by every estimator whose ``pscore_trim`` feeds
+    ``np.clip(pscore, trim, 1 - trim)`` (TripleDifference, DMLDiD,
+    ContinuousDiD, LWDiD, CallawaySantAnna): ``trim=0`` disables the
+    overlap guard that keeps the ``1/(1-p)`` IPW/DR weights finite, and
+    ``trim >= 0.5`` inverts the clip bounds. The TYPE guard precedes the
+    range check (validate_n_bootstrap shape): a bare ``0 < x < 0.5``
+    raises an incidental TypeError on None/str/complex, an
+    ambiguous-truth error on a multi-element array, and ACCEPTS a
+    1-element array. StaggeredTripleDifference deliberately keeps its
+    bare range check (construction-permissive dying class, ledger
+    M-013/M-144).
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
+        raise ValueError(
+            f"pscore_trim must be a real number in (0, 0.5), got {value!r} "
+            f"(type {type(value).__name__})"
+        )
+    if not np.isfinite(value) or not 0 < value < 0.5:
+        raise ValueError(f"pscore_trim must be in (0, 0.5), got {value}")
+    return float(value)
+
+
 # The staggered-only TripleDifference constructor params that genuinely select
 # staggered behavior (row M-013). Lives here because TWO independent consumers
 # need the same boundary and must not drift apart: TripleDifference.fit(), which

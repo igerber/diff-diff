@@ -1203,6 +1203,7 @@ The multiplier bootstrap uses random weights w_i with E[w]=0 and Var(w)=1:
 - [x] Repeated cross-sections (`panel=False`) for non-panel surveys (Phase 7b)
 
 - **Note:** `anticipation` is validated at construction (non-negative integer; `bool` rejected) via the shared `utils.validate_anticipation`, and re-checked on the fit path (direct-mutation defense) — see the family-wide adoption note (ledger row [M-144]) in the TripleDifference staggered-mode section.
+- **Note (`summary(alpha=)` never recomputes stored inference, ledger row M-146):** `CallawaySantAnnaResults.summary`/`print_summary` — and the sibling staggered-family results classes (StaggeredTripleDiffResults, ChaisemartinDHaultfoeuilleResults, ImputationDiDResults, EfficientDiDResults, TwoStageDiDResults, StackedDiDResults, SunAbrahamResults) — reject an `alpha` different from the fit-time value via the shared `results_base._require_fit_alpha` guard (the DMLDiDResults/EventStudyResults precedent). Previously the requested alpha relabeled the confidence-interval header while the FIT-TIME stored intervals were printed — silent coverage mislabeling (bootstrap percentile intervals cannot be reconstructed from the SE at all); `alpha=0.0` was additionally swallowed by a falsy-`or` default and now raises. Re-fit at the desired alpha instead. The non-staggered summaries with the same idiom are tracked as a TODO.md audit row.
 ---
 
 ## ChaisemartinDHaultfoeuille
@@ -3626,10 +3627,12 @@ shared verbatim.
   `np.clip(pscore, trim, 1 - trim)` in both engines, so `trim=0` disabled the
   overlap guard that keeps the `1/(1-p)` IPW/DR weights finite and `trim >= 0.5`
   inverted the clip bounds. `TripleDifference(pscore_trim=0)` therefore changes
-  from accepted to a loud `ValueError`. **Sibling divergence, recorded rather than
-  silently tolerated:** `ContinuousDiD` still validates `0.0 <= pscore_trim < 0.5`
-  and so still admits `0`; aligning it is out of scope for a DDD merge and is
-  tracked as a `TODO.md` row.
+  from accepted to a loud `ValueError`. The sibling divergence this Note
+  originally recorded (`ContinuousDiD` still validated `0.0 <= pscore_trim < 0.5`,
+  admitting `0`) was closed by ledger row M-145: every consumer now validates via
+  the shared `utils.validate_pscore_trim` (`0 < x < 0.5`, type guard, `float`
+  coercion), with the deprecated `StaggeredTripleDifference` deliberately keeping
+  its permissive construction shape (M-013/M-144 posture).
 - **Note (the `triple_difference()` wrapper stays 2x2x2-only):** the deprecated
   functional wrapper is deliberately NOT extended to staggered mode. It reaches
   only the 2x2x2 design and forwards its own `time=` as `post=`. Three reasons,
@@ -5886,6 +5889,28 @@ should be a deliberate user choice.
   normalization is accepted only when the chosen period is one of the marked rows (a no-op
   shift); any other period raises `ValueError`, because each anchor is a constraint under
   its own cohort base and no single shift represents them faithfully
+- **Note (zero-SE pointwise gate, `plot_group_effects` twin):** the pointwise
+  `effect +/- z*SE` reconstruction NaN-gates zero/negative-SE rows on every path that
+  reaches it - a zero-SE row has all-NaN stored inference (`safe_inference`), and a finite
+  zero-width interval would present defined inference for it (the prohibited partial-NaN
+  pattern). This includes the `EventStudyResults` container route after an explicit
+  `reference_period=` (which discards the stored-interval overrides): a zero-SE
+  non-reference container row previously drew a spurious `(0, 0)` bar there and now draws
+  none. The one retention: on the raw `event_study_effects` dict route, an auto-inferred
+  reference row (`effect` exactly 0, `se` 0) keeps its degenerate constraint bar per the
+  "retained for auto-inferred" rule above - the `effect == 0` conjunct stops the `-1`
+  reference fallback from retaining a genuinely estimated zero-SE row (a degenerate
+  estimated row with effect exactly 0 and se 0 at the fallback position retains today's
+  bar - today's behavior preserved, not a new defect). The dCDH route's synthesized
+  reference carries `se = NaN` and keeps its hollow-marker-no-bar rendering, unchanged.
+  Plotly caveat: the plotly renderer filters NaN-CI rows out of the CI band and
+  interpolates the polygon across the gap (pre-existing NaN-SE convention); the matplotlib
+  backend is where the gated interval visibly disappears. `plot_honest_event_study`'s raw
+  (non-container) routes mirror the container's retained-row semantics: zero/non-finite-SE
+  rows are excluded up front (explicitly requesting one raises), the reference row - now
+  auto-inferred on raw routes from a `reference_period` attribute or HonestDiD's own
+  constraint signature, never a bare `-1` fallback - is kept as a normalization anchor,
+  and an all-undefined surface raises instead of rendering a blank figure.
 
 **Reference implementation(s):**
 - R: `fixest::coefplot()` with reference category shown at 0 with no CI

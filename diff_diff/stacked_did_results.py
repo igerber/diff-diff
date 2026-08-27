@@ -14,7 +14,7 @@ import pandas as pd
 from diff_diff._deprecation import deprecated_field_property
 from diff_diff.aggregation import AggregationMixin, AggregationResult
 from diff_diff.results import _format_survey_block, _get_significance_stars
-from diff_diff.results_base import BaseResults, build_event_study_surface
+from diff_diff.results_base import BaseResults, _require_fit_alpha, build_event_study_surface
 
 __all__ = [
     "StackedDiDResults",
@@ -314,14 +314,19 @@ class StackedDiDResults(BaseResults, AggregationMixin):
         Parameters
         ----------
         alpha : float, optional
-            Significance level. Defaults to alpha used in estimation.
+            Accepted for signature uniformity. The stored intervals were
+            computed at fit time; a value different from the stored
+            ``alpha`` raises ValueError rather than silently recomputing
+            or relabeling (bootstrap percentile intervals cannot be
+            reconstructed from the reported SE). Re-fit at the desired
+            alpha instead.
 
         Returns
         -------
         str
             Formatted summary.
         """
-        alpha = alpha or self.alpha
+        alpha = _require_fit_alpha(alpha, self.alpha)
         conf_level = int((1 - alpha) * 100)
 
         lines = [

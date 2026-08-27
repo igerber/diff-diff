@@ -3561,3 +3561,28 @@ class TestSieveBasisCache:
         assert len(build_keys) == len(set(request_keys))
         # ...and there was genuine redundancy for the cache to eliminate.
         assert len(request_keys) > len(build_keys)
+
+
+@pytest.fixture(scope="module")
+def alpha_fitted():
+    return EfficientDiD(pt_assumption="all").fit(
+        _make_simple_panel(), "y", "unit", "time", "first_treat"
+    )
+
+
+class TestSummaryAlphaContract:
+    """summary(alpha=...) never recomputes stored inference.
+
+    Family-wide guard (results_base._require_fit_alpha): a non-fit alpha
+    raises instead of silently relabeling the confidence-interval header
+    over fit-time stored intervals; alpha=0.0 (previously swallowed by the
+    falsy `alpha or self.alpha` idiom) now raises too.
+    """
+
+    @pytest.mark.parametrize("bad_alpha", [0.10, 0.0])
+    def test_summary_rejects_non_fit_alpha(self, alpha_fitted, bad_alpha):
+        with pytest.raises(ValueError, match="never recomputes"):
+            alpha_fitted.summary(alpha=bad_alpha)
+
+    def test_summary_accepts_fit_alpha(self, alpha_fitted):
+        assert alpha_fitted.summary(alpha=alpha_fitted.alpha) == alpha_fitted.summary()

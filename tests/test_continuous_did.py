@@ -3,6 +3,8 @@ Unit and integration tests for ContinuousDiD estimator.
 """
 
 import warnings
+from decimal import Decimal
+from fractions import Fraction
 
 import numpy as np
 import pandas as pd
@@ -1665,6 +1667,32 @@ class TestCovariateAPI:
             ContinuousDiD(pscore_trim=-0.1)
         with pytest.raises(ValueError, match="epv_threshold"):
             ContinuousDiD(epv_threshold=0.0)
+
+    def test_pscore_trim_zero_rejected(self):
+        """trim=0 disables the np.clip overlap guard - now rejected, matching
+        the TripleDifference tightening (row M-142) via the shared helper."""
+        with pytest.raises(ValueError, match=r"pscore_trim must be in \(0, 0.5\)"):
+            ContinuousDiD(pscore_trim=0)
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            None,
+            "0.01",
+            True,
+            np.array([0.01]),
+            Decimal("0.01"),
+            Fraction(1, 100),
+        ],
+    )
+    def test_pscore_trim_type_guard(self, bad):
+        """Non-real-scalar inputs raise ValueError, closing the old
+        np.isfinite(...) TypeError hole (and 1-element-array acceptance)."""
+        with pytest.raises(ValueError, match="pscore_trim must be"):
+            ContinuousDiD(pscore_trim=bad)
+
+    def test_pscore_trim_numpy_float_coerced(self):
+        assert type(ContinuousDiD(pscore_trim=np.float32(0.01)).pscore_trim) is float
 
     def test_covariate_metadata_on_results(self):
         data = _cov_data()

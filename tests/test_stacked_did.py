@@ -2264,3 +2264,36 @@ class TestReferenceSupportGuardEffectiveWeights:
                     first_treat="first_treat",
                     survey_design=SurveyDesign(weights="w"),
                 )
+
+
+@pytest.fixture(scope="module")
+def alpha_fitted():
+    data = generate_staggered_data(
+        n_units=120,
+        n_periods=10,
+        cohort_periods=[4, 6],
+        never_treated_frac=0.3,
+        treatment_effect=5.0,
+        seed=42,
+    )
+    return StackedDiD(kappa_pre=2, kappa_post=2).fit(
+        data, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
+    )
+
+
+class TestSummaryAlphaContract:
+    """summary(alpha=...) never recomputes stored inference.
+
+    Family-wide guard (results_base._require_fit_alpha): a non-fit alpha
+    raises instead of silently relabeling the confidence-interval header
+    over fit-time stored intervals; alpha=0.0 (previously swallowed by the
+    falsy `alpha or self.alpha` idiom) now raises too.
+    """
+
+    @pytest.mark.parametrize("bad_alpha", [0.10, 0.0])
+    def test_summary_rejects_non_fit_alpha(self, alpha_fitted, bad_alpha):
+        with pytest.raises(ValueError, match="never recomputes"):
+            alpha_fitted.summary(alpha=bad_alpha)
+
+    def test_summary_accepts_fit_alpha(self, alpha_fitted):
+        assert alpha_fitted.summary(alpha=alpha_fitted.alpha) == alpha_fitted.summary()

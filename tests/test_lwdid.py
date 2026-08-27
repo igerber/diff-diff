@@ -2828,6 +2828,14 @@ class TestReviewRound2Guards:
         assert r1.se == r2.se
         assert r1.att == r2.att
 
+    def test_pscore_trim_rejections_use_shared_message(self):
+        """LWDiD now validates via utils.validate_pscore_trim: same guard
+        behavior as before, but the shared message wording."""
+        with pytest.raises(ValueError, match=r"pscore_trim must be in \(0, 0.5\)"):
+            LWDiD(rolling="demean", pscore_trim=0.6)
+        with pytest.raises(ValueError, match="pscore_trim must be a real number"):
+            LWDiD(rolling="demean", pscore_trim="0.01")
+
     def test_pscore_trim_provenance(self):
         df = self._panel(x=lambda u: float(u % 4))
         with warnings.catch_warnings():

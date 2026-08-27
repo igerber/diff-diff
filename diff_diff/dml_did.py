@@ -39,11 +39,10 @@ import pandas as pd
 from diff_diff._base import BaseEstimator
 from diff_diff._crossfit import DegenerateFoldError, assign_folds, cross_fit_predict
 from diff_diff._dr_scores import (
+    _chang_rcs_score_augmented_with_slope,
     chang_panel_score,
     chang_panel_score_augmented,
-    chang_rcs_lambda_slope,
     chang_rcs_score,
-    chang_rcs_score_augmented,
 )
 from diff_diff._learners import (
     _CLASSIFIER_NAMES,
@@ -70,6 +69,7 @@ from diff_diff.utils import (
     validate_anticipation,
     validate_covariate_names,
     validate_n_bootstrap,
+    validate_pscore_trim,
 )
 
 __all__ = ["DMLDiD"]
@@ -81,18 +81,6 @@ __all__ = ["DMLDiD"]
 # overflow. Realistic labels — years, YYYYMMDD, unix s/ms, ns timestamps
 # (~1.8e18) — sit far below 2**62 ~ 4.6e18.
 _LABEL_MAGNITUDE_BOUND = 2**62
-
-
-def _validate_pscore_trim(value: Any) -> float:
-    """Type guard BEFORE the range comparison (TripleDifference precedent)."""
-    if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
-        raise ValueError(
-            f"pscore_trim must be a real number in (0, 0.5), got {value!r} "
-            f"(type {type(value).__name__})"
-        )
-    if not np.isfinite(value) or not 0 < value < 0.5:
-        raise ValueError(f"pscore_trim must be in (0, 0.5), got {value}")
-    return float(value)
 
 
 def _validate_n_folds(value: Any) -> int:
@@ -399,7 +387,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 "would silently enable bands"
             )
         self.cband = bool(self.cband)
-        self.pscore_trim = _validate_pscore_trim(self.pscore_trim)
+        self.pscore_trim = validate_pscore_trim(self.pscore_trim)
         if not isinstance(self.panel, (bool, np.bool_)):
             raise ValueError(
                 f"panel must be a bool, got {self.panel!r} (type "
@@ -1420,11 +1408,8 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             with np.errstate(over="ignore", invalid="ignore"):
                 summand = chang_rcs_score(y_cell, D_cell, T_cell, m2_hat, ps, p_hat, lam_hat)
                 theta = float(np.mean(summand))
-                psi_bar = chang_rcs_score_augmented(
+                psi_bar, g2_lambda = _chang_rcs_score_augmented_with_slope(
                     summand, D_cell, T_cell, y_cell, m2_hat, ps, theta, p_hat, lam_hat
-                )
-                g2_lambda = chang_rcs_lambda_slope(
-                    y_cell, D_cell, T_cell, m2_hat, ps, p_hat, lam_hat
                 )
                 se = float(np.sqrt(np.mean(psi_bar**2) / n_cell))
         except ValueError as exc:

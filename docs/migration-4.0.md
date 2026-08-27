@@ -223,8 +223,8 @@ each one with its target.
 Smaller items that do not fit the families above — two inert `SyntheticDiD` constructor
 parameters, the `covariates=` constructor-to-`fit()` move, a retired transition warning, the
 Bacon roster re-homing, and the family-wide `anticipation` validation below. The appendix lists
-the ledger-derived removals/flips; [M-144] is a behavior tightening with no removal/deprecation
-fields and appears here only.
+the ledger-derived removals/flips; [M-144], [M-145], and [M-146] are behavior tightenings with
+no removal/deprecation fields and appear here only.
 
 - `anticipation` is validated across the family ([M-144], landing at 4.0): whole-valued floats
   that previously fit identically to their integer now raise — pass the `int`; bool and
@@ -233,6 +233,21 @@ fields and appears here only.
   (previously a numpy scalar survived). WooldridgeDiD's error message text changed to the shared
   wording, and its constructor now reports a bad `bootstrap_weights`/`vcov_type`/`df_convention`
   before a bad `anticipation` (the ordering flipped).
+
+- `pscore_trim` is validated via a shared helper ([M-145], landing at 4.0): `ContinuousDiD`
+  tightens from `[0, 0.5)` to `(0, 0.5)` — `pscore_trim=0` (which disabled the overlap clip
+  keeping IPW/DR weights finite) now raises, its message wording changed, and non-real-scalar
+  inputs (`None`, strings, `Decimal`/`Fraction`, 1-element arrays) raise `ValueError` instead of
+  `TypeError` (or being silently accepted, for the 1-element array). `CallawaySantAnna` gains the
+  same type guard; `TripleDifference`, `CallawaySantAnna`, and `ContinuousDiD` now store the value
+  coerced to built-in `float`; `LWDiD`'s message wording changed. The deprecated
+  `StaggeredTripleDifference` keeps its permissive construction shape.
+
+- `summary(alpha=...)` / `print_summary(alpha=...)` on the staggered-family results classes
+  ([M-146], landing at 4.0): a value different from the fit-time `alpha` now raises `ValueError`
+  instead of silently relabeling the confidence-interval header over fit-time stored intervals
+  (bootstrap percentile intervals cannot be reconstructed from the SE); `alpha=0.0`, previously
+  swallowed by a falsy-`or` default, raises too. Re-fit at the desired alpha instead.
 
 One pending decision: the `DIFF_DIFF_SOLVE_OLS_FASTPATH` environment default has a go/no-go due
 at 4.0 that has not been made. If it lands on, it is a numerics change and will be documented

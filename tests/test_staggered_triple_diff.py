@@ -729,3 +729,28 @@ class TestStaggeredTripleDiffORSolveFallback:
             est.fit(simple_data, "outcome", "unit", "period", "first_treat", "eligibility")
         lstsq_warnings = [w for w in caught if "Rank-deficient X'WX" in str(w.message)]
         assert lstsq_warnings == []
+
+
+@pytest.fixture(scope="module")
+def alpha_fitted():
+    data = generate_staggered_ddd_data(n_units=300, treatment_effect=3.0, seed=42)
+    return StaggeredTripleDifference().fit(
+        data, "outcome", "unit", "period", "first_treat", "eligibility"
+    )
+
+
+class TestSummaryAlphaContract:
+    """summary(alpha=...) never recomputes stored inference.
+
+    Family-wide guard (results_base._require_fit_alpha) - applies to this
+    results class even though the parent estimator is deprecated: the
+    summary surface is live through 3.x.
+    """
+
+    @pytest.mark.parametrize("bad_alpha", [0.10, 0.0])
+    def test_summary_rejects_non_fit_alpha(self, alpha_fitted, bad_alpha):
+        with pytest.raises(ValueError, match="never recomputes"):
+            alpha_fitted.summary(alpha=bad_alpha)
+
+    def test_summary_accepts_fit_alpha(self, alpha_fitted):
+        assert alpha_fitted.summary(alpha=alpha_fitted.alpha) == alpha_fitted.summary()

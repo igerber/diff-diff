@@ -731,3 +731,79 @@ class TestBaconPlotlyWeightedAvg:
         # Should have vertical line shapes (weighted avg + TWFE + zero line)
         shapes = fig.layout.shapes
         assert len(shapes) >= 4  # 3 weighted avg + 1 TWFE + zero line
+
+
+class TestPlotEventStudyZeroSE:
+    """Zero-SE rows draw no finite zero-width pointwise interval, while an
+    auto-inferred reference row keeps its degenerate constraint bar (the
+    plot_group_effects twin gate + the REGISTRY reference-retention
+    contract)."""
+
+    @staticmethod
+    def _fake(ref_conf_int):
+        nan = float("nan")
+
+        class _Fake:
+            anticipation = 0
+
+        f = _Fake()
+        f.event_study_effects = {
+            -1: {
+                "effect": 0.0,
+                "se": 0.0,
+                "t_stat": nan,
+                "p_value": nan,
+                "conf_int": ref_conf_int,
+                "n_obs": 0,
+            },
+            0: {
+                "effect": 1.5,
+                "se": 0.0,
+                "t_stat": nan,
+                "p_value": nan,
+                "conf_int": (nan, nan),
+                "n_obs": 8,
+            },
+            1: {
+                "effect": 1.0,
+                "se": 0.5,
+                "t_stat": 2.0,
+                "p_value": 0.045,
+                "conf_int": (0.02, 1.98),
+                "n_obs": 8,
+            },
+        }
+        return f
+
+    @staticmethod
+    def _yerr_segments(ax):
+        segs = []
+        for coll in ax.collections:
+            if hasattr(coll, "get_segments"):
+                segs.extend(coll.get_segments())
+        return segs
+
+    @pytest.mark.parametrize(
+        "ref_conf_int",
+        [(0.0, 0.0), (float("nan"), float("nan"))],  # Imputation vs StackedDiD shapes
+    )
+    def test_zero_se_gate_and_reference_retention(self, ref_conf_int):
+        from diff_diff.visualization import plot_event_study
+
+        ax = plot_event_study(self._fake(ref_conf_int), show=False)
+        # x positions are ordinal: -1 -> 0, 0 -> 1, 1 -> 2
+        saw_reference_bar = False
+        for seg in self._yerr_segments(ax):
+            if len(seg) != 2:
+                continue
+            x, lo_y, hi_y = float(seg[0][0]), float(seg[0][1]), float(seg[1][1])
+            if abs(x - 1.0) < 1e-9:  # the zero-SE NON-reference row
+                assert not (
+                    abs(lo_y - 1.5) < 1e-12 and abs(hi_y - 1.5) < 1e-12
+                ), "zero-SE non-reference row drawn with a finite zero-width CI"
+            if abs(x - 0.0) < 1e-9 and abs(lo_y) < 1e-12 and abs(hi_y) < 1e-12:
+                saw_reference_bar = True
+        assert saw_reference_bar, (
+            "auto-inferred reference row lost its degenerate (0, 0) bar "
+            "(REGISTRY: retained for auto-inferred)"
+        )

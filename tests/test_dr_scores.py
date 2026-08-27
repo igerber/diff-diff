@@ -320,3 +320,24 @@ class TestChangRCSScoreValidation:
             T_bad = T.copy()
             T_bad[0] = 3.0
             chang_rcs_score_augmented(summand, D, T_bad, y, m2, ps, 1.0, 0.5, 0.5)
+
+    def test_internal_with_slope_variant_matches_public_pair(self):
+        """The single-pass internal variant equals the two public calls exactly."""
+        from diff_diff._dr_scores import (
+            _chang_rcs_score_augmented_with_slope,
+            chang_rcs_lambda_slope,
+            chang_rcs_score,
+            chang_rcs_score_augmented,
+        )
+
+        y, D, T, m2, ps = self._inputs()
+        p_hat, lam_hat = 0.5, 0.45
+        summand = chang_rcs_score(y, D, T, m2, ps, p_hat, lam_hat)
+        theta = float(np.mean(summand))
+        psi_bar, g2_lambda = _chang_rcs_score_augmented_with_slope(
+            summand, D, T, y, m2, ps, theta, p_hat, lam_hat
+        )
+        np.testing.assert_array_equal(
+            psi_bar, chang_rcs_score_augmented(summand, D, T, y, m2, ps, theta, p_hat, lam_hat)
+        )
+        assert g2_lambda == chang_rcs_lambda_slope(y, D, T, m2, ps, p_hat, lam_hat)

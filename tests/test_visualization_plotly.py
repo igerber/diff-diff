@@ -520,3 +520,33 @@ class TestPlotlyPretrendsPowerStyling:
         )
         assert fig.layout.xaxis.showgrid is False
         assert fig.layout.yaxis.showgrid is False
+
+
+class TestPlotEventStudyZeroSEPlotly:
+    """The plotly CI band omits zero-SE non-reference rows entirely (the
+    renderer filters NaN-CI rows via has_ci; the polygon interpolating
+    across the gap is the pre-existing NaN-SE convention)."""
+
+    def test_zero_se_row_absent_from_ci_band(self):
+        from diff_diff.visualization import plot_event_study
+
+        nan = float("nan")
+
+        class _Fake:
+            anticipation = 0
+
+        res = _Fake()
+        res.event_study_effects = {
+            -1: {"effect": 0.0, "se": 0.0, "conf_int": (0.0, 0.0), "n_obs": 0},
+            0: {"effect": 1.5, "se": 0.0, "conf_int": (nan, nan), "n_obs": 8},
+            1: {"effect": 1.0, "se": 0.5, "conf_int": (0.02, 1.98), "n_obs": 8},
+        }
+        fig = plot_event_study(res, show=False, backend="plotly")
+        band_traces = [t for t in fig.data if getattr(t, "fill", None) == "toself"]
+        assert band_traces, "CI band trace missing"
+        band_x = set()
+        for t in band_traces:
+            band_x.update(float(x) for x in t.x)
+        # ordinal x: -1 -> 0.0 (reference, retained), 0 -> 1.0 (gated), 1 -> 2.0
+        assert 1.0 not in band_x, "zero-SE non-reference row still in the CI band"
+        assert 0.0 in band_x and 2.0 in band_x

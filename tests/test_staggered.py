@@ -3,6 +3,8 @@ Tests for Callaway-Sant'Anna staggered DiD estimator.
 """
 
 import warnings
+from decimal import Decimal
+from fractions import Fraction
 
 import numpy as np
 import pandas as pd
@@ -4237,6 +4239,56 @@ class TestPscoreTrimParameter:
         with pytest.raises(ValueError, match="pscore_trim must be in"):
             CallawaySantAnna(pscore_trim=0.0)
 
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            None,
+            "0.01",
+            True,
+            np.array([0.01]),
+            Decimal("0.01"),
+            Fraction(1, 100),
+        ],
+    )
+    def test_pscore_trim_type_guard(self, bad):
+        """Non-real-scalar inputs raise ValueError (shared utils helper).
+
+        The old bare `0 < x < 0.5` check raised TypeError on None/str,
+        ACCEPTED a 1-element array, and accepted Decimal/Fraction.
+        """
+        with pytest.raises(ValueError, match="pscore_trim must be"):
+            CallawaySantAnna(pscore_trim=bad)
+
+    def test_pscore_trim_numpy_float_coerced(self):
+        """The shared helper coerces to a builtin float (DMLDiD precedent)."""
+        assert type(CallawaySantAnna(pscore_trim=np.float32(0.01)).pscore_trim) is float
+
+    def test_fit_revalidates_directly_mutated_pscore_trim(self):
+        """Direct attribute mutation is caught by the fit-time re-check.
+
+        Uses a TYPE-guard value (1-element array) the OLD bare range check
+        silently accepted, so this test detects a missed migration of the
+        fit-time site - an out-of-range float would raise under either.
+        """
+        np.random.seed(42)
+        n_units, n_periods = 30, 4
+        units = np.repeat(np.arange(n_units), n_periods)
+        times = np.tile(np.arange(n_periods), n_units)
+        first_treat = np.where(units < 15, 2, 0)
+        data = pd.DataFrame(
+            {
+                "unit": units,
+                "time": times,
+                "first_treat": first_treat,
+                "outcome": np.random.normal(size=n_units * n_periods)
+                + 0.5 * ((first_treat > 0) & (times >= first_treat)),
+            }
+        )
+        cs = CallawaySantAnna()
+        cs.pscore_trim = np.array([0.01])
+        with pytest.raises(ValueError, match="pscore_trim"):
+            cs.fit(data, outcome="outcome", unit="unit", time="time", first_treat="first_treat")
+
     def test_pscore_trim_in_results(self):
         """results.pscore_trim matches the estimator's setting after fit()."""
         np.random.seed(42)
@@ -6180,3 +6232,33 @@ class TestCallawaySantAnnaClusterSafetyGates:
             f"reference SE ({res_ref.overall_se}) — both bootstraps must "
             "draw at the same effective PSU level."
         )
+
+
+@pytest.fixture(scope="module")
+def alpha_fitted():
+    data = generate_staggered_data(n_units=40, n_periods=6)
+    return CallawaySantAnna().fit(
+        data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+    )
+
+
+class TestSummaryAlphaContract:
+    """summary(alpha=...) never recomputes stored inference.
+
+    Family-wide guard (results_base._require_fit_alpha): a non-fit alpha
+    raises instead of silently relabeling the confidence-interval header
+    over fit-time stored intervals; alpha=0.0 (previously swallowed by the
+    falsy `alpha or self.alpha` idiom) now raises too.
+    """
+
+    @pytest.mark.parametrize("bad_alpha", [0.10, 0.0])
+    def test_summary_rejects_non_fit_alpha(self, alpha_fitted, bad_alpha):
+        with pytest.raises(ValueError, match="never recomputes"):
+            alpha_fitted.summary(alpha=bad_alpha)
+
+    def test_summary_accepts_fit_alpha(self, alpha_fitted):
+        assert alpha_fitted.summary(alpha=alpha_fitted.alpha) == alpha_fitted.summary()
+
+    def test_print_summary_relays_the_guard(self, alpha_fitted):
+        with pytest.raises(ValueError, match="never recomputes"):
+            alpha_fitted.print_summary(alpha=0.10)

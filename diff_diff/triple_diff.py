@@ -53,6 +53,7 @@ from diff_diff.utils import (
     staggered_ddd_ctor_offenders,
     validate_anticipation,
     validate_n_bootstrap,
+    validate_pscore_trim,
 )
 
 if TYPE_CHECKING:
@@ -649,27 +650,10 @@ class TripleDifference(
                 f"got '{bootstrap_weights}'"
             )
         validate_n_bootstrap(n_bootstrap)
-        # pscore_trim gains the staggered engine's range check (row M-142). It
-        # was previously unvalidated here, but the value feeds
-        # np.clip(pscore, trim, 1 - trim) in both engines: trim=0 disables the
-        # overlap guard that keeps the 1/(1-p) IPW/DR weights finite, and
-        # trim >= 0.5 inverts the clip bounds.
-        # The TYPE guard precedes the range check so the documented ValueError is
-        # what users actually see: a bare `0 < x < 0.5` raises an incidental
-        # TypeError on None/str/complex/list, an ambiguous-truth ValueError on a
-        # multi-element array, and - worst - ACCEPTS a 1-element array, storing an
-        # ndarray as the parameter. Same shape as validate_n_bootstrap: reject
-        # bool (True would read as a 1.0 trim), then non-real-scalar, then
-        # non-finite, then the range.
-        if isinstance(pscore_trim, bool) or not isinstance(
-            pscore_trim, (int, float, np.integer, np.floating)
-        ):
-            raise ValueError(
-                f"pscore_trim must be a real number in (0, 0.5), got {pscore_trim!r} "
-                f"(type {type(pscore_trim).__name__})"
-            )
-        if not np.isfinite(pscore_trim) or not 0 < pscore_trim < 0.5:
-            raise ValueError(f"pscore_trim must be in (0, 0.5), got {pscore_trim}")
+        # pscore_trim range check per row M-142 (trim=0 disables the overlap
+        # guard, trim >= 0.5 inverts the clip bounds); type guard + coercion
+        # via the shared utils.validate_pscore_trim helper.
+        pscore_trim = validate_pscore_trim(pscore_trim)
         if rank_deficient_action not in ["warn", "error", "silent"]:
             raise ValueError(
                 f"rank_deficient_action must be 'warn', 'error', or 'silent', "

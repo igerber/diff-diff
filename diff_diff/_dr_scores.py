@@ -373,6 +373,19 @@ def chang_rcs_lambda_slope(
     y, D, T, m2_hat, ps = _validate_chang_rcs_inputs(
         y, D, T, m2_hat, ps, p_hat, lam_hat, "chang_rcs_lambda_slope"
     )
+    return _chang_rcs_lambda_slope_validated(y, D, T, m2_hat, ps, p_hat, lam_hat)
+
+
+def _chang_rcs_lambda_slope_validated(
+    y: np.ndarray,
+    D: np.ndarray,
+    T: np.ndarray,
+    m2_hat: np.ndarray,
+    ps: np.ndarray,
+    p_hat: float,
+    lam_hat: float,
+) -> float:
+    # Assumes inputs already coerced/validated by _validate_chang_rcs_inputs.
     odds = (D - ps) / (1.0 - ps)
     term1 = (
         -((1.0 - 2.0 * lam_hat) / (lam_hat**2 * (1.0 - lam_hat) ** 2))
@@ -400,7 +413,9 @@ def chang_rcs_score_augmented(
     (T_i - lam_hat)`` — Theorem 2's combined score: the treated-share
     correction ``G_2p = -theta/p_hat`` folds into the score exactly as in
     Case 1, while the lambda-correction stays an EXPLICIT extra term
-    (``G_2lambda`` computed internally via :func:`chang_rcs_lambda_slope`).
+    (``G_2lambda`` computed internally via
+    :func:`_chang_rcs_lambda_slope_validated`, the shared slope kernel
+    behind :func:`chang_rcs_lambda_slope`).
     The variance estimator is ``SE = sqrt(mean(psi_bar**2) / N)``.
 
     Per the methodology review: "Omitting the λ-correction term is a
@@ -408,6 +423,29 @@ def chang_rcs_score_augmented(
     bare ``psi_2`` squared is NOT the Theorem 2 estimator, and no DoubleML
     parity anchor exists for this object (``DoubleMLDIDCSBinary``'s variance
     omits the lambda term; see the committed characterization spike).
+    """
+    return _chang_rcs_score_augmented_with_slope(
+        summand, D, T, y, m2_hat, ps, theta, p_hat, lam_hat
+    )[0]
+
+
+def _chang_rcs_score_augmented_with_slope(
+    summand: np.ndarray,
+    D: np.ndarray,
+    T: np.ndarray,
+    y: np.ndarray,
+    m2_hat: np.ndarray,
+    ps: np.ndarray,
+    theta: float,
+    p_hat: float,
+    lam_hat: float,
+) -> Tuple[np.ndarray, float]:
+    """Internal variant returning ``(psi_bar, g2_lambda)``.
+
+    Validates once and computes the O(n) lambda-slope pass once, so a
+    caller needing both the augmented score and the ``G_2lambda``
+    diagnostic (the DMLDiD RCS cell loop) avoids the duplicate
+    validation + slope pass of calling the two public functions.
     """
     context = "chang_rcs_score_augmented"
     summand = np.asarray(summand, dtype=np.float64)
@@ -422,5 +460,5 @@ def chang_rcs_score_augmented(
     y, D, T, m2_hat, ps = _validate_chang_rcs_inputs(y, D, T, m2_hat, ps, p_hat, lam_hat, context)
     if summand.shape[0] != y.shape[0]:
         raise ValueError(f"{context}: summand has length {summand.shape[0]}, expected {y.shape[0]}")
-    g2_lambda = chang_rcs_lambda_slope(y, D, T, m2_hat, ps, p_hat, lam_hat)
-    return summand - D * theta / p_hat + g2_lambda * (T - lam_hat)
+    g2_lambda = _chang_rcs_lambda_slope_validated(y, D, T, m2_hat, ps, p_hat, lam_hat)
+    return summand - D * theta / p_hat + g2_lambda * (T - lam_hat), g2_lambda

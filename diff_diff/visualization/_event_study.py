@@ -299,7 +299,18 @@ def plot_event_study(
             ci_lower = ci_lower_override[period]
             assert ci_upper_override is not None
             ci_upper = ci_upper_override[period]
-        elif np.isfinite(std_err):
+        elif np.isfinite(std_err) and (
+            std_err > 0 or (period == reference_period and effect == 0.0 and std_err == 0.0)
+        ):
+            # A zero/negative-SE row has all-NaN stored inference
+            # (safe_inference), and effect +/- z*0 would draw a finite
+            # zero-width interval for it - the prohibited partial-NaN
+            # pattern (plot_group_effects twin). The one retention: an
+            # auto-inferred reference row (effect exactly 0, se 0) keeps
+            # its degenerate constraint bar per the REGISTRY Event Study
+            # Plotting contract; the effect == 0.0 conjunct stops the
+            # unconditional -1 reference fallback from retaining a
+            # genuinely estimated zero-SE row.
             ci_lower = effect - critical_value * std_err
             ci_upper = effect + critical_value * std_err
         else:
@@ -1061,6 +1072,46 @@ def _extract_plot_data(
     )
 
 
+def _honest_raw_route_periods(
+    periods: Optional[List[Any]],
+    effects_dict: Dict[Any, float],
+    se_dict: Dict[Any, float],
+    reference_period: Optional[Any],
+) -> List[Any]:
+    """Period roster for the raw (non-container) honest-plot routes.
+
+    Mirrors the container route's ``_retained`` semantics: rows with
+    undefined inference (non-finite or zero SE) carry no honest interval
+    and would otherwise be painted with a zero-width original CI plus the
+    aggregate honest interval (or KeyError on per-period bounds), so they
+    are excluded up front; the reference row is kept as a
+    normalization-only anchor.
+    """
+
+    def _defined(p: Any) -> bool:
+        s = se_dict.get(p, float("nan"))
+        return bool(np.isfinite(s) and float(s) > 0)
+
+    if periods is None:
+        retained = [p for p in sorted(effects_dict.keys()) if _defined(p) or p == reference_period]
+    else:
+        _bad = [p for p in periods if p in se_dict and not _defined(p) and p != reference_period]
+        if _bad:
+            raise ValueError(
+                f"Requested periods {_bad} have undefined inference "
+                "(non-finite or zero SE) on this event-study surface: "
+                "HonestDiD excludes such rows from the sensitivity "
+                "analysis and they carry no honest interval."
+            )
+        retained = list(periods)
+    if not retained:
+        raise ValueError(
+            "No valid data to plot: every period on this event-study "
+            "surface has undefined inference (non-finite or zero SE)."
+        )
+    return retained
+
+
 def plot_honest_event_study(
     honest_results: "HonestDiDResults",
     *,
@@ -1090,9 +1141,14 @@ def plot_honest_event_study(
     honest_results : HonestDiDResults
         Results from HonestDiD.fit() that include event_study_bounds.
     periods : list, optional
-        Periods to plot. If None, uses all available periods.
+        Periods to plot. If None, uses all periods with defined inference
+        (non-container routes exclude zero/non-finite-SE rows, which carry
+        no honest interval; explicitly requesting one raises ValueError).
     reference_period : any, optional
-        Reference period to show as hollow marker.
+        Reference period to show as hollow marker. If None, inferred from
+        the results object where possible (a ``reference_period``
+        attribute, the container's reference marks, or a
+        normalization-constraint row on fit-time dict surfaces).
     figsize : tuple, default=(10, 6)
         Figure size.
     title : str
@@ -1188,16 +1244,32 @@ def plot_honest_event_study(
         # MultiPeriodDiDResults
         effects_dict = {p: pe.effect for p, pe in original_results.period_effects.items()}
         se_dict = {p: pe.se for p, pe in original_results.period_effects.items()}
-        if periods is None:
-            periods = list(original_results.period_effects.keys())
+        if reference_period is None:
+            reference_period = getattr(original_results, "reference_period", None)
+        periods = _honest_raw_route_periods(periods, effects_dict, se_dict, reference_period)
     elif hasattr(original_results, "event_study_effects"):
-        # CallawaySantAnnaResults
+        # CallawaySantAnnaResults (fit-time dict surface)
         effects_dict = {
             t: data["effect"] for t, data in original_results.event_study_effects.items()
         }
         se_dict = {t: data["se"] for t, data in original_results.event_study_effects.items()}
-        if periods is None:
-            periods = sorted(original_results.event_study_effects.keys())
+        if reference_period is None:
+            reference_period = getattr(original_results, "reference_period", None)
+        if reference_period is None:
+            # HonestDiD's own reference signature (honest_did.py): a
+            # normalization-constraint row, NOT any row whose inference
+            # happens to be undefined. No signature match (e.g. a
+            # marker-less varying-base surface) means no inferred
+            # reference - deliberately no -1 fallback here.
+            for t, data in original_results.event_study_effects.items():
+                if (
+                    data.get("n_groups", data.get("n_obs", 1)) == 0
+                    and data["effect"] == 0.0
+                    and not np.isfinite(data["se"])
+                ):
+                    reference_period = t
+                    break
+        periods = _honest_raw_route_periods(periods, effects_dict, se_dict, reference_period)
     else:
         raise TypeError("Cannot extract event study data from original_results")
 

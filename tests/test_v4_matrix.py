@@ -129,11 +129,13 @@ _MD_TOKEN_RE = re.compile(r"\[(M-\d{3})\]")
 # spent/earmarked) = 121; + the phase-3(b) DDD merge rows (M-140/M-141 carry
 # fit-time aggregate=/balance_e= onto the surviving TripleDifference, M-142 the
 # pscore_trim tightening) = 124; + the CiC results-field rename (M-143) = 125;
-# + the family-wide anticipation validation row (M-144) = 126.
+# + the family-wide anticipation validation row (M-144) = 126; + the DML
+# review-follow-ups pair (M-145 family-wide pscore_trim validation, M-146
+# staggered-family summary-alpha guard) = 128.
 # Ids are never reused and terminal rows are never deleted, so the ledger
 # only grows - raise the floor when rows are added; a lower parse count
 # means scanner/format drift or an illegal row deletion.
-ROW_COUNT_FLOOR = 126
+ROW_COUNT_FLOOR = 128
 
 # Committed snapshot of the shipped id set ("ids are never deleted or reused"
 # contract - a delete-one-add-one edit keeps the count above the floor but trips
@@ -188,6 +190,7 @@ _INITIAL_ID_RANGES = [
     (140, 142),
     (143, 143),
     (144, 144),
+    (145, 146),
 ]
 EXPECTED_INITIAL_IDS = frozenset(
     f"M-{n:03d}" for lo, hi in _INITIAL_ID_RANGES for n in range(lo, hi + 1)
@@ -586,14 +589,14 @@ def test_initial_ids_never_deleted():
     """The shipped id set is immutable: ids are never deleted or reused (spec section 11).
 
     ROW_COUNT_FLOOR alone would let a delete-one-add-one edit pass; this snapshot cannot.
-    Extends as rows ship (126 as of the family-wide anticipation validation row:
+    Extends as rows ship (128 as of the DML review-follow-ups pair:
     Phase 1 + diagnostic-family + M-092/M-093 + M-094..M-096 + the
     M-097..M-115 public-function completeness sweep + M-117..M-120/M-122 +
     M-123/M-124 + M-125 + M-126 + M-127..M-131 + M-132..M-135 +
-    M-136..M-138 + M-139 + M-140..M-142 + M-143 + M-144)."""
+    M-136..M-138 + M-139 + M-140..M-142 + M-143 + M-144 + M-145/M-146)."""
     missing = sorted(EXPECTED_INITIAL_IDS - set(_ROW_IDS))
     assert not missing, f"ledger rows deleted (ids are permanent): {missing}"
-    assert len(EXPECTED_INITIAL_IDS) == 126
+    assert len(EXPECTED_INITIAL_IDS) == 128
 
 
 def test_version_tuple_pads_to_three_components():
@@ -1057,17 +1060,18 @@ def _changes_at_4_0(row):
 
     Keyed on the two LIFECYCLE version fields only - a symbol removed at 4.0, or one
     whose deprecation warning starts firing at 4.0 (the ``field-flip`` family, removed
-    at 5.0). 108 of the 126 rows qualify.
+    at 5.0). 108 of the 128 rows qualify.
 
-    The 18 that do not, and why (this enumeration is the contract - a reader of the
+    The 20 that do not, and why (this enumeration is the contract - a reader of the
     guide must be able to trust that nothing 4.0-relevant was dropped):
 
     - 12 ``behavior`` rows with ``introduced_in: 3.9`` and no dep/rem: already shipped
       in 3.9, so there is no 4.0 action. They get their own guide section, not an
       appendix row.
-    - 1 ``behavior`` row with ``introduced_in: 4.0`` and no deprecation/removal
-      fields (``M-144``, the post-cut anticipation validation tightening): it lands
-      AT 4.0 but removes/deprecates nothing, so it appears in the guide's
+    - 3 ``behavior`` rows with ``introduced_in: 4.0`` and no deprecation/removal
+      fields (``M-144`` anticipation validation, ``M-145`` pscore_trim validation,
+      ``M-146`` summary-alpha guard - the post-cut validation tightenings): they land
+      AT 4.0 but remove/deprecate nothing, so they appear in the guide's
       "Remaining 4.0 changes" prose, not the ledger-derived appendix.
     - ``M-062``, ``M-063``: aliases, introduce-only / all lifecycle fields null.
     - ``M-031``, ``M-082``: ``deprecated_in: 3.9`` with ``removed_in: null``, because

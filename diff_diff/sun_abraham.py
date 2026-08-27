@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from diff_diff.survey import ResolvedSurveyDesign, SurveyDesign
 from diff_diff.linalg import LinearRegression
 from diff_diff.results import _format_survey_block, _get_significance_stars
-from diff_diff.results_base import BaseResults
+from diff_diff.results_base import BaseResults, _require_fit_alpha
 from diff_diff.utils import (
     absorbed_fe_cr1_k_increment,
     absorbed_fe_rank,
@@ -263,14 +263,19 @@ class SunAbrahamResults(BaseResults):
         Parameters
         ----------
         alpha : float, optional
-            Significance level. Defaults to alpha used in estimation.
+            Accepted for signature uniformity. The stored intervals were
+            computed at fit time; a value different from the stored
+            ``alpha`` raises ValueError rather than silently recomputing
+            or relabeling (bootstrap percentile intervals cannot be
+            reconstructed from the reported SE). Re-fit at the desired
+            alpha instead.
 
         Returns
         -------
         str
             Formatted summary.
         """
-        alpha = alpha or self.alpha
+        alpha = _require_fit_alpha(alpha, self.alpha)
         conf_level = int((1 - alpha) * 100)
 
         lines = [

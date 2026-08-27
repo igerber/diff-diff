@@ -35,6 +35,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   committed `DoubleMLDIDCSBinary` characterization spike (no parity oracle
   exists — DoubleML's RCS score differs and omits the λ term).
 
+### Changed
+- **`ContinuousDiD` rejects `pscore_trim=0`** (ledger row M-145): the bound
+  tightens from `[0, 0.5)` to `(0, 0.5)` — `trim=0` disabled the
+  `np.clip(pscore, trim, 1 - trim)` overlap guard that keeps the `1/(1-p)`
+  IPW/DR weights finite (the TripleDifference M-142 rationale). Validation now
+  runs through the shared `utils.validate_pscore_trim`, so the error message
+  wording changed, non-real-scalar inputs (`None`, strings, `Decimal`/
+  `Fraction`, 1-element arrays) raise `ValueError` instead of `TypeError` (or
+  silent acceptance, for the 1-element array), and the stored value is coerced
+  to built-in `float`.
+- **`pscore_trim` validation unified on `utils.validate_pscore_trim`**
+  (M-145): `CallawaySantAnna` gains the same type guard (previously a bare
+  range check: `None`/str raised `TypeError`, a 1-element array and
+  `Decimal`/`Fraction` were accepted) at construction and at the fit-path
+  mutation re-check; `TripleDifference`, `CallawaySantAnna`, and
+  `ContinuousDiD` now store the value coerced to built-in `float`; `LWDiD`'s
+  message wording changed (guard behavior unchanged). The deprecated
+  `StaggeredTripleDifference` deliberately keeps its permissive construction
+  shape (M-013/M-144 posture).
+- **Staggered-family `summary(alpha=...)`/`print_summary(alpha=...)` reject a
+  non-fit alpha** (M-146): `CallawaySantAnnaResults` and its siblings
+  (StaggeredTripleDiff, ChaisemartinDHaultfoeuille, Imputation, EfficientDiD,
+  TwoStage, Stacked, SunAbraham results) previously relabeled the
+  confidence-interval header at the requested alpha while printing the
+  fit-time stored intervals — silent coverage mislabeling (bootstrap
+  percentile intervals cannot be reconstructed from the SE). A value different
+  from the fit-time `alpha` now raises `ValueError` via the shared
+  `results_base._require_fit_alpha` guard (the DMLDiD/EventStudyResults
+  precedent); `alpha=0.0`, previously swallowed by a falsy-`or` default,
+  raises too. Re-fit at the desired alpha instead.
+
+### Fixed
+- **`plot_event_study` zero-SE pointwise gate** (the `plot_group_effects`
+  twin): the `effect ± z·SE` reconstruction NaN-gates zero/negative-SE rows —
+  their stored inference is all-NaN, and a finite zero-width interval
+  presented defined inference for them. Auto-inferred reference rows (effect
+  0, se 0) on the raw `event_study_effects` route retain their degenerate
+  constraint bar per the REGISTRY reference-retention contract; the
+  `EventStudyResults` container route after an explicit `reference_period=`
+  (which discards stored-interval overrides) no longer draws spurious
+  zero-width bars either.
+- **`plot_honest_event_study` raw (non-container) routes** now mirror the
+  container's retained-row semantics: zero/non-finite-SE periods are excluded
+  up front instead of drawing a zero-width original CI beside honest
+  inference that was never computed for them (explicitly requesting one
+  raises); the reference period is auto-inferred (a `reference_period`
+  attribute or HonestDiD's own constraint-row signature — never a bare `-1`
+  fallback), enabling the existing reference tolerance on these routes; an
+  all-undefined surface raises instead of rendering a blank figure.
+
+### Internal
+- `DMLDiD`'s repeated-cross-section cell loop computes the Case 2 λ-slope
+  `Ĝ₂λ` once per cell via `_dr_scores._chang_rcs_score_augmented_with_slope`
+  (previously twice: inside `chang_rcs_score_augmented` and again for the
+  `g2_lambda` diagnostic, each with its own input-validation pass). Public
+  score functions and all numerics unchanged (bitwise-pinned).
+
 ## [3.10.0] - 2026-08-22
 
 ### Added

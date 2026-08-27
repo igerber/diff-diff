@@ -1082,6 +1082,10 @@ class TestGateFIntrospectionAndValidation:
     def test_pscore_trim_interior_accepted(self, good):
         assert TripleDifference(pscore_trim=good).pscore_trim == good
 
+    def test_pscore_trim_coerced_to_builtin_float(self):
+        """The shared utils.validate_pscore_trim helper coerces on store."""
+        assert type(TripleDifference(pscore_trim=np.float32(0.02)).pscore_trim) is float
+
     def test_set_params_pscore_trim_is_transactional(self):
         est = TripleDifference(pscore_trim=0.01)
         with pytest.raises(ValueError):

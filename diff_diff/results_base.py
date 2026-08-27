@@ -92,6 +92,26 @@ class BaseResults:
     __slots__ = ()
 
 
+def _require_fit_alpha(alpha: Optional[float], fit_alpha: float) -> float:
+    """Reject a non-fit ``alpha``; summaries never recompute stored inference.
+
+    Shared by the staggered-family ``summary()`` methods (CallawaySantAnna
+    and siblings): stored intervals were computed at fit time, and bootstrap
+    percentile intervals cannot be reconstructed from the reported SE, so a
+    requested alpha other than the fit alpha raises instead of silently
+    relabeling the confidence-interval header.
+    """
+    if alpha is not None and alpha != fit_alpha:
+        raise ValueError(
+            f"This result stores intervals computed at alpha={fit_alpha}; "
+            f"summary() never recomputes or relabels stored inference "
+            f"(requested alpha={alpha}). Re-fit with the desired alpha "
+            "(bootstrap percentile intervals cannot be reconstructed from "
+            "the reported SE)."
+        )
+    return fit_alpha
+
+
 def _json_safe_label(value: Any) -> Any:
     """Convert an event-time label to a JSON-serializable form.
 

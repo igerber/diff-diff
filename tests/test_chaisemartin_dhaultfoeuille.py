@@ -12396,3 +12396,29 @@ class TestByPathPredictHetPlacebo:
         assert np.isnan(h["t_stat"])
         assert np.isnan(h["p_value"])
         assert h["n_obs"] == 4
+
+
+@pytest.fixture(scope="module")
+def alpha_fitted():
+    data = generate_reversible_did_data(n_groups=40, n_periods=5, seed=1)
+    return ChaisemartinDHaultfoeuille().fit(
+        data, outcome="outcome", unit="group", time="period", treatment="treatment"
+    )
+
+
+class TestSummaryAlphaContract:
+    """summary(alpha=...) never recomputes stored inference.
+
+    Family-wide guard (results_base._require_fit_alpha): a non-fit alpha
+    raises instead of silently relabeling the confidence-interval header
+    over fit-time stored intervals; alpha=0.0 (previously swallowed by the
+    falsy `alpha or self.alpha` idiom) now raises too.
+    """
+
+    @pytest.mark.parametrize("bad_alpha", [0.10, 0.0])
+    def test_summary_rejects_non_fit_alpha(self, alpha_fitted, bad_alpha):
+        with pytest.raises(ValueError, match="never recomputes"):
+            alpha_fitted.summary(alpha=bad_alpha)
+
+    def test_summary_accepts_fit_alpha(self, alpha_fitted):
+        assert alpha_fitted.summary(alpha=alpha_fitted.alpha) == alpha_fitted.summary()

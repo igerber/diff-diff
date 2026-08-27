@@ -46,7 +46,12 @@ from diff_diff.survey import (
     build_unit_first_row_index,
     compute_survey_vcov,
 )
-from diff_diff.utils import safe_inference, validate_anticipation, validate_n_bootstrap
+from diff_diff.utils import (
+    safe_inference,
+    validate_anticipation,
+    validate_n_bootstrap,
+    validate_pscore_trim,
+)
 
 if TYPE_CHECKING:
     from diff_diff.survey import ResolvedSurveyDesign, SurveyDesign
@@ -218,7 +223,7 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
         ``overall_att`` / ATT(d) level and in its doubly-robust standard errors.
     pscore_trim : float, default=0.01
         Propensity-score trimming bound for the ``dr`` path (scores clipped to
-        ``[pscore_trim, 1 - pscore_trim]``).
+        ``[pscore_trim, 1 - pscore_trim]``). Must be in ``(0, 0.5)``.
     epv_threshold : float, default=10.0
         Events-per-variable threshold for the ``dr`` propensity logit diagnostics.
     pscore_fallback : str, default="error"
@@ -339,10 +344,9 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
                 f"Invalid pscore_fallback: '{self.pscore_fallback}'. "
                 "Must be 'unconditional' or 'error'."
             )
-        if not (np.isfinite(self.pscore_trim) and 0.0 <= self.pscore_trim < 0.5):
-            raise ValueError(
-                f"Invalid pscore_trim: {self.pscore_trim}. " "Must be finite and in [0, 0.5)."
-            )
+        # Shared helper (utils.validate_pscore_trim): rejects 0 (which would
+        # disable the overlap clip) and non-real-scalar inputs, coerces to float.
+        self.pscore_trim = validate_pscore_trim(self.pscore_trim)
         if not (np.isfinite(self.epv_threshold) and self.epv_threshold > 0):
             raise ValueError(
                 f"Invalid epv_threshold: {self.epv_threshold}. Must be finite and > 0."
