@@ -1094,16 +1094,6 @@ def _honest_raw_route_periods(
 
     if periods is None:
         retained = [p for p in sorted(effects_dict.keys()) if _defined(p) or p == reference_period]
-        # The reference row is a normalization anchor, not an estimate: a
-        # surface whose every ESTIMATED row has undefined inference must
-        # raise, not render an anchor-only figure (REGISTRY all-undefined
-        # rejection).
-        if not any(_defined(p) for p in retained):
-            raise ValueError(
-                "No valid data to plot: every estimated period on this "
-                "event-study surface has undefined inference (non-finite "
-                "or zero SE)."
-            )
     else:
         _bad = [p for p in periods if p in se_dict and not _defined(p) and p != reference_period]
         if _bad:
@@ -1114,10 +1104,17 @@ def _honest_raw_route_periods(
                 "analysis and they carry no honest interval."
             )
         retained = list(periods)
-    if not retained:
+    # The reference row is a normalization anchor, not an estimate: with no
+    # defined ESTIMATED period retained - an all-undefined surface, or an
+    # explicit periods=[reference] selection - raise rather than render a
+    # meaningless anchor-only figure (REGISTRY all-undefined rejection;
+    # applies to BOTH the implicit and explicit selection branches).
+    if not any(_defined(p) for p in retained):
         raise ValueError(
-            "No valid data to plot: every period on this event-study "
-            "surface has undefined inference (non-finite or zero SE)."
+            "No valid data to plot: no retained period on this "
+            "event-study surface carries defined inference (non-finite "
+            "or zero SE everywhere, or only the reference anchor was "
+            "selected)."
         )
     return retained
 

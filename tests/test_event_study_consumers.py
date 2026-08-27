@@ -2253,6 +2253,25 @@ class TestHonestRawRouteZeroSE:
         with pytest.raises(ValueError, match="No valid data to plot"):
             plot_honest_event_study(self._honest(original), show=False)
 
+    def test_explicit_reference_only_selection_raises(self):
+        # CI review round-3 P1: periods=[reference] on an all-undefined
+        # surface must not bypass the defined-estimate guard via the
+        # explicit branch.
+        from types import SimpleNamespace
+
+        from diff_diff.visualization import plot_honest_event_study
+
+        nan = float("nan")
+        original = SimpleNamespace(
+            event_study_effects={
+                -1: {"effect": 0.0, "se": nan, "n_groups": 0},
+                0: {"effect": 1.0, "se": 0.0, "n_groups": 3},
+                1: {"effect": 1.2, "se": nan, "n_groups": 3},
+            }
+        )
+        with pytest.raises(ValueError, match="No valid data to plot"):
+            plot_honest_event_study(self._honest(original), periods=[-1], show=False)
+
     def test_all_rows_undefined_raises_not_blank_figure(self):
         from types import SimpleNamespace
 

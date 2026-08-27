@@ -514,9 +514,11 @@ def validate_pscore_trim(value: Any) -> float:
     range check (validate_n_bootstrap shape): a bare ``0 < x < 0.5``
     raises an incidental TypeError on None/str/complex, an
     ambiguous-truth error on a multi-element array, and ACCEPTS a
-    1-element array. StaggeredTripleDifference deliberately keeps its
-    bare range check (construction-permissive dying class, ledger
-    M-013/M-144).
+    1-element array. Accepted values must additionally satisfy
+    ``1 - trim < 1`` in binary64: a sub-ulp positive trim would round the
+    upper clip bound to exactly 1.0, disabling the guard like ``trim=0``.
+    StaggeredTripleDifference deliberately keeps its bare range check
+    (construction-permissive dying class, ledger M-013/M-144).
     """
     if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
         raise ValueError(
