@@ -461,7 +461,9 @@ class LWDiD(BaseEstimator):
         Random seed for bootstrap inference.
     pscore_trim : float, default 0.01
         Propensity score trimming threshold. Scores below this value
-        or above (1 - pscore_trim) are clipped. Used by IPW/DR/PSM.
+        or above (1 - pscore_trim) are clipped. Used by IPW/DR/PSM. Must be in
+        ``(0, 0.5)`` and large enough that ``1 - pscore_trim < 1`` in
+        float64 (a sub-ulp trim would disable the upper clip).
     n_neighbors : int, default 1
         Number of nearest neighbors for PSM matching.
     caliper : float or None, default None

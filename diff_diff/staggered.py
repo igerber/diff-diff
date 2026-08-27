@@ -450,7 +450,9 @@ class CallawaySantAnna(
     pscore_trim : float, default=0.01
         Trimming bound for propensity scores. Scores are clipped to
         ``[pscore_trim, 1 - pscore_trim]`` before weight computation
-        in IPW and DR estimation. Must be in ``(0, 0.5)``.
+        in IPW and DR estimation. Must be in ``(0, 0.5)`` and large
+        enough that ``1 - pscore_trim < 1`` in float64 (a sub-ulp trim
+        would disable the upper clip).
     panel : bool, default=True
         Whether the data is a balanced/unbalanced panel (units observed
         across multiple time periods). Set to ``False`` for stationary

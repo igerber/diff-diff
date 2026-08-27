@@ -223,7 +223,9 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
         ``overall_att`` / ATT(d) level and in its doubly-robust standard errors.
     pscore_trim : float, default=0.01
         Propensity-score trimming bound for the ``dr`` path (scores clipped to
-        ``[pscore_trim, 1 - pscore_trim]``). Must be in ``(0, 0.5)``.
+        ``[pscore_trim, 1 - pscore_trim]``). Must be in ``(0, 0.5)`` and
+        large enough that ``1 - pscore_trim < 1`` in float64 (a sub-ulp
+        trim would disable the upper clip).
     epv_threshold : float, default=10.0
         Events-per-variable threshold for the ``dr`` propensity logit diagnostics.
     pscore_fallback : str, default="error"

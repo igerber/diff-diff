@@ -279,7 +279,9 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
     pscore_trim : float, default 0.01
         Propensity clip bound: fitted propensities are clipped to
         ``[pscore_trim, 1 - pscore_trim]`` after the extremeness warning
-        (clip, never drop; Chang's paper gives no trimming rule).
+        (clip, never drop; Chang's paper gives no trimming rule). Must be in
+        ``(0, 0.5)`` and large enough that ``1 - pscore_trim < 1`` in
+        float64 (a sub-ulp trim would disable the upper clip).
     panel : bool, default True
         ``True`` estimates Chang's Case 1 (repeated outcomes) on panel data
         (one row per unit-period, cell score on outcome CHANGES). ``False``

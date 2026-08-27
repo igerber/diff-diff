@@ -444,7 +444,9 @@ class TripleDifference(
         Significance level for confidence intervals.
     pscore_trim : float, default=0.01
         Trimming threshold for propensity scores. Scores below this value
-        or above (1 - pscore_trim) are clipped to avoid extreme weights.
+        or above (1 - pscore_trim) are clipped to avoid extreme weights. Must be in
+        ``(0, 0.5)`` and large enough that ``1 - pscore_trim < 1`` in
+        float64 (a sub-ulp trim would disable the upper clip).
     rank_deficient_action : str, default="warn"
         Action when design matrix is rank-deficient (linearly dependent columns):
 
