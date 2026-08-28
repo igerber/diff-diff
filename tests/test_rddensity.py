@@ -60,12 +60,19 @@ RTOL = 1e-8
 #   pilot quantities carry ~1e-8 relative float noise (floors_0_0 and
 #   floors_50_0 are numerically the same selector run where the nLocalMin
 #   gate does not bind).
+# - the headstart p=3 configs: the real-data selector chain at order p+2=5
+#   leaves the jackknife SEs with ~6e-9 relative noise under Accelerate and
+#   ~1e-8 under CI's OpenBLAS (se_right breached the 1e-8 bar by 0.5% on
+#   the ubuntu py3.14 pure-Python leg); 5e-8 keeps ~5x headroom over the
+#   worst observed BLAS while staying an order under the floor overrides.
 RTOL_OVERRIDES = {
     ("dgp_normal", "p7"): 2e-3,
     ("dgp_masspoints", "floors_0_0"): 1e-7,
     ("dgp_masspoints", "floors_50_0"): 1e-7,
     ("dgp_masspoints_small", "floors_0_0"): 1e-7,
     ("dgp_masspoints_small", "floors_50_0"): 1e-7,
+    ("headstart", "p3_each"): 5e-8,
+    ("headstart", "p3_common"): 5e-8,
 }
 
 
