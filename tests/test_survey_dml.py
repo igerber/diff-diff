@@ -475,6 +475,36 @@ class TestClusterReportingProvenance:
         assert "cluster=" not in str(practitioner_next_steps(panel_plain))
 
 
+class TestSurveyMetadataRawScale:
+    """survey_metadata provenance must be on the RAW weight scale: resolve()
+    rescales pweights to mean 1, so recomputing at the estimation index
+    level with the resolved weights would misreport sum_weights and
+    weight_range (the module fixtures' uniform(0.5, 2.0) weights are
+    deliberately non-unit-scale)."""
+
+    def test_panel_metadata_uses_raw_unit_weights(self, panel_df, panel_survey):
+        md = panel_survey.survey_metadata
+        unit_w = panel_df.groupby("unit")["w"].first()
+        np.testing.assert_allclose(md.sum_weights, unit_w.sum(), rtol=1e-12)
+        np.testing.assert_allclose(md.weight_range, (unit_w.min(), unit_w.max()), rtol=1e-12)
+
+    def test_rcs_metadata_uses_raw_obs_weights(self, rcs_df, rcs_survey):
+        md = rcs_survey.survey_metadata
+        w = rcs_df["w"]
+        np.testing.assert_allclose(md.sum_weights, w.sum(), rtol=1e-12)
+        np.testing.assert_allclose(md.weight_range, (w.min(), w.max()), rtol=1e-12)
+
+    def test_injected_cluster_metadata_uses_raw_unit_weights(self, panel_df):
+        # PSU-less design + cluster=: metadata is recomputed on the inject
+        # path AND again at unit level — the final values must still be the
+        # raw unit-level scale.
+        res = _fit(panel_df, survey=SurveyDesign(weights="w", strata="stratum"), cluster="psu")
+        md = res.survey_metadata
+        unit_w = panel_df.groupby("unit")["w"].first()
+        np.testing.assert_allclose(md.sum_weights, unit_w.sum(), rtol=1e-12)
+        np.testing.assert_allclose(md.weight_range, (unit_w.min(), unit_w.max()), rtol=1e-12)
+
+
 # ---------------------------------------------------------------------------
 # 4. Folds
 # ---------------------------------------------------------------------------

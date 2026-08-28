@@ -1861,7 +1861,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
 
         (
             resolved_survey,
-            _survey_weights_raw,
+            _survey_weights_resolved,
             survey_weight_type,
             survey_metadata,
         ) = _resolve_survey_for_fit(survey_design, data, "analytical")
@@ -1873,6 +1873,21 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 "DMLDiD does not support replicate-weight survey designs yet "
                 "(tracked in TODO.md); use a full-design SurveyDesign "
                 "(weights/strata/psu/fpc) instead."
+            )
+
+        # Raw (pre-normalization) per-obs design weights, for metadata
+        # provenance only: compute_survey_metadata expects the ORIGINAL
+        # scale (resolve() rescales pweights to mean 1, so the resolved
+        # .weights would misreport sum_weights/weight_range; the
+        # scale-invariant fields — effective_n, design_effect, df — are
+        # unaffected either way).
+        raw_obs_weights: Optional[np.ndarray] = None
+        if resolved_survey is not None:
+            assert survey_design is not None
+            raw_obs_weights = (
+                data[survey_design.weights].values.astype(np.float64)
+                if survey_design.weights
+                else np.ones(len(data), dtype=np.float64)
             )
 
         effective_survey_design = survey_design
@@ -1895,7 +1910,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 effective_survey_design = SurveyDesign(psu=self.cluster, weight_type="pweight")
                 (
                     resolved_survey,
-                    _survey_weights_raw,
+                    _survey_weights_resolved,
                     survey_weight_type,
                     _synth_metadata,
                 ) = _resolve_survey_for_fit(effective_survey_design, data, "analytical")
@@ -1908,7 +1923,8 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
 
                 effective_survey_design = _dc_replace(survey_design, psu=self.cluster)
                 resolved_survey = _inject_cluster_as_psu(resolved_survey, cluster_ids_for_check)
-                survey_metadata = compute_survey_metadata(resolved_survey, resolved_survey.weights)
+                assert raw_obs_weights is not None
+                survey_metadata = compute_survey_metadata(resolved_survey, raw_obs_weights)
             else:
                 # Both supplied: the design's PSU wins (warn on differing
                 # partitions); the return value is intentionally unused.
@@ -1948,12 +1964,23 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             cell_fn = self._compute_dml_rcs_gt
 
         # Survey metadata reflects the estimation index space (units on the
-        # panel lane; the RCS lane's per-obs design is its own unit level).
+        # panel lane; the RCS lane's per-obs design is its own unit level),
+        # recomputed with RAW weights collapsed the same way (the resolved
+        # unit weights are normalized — see raw_obs_weights above).
         resolved_survey_unit = precomputed.get("resolved_survey_unit")
         if survey_metadata is not None and resolved_survey_unit is not None:
-            survey_metadata = compute_survey_metadata(
-                resolved_survey_unit, resolved_survey_unit.weights
-            )
+            assert raw_obs_weights is not None
+            if self.panel:
+                raw_unit_weights = (
+                    pd.Series(raw_obs_weights, index=df.index)
+                    .groupby(df[unit])
+                    .first()
+                    .reindex(precomputed["all_units"])
+                    .to_numpy(dtype=np.float64)
+                )
+            else:
+                raw_unit_weights = raw_obs_weights
+            survey_metadata = compute_survey_metadata(resolved_survey_unit, raw_unit_weights)
         df_survey = precomputed.get("df_survey")
 
         # PSU-cohesive folds whenever the PSU is strictly coarser than the
