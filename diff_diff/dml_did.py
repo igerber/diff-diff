@@ -2076,10 +2076,13 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     stacklevel=2,
                 )
             else:
+                # Declared-survey marker, NOT resolved_survey_unit: a bare
+                # cluster='s synthesized all-ones weights reduce exactly to
+                # the fixed row masses, so it takes the no-design wording.
                 _weighting_note = (
                     "(survey fits: aggregation weights use survey cohort masses "
                     "— see REGISTRY.md)"
-                    if _has_design
+                    if survey_metadata is not None
                     else "(aggregation weights use fixed cohort row masses — " "see REGISTRY.md)"
                 )
                 warnings.warn(

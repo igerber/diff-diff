@@ -1016,7 +1016,7 @@ estimation. The depth of support varies by estimator and variance method:
      - --
    * - ``DMLDiD``
      - Full (pweight only)
-     - ``n_PSU - n_strata``
+     - Full (TSL; df = ``n_PSU - n_strata``)
      - --
      - Multiplier (PSU)
    * - ``ChangesInChanges`` / ``QDiD``

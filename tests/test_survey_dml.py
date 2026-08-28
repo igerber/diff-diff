@@ -113,6 +113,11 @@ def rcs_survey(rcs_df):
     return _fit(rcs_df, panel=False, survey=_DESIGN)
 
 
+@pytest.fixture(scope="module")
+def rcs_cluster(rcs_df):
+    return _fit(rcs_df, panel=False, cluster="psu")
+
+
 # ---------------------------------------------------------------------------
 # Duck learners for the capability-gate and weight-threading pins
 # ---------------------------------------------------------------------------
@@ -413,6 +418,61 @@ class TestClusterWiring:
         est.cluster = 123  # bypasses __init__ validation
         with pytest.raises(ValueError, match="cluster must be"):
             est.fit(panel_df, covariates=["x1"], **FIT_KW)
+
+
+class TestClusterReportingProvenance:
+    """Bare cluster= carries df_inference but is NOT a survey fit — the
+    reporting and practitioner surfaces must not describe it as one."""
+
+    def test_bare_cluster_rcs_headline_uses_fixed_row_masses(self, rcs_cluster, rcs_survey):
+        from diff_diff._reporting_helpers import describe_target_parameter
+
+        assert rcs_cluster.survey_metadata is None
+        assert rcs_cluster.df_inference is not None
+        bare = describe_target_parameter(rcs_cluster)
+        assert "survey" not in bare["name"]
+        assert "SURVEY" not in bare["definition"]
+        assert "FIXED cohort row masses" in bare["definition"]
+        surv = describe_target_parameter(rcs_survey)
+        assert "survey-cohort-mass-weighted" in surv["name"]
+
+    def test_bare_cluster_panel_headline_keeps_cohort_mass_wording(self, panel_df):
+        # Panel bare cluster= DOES switch to cohort masses (all-ones survey
+        # weights replace per-cell complete-case n_treated) — pin that the
+        # provenance split keeps this branch intact.
+        from diff_diff._reporting_helpers import describe_target_parameter
+
+        res = _fit(panel_df, cluster="psu")
+        desc = describe_target_parameter(res)
+        assert "cohort-mass-weighted" in desc["name"]
+        assert "bare ``cluster=``" in desc["definition"]
+
+    def test_rcs_dropped_warning_wording_by_provenance(self, rcs_df):
+        df = rcs_df.copy()
+        victim = df.index[(df["g"] == 3) & (df["time"] == 3)][0]
+        df.loc[victim, "y"] = np.nan
+        with pytest.warns(UserWarning, match="fixed cohort row masses"):
+            _fit(df, panel=False, cluster="psu", ignore_warnings=False)
+        with pytest.warns(UserWarning, match="survey cohort masses"):
+            _fit(df, panel=False, survey=_DESIGN, ignore_warnings=False)
+
+    def test_practitioner_refit_snippet_preserves_cluster(self, panel_df, rcs_cluster):
+        from diff_diff import practitioner_next_steps
+
+        # Injected cluster on a PSU-less design must survive into the
+        # learner-sensitivity refit (it carries the PSU-cohesive folds and
+        # clustered inference that isolate the learner comparison).
+        res = _fit(panel_df, survey=SurveyDesign(weights="w", strata="stratum"), cluster="psu")
+        text = str(practitioner_next_steps(res))
+        assert "survey_design=" in text
+        assert "cluster='psu'" in text
+        # Bare cluster= keeps its cluster too.
+        assert "cluster='psu'" in str(practitioner_next_steps(rcs_cluster))
+
+    def test_practitioner_refit_snippet_no_cluster_on_plain(self, panel_plain):
+        from diff_diff import practitioner_next_steps
+
+        assert "cluster=" not in str(practitioner_next_steps(panel_plain))
 
 
 # ---------------------------------------------------------------------------

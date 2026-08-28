@@ -544,9 +544,13 @@ def _handle_dml_did(results: Any):
                 "alt = DMLDiD(outcome_learner='sieve', seed=0"
                 + (", panel=False" if getattr(results, "panel", True) is False else "")
                 + (
-                    ", cluster=..."
-                    if getattr(results, "survey_metadata", None) is None
-                    and getattr(results, "df_inference", None) is not None
+                    # cluster_name covers bare cluster=, a design-injected
+                    # cluster (survey_design without PSU + cluster=), and a
+                    # design-owned PSU (where re-passing the same column is a
+                    # silent no-op) — conservative so the refit never drops
+                    # PSU-cohesive folds or clustered inference.
+                    f", cluster={getattr(results, 'cluster_name', None)!r}"
+                    if getattr(results, "cluster_name", None) is not None
                     else ""
                 )
                 + ").fit(\n"
