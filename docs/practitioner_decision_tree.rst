@@ -438,10 +438,11 @@ satisfaction, NPS, or similar. The survey uses stratified sampling, clustering (
 by geography), or probability weights.
 
 **Answer:** Use a survey-capable method above, combined with
-:class:`~diff_diff.SurveyDesign`. (:class:`~diff_diff.LWDiD` and
-:class:`~diff_diff.DMLDiD` are the exceptions: they accept no
-``survey_design`` parameter at all — see the
-:ref:`survey-design-support` matrix.)
+:class:`~diff_diff.SurveyDesign`. (:class:`~diff_diff.LWDiD` is the
+exception: it accepts no ``survey_design`` parameter at all — see the
+:ref:`survey-design-support` matrix. :class:`~diff_diff.DMLDiD` supports
+pweight full-design TSL and ``cluster=`` on both lanes; replicate-weight
+designs are not supported yet.)
 
 Ignoring survey weights and clustering makes your confidence intervals too narrow -
 you will be overconfident about the result. Passing a ``SurveyDesign`` to ``fit()``
@@ -573,9 +574,10 @@ The six scenarios above cover the most common business use cases.
   (``results.aggregate('event_study')`` feeds HonestDiD/PreTrendsPower);
   set ``seed=`` for reproducible fold draws. Panel data by default;
   ``panel=False`` runs declared repeated cross sections (Chang Case 2,
-  λ-corrected variance). No survey/cluster support on either lane
-  (per-sampling-unit influence-function variance) — weighted RCS belongs
-  to ``CallawaySantAnna(panel=False, survey_design=...)``.
+  λ-corrected variance). Survey/cluster support on both lanes:
+  ``survey_design=`` (pweight full-design TSL — a documented library
+  extension of Chang's i.i.d. theory) and coarser-than-unit
+  ``cluster=``; replicate-weight designs are not supported yet.
 
 For the full academic decision tree with all estimators, see :doc:`choosing_estimator`.
 

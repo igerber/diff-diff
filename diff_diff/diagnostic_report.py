@@ -125,8 +125,9 @@ _APPLICABILITY: Dict[str, FrozenSet[str]] = {
     # ``bacon`` refits BaconDecomposition from the panel independently of
     # the estimator (every staggered binary-treatment peer carries it);
     # ``design_effect`` follows the 17-of-18 convention (instance-gated on
-    # survey_metadata, which DMLDiD never sets -> informative skip). Only
-    # ``epv`` is excluded: no in-cell unpenalized-logit EPV diagnostics.
+    # survey_metadata: LIVE on declared survey_design= fits, informative
+    # skip otherwise). Only ``epv`` is excluded: no in-cell
+    # unpenalized-logit EPV diagnostics.
     "DMLDiDResults": frozenset(
         {
             "parallel_trends",

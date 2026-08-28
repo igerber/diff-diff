@@ -16,7 +16,7 @@ compact `control_group` spellings) and its own `fit` signature (including the
 """
 
 import warnings
-from typing import TYPE_CHECKING, ClassVar, List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from diff_diff._base import BaseEstimator
 from diff_diff._staggered_triple_diff_engine import _StaggeredTripleDiffEngineMixin
@@ -121,7 +121,7 @@ class StaggeredTripleDifference(
     # Names this estimator in the shared bootstrap mixin's user-facing
     # warnings. The mixin is shared with the other hosts, so a hard-coded
     # literal there would misname whichever surface was actually fit.
-    _BOOTSTRAP_LABEL: ClassVar[str] = "StaggeredTripleDifference"
+    _BOOTSTRAP_LABEL: str = "StaggeredTripleDifference"
 
     def __init__(
         self,

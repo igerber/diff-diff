@@ -979,6 +979,12 @@ sources:
       - path: docs/methodology/REGISTRY.md
         section: "DMLDiD"
         type: methodology
+      - path: docs/methodology/survey-theory.md
+        section: "IF-based TSL roster / variance-dispatch table / PSU-multiplier-bootstrap roster"
+        type: methodology
+      - path: docs/methodology/variance-conventions.md
+        section: "dml_did / dml_did_rcs inventory rows (CI-pinned to tests/test_variance_conventions.py)"
+        type: methodology
       - path: docs/index.rst
         section: "Supported Estimators (one-line catalog row)"
         type: user_guide

@@ -18,10 +18,13 @@ setting; use CallawaySantAnna without covariates).
 ``DMLDiD`` writes the CallawaySantAnna per-(g,t) ``influence_func_info``
 payload (per-sampling-unit entries ``psi_bar_i / n_cell`` — per unit on
 panel fits, per observation on RCS fits — so ``sqrt(sum(if**2))`` IS the
-cell SE) and inherits the CS aggregation + multiplier-bootstrap mixins:
-event study with sup-t bands, group/simple aggregation (plus total on
-panel fits only; RCS fits fail ``total`` closed), and post-fit
-``results.aggregate()`` with bootstrap replay.
+cell SE on no-design fits; under ``survey_design=``/``cluster=`` the
+payload is the weighted-IF analogue ``w_i * psi_bar_i / sum(w)`` and the
+per-cell SE is the design-based CR1/weighted-IF variance instead) and
+inherits the CS aggregation + multiplier-bootstrap mixins: event study
+with sup-t bands, group/simple aggregation (plus total on panel
+non-survey fits; RCS and declared-survey fits fail ``total`` closed), and
+post-fit ``results.aggregate()`` with bootstrap replay.
 
 See docs/methodology/REGISTRY.md "DMLDiD" for equations, implementation
 Notes (global p-hat, D-stratified folds, pooled fold weighting, trimming,
@@ -29,9 +32,10 @@ skip-reason vocabulary) and the DoubleML parity anchors.
 """
 
 import decimal
+import inspect
 import secrets
 import warnings
-from typing import Any, ClassVar, Dict, Iterable, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Union, cast
 
 import numpy as np
 import pandas as pd
@@ -54,6 +58,7 @@ from diff_diff.dml_did_results import DMLDiDResults
 from diff_diff.linalg import _check_propensity_diagnostics
 from diff_diff.staggered import (
     _build_aggregation_kit,
+    _cluster_robust_se_from_per_gt_if,
     _nan_gt_entry,
 )
 from diff_diff.staggered import (
@@ -71,6 +76,9 @@ from diff_diff.utils import (
     validate_n_bootstrap,
     validate_pscore_trim,
 )
+
+if TYPE_CHECKING:
+    from diff_diff.survey import ResolvedSurveyDesign, SurveyDesign
 
 __all__ = ["DMLDiD"]
 
@@ -106,6 +114,38 @@ def _validate_learner_spec(spec: Any, *, kind: str, param_name: str) -> None:
             )
         return
     validate_learner(spec, kind=kind, param_name=param_name)
+
+
+def _validate_learner_sample_weight_support(spec: Any, param_name: str) -> None:
+    """Reject a user learner whose ``fit`` cannot take ``sample_weight``.
+
+    Declared-survey fits pass ``sample_weight`` into ``cross_fit_predict``,
+    which forwards it BY KEYWORD (``fit_kwargs = {"sample_weight": w_fit}``)
+    and deliberately propagates the learner's ``TypeError`` — so a learner
+    whose ``fit`` has neither a keyword-addressable ``sample_weight``
+    parameter (POSITIONAL_OR_KEYWORD or KEYWORD_ONLY; POSITIONAL_ONLY does
+    not qualify) nor ``**kwargs`` would hard-crash mid-fit. Raises
+    ``TypeError`` up front instead (the ``validate_learner`` convention for
+    object-capability failures).
+    """
+    try:
+        sig = inspect.signature(spec.fit)
+    except (TypeError, ValueError):  # pragma: no cover - exotic callables
+        return  # cannot introspect; let cross_fit_predict surface any error
+    for param in sig.parameters.values():
+        if param.kind is inspect.Parameter.VAR_KEYWORD:
+            return
+        if param.name == "sample_weight" and param.kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        ):
+            return
+    raise TypeError(
+        f"survey_design= requires learners whose fit() accepts sample_weight "
+        f"by keyword; the {param_name} object {type(spec).__name__!r} does not. "
+        "Add a sample_weight parameter (or **kwargs) to its fit(), or use a "
+        "library-native learner name."
+    )
 
 
 def _raw_label_is_infinite(value: Any) -> bool:
@@ -235,9 +275,14 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
     D-stratified and the outcome nuisance is the outcome-change regression
     ``E[dY | X, D=0]``; on RCS fits the folds are D x T stratified and the
     nuisance is the level regression ``E[(T - lam)Y | X, D=0]`` with the
-    lambda-corrected variance. Aggregation (event study, group, simple;
-    plus total on panel fits — RCS fits fail ``total`` closed) is POST-FIT
-    via ``results.aggregate()``.
+    lambda-corrected variance. (Under a survey/cluster design whose PSU is
+    strictly coarser than the sampling unit, folds are PSU-COHESIVE
+    instead of stratified, and the per-cell SE is design-based rather than
+    the plug-in ``sqrt(mean(psi_bar**2)/n)``; declared designs also weight
+    the moments — REGISTRY DMLDiD survey Notes.) Aggregation (event study,
+    group, simple; plus total on panel non-survey fits — RCS and
+    declared-survey fits fail ``total`` closed) is POST-FIT via
+    ``results.aggregate()``.
 
     Parameters
     ----------
@@ -265,7 +310,10 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         Root seed for the per-cell fold draws and the bootstrap. With
         ``seed=None``, POINT ESTIMATES vary across fits — cross-fitting
         draws random folds; set ``seed`` for reproducible results with the
-        library's deterministic built-in learners. A user-supplied
+        library's deterministic built-in learners. The same seed yields
+        DIFFERENT folds with vs without a coarser-than-unit PSU design
+        (PSU-cohesive folds consume the RNG differently than stratified
+        folds — a config change, not a reproducibility break). A user-supplied
         STOCHASTIC learner object must additionally be seeded by the user
         (e.g. sklearn ``random_state``) — ``cross_fit_predict`` deep-copies
         the learner template where copyable but never seeds its internal
@@ -296,9 +344,19 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         and treatment effects are expected, not violations), which is not
         data-checkable — ``fit()`` warns. ``aggregate('total')`` is unavailable on RCS fits (fails
         closed, the library-wide RC convention).
+    cluster : str, optional
+        Column name for COARSER-than-unit clustering. The column is
+        synthesized into a ``SurveyDesign(psu=cluster)`` (or injected as
+        the PSU of a declared PSU-less design): it drives PSU-cohesive
+        cross-fitting folds (when strictly coarser than the sampling
+        unit), the per-cell cluster-robust SE, the bootstrap draw
+        structure, and ``df_inference`` — while the moment kernels stay
+        UNWEIGHTED and no ``sample_weight`` reaches the learners. When
+        ``survey_design=`` also supplies a PSU, the design's PSU wins
+        (warning on differing partitions).
     """
 
-    _BOOTSTRAP_LABEL: ClassVar[str] = "DMLDiD"
+    _BOOTSTRAP_LABEL: str = "DMLDiD"
 
     def __init__(
         self,
@@ -315,6 +373,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         cband: bool = True,
         pscore_trim: float = 0.01,
         panel: bool = True,
+        cluster: Optional[str] = None,
     ) -> None:
         # Raw assignment, then ONE shared validator (also re-run at the top
         # of fit() as the direct-mutation defense) validates and normalizes
@@ -332,6 +391,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         self.cband = cband
         self.pscore_trim = pscore_trim
         self.panel = panel
+        self.cluster = cluster
         self._revalidate_config()
 
         # Fitted-state lifecycle (house convention; not inherited under this MRO).
@@ -397,6 +457,11 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 "would silently select the panel lane"
             )
         self.panel = bool(self.panel)
+        if self.cluster is not None and not isinstance(self.cluster, str):
+            raise ValueError(
+                f"cluster must be a column name (str) or None, got "
+                f"{self.cluster!r} (type {type(self.cluster).__name__})"
+            )
 
     # ------------------------------------------------------------------
     # Input validation
@@ -866,6 +931,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         time: str,
         first_treat: str,
         covariates: List[str],
+        resolved_survey: Optional["ResolvedSurveyDesign"] = None,
     ) -> Dict[str, Any]:
         # CS groupby form — NOT sorted(unique): sorted() raises a bare
         # TypeError on mixed-type unit labels that CS accepts.
@@ -895,9 +961,12 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         n_units = len(all_units)
         # obs_per_unit OMITTED deliberately: only the RC path sets it, and a
         # non-None value divides the aggregation WIF (would silently shrink
-        # SEs on a panel). Survey keys likewise omitted (mixin reads are
-        # .get with panel fallbacks).
-        return {
+        # SEs on a panel). Survey keys (CS names: survey_weights /
+        # resolved_survey / resolved_survey_unit / df_survey) are set from
+        # resolved_survey when a design (declared or cluster-synthesized) is
+        # in play; absent otherwise (mixin reads are .get with panel
+        # fallbacks).
+        out: Dict[str, Any] = {
             "all_units": all_units,
             "unit_to_idx": unit_to_idx,
             "unit_cohorts": unit_cohorts,
@@ -913,6 +982,24 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             "canonical_size": n_units,
             "n_units": n_units,
         }
+        if resolved_survey is not None:
+            from diff_diff.survey import collapse_survey_to_unit_level
+
+            survey_weights_unit = (
+                pd.Series(resolved_survey.weights, index=df.index)
+                .groupby(df[unit])
+                .first()
+                .reindex(all_units)
+                .to_numpy()
+            )
+            resolved_survey_unit = collapse_survey_to_unit_level(
+                resolved_survey, df, unit, all_units
+            )
+            out["survey_weights"] = survey_weights_unit
+            out["resolved_survey"] = resolved_survey
+            out["resolved_survey_unit"] = resolved_survey_unit
+            out["df_survey"] = resolved_survey_unit.df_survey
+        return out
 
     def _precompute_rcs(
         self,
@@ -922,6 +1009,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         time: str,
         first_treat: str,
         covariates: List[str],
+        resolved_survey: Optional["ResolvedSurveyDesign"] = None,
     ) -> Dict[str, Any]:
         """Declared-RCS bookkeeping: rows ARE the sampling units.
 
@@ -941,15 +1029,24 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         Supplying the key would be a numeric no-op that routes lookups
         through float()-keyed dict access, where distinct int64 cohorts
         above 2**53 (admissible through 2**62 by the label pipeline)
-        collide. ``obs_per_unit`` and survey keys likewise omitted (true RCS
-        is one row per unit — a non-None obs_per_unit would divide the WIF).
+        collide. That rationale HOLDS under survey too: the survey branches
+        of ``fixed_cohort_agg_weights`` (native-key dict) and
+        ``_get_agg_cache`` (bincount) are collision-free, so survey cohort
+        masses flow without ``agg_cohort_masses``. ``obs_per_unit`` stays
+        omitted (true RCS is one row per unit — a non-None obs_per_unit
+        would divide the WIF). Survey keys: on RCS the rows ARE the
+        sampling units, so ``resolved_survey_unit`` is the per-obs design
+        itself (CS RCS precedent) and ``survey_weights`` are the per-obs
+        weights; ``rcs_cohort_masses`` stays unweighted (the per-cell
+        ``agg_weight`` becomes an inert fallback — survey masses win in
+        the aggregation cache).
         """
         n_obs = len(df)
         unit_cohorts = df[first_treat].to_numpy()
         treatment_groups = sorted(g for g in df[first_treat].unique() if g > 0)
         time_periods = sorted(df[time].unique())
         period_to_col = {t: i for i, t in enumerate(time_periods)}
-        return {
+        out: Dict[str, Any] = {
             "all_units": np.arange(n_obs),
             "unit_to_idx": None,
             "unit_cohorts": unit_cohorts,
@@ -970,6 +1067,12 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 g: int(np.count_nonzero(unit_cohorts == g)) for g in treatment_groups
             },
         }
+        if resolved_survey is not None:
+            out["survey_weights"] = resolved_survey.weights.copy()
+            out["resolved_survey"] = resolved_survey
+            out["resolved_survey_unit"] = resolved_survey
+            out["df_survey"] = resolved_survey.df_survey
+        return out
 
     def _sanitize_learner_error(self, exc: BaseException) -> str:
         """Persisted error text for cross_fit_diagnostics / to_dict exports.
@@ -1060,16 +1163,50 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         D_cell = treated_valid[cell_idx].astype(np.float64)
         dY_cell = dY[cell_idx]
         X_cell = X_base[cell_idx]
-        p_hat = n_treated / n_cell
+
+        # Survey state (all .get with panel-safe fallbacks; see fit()).
+        weighted_moments = bool(precomputed.get("weighted_moments", False))
+        use_psu_folds = bool(precomputed.get("use_psu_folds", False))
+        resolved_survey_unit = precomputed.get("resolved_survey_unit")
+        survey_weights = precomputed.get("survey_weights")
+        df_survey = precomputed.get("df_survey")
+
+        w_cell: Optional[np.ndarray] = None
+        if weighted_moments and survey_weights is not None:
+            w_cell = np.asarray(survey_weights, dtype=np.float64)[cell_idx]
+            w_treated_mass = float(np.sum(w_cell[D_cell == 1.0]))
+            w_control_mass = float(np.sum(w_cell[D_cell == 0.0]))
+            if w_treated_mass <= 0.0 or w_control_mass <= 0.0:
+                # A group with rows but zero survey mass: p_hat would leave
+                # (0, 1) and mislabel the cell as non_finite_score.
+                return (
+                    _nan_gt_entry(
+                        n_treated=n_treated,
+                        n_control=n_control,
+                        skip_reason="zero_weight_mass",
+                    ),
+                    None,
+                    None,
+                )
+            p_hat = w_treated_mass / float(np.sum(w_cell))
+        else:
+            p_hat = n_treated / n_cell
         # Empirical treated-share overlap diagnostic: every Chang bound
         # carries powers of 1/p_0 (paper review, few-treated edge case), and
         # the fitted-propensity check below cannot see a sparse EMPIRICAL
         # share when a learner returns non-extreme predictions.
         if min(p_hat, 1.0 - p_hat) < self.pscore_trim:
+            if w_cell is not None:
+                _share_detail = (
+                    f"weighted p_hat={p_hat:.4f} (treated mass "
+                    f"{float(np.sum(w_cell[D_cell == 1.0])):.4g} / control mass "
+                    f"{float(np.sum(w_cell[D_cell == 0.0])):.4g})"
+                )
+            else:
+                _share_detail = f"p_hat={p_hat:.4f} ({n_treated} treated / {n_control} control)"
             warnings.warn(
                 f"DMLDiD cell (g={g}, t={t}): empirical treated share "
-                f"p_hat={p_hat:.4f} ({n_treated} treated / {n_control} "
-                f"control) is extreme (min(p, 1-p) < pscore_trim="
+                f"{_share_detail} is extreme (min(p, 1-p) < pscore_trim="
                 f"{self.pscore_trim}); the Chang score and variance scale "
                 "with powers of 1/p_hat, so this cell's estimate may be "
                 "unstable.",
@@ -1080,7 +1217,11 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         # Per-cell fold draw: seeded from (root, (g_idx, t_idx)) — positions
         # in the sorted cohort/period rosters, invariant to other cells'
         # estimability. D-stratified (DoubleML parity; documented REGISTRY
-        # deviation from Chang's plain random partition).
+        # deviation from Chang's plain random partition) — except under a
+        # coarser-than-unit PSU design, where folds are PSU-cohesive
+        # (cluster-cohesive splitting replaces the stratification MECHANISM;
+        # the composition requirement is one period only on this lane and
+        # stays guarded by cross_fit_predict's degenerate checks).
         seed_seq = np.random.SeedSequence(entropy=root_entropy, spawn_key=(g_idx, t_idx))
         rng = np.random.default_rng(seed_seq)
         diagnostics: Dict[str, Any] = {
@@ -1089,10 +1230,19 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             "p_hat": float(p_hat),
             "n_clipped_ps": None,
             "fold_seed": {"entropy": int(root_entropy), "spawn_key": [int(g_idx), int(t_idx)]},
+            "psu_folds": use_psu_folds,
         }
 
         try:
-            folds = assign_folds(n_cell, self.n_folds, rng=rng, stratify=D_cell)
+            if use_psu_folds and resolved_survey_unit is not None:
+                folds = assign_folds(
+                    n_cell,
+                    int(precomputed.get("effective_n_folds", self.n_folds)),
+                    rng=rng,
+                    cluster_ids=np.asarray(resolved_survey_unit.psu)[cell_idx],
+                )
+            else:
+                folds = assign_folds(n_cell, self.n_folds, rng=rng, stratify=D_cell)
         except ValueError as exc:
             # Cell smaller than n_folds, or a singleton D-stratum (one
             # treated/control unit cannot be cross-fitted).
@@ -1118,6 +1268,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     folds,
                     predict_method="predict_proba",
                     context_label=f"{context} propensity",
+                    sample_weight=w_cell,
                 )
                 or_res = cross_fit_predict(
                     make_learner(self.outcome_learner, kind="regressor"),
@@ -1127,6 +1278,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     predict_method="predict",
                     fit_mask=(D_cell == 0.0),
                     context_label=f"{context} outcome",
+                    sample_weight=w_cell,
                 )
         except DegenerateFoldError as exc:
             diagnostics["skip_reason"] = "cross_fit_degenerate"
@@ -1160,9 +1312,11 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         try:
             with np.errstate(over="ignore", invalid="ignore"):
                 summand = chang_panel_score(dY_cell, D_cell, m_hat, ps, p_hat)
-                theta = float(np.mean(summand))
+                if w_cell is not None:
+                    theta = float(np.average(summand, weights=w_cell))
+                else:
+                    theta = float(np.mean(summand))
                 psi_bar = chang_panel_score_augmented(summand, D_cell, theta, p_hat)
-                se = float(np.sqrt(np.mean(psi_bar**2) / n_cell))
         except ValueError as exc:
             diagnostics["skip_reason"] = "non_finite_score"
             diagnostics["error"] = self._sanitize_learner_error(exc)
@@ -1175,7 +1329,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 None,
                 diagnostics,
             )
-        if not (np.isfinite(theta) and np.isfinite(se) and np.all(np.isfinite(psi_bar))):
+        if not (np.isfinite(theta) and np.all(np.isfinite(psi_bar))):
             diagnostics["skip_reason"] = "non_finite_score"
             return (
                 _nan_gt_entry(
@@ -1187,7 +1341,67 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 diagnostics,
             )
 
-        t_stat, p_value, conf_int = safe_inference(theta, se, alpha=self.alpha)
+        # Payload BEFORE the SE/inference block: the design-based per-cell SE
+        # consumes it. No-survey payload: per-unit entries psi_bar_i /
+        # n_cell, so sqrt(sum(if^2)) IS the cell SE (the CS
+        # influence_func_info contract). Weighted payload: w_i * psi_bar_i /
+        # sum(w) — the Hajek analogue (reduces to psi_bar/n at w == 1).
+        n_units = precomputed["n_units"]
+        inf_full = np.zeros(n_units)
+        if w_cell is not None:
+            inf_full[cell_idx] = w_cell * psi_bar / float(np.sum(w_cell))
+        else:
+            inf_full[cell_idx] = psi_bar / n_cell
+        treated_idx = np.flatnonzero(treated_valid).astype(np.int64)
+        # Nonzero-derivation unchanged under weighting: a zero-weight control
+        # dropping from the payload is inert — the per-cell CR1 helper
+        # rebuilds the full-length psi vector over the complete design.
+        control_idx = np.flatnonzero((inf_full != 0.0) & ~treated_valid).astype(np.int64)
+        if_entry = {
+            "treated_idx": treated_idx,
+            "control_idx": control_idx,
+            "treated_inf": inf_full[treated_idx],
+            "control_inf": inf_full[control_idx],
+        }
+
+        # Per-cell SE. PSU designs (declared OR bare cluster=) route through
+        # the CS per-cell CR1 helper (3-valued contract: float = use it,
+        # NaN = unidentified clustered variance and MUST propagate,
+        # None = malformed -> fall back). Non-PSU survey designs use the
+        # weighted sqrt-sum (CS mirror: the full design enters aggregate SEs
+        # only); the no-survey branch is verbatim.
+        se: float
+        with np.errstate(over="ignore", invalid="ignore"):
+            if (
+                resolved_survey_unit is not None
+                and getattr(resolved_survey_unit, "psu", None) is not None
+            ):
+                se_cr1 = _cluster_robust_se_from_per_gt_if(if_entry, resolved_survey_unit)
+                if se_cr1 is None:
+                    se = float(np.sqrt(np.sum(inf_full**2)))
+                else:
+                    se = float(se_cr1)
+            elif w_cell is not None:
+                se = float(np.sqrt(np.sum(inf_full**2)))
+            else:
+                se = float(np.sqrt(np.mean(psi_bar**2) / n_cell))
+        # NOTE: `se` is deliberately OUTSIDE the non_finite_score gate on the
+        # design-based branches — a NaN from the CR1 helper is the
+        # unidentified-variance signal and must flow to safe_inference as a
+        # NaN-consistent inference tuple on a RETAINED cell.
+        if resolved_survey_unit is None and not np.isfinite(se):
+            diagnostics["skip_reason"] = "non_finite_score"
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="non_finite_score",
+                ),
+                None,
+                diagnostics,
+            )
+
+        t_stat, p_value, conf_int = safe_inference(theta, se, alpha=self.alpha, df=df_survey)
         gt_entry = {
             "effect": theta,
             "se": se,
@@ -1198,20 +1412,9 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             "n_control": n_control,
             "skip_reason": None,
         }
-
-        # Payload: per-unit entries psi_bar_i / n_cell, so sqrt(sum(if^2))
-        # IS the cell SE (the CS influence_func_info contract).
-        n_units = precomputed["n_units"]
-        inf_full = np.zeros(n_units)
-        inf_full[cell_idx] = psi_bar / n_cell
-        treated_idx = np.flatnonzero(treated_valid).astype(np.int64)
-        control_idx = np.flatnonzero((inf_full != 0.0) & ~treated_valid).astype(np.int64)
-        if_entry = {
-            "treated_idx": treated_idx,
-            "control_idx": control_idx,
-            "treated_inf": inf_full[treated_idx],
-            "control_inf": inf_full[control_idx],
-        }
+        if w_cell is not None:
+            # CS cell-payload convention: the TREATED survey mass.
+            gt_entry["survey_weight_sum"] = float(np.sum(w_cell[D_cell == 1.0]))
         return gt_entry, if_entry, diagnostics
 
     def _compute_dml_rcs_gt(
@@ -1296,16 +1499,62 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         T_cell = at_t[cell_idx].astype(np.float64)
         y_cell = y_obs[cell_idx]
         X_cell = X_obs[cell_idx]
+
+        # Survey state (all .get with panel-safe fallbacks; see fit()).
+        weighted_moments = bool(precomputed.get("weighted_moments", False))
+        use_psu_folds = bool(precomputed.get("use_psu_folds", False))
+        resolved_survey_unit = precomputed.get("resolved_survey_unit")
+        survey_weights = precomputed.get("survey_weights")
+        df_survey = precomputed.get("df_survey")
+
+        w_cell: Optional[np.ndarray] = None
+        if weighted_moments and survey_weights is not None:
+            w_cell = np.asarray(survey_weights, dtype=np.float64)[cell_idx]
+            # FOUR-group WEIGHTED-mass guard: a group with rows but zero
+            # survey mass would push the weighted p_hat/lam_hat out of
+            # (0, 1) and mislabel the cell as non_finite_score.
+            _group_masses = (
+                float(np.sum(w_cell[(D_cell == 1.0) & (T_cell == 1.0)])),
+                float(np.sum(w_cell[(D_cell == 1.0) & (T_cell == 0.0)])),
+                float(np.sum(w_cell[(D_cell == 0.0) & (T_cell == 1.0)])),
+                float(np.sum(w_cell[(D_cell == 0.0) & (T_cell == 0.0)])),
+            )
+            if min(_group_masses) <= 0.0:
+                return (
+                    _nan_gt_entry(
+                        n_treated=n_treated,
+                        n_control=n_control,
+                        skip_reason="zero_weight_mass",
+                    ),
+                    None,
+                    None,
+                )
         # Global-within-cell shares (REGISTRY convention: mirrors the Case 1
         # global p_hat and DoubleML's d.mean()/t.mean()); strictly interior
-        # BY the four-group guard.
-        p_hat = float(D_cell.mean())
-        lam_hat = float(T_cell.mean())
+        # BY the four-group guard (weighted analogue under a declared
+        # design: Hajek shares, interior by the weighted-mass guard).
+        if w_cell is not None:
+            _w_total = float(np.sum(w_cell))
+            p_hat = float(np.sum(w_cell * D_cell) / _w_total)
+            lam_hat = float(np.sum(w_cell * T_cell) / _w_total)
+        else:
+            p_hat = float(D_cell.mean())
+            lam_hat = float(T_cell.mean())
         if min(p_hat, 1.0 - p_hat) < self.pscore_trim:
+            if w_cell is not None:
+                _share_detail = (
+                    f"weighted p_hat={p_hat:.4f} over the pooled two-period rows "
+                    f"(treated mass {float(np.sum(w_cell * D_cell)):.4g} / control "
+                    f"mass {float(np.sum(w_cell * (1.0 - D_cell))):.4g})"
+                )
+            else:
+                _share_detail = (
+                    f"p_hat={p_hat:.4f} over the pooled two-period rows "
+                    f"({n_treated} treated / {n_control} control)"
+                )
             warnings.warn(
                 f"DMLDiD cell (g={g}, t={t}): empirical treated share "
-                f"p_hat={p_hat:.4f} over the pooled two-period rows "
-                f"({n_treated} treated / {n_control} control) is extreme "
+                f"{_share_detail} is extreme "
                 f"(min(p, 1-p) < pscore_trim={self.pscore_trim}); the Chang "
                 "score and variance scale with powers of 1/p_hat, so this "
                 "cell's estimate may be unstable.",
@@ -1327,7 +1576,10 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         # the FOUR D x T classes (DoubleML's d + 2t encoding — REGISTRY
         # deviation Note): every training complement then carries control
         # rows in both periods by construction, Chang's fold-composition
-        # requirement for fitting l_2 on I_kz^c.
+        # requirement for fitting l_2 on I_kz^c. Under a coarser-than-unit
+        # PSU design the folds are PSU-cohesive instead (the stratification
+        # MECHANISM cannot be cluster-constant), and the composition
+        # REQUIREMENT is preserved by the explicit guard below.
         seed_seq = np.random.SeedSequence(entropy=root_entropy, spawn_key=(g_idx, t_idx))
         rng = np.random.default_rng(seed_seq)
         diagnostics: Dict[str, Any] = {
@@ -1337,10 +1589,19 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             "lam_hat": float(lam_hat),
             "n_clipped_ps": None,
             "fold_seed": {"entropy": int(root_entropy), "spawn_key": [int(g_idx), int(t_idx)]},
+            "psu_folds": use_psu_folds,
         }
 
         try:
-            folds = assign_folds(n_cell, self.n_folds, rng=rng, stratify=D_cell + 2.0 * T_cell)
+            if use_psu_folds and resolved_survey_unit is not None:
+                folds = assign_folds(
+                    n_cell,
+                    int(precomputed.get("effective_n_folds", self.n_folds)),
+                    rng=rng,
+                    cluster_ids=np.asarray(resolved_survey_unit.psu)[cell_idx],
+                )
+            else:
+                folds = assign_folds(n_cell, self.n_folds, rng=rng, stratify=D_cell + 2.0 * T_cell)
         except ValueError as exc:
             # Cell smaller than n_folds, or a singleton D x T stratum (e.g.
             # ONE treated row in the base period cannot be cross-fitted).
@@ -1358,6 +1619,29 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
 
         context = f"DMLDiD (g={g}, t={t})"
         try:
+            # Chang's I_kz^c fold-composition requirement, checked EXPLICITLY
+            # whenever the D x T stratification no longer guarantees it (PSU
+            # folds) or per-row zero weights could hollow a period out even
+            # inside stratified folds (declared survey): every training
+            # complement needs positive-(weight-)mass control rows in BOTH
+            # periods, else the l_2 regression on r = (T - lam)y is
+            # finite-but-invalid. Raised here (inside this try) so the
+            # existing DegenerateFoldError handler skips the cell.
+            if use_psu_folds or weighted_moments:
+                _guard_w = w_cell if w_cell is not None else np.ones(n_cell)
+                for _k in range(folds.n_folds):
+                    _complement = folds.fold_ids != _k
+                    _ctrl = _complement & (D_cell == 0.0)
+                    if (
+                        float(np.sum(_guard_w[_ctrl & (T_cell == 1.0)])) <= 0.0
+                        or float(np.sum(_guard_w[_ctrl & (T_cell == 0.0)])) <= 0.0
+                    ):
+                        raise DegenerateFoldError(
+                            f"{context} outcome: fold {_k}'s training "
+                            "complement lacks positive-weight control rows in "
+                            "both periods (Chang's I_kz^c fold-composition "
+                            "requirement)"
+                        )
             with np.errstate(over="ignore", invalid="ignore"):
                 ps_res = cross_fit_predict(
                     make_learner(self.propensity_learner, kind="classifier"),
@@ -1366,6 +1650,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     folds,
                     predict_method="predict_proba",
                     context_label=f"{context} propensity",
+                    sample_weight=w_cell,
                 )
                 r_cell = (T_cell - lam_hat) * y_cell
                 or_res = cross_fit_predict(
@@ -1376,6 +1661,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     predict_method="predict",
                     fit_mask=(D_cell == 0.0),
                     context_label=f"{context} outcome",
+                    sample_weight=w_cell,
                 )
         except DegenerateFoldError as exc:
             diagnostics["skip_reason"] = "cross_fit_degenerate"
@@ -1409,11 +1695,22 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         try:
             with np.errstate(over="ignore", invalid="ignore"):
                 summand = chang_rcs_score(y_cell, D_cell, T_cell, m2_hat, ps, p_hat, lam_hat)
-                theta = float(np.mean(summand))
+                if w_cell is not None:
+                    theta = float(np.average(summand, weights=w_cell))
+                else:
+                    theta = float(np.mean(summand))
                 psi_bar, g2_lambda = _chang_rcs_score_augmented_with_slope(
-                    summand, D_cell, T_cell, y_cell, m2_hat, ps, theta, p_hat, lam_hat
+                    summand,
+                    D_cell,
+                    T_cell,
+                    y_cell,
+                    m2_hat,
+                    ps,
+                    theta,
+                    p_hat,
+                    lam_hat,
+                    weights=w_cell,
                 )
-                se = float(np.sqrt(np.mean(psi_bar**2) / n_cell))
         except ValueError as exc:
             diagnostics["skip_reason"] = "non_finite_score"
             diagnostics["error"] = self._sanitize_learner_error(exc)
@@ -1426,12 +1723,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 None,
                 diagnostics,
             )
-        if not (
-            np.isfinite(theta)
-            and np.isfinite(se)
-            and np.isfinite(g2_lambda)
-            and np.all(np.isfinite(psi_bar))
-        ):
+        if not (np.isfinite(theta) and np.isfinite(g2_lambda) and np.all(np.isfinite(psi_bar))):
             diagnostics["skip_reason"] = "non_finite_score"
             return (
                 _nan_gt_entry(
@@ -1444,30 +1736,20 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             )
         diagnostics["g2_lambda"] = float(g2_lambda)
 
-        t_stat, p_value, conf_int = safe_inference(theta, se, alpha=self.alpha)
-        gt_entry = {
-            "effect": theta,
-            "se": se,
-            "t_stat": t_stat,
-            "p_value": p_value,
-            "conf_int": conf_int,
-            # DISPLAY counts: pooled two-period valid rows. Aggregation
-            # weights come from agg_weight below (fixed cohort row mass, the
-            # CS-RCS convention) — never from these counts.
-            "n_treated": n_treated,
-            "n_control": n_control,
-            "skip_reason": None,
-            "agg_weight": precomputed["rcs_cohort_masses"][g],
-        }
-
-        # Payload: per-OBS entries psi_bar_i / n_cell over BOTH periods'
-        # rows, so sqrt(sum(if^2)) IS the cell SE. cell_idx is a flatnonzero
-        # of one mask => strictly increasing and duplicate-free, and the
-        # D-partition keeps treated_idx/control_idx disjoint (the fancy-+=
-        # scatter contract in the aggregation layer).
+        # Payload BEFORE the SE/inference block (the design-based per-cell
+        # SE consumes it): per-OBS entries psi_bar_i / n_cell over BOTH
+        # periods' rows, so sqrt(sum(if^2)) IS the cell SE on the no-survey
+        # path; weighted payload is the Hajek analogue w_i * psi_bar_i /
+        # sum(w). cell_idx is a flatnonzero of one mask => strictly
+        # increasing and duplicate-free, and the D-partition keeps
+        # treated_idx/control_idx disjoint (the fancy-+= scatter contract in
+        # the aggregation layer).
         n_units = precomputed["n_units"]
         inf_full = np.zeros(n_units)
-        inf_full[cell_idx] = psi_bar / n_cell
+        if w_cell is not None:
+            inf_full[cell_idx] = w_cell * psi_bar / float(np.sum(w_cell))
+        else:
+            inf_full[cell_idx] = psi_bar / n_cell
         treated_idx = cell_idx[D_cell == 1.0].astype(np.int64)
         control_idx = cell_idx[D_cell == 0.0].astype(np.int64)
         if_entry = {
@@ -1476,6 +1758,58 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             "treated_inf": inf_full[treated_idx],
             "control_inf": inf_full[control_idx],
         }
+
+        # Per-cell SE (same dispatch as the panel cell; see the comment
+        # there): PSU designs -> CS per-cell CR1 helper (NaN propagates as
+        # the deliberate unidentified-variance signal on a RETAINED cell);
+        # non-PSU survey -> weighted sqrt-sum; no-survey verbatim.
+        se: float
+        with np.errstate(over="ignore", invalid="ignore"):
+            if (
+                resolved_survey_unit is not None
+                and getattr(resolved_survey_unit, "psu", None) is not None
+            ):
+                se_cr1 = _cluster_robust_se_from_per_gt_if(if_entry, resolved_survey_unit)
+                if se_cr1 is None:
+                    se = float(np.sqrt(np.sum(inf_full**2)))
+                else:
+                    se = float(se_cr1)
+            elif w_cell is not None:
+                se = float(np.sqrt(np.sum(inf_full**2)))
+            else:
+                se = float(np.sqrt(np.mean(psi_bar**2) / n_cell))
+        if resolved_survey_unit is None and not np.isfinite(se):
+            diagnostics["skip_reason"] = "non_finite_score"
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="non_finite_score",
+                ),
+                None,
+                diagnostics,
+            )
+
+        t_stat, p_value, conf_int = safe_inference(theta, se, alpha=self.alpha, df=df_survey)
+        gt_entry = {
+            "effect": theta,
+            "se": se,
+            "t_stat": t_stat,
+            "p_value": p_value,
+            "conf_int": conf_int,
+            # DISPLAY counts: pooled two-period valid rows. Aggregation
+            # weights come from agg_weight below (fixed cohort row mass, the
+            # CS-RCS convention; an inert fallback under survey — the
+            # aggregation cache's survey cohort masses win) — never from
+            # these counts.
+            "n_treated": n_treated,
+            "n_control": n_control,
+            "skip_reason": None,
+            "agg_weight": precomputed["rcs_cohort_masses"][g],
+        }
+        if w_cell is not None:
+            # CS RCS cell-payload convention: the treated-at-period-t mass.
+            gt_entry["survey_weight_sum"] = float(np.sum(w_cell[(D_cell == 1.0) & (T_cell == 1.0)]))
         return gt_entry, if_entry, diagnostics
 
     # ------------------------------------------------------------------
@@ -1490,17 +1824,170 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         time: str,
         first_treat: str,
         covariates: Optional[Iterable[str]] = None,
+        survey_design: Optional["SurveyDesign"] = None,
     ) -> DMLDiDResults:
-        """Estimate staggered ATT(g,t) via per-cell cross-fitted Chang scores."""
+        """Estimate staggered ATT(g,t) via per-cell cross-fitted Chang scores.
+
+        Parameters
+        ----------
+        survey_design : SurveyDesign, optional
+            Complex survey design (pweight-only; full-design TSL —
+            weights/strata/PSU/FPC). Declared designs weight the moment
+            kernels (Hajek p-hat/lambda-hat/theta), pass ``sample_weight``
+            into the nuisance learners (user learner objects must accept
+            ``sample_weight`` by keyword — a learner without it is rejected
+            up front), switch cross-fitting to PSU-cohesive folds when the
+            PSU is strictly coarser than the sampling unit, and route the
+            per-cell and aggregate variances through the design-based
+            kernels with ``df = n_PSU - n_strata`` t-inference. Survey
+            support is a documented library extension of Chang (2020),
+            which assumes i.i.d. sampling — Theorem 2's coverage claim
+            does not carry over (REGISTRY DMLDiD Notes). Replicate-weight
+            designs are not supported yet (fail closed; TODO.md).
+        """
         df, covariates = self._validate_and_prepare(
             data, outcome, unit, time, first_treat, covariates
         )
+
+        # --- Survey/cluster resolution (CS transliteration, staggered.py) ---
+        from diff_diff.survey import (
+            SurveyDesign,
+            _inject_cluster_as_psu,
+            _resolve_effective_cluster,
+            _resolve_survey_for_fit,
+            _validate_unit_constant_survey,
+            compute_survey_metadata,
+        )
+
+        (
+            resolved_survey,
+            _survey_weights_raw,
+            survey_weight_type,
+            survey_metadata,
+        ) = _resolve_survey_for_fit(survey_design, data, "analytical")
+
+        # Replicate designs fail closed FIRST (None-guarded): no replicate
+        # variance path exists for the cross-fitted scores yet.
+        if resolved_survey is not None and resolved_survey.uses_replicate_variance:
+            raise NotImplementedError(
+                "DMLDiD does not support replicate-weight survey designs yet "
+                "(tracked in TODO.md); use a full-design SurveyDesign "
+                "(weights/strata/psu/fpc) instead."
+            )
+
+        effective_survey_design = survey_design
+        cluster_ids_for_check: Optional[np.ndarray] = None
+        if self.cluster is not None:
+            if self.cluster not in data.columns:
+                raise ValueError(f"cluster column '{self.cluster}' not found in data")
+            _cluster_col = data[self.cluster]
+            if _cluster_col.isna().any():
+                raise ValueError(
+                    f"cluster column '{self.cluster}' contains missing values; "
+                    "drop or impute them before fitting"
+                )
+            cluster_ids_for_check = _cluster_col.to_numpy()
+            if resolved_survey is None:
+                # Bare cluster=: synthesize a PSU-only design. survey_metadata
+                # stays None DELIBERATELY (it is the declared-survey marker:
+                # the aggregate('total') gate and the weighted-kernel gate
+                # both key on it); df carried on Results.df_inference instead.
+                effective_survey_design = SurveyDesign(psu=self.cluster, weight_type="pweight")
+                (
+                    resolved_survey,
+                    _survey_weights_raw,
+                    survey_weight_type,
+                    _synth_metadata,
+                ) = _resolve_survey_for_fit(effective_survey_design, data, "analytical")
+            elif resolved_survey.psu is None:
+                # Declared design without PSU: inject the cluster as the PSU.
+                # (resolved_survey non-None implies survey_design non-None on
+                # this branch - the bare-cluster synthesize path is above.)
+                assert survey_design is not None
+                from dataclasses import replace as _dc_replace
+
+                effective_survey_design = _dc_replace(survey_design, psu=self.cluster)
+                resolved_survey = _inject_cluster_as_psu(resolved_survey, cluster_ids_for_check)
+                survey_metadata = compute_survey_metadata(resolved_survey, resolved_survey.weights)
+            else:
+                # Both supplied: the design's PSU wins (warn on differing
+                # partitions); the return value is intentionally unused.
+                _resolve_effective_cluster(resolved_survey, cluster_ids_for_check, self.cluster)
+
+        if resolved_survey is not None:
+            if self.panel:
+                _validate_unit_constant_survey(data, unit, effective_survey_design)
+            if resolved_survey.weight_type != "pweight":
+                raise ValueError(
+                    f"DMLDiD supports weight_type='pweight' survey designs only, "
+                    f"got '{resolved_survey.weight_type}'"
+                )
+
+        weighted_moments = survey_design is not None
+        if weighted_moments:
+            # Learner capability gate: cross_fit_predict passes sample_weight
+            # BY KEYWORD, so a user learner without a keyword-addressable
+            # sample_weight (or **kwargs) would raise a raw TypeError mid-fit.
+            for spec, pname in (
+                (self.propensity_learner, "propensity_learner"),
+                (self.outcome_learner, "outcome_learner"),
+            ):
+                if isinstance(spec, str):
+                    continue  # native learners all accept sample_weight
+                _validate_learner_sample_weight_support(spec, pname)
+
         if self.panel:
-            precomputed = self._precompute(df, outcome, unit, time, first_treat, covariates)
+            precomputed = self._precompute(
+                df, outcome, unit, time, first_treat, covariates, resolved_survey=resolved_survey
+            )
             cell_fn = self._compute_dml_gt
         else:
-            precomputed = self._precompute_rcs(df, outcome, unit, time, first_treat, covariates)
+            precomputed = self._precompute_rcs(
+                df, outcome, unit, time, first_treat, covariates, resolved_survey=resolved_survey
+            )
             cell_fn = self._compute_dml_rcs_gt
+
+        # Survey metadata reflects the estimation index space (units on the
+        # panel lane; the RCS lane's per-obs design is its own unit level).
+        resolved_survey_unit = precomputed.get("resolved_survey_unit")
+        if survey_metadata is not None and resolved_survey_unit is not None:
+            survey_metadata = compute_survey_metadata(
+                resolved_survey_unit, resolved_survey_unit.weights
+            )
+        df_survey = precomputed.get("df_survey")
+
+        # PSU-cohesive folds whenever the PSU is strictly coarser than the
+        # sampling unit and cluster-cohesive splitting is POSSIBLE
+        # (>= 2 PSUs). With 2 <= n_psu < n_folds the effective fold count is
+        # REDUCED to n_psu (warned) — never silently reverting to unit folds
+        # there, because with >= 2 PSUs the clustered variance is identified
+        # and would legitimize nuisances trained with within-PSU leakage.
+        # Only the single-PSU design falls back to stratified unit folds:
+        # cohesive splitting is impossible and the clustered variance is
+        # NaN either way (the <2-PSU contract; REGISTRY Note).
+        use_psu_folds = False
+        effective_n_folds = self.n_folds
+        if resolved_survey_unit is not None and resolved_survey_unit.psu is not None:
+            _n_psu_global = int(np.unique(resolved_survey_unit.psu).size)
+            if _n_psu_global < len(resolved_survey_unit.psu) and _n_psu_global >= 2:
+                use_psu_folds = True
+                if _n_psu_global < self.n_folds:
+                    effective_n_folds = _n_psu_global
+                    warnings.warn(
+                        f"DMLDiD survey/cluster design has only {_n_psu_global} "
+                        f"PSU(s), fewer than n_folds={self.n_folds}; "
+                        f"cross-fitting uses {_n_psu_global} PSU-cohesive folds "
+                        "instead (fold count reduced to preserve cluster "
+                        "cohesion — unit-level folds would leak information "
+                        "within PSUs while the clustered variance is "
+                        "identified).",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+        precomputed["use_psu_folds"] = use_psu_folds
+        precomputed["effective_n_folds"] = effective_n_folds
+        precomputed["weighted_moments"] = weighted_moments
+
         treatment_groups = precomputed["treatment_groups"]
         time_periods = precomputed["time_periods"]
         observed_sorted = precomputed["observed_sorted"]
@@ -1569,26 +2056,38 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         # the sole user-visible trace). Accumulated per cell during the
         # estimation loop — no second O(n_units x n_cells) sweep.
         if dropped_units:
+            _has_design = precomputed.get("resolved_survey_unit") is not None
             if self.panel:
+                _weighting_note = (
+                    "(survey/cluster fits: point and aggregation weights both "
+                    "use cohort masses — see REGISTRY.md)"
+                    if _has_design
+                    else "(point weights use per-cell valid counts; aggregation "
+                    "cohort masses use full cohorts — see REGISTRY.md)"
+                )
                 warnings.warn(
                     f"{len(dropped_units)} unit(s) were excluded from at least one "
                     "(group, time) cell they would otherwise join, due to a "
                     "missing or NON-FINITE outcome, a non-finite covariate at the "
                     "cell's base period, or an outcome difference overflowing to "
-                    "non-finite. DMLDiD estimates each cell on its complete cases "
-                    "(point weights use per-cell valid counts; aggregation cohort "
-                    "masses use full cohorts — see REGISTRY.md).",
+                    f"non-finite. DMLDiD estimates each cell on its complete cases "
+                    f"{_weighting_note}.",
                     UserWarning,
                     stacklevel=2,
                 )
             else:
+                _weighting_note = (
+                    "(survey fits: aggregation weights use survey cohort masses "
+                    "— see REGISTRY.md)"
+                    if _has_design
+                    else "(aggregation weights use fixed cohort row masses — " "see REGISTRY.md)"
+                )
                 warnings.warn(
                     f"{len(dropped_units)} observation(s) were excluded from a "
                     "(group, time) cell they would otherwise join, due to a "
                     "missing or NON-FINITE outcome or a non-finite covariate "
                     "on the row. DMLDiD estimates each cell on its complete "
-                    "cases (aggregation weights use fixed cohort row masses — "
-                    "see REGISTRY.md).",
+                    f"cases {_weighting_note}.",
                     UserWarning,
                     stacklevel=2,
                 )
@@ -1607,6 +2106,20 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 cohort_mass = float(np.count_nonzero(unit_cohorts == g))
                 if cohort_mass <= 0:
                     continue
+                # Declared-survey fits gate materialization on the WEIGHTED
+                # cohort mass (CS precedent): a cohort with rows but zero
+                # survey mass must not materialize a reference cell.
+                _ref_weighted_mass: Optional[float] = None
+                if weighted_moments and precomputed.get("survey_weights") is not None:
+                    _ref_weighted_mass = float(
+                        np.sum(
+                            np.asarray(precomputed["survey_weights"], dtype=np.float64)[
+                                unit_cohorts == g
+                            ]
+                        )
+                    )
+                    if _ref_weighted_mass <= 0.0:
+                        continue
                 ref_entry: Dict[str, Any] = {
                     "effect": 0.0,
                     "se": np.nan,
@@ -1618,6 +2131,8 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     "skip_reason": None,
                     "is_reference": True,
                 }
+                if _ref_weighted_mass is not None:
+                    ref_entry["survey_weight_sum"] = _ref_weighted_mass
                 if not self.panel:
                     # Keep the RCS pg basis uniform: reference cells carry the
                     # same fixed cohort row mass as estimated cells.
@@ -1642,18 +2157,27 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 reference_event_times = tuple(sorted(ref_event_times))
 
         # Overall ATT (simple aggregation over post-treatment finite cells).
-        overall_att, overall_se, _ = self._aggregate_simple(
+        # overall_effective_df is non-None only when replicate variance
+        # dropped replicates — unreachable while replicate designs are
+        # rejected, but kept for structural parity with CS.
+        overall_att, overall_se, overall_effective_df = self._aggregate_simple(
             group_time_effects, influence_func_info, df, unit, precomputed
         )
+        if overall_effective_df is not None:
+            df_survey = overall_effective_df
         overall_t_stat, overall_p_value, overall_conf_int = safe_inference(
-            overall_att, overall_se, alpha=self.alpha
+            overall_att, overall_se, alpha=self.alpha, df=df_survey
         )
 
         # Optional multiplier bootstrap (keyword form; aggregate=None is the
         # supported skip-the-event-study-prep input — post-fit aggregate()
         # supplies its own level on replay). Adapted engine override block:
         # the fit-time event-study sub-block and the dead cband lines are
-        # dropped; every df=df_survey becomes df=None (plain normal theory).
+        # dropped; bootstrap overrides use df=None (plain normal theory)
+        # even on survey fits — the CS convention for percentile-bootstrap
+        # inference (staggered.py), NOT an oversight. The PSU-level survey
+        # bootstrap and the <2-PSU NaN contract activate inside the mixin
+        # via precomputed["resolved_survey_unit"].
         bootstrap_results = None
         if self.n_bootstrap > 0:
             bootstrap_results = self._run_multiplier_bootstrap(
@@ -1698,6 +2222,23 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         n_treated_units = int(np.sum(unit_cohorts > 0))
         n_control_units = int(np.sum(unit_cohorts == 0))
 
+        # Survey/cluster results provenance (CS conventions): cluster_name
+        # follows PSU precedence (declared design PSU column > cluster=);
+        # df_inference is populated ONLY on the bare-cluster path (declared
+        # designs carry their df on survey_metadata.df_survey).
+        cluster_name: Optional[str] = None
+        n_clusters: Optional[int] = None
+        df_inference: Optional[float] = None
+        if resolved_survey_unit is not None:
+            if survey_design is not None and survey_design.psu is not None:
+                cluster_name = survey_design.psu
+            elif self.cluster is not None:
+                cluster_name = self.cluster
+            if resolved_survey_unit.psu is not None:
+                n_clusters = int(np.unique(resolved_survey_unit.psu).size)
+            if survey_metadata is None and df_survey is not None:
+                df_inference = float(df_survey)
+
         results = DMLDiDResults(
             group_time_effects=group_time_effects,
             overall_att=overall_att,
@@ -1728,18 +2269,27 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             propensity_learner=_learner_spec_label(self.propensity_learner),
             outcome_learner=_learner_spec_label(self.outcome_learner),
             n_folds=self.n_folds,
+            effective_n_folds=(effective_n_folds if effective_n_folds != self.n_folds else None),
             cross_fit_diagnostics=cross_fit_diagnostics,
             seed=self.seed,
             n_bootstrap=self.n_bootstrap,
             bootstrap_weights=self.bootstrap_weights,
             cband=self.cband,
             panel=self.panel,
+            survey_metadata=survey_metadata,
+            cluster_name=cluster_name,
+            n_clusters=n_clusters,
+            df_inference=df_inference,
         )
         results._aggregation_kit = _build_aggregation_kit(
             cast(Any, self),  # duck-typed host contract (alpha/anticipation/cband)
             precomputed,
             influence_func_info,
             group_time_effects,
+            # Declared-survey marker: gates aggregate('total') closed on
+            # survey fits (bare cluster= keeps survey_metadata None and
+            # stays admitted).
+            is_survey_fit=survey_metadata is not None,
             bootstrap_results=bootstrap_results,
         )
         self.results_ = results

@@ -13,8 +13,11 @@ estimates or inference.
 ``cluster=None`` IS the per-sampling-unit influence-function variance by
 definition (REGISTRY.md "IF-based variance estimators..." — the default),
 and DMLDiD's augmented-score SE ``sqrt(mean(psi_bar**2)/n)`` is exactly
-that — per UNIT on panel fits, per OBSERVATION on repeated-cross-section
-fits (rows are the sampling units there).
+that on NO-DESIGN fits — per UNIT on panel fits, per OBSERVATION on
+repeated-cross-section fits (rows are the sampling units there). Under a
+``survey_design=``/``cluster=`` the per-cell SE is the design-based CR1 /
+weighted-IF variance instead (the CS clustered-``hc1`` convention:
+``SurveyDesign(psu=...)`` routed through the shared stratified-PSU meat).
 """
 
 from dataclasses import dataclass, field
@@ -59,12 +62,15 @@ class DMLDiDResults(CallawaySantAnnaResults):
 
     Inherits the full Callaway-Sant'Anna results surface — ``att``/``se``
     aliases, ``to_dataframe``, post-fit ``aggregate()`` (simple / event_study
-    / group, plus total on panel fits; repeated-cross-section fits fail
-    ``total`` closed) with bootstrap replay — and adds the DML provenance
-    fields below. Every inherited CS-only field that DMLDiD never populates
-    (``epv_*``, ``pscore_fallback``, ``allow_unbalanced_panel``,
-    ``used_rc_on_unbalanced_panel``, ``cluster_name``, ``n_clusters``,
-    ``df_inference``, ``survey_metadata``, ``influence_functions``,
+    / group, plus total on panel non-survey fits; repeated-cross-section
+    AND declared-survey fits fail ``total`` closed) with bootstrap replay —
+    and adds the DML provenance fields below. ``cluster_name``/
+    ``n_clusters``/``df_inference``/``survey_metadata`` are populated on
+    survey/``cluster=`` fits (CS conventions: ``survey_metadata`` marks a
+    DECLARED design; ``df_inference`` carries the bare-cluster df). Every
+    inherited CS-only field that DMLDiD never populates (``epv_*``,
+    ``pscore_fallback``, ``allow_unbalanced_panel``,
+    ``used_rc_on_unbalanced_panel``, ``influence_functions``,
     ``event_study_effects``/``event_study_vcov``/``event_study_vcov_index``/
     ``event_study_df``) stays at its inherited default and is inert.
     ``group_effects`` stays ``None`` permanently — ``aggregate("group")``
@@ -84,7 +90,12 @@ class DMLDiDResults(CallawaySantAnnaResults):
         the object itself: result pickles must not retain arbitrary user
         objects.
     n_folds : int
-        Cross-fitting fold count K.
+        Cross-fitting fold count K as REQUESTED (the configuration value).
+    effective_n_folds : int, optional
+        The REALIZED fold count when it differs from ``n_folds`` — set only
+        when a coarse survey/cluster PSU design reduced K to the global PSU
+        count to preserve cluster cohesion (warned at fit); ``None``
+        otherwise.
     cross_fit_diagnostics : dict, optional
         Per-``(g, t)`` cross-fit diagnostics: per-stage fold losses and fit
         counts, ``p_hat``, propensity clip count, and the fold-seed
@@ -100,6 +111,7 @@ class DMLDiDResults(CallawaySantAnnaResults):
     propensity_learner: Any = "logit"
     outcome_learner: Any = "linear"
     n_folds: int = 5
+    effective_n_folds: Optional[int] = None
     cross_fit_diagnostics: Optional[Dict[Any, Dict[str, Any]]] = field(default=None, repr=False)
     seed: Optional[int] = None
     n_bootstrap: int = 0
@@ -107,9 +119,12 @@ class DMLDiDResults(CallawaySantAnnaResults):
     cband: bool = True
 
     def __repr__(self) -> str:
+        folds = f"n_folds={self.n_folds}"
+        if self.effective_n_folds is not None:
+            folds += f" (effective {self.effective_n_folds})"
         return (
             f"DMLDiDResults(att={self.overall_att:.6g}, se={self.overall_se:.6g}, "
-            f"n_cells={len(self.group_time_effects)}, n_folds={self.n_folds}, "
+            f"n_cells={len(self.group_time_effects)}, {folds}, "
             f"propensity_learner={self.propensity_learner!r}, "
             f"outcome_learner={self.outcome_learner!r})"
         )
@@ -157,9 +172,12 @@ class DMLDiDResults(CallawaySantAnnaResults):
             # statistic column is effect/SE (a standardized ratio, not the
             # p-value's source), so label the p column honestly.
             base = base.replace("t-stat", "z-stat").replace("P>|t|", "Boot. p")
-        else:
-            # Analytical DMLDiD inference is normal-theory throughout
+        elif self.survey_metadata is None and self.df_inference is None:
+            # Analytical NO-DESIGN inference is normal-theory throughout
             # (safe_inference with df=None): relabel the parent's t columns.
+            # Survey/bare-cluster fits use finite-df t inference
+            # (df=df_survey / df_inference) — the parent's t labels are
+            # CORRECT there and must not be relabeled.
             base = base.replace("t-stat", "z-stat").replace("P>|t|", "P>|z|")
         lines = base.split("\n")
         for i, line in enumerate(lines):
@@ -183,6 +201,10 @@ class DMLDiDResults(CallawaySantAnnaResults):
             f"{'Propensity learner:':<30} {self.propensity_learner!r:>10}",
             f"{'Outcome learner:':<30} {self.outcome_learner!r:>10}",
             f"{'Cross-fitting folds (K):':<30} {self.n_folds:>10}",
+        ]
+        if self.effective_n_folds is not None:
+            header.append(f"{'Effective folds (PSU-reduced):':<30} {self.effective_n_folds:>10}")
+        header += [
             # The seed line renders UNCONDITIONALLY: the fold draw moves
             # point estimates on every fit, bootstrap or not. With
             # seed=None the OS-drawn fold entropy (recorded per cell in
@@ -215,6 +237,9 @@ class DMLDiDResults(CallawaySantAnnaResults):
         result["propensity_learner"] = str(self.propensity_learner)
         result["outcome_learner"] = str(self.outcome_learner)
         result["n_folds"] = int(self.n_folds)
+        result["effective_n_folds"] = (
+            None if self.effective_n_folds is None else int(self.effective_n_folds)
+        )
         result["seed"] = None if self.seed is None else int(self.seed)
         result["n_bootstrap"] = int(self.n_bootstrap)
         result["bootstrap_weights"] = self.bootstrap_weights

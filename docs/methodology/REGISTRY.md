@@ -2878,7 +2878,11 @@ the finite-dimensional `p_0` is handled by the variance correction below.
   treated (or single control) unit is a singleton stratum → `assign_folds`
   raises → the cell is recorded as a `cross_fit_degenerate` NaN cell where
   CS would have estimated it. Rationale: one treated unit cannot be
-  cross-fitted; CS is the right tool there.
+  cross-fitted; CS is the right tool there. Under a survey/cluster design
+  whose PSU is strictly coarser than the sampling unit the folds are
+  PSU-COHESIVE instead (the stratification cannot be cluster-constant; see
+  the survey Note below) — the degenerate guards in `cross_fit_predict`
+  keep covering the panel lane's composition requirement there.
 - **Note:** Pooled θ̂ AND pooled Σ̂ — both the point estimate and the variance
   are computed as POOLED means over all cell members rather than the paper's
   `1/K` equal-fold averages. With fold sizes differing by ±1 the pooled forms
@@ -2940,8 +2944,11 @@ the finite-dimensional `p_0` is handled by the variance correction below.
   covariate, or a ΔY overflow from two finite outcomes — the errstate
   boundaries make the warning the only user-visible trace of the latter).
 - **Note:** Skip-reason vocabulary — DMLDiD cells carry `skip_reason ∈`
-  {`missing_period`, `zero_treated_control`, `cross_fit_degenerate`,
-  `non_finite_score`}: the first two are the CS meanings; `cross_fit_degenerate`
+  {`missing_period`, `zero_treated_control`, `zero_weight_mass`,
+  `cross_fit_degenerate`, `non_finite_score`}: the first two are the CS
+  meanings; `zero_weight_mass` (declared-survey fits only, the CS meaning) =
+  a required group has rows but zero survey mass, so the weighted p̂/λ̂ would
+  leave (0, 1); `cross_fit_degenerate`
   = fold assignment or a fail-closed learner made the cell un-cross-fittable
   (chained learner message quoted in the consolidated skip warning);
   `non_finite_score` = the score/variance computation produced or received
@@ -2959,10 +2966,11 @@ the finite-dimensional `p_0` is handled by the variance correction below.
   influence-function variance IS unit-level clustering, so the 4.0
   auto-cluster DEFAULT flip is inert for it — mirroring how CallawaySantAnna
   is absent from M-080's `code_refs` and how M-010 pre-empted M-080 for the
-  TWFE event-study mode. CS additionally exposes `cluster=` for
-  COARSER-than-unit clustering, a surface DMLDiD ships without: the paper
-  assumes i.i.d. sampling, and the survey/cluster follow-up is the tracked
-  `DEFERRED.md` row.
+  TWFE event-study mode. COARSER-than-unit clustering ships via the CS-style
+  `cluster=` constructor parameter (3.11): the synthesized/injected
+  `SurveyDesign(psu=...)` drives PSU-cohesive folds, the per-cell CR1 SE,
+  the bootstrap draw structure and `df_inference`, while the moment kernels
+  stay unweighted (see the survey Notes below).
 - **Note:** Global λ̂ convention (Case 2) — `λ̂` is the FULL-SAMPLE-within-cell
   post-period sampling share `mean(T)` over the pooled two-period rows,
   mirroring the global-p̂ convention above and DoubleML's `t.mean()` (the
@@ -2984,7 +2992,13 @@ the finite-dimensional `p_0` is handled by the variance correction below.
   guarantees control rows in BOTH periods in every training complement
   (Chang's `I_kz^c` fold-composition requirement). Consequence: any singleton
   D×T stratum (e.g. ONE treated row in the base period) dies as
-  `cross_fit_degenerate`.
+  `cross_fit_degenerate`. Under PSU-cohesive folds (coarser-than-unit
+  survey/cluster designs) the stratification MECHANISM is unavailable, and
+  under a declared survey per-row zero weights can hollow a period out even
+  inside stratified folds — in both cases the REQUIREMENT is preserved by an
+  explicit per-complement guard (positive-weight control rows in BOTH
+  periods, else `DegenerateFoldError` → `cross_fit_degenerate` skip); the
+  no-design stratified path never evaluates the guard (bit-identity).
 - **Note:** Case 2 four-group guard — a cell needs treated AND control rows
   in BOTH periods; any empty group skips as `zero_treated_control` (the
   vocabulary is reused, not widened). A new λ̂-extremeness warning mirrors
@@ -3000,14 +3014,82 @@ the finite-dimensional `p_0` is handled by the variance correction below.
   through `float()`-keyed dict access, where distinct int64 cohorts above
   2^53 (admissible through 2^62 by the label pipeline) collide.
 - **Note:** `aggregate('total')` fails closed on RCS fits (the library-wide
-  repeated-cross-section convention; `is_panel: False` kit bookkeeping);
-  panel fits keep the total route. Per-observation IF entries make
-  `vcov_type="hc1"` the per-SAMPLING-UNIT variance on RCS (rows are the
-  sampling units).
+  repeated-cross-section convention; `is_panel: False` kit bookkeeping) AND
+  on declared-`survey_design=` fits (`is_survey_fit` kit gate, the CS/
+  EfficientDiD/Imputation/TwoStage convention); panel no-design and
+  bare-`cluster=` fits keep the total route (the latter subject to the
+  shared `_cs_total_mass` complete-treated-support coincidence guard).
+  Per-observation IF entries make `vcov_type="hc1"` the per-SAMPLING-UNIT
+  variance on RCS (rows are the sampling units).
 - **Note:** Case-2-only moment conditions — Assumption 3.2's level-outcome
   bounds (`E[Y²|X] ≤ C`, `|E[YU]| ≤ C`) belong to the repeated-cross-section
   case ONLY and are NOT imposed on the panel path; stationary sampling
   (Assumption 2.3) is warned at fit (not data-checkable).
+- **Note:** Survey support (3.11) is a LIBRARY EXTENSION — Chang (2020)
+  assumes i.i.d. sampling and never discusses clustering or weighting.
+  Declared `survey_design=` (pweight-only, full-design TSL:
+  weights/strata/PSU/FPC, resolved and validated by the shared CS
+  machinery) enters the ESTIMATOR, not just the variance: p̂ and (Case 2)
+  λ̂ become Hájek weighted shares, θ̂ the weighted score mean, Ĝ₂λ the
+  weighted slope mean, the nuisance learners receive `sample_weight`
+  (user learner objects must accept it by keyword — a `TypeError` fires
+  up front otherwise), and the IF payload is the weighted analogue
+  `w_i·ψ̄_i/Σw`. The per-cell SE is PSU-gated exactly like CS: designs
+  with a PSU route through `_cluster_robust_se_from_per_gt_if`
+  (`compute_survey_if_variance`; a NaN return is the deliberate
+  unidentified-variance signal and flows to `safe_inference` on a
+  RETAINED cell), strata/FPC-only designs use the weighted
+  `sqrt(sum(if²))` with the full design entering aggregate SEs via
+  `_se_from_psi`. Analytical inference uses `df = df_survey`
+  (`n_PSU − n_strata`) t-statistics; bootstrap overrides keep normal
+  theory (the CS convention). On the weighted-λ̂ RCS lane Theorem 2's
+  coverage claim does NOT carry over — the weighted plug-in is validated
+  by the survey invariant battery (`tests/test_survey_dml.py`), not by
+  the paper. Replicate-weight designs fail closed (TODO.md row).
+- **Note:** PSU-cohesive cross-fitting (survey/cluster designs) — when the
+  effective design's PSU is strictly coarser than the sampling unit AND
+  there are at least `n_folds` PSUs globally, fold assignment switches
+  from D (panel) / D×T (RCS) stratification to cluster-cohesive folds
+  (`assign_folds(cluster_ids=psu)`): unit-level folds with within-PSU
+  dependence would leak information across the train/test split,
+  undermining the cross-fitting argument (the DoubleML clustered-DML
+  prescription). With `2 <= n_psu < n_folds` the EFFECTIVE fold count is
+  REDUCED to `n_psu` under a `UserWarning` — PSU cohesion is preserved,
+  never silently traded for the requested fold count, because with >= 2
+  PSUs the clustered variance is IDENTIFIED and finite inference from
+  leaky unit folds would be reported as clustered. Only the SINGLE-PSU
+  design falls back to stratified unit folds: cluster-cohesive splitting
+  is impossible there and the variance layer NaNs out either way
+  (per-cell CR1 returns NaN below 2 PSUs; the bootstrap emits the <2-PSU
+  warning and NaNs every bootstrap surface — remediation is a coarser
+  design or more PSUs). Under a globally-eligible design a
+  CELL with fewer in-cell PSUs than folds skips as `cross_fit_degenerate`;
+  if EVERY cell does, the existing all-degenerate check aborts with the
+  generic "Could not estimate any group-time effects" ValueError (raised
+  before the consolidated skip warning; no skip detail in the message) —
+  remediation there is fewer folds.
+  The same `seed` yields DIFFERENT folds with vs without a coarse PSU
+  design (different RNG consumption — a config change, not a
+  reproducibility break); `diagnostics["psu_folds"]` records the mode.
+  Note the shared mixin's <2-PSU bootstrap warning suggests
+  "n_bootstrap=0 (analytical IF variance)" — pre-existing CS-shared
+  wording; on a one-PSU design the analytical path also yields NaN
+  inference (the design is unidentified either way).
+- **Note:** Bare `cluster=` (constructor) — synthesized into
+  `SurveyDesign(psu=cluster, weight_type="pweight")` (or injected as the
+  PSU of a declared PSU-less design; a design-supplied PSU wins with a
+  warning on differing partitions). The moment KERNELS stay unweighted
+  and no `sample_weight` reaches the learners — `cluster=` is not a
+  weighting request, and `(X, y)`-only learners keep working. Point
+  estimates can still move through two accepted channels: PSU-cohesive
+  folds (inherent to clustered cross-fitting) and, on incomplete panels,
+  the synthesized all-ones `survey_weights` switching aggregation masses
+  from per-cell complete-case `n_treated` to full cohort mass (the same
+  documented CS bare-`cluster=` divergence). On a fully complete panel
+  with an identity PSU both channels are inert and the fit is
+  bit-identical to unclustered. `survey_metadata` stays `None` (it is the
+  DECLARED-design marker); the bare-cluster df (`n_PSU − 1`) is carried
+  on `df_inference`.
 
 *Edge cases:*
 - Propensity near 0/1: clipped per the trimming Note (error bounds blow up as

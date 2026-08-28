@@ -341,3 +341,122 @@ class TestChangRCSScoreValidation:
             psi_bar, chang_rcs_score_augmented(summand, D, T, y, m2, ps, theta, p_hat, lam_hat)
         )
         assert g2_lambda == chang_rcs_lambda_slope(y, D, T, m2, ps, p_hat, lam_hat)
+
+
+class TestChangRCSSlopeWeights:
+    """Survey weights on the lambda-slope family (DMLDiD survey support)."""
+
+    def _inputs(self, n=24):
+        rng = np.random.default_rng(5)
+        y = rng.normal(size=n)
+        D = (rng.uniform(size=n) < 0.5).astype(float)
+        T = (rng.uniform(size=n) < 0.5).astype(float)
+        m2_hat = rng.normal(size=n)
+        ps = np.clip(rng.uniform(size=n), 0.1, 0.9)
+        return y, D, T, m2_hat, ps
+
+    def test_uniform_weights_match_unweighted_exactly(self):
+        from diff_diff._dr_scores import chang_rcs_lambda_slope
+
+        y, D, T, m2, ps = self._inputs()
+        base = chang_rcs_lambda_slope(y, D, T, m2, ps, 0.5, 0.45)
+        weighted = chang_rcs_lambda_slope(y, D, T, m2, ps, 0.5, 0.45, weights=np.ones(len(y)))
+        # np.average with uniform weights is not guaranteed bit-identical to
+        # np.mean, but must agree to float64 roundoff.
+        np.testing.assert_allclose(weighted, base, rtol=1e-14)
+
+    def test_weighted_slope_equals_weighted_mean_of_terms(self):
+        from diff_diff._dr_scores import chang_rcs_lambda_slope
+
+        y, D, T, m2, ps = self._inputs()
+        rng = np.random.default_rng(9)
+        w = rng.uniform(0.5, 2.0, size=len(y))
+        p_hat, lam_hat = 0.5, 0.45
+        odds = (D - ps) / (1.0 - ps)
+        term1 = (
+            -((1.0 - 2.0 * lam_hat) / (lam_hat**2 * (1.0 - lam_hat) ** 2))
+            * (odds / p_hat)
+            * ((T - lam_hat) * y - m2)
+        )
+        term2 = -(y / (p_hat * lam_hat * (1.0 - lam_hat))) * odds
+        expected = float(np.average(term1 + term2, weights=w))
+        got = chang_rcs_lambda_slope(y, D, T, m2, ps, p_hat, lam_hat, weights=w)
+        np.testing.assert_allclose(got, expected, rtol=1e-14)
+
+    def test_weighted_slope_finite_difference_identity(self):
+        # The slope is d/d(lambda) of the WEIGHTED mean of psi_2 evaluated at
+        # the plug-ins: central finite difference on the weighted score mean.
+        from diff_diff._dr_scores import chang_rcs_lambda_slope, chang_rcs_score
+
+        y, D, T, m2, ps = self._inputs()
+        rng = np.random.default_rng(11)
+        w = rng.uniform(0.5, 2.0, size=len(y))
+        p_hat, lam_hat, eps = 0.5, 0.45, 1e-6
+        up = np.average(chang_rcs_score(y, D, T, m2, ps, p_hat, lam_hat + eps), weights=w)
+        dn = np.average(chang_rcs_score(y, D, T, m2, ps, p_hat, lam_hat - eps), weights=w)
+        fd = (up - dn) / (2 * eps)
+        got = chang_rcs_lambda_slope(y, D, T, m2, ps, p_hat, lam_hat, weights=w)
+        np.testing.assert_allclose(got, fd, rtol=1e-5)
+
+    @pytest.mark.parametrize(
+        "bad_weights, match",
+        [
+            (np.ones((4, 6)), "1-dimensional"),
+            (np.ones(5), "length"),
+            (np.array([1.0, np.nan] + [1.0] * 22), "non-finite"),
+            (np.array([-1.0] + [1.0] * 23), "non-negative"),
+            (np.zeros(24), "positive sum"),
+        ],
+    )
+    def test_weight_validation_rejections_public(self, bad_weights, match):
+        from diff_diff._dr_scores import chang_rcs_lambda_slope
+
+        y, D, T, m2, ps = self._inputs()
+        with pytest.raises(ValueError, match=match):
+            chang_rcs_lambda_slope(y, D, T, m2, ps, 0.5, 0.45, weights=bad_weights)
+
+    @pytest.mark.parametrize(
+        "bad_weights, match",
+        [
+            (np.ones((4, 6)), "1-dimensional"),
+            (np.ones(5), "length"),
+            (np.array([1.0, np.inf] + [1.0] * 22), "non-finite"),
+            (np.array([-1.0] + [1.0] * 23), "non-negative"),
+            (np.zeros(24), "positive sum"),
+        ],
+    )
+    def test_weight_validation_rejections_internal_entry(self, bad_weights, match):
+        # The DMLDiD RCS cell calls the internal _with_slope entry directly,
+        # so its weight validation must hold there too, not only on the
+        # public wrappers.
+        from diff_diff._dr_scores import _chang_rcs_score_augmented_with_slope
+
+        y, D, T, m2, ps = self._inputs()
+        summand = np.zeros(len(y))
+        with pytest.raises(ValueError, match=match):
+            _chang_rcs_score_augmented_with_slope(
+                summand, D, T, y, m2, ps, 0.0, 0.5, 0.45, weights=bad_weights
+            )
+
+    def test_weighted_augmented_matches_public_pair(self):
+        from diff_diff._dr_scores import (
+            _chang_rcs_score_augmented_with_slope,
+            chang_rcs_lambda_slope,
+            chang_rcs_score,
+            chang_rcs_score_augmented,
+        )
+
+        y, D, T, m2, ps = self._inputs()
+        rng = np.random.default_rng(13)
+        w = rng.uniform(0.5, 2.0, size=len(y))
+        p_hat, lam_hat = 0.5, 0.45
+        summand = chang_rcs_score(y, D, T, m2, ps, p_hat, lam_hat)
+        theta = float(np.average(summand, weights=w))
+        psi_bar, g2 = _chang_rcs_score_augmented_with_slope(
+            summand, D, T, y, m2, ps, theta, p_hat, lam_hat, weights=w
+        )
+        np.testing.assert_array_equal(
+            psi_bar,
+            chang_rcs_score_augmented(summand, D, T, y, m2, ps, theta, p_hat, lam_hat, weights=w),
+        )
+        assert g2 == chang_rcs_lambda_slope(y, D, T, m2, ps, p_hat, lam_hat, weights=w)

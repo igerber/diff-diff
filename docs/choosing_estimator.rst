@@ -687,10 +687,11 @@ insensitive to the nuisance learners' regularization bias.
 **vs Callaway-Sant'Anna**: same cell architecture and aggregation surface;
 DMLDiD replaces CS's parametric nuisances with cross-fitted ML learners —
 prefer it when the covariate relationship is nonlinear/high-dimensional,
-prefer CS otherwise (fewer moving parts, survey/cluster support). Both
-handle declared repeated cross sections via ``panel=False``, but only CS
-carries survey weights there — RCS data is typically survey data, so
-weighted RCS belongs to CS.
+prefer CS otherwise (fewer moving parts, replicate-weight support). Both
+handle declared repeated cross sections via ``panel=False``, and both
+carry pweight survey designs and ``cluster=`` there (DMLDiD's survey
+lane is a documented library extension of Chang's i.i.d. theory;
+replicate-weight designs stay CS-only).
 
 **Example**::
 
@@ -881,7 +882,7 @@ Survey Design Support
 
 Most estimators support an optional ``survey_design`` parameter in ``fit()``
 (``SyntheticControl`` accepts the parameter but raises ``NotImplementedError``;
-``LWDiD`` and ``DMLDiD`` accept no ``survey_design`` parameter at all —
+``LWDiD`` accepts no ``survey_design`` parameter at all —
 passing it raises ``TypeError``).
 Pass a :class:`~diff_diff.SurveyDesign` object to get design-based variance
 estimation. The depth of support varies by estimator and variance method:
@@ -1014,10 +1015,10 @@ estimation. The depth of support varies by estimator and variance method:
      - --
      - --
    * - ``DMLDiD``
-     - N/A (no survey support)
-     - N/A
+     - Full (pweight only)
+     - ``n_PSU - n_strata``
      - --
-     - --
+     - Multiplier (PSU)
    * - ``ChangesInChanges`` / ``QDiD``
      - --
      - --

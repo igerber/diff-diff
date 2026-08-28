@@ -1414,7 +1414,8 @@ DMLDiD(
     cband=True,                   # sup-t bands on the event-study replay
     pscore_trim=0.01,             # clip fitted propensities (never drop)
     panel=True,                   # False = declared repeated cross sections (Chang Case 2)
-).fit(data, outcome, unit, time, first_treat, covariates) -> DMLDiDResults
+    cluster=None,                 # coarser-than-unit clustering (variance/folds only)
+).fit(data, outcome, unit, time, first_treat, covariates, survey_design=None) -> DMLDiDResults
 ```
 
 Key contracts:
@@ -1422,7 +1423,7 @@ Key contracts:
 - HonestDiD / PreTrendsPower consume the aggregate('event_study') container (admitted source); the native `compute_honest_did(results)` route raises with the container instruction. Varying-base containers warn; use base_period='universal' for clean Rambachan-Roth interpretation.
 - `SieveLearner(k_max=None, criterion="bic")` is the exported configurable learner (adaptive polynomial degree by IC); any sklearn-style estimator object also plugs in (seed stochastic learners yourself — the library seed pins folds, not learner internals).
 - Per-cell complete cases (one consolidated unbalanced-input warning); degenerate cells (fewer members than folds, singleton treated stratum, fail-closed learner) become NaN cells with machine-readable skip_reason and a consolidated warning; surviving cells still aggregate.
-- No survey_design=/cluster= on EITHER design (Chang assumes i.i.d.; the per-sampling-unit IF variance IS unit-level clustering — per unit on panel, per observation on RCS). panel=False requires row-unique unit IDs and assumes stationary cross-sectional sampling (Assumption 2.3, warned, not data-checkable) — note RCS data is typically survey data (BRFSS/ACS/CPS) and DMLDiD carries NO survey weights; use CallawaySantAnna(panel=False, survey_design=...) for weighted RCS. Reproducibility: set seed (fold draws move point estimates).
+- Survey/cluster support on BOTH designs. `survey_design=` (pweight-only, full-design TSL — weights/strata/PSU/FPC): weighted moment kernels (Hajek p-hat/lambda-hat/theta), sample_weight into the nuisance learners (user learner objects must accept sample_weight by keyword — rejected up front otherwise), PSU-cohesive cross-fitting folds when the PSU is strictly coarser than the sampling unit, design-based per-cell/aggregate variance with df = n_PSU - n_strata t-inference. A documented library EXTENSION of Chang's i.i.d. theory (Theorem 2's coverage claim does not carry over on the weighted-lambda RCS lane — REGISTRY DMLDiD Notes). Bare cluster= keeps the kernels unweighted (variance/folds/df only). Replicate-weight designs are rejected (tracked in TODO.md); aggregate('total') fails closed on declared-survey fits. panel=False requires row-unique unit IDs and assumes stationary cross-sectional sampling (Assumption 2.3, warned, not data-checkable). Reproducibility: set seed (fold draws move point estimates; PSU folds consume the RNG differently than stratified folds).
 
 ### TROP
 

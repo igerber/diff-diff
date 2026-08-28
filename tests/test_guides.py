@@ -806,10 +806,14 @@ class TestLLMsFullDMLDiDCoverage:
         from diff_diff import DMLDiD
 
         assert "covariates" in inspect.signature(DMLDiD.fit).parameters
+        assert "survey_design" in inspect.signature(DMLDiD.fit).parameters
         section = self._dml_section()
         fit_start = section.index(").fit(")
         fit_block = section[fit_start : section.index("DMLDiDResults", fit_start)]
         assert "covariates" in fit_block
+        # The new public fit parameter must be documented in the guide's
+        # .fit( block too (constructor parity is pinned separately).
+        assert "survey_design" in fit_block
         assert "REQUIRED" in section  # the covariates-required contract
 
     def test_llms_full_dml_documents_post_fit_aggregation_and_seed(self):

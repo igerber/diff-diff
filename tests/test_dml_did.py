@@ -1016,9 +1016,12 @@ class TestAnticipationInteractions:
 
 class TestUnweightedLearnerSignature:
     def test_fit_x_y_only_learners_through_public_fit(self, data):
-        # The advertised duck-typed contract is fit/predict(_proba); DMLDiD
-        # never passes sample weights, so learners whose fit signature is
-        # only (X, y) must work end to end through the public fit().
+        # The advertised duck-typed contract is fit/predict(_proba); on
+        # no-survey and bare-cluster fits DMLDiD passes no sample weights,
+        # so learners whose fit signature is only (X, y) must work end to
+        # end through the public fit(). (Declared survey_design= fits DO
+        # pass sample_weight and gate on it up front —
+        # tests/test_survey_dml.py.)
         class XYOnlyRegressor:
             def fit(self, X, y):
                 import numpy as _np
@@ -1064,6 +1067,7 @@ class TestFullConfigMutationDefense:
             ("outcome_learner", "logit"),
             ("pscore_trim", 0.9),
             ("n_folds", 1),
+            ("cluster", 123),
         ],
     )
     def test_mutated_config_raises_before_any_cell(self, data, attr, bad):

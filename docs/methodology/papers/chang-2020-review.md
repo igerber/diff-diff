@@ -181,15 +181,15 @@ the same variance estimators remain consistent under kernel first stages.
 per-item conventions/deviations are the REGISTRY "DMLDiD" Notes; Case 3
 items remain open, tracked in DEFERRED.md):
 - [x] Neyman-orthogonal Case 1 score (3.1) implemented exactly (Abadie score + mean-zero adjustment); [x] score (3.2) — SHIPPED as `chang_rcs_score` (`DMLDiD(panel=False)`); [ ] score (3.3) — Case 3 open
-- [x] DML2 cross-fitting: K-fold partition (D-stratified — documented deviation), nuisances fit on fold complements, never on the evaluation fold
+- [x] DML2 cross-fitting: K-fold partition (D-stratified — documented deviation; PSU-cohesive instead under a coarser-than-unit survey/cluster design, a further documented library extension), nuisances fit on fold complements, never on the evaluation fold
 - [x] Outcome nuisance `ℓ̂` fit on the UNTREATED subsample of the auxiliary fold only (`I_kz^c`)
 - [x] Scalar nuisance p̂: the global (full-sample-within-cell) convention adopted and documented (the I_k vs I_k^c printing contradiction is thereby sidestepped — see Gaps); [x] `λ̂` — same global convention (`mean(T)` within cell; REGISTRY Note)
 - [x] Final estimator: pooled mean (equals the paper's `1/K` average at equal fold sizes — documented deviation)
 - [x] Variance from the AUGMENTED score: `Ĝ_1p = -θ̃/p̂` folded in; [x] `Ĝ_2λ (T - λ̂)` — explicit term in `chang_rcs_score_augmented` (`Ĝ_2λ` = sample mean of the closed-form `∂λψ₂`, `chang_rcs_lambda_slope`; the paper prints no estimator — REGISTRY Note)
 - [x] Strict-overlap enforcement: fitted propensities clipped to `[trim, 1-trim]` (documented deviation; paper gives no rule)
-- [x] Per-fold/per-cell degenerate guards (zero treated/control, cell < K, singleton stratum) — closed skip vocabulary; [x] Case 2 pre/post-share guards — four-group guard + `λ̂` extremeness warning + D×T-stratified folds (control rows in both periods per training complement by construction)
+- [x] Per-fold/per-cell degenerate guards (zero treated/control, cell < K, singleton stratum) — closed skip vocabulary; [x] Case 2 pre/post-share guards — four-group guard + `λ̂` extremeness warning + D×T-stratified folds (control rows in both periods per training complement — by construction under stratified folds; preserved by an explicit per-complement composition guard under PSU folds / weighted fits, REGISTRY Note)
 - [x] Auxiliary-sample feasibility: an empty untreated training complement raises `DegenerateFoldError` (targeted, before the learner) → `cross_fit_degenerate` cell
-- [x] Normal-approximation inference via `safe_inference()`
+- [x] Normal-approximation inference via `safe_inference()` (no-design fits; survey/bare-cluster fits use finite-df t inference via `df=df_survey` — library extension, not from the paper)
 - [ ] Multilevel treatment (Case 3): open — DEFERRED
 - [ ] Case 3 guards: open — DEFERRED (see the Case 3 caution above)
 - [x] Validation (Case 1): `doubleml.DoubleMLDID` (2-period) + `DoubleMLDIDBinary` (staggered per-cell, end-to-end public fit) parity spikes, doubleml==0.11.4 pinned, golden literals in-repo; [x] Case 2 equation-level fixtures — SHIPPED (closed-form/oracle fixtures, derivative-identity checks, DR both directions, `DoubleMLDIDCSBinary` characterization spike — no parity oracle exists). CAVEAT: the paper's own §4 RCS simulation DGPs (pp. 17-21) are NOT replicated — the shipped recovery/coverage tests use a library-authored RCS design; replication is a tracked TODO.md row (needs the paper PDF); [ ] Case 3 fixtures — open

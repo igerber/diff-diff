@@ -229,8 +229,10 @@ Is treatment adoption staggered (multiple cohorts, different timing)?
 |   |                             post-fit, set seed= for reproducible
 |   |                             fold draws; panel=False = declared
 |   |                             repeated cross sections (Case 2,
-|   |                             lambda-corrected variance; no survey
-|   |                             weights)
+|   |                             lambda-corrected variance);
+|   |                             survey_design=/cluster= supported on
+|   |                             both designs (pweight TSL; replicate
+|   |                             designs rejected)
 |   \-- WooldridgeDiD (ETWFE)  -- nonlinear outcomes (logit/Poisson) or saturated OLS
 |
 |-- NO, simple 2x2 design:

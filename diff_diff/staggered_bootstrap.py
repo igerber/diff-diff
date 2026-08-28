@@ -8,7 +8,7 @@ are in :mod:`diff_diff.bootstrap_utils`.
 
 import warnings
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, Iterator, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 
@@ -145,13 +145,14 @@ class CallawaySantAnnaBootstrapMixin:
     # Type hints for attributes accessed from the main class
     # Host-supplied estimator name for user-facing bootstrap warnings. Declared
     # here because mypy type-checks the mixin independently of its hosts, so
-    # `self._BOOTSTRAP_LABEL` would otherwise be [attr-defined]. ClassVar, not a
-    # bare annotation: the hosts set it as class-level constant data, and an
-    # instance-variable declaration here would make each of those a
-    # "cannot override instance variable with class variable" [misc] error.
-    # (Contrast `_warn_frame_offset`, which IS assigned via instance and so must
-    # NOT be a ClassVar.)
-    _BOOTSTRAP_LABEL: ClassVar[str]
+    # `self._BOOTSTRAP_LABEL` would otherwise be [attr-defined]. A PLAIN
+    # annotation (not ClassVar): estimator hosts assign it as class-level
+    # constant data (valid for an instance-variable declaration), while the
+    # kit-replay host (`staggered_results._KitBootstrapAggregator`) sets it
+    # per-instance from the kit's recorded label — a ClassVar here would make
+    # that instance assignment a "cannot assign to class variable via
+    # instance" [misc] error.
+    _BOOTSTRAP_LABEL: str
     n_bootstrap: int
     bootstrap_weights: str
     alpha: float

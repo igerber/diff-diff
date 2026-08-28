@@ -131,9 +131,12 @@ Learner configuration
 (library defaults: ``"logit"``; ``"linear"``, ``"ridge"``, ``"sieve"``) or
 ANY object satisfying the duck-typed learner protocol —
 ``fit(X, y)`` plus ``predict`` (regressor) or ``predict_proba``
-(classifier). ``DMLDiD``'s cross-fitting is unweighted, so a
-``sample_weight`` parameter on ``fit`` is not required (it is passed only
-by consumers that actually use weighted cross-fitting). A user-constructed or scikit-learn
+(classifier). On no-design and bare-``cluster=`` fits the cross-fitting
+is unweighted, so a ``sample_weight`` parameter on ``fit`` is not
+required there; a DECLARED ``survey_design=`` fit passes
+``sample_weight`` into both nuisances, and a user learner whose ``fit``
+cannot take ``sample_weight`` by keyword is rejected up front with a
+``TypeError``. A user-constructed or scikit-learn
 estimator object plugs in directly; string names select library defaults
 only. :class:`~diff_diff.SieveLearner` is the exported configurable
 learner (``DMLDiD(outcome_learner=SieveLearner(k_max=3))``).
@@ -174,16 +177,25 @@ Restrictions
   while outcomes are the period-specific potential outcomes; warned at
   fit, not data-checkable).
   ``aggregate('total')`` is unavailable on RCS fits (fails closed).
-  NOTE: repeated-cross-section data is typically SURVEY data (BRFSS / ACS /
-  CPS), and ``DMLDiD`` carries NO survey weights — use
-  :class:`~diff_diff.CallawaySantAnna` ``(panel=False, survey_design=...)``
-  for weighted RCS designs.
-- **No survey/cluster support** — Chang (2020) assumes i.i.d. sampling;
-  ``fit()`` accepts no ``survey_design=`` or ``cluster=``. The
-  per-sampling-unit influence-function variance — per unit on panel fits,
-  per observation on repeated-cross-section fits — IS unit-level
-  clustering; coarser
-  clustering is a tracked follow-up (``DEFERRED.md``).
+  Repeated-cross-section data is typically SURVEY data (BRFSS / ACS /
+  CPS) — pass a pweight :class:`~diff_diff.SurveyDesign` via
+  ``survey_design=`` for weighted RCS.
+- **Survey/cluster support (both lanes)** — ``survey_design=``
+  (pweight-only, full-design TSL: weights/strata/PSU/FPC) weights the
+  moment kernels, passes ``sample_weight`` into the nuisance learners,
+  switches to PSU-cohesive cross-fitting folds when the PSU is strictly
+  coarser than the sampling unit, and uses design-based variance with
+  ``df = n_PSU - n_strata`` t-inference: PSU designs get the
+  cluster-robust survey kernel per cell, strata/FPC-only designs use the
+  weighted influence-function per-cell SE with the full design entering
+  the AGGREGATE variances (the CallawaySantAnna convention). This is a documented LIBRARY
+  EXTENSION of Chang (2020), which assumes i.i.d. sampling — on the
+  weighted-λ RCS lane Theorem 2's coverage claim does not carry over
+  (REGISTRY DMLDiD Notes). Bare ``cluster=`` (constructor) keeps the
+  kernels unweighted and affects folds, variance and df only.
+  Replicate-weight designs are not supported yet (fail closed;
+  ``TODO.md``); ``aggregate('total')`` also fails closed on
+  declared-survey fits.
 - **Propensity clipping, never dropping** — fitted propensities are
   clipped to ``[pscore_trim, 1 - pscore_trim]`` after an extremeness
   warning (the paper gives no trimming rule).

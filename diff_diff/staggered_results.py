@@ -69,16 +69,22 @@ class _KitBootstrapAggregator(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAg
     replayed bootstrap.
     """
 
-    _BOOTSTRAP_LABEL = "CallawaySantAnna"
-
     def __init__(
-        self, alpha: float, anticipation: int, n_bootstrap: int, bootstrap_weights: str
+        self,
+        alpha: float,
+        anticipation: int,
+        n_bootstrap: int,
+        bootstrap_weights: str,
+        bootstrap_label: str = "CallawaySantAnna",
     ) -> None:
         self.alpha = alpha
         self.anticipation = anticipation
         self.n_bootstrap = n_bootstrap
         self.bootstrap_weights = bootstrap_weights
         self.seed = None  # unused — the replay injects the captured state
+        # Producer identity from the kit (legacy kits default to CS), so the
+        # replayed <2-PSU warning is branded with the fitting estimator.
+        self._BOOTSTRAP_LABEL = bootstrap_label
 
 
 @dataclass
@@ -418,7 +424,11 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
                     "extension install)."
                 )
             host = _KitBootstrapAggregator(
-                kit.alpha, kit.anticipation, spec.n_bootstrap, spec.weight_type
+                kit.alpha,
+                kit.anticipation,
+                spec.n_bootstrap,
+                spec.weight_type,
+                bootstrap_label=kit.bookkeeping.get("bootstrap_label", "CallawaySantAnna"),
             )
             boot_replay = host._run_multiplier_bootstrap(
                 group_time_effects=self.group_time_effects,

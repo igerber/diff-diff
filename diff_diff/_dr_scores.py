@@ -35,7 +35,7 @@ Chang, N.-C. (2020). Double/debiased machine learning for
 difference-in-differences models. The Econometrics Journal, 23(2), 177-191.
 """
 
-from typing import Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 
@@ -343,6 +343,33 @@ def chang_rcs_score(
     return weight * ((T - lam_hat) * y - m2_hat)
 
 
+def _validate_slope_weights(
+    weights: Optional[np.ndarray], n: int, context: str
+) -> Optional[np.ndarray]:
+    """Validate optional survey weights for the lambda-slope family.
+
+    Returns the coerced float64 weight vector, or ``None`` when no weights
+    were supplied. Shared by the public wrappers AND the internal
+    ``_with_slope`` entry (DMLDiD's RCS cell calls the latter directly, so
+    validating only the public surface would leave the estimator's own
+    call path unvalidated).
+    """
+    if weights is None:
+        return None
+    w = np.asarray(weights, dtype=np.float64)
+    if w.ndim != 1:
+        raise ValueError(f"{context}: weights must be 1-dimensional")
+    if w.shape[0] != n:
+        raise ValueError(f"{context}: weights has length {w.shape[0]}, expected {n}")
+    if not np.all(np.isfinite(w)):
+        raise ValueError(f"{context}: weights contains non-finite values")
+    if np.any(w < 0):
+        raise ValueError(f"{context}: weights must be non-negative")
+    if not np.sum(w) > 0:
+        raise ValueError(f"{context}: weights must have a positive sum")
+    return w
+
+
 def chang_rcs_lambda_slope(
     y: np.ndarray,
     D: np.ndarray,
@@ -351,6 +378,8 @@ def chang_rcs_lambda_slope(
     ps: np.ndarray,
     p_hat: float,
     lam_hat: float,
+    *,
+    weights: Optional[np.ndarray] = None,
 ) -> float:
     """Chang (2020) Case 2 lambda-slope estimator ``G_2lambda``.
 
@@ -373,7 +402,8 @@ def chang_rcs_lambda_slope(
     y, D, T, m2_hat, ps = _validate_chang_rcs_inputs(
         y, D, T, m2_hat, ps, p_hat, lam_hat, "chang_rcs_lambda_slope"
     )
-    return _chang_rcs_lambda_slope_validated(y, D, T, m2_hat, ps, p_hat, lam_hat)
+    weights = _validate_slope_weights(weights, y.shape[0], "chang_rcs_lambda_slope")
+    return _chang_rcs_lambda_slope_validated(y, D, T, m2_hat, ps, p_hat, lam_hat, weights=weights)
 
 
 def _chang_rcs_lambda_slope_validated(
@@ -384,8 +414,11 @@ def _chang_rcs_lambda_slope_validated(
     ps: np.ndarray,
     p_hat: float,
     lam_hat: float,
+    *,
+    weights: Optional[np.ndarray] = None,
 ) -> float:
-    # Assumes inputs already coerced/validated by _validate_chang_rcs_inputs.
+    # Assumes inputs already coerced/validated by _validate_chang_rcs_inputs
+    # (and weights by _validate_slope_weights).
     odds = (D - ps) / (1.0 - ps)
     term1 = (
         -((1.0 - 2.0 * lam_hat) / (lam_hat**2 * (1.0 - lam_hat) ** 2))
@@ -393,7 +426,9 @@ def _chang_rcs_lambda_slope_validated(
         * ((T - lam_hat) * y - m2_hat)
     )
     term2 = -(y / (p_hat * lam_hat * (1.0 - lam_hat))) * odds
-    return float(np.mean(term1 + term2))
+    if weights is None:
+        return float(np.mean(term1 + term2))
+    return float(np.average(term1 + term2, weights=weights))
 
 
 def chang_rcs_score_augmented(
@@ -406,6 +441,8 @@ def chang_rcs_score_augmented(
     theta: float,
     p_hat: float,
     lam_hat: float,
+    *,
+    weights: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Chang (2020) Case 2 augmented score with BOTH finite-dim corrections.
 
@@ -425,7 +462,7 @@ def chang_rcs_score_augmented(
     omits the lambda term; see the committed characterization spike).
     """
     return _chang_rcs_score_augmented_with_slope(
-        summand, D, T, y, m2_hat, ps, theta, p_hat, lam_hat
+        summand, D, T, y, m2_hat, ps, theta, p_hat, lam_hat, weights=weights
     )[0]
 
 
@@ -439,6 +476,8 @@ def _chang_rcs_score_augmented_with_slope(
     theta: float,
     p_hat: float,
     lam_hat: float,
+    *,
+    weights: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, float]:
     """Internal variant returning ``(psi_bar, g2_lambda)``.
 
@@ -460,5 +499,8 @@ def _chang_rcs_score_augmented_with_slope(
     y, D, T, m2_hat, ps = _validate_chang_rcs_inputs(y, D, T, m2_hat, ps, p_hat, lam_hat, context)
     if summand.shape[0] != y.shape[0]:
         raise ValueError(f"{context}: summand has length {summand.shape[0]}, expected {y.shape[0]}")
-    g2_lambda = _chang_rcs_lambda_slope_validated(y, D, T, m2_hat, ps, p_hat, lam_hat)
+    weights = _validate_slope_weights(weights, y.shape[0], context)
+    g2_lambda = _chang_rcs_lambda_slope_validated(
+        y, D, T, m2_hat, ps, p_hat, lam_hat, weights=weights
+    )
     return summand - D * theta / p_hat + g2_lambda * (T - lam_hat), g2_lambda

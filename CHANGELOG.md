@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`DMLDiD` survey-design and cluster support (both lanes)**: `fit()` gains
+  `survey_design=` (pweight-only full-design TSL — weights/strata/PSU/FPC)
+  and the constructor gains `cluster=` (coarser-than-unit clustering). A
+  declared design weights the moment kernels (Hájek `p̂`/`λ̂`/`θ̂`, weighted
+  `Ĝ₂λ`), passes `sample_weight` into the nuisance learners (user learner
+  objects must accept it by keyword — rejected up front with `TypeError`
+  otherwise), switches cross-fitting to PSU-cohesive folds when the PSU is
+  strictly coarser than the sampling unit (with an explicit Chang
+  `I_kz^c` fold-composition guard on the RCS lane), and routes per-cell and
+  aggregate variances through the design-based kernels with
+  `df = n_PSU − n_strata` t-inference; the survey multiplier bootstrap and
+  the <2-PSU NaN contracts activate through the inherited CS machinery
+  (post-fit bootstrap replays now brand their warnings with the fitting
+  estimator's name). Bare `cluster=` keeps the kernels unweighted
+  (variance/folds/df only). A documented LIBRARY EXTENSION of Chang
+  (2020)'s i.i.d. theory (REGISTRY DMLDiD survey Notes; Theorem 2's
+  coverage claim does not carry over on the weighted-λ RCS lane).
+  Replicate-weight designs fail closed (TODO.md row);
+  `aggregate('total')` fails closed on declared-survey fits.
 - **`DMLDiD` — Chang (2020) double/debiased machine learning DiD** (staggered
   panel ATT(g,t)): per-(g,t)-cell DML2 cross-fitting of configurable nuisance
   learners (string names or any sklearn-style object; the adaptive polynomial
@@ -28,8 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Theorem 2 variance (`chang_rcs_score_augmented` with the explicit
   `Ĝ₂λ(T − λ̂)` term). Per-observation influence functions; aggregation
   weights are fixed cohort row masses (WIF-consistent SEs);
-  `aggregate('total')` fails closed on RCS fits; no survey weights (weighted
-  RCS belongs to `CallawaySantAnna(panel=False, survey_design=...)`).
+  `aggregate('total')` fails closed on RCS fits.
   Validated by equation-level fixtures, oracle closed forms,
   derivative-identity checks, double robustness in both directions, and a
   committed `DoubleMLDIDCSBinary` characterization spike (no parity oracle

@@ -7,7 +7,7 @@ including the Callaway-Sant'Anna (2021) estimator.
 
 import bisect
 import warnings
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -583,7 +583,7 @@ class CallawaySantAnna(
     # Names this estimator in the shared bootstrap mixin's user-facing
     # warnings. The mixin is shared with the other hosts, so a hard-coded
     # literal there would misname whichever surface was actually fit.
-    _BOOTSTRAP_LABEL: ClassVar[str] = "CallawaySantAnna"
+    _BOOTSTRAP_LABEL: str = "CallawaySantAnna"
 
     def __init__(
         self,
@@ -5156,6 +5156,11 @@ def _build_aggregation_kit(
         for (g, t), data in group_time_effects.items()
     )
     bookkeeping["is_survey_fit"] = bool(is_survey_fit)
+    # Producer identity for replayed-bootstrap warning attribution: the
+    # kit-replay host brands its <2-PSU warning with this label so a DMLDiD
+    # (or DDD) survey fit does not warn as "CallawaySantAnna" on post-fit
+    # aggregate(). Legacy kits without the key default at the read site.
+    bookkeeping["bootstrap_label"] = getattr(estimator, "_BOOTSTRAP_LABEL", "CallawaySantAnna")
 
     # Data minimization: the results object is picklable and users share
     # result artifacts, so the kit must not turn it into a carrier for raw

@@ -539,12 +539,25 @@ def _handle_dml_did(results: Any):
                 "default linear specification."
             ),
             code=(
-                "# Refit with alternative nuisance learners:\n"
+                "# Refit with alternative nuisance learners (carry the fit's\n"
+                "# design forward so the comparison isolates the learner):\n"
                 "alt = DMLDiD(outcome_learner='sieve', seed=0"
                 + (", panel=False" if getattr(results, "panel", True) is False else "")
+                + (
+                    ", cluster=..."
+                    if getattr(results, "survey_metadata", None) is None
+                    and getattr(results, "df_inference", None) is not None
+                    else ""
+                )
                 + ").fit(\n"
                 "    df, outcome=..., unit=..., time=..., first_treat=...,\n"
-                "    covariates=[...])\n"
+                "    covariates=[...]"
+                + (
+                    ",\n    survey_design=...  # the original fit's SurveyDesign"
+                    if getattr(results, "survey_metadata", None) is not None
+                    else ""
+                )
+                + ")\n"
                 "print(alt.att, results.att)  # should be close"
             ),
             step_name="learner_sensitivity",

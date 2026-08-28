@@ -450,8 +450,10 @@ ROWS = [
         status="legitimate",
         reason=(
             "L3: Chang (2020) Thm 2 augmented-score plug-in variance "
-            "(per-unit influence function; normal-theory safe_inference "
-            "throughout, no cluster surface)"
+            "(per-unit influence function; normal-theory safe_inference on "
+            "no-design fits; survey_design=/cluster= fits use the design-based "
+            "CR1/weighted-IF per-cell variance with df=df_survey t-inference "
+            "outside the shared CR1 sandwich)"
         ),
     ),
     dict(
@@ -476,7 +478,10 @@ ROWS = [
         reason=(
             "L3: Chang (2020) Thm 2 lambda-corrected augmented-score "
             "plug-in variance (Case 2; per-observation influence function; "
-            "normal-theory safe_inference throughout, no cluster surface)"
+            "normal-theory safe_inference on no-design fits; survey_design=/"
+            "cluster= fits use the design-based CR1/weighted-IF per-cell "
+            "variance with df=df_survey t-inference outside the shared CR1 "
+            "sandwich)"
         ),
     ),
 ]

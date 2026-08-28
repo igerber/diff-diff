@@ -150,12 +150,37 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
         }
 
     if name == "DMLDiDResults":
+        # Survey/cluster fits switch the aggregation weight source to cohort
+        # masses (survey masses on declared designs; all-ones cohort masses
+        # on bare cluster=). getattr-defaulted reads only: this function is
+        # exercised on attribute-less stubs by the exhaustiveness guard.
+        _has_design = (
+            getattr(results, "survey_metadata", None) is not None
+            or getattr(results, "df_inference", None) is not None
+        )
         if getattr(results, "panel", True) is False:
+            if _has_design:
+                weight_name = "survey-cohort-mass-weighted"
+                weight_clause = (
+                    "cell weights are SURVEY cohort masses (per-observation "
+                    "design weights summed by cohort; the per-cell "
+                    "complete-case ``n_treated`` is display-only; REGISTRY "
+                    "DMLDiD survey Note)"
+                )
+            else:
+                weight_name = "cohort-mass-weighted"
+                weight_clause = (
+                    "cell weights are FIXED cohort row masses (the CS-RCS "
+                    "convention, WIF-consistent; the per-cell complete-case "
+                    "``n_treated`` is display-only; REGISTRY DMLDiD RCS Note)"
+                )
+        elif _has_design:
             weight_name = "cohort-mass-weighted"
             weight_clause = (
-                "cell weights are FIXED cohort row masses (the CS-RCS "
-                "convention, WIF-consistent; the per-cell complete-case "
-                "``n_treated`` is display-only; REGISTRY DMLDiD RCS Note)"
+                "cell weights are cohort masses (survey masses on declared "
+                "designs; full-cohort counts on bare ``cluster=`` fits — "
+                "NOT the no-design per-cell complete-case ``n_treated``; "
+                "REGISTRY DMLDiD survey Note)"
             )
         else:
             weight_name = "valid-treated-count-weighted"

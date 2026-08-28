@@ -1576,6 +1576,15 @@ def _describe_assumption(estimator_name: str, results: Any = None) -> Dict[str, 
         }
     if estimator_name == "DMLDiDResults":
         is_rcs = getattr(results, "panel", True) is False
+        _is_survey = getattr(results, "survey_metadata", None) is not None
+        _survey_caveat = (
+            " Under the declared survey design, inference is the library's "
+            "design-based extension (Chang 2020 assumes i.i.d. sampling; "
+            "Theorem 2's coverage guarantee does not carry over — REGISTRY "
+            "DMLDiD survey Note)."
+            if _is_survey
+            else ""
+        )
         if is_rcs:
             tail = (
                 "cross-fitting (DML2) removing own-observation overfitting. "
@@ -1586,14 +1595,14 @@ def _describe_assumption(estimator_name: str, results: Any = None) -> Dict[str, 
                 "waves while outcomes are the period-specific potential "
                 "outcomes — not data-checkable), and valid "
                 "normal inference requires the nuisance learners to satisfy "
-                "Chang (2020)'s Case 2 rate conditions (Assumption 3.2(h))."
+                "Chang (2020)'s Case 2 rate conditions (Assumption 3.2(h))." + _survey_caveat
             )
         else:
             tail = (
                 "cross-fitting (DML2) removing own-observation overfitting; "
                 "valid normal inference additionally requires the nuisance "
                 "learners to satisfy Chang (2020)'s rate conditions "
-                "(Assumption 3.1(f))."
+                "(Assumption 3.1(f))." + _survey_caveat
             )
         return {
             "parallel_trends_variant": "conditional_on_covariates",

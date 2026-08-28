@@ -530,14 +530,16 @@ exact relay `C x overall` CONDITIONAL on the realized aggregation mass,
 where `C` is the adopter's finite-masked complete-case aggregation support
 (CallawaySantAnna: the kept post-anticipation finite cells' mass, replayed
 from a fit-time kit snapshot; DMLDiD: the same kit-snapshot replay via the
-inherited CS channel over its per-cell complete-case `n_treated`;
+inherited CS channel — per-cell complete-case `n_treated` on no-design
+fits, cohort masses once a survey/cluster design populates the kit's
+`survey_weights` (3.11 survey support);
 ImputationDiD: the finite-tau support -
 fixing the documented raw-|Omega_1| overcount of the MMM `scale="auto"`
 route for total exports; TwoStageDiD: the post-filter treatment-indicator
 support; EfficientDiD: the kept cells' integer `n_treated` sum). Adopters:
 those five, panel non-survey fits only - repeated-cross-section-routed
-fits, fits declaring a `survey_design=`, and CS bare-`cluster=` fits whose
-cohort-mass weighting diverges from the complete-case count all raise
+fits, fits declaring a `survey_design=`, and CS/DMLDiD bare-`cluster=`
+fits whose cohort-mass weighting diverges from the complete-case count all raise
 `NotImplementedError` naming the reason (DEFERRED tracks the survey/RC
 remainder and its att*dC mass-uncertainty variance term). StackedDiD is
 staged out (estimand ill-defined under `weighting=` variants; DEFERRED).
