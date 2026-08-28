@@ -44,3 +44,8 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      # v1.12 hangs after the codex turn completes (openai/codex-action#150);
+      # drop this once the action-side fix (openai/codex-action#151) is released.
+      - dependency-name: "openai/codex-action"
+        versions: ["1.12"]
