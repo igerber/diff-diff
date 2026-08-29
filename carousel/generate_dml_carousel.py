@@ -1146,10 +1146,21 @@ class DMLCarouselPDF(FPDF):
                 (str(CODE_SEED), G_),
                 (",", W_),
             ],
+            [("    base_period=", W_), ('"universal"', G_), (",", W_)],
             [(")", W_)],
-            [("res = est.fit(df, outcome=", W_), ('"y"', G_), (", ...,", W_)],
             [
-                ("              covariates=[", W_),
+                ("res = est.fit(df, outcome=", W_),
+                ('"y"', G_),
+                (", unit=", W_),
+                ('"unit"', G_),
+                (", time=", W_),
+                ('"time"', G_),
+                (",", W_),
+            ],
+            [
+                ("              first_treat=", W_),
+                ('"first_treat"', G_),
+                (", covariates=[", W_),
                 ('"x1"', G_),
                 (", ", W_),
                 ('"x2"', G_),
@@ -1161,12 +1172,12 @@ class DMLCarouselPDF(FPDF):
             [("from sklearn.ensemble import GradientBoostingRegressor", W_)],
             [("DMLDiD(outcome_learner=GradientBoostingRegressor())", W_)],
         ]
-        block_w = 212
+        block_w = 226
         self._add_code_block(
             (WIDTH - block_w) / 2, 88, block_w, code, font_size=15, line_height=11.8
         )
 
-        self.set_xy(30, 246)
+        self.set_xy(30, 252)
         self.set_font("Helvetica", "", 16)
         self.set_text_color(*LIGHT_GRAY)
         self.multi_cell(

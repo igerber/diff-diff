@@ -35,6 +35,10 @@ NB = "docs/tutorials/32_dml_did.ipynb"
 
 TOTAL_SLIDES = 11
 
+# Constant values the code slide renders via f-strings / str() - resolved
+# here so the snippet reconstruction stays a pure-AST operation.
+DECK_LITERALS = {"CODE_LEARNER": "sieve", "CODE_FOLDS": 5, "CODE_SEED": 42}
+
 
 @pytest.fixture(scope="module")
 def deck_constants():
@@ -368,6 +372,7 @@ class TestGuardrailPhrases:
         code = _notebook_code(NB)
         c = deck_constants
         for fragment in (
+            'base_period="universal"',
             f'outcome_learner="{c["CODE_LEARNER"]}"',
             f"n_folds={c['CODE_FOLDS']},",
             f"seed={c['CODE_SEED']},",
@@ -422,6 +427,54 @@ class TestGuardrailPhrases:
         assert "predict_proba()" in slide_strings["slide_08_when"]
         assert "classifiers" in slide_strings["slide_08_when"]
         assert "sklearn fits the contract" in slide_strings["slide_09_code"]
+
+    def test_code_slide_snippet_is_valid_python(self):
+        # Review round 3 P2: the displayed fit call was invalid Python
+        # (`fit(df, outcome="y", ..., covariates=...)` - positional
+        # ellipsis after keyword arguments) under a caption claiming the
+        # shown call reproduces the shown numbers. Reconstruct the snippet
+        # from the slide's token lines and require it to parse.
+        if not GENERATOR.exists():
+            pytest.skip(f"{GENERATOR} not available in this CI environment.")
+        tree = ast.parse(GENERATOR.read_text(encoding="utf-8"))
+        code_list = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "slide_09_code":
+                for stmt in ast.walk(node):
+                    if (
+                        isinstance(stmt, ast.Assign)
+                        and isinstance(stmt.targets[0], ast.Name)
+                        and stmt.targets[0].id == "code"
+                    ):
+                        code_list = stmt.value
+        assert code_list is not None, "slide_09_code lost its `code` token-line list"
+
+        def _frag(nodeval):
+            # token text: plain Constant or an f-string of Constants/Names
+            if isinstance(nodeval, ast.Constant):
+                return str(nodeval.value)
+            if isinstance(nodeval, ast.JoinedStr):
+                out = []
+                for v in nodeval.values:
+                    if isinstance(v, ast.Constant):
+                        out.append(str(v.value))
+                    elif isinstance(v, ast.FormattedValue) and isinstance(v.value, ast.Name):
+                        out.append(str(DECK_LITERALS[v.value.id]))
+                return "".join(out)
+            if isinstance(nodeval, ast.Call):  # str(CONST)
+                arg = nodeval.args[0]
+                if isinstance(arg, ast.Name):
+                    return str(DECK_LITERALS[arg.id])
+            raise AssertionError(f"unrecognized token node: {ast.dump(nodeval)[:80]}")
+
+        lines = []
+        for line in code_list.elts:
+            assert isinstance(line, ast.List)
+            lines.append("".join(_frag(tok.elts[0]) for tok in line.elts))
+        snippet = "\n".join(lines)
+        ast.parse(snippet)  # must be syntactically valid Python
+        assert 'base_period="universal"' in snippet  # the tutorial fit's config
+        assert 'unit="unit"' in snippet and 'first_treat="first_treat"' in snippet
 
     def test_tutorial_referenced_once_on_cta(self, visible_strings):
         assert visible_strings.count("Tutorial 32") == 1
