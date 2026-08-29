@@ -343,9 +343,11 @@ class TestDoubleRobustnessConverse:
 # ===========================================================================
 #
 # Shared fixed RCS DGP (library-authored, in the spirit of Chang Sec. 4 —
-# NOT the paper's own high-dimensional Sec. 4 RCS parameterization, whose
-# replication is a tracked TODO row): X ~ N(0, I_2), D ~
-# Bernoulli(sigmoid(0.5 X1 - 0.5 X2)), T ~ Bernoulli(0.5), levels
+# NOT the paper's own Sec. 4 RCS parameterization; the paper's Sec. 4.2.2
+# kernel-design DGP is replicated in the "Chang Sec. 4.2.2" section below,
+# and the Sec. 4.2.1 ML design is tracked in the narrowed TODO.md row):
+# X ~ N(0, I_2), D ~ Bernoulli(sigmoid(0.5 X1 - 0.5 X2)), T ~
+# Bernoulli(0.5), levels
 # Y = 1 + X1 + 0.5 X2 + T*(0.5 + 0.4 X1) + D + T*D*theta0 + eps.
 
 RCS_THETA0 = 3.0
@@ -688,6 +690,200 @@ class TestRCSMonteCarloCoverage:
                 res = DMLDiD(seed=rep, panel=False).fit(df, **FIT_KW, covariates=["x1", "x2"])
             lo, hi = res.conf_int
             hits += int(lo <= RCS_THETA0 <= hi)
+        coverage = hits / n_reps
+        lo_band, hi_band = (0.90, 0.99) if n_reps >= 100 else (0.80, 1.00)
+        assert lo_band <= coverage <= hi_band, coverage
+
+
+# ===========================================================================
+# Chang Sec. 4.2.2 kernel-design RCS DGP (paper replication, DML PR-B2)
+# ===========================================================================
+#
+# The paper's OWN repeated-cross-section simulation design (arXiv:1812.10846v3
+# p. 19, Sec. 4.2.2 "Kernel Estimation"), replicated verbatim: D ~
+# Bernoulli(0.5), scalar X | D ~ N(D, 1), Y0(0) = e1, Y0(1) = Y0(0) + X + e2,
+# Y1(1) = theta0 + Y0(1) + e3, theta0 = 3, T ~ Bernoulli(0.5), observed
+# Y = Y(0) + T*(Y(1) - Y(0)). "N(0, 0.1)" is read as VARIANCE 0.1
+# (sigma = sqrt(0.1)); the printed notation is ambiguous and the adopted
+# reading is recorded in docs/methodology/papers/chang-2020-review.md.
+#
+# The design's trend (X + e2) with group-imbalanced X | D ~ N(D, 1) violates
+# UNCONDITIONAL parallel trends by construction: the unadjusted 2x2 group-mean
+# DiD converges to theta0 + (E[X|D=1] - E[X|D=0]) = 4, which is what makes it
+# a genuine covariate-adjustment fixture. Under our native learners both
+# nuisances are correctly specified (true propensity = sigmoid(X - 1/2) by
+# Bayes' rule; true outcome nuisance l20(X) = E[(T - lam0) Y | X, D=0] =
+# lam0(1 - lam0) X = 0.25 X, from the identity E[(T - lam0) T] =
+# lam0(1 - lam0) — the l20 definition is in diff_diff/_dr_scores.py), so this
+# section adds paper-DGP faithfulness, not new discriminating power vs the
+# incumbent _rcs_frame; the discriminating assertion below compares against
+# the design's own confounded contrast instead. The paper estimates this
+# design with Gaussian-KERNEL first stages; the fixtures use the library's
+# native learners (documented REGISTRY Note). The Sec. 4.2.1 ML design is
+# NOT replicable with the bundled unpenalized learners (narrowed TODO.md row).
+# The paper publishes histograms only, so every assertion is recovery /
+# centering / self-coverage — never a published-number pin.
+
+CHANG_S422_THETA0 = 3.0
+
+
+def chang_s422_kernel_frame(n, seed):
+    """Sec. 4.2.2 verbatim; the EXACT draw order below is load-bearing (the
+    seed-pinned tolerances in TestChangS422Recovery were measured under it)."""
+    rng = np.random.default_rng(seed)
+    D = (rng.uniform(size=n) < 0.5).astype(int)
+    X = D + rng.standard_normal(n)  # X | D ~ N(D, 1)
+    e1, e2, e3 = rng.normal(0, np.sqrt(0.1), (3, n))
+    y00 = e1
+    y01 = y00 + X + e2
+    y11 = CHANG_S422_THETA0 + y01 + e3
+    T = (rng.uniform(size=n) < 0.5).astype(int)
+    y = np.where(T == 1, np.where(D == 1, y11, y01), y00)
+    return pd.DataFrame(
+        {
+            "unit": np.arange(n),
+            "time": T + 1,  # waves {1, 2}; cohort 2 = treated at period 2
+            "first_treat": D * 2,
+            "y": y,
+            "x1": X,
+        }
+    )
+
+
+def _fit_s422_expecting_only_a23(est, df):
+    """Fit recording ALL warnings; tolerate only the deliberate panel=False
+    Assumption 2.3 lane warning and the occasional propensity-trimming
+    notice (the design's unbounded-X tails put rare fitted propensities
+    outside [trim, 1-trim] — the documented overlap quirk; fires on some MC
+    replicates, not at the pinned recovery seeds). Any OTHER warning
+    (learner, degenerate cell, inference) fails the fixture instead of
+    being blanket-suppressed (review round: simplefilter("ignore") weakened
+    the regression guard)."""
+    tolerated = ("Assumption 2.3", "will be trimmed")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        res = est.fit(df, **FIT_KW, covariates=["x1"])
+    unexpected = [
+        f"{w.category.__name__}: {w.message}"
+        for w in caught
+        # both tolerated messages are documented UserWarnings - a matching
+        # text under a different category is still unexpected
+        if not (w.category is UserWarning and any(pat in str(w.message) for pat in tolerated))
+    ]
+    assert not unexpected, f"unexpected warnings: {unexpected}"
+    return res
+
+
+def _unadjusted_did(df):
+    """The covariate-blind 2x2 group-mean DiD contrast on a Sec.-4.2.2 frame
+    (shared by the shape pin and every recovery test's discriminating
+    comparison). Converges to theta0 + 1 on this design."""
+    T = (df["time"] == 2).to_numpy()
+    D = (df["first_treat"] > 0).to_numpy()
+    m = lambda mask: float(df.loc[mask, "y"].mean())  # noqa: E731
+    return (m(T & D) - m(~T & D)) - (m(T & ~D) - m(~T & ~D))
+
+
+class TestChangS422FrameShape:
+    """Pin the generator to the paper's distributions: recovery alone passes
+    under plausible mis-codings (dropped mean shift, dropped trend, SD-vs-
+    variance misread), so the defining moments are asserted directly."""
+
+    def test_frame_matches_paper_dgp(self):
+        df = chang_s422_kernel_frame(200_000, seed=40_000)
+        x = df["x1"].to_numpy()
+        T = (df["time"] == 2).to_numpy()
+        D = (df["first_treat"] > 0).to_numpy()
+        y = df["y"].to_numpy()
+
+        # X | D ~ N(D, 1); shares 0.5
+        assert abs(x[D].mean() - 1.0) < 0.02 and abs(x[~D].mean() - 0.0) < 0.02
+        assert abs(x[D].var() - 1.0) < 0.03 and abs(x[~D].var() - 1.0) < 0.03
+        assert abs(D.mean() - 0.5) < 0.01 and abs(T.mean() - 0.5) < 0.01
+
+        # Stationary RCS sampling (Assumption 2.3): the wave draw is
+        # independent of (D, X) — composition stable across waves.
+        assert abs(T[D].mean() - T[~D].mean()) < 0.01
+        assert abs(x[T].mean() - x[~T].mean()) < 0.02
+        assert abs(np.corrcoef(T.astype(float), x)[0, 1]) < 0.01
+
+        # Control-post regression on X: slope 1, residual var = Var(e1+e2) = 0.2
+        mask = T & ~D
+        slope, intercept = np.polyfit(x[mask], y[mask], 1)
+        resid = y[mask] - (slope * x[mask] + intercept)
+        assert abs(slope - 1.0) < 0.03
+        assert abs(resid.var() - 0.2) < 0.01
+
+        # Pre-wave outcome is pure e1: Var = 0.1
+        assert abs(y[~T].var() - 0.1) < 0.005
+
+        # Treated-post residual (OLS of y[T=1,D=1] on x1) = Var(e1+e2+e3) = 0.3
+        mask = T & D
+        slope, intercept = np.polyfit(x[mask], y[mask], 1)
+        resid = y[mask] - (slope * x[mask] + intercept)
+        assert abs(resid.var() - 0.3) < 0.015
+
+        # The design's built-in confounding: the UNADJUSTED contrast converges
+        # to theta0 + (E[X|D=1] - E[X|D=0]) = 4, NOT theta0.
+        assert abs(_unadjusted_did(df) - 4.0) < 0.05
+
+        # Correct-specification facts the recovery narrative rests on:
+        # true propensity = sigmoid(X - 1/2) (logistic in X)...
+        logit = LogitLearner().fit(x.reshape(-1, 1), D.astype(float))
+        assert abs(logit.intercept_ - (-0.5)) < 0.05
+        assert abs(float(np.asarray(logit.coef_).ravel()[0]) - 1.0) < 0.05
+        # ...and l20(X) = 0.25 X (OLS of (T - 0.5) y on x1 over controls).
+        mask = ~D
+        slope, _ = np.polyfit(x[mask], (T[mask] - 0.5) * y[mask], 1)
+        assert abs(slope - 0.25) < 0.02
+
+
+class TestChangS422Recovery:
+    """Seed-pinned recovery on the paper's design. The absolute bounds are
+    SEED-PINS at the named data seeds (measured margins 0.242 / 0.095 /
+    0.442), NOT distributional bounds (~0.5% of N=500 replicates exceed
+    1.25); a failure under the exact chang_s422_kernel_frame draw order is a
+    frame-implementation discrepancy, not a methodology signal — do not
+    retune. Each test also asserts the DISCRIMINATING comparison: the
+    adjusted estimate must land strictly closer to theta0 than the design's
+    own confounded unadjusted contrast (4.008 / 3.978 / 3.617 at these
+    seeds), which a covariate-blind estimator cannot do."""
+
+    @pytest.mark.parametrize(
+        "n,learner,seed,abs_bound",
+        [
+            (500, "sieve", 40_001, 1.25),
+            (500, "linear", 40_002, 1.25),
+            # the paper's small cell; centered but noisier at small N (the
+            # review's Figures 9-14 finding), hence the wider pin
+            (200, "linear", 40_003, 2.0),
+        ],
+    )
+    def test_theta_recovery(self, n, learner, seed, abs_bound):
+        df = chang_s422_kernel_frame(n, seed=seed)
+        res = _fit_s422_expecting_only_a23(DMLDiD(outcome_learner=learner, seed=0, panel=False), df)
+        err = abs(res.overall_att - CHANG_S422_THETA0)
+        assert err < 4 * res.overall_se, (res.overall_att, res.overall_se)
+        assert err < abs_bound, (res.overall_att, res.overall_se)
+        confounded_err = abs(_unadjusted_did(df) - CHANG_S422_THETA0)
+        assert err < confounded_err, (err, confounded_err)
+
+
+@pytest.mark.slow
+class TestChangS422MonteCarloCoverage:
+    def test_coverage_sanity(self, ci_params):
+        # Acceptance band CONDITIONAL on the scaled rep count (at ~22 reps the
+        # tight band fails ~42% of the time at nominal coverage).
+        n_reps = ci_params.bootstrap(200)
+        n = 500
+        hits = 0
+        for rep in range(n_reps):
+            df = chang_s422_kernel_frame(n, seed=41_000 + rep)
+            res = _fit_s422_expecting_only_a23(
+                DMLDiD(outcome_learner="linear", seed=rep, panel=False), df
+            )
+            lo, hi = res.conf_int
+            hits += int(lo <= CHANG_S422_THETA0 <= hi)
         coverage = hits / n_reps
         lo_band, hi_band = (0.90, 0.99) if n_reps >= 100 else (0.80, 1.00)
         assert lo_band <= coverage <= hi_band, coverage

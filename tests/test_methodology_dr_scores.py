@@ -198,8 +198,11 @@ class TestDoubleMLGoldenParity:
 #
 # LIBRARY-AUTHORED low-dimensional RCS design in the spirit of Chang Sec. 4
 # (Gaussian X, logistic PS, theta0 = 3) — NOT the paper's own Sec. 4 RCS
-# parameterization (a high-dimensional p in {100, 300} ML design, not
-# extracted into the paper review; replication is a tracked TODO row).
+# parameterization. The paper's Sec. 4.2 RCS DGPs are now extracted into
+# docs/methodology/papers/chang-2020-review.md; the Sec. 4.2.2 kernel design
+# is replicated in tests/test_methodology_dml_did.py ("Chang Sec. 4.2.2"
+# section), and the Sec. 4.2.1 ML design (p in {100, 300}) is tracked in the
+# narrowed TODO.md row (needs a penalized propensity learner).
 # Rows i.i.d.: X ~ N(0, I_2); D ~ Bernoulli(sigmoid(0.5 X1 - 0.5 X2));
 # T ~ Bernoulli(lam0) independent; levels
 # Y = 1 + X1 + 0.5 X2 + T*(0.5 + 0.4 X1) + D*1.0 + T*D*theta0 + eps.
