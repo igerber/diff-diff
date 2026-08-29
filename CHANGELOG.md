@@ -15,8 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   helpers (`stute_test`, `stute_joint_pretest`): previously-accepted
   type-blind values now raise the shared message — `True` (silently ran as
   1 replicate on HAD/dCDH), floats like `2.5` (passed the `>= 2` floors),
-  and bool/negative under SyntheticDiD's jackknife floor exemption. Every
-  estimator-specific floor and its message is unchanged.
+  and bool/negative under SyntheticDiD's jackknife floor exemption. The
+  estimator-specific floors are unchanged and keep their own messages for
+  non-negative sub-floor integers (TROP/SDiD `n_bootstrap=1`, HAD `0`);
+  NEGATIVE values now surface the shared validator's message instead of
+  each estimator's former wording.
 - **`honest_did` inference-df resolution consolidated** onto the shared
   `aggregation.resolve_inference_df()` (three duplicated precedence blocks
   removed). Same precedence; `HonestDiDResults.df_survey` is now
