@@ -780,11 +780,20 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
                 )
             lowest_dose = d_L
 
-        # Re-resolve survey design on filtered df if rows were dropped
-        # (survey arrays must align with df, not the original data)
+        # Re-resolve survey design on the filtered rows if rows were dropped
+        # (survey arrays must align with df, not the original data). Resolve
+        # from PRISTINE ``data`` rows, not the mutated working frame: the
+        # unfiltered path resolves from ``data``, and df's role-column
+        # coercions (never-treated dose zeroing, first_treat inf->0,
+        # to_numeric) must not leak into a design whose column aliases a
+        # mutated role column — resolving on df previously zero-weighted
+        # every never-treated unit when ``weights == dose``. The dose filter
+        # drops whole units and preserves row order, so the pristine
+        # unit-mask selection is row-for-row identical to df.
         if resolved_survey is not None and len(df) < len(data):
+            _kept_row_mask = data[unit].isin(set(df[unit].unique())).to_numpy()
             resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
-                _resolve_survey_for_fit(survey_design, df, "analytical")
+                _resolve_survey_for_fit(survey_design, data[_kept_row_mask], "analytical")
             )
 
         # 2. Precompute structures

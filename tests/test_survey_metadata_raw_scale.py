@@ -379,6 +379,61 @@ class TestContinuousDiDRawScale:
         )
         _assert_raw_scale(res.survey_metadata, df.groupby("unit")["dose"].first())
 
+    def test_filtered_aliased_weights_match_immutable_duplicate(self):
+        # COMBINED interaction: zero-dose TREATED units (the drop_units
+        # filter fires -> the survey is re-resolved on the filtered rows)
+        # AND weights == dose (the never-treated nonzero-dose coercion
+        # mutates that column on the working frame). The re-resolve must
+        # read PRISTINE data rows: resolving on the mutated frame
+        # zero-weighted every never-treated unit (previously "No valid
+        # (g,t) cells"). The aliased fit must match a fit on an immutable
+        # duplicate of the original column on estimates, SEs, and every
+        # metadata field.
+        rng = np.random.default_rng(3)
+        n_u, n_t = 60, 4
+        units = np.repeat(range(n_u), n_t)
+        times = np.tile(range(1, n_t + 1), n_u)
+        ft = np.repeat(np.where(np.arange(n_u) < 30, 3, 0), n_t)
+        dose_u = rng.uniform(0.5, 2.0, n_u)
+        dose_u[:5] = 0.0  # treated zero-dose: filter fires
+        dose = np.repeat(dose_u, n_t)  # never-treated rows nonzero: coercion fires
+        y = rng.normal(size=len(units)) + 0.5 * dose * (times >= ft) * (ft > 0)
+        df = pd.DataFrame(
+            {"unit": units, "time": times, "first_treat": ft, "dose": dose, "outcome": y}
+        )
+        df["w_dup"] = df["dose"]  # immutable duplicate of the ORIGINAL values
+
+        def fit_with(wcol):
+            return _fit_quiet(
+                ContinuousDiD(n_bootstrap=0),
+                df,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                "dose",
+                survey_design=SurveyDesign(weights=wcol),
+            )
+
+        r_alias, r_dup = fit_with("dose"), fit_with("w_dup")
+        assert r_alias.overall_att == r_dup.overall_att
+        assert r_alias.overall_att_se == r_dup.overall_att_se
+        ma, md_ = r_alias.survey_metadata, r_dup.survey_metadata
+        for field in (
+            "sum_weights",
+            "weight_range",
+            "effective_n",
+            "design_effect",
+            "df_survey",
+            "n_strata",
+            "n_psu",
+            "weight_type",
+        ):
+            assert getattr(ma, field) == getattr(md_, field), field
+        # And both report the raw scale of the surviving (filtered) units.
+        kept = df[~df["unit"].isin(range(5))]
+        _assert_raw_scale(ma, kept.groupby("unit")["dose"].first())
+
     def test_weights_none_ones_fallback(self, cont_df, cont_filtered):
         res = self._fit(cont_df, _DESIGN_NO_W, n_bootstrap=0)
         md = res.survey_metadata
