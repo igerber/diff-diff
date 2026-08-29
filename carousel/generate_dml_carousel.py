@@ -58,8 +58,10 @@ capability, then earn it with the confidently-wrong receipt):
                       moving parts). Closing band (user emphasis,
                       2026-08-29): four learners BUILT IN with no extra
                       installs, or bring your own - scikit-learn
-                      estimators already fit the duck-typed
-                      fit()/predict() contract.
+                      REGRESSORS already fit the duck-typed
+                      fit()/predict() outcome contract, and propensity
+                      CLASSIFIERS additionally need predict_proba()
+                      (both contracts stated on-slide).
 9.  Code (DARK)    -- the tutorial's own fit (sieve, n_folds=5, seed=42),
                       >= 15pt, plus the bring-your-own swap rendered as a
                       real sklearn import + constructor call.
@@ -124,6 +126,7 @@ Claim discipline (verified against the committed executed notebook
   on the library's own numpy/scipy solvers (no additional dependency - the
   claims test asserts the module imports no external ML package), and
   scikit-learn compatibility is the documented duck-typed protocol
+  (regressor fit()/predict(); classifier fit()/predict_proba())
   (``docs/api/dml_did.rst`` names scikit-learn; sklearn is an ecosystem
   library the estimator interoperates with, never a compared-against
   competitor). The sklearn import on the code slide is illustrative of the

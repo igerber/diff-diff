@@ -402,6 +402,15 @@ class TestGuardrailPhrases:
             pytest.skip("docs/api/dml_did.rst not available in this CI environment.")
         assert "scikit-learn" in rst.read_text(encoding="utf-8")
 
+    def test_module_docstring_states_both_contracts(self):
+        # The review-round P1: the guard below excludes docstrings, so the
+        # module docstring itself must also carry the classifier contract
+        # (predict_proba), never the bare fit()/predict() shorthand.
+        tree = ast.parse(GENERATOR.read_text(encoding="utf-8"))
+        doc = ast.get_docstring(tree) or ""
+        assert "predict_proba()" in doc
+        assert "CLASSIFIERS" in doc or "classifier" in doc.lower()
+
     def test_flexibility_band_is_slide_local(self, slide_strings):
         # The user-emphasized flexibility beats (2026-08-29) live on their
         # slides: built-ins + no-extra-installs on slide 8, the sklearn
