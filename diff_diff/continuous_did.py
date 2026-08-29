@@ -999,13 +999,19 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
         # sum_weights/effective_n/n_psu/df_survey describe one granularity —
         # the CS/EfficientDiD convention. Construction is byte-identical to
         # the ones inside _run_bootstrap and _compute_analytical_se.
-        if resolved_survey is not None and survey_metadata is not None:
-            from diff_diff.survey import compute_survey_metadata
-
-            _unit_resolved_meta = resolved_survey.subset_to_units_by_row_idx(
+        _unit_resolved_shared = None
+        if resolved_survey is not None:
+            # Built ONCE and threaded into the analytical/bootstrap helpers
+            # below (they previously rebuilt it — on replicate designs that
+            # copied the unit-by-replicate matrix twice).
+            _unit_resolved_shared = resolved_survey.subset_to_units_by_row_idx(
                 precomp["unit_first_panel_row"],
                 unit_weights=precomp.get("unit_survey_weights"),
             )
+        if resolved_survey is not None and survey_metadata is not None:
+            from diff_diff.survey import compute_survey_metadata
+
+            _unit_resolved_meta = _unit_resolved_shared
             # Raw (pre-normalization) unit weights for metadata provenance:
             # compute_survey_metadata expects the ORIGINAL scale (resolve()
             # rescales pweights to mean 1; scale-invariant fields are
@@ -1088,6 +1094,7 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
                     agg_acrt_d,
                     event_study_effects,
                     resolved_survey=resolved_survey,
+                    pre_unit_resolved=_unit_resolved_shared,
                 )
                 att_d_se = boot_result["att_d_se"]
                 att_d_ci_lower = boot_result["att_d_ci_lower"]
@@ -1128,6 +1135,7 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
                     agg_att_d,
                     agg_acrt_d,
                     resolved_survey=resolved_survey,
+                    pre_unit_resolved=_unit_resolved_shared,
                 )
                 att_d_se = analytic["att_d_se"]
                 acrt_d_se = analytic["acrt_d_se"]
@@ -1994,6 +2002,7 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
         agg_att_d: np.ndarray,
         agg_acrt_d: np.ndarray,
         resolved_survey: Optional["ResolvedSurveyDesign"] = None,
+        pre_unit_resolved: Optional["ResolvedSurveyDesign"] = None,
     ) -> Dict[str, Any]:
         """Compute analytical SEs using influence functions."""
         n_units = precomp["n_units"]
@@ -2094,9 +2103,16 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
             # The resolved_survey has panel-level arrays (n_obs = n_units * n_periods),
             # but influence functions are unit-level (n_units). Build a unit-level
             # ResolvedSurveyDesign by subsetting to one obs per unit.
-            row_idx = precomp["unit_first_panel_row"]
-            unit_resolved = resolved_survey.subset_to_units_by_row_idx(
-                row_idx, unit_weights=precomp.get("unit_survey_weights")
+            # Reuse the fit-level collapse when supplied (avoids copying
+            # the unit-by-replicate matrix a second time on replicate
+            # designs); construction is byte-identical.
+            unit_resolved = (
+                pre_unit_resolved
+                if pre_unit_resolved is not None
+                else resolved_survey.subset_to_units_by_row_idx(
+                    precomp["unit_first_panel_row"],
+                    unit_weights=precomp.get("unit_survey_weights"),
+                )
             )
 
             X_ones = np.ones((n_units, 1))
@@ -2194,6 +2210,7 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
         original_acrt_d: np.ndarray,
         event_study_effects: Optional[Dict[int, Dict]],
         resolved_survey: Optional["ResolvedSurveyDesign"] = None,
+        pre_unit_resolved: Optional["ResolvedSurveyDesign"] = None,
     ) -> Dict[str, Any]:
         """Run multiplier bootstrap inference."""
         if self.n_bootstrap < 50:
@@ -2224,9 +2241,15 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
         # Build unit-level ResolvedSurveyDesign for survey-aware bootstrap
         unit_resolved = None
         if resolved_survey is not None:
-            row_idx = precomp["unit_first_panel_row"]
-            unit_resolved = resolved_survey.subset_to_units_by_row_idx(
-                row_idx, unit_weights=precomp.get("unit_survey_weights")
+            # Reuse the fit-level collapse when supplied (byte-identical
+            # construction; avoids a second unit-by-replicate copy).
+            unit_resolved = (
+                pre_unit_resolved
+                if pre_unit_resolved is not None
+                else resolved_survey.subset_to_units_by_row_idx(
+                    precomp["unit_first_panel_row"],
+                    unit_weights=precomp.get("unit_survey_weights"),
+                )
             )
 
         # Generate bootstrap weights — PSU-level when survey design is present
