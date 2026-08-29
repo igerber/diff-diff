@@ -96,7 +96,7 @@ from diff_diff.survey import (
     SurveyDesign,
     make_pweight_design,
 )
-from diff_diff.utils import _generate_mammen_weights
+from diff_diff.utils import _generate_mammen_weights, validate_n_bootstrap
 
 __all__ = [
     "QUGTestResults",
@@ -1676,6 +1676,9 @@ def stute_test(
     """
     if not (0.0 < alpha < 1.0):
         raise ValueError(f"alpha must satisfy 0 < alpha < 1, got {alpha}.")
+    # Shared type guard first (a float like 999.5 previously passed the
+    # floor and reached np.empty(n_bootstrap)).
+    validate_n_bootstrap(n_bootstrap)
     if n_bootstrap < _MIN_N_BOOTSTRAP:
         raise ValueError(
             f"n_bootstrap must be >= {_MIN_N_BOOTSTRAP} (below this the "
@@ -2880,6 +2883,8 @@ def stute_joint_pretest(
     # Note: the actual `warn + return` happens below after horizon
     # labels are validated and collision-checked, so the NaN result
     # carries full per-horizon diagnostic keys.
+    # Shared type guard first (float floors through otherwise).
+    validate_n_bootstrap(n_bootstrap)
     if n_bootstrap < _MIN_N_BOOTSTRAP:
         raise ValueError(f"n_bootstrap must be >= {_MIN_N_BOOTSTRAP}; got " f"{n_bootstrap}.")
     if not isinstance(alpha, (int, float)) or not (0 < float(alpha) < 1):

@@ -26,6 +26,7 @@ import pandas as pd
 from scipy import optimize
 
 from diff_diff._base import BaseEstimator
+from diff_diff.aggregation import resolve_inference_df
 from diff_diff.results import (
     MultiPeriodDiDResults,
 )
@@ -1273,26 +1274,16 @@ def _extract_event_study_params(
             # Fallback: diagonal from SEs
             sigma = np.diag(np.array(ses) ** 2)
 
-        # Extract inference df. Prefer ``survey_metadata.df_survey`` (the
-        # actual CS-internal df, which may have been tightened post-resolve
-        # for replicate designs) over the dedicated ``df_inference`` field.
-        # ``df_inference`` is the FALLBACK carrier for bare-``cluster=`` CS
-        # fits where ``survey_metadata`` is intentionally None (preserving
-        # the survey/non-survey contract for ``DiagnosticReport`` /
-        # ``summary()``). Reading ``df_inference`` first would silently
-        # overstate the denominator df on panel survey fits whose df was
-        # tightened during aggregation. Replicate designs with undefined
-        # df → sentinel 0.
-        df_survey = None
-        if hasattr(results, "survey_metadata") and results.survey_metadata is not None:
-            sm = results.survey_metadata
-            df_survey = getattr(sm, "df_survey", None)
-            if df_survey is None and getattr(sm, "replicate_method", None) is not None:
-                df_survey = 0  # undefined replicate df → NaN inference
-        if df_survey is None:
-            df_inference = getattr(results, "df_inference", None)
-            if df_inference is not None:
-                df_survey = int(df_inference)
+        # Extract inference df via the shared precedence helper: prefer
+        # ``survey_metadata.df_survey`` (the actual internal df, which may
+        # have been tightened post-resolve for replicate designs; undefined
+        # replicate df -> the 0.0 sentinel) over the ``df_inference``
+        # FALLBACK carrier (bare-``cluster=`` fits where
+        # ``survey_metadata`` is intentionally None). Reading
+        # ``df_inference`` first would silently overstate the denominator
+        # df on panel survey fits whose df was tightened during
+        # aggregation.
+        df_survey = resolve_inference_df(results)
 
         # Return the ESTIMATED label lists - the ones beta_hat/sigma were
         # built from - not the declared results.pre_periods/post_periods
@@ -1521,26 +1512,11 @@ def _extract_event_study_params(
                         "or use balance_e to restrict to a balanced subset."
                     )
 
-                # Extract inference df. Prefer ``survey_metadata.df_survey``
-                # (the actual CS-internal df, which may have been tightened
-                # post-resolve for replicate designs) over the dedicated
-                # ``df_inference`` field. ``df_inference`` is the FALLBACK
-                # carrier for bare-``cluster=`` CS fits where
-                # ``survey_metadata`` is intentionally None (preserving the
-                # survey/non-survey contract for ``DiagnosticReport`` /
-                # ``summary()``). Mirrors the MPD branch preference order
-                # at ``_extract_event_study_params`` so all branches agree.
-                # Replicate designs with undefined df → sentinel 0.
-                df_survey = None
-                if hasattr(results, "survey_metadata") and results.survey_metadata is not None:
-                    sm = results.survey_metadata
-                    df_survey = getattr(sm, "df_survey", None)
-                    if df_survey is None and getattr(sm, "replicate_method", None) is not None:
-                        df_survey = 0  # undefined replicate df → NaN inference
-                if df_survey is None:
-                    df_inference = getattr(results, "df_inference", None)
-                    if df_inference is not None:
-                        df_survey = int(df_inference)
+                # Extract inference df via the shared precedence helper
+                # (``survey_metadata.df_survey`` -> replicate 0.0 sentinel
+                # -> ``df_inference`` fallback carrier) - the same order the
+                # MPD branch uses, so all branches agree.
+                df_survey = resolve_inference_df(results)
 
                 return (
                     beta_hat,
@@ -1693,26 +1669,11 @@ def _extract_event_study_params(
                 beta_hat = np.array(effects)
                 sigma = np.diag(np.array(ses) ** 2)
 
-                # Extract inference df. Prefer ``survey_metadata.df_survey``
-                # (the actual CS-internal df, which may have been tightened
-                # post-resolve for replicate designs) over the dedicated
-                # ``df_inference`` field. ``df_inference`` is the FALLBACK
-                # carrier for bare-``cluster=`` CS fits where
-                # ``survey_metadata`` is intentionally None (preserving the
-                # survey/non-survey contract for ``DiagnosticReport`` /
-                # ``summary()``). Mirrors the MPD branch preference order
-                # at ``_extract_event_study_params`` so all branches agree.
-                # Replicate designs with undefined df → sentinel 0.
-                df_survey = None
-                if hasattr(results, "survey_metadata") and results.survey_metadata is not None:
-                    sm = results.survey_metadata
-                    df_survey = getattr(sm, "df_survey", None)
-                    if df_survey is None and getattr(sm, "replicate_method", None) is not None:
-                        df_survey = 0  # undefined replicate df → NaN inference
-                if df_survey is None:
-                    df_inference = getattr(results, "df_inference", None)
-                    if df_inference is not None:
-                        df_survey = int(df_inference)
+                # Extract inference df via the shared precedence helper
+                # (``survey_metadata.df_survey`` -> replicate 0.0 sentinel
+                # -> ``df_inference`` fallback carrier) - the same order the
+                # MPD branch uses, so all branches agree.
+                df_survey = resolve_inference_df(results)
 
                 return (
                     beta_hat,

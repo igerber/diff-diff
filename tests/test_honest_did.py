@@ -1256,6 +1256,12 @@ class TestSurveyVariance:
         assert h_result.df_survey is not None
         assert h_result.df_survey > 0
         assert h_result.survey_metadata is not None
+        # Single-source oracle: the CS branch resolves via the shared helper
+        # (aggregation.resolve_inference_df) - value-equal, float-typed.
+        from diff_diff.aggregation import resolve_inference_df
+
+        assert h_result.df_survey == resolve_inference_df(cs_result)
+        assert isinstance(h_result.df_survey, float)
 
     def test_event_study_vcov_computed(self):
         """CallawaySantAnna event_study_vcov is computed and used by HonestDiD."""
@@ -1477,6 +1483,43 @@ class TestDCDHIntegration:
         assert all(t < 0 for t in pre_t)
         assert all(t > 0 for t in post_t)
         assert df_s is None  # non-survey fixture → df_survey is None
+        # Single-source oracle: the dCDH branch resolves via the shared
+        # helper (both None on this non-survey fixture).
+        from diff_diff.aggregation import resolve_inference_df
+
+        assert df_s == resolve_inference_df(results)
+
+    def test_dcdh_survey_df_matches_shared_resolver(self):
+        """Survey dCDH fit: the extracted df equals the shared resolver's
+        value (float-typed), pinning the MPD/CS/dCDH single-source
+        consolidation on a branch with a FINITE df."""
+        import warnings
+
+        from diff_diff import ChaisemartinDHaultfoeuille, SurveyDesign
+        from diff_diff.aggregation import resolve_inference_df
+        from diff_diff.prep import generate_reversible_did_data
+
+        data = generate_reversible_did_data(n_groups=40, n_periods=6, seed=42)
+        units = data["group"].unique()
+        wmap = {u: 1.0 + 0.3 * (i % 3) for i, u in enumerate(units)}
+        pmap = {u: i // 5 for i, u in enumerate(units)}
+        data = data.assign(weight=data["group"].map(wmap), psu=data["group"].map(pmap))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = ChaisemartinDHaultfoeuille(n_bootstrap=49, seed=7).fit(
+                data,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=2,
+                survey_design=SurveyDesign(weights="weight", psu="psu"),
+            )
+        *_, df_s = _extract_event_study_params(res)
+        expected = resolve_inference_df(res)
+        assert df_s == expected
+        if df_s is not None:
+            assert isinstance(df_s, float)
 
     def test_dcdh_no_placebos_raises(self):
         """dCDH results without placebos raise ValueError."""

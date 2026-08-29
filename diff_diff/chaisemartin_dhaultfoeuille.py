@@ -51,7 +51,7 @@ from diff_diff.chaisemartin_dhaultfoeuille_results import (
     DCDHBootstrapResults,
 )
 from diff_diff.linalg import solve_ols
-from diff_diff.utils import safe_inference
+from diff_diff.utils import safe_inference, validate_n_bootstrap
 
 __all__ = [
     "ChaisemartinDHaultfoeuille",
@@ -762,8 +762,8 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
             )
         if not 0.0 < alpha < 1.0:
             raise ValueError(f"alpha must be in (0, 1), got {alpha}")
-        if n_bootstrap < 0:
-            raise ValueError(f"n_bootstrap must be non-negative, got {n_bootstrap}")
+        # Shared type guard (rejects bool/float, floor stays 0).
+        validate_n_bootstrap(n_bootstrap)
         if by_path is not None:
             if isinstance(by_path, bool) or not isinstance(by_path, int):
                 raise ValueError(
@@ -836,8 +836,9 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
             )
         if not 0.0 < self.alpha < 1.0:
             raise ValueError(f"alpha must be in (0, 1), got {self.alpha}")
-        if self.n_bootstrap < 0:
-            raise ValueError(f"n_bootstrap must be non-negative, got {self.n_bootstrap}")
+        # Shared type guard (kept aligned with __init__ so the two sites
+        # cannot drift).
+        validate_n_bootstrap(self.n_bootstrap)
         if self.by_path is not None:
             if isinstance(self.by_path, bool) or not isinstance(self.by_path, int):
                 raise ValueError(

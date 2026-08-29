@@ -95,7 +95,7 @@ from diff_diff.survey import (
     SurveyMetadata,
     compute_survey_metadata,
 )
-from diff_diff.utils import safe_inference
+from diff_diff.utils import safe_inference, validate_n_bootstrap
 
 __all__ = [
     "HeterogeneousAdoptionDiD",
@@ -3045,9 +3045,10 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
                     f"or None."
                 )
         # Phase 4.5 B: n_bootstrap must be a positive int; seed must be
-        # None or a nonneg int (numpy default_rng contract).
-        if not isinstance(self.n_bootstrap, (int, np.integer)):
-            raise ValueError(f"n_bootstrap must be an int; got {type(self.n_bootstrap).__name__}.")
+        # None or a nonneg int (numpy default_rng contract). The shared
+        # type guard rejects bool (previously ran as 1 replicate) and
+        # floats; the >= 1 floor stays HAD-specific.
+        validate_n_bootstrap(self.n_bootstrap)
         if int(self.n_bootstrap) < 1:
             raise ValueError(f"n_bootstrap must be >= 1; got {self.n_bootstrap!r}.")
         if self.seed is not None:

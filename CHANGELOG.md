@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`n_bootstrap` type guards aligned onto `utils.validate_n_bootstrap`**
+  for the estimators the M-081 sweep deliberately left out —
+  `HeterogeneousAdoptionDiD`, `ChaisemartinDHaultfoeuille`, `TROP`,
+  `SyntheticDiD` (jackknife lane included), plus the two HAD pretest
+  helpers (`stute_test`, `stute_joint_pretest`): previously-accepted
+  type-blind values now raise the shared message — `True` (silently ran as
+  1 replicate on HAD/dCDH), floats like `2.5` (passed the `>= 2` floors),
+  and bool/negative under SyntheticDiD's jackknife floor exemption. Every
+  estimator-specific floor and its message is unchanged.
+- **`honest_did` inference-df resolution consolidated** onto the shared
+  `aggregation.resolve_inference_df()` (three duplicated precedence blocks
+  removed). Same precedence; `HonestDiDResults.df_survey` is now
+  float-typed (`31.0` where it was `31`), and a fractional `df_inference`
+  is preserved instead of truncated.
+
 ### Fixed
 - **Per-row event-study df provenance (M-092 completion)** for the four
   remaining holes — `EfficientDiD`, `ImputationDiD`, `ContinuousDiD`, and

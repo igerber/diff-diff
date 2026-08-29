@@ -828,15 +828,15 @@ def _validate_vcov_subblock(
 def _resolve_scalar_df_survey(results: Any) -> Optional[float]:
     """Resolve the producer's SCALAR inference df for container provenance.
 
-    Mirrors the fit-time consumers' preference order (honest_did):
-    ``survey_metadata.df_survey`` where present, with a replicate design
-    whose df is undefined mapping to the ``0.0`` sentinel (fails closed to
-    NaN critical values downstream); else the bare-``cluster=``
-    ``df_inference`` carrier; else None. Deliberate local sibling of
-    ``aggregation.resolve_inference_df``: this module cannot import it
-    (aggregation.py imports results_base - the dependency is one-way);
-    folding the copies together is tracked in TODO.md (df-resolution /
-    adapter-naming consolidation row).
+    Mirrors ``aggregation.resolve_inference_df`` (the shared preference
+    order honest_did now consumes directly): ``survey_metadata.df_survey``
+    where present, with a replicate design whose df is undefined mapping to
+    the ``0.0`` sentinel (fails closed to NaN critical values downstream);
+    else the bare-``cluster=`` ``df_inference`` carrier; else None.
+    Deliberate local sibling: this module cannot import it (aggregation.py
+    imports results_base - the dependency is one-way); folding the two
+    together is tracked in TODO.md (df-resolution / adapter-naming
+    consolidation row).
     """
     sm = getattr(results, "survey_metadata", None)
     if sm is not None:

@@ -42,7 +42,7 @@ from diff_diff.trop_results import (
     TROPResults,
     _PrecomputedStructures,
 )
-from diff_diff.utils import safe_inference, warn_if_not_converged
+from diff_diff.utils import safe_inference, validate_n_bootstrap, warn_if_not_converged
 
 
 class TROP(TROPLocalMixin, TROPGlobalMixin, BaseEstimator):
@@ -182,6 +182,9 @@ class TROP(TROPLocalMixin, TROPGlobalMixin, BaseEstimator):
         self.lambda_unit_grid = lambda_unit_grid or [0.0, 0.1, 0.5, 1.0, 2.0, 5.0]
         self.lambda_nn_grid = lambda_nn_grid or [0.0, 0.01, 0.1, 1.0, 10.0]
 
+        # Shared type guard first (rejects bool/float), then the
+        # TROP-specific floor.
+        validate_n_bootstrap(n_bootstrap)
         if n_bootstrap < 2:
             raise ValueError(
                 "n_bootstrap must be >= 2 for TROP (bootstrap variance "

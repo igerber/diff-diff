@@ -358,6 +358,14 @@ class TestStuteTest:
         with pytest.raises(ValueError, match=r"n_bootstrap must be >= 99"):
             stute_test(d, dy, n_bootstrap=50)
 
+    @pytest.mark.parametrize("bad", [999.5, True, None], ids=repr)
+    def test_n_bootstrap_type_blind_values_raise(self, bad):
+        """Shared type guard: a float like 999.5 previously passed the >= 99
+        floor and reached np.empty(n_bootstrap); bool/None likewise."""
+        d, dy = _linear_dgp(G=50)
+        with pytest.raises(ValueError, match="n_bootstrap must be a non-negative integer"):
+            stute_test(d, dy, n_bootstrap=bad)
+
     def test_exact_linear_returns_p1_not_nan(self):
         """P1 fix: exact linear fit (eps=0) must fail-to-reject with p=1,
         NOT return NaN. Assumption 8 holds exactly in this case."""
@@ -1346,6 +1354,28 @@ class TestStuteJointPretest:
         # p_value can differ slightly due to RNG draw order (joint draws
         # one eta vector per iteration, single draws one - same shape);
         # the statistic being bit-identical is the critical check.
+
+    @pytest.mark.parametrize("bad", [999.5, True, None], ids=repr)
+    def test_joint_n_bootstrap_type_blind_values_raise(self, bad):
+        """Shared type guard on the joint helper's n_bootstrap (a float
+        previously passed the >= 99 floor and reached range(n_bootstrap))."""
+        rng = np.random.default_rng(42)
+        G = 60
+        d = rng.uniform(0.0, 1.0, G)
+        dy = 0.3 * d + rng.normal(0.0, 0.2, G)
+        x = np.column_stack([np.ones(G), d])
+        beta = np.linalg.solve(x.T @ x, x.T @ dy)
+        fitted = x @ beta
+        with pytest.raises(ValueError, match="n_bootstrap must be a non-negative integer"):
+            stute_joint_pretest(
+                residuals_by_horizon={"only": dy - fitted},
+                fitted_by_horizon={"only": fitted},
+                doses=d,
+                design_matrix=x,
+                n_bootstrap=bad,
+                seed=123,
+                null_form="linearity",
+            )
 
     def test_linear_dgp_fails_to_reject(self):
         """Linear DGP across all horizons: joint test should not reject."""

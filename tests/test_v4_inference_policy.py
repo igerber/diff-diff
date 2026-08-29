@@ -34,17 +34,21 @@ import pytest
 
 import diff_diff
 from diff_diff import (
+    TROP,
     CallawaySantAnna,
+    ChaisemartinDHaultfoeuille,
     ChangesInChanges,
     ContinuousDiD,
     DifferenceInDifferences,
     DMLDiD,
     EfficientDiD,
+    HeterogeneousAdoptionDiD,
     ImputationDiD,
     MultiPeriodDiD,
     QDiD,
     StaggeredTripleDifference,
     SunAbraham,
+    SyntheticDiD,
     TripleDifference,
     TwoStageDiD,
     TwoWayFixedEffects,
@@ -102,6 +106,9 @@ VALIDATED_CLASSES = [
     TripleDifference,
     ChangesInChanges,
     QDiD,
+    # Type-guard alignment (post-M-081 follow-up): dCDH's floor is 0, so it
+    # satisfies the full roster contract (zero legal at construction).
+    ChaisemartinDHaultfoeuille,
 ]
 
 SELECTOR_CLASSES = [DifferenceInDifferences, MultiPeriodDiD, TwoWayFixedEffects]
@@ -439,3 +446,52 @@ class TestInferenceRoster:
             "bootstrap IS its inference method must keep n_bootstrap as "
             "documented domain vocabulary instead (v4-design section 7)."
         )
+
+
+# ===========================================================================
+# Type-guard alignment for the floor-carrying estimators (post-M-081
+# follow-up): TROP (>= 2), SyntheticDiD (>= 2 unless jackknife), and HAD
+# (>= 1) keep their floors, but the shared type guard now runs FIRST, so
+# bool/float/None/negative raise the shared message before any floor check.
+# They cannot join VALIDATED_CLASSES (test_zero_stays_legal_at_construction
+# conflicts with their floors).
+# ===========================================================================
+
+FLOOR_CLASSES = [
+    (TROP, {}),
+    (SyntheticDiD, {}),
+    (SyntheticDiD, {"variance_method": "jackknife"}),
+    (HeterogeneousAdoptionDiD, {}),
+]
+
+
+class TestFloorEstimatorTypeGuards:
+    @pytest.mark.parametrize(
+        "cls, extra", FLOOR_CLASSES, ids=lambda v: getattr(v, "__name__", str(v))
+    )
+    @pytest.mark.parametrize("bad", [1.5, True, None, -3], ids=repr)
+    def test_bad_type_raises_shared_message_at_init(self, cls, extra, bad):
+        with pytest.raises(ValueError, match=re.escape(N_BOOTSTRAP_MSG_PREFIX)):
+            cls(n_bootstrap=bad, **extra)
+
+    @pytest.mark.parametrize(
+        "cls, extra", FLOOR_CLASSES, ids=lambda v: getattr(v, "__name__", str(v))
+    )
+    def test_set_params_rejects_and_rolls_back(self, cls, extra):
+        est = cls(**extra)
+        before = est.get_params()
+        with pytest.raises(ValueError, match=re.escape(N_BOOTSTRAP_MSG_PREFIX)):
+            est.set_params(n_bootstrap=2.5)
+        assert est.get_params() == before
+
+    def test_floors_and_carveouts_intact(self):
+        # Floors keep their own messages after the type guard.
+        with pytest.raises(ValueError, match="n_bootstrap must be >= 2 for TROP"):
+            TROP(n_bootstrap=1)
+        with pytest.raises(ValueError, match=r"n_bootstrap must be >= 2 \(got 1\)"):
+            SyntheticDiD(n_bootstrap=1)
+        with pytest.raises(ValueError, match="n_bootstrap must be >= 1"):
+            HeterogeneousAdoptionDiD(n_bootstrap=0)
+        # The jackknife floor exemption survives (valid int 1 accepted).
+        est = SyntheticDiD(variance_method="jackknife", n_bootstrap=1)
+        assert est.get_params()["n_bootstrap"] == 1

@@ -23,6 +23,7 @@ from diff_diff.utils import (
     compute_time_weights_survey,
     safe_inference,
     validate_binary,
+    validate_n_bootstrap,
 )
 
 
@@ -266,6 +267,10 @@ class SyntheticDiD(DifferenceInDifferences):
                 f"variance_method must be one of {self._VALID_VARIANCE_METHODS}, "
                 f"got '{self.variance_method}'"
             )
+        # Shared type guard UNCONDITIONALLY (bool/negative previously
+        # slipped through under jackknife, whose floor exemption below is
+        # about the >= 2 minimum only).
+        validate_n_bootstrap(self.n_bootstrap)
         if self.n_bootstrap < 2 and self.variance_method != "jackknife":
             raise ValueError(
                 f"n_bootstrap must be >= 2 (got {self.n_bootstrap}). At least 2 "
