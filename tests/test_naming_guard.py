@@ -107,7 +107,7 @@ _SHIP_VERSION = {2: "3.9", 3: "3.9", 4: "3.9", 5: "4.0", 6: "4.1"}
 # silently disarm 4.0-window checks). Keyed off diff_diff.__version__ so the
 # Duty C lifecycle gate re-arms mechanically at each version bump; a missing
 # key fails loudly.
-_NEXT_RELEASE = {(3, 8): "3.9", (3, 9): "4.0", (3, 10): "4.0", (4, 0): "4.1"}
+_NEXT_RELEASE = {(3, 8): "3.9", (3, 9): "4.0", (3, 10): "4.0", (3, 11): "4.0", (4, 0): "4.1"}
 
 # Section-8 vocabulary predicate (Duty A). Every param/field rename token in
 # the ledger - current and lifecycle-gated - must be matched here
