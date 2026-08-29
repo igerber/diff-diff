@@ -1418,7 +1418,9 @@ class WooldridgeDiD(BaseEstimator):
                 warnings.simplefilter("ignore")
                 survey_design.resolve(sample)
 
-            if getattr(survey_design, "weights", None):
+            # `is not None`, not truthiness: resolve() treats any non-None
+            # string — an empty-string column name included — as a column.
+            if getattr(survey_design, "weights", None) is not None:
                 _cell_w = sample[survey_design.weights].to_numpy(dtype=float)
                 # The weighted within-transform's 0/0 constraint, checked before
                 # exclusion can delete the offending rows. OLS only: logit and

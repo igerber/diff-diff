@@ -290,6 +290,83 @@ class TestEmptyStringWeightColumn:
         )
         _assert_raw_scale(res.survey_metadata, panel.groupby("unit")[""].first())
 
+    def test_sun_abraham_parity_with_named_duplicate(self):
+        # SunAbraham's cohort/event-time aggregation reads the weight COLUMN
+        # NAME; a truthiness check treated "" as no-weights and silently fell
+        # back to unweighted cohort mass (behavioral: moved att AND se).
+        # A column named "" must give bit-identical results to the same
+        # values under a normal name.
+        from diff_diff import SunAbraham
+
+        panel = _make_staggered_panel()
+        panel[""] = panel["weight"]
+
+        def fit(col):
+            return _fit_quiet(
+                SunAbraham(),
+                panel,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                survey_design=SurveyDesign(weights=col),
+            )
+
+        a, b = fit(""), fit("weight")
+        assert a.overall_att == b.overall_att
+        assert a.overall_se == b.overall_se
+        for e in a.event_study_effects:
+            assert a.event_study_effects[e]["effect"] == b.event_study_effects[e]["effect"]
+            assert a.event_study_effects[e]["se"] == b.event_study_effects[e]["se"]
+
+    def test_wooldridge_zero_weight_group_parity(self):
+        # WooldridgeDiD's pre-exclusion zero-weight-group validation reads
+        # the weight column name; a truthiness check skipped it for "" so a
+        # zero-weight comparison cell passed validation under "" but was
+        # rejected under a normal name. Both aliases must behave identically.
+        from diff_diff import WooldridgeDiD
+
+        rng = np.random.default_rng(11)
+        n_u, n_t = 30, 4
+        rows = []
+        w = rng.uniform(0.5, 2.0, n_u)
+        for u in range(n_u):
+            ft = 3 if u < 15 else 0
+            for t in range(1, n_t + 1):
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "first_treat": ft,
+                        "outcome": rng.normal() + (1.0 if ft and t >= ft else 0.0),
+                        "w": w[u],
+                    }
+                )
+        df = pd.DataFrame(rows)
+        # Zero out one comparison unit's weights entirely so the weighted
+        # within-transform's 0/0 guard has something to reject.
+        df.loc[df["unit"] == 20, "w"] = 0.0
+        df[""] = df["w"]
+
+        def outcome_of(col):
+            try:
+                r = _fit_quiet(
+                    WooldridgeDiD(),
+                    df,
+                    "outcome",
+                    "unit",
+                    "time",
+                    "first_treat",
+                    survey_design=SurveyDesign(weights=col),
+                )
+                return ("fit", r.overall_att, r.overall_se)
+            except (ValueError, NotImplementedError) as exc:
+                # Normalize only the quoted column name, so messages that
+                # embed it still compare equal across the two aliases.
+                return ("raise", type(exc).__name__, str(exc).replace(f"'{col}'", "'<w>'"))
+
+        assert outcome_of("") == outcome_of("w")
+
     def test_continuous_did_analytical(self):
         cont = _make_continuous_data().rename(columns={"weight": ""})
         info = cont.groupby("unit").first()[["first_treat", "dose"]]
