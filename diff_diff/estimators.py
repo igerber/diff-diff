@@ -709,7 +709,7 @@ class DifferenceInDifferences(BaseEstimator):
             if resolved_survey.psu is not None and survey_metadata is not None:
                 raw_w = (
                     data[survey_design.weights].values.astype(np.float64)
-                    if survey_design.weights
+                    if survey_design.weights is not None
                     else np.ones(len(data), dtype=np.float64)
                 )
                 survey_metadata = compute_survey_metadata(resolved_survey, raw_w)
@@ -1889,7 +1889,7 @@ class DifferenceInDifferences(BaseEstimator):
             if resolved_survey.psu is not None and survey_metadata is not None:
                 raw_w = (
                     data[survey_design.weights].values.astype(np.float64)
-                    if survey_design.weights
+                    if survey_design.weights is not None
                     else np.ones(len(data), dtype=np.float64)
                 )
                 survey_metadata = compute_survey_metadata(resolved_survey, raw_w)

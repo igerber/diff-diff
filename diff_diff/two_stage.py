@@ -1674,7 +1674,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin, _TwoStageAggregationMixin, BaseEsti
                 assert survey_design is not None
                 raw_w = (
                     np.asarray(data[survey_design.weights].values, dtype=np.float64)
-                    if survey_design.weights
+                    if survey_design.weights is not None
                     else np.ones(len(data), dtype=np.float64)
                 )
                 survey_metadata = compute_survey_metadata(resolved_survey, raw_w)

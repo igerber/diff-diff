@@ -1886,7 +1886,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             assert survey_design is not None
             raw_obs_weights = (
                 data[survey_design.weights].values.astype(np.float64)
-                if survey_design.weights
+                if survey_design.weights is not None
                 else np.ones(len(data), dtype=np.float64)
             )
 

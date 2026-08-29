@@ -257,6 +257,58 @@ class TestCSRawScale:
 
 
 # ---------------------------------------------------------------------------
+# Empty-string weight-column name (falsy but valid: resolve() checks
+# `is not None`, so "" names a real column — truthiness checks would
+# silently substitute ones)
+# ---------------------------------------------------------------------------
+
+
+class TestEmptyStringWeightColumn:
+    def test_cs_rc_lane(self):
+        rc = _make_rc_data().rename(columns={"weight": ""})
+        res = _fit_quiet(
+            CallawaySantAnna(panel=False),
+            rc,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            survey_design=SurveyDesign(weights="", strata="stratum", psu="psu", nest=True),
+        )
+        _assert_raw_scale(res.survey_metadata, rc[""])
+
+    def test_efficient_did(self):
+        panel = _make_staggered_panel().rename(columns={"weight": ""})
+        res = _fit_quiet(
+            EfficientDiD(n_bootstrap=0),
+            panel,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            survey_design=SurveyDesign(weights="", strata="stratum", psu="psu", nest=True),
+        )
+        _assert_raw_scale(res.survey_metadata, panel.groupby("unit")[""].first())
+
+    def test_continuous_did_analytical(self):
+        cont = _make_continuous_data().rename(columns={"weight": ""})
+        info = cont.groupby("unit").first()[["first_treat", "dose"]]
+        drop = info[(info["first_treat"] > 0) & (info["dose"] == 0)].index
+        kept = cont[~cont["unit"].isin(drop)]
+        res = _fit_quiet(
+            ContinuousDiD(n_bootstrap=0),
+            cont,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            "dose",
+            survey_design=SurveyDesign(weights="", strata="stratum", psu="psu", nest=True),
+        )
+        _assert_raw_scale(res.survey_metadata, kept.groupby("unit")[""].first())
+
+
+# ---------------------------------------------------------------------------
 # Staggered DDD engine
 # ---------------------------------------------------------------------------
 

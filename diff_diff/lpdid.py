@@ -1501,7 +1501,7 @@ class LPDiD(BaseEstimator):
                 resolved_panel = _inject_cluster_as_psu(resolved_panel, data[cluster].to_numpy())
             raw_weights = (
                 data[survey_design.weights].to_numpy(dtype=float)
-                if survey_design.weights
+                if survey_design.weights is not None
                 else np.ones(len(data), dtype=float)
             )
             survey_metadata = compute_survey_metadata(resolved_panel, raw_weights)

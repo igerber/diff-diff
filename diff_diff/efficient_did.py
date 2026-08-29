@@ -1405,9 +1405,11 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
         raw_unit_w_meta: Optional[np.ndarray] = None
         if self._unit_resolved_survey is not None:
             assert survey_design is not None
+            # `is not None`, not truthiness: resolve() treats any non-None
+            # string — an empty-string column name included — as a column.
             raw_obs_w_meta = (
                 data[survey_design.weights].values.astype(np.float64)
-                if survey_design.weights
+                if survey_design.weights is not None
                 else np.ones(len(data), dtype=np.float64)
             )
             raw_unit_w_meta = raw_obs_w_meta[self._unit_first_panel_row]

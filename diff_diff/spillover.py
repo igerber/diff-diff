@@ -3035,7 +3035,10 @@ class SpilloverDiD(BaseEstimator):
                 # Matches the post-injection resolved_survey_fit length.
                 raw_w_for_meta = (
                     np.asarray(data[survey_design.weights].values, dtype=np.float64)
-                    if (survey_design is not None and getattr(survey_design, "weights", None))
+                    if (
+                        survey_design is not None
+                        and getattr(survey_design, "weights", None) is not None
+                    )
                     else np.ones(len(data), dtype=np.float64)
                 )
                 survey_metadata = _csm(resolved_survey_fit, raw_w_for_meta)

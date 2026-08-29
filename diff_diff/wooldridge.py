@@ -313,7 +313,7 @@ def _resolve_survey_for_wooldridge(survey_design, sample, cluster_ids, cluster_n
             if resolved.psu is not None and survey_metadata is not None:
                 raw_w = (
                     sample[survey_design.weights].values.astype(np.float64)
-                    if survey_design.weights
+                    if survey_design.weights is not None
                     else np.ones(len(sample), dtype=np.float64)
                 )
                 survey_metadata = compute_survey_metadata(resolved, raw_w)

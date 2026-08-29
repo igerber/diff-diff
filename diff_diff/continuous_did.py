@@ -513,7 +513,9 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
         # survey_metadata. Per-unit via groupby-first so the later
         # dose-filter (which drops whole units) cannot desync alignment.
         raw_unit_w_meta: Optional[pd.Series] = None
-        if survey_design is not None and survey_design.weights:
+        if survey_design is not None and survey_design.weights is not None:
+            # `is not None`, not truthiness: resolve() treats any non-None
+            # string — an empty-string column name included — as a column.
             raw_unit_w_meta = data.groupby(unit)[survey_design.weights].first()
 
         # Covariate-path guards (conditional parallel trends).

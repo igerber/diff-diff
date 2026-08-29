@@ -2253,7 +2253,7 @@ class CallawaySantAnna(
                 assert survey_design is not None
                 raw_w = (
                     data[survey_design.weights].values.astype(np.float64)
-                    if survey_design.weights
+                    if survey_design.weights is not None
                     else np.ones(len(data), dtype=np.float64)
                 )
                 survey_metadata = compute_survey_metadata(resolved_survey, raw_w)
@@ -2425,9 +2425,12 @@ class CallawaySantAnna(
                     )
                 else:
                     # RC lane: resolved_survey_unit is per-observation.
+                    # `is not None`, not truthiness: resolve() treats any
+                    # non-None string — an empty-string column name
+                    # included — as a column.
                     raw_unit_w = (
                         data[survey_design.weights].values.astype(np.float64)
-                        if survey_design.weights
+                        if survey_design.weights is not None
                         else np.ones(len(data), dtype=np.float64)
                     )
                 survey_metadata = compute_survey_metadata(resolved_survey_unit, raw_unit_w)
