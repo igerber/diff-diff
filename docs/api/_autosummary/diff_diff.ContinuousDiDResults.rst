@@ -37,6 +37,7 @@
       ~ContinuousDiDResults.degree
       ~ContinuousDiDResults.epv_threshold
       ~ContinuousDiDResults.estimation_method
+      ~ContinuousDiDResults.event_study_df
       ~ContinuousDiDResults.event_study_effects
       ~ContinuousDiDResults.is_significant
       ~ContinuousDiDResults.n_bootstrap

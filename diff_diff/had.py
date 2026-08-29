@@ -788,6 +788,9 @@ class HeterogeneousAdoptionDiDEventStudyResults(BaseResults, AggregationMixin):
         retained), ``"n_dropped"`` (units dropped), ``"dropped_cohorts"``
         (list of dropped cohort labels). ``None`` when no filter was
         applied.
+    event_study_df : float or None
+        Scalar survey df governing every horizon's t-inference (the
+        unit-level design's ``df_survey``); ``None`` on non-survey fits.
     """
 
     # Per-horizon arrays
@@ -859,6 +862,12 @@ class HeterogeneousAdoptionDiDEventStudyResults(BaseResults, AggregationMixin):
     """Number of multiplier-bootstrap replicates used to compute the sup-t
     critical value. ``None`` when ``cband=False`` or on unweighted,
     unclustered fits."""
+    event_study_df: Optional[float] = None
+    """Scalar survey df governing every horizon's t-inference (the
+    unit-level design's ``df_survey``). ``None`` on non-survey fits (normal
+    inference). Pointwise inference is always analytical (``n_bootstrap``
+    feeds only the sup-t band), so no bootstrap clearing applies. Appended
+    last (positional-``__init__`` compatibility)."""
 
     def __repr__(self) -> str:
         base = (
@@ -1003,6 +1012,7 @@ class HeterogeneousAdoptionDiDEventStudyResults(BaseResults, AggregationMixin):
             "cband_crit_value": self.cband_crit_value,
             "cband_method": self.cband_method,
             "cband_n_bootstrap": self.cband_n_bootstrap,
+            "event_study_df": self.event_study_df,
         }
 
     def to_dataframe(self) -> pd.DataFrame:
@@ -4904,4 +4914,8 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
             cband_crit_value=cband_crit_value,
             cband_method=cband_method_label,
             cband_n_bootstrap=cband_n_bootstrap_eff,
+            # Per-row ES df provenance (M-092 completion): the survey df
+            # every horizon's safe_inference received; None on non-survey
+            # fits (df_infer is None there).
+            event_study_df=(float(df_infer) if df_infer is not None and df_infer > 0 else None),
         )

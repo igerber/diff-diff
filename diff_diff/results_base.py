@@ -1348,6 +1348,9 @@ def _from_had(results: Any) -> EventStudyResults:
         # The per-horizon estimand is a WAS, not an ATT (row M-027):
         # relay the estimand label so summary()/to_dict never mislabel.
         estimand=getattr(results, "target_parameter", None),
+        # Per-row df provenance (M-092 completion): HAD's scalar survey df
+        # governs every horizon's t-inference; None on non-survey fits.
+        df=getattr(results, "event_study_df", None),
         **_provenance_kwargs(results),
     )
 

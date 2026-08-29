@@ -32,6 +32,7 @@
       ~HeterogeneousAdoptionDiDEventStudyResults.cband_n_bootstrap
       ~HeterogeneousAdoptionDiDEventStudyResults.effective_dose_mean
       ~HeterogeneousAdoptionDiDEventStudyResults.variance_formula
+      ~HeterogeneousAdoptionDiDEventStudyResults.event_study_df
       ~HeterogeneousAdoptionDiDEventStudyResults.event_times
       ~HeterogeneousAdoptionDiDEventStudyResults.att
       ~HeterogeneousAdoptionDiDEventStudyResults.se

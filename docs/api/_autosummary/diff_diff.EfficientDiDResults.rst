@@ -36,6 +36,7 @@
       ~EfficientDiDResults.control_group
       ~EfficientDiDResults.efficient_weights
       ~EfficientDiDResults.estimation_path
+      ~EfficientDiDResults.event_study_df
       ~EfficientDiDResults.event_study_effects
       ~EfficientDiDResults.group_effects
       ~EfficientDiDResults.influence_functions

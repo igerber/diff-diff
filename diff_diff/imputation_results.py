@@ -155,6 +155,12 @@ class ImputationDiDResults(BaseResults, AggregationMixin):
         Populated by pretrend_test().
     bootstrap_results : ImputationBootstrapResults, optional
         Bootstrap inference results.
+    event_study_df : float or None
+        Scalar survey df governing the event-study rows' t-inference (the
+        FINAL replicate-override value on replicate fits; leads included
+        on survey fits). ``None`` on non-survey fits, on bootstrapped
+        fits, when no fit-time event-study surface was built, and for the
+        replicate-undefined ``0`` sentinel.
     """
 
     treatment_effects: pd.DataFrame
@@ -199,9 +205,15 @@ class ImputationDiDResults(BaseResults, AggregationMixin):
     # Private panel-backed post-fit aggregation kit (rows M-021/M-118),
     # attached by ImputationDiD.fit(). None on results unpickled from a
     # pre-3.9 release (aggregate() then fails with the re-fit message).
-    # Appended LAST (the generated __init__ positional indexes are public
-    # API).
+    # New fields are appended AFTER this one (the generated __init__
+    # positional indexes are public API).
     _aggregation_kit: Optional[Any] = field(default=None, repr=False, compare=False)
+    # Scalar survey df governing the event-study rows' t-inference (leads
+    # included on survey fits). None on non-survey fits, on bootstrapped
+    # fits (percentile inference used no df), when no event-study surface
+    # was built, and for the replicate-undefined 0 sentinel. Appended last
+    # per the positional-__init__ convention above.
+    event_study_df: Optional[float] = None
 
     # Post-fit aggregation vocabulary (M-021). balance_e keeps the mixin
     # default ("event_study",) - CS precedent, do not redeclare.
@@ -358,11 +370,10 @@ class ImputationDiDResults(BaseResults, AggregationMixin):
         # Carrier + shared builder: ImputationDiD is a _from_relative_dict
         # producer, so the recomputed dict rides the same route as the
         # fit-time surface (zero-count-sentinel reference marking,
-        # n_kind="obs", all-NaN per-row df - identical to fit-time output).
-        # The carrier's metadata is a copy-on-use of the KIT's fit-final
-        # metadata copy (never the mutable public field); on a replicate
-        # replay its df_survey is the REPLAYED level-matched value,
-        # normalized by the same rule fit applies.
+        # n_kind="obs"). The carrier's metadata is a copy-on-use of the
+        # KIT's fit-final metadata copy (never the mutable public field);
+        # on a replicate replay its df_survey is the REPLAYED level-matched
+        # value, normalized by the same rule fit applies.
         meta = bk["survey_metadata"]
         if meta is not None:
             if bk["uses_replicate"]:
@@ -371,12 +382,18 @@ class ImputationDiDResults(BaseResults, AggregationMixin):
                 )
             else:
                 meta = dataclasses.replace(meta)
+        # Per-row df provenance: the df this route's ES rows actually used —
+        # the level-matched replay value on replicate replays (the fit-time
+        # snapshot came from the [overall]-only stack and can diverge), the
+        # seed df otherwise; 0-sentinel normalized.
+        _es_df = replay_df if bk["uses_replicate"] else bk["survey_df_seed"]
         carrier = dataclasses.replace(
             self,
             event_study_effects=es,
             survey_metadata=meta,
             anticipation=kit.anticipation,
             alpha=kit.alpha,
+            event_study_df=(float(_es_df) if _es_df is not None and _es_df > 0 else None),
         )
         return build_event_study_surface(carrier)
 

@@ -471,15 +471,70 @@ class TestContinuousDiDRawScale:
         res = self._fit(cont_df, _DESIGN, n_bootstrap=0)
         _assert_raw_scale(res.survey_metadata, cont_filtered.groupby("unit")["weight"].first())
 
-    def test_bootstrap_metadata_stays_obs_level_raw(self, cont_df, cont_filtered):
-        # Characterization pin for the deferred analytic-vs-bootstrap
-        # granularity divergence (TODO.md): the bootstrap branch keeps the
-        # OBS-level raw metadata from the (re-)resolve on the filtered frame.
+    def test_bootstrap_metadata_is_unit_level_raw(self, cont_df, cont_filtered):
+        # The bootstrap branch publishes the SAME unit-level raw metadata as
+        # the analytic branch (one granularity across all inference arms —
+        # the CS/EfficientDiD convention).
         res = self._fit(cont_df, _DESIGN, n_bootstrap=20, seed=42)
-        w = cont_filtered["weight"]
-        md = res.survey_metadata
-        np.testing.assert_allclose(md.sum_weights, w.sum(), rtol=1e-12)
-        np.testing.assert_allclose(md.weight_range, (w.min(), w.max()), rtol=1e-12)
+        _assert_raw_scale(res.survey_metadata, cont_filtered.groupby("unit")["weight"].first())
+
+    def test_analytic_bootstrap_metadata_parity(self, cont_df):
+        # Full-field metadata parity across inference branches, including an
+        # implicit-PSU design where df_survey/n_psu formerly diverged
+        # (obs- vs unit-level).
+        for design in (_DESIGN, SurveyDesign(weights="weight")):
+            r_a = self._fit(cont_df, design, n_bootstrap=0)
+            r_b = self._fit(cont_df, design, n_bootstrap=15, seed=42)
+            ma, mb = r_a.survey_metadata, r_b.survey_metadata
+            for f in (
+                "sum_weights",
+                "weight_range",
+                "effective_n",
+                "design_effect",
+                "df_survey",
+                "n_strata",
+                "n_psu",
+            ):
+                np.testing.assert_allclose(
+                    np.asarray(getattr(ma, f), dtype=float),
+                    np.asarray(getattr(mb, f), dtype=float),
+                    rtol=1e-12,
+                    err_msg=f,
+                )
+
+    def test_empty_post_cells_metadata_is_unit_level(self):
+        # Degenerate no-post-cells arm: the hoisted recompute must cover it
+        # too (no third granularity state). Treated cohort starts after the
+        # last observed period -> zero post cells, NaN overall.
+        rng = np.random.default_rng(9)
+        n_u, n_t = 40, 3
+        units = np.repeat(range(n_u), n_t)
+        times = np.tile(range(1, n_t + 1), n_u)
+        ft = np.repeat(np.where(np.arange(n_u) < 20, 9, 0), n_t)  # post-sample
+        dose = np.repeat(np.where(np.arange(n_u) < 20, rng.uniform(0.5, 2.0, n_u), 0.0), n_t)
+        w = np.repeat(rng.uniform(0.5, 2.0, n_u), n_t)
+        df = pd.DataFrame(
+            {
+                "unit": units,
+                "time": times,
+                "first_treat": ft,
+                "dose": dose,
+                "outcome": rng.normal(size=len(units)),
+                "weight": w,
+            }
+        )
+        res = _fit_quiet(
+            ContinuousDiD(n_bootstrap=0),
+            df,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            "dose",
+            survey_design=SurveyDesign(weights="weight"),
+        )
+        assert np.isnan(res.overall_att)
+        _assert_raw_scale(res.survey_metadata, df.groupby("unit")["weight"].first())
 
     def test_weight_column_aliasing_dose_reports_original_values(self):
         # weights == dose: the never-treated nonzero-dose coercion zeroes the

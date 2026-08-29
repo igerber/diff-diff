@@ -125,6 +125,11 @@ class ContinuousDiDResults(BaseResults, AggregationMixin):
         Random seed used for bootstrap.
     rank_deficient_action : str
         How rank deficiency is handled (``"warn"``, ``"error"``, ``"silent"``).
+    event_study_df : float or None
+        Scalar survey df governing the event-study rows' t-inference.
+        ``None`` on non-survey fits, on bootstrapped fits, when no
+        fit-time event-study surface was built, and for the
+        replicate-undefined ``0`` sentinel.
     """
 
     dose_response_att: DoseResponseCurve
@@ -176,9 +181,16 @@ class ContinuousDiDResults(BaseResults, AggregationMixin):
     # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
     survey_metadata: Optional[Any] = field(default=None)
     # Post-fit aggregation kit (row M-025), attached by ContinuousDiD.fit().
-    # Declared LAST for positional-__init__ compatibility. Only the
-    # 'event_study' recompute reads it; 'simple'/'dose' are views.
+    # New fields are appended AFTER this one (positional-__init__
+    # compatibility). Only the 'event_study' recompute reads it;
+    # 'simple'/'dose' are views.
     _aggregation_kit: Optional[Any] = field(default=None, repr=False, compare=False)
+    # Scalar survey df governing the event-study rows' t-inference. None on
+    # non-survey fits, on bootstrapped fits (percentile inference; the ES
+    # recompute also fails closed there), when no event-study surface was
+    # built, and for the replicate-undefined 0 sentinel. Appended last per
+    # the positional-__init__ convention above.
+    event_study_df: Optional[float] = None
 
     # Post-fit aggregation routing (M-122 contract). ContinuousDiD's extra
     # 'dose' level is documented in the ledger row and v4-design section 6;
@@ -683,12 +695,16 @@ class ContinuousDiDResults(BaseResults, AggregationMixin):
         # cells exist.
         meta = bk["survey_metadata"]
         meta = dataclasses.replace(meta) if meta is not None else None
+        # Per-row df provenance: the kit's survey df is the value this
+        # route's safe_inference calls received; 0-sentinel normalized.
+        _es_df = bk["survey_df"]
         carrier = dataclasses.replace(
             self,
             event_study_effects=es,
             survey_metadata=meta,
             alpha=kit.alpha,
             anticipation=kit.anticipation,
+            event_study_df=(float(_es_df) if _es_df is not None and _es_df > 0 else None),
             # _provenance_kwargs reads base_period off the carrier - it
             # rides the kit like its siblings alpha/anticipation so
             # post-fit mutation of the public field cannot reach

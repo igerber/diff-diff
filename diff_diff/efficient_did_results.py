@@ -209,6 +209,11 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
     omega_ridge : float
         Relative ridge used for the Omega* inversion behind the efficient
         weights (0 = legacy exact-inverse/pseudoinverse path).
+    event_study_df : float or None
+        Scalar df governing the event-study rows' t-inference (the fit's
+        survey df). ``None`` on non-survey fits, on bootstrapped fits
+        (percentile inference used no df), and when no fit-time
+        event-study surface was built.
     """
 
     group_time_effects: Dict[Tuple[Any, Any], Dict[str, Any]]
@@ -262,9 +267,15 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
     omega_ridge: float = 0.0
     # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
     survey_metadata: Optional[Any] = field(default=None)
-    # Post-fit aggregation kit (M-023) - declared LAST: the generated
-    # __init__'s positional indexes are public API (CS precedent).
+    # Post-fit aggregation kit (M-023). The generated __init__'s positional
+    # indexes are public API (CS precedent), so new fields are appended
+    # AFTER this one, never before.
     _aggregation_kit: Optional[Any] = field(default=None, repr=False, compare=False)
+    # Scalar df governing the event-study rows' t-inference (the fit's
+    # survey df; None on non-survey fits, on bootstrapped fits — percentile
+    # inference used no df — and when no event-study surface was built).
+    # Appended last per the positional-__init__ convention above.
+    event_study_df: Optional[float] = None
 
     # Post-fit aggregate() hooks (M-023). Plain class attributes (no
     # annotation) so they never enter dataclasses.fields; the mixin's
@@ -436,11 +447,10 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
             n_clusters=bk["n_clusters"],
         )
         if boot_replay is not None:
-            # Same applier as fit-time. The carrier below needs NO field
-            # clearing: this class has no vcov/cband/df fields for the ES
-            # surface (its published df column is all-NaN by construction),
-            # and the non-None bootstrap_results it retains keeps the
-            # container's inference provenance honest.
+            # Same applier as fit-time. The carrier clears only
+            # event_study_df below (this class has no vcov/cband ES
+            # fields), and the non-None bootstrap_results it retains keeps
+            # the container's inference provenance honest.
             apply_bootstrap_event_study_overrides(es, boot_replay, kit.alpha)
         # Carrier + shared builder: EDiD is a _from_relative_dict producer,
         # so the recomputed dict rides the same route as the fit-time
@@ -460,6 +470,13 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
         # mutated public field - a PT-All fit whose public pt_assumption
         # was flipped to "post" would otherwise mark the genuine e=-1
         # estimate as a reference row and zero it.
+        # Per-row df provenance: the kit's post-overall df snapshot on
+        # analytical recomputes; cleared on bootstrap replays (percentile
+        # inference used no df) and for the replicate-undefined 0 sentinel.
+        _es_df = bk["df_survey"]
+        es_df_carrier = (
+            float(_es_df) if (boot_replay is None and _es_df is not None and _es_df > 0) else None
+        )
         carrier = dataclasses.replace(
             self,
             event_study_effects=es,
@@ -467,6 +484,7 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
             pt_assumption=bk["pt_assumption"],
             anticipation=kit.anticipation,
             alpha=kit.alpha,
+            event_study_df=es_df_carrier,
         )
         return build_event_study_surface(carrier)
 

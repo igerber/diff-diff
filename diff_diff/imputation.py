@@ -1004,6 +1004,17 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
             _cluster_name_for_results = unit
             _n_clusters_for_results = int(data[unit].nunique())
 
+        # Per-row ES df provenance (M-092 completion): the FINAL survey df —
+        # on replicate fits the level-matched override value that rewrote
+        # every ES row's inference; the seed value on plain survey fits.
+        # None when no ES surface was built, under bootstrap (percentile
+        # inference used no df — the shipped producer convention), on
+        # non-survey fits, and for the replicate-undefined 0 sentinel.
+        _es_df_final: Optional[float] = None
+        if event_study_effects is not None and bootstrap_results is None:
+            if _survey_df is not None and _survey_df > 0:
+                _es_df_final = float(_survey_df)
+
         # Construct results
         self.results_ = ImputationDiDResults(
             treatment_effects=treated_df,
@@ -1031,6 +1042,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, Ba
             n_clusters=_n_clusters_for_results,
             leave_one_out=self.leave_one_out,
             df_convention=self.df_convention,
+            event_study_df=_es_df_final,
         )
 
         # Attach the post-fit aggregation kit (M-021/M-118). Unconditional —

@@ -818,6 +818,17 @@ class TestDfThreading:
         assert finite.size > 0
         assert np.all(finite == panel_survey.survey_metadata.df_survey)
 
+    def test_bootstrap_replay_scalar_persists_per_row_cleared(self, panel_df, ci_params):
+        # Two-channel contract on the bootstrap REPLAY (DMLDiD has no
+        # fit-time ES surface): the per-row df column is all-NaN beside
+        # percentile inference (M-027) while the df_survey scalar - the
+        # fit's resolved scalar inference df - persists.
+        boot = _fit(panel_df, survey=_DESIGN, n_bootstrap=ci_params.bootstrap(29))
+        es = boot.aggregate("event_study")
+        assert np.all(np.isnan(np.asarray(es.df, dtype=float)))
+        assert es.df_survey is not None and np.isfinite(es.df_survey)
+        assert es.df_survey == boot.survey_metadata.df_survey
+
     def test_describe_target_parameter_names_cohort_masses(self, panel_survey, panel_plain):
         from diff_diff._reporting_helpers import describe_target_parameter
 

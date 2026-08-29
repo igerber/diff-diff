@@ -5516,3 +5516,244 @@ class TestTotalEfficientDiD:
         assert np.isfinite(tot.n[0]) and tot.n[0] > 0
         assert tot.att[0] == tot.n[0] * simple.att[0]
         assert tot.se[0] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# M-092 completion: per-row ES df threading + the df_survey scalar contract
+# ---------------------------------------------------------------------------
+
+
+from diff_diff.results_base import build_event_study_surface  # noqa: E402
+
+
+class TestPerRowDfProvenanceCompletion:
+    """Per-row ES df threading for the four former M-092 holes (EfficientDiD,
+    ImputationDiD, ContinuousDiD, HAD) and the documented two-channel
+    contract: the scalar ``df_survey`` (the fit's resolved scalar inference
+    df) persists on bootstrapped surfaces, while the per-row ``df`` column is
+    the inference-provenance channel and is cleared under percentile
+    bootstrap (M-027)."""
+
+    # ---- EfficientDiD -------------------------------------------------
+
+    def test_edid_es_per_row_df_survey_tsl_oracle(self):
+        from diff_diff.utils import safe_inference
+
+        d, _ = _efficient_survey_panel()
+        sd = _efficient_survey_design()
+        plain = _fit_efficient(d, survey_design=sd)
+        expected = plain._aggregation_kit.bookkeeping["df_survey"]
+        # Modern fits build no fit-time ES surface -> attr None (absent-
+        # surface gate); the deprecated fit-time route carries the value.
+        assert plain.event_study_df is None
+        fit_time = _fit_efficient(d, survey_design=sd, aggregate="event_study")
+        assert fit_time.event_study_df == expected
+        es = plain.aggregate("event_study")
+        finite = np.isfinite(np.asarray(es.df, dtype=float))
+        assert finite.any()
+        assert set(np.unique(np.asarray(es.df, dtype=float)[finite])) == {float(expected)}
+        # Semantic oracle: safe_inference(att, se, df=row.df) reproduces the
+        # stored per-row inference (a mis-seeded df would mismatch p).
+        for i in np.flatnonzero(finite):
+            t, p, _ = safe_inference(
+                float(es.att[i]), float(es.se[i]), alpha=plain.alpha, df=float(es.df[i])
+            )
+            np.testing.assert_allclose(t, es.t_stat[i], rtol=1e-12)
+            np.testing.assert_allclose(p, es.p_value[i], rtol=1e-12)
+
+    def test_edid_es_per_row_df_replicate_arms(self):
+        from diff_diff.utils import safe_inference
+
+        for degenerate, expected_df in ((None, 7.0), ("dropped", 5.0)):
+            d, rep_cols = _efficient_survey_panel(replicate=True, degenerate=degenerate)
+            sd = _efficient_survey_design(rep_cols)
+            plain = _fit_efficient(d, survey_design=sd)
+            fit_time = _fit_efficient(d, survey_design=sd, aggregate="event_study")
+            assert fit_time.event_study_df == expected_df
+            es = plain.aggregate("event_study")
+            df_col = np.asarray(es.df, dtype=float)
+            finite = np.isfinite(df_col)
+            assert set(np.unique(df_col[finite])) <= {expected_df}
+            for i in np.flatnonzero(finite):
+                t, p, _ = safe_inference(
+                    float(es.att[i]), float(es.se[i]), alpha=plain.alpha, df=float(es.df[i])
+                )
+                np.testing.assert_allclose(p, es.p_value[i], rtol=1e-12)
+
+    def test_edid_replicate_undefined_zero_sentinel_is_none(self):
+        # 0-sentinel normalization: the replicate-undefined df publishes the
+        # ATTRIBUTE as None, never 0 (the sentinel stays representable only
+        # via survey_metadata).
+        d, rep_cols = _efficient_survey_panel(replicate=True, degenerate="undefined")
+        sd = _efficient_survey_design(rep_cols)
+        fit_time = _fit_efficient(d, survey_design=sd, aggregate="event_study")
+        assert fit_time.event_study_df is None
+
+    def test_edid_bootstrap_clears_per_row_df_scalar_persists(self):
+        d, _ = _efficient_survey_panel()
+        sd = _efficient_survey_design()
+        boot = _efficient_boot_fit(d, survey_design=sd)
+        # Fit-time clearing: percentile inference used no df.
+        assert boot.event_study_df is None
+        es = boot.aggregate("event_study")
+        assert np.all(np.isnan(np.asarray(es.df, dtype=float)))
+        # Row B: the scalar df_survey persists beside percentile inference.
+        assert es.df_survey is not None and np.isfinite(es.df_survey)
+        assert es.df_survey == boot.survey_metadata.df_survey
+        # Fit-time (deprecated route) surface behaves identically.
+        fit_time = _efficient_boot_fit_time(d, aggregate="event_study", survey_design=sd)
+        surface = build_event_study_surface(fit_time)
+        assert np.all(np.isnan(np.asarray(surface.df, dtype=float)))
+        assert surface.df_survey == fit_time.survey_metadata.df_survey
+
+    def test_edid_absent_es_surface_gate(self, efficient_panel):
+        plain = _fit_efficient(efficient_panel)
+        assert plain.event_study_effects is None
+        assert plain.event_study_df is None
+
+    # ---- ImputationDiD ------------------------------------------------
+
+    def test_imputation_es_per_row_df_covers_leads(self):
+        from diff_diff.utils import safe_inference
+
+        d, _ = _imputation_survey_panel()
+        sd = _imputation_survey_design()
+        plain = _fit_imputation(d, survey_design=sd, est_kw={"pretrends": True})
+        expected = plain.survey_metadata.df_survey
+        fit_time = _fit_imputation(
+            d, survey_design=sd, aggregate="event_study", est_kw={"pretrends": True}
+        )
+        assert fit_time.event_study_df == expected
+        es = plain.aggregate("event_study")
+        df_col = np.asarray(es.df, dtype=float)
+        ev = np.asarray(es.event_time)
+        finite = np.isfinite(df_col)
+        # Leads included: at least one pre-period row carries the finite df.
+        assert finite.any() and (ev[finite] < 0).any()
+        assert set(np.unique(df_col[finite])) == {float(expected)}
+        for i in np.flatnonzero(finite):
+            t, p, _ = safe_inference(
+                float(es.att[i]), float(es.se[i]), alpha=plain.alpha, df=float(es.df[i])
+            )
+            np.testing.assert_allclose(p, es.p_value[i], rtol=1e-12)
+
+    def test_imputation_replicate_replay_df_is_level_matched(self):
+        # The replay carrier's per-row df is the REPLAYED level-matched value
+        # (== the replay surface's own df_survey), which can diverge from the
+        # fit-time [overall]-stack snapshot on the cohort_zero shape.
+        d, rep_cols = _imputation_survey_panel(replicate=True, degenerate="cohort_zero")
+        sd = _imputation_survey_design(rep_cols)
+        plain = _fit_imputation(d, survey_design=sd)
+        es = plain.aggregate("event_study")
+        df_col = np.asarray(es.df, dtype=float)
+        finite = np.isfinite(df_col)
+        assert finite.any()
+        assert set(np.unique(df_col[finite])) == {float(es.df_survey)}
+
+    def test_imputation_replicate_undefined_zero_sentinel_is_none(self):
+        d, rep_cols = _imputation_survey_panel(replicate=True, degenerate="undefined")
+        sd = _imputation_survey_design(rep_cols)
+        fit_time = _fit_imputation(d, survey_design=sd, aggregate="event_study")
+        assert fit_time.event_study_df is None
+
+    def test_imputation_bootstrap_clears_at_fit_and_replay_fails_closed(self):
+        d, _ = _imputation_survey_panel()
+        sd = _imputation_survey_design()
+        boot = _fit_imputation(d, survey_design=sd, est_kw={"n_bootstrap": 30, "seed": 1})
+        assert boot.event_study_df is None
+        with pytest.raises(NotImplementedError):
+            boot.aggregate("event_study")
+
+    # ---- ContinuousDiD ------------------------------------------------
+
+    def test_cont_es_per_row_df_threads_survey_df(self):
+        d, _ = _cont_survey_panel()
+        sd = _cont_survey_design()
+        plain = _fit_cont(d, survey_design=sd)
+        expected = plain._aggregation_kit.bookkeeping["survey_df"]
+        assert plain.event_study_df is None  # no fit-time ES surface
+        es = plain.aggregate("event_study")
+        df_col = np.asarray(es.df, dtype=float)
+        finite = np.isfinite(df_col)
+        assert finite.any()
+        assert set(np.unique(df_col[finite])) == {float(expected)}
+        # Route parity: the fit-time surface carries the same column.
+        fit_time = _fit_cont(d, survey_design=sd, aggregate="eventstudy")
+        surface = build_event_study_surface(fit_time)
+        np.testing.assert_array_equal(
+            np.asarray(surface.df, dtype=float), np.asarray(es.df, dtype=float)
+        )
+
+    def test_cont_bootstrap_fit_clears_df_scalar_is_unit_level(self):
+        # Bootstrapped fit: _survey_df stays None -> attr None; the fit-time
+        # surface's per-row df is all-NaN while the df_survey scalar reports
+        # the (now unit-level) design df - the Row A container pin on an
+        # implicit-PSU design.
+        d, _ = _cont_survey_panel()
+        from diff_diff import SurveyDesign
+
+        sd = SurveyDesign(weights="w")  # implicit-PSU
+        boot = _fit_cont(
+            d,
+            survey_design=sd,
+            aggregate="eventstudy",
+            est_kw={"n_bootstrap": 20, "seed": 3},
+        )
+        assert boot.event_study_df is None
+        surface = build_event_study_surface(boot)
+        assert np.all(np.isnan(np.asarray(surface.df, dtype=float)))
+        # Unit-level scalar: n_units - 1 (implicit PSU = unit), not obs-level.
+        n_units = boot.survey_metadata.n_psu
+        assert surface.df_survey == boot.survey_metadata.df_survey == n_units - 1
+
+    def test_cont_absent_es_surface_gate(self, cont_panel):
+        plain = _fit_cont(cont_panel)
+        assert plain.event_study_effects is None
+        assert plain.event_study_df is None
+
+    # ---- HAD ----------------------------------------------------------
+
+    def test_had_es_per_row_df_survey(self):
+        from diff_diff import SurveyDesign
+        from diff_diff.utils import safe_inference
+
+        d = _had_panel_multi()
+        rng = np.random.default_rng(7)
+        wmap = {u: rng.uniform(0.5, 2.0) for u in d["unit"].unique()}
+        d = d.assign(w=d["unit"].map(wmap), stratum=d["unit"] % 4)
+        res = _fit_had(d, survey_design=SurveyDesign(weights="w", strata="stratum"))
+        expected = res.survey_metadata.df_survey
+        assert res.event_study_df == expected
+        es = res.aggregate("event_study")
+        df_col = np.asarray(es.df, dtype=float)
+        finite = np.isfinite(df_col)
+        assert finite.any()
+        assert set(np.unique(df_col[finite])) == {float(expected)}
+        for i in np.flatnonzero(finite):
+            t, p, _ = safe_inference(
+                float(es.att[i]), float(es.se[i]), alpha=res.alpha, df=float(es.df[i])
+            )
+            np.testing.assert_allclose(p, es.p_value[i], rtol=1e-12)
+        # to_dict carries the new field.
+        assert res.to_dict()["event_study_df"] == expected
+
+    def test_had_non_survey_df_stays_nan(self):
+        res = _fit_had(_had_panel_multi())
+        assert res.event_study_df is None
+        es = res.aggregate("event_study")
+        assert np.all(np.isnan(np.asarray(es.df, dtype=float)))
+
+    # ---- Row B scalar contract, CS side --------------------------------
+
+    def test_cs_bootstrapped_scalar_persists_per_row_cleared(self):
+        d = _survey_panel()
+        sd = _survey_design()
+        boot = _boot_fit(d, fit_kwargs={"survey_design": sd})
+        es = boot.aggregate("event_study")
+        assert np.all(np.isnan(np.asarray(es.df, dtype=float)))
+        assert es.df_survey is not None and np.isfinite(es.df_survey)
+        assert es.df_survey == boot.survey_metadata.df_survey
+        fit_time = _boot_fit_time(d, aggregate="event_study", fit_kwargs={"survey_design": sd})
+        surface = build_event_study_surface(fit_time)
+        assert np.all(np.isnan(np.asarray(surface.df, dtype=float)))
+        assert surface.df_survey == fit_time.survey_metadata.df_survey

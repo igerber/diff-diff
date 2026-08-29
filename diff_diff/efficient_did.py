@@ -1413,6 +1413,16 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
                 else np.ones(len(data), dtype=np.float64)
             )
             raw_unit_w_meta = raw_obs_w_meta[self._unit_first_panel_row]
+        # Per-row ES df provenance (M-092 completion): the post-overall
+        # survey-df snapshot is the df the ES rows' safe_inference used.
+        # None when no ES surface was built, under bootstrap (percentile
+        # inference used no df — the shipped producer convention), and for
+        # the replicate-undefined 0 sentinel (representable only via
+        # survey_metadata.df_survey).
+        _es_df_final: Optional[float] = None
+        if event_study_effects is not None and bootstrap_results is None:
+            if _survey_df_post_overall is not None and _survey_df_post_overall > 0:
+                _es_df_final = float(_survey_df_post_overall)
         self.results_ = EfficientDiDResults(
             group_time_effects=group_time_effects,
             overall_att=overall_att,
@@ -1432,6 +1442,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
             bootstrap_weights=self.bootstrap_weights,
             seed=self.seed,
             event_study_effects=event_study_effects,
+            event_study_df=_es_df_final,
             group_effects=group_effects,
             efficient_weights=stored_weights if stored_weights else None,
             omega_condition_numbers=stored_cond if stored_cond else None,

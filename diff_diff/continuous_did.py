@@ -994,6 +994,33 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
 
         _survey_df = None  # Set by analytical branch when survey is active
 
+        # Recompute survey_metadata from the UNIT-level design on EVERY arm
+        # (degenerate no-post-cells, bootstrap, analytic) so reported
+        # sum_weights/effective_n/n_psu/df_survey describe one granularity —
+        # the CS/EfficientDiD convention. Construction is byte-identical to
+        # the ones inside _run_bootstrap and _compute_analytical_se.
+        if resolved_survey is not None and survey_metadata is not None:
+            from diff_diff.survey import compute_survey_metadata
+
+            _unit_resolved_meta = resolved_survey.subset_to_units_by_row_idx(
+                precomp["unit_first_panel_row"],
+                unit_weights=precomp.get("unit_survey_weights"),
+            )
+            # Raw (pre-normalization) unit weights for metadata provenance:
+            # compute_survey_metadata expects the ORIGINAL scale (resolve()
+            # rescales pweights to mean 1; scale-invariant fields are
+            # unaffected either way). ``raw_unit_w_meta`` was snapshotted
+            # from pristine ``data`` before the df mutations; reindexing to
+            # ``all_units`` (the dose-filtered unit order) keeps alignment —
+            # survey weights are unit-constant (validated at resolve time).
+            assert survey_design is not None
+            raw_w_unit = (
+                raw_unit_w_meta.reindex(precomp["all_units"]).to_numpy(dtype=np.float64)
+                if raw_unit_w_meta is not None
+                else np.ones(precomp["n_units"], dtype=np.float64)
+            )
+            survey_metadata = compute_survey_metadata(_unit_resolved_meta, raw_w_unit)
+
         if len(post_gt) == 0:
             warnings.warn(
                 "No post-treatment (g,t) cells available for aggregation. "
@@ -1118,29 +1145,9 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
                 ):
                     _survey_df = 0
 
-                # Recompute survey_metadata from unit-level design so reported
-                # effective_n/n_psu/df_survey match the inference actually run
-                _unit_resolved = analytic.get("unit_resolved")
-                if _unit_resolved is not None:
-                    from diff_diff.survey import compute_survey_metadata
-
-                    # Raw (pre-normalization) unit weights for metadata
-                    # provenance: compute_survey_metadata expects the
-                    # ORIGINAL scale (resolve() rescales pweights to mean 1,
-                    # so _unit_resolved.weights would misreport sum_weights/
-                    # weight_range; scale-invariant fields are unaffected
-                    # either way). ``raw_unit_w_meta`` was snapshotted from
-                    # pristine ``data`` before the df mutations; reindexing
-                    # to ``all_units`` (the dose-filtered unit order that
-                    # built unit_resolved) keeps alignment — survey weights
-                    # are unit-constant (validated at resolve time).
-                    assert survey_design is not None
-                    raw_w_unit = (
-                        raw_unit_w_meta.reindex(precomp["all_units"]).to_numpy(dtype=np.float64)
-                        if raw_unit_w_meta is not None
-                        else np.ones(precomp["n_units"], dtype=np.float64)
-                    )
-                    survey_metadata = compute_survey_metadata(_unit_resolved, raw_w_unit)
+                # (Unit-level survey_metadata is recomputed once for ALL
+                # arms before the post_gt split; only the replicate-df
+                # propagation below is analytic-arm-specific.)
 
                 # Propagate replicate df override to survey_metadata for display
                 # (but not the df=0 sentinel — keep metadata as None for undefined df)
@@ -1270,6 +1277,15 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
             rank_deficient_action=self.rank_deficient_action,
             event_study_effects=event_study_effects,
             survey_metadata=survey_metadata,
+            # Per-row ES df provenance (M-092 completion): the survey df the
+            # ES rows' safe_inference used. None when no ES surface was
+            # built, on bootstrap fits (_survey_df stays None there), on
+            # non-survey fits, and for the replicate-undefined 0 sentinel.
+            event_study_df=(
+                float(_survey_df)
+                if (event_study_effects is not None and _survey_df is not None and _survey_df > 0)
+                else None
+            ),
         )
         # Post-fit aggregation kit (row M-025): attached on EVERY fit;
         # scalars-only on bootstrap fits (the ES route fails closed there).

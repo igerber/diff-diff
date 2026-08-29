@@ -2116,6 +2116,7 @@ Per-horizon event-study results container for `HeterogeneousAdoptionDiD`'s event
 | `cband_crit_value` | `float | None` | Sup-t critical value used for the simultaneous band |
 | `cband_method` | `str | None` | `"multiplier_bootstrap"` (weighted/survey band) or `"cluster_multiplier_bootstrap"` (clustered band) when populated |
 | `cband_n_bootstrap` | `int | None` | Bootstrap iterations used for the band |
+| `event_study_df` | `float | None` | Scalar survey df governing every horizon's t-inference (the unit-level design's `df_survey`); `None` on non-survey fits. Threaded into the unified container's per-row `df` column via `_from_had` |
 
 **Methods:** `summary()`, `print_summary()`, `to_dict()`, `to_dataframe()`, `aggregate(type, ...)` (M-027 pure view: `'event_study'` only - the unified `EventStudyResults` container via the `_from_had` passthrough, cband fields included; no kit; `'simple'` needs a two-period fit - no overall WAS is stored here)
 
