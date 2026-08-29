@@ -411,6 +411,8 @@ class TestGuardrailPhrases:
         # The review-round P1: the guard below excludes docstrings, so the
         # module docstring itself must also carry the classifier contract
         # (predict_proba), never the bare fit()/predict() shorthand.
+        if not GENERATOR.exists():
+            pytest.skip(f"{GENERATOR} not available in this CI environment.")
         tree = ast.parse(GENERATOR.read_text(encoding="utf-8"))
         doc = ast.get_docstring(tree) or ""
         assert "predict_proba()" in doc
