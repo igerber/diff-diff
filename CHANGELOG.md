@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [3.11.0] - 2026-08-29
 
 ### Added
+- **DMLDiD tutorial notebook** (`docs/tutorials/32_dml_did.ipynb`): authored via the
+  numbers-locked workflow (companion drift test `tests/test_t32_dml_did_drift.py`).
+  A staggered panel with engineered nonlinear confounding motivates the estimator:
+  the misspecified linear outcome learner misses by ~5 SE while the sieve and a
+  hand-rolled duck-typed `PolynomialRidge` learner recover the truth via double
+  robustness; also covers cross-fitting diagnostics, event-study/group aggregation,
+  HonestDiD, bootstrap sup-t bands, the `panel=False` repeated-cross-section lane
+  with a `SurveyDesign`, and seed semantics.
 - **`DMLDiD` survey-design and cluster support (both lanes)**: `fit()` gains
   `survey_design=` (pweight-only full-design TSL — weights/strata/PSU/FPC)
   and the constructor gains `cluster=` (coarser-than-unit clustering). A

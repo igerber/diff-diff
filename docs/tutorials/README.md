@@ -173,6 +173,19 @@ Executed end-to-end against the real framework: a geo-holdout launch experiment 
 - Requires `pip install "google-meridian==1.8.0"` on Python 3.12 (this tutorial only); cannot share an environment with the PyMC-Marketing tutorial (conflicting `arviz` pins); fully self-contained data
 - Companion drift-test file (`tests/test_t30_mmm_calibration_meridian_drift.py`)
 
+### 31. LWDiD Rolling Transformations (`31_lwdid.ipynb`)
+Lee & Wooldridge (2026) rolling-transformation DiD: demeaning (Procedure 2.1) and detrending (Procedure 3.1) turn the panel into a cross-section with exact small-sample t inference:
+- Prop 99 (common timing, one treated unit) and Walmart entry (staggered) replications
+- Cluster-robust and wild-bootstrap inference, randomization tests, transformation diagnostics
+- Companion drift-test file (`tests/test_t31_lwdid_drift.py`)
+
+### 32. Double ML DiD (`32_dml_did.ipynb`)
+Chang (2020) double/debiased machine learning DiD: cross-fitted ML nuisances on a staggered panel with engineered nonlinear confounding:
+- The bias demo: a misspecified linear outcome learner misses by almost five standard errors while the adaptive sieve and a hand-rolled duck-typed `PolynomialRidge` learner recover the truth (double robustness in action)
+- Cross-fitting diagnostics, event-study/group aggregation, HonestDiD sensitivity, bootstrap sup-t bands
+- The repeated-cross-section lane (`panel=False`) with a `SurveyDesign` (PSU-cohesive folds, design-df t inference)
+- Companion drift-test file (`tests/test_t32_dml_did_drift.py`)
+
 ## Running the Notebooks
 
 1. Install diff-diff with dependencies:

@@ -988,6 +988,8 @@ sources:
       - path: docs/index.rst
         section: "Supported Estimators (one-line catalog row)"
         type: user_guide
+      - path: docs/tutorials/32_dml_did.ipynb
+        type: tutorial
 
   diff_diff/dml_did_results.py:
     drift_risk: low
@@ -998,6 +1000,8 @@ sources:
         section: "DMLDiD"
         type: methodology
         note: "DMLDiDResults subclasses CallawaySantAnnaResults (kit-based post-fit aggregate(), bootstrap replay); adds learner/fold/cross-fit provenance and the seed/n_bootstrap/bootstrap_weights/cband inference-provenance fields."
+      - path: docs/tutorials/32_dml_did.ipynb
+        type: tutorial
 
   # ── TROP (trop group) ──────────────────────────────────────────────
 
@@ -1454,6 +1458,8 @@ sources:
         section: "Cross-fitting, DR-score, and ridge infrastructure (DML)"
         type: methodology
         note: "Duck-typed learner protocol (RegressorLearner/ClassifierLearner Protocols, validate_learner, _validate_predictions) + native learners (LinearLearner/RidgeLearner/LogitLearner/SieveLearner) wrapping linalg solvers. Contracts documented in REGISTRY: raw-X-no-intercept input, fit-reset semantics (documented limitation for stateful user learners), identified-columns prediction under rank deficiency."
+      - path: docs/tutorials/32_dml_did.ipynb
+        type: tutorial
 
   diff_diff/_dr_scores.py:
     drift_risk: low

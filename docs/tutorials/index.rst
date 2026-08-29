@@ -1,5 +1,5 @@
 .. meta::
-   :description: Hands-on diff-diff tutorials — 31 Jupyter notebooks covering basic 2x2 DiD, staggered adoption, synthetic DiD, power analysis, and business applications.
+   :description: Hands-on diff-diff tutorials — 33 Jupyter notebooks covering basic 2x2 DiD, staggered adoption, synthetic DiD, power analysis, and business applications.
    :keywords: DiD tutorial, difference-in-differences examples, causal inference notebooks
 
 Tutorials
@@ -245,6 +245,13 @@ Modern estimators for designs the basic toolkit cannot handle.
       Turn the panel into a cross-section, get exact small-sample
       inference, and replicate the Prop 99 and Walmart applications.
 
+   .. grid-item-card:: Double ML DiD (Chang 2020)
+      :link: 32_dml_did
+      :link-type: doc
+
+      Cross-fitted ML nuisances for nonlinear confounding - watch a
+      misspecified linear model fail where the sieve recovers the truth.
+
 
 .. toctree::
    :maxdepth: 1
@@ -262,6 +269,7 @@ Modern estimators for designs the basic toolkit cannot handle.
    Synthetic Control for Policy <25_synthetic_control_policy>
    Regression Discontinuity (RDD) <28_rdd_scholarship_illusion>
    LWDiD Rolling Transformations <31_lwdid>
+   Double ML DiD (Chang 2020) <32_dml_did>
 
 Study Design
 ------------

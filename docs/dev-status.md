@@ -170,7 +170,9 @@ Jupyter kernel (TensorFlow does not support the 3.14 dev environment):
 
 Both use the CI jobs' `diff_diff_dev.pth` shim (the repo root written into
 site-packages) instead of `pip install -e .` (the maturin build backend would
-demand a Rust build). Committed notebooks stay kernelspec-free; every local
+demand a Rust build). Committed notebooks carry either no kernelspec or the
+plain `python3` one (10 of 33 carry it; the t31/t32 drift tests pin `python3`
+where present) - never a machine-local venv kernel name; every local
 execution names the kernel explicitly (`--nbmake-kernel=...` /
 `nbconvert --ExecutePreprocessor.kernel_name=...`) - never the default
 `python3` kernel. Fragile edge: google-meridian pins an exact `tfp-nightly`
