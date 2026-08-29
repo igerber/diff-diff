@@ -1054,7 +1054,12 @@ class DMLCarouselPDF(FPDF):
         self.set_xy(left_x + 8, y0 + 82)
         self.set_font("Helvetica", "B", 15)
         self.set_text_color(*GRAPHITE)
-        self.multi_cell(col_w - 16, 8.5, "Bring any learner:\nfit() / predict().", align="C")
+        self.multi_cell(
+            col_w - 16,
+            8.5,
+            "Bring your own learners:\nregressors fit() / predict(),\nclassifiers predict_proba().",
+            align="C",
+        )
 
         rx = left_x + col_w + gap
         self._shadow_rect(rx, y0, col_w, col_h)
@@ -1110,8 +1115,8 @@ class DMLCarouselPDF(FPDF):
         self.multi_cell(
             WIDTH - 68,
             8.5,
-            "Or bring your own: scikit-learn estimators already fit the\n"
-            "fit() / predict() contract.",
+            "Or bring your own: scikit-learn regressors already fit the fit() /\n"
+            "predict() contract - classifiers add predict_proba().",
             align="C",
         )
         self.add_footer()

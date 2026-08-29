@@ -205,10 +205,10 @@ class TestEstimatesMatchNotebook:
         assert str(c["N_NEVER"]) in nb_output
         code = _notebook_code(NB)
         assert f"n_units, periods = {c['N_UNITS']}," in code
-        for g in c["COHORTS"]:
-            assert (
-                f"np.where(early, {c['COHORTS'][0]}, {c['COHORTS'][1]})" in code or str(g) in code
-            )
+        # exact cohort-construction expression (review round: a bare
+        # str(g)-in-code fallback was vacuous - single digits occur
+        # everywhere)
+        assert f"np.where(early, {c['COHORTS'][0]}, {c['COHORTS'][1]})" in code
 
     def test_survey_provenance_line(self, deck_constants, nb_output):
         c = deck_constants
@@ -407,7 +407,11 @@ class TestGuardrailPhrases:
         # slides: built-ins + no-extra-installs on slide 8, the sklearn
         # contract line on the code slide.
         assert "no extra installs" in slide_strings["slide_08_when"]
-        assert "scikit-learn estimators already fit the" in slide_strings["slide_08_when"]
+        assert "scikit-learn regressors already fit the" in slide_strings["slide_08_when"]
+        # the propensity contract is predict_proba, not predict - both
+        # contracts must be stated (review round 2 P2)
+        assert "predict_proba()" in slide_strings["slide_08_when"]
+        assert "classifiers" in slide_strings["slide_08_when"]
         assert "sklearn fits the contract" in slide_strings["slide_09_code"]
 
     def test_tutorial_referenced_once_on_cta(self, visible_strings):
