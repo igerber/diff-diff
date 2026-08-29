@@ -1397,6 +1397,20 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
             apply_bootstrap_group_overrides(group_effects, bootstrap_results, self.alpha)
 
         # ----- Build results -----
+        # Raw (pre-normalization) unit weights for the metadata recompute:
+        # compute_survey_metadata expects the ORIGINAL scale (resolve()
+        # rescales pweights to mean 1, so the resolved unit weights would
+        # misreport sum_weights/weight_range; scale-invariant fields are
+        # unaffected either way).
+        raw_unit_w_meta: Optional[np.ndarray] = None
+        if self._unit_resolved_survey is not None:
+            assert survey_design is not None
+            raw_obs_w_meta = (
+                data[survey_design.weights].values.astype(np.float64)
+                if survey_design.weights
+                else np.ones(len(data), dtype=np.float64)
+            )
+            raw_unit_w_meta = raw_obs_w_meta[self._unit_first_panel_row]
         self.results_ = EfficientDiDResults(
             group_time_effects=group_time_effects,
             overall_att=overall_att,
@@ -1452,7 +1466,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
             kernel_bandwidth=self.kernel_bandwidth,
             omega_ridge=self.omega_ridge,
             survey_metadata=(
-                self._recompute_unit_survey_metadata(survey_metadata)
+                self._recompute_unit_survey_metadata(survey_metadata, raw_unit_w_meta)
                 if survey_metadata is not None
                 else None
             ),
@@ -1483,14 +1497,22 @@ class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseE
         self.is_fitted_ = True
         return self.results_
 
-    def _recompute_unit_survey_metadata(self, panel_metadata):
-        """Recompute survey metadata from unit-level design if available."""
+    def _recompute_unit_survey_metadata(self, panel_metadata, raw_unit_weights=None):
+        """Recompute survey metadata from unit-level design if available.
+
+        ``raw_unit_weights`` carries the ORIGINAL-scale (pre-normalization)
+        unit weights and MUST be passed whenever ``_unit_resolved_survey``
+        is set — never fall back to ``_unit_resolved_survey.weights``, which
+        resolve() rescaled to mean 1 and would misreport sum_weights/
+        weight_range (scale-invariant fields are unaffected either way).
+        """
         if self._unit_resolved_survey is not None:
             from diff_diff.survey import compute_survey_metadata
 
+            assert raw_unit_weights is not None
             meta = compute_survey_metadata(
                 self._unit_resolved_survey,
-                self._unit_resolved_survey.weights,
+                raw_unit_weights,
             )
             # Propagate effective replicate df if available
             # (but not the df=0 sentinel — keep metadata as None for undefined df)

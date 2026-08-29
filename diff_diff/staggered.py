@@ -2406,10 +2406,31 @@ class CallawaySantAnna(
         if resolved_survey is not None and survey_metadata is not None:
             resolved_survey_unit = precomputed.get("resolved_survey_unit")
             if resolved_survey_unit is not None:
-                from diff_diff.survey import compute_survey_metadata
+                from diff_diff.survey import (
+                    _extract_unit_survey_weights,
+                    compute_survey_metadata,
+                )
 
-                unit_w = resolved_survey_unit.weights
-                survey_metadata = compute_survey_metadata(resolved_survey_unit, unit_w)
+                # Raw (pre-normalization) weights for metadata provenance:
+                # compute_survey_metadata expects the ORIGINAL scale
+                # (resolve() rescales pweights to mean 1, so the resolved
+                # weights would misreport sum_weights/weight_range; the
+                # scale-invariant fields — effective_n, design_effect, df —
+                # are unaffected either way). Read from ``data``: ``df``
+                # has first_treat/_never_treated overwritten by this point.
+                assert survey_design is not None
+                if precomputed.get("is_panel", True):
+                    raw_unit_w = _extract_unit_survey_weights(
+                        data, unit, survey_design, precomputed["all_units"]
+                    )
+                else:
+                    # RC lane: resolved_survey_unit is per-observation.
+                    raw_unit_w = (
+                        data[survey_design.weights].values.astype(np.float64)
+                        if survey_design.weights
+                        else np.ones(len(data), dtype=np.float64)
+                    )
+                survey_metadata = compute_survey_metadata(resolved_survey_unit, raw_unit_w)
 
         # Survey df for safe_inference calls — use the unit-level resolved
         # survey df computed in _precompute_structures for consistency.

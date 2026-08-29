@@ -295,8 +295,20 @@ class _StaggeredTripleDiffEngineMixin:
             if resolved_survey is not None and survey_metadata is not None:
                 resolved_survey_unit = precomputed.get("resolved_survey_unit")
                 if resolved_survey_unit is not None:
-                    unit_w = resolved_survey_unit.weights
-                    survey_metadata = compute_survey_metadata(resolved_survey_unit, unit_w)
+                    from diff_diff.survey import _extract_unit_survey_weights
+
+                    # Raw (pre-normalization) unit weights for metadata
+                    # provenance: compute_survey_metadata expects the ORIGINAL
+                    # scale (resolve() rescales pweights to mean 1, so the
+                    # resolved weights would misreport sum_weights/
+                    # weight_range; scale-invariant fields are unaffected
+                    # either way). Read from ``data``: ``df`` has first_treat
+                    # overwritten by this point.
+                    assert survey_design is not None
+                    raw_unit_w = _extract_unit_survey_weights(
+                        data, unit, survey_design, precomputed["all_units"]
+                    )
+                    survey_metadata = compute_survey_metadata(resolved_survey_unit, raw_unit_w)
 
             # Survey df for t-distribution critical values
             df_survey = precomputed.get("df_survey")

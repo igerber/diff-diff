@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`survey_metadata` raw-scale provenance on the unit-level recompute**
+  (CallawaySantAnna panel + repeated-cross-section lanes,
+  `TripleDifference`/`StaggeredTripleDifference` staggered engine,
+  `ContinuousDiD` analytical branch, `EfficientDiD`): the recompute passed
+  the RESOLVED (mean-1 rescaled) weights as `compute_survey_metadata`'s
+  raw weights, so `sum_weights`/`weight_range` reported the normalized
+  scale instead of the user's original weight scale. They now report the
+  raw scale, matching every other estimator (DMLDiD got the pattern in
+  its survey PR). Metadata-provenance only: estimates, SEs, p-values,
+  CIs, `df_survey`, `n_strata`, `n_psu` are byte-identical, and
+  `effective_n`/`design_effect` are scale-invariant (unchanged within
+  floating-point round-off).
+
 ## [3.11.0] - 2026-08-29
 
 ### Added
