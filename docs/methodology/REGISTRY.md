@@ -779,7 +779,9 @@ DR score is self-normalized; the two are not interchangeable"):
 
 - **Note:** p̂ convention (documented deviation). Chang's arXiv text is
   internally contradictory about the fold-level scalar nuisance: the printed
-  algorithms show `p̂_k = (1/n)Σ_{i∈I_k^c} D_i` (an invalid normalizer) while
+  algorithms show `p̂_k = (1/n)Σ_{i∈I_k^c} D_i` — an invalid normalizer for
+  K > 2 (with n = N/K and |I_k^c| = N − n; at K = 2 the two sizes coincide,
+  so the printed formula IS a valid auxiliary-sample mean there) — while
   the Theorem 1-2 proofs use fold means over `I_k` (see the review's Gaps).
   The score functions take `p_hat` as a CALLER-supplied argument; the LIBRARY
   convention — adopted for `DMLDiD` and used in all fixtures — is the
@@ -789,8 +791,31 @@ DR score is self-normalized; the two are not interchangeable"):
   5.6e-17 vs `DoubleMLDID(score="observational",
   in_sample_normalization=False)` under doubleml 0.11.4 with shared folds)
   and asymptotic equivalence to both printed readings. The published
-  *Econometrics Journal* version has not yet been cross-checked against the
-  arXiv typo (tracked in DEFERRED.md).
+  *Econometrics Journal* version was cross-checked 2026-08-30 (doi:
+  10.1093/ectj/utaa001): Definition 3.1(b) prints the SAME
+  `p̂_k = (1/n)Σ_{i∈I_k^c} D_i` formula (and `λ̂_k` likewise), so the
+  algorithm-vs-proof contradiction survives peer review unchanged. The
+  author's replication code (github.com/NengChiehChang/Diff-in-Diff,
+  commit `e93773d1c5ed`, inspected 2026-08-30; it fixes k = 2, so its own
+  printed-formula reading is self-consistent) uses MIXED conventions:
+  `p̂_k = mean(D)` over the propensity-TRIMMED evaluation fold — the
+  proofs' `E_{n,k}[D]` form, modulo trimming (`RO_Algorithm.R:70`,
+  `RCS_Algorithm.R:78`) — while `λ̂_k = mean(T)` over the AUXILIARY
+  sample (`RCS_Algorithm.R:58`). The √N-equivalence claim applies only to
+  the UNTRIMMED readings (main-fold, auxiliary-sample, global share). The
+  code's two extra operations are distinct and separately caveated:
+  (i) it DROPS rows with fitted ĝ outside (0.05, 0.95) before averaging,
+  which targets a propensity-trimmed-population ATT unless the trimming
+  is asymptotically inactive; (ii) the RCS score additionally applies a
+  one-sided REALIZED-SCORE-dependent deletion (`s = s[s < abs(min(s))]`,
+  `RCS_Algorithm.R:79`), an outcome-dependent truncation with NO
+  established estimand or covering variance theorem. The code is
+  consulted here ONLY to identify the scalar-normalizer placement, never
+  as an oracle for the complete estimator. The library
+  KEEPS the global full-sample share (exact DoubleML parity, documented
+  deviation — now from the author's code as well as the printed
+  algorithm; full cross-check log in
+  `docs/methodology/papers/chang-2020-review.md`).
 
 **Cross-fitting (`_crossfit.py`)** — DML2-style unit-level K-fold machinery:
 `assign_folds` captures the generator's bit-generator state BY VALUE before
@@ -864,7 +889,7 @@ double-weight).
   `benchmarks/doubleml/chang_rcs_characterization.py` documents the
   divergence for the shipped Case 2 lane), `DoubleMLDIDMulti` for Chang
   Case 3.
-- R: none for Chang's estimator; `DRDID::drdid_panel` for the SZ score.
+- R: the author's replication code (github.com/NengChiehChang/Diff-in-Diff, commit `e93773d1c5ed`, k=2 scripts `RO_Algorithm.R`/`RCS_Algorithm.R`) — an EQUATION-LEVEL reference only, not a numerical oracle (mixed p̂/λ̂ normalization, propensity row-dropping, an RCS score-dependent deletion, and no packaged variance conventions; see the p̂ convention Note); `DRDID::drdid_panel` for the SZ score.
 
 ---
 
