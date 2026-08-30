@@ -125,12 +125,26 @@ def _valid_fragment_name(name):
     return True
 
 
+_UNRELEASED_HEADER_RE = re.compile(r"^## \[Unreleased\]\s*$", flags=re.MULTILINE)
+
+
+def _unreleased_headers(changelog_text):
+    """All '## [Unreleased]' header matches, in file order."""
+    return list(_UNRELEASED_HEADER_RE.finditer(changelog_text))
+
+
 def _unreleased_slice(changelog_text):
-    """Return (start, end) character offsets of the Unreleased section body
-    (after the header line, up to the next '## ' line), or None."""
-    m = re.search(r"^## \[Unreleased\]\s*$", changelog_text, flags=re.MULTILINE)
-    if not m:
+    """Return (start, end) character offsets of the FIRST Unreleased section
+    body (after the header line, up to the next '## ' line), or None.
+
+    Callers must separately enforce that exactly one Unreleased header
+    exists (run_check does) — a duplicate header would otherwise hide its
+    body from this slice.
+    """
+    headers = _unreleased_headers(changelog_text)
+    if not headers:
         return None
+    m = headers[0]
     nl = changelog_text.find("\n", m.start())
     if nl == -1:
         # Header is the last line with no trailing newline: empty body.
@@ -165,19 +179,39 @@ def run_check(root):
                     "YYYYMMDD-<kebab-slug>.md with a real calendar date"
                 )
                 continue
+            # lstat-level guard BEFORE any read: a symlink's content is
+            # mutable out-of-band, and a FIFO/device would hang or crash the
+            # read; neither can be certified.
+            if p.is_symlink() or not p.is_file():
+                findings.append(f"changelog.d/{p.name}: not a regular file (symlink or special)")
+                continue
+            try:
+                text = p.read_text()
+            except (OSError, UnicodeDecodeError) as exc:
+                findings.append(f"changelog.d/{p.name}: unreadable ({exc})")
+                continue
             fragments.append(p)
-            _, errors = _parse_fragment(p.read_text())
+            _, errors = _parse_fragment(text)
             findings.extend(f"changelog.d/{p.name}: {e}" for e in errors)
 
     changelog = root / "CHANGELOG.md"
     if not changelog.is_file():
         findings.append("CHANGELOG.md is missing")
     else:
-        sl = _unreleased_slice(changelog.read_text())
-        if sl is None:
+        changelog_text = changelog.read_text()
+        headers = _unreleased_headers(changelog_text)
+        if not headers:
             findings.append("CHANGELOG.md: '## [Unreleased]' header is missing")
+        elif len(headers) > 1:
+            findings.append(
+                f"CHANGELOG.md: {len(headers)} '## [Unreleased]' headers found "
+                "— exactly one is allowed (a duplicate section would hide "
+                "direct edits from the pointer-only guard)"
+            )
         else:
-            body = changelog.read_text()[sl[0] : sl[1]]
+            sl = _unreleased_slice(changelog_text)
+            assert sl is not None
+            body = changelog_text[sl[0] : sl[1]]
             nonblank = [ln for ln in body.splitlines() if ln.strip()]
             if nonblank != [POINTER_COMMENT]:
                 findings.append(

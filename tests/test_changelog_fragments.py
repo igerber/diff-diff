@@ -228,6 +228,36 @@ class TestCheck:
         root = make_repo(tmp_path, changelog=MINIMAL_CHANGELOG.replace("## [Unreleased]\n", ""))
         assert any("Unreleased" in f for f in check_findings(mod, root))
 
+    def test_check_rejects_symlink_fragment_before_reading(self, mod, tmp_path):
+        # A symlink at a fragment path must be a finding at check level (CI),
+        # not just at compile time — its target is mutable out-of-band.
+        root = make_repo(tmp_path)
+        target = root / "real-content.md"
+        target.write_text(GOOD_FRAGMENT)
+        (root / "changelog.d" / "20260830-x.md").symlink_to(target)
+        assert any("not a regular file" in f for f in check_findings(mod, root))
+
+    def test_check_rejects_dangling_symlink_without_crashing(self, mod, tmp_path):
+        root = make_repo(tmp_path)
+        (root / "changelog.d" / "20260830-x.md").symlink_to(root / "does-not-exist.md")
+        assert any("not a regular file" in f for f in check_findings(mod, root))
+
+    def test_check_rejects_undecodable_fragment(self, mod, tmp_path):
+        root = make_repo(tmp_path)
+        (root / "changelog.d" / "20260830-x.md").write_bytes(b"### Fixed\n- \xff\xfe junk\n")
+        assert any("unreadable" in f for f in check_findings(mod, root))
+
+    def test_duplicate_unreleased_headers_fail(self, mod, tmp_path):
+        # A second '## [Unreleased]' section could carry direct bullets that
+        # the first-match slice never inspects; exactly one header is allowed.
+        changelog = MINIMAL_CHANGELOG.replace(
+            "## [1.2.0] - 2026-01-15\n",
+            "## [Unreleased]\n\n### Added\n- smuggled direct bullet\n\n"
+            "## [1.2.0] - 2026-01-15\n",
+        )
+        root = make_repo(tmp_path, changelog=changelog)
+        assert any("exactly one is allowed" in f for f in check_findings(mod, root))
+
     def test_eof_only_unreleased_header_is_finding_not_traceback(self, mod, tmp_path):
         # File ending exactly at the header with no trailing newline must
         # produce a validation finding, not a ValueError.
@@ -350,6 +380,18 @@ class TestCompile:
         changelog = MINIMAL_CHANGELOG.replace("## [1.2.0] - 2026-01-15", "## [1.2.0] - 2026-99-99")
         root = make_repo(tmp_path, changelog=changelog)
         assert run_compile(mod, root, version="1.2.0") == 1
+
+    def test_compile_refuses_duplicate_unreleased_headers(self, mod, tmp_path):
+        # check runs as compile's first step, so a duplicate Unreleased
+        # section blocks compilation before any insertion or deletion.
+        changelog = MINIMAL_CHANGELOG.replace(
+            "## [1.2.0] - 2026-01-15\n",
+            "## [Unreleased]\n\n### Added\n- smuggled direct bullet\n\n"
+            "## [1.2.0] - 2026-01-15\n",
+        )
+        root = make_repo(tmp_path, changelog=changelog, fragments={"20260830-x.md": GOOD_FRAGMENT})
+        assert run_compile(mod, root) == 1
+        assert (root / "changelog.d" / "20260830-x.md").exists()
 
     def test_exit4_target_header_at_eof_is_error_not_traceback(self, mod, tmp_path):
         # An existing target header ending the file with no trailing newline
