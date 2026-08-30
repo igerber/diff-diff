@@ -15,7 +15,12 @@ import pandas as pd
 from diff_diff.aggregation import AggregationMixin, AggregationResult
 from diff_diff.continuous_did_aggregation import _ContinuousDiDAggregationMixin
 from diff_diff.results import _format_survey_block, _get_significance_stars
-from diff_diff.results_base import BaseResults, build_event_study_surface
+from diff_diff.results_base import (
+    _SUMMARY_ALPHA_MESSAGE,
+    BaseResults,
+    _require_fit_alpha,
+    build_event_study_surface,
+)
 from diff_diff.utils import safe_inference
 
 __all__ = ["ContinuousDiDResults", "DoseResponseCurve"]
@@ -258,8 +263,17 @@ class ContinuousDiDResults(BaseResults, AggregationMixin):
         return self.overall_att_se / abs(self.overall_att)
 
     def summary(self, alpha: Optional[float] = None) -> str:
-        """Generate formatted summary."""
-        alpha = alpha or self.alpha
+        """Generate formatted summary.
+
+        Parameters
+        ----------
+        alpha : float, optional
+            Accepted for signature uniformity. The stored intervals were
+            computed at fit time; a value different from the stored
+            ``alpha`` raises ValueError rather than silently recomputing
+            or relabeling. Re-fit at the desired alpha instead.
+        """
+        alpha = _require_fit_alpha(alpha, self.alpha, message=_SUMMARY_ALPHA_MESSAGE)
         conf_level = int((1 - alpha) * 100)
         w = 85
 

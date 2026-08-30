@@ -1,11 +1,24 @@
 """Continuous DiD visualization functions (dose-response curves)."""
 
+import numbers
+import warnings
 from typing import TYPE_CHECKING, Any, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 if TYPE_CHECKING:
     from diff_diff.continuous_did_results import ContinuousDiDResults, DoseResponseCurve
+
+
+def _coverage_label(alpha: float) -> str:
+    """Exact coverage label: '97.5% CI' for alpha=0.025, '95% CI' for 0.05.
+
+    Rounds to 6 decimals first so a float32-noised alpha (0.0500000007...)
+    still reads 95 rather than 94.9999999255, then trims trailing zeros.
+    """
+    level = round(100.0 * (1.0 - float(alpha)), 6)
+    return f"{level:g}% CI"
 
 
 def plot_dose_response(
@@ -14,7 +27,7 @@ def plot_dose_response(
     curve: Optional["DoseResponseCurve"] = None,
     data: Optional[pd.DataFrame] = None,
     target: str = "att",
-    alpha: float = 0.05,
+    alpha: Optional[float] = None,
     figsize: Tuple[float, float] = (10, 6),
     title: Optional[str] = None,
     xlabel: str = "Dose",
@@ -41,11 +54,20 @@ def plot_dose_response(
         A DoseResponseCurve object directly.
     data : pd.DataFrame, optional
         DataFrame with columns ``dose``, ``effect``, ``se`` (and optionally
-        ``conf_int_lower``, ``conf_int_upper``).
+        ``conf_int_lower``, ``conf_int_upper``). Rows whose ``se`` is
+        non-positive or non-finite carry no defined interval: their band is
+        masked (with a warning) rather than drawn zero-width.
     target : str, default="att"
         Which dose-response curve: ``"att"`` or ``"acrt"``.
-    alpha : float, default=0.05
-        Significance level for confidence intervals (used with DataFrame input).
+    alpha : float, optional
+        Significance level for the reconstructed band on DataFrame-``se``
+        input ONLY (default 0.05 there; must be strictly inside (0, 1)).
+        Stored (``results=``/``curve=``) and explicit-CI intervals keep the
+        level they were built at — an explicitly passed ``alpha`` warns and
+        is ignored on those inputs. The band legend states the level where
+        it is knowable (the requested alpha on the ``se`` branch,
+        ``results.alpha`` on ``results=`` input) and the level-free "CI"
+        otherwise.
     figsize : tuple, default=(10, 6)
         Figure size (width, height) in inches.
     title : str, optional
@@ -86,6 +108,41 @@ def plot_dose_response(
         else:
             raise ValueError(f"target must be 'att' or 'acrt', got '{target}'")
 
+    # ``alpha`` constructs an interval ONLY on the DataFrame-``se`` branch;
+    # everywhere else the band's level is fixed by how it was built, so an
+    # explicitly passed alpha is a no-op — warn instead of silently ignoring.
+    se_branch = (
+        data is not None
+        and "se" in data.columns
+        and not ("conf_int_lower" in data.columns and "conf_int_upper" in data.columns)
+    )
+    if alpha is not None and not se_branch:
+        warnings.warn(
+            "alpha= only applies to DataFrame input with an 'se' column; the "
+            "displayed band keeps its stored/unknown confidence level.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    # Band legend: state the level only where it is knowable.
+    resolved_alpha = 0.05 if alpha is None else alpha
+    if se_branch:
+        if not 0.0 < resolved_alpha < 1.0:
+            raise ValueError(f"alpha must be strictly between 0 and 1, got {resolved_alpha}")
+        ci_label = _coverage_label(resolved_alpha)
+    elif results is not None:
+        fit_alpha = getattr(results, "alpha", None)
+        # numbers.Real (not (int, float)): np.float32 etc. are real numeric
+        # fit alphas too; the (0, 1) range check excludes bools.
+        if isinstance(fit_alpha, numbers.Real) and 0.0 < float(fit_alpha) < 1.0:
+            ci_label = _coverage_label(fit_alpha)
+        else:
+            ci_label = "CI"
+    else:
+        # Bare curve= (DoseResponseCurve carries no alpha) or explicit-CI /
+        # CI-less DataFrame input: no knowable level.
+        ci_label = "CI"
+
     if curve is not None:
         # Infer target from curve when passed directly (not via results)
         if results is None and hasattr(curve, "target") and curve.target:
@@ -103,9 +160,22 @@ def plot_dose_response(
             ci_lower = data["conf_int_lower"].values
             ci_upper = data["conf_int_upper"].values
         elif "se" in data.columns:
-            z = scipy_stats.norm.ppf(1 - alpha / 2)
-            ci_lower = effects - z * data["se"].values
-            ci_upper = effects + z * data["se"].values
+            se = np.asarray(data["se"].values, dtype=float)
+            invalid = ~(np.isfinite(se) & (se > 0))
+            z = scipy_stats.norm.ppf(1 - resolved_alpha / 2)
+            ci_lower = np.asarray(effects - z * se, dtype=float)
+            ci_upper = np.asarray(effects + z * se, dtype=float)
+            if invalid.any():
+                # A zero/negative/non-finite SE carries no defined interval:
+                # masking beats drawing a zero-width band asserting certainty.
+                warnings.warn(
+                    f"{int(invalid.sum())} row(s) with non-positive or "
+                    "non-finite 'se' have no confidence band.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                ci_lower[invalid] = np.nan
+                ci_upper[invalid] = np.nan
         else:
             ci_lower = None
             ci_upper = None
@@ -125,6 +195,7 @@ def plot_dose_response(
             effects=effects,
             ci_lower=ci_lower,
             ci_upper=ci_upper,
+            ci_label=ci_label,
             title=title,
             xlabel=xlabel,
             ylabel=ylabel,
@@ -139,6 +210,7 @@ def plot_dose_response(
         effects=effects,
         ci_lower=ci_lower,
         ci_upper=ci_upper,
+        ci_label=ci_label,
         figsize=figsize,
         title=title,
         xlabel=xlabel,
@@ -157,6 +229,7 @@ def _render_dose_response_mpl(
     effects,
     ci_lower,
     ci_upper,
+    ci_label,
     figsize,
     title,
     xlabel,
@@ -181,17 +254,22 @@ def _render_dose_response_mpl(
     if show_zero_line:
         ax.axhline(y=0, color="gray", linestyle="--", linewidth=1, alpha=0.5)
 
-    # Confidence band
+    # Confidence band. Skip entirely when no CI row is finite - an
+    # all-masked band would still register a stray legend entry.
     if ci_lower is not None and ci_upper is not None:
-        band_color = ci_color or color
-        ax.fill_between(
-            dose_grid,
-            ci_lower,
-            ci_upper,
-            alpha=0.15,
-            color=band_color,
-            label="95% CI",
+        finite_band = np.isfinite(np.asarray(ci_lower, dtype=float)) & np.isfinite(
+            np.asarray(ci_upper, dtype=float)
         )
+        if finite_band.any():
+            band_color = ci_color or color
+            ax.fill_between(
+                dose_grid,
+                ci_lower,
+                ci_upper,
+                alpha=0.15,
+                color=band_color,
+                label=ci_label,
+            )
 
     # Effect line
     ax.plot(dose_grid, effects, color=color, linewidth=2, label="Effect")
@@ -216,6 +294,7 @@ def _render_dose_response_plotly(
     effects,
     ci_lower,
     ci_upper,
+    ci_label,
     title,
     xlabel,
     ylabel,
@@ -239,21 +318,31 @@ def _render_dose_response_plotly(
     if show_zero_line:
         fig.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1, opacity=0.5)
 
-    # Confidence band
+    # Confidence band. A NaN vertex splits a fill="toself" polygon into
+    # independently-closed sub-polygons, so filter non-finite CI rows out
+    # before building the trace (the _event_study.py precedent - CI VALUES
+    # only, never the dose, which may be non-numeric) and skip the trace
+    # entirely when nothing survives (else an empty stray legend entry).
     if ci_lower is not None and ci_upper is not None:
-        band_color = ci_color or color
-        dose_list = list(dose_grid)
-        fig.add_trace(
-            go.Scatter(
-                x=dose_list + dose_list[::-1],
-                y=list(ci_upper) + list(ci_lower)[::-1],
-                fill="toself",
-                fillcolor=_color_to_rgba(band_color, 0.15),
-                line=dict(color="rgba(0,0,0,0)"),
-                name="95% CI",
-                hoverinfo="skip",
+        lo = np.asarray(ci_lower, dtype=float)
+        hi = np.asarray(ci_upper, dtype=float)
+        keep = np.isfinite(lo) & np.isfinite(hi)
+        if keep.any():
+            band_color = ci_color or color
+            dose_list = [d for d, k in zip(dose_grid, keep) if k]
+            hi_list = list(hi[keep])
+            lo_list = list(lo[keep])
+            fig.add_trace(
+                go.Scatter(
+                    x=dose_list + dose_list[::-1],
+                    y=hi_list + lo_list[::-1],
+                    fill="toself",
+                    fillcolor=_color_to_rgba(band_color, 0.15),
+                    line=dict(color="rgba(0,0,0,0)"),
+                    name=ci_label,
+                    hoverinfo="skip",
+                )
             )
-        )
 
     # Effect line
     fig.add_trace(

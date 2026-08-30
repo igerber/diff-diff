@@ -92,16 +92,35 @@ class BaseResults:
     __slots__ = ()
 
 
-def _require_fit_alpha(alpha: Optional[float], fit_alpha: float) -> float:
+# Family-wide non-staggered override for _require_fit_alpha: the staggered
+# default's rationale tail (bootstrap percentile intervals) is false for the
+# analytic-default siblings, so they share this accurate generic wording.
+# May use exactly the {alpha}/{fit_alpha} placeholders (helper-formatted).
+_SUMMARY_ALPHA_MESSAGE = (
+    "This result stores intervals computed at fit time (alpha={fit_alpha}); "
+    "summary() never recomputes or relabels stored inference "
+    "(requested alpha={alpha}); re-fit with the desired alpha."
+)
+
+
+def _require_fit_alpha(
+    alpha: Optional[float], fit_alpha: float, message: Optional[str] = None
+) -> float:
     """Reject a non-fit ``alpha``; summaries never recompute stored inference.
 
-    Shared by the staggered-family ``summary()`` methods (CallawaySantAnna
-    and siblings): stored intervals were computed at fit time, and bootstrap
-    percentile intervals cannot be reconstructed from the reported SE, so a
+    The family-wide ``summary()`` contract (staggered and non-staggered
+    results classes alike): stored intervals were computed at fit time, so a
     requested alpha other than the fit alpha raises instead of silently
-    relabeling the confidence-interval header.
+    relabeling the confidence-interval header. ``message`` replaces the
+    ENTIRE default error text for classes where the default rationale would
+    be inaccurate; overrides may use exactly the named placeholders
+    ``{alpha}`` and ``{fit_alpha}`` (this helper formats them — escape any
+    other literal brace as ``{{``/``}}``) and must keep the phrase
+    "never recomputes" (the family test pin).
     """
     if alpha is not None and alpha != fit_alpha:
+        if message is not None:
+            raise ValueError(message.format(alpha=alpha, fit_alpha=fit_alpha))
         raise ValueError(
             f"This result stores intervals computed at alpha={fit_alpha}; "
             f"summary() never recomputes or relabels stored inference "

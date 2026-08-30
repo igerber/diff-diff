@@ -1602,3 +1602,28 @@ class TestTripleDifferenceVcovType:
         assert res.vcov_type == "hc1"
         assert np.isfinite(res.att)
         assert np.isfinite(res.se)
+
+
+class TestSummaryAlphaContract:
+    """summary(alpha=...) never recomputes stored inference (M-146 family-wide)."""
+
+    @pytest.fixture
+    def alpha_fitted(self, simple_ddd_data):
+        return TripleDifference().fit(
+            simple_ddd_data,
+            outcome="outcome",
+            group="group",
+            partition="partition",
+            post="time",
+        )
+
+    @pytest.mark.parametrize("bad_alpha", [0.10, 0.0])
+    def test_summary_rejects_non_fit_alpha(self, alpha_fitted, bad_alpha):
+        with pytest.raises(ValueError, match="never recomputes") as exc:
+            alpha_fitted.summary(alpha=bad_alpha)
+        msg = str(exc.value)
+        assert "re-fit with the desired alpha" in msg
+        assert "bootstrap percentile" not in msg
+
+    def test_summary_accepts_fit_alpha(self, alpha_fitted):
+        assert alpha_fitted.summary(alpha=alpha_fitted.alpha) == alpha_fitted.summary()

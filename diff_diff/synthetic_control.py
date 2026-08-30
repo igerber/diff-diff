@@ -126,7 +126,10 @@ class SyntheticControl(BaseEstimator):
         standard deviation across donors+treated (ddof=1), matching R ``Synth``.
         ``"none"`` is a deviation from R (see REGISTRY).
     alpha : float, default 0.05
-        Significance level recorded for downstream (placebo) inference.
+        Significance level recorded on the results for signature
+        uniformity. Placebo and test-inversion entry points take their own
+        independent ``gamma``/``alpha`` arguments; the results
+        ``summary(alpha=)`` accepts only this stored value.
     seed : int, optional
         Seed for the multistart random (Dirichlet) starting points.
     v_cv_t0 : int, optional

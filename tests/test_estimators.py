@@ -4006,3 +4006,149 @@ class TestJointSpanCovariateSnap:
                 covariates=["xspan"],
             )
         assert res.att == pytest.approx(base.att, abs=1e-8)
+
+
+# ---------------------------------------------------------------------------
+# Family-wide summary(alpha=) contract (M-146 completion)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def did_alpha_fitted():
+    np.random.seed(11)
+    n = 40
+    rows = []
+    for unit in range(n):
+        for post in (0, 1):
+            rows.append(
+                {
+                    "unit": unit,
+                    "post": post,
+                    "treated": int(unit < n // 2),
+                    "outcome": np.random.normal() + 2.0 * (unit < n // 2) * post,
+                }
+            )
+    data = pd.DataFrame(rows)
+    return DifferenceInDifferences().fit(data, outcome="outcome", treatment="treated", time="post")
+
+
+@pytest.fixture(scope="module")
+def mpd_alpha_fitted():
+    np.random.seed(12)
+    n, t = 40, 6
+    rows = []
+    for unit in range(n):
+        for period in range(t):
+            rows.append(
+                {
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(unit < n // 2),
+                    "outcome": np.random.normal()
+                    + 0.3 * period
+                    + 1.5 * (unit < n // 2) * (period >= 3),
+                }
+            )
+    data = pd.DataFrame(rows)
+    return MultiPeriodDiD().fit(
+        data, outcome="outcome", treatment="treated", time="period", post_periods=[3, 4, 5]
+    )
+
+
+@pytest.fixture(scope="module")
+def sdid_alpha_fitted(ci_params):
+    np.random.seed(13)
+    n, t = 30, 8
+    rows = []
+    for unit in range(n):
+        ue = np.random.normal(0, 3)
+        for period in range(t):
+            rows.append(
+                {
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(unit < 5),
+                    "outcome": 10.0
+                    + ue
+                    + 0.5 * period
+                    + 5.0 * (unit < 5) * (period >= 4)
+                    + np.random.normal(0, 0.5),
+                }
+            )
+    data = pd.DataFrame(rows)
+    n_boot = ci_params.bootstrap(20)
+    return SyntheticDiD(n_bootstrap=n_boot, seed=42).fit(
+        data,
+        outcome="outcome",
+        treatment="treated",
+        unit="unit",
+        time="period",
+        post_periods=[4, 5, 6, 7],
+    )
+
+
+class TestSummaryAlphaContractNonStaggered:
+    """summary(alpha=...) never recomputes stored inference (M-146 family-wide).
+
+    A non-fit alpha raises instead of silently relabeling the
+    confidence-interval header over fit-time stored intervals; alpha=0.0
+    (previously swallowed by the falsy `alpha or self.alpha` idiom) raises
+    too. The five generic-message sites must emit the accurate shared
+    message, never the staggered default's bootstrap-percentile rationale.
+    """
+
+    @pytest.mark.parametrize("bad_alpha", [0.10, 0.0])
+    @pytest.mark.parametrize(
+        "fixture", ["did_alpha_fitted", "mpd_alpha_fitted", "sdid_alpha_fitted"]
+    )
+    def test_summary_rejects_non_fit_alpha(self, request, fixture, bad_alpha):
+        fitted = request.getfixturevalue(fixture)
+        with pytest.raises(ValueError, match="never recomputes") as exc:
+            fitted.summary(alpha=bad_alpha)
+        msg = str(exc.value)
+        assert "re-fit with the desired alpha" in msg
+        assert "bootstrap percentile" not in msg
+
+    @pytest.mark.parametrize(
+        "fixture", ["did_alpha_fitted", "mpd_alpha_fitted", "sdid_alpha_fitted"]
+    )
+    def test_summary_accepts_fit_alpha(self, request, fixture):
+        fitted = request.getfixturevalue(fixture)
+        assert fitted.summary(alpha=fitted.alpha) == fitted.summary()
+
+    def test_print_summary_relays_the_guard(self, did_alpha_fitted):
+        with pytest.raises(ValueError, match="never recomputes"):
+            did_alpha_fitted.print_summary(alpha=0.10)
+
+
+class TestRequireFitAlphaMessageOverride:
+    """The helper's message= override replaces the whole message; the default
+    stays byte-identical (staggered pins depend on it)."""
+
+    def test_default_message_unchanged(self):
+        from diff_diff.results_base import _require_fit_alpha
+
+        with pytest.raises(ValueError) as exc:
+            _require_fit_alpha(0.10, 0.05)
+        assert str(exc.value) == (
+            "This result stores intervals computed at alpha=0.05; "
+            "summary() never recomputes or relabels stored inference "
+            "(requested alpha=0.1). Re-fit with the desired alpha "
+            "(bootstrap percentile intervals cannot be reconstructed from "
+            "the reported SE)."
+        )
+
+    def test_message_override_replaces_and_formats(self):
+        from diff_diff.results_base import _require_fit_alpha
+
+        with pytest.raises(ValueError) as exc:
+            _require_fit_alpha(
+                0.10, 0.05, message="custom never recomputes a={alpha} f={fit_alpha}"
+            )
+        assert str(exc.value) == "custom never recomputes a=0.1 f=0.05"
+
+    def test_none_and_fit_alpha_pass(self):
+        from diff_diff.results_base import _require_fit_alpha
+
+        assert _require_fit_alpha(None, 0.05, message="x never recomputes") == 0.05
+        assert _require_fit_alpha(0.05, 0.05) == 0.05

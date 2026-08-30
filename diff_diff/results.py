@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from diff_diff.results_base import BaseResults
+from diff_diff.results_base import _SUMMARY_ALPHA_MESSAGE, BaseResults, _require_fit_alpha
 
 
 def _format_survey_block(sm, width: int) -> list:
@@ -188,15 +188,17 @@ class DiDResults(BaseResults):
         Parameters
         ----------
         alpha : float, optional
-            Significance level for confidence intervals. Defaults to the
-            alpha used during estimation.
+            Accepted for signature uniformity. The stored intervals were
+            computed at fit time; a value different from the stored
+            ``alpha`` raises ValueError rather than silently recomputing
+            or relabeling. Re-fit at the desired alpha instead.
 
         Returns
         -------
         str
             Formatted summary table.
         """
-        alpha = alpha or self.alpha
+        alpha = _require_fit_alpha(alpha, self.alpha, message=_SUMMARY_ALPHA_MESSAGE)
         conf_level = int((1 - alpha) * 100)
 
         lines = [
@@ -473,7 +475,12 @@ class SpilloverDiDResults(DiDResults):
 
     def summary(self, alpha: Optional[float] = None) -> str:
         """Extended summary with ATT row, per-event-time direct block, and
-        per-(ring, event-time) spillover block."""
+        per-(ring, event-time) spillover block.
+
+        ``alpha`` must equal the fit alpha (None = fit alpha): the inherited
+        guard raises on any other value rather than relabeling stored
+        intervals.
+        """
         base = super().summary(alpha=alpha)
         insert_blocks: List[str] = []
 
@@ -781,15 +788,17 @@ class MultiPeriodDiDResults(BaseResults):
         Parameters
         ----------
         alpha : float, optional
-            Significance level for confidence intervals. Defaults to the
-            alpha used during estimation.
+            Accepted for signature uniformity. The stored intervals were
+            computed at fit time; a value different from the stored
+            ``alpha`` raises ValueError rather than silently recomputing
+            or relabeling. Re-fit at the desired alpha instead.
 
         Returns
         -------
         str
             Formatted summary table.
         """
-        alpha = alpha or self.alpha
+        alpha = _require_fit_alpha(alpha, self.alpha, message=_SUMMARY_ALPHA_MESSAGE)
         conf_level = int((1 - alpha) * 100)
 
         lines = [
@@ -1279,15 +1288,17 @@ class SyntheticDiDResults(BaseResults):
         Parameters
         ----------
         alpha : float, optional
-            Significance level for confidence intervals. Defaults to the
-            alpha used during estimation.
+            Accepted for signature uniformity. The stored intervals were
+            computed at fit time; a value different from the stored
+            ``alpha`` raises ValueError rather than silently recomputing
+            or relabeling. Re-fit at the desired alpha instead.
 
         Returns
         -------
         str
             Formatted summary table.
         """
-        alpha = alpha or self.alpha
+        alpha = _require_fit_alpha(alpha, self.alpha, message=_SUMMARY_ALPHA_MESSAGE)
         conf_level = int((1 - alpha) * 100)
 
         lines = [

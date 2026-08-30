@@ -139,6 +139,7 @@ def dose_response_curve():
 def continuous_results(dose_response_curve):
     """Mock ContinuousDiDResults."""
     results = MagicMock()
+    results.alpha = 0.05  # real numeric fit alpha (drives the band label)
     results.dose_response_att = dose_response_curve
     acrt = MagicMock()
     acrt.dose_grid = np.array([1.0, 2.0, 3.0])
@@ -387,6 +388,133 @@ class TestPlotDoseResponse:
 
         with pytest.raises(ValueError, match="exactly one"):
             plot_dose_response(continuous_results, curve=dose_response_curve, show=False)
+
+    @staticmethod
+    def _band_vertices(ax):
+        import numpy as np
+
+        polys = [c for c in ax.collections if hasattr(c, "get_paths")]
+        if not polys:
+            return np.empty((0, 2))
+        return np.vstack([p.vertices for c in polys for p in c.get_paths()])
+
+    def test_invalid_se_rows_masked_with_warning(self):
+        """Zero/negative/non-finite se rows lose their band (not zero-width)
+        while the effect line keeps every row."""
+        from diff_diff import plot_dose_response
+
+        df = pd.DataFrame(
+            {
+                "dose": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+                "effect": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+                "se": [0.05, 0.0, np.nan, -0.1, np.inf, 0.06],
+            }
+        )
+        with pytest.warns(UserWarning, match="4 row\\(s\\) with non-positive or non-finite 'se'"):
+            ax = plot_dose_response(data=df, show=False)
+        verts = self._band_vertices(ax)
+        finite = verts[np.isfinite(verts).all(axis=1)]
+        for masked_x in (2.0, 3.0, 4.0, 5.0):
+            at_x = finite[np.isclose(finite[:, 0], masked_x)]
+            # No band interval may survive at a masked dose (degenerate
+            # single-y fill endpoints are tolerated; a real interval is not).
+            assert at_x.size == 0 or np.allclose(at_x[:, 1], at_x[0, 1])
+        # Effects untouched: the effect line still carries all six rows.
+        assert len(ax.lines[-1].get_xdata()) == 6
+
+    def test_valid_se_no_warning_and_alpha_bounds(self):
+        import warnings
+
+        from diff_diff import plot_dose_response
+
+        df = pd.DataFrame({"dose": [1.0, 2.0], "effect": [0.1, 0.2], "se": [0.05, 0.06]})
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            plot_dose_response(data=df, show=False)
+        for bad in (1.0, 0.0):
+            with pytest.raises(ValueError, match="strictly between 0 and 1"):
+                plot_dose_response(data=df, alpha=bad, show=False)
+
+    def test_band_labels_state_level_only_where_knowable(
+        self, continuous_results, dose_response_curve
+    ):
+        from diff_diff import plot_dose_response
+
+        def label_of(ax):
+            return [t.get_text() for t in ax.get_legend().get_texts()]
+
+        df_se = pd.DataFrame({"dose": [1.0, 2.0], "effect": [0.1, 0.2], "se": [0.05, 0.06]})
+        assert "90% CI" in label_of(plot_dose_response(data=df_se, alpha=0.10, show=False))
+        assert "95% CI" in label_of(plot_dose_response(data=df_se, show=False))
+        # results= carries a knowable level (results.alpha).
+        assert "95% CI" in label_of(plot_dose_response(continuous_results, show=False))
+        # Bare curve and explicit-CI input: level-free.
+        labels_curve = label_of(plot_dose_response(curve=dose_response_curve, show=False))
+        assert "CI" in labels_curve and "95% CI" not in labels_curve
+        df_ci = pd.DataFrame(
+            {
+                "dose": [1.0, 2.0],
+                "effect": [0.1, 0.2],
+                "conf_int_lower": [0.0, 0.1],
+                "conf_int_upper": [0.2, 0.3],
+            }
+        )
+        labels_ci = label_of(plot_dose_response(data=df_ci, show=False))
+        assert "CI" in labels_ci and "95% CI" not in labels_ci
+
+    def test_results_numpy_scalar_alpha_labels_level(self, continuous_results):
+        # np.float32 is a real numeric fit alpha (not a float subclass) -
+        # the level is knowable and must be labeled.
+        from diff_diff import plot_dose_response
+
+        continuous_results.alpha = np.float32(0.05)
+        ax = plot_dose_response(continuous_results, show=False)
+        assert "95% CI" in [t.get_text() for t in ax.get_legend().get_texts()]
+
+    def test_fractional_coverage_labeled_exactly(self, continuous_results):
+        # alpha=0.025 is a 97.5% interval - the label must not truncate or
+        # round it to a whole percentage.
+        from diff_diff import plot_dose_response
+
+        df = pd.DataFrame({"dose": [1.0, 2.0], "effect": [0.1, 0.2], "se": [0.05, 0.06]})
+        ax = plot_dose_response(data=df, alpha=0.025, show=False)
+        assert "97.5% CI" in [t.get_text() for t in ax.get_legend().get_texts()]
+        continuous_results.alpha = 0.025
+        ax_r = plot_dose_response(continuous_results, show=False)
+        assert "97.5% CI" in [t.get_text() for t in ax_r.get_legend().get_texts()]
+
+    def test_explicit_alpha_warns_on_every_no_op_path(
+        self, continuous_results, dose_response_curve
+    ):
+        from diff_diff import plot_dose_response
+
+        df_ci = pd.DataFrame(
+            {
+                "dose": [1.0, 2.0],
+                "effect": [0.1, 0.2],
+                "conf_int_lower": [0.0, 0.1],
+                "conf_int_upper": [0.2, 0.3],
+            }
+        )
+        df_bare = pd.DataFrame({"dose": [1.0, 2.0], "effect": [0.1, 0.2]})
+        for kwargs in (
+            {"results": continuous_results},
+            {"curve": dose_response_curve},
+            {"data": df_ci},
+            {"data": df_bare},
+        ):
+            with pytest.warns(UserWarning, match="only applies to DataFrame input"):
+                plot_dose_response(alpha=0.10, show=False, **kwargs)
+
+    def test_all_masked_se_no_band_no_stray_legend(self):
+        from diff_diff import plot_dose_response
+
+        df = pd.DataFrame(
+            {"dose": [1.0, 2.0, 3.0], "effect": [0.1, 0.2, 0.3], "se": [0.0, np.nan, -1.0]}
+        )
+        with pytest.warns(UserWarning, match="3 row"):
+            ax = plot_dose_response(data=df, show=False)
+        assert [t.get_text() for t in ax.get_legend().get_texts()] == ["Effect"]
 
     def test_no_input_raises(self):
         from diff_diff import plot_dose_response

@@ -243,11 +243,16 @@ no removal/deprecation fields and appear here only.
   coerced to built-in `float`; `LWDiD`'s message wording changed. The deprecated
   `StaggeredTripleDifference` keeps its permissive construction shape.
 
-- `summary(alpha=...)` / `print_summary(alpha=...)` on the staggered-family results classes
-  ([M-146], landing at 4.0): a value different from the fit-time `alpha` now raises `ValueError`
-  instead of silently relabeling the confidence-interval header over fit-time stored intervals
-  (bootstrap percentile intervals cannot be reconstructed from the SE); `alpha=0.0`, previously
+- `summary(alpha=...)` / `print_summary(alpha=...)` on the results classes family-wide
+  ([M-146], landing at 4.0; the staggered family first, then the non-staggered summaries -
+  DiDResults incl. SpilloverDiDResults, MultiPeriodDiDResults, SyntheticDiDResults,
+  TripleDifferenceResults, TROPResults, ContinuousDiDResults): a value different from the
+  fit-time `alpha` now raises `ValueError` instead of silently relabeling the
+  confidence-interval header over fit-time stored intervals; `alpha=0.0`, previously
   swallowed by a falsy-`or` default, raises too. Re-fit at the desired alpha instead.
+  `SyntheticControlResults.summary` joins the contract as a carve-out: its `alpha` was a
+  dead no-op (it prints no alpha-based interval; the displayed confidence set is keyed on
+  its own stored `gamma`), and a non-fit value now raises like the rest of the family.
 
 One pending decision: the `DIFF_DIFF_SOLVE_OLS_FASTPATH` environment default has a go/no-go due
 at 4.0 that has not been made. If it lands on, it is a numerics change and will be documented

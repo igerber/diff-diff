@@ -2245,3 +2245,25 @@ class TestLowestDoseAPI:
         assert est.get_params() == cfg  # config unchanged by fit
         r2 = est.fit(df, **_DKW)
         np.testing.assert_allclose(r1.dose_response_att.effects, r2.dose_response_att.effects)
+
+
+class TestSummaryAlphaContract:
+    """summary(alpha=...) never recomputes stored inference (M-146 family-wide)."""
+
+    @pytest.fixture
+    def alpha_fitted(self):
+        data = generate_continuous_did_data(n_units=100, n_periods=3, seed=42, noise_sd=0.1)
+        return ContinuousDiD(n_bootstrap=49, seed=42).fit(
+            data, "outcome", "unit", "period", "first_treat", "dose"
+        )
+
+    @pytest.mark.parametrize("bad_alpha", [0.10, 0.0])
+    def test_summary_rejects_non_fit_alpha(self, alpha_fitted, bad_alpha):
+        with pytest.raises(ValueError, match="never recomputes") as exc:
+            alpha_fitted.summary(alpha=bad_alpha)
+        msg = str(exc.value)
+        assert "re-fit with the desired alpha" in msg
+        assert "bootstrap percentile" not in msg
+
+    def test_summary_accepts_fit_alpha(self, alpha_fitted):
+        assert alpha_fitted.summary(alpha=alpha_fitted.alpha) == alpha_fitted.summary()

@@ -131,7 +131,7 @@ _MD_TOKEN_RE = re.compile(r"\[(M-\d{3})\]")
 # pscore_trim tightening) = 124; + the CiC results-field rename (M-143) = 125;
 # + the family-wide anticipation validation row (M-144) = 126; + the DML
 # review-follow-ups pair (M-145 family-wide pscore_trim validation, M-146
-# staggered-family summary-alpha guard) = 128.
+# family-wide summary-alpha guard) = 128.
 # Ids are never reused and terminal rows are never deleted, so the ledger
 # only grows - raise the floor when rows are added; a lower parse count
 # means scanner/format drift or an illegal row deletion.

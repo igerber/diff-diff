@@ -44,7 +44,7 @@ from diff_diff._deprecation import (
 from diff_diff._staggered_triple_diff_engine import _StaggeredTripleDiffEngineMixin
 from diff_diff.linalg import _rank_guarded_inv, solve_logit, solve_ols
 from diff_diff.results import _format_survey_block, _get_significance_stars
-from diff_diff.results_base import BaseResults
+from diff_diff.results_base import _SUMMARY_ALPHA_MESSAGE, BaseResults, _require_fit_alpha
 from diff_diff.staggered_aggregation import CallawaySantAnnaAggregationMixin
 from diff_diff.staggered_bootstrap import CallawaySantAnnaBootstrapMixin
 from diff_diff.staggered_triple_diff_results import StaggeredTripleDiffResults
@@ -153,15 +153,17 @@ class TripleDifferenceResults(BaseResults):
         Parameters
         ----------
         alpha : float, optional
-            Significance level for confidence intervals. Defaults to the
-            alpha used during estimation.
+            Accepted for signature uniformity. The stored intervals were
+            computed at fit time; a value different from the stored
+            ``alpha`` raises ValueError rather than silently recomputing
+            or relabeling. Re-fit at the desired alpha instead.
 
         Returns
         -------
         str
             Formatted summary table.
         """
-        alpha = alpha or self.alpha
+        alpha = _require_fit_alpha(alpha, self.alpha, message=_SUMMARY_ALPHA_MESSAGE)
         conf_level = int((1 - alpha) * 100)
 
         lines = [

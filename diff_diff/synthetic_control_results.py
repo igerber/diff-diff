@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff.results import _format_survey_block, _get_significance_stars
-from diff_diff.results_base import BaseResults
+from diff_diff.results_base import BaseResults, _require_fit_alpha
 
 __all__ = ["SyntheticControlResults"]
 
@@ -203,7 +203,11 @@ class SyntheticControlResults(BaseResults):
     standardize : str
         ``"std"`` (per-row SD scaling) or ``"none"``.
     alpha : float
-        Significance level recorded for downstream (placebo) inference.
+        Significance level recorded at fit time for signature uniformity.
+        Placebo and test-inversion entry points take their own independent
+        ``gamma``/``alpha`` arguments; this field feeds only
+        ``is_significant`` (always False here, since the Wald fields are
+        NaN by design).
     rmspe_ratio : float
         The treated unit's post/pre RMSPE ratio = ``sqrt(MSPE_post / MSPE_pre)`` —
         the in-space placebo test statistic (ADH 2010 §2.4), computed at fit time.
@@ -489,14 +493,31 @@ class SyntheticControlResults(BaseResults):
         Parameters
         ----------
         alpha : float, optional
-            Significance level; defaults to the alpha used during estimation.
+            Accepted for signature uniformity; must equal the stored fit
+            ``alpha`` (None = fit alpha) or ValueError is raised. This
+            summary reports no alpha-based interval (the Wald inference
+            fields are NaN by design); the displayed confidence set is
+            keyed on its own stored ``gamma``.
 
         Returns
         -------
         str
             Formatted summary table.
         """
-        alpha = alpha or self.alpha
+        # Tailored message: this class stores NO alpha-based interval (Wald
+        # fields NaN by design; the confidence set is gamma-keyed), so the
+        # shared messages' "stores intervals computed at alpha=..." would be
+        # factually wrong here.
+        alpha = _require_fit_alpha(
+            alpha,
+            self.alpha,
+            message=(
+                "This summary reports no alpha-based interval (Wald inference "
+                "fields are NaN by design; the displayed confidence set uses "
+                "its own stored gamma) and never recomputes stored inference "
+                "(requested alpha={alpha}, fit alpha={fit_alpha})."
+            ),
+        )
 
         n_top = min(5, len(self.donor_weights))
         top_donors = sorted(self.donor_weights.items(), key=lambda kv: kv[1], reverse=True)[:n_top]

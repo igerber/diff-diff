@@ -4865,3 +4865,23 @@ class TestConformalCovariates:
             warnings.simplefilter("ignore", UserWarning)
             s = res.conformal_test(0.0, covariates=["z"], scheme="moving_block")
         assert float(s["p_value"]) >= 1.0 / float(s["n_perms"]) - 1e-12
+
+
+def test_summary_alpha_guard_rejects_non_fit_alpha():
+    # M-146 family-wide summary(alpha=) contract, SyntheticControl carve-out:
+    # the previously DEAD alpha parameter (assigned, never used) now raises on
+    # a non-fit value with a class-accurate message - this class prints no
+    # alpha-based interval, so the message must not claim stored intervals.
+    res = _exact_combo_fit(effect=3.0)
+    for bad_alpha in (0.10, 0.0):
+        with pytest.raises(ValueError, match="never recomputes") as exc:
+            res.summary(alpha=bad_alpha)
+        msg = str(exc.value)
+        assert "no alpha-based interval" in msg
+        assert "stores intervals" not in msg
+    # Fit alpha and None still render, confidence set included.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res.confidence_set(family="constant", gamma=0.25)
+    assert res.summary(alpha=res.alpha) == res.summary()
+    assert "Confidence set" in res.summary() or "confidence set" in res.summary().lower()

@@ -4281,3 +4281,57 @@ class TestTROPConvergenceWarnings:
             assert (
                 "of" in msg and "per-observation fits" in msg
             ), f"LOOCV warning is not in aggregate format (fan-out not reduced): {msg}"
+
+
+class TestSummaryAlphaContract:
+    """summary(alpha=...) never recomputes stored inference (M-146 family-wide).
+
+    TROP's tailored message states the uniform-contract rationale - its t
+    interval WOULD be reconstructible, so it must not claim otherwise.
+    """
+
+    @pytest.fixture(scope="class")
+    def alpha_fitted(self):
+        # Same tiny config as TestTROPResults.fitted_results (class-scoped
+        # there, so re-declared rather than reused).
+        rng = np.random.default_rng(123)
+        n_units, n_treated, n_pre, n_post, true_att = 20, 5, 5, 3, 3.0
+        data = []
+        for i in range(n_units):
+            is_treated = i < n_treated
+            for t in range(n_pre + n_post):
+                post = t >= n_pre
+                y = 10.0 + i * 0.1 + t * 0.5
+                if is_treated and post:
+                    y += true_att
+                y += rng.normal(0, 0.5)
+                data.append(
+                    {
+                        "unit": i,
+                        "period": t,
+                        "outcome": y,
+                        "treated": 1 if (is_treated and post) else 0,
+                    }
+                )
+        panel = pd.DataFrame(data)
+        trop_est = TROP(
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            n_bootstrap=10,
+            seed=42,
+        )
+        return trop_est.fit(
+            panel, outcome="outcome", treatment="treated", unit="unit", time="period"
+        )
+
+    @pytest.mark.parametrize("bad_alpha", [0.10, 0.0])
+    def test_summary_rejects_non_fit_alpha(self, alpha_fitted, bad_alpha):
+        with pytest.raises(ValueError, match="never recomputes") as exc:
+            alpha_fitted.summary(alpha=bad_alpha)
+        msg = str(exc.value)
+        assert "family-wide contract" in msg
+        assert "cannot be reconstructed" not in msg
+
+    def test_summary_accepts_fit_alpha(self, alpha_fitted):
+        assert alpha_fitted.summary(alpha=alpha_fitted.alpha) == alpha_fitted.summary()

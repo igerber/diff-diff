@@ -17,7 +17,7 @@ except ImportError:
     from typing_extensions import TypedDict
 
 from diff_diff.results import _format_survey_block, _get_significance_stars
-from diff_diff.results_base import BaseResults
+from diff_diff.results_base import BaseResults, _require_fit_alpha
 
 __all__ = [
     "_LAMBDA_INF",
@@ -196,15 +196,29 @@ class TROPResults(BaseResults):
         Parameters
         ----------
         alpha : float, optional
-            Significance level for confidence intervals. Defaults to the
-            alpha used during estimation.
+            Accepted for signature uniformity. The stored interval was
+            computed at fit time; a value different from the stored
+            ``alpha`` raises ValueError rather than silently recomputing
+            or relabeling. Re-fit at the desired alpha instead.
 
         Returns
         -------
         str
             Formatted summary table.
         """
-        alpha = alpha or self.alpha
+        # Tailored message: TROP's interval is a t interval at the fit alpha
+        # (arithmetically reconstructible), so the guard holds purely by the
+        # family-wide never-recompute contract - never claim otherwise.
+        alpha = _require_fit_alpha(
+            alpha,
+            self.alpha,
+            message=(
+                "This result stores a t interval computed at the fit alpha "
+                "(alpha={fit_alpha}); summary() never recomputes or relabels "
+                "stored inference by the family-wide contract "
+                "(requested alpha={alpha}); re-fit with the desired alpha."
+            ),
+        )
         conf_level = int((1 - alpha) * 100)
 
         lines = [

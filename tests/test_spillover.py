@@ -9066,3 +9066,15 @@ class TestStaggeredSparseKDTreeBranch:
             atol=1e-12,
             equal_nan=True,
         )
+
+
+class TestSummaryAlphaContract:
+    """SpilloverDiDResults.summary relays DiDResults' inherited M-146 guard."""
+
+    def test_summary_rejects_non_fit_alpha(self):
+        df = _make_butts_2period_dgp(seed=42)
+        est = SpilloverDiD(rings=[0.0, 100.0], conley_coords=("lat", "lon"))
+        result = est.fit(df, outcome="y", unit="unit", time="time", treatment="D")
+        with pytest.raises(ValueError, match="never recomputes"):
+            result.summary(alpha=0.10)
+        assert result.summary(alpha=result.alpha) == result.summary()
