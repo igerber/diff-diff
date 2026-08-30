@@ -38,43 +38,37 @@ Files that need updating:
    - Read `diff_diff/__init__.py` and extract the current `__version__` value
    - Store as `OLD_VERSION` for comparison link generation
 
-3. **Check CHANGELOG entry and resolve `RELEASE_DATE`**:
-   - Search `CHANGELOG.md` for `## [NEW_VERSION]` section header.
-   - If found with content (at least one `### Added/Changed/Fixed` subsection with
-     bullet points):
-     - **Parse the existing header date** (e.g., `## [3.1.3] - 2026-04-19` → `2026-04-19`).
-       Store as `RELEASE_DATE` and skip to step 5.
-     - If the header has no date (malformed), abort with: `Error: CHANGELOG header for
-       [NEW_VERSION] is missing a date. Fix the header before re-running.`
-   - If not found or empty: Set `RELEASE_DATE` to today's date in `YYYY-MM-DD` format,
-     then continue to step 4.
+3. **Compile the changelog and resolve `RELEASE_DATE`** (release notes come
+   exclusively from `changelog.d/` fragments; the old git-log generation step
+   is removed):
+
+   ```bash
+   python3 .claude/scripts/changelog_compile.py compile --version NEW_VERSION --date "$(date +%F)"
+   ```
+
+   Key off the exit code:
+   - **Exit 0** (compiled): the `## [NEW_VERSION]` section and comparison link
+     were written and the fragments deleted. `RELEASE_DATE` = today (the
+     `--date` you passed).
+   - **Exit 4** (already compiled): the section already exists with content and
+     no fragments remain — an idempotent re-run after a partial bump. The
+     compiler prints the existing header's date; use THAT as `RELEASE_DATE`.
+     On such a re-run, verify EACH version file in the table individually
+     (step 5's blind `OLD_VERSION → NEW_VERSION` replacement no-ops once
+     `diff_diff/__init__.py` is already bumped, so grep every file rather than
+     trusting the replacements).
+   - **Any other exit**: surface the compiler's message and stop. For a
+     legitimately fragment-free cycle (all merged PRs CI/tooling-only), write
+     a minimal `### Internal` stub fragment describing the release, **commit
+     it**, then re-run (an uncommitted fragment is rejected by the compiler's
+     dirty-fragment guard — deliberately, so nothing unreviewed is swept into
+     a release and deleted).
 
    `RELEASE_DATE` is the single source of truth for the release date across every file
    touched in this bump. Do not recompute it downstream.
 
-4. **Generate CHANGELOG from git** (only if needed):
-   - Run: `git log v{OLD_VERSION}..HEAD --oneline`
-   - If no tag exists, use: `git log --oneline -50`
-   - Categorize commits using these heuristics:
-     - **Added**: commits containing "add", "new", "implement", "introduce", "create"
-     - **Changed**: commits containing "update", "change", "improve", "optimize", "refactor", "enhance"
-     - **Fixed**: commits containing "fix", "bug", "correct", "repair", "resolve"
-   - Use the `RELEASE_DATE` resolved in step 3 for the header.
-   - Create CHANGELOG entry in this format:
-     ```markdown
-     ## [X.Y.Z] - YYYY-MM-DD
-
-     ### Added
-     - Feature description from commit message
-
-     ### Changed
-     - Change description from commit message
-
-     ### Fixed
-     - Fix description from commit message
-     ```
-   - Only include sections that have commits (omit empty sections)
-   - Insert the new entry after the changelog header (after the "adheres to Semantic Versioning" line)
+4. *(Removed — the compiler owns changelog generation; the fragment format is
+   documented in `changelog.d/README.md`.)*
 
 5. **Update version in all files**:
    Use the Edit tool to update each file:
@@ -99,14 +93,10 @@ Files that need updating:
      preserve the quoting style. `RELEASE_DATE` must match the CHANGELOG header
      date; never substitute a freshly computed "today" value here.
 
-6. **Update CHANGELOG comparison links**:
-   - Run `git remote get-url origin` to determine the repository's GitHub URL
-     (strip `.git` suffix, convert SSH format to HTTPS if needed)
-   - At the bottom of `CHANGELOG.md`, after `[OLD_VERSION]:`, add the new comparison link:
-     ```
-     [NEW_VERSION]: https://github.com/OWNER/REPO/compare/vOLD_VERSION...vNEW_VERSION
-     ```
-     using the owner/repo derived from the remote URL.
+6. **CHANGELOG comparison link** — written by the compiler in step 3 (format
+   `[NEW]: <base>/compare/vOLD...vNEW`, both versions `v`-prefixed, inserted
+   immediately above the previous version's link line; the base URL is taken
+   from that line, not from the git remote). Nothing to do manually.
 
 7. **Report summary**:
    Display a summary of all changes made:
@@ -119,7 +109,7 @@ Files that need updating:
    - rust/Cargo.toml: version = "NEW_VERSION"
    - diff_diff/guides/llms-full.txt: Version: NEW_VERSION
    - CITATION.cff: version: NEW_VERSION, date-released: YYYY-MM-DD
-   - CHANGELOG.md: Added/verified [NEW_VERSION] entry
+   - CHANGELOG.md: compiled [NEW_VERSION] from changelog.d/
 
    Next steps:
    1. Review changes: git diff
@@ -131,12 +121,13 @@ Files that need updating:
 ## Notes
 
 - The Rust version in `rust/Cargo.toml` is always synced to match the Python version
-- If CHANGELOG already has the target version entry with content, it will not be overwritten
-- Commit messages are cleaned up (prefixes like "feat:", "fix:" are removed) for CHANGELOG
-- The comparison link format uses `v` prefix for tags (e.g., `v2.2.0`)
+- If CHANGELOG already has the target version section (and `changelog.d/` is empty),
+  the compiler exits 4 and the bump proceeds as a re-run — the existing section is
+  never overwritten
+- Release notes come from curated `changelog.d/` fragments; commit messages are never read
 - `CITATION.cff` `date-released` and the `CHANGELOG.md` section header share a single
-  `RELEASE_DATE` resolved in step 3: if the CHANGELOG entry was pre-populated, its
-  existing header date wins (so pre-written changelog drafts don't silently drift
+  `RELEASE_DATE` resolved in step 3: an already-compiled header's date wins via the
+  compiler's exit-4 path (so a re-run after a partial bump doesn't silently drift
   from the CITATION date); otherwise today's date is used for both. If the release
   is cut on a different day than the bump, update both surfaces manually — drift
   causes auto-citation tools (Zenodo, GitHub's "cite this repository", reference

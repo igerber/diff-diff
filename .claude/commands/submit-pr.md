@@ -374,7 +374,18 @@ Fill in the template:
 
 ## Security / privacy
 - Confirm no secrets/PII in this PR: Yes
+
+## Changelog
+- changelog.d/ fragment added (or N/A - no user-visible change): <Yes / N/A>
 ```
+
+The Changelog line mirrors `.github/pull_request_template.md` (this embedded
+copy is what `gh pr create` actually submits - GitHub never applies the
+template file on CLI-created PRs; keep the two in sync). While filling it in,
+check the branch diff: if it touches `diff_diff/` and contains no
+`changelog.d/` file, answer honestly and add a warning line to the step-11
+report (a missing fragment is a WARNING, not a blocker - see CONTRIBUTING.md
+"Changelog fragments").
 
 Do not add an authorship footer to the PR body.
 

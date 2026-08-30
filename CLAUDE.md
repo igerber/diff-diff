@@ -171,7 +171,10 @@ When adding new functionality, the source of truth is:
   with `:no-index:` on a module page keeps a canonical autosummary entry in
   `docs/api/index.rst`) are CI-enforced by `tests/test_docs_ia.py`; the full list is in
   CONTRIBUTING.md "Docs IA invariants".
-- **`CHANGELOG.md`** for release notes.
+- **`changelog.d/`** for release notes - one fragment file per PR (see
+  `changelog.d/README.md`), compiled into `CHANGELOG.md` at release by
+  `.claude/scripts/changelog_compile.py`. Never edit `## [Unreleased]` directly
+  (pointer-only, CI-enforced by `tests/test_changelog_fragments.py`).
 - **`README.md`** for ONE LINE in the `## Estimators` flat catalog (or `## Diagnostics & Sensitivity` for diagnostic-class features). Do NOT add usage examples, parameter tables, per-estimator sections, or full bibliographies.
 
 `/docs-impact` and `/docs-check` enforce these surfaces. See `CONTRIBUTING.md` "README is a landing page, not the docs" for the full convention.

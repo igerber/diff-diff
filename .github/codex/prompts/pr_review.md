@@ -22,6 +22,13 @@ SECONDARY PRIORITIES (in order):
 6) Minimization of tech debt
 7) Security (including accidental secrets)
 8) Documentation + tests
+   - A diff that CHANGES USER-VISIBLE BEHAVIOR but carries no `changelog.d/`
+     fragment is a P2 (release notes live as per-PR fragment files - see
+     `changelog.d/README.md`). Comment-only, docs-only, or test-only diffs
+     never trigger this - no behavior changed, no fragment owed.
+   - A diff that adds bullets directly under CHANGELOG.md's `## [Unreleased]`
+     is a P3: point at the fragment convention (that section is pointer-only
+     and CI-enforced).
 
 ## Edge Case Review (learned from PR #97 analysis)
 

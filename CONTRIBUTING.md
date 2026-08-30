@@ -79,7 +79,9 @@ If you find yourself adding a usage example, a parameter table, or a multi-parag
 5. **`README.md`** - Add ONLY:
    - One line in the `## Estimators` catalog with the paper citation and RTD link
 
-6. **`CHANGELOG.md`** - Add a release-note bullet under the next unreleased version.
+6. **`changelog.d/`** - Add a release-note fragment `changelog.d/YYYYMMDD-<slug>.md`
+   (see `changelog.d/README.md` for the format). NEVER edit `CHANGELOG.md`'s
+   `## [Unreleased]` section directly - it is pointer-only and CI-enforced.
 
 7. **`CLAUDE.md`** - Update only if adding new critical rules or design patterns.
 
@@ -105,11 +107,35 @@ The documentation site's information architecture is machine-enforced; a red
    autosummary entry in `docs/api/index.rst`, else `:class:` cross-references
    to it render as dead text.
 
+### Changelog fragments (CI-enforced by `tests/test_changelog_fragments.py`)
+
+Release notes are per-PR fragment files under `changelog.d/` so that parallel
+PRs never conflict on `CHANGELOG.md`:
+
+1. Write your entry as `changelog.d/YYYYMMDD-<slug>.md` - one file per PR,
+   `### <Category>` blocks with the bullets exactly as they should appear in
+   the changelog. Format spec: `changelog.d/README.md`.
+2. `CHANGELOG.md`'s `## [Unreleased]` section stays pointer-only between
+   releases; any direct edit fails the docs-tests lane.
+3. At release, `/bump-version` runs
+   `.claude/scripts/changelog_compile.py compile`, which merges the fragments
+   into the new version section (oldest-first within each category) and
+   deletes them.
+4. Rebasing a branch created before this system: move your old
+   `## [Unreleased]` bullet into a new fragment file.
+
+Rollback (if the system is ever removed): paste the current fragments' blocks
+back under `## [Unreleased]` (dropping the pointer comment), delete
+`changelog.d/`, `.claude/scripts/changelog_compile.py`, and
+`tests/test_changelog_fragments.py`, revert the `docs-tests.yml` /
+`rust-test.yml` filter entries and step, and restore the pre-change
+`bump-version` steps from git history.
+
 ### For Bug Fixes or Minor Enhancements
 
 - Update relevant docstrings
 - Add/update tests
-- Update `CHANGELOG.md`
+- Add a `changelog.d/YYYYMMDD-<slug>.md` fragment (never edit `## [Unreleased]` directly)
 - **If methodology-related**: Update `docs/methodology/REGISTRY.md` edge cases section
 - **README is almost never the right place** - skip it unless the bug was in a README claim
 

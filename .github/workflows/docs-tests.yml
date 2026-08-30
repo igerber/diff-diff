@@ -11,6 +11,13 @@ on:
       - 'tests/test_docs_ia.py'
       - 'tests/test_v4_matrix.py'
       - 'tests/test_naming_guard.py'
+      # Changelog-fragment guard: the fragment store, the compiler, and
+      # CHANGELOG.md itself trigger here (their ONLY CI lane - rust-test.yml
+      # deliberately does not fire on fragment-only diffs).
+      - 'tests/test_changelog_fragments.py'
+      - 'changelog.d/**'
+      - 'CHANGELOG.md'
+      - '.claude/scripts/changelog_compile.py'
       # tests/conftest.py is auto-loaded by pytest for the snippet
       # test run and mutates sys.path + MPLBACKEND (conftest.py:14, 18);
       # changes there can break snippet exec without touching the test
@@ -34,6 +41,10 @@ on:
       - 'tests/test_docs_ia.py'
       - 'tests/test_v4_matrix.py'
       - 'tests/test_naming_guard.py'
+      - 'tests/test_changelog_fragments.py'
+      - 'changelog.d/**'
+      - 'CHANGELOG.md'
+      - '.claude/scripts/changelog_compile.py'
       - 'tests/conftest.py'
       - 'pyproject.toml'
       # sphinx-build job mirrors RTD setup; trigger when RTD config drifts
@@ -111,6 +122,12 @@ jobs:
         # here for the same reason as the matrix step - docs-only ledger/spec
         # edits must not bypass it.
         run: PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/test_naming_guard.py -v
+
+      - name: Run changelog-fragment guard
+        # Pointer-only [Unreleased] invariant + fragment grammar + compiler
+        # behavior + these very path filters (self-pinning; see
+        # tests/test_changelog_fragments.py::TestWorkflowPins).
+        run: PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/test_changelog_fragments.py -v
 
   sphinx-build:
     name: Sphinx HTML build (-W warnings as errors)
@@ -208,6 +225,12 @@ jobs:
           # we catch drift like pydata-sphinx-theme>=0.17.1 (which requires
           # Python>=3.10) before it lands.
           python-version: '3.9'
+
+      - name: Run changelog-fragment check on the floor Python
+        # The compiler promises 3.9 compatibility but its behavioral tests
+        # run in the 3.14 doc-snippets job; this stdlib-only invocation is
+        # the floor's continuous syntax + behavior smoke for the script.
+        run: python .claude/scripts/changelog_compile.py check
 
       - name: Install docs dependencies
         # Same pip install line as sphinx-build above. Just installs - does

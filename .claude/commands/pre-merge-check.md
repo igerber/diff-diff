@@ -58,7 +58,12 @@ Run it:
 ```bash
 SCRATCH="$(git rev-parse --git-path premerge-scan)"; mkdir -p "$SCRATCH"
 python3 .claude/scripts/premerge_scan.py --scratch "$SCRATCH"
+python3 .claude/scripts/changelog_compile.py check
 ```
+
+The second command is the changelog-fragment guard (pointer-only
+`## [Unreleased]` + fragment grammar) - it catches a direct Unreleased edit
+here instead of first failing in the label-gated docs-tests CI lane.
 
 - If it **exits 4**, a git or file-read operation failed — the scan is **incomplete**
   and its run-lists were truncated to empty. **Stop and report the error;** do NOT
@@ -150,6 +155,10 @@ Based on your changes to: <list of changed files>
 - [ ] Happy path tested
 - [ ] Edge cases tested (empty data, NaN inputs, boundary conditions)
 - [ ] Error/warning paths tested with behavioral assertions
+
+### Changelog
+- [ ] User-visible change => changelog.d/YYYYMMDD-<slug>.md fragment present
+      (never edit CHANGELOG.md's [Unreleased] directly - CI-enforced)
 ```
 
 #### If Methodology Files Changed

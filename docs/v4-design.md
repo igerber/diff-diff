@@ -76,7 +76,7 @@ asserting (a) `pytest.warns` on the old surface with the migration message, and
 before the PR. Every removal PR follows the
 `tests/test_had_dual_knob_deprecation.py` pattern: canonical-surface positive
 smoke + `TypeError`/`AttributeError` removal pin per surface. Matrix rows flip
-in the same diff; the PR's CHANGELOG entry names the flipped row ids.
+in the same diff; the PR's changelog fragment names the flipped row ids.
 
 ## 3. Target 4.0 surface
 
@@ -845,7 +845,7 @@ without a deprecation window).
 Boundary rule, verbatim: **anything two later PRs could disagree about lives
 above; anything only one PR cares about stays in that PR's plan.**
 
-| Phase | Ships in | PRs (each: dedicated shim/removal tests + matrix flips + CHANGELOG naming flipped row ids) |
+| Phase | Ships in | PRs (each: dedicated shim/removal tests + matrix flips + changelog fragment naming flipped row ids) |
 |---|---|---|
 | 1 (this PR) | - | Spec + matrix + enforcement test + support edits |
 | 2: contract foundations | 3.9 | (a) results base + unified event-study representation [M-092] + to_dict completion + the Diagnostic marker base on the diagnostic result roster [M-091] (section 3.5); (b) `aggregate()` + fit(aggregate=) shims [M-020..M-027] [M-139] (M-020's shim already shipped; M-139 is the HAD workflow twin, a pre-cut amendment); (c) param renames [M-030..M-047] [M-084] [M-086..M-089] + their results-field mirrors [M-094] [M-095] (section 8 rule 9) + the public-function completeness sweep [M-097..M-113] (section 8 rule 10) + the dCDH results mirror [M-114] + the fourth `robust` site [M-115] + the 2(c)-ii missed-rename amendments [M-136..M-138] (LPDiD `level` value; the two post-dummy diagnostics params) + BaseEstimator mixin + ContinuousDiD covariates move; (d) alias introduction [M-062] (the Spillover introduction is cancelled [M-063]) + the alias-diet `__getattr__` warning shim [M-135] + wrapper deprecations [M-070..M-077] + the two inference-surface policies: `n_bootstrap` semantic unification [M-081] and the wild-cluster-bootstrap roster guard [M-096]; shipped insertions (all done): the aggregate contract [M-122], the ETWFE reference-period family [M-123] [M-124] [M-125], and the variance-consolidation program [M-126] [M-127] |

@@ -109,7 +109,7 @@ LOW DRIFT RISK:
 
 No map entry: <files not found in sources or groups, or "(none)">
 Stale references: <invalid paths, or "(none)">
-Always check: CHANGELOG.md, ROADMAP.md
+Always check: changelog.d/ fragment (never CHANGELOG.md's Unreleased directly), ROADMAP.md
 ```
 
 ### 7. Flag Missing Entries

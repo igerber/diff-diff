@@ -165,6 +165,8 @@ When the working tree is clean but commits are ahead, check for methodology issu
      [HIGH] docs/survey-roadmap.md
    Run /docs-impact for full details.
    ```
+   Also warn when the changes touch `diff_diff/` but the branch carries no
+   `changelog.d/` fragment (see CONTRIBUTING.md "Changelog fragments").
    This is a WARNING, not a blocker.
 
 Note: Section 3b checks are informational warnings only — no AskUserQuestion prompt, since changes are already committed and cannot be unstaged. This differs from the staged-changes path (Section 3) which offers a "fix vs continue" choice.
@@ -206,6 +208,8 @@ Note: Section 3b checks are informational warnings only — no AskUserQuestion p
      [METHODOLOGY] docs/methodology/REGISTRY.md — <section hint>
    Run /docs-impact for full details.
    ```
+   Also warn when the changes touch `diff_diff/` but the branch carries no
+   `changelog.d/` fragment (see CONTRIBUTING.md "Changelog fragments").
    This is a WARNING, not a blocker.
 
 3. **Capture file count for reporting**:

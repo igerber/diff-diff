@@ -10,6 +10,8 @@ on:
       # tests/test_doc_snippets.py is owned by docs-tests.yml; exclude it
       # so a harness-only edit does not fan out into the Rust matrix.
       - '!tests/test_doc_snippets.py'
+      # Same ownership split: the changelog-fragment guard runs in docs-tests.yml.
+      - '!tests/test_changelog_fragments.py'
       - 'tools/**'
       - 'pyproject.toml'
       - '.github/workflows/rust-test.yml'
@@ -43,6 +45,8 @@ on:
       - 'diff_diff/**'
       - 'tests/**'
       - '!tests/test_doc_snippets.py'
+      # Same ownership split: the changelog-fragment guard runs in docs-tests.yml.
+      - '!tests/test_changelog_fragments.py'
       - 'tools/**'
       - 'pyproject.toml'
       - '.github/workflows/rust-test.yml'

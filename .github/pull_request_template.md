@@ -9,3 +9,6 @@
 
 ## Security / privacy
 - Confirm no secrets/PII in this PR:
+
+## Changelog
+- changelog.d/ fragment added (or N/A - no user-visible change):
