@@ -1,5 +1,5 @@
-# Real-data canary for the LWDiD replication tests (TODO row: "Real-data CI
-# canary for dataset-backed replication tests").
+# Real-data canary for the LWDiD replication tests (closed the former TODO
+# row "Real-data CI canary for dataset-backed replication tests").
 #
 # tests/test_methodology_lwdid.py's Prop 99 / Walmart goldens VISIBLY skip
 # when the loaders fall back to synthetic data (df.attrs["source"] !=

@@ -400,6 +400,55 @@ class TestCompile:
         root = make_repo(tmp_path, changelog=changelog)
         assert run_compile(mod, root, version="1.2.0") == 1
 
+    @pytest.mark.parametrize(
+        "smuggled",
+        [
+            " ## [9.9.9] - 2099-01-01",
+            "   ## [9.9.9] - 2099-01-01",
+            " [9.9.9]: https://github.com/x/y/compare/v1.2.0...v9.9.9",
+        ],
+        ids=["indented-header-1sp", "indented-header-3sp", "indented-link-def"],
+    )
+    def test_indented_changelog_constructs_refused(self, mod, tmp_path, smuggled):
+        # CommonMark renders headings/link definitions indented 1-3 spaces,
+        # but the compiler's duplicate scans are column-zero anchored - an
+        # indented construct must refuse, on BOTH the fresh and exit-4 paths.
+        changelog = MINIMAL_CHANGELOG.replace(
+            "### Added\n- old entry\n",
+            f"### Added\n- old entry\n{smuggled}\n",
+        )
+        fresh = make_repo(
+            tmp_path / "fresh", changelog=changelog, fragments={"20260830-x.md": GOOD_FRAGMENT}
+        )
+        assert run_compile(mod, fresh) == 1
+        # Refused before writing: no new section, fragment untouched.
+        assert "## [1.3.0]" not in (fresh / "CHANGELOG.md").read_text()
+        assert (fresh / "changelog.d" / "20260830-x.md").exists()
+        exit4 = make_repo(tmp_path / "exit4", changelog=changelog)
+        assert run_compile(mod, exit4, version="1.2.0") == 1
+
+    def test_ls_tree_enumeration_failure_fails_closed(
+        self, mod, tmp_path, monkeypatch, git_commit_all
+    ):
+        # A failed HEAD enumeration means the deleted-fragment guard cannot
+        # run; that must refuse the compile, never silently skip the check.
+        root = make_repo(tmp_path, fragments={"20260830-x.md": GOOD_FRAGMENT})
+        git_commit_all(root)
+        before = (root / "CHANGELOG.md").read_text()
+        real_run = mod.subprocess.run
+
+        def failing_run(cmd, *a, **k):
+            if "ls-tree" in cmd and "-r" in cmd:
+                # A genuine nonzero-returncode CompletedProcess.
+                return real_run(["git", "--no-such-flag"], capture_output=True, text=True)
+            return real_run(cmd, *a, **k)
+
+        monkeypatch.setattr(mod.subprocess, "run", failing_run)
+        assert run_compile(mod, root, allow_dirty=False) == 1
+        # Nothing written, nothing consumed.
+        assert (root / "CHANGELOG.md").read_text() == before
+        assert (root / "changelog.d" / "20260830-x.md").exists()
+
     def test_indented_heading_fragment_cannot_compile(self, mod, tmp_path):
         frag = "### Fixed\n ## [9.9.9] - 2099-01-01\n- entry\n"
         root = make_repo(tmp_path, fragments={"20260830-x.md": frag})

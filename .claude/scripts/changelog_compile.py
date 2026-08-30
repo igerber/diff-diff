@@ -311,6 +311,26 @@ def run_compile(root, version, date_s, allow_dirty, previous_version=None):
                 file=sys.stderr,
             )
             return EXIT_FINDINGS
+    # CommonMark renders ATX headings and link-reference definitions
+    # indented up to 3 spaces, but every scan in this function is anchored
+    # at column zero — an indented ' ## [1.3.0]' or ' [1.3.0]: ...' would
+    # be invisible to the duplicate/date safeguards yet render as a real
+    # heading or definition. Refuse them outright.
+    indented = re.search(
+        r"^ {1,3}(?:#{1,6}(?:[ \t]|$)|\[\d+\.\d+\.\d+\]:)",
+        text,
+        flags=re.MULTILINE,
+    )
+    if indented:
+        lineno = text.count("\n", 0, indented.start()) + 1
+        print(
+            f"error: CHANGELOG.md line {lineno}: indented heading or "
+            "version-link definition (CommonMark renders these, but the "
+            "compiler's column-zero scans cannot see them) — fix the file "
+            "before compiling",
+            file=sys.stderr,
+        )
+        return EXIT_FINDINGS
     headers = _existing_headers(text)
     versions = [h[0] for h in headers]
     duplicated = sorted({v for v in versions if versions.count(v) > 1})
@@ -571,6 +591,16 @@ def run_compile(root, version, date_s, allow_dirty, previous_version=None):
                     "from the worktree - its release note would be "
                     "silently lost"
                 )
+        else:
+            # Fail CLOSED: an unenumerable HEAD means the deleted-fragment
+            # guard cannot run, so the dirty state is unverifiable. (An
+            # unborn HEAD is already refused above — every present fragment
+            # was flagged "not committed in HEAD".)
+            problems.append(
+                "changelog.d: cannot enumerate HEAD's fragments "
+                f"(git ls-tree failed: {head_res.stderr.strip() or 'unknown error'}) "
+                "- deleted-fragment check is unverifiable"
+            )
         if problems:
             print(
                 "error: changelog.d/ fragments must be committed unchanged "

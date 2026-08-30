@@ -81,17 +81,40 @@ def _restates_lifecycle(line: str) -> bool:
     return bool(_LEDGER_TOKENS.search(line) or _LIFECYCLE_VERSION.search(line))
 
 
-_CELL_SPLIT = re.compile(r"(?<!\\)\|")  # split on unescaped pipes only
+def _split_unescaped_pipes(s: str):
+    r"""Split on pipes preceded by an EVEN run of backslashes.
+
+    Markdown escaping is parity-based: ``\|`` is a literal pipe, ``\\|``
+    is a literal backslash followed by a cell separator, ``\\\|`` a
+    literal backslash + literal pipe. A fixed-width ``(?<!\\)`` lookbehind
+    gets the even cases wrong.
+    """
+    cells: list = []
+    cur: list = []
+    run = 0
+    for ch in s:
+        if ch == "\\":
+            run += 1
+            cur.append(ch)
+            continue
+        if ch == "|" and run % 2 == 0:
+            cells.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+        run = 0
+    cells.append("".join(cur))
+    return cells
 
 
 def _cells(row: str):
     r"""Cell texts of a pipe row, honoring escaped ``\|`` inside cells."""
-    inner = row.strip()
-    if inner.startswith("|"):
-        inner = inner[1:]
-    if inner.endswith("|") and not inner.endswith("\\|"):
-        inner = inner[:-1]
-    return [c.strip() for c in _CELL_SPLIT.split(inner)]
+    parts = _split_unescaped_pipes(row.strip())
+    if parts and parts[0] == "":  # leading pipe
+        parts = parts[1:]
+    if parts and parts[-1] == "":  # trailing unescaped pipe
+        parts = parts[:-1]
+    return [c.strip() for c in parts]
 
 
 def _normalize(row: str) -> str:
@@ -304,6 +327,30 @@ class TestRowShapes:
         n = len(_cells(header))
         counts = [len(_cells(ln)) for _, ln in rows]
         assert counts == [2, 6, n]  # short, extra, escaped-pipe row intact
+
+
+class TestBackslashParity:
+    r"""Markdown pipe escaping is parity-based: ``\|`` literal pipe,
+    ``\\|`` literal backslash + SEPARATOR, ``\\\|`` backslash + literal
+    pipe. A fixed-width lookbehind gets the even runs wrong."""
+
+    @pytest.mark.parametrize(
+        "row,expected",
+        [
+            (r"| a \| b | x |", 2),  # odd: escaped pipe stays in-cell
+            (r"| a \\| b | x |", 3),  # even: separator after literal backslash
+            (r"| a \\\| b | x |", 2),  # odd again
+            (r"| a \\\\| b | x |", 3),  # even again
+        ],
+    )
+    def test_backslash_run_parity(self, row, expected):
+        assert len(_cells(row)) == expected
+
+    def test_trailing_backslash_pipe_parity(self):
+        # '\\|' at row end: the pipe is a real (trailing) delimiter.
+        assert _cells(r"| a | b \\|") == ["a", r"b \\"]
+        # '\|' at row end: escaped pipe belongs to the cell.
+        assert _cells(r"| a | b \|") == ["a", r"b \|"]
 
 
 class TestLifecycleCaseInsensitivity:
