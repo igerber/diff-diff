@@ -1364,15 +1364,43 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             "control_inf": inf_full[control_idx],
         }
 
-        # Per-cell SE. PSU designs (declared OR bare cluster=) route through
-        # the CS per-cell CR1 helper (3-valued contract: float = use it,
-        # NaN = unidentified clustered variance and MUST propagate,
-        # None = malformed -> fall back). Non-PSU survey designs use the
-        # weighted sqrt-sum (CS mirror: the full design enters aggregate SEs
-        # only); the no-survey branch is verbatim.
+        # Per-cell SE. Replicate designs use IF-reweighting on the Hajek
+        # payload (compute_replicate_if_variance; the same psi the aggregate
+        # _se_from_psi call consumes) — a zero or non-finite replicate
+        # variance is degenerate and fails closed to NaN (stricter than the
+        # shared aggregate clamp; REGISTRY DMLDiD Note). PSU designs
+        # (declared OR bare cluster=) route through the CS per-cell CR1
+        # helper (3-valued contract: float = use it, NaN = unidentified
+        # clustered variance and MUST propagate, None = malformed -> fall
+        # back). Non-PSU survey designs use the weighted sqrt-sum (CS
+        # mirror: the full design enters aggregate SEs only); the no-survey
+        # branch is verbatim.
         se: float
         with np.errstate(over="ignore", invalid="ignore"):
-            if (
+            if resolved_survey_unit is not None and resolved_survey_unit.uses_replicate_variance:
+                from diff_diff.survey import compute_replicate_if_variance
+
+                variance, n_valid_rep = compute_replicate_if_variance(
+                    inf_full, resolved_survey_unit
+                )
+                if not np.isfinite(variance) or variance <= 0.0:
+                    se = float("nan")
+                else:
+                    se = float(np.sqrt(variance))
+                # Per-cell df: min(design df, n_valid - 1) — the dCDH
+                # _effective_df_survey rule, inlined. n_valid is computed
+                # over the WHOLE replicate columns, so it equals R for every
+                # cell in practice (defensive; REGISTRY Note). df_survey is
+                # a CELL-LOCAL binding — never mutate
+                # precomputed["df_survey"], which feeds the post-fit
+                # aggregation kit.
+                if df_survey is not None:
+                    df_survey = min(int(df_survey), int(n_valid_rep) - 1)
+                else:
+                    # Undefined replicate df (QR rank <= 1): df=0 sentinel
+                    # -> NaN inference (CS sentinel parity).
+                    df_survey = 0
+            elif (
                 resolved_survey_unit is not None
                 and getattr(resolved_survey_unit, "psu", None) is not None
             ):
@@ -1386,9 +1414,10 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             else:
                 se = float(np.sqrt(np.mean(psi_bar**2) / n_cell))
         # NOTE: `se` is deliberately OUTSIDE the non_finite_score gate on the
-        # design-based branches — a NaN from the CR1 helper is the
-        # unidentified-variance signal and must flow to safe_inference as a
-        # NaN-consistent inference tuple on a RETAINED cell.
+        # design-based branches — a NaN from the CR1 helper (or a degenerate
+        # replicate variance) is the unidentified-variance signal and must
+        # flow to safe_inference as a NaN-consistent inference tuple on a
+        # RETAINED cell.
         if resolved_survey_unit is None and not np.isfinite(se):
             diagnostics["skip_reason"] = "non_finite_score"
             return (
@@ -1760,12 +1789,28 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         }
 
         # Per-cell SE (same dispatch as the panel cell; see the comment
-        # there): PSU designs -> CS per-cell CR1 helper (NaN propagates as
+        # there): replicate designs -> IF-reweighting with the degenerate
+        # fail-closed guard and the cell-local min(df, n_valid - 1) rule;
+        # PSU designs -> CS per-cell CR1 helper (NaN propagates as
         # the deliberate unidentified-variance signal on a RETAINED cell);
         # non-PSU survey -> weighted sqrt-sum; no-survey verbatim.
         se: float
         with np.errstate(over="ignore", invalid="ignore"):
-            if (
+            if resolved_survey_unit is not None and resolved_survey_unit.uses_replicate_variance:
+                from diff_diff.survey import compute_replicate_if_variance
+
+                variance, n_valid_rep = compute_replicate_if_variance(
+                    inf_full, resolved_survey_unit
+                )
+                if not np.isfinite(variance) or variance <= 0.0:
+                    se = float("nan")
+                else:
+                    se = float(np.sqrt(variance))
+                if df_survey is not None:
+                    df_survey = min(int(df_survey), int(n_valid_rep) - 1)
+                else:
+                    df_survey = 0
+            elif (
                 resolved_survey_unit is not None
                 and getattr(resolved_survey_unit, "psu", None) is not None
             ):
@@ -1831,19 +1876,24 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         Parameters
         ----------
         survey_design : SurveyDesign, optional
-            Complex survey design (pweight-only; full-design TSL —
-            weights/strata/PSU/FPC). Declared designs weight the moment
-            kernels (Hajek p-hat/lambda-hat/theta), pass ``sample_weight``
-            into the nuisance learners (user learner objects must accept
-            ``sample_weight`` by keyword — a learner without it is rejected
-            up front), switch cross-fitting to PSU-cohesive folds when the
-            PSU is strictly coarser than the sampling unit, and route the
-            per-cell and aggregate variances through the design-based
-            kernels with ``df = n_PSU - n_strata`` t-inference. Survey
-            support is a documented library extension of Chang (2020),
-            which assumes i.i.d. sampling — Theorem 2's coverage claim
-            does not carry over (REGISTRY DMLDiD Notes). Replicate-weight
-            designs are not supported yet (fail closed; TODO.md).
+            Complex survey design (pweight-only). Declared designs weight
+            the moment kernels (Hajek p-hat/lambda-hat/theta) and pass
+            ``sample_weight`` into the nuisance learners (user learner
+            objects must accept ``sample_weight`` by keyword — a learner
+            without it is rejected up front). Two variance lanes:
+            full-design TSL (weights/strata/PSU/FPC) switches cross-fitting
+            to PSU-cohesive folds when the PSU is strictly coarser than the
+            sampling unit and routes the per-cell and aggregate variances
+            through the design-based kernels with ``df = n_PSU - n_strata``
+            t-inference; replicate-weight designs (BRR / Fay / JK1 / JKn /
+            SDR) compute per-cell AND aggregate variances by IF-reweighting
+            the cross-fitted scores with ``df = rank(replicate matrix) - 1``
+            t-inference (nuisances are not re-estimated per replicate;
+            REGISTRY DMLDiD Note). Replicate designs reject ``cluster=``
+            and ``n_bootstrap > 0`` combinations. Survey support is a
+            documented library extension of Chang (2020), which assumes
+            i.i.d. sampling — Theorem 2's coverage claim does not carry
+            over (REGISTRY DMLDiD Notes).
         """
         df, covariates = self._validate_and_prepare(
             data, outcome, unit, time, first_treat, covariates
@@ -1866,13 +1916,18 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             survey_metadata,
         ) = _resolve_survey_for_fit(survey_design, data, "analytical")
 
-        # Replicate designs fail closed FIRST (None-guarded): no replicate
-        # variance path exists for the cross-fitted scores yet.
-        if resolved_survey is not None and resolved_survey.uses_replicate_variance:
+        # Replicate + bootstrap rejected FIRST (before any fit work) —
+        # replicate variance is an analytical alternative, not compatible
+        # with bootstrap (CS parity, staggered.py).
+        if (
+            self.n_bootstrap > 0
+            and resolved_survey is not None
+            and resolved_survey.uses_replicate_variance
+        ):
             raise NotImplementedError(
-                "DMLDiD does not support replicate-weight survey designs yet "
-                "(tracked in TODO.md); use a full-design SurveyDesign "
-                "(weights/strata/psu/fpc) instead."
+                "DMLDiD bootstrap (n_bootstrap > 0) is not supported "
+                "with replicate-weight survey designs. Replicate weights provide "
+                "analytical variance; use n_bootstrap=0 instead."
             )
 
         # Raw (pre-normalization) per-obs design weights, for metadata
@@ -1902,6 +1957,25 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     "drop or impute them before fitting"
                 )
             cluster_ids_for_check = _cluster_col.to_numpy()
+            # Reject replicate-weight + cluster= AFTER the column checks (CS
+            # ordering: a bogus cluster name raises ValueError first).
+            # Replicate IF variance is computed by replicate reweighting and
+            # ignores PSU/cluster entirely (replicate_weights are mutually
+            # exclusive with strata/psu/fpc) — honoring cluster= would
+            # silently have no effect on the variance, and the inject-as-PSU
+            # paths below would violate that mutual exclusion.
+            if resolved_survey is not None and resolved_survey.uses_replicate_variance:
+                raise NotImplementedError(
+                    f"DMLDiD(cluster={self.cluster!r}) is not "
+                    "supported with replicate-weight survey designs. "
+                    "Replicate-weight variance is computed by replicate "
+                    "reweighting (BRR / Fay / JK1 / JKn / SDR) and ignores "
+                    "PSU/cluster entirely — setting cluster= would silently "
+                    "have no effect on the variance estimate. Either omit "
+                    "cluster= (the replicate weights encode the design "
+                    "structure implicitly) or use a non-replicate survey "
+                    "design (with explicit strata/psu/fpc)."
+                )
             if resolved_survey is None:
                 # Bare cluster=: synthesize a PSU-only design. survey_metadata
                 # stays None DELIBERATELY (it is the declared-survey marker:
@@ -2188,15 +2262,31 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
 
         # Overall ATT (simple aggregation over post-treatment finite cells).
         # overall_effective_df is non-None only when replicate variance
-        # dropped replicates — unreachable while replicate designs are
-        # rejected, but kept for structural parity with CS.
+        # dropped replicates (n_valid < R). MIN-CAP, not CS's replace: the
+        # QR-rank design df stays the ceiling (CS's replace convention can
+        # RAISE df above the design df — anti-conservative; deliberate
+        # documented divergence, REGISTRY DMLDiD Note + CS-parity TODO row).
         overall_att, overall_se, overall_effective_df = self._aggregate_simple(
             group_time_effects, influence_func_info, df, unit, precomputed
         )
-        if overall_effective_df is not None:
-            df_survey = overall_effective_df
+        if overall_effective_df is not None and df_survey is not None:
+            df_survey = min(int(df_survey), int(overall_effective_df))
+            # Propagate to survey_metadata for display consistency (CS
+            # parity) — the capped value, never the sentinel below.
+            if survey_metadata is not None:
+                survey_metadata.df_survey = df_survey
+        # Replicate design with undefined df (QR rank <= 1): df=0 sentinel
+        # -> NaN inference, applied to the LOCAL df only (survey_metadata
+        # keeps None).
+        df_overall = df_survey
+        if (
+            df_survey is None
+            and resolved_survey is not None
+            and resolved_survey.uses_replicate_variance
+        ):
+            df_overall = 0
         overall_t_stat, overall_p_value, overall_conf_int = safe_inference(
-            overall_att, overall_se, alpha=self.alpha, df=df_survey
+            overall_att, overall_se, alpha=self.alpha, df=df_overall
         )
 
         # Optional multiplier bootstrap (keyword form; aggregate=None is the

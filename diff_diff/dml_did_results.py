@@ -15,9 +15,12 @@ definition (REGISTRY.md "IF-based variance estimators..." — the default),
 and DMLDiD's augmented-score SE ``sqrt(mean(psi_bar**2)/n)`` is exactly
 that on NO-DESIGN fits — per UNIT on panel fits, per OBSERVATION on
 repeated-cross-section fits (rows are the sampling units there). Under a
-``survey_design=``/``cluster=`` the per-cell SE is the design-based CR1 /
-weighted-IF variance instead (the CS clustered-``hc1`` convention:
-``SurveyDesign(psu=...)`` routed through the shared stratified-PSU meat).
+``survey_design=``/``cluster=`` the per-cell SE is design-based instead:
+full-design TSL fits use the CR1 / weighted-IF variance (the CS
+clustered-``hc1`` convention: ``SurveyDesign(psu=...)`` routed through the
+shared stratified-PSU meat), while replicate-weight fits use IF-reweighting
+via ``compute_replicate_if_variance`` on the same per-cell payload
+(``df = rank(replicate matrix) - 1``; REGISTRY DMLDiD Note).
 """
 
 from dataclasses import dataclass, field

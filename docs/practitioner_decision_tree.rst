@@ -441,8 +441,8 @@ by geography), or probability weights.
 :class:`~diff_diff.SurveyDesign`. (:class:`~diff_diff.LWDiD` is the
 exception: it accepts no ``survey_design`` parameter at all — see the
 :ref:`survey-design-support` matrix. :class:`~diff_diff.DMLDiD` supports
-pweight full-design TSL and ``cluster=`` on both lanes; replicate-weight
-designs are not supported yet.)
+pweight full-design TSL, replicate-weight designs (IF-reweighting), and
+``cluster=`` on both lanes.)
 
 Ignoring survey weights and clustering makes your confidence intervals too narrow -
 you will be overconfident about the result. Passing a ``SurveyDesign`` to ``fit()``
@@ -575,9 +575,9 @@ The six scenarios above cover the most common business use cases.
   set ``seed=`` for reproducible fold draws. Panel data by default;
   ``panel=False`` runs declared repeated cross sections (Chang Case 2,
   λ-corrected variance). Survey/cluster support on both lanes:
-  ``survey_design=`` (pweight full-design TSL — a documented library
-  extension of Chang's i.i.d. theory) and coarser-than-unit
-  ``cluster=``; replicate-weight designs are not supported yet.
+  ``survey_design=`` (pweight full-design TSL or replicate weights via
+  IF-reweighting — a documented library extension of Chang's i.i.d.
+  theory) and coarser-than-unit ``cluster=``.
 
 For the full academic decision tree with all estimators, see :doc:`choosing_estimator`.
 

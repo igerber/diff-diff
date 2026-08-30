@@ -349,7 +349,7 @@ supported / out of scope; `warn` supported but with documented caveats;
 | `StackedDiD` | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ |
 | `WooldridgeDiD` (ETWFE) | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ |
 | `LWDiD` | ✓ | ✓ | ✗ | ✗ | ✓ | warn | partial | ✗ | ✓ |
-| `DMLDiD` | ✓ | ✓ | ✗ | ✗ | partial | ✓ (REQUIRED) | ✗ | ✗ | ✓ (pweight full-design TSL + coarser cluster=; PSU-cohesive folds; replicate designs rejected; panel=False = declared RCS) |
+| `DMLDiD` | ✓ | ✓ | ✗ | ✗ | partial | ✓ (REQUIRED) | ✗ | ✗ | ✓ (pweight full-design TSL + replicate weights + coarser cluster=; PSU-cohesive folds; panel=False = declared RCS) |
 | `EfficientDiD` | ✓ | ✓ | ✗ | ✗ | partial | ✓ | ✗ | ✗ | ✓ |
 | `SyntheticDiD` | ✓ | ✗ | ✗ | ✗ | ✓ | ✓ | ✓ | ✗ | partial |
 | `TROP` | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | partial |
@@ -766,10 +766,11 @@ Explicit RCS support in this library:
 - `DMLDiD(panel=False)` - Chang (2020) Case 2 declared-RCS mode
   (row-unique unit IDs; level-outcome orthogonal scores with the
   lambda-corrected variance; REGISTRY.md §DMLDiD). Survey/cluster
-  support on both designs: `survey_design=` (pweight full-design TSL;
-  the weighted-lambda plug-in is a library extension - Theorem 2's
-  coverage claim does not carry over) and coarser-than-unit `cluster=`
-  (variance/folds only); replicate designs rejected;
+  support on both designs: `survey_design=` (pweight full-design TSL
+  or replicate weights — per-cell AND aggregate IF-reweighting, df =
+  rank-1; replicate + cluster=/bootstrap rejected; the weighted-lambda
+  plug-in is a library extension - Theorem 2's coverage claim does not
+  carry over) and coarser-than-unit `cluster=` (variance/folds only);
   aggregate('total') fails closed on RCS and declared-survey fits.
 - `TripleDifference` - DDD cross-sectional use cases are documented
   in `docs/choosing_estimator.rst`; the two-period DDD estimator does

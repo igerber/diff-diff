@@ -3028,15 +3028,16 @@ the finite-dimensional `p_0` is handled by the variance correction below.
   (Assumption 2.3) is warned at fit (not data-checkable).
 - **Note:** Survey support (3.11) is a LIBRARY EXTENSION — Chang (2020)
   assumes i.i.d. sampling and never discusses clustering or weighting.
-  Declared `survey_design=` (pweight-only, full-design TSL:
-  weights/strata/PSU/FPC, resolved and validated by the shared CS
-  machinery) enters the ESTIMATOR, not just the variance: p̂ and (Case 2)
+  Declared `survey_design=` (pweight-only; full-design TSL —
+  weights/strata/PSU/FPC — or replicate weights, resolved and validated
+  by the shared CS machinery) enters the ESTIMATOR, not just the
+  variance: p̂ and (Case 2)
   λ̂ become Hájek weighted shares, θ̂ the weighted score mean, Ĝ₂λ the
   weighted slope mean, the nuisance learners receive `sample_weight`
   (user learner objects must accept it by keyword — a `TypeError` fires
   up front otherwise), and the IF payload is the weighted analogue
-  `w_i·ψ̄_i/Σw`. The per-cell SE is PSU-gated exactly like CS: designs
-  with a PSU route through `_cluster_robust_se_from_per_gt_if`
+  `w_i·ψ̄_i/Σw`. The TSL-lane per-cell SE is PSU-gated exactly like CS:
+  designs with a PSU route through `_cluster_robust_se_from_per_gt_if`
   (`compute_survey_if_variance`; a NaN return is the deliberate
   unidentified-variance signal and flows to `safe_inference` on a
   RETAINED cell), strata/FPC-only designs use the weighted
@@ -3044,12 +3045,60 @@ the finite-dimensional `p_0` is handled by the variance correction below.
   `_se_from_psi`. Analytical inference uses `df = df_survey` (on bootstrapped
   surfaces the container's `df_survey` SCALAR persists while the per-row `df`
   column is cleared - the two-channel contract in the CallawaySantAnna
-  post-fit Note applies to DMLDiD identically)
-  (`n_PSU − n_strata`) t-statistics; bootstrap overrides keep normal
+  post-fit Note applies to DMLDiD identically) — TSL designs at
+  (`n_PSU − n_strata`) t-statistics, replicate designs at
+  (`rank(replicate matrix) − 1`) (see the replicate Note below);
+  bootstrap overrides keep normal
   theory (the CS convention). On the weighted-λ̂ RCS lane Theorem 2's
   coverage claim does NOT carry over — the weighted plug-in is validated
   by the survey invariant battery (`tests/test_survey_dml.py`), not by
-  the paper. Replicate-weight designs fail closed (TODO.md row).
+  the paper.
+- **Note:** Replicate-weight designs (BRR / Fay / JK1 / JKn / SDR) are
+  supported via IF-reweighting on the AUGMENTED cross-fitted scores, per
+  cell AND aggregate (`compute_replicate_if_variance` on the same Hájek
+  payload `w_i·ψ̄_i/Σw` the aggregate `_se_from_psi` route consumes). The
+  replicate estimate is the LINEARIZED Hájek form with a FIXED full-weight
+  denominator: `θ_r = Σ_i w_{r,i}·ψ̄_i / Σ_{j∈cell} w_j`
+  (`combined_weights=True`; under `combined_weights=False` the helper's
+  ratio is `w_r` alone, i.e. `θ_r = Σ_i w_{r,i}·w_i·ψ̄_i / Σ_{j∈cell} w_j`)
+  — the denominator does NOT re-normalize per replicate (verified against
+  the implementation to 1e-15). Justification: the augmented score is
+  Neyman-orthogonal in the learned nuisances (g, ℓ) — first-order
+  insensitive to nuisance perturbation — so reweighting the REALIZED
+  scores without per-replicate re-cross-fitting is better grounded for
+  DMLDiD than for parametric first-stage estimators; the nuisances are
+  nonetheless NOT re-estimated per replicate (the same
+  conditional-on-nuisance convention as every IF-reweighting route; the
+  refit alternative is the ImputationDiD/TwoStageDiD lane). Because
+  replicate designs skip mean-1 weight normalization, the RAW weight
+  scale reaches the learners' `sample_weight`: the `linear` and `sieve`
+  learners are scale-invariant, but `RidgeLearner` (fixed alpha and
+  `alpha="loocv"`) is weight-scale-DEPENDENT via `solve_ridge`'s
+  unnormalized weighted loss against a fixed penalty — documented
+  behavior, bounded (ridge → OLS as the scale grows), pinned by the
+  scale-invariance tests. Df conventions: design df = QR rank of the
+  analysis-weight matrix − 1; per-cell and overall inference use
+  `min(df_survey, n_valid − 1)` capping (`n_valid` equals R in practice,
+  so the cap is defensive). The overall MIN-CAP deliberately diverges
+  from CS's replace convention (`df_survey = overall_effective_df`),
+  which can RAISE df above the design df — anti-conservative; the CS-side
+  flip, along with the inherited replace-style event-study/group
+  aggregation sites in shared code (latent — they fire only when
+  `n_valid < R`) and the staggered-DDD engine twins, is tracked in the
+  TODO.md CS-parity row. `df_survey is None` (rank ≤ 1) → NaN inference
+  (df=0 sentinel local to `safe_inference`; `survey_metadata.df_survey`
+  keeps `None`). PER-CELL replicate SEs EXCEED CS's per-cell convention
+  (CS leaves per-cell SEs on the weighted sqrt-sum under replicates) —
+  a deliberate documented divergence, same TODO row. Degenerate cells
+  (zero or non-finite replicate variance, e.g. a cell no replicate
+  column perturbs) fail closed to NaN inference PER-CELL — stricter than
+  the shared aggregate path, which clamps negatives and can report a 0.0
+  aggregate SE (documented asymmetry: new per-cell code holds the
+  stricter fail-closed contract; the aggregate clamp is inherited
+  shared code). Rejected combinations: replicate + `n_bootstrap > 0` and
+  replicate + `cluster=` (both `NotImplementedError`, message-parity
+  with CS; the cluster check runs AFTER column validation so a bogus
+  `cluster=` name stays `ValueError`).
 - **Note:** PSU-cohesive cross-fitting (survey/cluster designs) — when the
   effective design's PSU is strictly coarser than the sampling unit AND
   there are at least `n_folds` PSUs globally, fold assignment switches
@@ -6951,7 +7000,7 @@ variance from the distribution of replicate estimates.
   design structure is fixed and dropped replicates contribute zero to the
   sum without changing the scale. Survey df uses `n_valid - 1` for
   t-based inference.
-- **Note:** Replicate-weight support matrix (13 of 20 public estimators):
+- **Note:** Replicate-weight support matrix (14 of 21 public estimators):
   - **Supported**: CallawaySantAnna (reg/ipw/dr with or without covariates,
     no bootstrap; IF-based replicate variance is covariate-agnostic),
     ContinuousDiD (no bootstrap), EfficientDiD (no bootstrap),
@@ -6965,13 +7014,17 @@ variance from the distribution of replicate estimates.
     ImputationDiD (two-stage refit), TwoStageDiD (two-stage refit),
     ChaisemartinDHaultfoeuille (closed-form cell-collapse replicate ATT,
     multi-horizon and placebo paths; replicate + `n_bootstrap > 0` rejected
-    — see the ChaisemartinDHaultfoeuille Notes for the allocator contract)
+    — see the ChaisemartinDHaultfoeuille Notes for the allocator contract),
+    DMLDiD (IF-reweighting on the augmented cross-fitted scores, PER-CELL
+    and aggregate — exceeds CS's per-cell convention; replicate +
+    `cluster=` and replicate + bootstrap rejected — see the DMLDiD
+    replicate Note)
   - **Rejected with NotImplementedError**: SyntheticDiD, TROP
     (bootstrap-based variance), WooldridgeDiD, LPDiD, SpilloverDiD,
     HeterogeneousAdoptionDiD (TSL-only survey paths; replicate designs
     rejected at `fit()`), SyntheticControl (rejects `survey_design`
     entirely)
-  - **BaconDecomposition** is diagnostic-only — outside the 20-estimator
+  - **BaconDecomposition** is diagnostic-only — outside the 21-estimator
     count — and likewise rejects replicate designs
   - Estimators with replicate support reject replicate + bootstrap
     (replicate weights provide analytical variance)

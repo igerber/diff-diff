@@ -1,11 +1,13 @@
-"""DMLDiD survey-design support (both lanes): TSL + survey bootstrap + cluster=.
+"""DMLDiD survey-design support (both lanes): TSL + replicate weights +
+survey bootstrap + cluster=.
 
 Survey support is a documented library extension of Chang (2020), which
 assumes i.i.d. sampling (Assumption 2.3) — no external oracle exists
 (DoubleML has no survey support; R ``did::`` is survey-naive), so the
 evidence is the library's standard survey invariant battery (mirroring
 ``tests/test_survey_phase4.py``'s CS coverage) plus direct kernel
-cross-checks against ``compute_survey_if_variance``.
+cross-checks against ``compute_survey_if_variance`` (TSL lane) and
+``compute_replicate_if_variance`` (replicate lane).
 """
 
 import warnings
@@ -16,7 +18,11 @@ import pytest
 
 from diff_diff import DMLDiD
 from diff_diff.staggered_aggregation import fixed_cohort_agg_weights
-from diff_diff.survey import SurveyDesign, compute_survey_if_variance
+from diff_diff.survey import (
+    SurveyDesign,
+    compute_replicate_if_variance,
+    compute_survey_if_variance,
+)
 from diff_diff.utils import safe_inference
 from tests.conftest import assert_nan_inference
 
@@ -81,6 +87,66 @@ def _fit(df, *, panel=True, survey=None, cluster=None, seed=42, ignore_warnings=
 
 
 _DESIGN = SurveyDesign(weights="w", strata="stratum", psu="psu")
+
+
+def _attach_jk1(df, psu_col="psu", w_col="w"):
+    """Delete-cluster JK1 replicate columns over the frame's PSUs (the
+    test_survey_phase6.py construction). Returns (df_copy, rep_cols)."""
+    df = df.copy()
+    psus = np.unique(df[psu_col])
+    n_rep = len(psus)
+    rep_cols = []
+    for r, p in enumerate(psus):
+        w_r = df[w_col].to_numpy(dtype=np.float64).copy()
+        mask = (df[psu_col] == p).to_numpy()
+        w_r[mask] = 0.0
+        w_r[~mask] *= n_rep / (n_rep - 1)
+        col = f"rep_{r}"
+        df[col] = w_r
+        rep_cols.append(col)
+    return df, rep_cols
+
+
+def _attach_brr(df, psu_col="psu", w_col="w", n_rep=8):
+    """Half-sample BRR replicate columns (double one half, zero the other)."""
+    df = df.copy()
+    psu = df[psu_col].to_numpy()
+    rep_cols = []
+    for r in range(n_rep):
+        half = ((psu + r) % 2) == 0
+        w_r = df[w_col].to_numpy(dtype=np.float64).copy()
+        w_r[half] *= 2.0
+        w_r[~half] = 0.0
+        col = f"brr_{r}"
+        df[col] = w_r
+        rep_cols.append(col)
+    return df, rep_cols
+
+
+def _jk1_design(rep_cols, **kw):
+    return SurveyDesign(weights="w", replicate_weights=rep_cols, replicate_method="JK1", **kw)
+
+
+@pytest.fixture(scope="module")
+def panel_replicate_df(panel_df):
+    return _attach_jk1(panel_df)
+
+
+@pytest.fixture(scope="module")
+def rcs_replicate_df(rcs_df):
+    return _attach_jk1(rcs_df)
+
+
+@pytest.fixture(scope="module")
+def panel_replicate(panel_replicate_df):
+    df, rep_cols = panel_replicate_df
+    return _fit(df, survey=_jk1_design(rep_cols))
+
+
+@pytest.fixture(scope="module")
+def rcs_replicate(rcs_replicate_df):
+    df, rep_cols = rcs_replicate_df
+    return _fit(df, panel=False, survey=_jk1_design(rep_cols))
 
 
 @pytest.fixture(scope="module")
@@ -727,21 +793,22 @@ class TestSurveyBootstrap:
 
 
 class TestRejections:
-    def test_replicate_design_fails_closed(self, panel_df):
-        df = panel_df.copy()
-        df["rw1"] = df["w"] * 1.1
-        df["rw2"] = df["w"] * 0.9
-        design = SurveyDesign(weights="w", replicate_weights=["rw1", "rw2"], replicate_method="JK1")
-        with pytest.raises(NotImplementedError, match="replicate"):
-            _fit(panel_df.assign(rw1=df["rw1"], rw2=df["rw2"]), survey=design)
+    def test_cluster_plus_replicate_hits_targeted_message(self, panel_replicate_df):
+        df, rep_cols = panel_replicate_df
+        with pytest.raises(NotImplementedError, match="cluster.*replicate-weight"):
+            _fit(df, survey=_jk1_design(rep_cols), cluster="psu")
 
-    def test_cluster_plus_replicate_hits_blanket_replicate_message(self, panel_df):
-        df = panel_df.copy()
-        df["rw1"] = df["w"] * 1.1
-        df["rw2"] = df["w"] * 0.9
-        design = SurveyDesign(weights="w", replicate_weights=["rw1", "rw2"], replicate_method="JK1")
-        with pytest.raises(NotImplementedError, match="replicate"):
-            _fit(df, survey=design, cluster="psu")
+    def test_bogus_cluster_on_replicate_fit_raises_value_error_first(self, panel_replicate_df):
+        # CS ordering parity: the cluster column-existence check runs BEFORE
+        # the replicate + cluster= rejection, so a bogus name is ValueError.
+        df, rep_cols = panel_replicate_df
+        with pytest.raises(ValueError, match="cluster column 'nope' not found"):
+            _fit(df, survey=_jk1_design(rep_cols), cluster="nope")
+
+    def test_bootstrap_plus_replicate_rejected(self, panel_replicate_df):
+        df, rep_cols = panel_replicate_df
+        with pytest.raises(NotImplementedError, match="bootstrap.*replicate-weight"):
+            _fit(df, survey=_jk1_design(rep_cols), n_bootstrap=29)
 
     def test_non_pweight_rejected(self, panel_df):
         with pytest.raises(ValueError, match="pweight"):
@@ -880,3 +947,283 @@ class TestAggregationMasses:
         masses = fixed_cohort_agg_weights({"survey_weights": sw, "unit_cohorts": unit_cohorts})
         assert masses[g1] == 3.0
         assert masses[g2] == 5.0
+
+
+# ---------------------------------------------------------------------------
+# 10. Replicate-weight designs (IF-reweighting; per-cell + aggregate)
+# ---------------------------------------------------------------------------
+
+
+class TestReplicateDesigns:
+    @pytest.mark.parametrize("fixture", ["panel_replicate", "rcs_replicate"])
+    def test_acceptance_both_lanes(self, fixture, request):
+        res = request.getfixturevalue(fixture)
+        assert np.isfinite(res.overall_att) and np.isfinite(res.overall_se)
+        assert res.survey_metadata is not None
+        # Full-rank JK1 over 20 PSUs: QR-rank df = R - 1.
+        assert res.survey_metadata.df_survey == 19
+        finite_cells = [
+            v
+            for v in res.group_time_effects.values()
+            if v.get("skip_reason") is None and not v.get("is_reference")
+        ]
+        assert finite_cells
+        assert all(np.isfinite(v["se"]) and v["se"] > 0 for v in finite_cells)
+
+    def test_brr_method_accepted(self, panel_df):
+        df, rep_cols = _attach_brr(panel_df)
+        res = _fit(
+            df,
+            survey=SurveyDesign(weights="w", replicate_weights=rep_cols, replicate_method="BRR"),
+        )
+        assert np.isfinite(res.overall_att) and np.isfinite(res.overall_se)
+        assert res.survey_metadata is not None
+
+    def test_combined_weights_false_branch(self, panel_replicate_df, panel_replicate):
+        # combined_weights=False takes the ratio = w_r branch (not w_r/w) and
+        # a different df_survey analysis-weight construction; the SE must
+        # DIFFER from the combined fit on the same frame (a regression that
+        # routed it through the combined branch would reproduce it exactly).
+        df, rep_cols = panel_replicate_df
+        res = _fit(df, survey=_jk1_design(rep_cols, combined_weights=False))
+        assert np.isfinite(res.overall_att) and np.isfinite(res.overall_se)
+        np.testing.assert_allclose(res.overall_att, panel_replicate.overall_att, rtol=1e-12)
+        assert not np.isclose(res.overall_se, panel_replicate.overall_se, rtol=1e-6)
+
+    @pytest.mark.parametrize("fixture", ["panel_replicate", "rcs_replicate"])
+    def test_per_cell_se_matches_compute_replicate_if_variance(self, fixture, request):
+        res = request.getfixturevalue(fixture)
+        kit = res._aggregation_kit
+        checked = 0
+        for gt_key, data in res.group_time_effects.items():
+            if data.get("skip_reason") is not None or data.get("is_reference"):
+                continue
+            if gt_key not in kit.influence:
+                continue
+            psi, resolved = _reconstruct_cell_psi(kit, gt_key)
+            variance, _n_valid = compute_replicate_if_variance(psi, resolved)
+            np.testing.assert_allclose(data["se"], np.sqrt(variance), rtol=1e-12)
+            checked += 1
+        assert checked > 0
+
+    @pytest.mark.parametrize("learner", ["linear", "sieve"])
+    def test_scale_invariance_linear_sieve(self, panel_replicate_df, learner):
+        # Replicate designs skip mean-1 normalization, so the raw weight
+        # scale reaches the learners' sample_weight verbatim; linear/sieve
+        # solves and the Hajek moments are scale-invariant (allclose, not
+        # exact equality: BLAS summation order varies by backend/OS).
+        df, rep_cols = panel_replicate_df
+        base = _fit(df, survey=_jk1_design(rep_cols), outcome_learner=learner)
+        df_s = df.copy()
+        for c in ["w"] + rep_cols:
+            df_s[c] = df_s[c] * 100.0
+        scaled = _fit(df_s, survey=_jk1_design(rep_cols), outcome_learner=learner)
+        np.testing.assert_allclose(scaled.overall_att, base.overall_att, rtol=1e-14)
+        np.testing.assert_allclose(scaled.overall_se, base.overall_se, rtol=1e-14)
+
+    def test_ridge_scale_dependence_bounded(self, panel_replicate_df):
+        # RidgeLearner is weight-SCALE-sensitive by documented solve_ridge
+        # behavior (unnormalized weighted loss vs a fixed penalty; REGISTRY
+        # DMLDiD Note) — no equality pin, only a sanity ceiling on the drift.
+        from diff_diff._learners import RidgeLearner
+
+        df, rep_cols = panel_replicate_df
+        base = _fit(df, survey=_jk1_design(rep_cols), outcome_learner=RidgeLearner(alpha=1.0))
+        df_s = df.copy()
+        for c in ["w"] + rep_cols:
+            df_s[c] = df_s[c] * 100.0
+        scaled = _fit(df_s, survey=_jk1_design(rep_cols), outcome_learner=RidgeLearner(alpha=1.0))
+        assert np.isfinite(scaled.overall_att)
+        assert abs(scaled.overall_att - base.overall_att) < 1e-2
+
+    def test_df_tightening_spy_reaches_all_surfaces(self, panel_replicate_df, monkeypatch):
+        # dCDH two-pass convention: reduce n_valid on EVERY call; the
+        # min(df_survey, n_valid - 1) rule must reach per-cell inference,
+        # the overall, AND survey_metadata.df_survey.
+        from scipy import stats as _stats
+
+        from diff_diff import survey as _survey_mod
+
+        df, rep_cols = panel_replicate_df
+        reduced_n_valid = 7  # (7 - 1) < R - 1 = 19 -> the cap binds
+        original = _survey_mod.compute_replicate_if_variance
+
+        def reduce_n_valid(psi, resolved_arg):
+            var, _n_valid = original(psi, resolved_arg)
+            return var, reduced_n_valid
+
+        monkeypatch.setattr(_survey_mod, "compute_replicate_if_variance", reduce_n_valid)
+        res = _fit(df, survey=_jk1_design(rep_cols))
+        expected_df = reduced_n_valid - 1
+        assert res.survey_metadata.df_survey == expected_df
+        # Overall: min-cap picked the reduced value (19 -> 6).
+        t_overall = res.overall_att / res.overall_se
+        assert res.overall_p_value == pytest.approx(
+            2 * _stats.t.sf(abs(t_overall), df=expected_df), rel=1e-10
+        )
+        # Per-cell: every finite cell's p-value uses the reduced df.
+        checked = 0
+        for v in res.group_time_effects.values():
+            if v.get("skip_reason") is not None or v.get("is_reference"):
+                continue
+            if not (np.isfinite(v["se"]) and v["se"] > 0):
+                continue
+            t_cell = v["effect"] / v["se"]
+            assert v["p_value"] == pytest.approx(
+                2 * _stats.t.sf(abs(t_cell), df=expected_df), rel=1e-10
+            )
+            checked += 1
+        assert checked > 0
+
+    def test_overall_df_caps_never_replaces(self, panel_replicate_df, monkeypatch):
+        # The CAP-vs-REPLACE discriminator: a rank-deficient-but-usable
+        # design (duplicated replicate columns -> QR rank 5, df_survey = 4)
+        # plus a spy n_valid with n_valid - 1 = 6 > 4. CS's replace
+        # convention would report df = 6; DMLDiD's min-cap must keep 4
+        # (deliberate documented divergence; REGISTRY DMLDiD Note).
+        from scipy import stats as _stats
+
+        from diff_diff import survey as _survey_mod
+
+        df, rep_cols = panel_replicate_df
+        keep = rep_cols[:5]
+        r8_cols = []
+        for i in range(8):
+            src = keep[min(i, 4)]  # cols 5..7 duplicate col 4 -> rank 5
+            col = f"r8_{i}"
+            df = df.assign(**{col: df[src]})
+            r8_cols.append(col)
+        design = _jk1_design(r8_cols)
+        assert design.resolve(df).df_survey == 4
+
+        original = _survey_mod.compute_replicate_if_variance
+
+        def reduce_n_valid(psi, resolved_arg):
+            var, _n_valid = original(psi, resolved_arg)
+            return var, 7  # < R = 8 -> the overall relay activates with 6
+
+        monkeypatch.setattr(_survey_mod, "compute_replicate_if_variance", reduce_n_valid)
+        res = _fit(df, survey=design)
+        assert res.survey_metadata.df_survey == 4
+        t_overall = res.overall_att / res.overall_se
+        assert res.overall_p_value == pytest.approx(
+            2 * _stats.t.sf(abs(t_overall), df=4), rel=1e-10
+        )
+
+    def test_rank_one_replicate_matrix_nan_inference(self, panel_df):
+        # All replicate columns identical to the full weights: QR rank 1 ->
+        # df_survey None AND zero replicate contrast -> per-cell degenerate
+        # guard (se == NaN, not the clamped 0.0) + NaN inference on cell and
+        # overall surfaces; survey_metadata.df_survey stays None (the df=0
+        # sentinel is local to safe_inference, never leaked to metadata).
+        df = panel_df.copy()
+        rep_cols = []
+        for r in range(6):
+            col = f"same_{r}"
+            df[col] = df["w"]
+            rep_cols.append(col)
+        res = _fit(df, survey=_jk1_design(rep_cols))
+        assert res.survey_metadata.df_survey is None
+        checked = 0
+        for v in res.group_time_effects.values():
+            if v.get("skip_reason") is not None or v.get("is_reference"):
+                continue
+            assert np.isnan(v["se"])
+            assert_nan_inference(v)
+            checked += 1
+        assert checked > 0
+        assert_nan_inference(
+            {
+                "se": res.overall_se,
+                "t_stat": res.overall_t_stat,
+                "p_value": res.overall_p_value,
+                "conf_int": res.overall_conf_int,
+            }
+        )
+
+    @pytest.mark.parametrize("degenerate", [(0.0, 20), (float("nan"), 1)])
+    def test_degenerate_cell_fails_closed_to_nan(self, panel_replicate_df, monkeypatch, degenerate):
+        # Zero variance (a cell no replicate column perturbs) and the
+        # n_valid < 2 helper contract (variance NaN) both fail closed
+        # PER-CELL: se must be NaN EXPLICITLY (assert_nan_inference alone
+        # cannot discriminate NaN from a clamped 0.0 — safe_inference NaNs
+        # t/p/CI at se=0 either way). Spy hits the FIRST per-cell call only;
+        # every other cell stays finite.
+        from diff_diff import survey as _survey_mod
+
+        df, rep_cols = panel_replicate_df
+        original = _survey_mod.compute_replicate_if_variance
+        counter = {"n": 0}
+
+        def degrade_first_cell(psi, resolved_arg):
+            counter["n"] += 1
+            if counter["n"] == 1:
+                return degenerate
+            return original(psi, resolved_arg)
+
+        monkeypatch.setattr(_survey_mod, "compute_replicate_if_variance", degrade_first_cell)
+        res = _fit(df, survey=_jk1_design(rep_cols))
+        cells = [
+            v
+            for v in res.group_time_effects.values()
+            if v.get("skip_reason") is None and not v.get("is_reference")
+        ]
+        nan_cells = [v for v in cells if np.isnan(v["se"])]
+        finite_cells = [v for v in cells if np.isfinite(v["se"]) and v["se"] > 0]
+        assert len(nan_cells) == 1
+        assert_nan_inference(nan_cells[0])
+        assert len(finite_cells) == len(cells) - 1
+        # The degenerate cell is RETAINED (NaN-consistent inference), never
+        # silently skipped or given an analytical fallback.
+        assert nan_cells[0].get("skip_reason") is None
+
+    def test_aggregations_finite_es_vcov_none_total_closed(self, panel_replicate):
+        es = panel_replicate.aggregate("event_study")
+        se_vals = np.asarray(es.se, dtype=float)
+        ref = np.asarray(es.is_reference, dtype=bool)
+        assert np.all(np.isfinite(se_vals[~ref]))
+        assert es.vcov is None  # deliberate under replicates (HonestDiD diagonal)
+        gr = panel_replicate.aggregate("group")
+        assert np.all(np.isfinite(np.asarray(gr.se, dtype=float)))
+        with pytest.raises(NotImplementedError):
+            panel_replicate.aggregate("total")
+
+    def test_es_df_pins_inherited_replace_convention(self, panel_replicate_df, monkeypatch):
+        # The SHARED event-study aggregation path REPLACES the design df
+        # with min(non_none effective dfs) (staggered_aggregation.py) —
+        # the inherited CS convention, NOT the fit-level min-cap. To
+        # discriminate, the design must be rank-deficient (df_survey = 4)
+        # with spy n_valid - 1 = 6 > 4: replace reports 6, a cap would
+        # report 4. Pinned at 6 so the follow-up flip to min-cap (TODO.md
+        # CS-parity row: all five replace-style relay sites) is detectable;
+        # latent in practice (n_valid == R on well-formed designs).
+        from diff_diff import survey as _survey_mod
+
+        df, rep_cols = panel_replicate_df
+        keep = rep_cols[:5]
+        r8_cols = []
+        for i in range(8):
+            col = f"esr8_{i}"
+            df = df.assign(**{col: df[keep[min(i, 4)]]})
+            r8_cols.append(col)
+        design = _jk1_design(r8_cols)
+        assert design.resolve(df).df_survey == 4
+        res = _fit(df, survey=design)
+        original = _survey_mod.compute_replicate_if_variance
+
+        def reduce_n_valid(psi, resolved_arg):
+            var, _n_valid = original(psi, resolved_arg)
+            return var, 7  # < R = 8 -> effective df 6 at the shared site
+
+        monkeypatch.setattr(_survey_mod, "compute_replicate_if_variance", reduce_n_valid)
+        es = res.aggregate("event_study")
+        df_vals = np.asarray(es.df, dtype=float)
+        finite = df_vals[np.isfinite(df_vals)]
+        assert finite.size > 0
+        assert np.all(finite == 6.0)  # inherited replace; a min-cap would give 4
+
+    def test_replicate_fit_keeps_stratified_folds(self, panel_replicate):
+        # Replicate designs have psu None by mutual exclusion -> the
+        # PSU-cohesive fold gate is structurally inert.
+        diags = [d for d in panel_replicate.cross_fit_diagnostics.values() if "psu_folds" in d]
+        assert diags and all(d["psu_folds"] is False for d in diags)

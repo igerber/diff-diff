@@ -181,21 +181,25 @@ Restrictions
   CPS) — pass a pweight :class:`~diff_diff.SurveyDesign` via
   ``survey_design=`` for weighted RCS.
 - **Survey/cluster support (both lanes)** — ``survey_design=``
-  (pweight-only, full-design TSL: weights/strata/PSU/FPC) weights the
-  moment kernels, passes ``sample_weight`` into the nuisance learners,
-  switches to PSU-cohesive cross-fitting folds when the PSU is strictly
-  coarser than the sampling unit, and uses design-based variance with
-  ``df = n_PSU - n_strata`` t-inference: PSU designs get the
-  cluster-robust survey kernel per cell, strata/FPC-only designs use the
-  weighted influence-function per-cell SE with the full design entering
-  the AGGREGATE variances (the CallawaySantAnna convention). This is a documented LIBRARY
-  EXTENSION of Chang (2020), which assumes i.i.d. sampling — on the
-  weighted-λ RCS lane Theorem 2's coverage claim does not carry over
-  (REGISTRY DMLDiD Notes). Bare ``cluster=`` (constructor) keeps the
-  kernels unweighted and affects folds, variance and df only.
-  Replicate-weight designs are not supported yet (fail closed;
-  ``TODO.md``); ``aggregate('total')`` also fails closed on
-  declared-survey fits.
+  (pweight-only) weights the moment kernels and passes ``sample_weight``
+  into the nuisance learners; two variance lanes. Full-design TSL
+  (weights/strata/PSU/FPC) switches to PSU-cohesive cross-fitting folds
+  when the PSU is strictly coarser than the sampling unit and uses
+  design-based variance with ``df = n_PSU - n_strata`` t-inference: PSU
+  designs get the cluster-robust survey kernel per cell, strata/FPC-only
+  designs use the weighted influence-function per-cell SE with the full
+  design entering the AGGREGATE variances (the CallawaySantAnna
+  convention). Replicate-weight designs (BRR / Fay / JK1 / JKn / SDR)
+  compute per-cell AND aggregate variances by IF-reweighting the
+  cross-fitted scores with ``df = rank(replicate matrix) - 1``
+  t-inference (nuisances are not re-estimated per replicate); replicate
+  + ``cluster=`` and replicate + ``n_bootstrap > 0`` are rejected. This
+  is a documented LIBRARY EXTENSION of Chang (2020), which assumes
+  i.i.d. sampling — on the weighted-λ RCS lane Theorem 2's coverage
+  claim does not carry over (REGISTRY DMLDiD Notes). Bare ``cluster=``
+  (constructor) keeps the kernels unweighted and affects folds, variance
+  and df only. ``aggregate('total')`` fails closed on declared-survey
+  fits.
 - **Propensity clipping, never dropping** — fitted propensities are
   clipped to ``[pscore_trim, 1 - pscore_trim]`` after an extremeness
   warning (the paper gives no trimming rule).

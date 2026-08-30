@@ -452,7 +452,8 @@ ROWS = [
             "L3: Chang (2020) Thm 2 augmented-score plug-in variance "
             "(per-unit influence function; normal-theory safe_inference on "
             "no-design fits; survey_design=/cluster= fits use the design-based "
-            "CR1/weighted-IF per-cell variance with df=df_survey t-inference "
+            "CR1/weighted-IF per-cell variance — replicate designs the "
+            "IF-reweighting per-cell variance — with df=df_survey t-inference "
             "outside the shared CR1 sandwich)"
         ),
     ),
@@ -480,8 +481,9 @@ ROWS = [
             "plug-in variance (Case 2; per-observation influence function; "
             "normal-theory safe_inference on no-design fits; survey_design=/"
             "cluster= fits use the design-based CR1/weighted-IF per-cell "
-            "variance with df=df_survey t-inference outside the shared CR1 "
-            "sandwich)"
+            "variance — replicate designs the IF-reweighting per-cell "
+            "variance — with df=df_survey t-inference outside the shared "
+            "CR1 sandwich)"
         ),
     ),
 ]

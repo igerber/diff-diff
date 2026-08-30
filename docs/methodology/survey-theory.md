@@ -592,8 +592,8 @@ would require R complete re-fits of the estimator, which is computationally
 expensive.
 
 diff-diff avoids this for most IF-based estimators (CallawaySantAnna,
-EfficientDiD, ContinuousDiD, TripleDifference, StaggeredTripleDifference)
-using weight-ratio rescaling: the replicate estimate is computed by
+EfficientDiD, ContinuousDiD, TripleDifference, StaggeredTripleDifference,
+DMLDiD) using weight-ratio rescaling: the replicate estimate is computed by
 reweighting the per-unit IF values rather than re-running the estimator.
 The `SurveyDesign` parameter `combined_weights` controls the interpretation:
 
@@ -692,7 +692,7 @@ Each estimator uses one of three variance strategies under survey designs:
 | TwoWayFixedEffects | TSL sandwich | OLS-based, all weight types |
 | MultiPeriodDiD | TSL sandwich | OLS-based, all weight types |
 | CallawaySantAnna | TSL on IFs | pweight only |
-| DMLDiD | TSL on IFs | pweight only; cross-fitted augmented scores; library extension of Chang (2020) i.i.d. theory |
+| DMLDiD | TSL on IFs | pweight only; cross-fitted augmented scores; replicate designs: IF-reweighting on augmented scores, per-cell + aggregate; library extension of Chang (2020) i.i.d. theory |
 | SunAbraham | TSL sandwich | OLS-based, all weight types |
 | TripleDifference | TSL on IFs | pweight only |
 | StaggeredTripleDifference | TSL on IFs | pweight only |
