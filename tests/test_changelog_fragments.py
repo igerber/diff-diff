@@ -162,6 +162,8 @@ class TestCheck:
             ("### Wat\n- bullet\n", "unknown category"),
             ("", "no '### <Category>' block"),
             ("### Fixed\n", "no top-level bullet"),
+            ("### Fixed\n- \n", "empty top-level bullet"),
+            ("### Fixed\n-  \n", "empty top-level bullet"),
             ("### Fixed\n- ok\n## [9.9.9]\n", "'## ' header"),
             ("- floating bullet\n### Fixed\n- ok\n", "outside any"),
             ("### Fixed\nnot a bullet\n", "not a top-level bullet"),
@@ -198,6 +200,13 @@ class TestCheck:
     def test_missing_unreleased_header_fails(self, mod, tmp_path):
         root = make_repo(tmp_path, changelog=MINIMAL_CHANGELOG.replace("## [Unreleased]\n", ""))
         assert any("Unreleased" in f for f in check_findings(mod, root))
+
+    def test_eof_only_unreleased_header_is_finding_not_traceback(self, mod, tmp_path):
+        # File ending exactly at the header with no trailing newline must
+        # produce a validation finding, not a ValueError.
+        changelog = "# Changelog\n\n## [Unreleased]"
+        root = make_repo(tmp_path, changelog=changelog)
+        assert any("pointer comment" in f for f in check_findings(mod, root))
 
     def test_blank_lines_around_pointer_tolerated(self, mod, tmp_path):
         root = make_repo(
@@ -363,6 +372,43 @@ class TestCompile:
         subprocess.run([git, "init", "-q"], cwd=root, check=True)
         assert run_compile(mod, root, allow_dirty=False) == 1
         assert run_compile(mod, root, allow_dirty=True) == 0
+
+    def test_dirty_guard_catches_gitignored_fragment(self, mod, tmp_path):
+        # Plain `git status --porcelain` omits ignored untracked files; an
+        # uncommitted fragment hidden by .git/info/exclude must still be
+        # refused (it would be compiled into the release and deleted) and
+        # must survive the refused run.
+        git = shutil.which("git")
+        if git is None:
+            pytest.skip("git unavailable")
+        root = make_repo(tmp_path, fragments={"20260830-x.md": GOOD_FRAGMENT})
+        subprocess.run([git, "init", "-q"], cwd=root, check=True)
+        (root / ".git" / "info").mkdir(exist_ok=True)
+        (root / ".git" / "info" / "exclude").write_text("changelog.d/20260830-x.md\n")
+        assert run_compile(mod, root, allow_dirty=False) == 1
+        assert (root / "changelog.d" / "20260830-x.md").exists()
+
+    def test_dirty_guard_ignores_dotfiles(self, mod, tmp_path):
+        # A gitignored .DS_Store must NOT trip the dirty guard — dotfiles are
+        # never compiled or deleted, mirroring check's dotfile rule.
+        git = shutil.which("git")
+        if git is None:
+            pytest.skip("git unavailable")
+        root = make_repo(tmp_path, fragments={"20260830-x.md": GOOD_FRAGMENT})
+        subprocess.run([git, "init", "-q"], cwd=root, check=True)
+        env = {
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@t",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@t",
+            "PATH": "/usr/bin:/bin",
+        }
+        subprocess.run([git, "add", "-A"], cwd=root, check=True, env=env)
+        subprocess.run([git, "commit", "-q", "-m", "seed"], cwd=root, check=True, env=env)
+        (root / ".git" / "info").mkdir(exist_ok=True)
+        (root / ".git" / "info" / "exclude").write_text(".DS_Store\n")
+        (root / "changelog.d" / ".DS_Store").write_bytes(b"\x00junk")
+        assert run_compile(mod, root, allow_dirty=False) == 0
 
     def test_fragment_free_recovery_via_committed_stub(self, mod, tmp_path):
         # The documented fragment-free release recovery: write an

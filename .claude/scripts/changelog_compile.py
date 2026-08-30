@@ -96,6 +96,9 @@ def _parse_fragment(text):
         if current is None:
             errors.append(f"line {lineno}: content outside any '### <Category>' block")
             continue
+        if line.startswith("- ") and not line[2:].strip():
+            errors.append(f"line {lineno}: empty top-level bullet ('- ' with no content)")
+            continue
         if line.startswith("- ") or line[0] in (" ", "\t"):
             current[1].append(line)
         else:
@@ -105,7 +108,7 @@ def _parse_fragment(text):
     if not blocks:
         errors.append("no '### <Category>' block found")
     for cat, lines in blocks:
-        if not any(ln.startswith("- ") for ln in lines):
+        if not any(ln.startswith("- ") and ln[2:].strip() for ln in lines):
             errors.append(f"category {cat!r}: no top-level bullet")
     return blocks, errors
 
@@ -128,7 +131,11 @@ def _unreleased_slice(changelog_text):
     m = re.search(r"^## \[Unreleased\]\s*$", changelog_text, flags=re.MULTILINE)
     if not m:
         return None
-    body_start = changelog_text.index("\n", m.start()) + 1
+    nl = changelog_text.find("\n", m.start())
+    if nl == -1:
+        # Header is the last line with no trailing newline: empty body.
+        return len(changelog_text), len(changelog_text)
+    body_start = nl + 1
     nxt = re.compile(r"^## ", flags=re.MULTILINE).search(changelog_text, body_start)
     body_end = nxt.start() if nxt else len(changelog_text)
     return body_start, body_end
@@ -333,16 +340,28 @@ def run_compile(root, version, date_s, allow_dirty):
         return EXIT_FINDINGS
 
     if (root / ".git").exists():
-        status = subprocess.run(
-            ["git", "-C", str(root), "status", "--porcelain", "--", "changelog.d/"],
+        # --ignored: plain porcelain omits gitignored untracked files (via
+        # .git/info/exclude, a global gitignore, etc.), which would let an
+        # uncommitted-but-ignored fragment be swept into the release and
+        # deleted while the guard reports clean.
+        raw_status = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain", "--ignored", "--", "changelog.d/"],
             capture_output=True,
             text=True,
             check=True,
-        ).stdout.strip()
+        ).stdout
+        # Dotfiles (.DS_Store etc.) are never compiled or deleted, so they
+        # cannot lose content — exclude them, mirroring check's dotfile rule.
+        status_lines = []
+        for ln in raw_status.splitlines():
+            path_part = ln[3:].split(" -> ")[-1].strip().strip('"')
+            if not path_part.split("/")[-1].startswith("."):
+                status_lines.append(ln)
+        status = "\n".join(status_lines)
         if status and not allow_dirty:
             print(
-                "error: changelog.d/ has uncommitted changes (they would be "
-                "swept into the release and deleted):\n"
+                "error: changelog.d/ has uncommitted (or gitignored) changes "
+                "(they would be swept into the release and deleted):\n"
                 + status
                 + "\ncommit them first, or pass --allow-dirty",
                 file=sys.stderr,
