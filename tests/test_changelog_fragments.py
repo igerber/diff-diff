@@ -451,6 +451,35 @@ class TestCompile:
         exit4 = make_repo(tmp_path / "exit4", changelog=changelog)
         assert run_compile(mod, exit4, version="1.2.0") == 1
 
+    @pytest.mark.parametrize(
+        "wrapper",
+        [
+            "```\n{d}\n```",
+            "<pre>\n{d}\n</pre>",
+        ],
+        ids=["fenced-code", "html-block"],
+    )
+    def test_definition_inside_block_context_refused(self, mod, tmp_path, wrapper):
+        # A column-zero '[1.2.0]: url' inside a fenced/HTML block LOOKS
+        # canonical to line-based scans but does not render - the anchor
+        # search could insert the new link inside that block. Every
+        # definition must live in the terminal contiguous link block.
+        d = "[1.2.0]: https://github.com/x/y/compare/v1.1.0...v1.2.0"
+        changelog = MINIMAL_CHANGELOG.replace(
+            "### Added\n- old entry\n",
+            "### Added\n- old entry\n\n" + wrapper.format(d=d) + "\n",
+        ).replace(
+            d + "\n", ""
+        )  # the def now exists ONLY inside the block
+        fresh = make_repo(
+            tmp_path / "fresh", changelog=changelog, fragments={"20260830-x.md": GOOD_FRAGMENT}
+        )
+        assert run_compile(mod, fresh) == 1
+        assert "## [1.3.0]" not in (fresh / "CHANGELOG.md").read_text()
+        assert (fresh / "changelog.d" / "20260830-x.md").exists()
+        exit4 = make_repo(tmp_path / "exit4", changelog=changelog)
+        assert run_compile(mod, exit4, version="1.2.0") == 1
+
     def test_nospace_link_definition_blocks_fresh_target(self, mod, tmp_path):
         # CommonMark allows '[x]:dest' with no whitespace after the colon,
         # and resolves a label to its FIRST definition - a hidden no-space

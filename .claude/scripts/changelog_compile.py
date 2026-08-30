@@ -274,6 +274,31 @@ def _noncanonical_version_link(text):
     return None
 
 
+def _link_block_violation(text):
+    """(lineno, snippet) of the first canonical-LOOKING definition that is
+    not part of the terminal contiguous link block, else None.
+
+    The inverse hazard of _noncanonical_version_link: a column-zero
+    '[X.Y.Z]: url' inside a fenced code or raw-HTML block LOOKS canonical
+    to the line-based scans but does not render as a definition — the
+    anchor search could then insert the new link inside that block.
+    Requiring every definition to live in ONE contiguous run at the end
+    of the file (where no fence/HTML context can exist without breaking
+    the run) removes Markdown block context from the problem entirely."""
+    lines = text.split("\n")
+    end = len(lines)
+    while end > 0 and not lines[end - 1].strip():
+        end -= 1
+    start = end
+    while start > 0 and _CANONICAL_LINK_SHAPE.match(lines[start - 1]):
+        start -= 1
+    terminal = set(range(start, end))
+    for i, ln in enumerate(lines):
+        if _CANONICAL_LINK_SHAPE.match(ln) and i not in terminal:
+            return i + 1, ln[:60]
+    return None
+
+
 def _section_body(changelog_text, header_start):
     nl = changelog_text.find("\n", header_start)
     if nl == -1:
@@ -379,6 +404,19 @@ def run_compile(root, version, date_s, allow_dirty, previous_version=None):
             "link block (CommonMark would register it as a definition, "
             "invisible to the duplicate/target scans) — fix the file "
             "before compiling",
+            file=sys.stderr,
+        )
+        return EXIT_FINDINGS
+    # And the inverse: canonical-LOOKING definitions must all live in the
+    # terminal contiguous link block — see _link_block_violation.
+    stray = _link_block_violation(text)
+    if stray:
+        print(
+            f"error: CHANGELOG.md line {stray[0]}: definition-like line "
+            f"{stray[1]!r} outside the terminal link block (it may sit in a "
+            "fenced/HTML block and not render, yet the scans would treat it "
+            "as canonical) — move it into the contiguous block at the end "
+            "of the file",
             file=sys.stderr,
         )
         return EXIT_FINDINGS
@@ -729,6 +767,15 @@ def run_compile(root, version, date_s, allow_dirty, previous_version=None):
             f"error: assembled CHANGELOG line {bad_link[0]}: version-link-"
             f"like construct {bad_link[1]!r} would be written outside the "
             "canonical link block — refusing to compile",
+            file=sys.stderr,
+        )
+        return EXIT_FINDINGS
+    stray = _link_block_violation(text)
+    if stray:
+        print(
+            f"error: assembled CHANGELOG line {stray[0]}: definition-like "
+            f"line {stray[1]!r} would sit outside the terminal link block — "
+            "refusing to compile",
             file=sys.stderr,
         )
         return EXIT_FINDINGS
