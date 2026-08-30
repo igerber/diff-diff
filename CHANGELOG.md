@@ -9,6 +9,122 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- entries live in changelog.d/*.md; compiled at release by .claude/scripts/changelog_compile.py -->
 
+## [3.11.1] - 2026-08-30
+
+### Added
+- **DMLDiD replicate-weight survey designs**: `DMLDiD` now accepts
+  replicate-weight `SurveyDesign`s (BRR / Fay / JK1 / JKn / SDR) on both
+  lanes (panel and repeated cross sections), computing per-cell AND
+  aggregate variances by IF-reweighting the augmented cross-fitted scores
+  (`compute_replicate_if_variance`; nuisances are not re-estimated per
+  replicate). Inference uses `df = rank(replicate matrix) - 1` with
+  `min(df_survey, n_valid - 1)` capping; degenerate cells (zero or
+  non-finite replicate variance) fail closed to NaN inference. Replicate +
+  `cluster=` and replicate + `n_bootstrap > 0` are rejected with targeted
+  errors (previously all replicate designs failed closed with a blanket
+  `NotImplementedError`).
+- **Chang (2020) §4.2.2 RCS simulation-DGP replication** (`tests/test_methodology_dml_did.py`,
+  DML PR-B2): the paper's own kernel-design repeated-cross-section DGP as
+  maintainer validation fixtures for `DMLDiD(panel=False)` — a DGP-shape pin
+  (distributions, all three innovation scales, the design's built-in confounded
+  contrast → θ₀+1, and both correct-specification facts), seed-pinned recovery at
+  both paper sample sizes with a discriminating comparison against the unadjusted
+  contrast, and a slow Monte Carlo coverage lane. The §4.2 parameterizations are
+  extracted into the paper review; the §4.2.1 ML design is documented as not
+  replicable with the bundled unpenalized learners (narrowed TODO row) and the
+  REGISTRY carries the replication-scope Note.
+
+### Changed
+- **`n_bootstrap` type guards aligned onto `utils.validate_n_bootstrap`**
+  for the estimators the M-081 sweep deliberately left out —
+  `HeterogeneousAdoptionDiD`, `ChaisemartinDHaultfoeuille`, `TROP`,
+  `SyntheticDiD` (jackknife lane included), plus the two HAD pretest
+  helpers (`stute_test`, `stute_joint_pretest`): previously-accepted
+  type-blind values now raise the shared message — `True` (silently ran as
+  1 replicate on HAD/dCDH), floats like `2.5` (passed the `>= 2` floors),
+  and bool/negative under SyntheticDiD's jackknife floor exemption. The
+  estimator-specific floors are unchanged and keep their own messages for
+  non-negative sub-floor integers (TROP/SDiD `n_bootstrap=1`, HAD `0`);
+  NEGATIVE values now surface the shared validator's message instead of
+  each estimator's former wording.
+- **`honest_did` inference-df resolution consolidated** onto the shared
+  `aggregation.resolve_inference_df()` (three duplicated precedence blocks
+  removed). Same precedence; `HonestDiDResults.df_survey` is now
+  float-typed (`31.0` where it was `31`), and a fractional `df_inference`
+  is preserved instead of truncated.
+
+### Fixed
+- **Per-row event-study df provenance (M-092 completion)** for the four
+  remaining holes — `EfficientDiD`, `ImputationDiD`, `ContinuousDiD`, and
+  `HeterogeneousAdoptionDiD`: each results class gains a results-level
+  `event_study_df` scalar (appended last; positional `__init__` indexes
+  unchanged) threaded into the unified event-study container's per-row `df`
+  column, which was all-NaN even on survey fits whose p-values were governed
+  by a finite survey df. Finite on analytical survey fits (ImputationDiD:
+  the final replicate-override df, level-matched on replicate replays, lead
+  rows included; EfficientDiD: the post-overall snapshot; HAD: the
+  unit-level design df); `None` — never the replicate-undefined `0`
+  sentinel — on non-survey fits, on bootstrapped fits (percentile inference
+  used no df, matching the shipped producer convention), and when no
+  event-study surface was built. Inference values are unchanged everywhere.
+- **`ContinuousDiD` `survey_metadata` granularity unified across inference
+  branches**: the bootstrap and degenerate no-post-cells arms now publish
+  the same UNIT-level metadata as the analytical arm (the
+  CS/EfficientDiD convention); previously they kept the obs-level resolve,
+  so `sum_weights`/`effective_n`/`n_psu` — and `df_survey` on implicit-PSU
+  designs — differed from the analytical arm by panel length on the same
+  data. Metadata provenance only; estimates and inference unchanged.
+- **Documented (no behavior change)**: the event-study container's
+  `df_survey` SCALAR — the fit's resolved scalar inference df — deliberately
+  persists on bootstrapped fit-time and replayed surfaces (CS, DMLDiD,
+  EfficientDiD identically) as the consumer channel HonestDiD's container
+  branches read; the per-row `df` column is the inference-provenance channel
+  that percentile bootstrap clears. Recorded as a REGISTRY Note with a
+  cross-estimator parity pin.
+- **`survey_metadata` raw-scale provenance on the unit-level recompute**
+  (CallawaySantAnna panel + repeated-cross-section lanes,
+  `TripleDifference`/`StaggeredTripleDifference` staggered engine,
+  `ContinuousDiD` analytical branch, `EfficientDiD`): the recompute passed
+  the RESOLVED (mean-1 rescaled) weights as `compute_survey_metadata`'s
+  raw weights, so `sum_weights`/`weight_range` reported the normalized
+  scale instead of the user's original weight scale. They now report the
+  raw scale, matching every other estimator (DMLDiD got the pattern in
+  its survey PR). For previously-successful fits whose survey design does
+  not alias a mutated role column, this is metadata-provenance only:
+  estimates, SEs, p-values, CIs, `df_survey`, `n_strata`, `n_psu` are
+  byte-identical, and `effective_n`/`design_effect` are scale-invariant
+  (unchanged within floating-point round-off). Additionally,
+  `ContinuousDiD`'s zero-dose-unit filter now re-resolves the survey
+  design from pristine input rows: a design column aliasing a mutated
+  role column (e.g. `weights` naming the dose column) previously
+  zero-weighted every never-treated unit on filtered fits (failing with
+  "No valid (g,t) cells"); such fits now estimate under the user's
+  original weights, consistent with the unfiltered path.
+
+### Internal
+- **Changelog fragments**: release notes are now authored as per-PR files
+  under `changelog.d/` (see `changelog.d/README.md`) instead of editing
+  `CHANGELOG.md`'s `## [Unreleased]` section, which stays pointer-only
+  between releases (CI-enforced by `tests/test_changelog_fragments.py`) so
+  concurrent PRs no longer conflict on the changelog. At release,
+  `.claude/scripts/changelog_compile.py compile` merges the fragments into
+  the new version section and deletes them. One ordering change relative to
+  the old convention: within a category, compiled release sections list
+  entries oldest-first (ascending fragment-filename order) rather than the
+  newest-first order that prepending into Unreleased produced.
+- **Repo-process tooling** (infra sweep, part 2): a weekly `LWDiD Data
+  Canary` CI lane that fails loudly when the SHA-pinned Prop 99 / Walmart
+  loaders fall back to synthetic data (previously a visible-but-green test
+  skip), then runs the replication tests it de-gates; a
+  `tests/test_tracking_files.py` contract guard for TODO.md/DEFERRED.md
+  (no deferred-work pointers in TODO rows, no ledger-lifecycle
+  restatements beside `M-xxx` cross-links, documented table shapes with
+  per-row column counts — which also surfaced and fixed two DEFERRED.md
+  rows whose unescaped pipes broke the rendered tables and one row
+  restating M-010's version target); and the `/push-pr-update`
+  committed-range methodology scan restored via `premerge_scan.py --range`
+  with the comparison ref passed as quoted data.
+
 ## [3.11.0] - 2026-08-29
 
 ### Added
@@ -5479,6 +5595,7 @@ for the full feature history leading to this release.
 [2.1.2]: https://github.com/igerber/diff-diff/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/igerber/diff-diff/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/igerber/diff-diff/compare/v2.0.3...v2.1.0
+[3.11.1]: https://github.com/igerber/diff-diff/compare/v3.11.0...v3.11.1
 [3.11.0]: https://github.com/igerber/diff-diff/compare/v3.10.0...v3.11.0
 [3.10.0]: https://github.com/igerber/diff-diff/compare/v3.9.1...v3.10.0
 [3.9.1]: https://github.com/igerber/diff-diff/compare/v3.9.0...v3.9.1
