@@ -274,6 +274,35 @@ def _noncanonical_version_link(text):
     return None
 
 
+# CommonMark block contexts that persist through blank lines (and through
+# EOF when unterminated): fenced code (```/~~~ at 0-3 indent) and raw-HTML
+# block types 1-5 (<pre/script/style/textarea>, processing instructions,
+# declarations, CDATA). Any of these could swallow subsequent lines —
+# including the terminal link block — so headers/definitions inside them
+# would not render while still matching the line-based scans. Type-6/7
+# HTML blocks end at the first blank line and cannot reach the terminal
+# block. Comments (type 2) are allowed only when closed on the same line
+# (the Unreleased pointer's form).
+_BLOCK_CONTEXT_STARTER = re.compile(
+    r"^ {0,3}(?:```|~~~|<(?:pre|script|style|textarea)\b|<\?|<!\[CDATA\[|<![A-Za-z])",
+    flags=re.IGNORECASE,
+)
+
+
+def _block_context_violation(text):
+    """(lineno, snippet) of the first persistent block-context starter, or
+    an unclosed same-line HTML comment, else None. The changelog (and
+    compiler output — the fragment grammar cannot produce a column-0-3
+    fence) must contain none, so no scan ever needs Markdown block
+    context."""
+    for i, ln in enumerate(text.split("\n"), 1):
+        if _BLOCK_CONTEXT_STARTER.match(ln):
+            return i, ln[:60]
+        if "<!--" in ln and "-->" not in ln[ln.index("<!--") :]:
+            return i, ln[:60]
+    return None
+
+
 def _link_block_violation(text):
     """(lineno, snippet) of the first canonical-LOOKING definition that is
     not part of the terminal contiguous link block, else None.
@@ -404,6 +433,19 @@ def run_compile(root, version, date_s, allow_dirty, previous_version=None):
             "link block (CommonMark would register it as a definition, "
             "invisible to the duplicate/target scans) — fix the file "
             "before compiling",
+            file=sys.stderr,
+        )
+        return EXIT_FINDINGS
+    # No persistent Markdown block context may exist at all — an
+    # unterminated fence/<pre> would swallow everything after it
+    # (the terminal link block included) without breaking any run.
+    blk = _block_context_violation(text)
+    if blk:
+        print(
+            f"error: CHANGELOG.md line {blk[0]}: persistent Markdown block "
+            f"context starter {blk[1]!r} — fenced code / raw-HTML blocks "
+            "can swallow the sections and link definitions after them, so "
+            "the compiler refuses them anywhere in the file",
             file=sys.stderr,
         )
         return EXIT_FINDINGS
@@ -776,6 +818,17 @@ def run_compile(root, version, date_s, allow_dirty, previous_version=None):
             f"error: assembled CHANGELOG line {stray[0]}: definition-like "
             f"line {stray[1]!r} would sit outside the terminal link block — "
             "refusing to compile",
+            file=sys.stderr,
+        )
+        return EXIT_FINDINGS
+    blk = _block_context_violation(text)
+    if blk:
+        # A fragment continuation line indented a single space could land a
+        # 1-space fence at top level once compiled — catch it here.
+        print(
+            f"error: assembled CHANGELOG line {blk[0]}: persistent Markdown "
+            f"block context starter {blk[1]!r} would be written — refusing "
+            "to compile",
             file=sys.stderr,
         )
         return EXIT_FINDINGS

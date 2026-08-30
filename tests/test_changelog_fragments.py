@@ -456,8 +456,12 @@ class TestCompile:
         [
             "```\n{d}\n```",
             "<pre>\n{d}\n</pre>",
+            # Unterminated blocks stay open through EOF in CommonMark and
+            # would swallow the terminal link block itself.
+            "```\n{d}",
+            "<pre>\n{d}",
         ],
-        ids=["fenced-code", "html-block"],
+        ids=["fenced-code", "html-block", "unterminated-fence", "unterminated-pre"],
     )
     def test_definition_inside_block_context_refused(self, mod, tmp_path, wrapper):
         # A column-zero '[1.2.0]: url' inside a fenced/HTML block LOOKS
