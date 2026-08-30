@@ -406,13 +406,25 @@ class TestCompile:
             " ## [9.9.9] - 2099-01-01",
             "   ## [9.9.9] - 2099-01-01",
             " [9.9.9]: https://github.com/x/y/compare/v1.2.0...v9.9.9",
+            "##  [9.9.9] - 2099-01-01",
+            "##\t[9.9.9] - 2099-01-01",
+            "### [9.9.9] - 2099-01-01",
         ],
-        ids=["indented-header-1sp", "indented-header-3sp", "indented-link-def"],
+        ids=[
+            "indented-header-1sp",
+            "indented-header-3sp",
+            "indented-link-def",
+            "double-space-after-hashes",
+            "tab-after-hashes",
+            "h3-release-like",
+        ],
     )
-    def test_indented_changelog_constructs_refused(self, mod, tmp_path, smuggled):
-        # CommonMark renders headings/link definitions indented 1-3 spaces,
-        # but the compiler's duplicate scans are column-zero anchored - an
-        # indented construct must refuse, on BOTH the fresh and exit-4 paths.
+    def test_noncanonical_changelog_constructs_refused(self, mod, tmp_path, smuggled):
+        # CommonMark renders headings indented 1-3 spaces, with a tab or
+        # multiple spaces after the hashes, and at any hash depth - all
+        # invisible to column-zero/single-space-anchored duplicate scans.
+        # Every rendering-but-noncanonical shape must refuse, on BOTH the
+        # fresh and exit-4 paths.
         changelog = MINIMAL_CHANGELOG.replace(
             "### Added\n- old entry\n",
             f"### Added\n- old entry\n{smuggled}\n",

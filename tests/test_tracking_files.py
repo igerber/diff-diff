@@ -126,8 +126,16 @@ def _normalize(row: str) -> str:
     return "| " + " | ".join(_cells(row)) + " |"
 
 
+_DIVIDER_CELL = re.compile(r"^:?-+:?$")
+
+
 def _is_divider(row: str) -> bool:
-    return bool(row) and set(row.strip()) <= {"|", "-", ":", " "} and "-" in row
+    """GFM delimiter-row grammar: every cell is ``:?-+:?`` (an empty or
+    colon-only cell makes the whole table not render)."""
+    if not row or "-" not in row:
+        return False
+    cells = _cells(row)
+    return bool(cells) and all(_DIVIDER_CELL.match(c) for c in cells)
 
 
 def _tables(path: Path):
@@ -415,6 +423,20 @@ class TestMalformedTablesFailLoudly:
         f = tmp_path / "t.md"
         f.write_text("Issue | Location | Origin\n" "------|----------\n" "a | b | c\n")
         with pytest.raises(AssertionError, match="2 cells but the header has 3"):
+            list(_tables(f))
+
+    @pytest.mark.parametrize(
+        "divider",
+        ["|---||---|", "|:|---|", "| |---|"],
+        ids=["empty-cell", "colon-only-cell", "space-cell"],
+    )
+    def test_invalid_divider_cell_fails(self, tmp_path, divider):
+        # GFM requires every delimiter cell to be ':?-+:?'; an empty or
+        # colon-only cell stops the whole table from rendering.
+        assert not _is_divider(divider)
+        f = tmp_path / "t.md"
+        f.write_text(f"| a | b |\n{divider}\n| x | y |\n")
+        with pytest.raises(AssertionError, match="no divider"):
             list(_tables(f))
 
     @pytest.mark.parametrize("path", [TODO, DEFERRED], ids=lambda p: p.name)

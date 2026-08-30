@@ -35,16 +35,24 @@ Files that need updating:
    - If invalid, ask user to provide a valid version
 
 2. **Get current version**:
-   - Read `diff_diff/__init__.py` and extract the current `__version__` value
-   - Store as `OLD_VERSION` for comparison link generation
+   - Read `diff_diff/__init__.py` and note the current `__version__` value —
+     the "old version" used for comparison-link generation and sanity checks
+     in the steps below
 
 3. **Compile the changelog and resolve `RELEASE_DATE`** (release notes come
    exclusively from `changelog.d/` fragments; the old git-log generation step
-   is removed):
+   is removed). Shell variables do NOT persist across Bash calls, so
+   `OLD_VERSION` is resolved inside the SAME block that consumes it (never
+   substitute it as prose — an empty expansion would fail the compiler's
+   `--previous-version` cross-check on every normal release):
 
    ```bash
+   OLD_VERSION="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' diff_diff/__init__.py)"
    python3 .claude/scripts/changelog_compile.py compile --version NEW_VERSION --date "$(date +%F)" --previous-version "$OLD_VERSION"
    ```
+
+   (Substitute the literal target version for `NEW_VERSION`; it was validated
+   against the semver pattern in step 1.)
 
    Key off the exit code:
    - **Exit 0** (compiled): the `## [NEW_VERSION]` section and comparison link

@@ -301,8 +301,13 @@ def run_compile(root, version, date_s, allow_dirty, previous_version=None):
     # canonical shapes, so a malformed section would otherwise be invisible
     # to the duplicate/date safeguards and compile could add a SECOND
     # section for the same version.
+    # The scan accepts ANY CommonMark heading spacing ('##  [x]', a tab,
+    # any hash depth) so a rendering-but-noncanonical heading cannot hide
+    # from the duplicate/date safeguards; only exact-canonical release and
+    # Unreleased headers are exempt.
     canonical_starts = {m_start for _, _, m_start in _existing_headers(text)}
-    for m in re.finditer(r"^## \[(?!Unreleased\])[^\]]*\][^\n]*$", text, flags=re.MULTILINE):
+    canonical_starts |= {m.start() for m in _unreleased_headers(text)}
+    for m in re.finditer(r"^#{1,6}[ \t]+\[[^\]]*\][^\n]*$", text, flags=re.MULTILINE):
         if m.start() not in canonical_starts:
             print(
                 "error: malformed release header in CHANGELOG.md: "
