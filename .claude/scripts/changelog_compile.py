@@ -208,6 +208,26 @@ def run_check(root):
             fragments.append(p)
             _, errors = _parse_fragment(text)
             findings.extend(f"changelog.d/{p.name}: {e}" for e in errors)
+            # check↔compile parity: everything the assembled-output guards
+            # would refuse at release time must already fail HERE, at PR
+            # time — a fragment that passes CI but blocks the release is a
+            # fail-late trap. The whole-text scans also cover what the
+            # line-based grammar cannot see (a multi-line link label, an
+            # indented fence in a continuation line).
+            blk = _block_context_violation(text)
+            if blk:
+                findings.append(
+                    f"changelog.d/{p.name}: line {blk[0]}: Markdown block "
+                    f"context ({blk[1]!r}) not allowed in a fragment — "
+                    "fenced code / raw-HTML blocks are refused in the "
+                    "compiled changelog; use inline code instead"
+                )
+            link = _noncanonical_version_link(text)
+            if link:
+                findings.append(
+                    f"changelog.d/{p.name}: line {link[0]}: version-link-"
+                    f"like construct ({link[1]!r}) not allowed in a fragment"
+                )
 
     changelog = root / "CHANGELOG.md"
     if not changelog.is_file():

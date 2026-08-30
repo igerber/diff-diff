@@ -37,7 +37,13 @@ Rules (validated by `changelog_compile.py check`):
 - A block starts with `### <Category>` and must contain at least one
   top-level bullet (`- ` at column 0). Wrapped prose and nested sub-bullets
   are indented continuation lines. Blank lines are allowed anywhere.
-- Nothing outside category blocks; no `## ` headers.
+- Nothing outside category blocks; no `## ` headers (at any CommonMark
+  indentation or spacing).
+- No fenced code blocks or raw-HTML blocks (` ``` `, `~~~`, `<pre>`, …) and
+  no version-link-like constructs (`[X.Y.Z]:`): the compiled changelog
+  refuses both (they can swallow or outrank the release headers and the
+  comparison-link block), and `check` rejects them at PR time so a fragment
+  never blocks the release. Use inline code instead of fences.
 - Allowed categories (this list mirrors the compiler constant in
   `.claude/scripts/changelog_compile.py`; the mirror is test-pinned):
   `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`,

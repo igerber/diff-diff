@@ -212,6 +212,11 @@ class TestCheck:
             ("### Fixed\n- [1.3.0]:https://evil.example/wrong\n", "version-link-like"),
             ("### Fixed\n- ok\n  - [1.3.0]: https://evil.example\n", "version-link-like"),
             ("### Fixed\n- see [ 1.3.0 ]: for details\n", "version-link-like"),
+            # check<->compile parity: everything the assembled-output guards
+            # refuse must fail at PR time, not at release time.
+            ("### Documentation\n- Example:\n  ```python\n  print(1)\n  ```\n", "block context"),
+            ("### Fixed\n- x, see\n  <pre>\n  y\n  </pre>\n", "block context"),
+            ("### Fixed\n- see [1.3.0\n  ]: for details\n", "version-link-like"),
         ],
     )
     def test_bad_fragment_bodies(self, mod, tmp_path, body, needle):
