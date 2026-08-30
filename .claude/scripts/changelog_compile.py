@@ -285,6 +285,19 @@ def run_compile(root, version, date_s, allow_dirty):
     text = changelog_path.read_text()
     headers = _existing_headers(text)
     versions = [h[0] for h in headers]
+    duplicated = sorted({v for v in versions if versions.count(v) > 1})
+    if duplicated:
+        # A duplicated release header is a corrupt changelog whichever
+        # version it is: the loop below inspects only the first match, so
+        # exit 4 could otherwise certify a file that still carries a second
+        # '## [X.Y.Z]' section.
+        print(
+            "error: duplicated release header(s) in CHANGELOG.md: "
+            + ", ".join(f"'## [{v}]'" for v in duplicated)
+            + " — fix the file before compiling",
+            file=sys.stderr,
+        )
+        return EXIT_FINDINGS
     prev = max(versions, key=_semver_tuple) if versions else None
 
     # Existing-header detection FIRST, so the idempotent re-run path is

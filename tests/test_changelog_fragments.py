@@ -393,6 +393,19 @@ class TestCompile:
         assert run_compile(mod, root) == 1
         assert (root / "changelog.d" / "20260830-x.md").exists()
 
+    def test_duplicate_release_headers_rejected_not_certified(self, mod, tmp_path):
+        # Two '## [1.2.0]' sections with a nonempty first section and a valid
+        # comparison link: exit 4 must NOT certify this (the loop inspects
+        # only the first match); any duplicated release version is a corrupt
+        # changelog and exits 1.
+        changelog = MINIMAL_CHANGELOG.replace(
+            "## [1.1.0] - 2026-01-01\n",
+            "## [1.2.0] - 2026-01-15\n\n### Fixed\n- duplicate section\n\n"
+            "## [1.1.0] - 2026-01-01\n",
+        )
+        root = make_repo(tmp_path, changelog=changelog)  # no fragments
+        assert run_compile(mod, root, version="1.2.0") == 1
+
     def test_exit4_target_header_at_eof_is_error_not_traceback(self, mod, tmp_path):
         # An existing target header ending the file with no trailing newline
         # must produce the empty-section error, not a ValueError (the same
