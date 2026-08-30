@@ -203,7 +203,11 @@ def _existing_headers(changelog_text):
 
 
 def _section_nonempty(changelog_text, header_start):
-    body_start = changelog_text.index("\n", header_start) + 1
+    nl = changelog_text.find("\n", header_start)
+    if nl == -1:
+        # Header is the last line with no trailing newline: empty section.
+        return False
+    body_start = nl + 1
     nxt = re.compile(r"^## ", flags=re.MULTILINE).search(changelog_text, body_start)
     body = changelog_text[body_start : nxt.start() if nxt else len(changelog_text)]
     has_cat = any(
@@ -339,41 +343,60 @@ def run_compile(root, version, date_s, allow_dirty):
         )
         return EXIT_FINDINGS
 
-    if (root / ".git").exists():
-        # --ignored: plain porcelain omits gitignored untracked files (via
-        # .git/info/exclude, a global gitignore, etc.), which would let an
-        # uncommitted-but-ignored fragment be swept into the release and
-        # deleted while the guard reports clean.
-        raw_status = subprocess.run(
-            ["git", "-C", str(root), "status", "--porcelain", "--ignored", "--", "changelog.d/"],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-        # Dotfiles (.DS_Store etc.) are never compiled or deleted, so they
-        # cannot lose content — exclude them, mirroring check's dotfile rule.
-        status_lines = []
-        for ln in raw_status.splitlines():
-            path_part = ln[3:].split(" -> ")[-1].strip().strip('"')
-            if not path_part.split("/")[-1].startswith("."):
-                status_lines.append(ln)
-        status = "\n".join(status_lines)
-        if status and not allow_dirty:
+    if not allow_dirty:
+        # Committed-content guard: every fragment about to be compiled and
+        # DELETED must be a regular file whose bytes match its HEAD blob.
+        # This is deliberately not a `git status` parse — status output
+        # depends on configuration (status.showUntrackedFiles=no, ignore
+        # rules via .git/info/exclude or a global gitignore) and does not
+        # see through symlinks, all of which could let unreviewed content
+        # be swept into the release and destroyed.
+        if not (root / ".git").exists():
             print(
-                "error: changelog.d/ has uncommitted (or gitignored) changes "
-                "(they would be swept into the release and deleted):\n"
-                + status
+                "error: no .git at the resolved root — cannot verify the "
+                "fragments are committed; pass --allow-dirty for scratch "
+                "copies",
+                file=sys.stderr,
+            )
+            return EXIT_FINDINGS
+        problems = []
+        for p in fragments:
+            rel = f"changelog.d/{p.name}"
+            if p.is_symlink() or not p.is_file():
+                problems.append(f"{rel}: not a regular file (symlink or special)")
+                continue
+            tree_res = subprocess.run(
+                ["git", "-C", str(root), "ls-tree", "HEAD", "--", rel],
+                capture_output=True,
+                text=True,
+            )
+            tree = tree_res.stdout.strip()
+            if tree_res.returncode != 0 or not tree:
+                # Missing from HEAD — including an unborn HEAD (init with no
+                # commits), where ls-tree itself fails.
+                problems.append(f"{rel}: not committed in HEAD")
+                continue
+            mode, _, sha = tree.split()[0], tree.split()[1], tree.split()[2]
+            if mode not in ("100644", "100755"):
+                problems.append(f"{rel}: committed as a non-regular entry (mode {mode})")
+                continue
+            blob = subprocess.run(
+                ["git", "-C", str(root), "cat-file", "blob", sha],
+                capture_output=True,
+                check=True,
+            ).stdout
+            if blob != p.read_bytes():
+                problems.append(f"{rel}: worktree bytes differ from the HEAD blob")
+        if problems:
+            print(
+                "error: changelog.d/ fragments must be committed unchanged "
+                "before a release (they are compiled into CHANGELOG.md and "
+                "deleted):\n  "
+                + "\n  ".join(problems)
                 + "\ncommit them first, or pass --allow-dirty",
                 file=sys.stderr,
             )
             return EXIT_FINDINGS
-    elif not allow_dirty:
-        print(
-            "error: no .git at the resolved root — cannot run the "
-            "dirty-fragment guard; pass --allow-dirty for scratch copies",
-            file=sys.stderr,
-        )
-        return EXIT_FINDINGS
 
     # Assemble: category order = CATEGORIES; within a category, fragments in
     # ascending filename order, block bodies preserved byte-for-byte with

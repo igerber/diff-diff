@@ -97,6 +97,33 @@ def check_findings(mod, root):
     return findings
 
 
+@pytest.fixture
+def git_commit_all():
+    """git init + commit everything in a fixture repo (skips if git absent).
+
+    Call with init_only=True to initialize without committing (for tests
+    exercising the not-committed-in-HEAD path).
+    """
+    git = shutil.which("git")
+    if git is None:
+        pytest.skip("git unavailable")
+    env = {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+        "PATH": "/usr/bin:/bin",
+    }
+
+    def _commit(root, init_only=False):
+        subprocess.run([git, "init", "-q"], cwd=root, check=True)
+        if not init_only:
+            subprocess.run([git, "add", "-A"], cwd=root, check=True, env=env)
+            subprocess.run([git, "commit", "-q", "-m", "seed"], cwd=root, check=True, env=env)
+
+    return _commit
+
+
 # ---------------------------------------------------------------------------
 # 1. Live-repo invariant
 # ---------------------------------------------------------------------------
@@ -324,6 +351,20 @@ class TestCompile:
         root = make_repo(tmp_path, changelog=changelog)
         assert run_compile(mod, root, version="1.2.0") == 1
 
+    def test_exit4_target_header_at_eof_is_error_not_traceback(self, mod, tmp_path):
+        # An existing target header ending the file with no trailing newline
+        # must produce the empty-section error, not a ValueError (the same
+        # EOF anti-pattern fixed in _unreleased_slice).
+        changelog = (
+            "# Changelog\n\n"
+            "## [Unreleased]\n\n" + POINTER + "\n\n"
+            "## [1.1.0] - 2026-01-01\n\n### Fixed\n- older entry\n\n"
+            "[1.1.0]: https://github.com/x/y/releases/tag/v1.1.0\n"
+            "## [1.2.0] - 2026-01-15"
+        )
+        root = make_repo(tmp_path, changelog=changelog)
+        assert run_compile(mod, root, version="1.2.0") == 1
+
     def test_exit4_rejects_sole_release_header(self, mod, tmp_path):
         # A lone target header (no predecessor to anchor the comparison
         # link) cannot be compiler output; exit 4 must not certify it.
@@ -361,76 +402,82 @@ class TestCompile:
         root = make_repo(tmp_path)
         assert run_compile(mod, root) == 1
 
-    def test_dirty_guard(self, mod, tmp_path):
+    def test_dirty_guard(self, mod, tmp_path, git_commit_all):
         root = make_repo(tmp_path, fragments={"20260830-x.md": GOOD_FRAGMENT})
         # Non-git root without --allow-dirty: fail-closed.
         assert run_compile(mod, root, allow_dirty=False) == 1
         # Git root with an uncommitted fragment: refused; --allow-dirty passes.
-        git = shutil.which("git")
-        if git is None:
-            pytest.skip("git unavailable")
-        subprocess.run([git, "init", "-q"], cwd=root, check=True)
+        git_commit_all(root, init_only=True)
         assert run_compile(mod, root, allow_dirty=False) == 1
         assert run_compile(mod, root, allow_dirty=True) == 0
 
-    def test_dirty_guard_catches_gitignored_fragment(self, mod, tmp_path):
-        # Plain `git status --porcelain` omits ignored untracked files; an
-        # uncommitted fragment hidden by .git/info/exclude must still be
-        # refused (it would be compiled into the release and deleted) and
-        # must survive the refused run.
-        git = shutil.which("git")
-        if git is None:
-            pytest.skip("git unavailable")
-        root = make_repo(tmp_path, fragments={"20260830-x.md": GOOD_FRAGMENT})
-        subprocess.run([git, "init", "-q"], cwd=root, check=True)
+    def test_dirty_guard_catches_gitignored_fragment(self, mod, tmp_path, git_commit_all):
+        # `git status` never sees ignored untracked files; the guard is a
+        # committed-content check instead, so a fragment hidden by
+        # .git/info/exclude must be refused (it would be compiled into the
+        # release and deleted) and must survive the refused run. Baseline is
+        # committed FIRST so the ignored fragment is the sole dirty entry.
+        root = make_repo(tmp_path)
+        git_commit_all(root)
         (root / ".git" / "info").mkdir(exist_ok=True)
         (root / ".git" / "info" / "exclude").write_text("changelog.d/20260830-x.md\n")
+        (root / "changelog.d" / "20260830-x.md").write_text(GOOD_FRAGMENT)
         assert run_compile(mod, root, allow_dirty=False) == 1
         assert (root / "changelog.d" / "20260830-x.md").exists()
 
-    def test_dirty_guard_ignores_dotfiles(self, mod, tmp_path):
-        # A gitignored .DS_Store must NOT trip the dirty guard — dotfiles are
-        # never compiled or deleted, mirroring check's dotfile rule.
+    def test_dirty_guard_catches_status_hidden_untracked(self, mod, tmp_path, git_commit_all):
+        # status.showUntrackedFiles=no hides untracked files from
+        # `git status`; the committed-content guard must still refuse the
+        # uncommitted fragment.
+        root = make_repo(tmp_path)
+        git_commit_all(root)
         git = shutil.which("git")
-        if git is None:
-            pytest.skip("git unavailable")
+        subprocess.run(
+            [git, "-C", str(root), "config", "status.showUntrackedFiles", "no"],
+            check=True,
+        )
+        (root / "changelog.d" / "20260830-x.md").write_text(GOOD_FRAGMENT)
+        assert run_compile(mod, root, allow_dirty=False) == 1
+        assert (root / "changelog.d" / "20260830-x.md").exists()
+
+    def test_dirty_guard_rejects_symlink_fragment(self, mod, tmp_path, git_commit_all):
+        # A symlink at a fragment path is refused outright: read_text()
+        # follows mutable target content, so it can never be certified as
+        # committed bytes.
+        root = make_repo(tmp_path)
+        git_commit_all(root)
+        target = root / "real-content.md"
+        target.write_text(GOOD_FRAGMENT)
+        (root / "changelog.d" / "20260830-x.md").symlink_to(target)
+        assert run_compile(mod, root, allow_dirty=False) == 1
+
+    def test_dirty_guard_rejects_modified_committed_fragment(self, mod, tmp_path, git_commit_all):
+        # A committed fragment whose worktree bytes drifted from the HEAD
+        # blob is refused (a status-free byte comparison).
         root = make_repo(tmp_path, fragments={"20260830-x.md": GOOD_FRAGMENT})
-        subprocess.run([git, "init", "-q"], cwd=root, check=True)
-        env = {
-            "GIT_AUTHOR_NAME": "t",
-            "GIT_AUTHOR_EMAIL": "t@t",
-            "GIT_COMMITTER_NAME": "t",
-            "GIT_COMMITTER_EMAIL": "t@t",
-            "PATH": "/usr/bin:/bin",
-        }
-        subprocess.run([git, "add", "-A"], cwd=root, check=True, env=env)
-        subprocess.run([git, "commit", "-q", "-m", "seed"], cwd=root, check=True, env=env)
-        (root / ".git" / "info").mkdir(exist_ok=True)
-        (root / ".git" / "info" / "exclude").write_text(".DS_Store\n")
+        git_commit_all(root)
+        (root / "changelog.d" / "20260830-x.md").write_text(
+            GOOD_FRAGMENT + "- uncommitted extra bullet\n"
+        )
+        assert run_compile(mod, root, allow_dirty=False) == 1
+
+    def test_dirty_guard_ignores_dotfiles(self, mod, tmp_path, git_commit_all):
+        # A stray .DS_Store must NOT trip the guard — dotfiles are never
+        # compiled or deleted, mirroring check's dotfile rule.
+        root = make_repo(tmp_path, fragments={"20260830-x.md": GOOD_FRAGMENT})
+        git_commit_all(root)
         (root / "changelog.d" / ".DS_Store").write_bytes(b"\x00junk")
         assert run_compile(mod, root, allow_dirty=False) == 0
 
-    def test_fragment_free_recovery_via_committed_stub(self, mod, tmp_path):
+    def test_fragment_free_recovery_via_committed_stub(self, mod, tmp_path, git_commit_all):
         # The documented fragment-free release recovery: write an
         # ### Internal stub, COMMIT it, re-run WITHOUT --allow-dirty.
-        git = shutil.which("git")
-        if git is None:
-            pytest.skip("git unavailable")
         root = make_repo(tmp_path)
         assert run_compile(mod, root, allow_dirty=False) == 1  # nothing to release
         (root / "changelog.d" / "20260830-stub.md").write_text(
             "### Internal\n- metadata-only re-release\n"
         )
-        subprocess.run([git, "init", "-q"], cwd=root, check=True)
-        env = {
-            "GIT_AUTHOR_NAME": "t",
-            "GIT_AUTHOR_EMAIL": "t@t",
-            "GIT_COMMITTER_NAME": "t",
-            "GIT_COMMITTER_EMAIL": "t@t",
-            "PATH": "/usr/bin:/bin",
-        }
-        subprocess.run([git, "add", "-A"], cwd=root, check=True, env=env)
-        subprocess.run([git, "commit", "-q", "-m", "stub"], cwd=root, check=True, env=env)
+        git_commit_all(root)
         assert run_compile(mod, root, allow_dirty=False) == 0
 
     def test_byte_stability_outside_edits(self, mod, tmp_path):
