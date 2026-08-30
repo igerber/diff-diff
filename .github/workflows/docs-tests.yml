@@ -18,6 +18,13 @@ on:
       - 'changelog.d/**'
       - 'CHANGELOG.md'
       - '.claude/scripts/changelog_compile.py'
+      # Tracking-file contract guard: TODO/DEFERRED edits trigger here
+      # (their ONLY test lane - a tracking-file-only diff otherwise runs
+      # no suite that executes the guard).
+      - 'tests/test_tracking_files.py'
+      - 'TODO.md'
+      - 'DEFERRED.md'
+      - '.github/workflows/lwdid-data-canary.yml'
       # tests/conftest.py is auto-loaded by pytest for the snippet
       # test run and mutates sys.path + MPLBACKEND (conftest.py:14, 18);
       # changes there can break snippet exec without touching the test
@@ -45,6 +52,13 @@ on:
       - 'changelog.d/**'
       - 'CHANGELOG.md'
       - '.claude/scripts/changelog_compile.py'
+      # Tracking-file contract guard: TODO/DEFERRED edits trigger here
+      # (their ONLY test lane - a tracking-file-only diff otherwise runs
+      # no suite that executes the guard).
+      - 'tests/test_tracking_files.py'
+      - 'TODO.md'
+      - 'DEFERRED.md'
+      - '.github/workflows/lwdid-data-canary.yml'
       - 'tests/conftest.py'
       - 'pyproject.toml'
       # sphinx-build job mirrors RTD setup; trigger when RTD config drifts
@@ -128,6 +142,12 @@ jobs:
         # behavior + these very path filters (self-pinning; see
         # tests/test_changelog_fragments.py::TestWorkflowPins).
         run: PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/test_changelog_fragments.py -v
+
+      - name: Run tracking-file contract guard
+        # TODO/DEFERRED conventions (no deferred-work pointers in TODO rows,
+        # no ledger-lifecycle restatements beside M-xxx links, documented
+        # table shapes + per-row column counts).
+        run: PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/test_tracking_files.py -v
 
   sphinx-build:
     name: Sphinx HTML build (-W warnings as errors)

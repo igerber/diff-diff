@@ -55,7 +55,7 @@ POINTER_COMMENT = (
     "compiled at release by .claude/scripts/changelog_compile.py -->"
 )
 
-FRAGMENT_NAME_RE = re.compile(r"^(\d{8})-[a-z0-9][a-z0-9-]*\.md$")
+FRAGMENT_NAME_RE = re.compile(r"^(\d{8})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$")
 VERSION_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 
 EXIT_OK = 0
@@ -88,6 +88,12 @@ def _parse_fragment(text):
                 )
             current = (cat, [])
             blocks.append(current)
+            continue
+        if re.match(r" {1,3}#{1,6}(?:[ \t]|$)", line):
+            # CommonMark recognizes ATX headings indented up to 3 spaces, so
+            # an indented '## ...' would slip past the column-zero checks
+            # above as a "continuation" yet render as a real heading.
+            errors.append(f"line {lineno}: indented Markdown heading not allowed in a fragment")
             continue
         if not line.strip():
             if current is not None:
@@ -236,19 +242,26 @@ def _existing_headers(changelog_text):
     return out
 
 
-def _section_nonempty(changelog_text, header_start):
+def _section_body(changelog_text, header_start):
     nl = changelog_text.find("\n", header_start)
     if nl == -1:
-        # Header is the last line with no trailing newline: empty section.
-        return False
+        return ""
     body_start = nl + 1
     nxt = re.compile(r"^## ", flags=re.MULTILINE).search(changelog_text, body_start)
-    body = changelog_text[body_start : nxt.start() if nxt else len(changelog_text)]
-    has_cat = any(
-        ln.startswith("### ") and ln[4:].strip() in CATEGORIES for ln in body.splitlines()
-    )
-    has_bullet = any(ln.startswith("- ") for ln in body.splitlines())
-    return has_cat and has_bullet
+    return changelog_text[body_start : nxt.start() if nxt else len(changelog_text)]
+
+
+def _section_grammar_errors(changelog_text, header_start):
+    """Errors from validating a release section's body with the fragment
+    block grammar. A compiled section is exactly a concatenation of
+    fragment category blocks, so compiler OUTPUT always passes; an orphan
+    bullet, an empty category, or an unknown-category bullet is a state
+    compile could not have produced."""
+    body = _section_body(changelog_text, header_start)
+    if not body.strip():
+        return ["section is empty"]
+    _, errors = _parse_fragment(body)
+    return errors
 
 
 def _canonical_date(s):
@@ -261,7 +274,7 @@ def _canonical_date(s):
     return parsed.isoformat() == s
 
 
-def run_compile(root, version, date_s, allow_dirty):
+def run_compile(root, version, date_s, allow_dirty, previous_version=None):
     if not VERSION_RE.match(version):
         print(
             f"error: --version {version!r} is not a canonical SemVer " "X.Y.Z (no leading zeros)",
@@ -283,6 +296,21 @@ def run_compile(root, version, date_s, allow_dirty):
 
     changelog_path = root / "CHANGELOG.md"
     text = changelog_path.read_text()
+    # Reject release-LIKE headers the canonical grammar does not match
+    # (e.g. '## [1.3.0] - 2026-08-30 draft'): _existing_headers sees only
+    # canonical shapes, so a malformed section would otherwise be invisible
+    # to the duplicate/date safeguards and compile could add a SECOND
+    # section for the same version.
+    canonical_starts = {m_start for _, _, m_start in _existing_headers(text)}
+    for m in re.finditer(r"^## \[(?!Unreleased\])[^\]]*\][^\n]*$", text, flags=re.MULTILINE):
+        if m.start() not in canonical_starts:
+            print(
+                "error: malformed release header in CHANGELOG.md: "
+                f"{m.group(0)!r} does not match '## [X.Y.Z] - YYYY-MM-DD' — "
+                "fix the file before compiling",
+                file=sys.stderr,
+            )
+            return EXIT_FINDINGS
     headers = _existing_headers(text)
     versions = [h[0] for h in headers]
     duplicated = sorted({v for v in versions if versions.count(v) > 1})
@@ -298,7 +326,52 @@ def run_compile(root, version, date_s, allow_dirty):
             file=sys.stderr,
         )
         return EXIT_FINDINGS
+    # Link-definition duplicate check runs BEFORE the existing-target path:
+    # exit 4 must never certify a changelog carrying two definitions for
+    # any version (one correct + one wrong would otherwise pass).
+    link_versions = re.findall(r"^\[(\d+\.\d+\.\d+)\]:\s+\S+\s*$", text, flags=re.MULTILINE)
+    dup_links = sorted({v for v in link_versions if link_versions.count(v) > 1})
+    if dup_links:
+        print(
+            "error: duplicated comparison-link definition(s) in "
+            "CHANGELOG.md: " + ", ".join(f"'[{v}]:'" for v in dup_links),
+            file=sys.stderr,
+        )
+        return EXIT_FINDINGS
     prev = max(versions, key=_semver_tuple) if versions else None
+    if prev is not None:
+        # The anchor header is the compiler's own output from the previous
+        # cycle, so its date must be canonical (a fresh compile atop
+        # '## [X.Y.Z]' with no/impossible date would silently extend a
+        # corrupt tip). OLDER legacy headers are deliberately exempt - the
+        # real CHANGELOG carries dateless pre-convention releases
+        # (## [0.6.0] and earlier) that the compiler never touches.
+        prev_date = next(d for v, d, _ in headers if v == prev)
+        if prev_date is None or not _canonical_date(prev_date):
+            print(
+                f"error: the latest release header '## [{prev}]' has a "
+                f"missing or non-canonical date ({prev_date!r}) — fix it "
+                "before compiling a new release on top",
+                file=sys.stderr,
+            )
+            return EXIT_FINDINGS
+    if previous_version is not None and prev is not None and previous_version != prev:
+        # Cross-check against the caller's package-metadata version
+        # (bump-version's OLD_VERSION): a drifted CHANGELOG would otherwise
+        # silently anchor the comparison link to the wrong ancestor and
+        # delete the fragments before anyone noticed. EXCEPTION: when the
+        # latest release IS the compile target, this is the interrupted-bump
+        # recovery shape (compile finished, package metadata not yet
+        # updated) — fall through to the existing-target path, which itself
+        # validates previous_version against the target's real predecessor.
+        if prev != version:
+            print(
+                f"error: --previous-version {previous_version!r} does not match "
+                f"the latest CHANGELOG.md release {prev!r} — package metadata "
+                "and changelog have drifted; reconcile before compiling",
+                file=sys.stderr,
+            )
+            return EXIT_FINDINGS
 
     # Existing-header detection FIRST, so the idempotent re-run path is
     # reachable before any monotonicity check.
@@ -311,10 +384,12 @@ def run_compile(root, version, date_s, allow_dirty):
                     file=sys.stderr,
                 )
                 return EXIT_FINDINGS
-            if not _section_nonempty(text, hstart):
+            section_errors = _section_grammar_errors(text, hstart)
+            if section_errors:
                 print(
-                    f"error: '## [{version}]' exists but its section is "
-                    "empty — not a completed compile; fix the header",
+                    f"error: '## [{version}]' exists but its section is not "
+                    "a state compile could have produced — not a completed "
+                    "compile; fix the section:\n  " + "\n  ".join(section_errors),
                     file=sys.stderr,
                 )
                 return EXIT_FINDINGS
@@ -335,6 +410,21 @@ def run_compile(root, version, date_s, allow_dirty):
                 return EXIT_FINDINGS
             below = [v for v in versions if _semver_tuple(v) < _semver_tuple(version)]
             predecessor = max(below, key=_semver_tuple) if below else None
+            if previous_version is not None and previous_version not in (
+                version,
+                predecessor,
+            ):
+                # Recovery accepts package metadata at the target (bump
+                # completed) or its immediate predecessor (interrupted
+                # before the metadata update); anything else is drift.
+                print(
+                    f"error: --previous-version {previous_version!r} matches "
+                    f"neither '## [{version}]' nor its predecessor "
+                    f"{predecessor!r} — package metadata and changelog have "
+                    "drifted; reconcile before re-running",
+                    file=sys.stderr,
+                )
+                return EXIT_FINDINGS
             if predecessor is None:
                 # compile always anchors its comparison link to an existing
                 # release, so a sole-header state cannot be its output.
@@ -346,10 +436,35 @@ def run_compile(root, version, date_s, allow_dirty):
                 )
                 return EXIT_FINDINGS
             if predecessor is not None:
+                # The target link must use the SAME base URL as the
+                # predecessor's link (the base the compiler itself would
+                # have written) - a correct-version link pointing at an
+                # unrelated repository is not a completed compile.
+                pred_m = re.search(
+                    r"^\[" + re.escape(predecessor) + r"\]:\s+(\S+?)/(?:compare|releases)/\S+$",
+                    text,
+                    flags=re.MULTILINE,
+                )
+                if pred_m is None:
+                    # The compiler's own output always links the
+                    # predecessor (compare/, or releases/tag/ for the very
+                    # first release) - no link means this is not a state
+                    # compile produced; never fall back to accepting any
+                    # base.
+                    print(
+                        f"error: no link definition found for the "
+                        f"predecessor '[{predecessor}]' — not a completed "
+                        "compile; fix the link block",
+                        file=sys.stderr,
+                    )
+                    return EXIT_FINDINGS
+                pred_base = re.escape(pred_m.group(1))
                 link_re = re.compile(
                     r"^\["
                     + re.escape(version)
-                    + r"\]: \S+/compare/v"
+                    + r"\]: "
+                    + pred_base
+                    + r"/compare/v"
                     + re.escape(predecessor)
                     + r"\.\.\.v"
                     + re.escape(version)
@@ -434,6 +549,28 @@ def run_compile(root, version, date_s, allow_dirty):
             ).stdout
             if blob != p.read_bytes():
                 problems.append(f"{rel}: worktree bytes differ from the HEAD blob")
+        # Set equality with HEAD: a committed fragment DELETED from the
+        # worktree would otherwise be silently dropped from the release
+        # (the compile removes every fragment file, so the git diff shows
+        # both deletions while only the surviving one was compiled).
+        head_res = subprocess.run(
+            ["git", "-C", str(root), "ls-tree", "-r", "--name-only", "HEAD", "--", "changelog.d"],
+            capture_output=True,
+            text=True,
+        )
+        if head_res.returncode == 0:
+            head_frags = {
+                Path(line).name
+                for line in head_res.stdout.splitlines()
+                if FRAGMENT_NAME_RE.match(Path(line).name)
+            }
+            worktree_frags = {p.name for p in fragments}
+            for missing in sorted(head_frags - worktree_frags):
+                problems.append(
+                    f"changelog.d/{missing}: committed in HEAD but absent "
+                    "from the worktree - its release note would be "
+                    "silently lost"
+                )
         if problems:
             print(
                 "error: changelog.d/ fragments must be committed unchanged "
@@ -465,14 +602,30 @@ def run_compile(root, version, date_s, allow_dirty):
     insert_at = sl[1]
     text = text[:insert_at] + new_section + text[insert_at:]
 
+    # A definition for the TARGET version must not already exist on the
+    # fresh-compile path (compiling would emit a duplicate '[X.Y.Z]:' line;
+    # duplicates generally were rejected before the existing-target path).
+    if version in link_versions:
+        print(
+            f"error: a comparison-link definition '[{version}]:' already "
+            "exists in CHANGELOG.md but the release header does not — "
+            "inconsistent state; fix the link block before compiling",
+            file=sys.stderr,
+        )
+        return EXIT_FINDINGS
+    # Same predecessor-link form the exit-4 path accepts: compare/ links,
+    # or releases/tag/ for a sole first release (its second release could
+    # not compile otherwise); whitespace-tolerant after ':'.
     prev_link_re = re.compile(
-        r"^\[" + re.escape(prev) + r"\]: (\S+?)/compare/\S+$", flags=re.MULTILINE
+        r"^\[" + re.escape(prev) + r"\]:\s+(\S+?)/(?:compare|releases)/\S+$",
+        flags=re.MULTILINE,
     )
     m = prev_link_re.search(text)
     if not m:
         print(
-            f"error: comparison link '[{prev}]: .../compare/...' not found "
-            "at the bottom of CHANGELOG.md",
+            f"error: comparison link '[{prev}]: .../compare/...' (or the "
+            "first release's .../releases/tag/... form) not found at the "
+            "bottom of CHANGELOG.md",
             file=sys.stderr,
         )
         return EXIT_FINDINGS
@@ -480,9 +633,26 @@ def run_compile(root, version, date_s, allow_dirty):
     new_link = f"[{version}]: {base}/compare/v{prev}...v{version}\n"
     text = text[: m.start()] + new_link + text[m.start() :]
 
+    original_text = changelog_path.read_text()
+    fragment_bytes = {p: p.read_bytes() for p in fragments}
     changelog_path.write_text(text)
-    for p in fragments:
-        p.unlink()
+    try:
+        for p in fragments:
+            p.unlink()
+    except OSError as exc:
+        # Roll back to the pre-compile state: a half-deleted fragment set
+        # beside an already-written release section would need manual
+        # recovery (the next run deliberately refuses that shape).
+        changelog_path.write_text(original_text)
+        for p, data in fragment_bytes.items():
+            if not p.exists():
+                p.write_bytes(data)
+        print(
+            f"error: fragment deletion failed ({exc}); CHANGELOG.md and "
+            "all fragments restored - nothing was compiled",
+            file=sys.stderr,
+        )
+        return EXIT_FINDINGS
     print(f"compiled: version={version} date={date_s} fragments={len(fragments)}")
     return EXIT_OK
 
@@ -496,6 +666,12 @@ def main(argv=None):
     comp.add_argument("--version", required=True)
     comp.add_argument("--date", required=True)
     comp.add_argument("--allow-dirty", action="store_true")
+    comp.add_argument(
+        "--previous-version",
+        default=None,
+        help="cross-check: must equal the latest CHANGELOG.md release "
+        "(bump-version passes its package-metadata OLD_VERSION)",
+    )
     args = parser.parse_args(argv)
 
     root = (args.root or default_root()).resolve()
@@ -507,7 +683,7 @@ def main(argv=None):
             return EXIT_FINDINGS
         print("check: OK")
         return EXIT_OK
-    return run_compile(root, args.version, args.date, args.allow_dirty)
+    return run_compile(root, args.version, args.date, args.allow_dirty, args.previous_version)
 
 
 if __name__ == "__main__":

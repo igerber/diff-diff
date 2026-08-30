@@ -187,9 +187,10 @@ def _real_prop99():
     """Load the real Prop 99 panel or skip (offline / synthetic fallback).
 
     Skips are VISIBLE (not silent): CI runners have network and the loaders
-    are SHA-256-pinned, so these tests run in practice; a dedicated
-    real-data canary lane is tracked in TODO.md alongside the legacy-loader
-    fallback repair.
+    are SHA-256-pinned, so these tests run in practice; the dedicated
+    real-data canary lane (`.github/workflows/lwdid-data-canary.yml`,
+    weekly cron) fails LOUDLY when either loader is on its synthetic
+    fallback, so a network/URL/sha regression cannot stay green.
     """
     df = load_prop99()
     if df.attrs.get("source") != "lwdid_ssc_ancillary":
@@ -198,7 +199,10 @@ def _real_prop99():
 
 
 def _real_walmart():
-    """Load the real Walmart panel or skip (offline / synthetic fallback)."""
+    """Load the real Walmart panel or skip (offline / synthetic fallback).
+
+    Same skip contract and canary coverage as ``_real_prop99``.
+    """
     df = load_walmart()
     if df.attrs.get("source") != "lwdid_ssc_ancillary":
         pytest.skip("real Walmart data unavailable (synthetic fallback in use)")

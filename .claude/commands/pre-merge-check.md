@@ -53,17 +53,26 @@ every path** — emitting only validated-safe run-lists. It is unit-tested
 (`tests/test_premerge_scan.py`) with staged *and* untracked `$(touch sentinel)`
 filenames asserting nothing executes.
 
-Run it:
+Run it — as TWO separate Bash calls, so each command's exit status is
+inspected on its own (a single block reports only the LAST status, and a
+scan exit 3/4 must never be masked by a passing changelog check):
 
 ```bash
 SCRATCH="$(git rev-parse --git-path premerge-scan)"; mkdir -p "$SCRATCH"
 python3 .claude/scripts/premerge_scan.py --scratch "$SCRATCH"
+```
+
+Handle the scan's exit per the rules below BEFORE moving on. Then,
+separately:
+
+```bash
 python3 .claude/scripts/changelog_compile.py check
 ```
 
-The second command is the changelog-fragment guard (pointer-only
+This second call is the changelog-fragment guard (pointer-only
 `## [Unreleased]` + fragment grammar) - it catches a direct Unreleased edit
-here instead of first failing in the label-gated docs-tests CI lane.
+here instead of first failing in the label-gated docs-tests CI lane; a
+non-zero exit is its own finding to report, independent of the scan.
 
 - If it **exits 4**, a git or file-read operation failed — the scan is **incomplete**
   and its run-lists were truncated to empty. **Stop and report the error;** do NOT

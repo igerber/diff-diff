@@ -43,7 +43,7 @@ Files that need updating:
    is removed):
 
    ```bash
-   python3 .claude/scripts/changelog_compile.py compile --version NEW_VERSION --date "$(date +%F)"
+   python3 .claude/scripts/changelog_compile.py compile --version NEW_VERSION --date "$(date +%F)" --previous-version "$OLD_VERSION"
    ```
 
    Key off the exit code:

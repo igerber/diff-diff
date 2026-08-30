@@ -21,6 +21,7 @@ import importlib.util
 import pathlib
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -82,6 +83,7 @@ GOOD_FRAGMENT = "### Fixed\n- **a fix**: details, wrapped with\n  a continuation
 
 
 def make_repo(tmp_path, changelog=MINIMAL_CHANGELOG, fragments=None, readme=True):
+    tmp_path.mkdir(parents=True, exist_ok=True)
     d = tmp_path / "changelog.d"
     d.mkdir()
     if readme:
@@ -177,6 +179,9 @@ class TestCheck:
             "20269999-impossible-date.md",
             "20260830-UPPER.md",
             "20260830-slug.txt",
+            "20260830-topic-.md",
+            "20260830-topic--detail.md",
+            "20260830--topic.md",
         ],
     )
     def test_bad_fragment_names(self, mod, tmp_path, name):
@@ -194,6 +199,13 @@ class TestCheck:
             ("### Fixed\n- ok\n## [9.9.9]\n", "'## ' header"),
             ("- floating bullet\n### Fixed\n- ok\n", "outside any"),
             ("### Fixed\nnot a bullet\n", "not a top-level bullet"),
+            # CommonMark accepts ATX headings indented 1-3 spaces; they must
+            # not slip through as "continuation" lines (they render as real
+            # headings the compiler's column-zero scanners never see).
+            ("### Fixed\n ## [9.9.9] - 2099-01-01\n- entry\n", "indented Markdown heading"),
+            ("### Fixed\n  ## smuggled\n- entry\n", "indented Markdown heading"),
+            ("### Fixed\n   ## smuggled\n- entry\n", "indented Markdown heading"),
+            ("### Fixed\n- ok\n  ### Unknown\n", "indented Markdown heading"),
         ],
     )
     def test_bad_fragment_bodies(self, mod, tmp_path, body, needle):
@@ -369,6 +381,41 @@ class TestCompile:
         root = make_repo(tmp_path, changelog=changelog)
         assert run_compile(mod, root, version="1.2.0") == 1
 
+    def test_exit4_rejects_orphan_bullet_before_category(self, mod, tmp_path):
+        # Any-header + any-bullet independently is not enough: an orphan
+        # bullet above a (now empty) valid category is a state compile
+        # could not have produced - the section grammar must reject it.
+        changelog = MINIMAL_CHANGELOG.replace(
+            "## [1.2.0] - 2026-01-15\n\n### Added\n- old entry\n",
+            "## [1.2.0] - 2026-01-15\n\n- orphan bullet\n\n### Added\n",
+        )
+        root = make_repo(tmp_path, changelog=changelog)
+        assert run_compile(mod, root, version="1.2.0") == 1
+
+    def test_exit4_rejects_bullet_only_under_unknown_category(self, mod, tmp_path):
+        changelog = MINIMAL_CHANGELOG.replace(
+            "## [1.2.0] - 2026-01-15\n\n### Added\n- old entry\n",
+            "## [1.2.0] - 2026-01-15\n\n### Added\n\n### Unknown\n- smuggled\n",
+        )
+        root = make_repo(tmp_path, changelog=changelog)
+        assert run_compile(mod, root, version="1.2.0") == 1
+
+    def test_indented_heading_fragment_cannot_compile(self, mod, tmp_path):
+        frag = "### Fixed\n ## [9.9.9] - 2099-01-01\n- entry\n"
+        root = make_repo(tmp_path, fragments={"20260830-x.md": frag})
+        assert run_compile(mod, root) == 1
+        # Nothing consumed, nothing written.
+        assert (root / "changelog.d" / "20260830-x.md").exists()
+        assert "9.9.9" not in (root / "CHANGELOG.md").read_text()
+
+    def test_exit4_rejects_indented_heading_in_section(self, mod, tmp_path):
+        changelog = MINIMAL_CHANGELOG.replace(
+            "## [1.2.0] - 2026-01-15\n\n### Added\n- old entry\n",
+            "## [1.2.0] - 2026-01-15\n\n### Added\n- old entry\n ## smuggled\n",
+        )
+        root = make_repo(tmp_path, changelog=changelog)
+        assert run_compile(mod, root, version="1.2.0") == 1
+
     def test_exit4_requires_dated_header(self, mod, tmp_path):
         changelog = MINIMAL_CHANGELOG.replace("## [1.2.0] - 2026-01-15", "## [1.2.0]")
         root = make_repo(tmp_path, changelog=changelog)
@@ -392,6 +439,129 @@ class TestCompile:
         root = make_repo(tmp_path, changelog=changelog, fragments={"20260830-x.md": GOOD_FRAGMENT})
         assert run_compile(mod, root) == 1
         assert (root / "changelog.d" / "20260830-x.md").exists()
+
+    def test_previous_version_mismatch_leaves_state_untouched(self, mod, tmp_path):
+        # bump-version passes its package-metadata OLD_VERSION; a drifted
+        # changelog (latest release != OLD_VERSION) must refuse before any
+        # write or fragment deletion.
+        root = make_repo(tmp_path, fragments={"20260830-x.md": GOOD_FRAGMENT})
+        before = (root / "CHANGELOG.md").read_text()
+        rc = mod.run_compile(root, "1.3.0", "2026-08-30", True, previous_version="9.9.9")
+        assert rc == 1
+        assert (root / "CHANGELOG.md").read_text() == before
+        assert (root / "changelog.d" / "20260830-x.md").exists()
+        # Matching previous-version compiles normally.
+        assert mod.run_compile(root, "1.3.0", "2026-08-30", True, previous_version="1.2.0") == 0
+        # Interrupted-bump recovery: re-running with the SAME (now stale)
+        # previous-version must reach the idempotent exit-4 path, not the
+        # drift rejection (compile finished; package metadata not yet
+        # bumped).
+        assert mod.run_compile(root, "1.3.0", "2026-08-30", True, previous_version="1.2.0") == 4
+        # A completed bump re-run (metadata already at the target) also
+        # certifies; an unrelated value is drift.
+        assert mod.run_compile(root, "1.3.0", "2026-08-30", True, previous_version="1.3.0") == 4
+        assert mod.run_compile(root, "1.3.0", "2026-08-30", True, previous_version="9.9.9") == 1
+
+    def test_dateless_prev_anchor_rejected_legacy_exempt(self, mod, tmp_path):
+        # The ANCHOR (latest release) must carry a canonical date; older
+        # legacy headers without dates stay legal (the real CHANGELOG has
+        # pre-convention dateless releases).
+        frag = {"20260830-x.md": GOOD_FRAGMENT}
+        changelog = MINIMAL_CHANGELOG.replace("## [1.2.0] - 2026-01-15", "## [1.2.0]")
+        root = make_repo(tmp_path / "dateless", changelog=changelog, fragments=frag)
+        assert run_compile(mod, root, version="1.3.0") == 1
+        # Impossible date on the anchor is equally rejected.
+        changelog = MINIMAL_CHANGELOG.replace("2026-01-15", "2026-99-99")
+        root = make_repo(tmp_path / "impossible", changelog=changelog, fragments=frag)
+        assert run_compile(mod, root, version="1.3.0") == 1
+        # A dateless OLDER header does not block (legacy exemption).
+        changelog = MINIMAL_CHANGELOG.replace("## [1.1.0] - 2026-01-01", "## [1.1.0]")
+        root = make_repo(tmp_path / "legacy", changelog=changelog, fragments=frag)
+        assert run_compile(mod, root, version="1.3.0") == 0
+
+    def test_alternate_whitespace_target_link_detected(self, mod, tmp_path):
+        # A pre-existing target link with extra whitespace after ':' must
+        # still trip the duplicate-definition refusal.
+        changelog = MINIMAL_CHANGELOG + "[1.3.0]:   https://example.com/compare/v1.2.0...v1.3.0\n"
+        root = make_repo(tmp_path, changelog=changelog, fragments={"20260830-x.md": GOOD_FRAGMENT})
+        assert run_compile(mod, root, version="1.3.0") == 1
+
+    def test_preexisting_target_link_definition_rejected(self, mod, tmp_path):
+        # A '[X.Y.Z]:' link definition without its release header is an
+        # inconsistent state; compiling would emit a DUPLICATE definition.
+        changelog = MINIMAL_CHANGELOG + "[1.3.0]: https://example.com/compare/v1.2.0...v1.3.0\n"
+        root = make_repo(tmp_path, changelog=changelog, fragments={"20260830-x.md": GOOD_FRAGMENT})
+        assert run_compile(mod, root, version="1.3.0") == 1
+        assert (root / "changelog.d" / "20260830-x.md").exists()
+
+    def test_exit4_rejects_duplicate_link_definitions(self, mod, tmp_path):
+        # One correct + one wrong definition for the target: the duplicate
+        # check now runs BEFORE the existing-target path, so exit 4 cannot
+        # certify the ambiguous state.
+        changelog = MINIMAL_CHANGELOG.replace(
+            "## [1.2.0] - 2026-01-15",
+            "## [1.3.0] - 2026-01-16\n\n### Fixed\n- prior.\n\n## [1.2.0] - 2026-01-15",
+        )
+        changelog = changelog.replace(
+            "[1.2.0]:",
+            "[1.3.0]: https://example.com/compare/v1.2.0...v1.3.0\n"
+            "[1.3.0]: https://evil.example/compare/v1.2.0...v1.3.0\n[1.2.0]:",
+            1,
+        )
+        root = make_repo(tmp_path, changelog=changelog)
+        assert run_compile(mod, root, version="1.3.0") == 1
+
+    def test_exit4_requires_predecessor_link(self, mod, tmp_path):
+        # No link definition for the predecessor: never fall back to
+        # accepting any base - refuse (not a compiler-produced state).
+        changelog = MINIMAL_CHANGELOG.replace(
+            "## [1.2.0] - 2026-01-15",
+            "## [1.3.0] - 2026-01-16\n\n### Fixed\n- prior.\n\n## [1.2.0] - 2026-01-15",
+        )
+        changelog = changelog.replace(
+            "[1.2.0]:", "[1.3.0]: https://example.com/compare/v1.2.0...v1.3.0\n[oops-1.2.0]:", 1
+        )
+        root = make_repo(tmp_path, changelog=changelog)
+        assert run_compile(mod, root, version="1.3.0") == 1
+
+    def test_exit4_rejects_wrong_base_target_link(self, mod, tmp_path):
+        # Correct predecessor/target versions but an UNRELATED repository
+        # base: exit 4 must not certify this as already-compiled.
+        changelog = MINIMAL_CHANGELOG.replace(
+            "## [1.2.0] - 2026-01-15",
+            "## [1.3.0] - 2026-01-16\n\n### Fixed\n- prior.\n\n## [1.2.0] - 2026-01-15",
+        )
+        changelog = changelog.replace(
+            "[1.2.0]:",
+            "[1.3.0]: https://evil.example/compare/v1.2.0...v1.3.0\n[1.2.0]:",
+            1,
+        )
+        root = make_repo(tmp_path, changelog=changelog)
+        assert run_compile(mod, root, version="1.3.0") == 1
+
+    def test_malformed_release_header_rejected(self, mod, tmp_path):
+        # A release-LIKE header the canonical grammar does not match (extra
+        # suffix) is invisible to _existing_headers, so compiling that
+        # version would otherwise add a SECOND canonical section beside the
+        # malformed one; the compiler must refuse before touching anything.
+        changelog = MINIMAL_CHANGELOG.replace(
+            "## [1.2.0] - 2026-01-15", "## [1.2.0] - 2026-01-15 draft"
+        )
+        root = make_repo(tmp_path, changelog=changelog, fragments={"20260830-x.md": GOOD_FRAGMENT})
+        before = (root / "CHANGELOG.md").read_text()
+        assert run_compile(mod, root, version="1.2.0") == 1
+        assert (root / "changelog.d" / "20260830-x.md").exists()
+        assert (root / "CHANGELOG.md").read_text() == before  # untouched
+
+    def test_mixed_canonical_and_malformed_duplicate_rejected(self, mod, tmp_path):
+        # Canonical 1.2.0 + a malformed 1.2.0 twin: the malformed-header
+        # rejection fires (the duplicate check alone cannot see the twin).
+        changelog = MINIMAL_CHANGELOG.replace(
+            "## [1.1.0] - 2026-01-01\n",
+            "## [1.2.0] - 2026-01-15 rc1\n\n### Fixed\n- twin\n\n" "## [1.1.0] - 2026-01-01\n",
+        )
+        root = make_repo(tmp_path, changelog=changelog)
+        assert run_compile(mod, root, version="1.3.0") == 1
 
     def test_duplicate_release_headers_rejected_not_certified(self, mod, tmp_path):
         # Two '## [1.2.0]' sections with a nonempty first section and a valid
@@ -465,6 +635,59 @@ class TestCompile:
         git_commit_all(root, init_only=True)
         assert run_compile(mod, root, allow_dirty=False) == 1
         assert run_compile(mod, root, allow_dirty=True) == 0
+
+    def test_dirty_guard_catches_deleted_tracked_fragment(self, mod, tmp_path, git_commit_all):
+        # A committed fragment DELETED from the worktree must refuse: the
+        # compile would otherwise ship only the surviving fragment while
+        # the git diff deletes both - silently losing a release note.
+        root = make_repo(
+            tmp_path,
+            fragments={"20260830-a.md": GOOD_FRAGMENT, "20260830-b.md": GOOD_FRAGMENT},
+        )
+        git_commit_all(root)
+        (root / "changelog.d" / "20260830-a.md").unlink()
+        before = (root / "CHANGELOG.md").read_text()
+        assert run_compile(mod, root, allow_dirty=False) == 1
+        assert (root / "CHANGELOG.md").read_text() == before
+        assert (root / "changelog.d" / "20260830-b.md").exists()
+
+    def test_compile_rolls_back_on_unlink_failure(self, mod, tmp_path, monkeypatch):
+        # Transactionality: if fragment deletion fails after CHANGELOG.md
+        # was written, both the changelog and every fragment are restored.
+        root = make_repo(
+            tmp_path,
+            fragments={"20260830-a.md": GOOD_FRAGMENT, "20260830-b.md": GOOD_FRAGMENT},
+        )
+        before = (root / "CHANGELOG.md").read_text()
+        real_unlink = Path.unlink
+        calls = {"n": 0}
+
+        def failing_unlink(self, *a, **k):
+            if self.suffix == ".md" and self.parent.name == "changelog.d":
+                calls["n"] += 1
+                if calls["n"] == 2:
+                    raise OSError("simulated unlink failure")
+            return real_unlink(self, *a, **k)
+
+        monkeypatch.setattr(Path, "unlink", failing_unlink)
+        assert run_compile(mod, root, allow_dirty=True) == 1
+        assert (root / "CHANGELOG.md").read_text() == before
+        assert (root / "changelog.d" / "20260830-a.md").exists()
+        assert (root / "changelog.d" / "20260830-b.md").exists()
+
+    def test_second_release_over_tag_link_anchor(self, mod, tmp_path):
+        # A repo whose sole prior release carries the conventional
+        # releases/tag link must be able to compile its second release.
+        changelog = (
+            "# Changelog\n\n## [Unreleased]\n\n"
+            + POINTER
+            + "\n\n## [1.0.0] - 2026-01-01\n\n### Added\n- first.\n\n"
+            "[1.0.0]: https://example.com/releases/tag/v1.0.0\n"
+        )
+        root = make_repo(tmp_path, changelog=changelog, fragments={"20260830-x.md": GOOD_FRAGMENT})
+        assert run_compile(mod, root, version="1.1.0") == 0
+        out = (root / "CHANGELOG.md").read_text()
+        assert "[1.1.0]: https://example.com/compare/v1.0.0...v1.1.0" in out
 
     def test_dirty_guard_catches_gitignored_fragment(self, mod, tmp_path, git_commit_all):
         # `git status` never sees ignored untracked files; the guard is a

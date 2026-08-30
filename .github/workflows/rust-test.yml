@@ -12,6 +12,7 @@ on:
       - '!tests/test_doc_snippets.py'
       # Same ownership split: the changelog-fragment guard runs in docs-tests.yml.
       - '!tests/test_changelog_fragments.py'
+      - '!tests/test_tracking_files.py'
       - 'tools/**'
       - 'pyproject.toml'
       - '.github/workflows/rust-test.yml'
@@ -47,6 +48,7 @@ on:
       - '!tests/test_doc_snippets.py'
       # Same ownership split: the changelog-fragment guard runs in docs-tests.yml.
       - '!tests/test_changelog_fragments.py'
+      - '!tests/test_tracking_files.py'
       - 'tools/**'
       - 'pyproject.toml'
       - '.github/workflows/rust-test.yml'

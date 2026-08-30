@@ -146,15 +146,41 @@ When the working tree is clean but commits are ahead, scan for secrets in the co
 
 When the working tree is clean but commits are ahead, check for methodology issues before pushing:
 
-1. **Methodology review of already-committed changes is deferred to `/pre-merge-check`.**
-   The changes here are already committed, so this pattern check is non-blocking, and
-   the pre-merge gate (run before committing) is the right place for it. Do **not**
-   interpolate a comparison ref into a scan command here — `/pre-merge-check` covers the
-   working-tree case safely via `premerge_scan.py`, and re-deriving a committed range in
-   prose is where injection creeps back in. If you want the committed range checked, run
-   `/pre-merge-check` on the branch before it was committed, or review the diff by eye.
+1. **Methodology pattern scan of the committed range** — via the tested argv-safe
+   helper's `--range` mode (`premerge_scan.py`; the range is passed as DATA in a
+   quoted variable, never a raw placeholder — the injection shape that got the old
+   prose-grep version removed). Re-derive the comparison ref inside this one Bash
+   call using the same fallback chain as Section 2 (shell variables do not persist
+   across tool calls):
 
-3. **Documentation impact check**: Check which source files in `diff_diff/` are in the committed changes.
+   ```bash
+   SCRATCH="$(git rev-parse --git-path premerge-scan)"; mkdir -p "$SCRATCH"
+   DEFAULT_BRANCH="$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null || echo main)"
+   if UP="$(git rev-parse --abbrev-ref @{u} 2>/dev/null)"; then
+     COMPARISON_REF="$UP"
+   elif git rev-parse --verify "$DEFAULT_BRANCH" >/dev/null 2>&1; then
+     COMPARISON_REF="$DEFAULT_BRANCH"
+   elif git rev-parse --verify "origin/$DEFAULT_BRANCH" >/dev/null 2>&1; then
+     COMPARISON_REF="origin/$DEFAULT_BRANCH"
+   else
+     git fetch origin "$DEFAULT_BRANCH" --depth=1 2>/dev/null || true
+     COMPARISON_REF="origin/$DEFAULT_BRANCH"
+   fi
+   python3 .claude/scripts/premerge_scan.py --scratch "$SCRATCH" --range "$COMPARISON_REF..HEAD"
+   ```
+
+   (Upstream-first, exactly Section 2.4's resolver: on an existing PR the scan
+   covers only the UNPUSHED commits — comparing against the default branch would
+   rescan previously pushed, already-reviewed changes.)
+
+   Pattern FINDINGS are informational (report file:line; the changes are already
+   committed). Scan-INTEGRITY failures are not: **exit 3** means a changed path
+   carries shell metacharacters (excluded from the scan — surface it for manual
+   review) and **exit 4** means a git/read failure truncated the run-lists — the
+   scan is incomplete, so report the error rather than describing the range as
+   clean.
+
+2. **Documentation impact check**: Check which source files in `diff_diff/` are in the committed changes.
    If source files are present, read `docs/doc-deps.yaml` and check which dependent
    documentation files are NOT also in the committed changes. Warn about:
    - ALL docs with `type: methodology` (regardless of `drift_risk`)
@@ -169,7 +195,7 @@ When the working tree is clean but commits are ahead, check for methodology issu
    `changelog.d/` fragment (see CONTRIBUTING.md "Changelog fragments").
    This is a WARNING, not a blocker.
 
-Note: Section 3b checks are informational warnings only — no AskUserQuestion prompt, since changes are already committed and cannot be unstaged. This differs from the staged-changes path (Section 3) which offers a "fix vs continue" choice.
+Note: Section 3b FINDINGS are informational warnings only — no AskUserQuestion prompt, since changes are already committed and cannot be unstaged (unlike the staged-changes path, Section 3, which offers a "fix vs continue" choice). The one exception is scan INTEGRITY: `premerge_scan.py` exit 3/4 means the scan itself is incomplete — report that rather than proceeding as if the range were clean.
 
 ### 3. Stage and Commit Changes
 

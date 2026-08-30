@@ -154,6 +154,15 @@ DEFERRED.md (blocker sections):
 |-------|----------|----|----------|
 | Description of deferred item | `file.py` | #NNN | Medium/Low |
 
+DEFERRED.md (Decision record — won't-fix / waived):
+
+| Decision | Location | Verified |
+|----------|----------|----------|
+| The recorded decision | `file.py` | #NNN |
+
+These three shapes (and the no-deferred-pointers / no-ledger-restatement
+rules above) are CI-enforced by `tests/test_tracking_files.py`.
+
 ## README discipline
 
 `README.md` is a **landing page**, not the documentation. Target ~190 lines. The 3,119-line README that existed before the 2026-04 docs refresh grew because workflow conventions told contributors to add to README on every change.
