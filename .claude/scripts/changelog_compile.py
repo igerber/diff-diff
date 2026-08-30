@@ -354,7 +354,13 @@ def run_compile(root, version, date_s, allow_dirty, previous_version=None):
     # Link-definition duplicate check runs BEFORE the existing-target path:
     # exit 4 must never certify a changelog carrying two definitions for
     # any version (one correct + one wrong would otherwise pass).
-    link_versions = re.findall(r"^\[(\d+\.\d+\.\d+)\]:\s+\S+\s*$", text, flags=re.MULTILINE)
+    # Label-only match: CommonMark permits '[1.3.0]:https://...' with NO
+    # whitespace after the colon (and even a next-line destination), so
+    # requiring '\s+<dest>' here would let such a definition hide from the
+    # duplicate and already-defined-target checks while still controlling
+    # the rendered link (CommonMark resolves a label to its FIRST
+    # definition).
+    link_versions = re.findall(r"^\[(\d+\.\d+\.\d+)\]:", text, flags=re.MULTILINE)
     dup_links = sorted({v for v in link_versions if link_versions.count(v) > 1})
     if dup_links:
         print(

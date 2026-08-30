@@ -439,6 +439,28 @@ class TestCompile:
         exit4 = make_repo(tmp_path / "exit4", changelog=changelog)
         assert run_compile(mod, exit4, version="1.2.0") == 1
 
+    def test_nospace_link_definition_blocks_fresh_target(self, mod, tmp_path):
+        # CommonMark allows '[x]:dest' with no whitespace after the colon,
+        # and resolves a label to its FIRST definition - a hidden no-space
+        # definition for the target must refuse the fresh compile, or the
+        # appended canonical definition would be silently outranked.
+        changelog = MINIMAL_CHANGELOG.replace(
+            "[1.2.0]:",
+            "[1.3.0]:https://github.com/x/y/compare/vWRONG...vWRONG\n[1.2.0]:",
+        )
+        root = make_repo(tmp_path, changelog=changelog, fragments={"20260830-x.md": GOOD_FRAGMENT})
+        assert run_compile(mod, root) == 1
+        assert "## [1.3.0]" not in (root / "CHANGELOG.md").read_text()
+        assert (root / "changelog.d" / "20260830-x.md").exists()
+
+    def test_nospace_duplicate_link_definition_blocks_exit4(self, mod, tmp_path):
+        changelog = MINIMAL_CHANGELOG.replace(
+            "[1.2.0]:",
+            "[1.2.0]:https://github.com/x/y/compare/vWRONG...vWRONG\n[1.2.0]:",
+        )
+        root = make_repo(tmp_path, changelog=changelog)
+        assert run_compile(mod, root, version="1.2.0") == 1
+
     def test_ls_tree_enumeration_failure_fails_closed(
         self, mod, tmp_path, monkeypatch, git_commit_all
     ):
