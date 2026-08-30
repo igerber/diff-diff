@@ -793,8 +793,10 @@ DR score is self-normalized; the two are not interchangeable"):
   and asymptotic equivalence to both printed readings. The published
   *Econometrics Journal* version was cross-checked 2026-08-30 (doi:
   10.1093/ectj/utaa001): Definition 3.1(b) prints the SAME
-  `p̂_k = (1/n)Σ_{i∈I_k^c} D_i` formula (and `λ̂_k` likewise), so the
-  algorithm-vs-proof contradiction survives peer review unchanged. The
+  `p̂_k = (1/n)Σ_{i∈I_k^c} D_i` formula (and `λ̂_k` likewise) — the
+  printed-formula side of the contradiction persists in the version of
+  record, while the proofs are online-supplement-only and remain
+  unchecked (the arXiv-v3 proofs are the verified proof-side source). The
   author's replication code (github.com/NengChiehChang/Diff-in-Diff,
   commit `e93773d1c5ed`, inspected 2026-08-30; it fixes k = 2, so its own
   printed-formula reading is self-consistent) uses MIXED conventions:
