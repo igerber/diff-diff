@@ -322,6 +322,11 @@ def _link_block_violation(text):
     while start > 0 and _CANONICAL_LINK_SHAPE.match(lines[start - 1]):
         start -= 1
     terminal = set(range(start, end))
+    # The run must be immediately preceded by a BLANK line: type-6/7 raw-
+    # HTML blocks (e.g. a bare '<div>') persist only until a blank line,
+    # so a blank boundary guarantees no such block spans into the run.
+    if terminal and start > 0 and lines[start - 1].strip():
+        return start, lines[start - 1][:60]
     for i, ln in enumerate(lines):
         if _CANONICAL_LINK_SHAPE.match(ln) and i not in terminal:
             return i + 1, ln[:60]

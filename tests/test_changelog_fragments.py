@@ -484,6 +484,21 @@ class TestCompile:
         exit4 = make_repo(tmp_path / "exit4", changelog=changelog)
         assert run_compile(mod, exit4, version="1.2.0") == 1
 
+    def test_html_block_touching_link_block_refused(self, mod, tmp_path):
+        # A type-6 HTML block ('<div>') persists until a blank line - one
+        # sitting directly above the definitions would swallow them, so the
+        # terminal run must be preceded by a blank line.
+        changelog = MINIMAL_CHANGELOG.replace(
+            "- older entry\n\n[1.2.0]:", "- older entry\n<div>\n[1.2.0]:"
+        )
+        fresh = make_repo(
+            tmp_path / "fresh", changelog=changelog, fragments={"20260830-x.md": GOOD_FRAGMENT}
+        )
+        assert run_compile(mod, fresh) == 1
+        assert (fresh / "changelog.d" / "20260830-x.md").exists()
+        exit4 = make_repo(tmp_path / "exit4", changelog=changelog)
+        assert run_compile(mod, exit4, version="1.2.0") == 1
+
     def test_nospace_link_definition_blocks_fresh_target(self, mod, tmp_path):
         # CommonMark allows '[x]:dest' with no whitespace after the colon,
         # and resolves a label to its FIRST definition - a hidden no-space
