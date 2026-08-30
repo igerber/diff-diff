@@ -95,6 +95,15 @@ def _parse_fragment(text):
             # above as a "continuation" yet render as a real heading.
             errors.append(f"line {lineno}: indented Markdown heading not allowed in a fragment")
             continue
+        if _VERSION_LINK_SHAPE.search(line):
+            # A '- [1.3.0]:url' bullet would register a CommonMark link
+            # definition ONCE COMPILED — and the first definition wins,
+            # outranking the canonical one the compiler appends.
+            errors.append(
+                f"line {lineno}: version-link-like construct ('[X.Y.Z]:') "
+                "not allowed in a fragment"
+            )
+            continue
         if not line.strip():
             if current is not None:
                 current[1].append(line)
@@ -242,6 +251,29 @@ def _existing_headers(changelog_text):
     return out
 
 
+_VERSION_LINK_SHAPE = re.compile(r"\[\s*\d+\.\d+\.\d+\s*\]:")
+_CANONICAL_LINK_SHAPE = re.compile(r"\[\d+\.\d+\.\d+\]:")
+
+
+def _noncanonical_version_link(text):
+    """(lineno, snippet) of the first version-link-LIKE construct that is
+    not a canonical column-zero '[X.Y.Z]:' definition, else None.
+
+    CommonMark registers reference definitions inside containers (list
+    items, blockquotes) and whitespace-normalizes labels ('[ 1.3.0 ]'
+    resolves as '1.3.0'), and the FIRST definition wins — so any
+    version-label-plus-colon anywhere outside the canonical link block
+    could silently outrank the definitions this compiler writes and
+    scans. Rather than chase every container form, refuse them all."""
+    for m in _VERSION_LINK_SHAPE.finditer(text):
+        at_col0 = m.start() == 0 or text[m.start() - 1] == "\n"
+        if at_col0 and _CANONICAL_LINK_SHAPE.match(text, m.start()):
+            continue  # canonical: exactly what link_versions collects
+        lineno = text.count("\n", 0, m.start()) + 1
+        return lineno, m.group(0).replace("\n", "\\n")
+    return None
+
+
 def _section_body(changelog_text, header_start):
     nl = changelog_text.find("\n", header_start)
     if nl == -1:
@@ -332,6 +364,20 @@ def run_compile(root, version, date_s, allow_dirty, previous_version=None):
             f"error: CHANGELOG.md line {lineno}: indented heading or "
             "version-link definition (CommonMark renders these, but the "
             "compiler's column-zero scans cannot see them) — fix the file "
+            "before compiling",
+            file=sys.stderr,
+        )
+        return EXIT_FINDINGS
+    # Version-link-like constructs (any container form, any label spacing)
+    # must not exist outside the canonical column-zero definitions — see
+    # _noncanonical_version_link.
+    bad_link = _noncanonical_version_link(text)
+    if bad_link:
+        print(
+            f"error: CHANGELOG.md line {bad_link[0]}: version-link-like "
+            f"construct {bad_link[1]!r} outside the canonical column-zero "
+            "link block (CommonMark would register it as a definition, "
+            "invisible to the duplicate/target scans) — fix the file "
             "before compiling",
             file=sys.stderr,
         )
@@ -673,6 +719,19 @@ def run_compile(root, version, date_s, allow_dirty, previous_version=None):
     base = m.group(1)
     new_link = f"[{version}]: {base}/compare/v{prev}...v{version}\n"
     text = text[: m.start()] + new_link + text[m.start() :]
+
+    # Backstop on the fully assembled text (multi-line labels can span the
+    # fragment-line checks): the only version-link definitions in the
+    # output must be the canonical column-zero ones.
+    bad_link = _noncanonical_version_link(text)
+    if bad_link:
+        print(
+            f"error: assembled CHANGELOG line {bad_link[0]}: version-link-"
+            f"like construct {bad_link[1]!r} would be written outside the "
+            "canonical link block — refusing to compile",
+            file=sys.stderr,
+        )
+        return EXIT_FINDINGS
 
     original_text = changelog_path.read_text()
     fragment_bytes = {p: p.read_bytes() for p in fragments}

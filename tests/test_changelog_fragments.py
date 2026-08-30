@@ -206,6 +206,12 @@ class TestCheck:
             ("### Fixed\n  ## smuggled\n- entry\n", "indented Markdown heading"),
             ("### Fixed\n   ## smuggled\n- entry\n", "indented Markdown heading"),
             ("### Fixed\n- ok\n  ### Unknown\n", "indented Markdown heading"),
+            # CommonMark registers link definitions inside list items, and
+            # the FIRST definition wins once compiled - a version-link-like
+            # construct has no place in a release-note fragment.
+            ("### Fixed\n- [1.3.0]:https://evil.example/wrong\n", "version-link-like"),
+            ("### Fixed\n- ok\n  - [1.3.0]: https://evil.example\n", "version-link-like"),
+            ("### Fixed\n- see [ 1.3.0 ]: for details\n", "version-link-like"),
         ],
     )
     def test_bad_fragment_bodies(self, mod, tmp_path, body, needle):
@@ -409,6 +415,9 @@ class TestCompile:
             "##  [9.9.9] - 2099-01-01",
             "##\t[9.9.9] - 2099-01-01",
             "### [9.9.9] - 2099-01-01",
+            "[ 9.9.9 ]: https://github.com/x/y/compare/vA...vB",
+            "- [9.9.9]:https://evil.example/wrong",
+            "  - [9.9.9]: https://evil.example/wrong",
         ],
         ids=[
             "indented-header-1sp",
@@ -417,6 +426,9 @@ class TestCompile:
             "double-space-after-hashes",
             "tab-after-hashes",
             "h3-release-like",
+            "whitespace-normalized-label",
+            "list-item-link-def",
+            "nested-list-link-def",
         ],
     )
     def test_noncanonical_changelog_constructs_refused(self, mod, tmp_path, smuggled):
