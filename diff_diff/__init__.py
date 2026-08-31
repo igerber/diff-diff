@@ -300,6 +300,7 @@ from diff_diff.trop import (
 )
 from diff_diff.twfe_weights import (
     attgt_weights,
+    decompose_twfe_weights,
 )
 from diff_diff.twfe_weights_results import (
     ATTGTWeightsResult,
@@ -472,6 +473,7 @@ __all__ = [
     "ATTGTWeightsResult",
     "TWFEDecompositionResult",
     "attgt_weights",
+    "decompose_twfe_weights",
     # WooldridgeDiD (ETWFE)
     "WooldridgeDiD",
     "WooldridgeDiDResults",
