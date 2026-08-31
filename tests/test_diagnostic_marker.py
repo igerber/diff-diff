@@ -49,6 +49,8 @@ DIAGNOSTIC_ROSTER = [
     "HADPretestReport",
     "DiagnosticReportResults",
     "DurationDiDPretestResults",
+    "ATTGTWeightsResult",
+    "TWFEDecompositionResult",
 ]
 
 # Representative ESTIMATOR results: marked with BaseResults, never Diagnostic.
