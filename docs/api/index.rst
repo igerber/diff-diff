@@ -76,6 +76,8 @@ Result containers returned by estimators:
    diff_diff.TwoStageBootstrapResults
    diff_diff.SpilloverDiDResults
    diff_diff.BaconDecompositionResults
+   diff_diff.ATTGTWeightsResult
+   diff_diff.TWFEDecompositionResult
    diff_diff.wooldridge_results.WooldridgeDiDResults
    diff_diff.lpdid_results.LPDiDResults
    diff_diff.changes_in_changes_results.ChangesInChangesResults
@@ -119,6 +121,7 @@ Plotting functions and plot builders:
    diff_diff.plot_honest_event_study
    diff_diff.RDPlot
    diff_diff.plot_bacon
+   diff_diff.plot_twfe_weights
    diff_diff.plot_power_curve
    diff_diff.plot_pretrends_power
 
@@ -138,6 +141,8 @@ Placebo tests and model diagnostics:
    diff_diff.leave_one_out_test
    diff_diff.run_all_placebo_tests
    diff_diff.PlaceboTestResults
+   diff_diff.attgt_weights
+   diff_diff.decompose_twfe_weights
    diff_diff.RDDensityTest
 
 Panel Profiling
@@ -400,6 +405,7 @@ Diagnostics & Inference
    honest_did
    power
    pretrends
+   twfe_weights
 
 Reporting
 ~~~~~~~~~

@@ -329,6 +329,7 @@ from diff_diff.visualization import (
     plot_sensitivity,
     plot_staircase,
     plot_synth_weights,
+    plot_twfe_weights,
 )
 from diff_diff.wooldridge import WooldridgeDiD
 from diff_diff.wooldridge_results import WooldridgeDiDResults
@@ -488,6 +489,7 @@ __all__ = [
     "SieveLearner",
     # Visualization
     "plot_bacon",
+    "plot_twfe_weights",
     "plot_event_study",
     "plot_group_effects",
     "plot_sensitivity",
