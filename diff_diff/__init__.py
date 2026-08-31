@@ -296,6 +296,10 @@ from diff_diff.trop import (
     TROPResults,
     trop,
 )
+from diff_diff.twfe_weights_results import (
+    ATTGTWeightsResult,
+    TWFEDecompositionResult,
+)
 from diff_diff.two_stage import (
     TwoStageBootstrapResults,
     TwoStageDiD,
@@ -457,6 +461,11 @@ __all__ = [
     "TWFEWeightsResult",
     "chaisemartin_dhaultfoeuille",
     "twowayfeweights",
+    # TWFE weight diagnostics (Callaway `twfeweights` port) - distinct from
+    # the dCDH `twowayfeweights` surface above: these weight ATT(g,t)
+    # parameters, not (unit, time) cells.
+    "ATTGTWeightsResult",
+    "TWFEDecompositionResult",
     # WooldridgeDiD (ETWFE)
     "WooldridgeDiD",
     "WooldridgeDiDResults",
