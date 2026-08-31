@@ -86,10 +86,15 @@ if (!dir.exists(out_dir)) {
 
 extract_mp_weights <- function(obj) {
   df <- obj$weights_df
+  # mp_weights_obj stores `post` as a FACTOR (for ggplot colouring), so
+  # as.integer() would emit level codes 1/2 rather than the values 0/1.
+  # Round-trip through character.
+  post <- as.integer(as.character(df$post))
+  stopifnot(all(post %in% c(0L, 1L)))
   list(
     group = as.numeric(df$group),
     time = as.numeric(df$time.period),
-    post = as.integer(df$post),
+    post = post,
     weight = as.numeric(df$weight),
     att = as.numeric(df$attgt),
     implied_att = sum(df$weight * df$attgt)
