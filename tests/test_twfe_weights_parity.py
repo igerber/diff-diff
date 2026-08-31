@@ -238,3 +238,280 @@ class TestCSFitAndFrameAgree:
             left["weight"].to_numpy(), right["weight"].to_numpy(), atol=1e-15
         )
         np.testing.assert_allclose(from_fit.implied_att, from_frame.implied_att, atol=1e-15)
+
+
+# FWL decomposition. R double-demeans with `fixest::demean`, an iterative
+# alternating-projections solver with a 1e-8 fixed-point tolerance; ours is
+# the exact closed form on a balanced panel. The gap is fixest's convergence
+# slack, which then propagates through the OLS projection of Ddot on Xdot.
+DEMEAN_ATOL = 1e-10
+DEMEAN_COV_ATOL = 1e-8
+BALANCE_ATOL = 1e-9
+
+# Cells whose comparison-group implicit weights are constant AND average to
+# zero: ATT(g,t) there is a 0/0 limit. We return the limit (the unweighted
+# contrast, exact); R divides the rounding errors and lands ~1e-4 away. The
+# weights on such cells cancel exactly in the aggregate, so `estimate` is
+# unaffected - which is why the scalar assertions below stay at 1e-10 while
+# the per-cell gate is relaxed only where the degeneracy is DETECTED, never
+# by hard-coding a fixture or period.
+DEGENERATE_CELL_ATOL = 5e-2
+
+# R names balance rows `mean_<covariate>` (it averages each covariate over
+# periods within unit first); we keep the covariate's own name.
+R_BALANCE_COLUMNS = {
+    "unweighted_covs_treated": "unweighted_treated",
+    "unweighted_covs_comparison": "unweighted_control",
+    "unweighted_diff": "unweighted_diff",
+    "weighted_covs_treated": "weighted_treated",
+    "weighted_covs_comparison": "weighted_control",
+    "weighted_diff": "weighted_diff",
+    "sd": "sd",
+    "unweighted_log_ratio_sd_diff": "unweighted_log_ratio_sd",
+    "weighted_log_ratio_sd_diff": "weighted_log_ratio_sd",
+    "unweighted_frac_treated_extreme": "unweighted_frac_extreme",
+    "weighted_frac_treated_extreme": "weighted_frac_extreme",
+}
+
+
+def _decompose(df, cols, **kwargs):
+    return diff_diff.decompose_twfe_weights(
+        df,
+        outcome=cols["outcome"],
+        unit=cols["unit"],
+        time=cols["time"],
+        first_treat=cols["first_treat"],
+        **kwargs,
+    )
+
+
+def _degenerate_mask(cells, golden_cells):
+    """Rows where R's ATT(g,t) is a 0/0 artifact rather than a disagreement.
+
+    Detected from the DATA: a degenerate cell is one whose weight is exactly
+    offset by another cell in the same period (they cancel in the aggregate),
+    which is the signature of a vanishing comparison-group normalizer.
+    """
+    weights = np.asarray(golden_cells["weight"], dtype=float)
+    times = np.asarray(golden_cells["time"], dtype=float)
+    mask = np.zeros(len(weights), dtype=bool)
+    for t in np.unique(times):
+        in_period = times == t
+        if in_period.sum() > 1 and abs(weights[in_period].sum()) < 1e-12:
+            mask |= in_period
+    return mask
+
+
+class TestDecompositionParityFWL:
+    """R ``implicit_twfe_weights`` parity, including the no-covariate branch."""
+
+    @pytest.mark.parametrize("fixture", FIXTURES)
+    def test_no_covariate_branch_two_ways(self, golden, fixture):
+        """``covariates=None`` and a time-invariant covariate must agree.
+
+        The golden was generated with ``xformula = ~<time-invariant col>``
+        because upstream cannot run ``~1`` (``fixest::demean`` segfaults on
+        the zero-column model matrix). Asserting BOTH Python calls against
+        that single golden proves the equivalence instead of assuming it.
+        """
+        payload, df = _fixture(golden, fixture)
+        cols = payload["columns"]
+        expected = payload["decompose"]["fwl_nocov"]
+
+        without = _decompose(df, cols, covariates=None)
+        with pytest.warns(UserWarning, match="no within-unit-and-period variation"):
+            with_invariant = _decompose(df, cols, covariates=[cols["invariant_cov"]])
+
+        np.testing.assert_allclose(
+            without.cells["weight"].to_numpy(),
+            with_invariant.cells["weight"].to_numpy(),
+            atol=1e-15,
+        )
+        assert without.estimate == pytest.approx(with_invariant.estimate, abs=1e-15)
+
+        for result in (without, with_invariant):
+            np.testing.assert_allclose(result.estimate, expected["estimate"], atol=DEMEAN_ATOL)
+            np.testing.assert_allclose(
+                result.cells["weight"].to_numpy(),
+                np.asarray(expected["cells"]["weight"]),
+                atol=DEMEAN_ATOL,
+            )
+
+    @pytest.mark.parametrize("fixture", FIXTURES)
+    @pytest.mark.parametrize("key", ["fwl_nocov", "fwl_cov", "fwl_gmin1"])
+    def test_scalars(self, golden, fixture, key):
+        payload, df = _fixture(golden, fixture)
+        cols = payload["columns"]
+        expected = payload["decompose"][key]
+        kwargs = {
+            "fwl_nocov": {"covariates": None},
+            "fwl_cov": {"covariates": [cols["varying_cov"]]},
+            "fwl_gmin1": {"covariates": None, "base_period": "gmin1"},
+        }[key]
+        atol = DEMEAN_COV_ATOL if key == "fwl_cov" else DEMEAN_ATOL
+
+        result = _decompose(df, cols, **kwargs)
+
+        # `estimate` is invariant to the 0/0 cells - the weights on them
+        # cancel - so it is gated tightly on EVERY fixture. The
+        # decomposition/remainder SPLIT is not invariant: under gmin1 the
+        # remainder is itself built from the degenerate comparison-group
+        # weights, so R's noise moves mass between the two halves while
+        # leaving their sum exact.
+        np.testing.assert_allclose(result.estimate, expected["estimate"], atol=atol)
+
+        split_atol = atol
+        if _degenerate_mask(result.cells, expected["cells"]).any():
+            split_atol = DEGENERATE_CELL_ATOL
+        for field in ("decomposition", "remainder"):
+            np.testing.assert_allclose(getattr(result, field), expected[field], atol=split_atol)
+
+        # estimate == decomposition + remainder is an identity, not a fit
+        assert result.estimate == pytest.approx(result.decomposition + result.remainder, abs=1e-12)
+
+    @pytest.mark.parametrize("fixture", FIXTURES)
+    @pytest.mark.parametrize("key", ["fwl_nocov", "fwl_cov"])
+    def test_cells(self, golden, fixture, key):
+        payload, df = _fixture(golden, fixture)
+        cols = payload["columns"]
+        expected = payload["decompose"][key]
+        kwargs = {
+            "fwl_nocov": {"covariates": None},
+            "fwl_cov": {"covariates": [cols["varying_cov"]]},
+        }[key]
+        atol = DEMEAN_COV_ATOL if key == "fwl_cov" else DEMEAN_ATOL
+
+        result = _decompose(df, cols, **kwargs)
+        np.testing.assert_allclose(
+            result.cells["weight"].to_numpy(),
+            np.asarray(expected["cells"]["weight"]),
+            atol=atol,
+        )
+
+        actual_att = result.cells["att"].to_numpy()
+        golden_att = np.asarray(expected["cells"]["att"])
+        degenerate = _degenerate_mask(result.cells, expected["cells"])
+        np.testing.assert_allclose(actual_att[~degenerate], golden_att[~degenerate], atol=atol)
+        if degenerate.any():
+            np.testing.assert_allclose(
+                actual_att[degenerate],
+                golden_att[degenerate],
+                atol=DEGENERATE_CELL_ATOL,
+            )
+
+
+class TestDecompositionIsExactAtDegenerateCells:
+    """Where R reports 0/0 noise, we report the analytic limit."""
+
+    def test_limit_equals_the_unweighted_contrast(self, golden):
+        """sim_staggered has three equal cohorts, so E_3[D] == mean_t E_t[D].
+
+        The comparison-group implicit weights are then constant and average to
+        zero. The limit of ``resid / mean(resid)`` for a constant vector is
+        one, so ATT(g, 3) is the plain difference of mean outcome changes -
+        computable here without any of the module's machinery.
+        """
+        payload, df = _fixture(golden, "sim_staggered")
+        cols = payload["columns"]
+        result = _decompose(df, cols, covariates=None)
+
+        wide = df.pivot(index=cols["unit"], columns=cols["time"], values=cols["outcome"]).to_numpy()
+        cohorts = df.groupby(cols["unit"])[cols["first_treat"]].first().to_numpy()
+        change = wide[:, 2] - wide[:, 0]  # base_period="first_period"
+        control_mean = change[cohorts == 0].mean()
+
+        for cohort in (3, 4):
+            expected = change[cohorts == cohort].mean() - control_mean
+            actual = result.cells.query("group == @cohort and time == 3")["att"]
+            assert actual.iloc[0] == pytest.approx(expected, abs=1e-12)
+
+    def test_warns_about_the_degenerate_cells(self, golden):
+        payload, df = _fixture(golden, "sim_staggered")
+        with pytest.warns(UserWarning, match="0/0 limit"):
+            _decompose(df, payload["columns"], covariates=None)
+
+
+class TestBalanceParity:
+    """R ``twfe_cov_bal`` + ``mp_covariate_bal_summary_helper`` parity."""
+
+    @pytest.mark.parametrize("fixture", FIXTURES)
+    def test_cell_level(self, golden, fixture):
+        payload, df = _fixture(golden, fixture)
+        cols = payload["columns"]
+        expected = pd.DataFrame(payload["balance"]["fwl"]["cells"])
+        expected["covariate"] = expected["covariate"].str.replace("^mean_", "", regex=True)
+
+        result = _decompose(
+            df,
+            cols,
+            covariates=[cols["varying_cov"]],
+            balance_covariates=[cols["invariant_cov"], cols["varying_cov"]],
+        )
+        actual = result.covariate_balance(level="cell", standardize=False)
+
+        key = ["group", "time", "covariate"]
+        expected = expected.sort_values(key).reset_index(drop=True)
+        actual = actual.sort_values(key).reset_index(drop=True)
+        assert actual["covariate"].tolist() == expected["covariate"].tolist()
+
+        for r_name, our_name in R_BALANCE_COLUMNS.items():
+            np.testing.assert_allclose(
+                actual[our_name].to_numpy(dtype=float),
+                expected[r_name].to_numpy(dtype=float),
+                atol=BALANCE_ATOL,
+                err_msg=f"balance column {our_name!r} ({fixture})",
+            )
+
+    @pytest.mark.parametrize("fixture", FIXTURES)
+    def test_summary_level(self, golden, fixture):
+        payload, df = _fixture(golden, fixture)
+        cols = payload["columns"]
+        expected = pd.DataFrame(payload["balance"]["fwl"]["summary"])
+        expected["covariate"] = expected["covariate"].str.replace("^mean_", "", regex=True)
+
+        result = _decompose(
+            df,
+            cols,
+            covariates=[cols["varying_cov"]],
+            balance_covariates=[cols["invariant_cov"], cols["varying_cov"]],
+        )
+        actual = result.covariate_balance(level="summary", standardize=False)
+
+        expected = expected.sort_values("covariate").reset_index(drop=True)
+        actual = actual.sort_values("covariate").reset_index(drop=True)
+        assert actual["covariate"].tolist() == expected["covariate"].tolist()
+
+        r_summary = {
+            "unweighted_treat": "unweighted_treated",
+            "unweighted_untreat": "unweighted_control",
+            "unweighted_diff": "unweighted_diff",
+            "weighted_treat": "weighted_treated",
+            "weighted_untreat": "weighted_control",
+            "weighted_diff": "weighted_diff",
+            "sd": "sd",
+            "unweighted_log_ratio_sd_diff": "unweighted_log_ratio_sd",
+            "weighted_log_ratio_sd_diff": "weighted_log_ratio_sd",
+            "unweighted_frac_treated_extreme": "unweighted_frac_extreme",
+            "weighted_frac_treated_extreme": "weighted_frac_extreme",
+        }
+        for r_name, our_name in r_summary.items():
+            np.testing.assert_allclose(
+                actual[our_name].to_numpy(dtype=float),
+                expected[r_name].to_numpy(dtype=float),
+                atol=BALANCE_ATOL,
+                err_msg=f"balance summary {our_name!r} ({fixture})",
+            )
+
+
+class TestCrossSurfaceIdentity:
+    """attgt_weights and decompose_twfe_weights describe the same regression."""
+
+    @pytest.mark.parametrize("fixture", FIXTURES)
+    def test_twfe_weights_reproduce_the_decomposition(self, golden, fixture):
+        payload, df = _fixture(golden, fixture)
+        cols = payload["columns"]
+
+        weighted = attgt_weights(_fit_cs(df, cols), aggregation="twfe")
+        decomposed = _decompose(df, cols, covariates=None)
+
+        assert weighted.implied_att == pytest.approx(decomposed.estimate, abs=1e-6)
