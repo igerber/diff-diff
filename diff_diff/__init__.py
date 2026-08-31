@@ -296,6 +296,9 @@ from diff_diff.trop import (
     TROPResults,
     trop,
 )
+from diff_diff.twfe_weights import (
+    attgt_weights,
+)
 from diff_diff.twfe_weights_results import (
     ATTGTWeightsResult,
     TWFEDecompositionResult,
@@ -466,6 +469,7 @@ __all__ = [
     # parameters, not (unit, time) cells.
     "ATTGTWeightsResult",
     "TWFEDecompositionResult",
+    "attgt_weights",
     # WooldridgeDiD (ETWFE)
     "WooldridgeDiD",
     "WooldridgeDiDResults",
