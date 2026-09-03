@@ -10,11 +10,12 @@ the member level.
 
 ``cross_fit_predict`` produces out-of-fold nuisance predictions for EVERY
 unit: for each fold k the learner is fit on ``train_mask(k) & fit_mask`` and
-predicts all units in fold k. Each fold fits a DEEP COPY of the user's
-(never-fit) learner template, so no state — nested estimators and container
-parameters included — can carry across folds; an un-deep-copyable learner is
-reused with a loud warning under the fit-reset contract (see
-``diff_diff._learners``).
+predicts all units in fold k. Each fold uses a distinct top-level DEEP COPY of
+the user's (never-fit) learner template, so the template itself cannot carry
+fitted state across folds. Custom ``__deepcopy__`` implementations remain
+responsible for isolating nested mutable state. A template that cannot be
+deep-copied to a distinct top-level object fails closed with ``TypeError``
+(see ``diff_diff._learners``).
 
 Exception semantics (determinate):
 
@@ -33,7 +34,6 @@ Exception semantics (determinate):
 
 import copy
 import pickle
-import warnings
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, Literal, Optional, Tuple, cast, overload
 
@@ -58,38 +58,46 @@ __all__ = [
 _LOG_LOSS_CLIP = 1e-15
 
 
-def _fresh_learner(learner: Any) -> Any:
-    """Per-fold learner isolation: a deep copy of the (never-fit) template.
+def _clone_learner_template(learner: Any, *, label: str) -> Any:
+    """Return a distinct deep copy or raise a sanitised ``TypeError``.
 
-    ``copy.deepcopy`` of the user's template gives every fold a fully
-    independent learner — nested estimators, estimators inside lists/dicts,
-    accumulators, and warm-start state included — so no state (and therefore
-    no data from a previous complement, which includes the current evaluation
-    fold) can carry across folds. This is strictly stronger than
-    get_params-based reconstruction (which shares any estimator stored inside
-    a container parameter). The template itself is never fit. A copy FAILURE
-    is never silent: the instance is reused with a loud ``UserWarning`` naming
-    the learner and the fit-reset assumption now being relied on
-    (no-silent-failures rule).
+    The check deliberately proves only top-level identity. A custom
+    ``__deepcopy__`` remains responsible for isolating nested mutable state.
+    Error messages expose the learner class and copy exception class, never
+    foreign exception text that could carry credentials, paths, or data.
     """
     try:
-        return copy.deepcopy(learner)
-    except Exception as exc:  # noqa: BLE001 - loud fallback, never silent
-        # Exception CLASS only, never the message: a foreign learner's
-        # __deepcopy__ error text can embed credentials/paths/data excerpts,
-        # and this warning lands in notebook/CI logs (the same boundary as
-        # DMLDiD's persisted-diagnostics sanitization).
-        warnings.warn(
-            f"cross_fit_predict: could not deep-copy the "
-            f"{type(learner).__name__} template for this fold "
-            f"({type(exc).__name__}); "
-            "REUSING the same instance and relying on its fit-reset behavior. "
-            "A warm-start/stateful learner in this situation can leak data "
-            "across folds.",
-            UserWarning,
-            stacklevel=3,
+        clone = copy.deepcopy(learner)
+    except Exception as exc:  # noqa: BLE001 - sanitize a foreign exception boundary
+        copy_error_class = type(exc).__name__
+    else:
+        if clone is not learner:
+            return clone
+        raise TypeError(
+            f"{label}: {type(learner).__name__} learner template's __deepcopy__ "
+            "returned the original object; implement __deepcopy__ to return an "
+            "independent instance."
         )
-        return learner
+
+    raise TypeError(
+        f"{label}: could not deep-copy {type(learner).__name__} learner template "
+        f"({copy_error_class}); implement __deepcopy__ to return an independent instance."
+    )
+
+
+def _probe_learner_cloneability(learner: Any, *, param_name: str) -> None:
+    """Fail validation unless a learner template deep-copies independently."""
+    _clone_learner_template(learner, label=param_name)
+
+
+def _fresh_learner(learner: Any, *, context_label: str, fold: int) -> Any:
+    """Return an isolated learner for one fold; fail closed as a backstop.
+
+    DMLDiD probes user templates before fitting any cell. Direct callers of
+    ``cross_fit_predict`` still receive the same no-silent-failures contract.
+    """
+    label = f"{context_label}: fold {fold}" if context_label else f"cross_fit_predict: fold {fold}"
+    return _clone_learner_template(learner, label=label)
 
 
 def _unique_or_raise(arr: np.ndarray, name: str, **kwargs: Any) -> Any:
@@ -547,7 +555,7 @@ def cross_fit_predict(
 
         # (b) Learner errors during the fold -> DegenerateFoldError, chained.
         try:
-            fold_learner = _fresh_learner(learner)
+            fold_learner = _fresh_learner(learner, context_label=context_label, fold=k)
             # Unweighted path calls fit(X, y) WITHOUT the keyword: the
             # advertised duck-typed contract is fit/predict(_proba), so a
             # learner whose fit signature is only (X, y) must work when no

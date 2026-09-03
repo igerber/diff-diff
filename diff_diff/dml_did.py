@@ -41,7 +41,12 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
-from diff_diff._crossfit import DegenerateFoldError, assign_folds, cross_fit_predict
+from diff_diff._crossfit import (
+    DegenerateFoldError,
+    _probe_learner_cloneability,
+    assign_folds,
+    cross_fit_predict,
+)
 from diff_diff._dr_scores import (
     _chang_rcs_score_augmented_with_slope,
     chang_panel_score,
@@ -114,6 +119,7 @@ def _validate_learner_spec(spec: Any, *, kind: str, param_name: str) -> None:
             )
         return
     validate_learner(spec, kind=kind, param_name=param_name)
+    _probe_learner_cloneability(spec, param_name=param_name)
 
 
 def _validate_learner_sample_weight_support(spec: Any, param_name: str) -> None:
