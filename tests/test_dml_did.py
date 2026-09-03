@@ -121,6 +121,17 @@ class TestConstructionValidation:
         with pytest.raises(TypeError, match="propensity_learner"):
             DMLDiD(propensity_learner=object())
 
+    def test_sklearn_learners_pass_cloneability_preflight(self):
+        pytest.importorskip("sklearn")
+        from sklearn.linear_model import LinearRegression, LogisticRegression
+
+        est = DMLDiD(
+            propensity_learner=LogisticRegression(),
+            outcome_learner=LinearRegression(),
+        )
+        assert type(est.propensity_learner) is LogisticRegression
+        assert type(est.outcome_learner) is LinearRegression
+
     def test_get_set_params_roundtrip_learner_object_identity(self):
         learner = SieveLearner(k_max=2)
         est = DMLDiD(outcome_learner=learner, seed=3)
@@ -1080,6 +1091,28 @@ class TestFullConfigMutationDefense:
         with pytest.raises((ValueError, TypeError)):
             est.fit(data, **FIT_KW, **COV)
 
+    def test_mutated_uncopyable_learner_raises_before_any_cell(self, data):
+        class UndeepcopyableRegressor:
+            def __init__(self):
+                self.fit_calls = 0
+
+            def __deepcopy__(self, memo):
+                raise TypeError("cannot clone this learner")
+
+            def fit(self, X, y):
+                self.fit_calls += 1
+                return self
+
+            def predict(self, X):
+                return np.zeros(len(X))
+
+        learner = UndeepcopyableRegressor()
+        est = DMLDiD(seed=0)
+        est.outcome_learner = learner
+        with pytest.raises(TypeError, match="outcome_learner.*UndeepcopyableRegressor.*TypeError"):
+            est.fit(data, **FIT_KW, **COV)
+        assert learner.fit_calls == 0
+
 
 class TestReportingWeightingLabel:
     def test_target_parameter_names_complete_case_weighting(self, fitted):
@@ -1600,9 +1633,9 @@ class TestSummaryAlphaContract:
         assert "z-stat" in s and "P>|z|" in s
         assert "t-stat" not in s and "P>|t|" not in s
 
-    def test_deepcopy_failure_message_not_leaked(self, data):
-        # A foreign learner whose __deepcopy__ raises with sensitive text:
-        # the reuse warning names only the exception CLASS.
+    def test_deepcopy_failure_raises_sanitized_error(self, data):
+        # A foreign learner whose __deepcopy__ raises with sensitive text
+        # fails closed during configuration validation, before any cell fit.
         class LeakyDeepcopy:
             def __deepcopy__(self, memo):
                 raise ValueError("token=SECRET-DCOPY /home/user/x.csv")
@@ -1614,16 +1647,11 @@ class TestSummaryAlphaContract:
             def predict(self, X):
                 return np.full(len(X), self.m)
 
-        with warnings.catch_warnings(record=True) as rec:
-            warnings.simplefilter("always")
-            res = DMLDiD(outcome_learner=LeakyDeepcopy(), seed=0).fit(data, **FIT_KW, **COV)
-        texts = [str(w.message) for w in rec]
-        assert not any("SECRET-DCOPY" in s for s in texts)
-        assert any("could not deep-copy" in s and "ValueError" in s for s in texts)
-        import json
-
-        assert "SECRET-DCOPY" not in json.dumps(res.to_dict())
-        assert "SECRET-DCOPY" not in res.summary()
+        with pytest.raises(
+            TypeError, match="outcome_learner.*LeakyDeepcopy.*ValueError"
+        ) as exc_info:
+            DMLDiD(outcome_learner=LeakyDeepcopy(), seed=0)
+        assert "SECRET-DCOPY" not in str(exc_info.value)
 
     def test_bootstrap_summary_labels_percentile_p(self, data):
         with warnings.catch_warnings():

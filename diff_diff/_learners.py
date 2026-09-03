@@ -4,10 +4,10 @@ Learner contract
 ----------------
 Learners ALWAYS receive a raw covariate matrix ``X`` with NO intercept column;
 every learner manages the intercept internally (sklearn convention). Learners
-are INSTANCES with sklearn fit-reset semantics: ``fit`` fully re-initializes
-the fitted state and returns ``self``. A stateful/warm-start user learner that
-violates fit-reset cannot be detected without taking a clone dependency —
-documented accepted limitation.
+are INSTANCES whose ``fit`` returns ``self``. Cross-fitting requires each
+template to ``deepcopy`` to a distinct top-level object; a custom
+``__deepcopy__`` implementation is responsible for isolating nested mutable
+state.
 
 Native learners (``"linear"``, ``"ridge"``, ``"logit"``, ``"sieve"``) wrap
 the ``diff_diff.linalg`` solvers and expose sklearn-style fitted state

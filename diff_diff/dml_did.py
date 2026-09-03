@@ -46,6 +46,7 @@ from diff_diff._crossfit import (
     _fit_subset,
     _fold_loss,
     _predict_subset,
+    _probe_learner_cloneability,
     assign_folds,
     cross_fit_predict,
     iter_fold_fits,
@@ -124,6 +125,7 @@ def _validate_learner_spec(spec: Any, *, kind: str, param_name: str) -> None:
             )
         return
     validate_learner(spec, kind=kind, param_name=param_name)
+    _probe_learner_cloneability(spec, param_name=param_name)
 
 
 def _validate_learner_sample_weight_support(spec: Any, param_name: str) -> None:
@@ -2157,7 +2159,6 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     sample_weight=None,
                     k=k,
                     label=nu_label,
-                    warn_stacklevel=3,
                 )
                 nu_hat[test] = _predict_subset(
                     nu_learner,
@@ -2180,7 +2181,6 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     sample_weight=None,
                     k=k,
                     label=om_label,
-                    warn_stacklevel=3,
                 )
                 omega_raw[test] = _predict_subset(
                     om_learner,
@@ -2225,7 +2225,6 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     sample_weight=None,
                     k=k,
                     label=f"{context} split-half m: ",
-                    warn_stacklevel=3,
                 )
                 p_a, n_pa, _ = _fit_subset(
                     prop,
@@ -2237,7 +2236,6 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     sample_weight=None,
                     k=k,
                     label=f"{context} split-half p: ",
-                    warn_stacklevel=3,
                 )
                 m_b = _predict_subset(
                     m_a,
@@ -2273,7 +2271,6 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     sample_weight=None,
                     k=k,
                     label=nu_label,
-                    warn_stacklevel=3,
                 )
                 y_om = np.zeros(n)
                 y_om[b_ctrl] = p_b / (1.0 - p_b)
@@ -2287,7 +2284,6 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     sample_weight=None,
                     k=k,
                     label=om_label,
-                    warn_stacklevel=3,
                 )
                 nu_pred += 0.5 * _predict_subset(
                     nu_h,

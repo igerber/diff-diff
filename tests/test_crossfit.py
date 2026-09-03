@@ -337,11 +337,13 @@ class TestCrossFitPredict:
         y = np.zeros(n)
         folds = assign_folds(n, 2, rng=_rng(20))
         y[folds.test_mask(0)] = 1.0  # fold 0's outcomes differ from fold 1's
-        res = cross_fit_predict(AccumulatingMean(), X, y, folds)
+        template = AccumulatingMean()
+        res = cross_fit_predict(template, X, y, folds)
         # Each fold's prediction equals a FRESH fit on its complement alone.
         for k, train, test in folds.iter_folds():
             expected = float(np.mean(y[train]))
-            np.testing.assert_allclose(res.oof_predictions[test], expected)
+            np.testing.assert_array_equal(res.oof_predictions[test], expected)
+        assert template._seen_y == []
 
     def test_composite_learner_isolated_per_fold(self):
         # The per-fold deep copy isolates composites too: the template (and
@@ -432,10 +434,34 @@ class TestCrossFitPredict:
                 sample_weight=np.full(n, 1e10),
             )
 
-    def test_copy_failure_warns_loudly(self):
+    def test_copy_failure_raises_targeted_error(self):
         class Undeepcopyable:
+            def __init__(self):
+                self.fit_calls = 0
+
             def __deepcopy__(self, memo):
-                raise TypeError("cannot deep-copy this learner")
+                raise TypeError("token=SECRET-DCOPY /home/user/private.csv")
+
+            def fit(self, X, y, sample_weight=None):
+                self.fit_calls += 1
+                self.mean_ = float(np.mean(y))
+                return self
+
+            def predict(self, X):
+                return np.full(len(X), self.mean_)
+
+        X, y = _reg_setup()
+        folds = assign_folds(len(y), 2, rng=_rng(22))
+        template = Undeepcopyable()
+        with pytest.raises(TypeError, match="Undeepcopyable.*TypeError") as exc_info:
+            cross_fit_predict(template, X, y, folds)
+        assert "SECRET-DCOPY" not in str(exc_info.value)
+        assert template.fit_calls == 0
+
+    def test_self_returning_deepcopy_raises_targeted_error(self):
+        class SelfCopying:
+            def __deepcopy__(self, memo):
+                return self
 
             def fit(self, X, y, sample_weight=None):
                 self.mean_ = float(np.mean(y))
@@ -446,9 +472,19 @@ class TestCrossFitPredict:
 
         X, y = _reg_setup()
         folds = assign_folds(len(y), 2, rng=_rng(22))
-        with pytest.warns(UserWarning, match="could not deep-copy"):
-            res = cross_fit_predict(Undeepcopyable(), X, y, folds)
+        with pytest.raises(TypeError, match="SelfCopying.*original object"):
+            cross_fit_predict(SelfCopying(), X, y, folds)
+
+    def test_sklearn_estimator_passes_distinct_clone_contract(self):
+        pytest.importorskip("sklearn")
+        from sklearn.linear_model import LinearRegression
+
+        X, y = _reg_setup()
+        folds = assign_folds(len(y), 2, rng=_rng(22))
+        template = LinearRegression()
+        res = cross_fit_predict(template, X, y, folds)
         assert np.isfinite(res.oof_predictions).all()
+        assert not hasattr(template, "coef_")
 
     def test_result_picklable(self):
         X, y = _reg_setup()
