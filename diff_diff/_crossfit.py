@@ -33,6 +33,7 @@ Exception semantics (determinate):
 """
 
 import copy
+import inspect
 import pickle
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, Literal, NamedTuple, Optional, Tuple, cast, overload
@@ -87,19 +88,31 @@ def _clone_learner_template(learner: Any, *, label: str) -> Any:
     )
 
 
-def _probe_learner_cloneability(learner: Any, *, param_name: str) -> None:
-    """Fail validation unless a learner template deep-copies independently."""
-    _clone_learner_template(learner, label=param_name)
+def _probe_learner_cloneability(learner: Any, *, kind: str, param_name: str) -> Any:
+    """Return an independent clone after validating its learner protocol."""
+    clone = _clone_learner_template(learner, label=param_name)
+    validate_learner(clone, kind=kind, param_name=param_name)
+    return clone
 
 
-def _fresh_learner(learner: Any, *, context_label: str, fold: int) -> Any:
-    """Return an isolated learner for one fold; fail closed as a backstop.
-
-    DMLDiD probes user templates before fitting any cell. Direct callers of
-    ``cross_fit_predict`` still receive the same no-silent-failures contract.
-    """
-    label = f"{context_label}: fold {fold}" if context_label else f"cross_fit_predict: fold {fold}"
-    return _clone_learner_template(learner, label=label)
+def _validate_sample_weight_support(learner: Any, *, param_name: str) -> None:
+    """Require a learner ``fit`` method that accepts ``sample_weight`` by keyword."""
+    try:
+        sig = inspect.signature(learner.fit)
+    except (TypeError, ValueError):  # pragma: no cover - exotic callables
+        return  # Cannot introspect; let the learner surface any fit-time error.
+    for param in sig.parameters.values():
+        if param.kind is inspect.Parameter.VAR_KEYWORD:
+            return
+        if param.name == "sample_weight" and param.kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        ):
+            return
+    raise TypeError(
+        f"{param_name}: learner object {type(learner).__name__!r} must accept "
+        "sample_weight by keyword in fit(); add a sample_weight parameter (or **kwargs)."
+    )
 
 
 def _unique_or_raise(arr: np.ndarray, name: str, **kwargs: Any) -> Any:
@@ -572,6 +585,9 @@ def _fit_subset(
     # (b) Learner errors during the fold -> DegenerateFoldError, chained.
     try:
         fold_learner = _clone_learner_template(learner, label=f"{label}fold {k} learner")
+        validate_learner(fold_learner, kind=kind, param_name=f"{label}fold {k} learner")
+        if w_fit is not None:
+            _validate_sample_weight_support(fold_learner, param_name=f"{label}fold {k} learner")
         # Unweighted path calls fit(X, y) WITHOUT the keyword: the
         # advertised duck-typed contract is fit/predict(_proba), so a
         # learner whose fit signature is only (X, y) must work when no
@@ -712,9 +728,7 @@ def iter_fold_fits(
         sample_weight=sample_weight,
     )
     label = f"{context_label}: " if context_label else ""
-    return _iter_fold_fits_impl(
-        learner, X64, y64, folds, fit_mask_arr, sw, kind, label
-    )
+    return _iter_fold_fits_impl(learner, X64, y64, folds, fit_mask_arr, sw, kind, label)
 
 
 @overload
