@@ -27,6 +27,7 @@ from diff_diff._backend import (
 from diff_diff.linalg import _validate_cluster_k_adjustment_type
 from diff_diff.linalg import compute_robust_vcov as _compute_robust_vcov_linalg
 from diff_diff.linalg import solve_ols as _solve_ols_linalg
+from diff_diff.results_base import _coverage_pct
 
 # Numerical constants for optimization algorithms
 _OPTIMIZATION_MAX_ITER = 1000  # Maximum iterations for weight optimization
@@ -775,7 +776,7 @@ class WildBootstrapResults:
             f"Cluster-robust SE:   {self.se:.6f}",
             f"Bootstrap p-value:   {self.p_value:.4f}",
             f"Studentized t-stat:  {self.t_stat_original:.4f}",
-            f"CI ({int((1-self.alpha)*100)}%):           [{self.ci_lower:.6f}, {self.ci_upper:.6f}]",
+            f"CI ({_coverage_pct(self.alpha)}%):           [{self.ci_lower:.6f}, {self.ci_upper:.6f}]",
             f"Number of clusters:  {self.n_clusters}",
             f"Bootstrap reps:      {self.n_bootstrap}",
             f"Weight type:         {self.weight_type}",

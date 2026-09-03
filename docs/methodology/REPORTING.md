@@ -546,6 +546,17 @@ a library setting.
   `"2.0"`. The schemas remain marked experimental, so the formal
   deprecation policy does not yet apply.
 
+- **Note:** `headline.ci_level` carries the EXACT confidence level in
+  percent: an `int` for integral coverage (`95` at `alpha=0.05`, byte-
+  identical to the historical value) and a `float` for fractional coverage
+  (`97.5` at `alpha=0.025`, previously rounded to `98`). No version bump:
+  the key, its meaning, and every integral value are unchanged; only
+  previously misreported fractional levels change, and they change type
+  rather than enum membership. Every text surface (summary headers,
+  event-study table headers, sup-t band labels, report prose) derives its
+  percent from the same `results_base._coverage_level` / `_coverage_pct`
+  helpers, so display and schema cannot disagree.
+
 ## Reference implementation(s)
 
 The phrasing rules follow the guidance in:

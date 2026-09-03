@@ -131,6 +131,30 @@ def _require_fit_alpha(
     return fit_alpha
 
 
+def _coverage_level(alpha: float) -> Union[int, float]:
+    """Exact confidence level in percent: 95 for alpha=0.05, 97.5 for 0.025.
+
+    Rounds to 6 decimals first so a float32-noised alpha (0.0500000007...)
+    still reads 95, then returns an int when the level is integral (so the
+    historical int-valued schema fields are byte-compatible) and a float
+    otherwise. Every text surface that names a confidence level goes through
+    this helper (or ``_coverage_pct``) so no summary truncates ``97.5`` to
+    ``97`` or rounds it to ``98``.
+    """
+    level = round(100.0 * (1.0 - float(alpha)), 6)
+    return int(level) if level == int(level) else level
+
+
+def _coverage_pct(alpha: float) -> str:
+    """Display form of ``_coverage_level``: ``'95'``, ``'97.5'`` (no ``%``)."""
+    return f"{_coverage_level(alpha):g}"
+
+
+def _alpha_pct(alpha: float) -> str:
+    """Significance level in percent: ``'5'`` for alpha=0.05, ``'2.5'`` for 0.025."""
+    return f"{round(100.0 * float(alpha), 6):g}"
+
+
 def _json_safe_label(value: Any) -> Any:
     """Convert an event-time label to a JSON-serializable form.
 
@@ -697,7 +721,7 @@ class EventStudyResults(BaseResults):
                 f"alpha={self.alpha}; re-aggregate to obtain alpha={alpha} "
                 "intervals (summary() never recomputes stored inference)."
             )
-        ci_pct = int(round((1 - self.alpha) * 100))
+        ci_pct = _coverage_pct(self.alpha)
         lines = [
             "Event-Study Effects",
             "=" * 78,

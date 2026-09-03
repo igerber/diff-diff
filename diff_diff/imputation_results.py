@@ -15,7 +15,12 @@ import pandas as pd
 from diff_diff.aggregation import AggregationMixin, AggregationResult, build_total_relay_row
 from diff_diff.imputation_aggregation import _ImputationAggregationMixin
 from diff_diff.results import _format_survey_block, _get_significance_stars
-from diff_diff.results_base import BaseResults, _require_fit_alpha, build_event_study_surface
+from diff_diff.results_base import (
+    BaseResults,
+    _coverage_pct,
+    _require_fit_alpha,
+    build_event_study_surface,
+)
 
 
 class _ImputationKitAggregator(_ImputationAggregationMixin):
@@ -563,7 +568,7 @@ class ImputationDiDResults(BaseResults, AggregationMixin):
             Formatted summary.
         """
         alpha = _require_fit_alpha(alpha, self.alpha)
-        conf_level = int((1 - alpha) * 100)
+        conf_level = _coverage_pct(alpha)
 
         lines = [
             "=" * 85,

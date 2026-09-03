@@ -21,7 +21,12 @@ from diff_diff.bootstrap_utils import (
 from diff_diff.efficient_did_aggregation import _EfficientAggregationMixin
 from diff_diff.efficient_did_bootstrap import EfficientDiDBootstrapMixin
 from diff_diff.results import _format_survey_block, _get_significance_stars
-from diff_diff.results_base import BaseResults, _require_fit_alpha, build_event_study_surface
+from diff_diff.results_base import (
+    BaseResults,
+    _coverage_pct,
+    _require_fit_alpha,
+    build_event_study_surface,
+)
 
 if TYPE_CHECKING:
     from diff_diff.efficient_did_bootstrap import EDiDBootstrapResults
@@ -647,7 +652,7 @@ class EfficientDiDResults(BaseResults, AggregationMixin):
         never recomputed or relabeled - re-fit at the desired alpha).
         """
         alpha = _require_fit_alpha(alpha, self.alpha)
-        conf_level = int((1 - alpha) * 100)
+        conf_level = _coverage_pct(alpha)
 
         lines = [
             "=" * 85,

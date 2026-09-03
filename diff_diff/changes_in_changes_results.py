@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._deprecation import deprecated_field_property
-from diff_diff.results_base import BaseResults
+from diff_diff.results_base import BaseResults, _coverage_pct
 
 _ESTIMATOR_TITLES = {
     "cic": "Changes-in-Changes (Athey & Imbens 2006) Results",
@@ -159,7 +159,7 @@ class ChangesInChangesResults(BaseResults):
         """Fixed-width text summary: headline ATT block plus the quantile-effects table."""
         from diff_diff.results import _get_significance_stars
 
-        ci_pct = int(round((1 - self.alpha) * 100))
+        ci_pct = _coverage_pct(self.alpha)
         width = 88
         bar = "=" * width
         dash = "-" * width

@@ -30,7 +30,7 @@ from diff_diff.aggregation import resolve_inference_df
 from diff_diff.results import (
     MultiPeriodDiDResults,
 )
-from diff_diff.results_base import Diagnostic, _validate_vcov_subblock
+from diff_diff.results_base import Diagnostic, _coverage_pct, _validate_vcov_subblock
 from diff_diff.utils import _get_critical_value
 
 # =============================================================================
@@ -271,7 +271,7 @@ class HonestDiDResults(Diagnostic):
         str
             Formatted summary.
         """
-        conf_level = int((1 - self.alpha) * 100)
+        conf_level = _coverage_pct(self.alpha)
 
         method_names = {
             "smoothness": "Smoothness (Delta^SD)",

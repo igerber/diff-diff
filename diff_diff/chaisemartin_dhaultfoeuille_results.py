@@ -34,7 +34,13 @@ import pandas as pd
 from diff_diff._deprecation import deprecated_field_property
 from diff_diff.aggregation import AggregationMixin, AggregationResult
 from diff_diff.results import _get_significance_stars
-from diff_diff.results_base import BaseResults, _require_fit_alpha, build_event_study_surface
+from diff_diff.results_base import (
+    BaseResults,
+    _alpha_pct,
+    _coverage_pct,
+    _require_fit_alpha,
+    build_event_study_surface,
+)
 
 __all__ = [
     "ChaisemartinDHaultfoeuilleResults",
@@ -935,7 +941,7 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
             decomposition diagnostic, and a footer of significance codes.
         """
         alpha = _require_fit_alpha(alpha, self.alpha)
-        conf_level = int((1 - alpha) * 100)
+        conf_level = _coverage_pct(alpha)
         width = 85
         sep = "=" * width
         thin = "-" * width
@@ -1590,7 +1596,7 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
             if self.path_sup_t_bands is not None and path in self.path_sup_t_bands:
                 crit_p = self.path_sup_t_bands[path].get("crit_value", np.nan)
                 if np.isfinite(crit_p):
-                    conf_level = int((1 - self.alpha) * 100)
+                    conf_level = _coverage_pct(self.alpha)
                     lines.append(
                         f"  Sup-t critical value: {crit_p:.4f} "
                         f"(simultaneous {conf_level}% bands)"
@@ -1605,7 +1611,7 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
         method_label = hd.method.replace("_", " ").title()
         m_val = hd.M
         sig_label = "Yes" if hd.is_significant else "No"
-        conf_pct = int((1 - hd.alpha) * 100)
+        conf_pct = _coverage_pct(hd.alpha)
         lines.extend(
             [
                 thin,
@@ -1625,7 +1631,7 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
                 f"{'Identified set:':<35} " f"[{_fmt_float(hd.lb)}, {_fmt_float(hd.ub)}]",
                 f"{'Robust ' + str(conf_pct) + '% CI:':<35} "
                 f"[{_fmt_float(hd.ci_lb)}, {_fmt_float(hd.ci_ub)}]",
-                f"{'Significant at ' + str(int(hd.alpha * 100)) + '%:':<35} " f"{sig_label:>10}",
+                f"{'Significant at ' + _alpha_pct(hd.alpha) + '%:':<35} " f"{sig_label:>10}",
                 thin,
                 "",
             ]

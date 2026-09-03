@@ -17,7 +17,7 @@ except ImportError:
     from typing_extensions import TypedDict
 
 from diff_diff.results import _format_survey_block, _get_significance_stars
-from diff_diff.results_base import BaseResults, _require_fit_alpha
+from diff_diff.results_base import BaseResults, _coverage_pct, _require_fit_alpha
 
 __all__ = [
     "_LAMBDA_INF",
@@ -219,7 +219,7 @@ class TROPResults(BaseResults):
                 "(requested alpha={alpha}); re-fit with the desired alpha."
             ),
         )
-        conf_level = int((1 - alpha) * 100)
+        conf_level = _coverage_pct(alpha)
 
         lines = [
             "=" * 75,

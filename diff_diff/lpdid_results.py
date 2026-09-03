@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._deprecation import warn_deprecated_kwarg
-from diff_diff.results_base import BaseResults
+from diff_diff.results_base import BaseResults, _coverage_pct
 
 
 @dataclass
@@ -227,7 +227,7 @@ class LPDiDResults(BaseResults):
         # fit time using ``self.alpha``; the displayed level must match them, so
         # summary() does not accept an alpha override (it would relabel without
         # recomputing the intervals).
-        ci_pct = int(round((1 - self.alpha) * 100))
+        ci_pct = _coverage_pct(self.alpha)
         width = 88
         bar = "=" * width
         dash = "-" * width

@@ -90,7 +90,7 @@ from diff_diff.local_linear import (
     BiasCorrectedFit,
     bias_corrected_local_linear,
 )
-from diff_diff.results_base import BaseResults, build_event_study_surface
+from diff_diff.results_base import BaseResults, _coverage_pct, build_event_study_surface
 from diff_diff.survey import (
     SurveyMetadata,
     compute_survey_metadata,
@@ -444,7 +444,7 @@ class HeterogeneousAdoptionDiDResults(BaseResults, AggregationMixin):
     def summary(self) -> str:
         """Formatted summary table."""
         width = 72
-        conf_level = int((1 - self.alpha) * 100)
+        conf_level = _coverage_pct(self.alpha)
         lines = [
             "=" * width,
             "HeterogeneousAdoptionDiD Estimation Results".center(width),
@@ -884,7 +884,7 @@ class HeterogeneousAdoptionDiDEventStudyResults(BaseResults, AggregationMixin):
     def summary(self) -> str:
         """Formatted per-horizon summary table."""
         width = 80
-        conf_level = int((1 - self.alpha) * 100)
+        conf_level = _coverage_pct(self.alpha)
         lines = [
             "=" * width,
             "HeterogeneousAdoptionDiD Event-Study Results".center(width),

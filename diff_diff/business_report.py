@@ -48,7 +48,7 @@ import numpy as np
 
 from diff_diff._reporting_helpers import describe_target_parameter
 from diff_diff.diagnostic_report import DiagnosticReport, DiagnosticReportResults
-from diff_diff.results_base import Diagnostic
+from diff_diff.results_base import Diagnostic, _coverage_level, _coverage_pct
 
 BUSINESS_REPORT_SCHEMA_VERSION = "2.0"
 
@@ -534,7 +534,7 @@ class BusinessReport:
                 "ci_upper": None,
                 "alpha_was_honored": True,
                 "alpha_override_caveat": None,
-                "ci_level": int(round((1.0 - self._context.alpha) * 100)),
+                "ci_level": _coverage_level(self._context.alpha),
                 "p_value": None,
                 "is_significant": False,
                 "near_significance_threshold": False,
@@ -683,7 +683,7 @@ class BusinessReport:
                 f"for the confidence interval because this fit uses "
                 f"{inference_label} inference; the displayed CI remains "
                 f"at the fit's native level "
-                f"({int(round((1.0 - result_alpha) * 100))}%). The "
+                f"({_coverage_pct(result_alpha)}%). The "
                 f"significance phrasing still uses the requested alpha."
             )
 
@@ -700,7 +700,7 @@ class BusinessReport:
         )
         if att is None or not np.isfinite(att):
             sign = "undefined"
-        ci_level = int(round((1.0 - display_alpha) * 100))
+        ci_level = _coverage_level(display_alpha)
         # bool(...) coerces away numpy bool_ — when ``p`` is a numpy NaN (e.g.
         # SyntheticControl, whose analytical p_value is always NaN), ``np.isfinite``
         # yields a numpy bool that is NOT JSON-serializable in the schema.
@@ -2073,7 +2073,7 @@ def _significance_phrase(p: Optional[float], alpha: float) -> str:
     """
     if p is None or not np.isfinite(p):
         return "statistical significance cannot be assessed (p-value unavailable)"
-    ci_level = int(round((1.0 - alpha) * 100))
+    ci_level = _coverage_pct(alpha)
     if p < 0.001:
         return "the direction of the effect is strongly supported by the data"
     if p < 0.01:

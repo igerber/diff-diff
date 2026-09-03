@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff.results_base import _coverage_pct
+
 if TYPE_CHECKING:
     from diff_diff.continuous_did_results import ContinuousDiDResults, DoseResponseCurve
 
@@ -17,8 +19,7 @@ def _coverage_label(alpha: float) -> str:
     Rounds to 6 decimals first so a float32-noised alpha (0.0500000007...)
     still reads 95 rather than 94.9999999255, then trims trailing zeros.
     """
-    level = round(100.0 * (1.0 - float(alpha)), 6)
-    return f"{level:g}% CI"
+    return f"{_coverage_pct(alpha)}% CI"
 
 
 def plot_dose_response(

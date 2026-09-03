@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff.results import _format_survey_block, _get_significance_stars
-from diff_diff.results_base import BaseResults, _require_fit_alpha
+from diff_diff.results_base import BaseResults, _coverage_pct, _require_fit_alpha
 
 if TYPE_CHECKING:
     from diff_diff.staggered_bootstrap import CSBootstrapResults
@@ -175,7 +175,7 @@ class StaggeredTripleDiffResults(BaseResults):
             Formatted summary.
         """
         alpha = _require_fit_alpha(alpha, self.alpha)
-        conf_level = int((1 - alpha) * 100)
+        conf_level = _coverage_pct(alpha)
 
         lines = [
             "=" * 85,

@@ -269,7 +269,7 @@ def plot_event_study(
     # recomputes at the requested ``alpha``, so it never reaches here with
     # overrides active.)
     if results is not None and ci_lower_override is not None:
-        from diff_diff.results_base import EventStudyResults
+        from diff_diff.results_base import EventStudyResults, _coverage_pct
 
         if isinstance(results, EventStudyResults):
             stored_alpha = getattr(results, "alpha", None)
@@ -278,7 +278,7 @@ def plot_event_study(
                     f"plot_event_study(alpha={alpha}) does not apply to an "
                     "EventStudyResults container: the stored intervals "
                     f"drawn here are at the fit's alpha={stored_alpha} "
-                    f"({(1 - float(stored_alpha)) * 100:g}% coverage). "
+                    f"({_coverage_pct(stored_alpha)}% coverage). "
                     "Re-aggregate from a fit at the desired level to "
                     "change the plotted coverage.",
                     UserWarning,

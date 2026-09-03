@@ -49,7 +49,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._reporting_helpers import describe_target_parameter  # noqa: E402 (top-level import)
-from diff_diff.results_base import Diagnostic
+from diff_diff.results_base import Diagnostic, _coverage_pct
 
 DIAGNOSTIC_REPORT_SCHEMA_VERSION = "2.0"
 
@@ -4461,9 +4461,9 @@ def _render_overall_interpretation(schema: Dict[str, Any], labels: Dict[str, str
         # stays consistent with the rendered interval when alpha != 0.05.
         headline_alpha = headline.get("alpha") if isinstance(headline, dict) else None
         if isinstance(headline_alpha, (int, float)) and 0 < headline_alpha < 1:
-            ci_level = int(round((1.0 - headline_alpha) * 100))
+            ci_level = _coverage_pct(headline_alpha)
         else:
-            ci_level = 95
+            ci_level = "95"
         ci_finite = (
             isinstance(ci, (list, tuple))
             and len(ci) == 2

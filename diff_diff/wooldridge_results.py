@@ -15,7 +15,7 @@ from diff_diff._deprecation import (
     resolve_renamed_kwarg,
     warn_deprecated_kwarg,
 )
-from diff_diff.results_base import BaseResults
+from diff_diff.results_base import BaseResults, _coverage_pct
 from diff_diff.utils import safe_inference
 
 
@@ -774,7 +774,7 @@ class WooldridgeDiDResults(BaseResults):
                 f"{p:>8.4f}{stars}   [{ci_lo}, {ci_hi}]"
             )
 
-        ci_pct = f"{(1 - _alpha) * 100:.0f}%"
+        ci_pct = f"{_coverage_pct(_alpha)}%"
         header = (
             f"{'Parameter':<22} {'Estimate':>10}  {'Std. Err.':>10}  "
             f"{'t-stat':>8}  {'P>|t|':>8}   [{ci_pct} CI]"

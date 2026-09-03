@@ -20,7 +20,7 @@ import pandas as pd
 from diff_diff._deprecation import NOT_SUPPLIED, require_arg, resolve_renamed_kwarg
 from diff_diff.estimators import DifferenceInDifferences
 from diff_diff.results import _get_significance_stars
-from diff_diff.results_base import Diagnostic
+from diff_diff.results_base import Diagnostic, _coverage_pct
 from diff_diff.utils import safe_inference, validate_binary
 
 
@@ -87,7 +87,7 @@ class PlaceboTestResults(Diagnostic):
 
     def summary(self) -> str:
         """Generate formatted summary of placebo test results."""
-        conf_level = int((1 - self.alpha) * 100)
+        conf_level = _coverage_pct(self.alpha)
 
         lines = [
             "=" * 65,

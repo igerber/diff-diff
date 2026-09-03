@@ -126,7 +126,7 @@ from diff_diff._rdrobust_port import (
     rdbwselect,
     rdrobust_fit,
 )
-from diff_diff.results_base import BaseResults
+from diff_diff.results_base import BaseResults, _coverage_pct
 from diff_diff.utils import safe_inference, validate_covariate_names
 
 __all__ = [
@@ -308,7 +308,7 @@ class RegressionDiscontinuityResults(BaseResults):
     def summary(self) -> str:
         """Human-readable summary with the three-row rdrobust table."""
         width = 72
-        conf_level = 100 * (1 - self.alpha)
+        conf_level = _coverage_pct(self.alpha)
         lines = []
         lines.append("=" * width)
         design = "Fuzzy" if self.first_stage is not None else "Sharp"
@@ -343,7 +343,7 @@ class RegressionDiscontinuityResults(BaseResults):
         lines.append("-" * width)
         header = (
             f"{'Method':<16}{'Coef.':>11}{'Std. Err.':>11}{'z':>9}"
-            f"{'P>|z|':>9}{'[' + f'{conf_level:g}% Conf. Int.]':>16}"
+            f"{'P>|z|':>9}{'[' + f'{conf_level}% Conf. Int.]':>16}"
         )
         if self.first_stage is not None:
             # Fuzzy: R prints a first-stage block above the treatment

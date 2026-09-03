@@ -11,7 +11,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from diff_diff.results_base import _SUMMARY_ALPHA_MESSAGE, BaseResults, _require_fit_alpha
+from diff_diff.results_base import (
+    _SUMMARY_ALPHA_MESSAGE,
+    BaseResults,
+    _coverage_pct,
+    _require_fit_alpha,
+)
 
 
 def _format_survey_block(sm, width: int) -> list:
@@ -199,7 +204,7 @@ class DiDResults(BaseResults):
             Formatted summary table.
         """
         alpha = _require_fit_alpha(alpha, self.alpha, message=_SUMMARY_ALPHA_MESSAGE)
-        conf_level = int((1 - alpha) * 100)
+        conf_level = _coverage_pct(alpha)
 
         lines = [
             "=" * 70,
@@ -799,7 +804,7 @@ class MultiPeriodDiDResults(BaseResults):
             Formatted summary table.
         """
         alpha = _require_fit_alpha(alpha, self.alpha, message=_SUMMARY_ALPHA_MESSAGE)
-        conf_level = int((1 - alpha) * 100)
+        conf_level = _coverage_pct(alpha)
 
         lines = [
             "=" * 80,
@@ -1299,7 +1304,7 @@ class SyntheticDiDResults(BaseResults):
             Formatted summary table.
         """
         alpha = _require_fit_alpha(alpha, self.alpha, message=_SUMMARY_ALPHA_MESSAGE)
-        conf_level = int((1 - alpha) * 100)
+        conf_level = _coverage_pct(alpha)
 
         lines = [
             "=" * 75,

@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff.aggregation import AggregationMixin, AggregationResult
-from diff_diff.results_base import BaseResults, EventStudyResults
+from diff_diff.results_base import BaseResults, EventStudyResults, _coverage_pct
 
 
 # How the overall staggered standard error was obtained. Cohort effects that
@@ -549,7 +549,7 @@ class LWDiDResults(BaseResults, AggregationMixin):
         """
         from diff_diff.results import _format_vcov_label, _get_significance_stars
 
-        ci_pct = int(round((1 - self.alpha) * 100))
+        ci_pct = _coverage_pct(self.alpha)
         width = 88
         bar = "=" * width
         dash = "-" * width

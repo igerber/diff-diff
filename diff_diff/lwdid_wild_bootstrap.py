@@ -43,6 +43,7 @@ from typing import Optional
 import numpy as np
 
 from diff_diff.linalg import solve_ols
+from diff_diff.results_base import _coverage_pct
 from diff_diff.utils import wild_bootstrap_se
 
 _VALID_WEIGHT_TYPES = ("rademacher", "mammen", "webb")
@@ -106,7 +107,7 @@ class WildClusterBootstrapResult:
             if self.p_value < 0.01
             else "**" if self.p_value < 0.05 else "*" if self.p_value < 0.1 else ""
         )
-        level = int(round((1 - self.alpha) * 100))
+        level = _coverage_pct(self.alpha)
         return (
             f"Wild Cluster Bootstrap Results\n"
             f"{'=' * 50}\n"
