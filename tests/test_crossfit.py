@@ -1,6 +1,7 @@
 """Tests for unit-level K-fold cross-fitting (PR-B0)."""
 
 import pickle
+import traceback
 
 import numpy as np
 import pytest
@@ -455,7 +456,12 @@ class TestCrossFitPredict:
         template = Undeepcopyable()
         with pytest.raises(TypeError, match="Undeepcopyable.*TypeError") as exc_info:
             cross_fit_predict(template, X, y, folds)
-        assert "SECRET-DCOPY" not in str(exc_info.value)
+        error = exc_info.value
+        assert "SECRET-DCOPY" not in str(error)
+        assert error.__cause__ is None
+        assert error.__context__ is None
+        formatted = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        assert "SECRET-DCOPY" not in formatted
         assert template.fit_calls == 0
 
     def test_self_returning_deepcopy_raises_targeted_error(self):
@@ -474,6 +480,64 @@ class TestCrossFitPredict:
         folds = assign_folds(len(y), 2, rng=_rng(22))
         with pytest.raises(TypeError, match="SelfCopying.*original object"):
             cross_fit_predict(SelfCopying(), X, y, folds)
+
+    def test_fold_clone_must_keep_the_learner_protocol(self):
+        class CloneLosesProtocol:
+            def __init__(self):
+                self.deepcopy_calls = 0
+                self.fit_calls = 0
+
+            def __deepcopy__(self, memo):
+                self.deepcopy_calls += 1
+                if self.deepcopy_calls == 2:
+                    return object()
+                return type(self)()
+
+            def fit(self, X, y, sample_weight=None):
+                self.fit_calls += 1
+                self.mean_ = float(np.mean(y))
+                return self
+
+            def predict(self, X):
+                return np.full(len(X), self.mean_)
+
+        X, y = _reg_setup()
+        folds = assign_folds(len(y), 2, rng=_rng(22))
+        template = CloneLosesProtocol()
+        with pytest.raises(TypeError, match="fold 1 learner.*object.*fit"):
+            cross_fit_predict(template, X, y, folds)
+        assert template.deepcopy_calls == 2
+        assert template.fit_calls == 0
+
+    def test_weighted_fold_clone_must_accept_sample_weight(self):
+        class CloneWithoutSampleWeight:
+            def fit(self, X, y):
+                self.mean_ = float(np.mean(y))
+                return self
+
+            def predict(self, X):
+                return np.full(len(X), self.mean_)
+
+        class Template:
+            def __init__(self):
+                self.fit_calls = 0
+
+            def __deepcopy__(self, memo):
+                return CloneWithoutSampleWeight()
+
+            def fit(self, X, y, sample_weight=None):
+                self.fit_calls += 1
+                return self
+
+            def predict(self, X):
+                return np.zeros(len(X))
+
+        X, y = _reg_setup()
+        folds = assign_folds(len(y), 2, rng=_rng(22))
+        template = Template()
+        with pytest.raises(TypeError, match="fold 0 learner.*sample_weight"):
+            cross_fit_predict(template, X, y, folds, sample_weight=np.ones(len(y)))
+        assert template.fit_calls == 0
 
     def test_sklearn_estimator_passes_distinct_clone_contract(self):
         pytest.importorskip("sklearn")
