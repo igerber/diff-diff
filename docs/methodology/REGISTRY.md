@@ -2985,7 +2985,9 @@ the finite-dimensional `p_0` is handled by the variance correction below.
   = fold assignment or a fold-time learner `ValueError` made the cell
   un-cross-fittable (chained learner message quoted in the consolidated skip
   warning); a learner-configuration error, including an uncloneable template,
-  raises `TypeError` before any cell exists;
+  raises `TypeError` at the one-copy preflight before any cell exists, and a
+  per-fold clone failure later in the fit propagates as a hard `TypeError`
+  (never a NaN cell);
   `non_finite_score` = the score/variance computation produced or received
   non-finite values. NaN cells carry NO influence-function payload entry.
 - **Note:** Covariates REQUIRED — `fit(covariates=None/[])` raises with a
