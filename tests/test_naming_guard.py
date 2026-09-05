@@ -1080,6 +1080,10 @@ CONSUMER_ALLOWLIST = {
     ("time", "docs/methodology/papers/goodman-bacon-2021-review.md"): (
         "canonical calendar column prose (bacon period remapping), not the M-030 overload"
     ),
+    ("time", "docs/methodology/papers/deaner-ku-2026-review.md"): (
+        "canonical calendar-period column vocabulary in the DurationDiD proposal "
+        "(including elapsed-duration periods), not the renamed 0/1 post indicator"
+    ),
     ("time", "docs/methodology/papers/wooldridge-2023-review.md"): (
         "canonical calendar column prose in the shipped-API description, not the M-030 overload"
     ),
