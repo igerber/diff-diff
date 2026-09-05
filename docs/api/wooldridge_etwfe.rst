@@ -81,7 +81,12 @@ dict; its slope is the baseline (zero in deviation form).
    solve and the last cohort becomes the reference. The reduction is
    always reported — the number of observations and periods dropped, the
    reason, and any cohort left without cells. Stata's ``jwdid`` performs
-   the same reduction silently, reporting only a smaller ``N``.
+   the same reduction silently, reporting only a smaller ``N``. An
+   *unsupported period* is one lacking the required comparison support
+   (no positive-weight eligible comparison observation is observed there);
+   ``unsupported_period_action="error"`` refuses with ``ValueError`` before
+   removing any such period, for users who would rather see the refusal
+   than estimate on a reduced sample.
 
 See ``docs/methodology/REGISTRY.md`` → ``## WooldridgeDiD (ETWFE)`` →
 "Heterogeneous cohort trends" for the full normalization contract.

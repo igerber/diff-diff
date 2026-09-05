@@ -1113,8 +1113,9 @@ forever - a removed symbol resurrecting is a test failure.
   class/function rows
   and alias rows also assert `__all__` membership consistent with their
   status (stale `import *` entries fail). The shipped row ids are a
-  committed snapshot in the enforcement test (128 as of the DML
-  review-follow-ups pair; previously 126 as of the family-wide
+  committed snapshot in the enforcement test (129 as of the ETWFE
+  comparison-support opt-out row M-147; previously 128 as of the DML
+  review-follow-ups pair and 126 as of the family-wide
   anticipation validation row: Phase 1 + the diagnostic-family
   amendment +
   the M-092/M-093 results-contract rows + the M-094..M-096 amendment rows +

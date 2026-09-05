@@ -46,6 +46,7 @@ from diff_diff.wooldridge_results import WooldridgeDiDResults
 _VALID_METHODS = ("ols", "logit", "poisson")
 _VALID_CONTROL_GROUPS = ("never_treated", "not_yet_treated")
 _VALID_BOOTSTRAP_WEIGHTS = ("rademacher", "webb", "mammen")
+_VALID_UNSUPPORTED_PERIOD_ACTIONS = ("drop", "error")
 
 
 def _logistic(x: np.ndarray) -> np.ndarray:
@@ -164,9 +165,10 @@ def _require_complete_cell_set(
 
     The same-period comparison-support filter now catches the most common cause
     BEFORE the solve, with a better message: periods where no unit is untreated
-    are removed from the estimation sample and reported. This remains the
-    correctness backstop for what that filter cannot see -- cohorts sharing no
-    comparison period, and covariate collinearity.
+    are removed from the estimation sample and reported (or, under
+    ``unsupported_period_action="error"``, refused outright before any row is
+    removed). This remains the correctness backstop for what that filter cannot
+    see -- cohorts sharing no comparison period, and covariate collinearity.
     """
     missing = [
         k
@@ -184,8 +186,9 @@ def _require_complete_cell_set(
         "the survivors identify whatever contrast the reduced design supports "
         "(e.g. a difference between two treated cohorts), so reporting them "
         "under their original labels, or averaging them into the overall ATT, "
-        "would be silently wrong. Periods with no eligible comparison group are "
-        "already removed before the solve, so this points at one of two other "
+        "would be silently wrong. Periods with no eligible comparison group never "
+        "reach the solve (they are dropped, or refused under "
+        "unsupported_period_action='error'), so this points at one of two other "
         "causes: treated cohorts that share no comparison period with each "
         "other, or a covariate collinear with the treatment cells. Check your "
         "covariates first if any were supplied; otherwise restrict the panel to "
@@ -248,7 +251,8 @@ def _require_estimable_overall_att(
             "No treatment effect is identified: every cohort-time cell was "
             "removed from the design, so the overall ATT is undefined. This "
             "means the treatment cells are collinear with the absorbed "
-            f"fixed effects even after unsupported periods were removed -- with "
+            f"fixed effects even though no period without a comparison group "
+            f"reached the solve -- with "
             f"control_group={control_group!r}, this happens when the surviving "
             "cohorts share no comparison period, or when a supplied covariate is "
             f"collinear with the cells. {hint}"
@@ -644,6 +648,66 @@ def _compute_references(
     return references
 
 
+def _comparison_support_cause(
+    structural: List[Any],
+    zero_weight: List[Any],
+    include_pre: bool,
+    anticipation: int,
+) -> str:
+    """Cause sentence(s) for periods that lack the required comparison support.
+
+    A period is unsupported when no POSITIVE-WEIGHT eligible comparison
+    observation exists there. That has two distinct causes, and the message
+    must name the right one:
+
+    - STRUCTURAL: no eligible comparison row is observed at all -- on the
+      ``never_treated`` + OLS branch no never-treated unit, elsewhere every
+      unit already treated (accounting for anticipation);
+    - ZERO-WEIGHT: eligible comparison rows ARE observed but every one carries
+      zero survey weight, so none can supply support (support is
+      weight-aware: a zero-weight row is absent from the sqrt(w)-scaled
+      regression).
+
+    Shared by the drop warning and the ``unsupported_period_action="error"``
+    refusal so their wording never diverges. Contract: with a SINGLE cause the
+    returned sentence names no periods (the caller's ``Period(s) ...`` prefix
+    supplies them) and the structural sentence is byte-identical to the
+    pre-existing warning text. Only when BOTH causes are present are two
+    sentences returned, each carrying its own explicit period list, joined
+    with ``"; "``. The zero-weight clause is reachable today only through the
+    refusal: ``_cell_w`` is populated only from ``survey_design.weights``, and
+    under a survey the drop path refuses with ``NotImplementedError`` before
+    it can warn.
+    """
+    both = bool(structural) and bool(zero_weight)
+
+    def _labels(periods: List[Any]) -> str:
+        return ", ".join(str(t) for t in periods)
+
+    parts: List[str] = []
+    if structural:
+        where = f"at period(s) {_labels(structural)}" if both else "at those periods"
+        if include_pre:
+            parts.append(
+                f"no never-treated units are observed {where}, so ATT(g, t) "
+                "there is not identified against any untreated outcome"
+            )
+        else:
+            at = f" {where}" if both else ""
+            parts.append(
+                f"every unit is already treated{at} (accounting for "
+                f"`anticipation={anticipation}`), so ATT(g, t) there is not "
+                "identified against any untreated outcome"
+            )
+    if zero_weight:
+        where = f"at period(s) {_labels(zero_weight)}" if both else "at those periods"
+        parts.append(
+            f"the only eligible comparison observations {where} carry zero "
+            "survey weight, so none can supply support"
+        )
+    return "; ".join(parts)
+
+
 def _cells_derived_groups(gt_effects: Dict) -> List[Any]:
     """Cohorts carrying at least one ESTIMATED cell, for results metadata.
 
@@ -971,6 +1035,28 @@ class WooldridgeDiD(BaseEstimator):
         always take precedence; the logit/poisson arms are knob-independent
         (survey df or normal theory — an explicitly non-default value warns
         at fit time). The default flips to ``"cluster"`` at v4.
+    unsupported_period_action : {"drop", "error"}, default "drop"
+        What ``fit()`` does with UNSUPPORTED periods. An unsupported period is
+        one lacking the required comparison support: no positive-weight
+        ELIGIBLE comparison observation -- never-treated, or not-yet-treated
+        except on the ``never_treated`` + OLS branch, where treated units'
+        pre-treatment rows sit in their own indicators -- is observed there,
+        so no ``ATT(g, t)`` at that period is identified against an untreated
+        outcome (W2025 Section 5.4; see the Methodology Registry). ``"drop"``
+        (the default) removes those periods from the estimation sample before
+        the solve and warns naming the periods, the observation count and the
+        cause. ``"error"`` refuses BEFORE removing any period, raising
+        ``ValueError`` with the same information, for users who would rather
+        see the refusal than estimate on a reduced sample. The refusal is
+        decided before the ``survey_design=`` refusal, before any
+        reference-movement warning, cohort exclusion or row removal, and
+        before any rank warning, and it is NOT gated
+        on ``rank_deficient_action`` (that setting governs how rank warnings
+        surface, not whether the estimation sample may change). There is no
+        "keep the rows" mode: the cells at an unsupported period are collinear
+        with the time effects by construction, so retaining them can only
+        yield a rank-deficient design that the completeness gate refuses with
+        a less specific message.
     """
 
     def __init__(
@@ -993,6 +1079,7 @@ class WooldridgeDiD(BaseEstimator):
         conley_kernel: str = "bartlett",
         conley_lag_cutoff: Optional[int] = None,
         df_convention: str = "residual",
+        unsupported_period_action: str = "drop",
     ) -> None:
         self._validate_constructor_args(
             method=method,
@@ -1001,6 +1088,7 @@ class WooldridgeDiD(BaseEstimator):
             vcov_type=vcov_type,
             cohort_trends=cohort_trends,
             df_convention=df_convention,
+            unsupported_period_action=unsupported_period_action,
         )
 
         self.method = method
@@ -1022,6 +1110,7 @@ class WooldridgeDiD(BaseEstimator):
         self.conley_kernel = conley_kernel
         self.conley_lag_cutoff = conley_lag_cutoff
         self.df_convention = df_convention
+        self.unsupported_period_action = unsupported_period_action
         # Track whether the user explicitly opted out of the "hc1" default.
         # The auto-cluster-at-unit default in `_fit_ols` is suppressed only
         # when the user explicitly opts into a one-way family (``hc2``,
@@ -1042,6 +1131,7 @@ class WooldridgeDiD(BaseEstimator):
         vcov_type: str,
         cohort_trends: bool = False,
         df_convention: str = "residual",
+        unsupported_period_action: str = "drop",
     ) -> None:
         """Shared validation for both ``__init__`` and ``set_params``.
 
@@ -1066,6 +1156,11 @@ class WooldridgeDiD(BaseEstimator):
                 f"{{'classical','hc1','hc2','hc2_bm','conley'}}; got '{vcov_type}'"
             )
         validate_df_convention(df_convention)
+        if unsupported_period_action not in _VALID_UNSUPPORTED_PERIOD_ACTIONS:
+            raise ValueError(
+                "unsupported_period_action must be one of "
+                f"{_VALID_UNSUPPORTED_PERIOD_ACTIONS}, got {unsupported_period_action!r}"
+            )
         if method != "ols" and vcov_type != "hc1":
             raise NotImplementedError(
                 f"WooldridgeDiD(method={method!r}, vcov_type={vcov_type!r}) is "
@@ -1449,7 +1544,19 @@ class WooldridgeDiD(BaseEstimator):
         #       emitted cell below t = g - anticipation and so are baseline.
         #
         # Weight-aware: a zero-weight row is absent from the sqrt(w)-scaled
-        # regression, so it cannot supply support.
+        # regression, so it cannot supply support. The unweighted mask is kept
+        # alongside so the cause can be named accurately: a period unsupported
+        # only because its eligible rows carry zero survey weight is a
+        # different diagnosis from one with no eligible row at all.
+        #
+        # `unsupported_period_action="error"` refuses HERE, before the survey
+        # refusal and before any row is removed: both refuse, but this one
+        # names the identification cause, and the user has explicitly asked
+        # for a refusal rather than a reduced sample. There is no "keep the
+        # rows" mode -- the cells at an unsupported period sum to that period's
+        # time indicator, so retaining them can only produce a rank-deficient
+        # design that the completeness gate refuses with a vaguer message
+        # (measured on every branch and every rank_deficient_action mode).
         _include_pre = self.control_group == "never_treated" and self.method == "ols"
         _cohort_arr = sample[cohort].to_numpy()
         _time_arr = sample[time].to_numpy()
@@ -1459,13 +1566,18 @@ class WooldridgeDiD(BaseEstimator):
             else np.nan_to_num(np.asarray(_cell_w, dtype=float), nan=0.0)
         )
 
-        _eligible = _cohort_arr == 0
+        _eligible_unweighted = _cohort_arr == 0
         if not _include_pre:
-            _eligible = _eligible | ((_cohort_arr - self.anticipation) > _time_arr)
-        _eligible = _eligible & (_w_arr > 0)
+            _eligible_unweighted = _eligible_unweighted | (
+                (_cohort_arr - self.anticipation) > _time_arr
+            )
+        _eligible = _eligible_unweighted & (_w_arr > 0)
 
         _supported_periods = set(np.unique(_time_arr[_eligible]).tolist())
         _unsupported_periods = sorted(set(np.unique(_time_arr).tolist()) - _supported_periods)
+        _unweighted_supported = set(np.unique(_time_arr[_eligible_unweighted]).tolist())
+        _zero_weight_periods = [t for t in _unsupported_periods if t in _unweighted_supported]
+        _structural_periods = [t for t in _unsupported_periods if t not in _unweighted_supported]
 
         # References are needed BEFORE the filter -- not by the predicate above,
         # which reads only cohort/time/anticipation and row weights, but to tell
@@ -1501,6 +1613,59 @@ class WooldridgeDiD(BaseEstimator):
         }
 
         if _unsupported_periods:
+            # Everything the refusal and the warning report is computed up
+            # front: pure arithmetic over `_time_arr` and `sample`, removing
+            # no rows. The drop itself happens only on the "drop" path below.
+            _plabels = ", ".join(str(t) for t in _unsupported_periods)
+            _keep_rows = ~pd.Series(_time_arr, index=sample.index).isin(_unsupported_periods)
+            _n_dropped = int((~_keep_rows).sum())
+            _n_total = len(sample)
+            _n_periods_total = len(set(np.unique(_time_arr).tolist()))
+            _cause = _comparison_support_cause(
+                _structural_periods, _zero_weight_periods, _include_pre, self.anticipation
+            )
+
+            if self.unsupported_period_action == "error":
+                # The user asked to be refused rather than estimate on a
+                # reduced sample. Raised before the survey refusal (both
+                # refuse; this one names the cause) and before any row is
+                # touched. The remedy is conditional: under `survey_design=`
+                # the default "drop" ALSO refuses, so advising it there would
+                # promise a fit that cannot happen, and the PSU/stratum caveat
+                # the survey refusal carries must travel with the restriction
+                # advice.
+                if survey_design is None:
+                    _remedy = (
+                        "To estimate the remaining cells instead, set "
+                        "unsupported_period_action='drop' (the default); to "
+                        "estimate those periods, add never-treated units or "
+                        "restrict the panel."
+                    )
+                else:
+                    _remedy = (
+                        "Under `survey_design=` the default "
+                        "unsupported_period_action='drop' also refuses, because "
+                        "deleting rows would remove their PSUs and strata from the "
+                        "TSL variance and from `df_survey = n_PSU - n_strata`. "
+                        "Restrict the frame to the supported periods explicitly "
+                        "and re-fit, but first confirm every PSU and stratum "
+                        "survives that restriction; on an unbalanced panel a PSU "
+                        "observed only at these periods disappears with them. "
+                        "Adding never-treated units also restores support."
+                    )
+                raise ValueError(
+                    f"Period(s) {_plabels} lack the required comparison support: "
+                    f"no eligible comparison group exists at those periods -- "
+                    f"{_cause}. An unsupported period carries no identified "
+                    "ATT(g, t), because there is no positive-weight ELIGIBLE "
+                    "comparison observation to difference against (on the "
+                    "never_treated + OLS branch not-yet-treated rows are observed "
+                    "but ineligible). unsupported_period_action='error' refuses "
+                    f"rather than removing them; {_n_dropped} of {_n_total} "
+                    f"observations ({len(_unsupported_periods)} of "
+                    f"{_n_periods_total} periods) would be dropped. {_remedy}"
+                )
+
             if survey_design is not None:
                 # Same naive-subsetting problem the unidentified-cohort path
                 # refuses below: deleting rows removes their PSUs and strata
@@ -1509,7 +1674,6 @@ class WooldridgeDiD(BaseEstimator):
                 # row is removed. `SurveyDesign.subpopulation()` is NOT the
                 # remedy here -- it zero-pads the excluded rows, which
                 # `_reject_zero_weight_groups` then refuses on the OLS path.
-                _plabels = ", ".join(str(t) for t in _unsupported_periods)
                 raise NotImplementedError(
                     f"Period(s) {_plabels} have no eligible comparison group, so "
                     "they carry no identified ATT(g, t) and would be dropped from "
@@ -1525,30 +1689,14 @@ class WooldridgeDiD(BaseEstimator):
                     "the way this refusal exists to prevent."
                 )
 
-            _keep_rows = ~pd.Series(_time_arr, index=sample.index).isin(_unsupported_periods)
-            _n_dropped = int((~_keep_rows).sum())
-            _n_total = len(sample)
-            _n_periods_total = len(set(np.unique(_time_arr).tolist()))
             sample = sample.loc[_keep_rows.to_numpy()].copy()
             if _cell_w is not None:
                 _cell_w = _cell_w[_keep_rows.to_numpy()]
 
-            if _include_pre:
-                _cause = (
-                    "no never-treated units are observed at those periods, so "
-                    "ATT(g, t) there is not identified against any untreated "
-                    "outcome"
-                )
-            else:
-                _cause = (
-                    "every unit is already treated (accounting for "
-                    f"`anticipation={self.anticipation}`), so ATT(g, t) there is "
-                    "not identified against any untreated outcome"
-                )
             warnings.warn(
                 f"Dropped {_n_dropped} of {_n_total} observations "
                 f"({len(_unsupported_periods)} of {_n_periods_total} periods: "
-                f"{', '.join(str(t) for t in _unsupported_periods)}) from the "
+                f"{_plabels}) from the "
                 f"estimation sample: no eligible comparison group exists at those "
                 f"periods -- {_cause}. To estimate those periods, add "
                 "never-treated units or restrict the panel.",

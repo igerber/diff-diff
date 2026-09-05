@@ -1599,6 +1599,12 @@ WooldridgeDiD(
                                             # carries G-1 entries. Rejected with survey_design= and
                                             # with control_group="never_treated".
     df_convention: str = "residual",        # OLS analytical t/p/CI df (3.9: default-hc1 arms moved z -> t(residual)): "residual" (default), "cluster" (G-1, hc1-clustered only), "normal" (z); survey/BM DOF keep precedence; GLM arms knob-independent (explicit non-default warns); flips at v4
+    unsupported_period_action: str = "drop", # {"drop","error"}. An UNSUPPORTED period lacks the required
+                                            # comparison support: no positive-weight ELIGIBLE comparison
+                                            # observation is observed there, so no ATT(g, t) at that period is
+                                            # identified. "drop" (default) removes such periods before the solve
+                                            # and warns; "error" refuses (ValueError) BEFORE removing any period,
+                                            # naming periods + cause. Not gated on rank_deficient_action.
 )
 ```
 
@@ -1613,7 +1619,9 @@ the last cohort becomes the reference (W2025 Section 5.4). The fit warns naming
 the dropped periods, the observation count and the cause, and separately names
 any cohort left with no estimated cells; `results.groups` excludes those
 cohorts. Stata `jwdid` performs the same reduction silently, reporting only a
-smaller `N`. SOME covariate specifications on such a panel are still
+smaller `N`. To be REFUSED instead of estimating on the reduced sample, set
+`unsupported_period_action="error"`: the fit then raises `ValueError` before
+removing any period, naming the periods and the cause. SOME covariate specifications on such a panel are still
 rank-deficient -- `exovar`, `xgvar`, and `xtvar` with
 `demean_covariates=False` -- because `D_{G_max} x X` is not normalized;
 `rank_deficient_action="error"` raises on those and coefficients are
@@ -1621,11 +1629,15 @@ unaffected either way. Default `xtvar` (`demean_covariates=True`) is FULL
 RANK and fits cleanly.
 
 **Survey designs refuse row-dropping paths.** `survey_design=` combined with
-either comparison-support period filtering or unidentified-cohort exclusion
-raises `NotImplementedError` rather than deleting rows, because deletion would
-remove their PSUs and strata from the TSL variance. Restrict the frame yourself
-and re-fit. The refusals are conditional: survey fits that drop nothing are
-unaffected.
+either comparison-support period filtering (under the default
+`unsupported_period_action="drop"`) or unidentified-cohort exclusion raises
+`NotImplementedError` rather than deleting rows, because deletion would remove
+their PSUs and strata from the TSL variance. Under
+`unsupported_period_action="error"` the comparison-support path raises its own
+`ValueError` first (naming the periods and cause, with the same PSU/stratum
+caveat), so the survey `NotImplementedError` is reached only on the drop path.
+Restrict the frame yourself and re-fit. The refusals are conditional: survey
+fits that drop nothing are unaffected.
 
 **Alias:** `ETWFE`
 

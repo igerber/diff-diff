@@ -786,6 +786,10 @@ sources:
       - path: diff_diff/guides/llms-full.txt
         section: "WooldridgeDiD"
         type: user_guide
+      - path: diff_diff/guides/llms-autonomous.txt
+        section: "WooldridgeDiD bullet under the all-eventually-treated guidance"
+        type: user_guide
+        note: "States the comparison-support reduction and its unsupported_period_action opt-out; keep in sync with the fit() filter block."
       - path: diff_diff/guides/llms.txt
         section: "Estimators"
         type: user_guide
