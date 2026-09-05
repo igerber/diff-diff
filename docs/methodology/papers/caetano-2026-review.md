@@ -1211,7 +1211,7 @@ Pre-tests and guards:
 Validation:
 - [ ] Recovery tests on the SD DGPs 1-5 (true ATT = 1.00) matching Tables S2-S6 qualitatively (bias, SE/SD, coverage)
 - [ ] Black-box parity against R `badcontrols` on a shared fixture (no source porting)
-- [ ] Reduction test: with no bad control and no `W`, the DR score reduces to the Sant'Anna-Zhao / Chang panel DR score (see Relation section)
+- [ ] Reduction test: with no bad control and no `W`, the DR score reduces to the Chang (2020) panel DR score DMLDiD computes (see Relation section)
 
 ---
 
@@ -1296,9 +1296,13 @@ separate from the paper's claims.
   `diff_diff/_dr_scores.py` (score functions); plug-in influence-function SE; multiplier
   bootstrap and CS aggregations via mixins; a `panel=False` repeated-cross-section lane.
   **Consequence:** with no bad control and no `W`, Equation 10 reduces algebraically to the
-  Sant'Anna-Zhao / Chang panel DR score DMLDiD already computes (with `X_{t*}` absent,
-  `ν_0 = m_0` and `ω_0 = p/(1 - p)`, so lines 2-4 of Equation 10 collapse to the familiar
-  `(D/π) ΔY - (D/π) m_0 - ((1-D)/π)(ΔY - m_0) p/(1-p)` form), so the paper's DR estimator is
+  Chang (2020) panel DR score DMLDiD already computes, with its unconditional-`π`
+  normalization (with `X_{t*}` absent, `ν_0 = m_0` and `ω_0 = p/(1 - p)`, so lines 2-4 of
+  Equation 10 collapse to `(D/π) ΔY - (D/π) m_0 - ((1-D)/π)(ΔY - m_0) p/(1-p)`). The
+  Sant'Anna-Zhao (2020) DR panel score that CallawaySantAnna uses is the same estimand at
+  the population level but is self-normalized (Hajek-type weights) with a different
+  finite-sample normalization and influence function, so the reduction test should be
+  run against DMLDiD's Chang score, not against CS-DR. The paper's DR estimator is
   a strict generalization that can live on DMLDiD: new arguments for the bad control and
   `W`; a new nested second stage inside each fold (`ν̂_0^{-k}`, `ω̂_0^{-k}` from first-stage
   OOB / split predictions); a new score in `_dr_scores.py`; the `(D - π)` variance
