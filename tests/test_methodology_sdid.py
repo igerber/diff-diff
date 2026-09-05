@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from diff_diff.results import SyntheticDiDResults
 from diff_diff.synthetic_did import SyntheticDiD
 from diff_diff.utils import (
     _compute_noise_level,
@@ -1400,10 +1401,25 @@ class TestJackknifeSE:
         assert abs(res_jk.att - res_pl.att) < 1e-10
 
     def test_jackknife_n_bootstrap_ignored(self):
-        """n_bootstrap=1 should not raise for jackknife (it's ignored)."""
+        """n_bootstrap is ignored by jackknife VARIANCE estimation (n_bootstrap=1
+        must not raise; ATT and SE are identical), but it still caps the
+        pre-fit placebo reference (min(n_bootstrap, 20) draws), so the
+        diagnostic fields differ and the warning is unreachable at 1 draw."""
         sdid = SyntheticDiD(variance_method="jackknife", n_bootstrap=1)
         assert sdid.n_bootstrap == 1
         assert sdid.variance_method == "jackknife"
+        df = _make_panel(n_control=15, n_treated=3, seed=42)
+        kw = dict(outcome="outcome", treatment="treated", unit="unit", time="period")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res1 = SyntheticDiD(variance_method="jackknife", n_bootstrap=1, seed=42).fit(df, **kw)
+            res20 = SyntheticDiD(variance_method="jackknife", n_bootstrap=20, seed=42).fit(df, **kw)
+        assert res1.att == res20.att
+        assert res1.se == res20.se
+        assert res1.n_bootstrap is None and res20.n_bootstrap is None
+        assert len(res1.pre_fit_placebo_rmse) == 1
+        assert len(res20.pre_fit_placebo_rmse) == 20
+        assert res1.pre_fit_placebo_pvalue >= 0.5  # 1 draw: p >= 1/2, never warns
 
     def test_jackknife_n_bootstrap_none_in_results(self):
         """Results should have n_bootstrap=None for jackknife."""
@@ -2506,13 +2522,78 @@ class TestBalancedPanelValidation:
 class TestPreTreatmentFitWarning:
     """Test that poor pre-treatment fit emits a warning."""
 
+    @staticmethod
+    def _panel(treated_fn, control_fn, *, n_treated=2, n_control=8, T=8, noise=0.5, seed=42):
+        """Panel where treated/control outcomes follow ``f(t) + N(0, noise)``."""
+        rng = np.random.default_rng(seed)
+        rows = []
+        for u in range(n_treated + n_control):
+            is_treated = 1 if u < n_treated else 0
+            f = treated_fn if is_treated else control_fn
+            for t in range(T):
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "outcome": f(t) + rng.normal(0, noise),
+                        "treated": is_treated,
+                    }
+                )
+        return pd.DataFrame(rows)
+
+    @staticmethod
+    def _fit(data, post_periods):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            res = SyntheticDiD().fit(
+                data,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="time",
+                post_periods=post_periods,
+            )
+        fit_warnings = [x for x in w if "Pre-treatment fit is poor" in str(x.message)]
+        return res, fit_warnings
+
     def test_poor_fit_emits_warning(self):
-        """Treated units at very different level from controls should warn."""
+        """Treated series trends while controls are flat: no simplex weighting
+        of flat controls can follow the trend, so the shape-only residual is
+        many multiples of the control noise level and the warning fires.
+        (Under the retired 1x treated-SD rule this design could NOT fire for
+        a shape-only RMSE: a flat synthetic gives exactly the population SD.)
+        """
+        data = self._panel(lambda t: 2.0 * t, lambda t: 0.0)
+        res, fit_warnings = self._fit(data, post_periods=[6, 7])
+        assert len(fit_warnings) >= 1, "Expected poor pre-treatment fit warning"
+        assert res.pre_fit_placebo_pvalue <= 0.05
+        # Worse than every one of the 20 placebo fits: p = 1 / 21.
+        assert res.pre_fit_placebo_pvalue == pytest.approx(1.0 / 21.0)
+        assert res.pre_treatment_fit > np.max(res.pre_fit_placebo_rmse)
+        msg = str(fit_warnings[0].message)
+        assert "shape-only" in msg and "pre_treatment_level_gap" in msg and "placebo" in msg
+
+    def test_level_offset_does_not_warn(self):
+        """The reported scenario: treated = control trend + constant. The FW
+        objective is column-centered, so the level gap is not a fit failure;
+        the RMSE must be small, the gap reported, and the ATT recovered."""
+        data = self._panel(lambda t: 2.0 * t + 50.0, lambda t: 2.0 * t)
+        data.loc[(data["treated"] == 1) & (data["time"] >= 6), "outcome"] += 5.0
+        res, fit_warnings = self._fit(data, post_periods=[6, 7])
+        assert len(fit_warnings) == 0, f"Unexpected fit warning: {fit_warnings[0].message}"
+        assert res.pre_treatment_level_gap == pytest.approx(50.0, abs=2.0)
+        assert res.pre_fit_placebo_pvalue > 0.05
+        assert res.pre_treatment_fit < 0.05 * abs(res.pre_treatment_level_gap)
+        assert res.att == pytest.approx(5.0, abs=1.5)
+
+    def test_flat_noise_treated_does_not_warn(self):
+        """The pre-v3.11.2 'poor fit' fixture (treated ~100, controls ~10, both
+        flat) is a textbook GOOD SDID design: a pure level offset. It must no
+        longer warn, and the offset must surface as the level gap."""
         np.random.seed(42)
         rows = []
         for u in range(10):
             is_treated = 1 if u < 2 else 0
-            # Large level difference: treated ~100, control ~10
             level = 100.0 if is_treated else 10.0
             for t in range(8):
                 rows.append(
@@ -2523,22 +2604,213 @@ class TestPreTreatmentFitWarning:
                         "treated": is_treated,
                     }
                 )
-        data = pd.DataFrame(rows)
-        sdid = SyntheticDiD()
+        res, fit_warnings = self._fit(pd.DataFrame(rows), post_periods=[6, 7])
+        assert len(fit_warnings) == 0, f"Unexpected fit warning: {fit_warnings[0].message}"
+        assert res.pre_treatment_level_gap == pytest.approx(90.0, abs=1.0)
+
+    def test_single_pre_period_fit_is_nan(self):
+        """Shape is undefined with one pre-period: NaN RMSE, finite level gap,
+        no warning; sensitivity_to_zeta_omega reaches the same NaN branch."""
+        data = self._panel(lambda t: 2.0 * t + 5.0, lambda t: 2.0 * t, T=3)
+        res, fit_warnings = self._fit(data, post_periods=[1, 2])
+        assert len(fit_warnings) == 0
+        assert np.isnan(res.pre_treatment_fit)
+        assert np.isfinite(res.pre_treatment_level_gap)
+        assert res.pre_fit_placebo_rmse is None and res.pre_fit_placebo_pvalue is None
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            sens = res.sensitivity_to_zeta_omega()
+        assert sens["pre_fit_rmse"].isna().all()
+        assert np.isfinite(sens["att"]).all()
+
+    def test_two_pre_periods_single_control_no_warning(self):
+        """With a single control there is no pseudo-control left once it is
+        treated as if treated, so no placebo reference exists and the fit
+        warning must stay silent (the fit itself is legal)."""
+        data = self._panel(
+            lambda t: 2.0 * t + 3.0, lambda t: 2.0 * t, n_treated=1, n_control=1, T=4, noise=0.05
+        )
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            sdid.fit(
+            res = SyntheticDiD().fit(
                 data,
                 outcome="outcome",
                 treatment="treated",
                 unit="unit",
                 time="time",
-                post_periods=[6, 7],
+                post_periods=[2, 3],
             )
-            fit_warnings = [x for x in w if "Pre-treatment fit is poor" in str(x.message)]
-            assert (
-                len(fit_warnings) >= 1
-            ), "Expected warning about poor pre-treatment fit but none was raised"
+        # The single-control placebo variance path emits its own
+        # "Not enough control units" warning; only the fit warning is asserted.
+        fit_warnings = [x for x in w if "Pre-treatment fit" in str(x.message)]
+        assert res.noise_level == 0.0
+        assert np.isfinite(res.pre_treatment_fit)
+        # No pseudo-control remains once the single control is pseudo-treated.
+        assert res.pre_fit_placebo_rmse is None and res.pre_fit_placebo_pvalue is None
+        assert len(fit_warnings) == 0, f"Unexpected fit warning: {fit_warnings[0].message}"
+
+    def test_noiseless_controls_still_warn(self):
+        """Noiseless, exactly parallel controls are fit exactly by every
+        placebo draw (placebo RMSE 0), so a trending treated series is worse
+        than all of them and warns (this input warned under the pre-v3.11.2
+        level rule too)."""
+        rows = []
+        for u in range(10):
+            is_treated = 1 if u < 2 else 0
+            for t in range(8):
+                y = 2.0 * t if is_treated else 10.0 + 3.0 * u
+                rows.append({"unit": u, "time": t, "outcome": y, "treated": is_treated})
+        res, fit_warnings = self._fit(pd.DataFrame(rows), post_periods=[6, 7])
+        assert res.noise_level == 0.0
+        assert res.pre_treatment_fit > 1e-6
+        # Flat placebo sets are fit exactly by flat controls: every placebo
+        # RMSE is 0, so the trending treated series is worse than all of them.
+        assert np.max(res.pre_fit_placebo_rmse) == pytest.approx(0.0, abs=1e-10)
+        assert res.pre_fit_placebo_pvalue == pytest.approx(1.0 / 21.0)
+        assert len(fit_warnings) >= 1, "Expected poor pre-treatment fit warning"
+
+    def test_treated_level_shift_invariance(self):
+        """Adding a constant to the TREATED units only leaves the centered FW
+        objective and the control-derived normalisation unchanged, so the
+        shape-only RMSE must be invariant on all three surfaces (fit,
+        sensitivity_to_zeta_omega, in_time_placebo) while the level gap
+        shifts by exactly the constant. Under the retired level formula every
+        one of these moved by an amount of order the offset."""
+        df0 = _make_panel(seed=17)
+        df1 = df0.copy()
+        df1.loc[df1["treated"] == 1, "outcome"] += 25.0
+        kw = dict(outcome="outcome", treatment="treated", unit="unit", time="period")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res0 = SyntheticDiD(variance_method="jackknife", seed=17).fit(df0, **kw)
+            res1 = SyntheticDiD(variance_method="jackknife", seed=17).fit(df1, **kw)
+            sens0, sens1 = res0.sensitivity_to_zeta_omega(), res1.sensitivity_to_zeta_omega()
+            itp0, itp1 = res0.in_time_placebo(), res1.in_time_placebo()
+        assert res1.pre_treatment_fit == pytest.approx(res0.pre_treatment_fit, rel=1e-8)
+        assert res1.pre_treatment_level_gap - res0.pre_treatment_level_gap == pytest.approx(
+            25.0, abs=1e-8
+        )
+        np.testing.assert_allclose(
+            sens1["pre_fit_rmse"].to_numpy(), sens0["pre_fit_rmse"].to_numpy(), rtol=1e-8
+        )
+        np.testing.assert_allclose(
+            itp1["pre_fit_rmse"].to_numpy(), itp0["pre_fit_rmse"].to_numpy(), rtol=1e-8
+        )
+        # The multiplier-1.0 grid point re-fits at the fit-time zeta on the
+        # same window, so it must reproduce the fit-time statistic exactly.
+        row = sens0[np.isclose(sens0["zeta_omega"], res0.zeta_omega)]
+        assert len(row) == 1
+        assert float(row["pre_fit_rmse"].iloc[0]) == pytest.approx(res0.pre_treatment_fit, rel=1e-8)
+
+    def test_pre_fit_placebo_reference_fields(self):
+        """The reference distribution is capped at min(n_bootstrap, 20) draws,
+        finite, read-only, identical across variance methods for the same
+        seed (private RNG stream), and silenced below 19 draws."""
+        data = self._panel(lambda t: 2.0 * t + 50.0, lambda t: 2.0 * t)
+        kw = dict(outcome="outcome", treatment="treated", unit="unit", time="time")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res_p = SyntheticDiD(variance_method="placebo", seed=7).fit(
+                data, post_periods=[6, 7], **kw
+            )
+            res_j = SyntheticDiD(variance_method="jackknife", seed=7).fit(
+                data, post_periods=[6, 7], **kw
+            )
+            res_small = SyntheticDiD(variance_method="placebo", n_bootstrap=10, seed=7).fit(
+                data, post_periods=[6, 7], **kw
+            )
+        assert len(res_p.pre_fit_placebo_rmse) == 20
+        assert np.all(np.isfinite(res_p.pre_fit_placebo_rmse))
+        assert np.all(res_p.pre_fit_placebo_rmse >= 0)
+        assert not res_p.pre_fit_placebo_rmse.flags.writeable
+        np.testing.assert_array_equal(res_j.pre_fit_placebo_rmse, res_p.pre_fit_placebo_rmse)
+        assert res_j.pre_fit_placebo_pvalue == res_p.pre_fit_placebo_pvalue
+        assert 0.0 < res_p.pre_fit_placebo_pvalue <= 1.0
+        assert res_p.to_dict()["pre_fit_placebo_pvalue"] == res_p.pre_fit_placebo_pvalue
+        assert "Pre-fit placebo p-value" in res_p.summary()
+        # n_bootstrap=10 -> 10 draws -> p >= 1/11 > 0.05: the rule cannot fire.
+        assert len(res_small.pre_fit_placebo_rmse) == 10
+        assert res_small.pre_fit_placebo_pvalue >= 1.0 / 11.0
+
+    def test_large_common_offset_location_invariance(self):
+        """CI review P1 on PR #818: the fit-time diagnostics are computed on
+        the normalized arrays, so a large common outcome level (1e9) leaves
+        the shape RMSE, level gap, placebo p-value and warning decision
+        unchanged, and the fit-time RMSE equals the multiplier-1.0
+        sensitivity row exactly."""
+        base = self._panel(lambda t: 2.0 * t + 5.0, lambda t: 2.0 * t, noise=1.0)
+        shifted = base.copy()
+        shifted["outcome"] += 1.0e9
+        kw = dict(outcome="outcome", treatment="treated", unit="unit", time="time")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res0 = SyntheticDiD(seed=3).fit(base, post_periods=[6, 7], **kw)
+            res1 = SyntheticDiD(seed=3).fit(shifted, post_periods=[6, 7], **kw)
+            sens1 = res1.sensitivity_to_zeta_omega()
+        assert res1.pre_treatment_fit == pytest.approx(res0.pre_treatment_fit, rel=1e-6)
+        assert res1.pre_treatment_level_gap == pytest.approx(res0.pre_treatment_level_gap, rel=1e-6)
+        assert res1.pre_fit_placebo_pvalue == res0.pre_fit_placebo_pvalue
+        np.testing.assert_allclose(res1.pre_fit_placebo_rmse, res0.pre_fit_placebo_rmse, rtol=1e-6)
+        row = sens1[np.isclose(sens1["zeta_omega"], res1.zeta_omega)]
+        assert len(row) == 1
+        assert float(row["pre_fit_rmse"].iloc[0]) == pytest.approx(
+            res1.pre_treatment_fit, rel=1e-10
+        )
+
+    def test_legacy_pickle_state_migrates_level_rmse(self):
+        """CI review P1 on PR #818: a results object pickled before v3.11.2
+        carries the LEVEL-inclusive RMSE in ``pre_treatment_fit`` and none of
+        the new fields. ``__setstate__`` must recompute the shape-only RMSE
+        and the level gap from the stored trajectories (never relabel the
+        stale value), default the placebo fields to None, and leave summary()
+        callable; with no trajectories the stale value is cleared."""
+        data = self._panel(lambda t: 2.0 * t + 50.0, lambda t: 2.0 * t)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = SyntheticDiD(seed=5).fit(
+                data, outcome="outcome", treatment="treated", unit="unit", time="time"
+            )
+        resid = res.treated_pre_trajectory - res.synthetic_pre_trajectory
+        legacy_level_rmse = float(np.sqrt(np.mean(resid**2)))
+        state = res.__getstate__()
+        for key in ("pre_treatment_level_gap", "pre_fit_placebo_rmse", "pre_fit_placebo_pvalue"):
+            state.pop(key)
+        state["pre_treatment_fit"] = legacy_level_rmse  # what an old pickle stores
+        assert legacy_level_rmse > 10 * res.pre_treatment_fit  # level-dominated
+
+        revived = SyntheticDiDResults.__new__(SyntheticDiDResults)
+        revived.__setstate__(state)
+        assert revived.pre_treatment_fit == pytest.approx(res.pre_treatment_fit, rel=1e-12)
+        assert revived.pre_treatment_level_gap == pytest.approx(
+            res.pre_treatment_level_gap, rel=1e-12
+        )
+        assert revived.pre_fit_placebo_rmse is None and revived.pre_fit_placebo_pvalue is None
+        summary = revived.summary()
+        assert "Pre-fit RMSE (shape)" in summary and "placebo p-value" not in summary
+        assert revived.to_dict()["pre_fit_placebo_pvalue"] is None
+
+        # No trajectories stored (older still): clear rather than relabel.
+        bare = dict(state)
+        for key in (
+            "treated_pre_trajectory",
+            "synthetic_pre_trajectory",
+            "treated_post_trajectory",
+            "synthetic_post_trajectory",
+        ):
+            bare.pop(key)
+        revived_bare = SyntheticDiDResults.__new__(SyntheticDiDResults)
+        revived_bare.__setstate__(bare)
+        assert revived_bare.pre_treatment_fit is None
+        assert revived_bare.pre_treatment_level_gap is None
+        assert "Pre-fit RMSE" not in revived_bare.summary()
+
+        # A current pickle round-trips unchanged.
+        import pickle
+
+        rt = pickle.loads(pickle.dumps(res))
+        assert rt.pre_treatment_fit == res.pre_treatment_fit
+        assert rt.pre_fit_placebo_pvalue == res.pre_fit_placebo_pvalue
+        np.testing.assert_array_equal(rt.pre_fit_placebo_rmse, res.pre_fit_placebo_rmse)
 
     def test_good_fit_no_warning(self):
         """Parallel trends data with similar levels should not warn."""
@@ -2813,10 +3085,11 @@ class TestTrajectories:
         df = _make_panel(seed=17)
         sdid = SyntheticDiD(variance_method="jackknife", seed=17)
         res = sdid.fit(df, outcome="outcome", treatment="treated", unit="unit", time="period")
-        rmse = float(
-            np.sqrt(np.mean((res.treated_pre_trajectory - res.synthetic_pre_trajectory) ** 2))
-        )
+        resid = res.treated_pre_trajectory - res.synthetic_pre_trajectory
+        level_gap = float(np.mean(resid))
+        rmse = float(np.sqrt(np.mean((resid - level_gap) ** 2)))
         assert abs(rmse - res.pre_treatment_fit) < 1e-10
+        assert abs(level_gap - res.pre_treatment_level_gap) < 1e-10
 
 
 class TestLooEffectsDf:

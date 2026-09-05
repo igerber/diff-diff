@@ -798,7 +798,8 @@ def _handle_synthetic(results: Any):
                 "counterfactual well."
             ),
             code=(
-                "print(f'Pre-treatment fit (RMSE): {results.pre_treatment_fit:.4f}')\n"
+                "print(f'Pre-fit RMSE (shape): {results.pre_treatment_fit:.4f}')\n"
+                "print(f'Pre-fit level gap: {results.pre_treatment_level_gap:.4f}')\n"
                 "concentration = results.get_weight_concentration()\n"
                 "print(f\"Effective N: {concentration['effective_n']:.1f}\")\n"
                 "print(f\"Top-5 weight share: {concentration['top_k_share']:.2%}\")"

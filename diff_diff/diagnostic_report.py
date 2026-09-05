@@ -3647,8 +3647,16 @@ class DiagnosticReport:
 
         SDiD's design-enforced fit quality substitutes for a standard PT test:
         the synthetic control is explicitly constructed to match the treated
-        group's pre-period trajectory, so small ``pre_treatment_fit`` RMSE
+        group's pre-period trend, so small ``pre_treatment_fit`` RMSE
         means the weighted-PT analogue is satisfied.
+
+        ``pre_treatment_fit`` is SHAPE-ONLY (the constant pre-period level
+        gap is removed; SDID differences it out), whereas classic SCM's
+        ``pre_rmspe`` in ``_pt_scm_fit`` is level-inclusive by design. Both
+        are emitted under the shared ``pre_treatment_fit_rmse`` key as a
+        fit-quality RMSE in each estimator's own metric. NaN (a single
+        pre-period) is reported as ``skipped`` so the narrative never renders
+        ``RMSE = nan``.
         """
         r = self._results
         fit = _to_python_float(getattr(r, "pre_treatment_fit", None))
@@ -3657,6 +3665,15 @@ class DiagnosticReport:
                 "status": "skipped",
                 "method": "synthetic_fit",
                 "reason": "SyntheticDiDResults.pre_treatment_fit is not populated " "on this fit.",
+            }
+        if not np.isfinite(fit):
+            return {
+                "status": "skipped",
+                "method": "synthetic_fit",
+                "reason": (
+                    "SyntheticDiDResults.pre_treatment_fit is not defined on this "
+                    "fit (fewer than 2 pre-periods)."
+                ),
             }
         # Proxy verdict: unlike a classical PT p-value, this is a fit-quality
         # metric. Classify conservatively — phrasing in BR will explain that
@@ -4576,10 +4593,10 @@ def _render_overall_interpretation(schema: Dict[str, Any], labels: Dict[str, str
                 )
             else:
                 sentences.append(
-                    f"The synthetic control matches the treated group's "
-                    f"pre-period trajectory with RMSE = "
+                    f"The synthetic control tracks the treated group's "
+                    f"pre-period trend with shape-only RMSE = "
                     f"{rmse:.3g} (SDiD's design-enforced analogue of parallel "
-                    f"trends)."
+                    f"trends; a constant level gap is differenced out by SDID)."
                     if isinstance(rmse, (int, float))
                     else "SDiD's synthetic control is designed to satisfy the "
                     "weighted parallel-trends analogue."

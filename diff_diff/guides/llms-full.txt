@@ -1880,7 +1880,10 @@ Returned by `SyntheticDiD.fit()`.
 | `noise_level` | `float` | Estimated noise level |
 | `zeta_omega` | `float` | Unit weight regularization |
 | `zeta_lambda` | `float` | Time weight regularization |
-| `pre_treatment_fit` | `float` | Pre-treatment RMSE |
+| `pre_treatment_fit` | `float` | Shape-only pre-treatment RMSE (constant level gap removed: the data-fit component of the centered Frank-Wolfe objective; NaN with one pre-period) |
+| `pre_treatment_level_gap` | `float` | Signed mean pre-period gap, treated minus synthetic (absorbed by the DiD step; diagnostic only) |
+| `pre_fit_placebo_rmse` | `np.ndarray` | Reference distribution: shape-only pre-fit RMSE of up to 20 placebo (control-as-treated) fits; `None` when no placebo fit is possible |
+| `pre_fit_placebo_pvalue` | `float` | Plus-one-adjusted rank of the treated fit among the placebo fits, `(1 + #{placebo >= treated}) / (1 + n_draws)`; a fit diagnostic, not a treatment-effect p-value; the poor-fit warning fires at <= 0.05 (Abadie, Diamond & Hainmueller 2010 in-space placebo fit assessment) |
 
 **Methods:** `summary()`, `print_summary()`, `to_dict()`, `to_dataframe()`, `get_unit_weights_df()`, `get_time_weights_df()`
 

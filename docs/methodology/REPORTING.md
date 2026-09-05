@@ -318,8 +318,9 @@ a library setting.
 
 - **Note:** Estimator-native validation surfaces are surfaced rather
   than duplicated. `SyntheticDiDResults` routes parallel-trends to
-  `pre_treatment_fit` (the RMSE of the synthetic-control fit on the
-  pre-period), and routes sensitivity to `in_time_placebo()` +
+  `pre_treatment_fit` (the shape-only RMSE of the synthetic-control fit on
+  the pre-period; the constant level gap is reported separately as
+  `pre_treatment_level_gap`), and routes sensitivity to `in_time_placebo()` +
   `sensitivity_to_zeta_omega()`. `TROPResults` surfaces factor-model
   diagnostics (`effective_rank`, `loocv_score`, selected `lambda_*`)
   under `estimator_native_diagnostics`. `SyntheticControlResults`

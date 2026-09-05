@@ -26,6 +26,24 @@ from diff_diff.utils import (
     validate_n_bootstrap,
 )
 
+# Poor-fit warning anchor: the treated units' shape-only pre-treatment RMSE
+# is compared against the distribution of the same statistic over placebo
+# (control-as-treated) fits — the in-space placebo fit assessment of Abadie,
+# Diamond & Hainmueller (2010) / Abadie (2021), transposed onto SDID's
+# Algorithm 4 pseudo-treated draws. ``_PRE_FIT_REFERENCE_DRAWS`` caps the
+# number of placebo pre-fits (each is one Frank-Wolfe solve; under
+# ``variance_method="placebo"`` they are the first draws of the SE loop's
+# permutation stream); the warning fires when the placebo p-value
+# ``(1 + #{placebo_rmse >= treated_rmse}) / (1 + n_draws)`` is at or below
+# ``_PRE_FIT_PLACEBO_ALPHA``, so it needs at least 19 successful draws
+# (n_bootstrap >= 19) to be reachable at all. The cap of 20 keeps the cost
+# at ~20 Frank-Wolfe solves per fit (the pure-Python test suite doubled in
+# wall-clock at 50) while leaving the rule reachable: at 20 draws it fires
+# exactly when the treated fit is worse than every placebo draw
+# (p = 1/21 ~ 0.048).
+_PRE_FIT_REFERENCE_DRAWS = 20
+_PRE_FIT_PLACEBO_ALPHA = 0.05
+
 
 class SyntheticDiD(DifferenceInDifferences):
     """
@@ -82,7 +100,11 @@ class SyntheticDiD(DifferenceInDifferences):
         Number of replications for variance estimation. Used for:
         - Bootstrap: Number of bootstrap samples
         - Placebo: Number of random permutations (matches R's `replications` argument)
-        Ignored when ``variance_method="jackknife"``.
+        Ignored by jackknife variance estimation. For every variance method
+        it also caps the pre-treatment fit reference distribution
+        (``min(n_bootstrap, 20)`` placebo pre-fit draws behind
+        ``pre_fit_placebo_rmse`` / ``pre_fit_placebo_pvalue`` and the
+        poor-fit warning, which needs at least 19 draws to fire).
     seed : int, optional
         Random seed for reproducibility. If None (default), results
         will vary between runs.
@@ -827,31 +849,38 @@ class SyntheticDiD(DifferenceInDifferences):
         Y_pre_treated_mean = Y_pre_treated_mean_n * Y_scale + Y_shift
         Y_post_treated_mean = Y_post_treated_mean_n * Y_scale + Y_shift
 
-        # Compute pre-treatment fit (RMSE) using composed weights on the
+        # Pre-treatment fit diagnostics using composed weights on the
         # original Y (user-visible scale). omega_eff is a simplex — applies
         # cleanly to any linear rescale of Y — so trajectories live on the
         # original outcome scale for plotting and the poor-fit warning.
+        #
+        # The fit statistic is SHAPE-ONLY: the Frank-Wolfe unit-weight
+        # objective column-centers the pre-period matrix (intercept=True,
+        # matching R synthdid), so omega is chosen to match the treated
+        # pre-period *movements* and a constant level gap is deliberately
+        # left to the DiD step. The RMSE is therefore taken on the residual
+        # after removing its pre-period mean — on the non-survey path this
+        # is exactly the residual the solver minimised; on the survey path
+        # omega_eff is the post-hoc composed/renormalised vector, so it is the
+        # fit of the weights actually used. The removed mean is reported
+        # separately as the signed level gap (treated minus synthetic).
         synthetic_pre_trajectory = Y_pre_control @ omega_eff
         synthetic_post_trajectory = Y_post_control @ omega_eff
-        pre_fit_rmse = np.sqrt(np.mean((Y_pre_treated_mean - synthetic_pre_trajectory) ** 2))
-
-        # Warn if pre-treatment fit is poor (Registry requirement).
-        # Threshold: 1× SD of treated pre-treatment outcomes — a natural baseline
-        # since RMSE exceeding natural variation indicates the synthetic control
-        # fails to reproduce the treated series' level or trend.
-        pre_treatment_sd = (
-            np.std(Y_pre_treated_mean, ddof=1) if len(Y_pre_treated_mean) > 1 else 0.0
-        )
-        if pre_treatment_sd > 0 and pre_fit_rmse > pre_treatment_sd:
-            warnings.warn(
-                f"Pre-treatment fit is poor: RMSE ({pre_fit_rmse:.4f}) exceeds "
-                f"the standard deviation of treated pre-treatment outcomes "
-                f"({pre_treatment_sd:.4f}). The synthetic control may not "
-                f"adequately reproduce treated unit trends. Consider adding "
-                f"more control units or adjusting regularization.",
-                UserWarning,
-                stacklevel=2,
-            )
+        # The two scalar diagnostics are computed on the NORMALIZED arrays
+        # (same contract as the estimator and the post-fit diagnostics in
+        # results.py) and rescaled by Y_scale, so a large common outcome
+        # level cannot perturb them through floating-point cancellation.
+        pre_resid_n = Y_pre_treated_mean_n - Y_pre_control_n @ omega_eff
+        pre_level_gap_n = float(np.mean(pre_resid_n))
+        if len(pre_resid_n) >= 2:
+            pre_fit_rmse_n = float(np.sqrt(np.mean((pre_resid_n - pre_level_gap_n) ** 2)))
+        else:
+            # Shape is undefined with a single pre-period.
+            pre_fit_rmse_n = float("nan")
+        pre_fit_rmse = pre_fit_rmse_n * Y_scale
+        pre_level_gap = pre_level_gap_n * Y_scale
+        # The poor-fit warning is emitted after the variance block: its
+        # reference distribution (placebo pre-fits) is computed there.
 
         # Treated-unit trajectories (the pre/post means already computed above).
         treated_pre_trajectory = Y_pre_treated_mean
@@ -1204,6 +1233,55 @@ class SyntheticDiD(DifferenceInDifferences):
             variance_effects = np.asarray(variance_effects_n) * Y_scale
             inference_method = "placebo"
 
+        # Pre-treatment fit reference distribution (Registry requirement):
+        # the treated units' shape-only pre-fit RMSE is placed within the
+        # distribution of the same statistic over placebo (control-as-
+        # treated) fits — Algorithm 4's pseudo-treated draws, refit with the
+        # fit-time zeta — the in-space placebo fit assessment of Abadie,
+        # Diamond & Hainmueller (2010) / Abadie (2021). Independent of the
+        # variance method (its own generator seeded from ``self.seed``, so
+        # the SE loops' RNG streams are untouched; with a fixed seed on the
+        # non-survey / pweight-only placebo path the draws coincide with the
+        # SE loop's first permutations — not on full-design surveys, whose SE
+        # loop permutes within strata, and not when ``seed`` is None).
+        pre_fit_placebo_rmse: Optional[np.ndarray] = None
+        pre_fit_placebo_pvalue: Optional[float] = None
+        if np.isfinite(pre_fit_rmse_n):
+            pre_fit_placebo_rmse_n = self._placebo_pre_fit_reference(
+                Y_pre_control_n,
+                n_treated=len(treated_units),
+                zeta_omega=zeta_omega_n,
+                min_decrease=min_decrease,
+                w_control=w_control,
+                init_omega=unit_weights,
+                n_draws=min(self.n_bootstrap, _PRE_FIT_REFERENCE_DRAWS),
+            )
+            if len(pre_fit_placebo_rmse_n) > 0:
+                # Placebo p-value (compared on the normalized scale; Y_scale
+                # is a positive constant so the ordering is unchanged).
+                n_ge = int(np.sum(pre_fit_placebo_rmse_n >= pre_fit_rmse_n))
+                pre_fit_placebo_pvalue = (1.0 + n_ge) / (1.0 + len(pre_fit_placebo_rmse_n))
+                pre_fit_placebo_rmse = pre_fit_placebo_rmse_n * Y_scale
+                pre_fit_placebo_rmse.flags.writeable = False
+                if pre_fit_placebo_pvalue <= _PRE_FIT_PLACEBO_ALPHA:
+                    warnings.warn(
+                        f"Pre-treatment fit is poor: the treated units' shape-only "
+                        f"pre-fit RMSE ({pre_fit_rmse:.4f}) is worse than "
+                        f"{100 * (1 - pre_fit_placebo_pvalue):.0f}% of "
+                        f"{len(pre_fit_placebo_rmse_n)} placebo fits of control units "
+                        f"treated as if treated (placebo p-value "
+                        f"{pre_fit_placebo_pvalue:.3f}; median placebo RMSE "
+                        f"{np.median(pre_fit_placebo_rmse):.4f}). The synthetic control "
+                        f"may not reproduce the treated units' pre-treatment trend (a "
+                        f"constant level gap is excluded - SDID differences it out; see "
+                        f"pre_treatment_level_gap). This can also occur when treated "
+                        f"units are much noisier than the controls: inspect "
+                        f"treated_pre_trajectory against synthetic_pre_trajectory. "
+                        f"Consider adding more control units or adjusting regularization.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+
         # Compute test statistics
         t_stat, p_value_analytical, conf_int = safe_inference(att, se, alpha=self.alpha)
         # Empirical p-value is valid only for placebo (Algorithm 4): control
@@ -1288,6 +1366,9 @@ class SyntheticDiD(DifferenceInDifferences):
             zeta_omega=zeta_omega,
             zeta_lambda=zeta_lambda,
             pre_treatment_fit=pre_fit_rmse,
+            pre_treatment_level_gap=pre_level_gap,
+            pre_fit_placebo_rmse=pre_fit_placebo_rmse,
+            pre_fit_placebo_pvalue=pre_fit_placebo_pvalue,
             variance_effects=variance_effects if len(variance_effects) > 0 else None,
             n_bootstrap=self.n_bootstrap if inference_method == "bootstrap" else None,
             survey_metadata=survey_metadata,
@@ -2005,6 +2086,109 @@ class SyntheticDiD(DifferenceInDifferences):
         se = np.sqrt((n_successful - 1) / n_successful) * np.std(placebo_estimates, ddof=1)
 
         return se, placebo_estimates
+
+    def _placebo_pre_fit_reference(
+        self,
+        Y_pre_control: np.ndarray,
+        n_treated: int,
+        zeta_omega: float,
+        min_decrease: float,
+        w_control: Optional[np.ndarray],
+        init_omega: Optional[np.ndarray],
+        n_draws: int,
+    ) -> np.ndarray:
+        """Shape-only pre-fit RMSEs of placebo (control-as-treated) fits.
+
+        Runs steps 1-3 of Algorithm 4 (Arkhangelsky et al. 2021): permute the
+        control indices, designate the last ``n_treated`` as pseudo-treated,
+        re-estimate the unit weights on the pseudo-controls with the fit-time
+        ``zeta_omega`` (warm-started from ``init_omega`` exactly as the
+        placebo SE loop is), and return the shape-only RMSE of each
+        pseudo-treated pre-period residual (mean removed) — the same
+        statistic ``pre_treatment_fit`` reports for the treated units. The
+        treated units' RMSE is then placed within this distribution, the
+        in-space placebo fit assessment of Abadie, Diamond & Hainmueller
+        (2010) / Abadie (2021) transposed onto SDID.
+
+        Diagnostic only: per-draw Frank-Wolfe non-convergence warnings are
+        suppressed, failed draws are skipped, and the permutation stream
+        (``np.random.default_rng(self.seed)``) is private to this loop. Uses
+        the unstratified permutation for every survey design (pweight-only
+        composition ``omega * w_control`` mirrors the placebo SE loop);
+        returns an empty array when there is no pseudo-control left or fewer
+        than 2 pre-periods.
+
+        Parameters
+        ----------
+        Y_pre_control : np.ndarray
+            Normalized control pre-outcomes, shape ``(n_pre, n_control)``.
+        n_treated : int
+            Number of treated units (size of each pseudo-treated set).
+        zeta_omega : float
+            Fit-time unit-weight regularization on the normalized scale.
+        min_decrease : float
+            Frank-Wolfe convergence threshold used at fit time.
+        w_control : np.ndarray, optional
+            Per-control survey weights (pweight-only composition).
+        init_omega : np.ndarray, optional
+            Fit-time raw Frank-Wolfe unit weights used as warm-start.
+        n_draws : int
+            Number of placebo draws.
+
+        Returns
+        -------
+        np.ndarray
+            Shape-only RMSEs (normalized scale) of the successful draws.
+        """
+        n_pre, n_control = Y_pre_control.shape
+        n_pseudo_control = n_control - n_treated
+        if n_pseudo_control < 1 or n_pre < 2 or n_draws < 1:
+            return np.array([])
+        rng = np.random.default_rng(self.seed)
+        out: List[float] = []
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            for _rep in range(n_draws):
+                try:
+                    perm = rng.permutation(n_control)
+                    pseudo_control_idx = perm[:n_pseudo_control]
+                    pseudo_treated_idx = perm[n_pseudo_control:]
+                    Y_pre_pseudo_control = Y_pre_control[:, pseudo_control_idx]
+                    if w_control is not None:
+                        y_pre_pseudo_treated = np.average(
+                            Y_pre_control[:, pseudo_treated_idx],
+                            axis=1,
+                            weights=w_control[pseudo_treated_idx],
+                        )
+                    else:
+                        y_pre_pseudo_treated = np.mean(Y_pre_control[:, pseudo_treated_idx], axis=1)
+                    pseudo_omega_init = (
+                        _sum_normalize(init_omega[pseudo_control_idx])
+                        if init_omega is not None
+                        else None
+                    )
+                    pseudo_omega = compute_sdid_unit_weights(
+                        Y_pre_pseudo_control,
+                        y_pre_pseudo_treated,
+                        zeta_omega=zeta_omega,
+                        min_decrease=min_decrease,
+                        init_weights=pseudo_omega_init,
+                    )
+                    if w_control is not None:
+                        pseudo_omega_eff = pseudo_omega * w_control[pseudo_control_idx]
+                        denom = float(pseudo_omega_eff.sum())
+                        if denom <= 0:
+                            continue
+                        pseudo_omega_eff = pseudo_omega_eff / denom
+                    else:
+                        pseudo_omega_eff = pseudo_omega
+                    resid = y_pre_pseudo_treated - Y_pre_pseudo_control @ pseudo_omega_eff
+                    rmse = float(np.sqrt(np.mean((resid - resid.mean()) ** 2)))
+                    if np.isfinite(rmse):
+                        out.append(rmse)
+                except (ValueError, LinAlgError, ZeroDivisionError):
+                    continue
+        return np.asarray(out, dtype=np.float64)
 
     def _placebo_variance_se_survey(
         self,

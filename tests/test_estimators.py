@@ -2666,6 +2666,8 @@ class TestSyntheticDiD:
 
         assert results.pre_treatment_fit is not None
         assert results.pre_treatment_fit >= 0
+        assert isinstance(results.pre_treatment_level_gap, float)
+        assert np.isfinite(results.pre_treatment_level_gap)
 
     def test_summary_output(self, sdid_panel_data, ci_params):
         """Test that summary produces string output."""
@@ -2705,6 +2707,10 @@ class TestSyntheticDiD:
         assert "n_pre_periods" in result_dict
         assert "n_post_periods" in result_dict
         assert "pre_treatment_fit" in result_dict
+        assert "pre_treatment_level_gap" in result_dict
+        assert np.isfinite(result_dict["pre_treatment_level_gap"])
+        assert "pre_fit_placebo_pvalue" in result_dict
+        assert 0.0 < result_dict["pre_fit_placebo_pvalue"] <= 1.0
 
     def test_to_dataframe(self, sdid_panel_data, ci_params):
         """Test conversion to DataFrame."""
