@@ -2026,6 +2026,45 @@ class TestSDiDNative:
         assert pt["method"] == "synthetic_fit"
         assert pt["verdict"] == "design_enforced_pt"
         assert isinstance(pt.get("pre_treatment_fit_rmse"), float)
+        assert np.isfinite(pt["pre_treatment_fit_rmse"])
+
+    def test_sdid_single_pre_period_fit_is_skipped_not_nan(self):
+        """A 1-pre-period SDiD fit is legal but its shape-only
+        ``pre_treatment_fit`` is NaN; the PT analogue must report ``skipped``
+        (never a narrative "RMSE = nan"), while the raw NaN still flows into
+        the native-diagnostics data surface by the library's NaN convention."""
+        rng = np.random.default_rng(3)
+        rows = []
+        for u in range(10):
+            is_treated = 1 if u < 2 else 0
+            for t in range(3):
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "outcome": 2.0 * t + (5.0 if is_treated else 0.0) + rng.normal(0, 0.5),
+                        "treated": is_treated,
+                    }
+                )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fit = dd.SyntheticDiD().fit(
+                pd.DataFrame(rows),
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="time",
+                post_periods=[1, 2],
+            )
+            assert np.isnan(fit.pre_treatment_fit)
+            report = DiagnosticReport(fit).to_dict()
+        pt = report["parallel_trends"]
+        assert pt["status"] == "skipped"
+        assert "pre_treatment_fit_rmse" not in pt
+        assert "fewer than 2 pre-periods" in pt["reason"]
+        native = report["estimator_native_diagnostics"]
+        assert native["status"] == "ran"
+        assert np.isnan(native["pre_treatment_fit"])
 
     def test_sdid_native_section_populated(self, sdid_fit):
         fit, _ = sdid_fit

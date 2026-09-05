@@ -164,6 +164,8 @@ Synthetic Control Method
 
 - **Abadie, A., Diamond, A., & Hainmueller, J. (2015).** "Comparative Politics and the Synthetic Control Method." *American Journal of Political Science*, 59(2), 495-510. https://doi.org/10.1111/ajps.12116
 
+- **Abadie, A. (2021).** "Using Synthetic Controls: Feasibility, Data Requirements, and Methodological Aspects." *Journal of Economic Literature*, 59(2), 391-425. https://doi.org/10.1257/jel.20191450
+
 - **Chernozhukov, V., Wüthrich, K., & Zhu, Y. (2021).** "An Exact and Robust Conformal Inference Method for Counterfactual and Synthetic Controls." *Journal of the American Statistical Association*, 116(536), 1849-1864. https://doi.org/10.1080/01621459.2021.1920957
 
 - **Firpo, S., & Possebom, V. (2018).** "Synthetic Control Method: Inference, Sensitivity Analysis and Confidence Sets." *Journal of Causal Inference*, 6(2), 20160026. https://doi.org/10.1515/jci-2016-0026

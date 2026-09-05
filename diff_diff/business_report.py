@@ -2348,8 +2348,8 @@ def _render_summary(schema: Dict[str, Any]) -> str:
             else:
                 sentences.append(
                     "The synthetic control is designed to match the treated "
-                    "group's pre-period trajectory (SDiD's weighted-parallel-"
-                    "trends analogue)."
+                    "group's pre-period trend (SDiD's weighted-parallel-"
+                    "trends analogue; a constant level gap is differenced out)."
                 )
         elif verdict == "inconclusive":
             # Round-35 P1 CI review on PR #318: a ``verdict=="inconclusive"``

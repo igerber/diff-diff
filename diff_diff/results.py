@@ -1149,6 +1149,31 @@ class SyntheticDiDResults(BaseResults):
         (for ``"jackknife"``). The ``variance_method`` field disambiguates
         the contents. (The deprecated read-only alias ``placebo_effects``
         returns this array and is removed in v4.0.0.)
+    pre_treatment_fit : float, optional
+        Shape-only pre-treatment fit: the RMSE of the pre-period residual
+        (treated mean minus synthetic control) after removing its mean. The
+        Frank-Wolfe unit weights are fit on column-centered outcomes, so a
+        constant level gap is not a fit failure (SDID differences it out)
+        and is excluded here. NaN with a single pre-period.
+    pre_treatment_level_gap : float, optional
+        Signed mean pre-period gap, treated minus synthetic control. This is
+        the constant offset absorbed by the DiD step; it is reported for
+        inspection and never enters the poor-fit warning.
+    pre_fit_placebo_rmse : np.ndarray, optional
+        Reference distribution for ``pre_treatment_fit``: the shape-only
+        pre-fit RMSE of each placebo fit in which a random set of
+        ``n_treated`` control units is treated as if treated and the unit
+        weights are re-estimated on the remaining controls (Algorithm 4
+        draws, fit-time zeta). At most 20 draws (``min(n_bootstrap, 20)``);
+        ``None`` when no placebo fit is possible (no pseudo-control left, or
+        a single pre-period).
+    pre_fit_placebo_pvalue : float, optional
+        ``(1 + #{placebo RMSE >= treated RMSE}) / (1 + n_draws)``: the
+        plus-one-adjusted rank of the treated units' fit among the placebo
+        fits — a fit diagnostic, not a treatment-effect p-value. The
+        poor-fit warning fires at ``<= 0.05`` (in-space placebo fit
+        assessment, Abadie, Diamond & Hainmueller 2010; Abadie 2021), which
+        needs at least 19 successful draws to be reachable.
     synthetic_pre_trajectory : np.ndarray, optional
         Synthetic control trajectory in pre-treatment periods, shape
         ``(n_pre,)``. Equal to ``Y_pre_control @ omega_eff`` where
@@ -1186,6 +1211,9 @@ class SyntheticDiDResults(BaseResults):
     zeta_omega: Optional[float] = field(default=None)
     zeta_lambda: Optional[float] = field(default=None)
     pre_treatment_fit: Optional[float] = field(default=None)
+    pre_treatment_level_gap: Optional[float] = field(default=None)
+    pre_fit_placebo_rmse: Optional[np.ndarray] = field(default=None)
+    pre_fit_placebo_pvalue: Optional[float] = field(default=None)
     variance_effects: Optional[np.ndarray] = field(default=None)
     n_bootstrap: Optional[int] = field(default=None)
     # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
@@ -1256,6 +1284,33 @@ class SyntheticDiDResults(BaseResults):
         if "placebo_effects" in state and "variance_effects" not in state:
             state = dict(state)
             state["variance_effects"] = state.pop("placebo_effects")
+        # Pre-v3.11.2 pickles: ``pre_treatment_fit`` was the LEVEL-inclusive
+        # RMSE and the shape-only / placebo-reference fields did not exist.
+        # Never relabel the stale value as shape-only: recompute both
+        # statistics from the stored trajectories when they are present
+        # (retained on results since v3.8), otherwise clear it. The placebo
+        # reference cannot be rebuilt without the panel, so it stays None
+        # (the poor-fit warning is a fit-time event and is not replayed).
+        if "pre_treatment_level_gap" not in state:
+            state = dict(state)
+            treated_pre = state.get("treated_pre_trajectory")
+            synthetic_pre = state.get("synthetic_pre_trajectory")
+            if treated_pre is not None and synthetic_pre is not None:
+                resid = np.asarray(treated_pre, dtype=np.float64) - np.asarray(
+                    synthetic_pre, dtype=np.float64
+                )
+                level_gap = float(np.mean(resid))
+                state["pre_treatment_level_gap"] = level_gap
+                state["pre_treatment_fit"] = (
+                    float(np.sqrt(np.mean((resid - level_gap) ** 2)))
+                    if resid.shape[0] >= 2
+                    else float("nan")
+                )
+            else:
+                state["pre_treatment_level_gap"] = None
+                state["pre_treatment_fit"] = None
+            state.setdefault("pre_fit_placebo_rmse", None)
+            state.setdefault("pre_fit_placebo_pvalue", None)
         self.__dict__.update(state)
 
     @property
@@ -1326,7 +1381,11 @@ class SyntheticDiDResults(BaseResults):
             lines.append(f"{'Noise level:':<25} {self.noise_level:>10.4f}")
 
         if self.pre_treatment_fit is not None:
-            lines.append(f"{'Pre-treatment fit (RMSE):':<25} {self.pre_treatment_fit:>10.4f}")
+            lines.append(f"{'Pre-fit RMSE (shape):':<25} {self.pre_treatment_fit:>10.4f}")
+        if self.pre_treatment_level_gap is not None:
+            lines.append(f"{'Pre-fit level gap:':<25} {self.pre_treatment_level_gap:>10.4f}")
+        if self.pre_fit_placebo_pvalue is not None:
+            lines.append(f"{'Pre-fit placebo p-value:':<25} {self.pre_fit_placebo_pvalue:>10.3f}")
 
         # Variance method info
         lines.append(f"{'Variance method:':<25} {self.variance_method:>10}")
@@ -1416,6 +1475,8 @@ class SyntheticDiDResults(BaseResults):
             "zeta_omega": self.zeta_omega,
             "zeta_lambda": self.zeta_lambda,
             "pre_treatment_fit": self.pre_treatment_fit,
+            "pre_treatment_level_gap": self.pre_treatment_level_gap,
+            "pre_fit_placebo_pvalue": self.pre_fit_placebo_pvalue,
         }
         if self.n_bootstrap is not None:
             result["n_bootstrap"] = self.n_bootstrap
@@ -1613,7 +1674,9 @@ class SyntheticDiDResults(BaseResults):
             Columns:
                 - ``fake_treatment_period`` — the shifted date
                 - ``att`` — placebo ATT (ideally near 0)
-                - ``pre_fit_rmse`` — RMSE on the fake pre-window
+                - ``pre_fit_rmse`` — shape-only RMSE on the fake pre-window
+                  (pre-period mean gap removed, matching
+                  ``pre_treatment_fit``)
                 - ``n_pre_fake`` — periods before the fake date
                 - ``n_post_fake`` — periods from the fake date onward
 
@@ -1749,7 +1812,10 @@ class SyntheticDiDResults(BaseResults):
                 lambda_fake,
             )
             synthetic_pre_fake_n = Y_pre_c_n @ omega_eff_fake
-            pre_fit_n = float(np.sqrt(np.mean((y_pre_t_mean_n - synthetic_pre_fake_n) ** 2)))
+            # Shape-only RMSE (pre-window mean gap removed), matching the
+            # fit-time ``pre_treatment_fit`` definition. n_pre_fake >= 2 here.
+            resid_fake_n = y_pre_t_mean_n - synthetic_pre_fake_n
+            pre_fit_n = float(np.sqrt(np.mean((resid_fake_n - resid_fake_n.mean()) ** 2)))
             # ATT is scale-equivariant and shift-invariant in Y; RMSE is
             # scale-equivariant. Rescale back to original-Y units.
             row["att"] = float(att_fake_n * Y_scale)
@@ -1789,7 +1855,9 @@ class SyntheticDiDResults(BaseResults):
             Columns:
                 - ``zeta_omega`` — the regularization value evaluated
                 - ``att`` — resulting ATT
-                - ``pre_fit_rmse`` — RMSE on the original pre-period
+                - ``pre_fit_rmse`` — shape-only RMSE on the original
+                  pre-period (pre-period mean gap removed, matching
+                  ``pre_treatment_fit``; NaN with a single pre-period)
                 - ``max_unit_weight`` — max element of the composed
                   ``omega_eff`` (sensitivity indicator: close to 1 means
                   near-one-hot solutions; close to ``1/n_control`` means
@@ -1895,7 +1963,14 @@ class SyntheticDiDResults(BaseResults):
                 time_weights,
             )
             synthetic_pre_n = Y_pre_control_n @ omega_eff
-            pre_fit_n = float(np.sqrt(np.mean((y_pre_t_mean_n - synthetic_pre_n) ** 2)))
+            # Shape-only RMSE (pre-period mean gap removed), matching the
+            # fit-time ``pre_treatment_fit`` definition; undefined (NaN) with
+            # a single pre-period, which is a legal fit.
+            resid_n = y_pre_t_mean_n - synthetic_pre_n
+            if resid_n.shape[0] >= 2:
+                pre_fit_n = float(np.sqrt(np.mean((resid_n - resid_n.mean()) ** 2)))
+            else:
+                pre_fit_n = float("nan")
             herf = float(np.sum(omega_eff**2))
             rows.append(
                 {
