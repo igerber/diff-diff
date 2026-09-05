@@ -1599,13 +1599,25 @@ WooldridgeDiD(
                                             # carries G-1 entries. Rejected with survey_design= and
                                             # with control_group="never_treated".
     df_convention: str = "residual",        # OLS analytical t/p/CI df (3.9: default-hc1 arms moved z -> t(residual)): "residual" (default), "cluster" (G-1, hc1-clustered only), "normal" (z); survey/BM DOF keep precedence; GLM arms knob-independent (explicit non-default warns); flips at v4
+    unsupported_period_action: str = "drop", # "drop" warns and filters; "error" refuses unsupported periods
 )
 ```
 
 `fit()` additionally accepts `survey_design=` (a `SurveyDesign`) on all three
 methods; see the Survey Support section.
 
-**All-eventually-treated panels (no never-treated group).** Use
+**Comparison-support policy.** `unsupported_period_action="drop"` preserves
+period filtering and its warnings. Set `unsupported_period_action="error"`
+to raise `ValueError` naming the unsupported periods and affected observation
+count before removal. Support requires positive-weight never-treated rows on
+OLS + `control_group="never_treated"`; elsewhere not-yet-treated rows before
+`g - anticipation` also qualify. This is independent of `rank_deficient_action`
+and does not control unidentified-cohort exclusion or bypass identification checks.
+The results record the fit-time policy in `unsupported_period_action`, `to_dict()`
+and `summary()`, including after aggregation or estimator reconfiguration.
+
+**All-eventually-treated panels (no never-treated group).** With the default
+`unsupported_period_action="drop"`, use
 `control_group="not_yet_treated"` — `"never_treated"` raises when no cohort-0
 units exist. Periods at which every unit is treated carry no identified
 ATT(g, t), so they are REMOVED from the estimation sample before the solve and
@@ -1621,11 +1633,13 @@ unaffected either way. Default `xtvar` (`demean_covariates=True`) is FULL
 RANK and fits cleanly.
 
 **Survey designs refuse row-dropping paths.** `survey_design=` combined with
-either comparison-support period filtering or unidentified-cohort exclusion
-raises `NotImplementedError` rather than deleting rows, because deletion would
+either comparison-support period filtering (`unsupported_period_action="drop"`)
+or unidentified-cohort exclusion raises `NotImplementedError` rather than deleting rows, because deletion would
 remove their PSUs and strata from the TSL variance. Restrict the frame yourself
-and re-fit. The refusals are conditional: survey fits that drop nothing are
-unaffected.
+and re-fit only after confirming every PSU and stratum survives that restriction.
+With `unsupported_period_action="error"`, unsupported periods instead raise
+`ValueError`, after existing input/design validation. The refusals are conditional:
+survey fits that drop nothing are unaffected.
 
 **Alias:** `ETWFE`
 

@@ -43,6 +43,22 @@ WooldridgeDiD
 
 Main estimator class for Wooldridge ETWFE.
 
+``unsupported_period_action="drop"`` (default) removes periods lacking the
+required comparison support and warns. Use
+``WooldridgeDiD(unsupported_period_action="error")`` to raise ``ValueError``
+before those periods are removed; the error names the periods and affected
+observation count. This applies to all three methods, independently of
+``rank_deficient_action``. It does not control unidentified-cohort exclusion
+or relax other identification checks.
+
+Support requires a positive-weight never-treated observation for OLS with
+``control_group="never_treated"``. All other paths also admit observations
+before their cohort's ``g - anticipation`` threshold. Unsupported periods
+can therefore occur even when never-treated units exist elsewhere in the panel.
+With ``survey_design``, input/design validation runs first; ``"error"`` then
+raises ``ValueError`` for unsupported periods, while ``"drop"`` retains the
+existing ``NotImplementedError`` because survey domain estimation is unsupported.
+
 .. autoclass:: diff_diff.WooldridgeDiD
    :no-index:
    :members:
@@ -63,6 +79,10 @@ WooldridgeDiDResults
 
 Results container returned by ``WooldridgeDiD.fit()``.
 
+``unsupported_period_action`` records the fit-time policy and is included in
+``to_dict()`` and ``summary()``. It remains unchanged by post-fit aggregation
+or subsequent estimator reconfiguration.
+
 ``cohort_trend_coefs`` (populated under ``cohort_trends=True``, OLS path
 only): ``Dict[g → δ_g]`` keyed by treated cohort. The reported slopes
 are **relative to the baseline trend** absorbed by the design — the
@@ -74,7 +94,8 @@ dict; its slope is the baseline (zero in deviation form).
 
 .. note::
 
-   All-eventually-treated panels **estimate**. The paper's Section 5.4
+   With the default ``unsupported_period_action="drop"``, all-eventually-treated
+   panels **estimate**. The paper's Section 5.4
    rule is applied to the cohort × time cells as well as the trend
    columns: periods where no unit is untreated carry no identified
    ATT(g, t), so they are removed from the estimation sample before the

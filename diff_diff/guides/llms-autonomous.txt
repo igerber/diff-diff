@@ -557,13 +557,14 @@ When `has_never_treated == False`:
 - `ChaisemartinDHaultfoeuille` - constructs switchers vs. non-switchers
   directly; no never-treated requirement.
 - TWFE / `MultiPeriodDiD` / `ImputationDiD` / `TwoStageDiD` /
-  `StackedDiD` / `WooldridgeDiD` - use the last-treated or untreated-
+  `StackedDiD` - use the last-treated or untreated-
   until-late units as implicit controls; estimators do not error, but
   consider whether the implicit control structure is what you want.
 - `WooldridgeDiD` specifically: use `control_group="not_yet_treated"`
   (the default). `control_group="never_treated"` raises when no
-  cohort-0 units exist. On an all-eventually-treated panel the last
-  cohort becomes the reference per W2025 Section 5.4, so periods at
+  cohort-0 units exist. With the default `unsupported_period_action="drop"`,
+  the last cohort becomes the reference on an all-eventually-treated panel
+  per W2025 Section 5.4, so periods at
   which every unit is treated carry no identified ATT(g, t) and are
   REMOVED from the estimation sample before the solve. The fit emits a
   `UserWarning` naming the dropped periods, the observation count and
@@ -572,6 +573,17 @@ When `has_never_treated == False`:
   cohorts. If your agent surfaces warnings to a user, surface these:
   the estimate is computed on fewer rows than were supplied. Stata
   `jwdid` performs the same reduction but reports only a smaller `N`.
+  Use `WooldridgeDiD(unsupported_period_action="error")` when the user prefers
+  refusal to automatic period filtering: it raises `ValueError` naming the
+  unsupported periods and affected observation count before removal. A period
+  lacks support when no positive-weight eligible comparison is observed:
+  never-treated rows only on OLS + `never_treated`, and also rows before
+  `g - anticipation` on other paths. The policy applies to all methods,
+  independently of `rank_deficient_action`; other identification checks and
+  unidentified-cohort exclusion remain active. With `survey_design`, design
+  validation still runs first: `"error"` then raises `ValueError`, while
+  `"drop"` retains the survey-domain `NotImplementedError` when periods would
+  be removed. Fully supported survey fits are unaffected.
   SOME covariate specifications on such a panel are still rank-deficient
   (`exovar`, `xgvar`, and `xtvar` with `demean_covariates=False`), because
   `D_{G_max} x X` is not normalized; `rank_deficient_action="error"`
