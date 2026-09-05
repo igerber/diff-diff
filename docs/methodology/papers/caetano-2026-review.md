@@ -42,10 +42,13 @@ ATT can be written as `E[ΔY_{t*} | D = 1] - E[m_0(X_{t*}(0), X_{t*-1}, Z) | D =
 (Equation 2, p. 7), but this is NOT an identification result: the average is over the
 distribution `F̃_1` of the **untreated potential** bad control `X_{t*}(0)` in the treated
 group, which is never observed (Equation 3, p. 8). Section 3 shows that both traditional
-practices are biased whenever `X_t` is a genuine bad control: including the post-treatment
-`X_{t*}` as a covariate (`τ^use`, Section 3.1, p. 9) is unbiased only if Condition 2 fails,
-and dropping the covariate (`τ^discard`, Section 3.2, pp. 10-11) is unbiased only if
-Condition 1 fails.
+practices are generally biased when `X_t` is a genuine bad control (the paper's own prose
+says "bias whenever", pp. 9 and 11): including the post-treatment `X_{t*}` as a covariate
+(`τ^use`, Section 3.1, p. 9) has zero bias when Condition 2 fails, and dropping the
+covariate (`τ^discard`, Section 3.2, pp. 10-11) has zero bias when Condition 1 fails.
+Strictly, each displayed bias is an integral that could also vanish by moment cancellation
+with the conditions still holding, so failure of Condition 2 / Condition 1 is the paper's
+sufficient benchmark case for zero bias (Figures 2-3), not a necessary condition.
 
 Section 4 proposes two new approaches. **Approach 1** (Section 4.1, pp. 12-14) adds either
 **Assumption 4 (Simple Covariate Unconfoundedness)** `X_{t*}(0) ⊥⊥ D | X_{t*-1}, Z` or the
@@ -95,8 +98,12 @@ conditional-expectation statements hold almost surely.
   ```
   The complement (equality of the two conditional distributions) is what Lechner (2011) and
   Caetano and Callaway (2025) call *covariate exogeneity*; a leading case is
-  `X_{it*}(1) = X_{it*}(0)` for all units. Checkable in a post-treatment period only
-  indirectly, via `ATT_X` (Remark 6 / Figure 6).
+  `X_{it*}(1) = X_{it*}(0)` for all units. Not directly checkable; the post-treatment
+  `ATT_X` of Remark 6 / Figure 6 is a MEAN-effect diagnostic only: a nonzero `ATT_X` is
+  evidence that Condition 2 holds, but a zero `ATT_X` does not establish equality of the
+  two conditional distributions (distributional or sign-cancelling heterogeneous effects
+  can leave the mean at zero), and `ATT_X` says nothing about Condition 1 (outcome
+  relevance), which must be assessed separately before calling `X_t` a bad control.
 - **Definition 1 (Bad Control)** (p. 6): "`X_t` is a *bad control* if it satisfies both
   Conditions 1 and 2." The bad control is scalar in the notation; "it is straightforward to
   allow `X_it` to be a vector" (p. 5).
@@ -259,11 +266,19 @@ Traditional approaches (Section 3):
 τ^discard - ATT = ∫∫ ( m_0(x_{t*}(0), x_{t*-1}, z) - m_0(z) ) dF̃_1(x_{t*}(0) | x_{t*-1}, z) dF_1(x_{t*-1}, z)   (under Assumptions 1-3)
 ```
 where `F_1(x_{t*} | x_{t*-1}, z) := F_{X_{t*} | X_{t*-1}, Z, D=1}(x_{t*} | x_{t*-1}, z)` is the
-OBSERVED conditional cdf of the treated group's bad control. `τ^use - ATT = 0` only when
-Condition 2 fails (Figure 2: arrow `D → X_{t*}` removed); `τ^discard - ATT = 0` only when
-`m_0(Z) = m_0(X_{t*}(0), X_{t*-1}, Z)`, i.e. Condition 1 fails (Figure 3: arrows
-`X_{t*}(0) → ΔY_{t*}(0)` and `X_{t*-1} → ΔY_{t*}(0)` removed). Dropping a bad control "only
-changes the form of the bias relative to including it" (p. 11).
+OBSERVED conditional cdf of the treated group's bad control. The paper's prose (mirrored
+here): `τ^use - ATT` "is non-zero when the distribution of `X_{t*}(0)` differs from the
+distribution of `X_{t*}(1)` for the treated group - this corresponds exactly to Condition 2
+holding", so the approach "leads to bias whenever `X_{t*}` is a bad control" (p. 9;
+Figure 2: arrow `D → X_{t*}` removed rationalizes it); `τ^discard - ATT` "is equal to 0
+when `m_0(Z) = m_0(X_{t*}(0), X_{t*-1}, Z)`, which arises only in the case where `X_t` does
+not affect the change in untreated potential outcomes", i.e. Condition 1 fails (pp. 10-11;
+Figure 3: arrows `X_{t*}(0) → ΔY_{t*}(0)` and `X_{t*-1} → ΔY_{t*}(0)` removed). Dropping a
+bad control "only changes the form of the bias relative to including it" (p. 11).
+Qualification (not in the paper): both bias expressions are integrals of `m_0` against a
+signed measure / difference of functions, so they can also be exactly zero by cancellation
+while Conditions 1-2 hold; the Figure 2 / Figure 3 conditions are sufficient benchmark
+cases for zero bias, and "generally biased" is the precise reading.
 
 Assumption-to-result map:
 
@@ -366,7 +381,14 @@ Assumption-to-result map:
   the treatment." (verbatim, p. 23; "[is]" supplied - the printed text reads "it a test").
   The paper writes no estimand or estimator for `ATT_X(g, t)`; the application (Section 7)
   obtains it by "implementing the first step of the Section 6 imputation estimator" with
-  the bad control as the outcome (see the Application section and Gaps).
+  the bad control as the outcome (see the Application section and Gaps). Scope
+  qualification (not in the paper): `ATT_X(g, t)` is a conditional-MEAN effect of the
+  treatment on `X`. Its evidentiary scope is one-sided: a nonzero post-treatment value
+  supports Condition 2 (treatment affects `X`), but a zero value does not rule out
+  distributional or heterogeneous effects, and it carries no information about
+  Condition 1 (outcome relevance). It therefore cannot by itself establish that `X_t`
+  "actually" is a bad control; an implementation should label it a mean-effect
+  diagnostic and pair it with a separate outcome-relevance assessment.
 
 Appendix A proof structure (pp. 38-42) - intermediate identities useful as implementation
 checks:
@@ -437,7 +459,14 @@ ATT = E[ΔY_{t*} | D = 1] - τ,        τ := E[ν_0(X_{t*-1}, W, Z) | D = 1],
   ```
   (`X` scalar with scalar `β_1, β_2, γ_1`; `W`, `Z` vectors.) Builds on Gardner, Thakral,
   Tô, and Yap 2023; Borusyak, Jaravel, and Spiess 2024; Liu, Wang, and Xu 2024 (p. 23);
-  allows treatment-effect heterogeneity.
+  allows treatment-effect heterogeneity. **Intercept convention (paper silent, see Gaps
+  item 19):** neither linear model, nor `R_i` / `S_i` in SA, shows an explicit constant,
+  yet the Monte Carlo DGPs contain constants (`θ_2 - θ_1 = 0.3` in `ΔY`, `0.15` in
+  `X_2(0)`) and Table S1 classifies the imputation estimator as consistent in DGPs 1 and
+  4 - which requires an intercept in both regressions (or `Z` containing a constant). An
+  implementation must add an intercept to every nuisance regression (equivalently treat
+  `Z` as including `1`); `R_i`, `S_i`, `R̃_i` and the S8 influence function are then read
+  with the constant included in `Z`.
 - Steps (p. 24; SA p. 1 writes the OLS fits with explicit `(1 - D_i)` weights, with
   `R_i := (X_{it*}, X_{i,t*-1}, Z_i')'` and `S_i := (X_{i,t*-1}, W_i', Z_i')'`):
   1. OLS of `ΔY_{t*}` on `(X_{t*}, X_{t*-1}, Z)` in the UNTREATED sample:
@@ -1208,7 +1237,8 @@ Validation:
 ### Computational Considerations
 - Imputation estimator: two untreated-sample OLS fits per cell plus treated means; the S8
   influence function needs the two untreated second-moment matrices, their inverses, treated
-  means of `R̃` and `S`, and OLS residuals - all `O(n k^2)`.
+  means of `R̃` and `S`, and OLS residuals - `O(n k^2 + k^3)` per fit (the `k^3` term is the
+  factorization / inversion of the `k x k` second-moment matrix).
 - DR parametric: four nuisance fits per cell (OLS, OLS-plug-in, logit, OLS of fitted odds).
   Proposition 6 gives parametric CONSISTENCY without cross-fitting, but the inference
   result (Proposition 7, Assumption S2) is stated for the fold-specific cross-fitted
@@ -1371,3 +1401,13 @@ separate from the paper's claims.
     verbatim as gap fills; References (pp. 36-37 approximately) and SA p. 17 (references)
     were not extracted. No contradictions between extractors were found beyond the
     as-printed items above.
+19. **Intercept convention for the linear working models is never stated.** Assumption 8
+    (p. 24) and the SA regressor vectors `R_i`, `S_i` (SA p. 1) show no constant, `Z` is
+    described only as "a vector of other covariates" (p. 5), and no regression in
+    Sections 6-7 or SA mentions an intercept. The Monte Carlo DGPs (SA pp. 14-15) contain
+    constants (`θ_t` in `Y`, so `ΔY` has mean shift `0.3`; `0.15` in every `X_2(0)`
+    equation) and Table S1 marks the imputation estimator consistent in DGPs 1 and 4,
+    which is only true with an intercept (or a constant inside `Z`) in both OLS fits.
+    Implementation-required: include an intercept in every nuisance regression and in
+    the parametric propensity / odds models; document it as an implementation
+    convention, not a paper-stated one.
