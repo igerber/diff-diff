@@ -4489,6 +4489,63 @@ class TestUnsupportedPeriodAction:
         assert restored.to_dict()["unsupported_period_action"] == "drop"
         assert "Unsupported period action: drop" in restored.summary()
 
+    @pytest.mark.parametrize("method", ["logit", "poisson"])
+    @pytest.mark.parametrize(
+        "invalid", ["missing_outcome", "invalid_outcome", "exovar", "xtvar", "xgvar", "cluster"]
+    )
+    def test_support_refusal_can_precede_later_input_validation(self, method, invalid):
+        """The policy preserves the existing pipeline, not a full-input preflight."""
+        df = self._panel()
+        fit_options = {}
+        options = dict(method=method)
+        if invalid == "missing_outcome":
+            df = df.drop(columns="y")
+            expected_error, match = KeyError, "y"
+        elif invalid == "invalid_outcome":
+            # Invalid on a RETAINED period too, so the default fitter must reject it.
+            df.loc[df.time == 3, "y"] = -1.0
+            expected_error, match = ValueError, f"method='{method}' requires"
+        elif invalid == "cluster":
+            options["cluster"] = "missing_cluster"
+            expected_error, match = KeyError, "missing_cluster"
+        else:
+            fit_options[invalid] = ["missing_covariate"]
+            expected_error, match = KeyError, "missing_covariate"
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with pytest.raises(ValueError, match="no eligible comparison group"):
+                self._fit(
+                    WooldridgeDiD(**options, unsupported_period_action="error"), df, **fit_options
+                )
+        assert not caught
+        # When filtering is allowed (or already performed), the existing input
+        # error surfaces at its normal point rather than being silently accepted.
+        with pytest.warns(UserWarning, match="Dropped"):
+            with pytest.raises(expected_error, match=match):
+                self._fit(WooldridgeDiD(**options), df, **fit_options)
+        with pytest.raises(expected_error, match=match):
+            self._fit(
+                WooldridgeDiD(**options, unsupported_period_action="error"),
+                df[df.time < 6],
+                **fit_options,
+            )
+
+    @pytest.mark.parametrize("method", ["logit", "poisson"])
+    def test_outcomes_in_discarded_periods_are_not_preflighted(self, method):
+        """Full-frame outcome validation would break an existing successful fit."""
+        df = self._panel()
+        df.loc[df.time == 6, "y"] = 2.0 if method == "logit" else -1.0
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = self._fit(WooldridgeDiD(method=method), df)
+            supported = self._fit(
+                WooldridgeDiD(method=method, unsupported_period_action="error"), df[df.time < 6]
+            )
+        assert result.n_obs == len(df[df.time < 6])
+        assert np.isfinite(result.att) and np.isfinite(result.se)
+        self._assert_same_estimates(result, supported)
+
     @pytest.mark.parametrize("method", ["ols", "logit", "poisson"])
     @pytest.mark.parametrize("control", ["never_treated", "not_yet_treated"])
     @pytest.mark.parametrize("action", ["drop", "error"])

@@ -982,7 +982,10 @@ class WooldridgeDiD(BaseEstimator):
         exclusion. With ``survey_design``, ``"drop"`` still raises
         ``NotImplementedError`` if periods would be removed, because survey
         domain estimation is not supported; ``"error"`` raises ``ValueError``
-        after the existing input and survey validation.
+        after the existing pre-filter configuration, cohort, and survey-design
+        checks. Later validation (including covariate columns, nonlinear
+        outcomes, and some explicit cluster columns) is not preflighted: an
+        unsupported-period refusal can precede those input errors.
     """
 
     def __init__(

@@ -55,7 +55,10 @@ Support requires a positive-weight never-treated observation for OLS with
 ``control_group="never_treated"``. All other paths also admit observations
 before their cohort's ``g - anticipation`` threshold. Unsupported periods
 can therefore occur even when never-treated units exist elsewhere in the panel.
-With ``survey_design``, input/design validation runs first; ``"error"`` then
+Existing pre-filter configuration, cohort, and survey-design checks retain
+precedence. Later checks, including covariate columns, nonlinear outcomes, and
+non-Conley explicit cluster columns, are not preflighted: an unsupported-period
+refusal can precede those input errors. With ``survey_design``, ``"error"``
 raises ``ValueError`` for unsupported periods, while ``"drop"`` retains the
 existing ``NotImplementedError`` because survey domain estimation is unsupported.
 
