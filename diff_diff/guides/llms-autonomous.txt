@@ -580,8 +580,10 @@ When `has_never_treated == False`:
   never-treated rows only on OLS + `never_treated`, and also rows before
   `g - anticipation` on other paths. The policy applies to all methods,
   independently of `rank_deficient_action`; other identification checks and
-  unidentified-cohort exclusion remain active. With `survey_design`, design
-  validation still runs first: `"error"` then raises `ValueError`, while
+  unidentified-cohort exclusion remain active. Only existing pre-filter checks
+  retain precedence; later covariate, nonlinear-outcome, or explicit-cluster
+  validation can be preempted by unsupported-period refusal. With `survey_design`,
+  its pre-filter design validation still runs first: `"error"` then raises `ValueError`, while
   `"drop"` retains the survey-domain `NotImplementedError` when periods would
   be removed. Fully supported survey fits are unaffected.
   SOME covariate specifications on such a panel are still rank-deficient
