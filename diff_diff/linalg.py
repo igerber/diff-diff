@@ -1170,6 +1170,8 @@ def solve_ols(
           (default). With ``cluster_ids``, dispatches to CR1 (Liang-Zeger).
         - ``"hc2"``: leverage-corrected meat. One-way only; raises with
           ``cluster_ids`` (use ``"hc2_bm"`` for clustered Bell-McCaffrey).
+          An effective observation with ``h_ii >= 1 - 1e-8`` produces a
+          warning and entirely NaN covariance, retaining point estimates.
         - ``"hc2_bm"``: HC2 + Imbens-Kolesar (2016) Satterthwaite DOF one-way;
           Pustejovsky-Tipton (2018) CR2 Bell-McCaffrey with ``cluster_ids``.
           With ``weights``, dispatches to the clubSandwich WLS-CR2 port —
@@ -1177,11 +1179,15 @@ def solve_ols(
           ``fweight`` raise ``NotImplementedError`` (port matches the
           ``pweight`` convention only; aweight/fweight derivations are a
           separate methodology task).
+          Unweighted, unclustered fits share HC2's leverage-one NaN guard;
+          weighted/clustered CR2 retains its existing convention, including
+          all-ones probability weights.
         - ``"hc3"``: jackknife-style leverage correction, meat
           ``e_i^2 / (1 - h_ii)^2``. One-way only; raises with
           ``cluster_ids``. An observation with leverage ``h_ii ~ 1`` has no
           defined HC3 variance and the vcov fails closed (warning + NaN)
-          rather than flooring ``1 - h_ii``.
+          rather than flooring ``1 - h_ii``. As for HC2, zero-weight rows
+          are excluded; frequency weights use each expanded row's leverage.
         - ``"conley"``: Conley (1999) spatial-HAC sandwich. Requires
           ``conley_coords`` (n × 2 array) and ``conley_cutoff_km`` (positive
           bandwidth, no default per Conley 1999 Section 5's sensitivity-grid
@@ -1919,6 +1925,7 @@ def _solve_ols_numpy(
 
 
 _VALID_VCOV_TYPES = frozenset({"classical", "hc1", "hc2", "hc2_bm", "hc3", "conley"})
+_HC_LEVERAGE_THRESHOLD = 1.0 - 1e-8
 
 
 def _validate_vcov_args(
@@ -2159,6 +2166,9 @@ def compute_robust_vcov(
       ``sum_i (u_i^2 / (1 - h_ii)) x_i x_i'`` where ``h_ii`` are hat-matrix
       diagonals. No DOF adjustment beyond ``n - k``. One-way only; errors with
       ``cluster_ids``.
+      Any effective observation with ``h_ii >= 1 - 1e-8`` yields a warning
+      and entirely NaN covariance/DOF, as for HC3 and unweighted one-way
+      HC2-BM. This includes numerically over-one leverage; no HC1 fallback.
     - ``"hc3"``: jackknife-style leverage correction, meat
       ``sum_i (u_i^2 / (1 - h_ii)^2) x_i x_i'`` (matches ``sandwich::vcovHC``
       type="HC3": no DOF factor). One-way only; errors with ``cluster_ids``.
@@ -2171,6 +2181,10 @@ def compute_robust_vcov(
       with ``G=103``. **Weighted hc2_bm** (both one-way and clustered) is
       supported for ``weight_type="pweight"`` only via the clubSandwich
       WLS-CR2 port; ``aweight`` and ``fweight`` raise ``NotImplementedError``.
+      Weighted/clustered CR2 keeps its own adjustment convention: even
+      all-ones probability weights can yield finite covariance where the
+      unweighted one-way leverage guard returns NaN. Weighting is not a
+      remedy for undefined inference.
     - ``"conley"``: spatial HAC sandwich (Conley 1999 Eq 4.2). Requires
       ``conley_coords`` (n×2 array) and ``conley_cutoff_km`` (positive
       bandwidth). Two operating modes: cross-sectional (default) and panel
@@ -2236,7 +2250,8 @@ def compute_robust_vcov(
         array of per-coefficient degrees of freedom. For ``classical``,
         ``hc1``, ``hc2``, ``hc3``: every element is ``n_eff - k``. For
         ``hc2_bm`` one-way: Imbens-Kolesar (2016) Satterthwaite DOF per
-        contrast.
+        contrast. The leverage-one fail-closed guard returns an entirely
+        NaN vector for HC2, HC3, and unweighted one-way HC2-BM.
     cluster_k_adjustment : int, default 0, keyword-only
         Signed K_reference adjustment added to the visible column count in
         the CLUSTERED CR1 finite-sample factor only (absorbed FE not nested
@@ -2270,7 +2285,9 @@ def compute_robust_vcov(
     For HC2 one-way (weighted per review MEDIUM #3):
         h_ii = w_i * x_i' * (X'WX)^{-1} * x_i  (unweighted: w_i = 1)
         meat = sum_i (u_i^2 / (1 - h_ii)) x_i x_i'
-        Guards against h_ii > 1 - eps with a fall-back to HC1 plus warning.
+        For fweights, use each expanded row's leverage without the w_i
+        multiplier. Exclude zero-weight rows from the guard and meat.
+        Any effective h_ii >= 1 - 1e-8 yields warning + all-NaN vcov/DOF.
 
     For HC2 + Bell-McCaffrey one-way DOF (per Imbens-Kolesar 2016):
         For each coefficient j, let q_j = X (X'X)^{-1} e_j, let M = I - H.
@@ -2286,11 +2303,11 @@ def compute_robust_vcov(
         weights = _validate_weights(weights, weight_type, X.shape[0])
 
     # Rust HC2 (one-way, unweighted, no DOF): mirrors the NumPy hc2 branch
-    # exactly (leverage meat, no n/(n-k) factor). The near-singular
-    # hat-diagonal guard stays Python-side: the kernel returns a sentinel
-    # error and the documented warn-and-fall-back-to-HC1 fires here,
-    # identical to the NumPy branch's behavior. Imported independently
-    # (mixed-version safe) — None on a stale extension.
+    # exactly (leverage meat, no n/(n-k) factor). At leverage ~1 the
+    # kernel returns a sentinel error, translated to warning + NaN here,
+    # identical to the NumPy branch's behavior. _backend imports only the
+    # versioned fail-closed symbol; a legacy extension uses NumPy HC2 even
+    # when it exports the original, denominator-flooring HC2 kernel.
     if (
         HAS_RUST_BACKEND
         and _rust_compute_robust_vcov_hc2 is not None
@@ -2305,21 +2322,22 @@ def compute_robust_vcov(
             return _rust_compute_robust_vcov_hc2(X_c, residuals_c)
         except ValueError as e:
             error_msg = str(e)
-            if "Hat-matrix diagonal exceeds 1" in error_msg:
+            if error_msg.startswith("HC2 variance is undefined:"):
                 warnings.warn(
-                    f"{error_msg} Falling back to HC1.",
+                    f"{error_msg} Returning NaN vcov.",
                     UserWarning,
                     stacklevel=2,
                 )
-                return _compute_robust_vcov_numpy(
-                    X,
-                    residuals,
-                    cluster_ids=None,
-                    weights=None,
-                    weight_type=weight_type,
-                    vcov_type="hc1",
-                    return_dof=return_dof,
+                return np.full((X.shape[1], X.shape[1]), np.nan)
+            if "Hat-matrix diagonal exceeds 1" in error_msg:
+                # Older kernels can signal over-one leverage with this
+                # sentinel. Never relabel an HC1 fallback as HC2.
+                warnings.warn(
+                    f"HC2 variance is undefined: {error_msg} Returning NaN vcov.",
+                    UserWarning,
+                    stacklevel=2,
                 )
+                return np.full((X.shape[1], X.shape[1]), np.nan)
             if "Matrix inversion failed" in error_msg:
                 raise ValueError(
                     "Design matrix is rank-deficient (singular X'X matrix). "
@@ -2436,8 +2454,9 @@ def _compute_hat_diagonals(
     ``sandwich::vcovHC(..., type="HC2")`` in R and matches the per-observation
     effective leverage under WLS.
 
-    Returns an ``(n,)`` array. Values are clamped to ``[0, 1 - 1e-10]`` to
-    guard against numerical `` h_ii > 1`` from near-singular designs.
+    Returns an unclamped ``(n,)`` array. Covariance callers check effective
+    observations for leverage ``h_ii >= 1 - 1e-8`` and fail closed; keeping
+    raw values also exposes numerical ``h_ii > 1`` from unstable designs.
     """
     # Compute x_i' (X'WX)^{-1} x_i via a single solve rather than per-row.
     # np.linalg.solve(bread, X.T) has shape (k, n); multiplying element-wise by
@@ -2456,7 +2475,7 @@ def _compute_hat_diagonals(
     if weights is not None:
         h_diag = weights * h_diag
     # Numerical guard. Do not silently clip values materially exceeding 1 — that
-    # indicates a real design pathology; the caller warns and falls back.
+    # indicates a real design pathology; the covariance caller fails closed.
     return np.asarray(h_diag, dtype=np.float64)
 
 
@@ -3287,9 +3306,10 @@ def _compute_bm_dof_from_contrasts(
     Schur-product expansion (see the inline derivation) at ``O(n k^2 + k^3)``
     per contrast with NO dense ``n×n`` residual-maker — the prior form's
     ``O(n^2 k)`` hat build limited it to ``n < 10_000``. A noise-floor
-    cancellation guard NaNs extreme-leverage contrasts whose expanded
-    denominator collapses below float precision (mirrors the clustered
-    scores path's guard).
+    cancellation guard NaNs contrasts whose expanded denominator collapses
+    below float precision (mirrors the clustered scores path's guard).
+    Before that calculation, any ``h_ii >= 1 - 1e-8`` suppresses ALL
+    unweighted contrast DOFs, matching the design-wide covariance guard.
 
     **Weighted** (``weights is not None``): dispatches to the clubSandwich
     singleton-cluster CR2 reduction (each observation is its own cluster)
@@ -3318,7 +3338,9 @@ def _compute_bm_dof_from_contrasts(
     -------
     ndarray of shape (m,) of Satterthwaite DOF per contrast column. NaN when
     the denominator is non-positive or at/below the cancellation noise
-    floor (degenerate / extreme-leverage case; see the inline guard note).
+    floor. On the unweighted path, any ``h_ii >= 1 - 1e-8`` returns an
+    entirely NaN vector without warning, matching the design-wide covariance
+    guard (which owns the warning). Weighted CR2 keeps its own convention.
     """
     n, k = X.shape
     if contrasts.ndim != 2 or contrasts.shape[0] != k:
@@ -3336,6 +3358,11 @@ def _compute_bm_dof_from_contrasts(
             X, cluster_ids_singleton, bread_matrix, contrasts, weights=weights
         )
 
+    if np.any(h_diag >= _HC_LEVERAGE_THRESHOLD):
+        # Covariance already warns on this design. Remain silent for callers
+        # computing additional contrasts, e.g. MultiPeriodDiD's average ATT.
+        return np.full(contrasts.shape[1], np.nan)
+
     # Unweighted: keep the simple (tr B)² / tr(B²) formula — algebraically
     # identical backward compatibility with prior unweighted Bell-McCaffrey
     # output (dense prior evaluation; floating-point-tolerance parity).
@@ -3350,7 +3377,7 @@ def _compute_bm_dof_from_contrasts(
         raise
     # q has shape (n, m); column j is X @ (bread_inv @ contrasts[:, j]).
     q = X @ bread_inv_c
-    one_minus_h = np.maximum(1.0 - h_diag, 1e-10)
+    one_minus_h = 1.0 - h_diag
     one_minus_2h = 1.0 - 2.0 * h_diag
     m = contrasts.shape[1]
     dof = np.empty(m)
@@ -3607,24 +3634,19 @@ def _compute_robust_vcov_numpy(
             bread_matrix,
             weights=None if weight_type == "fweight" else weights,
         )
-        # Leverage-one observations make the HC3 leave-one-out residual
-        # undefined (and HC2 nearly so): flooring 1 - h_ii would fabricate
-        # an arbitrary finite variance for a perfectly-leveraged point
-        # (e.g. a single treated unit under [1, D]). HC3 fails closed with
-        # a NaN vcov instead (LWDiD fix-wave review finding); HC2/HC2-BM
-        # keep their long-standing floor behavior (released surface;
-        # pre-existing, tracked separately). This check runs BEFORE the
-        # generic over-one HC1 fallback below (round-10 review: numerically
-        # over-one leverage previously escaped into an HC1 result still
-        # labeled hc3 - h >= 1 - 1e-8 covers h > 1 + 1e-6 entirely).
-        if vcov_type == "hc3" and np.any(h_diag >= 1.0 - 1e-8):
-            n_lev1 = int(np.sum(h_diag >= 1.0 - 1e-8))
+        # A leverage-one observation has no residual information for HC2/HC3.
+        # Do not fabricate finite variance by flooring its denominator or
+        # substituting HC1. The threshold also catches numerical h > 1.
+        # Zero-weight rows represent no observations, even if their fweight
+        # quadratic form (which omits the weight multiplier) exceeds one.
+        active = np.ones(n, dtype=bool) if weights is None else weights > 0
+        leverage_one = active & (h_diag >= _HC_LEVERAGE_THRESHOLD)
+        if np.any(leverage_one):
+            n_lev1 = int(np.sum(leverage_one))
+            family = "HC2-BM" if vcov_type == "hc2_bm" else vcov_type.upper()
             warnings.warn(
-                f"HC3 variance is undefined: {n_lev1} observation(s) have "
-                f"hat-matrix leverage ~1 (a perfectly-leveraged design, "
-                f"e.g. a single treated unit). Returning NaN vcov; use "
-                f"vcov_type='classical' exact inference or add treated "
-                f"units.",
+                f"{family} variance is undefined: {n_lev1} observation(s) have "
+                "hat-matrix leverage ~1 (h_ii >= 1 - 1e-8). Returning NaN vcov.",
                 UserWarning,
                 stacklevel=3,
             )
@@ -3635,44 +3657,26 @@ def _compute_robust_vcov_numpy(
                 # the fail-closed semantics through safe_inference.
                 return nan_vcov, np.full(X.shape[1], np.nan)
             return nan_vcov
-        if np.any(h_diag > 1.0 + 1e-6):
-            # hc2/hc2_bm only: hc3 designs with over-one leverage are
-            # already caught by the fail-closed guard above.
-            warnings.warn(
-                f"Hat-matrix diagonal exceeds 1 (max={h_diag.max():.6f}); "
-                "the design is near-singular. Falling back to HC1.",
-                UserWarning,
-                stacklevel=3,
-            )
-            return _compute_robust_vcov_numpy(
-                X,
-                residuals,
-                cluster_ids=None,
-                weights=weights,
-                weight_type=weight_type,
-                vcov_type="hc1",
-                return_dof=return_dof,
-            )
-        one_minus_h = np.maximum(1.0 - h_diag, 1e-10)
+        one_minus_h = np.where(active, 1.0 - h_diag, 1.0)
+        # Mask before arithmetic: even an extreme residual on an excluded
+        # row must not overflow or produce 0/0 before its zero contribution.
+        score_residuals = np.where(active, residuals, 0.0)
         # HC2 meat: sum_i (u_i^2 / (1 - h_ii)) x_i x_i'; HC3 squares the
         # leverage denominator (jackknife-style, sandwich::vcovHC type="HC3").
         # pweight scaling matches the HC1 convention (w_i * u_i / sqrt(denom)
         # as score).
         lev_denom = one_minus_h**2 if vcov_type == "hc3" else one_minus_h
         if weights is not None and weight_type == "fweight":
-            factor = weights * (residuals**2) / lev_denom
+            factor = weights * (score_residuals**2) / lev_denom
             meat = X.T @ (X * factor[:, np.newaxis])
         elif weights is not None and weight_type == "pweight":
             # pweight scores carry w in the score, so meat = sum (w u / sqrt(denom))^2 x x'
-            scaled = weights * residuals / np.sqrt(lev_denom)
+            scaled = weights * score_residuals / np.sqrt(lev_denom)
             scores_hc2 = X * scaled[:, np.newaxis]
             meat = scores_hc2.T @ scores_hc2
         else:
             # aweight / unweighted: meat = sum_i (u_i^2 / denom_i) x_i x_i'
-            factor = (residuals**2) / lev_denom
-            # Zero out zero-weight rows under aweight (subpopulation invariance)
-            if weights is not None and np.any(weights == 0):
-                factor = factor * (weights > 0)
+            factor = (score_residuals**2) / lev_denom
             meat = X.T @ (X * factor[:, np.newaxis])
 
         # Sandwich without DOF adjustment for HC2/HC3 (matches sandwich::vcovHC
@@ -4402,6 +4406,11 @@ class LinearRegression:
         ``NotImplementedError``). On top of the sandwich, the class
         stores per-coefficient BM Satterthwaite DOF (``self._bm_dof``)
         and threads it into ``get_inference``.
+
+        HC2, HC3, and unweighted unclustered HC2-BM retain coefficients but
+        warn and return entirely NaN covariance at effective leverage
+        ``h_ii >= 1 - 1e-8``; coefficient SEs, tests, and intervals are NaN.
+        Weighted/clustered HC2-BM keeps its separate CR2 convention.
 
         For ``"conley"`` (Conley 1999 spatial-HAC) two operating modes are
         supported on the `LinearRegression` / `compute_robust_vcov` surface:

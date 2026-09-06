@@ -2769,13 +2769,12 @@ class TestOneWayBMScoresDOF:
         assert fin.all(), "oracle produced NaN on a well-conditioned design"
         np.testing.assert_allclose(dof[fin], oracle[fin], rtol=1e-10)
 
-    def test_noise_floor_guard_nans_leverage_one_contrast(self):
-        """A dummy column firing on exactly one observation gives that row
-        leverage 1: for the dummy's own coefficient the expanded
-        denominator's two terms cancel at ~1e20 scale down to the float
-        noise floor, so the guard must NaN it (the prior dense den > 0
-        would have kept the noise and inflated the DOF) while every
-        ordinary contrast in the same design stays finite."""
+    def test_leverage_one_guard_nans_all_contrasts_silently(self):
+        """A single-observation dummy suppresses all unweighted contrast DOFs.
+
+        The covariance guard owns the warning; this helper stays silent
+        when computing further contrasts from the same failed design.
+        """
         from diff_diff.linalg import _compute_bm_dof_from_contrasts
 
         rng = np.random.default_rng(9)
@@ -2785,11 +2784,11 @@ class TestOneWayBMScoresDOF:
         bread = X.T @ X
         h_diag = np.einsum("ij,ij->i", X @ np.linalg.pinv(bread), X)
         assert h_diag.max() > 1 - 1e-12
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
             dof = _compute_bm_dof_from_contrasts(X, bread, h_diag, np.eye(k))
-        assert np.isnan(dof[3]), "leverage-1 dummy coefficient must NaN"
-        assert np.isfinite(dof[:3]).all(), "ordinary contrasts must stay finite"
+        assert dof.shape == (4,) and np.isnan(dof).all()
+        assert not caught
 
 
 class TestCR2BMLowRankAdjustment:

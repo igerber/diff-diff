@@ -4309,6 +4309,29 @@ class TestReviewRound21Guards:
 
     KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
 
+    @pytest.mark.parametrize("vcov_type", ["hc2", "hc3"])
+    def test_regression_leverage_one_warns_once_and_discards_influence(self, vcov_type):
+        est = LWDiD(rolling="demean", vcov_type=vcov_type)
+        treatment = np.array([0.0, 0.0, 0.0, 1.0])
+        y = np.array([0.0, 1.0, 2.0, 5.0])
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            att, se, coefs, vcov, n_params, influence = est._estimate_reg(
+                y, treatment, None, None, 4
+            )
+        np.testing.assert_allclose(coefs, [1.0, 4.0], atol=1e-14)
+        assert att == pytest.approx(4.0) and n_params == 2
+        assert np.isnan(se) and np.isnan(vcov).all() and influence is None
+        assert len(caught) == 1
+        assert f"{vcov_type.upper()} variance is undefined" in str(caught[0].message)
+
+        # Keep the independent influence safeguard even after removing the
+        # duplicate covariance guard: aggregations must not reuse finite IFs.
+        X = np.column_stack([np.ones(4), treatment])
+        psi = est._ols_treatment_influence(X, np.linalg.inv(X.T @ X), y - X @ coefs, 4, 2, None)
+        assert np.isnan(psi).all()
+        assert est._finalize_influence(psi, se) is None
+
     def test_hc2_leverage_one_fails_closed_on_lwdid(self):
         rng = np.random.default_rng(0)
         rows = []
@@ -4317,8 +4340,12 @@ class TestReviewRound21Guards:
                 d = 1 if (u < 1 and t >= 4) else 0  # single treated unit
                 rows.append(dict(unit=u, time=t, treat=d, y=rng.normal() + d))
         df = pd.DataFrame(rows)
-        with pytest.warns(UserWarning, match="HC2 variance is undefined"):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
             res = LWDiD(rolling="demean", vcov_type="hc2").fit(df, **self.KW)
+        # Three post-period regressions plus the headline regression; each
+        # emits its own shared covariance diagnostic, with no local duplicate.
+        assert sum("HC2 variance is undefined" in str(w.message) for w in caught) == 4
         assert np.isfinite(res.att)
         from tests.conftest import assert_nan_inference
 
