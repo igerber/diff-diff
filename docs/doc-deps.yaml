@@ -786,6 +786,9 @@ sources:
       - path: diff_diff/guides/llms-full.txt
         section: "WooldridgeDiD"
         type: user_guide
+      - path: diff_diff/guides/llms-autonomous.txt
+        section: "§4.4 No never-treated group"
+        type: user_guide
       - path: diff_diff/guides/llms.txt
         section: "Estimators"
         type: user_guide

@@ -36,6 +36,8 @@ class WooldridgeDiDResults(BaseResults):
     ``aggregation_weights`` is keyed by aggregation type and records
     the active weighting scheme that wrote to each cached surface
     (surfaced in ``summary()`` / ``to_dataframe()`` / ``__repr__``).
+    ``unsupported_period_action`` records the fit's policy for periods
+    lacking comparison support (``"drop"`` or ``"error"``).
     """
 
     # ------------------------------------------------------------------ #
@@ -215,8 +217,12 @@ class WooldridgeDiDResults(BaseResults):
     df_convention: Optional[str] = None
     """The estimator's ``df_convention`` configuration echoed onto the
     results ("residual" | "cluster" | "normal"; added 3.9). Governs the OLS
-    analytical arms only; GLM inference is knob-independent. Appended LAST
-    (the generated ``__init__`` positional indexes are public API)."""
+    analytical arms only; GLM inference is knob-independent."""
+    unsupported_period_action: str = "drop"
+    """Fit-time comparison-support period policy (``"drop"`` or ``"error"``).
+    Appended last to preserve generated constructor positional indexes.
+    ``"error"`` fits only when no period needs comparison-support filtering;
+    other identification guards, including cohort exclusion, still apply."""
 
     # ------------------------------------------------------------------ #
     # Public methods                                                      #
@@ -234,6 +240,7 @@ class WooldridgeDiDResults(BaseResults):
         classical/hc2 inference (legacy hc1 pickles carried None there,
         which restores the pre-3.9 normal-theory aggregation for them).
         ``df_convention`` (added 3.9) defaults to ``"residual"``.
+        Missing ``unsupported_period_action`` defaults to ``"drop"``.
         """
         self.__dict__.update(state)
         # NOTE: check __dict__ membership, not hasattr - dataclass field
@@ -243,6 +250,7 @@ class WooldridgeDiDResults(BaseResults):
         self.__dict__.pop("_df_one_way", None)
         if "df_convention" not in self.__dict__:
             self.__dict__["df_convention"] = "residual"
+        self.__dict__.setdefault("unsupported_period_action", "drop")
         # M-086: pickles written before the "event" -> "event_study" value
         # unification carry only the old aggregation_weights key; mirror it
         # so both spellings resolve during the 3.9 window.
@@ -733,6 +741,7 @@ class WooldridgeDiDResults(BaseResults):
             "=" * 70,
             f"Method:          {self.method}",
             f"Control group:   {self.control_group}",
+            f"Unsupported period action: {self.unsupported_period_action}",
             f"Observations:    {self.n_obs}",
             f"Treated units:   {self.n_treated_units}",
             f"Control units:   {self.n_control_units}",
@@ -862,6 +871,7 @@ class WooldridgeDiDResults(BaseResults):
             "conf_int_upper": self.overall_conf_int[1],
             "method": self.method,
             "control_group": self.control_group,
+            "unsupported_period_action": self.unsupported_period_action,
             "n_obs": self.n_obs,
             "n_treated_units": self.n_treated_units,
             "n_control_units": self.n_control_units,

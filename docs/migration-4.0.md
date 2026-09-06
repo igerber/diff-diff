@@ -223,8 +223,15 @@ each one with its target.
 Smaller items that do not fit the families above — two inert `SyntheticDiD` constructor
 parameters, the `covariates=` constructor-to-`fit()` move, a retired transition warning, the
 Bacon roster re-homing, and the family-wide `anticipation` validation below. The appendix lists
-the ledger-derived removals/flips; [M-144], [M-145], and [M-146] are behavior tightenings with
-no removal/deprecation fields and appear here only.
+the ledger-derived removals/flips; [M-144], [M-145], and [M-146] are behavior tightenings,
+and [M-147] is an additive policy. These have no removal/deprecation fields and appear here only.
+
+- `WooldridgeDiD(unsupported_period_action="error")` ([M-147]) refuses periods lacking
+  comparison support before removing them. The default `"drop"` preserves filtering and
+  warnings, so existing callers need no migration. The policy applies to all three methods
+  independently of `rank_deficient_action`; other identification checks still apply.
+  Survey validation runs first, then `"error"` raises `ValueError` for unsupported periods;
+  `"drop"` retains the survey-domain `NotImplementedError` when removal would be required.
 
 - `anticipation` is validated across the family ([M-144], landing at 4.0): whole-valued floats
   that previously fit identically to their integer now raise — pass the `int`; bool and

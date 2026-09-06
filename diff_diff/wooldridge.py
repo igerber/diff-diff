@@ -971,6 +971,21 @@ class WooldridgeDiD(BaseEstimator):
         always take precedence; the logit/poisson arms are knob-independent
         (survey df or normal theory — an explicitly non-default value warns
         at fit time). The default flips to ``"cluster"`` at v4.
+    unsupported_period_action : {"drop", "error"}, default "drop"
+        How to handle periods lacking the required comparison support.
+        ``"drop"`` removes those periods before estimation and warns;
+        ``"error"`` raises ``ValueError`` before removing them. Support
+        requires a positive-weight never-treated observation on OLS with
+        ``control_group="never_treated"``; other paths also admit observations
+        before ``g - anticipation``. This policy is independent of
+        ``rank_deficient_action`` and does not control unidentified-cohort
+        exclusion. With ``survey_design``, ``"drop"`` still raises
+        ``NotImplementedError`` if periods would be removed, because survey
+        domain estimation is not supported; ``"error"`` raises ``ValueError``
+        after the existing pre-filter configuration, cohort, and survey-design
+        checks. Later validation (including covariate columns, nonlinear
+        outcomes, and some explicit cluster columns) is not preflighted: an
+        unsupported-period refusal can precede those input errors.
     """
 
     def __init__(
@@ -993,6 +1008,7 @@ class WooldridgeDiD(BaseEstimator):
         conley_kernel: str = "bartlett",
         conley_lag_cutoff: Optional[int] = None,
         df_convention: str = "residual",
+        unsupported_period_action: str = "drop",
     ) -> None:
         self._validate_constructor_args(
             method=method,
@@ -1022,6 +1038,8 @@ class WooldridgeDiD(BaseEstimator):
         self.conley_kernel = conley_kernel
         self.conley_lag_cutoff = conley_lag_cutoff
         self.df_convention = df_convention
+        self._validate_unsupported_period_action(unsupported_period_action)
+        self.unsupported_period_action = unsupported_period_action
         # Track whether the user explicitly opted out of the "hc1" default.
         # The auto-cluster-at-unit default in `_fit_ols` is suppressed only
         # when the user explicitly opts into a one-way family (``hc2``,
@@ -1032,6 +1050,12 @@ class WooldridgeDiD(BaseEstimator):
 
         self.is_fitted_: bool = False
         self._results: Optional[WooldridgeDiDResults] = None
+
+    @staticmethod
+    def _validate_unsupported_period_action(value: str) -> None:
+        """Validate the period policy without coercing non-string values."""
+        if not isinstance(value, str) or value not in ("drop", "error"):
+            raise ValueError(f"unsupported_period_action must be 'drop' or 'error', got {value!r}")
 
     @staticmethod
     def _validate_constructor_args(
@@ -1152,6 +1176,7 @@ class WooldridgeDiD(BaseEstimator):
         # mutated and passed the deprecated kwarg still sees the
         # FutureWarning before the raise.
         self.anticipation = validate_anticipation(self.anticipation)
+        self._validate_unsupported_period_action(self.unsupported_period_action)
 
         df = data.copy()
         df = _warn_and_fill_nan_cohort(df, cohort, stacklevel=2)
@@ -1501,6 +1526,18 @@ class WooldridgeDiD(BaseEstimator):
         }
 
         if _unsupported_periods:
+            if self.unsupported_period_action == "error":
+                _n_unsupported = int(sample[time].isin(_unsupported_periods).sum())
+                _plabels = ", ".join(str(t) for t in _unsupported_periods)
+                raise ValueError(
+                    f"Period(s) {_plabels} have no eligible comparison group "
+                    f"and contain {_n_unsupported} of {len(sample)} observations. "
+                    "unsupported_period_action='error' refuses the fit before "
+                    "removing these unsupported periods. Use "
+                    "unsupported_period_action='drop' to permit automatic "
+                    "filtering (unavailable with survey_design), or supply data "
+                    "with the required comparison support."
+                )
             if survey_design is not None:
                 # Same naive-subsetting problem the unidentified-cohort path
                 # refuses below: deleting rows removes their PSUs and strata
@@ -2015,6 +2052,7 @@ class WooldridgeDiD(BaseEstimator):
             and _pre_filter_unit_counts[g] > results._n_g_per_cohort[g]
         }
 
+        results.unsupported_period_action = self.unsupported_period_action
         self._results = results
         self.is_fitted_ = True
         return results
