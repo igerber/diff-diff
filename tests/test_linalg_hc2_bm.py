@@ -21,6 +21,8 @@ this file's tests cover backward-compat (unweighted is bit-equal to prior).
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -839,3 +841,268 @@ class TestCR2BMContrastDOF:
         dof = _compute_cr2_bm_contrast_dof(X, cluster, bread, C, weights=weights)
         assert dof.shape == (C.shape[1],)
         assert np.all(np.isfinite(dof))
+
+
+# =============================================================================
+# Leverage-one fail-closed contract (2026-09 maintainer decision): hc2 on
+# every weight type and unweighted, unclustered hc2_bm return an all-NaN vcov
+# (+ all-NaN DOF) with a warning, exactly like hc3, instead of flooring
+# 1 - h_ii. Point estimates are computed upstream and untouched.
+# =============================================================================
+
+
+def _probe_design():
+    """[1, D] with a single treated row (h_66 = 1, residual exactly 0)."""
+    X = np.column_stack([np.ones(6), np.array([0.0, 0.0, 0.0, 0.0, 0.0, 1.0])])
+    y = np.random.default_rng(0).normal(size=6)
+    resid = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+    return X, resid
+
+
+def _wls_resid(X, y, w):
+    beta = np.linalg.solve(X.T @ (X * w[:, None]), X.T @ (w * y))
+    return y - X @ beta
+
+
+class TestLeverageOneFailsClosed:
+    """Family-wide leverage-one guard on the shared one-way kernel."""
+
+    @pytest.mark.parametrize("vcov_type,label", [("hc2", "HC2"), ("hc2_bm", "HC2-BM")])
+    @pytest.mark.parametrize("return_dof", [False, True])
+    @pytest.mark.parametrize("entry", ["dispatch", "numpy"])
+    def test_probe_design_fails_closed(self, vcov_type, label, return_dof, entry):
+        from diff_diff.linalg import _compute_robust_vcov_numpy
+
+        X, resid = _probe_design()
+        fn = compute_robust_vcov if entry == "dispatch" else _compute_robust_vcov_numpy
+        with pytest.warns(UserWarning, match=rf"{label} variance is undefined: 1 observation"):
+            out = fn(X, resid, vcov_type=vcov_type, return_dof=return_dof)
+        if return_dof:
+            vcov, dof = out
+            assert dof.shape == (2,) and np.isnan(dof).all()
+        else:
+            vcov = out
+        assert vcov.shape == (2, 2) and np.isnan(vcov).all()
+
+    def test_message_lists_count_and_first_five_rows(self):
+        """Six singleton dummies -> six offending rows; the message states the
+        total and previews exactly five (both backends: the Rust re-dispatch
+        hands the message to the NumPy branch)."""
+        n = 12
+        X = np.column_stack([np.ones(n), np.eye(n)[:, :6]])
+        y = np.random.default_rng(1).normal(size=n)
+        resid = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        with pytest.warns(UserWarning) as rec:
+            v = compute_robust_vcov(X, resid, vcov_type="hc2")
+        msgs = [str(w.message) for w in rec if "variance is undefined" in str(w.message)]
+        assert len(msgs) == 1
+        assert "6 observation(s)" in msgs[0]
+        assert "rows [0, 1, 2, 3, 4, ...]" in msgs[0]
+        assert "vcov_type='classical'" in msgs[0] and "hc1" not in msgs[0]
+        assert np.isnan(v).all()
+
+    @pytest.mark.parametrize("weight_type", ["aweight", "pweight"])
+    @pytest.mark.parametrize("uniform", [True, False])
+    def test_weighted_hc2_fails_closed(self, weight_type, uniform):
+        """The WLS hat diagonal of a perfectly fitted positive-weight row is
+        exactly 1 regardless of the weight vector."""
+        X, _ = _probe_design()
+        y = np.random.default_rng(0).normal(size=6)
+        w = np.ones(6) if uniform else np.array([1.0, 2.0, 0.5, 1.5, 1.0, 3.0])
+        resid = _wls_resid(X, y, w)
+        with pytest.warns(UserWarning, match="HC2 variance is undefined: 1 observation"):
+            v = compute_robust_vcov(X, resid, weights=w, weight_type=weight_type, vcov_type="hc2")
+        assert np.isnan(v).all()
+
+    def test_fweight_singleton_count_one_fails_closed_count_two_does_not(self):
+        """Replicated-data semantics: a count-1 singleton row is leverage-one
+        (h = 1.0); with count 2 the two replicates share the parameter
+        (h = 0.5) and HC2 is defined."""
+        X, _ = _probe_design()
+        y = np.random.default_rng(0).normal(size=6)
+        w1 = np.ones(6)
+        with pytest.warns(UserWarning, match="HC2 variance is undefined"):
+            v1 = compute_robust_vcov(
+                X, _wls_resid(X, y, w1), weights=w1, weight_type="fweight", vcov_type="hc2"
+            )
+        assert np.isnan(v1).all()
+        w2 = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 2.0])
+        bread = X.T @ (X * w2[:, None])
+        assert np.isclose(_compute_hat_diagonals(X, bread)[5], 0.5)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            v2 = compute_robust_vcov(
+                X, _wls_resid(X, y, w2), weights=w2, weight_type="fweight", vcov_type="hc2"
+            )
+        assert np.isfinite(v2).all()
+
+    @staticmethod
+    def _fw0(x6):
+        x = np.array([0.0, 1.0, 2.0, 3.0, 4.0, x6])
+        X = np.column_stack([np.ones(6), x])
+        w = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 0.0])
+        y = np.random.default_rng(1).normal(size=6) + x
+        return X, w, y
+
+    @pytest.mark.parametrize("vcov_type", ["hc2", "hc3"])
+    @pytest.mark.parametrize("x6", [2.0 + np.sqrt(8.0), 7.0])  # h6 = 1.0 and 2.7
+    def test_zero_count_fweight_row_equals_literal_expansion(self, vcov_type, x6):
+        """An inert zero-count fweight row (its unweighted-quadform leverage is
+        meaningless: exactly 1.0, or 2.7) neither trips the guard nor breaks
+        the compressed == np.repeat-expansion identity."""
+        from diff_diff.linalg import _compute_robust_vcov_numpy
+
+        X, w, y = self._fw0(x6)
+        resid = _wls_resid(X, y, w)
+        h6 = _compute_hat_diagonals(X, X.T @ (X * w[:, None]))[5]
+        assert h6 >= 1.0 - 1e-8
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            v = _compute_robust_vcov_numpy(
+                X, resid, None, weights=w, weight_type="fweight", vcov_type=vcov_type
+            )
+        Xe, ye = X[:5], y[:5]
+        resid_e = ye - Xe @ np.linalg.lstsq(Xe, ye, rcond=None)[0]
+        v_e = _compute_robust_vcov_numpy(Xe, resid_e, None, vcov_type=vcov_type)
+        np.testing.assert_allclose(v, v_e, rtol=0, atol=1e-12)
+        assert np.isfinite(v).all()
+
+    @pytest.mark.parametrize("vcov_type,label", [("hc2", "HC2"), ("hc3", "HC3")])
+    def test_zero_count_mask_does_not_disable_guard(self, vcov_type, label):
+        """Mixed design: a positive-count singleton dummy (row 0, h = 1.0) next
+        to the zero-count row (h = 1.334): the guard fires, counts ONLY the
+        positive-count row, and lists only it."""
+        from diff_diff.linalg import _compute_robust_vcov_numpy
+
+        X, w, y = self._fw0(2.0 + np.sqrt(8.0))
+        X = np.column_stack([X, np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])])
+        h = _compute_hat_diagonals(X, X.T @ (X * w[:, None]))
+        assert np.isclose(h[0], 1.0) and h[5] > 1.0
+        resid = _wls_resid(X, y, w)
+        with pytest.warns(
+            UserWarning, match=rf"{label} variance is undefined: 1 observation"
+        ) as rec:
+            v = _compute_robust_vcov_numpy(
+                X, resid, None, weights=w, weight_type="fweight", vcov_type=vcov_type
+            )
+        assert "rows [0]" in str(rec[0].message)
+        assert np.isnan(v).all()
+
+    def test_weighted_hc2_bm_ones_keeps_clubsandwich_result(self):
+        """Documented boundary of the decision: pweight hc2_bm routes through
+        the clubSandwich singleton-CR2 port, whose generalized inverse returns
+        a finite (understated) variance at leverage one - even for no-op
+        weights. R clubSandwich::vcovCR(cluster=1:n, type="CR2") on this
+        design: SE 0.1915, Satterthwaite df 4."""
+        X, resid = _probe_design()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            v, dof = compute_robust_vcov(
+                X,
+                resid,
+                weights=np.ones(6),
+                weight_type="pweight",
+                vcov_type="hc2_bm",
+                return_dof=True,
+            )
+        assert np.isclose(np.sqrt(v[1, 1]), 0.19145263, atol=1e-6)
+        np.testing.assert_allclose(dof, [4.0, 4.0], atol=1e-8)
+
+    def test_over_one_leverage_fails_closed_no_hc1_fallback(self, monkeypatch):
+        """Numerically over-one leverage is inside the guard (round-10 ordering,
+        now family-wide): NaN + warning, never a result labeled hc2 that is
+        actually HC1. Runs the NumPy branch directly (the Rust dispatch does
+        not call the Python hat-diagonal helper)."""
+        import diff_diff.linalg as la
+
+        X, resid = small_design = _nondegenerate_design()
+        monkeypatch.setattr(
+            la,
+            "_compute_hat_diagonals",
+            lambda *a, **k: np.r_[1.0 + 1e-5, np.full(X.shape[0] - 1, 0.1)],
+        )
+        with pytest.warns(UserWarning) as rec:
+            v = la._compute_robust_vcov_numpy(X, resid, None, vcov_type="hc2")
+        msgs = [str(w.message) for w in rec]
+        assert any("HC2 variance is undefined" in m for m in msgs)
+        assert not any("Falling back to HC1" in m for m in msgs)
+        assert np.isnan(v).all()
+        del small_design
+
+    def test_legacy_rust_sentinel_re_dispatches(self, monkeypatch):
+        """A present-but-stale compiled kernel raises the retired over-one
+        sentinel; the dispatcher re-dispatches to the NumPy branch (fail
+        closed on a leverage-one design, finite on a defined design), never
+        HC1."""
+        import diff_diff.linalg as la
+
+        def _legacy(*a, **k):
+            raise ValueError(
+                "Hat-matrix diagonal exceeds 1 (max=1.000010); the design is near-singular."
+            )
+
+        monkeypatch.setattr(la, "HAS_RUST_BACKEND", True)
+        monkeypatch.setattr(la, "_rust_compute_robust_vcov_hc2", _legacy)
+        X, resid = _probe_design()
+        with pytest.warns(UserWarning, match="HC2 variance is undefined") as rec:
+            v = la.compute_robust_vcov(X, resid, vcov_type="hc2")
+        assert np.isnan(v).all()
+        assert not any("Falling back" in str(w.message) for w in rec)
+        Xn, rn = _nondegenerate_design()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            v_n = la.compute_robust_vcov(Xn, rn, vcov_type="hc2")
+        np.testing.assert_allclose(
+            v_n, la._compute_robust_vcov_numpy(Xn, rn, None, vcov_type="hc2"), rtol=1e-12
+        )
+
+    def test_high_but_defined_leverage_uses_true_denominator(self):
+        """No floor: the meat uses the true 1 - h_ii (h_max ~ 0.78 here)."""
+        from diff_diff.linalg import _compute_robust_vcov_numpy
+
+        X, resid = _nondegenerate_design()
+        bread = X.T @ X
+        h = _compute_hat_diagonals(X, bread)
+        assert 0.7 < h.max() < 1.0 - 1e-8
+        meat = X.T @ (X * (resid**2 / (1.0 - h))[:, None])
+        expected = np.linalg.solve(bread, np.linalg.solve(bread, meat).T).T
+        v = _compute_robust_vcov_numpy(X, resid, None, vcov_type="hc2")
+        np.testing.assert_allclose(v, expected, rtol=1e-12, atol=0)
+
+    def test_bm_dof_helper_all_nan_at_leverage_one(self):
+        from diff_diff.linalg import _compute_bm_dof_from_contrasts
+
+        X, _ = _probe_design()
+        bread = X.T @ X
+        h = _compute_hat_diagonals(X, bread)
+        contrasts = np.column_stack([np.eye(2), np.array([0.5, 0.5])])
+        dof = _compute_bm_dof_from_contrasts(X, bread, h, contrasts)
+        assert dof.shape == (3,) and np.isnan(dof).all()
+        Xn, _ = _nondegenerate_design()
+        bn = Xn.T @ Xn
+        dof_n = _compute_bm_dof_from_contrasts(
+            Xn, bn, _compute_hat_diagonals(Xn, bn), np.eye(Xn.shape[1])
+        )
+        assert np.isfinite(dof_n).all()
+
+    def test_warning_attributed_to_caller_numpy_path(self, monkeypatch):
+        import diff_diff.linalg as la
+
+        monkeypatch.setattr(la, "HAS_RUST_BACKEND", False)
+        X, resid = _probe_design()
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            la.compute_robust_vcov(X, resid, vcov_type="hc2")
+        lev = [w for w in rec if "variance is undefined" in str(w.message)]
+        assert len(lev) == 1 and lev[0].filename == __file__
+
+
+def _nondegenerate_design():
+    """Well-conditioned design with one high-leverage-but-defined row."""
+    rng = np.random.default_rng(3)
+    n = 40
+    X = np.column_stack([np.ones(n), rng.normal(size=(n, 2))])
+    X[0, 1] = 12.0  # h_max ~ 0.78
+    y = X @ np.array([1.0, 0.5, -0.3]) + rng.normal(size=n)
+    resid = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+    return X, resid

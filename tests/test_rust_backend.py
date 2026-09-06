@@ -9,6 +9,8 @@ These tests verify that:
 Tests are skipped if the Rust backend is not available.
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -3543,9 +3545,12 @@ class TestRustHC2Vcov:
     """Rust HC2 (leverage-corrected) vcov parity with the NumPy hc2 branch.
 
     The kernel mirrors `_compute_robust_vcov_numpy`'s unweighted `hc2` path
-    exactly (hat diagonals off the same bread, `u^2 / max(1 - h, 1e-10)` meat,
-    NO n/(n-k) factor); the near-singular hat-diagonal guard stays Python-side
-    (sentinel error -> documented warn-and-fall-back-to-HC1)."""
+    exactly (hat diagonals off the same bread, `u^2 / (1 - h)` meat with NO
+    floor, NO n/(n-k) factor); the leverage-one guard decision stays
+    Python-side: the kernel raises the "Hat-matrix leverage ~1" sentinel and
+    the dispatcher re-dispatches to the NumPy branch, which fails closed
+    (warning + all-NaN vcov). A stale kernel's legacy over-one sentinel takes
+    the same re-dispatch."""
 
     @staticmethod
     def _design(n=400, k=5, seed=0):
@@ -3575,42 +3580,82 @@ class TestRustHC2Vcov:
         np.testing.assert_allclose(v, v.T, rtol=0, atol=1e-12)
         assert np.all(np.diag(v) > 0)
 
-    def test_exact_unit_leverage_clamp_parity(self):
-        """h_ii == 1 exactly (a one-obs dummy is its own perfect predictor)
-        does NOT trip the > 1 + 1e-6 guard in either backend — both take the
-        max(1 - h, 1e-10) clamp path and must agree."""
-        from diff_diff.linalg import _compute_robust_vcov_numpy, compute_robust_vcov
-
-        n = 60
-        rng = np.random.default_rng(3)
+    @staticmethod
+    def _leverage_one_design(n=60, seed=3):
+        """h_00 == 1 exactly: a one-obs dummy is its own perfect predictor."""
+        rng = np.random.default_rng(seed)
         d = np.zeros(n)
         d[0] = 1.0
         X = np.column_stack([np.ones(n), d, rng.normal(size=n)])
         y = X @ np.array([1.0, 2.0, 0.5]) + rng.normal(size=n)
         resid = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        return X, resid
 
-        v_rust_path = compute_robust_vcov(X, resid, vcov_type="hc2")
-        v_numpy_path = _compute_robust_vcov_numpy(X, resid, None, vcov_type="hc2")
-        np.testing.assert_allclose(v_rust_path, v_numpy_path, rtol=1e-9, atol=1e-12)
+    def test_exact_unit_leverage_fails_closed_both_backends(self):
+        """h_ii == 1 exactly fails closed identically through the Rust
+        dispatch (sentinel -> NumPy re-dispatch) and the NumPy branch: one
+        "HC2 variance is undefined" warning and an all-NaN vcov each (asserted
+        with explicit isnan, never assert_allclose's NaN == NaN)."""
+        from diff_diff.linalg import _compute_robust_vcov_numpy, compute_robust_vcov
 
-    def test_sentinel_error_falls_back_to_hc1_with_warning(self, monkeypatch):
-        """The kernel's near-singular sentinel error must reproduce the NumPy
-        branch's warn-and-fall-back-to-HC1 through the dispatcher (the guard
-        decision is Python-side; the kernel only signals)."""
+        X, resid = self._leverage_one_design()
+        with pytest.warns(UserWarning, match="HC2 variance is undefined: 1 observation") as r1:
+            v_rust_path = compute_robust_vcov(X, resid, vcov_type="hc2")
+        with pytest.warns(UserWarning, match="HC2 variance is undefined: 1 observation") as r2:
+            v_numpy_path = _compute_robust_vcov_numpy(X, resid, None, vcov_type="hc2")
+        assert v_rust_path.shape == v_numpy_path.shape == (3, 3)
+        assert np.isnan(v_rust_path).all() and np.isnan(v_numpy_path).all()
+        assert sum("variance is undefined" in str(w.message) for w in r1) == 1
+        assert sum("variance is undefined" in str(w.message) for w in r2) == 1
+
+    def test_kernel_raises_leverage_one_sentinel(self):
+        """Direct kernel call on a leverage-one design raises the sentinel the
+        dispatcher keys on. This is the stale-kernel diagnostic: a kernel
+        built before the 2026-09 change returns a floored finite vcov here."""
+        from diff_diff._rust_backend import compute_robust_vcov_hc2
+
+        X, resid = self._leverage_one_design()
+        with pytest.raises(ValueError, match=r"Hat-matrix leverage ~1 \(count=1\)"):
+            compute_robust_vcov_hc2(np.ascontiguousarray(X), np.ascontiguousarray(resid))
+
+    def test_legacy_sentinel_fails_closed(self, monkeypatch):
+        """A stale kernel's legacy over-one sentinel re-dispatches to the NumPy
+        branch (the guard decision is Python-side; the kernel only signals):
+        fail closed on a leverage-one design, the finite NumPy hc2 vcov with
+        no warning on a defined design - never an HC1 fallback."""
         import diff_diff.linalg as la
-
-        X, resid = self._design()
 
         def _sentinel(*a, **k):
             raise ValueError(
                 "Hat-matrix diagonal exceeds 1 (max=1.000010); the design is near-singular."
             )
 
+        monkeypatch.setattr(la, "HAS_RUST_BACKEND", True)
         monkeypatch.setattr(la, "_rust_compute_robust_vcov_hc2", _sentinel)
-        with pytest.warns(UserWarning, match="Falling back to HC1"):
-            v = la.compute_robust_vcov(X, resid, vcov_type="hc2")
-        v_hc1 = la._compute_robust_vcov_numpy(X, resid, None, vcov_type="hc1")
-        np.testing.assert_allclose(v, v_hc1, rtol=1e-12, atol=1e-15)
+        X1, r1 = self._leverage_one_design()
+        with pytest.warns(UserWarning, match="HC2 variance is undefined") as rec:
+            v = la.compute_robust_vcov(X1, r1, vcov_type="hc2")
+        assert np.isnan(v).all()
+        assert not any("Falling back" in str(w.message) for w in rec)
+        X0, r0 = self._design()  # h_max ~ 0.05: defined
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            v0 = la.compute_robust_vcov(X0, r0, vcov_type="hc2")
+        np.testing.assert_allclose(
+            v0, la._compute_robust_vcov_numpy(X0, r0, None, vcov_type="hc2"), rtol=1e-12, atol=1e-15
+        )
+
+    def test_warning_attributed_to_caller_rust_path(self):
+        """The re-dispatch warns from the NumPy branch at the same depth as the
+        direct path, so the warning is attributed to this test file."""
+        from diff_diff.linalg import compute_robust_vcov
+
+        X, resid = self._leverage_one_design()
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            compute_robust_vcov(X, resid, vcov_type="hc2")
+        lev = [w for w in rec if "variance is undefined" in str(w.message)]
+        assert len(lev) == 1 and lev[0].filename == __file__
 
     def test_dispatch_declined_for_dof_and_weights(self):
         """return_dof / weights / cluster requests stay on the NumPy path

@@ -4317,8 +4317,15 @@ class TestReviewRound21Guards:
                 d = 1 if (u < 1 and t >= 4) else 0  # single treated unit
                 rows.append(dict(unit=u, time=t, treat=d, y=rng.normal() + d))
         df = pd.DataFrame(rows)
-        with pytest.warns(UserWarning, match="HC2 variance is undefined"):
+        with pytest.warns(UserWarning, match="HC2 variance is undefined") as rec:
             res = LWDiD(rolling="demean", vcov_type="hc2").fit(df, **self.KW)
+        # 2026-09: the SHARED kernel fails closed and owns the warning (one per
+        # leverage-one solve_ols call - this fit makes several); the former
+        # LWDiD-local guard and its differently worded duplicate are retired.
+        lev = [str(w.message) for w in rec if "HC2 variance is undefined" in str(w.message)]
+        assert len(lev) >= 1
+        assert all("Returning NaN vcov" in m for m in lev), "kernel-shaped warning expected"
+        assert not any("for this design" in m for m in lev), "retired local-guard wording"
         assert np.isfinite(res.att)
         from tests.conftest import assert_nan_inference
 

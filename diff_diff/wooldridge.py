@@ -909,7 +909,10 @@ class WooldridgeDiD(BaseEstimator):
         ``clubSandwich::vcovCR(lm(...), type="CR2") + coef_test()$df_Satt``).
         ``classical`` / ``hc2`` are supported via the same full-dummy route AND
         an auto-drop of the unit auto-cluster (one-way families don't compose
-        with cluster_ids per the linalg validator). Explicit ``cluster="X"`` +
+        with cluster_ids per the linalg validator). Under one-way ``hc2`` a
+        leverage-one row (e.g. a singleton cohort x period cell) has no
+        defined HC2 variance: the whole vcov fails closed (warning + NaN
+        inference on every cell and aggregate, point estimates preserved). Explicit ``cluster="X"`` +
         one-way ``vcov_type`` raises at the validator. ``"conley"`` (Conley 1999
         spatial-HAC) threads the ``conley_*`` params through ``solve_ols`` on the
         within-transform design (``conley_lag_cutoff=0`` = within-period spatial only;

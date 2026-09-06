@@ -3321,3 +3321,211 @@ class TestHC3SharedSurfaceHardening:
                 ), f"{name} rejected hc3 without naming it: {exc_info.value}"
         # The guard must actually be exercising a meaningful roster.
         assert len(checked) >= 8, f"roster unexpectedly small: {checked}"
+
+
+# =============================================================================
+# Leverage-one designs fail closed at estimator level (2026-09): hc2 on every
+# reachable one-way path and unweighted, unclustered hc2_bm. Point estimates
+# are preserved; every inference field is NaN. Every panel is built
+# unit-major from a fresh default_rng(0).
+# =============================================================================
+
+
+def _nan_scalar_inference(res, prefix=""):
+    from tests.conftest import assert_nan_inference
+
+    g = lambda name: getattr(res, f"{prefix}{name}")  # noqa: E731
+    assert_nan_inference(
+        {"se": g("se"), "t_stat": g("t_stat"), "p_value": g("p_value"), "conf_int": g("conf_int")}
+    )
+
+
+class TestLeverageOneEstimators:
+    LEV = "variance is undefined"
+
+    @staticmethod
+    def _did_panel():
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(4):
+            for t in (0, 1):
+                rows.append(dict(unit=u, post=t, treated=int(u == 0), y=rng.normal()))
+        return pd.DataFrame(rows)
+
+    @pytest.mark.parametrize("vcov_type,label", [("hc2", "HC2"), ("hc2_bm", "HC2-BM")])
+    def test_did_single_treated_unit(self, vcov_type, label):
+        """4 units x 2 periods, one treated: the treated x post cell has one
+        row (h = 1). Non-saturated (n=8, k=4), so no unrelated df warning."""
+        df = self._did_panel()
+        kw = dict(outcome="y", treatment="treated", time="post")
+        ref = DifferenceInDifferences(vcov_type="classical").fit(df, **kw)
+        assert np.isfinite(ref.se)  # classical is defined here (residual df 4)
+        with pytest.warns(UserWarning, match=f"{label} {self.LEV}") as rec:
+            res = DifferenceInDifferences(vcov_type=vcov_type).fit(df, **kw)
+        assert sum(self.LEV in str(w.message) for w in rec) == 1
+        assert np.isclose(res.att, ref.att, atol=1e-12)
+        _nan_scalar_inference(res)
+
+    @staticmethod
+    def _mpd_panel():
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(8):
+            for t in range(1, 5):
+                rows.append(
+                    dict(
+                        unit=u,
+                        time=t,
+                        treated=int(u == 0),
+                        y=rng.normal() + (1.0 if (u == 0 and t >= 3) else 0.0),
+                    )
+                )
+        return pd.DataFrame(rows)
+
+    def test_multi_period_unclustered_hc2_bm(self):
+        """The unclustered hc2_bm event-study path (also the only production
+        consumer of the one-way BM-DOF helper): per-period and post-average
+        inference all NaN, every point estimate preserved."""
+        df = self._mpd_panel()
+        kw = dict(outcome="y", treatment="treated", time="time", post_periods=[3, 4])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ref = MultiPeriodDiD(vcov_type="hc1").fit(df, **kw)
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            res = MultiPeriodDiD(vcov_type="hc2_bm").fit(df, **kw)
+        lev = [w for w in rec if self.LEV in str(w.message)]
+        assert len(lev) == 1 and "HC2-BM" in str(lev[0].message)
+        assert np.isclose(res.avg_att, ref.avg_att, atol=1e-12)
+        _nan_scalar_inference(res, prefix="avg_")
+        for p, eff in res.period_effects.items():
+            assert np.isfinite(eff.effect) and np.isclose(eff.effect, ref.period_effects[p].effect)
+            _nan_scalar_inference(eff)
+
+    def test_twfe_pooled_event_study_without_unit_hc2_bm(self):
+        """event_study=True, spec='pooled', no unit=: cluster_override is None,
+        so this is the one-way hc2_bm branch. Asserted elementwise on the
+        EventStudyResults arrays (reference row att is exactly 0.0)."""
+        df = self._mpd_panel()
+        kw = dict(
+            outcome="y",
+            treatment="treated",
+            event_study=True,
+            spec="pooled",
+            time="time",
+            post_periods=[3, 4],
+        )
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            r = TwoWayFixedEffects(vcov_type="hc2_bm").fit(df, **kw)
+        lev = [w for w in rec if self.LEV in str(w.message)]
+        assert len(lev) == 1 and "HC2-BM" in str(lev[0].message)
+        assert np.isfinite(r.att).all()
+        assert np.isclose(r.att[r.is_reference], 0.0).all()
+        for name in ("se", "t_stat", "p_value", "conf_int_lower", "conf_int_upper"):
+            assert np.isnan(getattr(r, name)).all(), name
+        # Control: unit= restores the auto-cluster -> clustered CR2 (unchanged
+        # path): no leverage warning, finite non-reference SEs, same points.
+        # t/p/CI are NOT asserted: on this small design they are already NaN
+        # from the pre-existing Satterthwaite-reliability guard.
+        with warnings.catch_warnings(record=True) as rec_c:
+            warnings.simplefilter("always")
+            rc = TwoWayFixedEffects(vcov_type="hc2_bm").fit(df, unit="unit", **kw)
+        assert not any(self.LEV in str(w.message) for w in rec_c)
+        assert np.isfinite(rc.se[~rc.is_reference]).all()
+        np.testing.assert_allclose(rc.att, r.att, atol=1e-12)
+
+    def test_twfe_static_explicit_hc2(self):
+        """Explicit hc2 drops the unit auto-cluster; a single treated
+        (unit, period) cell is leverage-one on the full-dummy design."""
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(6):
+            for t in range(1, 4):
+                rows.append(
+                    dict(
+                        unit=u,
+                        time=t,
+                        post=int(t == 3),
+                        treated=int(u == 0 and t == 3),
+                        y=rng.normal(),
+                    )
+                )
+        df = pd.DataFrame(rows)
+        kw = dict(outcome="y", treatment="treated", post="post", unit="unit")
+        ref = TwoWayFixedEffects(vcov_type="classical").fit(df, **kw)
+        with pytest.warns(UserWarning, match=f"HC2 {self.LEV}") as rec:
+            res = TwoWayFixedEffects(vcov_type="hc2").fit(df, **kw)
+        assert sum(self.LEV in str(w.message) for w in rec) == 1
+        assert np.isclose(res.att, ref.att, atol=1e-12) and np.isclose(
+            res.att, 0.6273417, atol=1e-6
+        )
+        _nan_scalar_inference(res)
+
+    @staticmethod
+    def _staggered_panel():
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(8):
+            g = 3 if u == 0 else (4 if u in (1, 2) else 0)
+            for t in range(1, 7):
+                rows.append(
+                    dict(
+                        unit=u,
+                        time=t,
+                        first_treat=g,
+                        y=rng.normal() + (1.0 if (g and t >= g) else 0.0),
+                    )
+                )
+        return pd.DataFrame(rows)
+
+    def test_sun_abraham_singleton_cohort_hc2(self):
+        """A singleton cohort makes every (cohort, event-time) interaction a
+        single-row column: whole-vcov NaN, every point estimate preserved."""
+        df = self._staggered_panel()
+        kw = dict(outcome="y", unit="unit", time="time", first_treat="first_treat")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ref = SunAbraham(vcov_type="hc1").fit(df, **kw)
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            res = SunAbraham(vcov_type="hc2").fit(df, **kw)
+        lev = [w for w in rec if self.LEV in str(w.message)]
+        assert len(lev) == 1 and "HC2 " in str(lev[0].message)
+        assert np.isclose(res.overall_att, ref.overall_att, atol=1e-10)
+        assert np.isclose(res.overall_att, 1.127459, atol=1e-6)
+        _nan_scalar_inference(res, prefix="overall_")
+        for e, d in res.event_study_effects.items():
+            assert np.isfinite(d["effect"]) and np.isnan(d["se"])
+        for c, d in res.cohort_effects.items():
+            assert np.isfinite(d["effect"]) and np.isnan(d["se"])
+
+    def test_wooldridge_ols_singleton_cohort_hc2(self):
+        """WooldridgeDiD has no hc3 arm, so this is the first time an all-NaN
+        one-way vcov flows through its cell extraction and aggregation:
+        overall and per-cell points preserved, every se NaN."""
+        from diff_diff import WooldridgeDiD
+
+        df = self._staggered_panel()
+        kw = dict(outcome="y", unit="unit", time="time", first_treat="first_treat")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ref = WooldridgeDiD(method="ols", vcov_type="hc1").fit(df, **kw)
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            res = WooldridgeDiD(method="ols", vcov_type="hc2").fit(df, **kw)
+        lev = [w for w in rec if self.LEV in str(w.message)]
+        assert len(lev) == 1 and "HC2 " in str(lev[0].message)
+        assert np.isfinite(res.overall_att) and np.isclose(
+            res.overall_att, ref.overall_att, atol=1e-10
+        )
+        _nan_scalar_inference(res, prefix="overall_")
+        assert res.cluster_name is None
+        assert len(res.group_time_effects) > 0
+        for key, d in res.group_time_effects.items():
+            assert np.isfinite(d["att"]) and np.isclose(
+                d["att"], ref.group_time_effects[key]["att"]
+            )
+            from tests.conftest import assert_nan_inference
+
+            assert_nan_inference(d)

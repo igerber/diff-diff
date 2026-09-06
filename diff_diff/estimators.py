@@ -109,7 +109,12 @@ class DifferenceInDifferences(BaseEstimator):
           (library default). With ``cluster=``, uses CR1 (Liang-Zeger).
         - ``"hc2"``: leverage-corrected meat (one-way only). Errors with
           ``cluster=``; use ``"hc2_bm"`` for clustered Bell-McCaffrey.
-        - ``"hc2_bm"``: one-way HC2 + Imbens-Kolesar (2016) Satterthwaite DOF;
+          A leverage-one observation has no defined HC2 variance and the
+          vcov fails closed (warning + NaN inference, point estimate
+          preserved) rather than flooring ``1 - h_ii``.
+        - ``"hc2_bm"``: one-way HC2 + Imbens-Kolesar (2016) Satterthwaite DOF
+          (unweighted and unclustered, it shares the ``hc2`` leverage-one
+          fail-closed contract);
           with ``cluster=``, Pustejovsky-Tipton (2018) CR2 cluster-robust.
           ``MultiPeriodDiD(cluster=..., vcov_type="hc2_bm")`` is supported and
           uses a cluster-aware Bell-McCaffrey contrast DOF for the
@@ -2513,9 +2518,14 @@ class MultiPeriodDiD(DifferenceInDifferences):
           (library default). With ``cluster=``, uses CR1 (Liang-Zeger).
         - ``"hc2"``: leverage-corrected meat (one-way only). Errors with
           ``cluster=``; use ``"hc2_bm"`` without cluster for Bell-McCaffrey.
+          A leverage-one observation has no defined HC2 variance and the
+          vcov fails closed (warning + NaN inference, point estimate
+          preserved) rather than flooring ``1 - h_ii``.
         - ``"hc2_bm"``: one-way HC2 + Imbens-Kolesar (2016) Satterthwaite DOF
           per coefficient plus a contrast-aware DOF for the post-period-average
-          ATT. With ``cluster=``, dispatches to Pustejovsky-Tipton (2018)
+          ATT (unclustered, it shares the ``hc2`` leverage-one fail-closed
+          contract: all-NaN vcov and DOF, point estimates preserved). With
+          ``cluster=``, dispatches to Pustejovsky-Tipton (2018)
           CR2 cluster-robust with a Bell-McCaffrey Satterthwaite contrast DOF
           on the post-period average (see ``cluster`` above for parity
           details). Weighted CR2-BM (``survey_design=``) is still gated.

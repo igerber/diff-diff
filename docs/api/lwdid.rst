@@ -247,10 +247,11 @@ permutation encodes — complete randomization of the treatment labels
 authors' package convention (inclusive Phipson-Smyth counting; see the
 methodology registry's RI Note).
 
-**HC3 caveat** — HC3 requires the leverage of every observation to be
-bounded away from one; a perfectly-leveraged design (e.g. a single
-treated unit) has no defined HC3 variance and fails closed with a
-warning and NaN inference. Use classical exact inference there.
+**HC2 / HC3 caveat** — HC2 and HC3 require the leverage of every
+observation to be bounded away from one; a perfectly-leveraged design
+(e.g. a single treated unit) has no defined HC2 or HC3 variance and fails
+closed with a warning and NaN inference (the point estimate is preserved).
+Use classical exact inference there.
 
 **PSM inference** — ``estimation_method='psm'`` reports the matched ATT
 point estimate with NaN inference: no valid matching variance estimator
