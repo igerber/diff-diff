@@ -1000,7 +1000,7 @@ t = np.arange(1, 6, dtype=float)
 elapsed = t - 1
 pre, post = np.array([1, 2]), np.array([3, 4])
 d2 = np.array([0, .10, .30, .45, .60])
-r1_base, r2_base = .50, .20  # unequal initial survival
+r1_base, r2_base = .50, .20  # unequal initial cumulative hazards (and hence survivals)
 r2 = r2_base + d2
 r1_cd = r1_base + d2 + .04 * elapsed
 c = np.mean((r1_cd[pre] - r1_base - d2[pre]) / elapsed[pre])
