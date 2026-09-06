@@ -32,7 +32,6 @@ skip-reason vocabulary) and the DoubleML parity anchors.
 """
 
 import decimal
-import inspect
 import secrets
 import warnings
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Union, cast
@@ -41,7 +40,13 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
-from diff_diff._crossfit import DegenerateFoldError, assign_folds, cross_fit_predict
+from diff_diff._crossfit import (
+    DegenerateFoldError,
+    _probe_learner_cloneability,
+    _validate_sample_weight_support,
+    assign_folds,
+    cross_fit_predict,
+)
 from diff_diff._dr_scores import (
     _chang_rcs_score_augmented_with_slope,
     chang_panel_score,
@@ -99,7 +104,9 @@ def _validate_n_folds(value: Any) -> int:
     return int(value)
 
 
-def _validate_learner_spec(spec: Any, *, kind: str, param_name: str) -> None:
+def _validate_learner_spec(
+    spec: Any, *, kind: str, param_name: str, require_sample_weight: bool = False
+) -> None:
     """Eager learner-spec validation naming the ACTUAL constructor param.
 
     ``make_learner`` hard-codes ``param_name="learner"`` for objects, which
@@ -114,38 +121,9 @@ def _validate_learner_spec(spec: Any, *, kind: str, param_name: str) -> None:
             )
         return
     validate_learner(spec, kind=kind, param_name=param_name)
-
-
-def _validate_learner_sample_weight_support(spec: Any, param_name: str) -> None:
-    """Reject a user learner whose ``fit`` cannot take ``sample_weight``.
-
-    Declared-survey fits pass ``sample_weight`` into ``cross_fit_predict``,
-    which forwards it BY KEYWORD (``fit_kwargs = {"sample_weight": w_fit}``)
-    and deliberately propagates the learner's ``TypeError`` — so a learner
-    whose ``fit`` has neither a keyword-addressable ``sample_weight``
-    parameter (POSITIONAL_OR_KEYWORD or KEYWORD_ONLY; POSITIONAL_ONLY does
-    not qualify) nor ``**kwargs`` would hard-crash mid-fit. Raises
-    ``TypeError`` up front instead (the ``validate_learner`` convention for
-    object-capability failures).
-    """
-    try:
-        sig = inspect.signature(spec.fit)
-    except (TypeError, ValueError):  # pragma: no cover - exotic callables
-        return  # cannot introspect; let cross_fit_predict surface any error
-    for param in sig.parameters.values():
-        if param.kind is inspect.Parameter.VAR_KEYWORD:
-            return
-        if param.name == "sample_weight" and param.kind in (
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            inspect.Parameter.KEYWORD_ONLY,
-        ):
-            return
-    raise TypeError(
-        f"survey_design= requires learners whose fit() accepts sample_weight "
-        f"by keyword; the {param_name} object {type(spec).__name__!r} does not. "
-        "Add a sample_weight parameter (or **kwargs) to its fit(), or use a "
-        "library-native learner name."
-    )
+    clone = _probe_learner_cloneability(spec, kind=kind, param_name=param_name)
+    if require_sample_weight:
+        _validate_sample_weight_support(clone, param_name=param_name)
 
 
 def _raw_label_is_infinite(value: Any) -> bool:
@@ -398,7 +376,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         self.results_: Optional[DMLDiDResults] = None
         self.is_fitted_ = False
 
-    def _revalidate_config(self) -> None:
+    def _revalidate_config(self, *, require_sample_weight: bool = False) -> None:
         """Validate + normalize EVERY config param from current attributes.
 
         Called at ``__init__`` and again at the start of ``fit()`` (the
@@ -411,9 +389,17 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         """
         self.anticipation = validate_anticipation(self.anticipation)
         _validate_learner_spec(
-            self.propensity_learner, kind="classifier", param_name="propensity_learner"
+            self.propensity_learner,
+            kind="classifier",
+            param_name="propensity_learner",
+            require_sample_weight=require_sample_weight,
         )
-        _validate_learner_spec(self.outcome_learner, kind="regressor", param_name="outcome_learner")
+        _validate_learner_spec(
+            self.outcome_learner,
+            kind="regressor",
+            param_name="outcome_learner",
+            require_sample_weight=require_sample_weight,
+        )
         # Specs stored VERBATIM (a passed learner object is the same object
         # in get_params()); fit-time make_learner does the resolution.
         self.n_folds = _validate_n_folds(self.n_folds)
@@ -475,13 +461,15 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         time: str,
         first_treat: str,
         covariates: Optional[Iterable[str]],
+        *,
+        require_sample_weight: bool = False,
     ) -> Tuple[pd.DataFrame, List[str]]:
         """Validate inputs; return the numeric working frame + covariate list."""
         # FULL config re-validation FIRST (mutation defense; anticipation
         # leads inside _revalidate_config — the ordering is load-bearing for
         # the anticipation-policy suite, which fits a bare DataFrame and
         # requires the config error to precede column checks).
-        self._revalidate_config()
+        self._revalidate_config(require_sample_weight=require_sample_weight)
 
         # covariates are REQUIRED (Chang's estimator exists for the
         # high-dimensional-X setting).
@@ -1267,7 +1255,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     D_cell,
                     folds,
                     predict_method="predict_proba",
-                    context_label=f"{context} propensity",
+                    context_label=f"{context} propensity_learner",
                     sample_weight=w_cell,
                 )
                 or_res = cross_fit_predict(
@@ -1277,7 +1265,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     folds,
                     predict_method="predict",
                     fit_mask=(D_cell == 0.0),
-                    context_label=f"{context} outcome",
+                    context_label=f"{context} outcome_learner",
                     sample_weight=w_cell,
                 )
         except DegenerateFoldError as exc:
@@ -1678,7 +1666,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     D_cell,
                     folds,
                     predict_method="predict_proba",
-                    context_label=f"{context} propensity",
+                    context_label=f"{context} propensity_learner",
                     sample_weight=w_cell,
                 )
                 r_cell = (T_cell - lam_hat) * y_cell
@@ -1689,7 +1677,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     folds,
                     predict_method="predict",
                     fit_mask=(D_cell == 0.0),
-                    context_label=f"{context} outcome",
+                    context_label=f"{context} outcome_learner",
                     sample_weight=w_cell,
                 )
         except DegenerateFoldError as exc:
@@ -1895,8 +1883,16 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             i.i.d. sampling — Theorem 2's coverage claim does not carry
             over (REGISTRY DMLDiD Notes).
         """
+        self.results_ = None
+        self.is_fitted_ = False
         df, covariates = self._validate_and_prepare(
-            data, outcome, unit, time, first_treat, covariates
+            data,
+            outcome,
+            unit,
+            time,
+            first_treat,
+            covariates,
+            require_sample_weight=survey_design is not None,
         )
 
         # --- Survey/cluster resolution (CS transliteration, staggered.py) ---
@@ -2014,17 +2010,6 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 )
 
         weighted_moments = survey_design is not None
-        if weighted_moments:
-            # Learner capability gate: cross_fit_predict passes sample_weight
-            # BY KEYWORD, so a user learner without a keyword-addressable
-            # sample_weight (or **kwargs) would raise a raw TypeError mid-fit.
-            for spec, pname in (
-                (self.propensity_learner, "propensity_learner"),
-                (self.outcome_learner, "outcome_learner"),
-            ):
-                if isinstance(spec, str):
-                    continue  # native learners all accept sample_weight
-                _validate_learner_sample_weight_support(spec, pname)
 
         if self.panel:
             precomputed = self._precompute(
