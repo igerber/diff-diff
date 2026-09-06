@@ -1503,6 +1503,44 @@ results.print_summary()
 plot_bacon(results)
 ```
 
+### TWFE Weight Diagnostics
+
+What a TWFE regression implicitly weights on staggered data. Distinct from
+`twowayfeweights` (dCDH), which weights (unit, time) cells: these weight
+ATT(g,t) parameters. Ported from Brantly Callaway's `twfeweights` R package
+(MIT); methodology Baker, Callaway, Cunningham, Goodman-Bacon & Sant'Anna
+(2025).
+
+```python
+attgt_weights(
+    results,                        # CallawaySantAnnaResults, or a (g,t) frame
+    aggregation="twfe",             # "twfe" | "overall" (ATT^O) | "simple"
+    data=None, unit=None, time=None, first_treat=None,   # frame path only
+    weights=None,                   # unit-level sampling weights
+) -> ATTGTWeightsResult
+
+decompose_twfe_weights(
+    data,                           # balanced long panel (it re-estimates)
+    outcome=, unit=, time=, first_treat=,
+    method="fwl",
+    covariates=None,
+    base_period="first_period",     # or "gmin1"
+    balance_covariates=None,        # enables result.covariate_balance()
+    weights=None,
+) -> TWFEDecompositionResult
+
+plot_twfe_weights(result, kind="auto")   # "weights" | "balance"
+```
+
+`aggregation="twfe"` requires a fit with `base_period="universal"` and
+`control_group="never_treated"`; it raises otherwise. ATT^O and ATT^simple
+weights are non-negative and sum to one, so comparing `implied_att` across
+the three aggregations shows what the TWFE specification costs.
+
+`decompose_twfe_weights` takes the raw panel rather than a fitted result
+because it re-estimates. It is tied to `attgt_weights` by an identity:
+`attgt_weights(cs, aggregation="twfe").implied_att == decompose_twfe_weights(panel, ...).estimate`.
+
 ### StaggeredTripleDifference
 
 DEPRECATED in 3.9, removed in 4.0 (ledger row M-013). Use
@@ -1966,6 +2004,33 @@ Returned by `BaconDecomposition.fit()` (and the deprecated `bacon_decompose()` w
 | `decomposition_error` | `float` | Error: TWFE minus weighted sum |
 
 **Methods:** `summary()`, `print_summary()`, `to_dataframe()`
+
+### ATTGTWeightsResult
+
+Diagnostic result from `attgt_weights`. No inference quintet - the
+decomposition is an algebraic identity.
+
+- `weights`: DataFrame with `group`, `time`, `post`, `weight`, `att`
+- `implied_att`: `sum(weight * att)` - the TWFE coefficient when
+  `aggregation="twfe"`
+- `n_negative`, `negative_weight_share`: the staggered-TWFE pathology
+- `aggregation`, `source`, `control_group`, `base_period`, `n_cells`
+- `summary()`, `to_dataframe()`, `to_dict()`
+
+### TWFEDecompositionResult
+
+Diagnostic result from `decompose_twfe_weights`.
+
+- `cells`: DataFrame with `group`, `time`, `post`, `att`, `weight`, `ess`,
+  `remainder`
+- `estimate` == `decomposition` + `remainder`
+- `pretrend_bias`: contribution of PRE-treatment cells, i.e. of
+  parallel-trends violations rather than of treatment
+- `post_only`, `effective_sample_size`, `covariates`, `base_period`
+- `covariate_balance(level="summary"|"cell", standardize=True,
+  post_only=True)`: implicit-weight covariate balance; raises when
+  `balance_covariates=` was not requested
+- `summary()`, `to_dataframe()`, `to_dict()`
 
 ### Comparison2x2
 

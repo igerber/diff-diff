@@ -21,6 +21,9 @@
 # Members resolve to the first entry (the primary module) for doc lookup.
 # ────────────���─────────────────────────────────────────────────────────
 groups:
+  twfe_weights:
+    - diff_diff/twfe_weights.py
+    - diff_diff/twfe_weights_results.py
   staggered:
     - diff_diff/staggered.py
     - diff_diff/staggered_aggregation.py
@@ -1124,6 +1127,33 @@ sources:
 
   # ── BaconDecomposition ───���─────────────────────────────────────────
 
+  diff_diff/twfe_weights.py:
+    drift_risk: low
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "TWFE Weight Diagnostics"
+        type: methodology
+      - path: docs/api/twfe_weights.rst
+        type: api_reference
+      - path: README.md
+        section: "Diagnostics & Sensitivity (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Diagnostics and Sensitivity Analysis"
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "TWFE Weight Diagnostics"
+        type: user_guide
+  diff_diff/twfe_weights_results.py:
+    drift_risk: low
+    docs:
+      - path: docs/api/twfe_weights.rst
+        type: api_reference
+      - path: docs/methodology/REGISTRY.md
+        section: "TWFE Weight Diagnostics"
+        type: methodology
   diff_diff/bacon.py:
     drift_risk: low
     docs:

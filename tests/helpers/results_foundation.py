@@ -43,6 +43,48 @@ def make_constructed_diagnostics() -> Dict[str, Any]:
     poly = pd.DataFrame({"rdplot_x": [-1.0, 0.0, 1.0], "rdplot_y": [0.9, 1.4, 2.1]})
     coef = pd.DataFrame({"side": ["left", "right"], "coef_0": [1.0, 2.0]})
 
+    # TWFE weight diagnostics: a 2-cohort x 2-period grid with one negative
+    # weight, so summary() exercises the negative-weight branch.
+    attgt_weight_cells = pd.DataFrame(
+        {
+            "group": [2, 2, 3, 3],
+            "time": [2, 3, 2, 3],
+            "post": [1, 1, 0, 1],
+            "weight": [0.6, 0.5, -0.2, 0.1],
+            "att": [1.0, 1.2, 0.0, 0.8],
+        }
+    )
+    decomposition_cells = pd.DataFrame(
+        {
+            "group": [2, 2, 3, 3],
+            "time": [2, 3, 2, 3],
+            "post": [1, 1, 0, 1],
+            "att": [1.0, 1.2, 0.0, 0.8],
+            "weight": [0.4, 0.3, 0.1, 0.2],
+            "ess": [8.0, 8.0, 6.0, 6.0],
+            "remainder": [0.0, 0.0, 0.0, 0.0],
+        }
+    )
+    decomposition_balance = pd.DataFrame(
+        {
+            "group": [2, 2, 3, 3],
+            "time": [2, 3, 2, 3],
+            "post": [1, 1, 0, 1],
+            "covariate": ["x1", "x1", "x1", "x1"],
+            "unweighted_treated": [0.5, 0.5, 0.4, 0.4],
+            "unweighted_control": [0.3, 0.3, 0.2, 0.2],
+            "unweighted_diff": [0.2, 0.2, 0.2, 0.2],
+            "weighted_treated": [0.5, 0.5, 0.4, 0.4],
+            "weighted_control": [0.45, 0.45, 0.38, 0.38],
+            "weighted_diff": [0.05, 0.05, 0.02, 0.02],
+            "sd": [1.0, 1.0, 1.0, 1.0],
+            "unweighted_log_ratio_sd": [0.01, 0.01, 0.02, 0.02],
+            "weighted_log_ratio_sd": [0.005, 0.005, 0.01, 0.01],
+            "unweighted_frac_extreme": [0.05, 0.05, 0.06, 0.06],
+            "weighted_frac_extreme": [0.04, 0.04, 0.05, 0.05],
+        }
+    )
+
     qug = diff_diff.QUGTestResults(
         t_stat=1.2,
         p_value=0.23,
@@ -270,6 +312,32 @@ def make_constructed_diagnostics() -> Dict[str, Any]:
             schema={"schema_version": "2.0", "estimator": "DiDResults"},
             interpretation="All applicable checks passed.",
             applicable_checks=("parallel_trends",),
+        ),
+        "ATTGTWeightsResult": diff_diff.ATTGTWeightsResult(
+            weights=attgt_weight_cells,
+            aggregation="twfe",
+            implied_att=float((attgt_weight_cells["weight"] * attgt_weight_cells["att"]).sum()),
+            n_negative=1,
+            negative_weight_share=0.25,
+            n_cells=len(attgt_weight_cells),
+            source="CallawaySantAnnaResults",
+            control_group="never_treated",
+            base_period="universal",
+        ),
+        "TWFEDecompositionResult": diff_diff.TWFEDecompositionResult(
+            cells=decomposition_cells,
+            method="fwl",
+            estimate=float((decomposition_cells["weight"] * decomposition_cells["att"]).sum()),
+            decomposition=float((decomposition_cells["weight"] * decomposition_cells["att"]).sum()),
+            remainder=0.0,
+            pretrend_bias=0.0,
+            post_only=0.5,
+            base_period="first_period",
+            covariates=("x1",),
+            effective_sample_size=42.0,
+            n_units=12,
+            n_periods=4,
+            balance=decomposition_balance,
         ),
     }
     return instances
