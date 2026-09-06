@@ -128,6 +128,7 @@ class TestWooldridgeDiDAPI:
         assert est.bootstrap_weights == "rademacher"
         assert est.seed is None
         assert est.rank_deficient_action == "warn"
+        assert est.unsupported_period_action == "drop"
         assert not est.is_fitted_
 
     def test_invalid_method_raises(self):
@@ -3856,6 +3857,137 @@ class TestComparisonSupportFiltering:
                 uid += 1
         return pd.DataFrame(rows)
 
+    @staticmethod
+    def _full_support(seed=21):
+        """Never-treated + cohorts 3, 5 over t=1..6: every period has a comparison."""
+        rng = np.random.default_rng(seed)
+        rows = []
+        for u in range(120):
+            g = 0 if u < 40 else (3 if u < 80 else 5)
+            for t in range(1, 7):
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "cohort": g,
+                        "y": rng.standard_normal() + 1.0 * int(g > 0 and t >= g),
+                    }
+                )
+        return pd.DataFrame(rows)
+
+    @staticmethod
+    def _branch_one(nt_periods=4, seed=5):
+        """`never_treated` + OLS branch-1 panel.
+
+        Never-treated units observed t=1..`nt_periods`; cohorts 3 and 6 observed
+        t=1..6. With `nt_periods=4`, periods 5 and 6 have no never-treated row
+        and are unsupported on that branch even though cohort 6 is still
+        untreated at t=5 (observed but INELIGIBLE there).
+        """
+        rng = np.random.default_rng(seed)
+        rows = []
+        uid = 0
+        for _ in range(30):
+            for t in range(1, nt_periods + 1):
+                rows.append(
+                    {"unit": uid, "time": t, "cohort": 0, "y": 0.2 * t + rng.normal(0, 0.05)}
+                )
+            uid += 1
+        for g in (3, 6):
+            for _ in range(30):
+                for t in range(1, 7):
+                    rows.append(
+                        {
+                            "unit": uid,
+                            "time": t,
+                            "cohort": g,
+                            "y": 0.2 * t + (1.0 if t >= g else 0.0) + rng.normal(0, 0.05),
+                        }
+                    )
+                uid += 1
+        return pd.DataFrame(rows)
+
+    @staticmethod
+    def _zero_weight_nyt(kind, mixed=False, seed=3):
+        """`not_yet_treated` survey panel whose unsupported periods are ZERO-WEIGHT caused.
+
+        Cohorts (0, 3, 5, 8), 30 units each, link-appropriate outcome. Pure
+        (`mixed=False`): every cohort observed t=1..9 and cohort-0 rows carry
+        `w=0` at t >= 8, so periods 8 and 9 have never-treated rows that cannot
+        supply support. Mixed (`mixed=True`): cohort 0 observed t=1..8 only
+        with `w=0` at t=8, so period 8 is zero-weight caused and period 9 is
+        structural (no eligible row at all).
+        """
+        rng = np.random.default_rng(seed)
+        rows = []
+        uid = 0
+        for g in (0, 3, 5, 8):
+            for _ in range(30):
+                uid += 1
+                fe = 0.3 * rng.standard_normal()
+                for t in range(1, 10):
+                    if mixed and g == 0 and t == 9:
+                        continue
+                    lin = fe + 0.05 * t + 0.8 * int(g > 0 and t >= g)
+                    if kind == "ols":
+                        y = lin + 0.3 * rng.standard_normal()
+                    elif kind == "logit":
+                        y = rng.binomial(1, 1.0 / (1.0 + np.exp(-lin)))
+                    else:
+                        y = rng.poisson(np.exp(lin))
+                    zero = (t == 8) if mixed else (t >= 8)
+                    rows.append(
+                        {
+                            "unit": uid,
+                            "time": t,
+                            "cohort": g,
+                            "y": y,
+                            "w": 0.0 if (g == 0 and zero) else 1.0,
+                        }
+                    )
+        return pd.DataFrame(rows)
+
+    @staticmethod
+    def _zero_weight_nt(mixed=False, seed=5):
+        """`never_treated` + OLS survey panel with zero-weight-caused unsupported periods.
+
+        Never-treated units observed t=1..6 with `w=0` at t >= 5 (pure: periods
+        5 and 6 both zero-weight caused), or t=1..5 with `w=0` at t=5 (mixed:
+        period 5 zero-weight caused, period 6 structural). Cohorts 3 and 6
+        observed t=1..6 at `w=1`.
+        """
+        rng = np.random.default_rng(seed)
+        rows = []
+        uid = 0
+        nt_last = 5 if mixed else 6
+        for _ in range(30):
+            uid += 1
+            for t in range(1, nt_last + 1):
+                zero = (t == 5) if mixed else (t >= 5)
+                rows.append(
+                    {
+                        "unit": uid,
+                        "time": t,
+                        "cohort": 0,
+                        "y": 0.2 * t + rng.normal(0, 0.05),
+                        "w": 0.0 if zero else 1.0,
+                    }
+                )
+        for g in (3, 6):
+            for _ in range(30):
+                uid += 1
+                for t in range(1, 7):
+                    rows.append(
+                        {
+                            "unit": uid,
+                            "time": t,
+                            "cohort": g,
+                            "y": 0.2 * t + (1.0 if t >= g else 0.0) + rng.normal(0, 0.05),
+                            "w": 1.0,
+                        }
+                    )
+        return pd.DataFrame(rows)
+
     @pytest.mark.parametrize("anticipation,expected_kept", [(0, 7), (1, 6), (2, 5)])
     def test_eq_5_15_cell_set_on_a_balanced_panel(self, anticipation, expected_kept):
         """The retained cell set is Eq. 5.15's, intersected with observed times.
@@ -3897,20 +4029,7 @@ class TestComparisonSupportFiltering:
     def test_no_op_when_every_period_has_a_comparison(self):
         """Filtering is a no-op iff every period has an eligible comparison --
         not merely 'a never-treated group exists'."""
-        rng = np.random.default_rng(21)
-        rows = []
-        for u in range(120):
-            g = 0 if u < 40 else (3 if u < 80 else 5)
-            for t in range(1, 7):
-                rows.append(
-                    {
-                        "unit": u,
-                        "time": t,
-                        "cohort": g,
-                        "y": rng.standard_normal() + 1.0 * int(g > 0 and t >= g),
-                    }
-                )
-        df = pd.DataFrame(rows)
+        df = self._full_support()
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             res = WooldridgeDiD(control_group="not_yet_treated").fit(
@@ -3927,28 +4046,7 @@ class TestComparisonSupportFiltering:
         would use. Silent renormalization is the #724 defect class, so this
         warns rather than raising.
         """
-        rng = np.random.default_rng(5)
-        rows = []
-        uid = 0
-        for _ in range(30):  # never-treated, observed t=1..4 only
-            for t in range(1, 5):
-                rows.append(
-                    {"unit": uid, "time": t, "cohort": 0, "y": 0.2 * t + rng.normal(0, 0.05)}
-                )
-            uid += 1
-        for g in (3, 6):
-            for _ in range(30):
-                for t in range(1, 7):
-                    rows.append(
-                        {
-                            "unit": uid,
-                            "time": t,
-                            "cohort": g,
-                            "y": 0.2 * t + (1.0 if t >= g else 0.0) + rng.normal(0, 0.05),
-                        }
-                    )
-                uid += 1
-        df = pd.DataFrame(rows)
+        df = self._branch_one()  # never-treated observed t=1..4 only
         with pytest.warns(UserWarning, match=r"reference period moved from 5 to 4"):
             res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
                 df, outcome="y", unit="unit", time="time", first_treat="cohort"
@@ -4339,6 +4437,324 @@ class TestComparisonSupportFiltering:
             )
         assert np.isfinite(res.overall_att)
         assert np.isfinite(res.overall_se)
+
+
+class TestUnsupportedPeriodAction:
+    """`unsupported_period_action`: refuse instead of dropping unsupported periods.
+
+    An unsupported period is one lacking the required comparison support -- no
+    positive-weight ELIGIBLE comparison observation is observed there, so no
+    ATT(g, t) at that period is identified. `"drop"` (default) removes such
+    periods before the solve and warns (M-125, byte-identical); `"error"`
+    refuses BEFORE any row is removed. There is no "keep the rows" mode: with
+    the filter disabled every branch and every `rank_deficient_action` mode
+    refuses anyway (collinear cells), only with a vaguer message.
+
+    Panels come from `TestComparisonSupportFiltering`'s builders; every number
+    asserted here was measured on those exact builders before the tests were
+    written.
+    """
+
+    KW = dict(outcome="y", unit="unit", time="time", first_treat="cohort")
+    DEFINITION = "lack the required comparison support"
+    NO_GROUP = "no eligible comparison group"
+    ZERO_W = "zero survey weight"
+    STRUCTURAL = {
+        "not_yet_treated": "every unit is already treated",
+        "never_treated": "no never-treated units are observed",
+    }
+    DROP_ADVICE = "set unsupported_period_action='drop'"
+
+    @staticmethod
+    def _panels():
+        b = TestComparisonSupportFiltering
+        return {
+            ("not_yet_treated", "ols"): (b._all_treated(), "8, 9"),
+            ("never_treated", "ols"): (b._branch_one(), "5, 6"),
+            ("not_yet_treated", "logit"): (b._all_treated_nonlinear("logit"), "8, 9"),
+            ("not_yet_treated", "poisson"): (b._all_treated_nonlinear("poisson"), "8, 9"),
+        }
+
+    # ---- 1. constructor contract -----------------------------------------
+    def test_contract_default_get_set_params_and_validation(self):
+        est = WooldridgeDiD()
+        assert est.unsupported_period_action == "drop"
+        assert est.get_params()["unsupported_period_action"] == "drop"
+        est.set_params(unsupported_period_action="error")
+        assert est.unsupported_period_action == "error"
+        assert (
+            WooldridgeDiD(unsupported_period_action="error").get_params()[
+                "unsupported_period_action"
+            ]
+            == "error"
+        )
+
+        with pytest.raises(ValueError, match="unsupported_period_action"):
+            WooldridgeDiD(unsupported_period_action="keep")
+        with pytest.raises(ValueError, match="unsupported_period_action"):
+            WooldridgeDiD(unsupported_period_action=False)
+
+        # Transactional: a bad value via set_params leaves EVERYTHING unchanged.
+        est = WooldridgeDiD()
+        before = est.get_params()
+        with pytest.raises(ValueError, match="unsupported_period_action"):
+            est.set_params(unsupported_period_action="bogus", alpha=0.10)
+        assert est.get_params() == before
+        assert est.unsupported_period_action == "drop" and est.alpha == 0.05
+
+    # ---- 2. structural matrix: both branches x all three rank modes -------
+    @pytest.mark.parametrize(
+        "control_group,method",
+        [
+            ("not_yet_treated", "ols"),
+            ("never_treated", "ols"),
+            ("not_yet_treated", "logit"),
+            ("not_yet_treated", "poisson"),
+        ],
+    )
+    def test_error_refuses_up_front_on_every_branch_and_rank_mode(self, control_group, method):
+        """The refusal names the periods and the branch-correct cause, emits no
+        warning at all, and is identical across the three rank modes -- it is
+        not gated on `rank_deficient_action`."""
+        df, periods = self._panels()[(control_group, method)]
+        messages = set()
+        for rda in ("warn", "error", "silent"):
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                with pytest.raises(ValueError) as exc:
+                    WooldridgeDiD(
+                        method=method,
+                        control_group=control_group,
+                        rank_deficient_action=rda,
+                        unsupported_period_action="error",
+                    ).fit(df, **self.KW)
+            assert not w, (
+                "refusal must precede the filtering-block warnings (drop, reference "
+                f"move, zero-cell) and every rank warning; got {[str(m.message) for m in w]}"
+            )
+            messages.add(str(exc.value))
+        assert len(messages) == 1, "message must not depend on rank_deficient_action"
+        msg = messages.pop()
+        assert f"Period(s) {periods} {self.DEFINITION}" in msg
+        assert self.NO_GROUP in msg
+        assert self.STRUCTURAL[control_group] in msg
+        assert self.DROP_ADVICE in msg
+        assert self.ZERO_W not in msg and "PSU" not in msg
+
+    def test_outcome_fit_hint_is_the_only_warning_that_may_precede_the_refusal(self):
+        """The no-warning guarantee is scoped to the filtering block and rank warnings.
+
+        The step-0g outcome-fit hint reads only the outcome COLUMN and runs
+        before the comparison-support block, so on a binary outcome under the
+        default OLS it legitimately fires first. Pin that as the documented
+        exception rather than let a future binary fixture look like a
+        regression of the matrix test above.
+        """
+        df = TestComparisonSupportFiltering._all_treated_nonlinear("logit")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            with pytest.raises(ValueError, match=rf"Period\(s\) 8, 9 {self.DEFINITION}"):
+                WooldridgeDiD(method="ols", unsupported_period_action="error").fit(df, **self.KW)
+        msgs = [str(m.message) for m in w]
+        assert len(msgs) == 1 and "looks binary" in msgs[0], msgs
+        assert not [m for m in msgs if self.NO_GROUP in m or "Rank-deficient" in m]
+
+    # ---- 3. zero-weight cause under a survey design ------------------------
+    @pytest.mark.parametrize(
+        "control_group,method,periods,n_obs",
+        [
+            ("not_yet_treated", "ols", "8, 9", 1080),
+            ("not_yet_treated", "logit", "8, 9", 1080),
+            ("not_yet_treated", "poisson", "8, 9", 1080),
+            ("never_treated", "ols", "5, 6", 540),
+        ],
+    )
+    def test_zero_weight_cause_is_named_under_survey_design(
+        self, control_group, method, periods, n_obs
+    ):
+        """Eligible rows exist at those periods but carry zero survey weight.
+
+        The structural sentence would be FALSE here (never-treated rows ARE
+        observed), so the refusal must name the zero-weight cause instead, and
+        its remedy must not advise `'drop'` -- under a survey design the
+        default refuses too.
+        """
+        from diff_diff.survey import SurveyDesign
+
+        b = TestComparisonSupportFiltering
+        df = (
+            b._zero_weight_nyt(method)
+            if control_group == "not_yet_treated"
+            else b._zero_weight_nt()
+        )
+        design = SurveyDesign(weights="w")
+        with pytest.raises(ValueError) as exc:
+            WooldridgeDiD(
+                method=method, control_group=control_group, unsupported_period_action="error"
+            ).fit(df, survey_design=design, **self.KW)
+        msg = str(exc.value)
+        assert f"Period(s) {periods} {self.DEFINITION}" in msg
+        assert self.ZERO_W in msg
+        assert self.STRUCTURAL[control_group] not in msg
+        assert "PSU" in msg and "stratum" in msg
+        assert self.DROP_ADVICE not in msg
+
+        # Companions: the default still refuses under the survey design
+        # (unchanged), and without it the same frame fits -- support is then
+        # unweighted, so nothing is unsupported.
+        with pytest.raises(NotImplementedError, match=self.NO_GROUP):
+            WooldridgeDiD(method=method, control_group=control_group).fit(
+                df, survey_design=design, **self.KW
+            )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = WooldridgeDiD(method=method, control_group=control_group).fit(df, **self.KW)
+        assert np.isfinite(res.overall_att)
+        assert res.n_obs == n_obs
+
+    # ---- 3b. mixed causes: the helper's join branch ------------------------
+    @pytest.mark.parametrize(
+        "control_group,method,zero_period,structural_period",
+        [
+            ("not_yet_treated", "ols", "8", "9"),
+            ("not_yet_treated", "logit", "8", "9"),
+            ("not_yet_treated", "poisson", "8", "9"),
+            ("never_treated", "ols", "5", "6"),
+        ],
+    )
+    def test_mixed_causes_name_each_period_under_its_own_cause(
+        self, control_group, method, zero_period, structural_period
+    ):
+        from diff_diff.survey import SurveyDesign
+
+        b = TestComparisonSupportFiltering
+        df = (
+            b._zero_weight_nyt(method, mixed=True)
+            if control_group == "not_yet_treated"
+            else b._zero_weight_nt(mixed=True)
+        )
+        design = SurveyDesign(weights="w")
+        with pytest.raises(ValueError) as exc:
+            WooldridgeDiD(
+                method=method, control_group=control_group, unsupported_period_action="error"
+            ).fit(df, survey_design=design, **self.KW)
+        msg = str(exc.value)
+        structural = self.STRUCTURAL[control_group]
+        assert msg.count(structural) == 1
+        assert msg.count(self.ZERO_W) == 1
+        # Each cause carries its own explicit period list, in its own sentence.
+        s_idx, z_idx = msg.index(structural), msg.index(self.ZERO_W)
+        s_sentence = msg[s_idx : msg.index(", so ATT", s_idx)]
+        z_sentence = msg[msg.rfind("; ", 0, z_idx) + 2 : z_idx]
+        assert f"at period(s) {structural_period}" in s_sentence
+        assert f"at period(s) {zero_period}" in z_sentence
+        assert "; the only eligible comparison observations" in msg
+
+        with pytest.raises(NotImplementedError, match=self.NO_GROUP):
+            WooldridgeDiD(method=method, control_group=control_group).fit(
+                df, survey_design=design, **self.KW
+            )
+
+    # ---- 4. no-op invariance -----------------------------------------------
+    def test_error_is_a_no_op_when_every_period_has_support(self):
+        df = TestComparisonSupportFiltering._full_support()
+        results = {}
+        for action in ("drop", "error"):
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                results[action] = WooldridgeDiD(unsupported_period_action=action).fit(df, **self.KW)
+            assert not [m for m in w if self.NO_GROUP in str(m.message)]
+        a, b = results["drop"], results["error"]
+        assert a.overall_att == b.overall_att
+        assert a.overall_se == b.overall_se
+        assert a.n_obs == b.n_obs == len(df)
+        assert sorted(a.group_time_effects) == sorted(b.group_time_effects)
+
+    # ---- 5. ordering before the filter-block survey refusal -----------------
+    @pytest.mark.parametrize("method", ["ols", "logit", "poisson"])
+    def test_error_precedes_the_survey_refusal(self, method):
+        from diff_diff.survey import SurveyDesign
+
+        b = TestComparisonSupportFiltering
+        df = b._all_treated() if method == "ols" else b._all_treated_nonlinear(method)
+        df = df.copy()
+        df["w"] = 1.0
+        with pytest.raises(ValueError) as exc:
+            WooldridgeDiD(
+                method=method, control_group="not_yet_treated", unsupported_period_action="error"
+            ).fit(df, survey_design=SurveyDesign(weights="w"), **self.KW)
+        msg = str(exc.value)
+        assert f"Period(s) 8, 9 {self.DEFINITION}" in msg
+        assert "PSU" in msg
+        assert self.DROP_ADVICE not in msg
+
+    # ---- 6. the default is byte-identical to M-125 -------------------------
+    def test_drop_default_reproduces_the_filtered_fit(self):
+        """Measured on `_all_treated()` (NOT the inline 70/70/60 panel that pins
+        1.5502 elsewhere): overall_att 1.5416117, se 0.0943478, 1470 of 1890."""
+        df = TestComparisonSupportFiltering._all_treated()
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            res = WooldridgeDiD().fit(df, **self.KW)
+        assert res.overall_att == pytest.approx(1.5416, abs=5e-3)
+        assert res.n_obs == 1470 and len(df) == 1890
+        assert sorted((int(g), int(t)) for g, t in res.group_time_effects) == [
+            (3, 3),
+            (3, 4),
+            (3, 5),
+            (3, 6),
+            (3, 7),
+            (5, 5),
+            (5, 6),
+            (5, 7),
+        ]
+        drop = [str(m.message) for m in w if self.NO_GROUP in str(m.message)]
+        assert len(drop) == 1
+        assert drop[0].startswith("Dropped 420 of 1890 observations (2 of 9 periods: 8, 9)")
+
+    # ---- 7. the refusal replaces the downstream gate --------------------------
+    def test_refusal_replaces_the_completeness_gate_where_the_filter_is_the_cause(self):
+        """`{3: [1,2,3], 5: [3,4,5]}` loses t=5 to the filter and then trips the
+        completeness gate under the default; under "error" the up-front refusal
+        fires instead. The gate's message must no longer claim the periods were
+        'already removed' and must name the opt-out."""
+        df = TestOverallAttFailsClosed._unbalanced({3: [1, 2, 3], 5: [3, 4, 5]})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match="not identified and were removed") as exc:
+                WooldridgeDiD(control_group="not_yet_treated").fit(df, **self.KW)
+        gate = str(exc.value)
+        assert "already removed" not in gate
+        assert "unsupported_period_action" in gate
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            with pytest.raises(ValueError, match=rf"Period\(s\) 5 {self.DEFINITION}"):
+                WooldridgeDiD(
+                    control_group="not_yet_treated", unsupported_period_action="error"
+                ).fit(df, **self.KW)
+        assert not w
+
+    # ---- 8. warning / refusal wording lockstep --------------------------------
+    def test_warning_and_refusal_share_the_cause_sentence(self):
+        df = TestComparisonSupportFiltering._all_treated()
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            WooldridgeDiD().fit(df, **self.KW)
+        warning = next(str(m.message) for m in w if self.NO_GROUP in str(m.message))
+        with pytest.raises(ValueError) as exc:
+            WooldridgeDiD(unsupported_period_action="error").fit(df, **self.KW)
+        refusal = str(exc.value)
+
+        def cause(text):
+            start = text.index(" -- ") + 4
+            return text[start : text.index("untreated outcome", start) + len("untreated outcome")]
+
+        assert cause(warning) == cause(refusal)
+        assert cause(warning) == (
+            "every unit is already treated (accounting for `anticipation=0`), so "
+            "ATT(g, t) there is not identified against any untreated outcome"
+        )
 
 
 class TestWooldridgeDfConvention:

@@ -433,7 +433,7 @@ _CONTEXT_DEPENDENT_SNIPPETS = {
     "test_id, code, skip_reason",
     [pytest.param(tid, c, s, id=tid) for tid, c, s in _CASES],
 )
-def test_doc_snippet(test_id: str, code: str, skip_reason: Optional[str]):
+def test_doc_snippet(test_id: str, code: str, skip_reason: Optional[str], tmp_path, monkeypatch):
     """Execute a documentation code snippet and assert no API/runtime errors.
 
     ``os.environ`` is snapshot/restored around the exec: snippets may
@@ -442,11 +442,19 @@ def test_doc_snippet(test_id: str, code: str, skip_reason: Optional[str]):
     unreverted mutation leaks process state into every later test in the
     session (it flipped the backend-arm selection of the dCDH pinned
     bootstrap baseline under full-suite order).
+
+    The snippet runs with ``tmp_path`` as the working directory: several
+    snippets call ``savefig('<name>.png')`` with a bare filename, and with the
+    repo root as CWD those files landed there and were swept into a
+    developer's change set (``event_study.png`` and three siblings, ~208 KB,
+    caught in review). Isolating the CWD keeps snippet side effects out of
+    the checkout entirely instead of ignoring them by name.
     """
     if skip_reason:
         pytest.skip(skip_reason)
 
     ns = _build_namespace()
+    monkeypatch.chdir(tmp_path)
     env_snapshot = os.environ.copy()
     try:
         exec(compile(code, f"<{test_id}>", "exec"), ns)

@@ -224,7 +224,8 @@ Smaller items that do not fit the families above — two inert `SyntheticDiD` co
 parameters, the `covariates=` constructor-to-`fit()` move, a retired transition warning, the
 Bacon roster re-homing, and the family-wide `anticipation` validation below. The appendix lists
 the ledger-derived removals/flips; [M-144], [M-145], and [M-146] are behavior tightenings with
-no removal/deprecation fields and appear here only.
+no removal/deprecation fields, and [M-147] is an additive `WooldridgeDiD` knob of the same shape;
+all four appear here only.
 
 - `anticipation` is validated across the family ([M-144], landing at 4.0): whole-valued floats
   that previously fit identically to their integer now raise — pass the `int`; bool and
@@ -253,6 +254,14 @@ no removal/deprecation fields and appear here only.
   `SyntheticControlResults.summary` joins the contract as a carve-out: its `alpha` was a
   dead no-op (it prints no alpha-based interval; the displayed confidence set is keyed on
   its own stored `gamma`), and a non-fit value now raises like the rest of the family.
+
+- `WooldridgeDiD(unsupported_period_action=...)` ([M-147], landing at 4.0): an opt-out for
+  per-period comparison-support filtering. An *unsupported period* is one lacking the required
+  comparison support — no positive-weight eligible comparison observation is observed there, so
+  no `ATT(g, t)` at that period is identified. The default `"drop"` is unchanged: such periods
+  are removed before the solve and the reduction is warned. `"error"` refuses with `ValueError`
+  before removing any period, naming the periods and the cause, for users who would rather see
+  the refusal than estimate on a reduced sample. No estimate changes under either value.
 
 One pending decision: the `DIFF_DIFF_SOLVE_OLS_FASTPATH` environment default has a go/no-go due
 at 4.0 that has not been made. If it lands on, it is a numerics change and will be documented
