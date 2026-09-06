@@ -114,13 +114,13 @@ try:
 except ImportError:
     _rust_batched_ridge_chol_solve = None
 
-# HC2 (leverage-corrected) robust vcov: imported independently for the same
-# mixed-version reason as demean_map (a stale extension missing only this
-# newer symbol degrades HC2 to the NumPy path without disabling the older
-# Rust accelerations).
+# HC2 requires the v2 fail-closed leverage contract. An older extension can
+# export the original symbol yet return finite covariance at unit leverage,
+# so symbol presence alone is insufficient. Import v2 independently: legacy
+# extensions use NumPy HC2 while retaining every other Rust acceleration.
 try:
     from diff_diff._rust_backend import (
-        compute_robust_vcov_hc2 as _rust_compute_robust_vcov_hc2,
+        compute_robust_vcov_hc2_v2 as _rust_compute_robust_vcov_hc2,
     )
 except ImportError:
     _rust_compute_robust_vcov_hc2 = None

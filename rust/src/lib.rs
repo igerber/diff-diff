@@ -55,6 +55,13 @@ fn _rust_backend(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(linalg::solve_ols_chol, m)?)?;
     m.add_function(wrap_pyfunction!(linalg::compute_robust_vcov, m)?)?;
     m.add_function(wrap_pyfunction!(linalg::compute_robust_vcov_hc2, m)?)?;
+    // Versioned capability: Python must not dispatch HC2 to older kernels
+    // that silently floor the leverage denominator. Keep the original name
+    // as an alias for callers using the extension directly.
+    m.add(
+        "compute_robust_vcov_hc2_v2",
+        m.getattr("compute_robust_vcov_hc2")?,
+    )?;
 
     // Batched ridge-regularized SPD solve (EfficientDiD per-unit weights)
     m.add_function(wrap_pyfunction!(

@@ -149,6 +149,8 @@ output).
   family applies no CR1 finite-sample factor, so it has no cell on the axis this
   matrix measures.
 
+  **Effective-leverage guard:** HC2, HC3, and unweighted one-way HC2-BM return warning + all-NaN covariance/DOF when any positive-weight observation has `h_ii >= 1 - 1e-8` (all rows are effective without weights); identified point estimates remain. Zero-weight rows contribute nothing and cannot trigger the guard, preserving frequency-expansion parity even with zero counts. Weighted/clustered HC2-BM retains CR2, including the all-ones-pweight boundary; its output can differ from unweighted HC2-BM at leverage one. No over-one HC1 fallback is used in the leverage-family branch.
+
 ## Tail-df landscape (converged, 3.9 / M-127)
 
 ONE three-value knob (`df_convention ∈ {"residual", "cluster", "normal"}`)
