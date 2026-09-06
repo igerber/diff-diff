@@ -242,12 +242,13 @@ pub fn compute_robust_vcov<'py>(
 /// Mirrors the NumPy `_compute_robust_vcov_numpy` unweighted `hc2` branch
 /// exactly (sandwich::vcovHC type="HC2" convention):
 ///   h_i    = x_i' (X'X)^{-1} x_i
-///   meat   = X' diag(u_i^2 / max(1 - h_i, 1e-10)) X
+///   meat   = X' diag(u_i^2 / (1 - h_i)) X        (no floor)
 ///   vcov   = (X'X)^{-1} meat (X'X)^{-1}          (NO n/(n-k) factor)
-/// A hat diagonal exceeding 1 + 1e-6 signals a near-singular design; this
-/// returns the sentinel error "Hat-matrix diagonal exceeds 1" so the Python
-/// dispatcher can reproduce the documented warn-and-fall-back-to-HC1
-/// behavior (the guard decision stays in one place, Python-side).
+/// A hat diagonal at or above 1 - 1e-8 (a perfectly fitted row) makes the
+/// meat term 0/0: this returns the sentinel error
+/// "Hat-matrix leverage ~1 (count=N)" so the Python dispatcher re-dispatches
+/// to the NumPy branch, which fails closed (warning + all-NaN vcov). The
+/// guard decision stays in one place, Python-side; the kernel only signals.
 ///
 /// # Arguments
 /// * `x` - Design matrix (n, k)
@@ -281,19 +282,19 @@ pub fn compute_robust_vcov_hc2<'py>(
     let x_bread = x_arr.dot(&xtx_inv); // (n, k)
     let h_diag: Array1<f64> = (&x_bread * &x_arr).sum_axis(Axis(1));
 
-    let h_max = h_diag.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-    if h_max > 1.0 + 1e-6 {
+    let n_lev1 = h_diag.iter().filter(|&&h| h >= 1.0 - 1e-8).count();
+    if n_lev1 > 0 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-            "Hat-matrix diagonal exceeds 1 (max={:.6}); the design is near-singular.",
-            h_max
+            "Hat-matrix leverage ~1 (count={}); the HC2 variance is undefined.",
+            n_lev1
         )));
     }
 
-    // meat = X' diag(u^2 / max(1 - h, 1e-10)) X
+    // meat = X' diag(u^2 / (1 - h)) X  (every h < 1 - 1e-8 here: no floor)
     let factor: Array1<f64> = residuals_arr
         .iter()
         .zip(h_diag.iter())
-        .map(|(u, h)| u * u / (1.0 - h).max(1e-10))
+        .map(|(u, h)| u * u / (1.0 - h))
         .collect();
     let factor_col = factor.insert_axis(Axis(1)); // (n, 1)
     let x_weighted = &x_arr * &factor_col; // (n, k)

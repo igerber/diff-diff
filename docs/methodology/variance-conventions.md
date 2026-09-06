@@ -142,7 +142,7 @@ output).
   since the M-021 migration — and carries the K_reference increment there
   (+6, the [time, unit] no-intercept
   increment on df_0 — pinned via expected_adjustment on its matrix row).
-- **L4 — hc2/hc2_bm/hc3** (leverage / Satterthwaite DOF — no CR1 factor; hc3 squares the leverage denominator and is one-way only; under `fweight` the leverage is each replicate row's UNWEIGHTED quadratic form against the weighted bread — frequency weights are replicated data, and compressed HC2/HC3 equal literal expansion exactly — while aweight/pweight keep the WLS-hat `w_i x_i'(X'WX)^{-1}x_i` convention),
+- **L4 — hc2/hc2_bm/hc3** (leverage / Satterthwaite DOF — no CR1 factor; hc3 squares the leverage denominator and is one-way only; under `fweight` the leverage is each replicate row's UNWEIGHTED quadratic form against the weighted bread — frequency weights are replicated data, and compressed HC2/HC3 equal literal expansion exactly, and zero-count rows are excluded from both the leverage-one guard and the meat — while aweight/pweight keep the WLS-hat `w_i x_i'(X'WX)^{-1}x_i` convention; family-wide fail-closed rule (2026-09): any positive-weight row with `h_ii >= 1 - 1e-8` makes the one-way hc2 / unweighted-unclustered hc2_bm / hc3 vcov all-NaN with a warning, point estimates preserved; the former `1 - h` floor and over-one HC1 fallback are retired — see the REGISTRY "IF-based variance estimators vs analytical-sandwich estimators" Note),
   **survey TSL** (n_PSU - n_strata over the full design), and **Wooldridge
   cohort_trends full-dummy** (documented opt-in landing on the L1
   convention). **conley** is out of this matrix by decision: the spatial-HAC

@@ -127,7 +127,12 @@ class TwoWayFixedEffects(DifferenceInDifferences):
     ATT coefficient, its SE, and analytical inference are unchanged.
     Auto-cluster-at-unit is preserved on ``hc2_bm`` (routes to CR2-BM at
     unit) and on ``hc2``/``hc3`` + ``wild_bootstrap``; dropped on explicit
-    ``hc2``/``hc3`` + ``analytical`` to match the one-way contract. **This wording applies
+    ``hc2``/``hc3`` + ``analytical`` to match the one-way contract. On the
+    one-way paths — explicit ``hc2``/``hc3``, and ``hc2_bm`` in event-study
+    ``spec="pooled"`` with no ``unit=`` (no auto-cluster to fall back to) —
+    a leverage-one observation (a perfectly fitted cell, e.g. a single
+    treated unit) has no defined HC2/HC3 variance and the fit fails closed
+    (warning + NaN inference, point estimates preserved). **This wording applies
     to the non-survey analytical path**: under ``survey_design=`` with no
     explicit ``cluster=``, TWFE intentionally keeps the documented
     implicit-PSU path (auto-cluster is NOT injected into the survey PSU

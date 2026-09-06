@@ -3129,25 +3129,13 @@ class LWDiD(BaseEstimator):
         used_scales[used_scales == 0] = 1.0
         X_scaled = X_used / used_scales
         xtx_inv = np.linalg.pinv(X_scaled.T @ X_scaled) / np.outer(used_scales, used_scales)
-        if self.vcov_type == "hc2" and cluster_ids is None:
-            # Round-21 review: the shared hc2 kernel keeps its RELEASED
-            # 1 - h floor (tracked separately), but the NEW LWDiD surface
-            # must not report a fabricated finite variance for a
-            # perfectly-leveraged design - fail closed HERE, mirroring
-            # hc3 (point retained, inference NaN).
-            leverage_used = np.sum((X_used @ xtx_inv) * X_used, axis=1)
-            if np.any(leverage_used >= 1.0 - 1e-8):
-                n_lev1 = int(np.sum(leverage_used >= 1.0 - 1e-8))
-                warnings.warn(
-                    f"HC2 variance is undefined for this design: {n_lev1} "
-                    f"observation(s) have hat-matrix leverage ~1 (e.g. a "
-                    f"single treated unit). Returning NaN inference (point "
-                    f"retained); use vcov_type='classical' exact inference "
-                    f"or add treated units.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-                se = np.nan
+        # Leverage-one designs under hc2: the shared linalg kernel now fails
+        # closed (2026-09, family-wide with hc3) - solve_ols above returned an
+        # all-NaN vcov and emitted the single "HC2 variance is undefined"
+        # warning, so `se` is already NaN via the finiteness check. The
+        # round-21 local guard that duplicated this (and its second warning)
+        # is retired; the influence-vector guard in
+        # `_ols_treatment_influence` still NaNs psi under the same condition.
         influence = self._finalize_influence(
             self._ols_treatment_influence(
                 X_used,

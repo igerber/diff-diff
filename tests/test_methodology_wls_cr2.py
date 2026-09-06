@@ -989,6 +989,11 @@ class TestDOFFormulaDualPathEquivalence:
         )
 
     def test_unweighted_one_way_dof_path_equivalence(self, goldens):
+        """Non-degenerate designs only: the simple unweighted formula and the
+        weights=ones P_array singleton-cluster reduction agree. The identity
+        does NOT hold at a leverage-one row (2026-09): the simple formula
+        fails closed (all-NaN DOF, like its vcov) while the P_array port
+        keeps clubSandwich's finite generalized-inverse DOF."""
         d = goldens["singletons_present"]
         X = np.column_stack([np.ones(len(d["x"])), np.asarray(d["x"])])
         y = np.asarray(d["y"])
@@ -1010,6 +1015,7 @@ class TestDOFFormulaDualPathEquivalence:
             atol=1e-12,
             err_msg=(
                 "One-way unweighted DOF: simple formula must agree with the "
-                "P_array singleton-cluster reduction at the unweighted limit."
+                "P_array singleton-cluster reduction at the unweighted limit "
+                "on a non-degenerate (no leverage-one row) design."
             ),
         )

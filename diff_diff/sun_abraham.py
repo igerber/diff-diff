@@ -580,7 +580,10 @@ class SunAbraham(BaseEstimator):
         - ``"hc2"``: Eicker-Huber-White HC2 leverage correction. One-way
           only; the linalg validator rejects combining ``hc2`` with
           clusters. The unit auto-cluster is dropped when ``hc2`` is
-          explicitly opted into.
+          explicitly opted into. A leverage-one row in the full-dummy
+          design (e.g. a singleton cohort x event-time cell) has no
+          defined HC2 variance: the whole vcov fails closed (warning +
+          NaN inference on every effect, point estimates preserved).
         - ``"hc2_bm"``: HC2 + Bell-McCaffrey CR2 Satterthwaite DOF for
           cluster-robust inference. Routes to CR2-BM at the cluster
           level; preserves the auto-cluster default.
