@@ -16,6 +16,10 @@ Queued work, ordered by expected leverage. Each item is its own PR. Ordering is 
 
 - **Context-aware `practitioner_next_steps()`.** Substitutes actual column names from fitted results instead of generic placeholders, so next-step guidance is executable rather than illustrative. (Standalone follow-up to the `BusinessReport` / `DiagnosticReport` layer; tracked under the AI-Agent Track too.)
 
+### New estimators
+
+- **`DurationDiD` - causal duration DiD for binary absorbing-state outcomes** (Deaner & Ku, arXiv:2405.05220v2, 2026; revise-and-resubmit at *Quantitative Economics*). Parallel trends in mean outcomes generally fails when the outcome is an absorbing state (the paper's wording, pp. 1-2; exception: identical group means, footnote 1); the method imposes linear restrictions on counterfactual hazard rates (common dynamics / proportional hazards, Section 2) and avoids parametric hazard-model estimation (p. 3). Maintainer-approved first scope (2026-09): two-group, common timing, both specifications, individual block-bootstrap inference with pointwise and uniform bands, pre-treatment diagnostics; covariate adjustment, K-group restrictions, censoring input and staggered adoption deferred to follow-on PRs. Methodology review on file: `docs/methodology/papers/deaner-ku-2026-review.md`.
+
 ### Practitioner tutorials
 
 - **dCDH comprehensive tutorial.** One notebook covering reversible treatment, dynamic event study, covariates, trends, HonestDiD on placebos, and survey. Favara-Imbs (2015) banking-deregulation replication as the headline application.
@@ -80,12 +84,6 @@ Long-running program, framed as "building toward" rather than with discrete ship
 ## Long-term Research Directions
 
 Frontier methods that may graduate to Under Consideration given time and research signals.
-
-### Causal Duration Analysis with DiD
-
-Extends DiD to duration / survival outcomes where standard methods fail (hazard rates, time-to-event). Duration analogue of parallel trends; avoids distributional and hazard-function assumptions.
-
-**Reference**: Deaner & Ku (2025), *AEA Conference Paper*.
 
 ### CATT Meta-Learner for Heterogeneous Effects
 
