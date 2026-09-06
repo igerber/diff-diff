@@ -42,6 +42,20 @@
 > | `status-pages/ben-deaner-research-2026-09-05.html` | https://bendeaner.wordpress.com/research/ | as served 2026-09-05 20:52 UTC | `e4f00e517a58e965ab1bdf1fe8ba02b39d65524a3c61851a22d240cede5fc1ef` | R&R status (secondary) |
 > | `status-pages/arxiv-2405.05220v1-abs-2026-09-05.html` | https://arxiv.org/abs/2405.05220v1 | as served 2026-09-05 21:33 UTC | `cedd430d8f04242f22bbf89ae0594ae1914bacd3797b6f56a41fd3a7ae738812` | v1 date and page count |
 >
+> **Reproducing the cache.** `.workflow/` is a local, git-excluded working directory and is
+> not shipped with the repository; the pinned URLs and digests above are what make every
+> transcription and line citation independently checkable. To rebuild the cache from
+> scratch: fetch the paper with `curl -L -o deaner-ku-2024-arxiv-2405.05220v2.pdf
+> https://arxiv.org/pdf/2405.05220v2`; fetch each code file from the pinned commit with
+> `curl -L -o <name> https://raw.githubusercontent.com/ben-deaner-teaching/Duration-DiD/202e92ef222bf7d250c26c98e8fb42e151223c71/<name>`
+> for `README.md`, `durationdid.ado`, `durationDiD.m`, `UIP_application.do`,
+> `UIP_application_revision_R2.m`, `montecarlo_revision.m` (commit-pinned, hence
+> byte-stable); then run `shasum -a 256` on each file and compare with the table. All line
+> numbers cited below refer to those commit-pinned files. The three web pages are dated
+> snapshots whose live content may change; their digests identify the cached snapshots of
+> 2026-09-05, not the live pages, and the facts taken from them (revise-and-resubmit status,
+> v1 date and page count) are marked as secondary-source claims.
+>
 > **Licence.** The repository has no LICENSE file, so all rights are reserved by default.
 > The library must NOT port or translate the Stata or MATLAB source; the code may be used
 > only as a black-box / equation-level reference (read to understand conventions, run
@@ -53,7 +67,7 @@
 
 ## Methodology Registry Entry
 
-*Formatted to match docs/methodology/REGISTRY.md structure. Heading levels and labels align with existing entries - copy the `## DurationDiD` section into the "Advanced Estimators" category of the registry once the estimator ships (rename to the shipped class name). It is NOT a "Modern Staggered" entry: the main estimator is two-group with a single common treatment date; the staggered extension (Appendix A.3) is an appendix sketch with an acknowledged bias caveat and no inference.*
+*Formatted to match docs/methodology/REGISTRY.md structure. Heading levels and labels align with existing entries - copy the `## DurationDiD` section into the "Advanced Estimators" category of the registry once the estimator ships (rename to the shipped class name). Library policies and extensions that go beyond the paper carry the registry-recognised `- **Note:**` label below; when copying, keep those labels, replace each "proposal" / "recommendation" wording with the decision actually implemented, and label any further departure from the source with `- **Note:**` (or `- **Deviation from R:**` where an external package is the comparator) so the AI reviewer's deviation grep resolves. It is NOT a "Modern Staggered" entry: the main estimator is two-group with a single common treatment date; the staggered extension (Appendix A.3) is an appendix sketch with an acknowledged bias caveat and no inference.*
 
 ## DurationDiD (prospective; name provisional)
 
@@ -641,8 +655,10 @@ E[Y^{(0)}_{i,t} | G_i = 1] = E[Y_{i,1} | G_i = 1] + E[ (1 - Y_{i,1}) (1 - exp(-�
 - **Diagnostic minimum:** the Algorithm 2 test set is `t_2..t_{j*-1}`; the test is available
   whenever it contains at least one grid point besides the anchor `t_{j*}` (`j* ≥ 3`; at
   `j* = 3` it is a single-point, degenerate-uniform test; Remark 1's over-identification
-  holds whenever `t* > 2`). The test set is NOT truncated by the estimation weights (the
-  reference code's `burnin..t*` start is an optional, documented deviation).
+  holds whenever `t* > 2`).
+- **Note:** The test set is NOT truncated by the estimation weights, following Algorithm 2
+  rather than the reference code, whose `burnin..t*` start is offered only as an optional,
+  documented deviation (`pretrend_start`).
 
 *Edge cases (detection → handling proposals):*
 - **Input validation, fail closed:** empty sample; missing treated or untreated arm; **panel
@@ -658,7 +674,7 @@ E[Y^{(0)}_{i,t} | G_i = 1] = E[Y_{i,1} | G_i = 1] + E[ (1 - Y_{i,1}) (1 - exp(-�
   **non-numeric time labels** (datetime64, `pd.Period`, strings, categoricals) rejected with a
   message pointing at conversion to elapsed units, because `t - t_1` arithmetic is
   load-bearing; `t*` not in the grid; extrapolation end beyond the data.
-- **Exact-zero survival `Ȳ_{k,t} = 1`, role-sensitive, no clipping.** (3.1) maps a fully
+- **Note:** **Exact-zero survival `Ȳ_{k,t} = 1`, role-sensitive, no clipping** (library policy; the paper does not discuss it). (3.1) maps a fully
   absorbed cell to `R̂ = +∞`; the reference propagates it unguarded (`durationDiD.m:39-40`:
   `log(0) = -Inf`, then `∞ - ∞ = NaN` under CD and `∞/∞` under PH). By Assumption 1 a fully
   absorbed cell stays fully absorbed at every later grid point. Proposed handling:
@@ -684,7 +700,7 @@ E[Y^{(0)}_{i,t} | G_i = 1] = E[Y_{i,1} | G_i = 1] + E[ (1 - Y_{i,1}) (1 - exp(-�
   ordinary. (v) Inside bootstrap draws the same rules apply, but a draw hitting (i)/(ii) is a
   non-finite replicate handled by the valid-replicate gate, not an exception. No
   undocumented clipping of survival or `R̂` anywhere.
-- **Proportional-hazards parameter domain.** The paper assumes strictly positive
+- **Note:** **Proportional-hazards parameter domain** (library validation of a paper assumption). The paper assumes strictly positive
   counterfactual hazards under PH (p. 10), so `c = h_1/h_2 > 0`. An in-sample `ĉ ≤ 0` is
   reachable (with monotone `Y` every `Δ_{t-1}R̂_{k,t} ≥ 0`, so the weighted-LS slope and the
   reference's mean of ratios both return 0 when the treated group has no pre-treatment exits
@@ -692,7 +708,7 @@ E[Y^{(0)}_{i,t} | G_i = 1] = E[Y_{i,1} | G_i = 1] + E[ (1 - Y_{i,1}) (1 - exp(-�
   a warning naming the cause; never a silent value. With `ĉ = 0` the PH imputation collapses
   to `R̂^{(0)}_{1,t} = R̂_{1,1}` (`τ̂_t = Ȳ_{1,t} - Ȳ_{1,1}`) and numerically `0 · ∞` is NaN in
   case (iii) (`durationDiD.m:50` reproduces this shape).
-- **PH zero denominators, split by object.** *Identification* needs only ONE nonzero
+- **Note:** **PH zero denominators, split by object** (library policy). *Identification* needs only ONE nonzero
   pre-treatment control difference (footnote 5, p. 13). *Estimation* fails only when the
   aggregate denominator of the chosen `ĉ` is zero (`Σ α_t B_t²` under decision 1(i),
   `Σ α_t B_t²/(t-1)²` under 1(iv)); under the reference's mean of ratios
@@ -710,9 +726,9 @@ E[Y^{(0)}_{i,t} | G_i = 1] = E[Y_{i,1} | G_i = 1] + E[ (1 - Y_{i,1}) (1 - exp(-�
   unavailable (NaN test fields, empty `δ̂` arrays, warning) while an otherwise identified fit
   stays intact; horizon-specific `Δ_{t-1}R̂_{2,t} = 0` for `t` in the test set drops only that
   horizon with a warning. The CD statistic has no denominator.
-- **Common dynamics implied negative hazard** (p. 20): imputed `Δ_{t-1}R̂^{(0)}_{1,t}`
+- **Note:** **Common dynamics implied negative hazard** (library warning for the p. 20 remark): imputed `Δ_{t-1}R̂^{(0)}_{1,t}`
   decreasing in `t` → non-monotone `E[Y^{(0)}]` → warn.
-- **Zero bootstrap SD, per surface.** The reference divides unguarded (`durationDiD.m:118-119`;
+- **Note:** **Zero bootstrap SD, per surface** (library policy). The reference divides unguarded (`durationDiD.m:118-119`;
   Mata adds `1e-100`, `durationdid.ado:496-498`). Library policy: the stored per-period `se` is
   set to NaN for a zero-spread horizon (the `changes_in_changes.py:1070-1075` precedent) so
   `safe_inference` applies the **joint-NaN inference contract** - the point estimate stays
@@ -723,7 +739,7 @@ E[Y^{(0)}_{i,t} | G_i = 1] = E[Y_{i,1} | G_i = 1] + E[ (1 - Y_{i,1}) (1 - exp(-�
   test set with a warning; if no valid horizon remains the band or the test is reported
   unavailable (NaN critical value, NaN p-value). The `1e-9` IQR floor of
   `changes_in_changes.py:816-820` is a qte-parity port and is not adopted.
-- **Invalid bootstrap draws, two families.** The paper and the reference keep the two
+- **Note:** **Invalid bootstrap draws, two families** (library policy). The paper and the reference keep the two
   bootstrap summaries apart (Algorithm 1 summarises only `τ̂*_{b,t}`, Algorithm 2 only
   `δ̂*_{b,t}`; `durationDiD.m:117-119` builds `boot_tau` and `boot_delta` independently).
   Apply the library's valid-replicate gate separately to each family: one finite-row mask,
@@ -734,7 +750,7 @@ E[Y^{(0)}_{i,t} | G_i = 1] = E[Y_{i,1} | G_i = 1] + E[ (1 - Y_{i,1}) (1 - exp(-�
   `warn_bootstrap_failure_rate` (`diff_diff/bootstrap_utils.py:79`), and NaNs its SEs /
   critical values only when `n_valid < max(2, 0.5 · n_bootstrap)`
   (`changes_in_changes.py:241`, gate at `:801-808`).
-- **Unavailable specification test:** when `j* < 3`, the anchor denominator is zero (PH),
+- **Note:** **Unavailable specification test** (library policy): when `j* < 3`, the anchor denominator is zero (PH),
   or no tested horizon survives, the estimator still fits; results carry
   `spec_test_p_value = NaN`, `spec_test_crit_value = NaN`, empty (length-0) `δ̂` / band arrays,
   a caveat string naming the reason, and a `UserWarning`; never an exception when estimation
@@ -746,18 +762,20 @@ E[Y^{(0)}_{i,t} | G_i = 1] = E[Y_{i,1} | G_i = 1] + E[ (1 - Y_{i,1}) (1 - exp(-�
   and rescales); extreme balancing weights / propensities near zero (Section 3.3 caveat 3);
   binding inequality constraints in `𝓑` (caveat 2).
 
-*Specification-test p-value (a library extension - the paper defines none):* with test set
-`𝒯_test = {t_2..t_{j*-1}}` (minus dropped horizons), `σ̂_t = SD_b(δ̂*_{b,t})` over valid draws,
-`T̂ = max_{t∈𝒯_test} |δ̂_t|/σ̂_t` and `T*_b = max_{t∈𝒯_test} |δ̂*_{b,t} - δ̂_t|/σ̂_t` (the same
-centred, studentised statistic Algorithm 2 step 7 uses for the band):
+*Specification-test p-value:*
+- **Note:** The p-value is a library extension - the paper defines none (Section 3.2,
+  Appendix B give a band test only). With test set `𝒯_test = {t_2..t_{j*-1}}` (minus dropped
+  horizons), `σ̂_t = SD_b(δ̂*_{b,t})` over valid draws, `T̂ = max_{t∈𝒯_test} |δ̂_t|/σ̂_t` and
+  `T*_b = max_{t∈𝒯_test} |δ̂*_{b,t} - δ̂_t|/σ̂_t` (the same centred, studentised statistic
+  Algorithm 2 step 7 uses for the band):
 
-```
-p = max( (1/n_valid) Σ_b 1{ T*_b ≥ T̂ },  1/(n_valid + 1) )
-```
+  ```
+  p = max( (1/n_valid) Σ_b 1{ T*_b ≥ T̂ },  1/(n_valid + 1) )
+  ```
 
-Inclusive comparison and the `1/(n_valid + 1)` floor follow `compute_bootstrap_pvalue`
-(`diff_diff/bootstrap_utils.py:278-311`). Reference differences: strict `>`, `abs(max(·))`
-instead of `max|·|`, test set `burn_in..t*` including the zero anchor (fidelity item 2).
+  Inclusive comparison and the `1/(n_valid + 1)` floor follow `compute_bootstrap_pvalue`
+  (`diff_diff/bootstrap_utils.py:278-311`). Reference differences: strict `>`, `abs(max(·))`
+  instead of `max|·|`, test set `burn_in..t*` including the zero anchor (fidelity item 2).
 
 *Monte Carlo design (Appendix C, pp. 40-44) - future test oracle:*
 
