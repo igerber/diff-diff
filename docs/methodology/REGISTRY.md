@@ -10,6 +10,7 @@ This document provides the academic foundations and key implementation requireme
    - [DifferenceInDifferences](#differenceindifferences)
    - [MultiPeriodDiD](#multiperioddid)
    - [TwoWayFixedEffects](#twowayfixedeffects)
+   - [DurationDiD](#durationdid)
 2. [Modern Staggered Estimators](#modern-staggered-estimators)
    - [CallawaySantAnna](#callawaysantanna)
    - [ChaisemartinDHaultfoeuille](#chaisemartindhaultfoeuille)
@@ -45,6 +46,73 @@ This document provides the academic foundations and key implementation requireme
 ---
 
 # Core DiD Estimators
+
+## DurationDiD
+
+**Reference:** Deaner and Ku (2026), *Causal Duration Analysis with Diff-in-Diff*,
+arXiv:2405.05220v2. Binding source audit:
+`docs/methodology/papers/deaner-ku-2026-review.md`. Module: `duration_did.py`;
+results: `duration_did_results.py`. Dedicated checks: `test_methodology_duration_did.py`.
+
+**Design and estimand:** Two groups, complete balanced individual histories,
+common intervention time, absorbing binary outcomes, no anticipation and unaffected
+controls. Keep baseline-absorbed people. With group survival S, R=-log(S), baseline
+increments D and normalized elapsed d, CD uses `c=sum w*(D1-D0)/d` and
+`Rcf=R1baseline+D0+d*c` (3.2–3.4); PH uses `c=sum w*D1/D0` and
+`Rcf=R1baseline+c*D0` (Theorem 1, 2.16). `ATT=exp(-Rcf)-S1` measures increased
+cumulative absorption on the whole treated population. The headline uniformly
+averages all declared post-date ATTs. CD c is per normalized observation interval;
+PH c is dimensionless. No outcome-mean parallel-trends assumption is imposed.
+
+- **Note:** PH mean-of-ratios follows the review's resolution of printed 3.5;
+  neither the inverted printed slope nor a repaired least-squares slope is used.
+  Require a positive coefficient and positive control increments for required moments.
+- **Note:** Default calibration equally weights original eligible pre-dates strictly
+  after baseline. Explicit nonnegative weights normalize over positive support;
+  zero weights remove moments before evaluation; unrepresentable positive normalized
+  weights raise rather than silently changing support. Unsupported explicit positive-weight
+  moments raise; default exclusions retain reasons. Freeze support for every draw.
+- **Note:** Appendix B Algorithm 2 is the fixed-anchor diagnostic: every interior
+  pre-date's gap/ratio minus the last-pre anchor, baseline and anchor excluded from
+  studentization. It is separate from outcome effects and from calibration selection.
+  At least three pre-dates are needed; unavailable tests have `reject=None`.
+- **Note:** Algorithm 1 uses exactly B pooled individual history draws with full
+  nuisance re-estimation; independent individuals are assumed. Use ddof=1, centered
+  absolute pivots and inverse empirical-CDF index ceil((1-alpha)B)-1. Simultaneous
+  families are all declared post-dates (effects) or all interior pre-dates (diagnostic).
+  Headline weights are applied inside each draw. Centered absolute-tail p-values
+  count equality and are a finite-bootstrap library companion to the bands.
+- **Note:** Never retry, stratify, substitute epsilons, or infer from filtered
+  successful draws. Any failed draw suppresses its family's inference; preserve
+  valid original points. Effect and diagnostic validity are independent. Zero SE
+  makes associated t/p/CI undefined and disables joint bands; other valid pointwise
+  coordinates and headline inference remain available. Covariance requires all effect draws.
+- **Note:** Required logs must have positive survival; zero factual treated post
+  survival is valid. Counterfactual probability and monotonicity checks include the
+  factual treated last-pre boundary with 1e-12 tolerance. This conservative library
+  gate can fail under sampling noise even when population hazard restrictions hold;
+  the calibrated curve need not interpolate the factual last-pre point.
+  Invalid original curves retain raw paths
+  but suppress all canonical post effects and headline; no clipping or horizon trimming.
+- **Note:** Support warnings (<5 survivors in either group at every date; PH also
+  <5 control exits since baseline at selected calibration dates) are library heuristics,
+  not theorem thresholds. They do not trim or replace strict domain/failure gates.
+- **Note:** Numeric grid equality uses rtol=1e-9 and atol=1e-12 times the first
+  spacing; datetime/timedelta grids require equal actual durations. All estimation
+  uses normalized observation intervals; original labels and spacing remain recorded.
+
+**Results and scope:** Flat native inference quintet; owned frames/arrays and strict
+JSON metadata. Only simple/event-study aggregation; the event study has a reference
+-1 and post times starting at zero with post covariance and simultaneous bands.
+Stored `pretrend_test()` returns a Diagnostic copy, never recomputes. Native reporting
+rejects generic PT/sensitivity overrides and supplied diagnostic reports whose
+native payload differs from the fitted result's stored hazard diagnostic or
+availability metadata. Covariates, staggered timing, censoring,
+repeated cross-sections, survey weights and higher-level clustering are unsupported.
+No author-code parity or application replication is claimed.
+
+---
+
 
 ## DifferenceInDifferences
 

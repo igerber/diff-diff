@@ -1279,3 +1279,69 @@ class TestLWDiDGuideSection:
                 f"{surface_name} lost 'parallel trends' from its short "
                 f"identifying-assumptions qualifier."
             )
+
+
+class TestDurationDiDGuides:
+    """Protect the actionable estimator-specific workflow and selection contracts."""
+
+    def test_concise_catalog_diagnostic_and_workflow(self):
+        text = get_llm_guide()
+        estimators = text.split("## Estimators", 1)[1].split("## ", 1)[0]
+        diagnostics = text.split("## Diagnostics and Sensitivity Analysis", 1)[1].split("## ", 1)[0]
+        workflow = text.split("## Practitioner Workflow", 1)[1].split("## ", 1)[0]
+        assert "DurationDiD" in estimators and "Deaner" in estimators
+        assert "DurationDiD hazard pretest" in diagnostics and "reject=None" in diagnostics
+        assert "pooled individual bootstrap" in workflow
+        assert "covariates where supported" in workflow
+        assert "For estimators supporting cluster inference" in workflow
+
+    def test_full_contracts_and_selection(self):
+        text = get_llm_guide("full")
+        for heading in (
+            "### DurationDiD\n",
+            "### DurationDiDResults\n",
+            "### DurationDiDPretestResults\n",
+        ):
+            assert heading in text
+        section = text.split("### DurationDiD\n", 1)[1].split("### DurationDiDResults", 1)[0]
+        import inspect
+
+        from diff_diff import DurationDiD
+
+        for name in inspect.signature(DurationDiD.fit).parameters:
+            if name != "self":
+                assert name in section
+        assert "dimensionless" in section and "normalized observation interval" in section
+        table = text.split("## Choosing an Estimator", 1)[1].split("## ", 1)[0]
+        row = next(line for line in table.splitlines() if "| `DurationDiD` |" in line)
+        assert "Absorbing" in row and "balanced individual" in row and "common timing" in row
+        for heading in ("## BusinessReport", "## DiagnosticReport"):
+            section = text.split(heading, 1)[1].split("## ", 1)[0]
+            assert "DurationDiD" in section and "pretrend_test.status" in section
+
+    def test_autonomous_treatment_outcome_distinction_and_scope(self):
+        text = get_llm_guide("autonomous")
+        row = next(line for line in text.splitlines() if line.startswith("| `DurationDiD` |"))
+        assert row.count("✗") == 7 and "partial" in row
+        section = text.split("### §4.11", 1)[1].split("## §5.", 1)[0]
+        for term in (
+            "absorbing",
+            "balanced",
+            "common",
+            "hazard",
+            "fixed treatment group membership",
+            "post_periods",
+        ):
+            assert term in section
+        native = text.split("### Estimator-native diagnostics", 1)[1].split("### ", 1)[0]
+        assert "DurationDiDResults.pretrend_test()" in native and "reject=None" in native
+
+    def test_practitioner_step5_and_robustness_exceptions(self):
+        text = get_llm_guide("practitioner")
+        step5 = text.split("## Step 5: Estimate", 1)[1].split("## Step 6:", 1)[0]
+        assert "DurationDiD instead uses pooled individual bootstrap only" in step5
+        assert "For estimators supporting cluster inference" in step5
+        step6 = text.split("## Step 6:", 1)[1].split("## Step 7:", 1)[0]
+        assert "DurationDiD" in step6 and "stored fixed-anchor" in step6
+        step8 = text.split("## Step 8:", 1)[1].split("\n## ", 1)[0]
+        assert "DurationDiD has no covariate option" in step8

@@ -29,6 +29,7 @@ NEW_TO_DICT = [
 
 # Every public estimator results class (must be BaseResults, never Diagnostic).
 ESTIMATOR_RESULTS = [
+    "DurationDiDResults",
     "DiDResults",
     "SpilloverDiDResults",
     "MultiPeriodDiDResults",

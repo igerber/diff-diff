@@ -738,3 +738,43 @@ def test_r_argument_table_is_complete_and_real():
         f"R argument table is missing an in-scope package block: "
         f"{sorted(_R_TABLE_REQUIRED_PACKAGES - packages)}"
     )
+
+
+def test_duration_public_selection_and_survey_scope():
+    selection = (DOCS / "practitioner_decision_tree.rst").read_text()
+    duration = _section_body(selection, "Absorbing Individual Outcomes")
+    for term in ("DurationDiD", "balanced", "individual", "common", "hazard"):
+        assert term in duration
+    assert "DurationDiD" in _section_body(selection, "At a Glance")
+    assert "25 estimators" in selection
+    survey = (DOCS / "survey-roadmap.md").read_text().split("## Current Limitations", 1)[1]
+    row = next(line for line in survey.splitlines() if line.startswith("| DurationDiD |"))
+    assert "TypeError" in row and "time_weights" in row and "No survey-aware" in row
+    start_here = _section_body(
+        (DOCS / "practitioner_getting_started.rst").read_text(), "What If You Have Survey Data?"
+    )
+    assert "survey-capable estimator" in start_here and "DurationDiD" in start_here
+    assert "any estimator's" not in start_here
+
+
+def test_duration_public_reporting_and_readme_workflow():
+    report = _section_body(
+        (DOCS / "api/business_report.rst").read_text(), "DurationDiD native hazard diagnostics"
+    )
+    for term in (
+        "auto_diagnostics=False",
+        "reject=None",
+        "honest_did_results",
+        "confidence",
+        "bootstrap",
+    ):
+        assert term in report
+    readme = (
+        (REPO_ROOT / "README.md")
+        .read_text()
+        .split("## Practitioner Workflow", 1)[1]
+        .split("## Estimators", 1)[0]
+    )
+    assert "For estimators supporting cluster inference" in readme
+    assert "covariates where supported" in readme
+    assert "For DurationDiD, use hazard assumptions" in readme

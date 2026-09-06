@@ -30,6 +30,7 @@ from diff_diff.practitioner import practitioner_next_steps
 # separately: it is produced by a real fit below (its container is only
 # meaningful when populated by the decomposition).
 DIAGNOSTIC_ROSTER = [
+    "DurationDiDPretestResults",
     "BaconDecompositionResults",
     "RDPlotResult",
     "RDDensityTestResult",

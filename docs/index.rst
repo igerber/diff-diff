@@ -185,6 +185,8 @@ Supported Estimators
      - Athey & Imbens (2006) distributional DiD with quantile treatment effects
    * - :class:`~diff_diff.LWDiD`
      - Lee & Wooldridge (2025, 2026) rolling-transformation DiD; ``rolling='detrend'`` handles heterogeneous linear trends
+   * - :class:`~diff_diff.DurationDiD`
+     - Common-timing cumulative absorption effects under common dynamics or proportional hazards
    * - :class:`~diff_diff.DMLDiD`
      - Chang (2020) double/debiased ML DiD; staggered ATT(g,t) with cross-fitted nuisance learners (panel or declared repeated cross sections; survey/cluster support)
    * - :class:`~diff_diff.QDiD`

@@ -98,6 +98,8 @@ from diff_diff.diagnostics import (
 )
 from diff_diff.dml_did import DMLDiD
 from diff_diff.dml_did_results import DMLDiDResults
+from diff_diff.duration_did import DurationDiD
+from diff_diff.duration_did_results import DurationDiDPretestResults, DurationDiDResults
 from diff_diff.efficient_did import (
     EDiDBootstrapResults,
     EfficientDiD,
@@ -468,6 +470,9 @@ __all__ = [
     "LWDiD",
     "LWDiDResults",
     # DMLDiD (Chang 2020 double/debiased ML DiD)
+    "DurationDiD",
+    "DurationDiDResults",
+    "DurationDiDPretestResults",
     "DMLDiD",
     "DMLDiDResults",
     "SieveLearner",

@@ -479,6 +479,7 @@ _CS_GROUPS_CLASSES = (
 # 2(c)/3(a) rename PRs work from - these are the LEGAL `time`s; the two
 # 0/1-post overloads are rowed as M-030/M-082).
 _RULE1_TIME_SURFACES = (
+    "DurationDiD.fit[time]",  # Observation clock, not a renamed treatment selector.
     "BaconDecomposition.fit[time]",
     "BusinessReport.__init__[time]",
     "CallawaySantAnna.diagnose_propensity[time]",
@@ -994,6 +995,10 @@ CONSUMER_ALLOWLIST = {
     ),
     ("estimator", "diff_diff/diagnostic_report.py"): (
         'report-schema "estimator" keys holding type(results).__name__'
+    ),
+    ("estimator", "diff_diff/_reporting_helpers.py"): (
+        'native report-schema "estimator" key holding a class tag, '
+        "not a read of ChangesInChangesResults' renamed method field"
     ),
     ("estimator", "diff_diff/had.py"): (
         "prose/schema use of the word, not a read of CiC's results field"

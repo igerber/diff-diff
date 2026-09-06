@@ -6,6 +6,11 @@ Forward-looking plan for diff-diff, organized as queued work, candidates under c
 
 ## Shipping Next
 
+DurationDiD now provides the two-group common-timing core for absorbing individual
+outcomes, with CD/PH hazards, pooled bootstrap and native pretests. Covariate,
+staggered, censoring, survey and clustering extensions remain outside this release;
+see [the API](docs/api/duration_did.rst) and the dated methodology review.
+
 Queued work, ordered by expected leverage. Each item is its own PR. Ordering is priority-sequenced, not time-committed.
 
 ### 4.0 API unification
@@ -80,12 +85,6 @@ Long-running program, framed as "building toward" rather than with discrete ship
 ## Long-term Research Directions
 
 Frontier methods that may graduate to Under Consideration given time and research signals.
-
-### Causal Duration Analysis with DiD
-
-Extends DiD to duration / survival outcomes where standard methods fail (hazard rates, time-to-event). Duration analogue of parallel trends; avoids distributional and hazard-function assumptions.
-
-**Reference**: Deaner & Ku (2025), *AEA Conference Paper*.
 
 ### CATT Meta-Learner for Heterogeneous Effects
 

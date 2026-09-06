@@ -41,6 +41,7 @@ from diff_diff import (
     ContinuousDiD,
     DifferenceInDifferences,
     DMLDiD,
+    DurationDiD,
     EfficientDiD,
     HeterogeneousAdoptionDiD,
     ImputationDiD,
@@ -458,6 +459,7 @@ class TestInferenceRoster:
 # ===========================================================================
 
 FLOOR_CLASSES = [
+    (DurationDiD, {}),
     (TROP, {}),
     (SyntheticDiD, {}),
     (SyntheticDiD, {"variance_method": "jackknife"}),
@@ -486,6 +488,8 @@ class TestFloorEstimatorTypeGuards:
 
     def test_floors_and_carveouts_intact(self):
         # Floors keep their own messages after the type guard.
+        with pytest.raises(ValueError, match="n_bootstrap must be >= 2 for DurationDiD"):
+            DurationDiD(n_bootstrap=1)
         with pytest.raises(ValueError, match="n_bootstrap must be >= 2 for TROP"):
             TROP(n_bootstrap=1)
         with pytest.raises(ValueError, match=r"n_bootstrap must be >= 2 \(got 1\)"):

@@ -883,7 +883,7 @@ Survey Design Support
 
 Most estimators support an optional ``survey_design`` parameter in ``fit()``
 (``SyntheticControl`` accepts the parameter but raises ``NotImplementedError``;
-``LWDiD`` accepts no ``survey_design`` parameter at all —
+``LWDiD`` and ``DurationDiD`` accept no ``survey_design`` parameter at all —
 passing it raises ``TypeError``).
 Pass a :class:`~diff_diff.SurveyDesign` object to get design-based variance
 estimation. The depth of support varies by estimator and variance method:
@@ -1010,6 +1010,11 @@ estimation. The depth of support varies by estimator and variance method:
      - Full (Binder TSL)
      - --
      - --
+   * - ``DurationDiD``
+     - N/A (no survey support)
+     - N/A
+     - --
+     - --
    * - ``LWDiD``
      - N/A (no survey support)
      - N/A
@@ -1064,3 +1069,20 @@ estimation. The depth of support varies by estimator and variance method:
 For the full walkthrough with code examples, see the
 `survey tutorial <https://github.com/igerber/diff-diff/blob/main/docs/tutorials/16_survey_did.ipynb>`_.
 For deferred work and remaining limitations, see ``docs/survey-roadmap.md``.
+
+Duration DiD: Absorbing Individual Outcomes
+-------------------------------------------
+
+Choose :class:`~diff_diff.DurationDiD` when the outcome records whether an
+individual has already experienced absorption, the complete balanced panel has
+unaffected controls and common treatment timing, and a common-dynamics or
+proportional untreated-hazard restriction is credible. At least two pre-dates
+and one post-date are needed. Group membership is fixed; ``post_periods`` declares
+timing. This does not support arbitrary proportions, censoring, staggered timing,
+covariates, survey weights or higher-level clustering.
+
+Inference is pooled individual bootstrap only: pointwise and simultaneous bands,
+a uniformly time-averaged headline, and an independent stored hazard pretest.
+Failed families report unavailable inference; very few treated individuals do
+not gain exact or synthetic-control inference. Inspect support and failure counts.
+See :doc:`api/duration_did` and :doc:`tutorials/33_duration_did`.

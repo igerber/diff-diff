@@ -49,6 +49,11 @@ Which of these best describes your situation?
    Universal rollout with dose-only variation. Go to
    :ref:`section-no-untreated`.
 
+8. **I track whether each person has experienced a one-time event**
+
+   Complete absorbing histories with common intervention timing. Go to
+   :ref:`section-duration`.
+
 .. tip::
 
    In academic literature, "rolling out in waves" is called *staggered adoption*,
@@ -90,6 +95,9 @@ change in your test markets to the before/after change in your control markets.
    *ATT* (Average Treatment Effect on the Treated) - it tells you the average lift
    among the markets that received the campaign.
 
+For absorbing individual histories, first consider :ref:`section-duration`;
+the ordinary outcome parallel-trends assumption is a different restriction.
+
 **When to upgrade:**
 
 - If you have many time periods and want unit-level controls:
@@ -97,6 +105,31 @@ change in your test markets to the before/after change in your control markets.
 - If you want to see how the effect evolves over time (week by week):
   :class:`~diff_diff.TwoWayFixedEffects` with ``event_study=True``
   (``MultiPeriodDiD`` is deprecated in 3.9)
+
+
+.. _section-duration:
+
+Absorbing Individual Outcomes
+-----------------------------
+
+**Your situation:** You track the same individuals at equally spaced dates and
+record whether each has already experienced an absorbing event. There are
+unaffected controls, and intervention begins at a common date for treated people.
+The panel is balanced: every individual has a complete history; keep people absorbed at baseline.
+
+**Method:** :class:`~diff_diff.DurationDiD` under common dynamics or proportional
+untreated hazards. These hazard restrictions need substantive justification.
+Positive effects increase cumulative absorption; the headline averages all
+post-date ATTs over the whole treated population. At least two pre-dates and one
+post-date are required; three pre-dates permit the stored hazard pretest.
+
+Inspect ``results.pretrend_test()``, survival paths, support and bootstrap failures.
+Non-rejection does not establish identification. Inference uses pooled individual
+histories, assuming independent individuals. Covariates, staggered timing,
+censoring/dropout, repeated cross-sections, survey weights and higher-level
+clustering are unsupported. This is not a shortcut for few treated markets or
+arbitrary proportion outcomes. See :doc:`api/duration_did` and
+:doc:`tutorials/33_duration_did`.
 
 
 .. _section-staggered:
@@ -438,8 +471,8 @@ satisfaction, NPS, or similar. The survey uses stratified sampling, clustering (
 by geography), or probability weights.
 
 **Answer:** Use a survey-capable method above, combined with
-:class:`~diff_diff.SurveyDesign`. (:class:`~diff_diff.LWDiD` is the
-exception: it accepts no ``survey_design`` parameter at all — see the
+:class:`~diff_diff.SurveyDesign`. (:class:`~diff_diff.LWDiD` and :class:`~diff_diff.DurationDiD` are
+exceptions: they accept no ``survey_design`` parameter at all — see the
 :ref:`survey-design-support` matrix. :class:`~diff_diff.DMLDiD` supports
 pweight full-design TSL, replicate-weight designs (IF-reweighting), and
 ``cluster=`` on both lanes.)
@@ -528,19 +561,22 @@ At a Glance
    * - Only a few test markets
      - ``SyntheticDiD`` or ``LWDiD``
      - ``SyntheticDiD`` builds a synthetic counterfactual; ``LWDiD`` adds exact small-sample inference (under classical error assumptions — see :ref:`section-few-markets`)
-   * - Survey data (any design above)
-     - Any survey-capable estimator above (not ``LWDiD``) + ``SurveyDesign``
+   * - Absorbing individual histories, common timing
+     - ``DurationDiD``
+     - Cumulative absorption ATT under CD/PH hazard restrictions; balanced panel
+   * - Survey data (supported designs above)
+     - Any survey-capable estimator above (not ``LWDiD`` or ``DurationDiD``) + ``SurveyDesign``
      - Correct confidence intervals; see the :ref:`survey-design-support` matrix
 
 
 What About the Other Estimators?
 --------------------------------
 
-diff-diff has 24 estimators covering advanced scenarios: Sun-Abraham for
+diff-diff has 25 estimators covering advanced scenarios: Sun-Abraham for
 interaction-weighted estimation, Imputation DiD and Two-Stage DiD for alternative
 staggered approaches, Local Projections DiD, Stacked DiD, Efficient DiD,
 Triple Difference, TROP, Changes-in-Changes for distributional/quantile effects, and more.
-The six scenarios above cover the most common business use cases.
+The scenarios above cover the most common business use cases.
 
 - **Want rolling-transformation approach?** → :class:`~diff_diff.LWDiD` (Lee & Wooldridge 2025, 2026)
 

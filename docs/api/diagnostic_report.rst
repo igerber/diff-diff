@@ -90,3 +90,49 @@ API
    :show-inheritance:
 
 .. autodata:: diff_diff.DIAGNOSTIC_REPORT_SCHEMA_VERSION
+
+DurationDiD native hazard diagnostics
+-------------------------------------
+
+For ``DurationDiDResults``, the stored fixed-anchor hazard pretest is extracted
+without raw data, refitting, or recomputing diagnostics. The
+``estimator_native_diagnostics`` section has outer ``status='ran'`` for successful
+extraction; its nested ``pretrend_test.status`` determines availability and
+``reject=None`` denotes an unavailable test. Its confidence level is the fit's
+``alpha``, independently of report-level phrasing. Non-rejection never establishes
+identification or adequate power. Effect and diagnostic bootstrap validity are
+independent; inspect estimation/inference statuses, reasons and support warnings.
+
+``summary()`` (including on the returned ``DiagnosticReportResults``) and
+``full_report()`` describe the stored hazard decision at its fitted simultaneous
+confidence level. An unavailable pretest includes its reasons and explicitly has
+no rejection decision. The native row in ``to_dataframe()`` retains extraction
+``status='ran'``: its ``headline`` is the stored hazard-test p-value when available,
+otherwise missing, with the availability reasons in ``reason``. These views never
+recompute the diagnostic or replace its fitted confidence level with report alpha.
+For invalid counterfactual curves, the narrative directs readers to
+``survival_curve`` and specification comparisons using ``method`` and ``fit_periods``.
+
+All generic ``precomputed`` overrides (parallel_trends, sensitivity,
+pretrends_power, bacon) are rejected for DurationDiD. Its hazard contrasts are
+not pre-treatment outcome ATTs and do not admit generic HonestDiD/PreTrendsPower.
+
+A self-contained example:
+
+.. code-block:: python
+
+   import pandas as pd
+   from diff_diff import DurationDiD, DiagnosticReport
+
+   rows = []
+   for group, counts in enumerate(([96, 80, 64, 48, 32, 16], [90, 75, 60, 45, 20, 8])):
+       for person in range(400):
+           for date, survivors in enumerate(counts):
+               rows.append((group * 400 + person, date, group, int(person >= 4 * survivors)))
+   panel = pd.DataFrame(rows, columns=["person", "date", "group", "absorbed"])
+   fitted = DurationDiD(n_bootstrap=19, seed=33).fit(
+       panel, "absorbed", "group", "person", "date", post_periods=[4, 5]
+   )
+   native = DiagnosticReport(fitted).to_dict()["estimator_native_diagnostics"]
+   assert native["estimator"] == "DurationDiD"
+   print(fitted.pretrend_test().summary())

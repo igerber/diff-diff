@@ -34,6 +34,9 @@ print(f"ATT: {results.att:.3f} (SE: {results.se:.3f})")
 ## Practitioner Workflow (based on Baker et al. 2025)
 
 For rigorous DiD analysis, follow the 8-step framework (call `diff_diff.get_llm_guide("practitioner")`).
+For DurationDiD, use hazard assumptions and the stored hazard pretest, pooled
+individual-bootstrap inference, and method/calibration comparisons. Covariates,
+survey weights, higher-level clusters and generic sensitivity procedures are unsupported.
 After estimation, call:
 
 ```python
@@ -45,6 +48,112 @@ Returns context-aware guidance on remaining diagnostic steps (parallel trends
 testing, sensitivity analysis, heterogeneity checks, robustness comparisons).
 
 ## Estimators
+
+### DurationDiD
+
+Deaner & Ku (2026), Causal Duration Analysis with Diff-in-Diff, arXiv:2405.05220v2.
+Whole-treated-population cumulative absorption ATT (including baseline-absorbed
+people); positive effects increase absorption. Headline = uniform mean across all
+post-period ATTs. Requires complete balanced individual histories, absorbing 0/1
+outcomes, unaffected controls and common timing; two pre-dates and one post-date
+minimum. Identification uses common dynamics or proportional untreated hazards,
+no anticipation and fixed populations. Individual independence additionally
+underlies inference. No outcome-mean parallel-trends assumption is imposed.
+
+```python
+DurationDiD(method="common_dynamics", n_bootstrap=1000, alpha=0.05, seed=None)
+est.fit(data, outcome, treatment, unit, time, *, post_periods,
+        fit_periods=None, time_weights=None) -> DurationDiDResults
+```
+
+`treatment` is fixed binary group membership; `post_periods` is an explicit
+nonempty observed suffix. Equal-spaced numeric/Timestamp/Timedelta clock. The
+preceding date is last untreated; never infer timing from absorption.
+`fit_periods` selects pre-dates strictly after baseline, leaving population,
+baseline, post horizon and diagnostic window intact. `time_weights` keys match
+selected dates (or default eligible dates); finite nonnegative weights normalize
+to one. Zero weights remove moments before arithmetic. Explicit unsupported
+positive moments raise; default exclusions carry reasons. Support is frozen for
+all bootstrap draws. PH needs positive control increments and positive c.
+
+With R=-log(S), baseline increments D and normalized elapsed d, CD estimates
+c=sum w*(D1-D0)/d and Rcf=R1baseline+D0+d*c; PH estimates the reviewed mean of
+ratios c=sum w*D1/D0 and Rcf=R1baseline+c*D0. ATT=exp(-Rcf)-S1. The CD coefficient
+is a hazard gap per normalized observation interval; PH is a dimensionless
+hazard ratio and never acquires time units when the observation clock changes.
+
+Inference: exactly B pooled individual history draws, nuisance re-estimation,
+ddof=1 SD/covariance, centered absolute bootstrap pivots, inverse empirical-CDF
+quantiles (ceil((1-alpha)B)-1). Pointwise bands use coordinate pivots; simultaneous
+bands use post-family maxima. Headline weights apply inside each draw. Centered
+absolute-tail p-values count equality; they are discrete library companions to
+the paper's bands, not raw percentile or normal inference. No retries, stratified
+replacement, epsilon substitution or successful-draw filtering. Any failed effect
+draw disables the entire effect family's inference and headline inference while
+preserving valid original points; diagnostic-family validity is independent.
+Zero SE disables associated t/p/CI and uniform bands, not other valid coordinates.
+
+Scope: no covariates, staggered adoption, censoring/dropout, repeated cross-sections,
+survey weights or higher-level clustering. Calibration time_weights are not sampling
+weights. Required logs must be defined; zero factual treated post-survival is valid.
+Invalid counterfactual bounds or increasing survival (including the last-pre
+boundary) preserve raw paths but suppress canonical causal output, without clipping
+or horizon trimming. Support warnings (<5 survivors, or PH control exits since
+baseline at selected dates) are reporting heuristics, not trimming rules.
+
+### DurationDiDResults
+
+Flat fields `att`, `se`, `t_stat`, `p_value`, `conf_int`; configuration `method`,
+`alpha`, `seed`, `n_bootstrap`; counts `n_obs` (rows), `n_units`, `n_treated`,
+`n_control` (people). Date lists: `periods`, `pre_periods`, `post_periods`, effective
+`fit_periods`, optional `requested_fit_periods`; mappings `time_weights`,
+`excluded_fit_periods`; clock `time_origin`, `time_step`; method-specific `coefficient`.
+
+Owns `effects`, `survival_curve`, `bootstrap_failures`, B-by-post `bootstrap_effects`,
+`n_bootstrap_valid`, optional post-ordered `vcov`, and `cband_crit_value`.
+`estimation_status`: ok/invalid_counterfactual. `inference_status` and
+`inference_reasons` have pointwise/simultaneous/simple keys; available/unavailable,
+plus partial for pointwise. `support_warnings` and `pretrend_results` remain
+inspectable. Properties: `inference_method='bootstrap'`, uniform raw post `raw_att`.
+
+Native table column order (chronological RangeIndex):
+- effects (post only): period, event_time, att, se, t_stat, p_value, conf_int_lower,
+  conf_int_upper, cband_lower, cband_upper, pointwise_crit_value, inference_status, reason.
+- survival_curve (all dates): period, elapsed_time, treated_survival, control_survival,
+  treated_survivors, control_survivors, raw_counterfactual_cumulative_hazard,
+  raw_counterfactual_survival, raw_att, counterfactual_status, reason. Pre raw values
+  are NaN/not_estimated; post status is valid/invalid. Invalid original curves make
+  every canonical post ATT and the headline unavailable, preserving raw paths.
+- bootstrap_failures: draw (zero-based), family (effects/diagnostics), period
+  (nullable), reason. Multiple reasons do not double-count draws; failed effect rows are all NaN.
+
+`to_dataframe(level='event_study')` defaults to EVENT_STUDY_SCHEMA; simple uses
+AGGREGATION_SCHEMA, survival/diagnostics return owned native tables. Only
+`aggregate('simple')` / `aggregate('event_study')`; no weights or balance_e.
+Event-study reference -1 has zero effect and undefined inference/count, post
+relative times start at zero; preserve post covariance, its index and simultaneous
+bands. Source is DurationDiDResults, event_time_convention=e0_first_treated,
+n_kind=units (treated people), df=NaN. No generic HonestDiD/PreTrendsPower admission.
+
+### DurationDiDPretestResults
+
+`pretrend_test()` returns an owned copy of this stored Diagnostic, never a refit.
+Fields: method, alpha, anchor_period, contrasts, statistic, p_value, critical_value,
+reject, status, reasons, n_bootstrap, n_bootstrap_attempted, n_bootstrap_valid,
+bootstrap_contrasts (B by tested dates), bootstrap_failures (diagnostic subset).
+Contrast columns: period, elapsed_time, contrast, se, cband_lower, cband_upper,
+status, reason. Tests all interior pre-dates against the last untreated anchor,
+excluding baseline/anchor, independent of calibration. These are hazard contrasts,
+not pre-treatment outcome ATTs. Three pre-dates needed; unavailable tests retain
+raw contrasts and reject=None. Invalid original diagnostics attempt zero draws.
+
+Both containers implement summary(alpha=None), to_dict(), to_dataframe(); the
+Diagnostic dataframe is its contrast table. Summaries preserve fit-level confidence
+and reject changed alpha. Serialization includes all public metadata, nested
+diagnostics and bootstrap arrays, emits scalar conf_int_lower/conf_int_upper,
+serializes period maps as period/value records, dates as ISO and nonfinite numbers
+as null (strict JSON). Containers own arrays/frames. Non-rejection does not establish
+identification or adequate power. API: https://diff-diff.readthedocs.io/en/stable/api/duration_did.html.
 
 ### DifferenceInDifferences
 
@@ -2695,7 +2804,7 @@ sd_female, data_female = sd.subpopulation(data, mask=lambda df: df['sex'] == 'F'
 
 **Key features:**
 - Taylor Series Linearization (TSL) variance with strata + PSU + FPC
-- Replicate weight variance: BRR, Fay's BRR, JK1, JKn, SDR (14 of 24 estimators, including dCDH and DMLDiD)
+- Replicate weight variance: BRR, Fay's BRR, JK1, JKn, SDR (14 of 25 estimators, including dCDH and DMLDiD)
 - Survey-aware bootstrap: multiplier at PSU (Hall-Mammen wild; dCDH, staggered) or Rao-Wu rescaled (SunAbraham, SyntheticDiD, TROP). SyntheticDiD bootstrap composes Rao-Wu rescaled per-draw weights with the weighted Frank-Wolfe variant of `_sc_weight_fw` (PR #355): each draw solves `min ||A·diag(rw)·ω - b||² + ζ²·Σ rw_i ω_i²` and composes `ω_eff = rw·ω/Σ(rw·ω)` for the SDID estimator. Pweight-only fits use constant `rw = w_control`; full designs use Rao-Wu. SDID's placebo (stratified permutation + weighted FW) and jackknife (PSU-level LOO with stratum aggregation, Rust & Rao 1996) paths also support pweight-only and full strata/PSU/FPC designs
 - DEFF diagnostics, subpopulation analysis, weight trimming (`trim_weights`)
 - Repeated cross-sections: `CallawaySantAnna(panel=False)`
@@ -2901,6 +3010,7 @@ DIFF_DIFF_BACKEND=rust pytest     # Force Rust (fail if unavailable)
 
 | Scenario | Recommended Estimator |
 |----------|----------------------|
+| Absorbing binary outcomes, balanced individual panel, common timing and CD/PH untreated-hazard assumptions | `DurationDiD` |
 | Classic 2x2 design (one treated group, one time split) | `DifferenceInDifferences` |
 | Panel data with unit + time FE | `TwoWayFixedEffects` |
 | Event study with multiple periods (simultaneous adoption) | `TwoWayFixedEffects` with `event_study=True` (`spec="pooled"` reproduces the deprecated `MultiPeriodDiD`) |
@@ -2919,6 +3029,22 @@ DIFF_DIFF_BACKEND=rust pytest     # Force Rust (fail if unavailable)
 | Robustness to parallel trends violations | `HonestDiD` |
 
 ## BusinessReport
+
+DurationDiD uses only estimator_native routing. It extracts the stored hazard
+pretest without refitting: outer status=ran denotes extraction, while nested
+pretrend_test.status/reject/reasons define availability. Effect-family and
+diagnostic-family validity are independent. Preserve its fitted confidence level,
+bootstrap failure counts and support warnings. All four generic precomputed
+keys are rejected; BusinessReport also rejects honest_did_results. Even when
+auto_diagnostics=False, fit-level failure and support caveats remain visible.
+Few treated individuals imply individual-bootstrap support concerns, not
+large-cluster asymptotics or automatic synthetic/permutation alternatives.
+Supplied BusinessReport diagnostics= (live or detached) must name DurationDiD,
+match its stored native hazard payload and availability metadata, and contain no
+computed generic diagnostics. Use pretrend_test() and method/fit_periods comparisons.
+Short summaries count support warnings and summarize unavailable families; to_dict()
+and full_report() retain every per-date warning and reason.
+
 
 Plain-English stakeholder narrative from any fitted result type.
 Renders `summary()` (short paragraph), `full_report()` (multi-section
@@ -2971,6 +3097,28 @@ Status enum values: `ran | skipped | error | not_applicable | not_run | computed
 no-scalar branch.
 
 ## DiagnosticReport
+
+DurationDiD uses only estimator_native routing. It extracts the stored hazard
+pretest without refitting: outer status=ran denotes extraction, while nested
+pretrend_test.status/reject/reasons define availability. Effect-family and
+diagnostic-family validity are independent. Preserve its fitted confidence level,
+bootstrap failure counts and support warnings. All four generic precomputed
+keys are rejected; BusinessReport also rejects honest_did_results. Even when
+auto_diagnostics=False, fit-level failure and support caveats remain visible.
+Few treated individuals imply individual-bootstrap support concerns, not
+large-cluster asymptotics or automatic synthetic/permutation alternatives.
+Supplied BusinessReport diagnostics= (live or detached) must name DurationDiD,
+match its stored native hazard payload and availability metadata, and contain no
+computed generic diagnostics. Use pretrend_test() and method/fit_periods comparisons.
+Short summaries count support warnings and summarize unavailable families; to_dict()
+and full_report() retain every per-date warning and reason.
+DiagnosticReport.summary() (also on returned results) and full_report() state the
+stored hazard verdict at its fitted simultaneous confidence level; unavailable
+tests include reasons and have no rejection decision. The native to_dataframe()
+row keeps extraction status=ran, with headline equal to the available hazard
+p-value, otherwise missing with availability reasons in reason. Invalid curves
+point to survival_curve raw extrapolations and method/fit_periods comparisons.
+
 
 Unified diagnostic runner orchestrating `check_parallel_trends`,
 `compute_pretrends_power`, `HonestDiD.sensitivity`, `BaconDecomposition`,

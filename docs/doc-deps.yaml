@@ -21,6 +21,9 @@
 # Members resolve to the first entry (the primary module) for doc lookup.
 # ────────────���─────────────────────────────────────────────────────────
 groups:
+  duration_did:
+    - diff_diff/duration_did.py
+    - diff_diff/duration_did_results.py
   staggered:
     - diff_diff/staggered.py
     - diff_diff/staggered_aggregation.py
@@ -105,6 +108,76 @@ groups:
 # Source-to-docs mappings
 # ────────���─────────────────────────��───────────────────────────────────
 sources:
+  diff_diff/duration_did.py:
+    drift_risk: high
+    docs:
+      - path: docs/api/duration_did.rst
+        type: api_reference
+        section: "Estimator and result contracts"
+      - path: docs/api/business_report.rst
+        type: api_reference
+        section: "DurationDiD native diagnostics and opt-out caveats"
+      - path: docs/api/diagnostic_report.rst
+        type: api_reference
+        section: "DurationDiD native hazard pretest"
+      - path: docs/api/index.rst
+        type: api_reference
+        section: "Estimator/results catalog"
+      - path: README.md
+        type: user_guide
+        section: "Estimators and Practitioner Workflow exceptions"
+      - path: docs/index.rst
+        type: user_guide
+        section: "Supported Estimators"
+      - path: docs/tutorials/index.rst
+        type: user_guide
+        section: "Duration DiD card and navigation"
+      - path: docs/tutorials/33_duration_did.ipynb
+        type: tutorial
+        section: "Absorbing outcomes and native diagnostics"
+      - path: docs/references.rst
+        type: user_guide
+        section: "Duration DiD"
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+        section: "Duration DiD and Survey Design Support"
+      - path: docs/practitioner_decision_tree.rst
+        type: user_guide
+        section: "Absorbing Individual Outcomes and survey exclusions"
+      - path: docs/practitioner_getting_started.rst
+        type: user_guide
+        section: "What If You Have Survey Data?"
+      - path: docs/survey-roadmap.md
+        type: roadmap
+        section: "Current Limitations"
+      - path: diff_diff/guides/llms.txt
+        type: user_guide
+        section: "Estimator catalog, diagnostics and workflow"
+      - path: diff_diff/guides/llms-full.txt
+        type: user_guide
+        section: "DurationDiD, results, selection, reporting and workflow"
+      - path: diff_diff/guides/llms-practitioner.txt
+        type: user_guide
+        section: "Hazard assumptions, Step 5 and native robustness"
+      - path: diff_diff/guides/llms-autonomous.txt
+        type: user_guide
+        section: "Estimator-support matrix, §4 design discussion and native reporting"
+      - path: docs/methodology/REGISTRY.md
+        type: methodology
+        section: "DurationDiD"
+      - path: docs/methodology/REPORTING.md
+        type: methodology
+        section: "DurationDiD"
+      - path: docs/methodology/papers/deaner-ku-2026-review.md
+        type: methodology
+        section: "Binding dated source review (preserve historical framing)"
+      - path: METHODOLOGY_REVIEW.md
+        type: internal
+        section: "DurationDiD In Progress"
+      - path: ROADMAP.md
+        type: roadmap
+        section: "DurationDiD scope"
+
 
   # ── Base estimators ──────��───────────────────────────────────────────
 
@@ -1188,6 +1261,9 @@ sources:
   diff_diff/business_report.py:
     drift_risk: medium
     docs:
+      - path: diff_diff/guides/llms-autonomous.txt
+        type: user_guide
+        section: "DurationDiD workflow and reporting"
       - path: docs/methodology/REPORTING.md
         type: methodology
         note: "Phrasing rules, pre-trends verdict thresholds, unit-translation policy, schema stability."
@@ -1524,6 +1600,12 @@ sources:
   diff_diff/practitioner.py:
     drift_risk: low
     docs:
+      - path: diff_diff/guides/llms.txt
+        type: user_guide
+        section: "DurationDiD workflow and reporting"
+      - path: README.md
+        type: user_guide
+        section: "DurationDiD workflow and reporting"
       - path: diff_diff/guides/llms-practitioner.txt
         type: user_guide
       - path: diff_diff/guides/llms-full.txt

@@ -41,12 +41,17 @@ experimental in v3.2.
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, List, Optional, Union
 
 import numpy as np
 
-from diff_diff._reporting_helpers import describe_target_parameter
+from diff_diff._reporting_helpers import (
+    _duration_hazard_sentence,
+    _duration_native_diagnostics,
+    describe_target_parameter,
+)
 from diff_diff.diagnostic_report import DiagnosticReport, DiagnosticReportResults
 from diff_diff.results_base import Diagnostic, _coverage_level, _coverage_pct
 
@@ -240,6 +245,18 @@ class BusinessReport:
         # auto-constructed ``DiagnosticReport`` (which now also
         # rejects it at construction time — round-21 P1 CI review on
         # PR #318).
+        if type(results).__name__ == "DurationDiDResults" and precomputed:
+            raise ValueError(
+                "DurationDiD accepts no generic precomputed diagnostics; use its stored hazard pretest."
+            )
+        if type(results).__name__ == "DurationDiDResults" and honest_did_results is not None:
+            raise ValueError(
+                "DurationDiDResults does not accept honest_did_results: HonestDiD bounds "
+                "are incompatible with its hazard restrictions. Use pretrend_test() for "
+                "the stored hazard diagnostic and compare method and fit_periods "
+                "specifications. BusinessReport surfaces the stored pretest under "
+                "estimator_native_diagnostics."
+            )
         if honest_did_results is not None and type(results).__name__ in {
             "SyntheticDiDResults",
             "TROPResults",
@@ -443,10 +460,16 @@ class BusinessReport:
         """Return the DiagnosticReportResults to embed, or ``None`` if skipped."""
         if self._diagnostics_arg is not None:
             if isinstance(self._diagnostics_arg, DiagnosticReportResults):
-                return self._diagnostics_arg
-            if isinstance(self._diagnostics_arg, DiagnosticReport):
-                return self._diagnostics_arg.run_all()
-            raise TypeError("diagnostics= must be a DiagnosticReport or DiagnosticReportResults")
+                supplied = self._diagnostics_arg
+            elif isinstance(self._diagnostics_arg, DiagnosticReport):
+                supplied = self._diagnostics_arg.run_all()
+            else:
+                raise TypeError(
+                    "diagnostics= must be a DiagnosticReport or DiagnosticReportResults"
+                )
+            if type(self._results).__name__ == "DurationDiDResults":
+                self._validate_duration_diagnostics(supplied.schema)
+            return supplied
         if not self._auto_diagnostics:
             return None
         # Round-43 P2 CI review on PR #318: forward the user's
@@ -474,6 +497,36 @@ class BusinessReport:
             survey_design=self._dr_survey_design,
         )
         return dr.run_all()
+
+    def _validate_duration_diagnostics(self, schema: Dict[str, Any]) -> None:
+        """Admit only native diagnostics matching this DurationDiD fit's stored payload."""
+        if schema.get("estimator") != "DurationDiDResults":
+            raise ValueError("DurationDiD diagnostics= requires a DurationDiDResults report.")
+        for check in (
+            "parallel_trends",
+            "sensitivity",
+            "pretrends_power",
+            "bacon",
+            "design_effect",
+            "heterogeneity",
+            "epv",
+            "placebo",
+        ):
+            section = schema.get(check, {})
+            if not isinstance(section, dict) or (
+                section and section.get("status") not in {"not_applicable", "skipped"}
+            ):
+                raise ValueError(
+                    f"DurationDiD diagnostics= cannot include a computed generic {check} section; "
+                    "use its stored hazard pretest."
+                )
+        if schema.get("estimator_native_diagnostics") != _duration_native_diagnostics(
+            self._results
+        ):
+            raise ValueError(
+                "DurationDiD diagnostics= must match this fit's stored native hazard diagnostic "
+                "and availability metadata. Build DiagnosticReport from these fitted results."
+            )
 
     def _build_schema(self) -> Dict[str, Any]:
         """Assemble the structured schema.
@@ -1078,6 +1131,8 @@ def _lift_robustness(dr: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "estimator": native.get("estimator"),
         "pre_treatment_fit": native.get("pre_treatment_fit"),
     }
+    if native.get("estimator") == "DurationDiD":
+        native_block = deepcopy(native)
     # Classic SCM exposes pre_rmspe + donor-weight concentration + the (opt-in)
     # in-space placebo rather than SDiD's pre_treatment_fit; surface those so the
     # top-level robustness block is not empty for SyntheticControl.
@@ -1208,6 +1263,12 @@ def _apply_anticipation_to_assumption(block: Dict[str, Any], results: Any) -> Di
 
 def _describe_assumption(estimator_name: str, results: Any = None) -> Dict[str, Any]:
     """Return the identifying-assumption block for an estimator."""
+    if estimator_name == "DurationDiDResults":
+        return {
+            "parallel_trends_variant": "untreated_hazards",
+            "no_anticipation": True,
+            "description": f"Identification uses {getattr(results, 'method', 'the selected')} untreated hazards, no anticipation, unaffected controls, absorbing outcomes, fixed populations and common treatment timing. Pooled individual-bootstrap inference additionally assumes independent individuals.",
+        }
     if estimator_name in {
         "SyntheticDiDResults",
     }:
@@ -1690,7 +1751,15 @@ def _build_caveats(
 
     # Few treated units.
     nt = sample.get("n_treated")
-    if nt is not None and nt <= 3:
+    if nt is not None and nt <= 3 and type(_results).__name__ == "DurationDiDResults":
+        caveats.append(
+            {
+                "severity": "warning",
+                "topic": "few_treated",
+                "message": f"Only {nt} treated individuals: pooled individual-bootstrap support and reliability can be poor. Inspect survivor/exit support and bootstrap-family availability and failure counts.",
+            }
+        )
+    elif nt is not None and nt <= 3:
         caveats.append(
             {
                 "severity": "warning",
@@ -1702,6 +1771,42 @@ def _build_caveats(
                     "alternative."
                 ),
             }
+        )
+
+    if type(_results).__name__ == "DurationDiDResults":
+        messages = [("duration_support", msg) for msg in _results.support_warnings]
+        if _results.estimation_status != "ok":
+            messages.append(
+                (
+                    "duration_counterfactual",
+                    "Invalid counterfactual survival: canonical causal effects are unavailable; inspect raw extrapolations.",
+                )
+            )
+        messages.extend(
+            (
+                "duration_inference",
+                f"{family} inference {state}: {'; '.join(_results.inference_reasons[family])}",
+            )
+            for family, state in _results.inference_status.items()
+            if state != "available"
+        )
+        if _results.n_bootstrap_valid != _results.n_bootstrap:
+            messages.append(
+                (
+                    "duration_bootstrap",
+                    f"Pooled individual bootstrap: {_results.n_bootstrap_valid}/{_results.n_bootstrap} valid effect draws.",
+                )
+            )
+        if _results.pretrend_results.status != "available":
+            messages.append(
+                (
+                    "duration_pretest",
+                    "Hazard pretest unavailable: " + "; ".join(_results.pretrend_results.reasons),
+                )
+            )
+        caveats.extend(
+            {"severity": "warning", "topic": topic, "message": msg}
+            for topic, msg in dict.fromkeys(messages)
         )
 
     # Non-trivial design effect.
@@ -1971,6 +2076,13 @@ def _references_for(estimator_name: str) -> List[Dict[str, str]]:
             ),
         },
     ]
+    if estimator_name == "DurationDiDResults":
+        return [
+            {
+                "role": "estimator",
+                "citation": "Deaner, B., and Ku, H. (2026). Causal Duration Analysis with Diff-in-Diff. arXiv:2405.05220v2.",
+            }
+        ] + [item for item in base if item["role"] != "sensitivity"]
     estimator_refs = {
         "CallawaySantAnnaResults": {
             "role": "estimator",
@@ -2242,9 +2354,14 @@ def _render_headline_sentence(schema: Dict[str, Any]) -> str:
     return f"{treatment_sentence} {verb} {outcome}{by_clause}{ci_str}."
 
 
+def _duration_diagnostic_sentence(schema: Dict[str, Any]) -> str:
+    native = (schema.get("robustness") or {}).get("estimator_native") or {}
+    return _duration_hazard_sentence(native)
+
+
 def _render_summary(schema: Dict[str, Any]) -> str:
     """Render the short-form stakeholder summary paragraph."""
-    sentences: List[str] = []
+    sentences: List[str] = [_duration_diagnostic_sentence(schema)]
     ctx = schema.get("context", {})
     question = ctx.get("business_question")
     if question:
@@ -2555,8 +2672,28 @@ def _render_summary(schema: Dict[str, Any]) -> str:
     caveats = schema.get("caveats", [])
     warning_caveats = [c for c in caveats if c.get("severity") == "warning"]
     if warning_caveats:
-        top = warning_caveats[0]
-        sentences.append(f"Caveat: {top.get('message')}")
+        ordinary = [c for c in warning_caveats if not c.get("topic", "").startswith("duration_")]
+        if ordinary:
+            top = ordinary[0]
+            sentences.append(f"Caveat: {top.get('message')}")
+        duration = [c for c in warning_caveats if c.get("topic", "").startswith("duration_")]
+        if duration:
+            # Keep all availability categories visible, with bounded prose even
+            # when individual dates contribute hundreds of support/failure reasons.
+            compact = []
+            support_count = sum(c["topic"] == "duration_support" for c in duration)
+            for caveat in duration:
+                topic, message = caveat["topic"], caveat["message"]
+                if topic == "duration_support":
+                    continue
+                if topic in {"duration_inference", "duration_pretest"}:
+                    message = message.partition(":")[0]
+                compact.append(message.rstrip("."))
+            if support_count:
+                compact.append(f"{support_count} survivor/exit support warnings")
+            sentences.append(
+                "Caveat: " + "; ".join(compact) + ". See full_report() for all warning details."
+            )
 
     return " ".join(s for s in sentences if s)
 
@@ -2608,6 +2745,10 @@ def _render_full_report(schema: Dict[str, Any]) -> str:
         if tp.get("definition"):
             lines.append(f"- {tp['definition']}")
         lines.append("")
+
+    duration_sentence = _duration_diagnostic_sentence(schema)
+    if duration_sentence:
+        lines.extend(["## Hazard Diagnostic", "", duration_sentence, ""])
 
     # Identifying assumption
     lines.append("## Identifying Assumption")

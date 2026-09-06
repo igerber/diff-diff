@@ -48,7 +48,11 @@ from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from diff_diff._reporting_helpers import describe_target_parameter  # noqa: E402 (top-level import)
+from diff_diff._reporting_helpers import (  # noqa: E402 (top-level import)
+    _duration_hazard_sentence,
+    _duration_native_diagnostics,
+    describe_target_parameter,
+)
 from diff_diff.results_base import Diagnostic, _coverage_pct
 
 DIAGNOSTIC_REPORT_SCHEMA_VERSION = "2.0"
@@ -117,6 +121,7 @@ _APPLICABILITY: Dict[str, FrozenSet[str]] = {
             "epv",
         }
     ),
+    "DurationDiDResults": frozenset({"estimator_native"}),
     # DMLDiD (Chang 2020) mirrors the CS staggered ATT(g,t) surface via
     # the DERIVED post-fit event-study container (fit-time
     # event_study_effects is never populated): ``pretrends_power`` and
@@ -333,17 +338,29 @@ class DiagnosticReportResults(Diagnostic):
         return self.interpretation
 
     def to_dataframe(self) -> pd.DataFrame:
-        """Return one row per check with status and headline metric."""
+        """Return one row per check with extraction status and headline metric.
+
+        DurationDiD's native headline is the stored hazard-test p-value when
+        available; otherwise it is missing and ``reason`` explains availability.
+        Native ``status='ran'`` denotes extraction, not a usable statistical test.
+        """
         rows = []
         for check in _CHECK_NAMES:
             section_key = "estimator_native_diagnostics" if check == "estimator_native" else check
             section = self.schema.get(section_key, {})
+            reason = section.get("reason")
+            if check == "estimator_native" and section.get("estimator") == "DurationDiD":
+                diagnostic = section.get("pretrend_test") or {}
+                if section.get("status") == "ran" and diagnostic.get("status") != "available":
+                    reason = (
+                        "; ".join(diagnostic.get("reasons", [])) or "Hazard pretest unavailable."
+                    )
             rows.append(
                 {
                     "check": check,
                     "status": section.get("status"),
                     "headline": _check_headline(check, section),
-                    "reason": section.get("reason"),
+                    "reason": reason,
                 }
             )
         return pd.DataFrame(rows)
@@ -565,6 +582,10 @@ class DiagnosticReport:
         # native-routing contract documented in REPORTING.md.
         # Round-21 P1 CI review on PR #318 flagged this bypass.
         _result_name = type(self._results).__name__
+        if _result_name == "DurationDiDResults" and self._precomputed:
+            raise ValueError(
+                "DurationDiD accepts no generic precomputed diagnostics; use its stored hazard pretest."
+            )
         _native_routed_names = {"SyntheticDiDResults", "TROPResults", "SyntheticControlResults"}
         if _result_name in _native_routed_names:
             _incompatible_keys = []
@@ -1306,7 +1327,12 @@ class DiagnosticReport:
                     continue
             return "No group/event-study effects available to compute heterogeneity."
         if check == "estimator_native":
-            if name not in {"SyntheticDiDResults", "TROPResults", "SyntheticControlResults"}:
+            if name not in {
+                "SyntheticDiDResults",
+                "TROPResults",
+                "SyntheticControlResults",
+                "DurationDiDResults",
+            }:
                 return f"{name} does not expose native validation methods."
             return None
         return None
@@ -2800,6 +2826,8 @@ class DiagnosticReport:
         """
         r = self._results
         name = type(r).__name__
+        if name == "DurationDiDResults":
+            return _duration_native_diagnostics(r)
         if name == "SyntheticDiDResults":
             return self._sdid_native(r)
         if name == "TROPResults":
@@ -4344,6 +4372,9 @@ def _check_headline(check: str, section: Dict[str, Any]) -> Optional[Any]:
     if check == "epv":
         return section.get("min_epv")
     if check == "estimator_native":
+        if section.get("estimator") == "DurationDiD":
+            diagnostic = section.get("pretrend_test") or {}
+            return diagnostic.get("p_value") if diagnostic.get("status") == "available" else None
         # SDiD reports ``pre_treatment_fit``; classic SCM reports ``pre_rmspe`` (its
         # design-enforced pre-fit) — fall back so SCM's tabular headline is not None.
         fit = section.get("pre_treatment_fit")
@@ -4463,6 +4494,12 @@ def _render_overall_interpretation(schema: Dict[str, Any], labels: Dict[str, str
             sentences.append(f"{base} {reason}")
         else:
             sentences.append(base + " (by design)")
+    elif est == "DurationDiDResults" and not val_finite:
+        sentences.append(
+            f"On {est}, the counterfactual survival path is invalid and canonical causal "
+            "effects are unavailable. Inspect survival_curve for raw extrapolations and "
+            "counterfactual validity reasons; compare method and fit_periods specifications."
+        )
     elif val is not None and not val_finite:
         sentences.append(
             f"On {est}, {treatment}'s effect on {outcome} is non-finite "
@@ -4507,6 +4544,10 @@ def _render_overall_interpretation(schema: Dict[str, Any], labels: Dict[str, str
     tp_name = tp.get("name")
     if tp_name:
         sentences.append(f"Target parameter: {tp_name}.")
+
+    hazard_sentence = _duration_hazard_sentence(schema.get("estimator_native_diagnostics") or {})
+    if hazard_sentence:
+        sentences.append(hazard_sentence)
 
     # Sentence 3: parallel trends + power (method-aware prose per the
     # round-8 CI review on PR #318; PT method can be slope_difference
@@ -4808,6 +4849,10 @@ def _render_dr_full_report(results: "DiagnosticReportResults") -> str:
                 if isinstance(v, (dict, list)):
                     continue
                 lines.append(f"- {k}: `{v}`")
+            if key == "estimator_native_diagnostics":
+                hazard_sentence = _duration_hazard_sentence(section)
+                if hazard_sentence:
+                    lines.append(f"- {hazard_sentence}")
         lines.append("")
 
     if schema.get("next_steps"):

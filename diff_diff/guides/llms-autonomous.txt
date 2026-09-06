@@ -338,6 +338,7 @@ supported / out of scope; `warn` supported but with documented caveats;
 
 | Estimator | binary absorbing | staggered | continuous | triple-diff | never-treated required | covariate adjustment | few-treated (synthetic) | heterogeneous adoption | clustered SE |
 |---|---|---|---|---|---|---|---|---|---|
+| `DurationDiD` | partial | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ |
 | `DifferenceInDifferences` | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ |
 | `MultiPeriodDiD` (deprecated 3.9 → `TwoWayFixedEffects` `event_study=True`) | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ |
 | `TwoWayFixedEffects` | ✓ | warn | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ |
@@ -360,6 +361,13 @@ supported / out of scope; `warn` supported but with documented caveats;
 | `RegressionDiscontinuity` | ✗ (cross-sectional; sharp: treatment = running >= cutoff; fuzzy: observed take-up via `takeup=`) | ✗ | ✗ | ✗ | ✗ | ✓ (precision only - estimand unchanged, unlike the DiD conditional-PT role; `covariates=`) | ✗ | ✗ | ✗ (follow-up) |
 
 **Footnotes.**
+- `DurationDiD`: common timing only. The matrix describes treatment shape; an
+  absorbing binary OUTCOME is an additional requirement. fit() takes fixed group
+  membership plus explicit post_periods. Profile treatment shape alone cannot
+  establish eligibility. Unaffected never-treated controls and independent people
+  are required; no covariates, survey weights, higher-level clusters or synthetic
+  few-treated inference.
+
 - `LWDiD` + never-treated: requires at least one never-treated unit under
   `control_group='not_yet_treated'` and at least two under
   `'never_treated'`; all-eventually-treated designs raise under both
@@ -425,7 +433,7 @@ supported / out of scope; `warn` supported but with documented caveats;
 exactly one observation per `(unit, time)` cell with every unit
 observed in every period: `ContinuousDiD`, `EfficientDiD`,
 `SyntheticDiD`, `HeterogeneousAdoptionDiD`,
-`StaggeredTripleDifference`. Gate these on BOTH
+`StaggeredTripleDifference`, `DurationDiD`. Gate these on BOTH
 `PanelProfile.is_balanced == True` AND the absence of the
 `duplicate_unit_time_rows` alert (`is_balanced` is computed from the
 unique-key support and stays `True` when duplicates exist; the
@@ -434,7 +442,9 @@ conditions as hard gates: `EfficientDiD` and
 `HeterogeneousAdoptionDiD` raise `ValueError` at `fit()` on
 duplicate cells, and `ContinuousDiD`'s precompute path resolves
 duplicates with last-row-wins (silent overwrite that can change
-the estimand). If either condition fails, pre-process with
+the estimand). For DurationDiD, do not establish eligibility by filling missing outcomes or
+dropping histories: the fixed-population/no-dropout assumptions need justification.
+For the other methods, if either condition fails, pre-process with
 `diff_diff.prep.balance_panel()` and a
 `drop_duplicates([unit, time])` pass, or pick a balance-tolerant
 estimator from the remaining rows (CS/SA/dCDH/Imputation/TwoStage/
@@ -469,6 +479,10 @@ case; the choice between them is mostly about output shape:
   (DDD) - see §4.6.
 
 ### §4.2 Multi-period single-cohort (event-study without staggering)
+
+For absorbing individual OUTCOMES with common timing, see DurationDiD in §4.11;
+it requires at least two pre-dates and one post-date, a balanced complete panel,
+and credible untreated-hazard restrictions.
 
 When `is_staggered == False` and `n_periods > 2`, event-study dynamics
 can be estimated but cohort-mixing bias is moot:
@@ -803,6 +817,19 @@ docs explicitly say otherwise. When routing, also:
 
 ### §4.11 Outcome-shape considerations
 
+`DurationDiD` targets cumulative absorption ATT when a binary outcome stays 1
+after the event. It needs complete balanced individual histories, unaffected
+controls, common intervention timing and either common dynamics or proportional
+untreated hazards; at least two pre-dates and one post-date. Keep baseline-absorbed
+people. fit() takes fixed treatment group membership and explicit post_periods,
+not the time-varying exposure indicator a generic profile may describe. Verify
+absorption from histories separately; bounded outcome values alone are insufficient.
+The headline uniformly averages post-date effects on the whole treated population.
+No censoring/dropout, covariates, staggered timing, repeated cross-sections, survey
+weights or higher-level clusters are supported. Pooled individual bootstrap assumes
+independent people; inspect support/failure counts and the stored hazard pretest,
+not generic outcome-mean pretrends or HonestDiD. See the DurationDiD API/full guide.
+
 The matrix in §3 routes by treatment shape. Outcome shape is a separate
 axis: a panel that is binary-absorbing and staggered may still have a
 count-shaped outcome (e.g., number of incidents per unit-period), and
@@ -838,9 +865,8 @@ calibration. `PanelProfile.outcome_shape` exposes the relevant facts:
   profile.
 - `outcome_shape.is_bounded_unit == True` (values in `[0, 1]`,
   e.g. a proportion) - linear DiD can produce predictions outside
-  `[0, 1]` and inference at the boundary is questionable. No
-  estimator in the suite handles this differently from a numeric
-  outcome; flag the consideration in the write-up.
+  `[0, 1]` and inference at the boundary is questionable. DurationDiD handles the specific absorbing binary individual-panel case above,
+  not arbitrary proportions; flag the distinction in the write-up.
 - `outcome_shape.is_integer_valued == True` without
   `is_count_like` (e.g., 0/1 binary, ordinal Likert) - the binary
   case has its own caveats (logit/log-odds alternative per Roth
@@ -1127,6 +1153,12 @@ section is the API-reference index.
 
 Some estimators expose diagnostics as methods on the result object:
 
+- `DurationDiDResults.pretrend_test()` returns a defensive copy of the stored
+  fixed-anchor hazard Diagnostic, without refitting. Three pre-dates are needed;
+  unavailable tests have reject=None. This is independent of effect-family validity
+  and does not establish identification/power from a non-rejection. Generic
+  outcome-pretrend/sensitivity procedures do not admit DurationDiD results.
+
 - `SyntheticDiDResults.in_time_placebo()` - placebo treatment applied
   in a pre-treatment period.
 - `SyntheticDiDResults.sensitivity_to_zeta_omega()` - regularization-
@@ -1168,6 +1200,12 @@ close to zero support parallel trends.
 
 
 ## §7. How to read BusinessReport / DiagnosticReport output
+
+DurationDiD: native outer status=ran describes extraction; nested pretrend_test
+status/reject/reasons describe hazard-test availability at the fitted alpha.
+BusinessReport retains native fields, support warnings and failure counts; even
+with auto_diagnostics=False its fit-level caveats remain. No generic precomputed
+overrides or honest_did_results are accepted.
 
 `BusinessReport(results)` and `DiagnosticReport(results)` are experimental
 in the 3.2 line. Their schema is versioned (`BUSINESS_REPORT_SCHEMA_VERSION`

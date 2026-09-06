@@ -400,3 +400,11 @@ General Causal Inference
 - **Imbens, G. W., & Rubin, D. B. (2015).** *Causal Inference for Statistics, Social, and Biomedical Sciences: An Introduction*. Cambridge University Press.
 
 - **Cunningham, S. (2021).** *Causal Inference: The Mixtape*. Yale University Press. https://mixtape.scunning.com/
+
+Duration DiD
+------------
+
+Deaner, B. and Ku, H. (2026). Causal Duration Analysis with Diff-in-Diff.
+`arXiv:2405.05220v2 <https://arxiv.org/abs/2405.05220v2>`_. See
+:doc:`api/duration_did` for the two-group implementation and
+``docs/methodology/papers/deaner-ku-2026-review.md`` for the source audit.

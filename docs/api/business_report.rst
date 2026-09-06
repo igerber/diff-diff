@@ -117,3 +117,45 @@ API
    :show-inheritance:
 
 .. autodata:: diff_diff.BUSINESS_REPORT_SCHEMA_VERSION
+
+DurationDiD native hazard diagnostics
+-------------------------------------
+
+For ``DurationDiDResults``, the stored fixed-anchor hazard pretest is extracted
+without raw data, refitting, or recomputing diagnostics. The
+``estimator_native_diagnostics`` section has outer ``status='ran'`` for successful
+extraction; its nested ``pretrend_test.status`` determines availability and
+``reject=None`` denotes an unavailable test. Its confidence level is the fit's
+``alpha``, independently of report-level phrasing. Non-rejection never establishes
+identification or adequate power. Effect and diagnostic bootstrap validity are
+independent; inspect estimation/inference statuses, reasons and support warnings.
+
+All generic ``precomputed`` overrides (parallel_trends, sensitivity,
+pretrends_power, bacon) are rejected for DurationDiD. Its hazard contrasts are
+not pre-treatment outcome ATTs and do not admit generic HonestDiD/PreTrendsPower.
+
+BusinessReport preserves this payload in ``robustness.estimator_native`` and
+renders hazard-test availability or rejection in summary and full reports.
+``honest_did_results`` is also rejected. A report alpha override preserves the
+fitted bootstrap confidence intervals and identifies their actual confidence
+level; it cannot reconstruct intervals from the reported SE.
+
+An explicit ``diagnostics=`` argument, whether a live ``DiagnosticReport`` or a
+detached ``DiagnosticReportResults``, must name DurationDiD and contain its
+matching stored native hazard diagnostic and availability metadata. Foreign
+reports, altered native payloads and computed generic diagnostic sections raise
+``ValueError``. Construct the diagnostic report from the fitted results being
+reported. Use ``pretrend_test()`` and comparisons of ``method`` and ``fit_periods``
+for the supported diagnostic and specification workflow.
+
+``auto_diagnostics=False`` skips automatic DiagnosticReport construction, but
+fit-level caveats remain visible: invalid counterfactual curves, unavailable
+inference, failed bootstrap counts, support warnings and unavailable hazard
+pretests. When at most three treated people are present, the caveat describes
+pooled individual-bootstrap support and reliability, not large-cluster
+asymptotics, synthetic weighting or exact permutation inference. See
+:doc:`duration_did` and :doc:`diagnostic_report` for the fitting example.
+
+The short summary groups support warnings by count and summarizes unavailable
+inference families. Every warning and reason remains in ``to_dict()`` and
+``full_report()``, including details for each date.

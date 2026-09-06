@@ -24,7 +24,7 @@ A **Complete** entry has a documented review pass against the primary academic s
 
 The catalog grew incrementally over several quarters, so formats vary across the existing Complete entries; the consistent invariant is that someone walked through the implementation against the academic source and captured the result here. New reviews going forward should aim for the fuller structure (Verified Components + Corrections Made + Deviations + dedicated methodology test file) used by the more recent entries.
 
-**In Progress** entries have a REGISTRY.md section and unit-test coverage but no formal walk-through captured here yet, carrying a "Documentation in place" / "Outstanding for promotion" pair until promoted. **As of 2026-06-27 no In Progress rows remain** — every estimator, diagnostic, and cross-cutting inference feature has been reviewed to Complete (Survey Data Support was the last, promoted 2026-06-27). The band description is retained for surfaces that enter the tracker later.
+**In Progress** entries have a REGISTRY.md section and unit-test coverage but no formal walk-through captured here yet, carrying a "Documentation in place" / "Outstanding for promotion" pair until promoted. The earlier consolidation completed on 2026-06-27. DurationDiD now enters as **In Progress** pending a recorded primary-source implementation walk-through.
 
 **Not Started** entries have neither a tracker walk-through nor an REGISTRY.md section. This tracker no longer carries any Not Started rows; new estimators are expected to enter as In Progress when their REGISTRY entry lands.
 
@@ -39,6 +39,7 @@ The catalog grew incrementally over several quarters, so formats vary across the
 | DifferenceInDifferences | `estimators.py` | `fixest::feols()` | **Complete** | 2026-01-24 |
 | MultiPeriodDiD | `estimators.py` | `fixest::feols()` | **Complete** | 2026-02-02 |
 | TwoWayFixedEffects | `twfe.py` | `fixest::feols()` | **Complete** | 2026-02-08 |
+| DurationDiD | `duration_did.py` | Deaner–Ku paper (no executed software parity) | **In Progress** | — |
 
 ### Staggered Treatment Estimators
 
@@ -93,12 +94,18 @@ The catalog grew incrementally over several quarters, so formats vary across the
 
 **Status legend** (matches the contract in [§ What "Complete" means in this tracker](#what-complete-means-in-this-tracker) above):
 - **Not Started**: No REGISTRY.md entry yet. Reserved for future surfaces; this tracker currently carries no Not Started rows.
-- **In Progress**: REGISTRY.md entry and unit-test coverage exist, but no formal walk-through has been captured in this document yet (a "Documentation in place" / "Outstanding for promotion" pair tracks the gap). No rows currently carry this status — the tracker is fully Complete as of 2026-06-27.
+- **In Progress**: REGISTRY.md entry and unit-test coverage exist, but no formal walk-through has been captured in this document yet (a "Documentation in place" / "Outstanding for promotion" pair tracks the gap). DurationDiD currently carries this status.
 - **Complete**: A documented review pass against the primary academic source is captured here (minimum: Corrections Made, Deviations or `(None)`, and Verified Components / Edge Cases Verified / R Comparison Results in some form).
 
 ---
 
 ## Detailed Review Notes
+
+### DurationDiD (Core DiD) — In Progress
+
+**Documentation in place:** REGISTRY.md DurationDiD entry, dated Deaner–Ku source review, API and executed tutorial; `tests/test_methodology_duration_did.py` checks paper-numbered identities and both bootstrap algorithms.
+
+**Outstanding for promotion:** Capture a formal primary-source-to-implementation walk-through, verified components, corrections and deviations in this tracker. Unit tests and workflow approval alone do not establish Complete. No executed author-software parity or application replication is claimed.
 
 ### Core DiD Estimators
 
@@ -1514,7 +1521,7 @@ more graceful handling of edge cases while still signaling invalid inference to 
 
 ### Priority Order (updated 2026-06-27)
 
-**No In Progress entries remain.** **Survey Data Support** was promoted to Complete on 2026-06-27 — the last consolidation-pass row (PlaceboTests was promoted 2026-06-26). The methodology-review tracker is now Complete across all core/staggered/continuous/triple-difference/synthetic estimators, diagnostics, and cross-cutting inference features.
+**DurationDiD remains In Progress.** **Survey Data Support** was promoted to Complete on 2026-06-27 — the last consolidation-pass row (PlaceboTests was promoted 2026-06-26). Those consolidation-pass entries remain Complete; the newly added DurationDiD entry awaits its documented promotion evidence.
 
 - Going forward, a new surface enters as **In Progress** when its REGISTRY.md entry lands and is promoted via a documented review pass (primary-source fidelity walk → dedicated methodology test file with paper-equation-numbered Verified Components → R-parity / deviation documentation), per the contract in [§ What "Complete" means in this tracker](#what-complete-means-in-this-tracker).
 

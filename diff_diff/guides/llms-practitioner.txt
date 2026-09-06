@@ -95,6 +95,11 @@ results.se                # alias of overall_se / avg_se (or overall_att_se for 
 
 ## Step 2: State Identification Assumptions
 
+DurationDiD exception: state the selected untreated-hazard restriction (common_dynamics
+or proportional_hazards), absorbing outcomes, fixed population, no anticipation,
+unaffected controls and common timing. Individual independence additionally underlies
+its pooled bootstrap; outcome-mean parallel trends is not its identifying restriction.
+
 Explicitly state which assumptions you are invoking and argue why they are
 plausible in your setting.
 
@@ -172,6 +177,11 @@ large a violation would need to be to overturn your results.
 ---
 
 ## Step 4: Choose Estimation Method
+
+For absorbing binary individual histories in a balanced complete panel with common
+timing and credible CD/PH hazard assumptions, consider DurationDiD. Treatment is fixed
+group membership and post_periods declares timing. It has no covariate, staggered,
+censoring, survey or higher-level cluster extension. See its full-guide/API contract.
 
 Use this decision tree to select the appropriate estimator:
 
@@ -293,11 +303,13 @@ print(bacon_result.summary())
 
 ## Step 5: Estimate
 
-Before fitting, you MUST check the cluster count and choose inference
-accordingly. Do not assume — always print and decide based on the data.
+For estimators supporting cluster inference, check the cluster count and choose
+inference accordingly. The following cluster workflow applies to those estimators.
+DurationDiD instead uses pooled individual bootstrap only; inspect survivor/exit
+support and failed-draw counts. It has no higher-level cluster selector.
 
 ```python
-# ALWAYS check the cluster count before choosing inference:
+# For estimators supporting cluster inference, check the cluster count:
 cluster_col = 'county_id'  # the level at which treatment is assigned
 n_clusters = data[cluster_col].nunique()
 print(f"Number of clusters: {n_clusters}")
@@ -382,6 +394,12 @@ print(results.summary())
 ---
 
 ## Step 6: Sensitivity Analysis
+
+DurationDiD: inspect results.pretrend_test(), the stored fixed-anchor simultaneous
+hazard Diagnostic (no refit), and compare CD/PH or explicit fit_periods choices.
+Unavailable means reject=None, never non-rejection. Non-rejection does not establish
+identification or power. Generic HonestDiD and outcome placebo procedures below do
+not apply to DurationDiD, including its event-study aggregation.
 
 This step is CRITICAL and most often skipped. Run at least one of:
 
@@ -544,10 +562,11 @@ print(f"SA ATT:  {sa_result.overall_att:.4f} (SE: {sa_result.overall_se:.4f})")
 print(f"BJS ATT: {bjs_result.overall_att:.4f} (SE: {bjs_result.overall_se:.4f})")
 ```
 
-### Report with and without covariates — REQUIRED
+### Report with and without covariates where supported
 
-You MUST report estimates both with and without covariates. This is not
-optional — it shows whether covariate conditioning is driving identification
+For estimators supporting covariates, report estimates both with and without
+them. DurationDiD has no covariate option: compare methods/calibration choices.
+For covariate-capable estimators, the comparison shows whether covariate conditioning is driving identification
 or merely improving precision. A large shift between the two specifications
 signals that covariates are substantively important for the parallel trends
 assumption and warrants discussion.
@@ -573,7 +592,7 @@ Your analysis report MUST include all of the following:
 - [ ] Sensitivity analysis results (HonestDiD bounds or placebo tests)
 - [ ] Event study plot (if applicable)
 - [ ] Comparison across at least 2-3 estimators
-- [ ] Estimates with and without covariates (REQUIRED)
+- [ ] Estimates with and without covariates where supported; DurationDiD method/calibration comparisons
 
 ### One-call reporting via BusinessReport + DiagnosticReport
 
@@ -649,6 +668,10 @@ Executed end-to-end examples: tutorials 29 (PyMC-Marketing lift test) and
 ---
 
 ## Common Pitfalls
+
+For DurationDiD, outcome parallel-trends tests, generic HonestDiD/placebo procedures,
+covariate comparisons and cluster-count inference selection are inapplicable. Use
+the stored hazard pretest and pooled individual-bootstrap support/failure metadata.
 
 1. **Using TWFE with staggered adoption**: TWFE assigns negative weights to
    some group-time cells when treatment timing varies. Always use CS, SA, or

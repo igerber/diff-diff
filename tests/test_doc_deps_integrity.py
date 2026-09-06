@@ -186,3 +186,41 @@ def test_group_primaries_have_sources_entry():
         + "\n\nGroup members resolve to the group's first entry; add a `sources:` entry for that "
         "primary module in docs/doc-deps.yaml."
     )
+
+
+@pytest.mark.parametrize(
+    "module", ["diff_diff/duration_did.py", "diff_diff/duration_did_results.py"]
+)
+def test_duration_modules_resolve_complete_documentation(module):
+    text = DOC_DEPS.read_text()
+    members = _parse_groups()["duration_did"]
+    assert module in members and members[0] == "diff_diff/duration_did.py"
+    section = text.split("  " + members[0] + ":\n", 1)[1].split("\n  diff_diff/", 1)[0]
+    mapped = {
+        m.group(1).strip().strip('"')
+        for line in section.splitlines()
+        if (m := _PATH_RE.match(line))
+    }
+    required = {
+        "README.md",
+        "docs/index.rst",
+        "docs/api/index.rst",
+        "docs/api/duration_did.rst",
+        "docs/api/business_report.rst",
+        "docs/api/diagnostic_report.rst",
+        "docs/references.rst",
+        "docs/choosing_estimator.rst",
+        "docs/practitioner_decision_tree.rst",
+        "docs/practitioner_getting_started.rst",
+        "docs/survey-roadmap.md",
+        "docs/tutorials/index.rst",
+        "docs/tutorials/33_duration_did.ipynb",
+        "docs/methodology/REGISTRY.md",
+        "docs/methodology/REPORTING.md",
+        "docs/methodology/papers/deaner-ku-2026-review.md",
+        "diff_diff/guides/llms.txt",
+        "diff_diff/guides/llms-full.txt",
+        "diff_diff/guides/llms-autonomous.txt",
+        "diff_diff/guides/llms-practitioner.txt",
+    }
+    assert required <= mapped

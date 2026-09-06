@@ -573,3 +573,42 @@ The phrasing rules follow the guidance in:
 - Roth, J. (2022). *Pretest with Caution: Event-study Estimates after
   Testing for Parallel Trends.* American Economic Review: Insights.
   (Motivates the power-aware phrasing tiers.)
+
+## DurationDiD
+
+`DurationDiDResults` has only estimator-native DiagnosticReport applicability.
+The stored fixed-anchor hazard pretest is extracted without refitting under
+`estimator_native_diagnostics.pretrend_test`; outer `status=ran` describes
+extraction, nested status/reject/reasons describe statistical availability.
+The full serialized diagnostic retains its fitted alpha and bootstrap counts.
+Effect and diagnostic families are independently valid. BusinessReport relays
+this block to `robustness.estimator_native` and renders it in both report forms.
+DiagnosticReport and its returned results summary also render the stored hazard
+decision, fitted simultaneous confidence level and unavailability reasons; the
+full report includes this narrative in its native section. The native dataframe
+headline is the available hazard-test p-value, otherwise missing with the stored
+availability reasons in `reason`. Its outer `status=ran` still means extraction.
+Invalid-counterfactual guidance points to raw `survival_curve` extrapolations and
+method/calibration comparisons. Rendering does not recompute diagnostic inference
+or turn an unavailable test into a non-rejection. The warnings channel retains its
+existing role of reporting captured execution warnings.
+
+The target parameter is the uniform mean across declared post-dates of cumulative
+absorption effects on the whole treated population (baseline-absorbed included).
+Positive ATT increases absorption. Identification uses the selected untreated-hazard
+restriction, no anticipation, unaffected controls, fixed population, absorption
+and common timing; individual independence additionally underlies bootstrap inference.
+Do not describe this as outcome-level parallel trends or infer identification/power
+from a non-rejection. Generic precomputed overrides and `honest_did_results` are rejected.
+Supplied `diagnostics=` containers must name DurationDiD, have no computed generic
+checks, and match the fitted result's complete stored native hazard payload and
+availability metadata. This applies to both live DiagnosticReport objects and
+detached DiagnosticReportResults. Use `pretrend_test()` and comparisons of `method`
+and `fit_periods` for supported diagnostic and specification guidance.
+
+Report alpha overrides preserve fitted intervals. Even with `auto_diagnostics=False`,
+invalid-curve, unavailable-family, failed-draw and support caveats remain visible.
+Few-treated counts mean people: warn about individual-bootstrap support and reliability,
+without the generic large-cluster or SyntheticDiD/exact-permutation recommendation.
+Short summaries count support warnings and summarize each unavailable inference
+family; all per-date warnings and reasons remain in `to_dict()` and `full_report()`.

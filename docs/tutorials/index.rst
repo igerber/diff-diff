@@ -238,6 +238,12 @@ Modern estimators for designs the basic toolkit cannot handle.
       Sharp and fuzzy RD from plot to estimate, when a naive cutoff
       comparison overstates the effect fivefold.
 
+   .. grid-item-card:: Duration DiD
+      :link: 33_duration_did
+      :link-type: doc
+
+      Absorbing individual outcomes, hazard assumptions, bootstrap bands and native diagnostics.
+
    .. grid-item-card:: LWDiD Rolling Transformations
       :link: 31_lwdid
       :link-type: doc
@@ -268,6 +274,7 @@ Modern estimators for designs the basic toolkit cannot handle.
    Wooldridge ETWFE <16_wooldridge_etwfe>
    Synthetic Control for Policy <25_synthetic_control_policy>
    Regression Discontinuity (RDD) <28_rdd_scholarship_illusion>
+   Duration DiD <33_duration_did>
    LWDiD Rolling Transformations <31_lwdid>
    Double ML DiD (Chang 2020) <32_dml_did>
 

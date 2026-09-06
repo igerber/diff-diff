@@ -31,6 +31,7 @@ STEPS: Set[str] = {
 # Estimator name mapping
 # ---------------------------------------------------------------------------
 _ESTIMATOR_NAMES: Dict[str, str] = {
+    "DurationDiDResults": "DurationDiD",
     "DiDResults": "DifferenceInDifferences",
     "MultiPeriodDiDResults": "MultiPeriodDiD (Event Study)",
     "CallawaySantAnnaResults": "CallawaySantAnna",
@@ -183,6 +184,15 @@ def practitioner_next_steps(
     if type_name == "ChangesInChangesResults":
         pre_estimation[1] = _cic_assumptions_step(results)
 
+    if type_name == "DurationDiDResults":
+        pre_estimation[1] = _step(
+            baker_step=2,
+            label="State hazard identification assumptions",
+            why=f"Use {results.method} untreated hazards, no anticipation, unaffected controls, absorbing outcomes, a fixed population and common timing. Pooled bootstrap inference assumes independent individuals.",
+            code="# Justify the selected untreated-hazard restriction and individual independence.",
+            priority="high",
+            step_name="assumptions",
+        )
     if not diagnostic_input:
         steps = pre_estimation + steps
 
@@ -2306,7 +2316,46 @@ def _handle_generic(results: Any):
 # Handler registry — maps result type *names* (not classes) to avoid
 # import-time circular dependencies
 # ---------------------------------------------------------------------------
+def _handle_duration(results: Any) -> Any:
+    diagnostic = results.pretrend_results
+    warnings = list(results.support_warnings)
+    warnings.extend(reason for values in results.inference_reasons.values() for reason in values)
+    warnings.extend(diagnostic.reasons)
+    if results.estimation_status != "ok":
+        warnings.append(
+            "Invalid counterfactual: canonical causal estimates are unavailable; inspect raw survival paths."
+        )
+    steps = [
+        _step(
+            baker_step=3,
+            label="Inspect the stored hazard pretest",
+            why="Fixed-anchor simultaneous hazard contrasts assess pre-treatment restrictions. Non-rejection does not establish identification or adequate power.",
+            code="print(results.pretrend_test().summary())",
+            priority="high",
+            step_name="parallel_trends",
+        ),
+        _step(
+            baker_step=7,
+            label="Inspect survival and absorption effects",
+            why="Inspect the raw counterfactual, support and post-period effects together.",
+            code="print(results.to_dataframe(level='survival'))\nprint(results.to_dataframe())",
+            priority="high",
+            step_name="heterogeneity",
+        ),
+        _step(
+            baker_step=8,
+            label="Compare hazard specifications and calibration dates",
+            why="Compare common_dynamics and proportional_hazards or explicit fit_periods choices under their identifying assumptions. Check pooled individual-bootstrap failures; covariate and higher-level cluster options are unsupported.",
+            code="# Refit with explicit method / fit_periods choices; inspect support and availability.",
+            priority="medium",
+            step_name="robustness",
+        ),
+    ]
+    return steps, list(dict.fromkeys(warnings))
+
+
 _HANDLERS = {
+    "DurationDiDResults": _handle_duration,
     "DiDResults": _handle_did,
     "MultiPeriodDiDResults": _handle_multi_period,
     "CallawaySantAnnaResults": _handle_cs,

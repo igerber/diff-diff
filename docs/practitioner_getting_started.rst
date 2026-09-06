@@ -290,8 +290,12 @@ If your outcome comes from a survey (brand awareness, NPS, customer satisfaction
 your data likely has a complex sampling design with strata, clusters, and weights.
 Ignoring these makes your confidence intervals too narrow.
 
-diff-diff handles this via :class:`~diff_diff.SurveyDesign` - pass it to any estimator's
-``fit()`` method.
+diff-diff handles this via :class:`~diff_diff.SurveyDesign` - pass it to a survey-capable estimator's
+``fit()`` method. ``DurationDiD`` has no ``survey_design`` argument and supports
+only unweighted complete individual panels with pooled individual-bootstrap
+inference. Its calibration ``time_weights`` are not survey weights. See the
+:ref:`survey-design-support` matrix; choosing another estimator also requires
+compatible identifying assumptions and a compatible target parameter.
 
 If your data is **individual-level microdata** - one row per respondent, with
 sampling weights and strata/PSU columns (BRFSS, ACS, CPS, NHANES) - use

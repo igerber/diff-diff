@@ -76,6 +76,34 @@ def make_constructed_diagnostics() -> Dict[str, Any]:
     )
 
     instances: Dict[str, Any] = {
+        "DurationDiDPretestResults": diff_diff.DurationDiDPretestResults(
+            method="common_dynamics",
+            alpha=0.05,
+            anchor_period=1,
+            contrasts=pd.DataFrame(
+                columns=[
+                    "period",
+                    "elapsed_time",
+                    "contrast",
+                    "se",
+                    "cband_lower",
+                    "cband_upper",
+                    "status",
+                    "reason",
+                ]
+            ),
+            statistic=np.nan,
+            p_value=np.nan,
+            critical_value=np.nan,
+            reject=None,
+            status="unavailable",
+            reasons=["at least three pre-periods required"],
+            n_bootstrap=2,
+            n_bootstrap_attempted=0,
+            n_bootstrap_valid=0,
+            bootstrap_contrasts=np.empty((2, 0)),
+            bootstrap_failures=pd.DataFrame(columns=["draw", "family", "period", "reason"]),
+        ),
         "RDPlotResult": diff_diff.RDPlotResult(
             coef=coef,
             vars_bins=rng_bins,

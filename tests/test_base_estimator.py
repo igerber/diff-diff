@@ -79,6 +79,7 @@ DEFAULT_KWARGS = {
 # (value-level rollback lane). Classes absent here are still covered by the
 # unknown-key atomicity lane.
 BAD_VALUES = {
+    "DurationDiD": {"n_bootstrap": 1},
     "DifferenceInDifferences": {"vcov_type": "hc99"},
     "DMLDiD": {"n_folds": 0},
     "TwoWayFixedEffects": {"vcov_type": "hc99"},

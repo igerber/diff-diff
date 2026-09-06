@@ -9,6 +9,8 @@ reference a BR symbol.
 
 Current contents:
 
+- ``_duration_native_diagnostics(results)`` — extracts the stored DurationDiD
+  hazard payload for DiagnosticReport emission and BusinessReport input validation.
 - ``describe_target_parameter(results)`` — returns the
   ``target_parameter`` block documenting what scalar the headline
   represents. Introduced for BR/DR gap #6 (target-parameter
@@ -21,7 +23,42 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from diff_diff.results_base import Diagnostic
+from diff_diff.results_base import Diagnostic, _coverage_pct
+
+
+def _duration_native_diagnostics(results: Any) -> Dict[str, Any]:
+    """Extract DurationDiD's stored native payload without recomputing inference."""
+    return {
+        "status": "ran",
+        "estimator": "DurationDiD",
+        "method": results.method,
+        "pretrend_test": results.pretrend_test().to_dict(),
+        "estimation_status": results.estimation_status,
+        "inference_status": dict(results.inference_status),
+        "inference_reasons": {k: list(v) for k, v in results.inference_reasons.items()},
+        "support_warnings": list(results.support_warnings),
+        "n_bootstrap_valid": results.n_bootstrap_valid,
+    }
+
+
+def _duration_hazard_sentence(native: Dict[str, Any]) -> str:
+    """Describe the stored hazard decision consistently across BR and DR."""
+    if native.get("estimator") != "DurationDiD" or native.get("status") != "ran":
+        return ""
+    diagnostic = native.get("pretrend_test") or {}
+    level = _coverage_pct(diagnostic["alpha"])
+    if diagnostic.get("status") != "available" or diagnostic.get("reject") is None:
+        reasons = "; ".join(diagnostic.get("reasons", [])) or "no usable test statistic"
+        return (
+            f"Hazard pretest unavailable at the {level}% simultaneous confidence level: "
+            f"{reasons}. No rejection decision is available."
+        )
+    decision = "rejects" if diagnostic["reject"] else "does not reject"
+    return (
+        f"The fixed-anchor hazard pretest {decision} at the {level}% simultaneous "
+        f"confidence level (p={diagnostic['p_value']:.4g}). "
+        "Non-rejection does not establish identification or adequate power."
+    )
 
 
 def describe_target_parameter(results: Any) -> Dict[str, Any]:
@@ -77,6 +114,15 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
       event-study tables).
     """
     name = type(results).__name__
+
+    if name == "DurationDiDResults":
+        return {
+            "name": "Mean cumulative absorption ATT",
+            "definition": "Uniform average across declared post-periods of cumulative absorption effects on the whole treated population, including baseline-absorbed individuals. Positive effects increase absorption.",
+            "aggregation": "uniform_post_periods",
+            "headline_attribute": "att",
+            "reference": "Deaner and Ku (2026); REGISTRY.md DurationDiD",
+        }
 
     if name == "DiDResults":
         # Covers both ``DifferenceInDifferences`` (2x2 DiD) and
