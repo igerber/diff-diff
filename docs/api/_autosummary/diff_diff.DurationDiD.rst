@@ -19,12 +19,3 @@
 
 
 
-   .. rubric:: Attributes
-
-   .. autosummary::
-
-      ~DurationDiD.method
-      ~DurationDiD.n_bootstrap
-      ~DurationDiD.alpha
-      ~DurationDiD.seed
-

@@ -282,8 +282,8 @@ class SyntheticControl(BaseEstimator):
         predictor_window : list, optional
             Pre-periods over which ``predictors`` are averaged. Defaults to all
             pre periods. Must be a non-empty subset of the pre periods.
-        special_predictors : list of (var, periods, op), optional
-            Per-variable special predictors, each averaged over its own periods
+        special_predictors : list of tuple, optional
+            ``(var, periods, op)`` special predictors, each averaged over its own periods
             with its own operator (mirrors R ``Synth`` ``special.predictors``).
         pre_period_outcomes : "all" or list, optional
             Use individual pre-period outcomes as predictor rows ("all" = every

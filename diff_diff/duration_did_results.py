@@ -123,7 +123,7 @@ class DurationDiDPretestResults(Diagnostic):
     cumulative-increment RATIO under ``method="ph"``. The whole-individual
     bootstrap gives one SD per contrast, a simultaneous critical value from
     the maximum absolute centered pivot, symmetric bands
-    ``contrast +/- crit_value * se`` and the max-|t| statistic. The test
+    ``contrast +/- crit_value * se`` and the ``max-|t|`` statistic. The test
     rejects when any band excludes zero, which is exactly ``p_value <=
     alpha`` under the inverse-empirical-CDF quantile.
 

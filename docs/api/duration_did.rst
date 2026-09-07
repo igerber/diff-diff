@@ -23,7 +23,7 @@ hazard and the treated baseline (Theorem 1), and the **absorption ATT**
 
 Inference is the paper's whole-individual pooled bootstrap (Appendix B,
 Algorithm 1): each draw resamples complete histories, recomputes everything,
-and the reported pointwise intervals and simultaneous (max-|t|) band are
+and the reported pointwise intervals and simultaneous (``max-|t|``) band are
 centered absolute-deviation bands. The Algorithm 2 fixed-anchor
 pre-treatment specification test is reported separately in
 ``results.pretest``. Every inference family is either fully available or

@@ -877,7 +877,7 @@ class DurationDiD(BaseEstimator):
     ``E[Y_it - Y_it(0) | treated]`` (positive = more cumulative exit); the
     headline ``att`` is its uniform average over the post-treatment dates.
     Inference is the Appendix B whole-individual pooled bootstrap with
-    centered absolute-deviation pointwise and simultaneous (max-|t|) bands,
+    centered absolute-deviation pointwise and simultaneous (``max-|t|``) bands,
     plus the Algorithm 2 fixed-anchor pre-treatment specification test.
 
     Parameters

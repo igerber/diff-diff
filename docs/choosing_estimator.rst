@@ -733,7 +733,7 @@ restricts the groups' *untreated hazards* instead.
   cumulative hazards — equal weights over every eligible pre-treatment date
   by default, or a window via ``pre_periods=`` / ``pre_period_weights=``
 - Per-date absorption ATT with the paper's whole-individual bootstrap:
-  centered pointwise intervals and a simultaneous max-|t| band; the headline
+  centered pointwise intervals and a simultaneous ``max-|t|`` band; the headline
   ``att`` is the uniform average over the post-treatment dates
 - ``results.pretest``: the fixed-anchor pre-treatment specification test
   (Algorithm 2) — the estimator's own diagnostic; ``check_parallel_trends``

@@ -326,9 +326,12 @@ class TestSampling:
 
 @pytest.mark.slow
 class TestCoverage:
-    def test_uniform_coverage_near_nominal(self, ci_params):
+    def test_uniform_coverage_near_nominal(self):
         S1, _, S2, tau_true = population_curves()
-        n_rep = ci_params.bootstrap(200, min_n=40)
+        # This fixed-tolerance Monte Carlo rate needs the full replication
+        # count on both backends: 40 datasets are too noisy for a 0.06 margin.
+        # DurationDiD uses the same NumPy core in either mode.
+        n_rep = 200
         covered = 0
         for s in range(n_rep):
             r = fit_quiet(
