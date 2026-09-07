@@ -81,12 +81,6 @@ Long-running program, framed as "building toward" rather than with discrete ship
 
 Frontier methods that may graduate to Under Consideration given time and research signals.
 
-### Causal Duration Analysis with DiD
-
-Extends DiD to duration / survival outcomes where standard methods fail (hazard rates, time-to-event). Duration analogue of parallel trends; avoids distributional and hazard-function assumptions.
-
-**Reference**: Deaner & Ku (2025), *AEA Conference Paper*.
-
 ### CATT Meta-Learner for Heterogeneous Effects
 
 ML-powered conditional ATT, using a doubly robust meta-learner to discover which units benefit most from treatment.

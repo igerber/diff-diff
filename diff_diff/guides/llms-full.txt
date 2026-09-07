@@ -1429,6 +1429,32 @@ Key contracts:
 - Bad controls (Caetano, Callaway, Payne & Sant'Anna 2026): `fit(..., bad_control='x', bad_control_covariates=[outcome])` swaps the cell score for the paper's Neyman-orthogonal doubly-robust score (Eq. 10; parallel trends conditional on the bad control's UNTREATED path, its untreated evolution identified by covariate unconfoundedness given the base-period bad control, W and Z; four cross-fitted nuisances incl. two nested second stages) and stores the per-cell `ATT_X(g,t)` pre-test (`results.bad_control_summary()`, `results.bad_control_diagnostics`; analytical SE only, never bootstrapped/aggregated). Panel lane only, bare `cluster=` only (`survey_design=` raises), `anticipation=0` and `base_period='varying'` only; the bad control may not appear in `covariates`; `bad_control_covariates=None` means no W. Headline `att` keeps the CS simple weighting (not the paper's Remark 4 overall). Approach 1 (condition on the PRE-treatment bad control) = pass it in `covariates` on the panel lane instead.
 - Survey/cluster support on BOTH designs (bad-control lane: panel only, `cluster=` only). `survey_design=` (pweight-only): weighted moment kernels (Hajek p-hat/lambda-hat/theta), sample_weight into the nuisance learners (user learner objects must accept sample_weight by keyword — rejected up front otherwise); two variance lanes. Full-design TSL (weights/strata/PSU/FPC): PSU-cohesive cross-fitting folds when the PSU is strictly coarser than the sampling unit, design-based per-cell/aggregate variance with df = n_PSU - n_strata t-inference. Replicate weights (BRR/Fay/JK1/JKn/SDR): per-cell AND aggregate IF-reweighting variance on the augmented cross-fitted scores with df = rank(replicate matrix) - 1 t-inference (nuisances not re-estimated per replicate; replicate + cluster= and replicate + bootstrap rejected). A documented library EXTENSION of Chang's i.i.d. theory (Theorem 2's coverage claim does not carry over on the weighted-lambda RCS lane — REGISTRY DMLDiD Notes). Bare cluster= keeps the kernels unweighted (variance/folds/df only). aggregate('total') fails closed on declared-survey fits. panel=False requires row-unique unit IDs and assumes stationary cross-sectional sampling (Assumption 2.3, warned, not data-checkable). Reproducibility: set seed (fold draws move point estimates; PSU folds consume the RNG differently than stratified folds).
 
+### DurationDiD
+
+Deaner & Ku (2026, arXiv:2405.05220v2) causal duration analysis with diff-in-diff: a two-group, common-timing design for a binary ABSORBING outcome (Y_it = 1 once the spell has ended, e.g. job found, subscription cancelled). Standard DiD on the cumulative event indicator imposes a constant gap in event PROBABILITIES, which forces the survivors' hazards to diverge (Appendix A.1); DurationDiD instead restricts the two groups' UNTREATED HAZARDS — a constant additive gap c (`method='cd'`, common dynamics) or a constant ratio c (`method='ph'`, proportional hazards, the mean-of-ratios estimator supported by Theorem 1 and the authors' code) — fitted on the pre-treatment cumulative hazards (default: equal weights over every eligible pre-treatment date after the baseline; `pre_periods=`/`pre_period_weights=` select a window with nonnegative weights). The treated counterfactual survival is imputed from the control cumulative hazard and the treated baseline, and the ABSORPTION ATT E[Y_t - Y_t(0) | treated] (positive = more cumulative exit) is reported at every post-treatment date; `att` is its uniform average. Inference is the paper's whole-individual pooled bootstrap (Appendix B Algorithm 1): centered absolute-deviation pointwise intervals, a simultaneous max-|t| band (`cband_*`, `joint_p_value`), and the Algorithm 2 fixed-anchor pre-treatment specification test in `results.pretest`. Baseline-absorbed individuals stay in the estimand.
+
+```python
+DurationDiD(
+    method='cd',          # 'cd' (additive untreated-hazard gap) | 'ph' (hazard ratio)
+    n_bootstrap=1000,     # whole-individual draws; 0 = point estimates only (NaN inference); else >= 2
+    alpha=0.05,
+    seed=None,
+).fit(
+    data, outcome, unit, time, treatment,
+    last_pre_period=...,      # REQUIRED: the last untreated date (a value of `time`); never inferred
+    pre_periods=None,         # fitting dates strictly after the baseline date and at or before last_pre_period
+    pre_period_weights=None,  # nonnegative weights aligned with pre_periods (requires pre_periods)
+) -> DurationDiDResults
+```
+
+Key contracts:
+- Input: exactly one row per (individual, date) on a common, equally spaced numeric time grid (datetime must be converted to an elapsed scale); `treatment` is a FIXED 0/1 group indicator; `outcome` is 0/1 and absorbing (reversals raise). Missing cells, late entry, and dropout raise; an administrative end of a complete window is fine.
+- `results.att_by_period`, `se_by_period`, `conf_int_by_period` (pointwise), `cband_lower/upper` + `cband_crit_value` (simultaneous), `joint_p_value`, `vcov` (P x P bootstrap covariance), `coefficient` (fitted c), `survival_treated/control`, `counterfactual_survival`, `pre_periods`/`pre_period_weights` (realized), `excluded_pre_periods`.
+- Every inference family is fully available or fully withheld: `inference_status` in `ok` / `disabled` (n_bootstrap=0) / `unavailable_invalid_periods` (the CD model extrapolated an invalid counterfactual curve — survival above one or a decreasing cumulative hazard — `curve_status`/`period_status` name the dates; the warning names the applicable remedy: a fitted pre-date violation cannot be repaired by a shorter horizon — change `method` or the fitting window; a later post-date violation admits an explicit refit on the dates before the first invalid post date; a first-post-date violation admits no valid shorter horizon) / `unavailable_failed_draws` (any failed draw; fixed draws, no retries, `bootstrap_failure_reasons` per family) / `unavailable_zero_se`. `n_draws_invalid_counterfactual` counts complete draws whose imputed curve left the domain (not failures; a large share signals weak extrapolation support — shown in `summary()`). `p_value <= alpha` is exactly the band rule (`is_significant`).
+- `results.pretest` (`DurationDiDPretestResults`, a Diagnostic): contrasts of the CD gap / PH ratio at every interior pre-date against the fixed anchor `last_pre_period`, simultaneous band, `statistic`, `p_value`, `reject`, `status` (needs at least three pre-dates). A non-rejection does not establish identification.
+- `results.aggregate('event_study')` returns the unified `EventStudyResults` (event time 0 = first post-treatment date, reference -1, `n_kind='units'`); no pre-treatment ATT rows exist (the pretest is not an event study). Do NOT run `check_parallel_trends` or HonestDiD on this estimator; `DiagnosticReport`/`BusinessReport` reject `DurationDiDResults` by type; `practitioner_next_steps` has a dedicated handler.
+- Not supported in this version: covariates, staggered adoption, censoring, survey weights, cluster dependence, repeated cross-sections.
+
 ### TROP
 
 Triply Robust Panel estimator (Athey, Imbens, Qu & Viviano 2025). Combines nuclear norm regularization, distance-based unit weights, and time decay weights.
@@ -2699,7 +2725,7 @@ sd_female, data_female = sd.subpopulation(data, mask=lambda df: df['sex'] == 'F'
 
 **Key features:**
 - Taylor Series Linearization (TSL) variance with strata + PSU + FPC
-- Replicate weight variance: BRR, Fay's BRR, JK1, JKn, SDR (14 of 24 estimators, including dCDH and DMLDiD)
+- Replicate weight variance: BRR, Fay's BRR, JK1, JKn, SDR (the survey-capable estimators listed in the Survey Design Support table of docs/choosing_estimator.rst, including dCDH and DMLDiD)
 - Survey-aware bootstrap: multiplier at PSU (Hall-Mammen wild; dCDH, staggered) or Rao-Wu rescaled (SunAbraham, SyntheticDiD, TROP). SyntheticDiD bootstrap composes Rao-Wu rescaled per-draw weights with the weighted Frank-Wolfe variant of `_sc_weight_fw` (PR #355): each draw solves `min ||A·diag(rw)·ω - b||² + ζ²·Σ rw_i ω_i²` and composes `ω_eff = rw·ω/Σ(rw·ω)` for the SDID estimator. Pweight-only fits use constant `rw = w_control`; full designs use Rao-Wu. SDID's placebo (stratified permutation + weighted FW) and jackknife (PSU-level LOO with stratum aggregation, Rust & Rao 1996) paths also support pweight-only and full strata/PSU/FPC designs
 - DEFF diagnostics, subpopulation analysis, weight trimming (`trim_weights`)
 - Repeated cross-sections: `CallawaySantAnna(panel=False)`
@@ -2924,7 +2950,7 @@ DIFF_DIFF_BACKEND=rust pytest     # Force Rust (fail if unavailable)
 
 ## BusinessReport
 
-Plain-English stakeholder narrative from any fitted result type.
+Plain-English stakeholder narrative from a fitted estimator result (every scalar estimator result except the two rejected by type: `EventStudyResults` surfaces and `DurationDiDResults`).
 Renders `summary()` (short paragraph), `full_report()` (multi-section
 markdown), and `to_dict()` (stable AI-legible schema — single source of
 truth; prose renders from the dict).

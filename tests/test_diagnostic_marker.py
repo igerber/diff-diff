@@ -48,6 +48,7 @@ DIAGNOSTIC_ROSTER = [
     "StuteJointResult",
     "HADPretestReport",
     "DiagnosticReportResults",
+    "DurationDiDPretestResults",
 ]
 
 # Representative ESTIMATOR results: marked with BaseResults, never Diagnostic.

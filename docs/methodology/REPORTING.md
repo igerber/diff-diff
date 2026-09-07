@@ -2,7 +2,7 @@
 
 This document records the methodology choices embedded in
 `BusinessReport` and `DiagnosticReport` — the convenience layer that
-produces plain-English stakeholder narratives from any diff-diff result.
+produces plain-English stakeholder narratives from a diff-diff estimator result (every scalar estimator result except the two rejected by type: `EventStudyResults` surfaces and `DurationDiDResults` — see the constructor rejection branches).
 
 Methodology for estimators lives in `REGISTRY.md`. This file is the
 single source for reporting-layer decisions; `REGISTRY.md` cross-links
@@ -15,7 +15,7 @@ here rather than duplicating content.
   `DiagnosticReportResults`.
 
 Both modules dispatch by `type(results).__name__` lookup to avoid
-circular imports across the 16 result classes. They do no estimator
+circular imports across the result classes named in `_APPLICABILITY` / the per-class handlers. `DurationDiDResults` (Deaner & Ku 2026) is rejected by type: its identification is an untreated-hazard restriction on an absorbing outcome, so the mean-outcome parallel-trends battery and narrative do not apply — use `results.summary()`, `results.pretest` and `results.aggregate("event_study")`; admission is tracked in `TODO.md`. They do no estimator
 fitting; every effect, SE, p-value, CI, and sensitivity bound is
 either read from the fitted result, derived from the result's own
 post-fit `aggregate('event_study')` surface, or produced by an
@@ -89,7 +89,7 @@ not new inference.
 
 The BusinessReport and DiagnosticReport schemas both carry a
 top-level `target_parameter` block that names what scalar the
-headline number actually represents. The 16 result classes have
+headline number actually represents. The dispatched result classes have
 meaningfully different estimands — a stakeholder reading
 `overall_att = -0.0214` on a Callaway-Sant'Anna fit cannot tell
 whether that is the simple-weighted average across `ATT(g,t)`

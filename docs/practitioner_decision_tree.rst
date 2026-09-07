@@ -536,7 +536,7 @@ At a Glance
 What About the Other Estimators?
 --------------------------------
 
-diff-diff has 24 estimators covering advanced scenarios: Sun-Abraham for
+diff-diff has many more estimators (the full roster is the API catalog) covering advanced scenarios: Sun-Abraham for
 interaction-weighted estimation, Imputation DiD and Two-Stage DiD for alternative
 staggered approaches, Local Projections DiD, Stacked DiD, Efficient DiD,
 Triple Difference, TROP, Changes-in-Changes for distributional/quantile effects, and more.
@@ -563,6 +563,16 @@ The six scenarios above cover the most common business use cases.
   than the eligible never-treated composite use large-sample
   influence-function inference, not the exact t. Compare ``rolling='demean'`` vs
   ``rolling='detrend'`` as a built-in specification robustness check.
+
+- **Is the outcome a spell that ends and stays ended (churn, reemployment, discharge)?** → :class:`~diff_diff.DurationDiD` (Deaner & Ku 2026)
+
+  Causal duration DiD for a binary absorbing outcome in a two-group,
+  common-timing design. The identifying restriction is on the groups'
+  *untreated hazards* (``method="cd"`` additive gap or ``method="ph"``
+  ratio), not on outcome levels; the per-date absorption ATT comes with
+  whole-individual bootstrap pointwise and simultaneous bands and a
+  fixed-anchor pre-treatment specification test (``results.pretest``).
+  ``last_pre_period=`` (the last untreated date) is required.
 
 - **Need flexible / high-dimensional covariate adjustment?** → :class:`~diff_diff.DMLDiD` (Chang 2020)
 

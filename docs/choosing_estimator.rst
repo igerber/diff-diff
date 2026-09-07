@@ -140,6 +140,10 @@ Quick Reference
      - 2x2 distributional effects (which quantiles moved, not just the mean)
      - h(u, t) monotone in a scalar unobservable; U time-invariant within groups
      - ATT + quantile treatment effects (bootstrap inference)
+   * - ``DurationDiD``
+     - Binary absorbing outcome (spell ended), two groups, common timing
+     - Constant gap (CD) or ratio (PH) between the groups' untreated hazards
+     - Per-date absorption ATT + uniform average (whole-individual bootstrap bands, pretest)
    * - ``QDiD`` (deprecated 3.9; use ``ChangesInChanges(method="qdid")``)
      - 2x2 quantile-DiD comparison alongside ChangesInChanges
      - Additive quantile model (scale-dependent, testable restrictions)
@@ -711,6 +715,65 @@ exceeding CS's per-cell convention).
                       first_treat='first_treat', covariates=['x1', 'x2'])
     print(results.aggregate('event_study').to_dataframe())
 
+DurationDiD (Deaner & Ku 2026)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**When to use**: The outcome is a binary ABSORBING event observed over time
+(a spell that ends and stays ended: reemployment, churn, discharge), there
+are two groups with a common intervention date, and you want the effect on
+the probability of having exited by each post-treatment date. Standard DiD
+on the cumulative indicator imposes a constant gap in event probabilities,
+which forces the survivors' hazards to diverge (Appendix A.1); DurationDiD
+restricts the groups' *untreated hazards* instead.
+
+**Key features**:
+
+- ``method="cd"`` (constant additive untreated-hazard gap) or
+  ``method="ph"`` (constant hazard ratio), fitted on the pre-treatment
+  cumulative hazards — equal weights over every eligible pre-treatment date
+  by default, or a window via ``pre_periods=`` / ``pre_period_weights=``
+- Per-date absorption ATT with the paper's whole-individual bootstrap:
+  centered pointwise intervals and a simultaneous max-|t| band; the headline
+  ``att`` is the uniform average over the post-treatment dates
+- ``results.pretest``: the fixed-anchor pre-treatment specification test
+  (Algorithm 2) — the estimator's own diagnostic; ``check_parallel_trends``
+  and HonestDiD do not apply
+- Every inference family is fully available or fully withheld with a named
+  ``inference_status`` (invalid extrapolated counterfactual curve, failed
+  draws, zero SE); ``last_pre_period=`` is required and never inferred
+
+**vs DifferenceInDifferences / TwoWayFixedEffects**: those identify off
+parallel trends in outcome *levels*; on an absorbing indicator that is a
+restriction on event probabilities, not hazards. **vs ChangesInChanges**:
+distributional DiD for continuous outcomes, not a duration model.
+
+**Example**:
+
+.. code-block:: python
+
+    import numpy as np
+    import pandas as pd
+    from diff_diff import DurationDiD
+
+    rng = np.random.default_rng(3)
+    n, T = 300, 8
+    control = 0.8 * np.exp(-np.cumsum(np.r_[0.0, 0.15 + 0.02 * np.arange(2, T + 1)]))
+    treated = 0.6 * np.exp(-np.cumsum(np.r_[0.0, 0.20 + 0.02 * np.arange(2, T + 1)
+                                              + 0.3 * (np.arange(2, T + 1) > 4)]))
+    group = np.repeat([1, 0], n)
+    curves = np.where(group[:, None] == 1, treated[None, :], control[None, :])
+    panel = pd.DataFrame({
+        "unit": np.repeat(np.arange(2 * n), T),
+        "time": np.tile(np.arange(1, T + 1), 2 * n),
+        "treated": np.repeat(group, T),
+        "exited": (rng.uniform(size=2 * n)[:, None] > curves).astype(int).ravel(),
+    })
+    est = DurationDiD(method="cd", n_bootstrap=100, seed=42)
+    results = est.fit(panel, outcome="exited", unit="unit", time="time",
+                      treatment="treated", last_pre_period=4)
+    print(results.to_dataframe())
+    print(results.pretest.summary())
+
 Bacon Decomposition
 ~~~~~~~~~~~~~~~~~~~
 
@@ -1032,6 +1095,11 @@ estimation. The depth of support varies by estimator and variance method:
    * - ``ChangesInChanges`` / ``QDiD``
      - --
      - --
+     - --
+     - --
+   * - ``DurationDiD``
+     - N/A (no survey support)
+     - N/A
      - --
      - --
    * - ``SpilloverDiD``

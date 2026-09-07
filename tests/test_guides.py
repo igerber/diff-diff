@@ -766,6 +766,60 @@ class TestLLMsFullHADCoverage:
                     )
 
 
+class TestLLMsFullDurationDiDCoverage:
+    """Pin the DurationDiD section of llms-full.txt to the real API.
+
+    Adding a public parameter to DurationDiD.__init__ or DurationDiD.fit()
+    requires updating diff_diff/guides/llms-full.txt — these tests catch drift.
+    """
+
+    def _section(self):
+        text = get_llm_guide("full")
+        start = text.index("### DurationDiD")
+        nxt = text.index("\n### ", start + 1)
+        return text[start:nxt]
+
+    def test_llms_full_has_duration_section(self):
+        assert "### DurationDiD" in get_llm_guide("full")
+
+    def test_llms_full_duration_constructor_signature_matches_real_api(self):
+        import inspect
+
+        from diff_diff import DurationDiD
+
+        sig_params = set(inspect.signature(DurationDiD.__init__).parameters)
+        sig_params.discard("self")
+        section = self._section()
+        block_start = section.index("DurationDiD(")
+        block_end = section.index(").fit(", block_start)
+        ctor_block = section[block_start:block_end]
+        for param in sig_params:
+            assert f"{param}=" in ctor_block, (
+                f"DurationDiD constructor block in llms-full.txt is missing the real "
+                f"public parameter {param!r}."
+            )
+
+    def test_llms_full_duration_fit_signature_set_equality(self):
+        import inspect
+        import re
+
+        from diff_diff import DurationDiD
+
+        sig_params = set(inspect.signature(DurationDiD.fit).parameters)
+        sig_params.discard("self")
+        section = self._section()
+        fit_start = section.index(").fit(")
+        fit_block = section[fit_start : section.index("DurationDiDResults", fit_start)]
+        # Strip trailing comments so prose never masquerades as a parameter.
+        fit_code = "\n".join(line.split("#", 1)[0] for line in fit_block.splitlines())
+        documented = set(re.findall(r"\b([a-z_]+)(?=\s*(?:=|,|\)))", fit_code))
+        documented.discard("fit")
+        assert documented == sig_params, (
+            f"llms-full.txt DurationDiD fit() block documents {sorted(documented)} but the "
+            f"real signature is {sorted(sig_params)}"
+        )
+
+
 class TestLLMsFullDMLDiDCoverage:
     """Pin the DMLDiD section of llms-full.txt to the real API.
 

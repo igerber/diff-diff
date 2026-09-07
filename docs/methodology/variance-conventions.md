@@ -41,6 +41,7 @@ produced wrong figures three separate times while this inventory was drafted).
 | `dml_did` | — | None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None | **legitimate** | L3: Chang (2020) Thm 2 augmented-score plug-in variance (per-unit influence function; normal-theory safe_inference on no-design fits; survey_design=/cluster= fits use the design-based CR1/weighted-IF per-cell variance — replicate designs the IF-reweighting per-cell variance — with df=df_survey t-inference outside the shared CR1 sandwich) |
 | `dml_did_bad_control` | — | None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None | **legitimate** | L3: Caetano et al. (2026) Eq. 11 augmented-score plug-in variance (same psi_bar - D*theta/pi centering as Chang Thm 2; per-unit influence function; normal-theory safe_inference on no-design fits; cluster= fits use the CR1 per-cell variance with df=df_survey t-inference) and the per-cell ATT_X diagnostic tuple sharing the same branch and df (one extra safe_inference call per retained cell) |
 | `dml_did_rcs` | — | None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None | **legitimate** | L3: Chang (2020) Thm 2 lambda-corrected augmented-score plug-in variance (Case 2; per-observation influence function; normal-theory safe_inference on no-design fits; survey_design=/cluster= fits use the design-based CR1/weighted-IF per-cell variance — replicate designs the IF-reweighting per-cell variance — with df=df_survey t-inference outside the shared CR1 sandwich) |
+| `duration_did` | — | None, None | **legitimate** | L3: Deaner & Ku (2026) whole-individual pooled bootstrap (centered absolute-deviation pointwise and simultaneous bands); no CR1 sandwich, normal-theory safe_inference gate only |
 cr1_k is the sorted multiset of K_reference counts reaching the shared
 clustered CR1 denominator — visible columns + the signed cluster_k_adjustment
 (linalg._compute_robust_vcov_numpy with
@@ -130,9 +131,13 @@ output).
   the library-wide v4 target — bit-identical, no numbers moved), with
   "residual"/"normal" as opt-ins; the degenerate lanes (unclustered refit,
   RA G<=1, saturated early return) keep literal df=None under every value.
-- **L3 — CallawaySantAnna / DMLDiD / TwoStageDiD / ImputationDiD (default)**:
-  different variance theory (influence functions / Chang (2020) augmented-score
-  plug-in / two-stage / BJS imputation), never the shared CR1 sandwich. CS is
+- **L3 — CallawaySantAnna / DMLDiD / TwoStageDiD / ImputationDiD (default) /
+  DurationDiD**: different variance theory (influence functions / Chang (2020)
+  augmented-score plug-in / two-stage / BJS imputation / Deaner & Ku (2026)
+  whole-individual pooled bootstrap with centered absolute-deviation bands),
+  never the shared CR1 sandwich. DurationDiD is bootstrap-only: its single
+  `safe_inference` + `safe_inference_batch` gate passes `df=None` and the
+  centered-bootstrap p-values/intervals override the normal-theory values. CS is
   anchored to Stata csdid outright; DMLDiD's panel lane to DoubleML at
   machine precision, while its repeated-cross-section lane (panel=False) is
   characterization-anchored only (DoubleML's RCS score differs and omits the
