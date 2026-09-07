@@ -254,12 +254,15 @@ class DurationDiDResults(BaseResults, AggregationMixin):
         raise ValueError("level must be 'event_study', 'simple', 'survival', or 'diagnostics'")
 
     def summary(self, alpha: Optional[float] = None) -> str:
-        """Summarize stored whole-population absorption ATT and availability."""
+        """Summarize stored absorption ATT and availability, printing shared reasons once."""
         _require_fit_alpha(alpha, self.alpha, message=_SUMMARY_ALPHA_MESSAGE)
         units = (
             "hazard gap per normalized observation interval"
             if self.method == "common_dynamics"
             else "dimensionless hazard ratio"
+        )
+        reasons = dict.fromkeys(
+            reason for values in self.inference_reasons.values() for reason in values
         )
         return (
             f"DurationDiD ({self.method})\n"
@@ -268,9 +271,7 @@ class DurationDiDResults(BaseResults, AggregationMixin):
             f"{_coverage_pct(self.alpha)}% CI: {self.conf_int}; p-value: {self.p_value:.6g}\n"
             f"Estimation: {self.estimation_status}; inference: {self.inference_status}\n"
             f"Pooled individual bootstrap: {self.n_bootstrap_valid}/{self.n_bootstrap} valid effect draws"
-            + "".join(
-                "\n" + reason for values in self.inference_reasons.values() for reason in values
-            )
+            + "".join("\n" + reason for reason in reasons)
             + "".join("\n" + warning for warning in self.support_warnings)
             + "\n"
             + self.pretrend_results.summary()

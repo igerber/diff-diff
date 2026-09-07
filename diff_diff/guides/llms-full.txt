@@ -115,6 +115,8 @@ Owns `effects`, `survival_curve`, `bootstrap_failures`, B-by-post `bootstrap_eff
 `inference_reasons` have pointwise/simultaneous/simple keys; available/unavailable,
 plus partial for pointwise. `support_warnings` and `pretrend_results` remain
 inspectable. Properties: `inference_method='bootstrap'`, uniform raw post `raw_att`.
+`summary()` prints distinct inference-unavailability reasons once in first appearance
+order; the full per-family `inference_reasons` mapping remains in the result and `to_dict()`.
 
 Native table column order (chronological RangeIndex):
 - effects (post only): period, event_time, att, se, t_stat, p_value, conf_int_lower,

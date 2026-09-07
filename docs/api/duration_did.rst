@@ -135,6 +135,10 @@ mappings as period/value records. Native tables have chronological RangeIndex.
   ``support_warnings`` and stored ``pretrend_results`` remain inspectable.
 - Properties: ``inference_method='bootstrap'`` and uniform raw post mean ``raw_att``.
 
+``summary()`` prints each distinct inference-unavailability reason once, in first
+appearance order. The full per-family ``inference_reasons`` mapping is preserved
+on the result and in ``to_dict()``.
+
 Native schemas, in column order:
 
 - ``effects`` (post only): period, event_time, att, se, t_stat, p_value,

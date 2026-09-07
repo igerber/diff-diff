@@ -93,6 +93,19 @@ def test_serialization_confidence_and_metadata(result):
     assert "dimensionless hazard ratio" in ph.summary()
 
 
+def test_summary_reports_shared_inference_failure_once():
+    data = duration_panel(control=(3, 2, 1, 1, 1, 1), treated=(3, 2, 1, 1, 1, 1), n=3, scale=1)
+    r = fit_duration(data, n_bootstrap=15, seed=2)
+    stored = r.to_dict()
+    reason = "one or more effect bootstrap draws failed"
+    assert all(reason in r.inference_reasons[family] for family in r.inference_status)
+    text = r.summary()
+    assert text.splitlines().count(reason) == 1
+    assert all(warning in text for warning in r.support_warnings)
+    assert r.pretrend_results.summary() in text
+    assert r.to_dict() == stored
+
+
 @pytest.mark.parametrize(
     "clock", [pd.date_range("2020", periods=6), pd.timedelta_range("0 days", periods=6)]
 )
