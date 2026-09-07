@@ -130,6 +130,7 @@ Full guide: `diff_diff.get_llm_guide("practitioner")`.
 - [Manipulation Testing](https://diff-diff.readthedocs.io/en/stable/api/regression_discontinuity.html) - Cattaneo, Jansson & Ma (2020) density-discontinuity test (`RDDensityTest`): rddensity 3.0 parity, robust bias-corrected inference, unrestricted/restricted models, mass-point adjustment
 - [Parallel Trends Testing](https://diff-diff.readthedocs.io/en/stable/api/diagnostics.html) - simple and Wasserstein-robust parallel trends tests, equivalence testing (TOST)
 - [Placebo Tests](https://diff-diff.readthedocs.io/en/stable/api/diagnostics.html) - placebo timing, group, permutation, leave-one-out
+- [TWFE Weight Diagnostics](https://diff-diff.readthedocs.io/en/stable/api/twfe_weights.html) - Baker et al. (2025) implicit weights a TWFE regression places on each ATT(g,t), against the ATT^O / ATT^simple targets, with the pre-trend contribution. Ports Callaway's `twfeweights` (MIT)
 - [Honest DiD](https://diff-diff.readthedocs.io/en/stable/api/honest_did.html) - Rambachan & Roth (2023) sensitivity analysis: robust CI under PT violations, breakdown values
 - [Pre-Trends Power Analysis](https://diff-diff.readthedocs.io/en/stable/api/pretrends.html) - Roth (2022) minimum detectable violation and power curves
 - [Power Analysis](https://diff-diff.readthedocs.io/en/stable/api/power.html) - analytical and simulation-based MDE, sample size, power curves for study design

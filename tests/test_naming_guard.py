@@ -557,6 +557,31 @@ SURFACE_ALLOWLIST = {
     "TripleDifference.fit[group]": (
         "rule-3 reserved treated-group 0/1 indicator (v4-design section 8 rule 3)"
     ),
+    # The TWFE weight diagnostics share vocabulary with three rename families
+    # without reading any of them. `time=` here is the panel PERIOD COLUMN
+    # NAME (the same role as CallawaySantAnna.fit[time], which no row touches),
+    # not the two-period 0/1 post dummy M-030/M-031/M-082/M-137/M-138 rename to
+    # `post`: both functions are staggered-only. `aggregation=` selects an
+    # ESTIMAND ("twfe" / "overall" / "simple"), not the Wooldridge output
+    # granularity M-044 renames to `level` and M-087 removes.
+    **{
+        f"{fn}[time]": (
+            "panel PERIOD COLUMN NAME (as in CallawaySantAnna.fit[time]), not "
+            "the two-period 0/1 post dummy renamed to `post` by "
+            "M-030/M-031/M-082/M-137/M-138; survives 4.0"
+        )
+        for fn in ("attgt_weights", "decompose_twfe_weights")
+    },
+    "attgt_weights[aggregation]": (
+        "ESTIMAND selector ('twfe' / 'overall' / 'simple'), not the "
+        "WooldridgeDiDResults output granularity M-044 renames to `level` and "
+        "M-087 removes; survives 4.0"
+    ),
+    "ATTGTWeightsResult.aggregation": (
+        "records which ESTIMAND's weights the result holds - the "
+        "attgt_weights[aggregation] value, not a Wooldridge output granularity "
+        "(M-044 / M-087); survives 4.0"
+    ),
     "run_placebo_test[time]": (
         "OVERLOADED pass-through, redesign pending (TODO.md): forwarded as "
         "the calendar column to placebo_timing_test/placebo_group_test AND "
@@ -981,6 +1006,23 @@ CONSUMER_ALLOWLIST = {
     # field. The one file that DID name it - diff_diff/guides/llms-full.txt -
     # was migrated in this same diff (migrate-first rule) and remains a lane
     # hit only through its unrelated backticked schema key.
+    # The TWFE weight diagnostics document their own `time=` (panel period
+    # COLUMN) and `aggregation=` (estimand selector) on these two surfaces;
+    # neither reads a renamed name. See the SURFACE_ALLOWLIST entries for
+    # attgt_weights / decompose_twfe_weights.
+    ("time", "diff_diff/guides/llms.txt"): (
+        "attgt_weights / decompose_twfe_weights document a panel PERIOD COLUMN "
+        "named `time`, not the two-period 0/1 post dummy renamed by "
+        "M-030/M-031/M-082/M-137/M-138"
+    ),
+    ("aggregation", "diff_diff/guides/llms.txt"): (
+        "attgt_weights' ESTIMAND selector, not WooldridgeDiDResults' output "
+        "granularity (M-044 / M-087)"
+    ),
+    ("aggregation", "docs/methodology/REGISTRY.md"): (
+        "the TWFE Weight Diagnostics section documents attgt_weights' ESTIMAND "
+        "selector, not WooldridgeDiDResults' output granularity (M-044 / M-087)"
+    ),
     ("estimator", "diff_diff/aggregation.py"): (
         "AggregationResult.estimator - independent field holding a CLASS NAME"
     ),

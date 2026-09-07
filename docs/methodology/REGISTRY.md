@@ -38,6 +38,7 @@ This document provides the academic foundations and key implementation requireme
 5. [Diagnostics and Sensitivity](#diagnostics-and-sensitivity)
    - [PlaceboTests](#placebotests)
    - [BaconDecomposition](#bacondecomposition)
+   - [TWFE Weight Diagnostics](#twfe-weight-diagnostics)
    - [HonestDiD](#honestdid)
    - [PreTrendsPower](#pretrendspower)
    - [PowerAnalysis](#poweranalysis)
@@ -5695,6 +5696,132 @@ Where `n_k` is the sample share of timing group `k`, `n_{kℓ} = n_k / (n_k + n_
 - **Note (R parity convention divergence on always-treated):** R `bacondecomp::bacon()` keeps `first_treat=1` (the always-treated cohort) as a separate timing cohort and emits an additional comparison type `Later vs Always Treated` (cohort k vs the always-treated cell) alongside the standard `Treated vs Untreated` row. Python's footnote-11 convention remaps these units to the `U` bucket and folds those R-side rows into a single `treated_vs_never` cell per treated cohort. The aggregate (TWFE coefficient + sum of weights) is invariant to this re-bucketing — Theorem 1's identity holds identically because the U bucket's total weight gets re-allocated across nested 2x2 cells but the total weight on `{cohort_k vs U}` is the same. The per-component breakdown, however, differs structurally between the two conventions. The R parity test (`tests/test_methodology_bacon.py::TestBaconParityR::test_component_estimates_match_r`) asserts per-component parity at `atol=1e-6` on the 2 fixtures without always-treated (`uniform_3groups_with_never_treated`, `two_groups_no_never_treated`) AND on the 6 timing-vs-timing rows of `always_treated_remapped` — the carve-out is narrowed to U-bucket rows only (R's `Later vs Always Treated` rows canonicalize to `treated_vs_never` and are dropped alongside the matching Python rows). The R→Python U-bucket fold-back is pinned separately by `test_always_treated_remapped_fold_back_matches_r`, which aggregates R's split `Later vs Always Treated` + `Treated vs Untreated` rows per treated cohort and asserts the combined weight + weight-averaged estimate match Python's single `treated_vs_never` cell at `atol=1e-6`. Aggregate parity (`test_twfe_coef_matches_r`, `test_weights_sum_matches_r`) is locked across all 3 fixtures.
 - **Deviation (first-period boundary extension on always-treated remap):** Paper footnote 11 (Goodman-Bacon 2021) uses the strict inequality `t_i < 1` (units treated *before* the first observable period) for the always-treated bucket. The library applies the **inclusive** `first_treat <= min(time)` rule, which additionally folds units treated *at* the first observable period (`first_treat == min(time)`) into `U`. This is a library boundary convention, not a paper-faithful rule: such units have no untreated cell in the observed panel and so cannot contribute to any 2x2 DD as a treated cohort, so folding them into the U bucket mirrors the always-treated handling rather than dropping them silently. R `bacondecomp::bacon()` does not apply this boundary fold-back — it keeps `first_treat == min(time)` cohorts in their own bucket and emits `Later vs Always Treated` comparisons (see the **Note (R parity convention divergence on always-treated)** above for how the parity tests handle the resulting structural breakdown difference; aggregate Theorem 1 identity remains invariant). When `min(time)` is strictly greater than 1 (no first-period-treated cohorts), the library rule reduces to the paper's strict rule and the two conventions coincide.
 - **Deviation (unbalanced-panel library extension):** Unbalanced panels are accepted with a `UserWarning` ("Unbalanced panel detected. Bacon decomposition assumes balanced panels. Results may be inaccurate."). Goodman-Bacon (2021) Appendix A's proof assumes a balanced panel; under unbalance, the Theorem 1 identity holds only approximately. The decomposition still returns finite, well-defined outputs but `weights="exact"` does NOT achieve the machine-precision algebraic identity that the balanced-panel claims above describe.
+
+---
+
+## TWFE Weight Diagnostics
+
+**Primary source:** [Baker, A., Callaway, B., Cunningham, S., Goodman-Bacon, A., & Sant'Anna, P. H. C. (2025). "Difference-in-Differences Designs: A Practitioner's Guide." arXiv:2503.13323](https://arxiv.org/abs/2503.13323)
+
+**Secondary source:** [Callaway, B., & Sant'Anna, P. H. C. (2021). Difference-in-Differences with multiple time periods. *Journal of Econometrics*, 225(2), 200-230.](https://doi.org/10.1016/j.jeconom.2020.12.001) — for the ATT^O / ATT^simple target-parameter weights.
+
+**Reference implementation:** the `twfeweights` R package (v0.9.0) by Brantly Callaway, MIT License, Copyright (c) 2023 Brantly Callaway. The upstream notice is reproduced in the module docstring of `diff_diff/twfe_weights.py`, as its terms require.
+
+**Scope:** these are DIAGNOSTICS, not estimators. Both result containers subclass `Diagnostic` and carry no inference quintet — the decomposition is an algebraic identity, so there is nothing to attach a standard error to. The headline scalars are named `implied_att` and `estimate` rather than `att` for the same reason.
+
+### Relationship to neighbouring surfaces
+
+- **vs `twowayfeweights` (de Chaisemartin & D'Haultfoeuille 2020, Theorem 1):** that surface weights **(unit, time) cells**; these functions weight **ATT(g,t) parameters** — the cohort-by-period building blocks. Both detect negative weighting in staggered TWFE, but they decompose along different axes and their weight tables are not comparable row-for-row. The names are deliberately disjoint (`attgt_weights` / `ATTGTWeightsResult` vs `twowayfeweights` / `TWFEWeightsResult`).
+- **vs `BaconDecomposition` (Goodman-Bacon 2021):** Bacon decomposes TWFE into **2x2 DiD comparisons** and asks which comparisons drive the estimate. `decompose_twfe_weights` decomposes it into **group-time effects** and additionally isolates a pre-trend-violation term. Use Bacon to see the forbidden comparisons; use this to see the per-`(g,t)` weights and how much of the estimate is not a treatment effect at all.
+
+### Estimator equations (as implemented)
+
+All expressions are evaluated in POSITIONAL time (periods mapped to `1..T`, cohorts to their period position, never-treated staying `0`), so `maxT == T`.
+
+*ATT(g,t) weights — `attgt_weights(aggregation=...)`:*
+
+`aggregation="twfe"` (R `twfe_weights`), with `p_g` the share of ALL units in cohort `g` and `E_t[D]` the share of units treated by `t`:
+
+```
+h(g,t)   = 1[t >= g] - (maxT - g + 1)/T - E_t[D] + mean_t E_t[D]
+num(g,t) = h(g,t) * p_g
+w(g,t)   = num(g,t) / sum over {t >= g, g != 0} of num(g,t)
+```
+
+`aggregation="overall"` (ATT^O, R `attO_weights`), with `pbar_g` the share of EVER-TREATED units in cohort `g`:
+
+```
+w(g,t) = 1[t >= g] * pbar_g / (maxT - g + 1)
+```
+
+`aggregation="simple"` (ATT^simple, R `att_simple_weights`):
+
+```
+w(g,t) = 1[t >= g] * pbar_g,   then normalized to sum to one
+```
+
+*FWL decomposition — `decompose_twfe_weights(method="fwl")` (R `implicit_twfe_weights`):*
+
+Double-demean the treatment indicator `D` and the covariates `X` over unit and period, project the demeaned treatment on the demeaned covariates, and take the residual:
+
+```
+gamma  = argmin_b || Ddot - Xdot b ||_w
+resid  = Ddot - Xdot gamma
+alpha_den = E_w[resid * Ddot]
+```
+
+The residual IS the implicit weight the regression applies to each observation. Per `(g,t)` cell, with the treated and comparison weights each normalized to mean one:
+
+```
+alpha_weight(g,t) = E_w[resid | G=g, T=t] * p_g / (alpha_den * T)
+ATT(g,t)          = E_w[wtreated * Ytilde | G=g] - E_w[wcontrol * Ytilde | G=0]
+```
+
+where `Ytilde` is the outcome measured against the base period (`Y_t - Y_1` under `base_period="first_period"`, `Y_t - Y_{g-1}` under `"gmin1"`). Roll-ups:
+
+```
+decomposition  = sum over all cells of alpha_weight * ATT
+remainder      = sum of alpha_weight * cell remainder     (0 unless base_period="gmin1")
+estimate       = decomposition + remainder
+pretrend_bias  = sum over PRE cells (t < g) of alpha_weight * ATT
+```
+
+Under parallel trends every pre-treatment ATT(g,t) is zero and `pretrend_bias` vanishes; a non-zero value is the contribution of parallel-trends violations to the TWFE coefficient.
+
+*Cross-surface identity (pinned by `tests/test_twfe_weights_parity.py::TestCrossSurfaceIdentity`):* when the CS fit used `base_period="universal"`, `control_group="never_treated"` and no covariates,
+
+```
+attgt_weights(cs, aggregation="twfe").implied_att == decompose_twfe_weights(panel, ...).estimate
+```
+
+Verified on `mpdta` at `-0.03654894` from both directions.
+
+### Edge cases
+
+- **Note (grid completeness is a hard error):** `attgt_weights` fails closed on an incomplete group-time grid: a weight table over a partial grid is not the named estimand. `aggregation="twfe"` requires every cohort x period cell (pre cells enter `h(g,t)`); `"overall"` / `"simple"` require every post-treatment cell. The error names the missing cells and each cell's CS `skip_reason`. Only the two structural gaps below are exempt. A non-estimable PRE cell of a surviving cohort under `"overall"` / `"simple"` is still merely dropped-and-warned and counted in `n_dropped_cells`: those estimands place no weight on pre cells, so nothing renormalizes and no number moves.
+- **Note (matches R `did`'s first-period drop):** a cohort with NO estimable post-treatment cell, canonically one treated in the first observed period (no base period), is excluded from the weight table AND from the cohort masses (`p_g`, `pbar_g`, `E_t[D]`) with a `UserWarning`, exactly as `did::pre_process_did` drops units already treated in the first period. The criterion is *post* cells, not all cells: a cohort can have an estimable universal-base pre cell and still no usable post cell. On a bare ATT(g,t) frame with no `skip_reason` column, only a cohort whose label equals the first observed period is excludable this way; any other absent cohort raises, being indistinguishable from user truncation.
+- **Note (matches R `aggte`'s available-period averaging under not-yet-treated controls):** on a `control_group="not_yet_treated"` fit the last cohorts run out of comparison units and CS marks those post cells `skip_reason="zero_treated_control"`. For `"overall"` / `"simple"` they are treated as structurally absent: `"overall"` divides each cohort by its number of AVAILABLE post periods instead of `(maxT - g + 1)`, and `"simple"` renormalizes over the available post cells, which is what R `aggte(type="group")` / `aggte(type="simple")` compute on such a fit. A `UserWarning` names the cells. `"twfe"` requires a never-treated comparison group and never reaches this branch; a bare frame without `skip_reason` stays strict.
+- **Note (cohort labels are validated):** never-treated is exactly `0` or `+inf`. Any other non-finite label (NaN, `-inf`) raises rather than being silently absorbed into cohort 0; before this check a single NaN label moved `decompose_twfe_weights(...).estimate` by ~1.4% with no warning. Within-unit invariance uses `nunique(dropna=False)` so a label that is NaN in one period fails, and non-finite period labels are rejected up front.
+- **Note (`aggregation="twfe"` requires an unadjusted fit):** R's `twfe_weights` stops unless `xformla == ~1`. The fit records its covariate column names on the aggregation kit (`bookkeeping["covariates"]`) and a non-empty tuple raises. A kit predating that bookkeeping warns instead; a bare ATT(g,t) frame carries no record at all, so on the DataFrame path the caller is responsible (stated in the docstring). Use `decompose_twfe_weights(covariates=...)` for the covariate-adjusted decomposition.
+- **Note (sampling weights are validated):** unit weights must be finite, non-negative, with positive total and positive treated mass. Positive never-treated mass is required only where the comparison group enters the formula, i.e. `aggregation="twfe"` and `decompose_twfe_weights`, never for ATT^O / ATT^simple, which are defined without a never-treated group.
+- `decompose_twfe_weights` requires a balanced panel and a never-treated comparison group, and rejects time-varying cohort labels or sampling weights.
+- `base_period="gmin1"` requires a period before each cohort's treatment; a cohort treated in the first period raises.
+- `attgt_weights` rejects repeated-cross-section fits and unbalanced-panel fallbacks: `E_t[D]` and the cohort shares average over a fixed unit set.
+
+### Notes and deviations
+
+- **Note (upstream `fixest::demean` segfault on the no-covariate branch):** `twfeweights::implicit_twfe_weights(xformula = ~1)` builds `model.matrix(~-1, data)`, an `nT x 0` matrix, and `fixest::demean()` SEGFAULTS on a zero-column matrix (reproduced in isolation on R 4.6.1 / fixest 0.14.2: `fixest::demean(matrix(numeric(0), 10, 0), ids)` → `*** caught segfault *** memory not mapped`). This is a zero-column bug, not a property of any fixture. The no-covariate golden is therefore generated with a TIME-INVARIANT covariate, which double-demeaning annihilates exactly, making the call numerically the `~1` branch; the parity test asserts BOTH `covariates=None` and `covariates=[<that column>]` against that single golden, so the equivalence is proven rather than assumed. Verified on `mpdta`: `twfe_weights(att_gt(...))` aggregate and `implicit_twfe_weights(xformula = ~lpop)$est` both equal `-0.03654894`.
+- **Note (annihilated covariates are dropped before the projection, as numerical hygiene):** a covariate with no within-unit-and-period variation leaves a column of pure rounding noise after double-demeaning (~1e-16 against a raw scale of ~1). Keeping it is not catastrophic: the column lies in the fixed-effect span and is orthogonal to the treatment residual, so on mpdta's `lpop` it moves the FWL residual by ~2e-18. But regressing on an exactly-zero column is meaningless, and dropping it is what makes `covariates=None` and `covariates=[<time-invariant col>]` agree exactly rather than approximately. diff-diff judges each column against its own PRE-demeaning norm; a rank test on the demeaned matrix alone cannot see this, because there 1e-16 is simply the largest pivot. **Limitation:** the 1e-10 relative threshold is blunt, so a covariate with a large level and genuinely small within-variation can trip it. The `UserWarning` says so and suggests centring or rescaling.
+- **Deviation from R (0/0 cells report the limit, not the rounding noise):** for the never-treated comparison group the double-demeaned treatment is CONSTANT within a period (`-E_t[D] + mean_t E_t[D]`), and for some cohort structures that constant is analytically ZERO — on the `sim_staggered` fixture (three equal cohorts at `g in {0,3,4}`, `T=5`) it vanishes exactly at `t=3`, where `-1/3 + 1/3 = 0`. The cell's implicit weights are then `0/0`. diff-diff returns the limit (a constant divided by its own mean is one), giving the plain unweighted contrast; R divides the two rounding errors and lands ~3e-4 away. Verified against a hand-computed contrast that uses none of this module's machinery: diff-diff is exact to 4.4e-16. A `UserWarning` names the affected cells. **`estimate` is unaffected either way** — the weights on such cells cancel exactly (on `sim_staggered`, `w(3,3) + w(4,3) = 0`), so it matches R to 1e-15. Other user-visible fields DO move, because the cancelling cells straddle the pre/post split. Measured against the pinned R values on `sim_staggered`: `pretrend_bias` and `post_only` each by ~1.2e-4 (equal and opposite, so their sum stays exact), `effective_sample_size` by ~0.99, per-cell `ess` by up to ~0.53, and per-cell `remainder` (under `base_period="gmin1"`) correspondingly. All print in `summary()`. The parity suite asserts every one: tight wherever the degeneracy is not detected, and at the degenerate cells against R's own weights with our limit value substituted only where R's number is 0/0 noise.
+- **Deviation from R (positional time rescaling in `attgt_weights`):** R evaluates `(maxT - g + 1) / length(tlist)` on the RAW period labels, which is only correct when those labels are consecutive integers. diff-diff maps periods to `1..T` first (mirroring `BMisc::orig2t`, which R already applies inside `implicit_twfe_weights` but not inside `twfe_weights`). Bit-identical on consecutive grids — `mpdta`'s 2003..2007 maps to 1..5 and both give `4/5` at `g = 2004` — and correct on gapped ones. Pinned by a test that remaps periods to 10, 20, 30, 40, 50.
+- **Deviation from R (`keep_untreated` not exposed):** R's `keep_untreated=TRUE` synthesizes `G = 0` rows with `attgt = 0` to mirror an internal vector layout. Those rows are excluded from every normalization (`cond <- .t >= .group & .group != 0`) and contribute exactly zero, so the argument is numerically inert.
+- **Deviation from R (consolidated API):** upstream exports 21 symbols in a flat namespace. diff-diff exposes five: `attgt_weights` (folding `twfe_weights` / `attO_weights` / `att_simple_weights` behind `aggregation=`), `decompose_twfe_weights` (folding `implicit_twfe_weights` behind `method=`), the two result classes, and `plot_twfe_weights` (replacing `ggtwfeweights`). The per-cell helpers and the eleven balance statistics are private and pinned through the public surfaces that expose them. The two two-period kernels (`two_period_reg_weights` / `two_period_aipw_weights`) and the AIPW blocks are captured in the golden but read by no test: they are labelled **reserved** in the JSON `meta` and the generator header, pinned so the `method="aipw"` follow-up needs no R re-run. The AIPW golden is covariate-adjusted, since a time-invariant covariate is annihilated by double-demeaning but is NOT a no-op in a propensity score.
+- **Deviation from R (post-lasso block out of scope):** `did_post_lasso` / `did_post_lasso_ra` are not ported. The upstream source is unfinished — `R/did_post_lasso.R:69` contains a leftover `browser()` call and references undefined variables — so there is no runnable reference to validate against, and it would add an sklearn dependency.
+- **Deviation from R (`method="aipw"` not yet implemented):** upstream's `implicit_aipw_weights` is out of scope for the initial port; `method=` currently accepts `"fwl"` only and raises listing the accepted values.
+- **Note (`log_ratio_sd` scaling preserved verbatim):** upstream scales each group's standard deviation by `sqrt(n - 1)` before taking the log ratio, which is not a conventional standard deviation. Preserved as-is for parity; the quantity is only read as a relative balance statistic and the factor largely cancels in the ratio.
+- **Note (`frac_treated_extreme` is a step function):** upstream routes through `BMisc::weighted_ecdf` → `make_dist` (an `approxfun(method="constant")` classed as `ecdf`) → `stats:::quantile.ecdf`, which does NOT invert the step function but rebuilds a pseudo-sample by repeating each knot `diff(c(0, round(nobs * F)))` times and takes an ordinary type-7 quantile of that. diff-diff reproduces this exactly, including the `NA` return when the covariate has fewer than three distinct values, and that `NA` survives the summary roll-up. R propagates NA if any contributing cell is NA, whereas a plain pandas `.sum()` skips it and would report a spurious `0.0` for a binary or constant covariate; the roll-up therefore masks on the `post` column (not on a zero roll-up weight, since a post cell whose implicit weight is exactly zero still contributes) and returns NaN whenever any contributing post cell is NaN. Because the statistic is a step function of a weighted ECDF, a perturbation of order 1e-12 can move one unit across a knot and shift the value by `1/n`; parity is gated accordingly.
+- **Note (negative-weight statistics; no R counterpart):** over the `g != 0` grid the TWFE weights sum to zero, post cells to +1 and pre cells to -1, so `n_negative` is non-zero and `negative_weight_share` sits near 0.5 in EVERY staggered design, including one with no negative post-period weight. The pathology the literature describes is negative weight on POST cells, so `ATTGTWeightsResult` reports both, labelled: `n_negative` / `negative_weight_share` over all cells, and `n_negative_post` / `negative_post_weight_share` restricted to post cells (the share of post-period weight MASS that is negative). `summary()` leads with the post-only figures. R reports neither statistic.
+- **Note (weighted `aggregation="twfe"` is a diff-diff extension):** R's `twfe_weights` takes no `w=`, so there is no upstream reference for a weighted TWFE weight table. The equations above define `p_g` and `E_t[D]` as unweighted shares; with `weights=` they become the corresponding weighted shares (each unit's mass is its sampling weight rather than one), the same algebra a weighted TWFE regression implies on a balanced panel. Pinned by asserting that `attgt_weights(fit, aggregation="twfe", weights=w)` and `decompose_twfe_weights(panel, weights="w")` produce identical weight vectors to 1e-12, plus a frozen-numbers regression test on a synthetic weighted panel (every parity fixture is unweighted, so R cannot gate this path).
+- **Note (linear algebra runs through the house helpers):** the two-way demeaning is `diff_diff.utils.within_transform` (the same alternating projections `fixest::demean` runs) applied to the sorted long frame before the `(unit, period)` reshape, with the treatment indicator synthesized as a column since it is derived from cohorts x positional periods rather than supplied. The Frisch-Waugh-Lovell solve is `diff_diff.linalg.solve_ols(..., weights=, rank_deficient_action="silent")`: on a rank-deficient design it fits the maximal independent set, sets the aliased coefficients to `NaN` (R-style) and returns the residual computed from the identified ones, so the module reads the dropped column names off the `NaN` positions and uses the returned residual directly. This replaced a bespoke pivoted QR whose docstring claimed to drop "later columns first"; it did not, being the same norm-pivoted QR `solve_ols` uses, and dropping the same column.
+- **Note (diff-diff adds standardized differences):** `covariate_balance(standardize=True)` appends `unweighted_std_diff` / `weighted_std_diff` (difference divided by the pooled SD). R does not emit these; they are additive, so parity is asserted on the R columns only. A zero pooled SD yields NaN rather than an infinity.
+- **Note (balance is requested up front, not bolted on):** R mutates a `decomposed_twfe` object in a second pass (`twfe_cov_bal`). diff-diff computes the table at construction when `balance_covariates=` is supplied and exposes it via `covariate_balance()`, so the result never retains the raw panel — consistent with the `AggregationKit` data-minimization contract. Calling `covariate_balance()` without having requested it raises with the fix inlined.
+
+### R output parity
+
+Goldens: `benchmarks/data/twfeweights_golden.json`, plus two simulated sibling panel CSVs. The `mpdta` fixture reads the shared `benchmarks/data/mpdta_stata_panel.csv` and derives `lpop_t` from a `derived_columns` expression in the golden, rather than committing a renamed copy; the generator asserts the two sources agree to CSV round-trip precision. Every cells block carries ORIGINAL period labels: `implicit_*` run in positional time internally, and the generator maps them back so one convention holds throughout and the tests assert labels rather than array position. Regenerated by `benchmarks/R/generate_twfeweights_golden.R`; R is needed only to regenerate, never to run the tests. Tests: `tests/test_twfe_weights_parity.py`.
+
+Three fixtures: `mpdta` (real; non-`1..T` period labels; provenance `data(mpdta, package="did")`), `sim_staggered` (three equal cohorts of 100, which is exactly what makes the comparison-group normalizer vanish at `t=3`, so this fixture deliberately exercises the degenerate cells above; its `pretrend_bias` is non-zero but the ~0.093 is sampling noise, since `x1` is iid and cohorts are assigned by unit index, so no differential pre-trend is designed in), and `unbalanced_cohorts` (120/70/60, which breaks the `p_g == 1/3` degeneracy that would let a cohort-share bug pass silently on the equal-cohort fixture).
+
+| Surface | Gate | Rationale |
+|---------|------|-----------|
+| ATT(g,t) weights, all three aggregations | `atol=1e-12` | Closed-form rational expression in cohort masses; only double-precision representation error separates the two sides. Observed max deviation 4.7e-16. |
+| `implied_att` (R's own ATT(g,t) fed back in) | `atol=1e-12` | Isolates the weight arithmetic from CallawaySantAnna-vs-`did` parity. |
+| End-to-end from a CS fit | `rtol=1e-6` | COMPOSED check — carries the pre-existing CS parity band, not this module's. |
+| FWL decomposition scalars and cell weights | `atol=1e-10` | R double-demeans with `fixest::demean`, iterative alternating projections at a 1e-8 fixed-point tolerance; ours is the exact closed form on a balanced panel. The gap is fixest's convergence slack. |
+| FWL with covariates | `atol=1e-8` | The demeaning slack propagates through the OLS projection of `Ddot` on `Xdot`. |
+| Covariate balance (11 statistics) | `atol=1e-9` | Smooth functions of the weights above. Observed max deviation 7.3e-11. |
+| Per-cell ATT, `pretrend_bias` / `post_only`, and (under `gmin1`) the decomposition/remainder split at DEGENERATE cells | `atol=5e-2` | R reports 0/0 rounding noise there; we report the exact limit. Degeneracy is DETECTED from the weight structure, never hard-coded to a fixture or period, and `estimate` stays on the tight gate everywhere. Under `base_period="first_period"` the remainder is identically zero, so the split is gated tight even where the mask fires. |
+| `effective_sample_size` and per-cell `ess` at DEGENERATE cells | expected value rebuilt from R's own cells | R's `ess` at a 0/0 cell is a ratio of rounding errors (scalar gap ~0.99, per-cell up to ~0.53). The expectation uses R's weights and R's `ess` wherever the degeneracy is not detected, substituting our limit value only at the detected cells, so the assertion is anchored to R rather than to our own implementation. |
 
 ---
 

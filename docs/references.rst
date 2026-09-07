@@ -292,6 +292,11 @@ Multi-Period and Staggered Adoption
 
 - **Baker, A., Callaway, B., Cunningham, S., Goodman-Bacon, A., & Sant'Anna, P. H. C. (2025).** "Difference-in-Differences Designs: A Practitioner's Guide." *arXiv preprint* arXiv:2503.13323. https://arxiv.org/abs/2503.13323
 
+  Primary source for the implicit-TWFE-weight diagnostics
+  (:func:`diff_diff.attgt_weights`, :func:`diff_diff.decompose_twfe_weights`).
+  Reference implementation: the ``twfeweights`` R package (v0.9.0) by Brantly
+  Callaway, MIT License, Copyright (c) 2023 Brantly Callaway.
+
   Source for the 8-step practitioner workflow surfaced via ``diff_diff.get_llm_guide("practitioner")`` and the README ``## Practitioner Workflow`` section. See ``docs/methodology/REGISTRY.md`` for the diff-diff renumbering and per-step deviations.
 
 Double/Debiased Machine Learning

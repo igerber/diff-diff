@@ -15,6 +15,7 @@ from diff_diff.visualization._continuous import (
 from diff_diff.visualization._diagnostic import (
     plot_bacon,
     plot_sensitivity,
+    plot_twfe_weights,
 )
 from diff_diff.visualization._event_study import (
     PlottableResults,
@@ -48,6 +49,7 @@ __all__ = [
     "plot_group_effects",
     "plot_sensitivity",
     "plot_bacon",
+    "plot_twfe_weights",
     "plot_power_curve",
     "plot_pretrends_power",
     # New public functions

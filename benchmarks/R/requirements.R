@@ -19,6 +19,8 @@ required_packages <- c(
   "nprobust",      # Calonico-Cattaneo-Farrell local-linear (DIDHAD dependency)
   "Synth",         # Abadie-Diamond-Hainmueller (2010) synthetic control (SyntheticControl R-parity; ships data(basque))
   "qte",           # Callaway qte package (Athey-Imbens CiC + QDiD R-parity; ships data(lalonde))
+  "BMisc",         # Callaway utility package (twfeweights dependency: weighted_ecdf, orig2t)
+  "DRDID",         # Sant'Anna & Zhao (2020) doubly-robust DiD (twfeweights AIPW dependency)
 
   # Utilities
   "jsonlite",      # JSON output for Python interop
@@ -27,7 +29,9 @@ required_packages <- c(
 
 # synthdid must be installed from GitHub
 github_packages <- list(
-  synthdid = "synth-inference/synthdid"
+  synthdid = "synth-inference/synthdid",
+  # TWFE weight diagnostics parity goldens (not on CRAN)
+  twfeweights = "bcallaway11/twfeweights"
 )
 
 install_if_missing <- function(pkg) {

@@ -2411,6 +2411,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             # stays admitted).
             is_survey_fit=survey_metadata is not None,
             bootstrap_results=bootstrap_results,
+            covariates=covariates,
         )
         self.results_ = results
         self.is_fitted_ = True

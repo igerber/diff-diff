@@ -1,12 +1,20 @@
-"""Diagnostic visualization functions (sensitivity, Bacon decomposition)."""
+"""Diagnostic visualization functions (sensitivity, Bacon decomposition).
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+``plot_twfe_weights`` renders the implicit ATT(g, t) weights (or their covariate
+balance) from :func:`diff_diff.attgt_weights` / :func:`diff_diff.decompose_twfe_weights`.
+"""
+
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
 if TYPE_CHECKING:
     from diff_diff.bacon import BaconDecompositionResults
     from diff_diff.honest_did import SensitivityResults
+    from diff_diff.twfe_weights_results import (
+        ATTGTWeightsResult,
+        TWFEDecompositionResult,
+    )
 
 
 def plot_sensitivity(
@@ -816,4 +824,334 @@ def _render_bacon_plotly(
     if show:
         fig.show()
 
+    return fig
+
+
+def plot_twfe_weights(
+    results: "Union[ATTGTWeightsResult, TWFEDecompositionResult]",
+    *,
+    kind: str = "auto",
+    standardize: bool = True,
+    absolute_value: bool = True,
+    figsize: Tuple[float, float] = (10, 6),
+    title: Optional[str] = None,
+    xlabel: Optional[str] = None,
+    ylabel: Optional[str] = None,
+    post_color: str = "#2563eb",
+    pre_color: str = "#dc2626",
+    markersize: int = 80,
+    alpha: float = 0.8,
+    annotate: bool = False,
+    ax: Optional[Any] = None,
+    show: bool = True,
+    backend: str = "matplotlib",
+) -> Any:
+    """Visualize implicit TWFE weights on ATT(g, t), or their covariate balance.
+
+    Two views, matching upstream's ``ggtwfeweights`` methods:
+
+    - ``kind="weights"`` plots weight against ATT(g, t), one point per
+      group-time cell, coloured by pre/post. Points to the LEFT of the
+      vertical zero line carry negative weight - the staggered-TWFE
+      pathology.
+    - ``kind="balance"`` plots unweighted against implicitly-weighted
+      covariate differences. Points near zero on the vertical axis are
+      covariates the implicit weights balance.
+
+    Parameters
+    ----------
+    results : ATTGTWeightsResult or TWFEDecompositionResult
+        Output of :func:`diff_diff.attgt_weights` or
+        :func:`diff_diff.decompose_twfe_weights`.
+    kind : {"auto", "weights", "balance"}, default "auto"
+        ``"auto"`` picks ``"balance"`` when the result carries a balance
+        table and ``"weights"`` otherwise.
+    standardize : bool, default True
+        Balance view: divide differences by the pooled standard deviation.
+    absolute_value : bool, default True
+        Balance view: plot absolute differences, so "closer to zero is
+        better" reads the same for every covariate.
+    figsize : tuple, default (10, 6)
+        Figure size in inches. Ignored when ``ax`` is supplied.
+    title, xlabel, ylabel : str, optional
+        Overrides for the defaults chosen per ``kind``.
+    post_color, pre_color : str
+        Colors for post- and pre-treatment cells (weights view).
+    markersize : int, default 80
+        Scatter marker area.
+    alpha : float, default 0.8
+        Marker opacity.
+    annotate : bool, default False
+        Label each point with its ``(group, time)`` or covariate name.
+    ax : matplotlib Axes, optional
+        Axes to draw on. A new figure is created when omitted. Matplotlib only.
+    show : bool, default True
+        Call ``plt.show()`` / ``fig.show()`` before returning.
+    backend : str, default "matplotlib"
+        Plotting backend: ``"matplotlib"`` or ``"plotly"``.
+
+    Returns
+    -------
+    matplotlib.axes.Axes or plotly.graph_objects.Figure
+
+    Raises
+    ------
+    ValueError
+        On an unknown ``kind`` or ``backend``; when ``kind="balance"`` is
+        requested for a result that carries no balance table; or when the
+        balance table has no finite differences to plot.
+
+    Examples
+    --------
+    >>> import diff_diff  # doctest: +SKIP
+    >>> w = diff_diff.attgt_weights(cs_result)  # doctest: +SKIP
+    >>> diff_diff.plot_twfe_weights(w)  # doctest: +SKIP
+    >>> diff_diff.plot_twfe_weights(w, backend="plotly")  # doctest: +SKIP
+    """
+    if kind not in ("auto", "weights", "balance"):
+        raise ValueError(f"kind must be one of ['auto', 'weights', 'balance'], got {kind!r}")
+    if backend not in ("matplotlib", "plotly"):
+        raise ValueError(f"backend must be 'matplotlib' or 'plotly', got {backend!r}")
+    has_balance = getattr(results, "balance", None) is not None
+    if kind == "auto":
+        kind = "balance" if has_balance else "weights"
+    if kind == "balance" and not has_balance:
+        raise ValueError(
+            "this result carries no covariate balance table, so kind='balance' "
+            "has nothing to plot. Recompute with "
+            "decompose_twfe_weights(..., balance_covariates=[...])."
+        )
+
+    payload = _twfe_weights_payload(results, kind, standardize, absolute_value)
+    render = _render_twfe_weights_plotly if backend == "plotly" else _render_twfe_weights_mpl
+    return render(
+        payload,
+        kind=kind,
+        standardize=standardize,
+        figsize=figsize,
+        title=title,
+        xlabel=xlabel,
+        ylabel=ylabel,
+        post_color=post_color,
+        pre_color=pre_color,
+        markersize=markersize,
+        alpha=alpha,
+        annotate=annotate,
+        ax=ax,
+        show=show,
+    )
+
+
+def _twfe_weights_payload(
+    results: Any, kind: str, standardize: bool, absolute_value: bool
+) -> Dict[str, Any]:
+    """Backend-agnostic data for either view (shared by the two renderers)."""
+    if kind == "weights":
+        table = getattr(results, "weights", None)
+        if table is None:
+            table = results.cells
+        weight = table["weight"].to_numpy(dtype=float)
+        return {
+            "post": table["post"].to_numpy().astype(bool),
+            "weight": weight,
+            "att": table["att"].to_numpy(dtype=float),
+            "labels": [f"({g}, {t})" for g, t in zip(table["group"], table["time"])],
+            "n_negative": int((weight < 0).sum()),
+        }
+    balance = results.covariate_balance(level="summary", standardize=standardize)
+    suffix = "_std_diff" if standardize else "_diff"
+    unweighted = balance["unweighted" + suffix].to_numpy(dtype=float)
+    weighted = balance["weighted" + suffix].to_numpy(dtype=float)
+    if absolute_value:
+        unweighted, weighted = np.abs(unweighted), np.abs(weighted)
+    finite = np.isfinite(unweighted) & np.isfinite(weighted)
+    if not finite.any():
+        raise ValueError(
+            "the covariate balance table has no finite differences to plot "
+            "(every covariate is degenerate - e.g. constant or binary with a zero "
+            "pooled SD under standardize=True); try standardize=False or check the "
+            "balance_covariates"
+        )
+    limit = float(np.max(np.abs(np.concatenate([unweighted[finite], weighted[finite]]))) or 1.0)
+    return {
+        "unweighted": unweighted,
+        "weighted": weighted,
+        "labels": [str(c) for c in balance["covariate"]],
+        "limit": limit,
+    }
+
+
+def _render_twfe_weights_mpl(
+    payload: Dict[str, Any],
+    *,
+    kind: str,
+    standardize: bool,
+    figsize: Tuple[float, float],
+    title: Optional[str],
+    xlabel: Optional[str],
+    ylabel: Optional[str],
+    post_color: str,
+    pre_color: str,
+    markersize: int,
+    alpha: float,
+    annotate: bool,
+    ax: Optional[Any],
+    show: bool,
+) -> Any:
+    from diff_diff.visualization._common import _require_matplotlib
+
+    plt = _require_matplotlib()
+    if ax is None:
+        _, ax = plt.subplots(figsize=figsize)
+
+    if kind == "weights":
+        post, weight, att = payload["post"], payload["weight"], payload["att"]
+        ax.axhline(0, color="0.4", linewidth=1.2, zorder=1)
+        ax.axvline(0, color="0.4", linewidth=1.2, zorder=1)
+        for mask, color, label in (
+            (post, post_color, "post-treatment"),
+            (~post, pre_color, "pre-treatment"),
+        ):
+            if mask.any():
+                ax.scatter(
+                    weight[mask],
+                    att[mask],
+                    s=markersize,
+                    alpha=alpha,
+                    color=color,
+                    label=label,
+                    zorder=3,
+                )
+        if annotate:
+            for w, a, lab in zip(weight, att, payload["labels"]):
+                ax.annotate(lab, (w, a), fontsize=8, xytext=(4, 4), textcoords="offset points")
+        ax.set_xlabel(xlabel or "Implicit weight")
+        ax.set_ylabel(ylabel or "ATT(g, t)")
+        default_title = "Implicit weights on group-time effects"
+        if payload["n_negative"]:
+            default_title += f"  ({payload['n_negative']} negative)"
+        ax.set_title(title or default_title)
+        ax.legend(frameon=False)
+    else:
+        unweighted, weighted, limit = payload["unweighted"], payload["weighted"], payload["limit"]
+        ax.axhline(0, color="0.4", linewidth=1.2, zorder=1)
+        ax.scatter(unweighted, weighted, s=markersize, alpha=alpha, color=post_color, zorder=3)
+        ax.plot(
+            [0, limit],
+            [0, limit],
+            color="0.6",
+            linestyle="--",
+            linewidth=1.0,
+            zorder=2,
+            label="no improvement",
+        )
+        if annotate:
+            for x, y, name in zip(unweighted, weighted, payload["labels"]):
+                ax.annotate(name, (x, y), fontsize=8, xytext=(4, 4), textcoords="offset points")
+        kindword = "standardized " if standardize else ""
+        ax.set_xlabel(xlabel or f"Unweighted {kindword}difference")
+        ax.set_ylabel(ylabel or f"Implicitly-weighted {kindword}difference")
+        ax.set_title(title or "Covariate balance under the implicit weights")
+        ax.legend(frameon=False)
+
+    if show:
+        plt.show()
+    return ax
+
+
+def _render_twfe_weights_plotly(
+    payload: Dict[str, Any],
+    *,
+    kind: str,
+    standardize: bool,
+    figsize: Tuple[float, float],
+    title: Optional[str],
+    xlabel: Optional[str],
+    ylabel: Optional[str],
+    post_color: str,
+    pre_color: str,
+    markersize: int,
+    alpha: float,
+    annotate: bool,
+    ax: Optional[Any],
+    show: bool,
+) -> Any:
+    from diff_diff.visualization._common import _require_plotly
+
+    go = _require_plotly()
+    fig = go.Figure()
+    marker_px = max(4.0, float(np.sqrt(markersize)))  # matplotlib area -> plotly diameter
+    mode = "markers+text" if annotate else "markers"
+
+    if kind == "weights":
+        post, weight, att = payload["post"], payload["weight"], payload["att"]
+        labels = np.asarray(payload["labels"], dtype=object)
+        for mask, color, name in (
+            (post, post_color, "post-treatment"),
+            (~post, pre_color, "pre-treatment"),
+        ):
+            if mask.any():
+                fig.add_trace(
+                    go.Scatter(
+                        x=weight[mask],
+                        y=att[mask],
+                        mode=mode,
+                        name=name,
+                        text=labels[mask] if annotate else None,
+                        textposition="top right",
+                        marker={"size": marker_px, "color": color, "opacity": alpha},
+                        hovertemplate="%{text}<br>weight=%{x:.4f}<br>ATT(g,t)=%{y:.4f}<extra></extra>",
+                        customdata=None,
+                    )
+                )
+                fig.data[-1].text = labels[mask]
+        fig.add_hline(y=0, line={"color": "gray", "width": 1.2})
+        fig.add_vline(x=0, line={"color": "gray", "width": 1.2})
+        default_title = "Implicit weights on group-time effects"
+        if payload["n_negative"]:
+            default_title += f"  ({payload['n_negative']} negative)"
+        fig.update_layout(
+            title=title or default_title,
+            xaxis_title=xlabel or "Implicit weight",
+            yaxis_title=ylabel or "ATT(g, t)",
+        )
+    else:
+        unweighted, weighted, limit = payload["unweighted"], payload["weighted"], payload["limit"]
+        fig.add_trace(
+            go.Scatter(
+                x=unweighted,
+                y=weighted,
+                mode=mode,
+                name="covariates",
+                text=payload["labels"],
+                textposition="top right",
+                marker={"size": marker_px, "color": post_color, "opacity": alpha},
+                hovertemplate="%{text}<br>unweighted=%{x:.4f}<br>weighted=%{y:.4f}<extra></extra>",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=[0, limit],
+                y=[0, limit],
+                mode="lines",
+                name="no improvement",
+                line={"color": "gray", "dash": "dash", "width": 1.0},
+            )
+        )
+        fig.add_hline(y=0, line={"color": "gray", "width": 1.2})
+        kindword = "standardized " if standardize else ""
+        fig.update_layout(
+            title=title or "Covariate balance under the implicit weights",
+            xaxis_title=xlabel or f"Unweighted {kindword}difference",
+            yaxis_title=ylabel or f"Implicitly-weighted {kindword}difference",
+        )
+
+    fig.update_layout(
+        width=int(figsize[0] * 100),
+        height=int(figsize[1] * 100),
+        template="plotly_white",
+        legend={"orientation": "h", "y": -0.15},
+    )
+    if show:
+        fig.show()
     return fig
