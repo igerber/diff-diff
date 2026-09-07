@@ -1457,7 +1457,7 @@ sources:
       - path: docs/methodology/REGISTRY.md
         section: "Cross-fitting, DR-score, and ridge infrastructure (DML)"
         type: methodology
-        note: "Duck-typed learner protocol (RegressorLearner/ClassifierLearner Protocols, validate_learner, _validate_predictions) + native learners (LinearLearner/RidgeLearner/LogitLearner/SieveLearner) wrapping linalg solvers. Contracts documented in REGISTRY: raw-X-no-intercept input, fit-reset semantics (documented limitation for stateful user learners), identified-columns prediction under rank deficiency."
+        note: "Duck-typed learner protocol (RegressorLearner/ClassifierLearner Protocols, validate_learner, _validate_predictions) + native learners (LinearLearner/RidgeLearner/LogitLearner/SieveLearner) wrapping linalg solvers. Contracts documented in REGISTRY: raw-X-no-intercept input, independent top-level deepcopy before cross-fitting, identified-columns prediction under rank deficiency."
       - path: docs/tutorials/32_dml_did.ipynb
         type: tutorial
 

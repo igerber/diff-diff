@@ -141,6 +141,14 @@ estimator object plugs in directly; string names select library defaults
 only. :class:`~diff_diff.SieveLearner` is the exported configurable
 learner (``DMLDiD(outcome_learner=SieveLearner(k_max=3))``).
 
+Custom learner templates must support ``copy.deepcopy`` and return a distinct
+top-level object. DMLDiD preflights one copy of each template before fitting
+any cell and raises a targeted ``TypeError`` if copying fails or returns the
+original object; a clone failure in a later fold propagates as the same
+``TypeError`` rather than a NaN-cell skip. A
+custom ``__deepcopy__`` implementation remains responsible for isolating its
+nested mutable state.
+
 With ``seed`` set, fits are reproducible with the library's deterministic
 built-in learners; a user-supplied STOCHASTIC learner must additionally be
 seeded by the user (e.g. sklearn ``random_state``).
@@ -210,10 +218,13 @@ Restrictions
   base-period covariate). One consolidated ``UserWarning`` reports the
   drops.
 - **Degenerate cells skip loudly** — a cell that cannot be cross-fitted
-  (fewer members than folds, a singleton treated/control stratum, a
-  fail-closed learner error) is recorded as a NaN cell with a
-  machine-readable ``skip_reason`` and reported in a consolidated
-  warning; surviving cells still aggregate.
+  (fewer members than folds, a singleton treated/control stratum, or a
+  fold-time learner ``ValueError``) is recorded as a NaN cell with a
+  machine-readable ``skip_reason`` and reported in a consolidated warning;
+  surviving cells still aggregate. Learner-configuration errors, including
+  an uncloneable template, raise ``TypeError`` at the preflight before any
+  cell is estimated; a per-fold clone failure later in the fit propagates as
+  a hard ``TypeError`` too, never as a NaN cell.
 - **Event-study surface is post-fit only** — fit-time
   ``event_study_effects`` is never populated; call
   ``results.aggregate('event_study')``.
