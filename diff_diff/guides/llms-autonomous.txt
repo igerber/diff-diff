@@ -349,7 +349,7 @@ supported / out of scope; `warn` supported but with documented caveats;
 | `StackedDiD` | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ |
 | `WooldridgeDiD` (ETWFE) | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ |
 | `LWDiD` | ✓ | ✓ | ✗ | ✗ | ✓ | warn | partial | ✗ | ✓ |
-| `DMLDiD` | ✓ | ✓ | ✗ | ✗ | partial | ✓ (REQUIRED) | ✗ | ✗ | ✓ (pweight full-design TSL + replicate weights + coarser cluster=; PSU-cohesive folds; panel=False = declared RCS) |
+| `DMLDiD` | ✓ | ✓ | ✗ | ✗ | partial | ✓ (REQUIRED) | ✗ | ✗ | ✓ (pweight full-design TSL + replicate weights + coarser cluster=; PSU-cohesive folds; panel=False = declared RCS; bad-control lane `fit(bad_control=)`: panel only, `cluster=` only) |
 | `EfficientDiD` | ✓ | ✓ | ✗ | ✗ | partial | ✓ | ✗ | ✗ | ✓ |
 | `SyntheticDiD` | ✓ | ✗ | ✗ | ✗ | ✓ | ✓ | ✓ | ✗ | partial |
 | `TROP` | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | partial |
@@ -522,7 +522,13 @@ estimators:
   never-treated: same CS rule (not_yet_treated needs never-treated units
   or >= 2 cohorts). Aggregation is post-fit
   (`results.aggregate('event_study'/...)`); with `seed=None` point
-  estimates vary across fits (random folds) - set `seed`.
+  estimates vary across fits (random folds) - set `seed`. Bad controls
+  (Caetano, Callaway, Payne & Sant'Anna 2026): `fit(..., bad_control=,
+  bad_control_covariates=)` runs the paper's orthogonal DR score and
+  stores the per-cell `ATT_X(g,t)` pre-test
+  (`results.bad_control_summary()`); panel only, `cluster=` only,
+  `anticipation=0` + varying base only; never put the bad control in
+  `covariates`.
 
 Diagnostic: `BaconDecomposition().fit(df, ...)` shows the weight allocation of a
 TWFE fit to 2×2 comparison types. Forbidden-comparison weight > 10% is a
@@ -765,8 +771,9 @@ Explicit RCS support in this library:
   REGISTRY.md §CallawaySantAnna; use this variant on RCS data.
 - `DMLDiD(panel=False)` - Chang (2020) Case 2 declared-RCS mode
   (row-unique unit IDs; level-outcome orthogonal scores with the
-  lambda-corrected variance; REGISTRY.md §DMLDiD). Survey/cluster
-  support on both designs: `survey_design=` (pweight full-design TSL
+  lambda-corrected variance; REGISTRY.md §DMLDiD). The bad-control
+  lane (`fit(bad_control=)`) is panel only (Remark 1) and `cluster=`
+  only. Survey/cluster support on both designs: `survey_design=` (pweight full-design TSL
   or replicate weights — per-cell AND aggregate IF-reweighting, df =
   rank-1; replicate + cluster=/bootstrap rejected; the weighted-lambda
   plug-in is a library extension - Theorem 2's coverage claim does not

@@ -41,9 +41,19 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
-from diff_diff._crossfit import DegenerateFoldError, assign_folds, cross_fit_predict
+from diff_diff._crossfit import (
+    DegenerateFoldError,
+    _fit_subset,
+    _fold_loss,
+    _predict_subset,
+    assign_folds,
+    cross_fit_predict,
+    iter_fold_fits,
+)
 from diff_diff._dr_scores import (
     _chang_rcs_score_augmented_with_slope,
+    ccps_panel_score,
+    ccps_panel_score_augmented,
     chang_panel_score,
     chang_panel_score_augmented,
     chang_rcs_score,
@@ -227,6 +237,30 @@ def _is_native_learner_spec(spec: Any) -> bool:
     if isinstance(spec, str):
         return True
     if type(spec) not in (LinearLearner, LogitLearner, RidgeLearner, SieveLearner):
+        return False
+    return all(
+        _config_value_is_primitive(getattr(spec, attr, None)) for attr in type(spec)._CONFIG_ATTRS
+    )
+
+
+def _is_parametric_learner_spec(spec: Any) -> bool:
+    """True for the PARAMETRIC built-in learners only: ``"linear"`` / ``"logit"``.
+
+    The CCPS (2026) nested second stage may use in-sample fold-k first-stage
+    predictions as its pseudo-outcomes ONLY when the first stage is the
+    paper's own linear/logit working model (Assumption 8's plug-in identity:
+    OLS of ``R'beta`` on ``S`` is exactly ``beta_1 * OLS(xt ~ S) + beta_2 xb +
+    beta_3 Z``). ``ridge``, ``sieve``, native SUBCLASSES and every foreign
+    learner take the split-half branch (footnote 9). The string check runs
+    FIRST so a foreign object's ``__eq__`` is never invoked; objects need the
+    exact native type plus primitive config (the ``_is_native_learner_spec``
+    trust boundary).
+    """
+    from diff_diff._learners import LinearLearner, LogitLearner
+
+    if isinstance(spec, str):
+        return spec in ("linear", "logit")
+    if type(spec) not in (LinearLearner, LogitLearner):
         return False
     return all(
         _config_value_is_primitive(getattr(spec, attr, None)) for attr in type(spec)._CONFIG_ATTRS
@@ -475,13 +509,58 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         time: str,
         first_treat: str,
         covariates: Optional[Iterable[str]],
-    ) -> Tuple[pd.DataFrame, List[str]]:
-        """Validate inputs; return the numeric working frame + covariate list."""
+        bad_control: Optional[str] = None,
+        bad_control_covariates: Optional[Iterable[str]] = None,
+        has_survey_design: bool = False,
+    ) -> Tuple[pd.DataFrame, List[str], Optional[List[str]]]:
+        """Validate inputs; return the numeric working frame, covariate list,
+        and the materialized bad-control covariate list (``None`` when no bad
+        control is declared)."""
         # FULL config re-validation FIRST (mutation defense; anticipation
         # leads inside _revalidate_config — the ordering is load-bearing for
         # the anticipation-policy suite, which fits a bare DataFrame and
         # requires the config error to precede column checks).
         self._revalidate_config()
+
+        # Bad-control lane (CCPS 2026): unsupported-combination gates right
+        # after the config validation (config errors first), then the
+        # argument-NAME checks below once ``covariates`` is materialized.
+        if bad_control is None and bad_control_covariates is not None:
+            raise ValueError(
+                "bad_control_covariates requires bad_control: the W covariates "
+                "model the bad control's untreated evolution (Caetano, Callaway, "
+                "Payne & Sant'Anna 2026, Assumption 6) and have no role without "
+                "a bad control."
+            )
+        if bad_control is not None:
+            if not self.panel:
+                raise NotImplementedError(
+                    "bad_control is not available with panel=False: the bad-control "
+                    "identification strategies need the same unit's bad control at "
+                    "the base period and at t (Caetano et al. 2026, Remark 1: not "
+                    "available with repeated cross sections 'to a large extent')."
+                )
+            if has_survey_design:
+                raise NotImplementedError(
+                    "bad_control with survey_design= is not supported yet: the "
+                    "nested second-stage nuisances under design weights and "
+                    "replicate variances are unvalidated. cluster= is supported."
+                )
+            if self.anticipation != 0:
+                raise NotImplementedError(
+                    "bad_control requires anticipation=0: the paper's no-anticipation "
+                    "assumption (MP-2) covers the bad control as well as the outcome "
+                    "and the limited-anticipation relaxation is not developed "
+                    "(DEFERRED.md)."
+                )
+            if self.base_period != "varying":
+                raise NotImplementedError(
+                    "bad_control requires base_period='varying': under a universal "
+                    "base a pre-period cell would read the bad control at t BEFORE "
+                    "its base-period value, inverting the X_t / X_{t-1} ordering "
+                    "that covariate unconfoundedness (MP-5) conditions on "
+                    "(DEFERRED.md)."
+                )
 
         # covariates are REQUIRED (Chang's estimator exists for the
         # high-dimensional-X setting).
@@ -526,7 +605,18 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 )
             seen[col] = role
 
+        # Bad-control NAME-level checks: names only, never ``data`` (so a
+        # malformed name reaches a targeted ValueError, not pandas).
+        w_names: Optional[List[str]] = None
+        if bad_control is not None:
+            w_names = self._validate_bad_control_names(
+                bad_control, bad_control_covariates, covariates, roles
+            )
+
         required_cols = [outcome, unit, time, first_treat, *covariates]
+        if bad_control is not None:
+            required_cols.append(bad_control)
+            required_cols.extend(w for w in (w_names or []) if w != outcome)
         missing = [c for c in required_cols if c not in data.columns]
         if missing:
             raise ValueError(f"Missing columns: {missing}")
@@ -619,7 +709,11 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         # (load-bearing: pd.to_numeric preserves int64/bool, where a bool
         # outcome TypeErrors in the subtraction and int64 overflow WRAPS to a
         # finite wrong value invisible to errstate/isfinite).
-        for col in [outcome, *covariates]:
+        numeric_cols = [outcome, *covariates]
+        if bad_control is not None:
+            numeric_cols.append(bad_control)
+            numeric_cols.extend(w for w in (w_names or []) if w != outcome)
+        for col in numeric_cols:
             try:
                 converted = pd.to_numeric(df[col])
             except (ValueError, TypeError) as exc:
@@ -663,7 +757,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 UserWarning,
                 stacklevel=3,
             )
-            return df, covariates
+            return df, covariates, w_names
 
         # Duplicate (unit, time) rows.
         dup_mask = df.duplicated(subset=[unit, time], keep=False)
@@ -685,7 +779,76 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
 
         self._check_control_group_availability(df, unit, first_treat)
 
-        return df, covariates
+        return df, covariates, w_names
+
+    @staticmethod
+    def _validate_bad_control_names(
+        bad_control: Any,
+        bad_control_covariates: Optional[Iterable[str]],
+        covariates: List[str],
+        roles: Dict[str, str],
+    ) -> List[str]:
+        """Name-level validation of the bad-control arguments (no data access).
+
+        Returns the materialized ``W`` list (``[]`` for ``None``). The outcome
+        name is allowed inside ``W`` and means the outcome at the cell's base
+        period (Remark 5's ``W = Y_{g-1}``).
+        """
+        if not isinstance(bad_control, str):
+            raise ValueError(
+                f"bad_control must be a single column name (str), got {bad_control!r}; "
+                "the paper's notation and the R reference implementation carry ONE "
+                "bad control."
+            )
+        if bad_control in roles.values():
+            role = next(r for r, c in roles.items() if c == bad_control)
+            raise ValueError(f"bad_control={bad_control!r} collides with {role}={bad_control!r}")
+        if bad_control in covariates:
+            raise ValueError(
+                f"bad_control={bad_control!r} also appears in covariates. A bad control "
+                "must not be conditioned on at period t (the 'include the bad "
+                "control' bias, Caetano et al. 2026 Section 3.1). Pass it ONLY as "
+                "bad_control (covariate-unconfoundedness lane), or - for the "
+                "pre-treatment-conditioning lane of Theorem 1 / Proposition 3 - "
+                "drop bad_control and pass it in covariates alone, where "
+                "DMLDiD/CallawaySantAnna read it at the cell's base period."
+            )
+        if bad_control_covariates is None:
+            return []
+        if isinstance(bad_control_covariates, (str, bytes)):
+            raise ValueError(
+                "bad_control_covariates must be a sequence of column names, not a "
+                f"bare string ({bad_control_covariates!r}); wrap it in a list."
+            )
+        # Materialize EXACTLY ONCE (one-shot iterables; same rule as covariates).
+        w_list = list(bad_control_covariates)
+        for w in w_list:
+            if not isinstance(w, str):
+                raise ValueError(
+                    f"bad_control_covariates entries must be column names (str), got {w!r}"
+                )
+        dupes = sorted({w for w in w_list if w_list.count(w) > 1})
+        if dupes:
+            raise ValueError(f"bad_control_covariates contains duplicate names: {dupes}")
+        for w in w_list:
+            if w in (roles["unit"], roles["time"], roles["first_treat"]):
+                raise ValueError(
+                    f"bad_control_covariates entry {w!r} names a role column "
+                    "(unit/time/first_treat); only the outcome name is allowed there "
+                    "(meaning the outcome at the cell's base period)."
+                )
+            if w == bad_control:
+                raise ValueError(
+                    f"bad_control_covariates entry {w!r} is the bad control itself; "
+                    "its pre-treatment value is already conditioned on."
+                )
+            if w in covariates:
+                raise ValueError(
+                    f"bad_control_covariates entry {w!r} also appears in covariates; a "
+                    "column plays one role (Z enters parallel trends, W enters only "
+                    "the bad control's unconfoundedness model)."
+                )
+        return w_list
 
     def _check_control_group_availability(
         self, df: pd.DataFrame, unit: str, first_treat: str
@@ -932,6 +1095,8 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         first_treat: str,
         covariates: List[str],
         resolved_survey: Optional["ResolvedSurveyDesign"] = None,
+        bad_control: Optional[str] = None,
+        bad_control_covariates: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         # CS groupby form — NOT sorted(unique): sorted() raises a bare
         # TypeError on mixed-type unit labels that CS accepts.
@@ -982,6 +1147,34 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             "canonical_size": n_units,
             "n_units": n_units,
         }
+        if bad_control is not None:
+            # CCPS (2026) lane: the bad control at EVERY period (read at t and
+            # at the base period per cell) and the W block at every period
+            # (read at the base period), in the user's listed order with the
+            # outcome name resolving to the outcome itself at that position.
+            w_names = list(bad_control_covariates or [])
+            bc_wide = df.pivot(index=unit, columns=time, values=bad_control).reindex(all_units)
+            w_wide = {
+                c: (
+                    outcome_wide
+                    if c == outcome
+                    else df.pivot(index=unit, columns=time, values=c).reindex(all_units)
+                )
+                for c in w_names
+            }
+            out["bad_control_by_period"] = {
+                t: bc_wide[t].to_numpy(dtype=np.float64) for t in time_periods
+            }
+            out["w_by_period"] = {
+                t: (
+                    np.column_stack([w_wide[c][t].to_numpy(dtype=np.float64) for c in w_names])
+                    if w_names
+                    else np.empty((n_units, 0))
+                )
+                for t in time_periods
+            }
+            out["bad_control"] = bad_control
+            out["bad_control_covariates"] = tuple(w_names)
         if resolved_survey is not None:
             from diff_diff.survey import collapse_survey_to_unit_level
 
@@ -1110,6 +1303,10 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         dropped_units_out: Optional[set] = None,
     ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """One (g, t) cell. Returns (gt_entry, if_entry|None, diagnostics|None)."""
+        if precomputed.get("bad_control") is not None:
+            return self._compute_ccps_gt(
+                precomputed, g, t, g_idx, t_idx, root_entropy, dropped_units_out
+            )
         observed_sorted = precomputed["observed_sorted"]
         period_to_col = precomputed["period_to_col"]
         base = _select_base_period_impl(self.base_period, self.anticipation, g, t, observed_sorted)
@@ -1341,40 +1538,47 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 diagnostics,
             )
 
-        # Payload BEFORE the SE/inference block: the design-based per-cell SE
-        # consumes it. No-survey payload: per-unit entries psi_bar_i /
-        # n_cell, so sqrt(sum(if^2)) IS the cell SE (the CS
-        # influence_func_info contract). Weighted payload: w_i * psi_bar_i /
-        # sum(w) — the Hajek analogue (reduces to psi_bar/n at w == 1).
-        n_units = precomputed["n_units"]
-        inf_full = np.zeros(n_units)
-        if w_cell is not None:
-            inf_full[cell_idx] = w_cell * psi_bar / float(np.sum(w_cell))
-        else:
-            inf_full[cell_idx] = psi_bar / n_cell
-        treated_idx = np.flatnonzero(treated_valid).astype(np.int64)
-        # Nonzero-derivation unchanged under weighting: a zero-weight control
-        # dropping from the payload is inert — the per-cell CR1 helper
-        # rebuilds the full-length psi vector over the complete design.
-        control_idx = np.flatnonzero((inf_full != 0.0) & ~treated_valid).astype(np.int64)
-        if_entry = {
-            "treated_idx": treated_idx,
-            "control_idx": control_idx,
-            "treated_inf": inf_full[treated_idx],
-            "control_inf": inf_full[control_idx],
-        }
+        return self._finish_panel_cell(
+            precomputed=precomputed,
+            cell_idx=cell_idx,
+            treated_valid=treated_valid,
+            D_cell=D_cell,
+            w_cell=w_cell,
+            psi_bar=psi_bar,
+            theta=theta,
+            n_treated=n_treated,
+            n_control=n_control,
+            resolved_survey_unit=resolved_survey_unit,
+            df_survey=df_survey,
+            diagnostics=diagnostics,
+        )
 
-        # Per-cell SE. Replicate designs use IF-reweighting on the Hajek
-        # payload (compute_replicate_if_variance; the same psi the aggregate
-        # _se_from_psi call consumes) — a zero or non-finite replicate
-        # variance is degenerate and fails closed to NaN (stricter than the
-        # shared aggregate clamp; REGISTRY DMLDiD Note). PSU designs
-        # (declared OR bare cluster=) route through the CS per-cell CR1
-        # helper (3-valued contract: float = use it, NaN = unidentified
-        # clustered variance and MUST propagate, None = malformed -> fall
-        # back). Non-PSU survey designs use the weighted sqrt-sum (CS
-        # mirror: the full design enters aggregate SEs only); the no-survey
-        # branch is verbatim.
+    def _cell_se_from_payload(
+        self,
+        *,
+        inf_full: np.ndarray,
+        if_entry: Dict[str, Any],
+        psi_bar: np.ndarray,
+        n_cell: int,
+        w_cell: Optional[np.ndarray],
+        resolved_survey_unit: Any,
+        df_survey: Optional[float],
+    ) -> Tuple[float, Optional[float]]:
+        """Per-cell SE from a scattered influence payload; returns ``(se, df)``.
+
+        Replicate designs use IF-reweighting on the Hajek payload
+        (compute_replicate_if_variance; the same psi the aggregate
+        _se_from_psi call consumes) — a zero or non-finite replicate variance
+        is degenerate and fails closed to NaN (stricter than the shared
+        aggregate clamp; REGISTRY DMLDiD Note). PSU designs (declared OR bare
+        cluster=) route through the CS per-cell CR1 helper (3-valued
+        contract: float = use it, NaN = unidentified clustered variance and
+        MUST propagate, None = malformed -> fall back). Non-PSU survey designs
+        use the weighted sqrt-sum (CS mirror: the full design enters
+        aggregate SEs only); the no-survey branch is verbatim. The returned
+        ``df`` is the CELL-LOCAL replicate-design rebind (never written back
+        to ``precomputed["df_survey"]``, which feeds the aggregation kit).
+        """
         se: float
         with np.errstate(over="ignore", invalid="ignore"):
             if resolved_survey_unit is not None and resolved_survey_unit.uses_replicate_variance:
@@ -1390,10 +1594,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 # Per-cell df: min(design df, n_valid - 1) — the dCDH
                 # _effective_df_survey rule, inlined. n_valid is computed
                 # over the WHOLE replicate columns, so it equals R for every
-                # cell in practice (defensive; REGISTRY Note). df_survey is
-                # a CELL-LOCAL binding — never mutate
-                # precomputed["df_survey"], which feeds the post-fit
-                # aggregation kit.
+                # cell in practice (defensive; REGISTRY Note).
                 if df_survey is not None:
                     df_survey = min(int(df_survey), int(n_valid_rep) - 1)
                 else:
@@ -1413,6 +1614,81 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 se = float(np.sqrt(np.sum(inf_full**2)))
             else:
                 se = float(np.sqrt(np.mean(psi_bar**2) / n_cell))
+        return se, df_survey
+
+    def _scatter_if_payload(
+        self,
+        *,
+        n_units: int,
+        cell_idx: np.ndarray,
+        treated_valid: np.ndarray,
+        psi_bar: np.ndarray,
+        w_cell: Optional[np.ndarray],
+    ) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """Scatter a cell's per-unit IF summands into the all-units index space.
+
+        No-survey payload: per-unit entries psi_bar_i / n_cell, so
+        sqrt(sum(if^2)) IS the cell SE (the CS influence_func_info contract).
+        Weighted payload: w_i * psi_bar_i / sum(w) — the Hajek analogue
+        (reduces to psi_bar/n at w == 1). Control members derive from
+        NONZERO-ness: a zero-weight control dropping from the payload is inert
+        (the per-cell CR1 helper rebuilds the full-length psi vector over the
+        complete design).
+        """
+        n_cell = psi_bar.shape[0]
+        inf_full = np.zeros(n_units)
+        if w_cell is not None:
+            inf_full[cell_idx] = w_cell * psi_bar / float(np.sum(w_cell))
+        else:
+            inf_full[cell_idx] = psi_bar / n_cell
+        treated_idx = np.flatnonzero(treated_valid).astype(np.int64)
+        control_idx = np.flatnonzero((inf_full != 0.0) & ~treated_valid).astype(np.int64)
+        if_entry = {
+            "treated_idx": treated_idx,
+            "control_idx": control_idx,
+            "treated_inf": inf_full[treated_idx],
+            "control_inf": inf_full[control_idx],
+        }
+        return inf_full, if_entry
+
+    def _finish_panel_cell(
+        self,
+        *,
+        precomputed: Dict[str, Any],
+        cell_idx: np.ndarray,
+        treated_valid: np.ndarray,
+        D_cell: np.ndarray,
+        w_cell: Optional[np.ndarray],
+        psi_bar: np.ndarray,
+        theta: float,
+        n_treated: int,
+        n_control: int,
+        resolved_survey_unit: Any,
+        df_survey: Optional[float],
+        diagnostics: Dict[str, Any],
+    ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """Shared panel-cell tail: IF payload, per-cell SE, inference, gt_entry.
+
+        Used verbatim by the Chang lane and the CCPS bad-control lane (the
+        payload schema is what the CS bootstrap/aggregation mixins consume).
+        """
+        n_cell = psi_bar.shape[0]
+        inf_full, if_entry = self._scatter_if_payload(
+            n_units=precomputed["n_units"],
+            cell_idx=cell_idx,
+            treated_valid=treated_valid,
+            psi_bar=psi_bar,
+            w_cell=w_cell,
+        )
+        se, df_survey = self._cell_se_from_payload(
+            inf_full=inf_full,
+            if_entry=if_entry,
+            psi_bar=psi_bar,
+            n_cell=n_cell,
+            w_cell=w_cell,
+            resolved_survey_unit=resolved_survey_unit,
+            df_survey=df_survey,
+        )
         # NOTE: `se` is deliberately OUTSIDE the non_finite_score gate on the
         # design-based branches — a NaN from the CR1 helper (or a degenerate
         # replicate variance) is the unidentified-variance signal and must
@@ -1445,6 +1721,614 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             # CS cell-payload convention: the TREATED survey mass.
             gt_entry["survey_weight_sum"] = float(np.sum(w_cell[D_cell == 1.0]))
         return gt_entry, if_entry, diagnostics
+
+    def _compute_ccps_gt(
+        self,
+        precomputed: Dict[str, Any],
+        g: Any,
+        t: Any,
+        g_idx: int,
+        t_idx: int,
+        root_entropy: int,
+        dropped_units_out: Optional[set] = None,
+    ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """One (g, t) cell under the CCPS (2026) bad-control score (Eq. 10).
+
+        Same return contract as :meth:`_compute_dml_gt`. Panel lane only,
+        ``anticipation=0`` and ``base_period="varying"`` (fit-time gates), no
+        survey design (``cluster=`` allowed), so ``w_cell`` is always ``None``
+        here and the nuisances are unweighted.
+        """
+        observed_sorted = precomputed["observed_sorted"]
+        period_to_col = precomputed["period_to_col"]
+        base = _select_base_period_impl(self.base_period, self.anticipation, g, t, observed_sorted)
+        if base is None or base not in period_to_col or t not in period_to_col:
+            return _nan_gt_entry(skip_reason="missing_period"), None, None
+
+        unit_cohorts = precomputed["unit_cohorts"]
+        outcome_matrix = precomputed["outcome_matrix"]
+        treated_mask = precomputed["cohort_masks"][g]
+        if self.control_group == "never_treated":
+            control_mask = precomputed["never_treated_mask"]
+        else:  # not_yet_treated (CS semantics: untreated at max(t, base) + k)
+            nyt_threshold = max(t, base) + self.anticipation
+            control_mask = precomputed["never_treated_mask"] | (
+                (unit_cohorts > nyt_threshold) & (unit_cohorts != g)
+            )
+
+        Z_by_period = precomputed["covariate_by_period"]
+        bc_by_period = precomputed["bad_control_by_period"]
+        w_by_period = precomputed["w_by_period"]
+        base_col = period_to_col[base]
+        t_col = period_to_col[t]
+        with np.errstate(over="ignore", invalid="ignore"):
+            y_base = outcome_matrix[:, base_col]
+            y_post = outcome_matrix[:, t_col]
+            dY = y_post - y_base
+            Z_base = Z_by_period[base]
+            xt_all = bc_by_period[t]
+            xb_all = bc_by_period[base]
+            W_base = w_by_period[base]
+            # ONE complete-case policy for both groups: every design column of
+            # R = [xt, xb, Z] and S = [xb, W, Z] must be finite (the score
+            # needs m_hat/omega_hat on every unit, treated included).
+            valid = (
+                np.isfinite(y_base)
+                & np.isfinite(y_post)
+                & np.isfinite(dY)
+                & np.all(np.isfinite(Z_base), axis=1)
+                & np.isfinite(xt_all)
+                & np.isfinite(xb_all)
+                & np.all(np.isfinite(W_base), axis=1)
+            )
+
+        treated_valid = treated_mask & valid
+        control_valid = control_mask & valid
+        if dropped_units_out is not None:
+            dropped_units_out.update(
+                np.flatnonzero((treated_mask | control_mask) & ~valid).tolist()
+            )
+        n_treated = int(np.sum(treated_valid))
+        n_control = int(np.sum(control_valid))
+        if n_treated == 0 or n_control == 0:
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="zero_treated_control",
+                ),
+                None,
+                None,
+            )
+
+        cell_mask = treated_valid | control_valid
+        cell_idx = np.flatnonzero(cell_mask)
+        n_cell = cell_idx.shape[0]
+        D_cell = treated_valid[cell_idx].astype(np.float64)
+        dY_cell = dY[cell_idx]
+        xt = xt_all[cell_idx]
+        xb = xb_all[cell_idx]
+        # Fixed column orders (the numpy oracle and the plug-in identity test
+        # reproduce them): R = [xt, xb, Z]; S = [xb, W (user order), Z].
+        R = np.column_stack([xt, xb, Z_base[cell_idx]])
+        S = np.column_stack([xb, W_base[cell_idx], Z_base[cell_idx]])
+
+        # Survey state: survey_design fails closed on this lane, so
+        # weighted_moments is False and w_cell is None; bare cluster= still
+        # supplies a resolved PSU design for folds and the CR1 SE.
+        use_psu_folds = bool(precomputed.get("use_psu_folds", False))
+        resolved_survey_unit = precomputed.get("resolved_survey_unit")
+        df_survey = precomputed.get("df_survey")
+        w_cell: Optional[np.ndarray] = None
+        p_hat = n_treated / n_cell
+        if min(p_hat, 1.0 - p_hat) < self.pscore_trim:
+            warnings.warn(
+                f"DMLDiD cell (g={g}, t={t}): empirical treated share "
+                f"p_hat={p_hat:.4f} ({n_treated} treated / {n_control} control) is "
+                f"extreme (min(p, 1-p) < pscore_trim={self.pscore_trim}); the CCPS "
+                "score and variance scale with powers of 1/p_hat, so this cell's "
+                "estimate may be unstable.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+        seed_seq = np.random.SeedSequence(entropy=root_entropy, spawn_key=(g_idx, t_idx))
+        rng = np.random.default_rng(seed_seq)
+        diagnostics: Dict[str, Any] = {
+            "propensity": None,
+            "outcome": None,
+            "nu": None,
+            "omega": None,
+            "bad_control_outcome": None,
+            "p_hat": float(p_hat),
+            "n_clipped_ps": None,
+            "n_clipped_omega": None,
+            "nested_stage": None,
+            "fold_seed": {"entropy": int(root_entropy), "spawn_key": [int(g_idx), int(t_idx)]},
+            "psu_folds": use_psu_folds,
+        }
+
+        psu_cell: Optional[np.ndarray] = None
+        try:
+            if use_psu_folds and resolved_survey_unit is not None:
+                psu_cell = np.asarray(resolved_survey_unit.psu)[cell_idx]
+                folds = assign_folds(
+                    n_cell,
+                    int(precomputed.get("effective_n_folds", self.n_folds)),
+                    rng=rng,
+                    cluster_ids=psu_cell,
+                )
+            else:
+                folds = assign_folds(n_cell, self.n_folds, rng=rng, stratify=D_cell)
+        except ValueError as exc:
+            diagnostics["skip_reason"] = "cross_fit_degenerate"
+            diagnostics["error"] = str(exc)
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="cross_fit_degenerate",
+                ),
+                None,
+                diagnostics,
+            )
+
+        context = f"DMLDiD (g={g}, t={t})"
+        try:
+            with np.errstate(over="ignore", invalid="ignore"):
+                m_hat, ps_raw, nu_hat, omega_raw, stage = self._ccps_nuisances(
+                    R, S, dY_cell, D_cell, folds, rng, psu_cell, use_psu_folds, context
+                )
+        except DegenerateFoldError as exc:
+            diagnostics["skip_reason"] = "cross_fit_degenerate"
+            diagnostics["error"] = self._sanitize_learner_error(exc)
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="cross_fit_degenerate",
+                ),
+                None,
+                diagnostics,
+            )
+
+        _check_propensity_diagnostics(ps_raw, self.pscore_trim)
+        ps = np.clip(ps_raw, self.pscore_trim, 1.0 - self.pscore_trim)
+        n_clipped = int(np.sum((ps_raw < self.pscore_trim) | (ps_raw > 1.0 - self.pscore_trim)))
+        omega_cap = (1.0 - self.pscore_trim) / self.pscore_trim
+        omega_hat = np.clip(omega_raw, 0.0, omega_cap)
+        n_clipped_omega = int(np.sum((omega_raw < 0.0) | (omega_raw > omega_cap)))
+        if n_clipped_omega > 0:
+            warnings.warn(
+                f"DMLDiD cell (g={g}, t={t}): {n_clipped_omega} of {n_cell} nested "
+                f"odds-projection predictions (omega_hat) fell outside [0, "
+                f"{omega_cap:.4g}] and were clipped (Assumption S2(iv) boundedness; "
+                "the paper gives no rule - REGISTRY DMLDiD Note).",
+                UserWarning,
+                stacklevel=3,
+            )
+        diagnostics.update(stage)
+        diagnostics["n_clipped_ps"] = n_clipped
+        diagnostics["n_clipped_omega"] = n_clipped_omega
+
+        try:
+            with np.errstate(over="ignore", invalid="ignore"):
+                summand = ccps_panel_score(dY_cell, D_cell, m_hat, nu_hat, ps, omega_hat, p_hat)
+                theta = float(np.mean(summand))
+                psi_bar = ccps_panel_score_augmented(summand, D_cell, theta, p_hat)
+        except ValueError as exc:
+            diagnostics["skip_reason"] = "non_finite_score"
+            diagnostics["error"] = self._sanitize_learner_error(exc)
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="non_finite_score",
+                ),
+                None,
+                diagnostics,
+            )
+        if not (np.isfinite(theta) and np.all(np.isfinite(psi_bar))):
+            diagnostics["skip_reason"] = "non_finite_score"
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="non_finite_score",
+                ),
+                None,
+                diagnostics,
+            )
+
+        gt_entry, if_entry, diagnostics_out = self._finish_panel_cell(
+            precomputed=precomputed,
+            cell_idx=cell_idx,
+            treated_valid=treated_valid,
+            D_cell=D_cell,
+            w_cell=w_cell,
+            psi_bar=psi_bar,
+            theta=theta,
+            n_treated=n_treated,
+            n_control=n_control,
+            resolved_survey_unit=resolved_survey_unit,
+            df_survey=df_survey,
+            diagnostics=diagnostics,
+        )
+        if gt_entry.get("skip_reason") is not None or diagnostics_out is None:
+            return gt_entry, if_entry, diagnostics_out
+
+        # ATT_X(g, t) diagnostic (Remark 6): AIPW ATT with the bad control at t
+        # as the outcome, mu_X = cross-fitted control regression of xt on S,
+        # the same clipped propensity, and its OWN influence payload. It never
+        # affects cell retention: a degenerate mu_X cross-fit or a non-finite
+        # score leaves every ATT_X inference field NaN.
+        att_x = float("nan")
+        se_x = float("nan")
+        df_x = df_survey
+        mu_diag: Optional[Dict[str, Any]] = None
+        try:
+            with np.errstate(over="ignore", invalid="ignore"):
+                mu_res = cross_fit_predict(
+                    make_learner(self.outcome_learner, kind="regressor"),
+                    S,
+                    xt,
+                    folds,
+                    predict_method="predict",
+                    fit_mask=(D_cell == 0.0),
+                    context_label=f"{context} bad-control outcome",
+                )
+            mu_diag = {
+                "fold_losses": [float(v) for v in mu_res.fold_losses],
+                "n_fit_per_fold": [int(v) for v in mu_res.n_fit_per_fold],
+            }
+            mu_x = mu_res.oof_predictions
+            try:
+                with np.errstate(over="ignore", invalid="ignore"):
+                    sx = chang_panel_score(xt, D_cell, mu_x, ps, p_hat)
+                    att_x_val = float(np.mean(sx))
+                    psi_x = chang_panel_score_augmented(sx, D_cell, att_x_val, p_hat)
+            except ValueError:
+                att_x_val = float("nan")
+                psi_x = None
+            if psi_x is not None and np.isfinite(att_x_val) and np.all(np.isfinite(psi_x)):
+                att_x = att_x_val
+                inf_x, if_x = self._scatter_if_payload(
+                    n_units=precomputed["n_units"],
+                    cell_idx=cell_idx,
+                    treated_valid=treated_valid,
+                    psi_bar=psi_x,
+                    w_cell=None,
+                )
+                se_x, df_x = self._cell_se_from_payload(
+                    inf_full=inf_x,
+                    if_entry=if_x,
+                    psi_bar=psi_x,
+                    n_cell=n_cell,
+                    w_cell=None,
+                    resolved_survey_unit=resolved_survey_unit,
+                    df_survey=df_survey,
+                )
+        except DegenerateFoldError as exc:
+            mu_diag = {"error": self._sanitize_learner_error(exc)}
+        t_x, p_x, ci_x = safe_inference(att_x, se_x, alpha=self.alpha, df=df_x)
+        diagnostics_out["bad_control_outcome"] = mu_diag
+        diagnostics_out["att_x"] = {
+            "effect": att_x,
+            "se": se_x,
+            "t_stat": t_x,
+            "p_value": p_x,
+            "conf_int": ci_x,
+            "n_treated": n_treated,
+            "n_control": n_control,
+        }
+        return gt_entry, if_entry, diagnostics_out
+
+    def _ccps_nuisances(
+        self,
+        R: np.ndarray,
+        S: np.ndarray,
+        dY: np.ndarray,
+        D: np.ndarray,
+        folds: Any,
+        rng: np.random.Generator,
+        psu_cell: Optional[np.ndarray],
+        use_psu_folds: bool,
+        context: str,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, Any]]:
+        """The four cross-fitted CCPS nuisances on one cell's folds.
+
+        First stage per fold k (fit on the training complement I_{-k}):
+        ``m0`` = outcome regression of dY on R among controls; ``p`` =
+        propensity of D on S on all units. Second stage per fold k, fit on
+        TRAINING controls only: ``nu0`` = regression on S of the fold-k m0
+        model's predictions; ``omega0`` = regression on R of the fold-k
+        propensity odds (propensity clipped by ``pscore_trim`` first). The
+        nested TARGETS come from the fold-k first-stage model's predictions on
+        its own training units when BOTH learners are the parametric built-ins
+        (Assumption 8's plug-in), and from a split-half of the training
+        complement otherwise (footnote 9: fit the first stage on half A,
+        targets on half B's controls, nested fit on B; swap; average the two
+        nested models' held-out predictions). The score's m_hat / ps on the
+        held-out fold ALWAYS come from the full-training-complement fits.
+        Returns ``(m_hat, ps_raw, nu_hat, omega_raw, stage_diagnostics)``.
+        """
+        controls = D == 0.0
+        n = D.shape[0]
+        n_folds = folds.n_folds
+        trim = self.pscore_trim
+        prop = make_learner(self.propensity_learner, kind="classifier")
+        outc = make_learner(self.outcome_learner, kind="regressor")
+        parametric = _is_parametric_learner_spec(self.propensity_learner) and (
+            _is_parametric_learner_spec(self.outcome_learner)
+        )
+
+        m_hat = np.empty(n)
+        ps_raw = np.empty(n)
+        nu_hat = np.empty(n)
+        omega_raw = np.empty(n)
+        m_losses = np.empty(n_folds)
+        p_losses = np.empty(n_folds)
+        m_nfit = np.empty(n_folds, dtype=np.int64)
+        p_nfit = np.empty(n_folds, dtype=np.int64)
+        nu_nfit = np.empty(n_folds, dtype=np.int64)
+        om_nfit = np.empty(n_folds, dtype=np.int64)
+        nu_label = f"{context} nu: "
+        om_label = f"{context} omega: "
+
+        gen_m = iter_fold_fits(
+            outc,
+            R,
+            dY,
+            folds,
+            fit_mask=controls,
+            predict_method="predict",
+            context_label=f"{context} outcome",
+        )
+        gen_p = iter_fold_fits(
+            prop,
+            S,
+            D,
+            folds,
+            predict_method="predict_proba",
+            context_label=f"{context} propensity",
+        )
+        for ff_m, ff_p in zip(gen_m, gen_p):
+            k = ff_m.k
+            test = ff_m.test_idx
+            train = ff_m.train_idx
+            m_test = _predict_subset(
+                ff_m.learner,
+                R[test],
+                kind="regressor",
+                k=k,
+                label=ff_m.label,
+                n_fit=ff_m.n_fit,
+                w_fit=None,
+            )
+            p_test = _predict_subset(
+                ff_p.learner,
+                S[test],
+                kind="classifier",
+                k=k,
+                label=ff_p.label,
+                n_fit=ff_p.n_fit,
+                w_fit=None,
+            )
+            m_hat[test] = m_test
+            ps_raw[test] = p_test
+            m_losses[k] = _fold_loss("regressor", dY[test], m_test, None)
+            p_losses[k] = _fold_loss("classifier", D[test], p_test, None)
+            m_nfit[k] = ff_m.n_fit
+            p_nfit[k] = ff_p.n_fit
+
+            if parametric:
+                fit_idx = ff_m.fit_idx  # training controls
+                m_tr = _predict_subset(
+                    ff_m.learner,
+                    R[fit_idx],
+                    kind="regressor",
+                    k=k,
+                    label=ff_m.label,
+                    n_fit=ff_m.n_fit,
+                    w_fit=None,
+                )
+                p_tr = np.clip(
+                    _predict_subset(
+                        ff_p.learner,
+                        S[fit_idx],
+                        kind="classifier",
+                        k=k,
+                        label=ff_p.label,
+                        n_fit=ff_p.n_fit,
+                        w_fit=None,
+                    ),
+                    trim,
+                    1.0 - trim,
+                )
+                y_nu = np.zeros(n)
+                y_nu[fit_idx] = m_tr
+                nu_learner, n_nu, _ = _fit_subset(
+                    outc,
+                    S,
+                    y_nu,
+                    fit_idx,
+                    n_train=int(train.shape[0]),
+                    kind="regressor",
+                    sample_weight=None,
+                    k=k,
+                    label=nu_label,
+                    warn_stacklevel=3,
+                )
+                nu_hat[test] = _predict_subset(
+                    nu_learner,
+                    S[test],
+                    kind="regressor",
+                    k=k,
+                    label=nu_label,
+                    n_fit=n_nu,
+                    w_fit=None,
+                )
+                y_om = np.zeros(n)
+                y_om[fit_idx] = p_tr / (1.0 - p_tr)
+                om_learner, n_om, _ = _fit_subset(
+                    outc,
+                    R,
+                    y_om,
+                    fit_idx,
+                    n_train=int(train.shape[0]),
+                    kind="regressor",
+                    sample_weight=None,
+                    k=k,
+                    label=om_label,
+                    warn_stacklevel=3,
+                )
+                omega_raw[test] = _predict_subset(
+                    om_learner,
+                    R[test],
+                    kind="regressor",
+                    k=k,
+                    label=om_label,
+                    n_fit=n_om,
+                    w_fit=None,
+                )
+                nu_nfit[k] = n_nu
+                om_nfit[k] = n_om
+                continue
+
+            # Split-half branch: ONE draw per outer fold, ascending k, on the
+            # shared cell rng, using the outer folds' own mechanism.
+            try:
+                if use_psu_folds and psu_cell is not None:
+                    halves = assign_folds(
+                        int(train.shape[0]), 2, rng=rng, cluster_ids=psu_cell[train]
+                    )
+                else:
+                    halves = assign_folds(int(train.shape[0]), 2, rng=rng, stratify=D[train])
+            except ValueError as exc:
+                raise DegenerateFoldError(f"{context} split-half fold {k}: {exc}") from exc
+            nu_pred = np.zeros(test.shape[0])
+            om_pred = np.zeros(test.shape[0])
+            n_nu_total = 0
+            n_om_total = 0
+            for h in (0, 1):
+                a_idx = train[halves.fold_ids == h]
+                b_idx = train[halves.fold_ids != h]
+                a_ctrl = a_idx[controls[a_idx]]
+                b_ctrl = b_idx[controls[b_idx]]
+                m_a, n_ma, _ = _fit_subset(
+                    outc,
+                    R,
+                    dY,
+                    a_ctrl,
+                    n_train=int(a_idx.shape[0]),
+                    kind="regressor",
+                    sample_weight=None,
+                    k=k,
+                    label=f"{context} split-half m: ",
+                    warn_stacklevel=3,
+                )
+                p_a, n_pa, _ = _fit_subset(
+                    prop,
+                    S,
+                    D,
+                    a_idx,
+                    n_train=int(a_idx.shape[0]),
+                    kind="classifier",
+                    sample_weight=None,
+                    k=k,
+                    label=f"{context} split-half p: ",
+                    warn_stacklevel=3,
+                )
+                m_b = _predict_subset(
+                    m_a,
+                    R[b_ctrl],
+                    kind="regressor",
+                    k=k,
+                    label=f"{context} split-half m: ",
+                    n_fit=n_ma,
+                    w_fit=None,
+                )
+                p_b = np.clip(
+                    _predict_subset(
+                        p_a,
+                        S[b_ctrl],
+                        kind="classifier",
+                        k=k,
+                        label=f"{context} split-half p: ",
+                        n_fit=n_pa,
+                        w_fit=None,
+                    ),
+                    trim,
+                    1.0 - trim,
+                )
+                y_nu = np.zeros(n)
+                y_nu[b_ctrl] = m_b
+                nu_h, n_nu_h, _ = _fit_subset(
+                    outc,
+                    S,
+                    y_nu,
+                    b_ctrl,
+                    n_train=int(b_idx.shape[0]),
+                    kind="regressor",
+                    sample_weight=None,
+                    k=k,
+                    label=nu_label,
+                    warn_stacklevel=3,
+                )
+                y_om = np.zeros(n)
+                y_om[b_ctrl] = p_b / (1.0 - p_b)
+                om_h, n_om_h, _ = _fit_subset(
+                    outc,
+                    R,
+                    y_om,
+                    b_ctrl,
+                    n_train=int(b_idx.shape[0]),
+                    kind="regressor",
+                    sample_weight=None,
+                    k=k,
+                    label=om_label,
+                    warn_stacklevel=3,
+                )
+                nu_pred += 0.5 * _predict_subset(
+                    nu_h,
+                    S[test],
+                    kind="regressor",
+                    k=k,
+                    label=nu_label,
+                    n_fit=n_nu_h,
+                    w_fit=None,
+                )
+                om_pred += 0.5 * _predict_subset(
+                    om_h,
+                    R[test],
+                    kind="regressor",
+                    k=k,
+                    label=om_label,
+                    n_fit=n_om_h,
+                    w_fit=None,
+                )
+                n_nu_total += n_nu_h
+                n_om_total += n_om_h
+            nu_hat[test] = nu_pred
+            omega_raw[test] = om_pred
+            nu_nfit[k] = n_nu_total
+            om_nfit[k] = n_om_total
+
+        nan_losses = [float("nan")] * n_folds
+        stage: Dict[str, Any] = {
+            "propensity": {
+                "fold_losses": [float(v) for v in p_losses],
+                "n_fit_per_fold": [int(v) for v in p_nfit],
+            },
+            "outcome": {
+                "fold_losses": [float(v) for v in m_losses],
+                "n_fit_per_fold": [int(v) for v in m_nfit],
+            },
+            "nu": {"fold_losses": nan_losses, "n_fit_per_fold": [int(v) for v in nu_nfit]},
+            "omega": {"fold_losses": nan_losses, "n_fit_per_fold": [int(v) for v in om_nfit]},
+            "nested_stage": "in_sample" if parametric else "split_half",
+        }
+        return m_hat, ps_raw, nu_hat, omega_raw, stage
 
     def _compute_dml_rcs_gt(
         self,
@@ -1870,6 +2754,8 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         first_treat: str,
         covariates: Optional[Iterable[str]] = None,
         survey_design: Optional["SurveyDesign"] = None,
+        bad_control: Optional[str] = None,
+        bad_control_covariates: Optional[Iterable[str]] = None,
     ) -> DMLDiDResults:
         """Estimate staggered ATT(g,t) via per-cell cross-fitted Chang scores.
 
@@ -1894,9 +2780,49 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             documented library extension of Chang (2020), which assumes
             i.i.d. sampling — Theorem 2's coverage claim does not carry
             over (REGISTRY DMLDiD Notes).
+        bad_control : str, optional
+            Column name of a "bad control" (Caetano, Callaway, Payne &
+            Sant'Anna 2026): a time-varying covariate that treatment can
+            affect. When set, each panel cell runs the paper's
+            Neyman-orthogonal doubly-robust score (Equation 10 / Algorithm 1)
+            instead of the Chang score - parallel trends conditional on the
+            bad control's UNTREATED path, with its untreated evolution
+            identified by covariate unconfoundedness given its base-period
+            value, ``bad_control_covariates`` and ``covariates`` - and stores
+            the per-cell ``ATT_X(g, t)`` pre-test (Remark 6) on
+            ``results.bad_control_diagnostics`` /
+            ``results.bad_control_summary()``. The column is read at the
+            cell's base period AND at ``t`` (both must be finite for a unit
+            to join the cell) and must NOT also appear in ``covariates``
+            (the "include the bad control" bias; to condition only on its
+            pre-treatment value - the paper's Approach 1 - pass it in
+            ``covariates`` alone instead). Requires ``panel=True``,
+            ``anticipation=0``, ``base_period="varying"`` and no
+            ``survey_design`` (each raises ``NotImplementedError``; bare
+            ``cluster=`` is supported). ``covariates`` stays required.
+            Default ``None`` = the plain Chang lane (unchanged).
+        bad_control_covariates : iterable of str, optional
+            Extra pre-treatment covariates ``W`` for the bad control's
+            unconfoundedness model (the propensity design is
+            ``[X_base, W, Z]``; the outcome regressions use
+            ``[X_t, X_base, Z]``). Every entry is read at the cell's base
+            period; the ``outcome`` name is allowed and means the
+            base-period outcome (``Y_{g-1}``, the paper's Remark 5
+            recommendation: ``bad_control_covariates=[outcome]``). Names
+            may not overlap ``covariates`` or ``bad_control``. Default
+            ``None`` = no ``W`` (matches the R ``badcontrols`` default);
+            results store ``()``. Requires ``bad_control``.
         """
-        df, covariates = self._validate_and_prepare(
-            data, outcome, unit, time, first_treat, covariates
+        df, covariates, w_names = self._validate_and_prepare(
+            data,
+            outcome,
+            unit,
+            time,
+            first_treat,
+            covariates,
+            bad_control=bad_control,
+            bad_control_covariates=bad_control_covariates,
+            has_survey_design=survey_design is not None,
         )
 
         # --- Survey/cluster resolution (CS transliteration, staggered.py) ---
@@ -2028,7 +2954,15 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
 
         if self.panel:
             precomputed = self._precompute(
-                df, outcome, unit, time, first_treat, covariates, resolved_survey=resolved_survey
+                df,
+                outcome,
+                unit,
+                time,
+                first_treat,
+                covariates,
+                resolved_survey=resolved_survey,
+                bad_control=bad_control,
+                bad_control_covariates=w_names,
             )
             cell_fn = self._compute_dml_gt
         else:
@@ -2099,6 +3033,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         group_time_effects: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
         influence_func_info: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
         cross_fit_diagnostics: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
+        bad_control_diagnostics: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
         skipped: Dict[str, List[Tuple[Any, Any]]] = {}
         skip_errors: List[str] = []
         dropped_units: set = set()
@@ -2115,6 +3050,12 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 if if_entry is not None:
                     influence_func_info[(g, t)] = if_entry
                 if diagnostics is not None:
+                    # MOVE the ATT_X block out of the cross-fit diagnostics so
+                    # the per-cell inference dict is stored (and serialized)
+                    # exactly once; skipped cells carry no ATT_X.
+                    att_x_entry = diagnostics.pop("att_x", None)
+                    if att_x_entry is not None:
+                        bad_control_diagnostics[(g, t)] = att_x_entry
                     cross_fit_diagnostics[(g, t)] = diagnostics
                 reason = gt_entry.get("skip_reason")
                 if reason is not None:
@@ -2166,11 +3107,18 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     else "(point weights use per-cell valid counts; aggregation "
                     "cohort masses use full cohorts — see REGISTRY.md)"
                 )
+                _bc_note = (
+                    ", a non-finite bad control at the cell's base period or at t, "
+                    "a non-finite bad-control covariate at the base period"
+                    if bad_control is not None
+                    else ""
+                )
                 warnings.warn(
                     f"{len(dropped_units)} unit(s) were excluded from at least one "
                     "(group, time) cell they would otherwise join, due to a "
                     "missing or NON-FINITE outcome, a non-finite covariate at the "
-                    "cell's base period, or an outcome difference overflowing to "
+                    f"cell's base period{_bc_note}, or an outcome difference "
+                    "overflowing to "
                     f"non-finite. DMLDiD estimates each cell on its complete cases "
                     f"{_weighting_note}.",
                     UserWarning,
@@ -2400,6 +3348,9 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             cluster_name=cluster_name,
             n_clusters=n_clusters,
             df_inference=df_inference,
+            bad_control=bad_control,
+            bad_control_covariates=(tuple(w_names) if w_names is not None else None),
+            bad_control_diagnostics=(bad_control_diagnostics if bad_control_diagnostics else None),
         )
         results._aggregation_kit = _build_aggregation_kit(
             cast(Any, self),  # duck-typed host contract (alpha/anticipation/cband)

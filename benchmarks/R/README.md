@@ -216,3 +216,64 @@ every synthetic sample at 17 significant digits (R RNG streams are not
 reproducible from numpy), and aborts loudly if the mass-point fixtures fail
 to separate the two `nLocalMin`/`nUniqueMin` regularization gates (the
 floor-gate configs exist to pin exactly that behavior).
+
+# badcontrols (Caetano, Callaway, Payne & Sant'Anna 2026) black-box goldens
+
+`benchmarks/data/badcontrols_golden.json` (+ the shared input panel
+`benchmarks/data/badcontrols_panel.csv`) anchors the `DMLDiD` bad-control
+lane (`fit(..., bad_control=, bad_control_covariates=)`) against the
+authors' R package `badcontrols`. Consumed by
+`tests/test_dml_did_bad_controls_parity.py`.
+
+## Why this package, and the GPL black-box rule
+
+`badcontrols` is the authors' reference implementation of the paper's
+doubly-robust / DML estimator (arXiv:2608.03881). It is **GPL-3**; diff-diff
+is MIT. The Python lane is derived from the paper alone
+(`docs/methodology/papers/caetano-2026-review.md`), and the R package is
+used ONLY as an executed oracle: the generator calls `didbc()` and records
+its outputs. Contributors must never read `R/*.R` of that package while
+working on `diff_diff/` (a direct port was rejected on licensing grounds).
+
+## Regenerating
+
+```sh
+Rscript benchmarks/R/requirements.R              # installs badcontrols at the pinned commit + ptetools 1.0.0
+Rscript benchmarks/R/generate_badcontrols_golden.R
+pytest tests/test_dml_did_bad_controls_parity.py  # must NOT skip locally
+```
+
+The generator hard-fails unless `badcontrols` is 1.0.0 installed from
+GitHub commit `651ccc925776125bb9233d76867c862107ea0ba5` (no tags or
+releases exist and HEAD also reports 1.0.0, so the `RemoteSha` is the pin)
+and `ptetools` is 1.0.0.
+
+## What is recorded
+
+`simulate_bad_controls(n = 1000, T_max = 4)` under `set.seed(20260905)`,
+then four `didbc(est_method = "dr_ml", nuisance_method = "parametric",
+xformula = ~Z, base_period = "varying", anticipation = 0, bstrap = FALSE,
+overlap_threshold = 1, nfolds = 5)` runs: `bad_control_formula = ~X` with
+`bad_control_cov_formula = ~W` (not-yet-treated, then never-treated), `~Y`
+(Remark 5's lagged outcome, not-yet-treated), and a no-bad-control run
+(characterization only - R's `dr_ml` path is not the plain Chang score).
+`overlap_threshold = 1` disables the package's silent fallback to its
+imputation estimator on high-propensity cells.
+
+Each run is recorded as the per-cell mean over `n_seeds = 10` seeds
+(`att_gt_mean`: `group, t, att, V_analytical, att_seed_sd, n, n_treated`)
+plus every per-seed table (`att_gt_per_seed`). `V_analytical` is the
+diagonal of `att_gt$V_analytical` (the analytical covariance; `att_gt$se`
+is bootstrap-based even with `bstrap = FALSE`) and the parity SE is
+`sqrt(V_analytical / n)`. `true_att_gt` carries the simulator's truth.
+
+## Tolerance rationale and skip behavior
+
+`didbc()` cross-fits with its own fold draw (`nfolds = 1` errors), so no
+bit-exact target exists; single-seed fold noise is ~0.1-0.25 SE on most
+cells and up to ~0.5 SE on the smallest ones. Averaging `n_seeds` seeds on
+both sides shrinks the noise of the difference of means to ~0.1-0.2 SE, and
+the test asserts `|mean_att_py - mean_att_R| < 0.5 SE_R` per cell plus an
+SE ratio within 30% (runs 1-2 and run 3's post cells); run 3's pre cells
+and run 4 are characterizations at 1.0 SE. A missing fixture skips the
+module (isolated-install CI jobs copy `tests/` only).

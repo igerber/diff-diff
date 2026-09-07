@@ -192,6 +192,22 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                 "the aggregation weight influence function; REGISTRY DMLDiD "
                 "complete-case Note)"
             )
+        _bad_control = getattr(results, "bad_control", None)
+        if _bad_control is not None:
+            _w = tuple(getattr(results, "bad_control_covariates", None) or ())
+            _w_clause = f" and the bad-control covariates W = {list(_w)!r}" if _w else ""
+            score_clause = (
+                "estimated by Caetano, Callaway, Payne & Sant'Anna (2026)'s "
+                "cross-fitted Neyman-orthogonal bad-control score (Eq. 10) "
+                f"with the pre-treatment bad control {_bad_control!r}"
+                f"{_w_clause} in the propensity set"
+            )
+            reference = "Caetano et al. (2026); Chang (2020); REGISTRY.md Sec. DMLDiD"
+        else:
+            score_clause = (
+                "estimated by Chang (2020)'s cross-fitted Neyman-orthogonal " "score (DML2)"
+            )
+            reference = "Chang (2020); REGISTRY.md Sec. DMLDiD"
         return {
             "name": f"overall ATT ({weight_name} average of ATT(g,t))",
             "definition": (
@@ -200,14 +216,14 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
                 "cells (``t >= g - anticipation``; ``t >= g`` when "
                 "anticipation=0) — " + weight_clause + " — "
                 "where each cell is a conditional-on-covariates ATT "
-                "estimated by Chang (2020)'s cross-fitted Neyman-orthogonal "
-                "score (DML2). ``overall_att`` is the simple-aggregation "
+                + score_clause
+                + ". ``overall_att`` is the simple-aggregation "
                 "headline; event-study and group tables are produced "
                 "post-fit via ``results.aggregate('event_study'/'group')``."
             ),
             "aggregation": "simple",
             "headline_attribute": "overall_att",
-            "reference": "Chang (2020); REGISTRY.md Sec. DMLDiD",
+            "reference": reference,
         }
 
     if name == "SunAbrahamResults":

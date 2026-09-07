@@ -602,3 +602,159 @@ class TestFoldErrorContract:
         folds = assign_folds(10, 2, rng=_rng(8))
         with pytest.raises(ValueError, match="predict_method"):
             cross_fit_predict(LinearLearner(), X, y, folds, predict_method="proba")
+
+
+class TestIterFoldFits:
+    """The per-fold generator under ``cross_fit_predict`` (CCPS nested stages
+    consume it directly)."""
+
+    def test_yields_fitted_folds_with_contract(self):
+        from diff_diff._crossfit import FoldFit, _predict_subset, iter_fold_fits
+
+        X, y = _reg_setup(n=40)
+        folds = assign_folds(40, 4, rng=_rng(5))
+        fit_mask = np.arange(40) % 3 != 0
+        template = LinearLearner()
+        fits = list(iter_fold_fits(template, X, y, folds, fit_mask=fit_mask))
+        assert [ff.k for ff in fits] == [0, 1, 2, 3]
+        assert all(isinstance(ff, FoldFit) for ff in fits)
+        seen = np.concatenate([ff.test_idx for ff in fits])
+        assert np.array_equal(np.sort(seen), np.arange(40))  # disjoint, exhaustive
+        assert all(ff.learner is not template for ff in fits)  # per-fold deep copies
+        assert getattr(template, "coef_", None) is None  # template never fit
+        ref = cross_fit_predict(LinearLearner(), X, y, folds, fit_mask=fit_mask)
+        for ff in fits:
+            np.testing.assert_array_equal(ff.fit_idx, ff.train_idx[fit_mask[ff.train_idx]])
+            assert ff.n_fit == ff.fit_idx.size and ff.kind == "regressor"
+            pred = _predict_subset(
+                ff.learner,
+                ff.X[ff.test_idx],
+                kind="regressor",
+                k=ff.k,
+                label=ff.label,
+                n_fit=ff.n_fit,
+                w_fit=ff.w_fit,
+            )
+            np.testing.assert_allclose(pred, ref.oof_predictions[ff.test_idx], rtol=0, atol=1e-14)
+
+    def test_validation_is_eager(self):
+        from diff_diff._crossfit import iter_fold_fits
+
+        X, y = _reg_setup(n=20)
+        folds = assign_folds(20, 2, rng=_rng(1))
+        y_bad = y.copy()
+        y_bad[0] = np.nan
+        with pytest.raises(ValueError):
+            iter_fold_fits(LinearLearner(), X, y_bad, folds)  # no next() needed
+
+    def test_fit_subset_empty_message_interpolates_train_size(self):
+        from diff_diff._crossfit import _fit_subset
+
+        X, y = _reg_setup(n=20)
+        with pytest.raises(
+            DegenerateFoldError, match=r"fold 3: the fit subset is empty \(train size 17"
+        ):
+            _fit_subset(
+                LinearLearner(),
+                X,
+                y,
+                np.array([], dtype=np.int64),
+                n_train=17,
+                kind="regressor",
+                sample_weight=None,
+                k=3,
+                label="",
+                warn_stacklevel=2,
+            )
+
+    def test_predict_subset_chains_learner_error(self):
+        from diff_diff._crossfit import _predict_subset
+
+        class BadPredict:
+            def predict(self, X):
+                raise ValueError("boom")
+
+        with pytest.raises(
+            DegenerateFoldError,
+            match=r"fold 1: boom; the fold's fit subset has n=7, n_pos_weight=2",
+        ) as ei:
+            _predict_subset(
+                BadPredict(),
+                np.zeros((3, 2)),
+                kind="regressor",
+                k=1,
+                label="lbl ",
+                n_fit=7,
+                w_fit=np.array([1.0, 0.0, 2.0]),
+            )
+        assert isinstance(ei.value.__cause__, ValueError)
+
+    def test_learner_raised_degenerate_passes_through_unwrapped(self):
+        class SelfDegenerate:
+            def fit(self, X, y, sample_weight=None):
+                raise DegenerateFoldError("my own message")
+
+            def predict(self, X):  # pragma: no cover
+                return np.zeros(len(X))
+
+        X, y = _reg_setup(n=20)
+        folds = assign_folds(20, 2, rng=_rng(1))
+        with pytest.raises(DegenerateFoldError) as ei:
+            cross_fit_predict(SelfDegenerate(), X, y, folds)
+        assert str(ei.value) == "my own message"
+        assert ei.value.__cause__ is None
+
+    def test_deep_copy_warning_attribution(self):
+        import warnings as _w
+
+        import pandas as pd
+
+        from diff_diff import DMLDiD
+
+        class Undeepcopyable:
+            def __deepcopy__(self, memo):
+                raise TypeError("cannot deep-copy this learner")
+
+            def fit(self, X, y, sample_weight=None):
+                self.mean_ = float(np.mean(y))
+                return self
+
+            def predict(self, X):
+                return np.full(len(X), self.mean_)
+
+        X, y = _reg_setup()
+        folds = assign_folds(len(y), 2, rng=_rng(22))
+        with _w.catch_warnings(record=True) as rec:
+            _w.simplefilter("always")
+            cross_fit_predict(Undeepcopyable(), X, y, folds)
+        hits = [r for r in rec if "could not deep-copy" in str(r.message)]
+        assert hits and all(r.filename == __file__ for r in hits)
+        assert str(hits[0].message).startswith("_crossfit: could not deep-copy")
+
+        # Bad-control fit: a foreign learner takes the split-half branch, so
+        # both the iter_fold_fits route (default stacklevel) and the direct
+        # _fit_subset route attribute to dml_did.py.
+        rng = np.random.default_rng(3)
+        rows = []
+        for i in range(60):
+            g = 2 if i % 2 else 0
+            for t in (1, 2):
+                rows.append(
+                    (i, t, g, rng.normal() + (t == 2) * (g == 2), rng.normal(), rng.normal())
+                )
+        df = pd.DataFrame(rows, columns=["unit", "time", "first_treat", "y", "x", "z"])
+        import diff_diff.dml_did as dml_mod
+
+        with _w.catch_warnings(record=True) as rec:
+            _w.simplefilter("always")
+            DMLDiD(outcome_learner=Undeepcopyable(), seed=0).fit(
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["z"],
+                bad_control="x",
+            )
+        hits = [r for r in rec if "could not deep-copy" in str(r.message)]
+        assert hits and {r.filename for r in hits} == {dml_mod.__file__}

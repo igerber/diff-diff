@@ -290,6 +290,23 @@ a library setting.
   identification narrative is likewise design-aware: RCS fits cite the
   stationary-sampling Assumption 2.3 and the Case 2 rate package.
 
+- **Note:** DMLDiD bad-control fits (`results.bad_control` set; Caetano,
+  Callaway, Payne & Sant'Anna 2026) take a separate identification branch
+  in `business_report.py`: the description names parallel trends
+  conditional on the covariates AND the bad control's untreated path
+  (MP-4, reduced by MP-7) with the bad control's untreated evolution
+  identified by covariate unconfoundedness given its pre-treatment value,
+  `W` and `Z` (Assumption 6 / MP-5), the panel-only restriction, and
+  Assumption 9's product rates; `_references_for(estimator_name, results)`
+  appends a second estimator-role citation entry for Caetano et al.
+  (2026) after Chang (2020). The target-parameter block (`_reporting_helpers.py`)
+  names the Eq. 10 score with the pre-treatment bad control (and the `W`
+  list only when non-empty) and its reference string is
+  "Caetano et al. (2026); Chang (2020); REGISTRY.md Sec. DMLDiD". The
+  practitioner learner-sensitivity snippet carries `bad_control=` /
+  `bad_control_covariates=` inside `.fit(` and `control_group=` inside
+  `DMLDiD(...)` on such fits.
+
   The simple 2x2 parallel-trends helper (`utils.check_parallel_trends`)
   has no survey-aware variant. On a survey-backed `DiDResults` the
   check is skipped **unconditionally**, regardless of whether

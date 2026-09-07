@@ -354,3 +354,177 @@ class TestChangRCSScoreMethodology:
         se_full = np.sqrt(np.mean(psi_bar**2) / len(D))
         se_no_lambda = np.sqrt(np.mean(psi_no_lambda**2) / len(D))
         assert abs(se_full - se_no_lambda) / se_full > 1e-4
+
+
+# ===========================================================================
+# CCPS (2026) bad-control score (Equation 10) - pure-function methodology
+# ===========================================================================
+from diff_diff._dr_scores import ccps_panel_score, ccps_panel_score_augmented  # noqa: E402
+
+CCPS_TAU = 1.0
+
+
+def _ccps_dgp(n=300_000, seed=17):
+    """Two-period bad-control DGP with CLOSED-FORM nuisances (W empty).
+
+    xb, Z ~ N(0, 1); p(S) = expit(0.5 xb + 0.3 Z) is a function of
+    S = (xb, Z) only, so omega0(R) = p/(1-p) EXACTLY (Equation 9 with the
+    odds already S-measurable); xt(0) = 0.7 xb + 0.3 Z + e (independent of D
+    given S: Assumption 4); xt = xt(0) + 0.5 D (a genuine bad control);
+    m0(xt, xb, Z) = xt + 0.5 xb + 0.3 Z at the UNTREATED bad control;
+    dY = m0 + tau D + noise. Hence nu0(S) = E[m0 | S, D=0] = 1.2 xb + 0.6 Z and
+    the ATT is tau. Returns arrays evaluated at the OBSERVED bad control (the
+    score only reads m_hat/omega_hat on controls, where xt == xt(0)).
+    """
+    rng = np.random.default_rng(seed)
+    xb = rng.standard_normal(n)
+    Z = rng.standard_normal(n)
+    p = 1.0 / (1.0 + np.exp(-(0.5 * xb + 0.3 * Z)))
+    D = (rng.uniform(size=n) < p).astype(float)
+    xt0 = 0.7 * xb + 0.3 * Z + 0.3 * rng.standard_normal(n)
+    xt = xt0 + 0.5 * D
+    m0_untreated = xt0 + 0.5 * xb + 0.3 * Z
+    dY = m0_untreated + CCPS_TAU * D + 0.5 * rng.standard_normal(n)
+    m_true = xt + 0.5 * xb + 0.3 * Z
+    nu_true = 1.2 * xb + 0.6 * Z
+    omega_true = p / (1.0 - p)
+    return dict(xt=xt, xb=xb, Z=Z, D=D, dY=dY, p=p, m=m_true, nu=nu_true, omega=omega_true)
+
+
+class TestCCPSScore:
+    def _score_mean(self, d, m=None, nu=None, ps=None, omega=None):
+        m = d["m"] if m is None else m
+        nu = d["nu"] if nu is None else nu
+        ps = d["p"] if ps is None else ps
+        omega = d["omega"] if omega is None else omega
+        ps = np.clip(ps, 1e-3, 1 - 1e-3)
+        return float(
+            ccps_panel_score(d["dY"], d["D"], m, nu, ps, omega, float(d["D"].mean())).mean()
+        )
+
+    def test_score_mean_recovers_att_with_oracle_nuisances(self):
+        d = _ccps_dgp()
+        assert abs(self._score_mean(d) - CCPS_TAU) < 0.02
+
+    def test_double_robustness_paired_outcome_side(self):
+        # Proposition 6 (i): correct (m0, nu0) with WRONG (p, omega0) (an
+        # internally consistent wrong pair: constant propensity, its odds).
+        d = _ccps_dgp()
+        ps_wrong = np.full_like(d["p"], 0.4)
+        omega_wrong = np.full_like(d["p"], 0.4 / 0.6)
+        assert abs(self._score_mean(d, ps=ps_wrong, omega=omega_wrong) - CCPS_TAU) < 0.02
+
+    def test_double_robustness_paired_weighting_side(self):
+        # Proposition 6 (ii): correct (p, omega0) with WRONG (m0, nu0), keeping
+        # nu_wrong = E[m_wrong | S, D=0] (the pair stays functionally linked).
+        d = _ccps_dgp()
+        h = 0.8 * d["xb"] ** 2
+        assert abs(self._score_mean(d, m=d["m"] + h, nu=d["nu"] + h) - CCPS_TAU) < 0.02
+
+    def test_single_swaps_break_double_robustness(self):
+        # The pairing is m0 <-> omega0 and nu0 <-> p (Lemma S2 / Lemma S3):
+        # breaking BOTH members of a cancellation pair leaves an O(1) bias.
+        d = _ccps_dgp()
+        h = 0.8 * d["xb"] ** 2
+        omega_const = np.full_like(d["p"], 0.2)
+        bias_m_omega = self._score_mean(d, m=d["m"] + h, omega=omega_const) - CCPS_TAU
+        assert abs(bias_m_omega) > 0.05, bias_m_omega
+        ps_wrong = np.full_like(d["p"], 0.4)
+        bias_nu_p = self._score_mean(d, nu=d["nu"] + h, ps=ps_wrong) - CCPS_TAU
+        assert abs(bias_nu_p) > 0.05, bias_nu_p
+
+    @pytest.mark.parametrize("direction", ["m", "nu", "p", "omega"])
+    def test_neyman_orthogonality_vs_nonorthogonal_comparator(self, direction):
+        """Gateaux derivative of E[score] is zero in each nuisance direction at
+        the truth (Lemma S3's cross-terms), so the finite-sample shift under an
+        eps-perturbation is Monte Carlo noise, while a purpose-built
+        NON-orthogonal comparator shifts by O(eps). Orthogonal shift must be at
+        least 20x smaller.
+        """
+        d = _ccps_dgp(n=400_000, seed=23)
+        dY, D, xt, xb, Z = d["dY"], d["D"], d["xt"], d["xb"], d["Z"]
+        m, nu, omega = d["m"], d["nu"], d["omega"]
+        ps = np.clip(d["p"], 1e-3, 1 - 1e-3)
+        p_hat = float(D.mean())
+        eps = 0.05
+
+        def score(m_=m, nu_=nu, ps_=ps, om_=omega):
+            return float(ccps_panel_score(dY, D, m_, nu_, ps_, om_, p_hat).mean())
+
+        base_orth = score()
+        if direction == "m":
+            # h is a function of R; its S-projection is E[h | S, D=0].
+            h = 0.5 * xt + 0.3
+            h_proj = 0.5 * (0.7 * xb + 0.3 * Z) + 0.3
+            pert_orth = score(m_=m + eps * h)
+            # Comparator: regression-adjustment plug-in mean_D(dY - nu) with nu
+            # re-projected from the perturbed m (no reweighting terms).
+            base_naive = float((D * (dY - nu) / p_hat).mean())
+            pert_naive = float((D * (dY - (nu + eps * h_proj)) / p_hat).mean())
+        elif direction == "nu":
+            h = 0.5 * xb + 0.3
+            pert_orth = score(nu_=nu + eps * h)
+            base_naive = float((D * (dY - nu) / p_hat).mean())
+            pert_naive = float((D * (dY - (nu + eps * h)) / p_hat).mean())
+        elif direction == "p":
+            h = 0.5 * xb + 0.3
+            ps_pert = np.clip(ps + eps * h * ps * (1 - ps), 1e-3, 1 - 1e-3)
+            pert_orth = score(ps_=ps_pert)
+
+            def ipw(p_):  # Abadie IPW plug-in (no outcome adjustment)
+                return float(((D - p_ * (1 - D) / (1 - p_)) * dY / p_hat).mean())
+
+            base_naive = ipw(ps)
+            pert_naive = ipw(ps_pert)
+        else:
+            h = 0.5 * xt + 0.3
+            d_omega = eps * h
+            pert_orth = score(om_=omega + d_omega)
+            # Comparator: the omega term multiplies a NON-mean-zero residual
+            # (a biased outcome regression m + c inside the omega term only),
+            # so its omega-derivative is +c E[(1-D) d_omega]/p_hat != 0.
+            c = 0.5
+
+            def biased(om_):
+                return score(om_=om_) + float(((1 - D) / p_hat * c * om_).mean())
+
+            base_naive = biased(omega)
+            pert_naive = biased(omega + d_omega)
+
+        shift_orth = abs(pert_orth - base_orth)
+        shift_naive = abs(pert_naive - base_naive)
+        assert shift_orth < shift_naive / 20.0, (direction, shift_orth, shift_naive)
+
+    def test_reduces_to_chang_score_without_bad_control(self):
+        # nu = m and omega = ps/(1-ps): Equation 10 IS Chang's Case 1 score.
+        d = _ccps_dgp(n=5000, seed=3)
+        ps = np.clip(d["p"], 1e-3, 1 - 1e-3)
+        p_hat = float(d["D"].mean())
+        a = ccps_panel_score(d["dY"], d["D"], d["m"], d["m"], ps, ps / (1 - ps), p_hat)
+        b = chang_panel_score(d["dY"], d["D"], d["m"], ps, p_hat)
+        np.testing.assert_allclose(a, b, rtol=1e-12, atol=1e-14)
+
+    def test_augmented_step_is_chang_augmented(self):
+        # phi_i = phi_1i - ATT - (ATT/pi)(D_i - pi) == summand - D theta / pi.
+        d = _ccps_dgp(n=5000, seed=4)
+        ps = np.clip(d["p"], 1e-3, 1 - 1e-3)
+        p_hat = float(d["D"].mean())
+        s = ccps_panel_score(d["dY"], d["D"], d["m"], d["nu"], ps, d["omega"], p_hat)
+        theta = float(s.mean())
+        aug = ccps_panel_score_augmented(s, d["D"], theta, p_hat)
+        hand = s - theta - (theta / p_hat) * (d["D"] - p_hat)
+        np.testing.assert_allclose(aug, hand, rtol=0, atol=1e-12)
+        np.testing.assert_array_equal(aug, chang_panel_score_augmented(s, d["D"], theta, p_hat))
+        assert abs(aug.mean()) < 1e-12
+
+    def test_input_validation(self):
+        d = _ccps_dgp(n=50, seed=5)
+        ps = np.clip(d["p"], 1e-3, 1 - 1e-3)
+        with pytest.raises(ValueError, match="omega_hat must be non-negative"):
+            ccps_panel_score(d["dY"], d["D"], d["m"], d["nu"], ps, -d["omega"], 0.5)
+        with pytest.raises(ValueError, match="ps must lie in"):
+            ccps_panel_score(d["dY"], d["D"], d["m"], d["nu"], np.ones(50), d["omega"], 0.5)
+        with pytest.raises(ValueError, match="has length"):
+            ccps_panel_score(d["dY"], d["D"], d["m"][:-1], d["nu"], ps, d["omega"], 0.5)
+        with pytest.raises(ValueError, match="p_hat must satisfy"):
+            ccps_panel_score(d["dY"], d["D"], d["m"], d["nu"], ps, d["omega"], 1.0)

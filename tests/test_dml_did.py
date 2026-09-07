@@ -2145,3 +2145,682 @@ class TestRCSCompleteCases:
             warnings.simplefilter("always")
             DMLDiD(panel=False, seed=0).fit(rcs_data, **FIT_KW, **COV)
         assert not any("were excluded" in str(w.message) for w in rec)
+
+
+# ===========================================================================
+# Bad-control lane (Caetano, Callaway, Payne & Sant'Anna 2026): API contract
+# ===========================================================================
+from diff_diff.dml_did import _is_parametric_learner_spec  # noqa: E402
+from diff_diff.dml_did_results import DMLDiDResults  # noqa: E402
+
+
+def add_bad_control(df, seed=7, jump=0.5):
+    """Append a time-varying ``xbad`` column (AR(1)-ish in x1 with noise) that
+    jumps by ``jump`` on treated post rows."""
+    rng = np.random.default_rng(seed)
+    df = df.sort_values(["unit", "time"]).reset_index(drop=True)
+    xbad = np.empty(len(df))
+    lag = {}
+    for i, (u, ft, t, x1) in enumerate(zip(df["unit"], df["first_treat"], df["time"], df["x1"])):
+        prev = lag.get(u, 0.5 * x1)
+        val = 0.7 * prev + 0.3 * x1 + 0.3 * rng.normal()
+        if ft > 0 and t >= ft:
+            val += jump
+        xbad[i] = val
+        lag[u] = val
+    return df.assign(xbad=xbad)
+
+
+BC_KW = dict(bad_control="xbad", bad_control_covariates=["y"])
+
+
+@pytest.fixture(scope="module")
+def bc_data(data):
+    return add_bad_control(data)
+
+
+@pytest.fixture(scope="module")
+def bc_fitted(bc_data):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return DMLDiD(seed=0).fit(bc_data, **FIT_KW, **COV, **BC_KW)
+
+
+class _MeanRegressor:
+    """Deterministic foreign regressor (fitted mean); takes the split-half branch."""
+
+    def fit(self, X, y, sample_weight=None):
+        self.m_ = float(np.mean(y))
+        return self
+
+    def predict(self, X):
+        return np.full(X.shape[0], self.m_)
+
+
+class _RecordingRegressor(_MeanRegressor):
+    seen = []
+
+    def fit(self, X, y, sample_weight=None):
+        type(self).seen.append((np.array(X, copy=True), np.array(y, copy=True)))
+        return super().fit(X, y)
+
+
+class TestBadControlAPI:
+    # ---- reduction: bad_control=None is the pre-existing code path ----------
+    def test_reduction_native_bit_identity(self, bc_data):
+        a = DMLDiD(seed=0).fit(bc_data, **FIT_KW, **COV)
+        b = DMLDiD(seed=0).fit(bc_data, **FIT_KW, **COV, bad_control=None)
+        assert a.att == b.att and a.se == b.se
+        assert a.group_time_effects == b.group_time_effects
+        ia, ib = a._aggregation_kit.influence, b._aggregation_kit.influence
+        assert set(ia) == set(ib)
+        for k in ia:
+            assert set(ia[k]) == set(ib[k])
+            for name, val in ia[k].items():
+                np.testing.assert_array_equal(np.asarray(val), np.asarray(ib[k][name]))
+        pd.testing.assert_frame_equal(a.to_dataframe(), b.to_dataframe())
+        assert set(a.to_dict()) == set(b.to_dict())
+        assert "bad_control" not in a.to_dict()
+        assert b.bad_control is None and b.bad_control_covariates is None
+        assert b.bad_control_diagnostics is None
+
+    def test_reduction_user_learners(self, bc_data):
+        kw = dict(outcome_learner=_MeanRegressor(), seed=0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            a = DMLDiD(**kw).fit(bc_data, **FIT_KW, **COV)
+            b = DMLDiD(**kw).fit(bc_data, **FIT_KW, **COV, bad_control=None)
+        assert a.att == b.att and a.se == b.se
+        assert a.group_time_effects == b.group_time_effects
+
+    # ---- validation matrix ------------------------------------------------
+    def test_unsupported_combinations_fail_closed(self, bc_data):
+        with pytest.raises(NotImplementedError, match="panel=False"):
+            DMLDiD(panel=False).fit(bc_data, **FIT_KW, **COV, **BC_KW)
+        from diff_diff import SurveyDesign
+
+        df = bc_data.assign(w=1.0)
+        with pytest.raises(NotImplementedError, match="survey_design"):
+            DMLDiD().fit(df, **FIT_KW, **COV, **BC_KW, survey_design=SurveyDesign(weights="w"))
+        with pytest.raises(NotImplementedError, match="anticipation=0"):
+            DMLDiD(anticipation=1).fit(bc_data, **FIT_KW, **COV, **BC_KW)
+        with pytest.raises(NotImplementedError, match="base_period='varying'"):
+            DMLDiD(base_period="universal").fit(bc_data, **FIT_KW, **COV, **BC_KW)
+
+    @pytest.mark.parametrize(
+        "kwargs,match",
+        [
+            (dict(bad_control_covariates=["y"]), "requires bad_control"),
+            (dict(bad_control="xbad", bad_control_covariates="y"), "bare"),
+            (dict(bad_control=3), "single column name"),
+            (dict(bad_control=["xbad"]), "single column name"),
+            (dict(bad_control="y"), "collides with outcome"),
+            (dict(bad_control="unit"), "collides with unit"),
+            (dict(bad_control="time"), "collides with time"),
+            (dict(bad_control="first_treat"), "collides with first_treat"),
+            (dict(bad_control="xbad", bad_control_covariates=[1]), "must be column names"),
+            (dict(bad_control="xbad", bad_control_covariates=["y", "y"]), "duplicate"),
+            (dict(bad_control="xbad", bad_control_covariates=["unit"]), "role column"),
+            (dict(bad_control="xbad", bad_control_covariates=["time"]), "role column"),
+            (dict(bad_control="xbad", bad_control_covariates=["first_treat"]), "role column"),
+            (dict(bad_control="x1"), "also appears in covariates"),
+            (dict(bad_control="xbad", bad_control_covariates=["xbad"]), "bad control itself"),
+            (dict(bad_control="xbad", bad_control_covariates=["x2"]), "also appears in covariates"),
+            (dict(bad_control="nope"), "Missing"),
+            (dict(bad_control="xbad", bad_control_covariates=["nope"]), "Missing"),
+        ],
+    )
+    def test_name_level_errors(self, bc_data, kwargs, match):
+        with pytest.raises(ValueError, match=match):
+            DMLDiD().fit(bc_data, **FIT_KW, **COV, **kwargs)
+
+    def test_non_numeric_bad_control_rejected(self, bc_data):
+        df = bc_data.assign(xbad=bc_data["xbad"].astype(str) + "a")
+        with pytest.raises(ValueError, match="numeric-castable"):
+            DMLDiD().fit(df, **FIT_KW, **COV, bad_control="xbad")
+        df = bc_data.assign(wtxt="a")
+        with pytest.raises(ValueError, match="numeric-castable"):
+            DMLDiD().fit(df, **FIT_KW, **COV, bad_control="xbad", bad_control_covariates=["wtxt"])
+
+    def test_outcome_in_w_accepted_and_none_means_no_w(self, bc_data, bc_fitted):
+        assert bc_fitted.bad_control == "xbad"
+        assert bc_fitted.bad_control_covariates == ("y",)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = DMLDiD(seed=0).fit(bc_data, **FIT_KW, **COV, bad_control="xbad")
+        assert res.bad_control_covariates == ()
+        assert np.isfinite(res.att)
+        assert res.att != bc_fitted.att  # W changes S, hence the fit
+
+    def test_generator_w_equals_list(self, bc_data):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            a = DMLDiD(seed=0).fit(
+                bc_data, **FIT_KW, **COV, bad_control="xbad", bad_control_covariates=["y"]
+            )
+            b = DMLDiD(seed=0).fit(
+                bc_data,
+                **FIT_KW,
+                **COV,
+                bad_control="xbad",
+                bad_control_covariates=(c for c in ["y"]),
+            )
+        assert a.att == b.att and a.se == b.se
+        assert a.bad_control_covariates == b.bad_control_covariates == ("y",)
+
+    def test_is_parametric_learner_spec(self):
+        from diff_diff._learners import LinearLearner, LogitLearner, RidgeLearner
+
+        assert _is_parametric_learner_spec("linear") and _is_parametric_learner_spec("logit")
+        assert not _is_parametric_learner_spec("ridge")
+        assert not _is_parametric_learner_spec("sieve")
+        assert _is_parametric_learner_spec(LinearLearner())
+        assert _is_parametric_learner_spec(LogitLearner())
+        assert not _is_parametric_learner_spec(RidgeLearner())
+
+        class Sub(LinearLearner):
+            pass
+
+        assert not _is_parametric_learner_spec(Sub())
+
+        class Raising:
+            def __eq__(self, other):  # pragma: no cover - must never be called
+                raise RuntimeError("__eq__ called")
+
+        assert not _is_parametric_learner_spec(Raising())
+
+    # ---- complete-case policy ---------------------------------------------
+    def test_complete_case_drops_unit_with_nan_bad_control_or_w(self, bc_data, bc_fitted):
+        cell = (2001, 2001)
+        base_entry = bc_fitted.group_time_effects[cell]
+        treated_units = bc_data.loc[bc_data["first_treat"] == 2001, "unit"].unique()
+        control_units = bc_data.loc[bc_data["first_treat"] == 0, "unit"].unique()
+
+        def fit_with_nan(col, unit, period):
+            df = bc_data.copy()
+            df.loc[(df["unit"] == unit) & (df["time"] == period), col] = np.nan
+            with pytest.warns(UserWarning, match="non-finite bad control|bad-control covariate"):
+                return DMLDiD(seed=0).fit(df, **FIT_KW, **COV, **BC_KW)
+
+        # NaN xt on a treated unit -> that unit leaves the cell (treated side).
+        r = fit_with_nan("xbad", treated_units[0], 2001)
+        e = r.group_time_effects[cell]
+        assert e["n_treated"] == base_entry["n_treated"] - 1
+        assert e["n_control"] == base_entry["n_control"]
+        # NaN xb on a control unit -> control side.
+        r = fit_with_nan("xbad", control_units[0], 2000)
+        e = r.group_time_effects[cell]
+        assert e["n_control"] == base_entry["n_control"] - 1
+        # NaN W (= Y_base) on a control unit -> the outcome NaN drops it too.
+        r = fit_with_nan("y", control_units[1], 2000)
+        e = r.group_time_effects[cell]
+        assert e["n_control"] == base_entry["n_control"] - 1
+
+    def test_complete_case_w_column_nan(self, bc_data, bc_fitted):
+        # A NON-outcome W column with a NaN at the base period drops the unit
+        # only on this lane (a plain fit never reads it).
+        cell = (2001, 2001)
+        control_units = bc_data.loc[bc_data["first_treat"] == 0, "unit"].unique()
+        df = bc_data.assign(w1=np.cos(bc_data["unit"] * 0.37 + bc_data["time"]))
+        df.loc[(df["unit"] == control_units[2]) & (df["time"] == 2000), "w1"] = np.nan
+        with pytest.warns(UserWarning, match="bad-control covariate"):
+            r = DMLDiD(seed=0).fit(
+                df, **FIT_KW, **COV, bad_control="xbad", bad_control_covariates=["w1", "y"]
+            )
+        assert (
+            r.group_time_effects[cell]["n_control"]
+            == bc_fitted.group_time_effects[cell]["n_control"] - 1
+        )
+
+    # ---- column-order contract --------------------------------------------
+    def test_design_matrix_column_order(self, bc_data):
+        df = bc_data.assign(
+            z1=lambda d: np.sin(d["unit"]) + 0.1 * d["time"],
+            w1=lambda d: np.cos(d["unit"] * d["time"]),
+            w2=lambda d: 0.3 * d["x1"] + 0.01 * d["time"],
+        )
+        _RecordingRegressor.seen = []
+        est = DMLDiD(outcome_learner=_RecordingRegressor(), seed=0, control_group="never_treated")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            est.fit(
+                df,
+                **FIT_KW,
+                covariates=["z1"],
+                bad_control="xbad",
+                bad_control_covariates=["w1", "y", "w2"],
+            )
+        # Hand-build S and R for the first estimated cell (g=2001, t=2001;
+        # base 2000): the recorder's very first fit is the fold-0 outcome
+        # regression on R over training controls; its S-shaped fits carry
+        # five columns.
+        wide = {
+            c: df.pivot(index="unit", columns="time", values=c)
+            for c in ("xbad", "w1", "y", "w2", "z1")
+        }
+        units = wide["xbad"].index
+        ft = df.groupby("unit")["first_treat"].first().reindex(units)
+        cell_units = units[(ft == 2001) | (ft == 0)]
+        S_hand = np.column_stack(
+            [
+                wide["xbad"].loc[cell_units, 2000],
+                wide["w1"].loc[cell_units, 2000],
+                wide["y"].loc[cell_units, 2000],
+                wide["w2"].loc[cell_units, 2000],
+                wide["z1"].loc[cell_units, 2000],
+            ]
+        )
+        R_hand = np.column_stack(
+            [
+                wide["xbad"].loc[cell_units, 2001],
+                wide["xbad"].loc[cell_units, 2000],
+                wide["z1"].loc[cell_units, 2000],
+            ]
+        )
+
+        # Every recorded design row must be a row of the hand-built matrix of
+        # the same width (rows are subsets of the cell in unit order).
+        def rows_subset(X, H):
+            return all(any(np.allclose(x, h) for h in H) for x in X)
+
+        first_cell_fits = [(X, y) for X, y in _RecordingRegressor.seen[:20]]
+        assert any(X.shape[1] == 5 for X, _ in first_cell_fits)
+        assert any(X.shape[1] == 3 for X, _ in first_cell_fits)
+        for X, _ in first_cell_fits:
+            if X.shape[1] == 5:
+                assert rows_subset(X, S_hand)
+            elif X.shape[1] == 3:
+                assert rows_subset(X, R_hand)
+
+    # ---- results surface ----------------------------------------------------
+    def test_results_surface(self, bc_fitted):
+        assert isinstance(bc_fitted, DMLDiDResults)
+        assert bc_fitted.bad_control_diagnostics
+        s = bc_fitted.summary()
+        assert "CCPS 2026 bad-control score" in s
+        assert "Bad control:" in s and "xbad" in s
+        assert "ATT_X cells (post / pre):" in s
+        assert "CS simple" in s
+        assert "bad_control_summary()" in s
+        assert "ATT_X SE: analytical" not in s  # analytical fit
+        tab = bc_fitted.bad_control_summary()
+        assert list(tab.columns) == [
+            "group",
+            "time",
+            "post",
+            "att_x",
+            "se_x",
+            "t_stat",
+            "p_value",
+            "conf_int_lower",
+            "conf_int_upper",
+        ]
+        keys = set(zip(tab["group"], tab["time"]))
+        assert keys == set(bc_fitted.bad_control_diagnostics)
+        assert (tab["post"] == (tab["time"] >= tab["group"])).all()
+        for (g, t), entry in bc_fitted.bad_control_diagnostics.items():
+            assert set(entry) == {
+                "effect",
+                "se",
+                "t_stat",
+                "p_value",
+                "conf_int",
+                "n_treated",
+                "n_control",
+            }
+            row = tab[(tab["group"] == g) & (tab["time"] == t)].iloc[0]
+            assert row["att_x"] == entry["effect"] and row["se_x"] == entry["se"]
+        # skipped cells carry no ATT_X row
+        for (g, t), e in bc_fitted.group_time_effects.items():
+            if e.get("skip_reason") is not None:
+                assert (g, t) not in bc_fitted.bad_control_diagnostics
+        df_gt = bc_fitted.to_dataframe()
+        assert "att_x" in df_gt.columns and "se_x" in df_gt.columns
+        d = bc_fitted.to_dict()
+        json.dumps(d)
+        assert d["bad_control"] == "xbad" and d["bad_control_covariates"] == ["y"]
+        assert all(k.startswith("g=") for k in d["bad_control_diagnostics"])
+        import pickle
+
+        rt = pickle.loads(pickle.dumps(bc_fitted))
+        assert rt.bad_control_diagnostics == bc_fitted.bad_control_diagnostics
+
+    def test_pre_upgrade_pickle_behaves_as_plain(self, fitted):
+        import copy
+
+        res = copy.copy(fitted)
+        for name in ("bad_control", "bad_control_covariates", "bad_control_diagnostics"):
+            res.__dict__.pop(name, None)
+        assert "Bad control:" not in res.summary()
+        assert res.bad_control_summary().empty
+        assert "att_x" not in res.to_dataframe().columns
+        assert "bad_control" not in res.to_dict()
+
+    def test_plain_results_have_typed_empty_bad_control_summary(self, fitted):
+        tab = fitted.bad_control_summary()
+        assert tab.empty and "att_x" in tab.columns
+
+    def test_diagnostics_schema(self, bc_fitted, bc_data):
+        for (g, t), d in bc_fitted.cross_fit_diagnostics.items():
+            if d.get("skip_reason") is not None:
+                continue
+            for key in ("propensity", "outcome", "nu", "omega"):
+                assert set(d[key]) == {"fold_losses", "n_fit_per_fold"}
+                assert len(d[key]["n_fit_per_fold"]) == 5
+            assert all(np.isnan(v) for v in d["nu"]["fold_losses"])
+            assert d["nested_stage"] == "in_sample"
+            assert isinstance(d["n_clipped_omega"], int)
+            assert set(d["bad_control_outcome"]) == {"fold_losses", "n_fit_per_fold"}
+            assert "att_x" not in d  # moved to bad_control_diagnostics
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ridge = DMLDiD(outcome_learner="ridge", seed=0).fit(bc_data, **FIT_KW, **COV, **BC_KW)
+            user = DMLDiD(outcome_learner=_MeanRegressor(), seed=0).fit(
+                bc_data, **FIT_KW, **COV, **BC_KW
+            )
+        for res in (ridge, user):
+            stages = {
+                d.get("nested_stage")
+                for d in res.cross_fit_diagnostics.values()
+                if d.get("skip_reason") is None
+            }
+            assert stages == {"split_half"}
+        json.dumps(ridge.to_dict())
+
+    # ---- omega clipping -------------------------------------------------------
+    def test_omega_clip_warning(self, bc_data):
+        # A wildly extrapolating omega projection: pscore_trim close to 0.5
+        # makes the cap (1-trim)/trim tiny so the odds regression's
+        # predictions overshoot it on a real cell.
+        with pytest.warns(UserWarning, match="omega_hat"):
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=".*could not be estimated.*")
+                warnings.filterwarnings("ignore", message=".*empirical.*")
+                warnings.filterwarnings("ignore", message=".*propensity.*")
+                res = DMLDiD(seed=0, pscore_trim=0.45).fit(bc_data, **FIT_KW, **COV, **BC_KW)
+        assert any((d.get("n_clipped_omega") or 0) > 0 for d in res.cross_fit_diagnostics.values())
+
+    # ---- ATT_X NaN contract -------------------------------------------------
+    def test_att_x_nan_when_only_mu_x_degenerate(self, bc_data):
+        import diff_diff.dml_did as mod
+        from diff_diff._crossfit import DegenerateFoldError
+        from tests.conftest import assert_nan_inference
+
+        orig_cf = mod.cross_fit_predict
+
+        def cf(learner, X, y, folds, **kw):
+            if "bad-control outcome" in kw.get("context_label", ""):
+                raise DegenerateFoldError("mu_x degenerate")
+            return orig_cf(learner, X, y, folds, **kw)
+
+        mod.cross_fit_predict = cf
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                res = DMLDiD(seed=0).fit(bc_data, **FIT_KW, **COV, **BC_KW)
+        finally:
+            mod.cross_fit_predict = orig_cf
+        assert np.isfinite(res.att)
+        assert res.bad_control_diagnostics
+        for (g, t), entry in res.bad_control_diagnostics.items():
+            assert res.group_time_effects[(g, t)]["skip_reason"] is None
+            assert np.isnan(entry["effect"])
+            assert_nan_inference(entry)
+            assert "error" in res.cross_fit_diagnostics[(g, t)]["bad_control_outcome"]
+        assert not res.bad_control_summary()["att_x"].notna().any()
+
+    # ---- split-half branch ----------------------------------------------------
+    def test_split_half_hand_replication_with_mean_learners(self, bc_data):
+        """With fitted-mean regressors every nested model is a constant, so the
+        split-half average is reproducible by hand from the same RNG stream."""
+        from diff_diff._crossfit import assign_folds
+        from diff_diff._learners import LogitLearner
+
+        est = DMLDiD(outcome_learner=_MeanRegressor(), seed=0, control_group="never_treated")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = est.fit(bc_data, **FIT_KW, **COV, **BC_KW)
+        g, t = 2001, 2001
+        d = res.cross_fit_diagnostics[(g, t)]
+        assert d["nested_stage"] == "split_half"
+        # Rebuild the cell exactly as the estimator does.
+        df = bc_data
+        units = np.sort(df["unit"].unique())
+        ft = df.groupby("unit")["first_treat"].first().reindex(units).to_numpy()
+        keep = (ft == g) | (ft == 0)
+        D = (ft[keep] == g).astype(float)
+
+        def wide(c):
+            return df.pivot(index="unit", columns="time", values=c).reindex(units)
+
+        dY = (wide("y")[2001] - wide("y")[2000]).to_numpy()[keep]
+        xt = wide("xbad")[2001].to_numpy()[keep]
+        xb = wide("xbad")[2000].to_numpy()[keep]
+        Z = np.column_stack([wide("x1")[2000].to_numpy()[keep], wide("x2")[2000].to_numpy()[keep]])
+        R = np.column_stack([xt, xb, Z])
+        S = np.column_stack([xb, wide("y")[2000].to_numpy()[keep], Z])
+        n = D.shape[0]
+        seed_seq = np.random.SeedSequence(
+            entropy=d["fold_seed"]["entropy"], spawn_key=tuple(d["fold_seed"]["spawn_key"])
+        )
+        rng = np.random.default_rng(seed_seq)
+        folds = assign_folds(n, 5, rng=rng, stratify=D)
+        ctrl = D == 0.0
+        trim = est.pscore_trim
+        nu_hand = np.empty(n)
+        om_hand = np.empty(n)
+        for k, train, test in folds.iter_folds():
+            halves = assign_folds(int(train.shape[0]), 2, rng=rng, stratify=D[train])
+            nu_k = 0.0
+            om_k = 0.0
+            for h in (0, 1):
+                a = train[halves.fold_ids == h]
+                b = train[halves.fold_ids != h]
+                a_c = a[ctrl[a]]
+                b_c = b[ctrl[b]]
+                m_b = np.full(b_c.size, dY[a_c].mean())
+                p_b = np.clip(
+                    LogitLearner().fit(S[a], D[a]).predict_proba(S[b_c])[:, 1], trim, 1 - trim
+                )
+                nu_k += 0.5 * m_b.mean()
+                om_k += 0.5 * (p_b / (1 - p_b)).mean()
+            nu_hand[test] = nu_k
+            om_hand[test] = om_k
+        # Replay the estimator's own stream (fold draw first, then one half
+        # draw per outer fold) through _ccps_nuisances directly.
+        # The generator above consumed the fold draw first, then K half draws:
+        # replay identically.
+        rng2 = np.random.default_rng(seed_seq)
+        folds2 = assign_folds(n, 5, rng=rng2, stratify=D)
+        m_hat, ps_raw, nu_hat, om_raw, stage = est._ccps_nuisances(
+            R, S, dY, D, folds2, rng2, None, False, "x"
+        )
+        assert stage["nested_stage"] == "split_half"
+        np.testing.assert_allclose(nu_hat, nu_hand, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(om_raw, om_hand, rtol=0, atol=1e-12)
+        assert stage["nu"]["n_fit_per_fold"] == [
+            int(ctrl[tr].sum()) for _, tr, _ in folds2.iter_folds()
+        ]
+
+    def test_split_half_degenerate_cell_skips(self, bc_data):
+        # Tiny never-treated pool: the 2-way stratified half split of a
+        # training complement with < 2 controls per half fails -> the cell is
+        # skipped as cross_fit_degenerate (user learner -> split-half branch).
+        from diff_diff._crossfit import DegenerateFoldError, assign_folds
+
+        # Two never-treated controls: the outer 5-fold split places them in
+        # different folds (a fitted-mean learner fits on ONE control), but the
+        # training complement then holds a single control and the stratified
+        # half split has a singleton stratum -> DegenerateFoldError labelled
+        # split-half -> the cell is skipped as cross_fit_degenerate; with
+        # every cell sharing those controls the fit raises the all-degenerate
+        # ValueError.
+        keep_ctrl = bc_data.loc[bc_data["first_treat"] == 0, "unit"].unique()[:2]
+        df = bc_data[(bc_data["first_treat"] != 0) | bc_data["unit"].isin(keep_ctrl)]
+        est = DMLDiD(outcome_learner=_MeanRegressor(), seed=0, control_group="never_treated")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match="Could not estimate"):
+                est.fit(df, **FIT_KW, **COV, **BC_KW)
+        rng = np.random.default_rng(0)
+        n = 12
+        D = np.array([0.0, 0.0] + [1.0] * (n - 2))
+        R = rng.normal(size=(n, 3))
+        S = rng.normal(size=(n, 3))
+        dY = rng.normal(size=n)
+        folds = assign_folds(n, 5, rng=rng, stratify=D)
+        with pytest.raises(DegenerateFoldError, match="split-half"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                est._ccps_nuisances(R, S, dY, D, folds, rng, None, False, "cell")
+
+    def test_split_half_psu_cohesive_under_cluster(self, bc_data):
+        from diff_diff._crossfit import assign_folds
+
+        df = bc_data.assign(grp=lambda d: d["unit"] % 12)
+        est = DMLDiD(
+            outcome_learner=_MeanRegressor(), seed=0, cluster="grp", control_group="never_treated"
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = est.fit(df, **FIT_KW, **COV, **BC_KW)
+        g, t = 2001, 2001
+        d = res.cross_fit_diagnostics[(g, t)]
+        assert d["psu_folds"] is True and d["nested_stage"] == "split_half"
+        units = np.sort(df["unit"].unique())
+        ft = df.groupby("unit")["first_treat"].first().reindex(units).to_numpy()
+        keep = (ft == g) | (ft == 0)
+        D = (ft[keep] == g).astype(float)
+        psu = (units % 12)[keep]
+        rng = np.random.default_rng(
+            np.random.SeedSequence(
+                entropy=d["fold_seed"]["entropy"], spawn_key=tuple(d["fold_seed"]["spawn_key"])
+            )
+        )
+        folds = assign_folds(int(D.shape[0]), 5, rng=rng, cluster_ids=psu)
+        for k, train, test in folds.iter_folds():
+            halves = assign_folds(int(train.shape[0]), 2, rng=rng, cluster_ids=psu[train])
+            for h in (0, 1):
+                psus_h = set(psu[train][halves.fold_ids == h])
+                psus_o = set(psu[train][halves.fold_ids != h])
+                assert not (psus_h & psus_o)
+        assert np.isfinite(res.att)
+
+    # ---- cluster / inference ------------------------------------------------
+    def test_cluster_unit_and_coarser_finite(self, bc_data):
+        df = bc_data.assign(grp=lambda d: d["unit"] % 10)
+        for col in ("unit", "grp"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                res = DMLDiD(seed=0, cluster=col).fit(df, **FIT_KW, **COV, **BC_KW)
+            assert np.isfinite(res.att) and np.isfinite(res.se)
+            for (g, t), e in res.bad_control_diagnostics.items():
+                assert np.isfinite(e["se"])
+                # same df_inference as the ATT: t-quantile CI half-width ratio
+                # matches for both tuples
+                gt = res.group_time_effects[(g, t)]
+                hw_att = (gt["conf_int"][1] - gt["conf_int"][0]) / (2 * gt["se"])
+                hw_x = (e["conf_int"][1] - e["conf_int"][0]) / (2 * e["se"])
+                np.testing.assert_allclose(hw_att, hw_x, rtol=1e-10)
+
+    def test_single_psu_cluster_nan_inference_incl_att_x(self, bc_data):
+        from tests.conftest import assert_nan_inference
+
+        df = bc_data.assign(one=0)
+        with pytest.warns(UserWarning, match="PSU"):
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=".*excluded.*")
+                res = DMLDiD(seed=0, cluster="one").fit(df, **FIT_KW, **COV, **BC_KW)
+        found = False
+        for (g, t), e in res.group_time_effects.items():
+            if e.get("skip_reason") is not None:
+                continue
+            assert np.isfinite(e["effect"])
+            assert_nan_inference(e)
+            x = res.bad_control_diagnostics[(g, t)]
+            assert np.isfinite(x["effect"])
+            assert_nan_inference(x)
+            found = True
+        assert found
+
+    # ---- bootstrap + aggregation ----------------------------------------------
+    def test_bootstrap_lane_and_aggregations(self, bc_data):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            boot = DMLDiD(seed=0, n_bootstrap=49).fit(bc_data, **FIT_KW, **COV, **BC_KW)
+            plain = DMLDiD(seed=0).fit(bc_data, **FIT_KW, **COV, **BC_KW)
+        assert "ATT_X SE: analytical (not bootstrapped)" in boot.summary()
+        moved = False
+        for k, e in boot.group_time_effects.items():
+            if e.get("skip_reason") is not None:
+                continue
+            p = plain.group_time_effects[k]
+            assert e["effect"] == p["effect"]
+            moved |= e["se"] != p["se"]
+            assert boot.bad_control_diagnostics[k]["se"] == plain.bad_control_diagnostics[k]["se"]
+        assert moved
+        df_gt = boot.to_dataframe()
+        assert {"se", "se_x"} <= set(df_gt.columns)
+        for level in ("event_study", "group", "total"):
+            df_a = boot.aggregate(level).to_dataframe()
+            assert np.isfinite(df_a["att"]).any()
+
+    def test_total_raises_on_incomplete_treated_support_under_cluster(self, bc_data):
+        df = bc_data.copy()
+        treated_unit = df.loc[df["first_treat"] == 2001, "unit"].unique()[0]
+        df.loc[(df["unit"] == treated_unit) & (df["time"] == 2002), "xbad"] = np.nan
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = DMLDiD(seed=0, cluster="unit").fit(df, **FIT_KW, **COV, **BC_KW)
+        with pytest.raises(NotImplementedError, match="incomplete treated support"):
+            res.aggregate("total")
+
+    # ---- time-invariant bad control -------------------------------------------
+    def test_time_invariant_bad_control(self, bc_data):
+        # Time-invariant AND not collinear with Z (S stays full rank; only
+        # R = [xt, xb, Z] loses rank because xt == xb).
+        df = bc_data.assign(xbad=lambda d: np.sin(0.7 * d["unit"]))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match="Could not estimate"):
+                DMLDiD(seed=0).fit(df, **FIT_KW, **COV, bad_control="xbad")
+            res = DMLDiD(seed=0, outcome_learner="ridge").fit(
+                df, **FIT_KW, **COV, bad_control="xbad"
+            )
+        assert np.isfinite(res.att)
+
+    # ---- reporting surfaces ------------------------------------------------------
+    def test_reporting_surfaces(self, bc_fitted, fitted):
+        from diff_diff._reporting_helpers import describe_target_parameter
+        from diff_diff.business_report import BusinessReport
+        from diff_diff.practitioner import practitioner_next_steps
+
+        tp = describe_target_parameter(bc_fitted)
+        assert "Caetano" in tp["reference"] and "Caetano" in tp["definition"]
+        assert "W" in tp["definition"]  # W non-empty on this fit
+        assert "Caetano" not in describe_target_parameter(fitted)["reference"]
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            br = BusinessReport(bc_fitted, auto_diagnostics=False).to_dict()
+            br_plain = BusinessReport(fitted, auto_diagnostics=False).to_dict()
+        blob = json.dumps(br)
+        assert "covariate unconfoundedness" in blob
+        cites = [r["citation"] for r in br["references"]]
+        assert any(c.startswith("Caetano, C., Callaway, B.") for c in cites)
+        assert not any(
+            c.startswith("Caetano") for r in br_plain["references"] for c in [r["citation"]]
+        )
+
+        out = practitioner_next_steps(bc_fitted, verbose=False)
+        step = next(s for s in out["next_steps"] if "alt = DMLDiD(" in (s.get("code") or ""))
+        code = step["code"]
+        fit_part = code.split(".fit(", 1)[1]
+        assert "bad_control='xbad'" in fit_part
+        assert "bad_control_covariates=['y']" in fit_part
+        assert "control_group='never_treated'" in code.split(".fit(", 1)[0]
+        plain_out = practitioner_next_steps(fitted, verbose=False)
+        plain_code = next(
+            s for s in plain_out["next_steps"] if "alt = DMLDiD(" in (s.get("code") or "")
+        )["code"]
+        assert "bad_control" not in plain_code and "control_group" not in plain_code

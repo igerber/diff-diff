@@ -1175,9 +1175,9 @@ Headline findings (authors' summary, SA pp. 16-17, with table facts):
 **Requirements checklist:**
 
 Approach 1 (Theorem 1 / Proposition 1 / Proposition 3 - docs + CallawaySantAnna):
-- [ ] Document that passing the PRE-treatment bad control (read at base period `g - 1`) plus `Z` as CallawaySantAnna covariates computes the Proposition 3 estimand (two-period: Theorem 1 / Proposition 1), and state Assumptions 4 / 5 (MP-8 / MP-9) explicitly
-- [ ] Guard: the post-treatment bad control must NOT be in the covariate set (`τ^use` bias); warn or refuse when a time-varying covariate is read at `t` rather than `g - 1`
-- [ ] Pre-test surface: pre-period pseudo-`ATT(g, t)` (existing CS pre-period cells) and `ATT_X(g, t)` (bad control as outcome)
+- [x] Document that passing the PRE-treatment bad control (read at base period `g - 1`) plus `Z` as CallawaySantAnna covariates computes the Proposition 3 estimand (two-period: Theorem 1 / Proposition 1), and state Assumptions 4 / 5 (MP-8 / MP-9) explicitly
+- [x] Guard: the post-treatment bad control must NOT be in the covariate set (`τ^use` bias); warn or refuse when a time-varying covariate is read at `t` rather than `g - 1` (DMLDiD refuses `bad_control` in `covariates`; on the PANEL lane CS/DMLDiD read `covariates` at the base period, so Approach 1 is the user's responsibility to pass the pre-treatment value and no library guard can detect a post-treatment column there; RCS lanes read covariates at `t` and are out of scope)
+- [x] Pre-test surface: pre-period pseudo-`ATT(g, t)` (existing CS pre-period cells) and `ATT_X(g, t)` (bad control as outcome) (per-cell ATT_X; no event study)
 
 Imputation estimator (Section 6.1):
 - [ ] Untreated-only OLS of `ΔY` on `(X_{t*}, X_{t*-1}, Z)` and of `X_{t*}` on `(X_{t*-1}, W, Z)`; `ν̂_0` by plug-in (Eq. 5 under Assumption 8); `ATT̂_ra = m̂_1 - τ̂_ra` (Eqs. 6-7)
@@ -1185,33 +1185,33 @@ Imputation estimator (Section 6.1):
 - [ ] Rank / positive-definiteness checks on the two untreated design matrices (Assumption S1(ii)); NaN inference via `safe_inference()` when violated
 
 DR estimator, parametric (Section 6.2):
-- [ ] Score `φ_1` (Eq. 10) exactly; sample analog Eq. 11; `π̂` global
-- [ ] Nuisances: `m_0` (untreated OLS), `ν_0` (nested plug-in), `p` (logit on ALL units, on `(X_{t*-1}, W, Z)`), `ω_0` (untreated OLS of fitted odds on `(X_{t*}, X_{t*-1}, Z)`)
-- [ ] Variance `V̂_dr` from `φ̂_i = φ̂_{1,i} - ATT̂_dr - (ATT̂_dr/π̂)(D_i - π̂)` (Algorithm 1 step 4); `se = √(V̂_dr/n)`; no DoF correction
-- [ ] Overlap enforcement on `p̂` (away from 1) and boundedness of `ω̂_0` - implementation-chosen rule, documented deviation
-- [ ] Double-robustness tests: correct `(m_0, ν_0)` with wrong `(p, ω_0)` and vice versa (Proposition 6 pairing)
+- [x] Score `φ_1` (Eq. 10) exactly; sample analog Eq. 11; `π̂` = the cell's treated share (`n_g/n_cell`; the paper's global `π̂` in the two-period case)
+- [x] Nuisances: `m_0` (untreated OLS), `ν_0` (nested plug-in), `p` (logit on ALL units, on `(X_{t*-1}, W, Z)`), `ω_0` (untreated OLS of fitted odds on `(X_{t*}, X_{t*-1}, Z)`)
+- [x] Variance `V̂_dr` from `φ̂_i = φ̂_{1,i} - ATT̂_dr - (ATT̂_dr/π̂)(D_i - π̂)` (Algorithm 1 step 4); `se = √(V̂_dr/n)`; no DoF correction
+- [x] Overlap enforcement on `p̂` (away from 1) and boundedness of `ω̂_0` - implementation-chosen rule, documented deviation (`pscore_trim` clip; `ω̂` clipped to `[0, (1-trim)/trim]` with a warning; REGISTRY Note)
+- [x] Double-robustness tests: correct `(m_0, ν_0)` with wrong `(p, ω_0)` and vice versa (Proposition 6 pairing)
 
 DR estimator, ML / cross-fitting (Algorithm 1):
-- [ ] K-fold partition; per-fold first stage (`m̂_0^{-k}` untreated, `p̂^{-k}` all) then nested second stage (`ν̂_0^{-k}`, `ω̂_0^{-k}` untreated) on `I_{-k}`; score on `I_k`
-- [ ] Pseudo-outcome overfitting control for the nested stage (OOB predictions or a further split of the training fold - footnote 9)
-- [ ] Pluggable regressor / classifier learners; document the `o_p(n^{-1/4})` requirement (Assumption 9)
-- [ ] Degenerate-fold guards (no untreated rows in a training complement; no treated rows)
+- [x] K-fold partition; per-fold first stage (`m̂_0^{-k}` untreated, `p̂^{-k}` all) then nested second stage (`ν̂_0^{-k}`, `ω̂_0^{-k}` untreated) on `I_{-k}`; score on `I_k`
+- [x] Pseudo-outcome overfitting control for the nested stage (OOB predictions or a further split of the training fold - footnote 9) (split-half for `ridge` / `sieve` / user learners; the parametric `linear`/`logit` branch uses in-sample fold-k targets = the paper's own parametric plug-in, REGISTRY Note)
+- [x] Pluggable regressor / classifier learners; document the `o_p(n^{-1/4})` requirement (Assumption 9)
+- [x] Degenerate-fold guards (no untreated rows in a training complement; no treated rows)
 
 Staggered cells + aggregation (Section 5, SB.3):
-- [ ] Per-(g,t) substitution: `Y_t - Y_{g-1}`, `X_t`, `X_{g-1}`, `W = Y_{g-1}` default (Remark 5), not-yet-treated (default) or never-treated comparison
-- [ ] Per-cell IFs `ψ_{g,t}` / `φ_{g,t}`; aggregation IF `ξ_θ` with estimated-weight terms `ξ^w_{g,t}` (CS 2021 conventions); simple / group / event-study / calendar aggregations
-- [ ] Drop already-treated group; require no group treated in period 1
+- [x] Per-(g,t) substitution: `Y_t - Y_{g-1}`, `X_t`, `X_{g-1}`, `W = Y_{g-1}` (Remark 5; library: opt-in via `bad_control_covariates=[outcome]`, default no `W`), not-yet-treated (the paper's Proposition 2 choice) or never-treated comparison (library default `control_group="never_treated"`; set `"not_yet_treated"` for Proposition 2) (anticipation fails closed)
+- [x] Per-cell IFs `ψ_{g,t}` / `φ_{g,t}`; aggregation IF `ξ_θ` with estimated-weight terms `ξ^w_{g,t}` (CS 2021 conventions); simple / group / event-study / calendar aggregations (simple / group / event-study; calendar not supported by CS/DMLDiD, DEFERRED.md 'Calendar-time aggregation' row; the headline `att` is CS simple, not Remark 4's overall - TODO.md)
+- [x] Drop already-treated group; require no group treated in period 1 (a first-period cohort has no base period and is skipped as `missing_period` with the consolidated warning; not a hard error)
 
 Pre-tests and guards:
-- [ ] Pre-period pseudo-`ATT(g, t)` with base = immediately preceding period (Figure 6/7 convention)
+- [x] Pre-period pseudo-`ATT(g, t)` with base = immediately preceding period (Figure 6/7 convention)
 - [ ] `ATT_X(g, t)` estimator (bad control as outcome) with event study; estimand convention documented (the paper writes none)
-- [ ] Panel-only: fail closed for repeated cross-sections (Remark 1)
-- [ ] Balanced-panel / missing-data policy (paper: complete cases only)
+- [x] Panel-only: fail closed for repeated cross-sections (Remark 1)
+- [x] Balanced-panel / missing-data policy (paper: complete cases only) (library: per-cell complete cases incl. treated `X_t`)
 
 Validation:
-- [ ] Recovery tests on the SD DGPs 1-5 (true ATT = 1.00) matching Tables S2-S6 qualitatively (bias, SE/SD, coverage)
-- [ ] Black-box parity against R `badcontrols` on a shared fixture (no source porting)
-- [ ] Reduction test: with no bad control and no `W`, the DR score reduces to the Chang (2020) panel DR score DMLDiD computes (see Relation section)
+- [x] Recovery tests on the SD DGPs 1-5 (true ATT = 1.00) matching Tables S2-S6 qualitatively (bias, SE/SD, coverage) (DGP 1 and DGP 4, parametric DR; DGPs 2/3/5 need a flexible-learner fixture, TODO row)
+- [x] Black-box parity against R `badcontrols` on a shared fixture (no source porting)
+- [x] Reduction test: with no bad control and no `W`, the DR score reduces to the Chang (2020) panel DR score DMLDiD computes (see Relation section)
 
 ---
 
@@ -1219,19 +1219,22 @@ Validation:
 
 ### Data Structure Requirements
 - **Balanced panel**, one row per unit-period (MP-3; the application requires non-missing
-  data in every period). Columns: outcome `Y_it`; unit id; time `t`; first-treatment group
+  data in every period) (library: per-cell complete cases). Columns: outcome `Y_it`; unit id; time `t`; first-treatment group
   `G_i` (never-treated coded `∞`, e.g. `0`/`NaN` in the library convention); bad control
   `X_it` (time-varying, scalar in the paper); `Z_i` (pre-treatment/baseline or exogenous
   time-varying covariates - the staggered notation carries a single `Z_i` per unit); `W_i`
-  (pre-treatment confounders of `X`, per unit; default `W = Y_{g-1}`).
+  (pre-treatment confounders of `X`, per unit; default `W = Y_{g-1}`) (library: opt-in via
+  `bad_control_covariates=[outcome]`; default no `W`).
 - **"Pre-treatment value" is cell-specific:** for cell `(g, t)` the bad control is read at
   `t` (inner nuisance only) and at the base period `g - 1` (both nuisances and the
   propensity); `W = Y_{g-1}` is the outcome at the group's base period, NOT `t - 1`
-  (Remark 5). Two-period case: `t* - 1` and `t*`.
+  (Remark 5) (library: varying-base pre-period pseudo-cells read `Y_{t-1}`, REGISTRY Note).
+  Two-period case: `t* - 1` and `t*`.
 - **Comparison units per cell:** not-yet-treated (`G > t`, includes never-treated) for
   Propositions 2-3; never-treated only for Theorem 3. Treated units in the cell: `G = g`.
 - Treatment must be absorbing (MP-1); no anticipation for `Y` AND `X` (MP-2); no group
-  treated in period 1; already-treated units dropped.
+  treated in period 1 (library: such a cohort is skipped as `missing_period` with a
+  warning); already-treated units dropped.
 - Panel only; repeated cross-sections must fail closed (Remark 1).
 
 ### Computational Considerations
@@ -1255,7 +1258,9 @@ Validation:
 - Aggregation: per-unit IF vectors across cells (`ψ_{g,t}` / `φ_{g,t}`) plus weight IFs
   `ξ^w_{g,t}`; memory `O(n x cells)` as in CallawaySantAnna.
 - Never fit a nuisance on the fold it is evaluated on; the nested-stage pseudo-outcome
-  should not be the in-sample first-stage fit (footnote 9).
+  should not be the in-sample first-stage fit (footnote 9) (library: split-half for
+  `ridge` / `sieve` / user learners; the parametric `linear`/`logit` branch uses the
+  in-sample plug-in, which is the paper's own parametric estimator, REGISTRY Note).
 
 ### Tuning Parameters
 
@@ -1281,7 +1286,7 @@ separate from the paper's claims.
   (positional; "varying" / "universal"); never-treated or not-yet-treated controls;
   covariates read at the cell's BASE PERIOD; estimation methods `reg` / `ipw` / `dr`
   (Sant'Anna and Zhao 2020); multiplier bootstrap; aggregations (simple, group, event
-  study, calendar). **Consequence:** Approach 1 (Theorem 1 / Proposition 1 / Proposition 3)
+  study; calendar is not supported, DEFERRED.md). **Consequence:** Approach 1 (Theorem 1 / Proposition 1 / Proposition 3)
   is ALREADY computable by passing the bad control in `covariates` (it is read at `g - 1`,
   exactly the paper's `X_{g-1}`); only documentation and the explicit assumptions
   (4 / 5 / MP-8 / MP-9 and the `τ^use` warning) are missing. The paper's Proposition 3

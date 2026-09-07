@@ -752,7 +752,7 @@ Private infrastructure modules (`diff_diff/_crossfit.py`,
 "DMLDiD" section). `SieveLearner` is publicly exported for DMLDiD nuisance
 configuration; the other learners and modules stay private.
 
-**Two DISTINCT doubly-robust panel score families** (per the Chang review:
+**Four DISTINCT doubly-robust score families** (per the Chang review:
 "Chang's Case-1 score normalizes by the unconditional `p_0` … whereas the SZ
 DR score is self-normalized; the two are not interchangeable"):
 
@@ -776,6 +776,17 @@ DR score is self-normalized; the two are not interchangeable"):
   `ps ∈ [0,1)`, `0 < p̂ < 1` strictly — `p̂ = 1` means no comparison
   population and is rejected as unidentified — finiteness) and never emit
   silent inf.
+- `ccps_panel_score(dY, D, m_hat, nu_hat, ps, omega_hat, p_hat)` — Caetano,
+  Callaway, Payne & Sant'Anna (2026) Equation 10's Neyman-orthogonal
+  bad-control score as the per-unit UNCENTERED summand
+  `(D/π)dY − (D/π)ν − ((1−D)/π)(m − ν)ps/(1−ps) − ((1−D)/π)(dY − m)ω`, whose
+  mean is the ATT; the untreated terms are normalized by `1/π` (not
+  `1/(1−π)`). `ccps_panel_score_augmented(summand, D, theta, p_hat)` is the
+  same centering identity as `chang_panel_score_augmented` (`ψ̄ = summand −
+  D θ/π̂` equals the paper's `ψ − θ − (θ/π)(D − π)`). With `ν = m` and
+  `ω = ps/(1−ps)` the score reduces to `chang_panel_score` (pinned at 1e-14).
+  Validation adds `omega_hat ≥ 0`; see the DMLDiD "Bad-control extension"
+  block for the estimator-level conventions.
 
 - **Note:** p̂ convention (documented deviation). Chang's arXiv text is
   internally contradictory about the fold-level scalar nuisance: the printed
@@ -833,7 +844,17 @@ fold-time degeneracy raises `DegenerateFoldError` (pre-checks plus chained
 wrapping of learner `ValueError`s with the fold index and the original message
 quoted); log-loss diagnostics clip probabilities to `[1e-15, 1−1e-15]` for the
 LOSS ONLY — out-of-fold predictions are returned unclipped (nuisance trimming
-is estimator policy, applied by the consuming estimator).
+is estimator policy, applied by the consuming estimator). `iter_fold_fits`
+is the per-fold building block under `cross_fit_predict` (its sole consumer
+besides the DMLDiD bad-control lane): validation runs eagerly at the call,
+then it yields one `FoldFit` per fold in ascending `k` (the fitted per-fold
+deep copy, `fit_idx == train_idx[fit_mask[train_idx]]`, `train_idx`,
+`test_idx`, the coerced arrays); predictions are the caller's job via
+`_predict_subset`, which is what lets a consumer fit a NESTED nuisance on a
+fold's training complement before predicting the held-out fold. The
+deep-copy fallback warning is attributed to the frame that advances the
+generator (the user's `cross_fit_predict` call site, or `dml_did.py` for the
+internal routes) and reads `"_crossfit: could not deep-copy ..."`.
 
 **Learner contract (`_learners.py`)** — duck-typed `RegressorLearner` /
 `ClassifierLearner` Protocols (sklearn-compatible `fit`/`predict`/
@@ -935,6 +956,23 @@ With covariates (doubly robust):
 ```
 ATT(g,t) = E[((G_g - p̂_g(X))/(1-p̂_g(X))) × (Y_t - Y_{g-1} - m̂_{0,g,t}(X) + m̂_{0,g,g-1}(X))] / E[G_g]
 ```
+
+- **Note:** Bad controls, Approach 1 (Caetano, Callaway, Payne & Sant'Anna
+  2026, Theorem 1 / Proposition 3). ON THE PANEL LANE a time-varying covariate
+  passed in `covariates` is read at the cell's base period (the observed
+  period preceding `g` for post cells), never at `t`, so a bad control (a
+  covariate that treatment can affect) conditioned this way computes the
+  paper's Proposition 3 estimand under Assumption 4 or 5 (MP-8 / MP-9:
+  parallel trends conditional on the PRE-treatment bad control), not the
+  Section 3.1 `τ^use` "include the bad control" bias. Passing the
+  pre-treatment value is the user's responsibility; no library guard can
+  detect a post-treatment column there. The repeated-cross-section lanes of
+  CallawaySantAnna and DMLDiD read covariates on the observation's own row,
+  so a time-varying bad control there IS `X_t` and Approach 1 does not apply
+  (Remark 1). For the paper's covariate-unconfoundedness approach (parallel
+  trends given the bad control's untreated path, with extra covariates `W`)
+  use `DMLDiD(...).fit(..., bad_control=, bad_control_covariates=)` - see the
+  DMLDiD "Bad-control extension (CCPS 2026)" block.
 
 Aggregations:
 - Simple: `ATT = Σ_{g,t} w_{g,t} × ATT(g,t)` weighted by group size
@@ -2862,7 +2900,7 @@ closed-form `∂λψ₂` (`chang_rcs_lambda_slope`).
 **Key implementation requirements:**
 
 *Assumption checks / warnings:*
-- **Conditional parallel trends (Assumption 2.1, Abadie 2005):** `E[Y^0(1) - Y^0(0) | X, D = 1] = E[Y^0(1) - Y^0(0) | X, D = 0]` per cell. Untestable; the estimator adds **no identification assumptions beyond Abadie (2005)** (Section 2, p. 8).
+- **Conditional parallel trends (Assumption 2.1, Abadie 2005):** `E[Y^0(1) - Y^0(0) | X, D = 1] = E[Y^0(1) - Y^0(0) | X, D = 0]` per cell. Untestable; the estimator adds **no identification assumptions beyond Abadie (2005)** (Section 2, p. 8) on the plain lane; the bad-control lane (`fit(..., bad_control=)`) adds MP-4 / MP-5 / MP-6 / MP-7 of Caetano et al. (2026) - see the "Bad-control extension (CCPS 2026)" block below.
 - **Overlap (Assumption 2.2):** `P(D = 1) > 0` and `P(D = 1 | X) < 1` a.s. Regularity Assumptions 3.1(a) (Case 1) / 3.2(a) (Case 2) strengthen this to **strict overlap**: `Pr(κ ≤ g_0(X) ≤ 1 - κ) = 1` for some fixed `κ > 0`, imposed on the **estimated** propensity too (pp. 28, 37). The theory does not cover fitted propensities approaching 0 or 1 — see the trimming Note below.
 - **Stationary RCS sampling (Assumption 2.3, `panel=False` only):** conditional on `T = 0` (resp. `T = 1`), rows are i.i.d. draws from the distribution of `(Y(0), D, X)` (resp. `(Y(1), D, X)`) — each wave samples the same target population, so the composition of `(D, X)` is stable across waves while outcomes are the period-specific potential outcomes (trends and treatment effects are expected, not violations). Not data-checkable; surfaced as a fit-time `UserWarning` after the declared-RCS structure validates.
 - **First-stage rate condition (Assumptions 3.1(f) (Case 1) / 3.2(h) (Case 2) + Theorem 1):** BOTH conditions hold jointly — the bundle envelope `‖η̂_k - η_0‖_{P,2} ≤ ε_N` with `ε_N = o(N^{-1/4})` (each nuisance component must meet the rate; a fast learner cannot compensate a slow one), AND the product bound `‖ĝ - g_0‖²_{P,2} + ‖ĝ - g_0‖_{P,2}·‖ℓ̂ - ℓ_0‖_{P,2} ≤ ε_N²`. Not detectable at runtime; documented.
@@ -3209,6 +3247,201 @@ the finite-dimensional `p_0` is handled by the variance correction below.
 
 - **Note:** Chang §4.2 simulation-DGP replication scope (PR-B2). The §4.2.2 kernel-design RCS DGP (arXiv v3 p. 19) is replicated verbatim in `tests/test_methodology_dml_did.py`, estimated with the library's NATIVE learners rather than the paper's Gaussian-kernel first stages (no kernel first stage is bundled); the fixture is correctly specified on both nuisances (true propensity `sigmoid(X − 1/2)` by Bayes' rule; true `ℓ₂₀ = 0.25·X`), so it validates paper-DGP faithfulness — the discriminating assertion compares against the design's own confounded unadjusted contrast (→ θ₀ + 1), not against a misspecified learner. The design's unbounded X means the a.s. strict-overlap Assumption 3.2(a) holds for no fixed κ > 0 (mass outside [0.01, 0.99] ≈ 2.1e-5 — immaterial at the fixture Ns; the same quirk applies more strongly to §4.2.1, tail ≈ 0.06%). The §4.2.1 ML design is NOT replicable with the bundled unpenalized learners: at (N=500, p=100) the native logit+linear stack is order-of-magnitude noise across seeds (SE ~4-10; `solve_logit` EPV ~1.4-1.6 vs threshold 10; fitted out-of-fold clipping ~5-29% of rows — estimated propensities, not true ones, whose out-of-[0.01, 0.99] mass is ≈0.06%), and at (N=200, p=100) the linear outcome learner fails closed on control-fold rank deficiency even under an oracle propensity (ridge/sieve fit there) — tracked in TODO.md (penalized propensity learner + p-robust outcome learner).
 
+**Bad-control extension (CCPS 2026): `fit(..., bad_control=, bad_control_covariates=)`.**
+
+**Source:** Caetano, C., Callaway, B., Payne, S., & Sant'Anna, H. (2026).
+Difference-in-differences with "bad controls". arXiv:2608.03881v2 +
+Supplementary Appendix v1 (paper review on file:
+`docs/methodology/papers/caetano-2026-review.md`; a deliberate exception to
+the published-source rule, recorded there). The authors' GPL-3 R package
+`badcontrols` is used ONLY as an executed black-box oracle
+(`benchmarks/R/generate_badcontrols_golden.R`); the lane is derived from the
+paper alone.
+
+A "bad control" `X_t` is a time-varying covariate that treatment can affect.
+Conditioning on `X_t` biases DiD (the paper's Section 3.1 "include the bad
+control" bias); conditioning on the PRE-treatment value `X_{g-1}` alone is the
+paper's Approach 1 (Theorem 1 / Proposition 3), already available by passing
+the bad control in `covariates` on the panel lane (read at the cell's base
+period; see the CallawaySantAnna Note). This lane implements Approach 2:
+parallel trends conditional on the bad control's UNTREATED path (MP-4,
+reduced to `(X_{g-1}, X_t(0))` by MP-7) plus covariate unconfoundedness for
+the bad control's untreated evolution given `(X_{g-1}, W, Z)` (Assumption 6 /
+MP-5) and overlap (Assumption 7 / MP-6), estimated with the paper's
+Neyman-orthogonal doubly-robust score (Equation 10 / 11, Algorithm 1,
+Propositions 5-7), applied per CS `(g, t)` cell (Proposition 2 / SB.3).
+
+*Per-cell estimator (panel lane, as implemented - `ccps_panel_score`):* with
+`dY = Y_t − Y_base`, `xt` / `xb` the bad control at `t` / at the base period,
+`Z` = `covariates` at base, `W` = `bad_control_covariates` at base (the
+outcome name in `W` means `Y_base`), `R = [xt, xb, Z]`, `S = [xb, W, Z]`,
+`π̂ = p̂` = the cell's treated share::
+
+    m̂(R)   = cross-fitted E[dY | R, D=0]                       (outcome_learner, controls)
+    p̂(S)   = cross-fitted P(D=1 | S), clipped to [trim, 1−trim] (propensity_learner)
+    ν̂(S)   = nested: fold-k m̂ predictions on training controls, regressed on S
+    ω̂(R)   = nested: fold-k odds p̂/(1−p̂) (clipped by pscore_trim) on training controls,
+              regressed on R, then clipped to [0, (1−trim)/trim]
+    summand = (D/π̂) dY − (D/π̂) ν̂ − ((1−D)/π̂)(m̂ − ν̂) p̂/(1−p̂) − ((1−D)/π̂)(dY − m̂) ω̂
+    θ̂ = mean(summand);  ψ̄ = summand − D θ̂/π̂;  SE = sqrt(mean(ψ̄²)/n_cell)
+
+With `ν̂ = m̂` and `ω̂ = p̂/(1−p̂)` the summand is `chang_panel_score` verbatim
+(pinned at 1e-14 in `tests/test_methodology_dr_scores.py`); the centering is
+`chang_panel_score_augmented`, so the SE / cluster / t-inference tail is the
+plain lane's, unchanged.
+
+*ATT_X(g, t) diagnostic (Remark 6; `results.bad_control_summary()`,
+`results.bad_control_diagnostics`):* `E[X_t(g) − X_t(0) | G = g]` is identified
+by Assumption 6 / MP-5 plus overlap (Lemma 3 reduces the conditioning set to
+the cell base `X_{g-1}` for `t > g`) as an ATT on LEVELS of `X_t` with `S` as
+the conditioning set (the paper's p. 31 application form), and estimated as
+the AIPW `chang_panel_score(xt, D, μ̂_X, p̂, π̂)` with `μ̂_X` the cross-fitted
+control regression of `xt` on `S`; SE from its own augmented-score payload
+through the same branch (and the same `df`) as the ATT. It is a MEAN-effect
+diagnostic: one-sided evidence for Condition 2 (a nonzero ATT_X shows the
+control is bad), silent on Condition 1; a zero ATT_X is not evidence that the
+control is good (review lines 100-103). Pre-period cells give the MP-5 / MP-8
+pre-test. Not the SC / S17 "parallel trends for X" estimand.
+
+- **Note:** Nested-stage convention. The paper's Algorithm 1 leaves the
+  nested pseudo-outcome construction to the practitioner (footnote 9 warns
+  against in-sample first-stage fits for ML learners). Library: when BOTH
+  learners are the parametric built-ins (`"linear"` / `"logit"` strings or the
+  exact `LinearLearner` / `LogitLearner` objects; `_is_parametric_learner_spec`)
+  the nested targets are the fold-k first-stage model's IN-SAMPLE predictions
+  on its training units - for `LinearLearner` this is exactly Assumption 8's
+  plug-in (OLS of `R'β` on `S` equals `β₁·OLS(xt ~ S) + β₂ xb + β₃ Z`, pinned
+  by `TestCCPSPlugInIdentity`), i.e. the paper's own parametric DR estimator.
+  Otherwise (`ridge`, `sieve`, native subclasses, any user learner) the
+  training complement of each outer fold is split in half
+  (`assign_folds(n_train, 2, ...)`, one RNG draw per outer fold in ascending
+  `k`, AFTER the cell's fold draw, using the cell's resolved fold mechanism -
+  PSU-cohesive under `cluster=`, else `D`-stratified); the first stage is fit
+  on half A, targets and nested fits on half B's controls, swapped, and the
+  two nested models' held-out predictions averaged (footnote 9). The score's
+  `m̂` / `p̂` on the held-out fold always come from the full-complement fits.
+  `cross_fit_diagnostics[(g,t)]["nested_stage"]` records `"in_sample"` /
+  `"split_half"`; the split-half branch needs ≥ 2 controls per stratum per
+  half (or ≥ 2 PSUs) and skips small cells as `cross_fit_degenerate` more
+  often than the plain lane.
+- **Note:** `ω̂` boundedness (documented deviation). Assumption S2(iv) bounds
+  `ω_0`; the paper gives no rule for the estimated odds projection, which a
+  linear regression on `R` can push negative or above the overlap bound.
+  Library: the nested target uses the fold-k propensity clipped by
+  `pscore_trim` (so the target lies in `[trim/(1−trim), (1−trim)/trim]`) and
+  `ω̂` is clipped to `[0, (1−trim)/trim]` with a `UserWarning` when any entry
+  is clipped; `n_clipped_omega` is recorded per cell.
+- **Note:** `W` default and Remark 5. `bad_control_covariates=None` (default)
+  means NO `W` (`S = [xb, Z]`, matching R `badcontrols`'s
+  `bad_control_cov_formula = NULL`); results store `()`. Remark 5's
+  `W = Y_{g-1}` is the recommended explicit choice via
+  `bad_control_covariates=[outcome]`. `W` names may not overlap `covariates`
+  or the bad control (one role per column).
+- **Note:** Base-period semantics (varying base only). Post cells (`t ≥ g`)
+  read `xb` / `W` at the observed period immediately preceding `g` - exactly
+  Remark 5's `X_{g-1}` / `Y_{g-1}`. Pre-period varying-base pseudo-cells
+  (`t < g`) read them at the period preceding `t`, so `W = Y_{t-1}` there by
+  construction of the CS pre-period pseudo-ATT (Remark 6 computes "the same
+  estimand as in Proposition 2 but for pre-treatment periods"; the paper's
+  own pre-period base is the immediately preceding period, Figures 6-7).
+  Remark 5 rejects `Y_{t-1}` only for POST cells: on a pre-period cell
+  `t − 1 < g`, so `Y_{t-1} = Y_{t-1}(0)` IS observed for group `g`, and its
+  second objection (feedback from treatment to the bad control through the
+  outcome) is inapplicable because no unit in the cell has been treated yet.
+  `base_period="universal"` fails closed (`NotImplementedError`): under a
+  universal base a pre cell with `t < g − 1` would read `xt` EARLIER than
+  `xb` / `W`, inverting the `X_t` / `X_{t-1}` ordering MP-5 conditions on
+  (DEFERRED.md, paper-gated).
+- **Note:** Anticipation fails closed (`anticipation != 0` →
+  `NotImplementedError`): MP-2 assumes no anticipation for `Y` AND `X`, and
+  the paper does not develop the limited-anticipation base-period convention
+  for `X` / `W` (DEFERRED.md, paper-gated).
+- **Note:** `π̂` = the cell's treated share `n_g / n_cell` (the plain lane's
+  `p̂` convention; the paper's global `π̂` in the two-period case - review Gap
+  11). Intercepts are the learners' own (review Gap 19).
+- **Note:** Repeated cross sections and survey designs fail closed.
+  `panel=False` + `bad_control` → `NotImplementedError` (Remark 1: the
+  approach is "to a large extent" unavailable with repeated cross sections
+  because `X_{g-1}` and `X_t` must be observed for the same unit; RCS lanes
+  read covariates on the observation's own row, so a time-varying bad
+  control there IS `X_t`). `survey_design=` + `bad_control` →
+  `NotImplementedError` (the nested stages under design weights and replicate
+  variances are unvalidated; DEFERRED.md). Bare `cluster=` IS supported
+  (PSU-cohesive folds and halves, CR1 per-cell SE, `df_survey` t-inference;
+  a single-PSU cluster column yields NaN inference for the ATT and ATT_X of
+  every retained cell, the lonely-PSU carve-out).
+- **Note:** Complete-case policy. A unit joins a cell only if `dY`, `Z_base`,
+  `xt`, `xb` and `W_base` are all finite - ONE rule for both groups. Treated
+  `xt` is load-bearing for the ATT itself (`m̂` and `ω̂` are evaluated on
+  `R = [xt, xb, Z]` for every unit and the score validator rejects
+  non-finite entries), not only for ATT_X. The unbalanced-input warning
+  names the bad-control columns. Under bare `cluster=` a treated unit dropped
+  for a non-finite `xt` makes `aggregate("total")` raise the existing
+  "incomplete treated support" `NotImplementedError` (the `_cs_total_mass`
+  coincidence guard).
+- **Note:** Time-invariant bad control. If `xt − xb` is constant within a
+  cell (including `xt == xb`), `R = [xt, xb, Z]` is rank-deficient once the
+  learner prepends its intercept; no up-front skip - the learners' own rank
+  guards decide (`LinearLearner` fails closed → `cross_fit_degenerate`;
+  `RidgeLearner` / user learners proceed). A zero `ATT_X` from such a column
+  is not evidence against Condition 2.
+- **Note:** Value collinearity between `W = Y_base` and a lagged-outcome
+  column in `Z` (names are rejected; values are not) fails the cell closed on
+  the native lane because `S` is the PROPENSITY design and the only native
+  classifier is the unpenalized `LogitLearner`.
+- **Note:** Empty `Z` is not allowed (the paper's `Z` may be empty; DMLDiD's
+  pre-existing "covariates are REQUIRED" contract stands; TODO.md).
+- **Note:** Binary bad control: LPM regressions on `xt`; ATT_X is a risk
+  difference; no special handling (R's `bad_control_binary` is unused on its
+  DR path too).
+- **Note:** Aggregation weights (deviation: headline weighting differs from
+  Remark 4). The headline `att` is the CS "simple" post-treatment average
+  exactly as on the plain lane (each post cell weighted by its complete-case
+  `n_treated` on no-design fits, by fixed cohort mass under `cluster=`; every
+  post cell of a cohort enters, so early cohorts carry more total weight).
+  The paper's Remark 4 overall
+  `ATT^o = Σ_{g∈Ḡ} Σ_{t=g}^{T} [P(G=g | G∈Ḡ)/(T−g+1)] ATT(g,t)` (cohort mass
+  among the ever-treated divided by the cohort's number of post periods) is
+  NOT exposed by any current aggregation (`aggregate("group")` returns one
+  row per cohort and never forms a cross-cohort mass; TODO.md). ATT_X is
+  never aggregated or bootstrapped: on bootstrapped fits the cell `se` is the
+  bootstrap SE while `se_x` stays analytical (`summary()` says so;
+  `to_dataframe()` joins `att_x` / `se_x` at `level="group_time"` only).
+  Calendar-time aggregation is not supported (DEFERRED.md
+  "Calendar-time aggregation").
+- **Note:** ATT_X inference assumptions. The plug-in `mean(ψ_X²)` variance is
+  valid under the same cross-fitting and product-rate conditions as the ATT
+  (Assumption 9-type); under a misspecified parametric nuisance it is the
+  usual DR plug-in approximation, exactly as for the ATT. A degenerate `μ̂_X`
+  cross-fit or a non-finite ATT_X score leaves every ATT_X inference field
+  NaN and never skips the cell.
+- **Note:** Validation scope. (i) `tests/test_methodology_dr_scores.py::TestCCPSScore`:
+  oracle recovery, PAIRED double robustness (`(m, ν)` vs `(p, ω)`; single
+  swaps are not robust), four-direction Neyman orthogonality against
+  purpose-built non-orthogonal comparators, the reduction to
+  `chang_panel_score`, the augmented identity. (ii) `tests/test_methodology_dml_did.py`:
+  numpy oracle of Equation 11 / Algorithm 1 (folds re-derived from the same
+  spawned seed, in-sample nested targets; `rtol=1e-12` on ATT, SE and ATT_X),
+  oracle user learners on the split-half branch (closed-form score mean at
+  1e-12), the Assumption-8 plug-in identity, and the Supplementary Appendix's
+  DGP 1 / DGP 4 (the two the parametric DR is consistent on, Table S1)
+  with seed-pinned recovery of `ATT = 1.00` and `ATT_X = λ = 0.50`, a
+  discriminating naive include-`X_t` contrast, and slow MC coverage;
+  DGPs 2 / 3 / 5 need a flexible-learner fixture (TODO.md). (iii) R
+  `badcontrols` 1.0.0 (commit `651ccc92`; ptetools 1.0.0) black-box goldens
+  (`tests/test_dml_did_bad_controls_parity.py`): `didbc()` cross-fits with its
+  own fold draw (`nfolds=1` errors) and its single-seed fold noise is up to
+  ~0.5 analytical SE on the smallest cells, so both sides are averaged over
+  10 seeds and parity is TOLERANCE-based: `|Δatt| < 0.5 SE_R` per cell and
+  `|se_py/SE_R − 1| < 0.3` on the two `W=[W]` runs and the `W=[Y]` post
+  cells; `W=[Y]` pre cells and the no-bad-control run (R's `dr_ml` path is
+  not the plain Chang score) at 1.0 SE as characterizations. Observed
+  single-seed gaps are ≤ 0.63 SE (cell `(4,4)`, `W=[Y]`, n = 500; both
+  implementations' 10-seed means agree within 0.1 SE there) and SE ratios
+  within 1.25. (iv) `bad_control=None` is the pre-existing code path
+  (dispatch precedes all new code; `TestBadControlAPI` pins bit-identity of
+  every payload).
+
 **Requirements checklist (shipped Case 1 panel + Case 2 RCS staggered lanes):**
 - [x] Neyman-orthogonal Case 1 score (3.1) implemented exactly (Abadie score + mean-zero adjustment; `chang_panel_score`)
 - [x] DML2 cross-fitting: per-cell K-fold partition, nuisances fit on fold complements, never on the evaluation fold
@@ -3221,6 +3454,9 @@ the finite-dimensional `p_0` is handled by the variance correction below.
 - [x] Validation: 2-period DoubleMLDID + staggered per-cell DoubleMLDIDBinary parity spikes (version-pinned, committed, golden literals consumed in-tests) + oracle-nuisance closed-form equivalence + degenerate-cell hand-pipeline equivalence (rtol 1e-14 — BLAS reduces differently-laid-out inputs in platform-dependent order, so bit identity does not hold cross-platform) + Monte Carlo coverage sanity
 - [x] Case 2 (repeated cross sections): Equation 3.2 score + λ-corrected Theorem 2 variance — SHIPPED as `DMLDiD(panel=False)` (`chang_rcs_score` / `chang_rcs_lambda_slope` / `chang_rcs_score_augmented`; equation-level fixtures, oracle closed forms, derivative-identity checks, DR both directions, characterization spike, MC coverage). The paper's own §4.2.2 kernel-design RCS DGP is replicated (`tests/test_methodology_dml_did.py` "Chang Sec. 4.2.2" section: DGP-shape pin, seed-pinned recovery at both paper Ns with a discriminating comparison against the design's confounded unadjusted contrast, slow MC coverage — see the §4.2 replication Note below); the §4.2.1 ML design is not replicable with the bundled learners (narrowed TODO.md row).
 - [ ] Case 3 (multilevel treatment): deferred (`DEFERRED.md`; implementation-required overlap conditions per the paper review's Case 3 caution)
+- [x] Bad-control lane (Caetano et al. 2026 Eq. 10 / 11, Algorithm 1): `ccps_panel_score` / `ccps_panel_score_augmented`, nested `ν̂` / `ω̂` stages (parametric in-sample = Assumption-8 plug-in; split-half otherwise), `ω̂` clip, per-cell `ATT_X(g,t)` diagnostic, panel + `cluster=` only, varying base + `anticipation=0` only (Notes above)
+- [x] Bad-control validation: score-level DR / orthogonality / reduction, numpy Eq. 11 oracle, split-half oracle learners, SA DGP 1 / 4 recovery + MC coverage, R `badcontrols` black-box goldens (tolerance-based; Validation-scope Note)
+- [ ] Bad-control imputation estimator (Section 6.1, Eqs. 5-7, S8 IF), SC "PT for X" variant, Remark-4 overall weighting, ATT_X event study, RCS / anticipation / universal-base / survey lanes: TODO.md / DEFERRED.md rows
 
 ---
 

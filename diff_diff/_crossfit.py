@@ -35,7 +35,7 @@ import copy
 import pickle
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, Literal, Optional, Tuple, cast, overload
+from typing import Any, Dict, Iterator, Literal, NamedTuple, Optional, Tuple, cast, overload
 
 import numpy as np
 import pandas as pd
@@ -53,12 +53,14 @@ __all__ = [
     "CrossFitResult",
     "assign_folds",
     "cross_fit_predict",
+    "FoldFit",
+    "iter_fold_fits",
 ]
 
 _LOG_LOSS_CLIP = 1e-15
 
 
-def _fresh_learner(learner: Any) -> Any:
+def _fresh_learner(learner: Any, *, stacklevel: int) -> Any:
     """Per-fold learner isolation: a deep copy of the (never-fit) template.
 
     ``copy.deepcopy`` of the user's template gives every fold a fully
@@ -70,7 +72,10 @@ def _fresh_learner(learner: Any) -> Any:
     a container parameter). The template itself is never fit. A copy FAILURE
     is never silent: the instance is reused with a loud ``UserWarning`` naming
     the learner and the fit-reset assumption now being relied on
-    (no-silent-failures rule).
+    (no-silent-failures rule). ``stacklevel`` is supplied by the caller so the
+    warning is attributed to the entry point's own caller (``cross_fit_predict``
+    passes the level that lands on the user's call site; internal consumers
+    of ``iter_fold_fits`` pass the level that lands on themselves).
     """
     try:
         return copy.deepcopy(learner)
@@ -80,14 +85,14 @@ def _fresh_learner(learner: Any) -> Any:
         # and this warning lands in notebook/CI logs (the same boundary as
         # DMLDiD's persisted-diagnostics sanitization).
         warnings.warn(
-            f"cross_fit_predict: could not deep-copy the "
+            f"_crossfit: could not deep-copy the "
             f"{type(learner).__name__} template for this fold "
             f"({type(exc).__name__}); "
             "REUSING the same instance and relying on its fit-reset behavior. "
             "A warm-start/stateful learner in this situation can leak data "
             "across folds.",
             UserWarning,
-            stacklevel=3,
+            stacklevel=stacklevel,
         )
         return learner
 
@@ -404,6 +409,314 @@ def assign_folds(
     )
 
 
+class FoldFit(NamedTuple):
+    """One fold's fitted learner plus the index sets it was built from.
+
+    Yielded by :func:`iter_fold_fits`. ``X`` / ``y`` / ``sample_weight`` are the
+    validated, float64-coerced arrays (so consumers index them positionally
+    exactly as :func:`cross_fit_predict` does); ``learner`` is the per-fold
+    deep copy already fit on ``fit_idx``; ``train_idx`` is fold ``k``'s full
+    training complement and ``test_idx`` the held-out fold.
+    """
+
+    k: int
+    learner: Any
+    fit_idx: np.ndarray
+    train_idx: np.ndarray
+    test_idx: np.ndarray
+    n_fit: int
+    w_fit: Optional[np.ndarray]
+    kind: str
+    label: str
+    X: np.ndarray
+    y: np.ndarray
+    sample_weight: Optional[np.ndarray]
+
+
+def _prepare_cross_fit_inputs(
+    learner: object,
+    X: np.ndarray,
+    y: np.ndarray,
+    folds: FoldAssignment,
+    *,
+    fit_mask: Optional[np.ndarray],
+    predict_method: str,
+    sample_weight: Optional[np.ndarray],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray], str]:
+    """Argument validation shared by every cross-fit entry point.
+
+    Own-argument failures raise plain ``ValueError`` (the module contract).
+    """
+    n_units = folds.n_units
+    if predict_method not in ("predict", "predict_proba"):
+        raise ValueError(
+            f"predict_method must be 'predict' or 'predict_proba', got {predict_method!r}"
+        )
+    kind = "regressor" if predict_method == "predict" else "classifier"
+    validate_learner(learner, kind=kind, param_name="learner")
+
+    X = np.asarray(X, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    if X.ndim != 2 or X.shape[0] != n_units:
+        raise ValueError(
+            f"X must be 2-dimensional with folds.n_units={n_units} rows, " f"got shape {X.shape}"
+        )
+    if y.ndim != 1 or y.shape[0] != n_units:
+        raise ValueError(
+            f"y must be 1-dimensional with folds.n_units={n_units} entries, " f"got shape {y.shape}"
+        )
+    if not np.isfinite(X).all():
+        raise ValueError("X contains NaN or Inf values")
+    if not np.isfinite(y).all():
+        raise ValueError("y contains NaN or Inf values")
+
+    if fit_mask is None:
+        fit_mask_arr = np.ones(n_units, dtype=bool)
+    else:
+        raw_mask = np.asarray(fit_mask)
+        if raw_mask.ndim != 1 or raw_mask.shape[0] != n_units:
+            raise ValueError(
+                f"fit_mask must be 1-dimensional with {n_units} entries, "
+                f"got shape {raw_mask.shape}"
+            )
+        if raw_mask.dtype != np.bool_:
+            raise ValueError(
+                f"fit_mask must be a boolean array, got dtype {raw_mask.dtype} "
+                "(an int/float mask would silently select the wrong rows)"
+            )
+        fit_mask_arr = raw_mask
+
+    sw: Optional[np.ndarray] = None
+    if sample_weight is not None:
+        sw = np.asarray(sample_weight, dtype=np.float64)
+        if sw.ndim != 1:
+            raise ValueError(
+                f"sample_weight must be 1-dimensional, got ndim={sw.ndim} "
+                "(a column vector like (n, 1) is not accepted)"
+            )
+        if sw.shape[0] != n_units:
+            raise ValueError(f"sample_weight has length {sw.shape[0]}, expected {n_units}")
+        if not np.isfinite(sw).all():
+            raise ValueError("sample_weight contains NaN or Inf values")
+        if np.any(sw < 0):
+            raise ValueError("sample_weight must be non-negative")
+
+    if predict_method == "predict_proba" and not np.all((y == 0.0) | (y == 1.0)):
+        raise ValueError(
+            "y must be strictly binary 0/1 for predict_method='predict_proba' "
+            "(the logit solver silently saturates on other encodings)"
+        )
+    return X, y, fit_mask_arr, sw, kind
+
+
+def _learner_error(
+    exc: ValueError, *, k: int, label: str, n_fit: int, w_fit: Optional[np.ndarray]
+) -> DegenerateFoldError:
+    return DegenerateFoldError(
+        f"{label}learner error in fold {k}: {exc}; the fold's fit subset "
+        f"has n={n_fit}"
+        + (f", n_pos_weight={int(np.sum(w_fit > 0))}" if w_fit is not None else "")
+        + ". Reduce n_folds, widen fit_mask, or check the fold's data."
+    )
+
+
+def _fit_subset(
+    learner: object,
+    X: np.ndarray,
+    y: np.ndarray,
+    fit_idx: np.ndarray,
+    *,
+    n_train: int,
+    kind: str,
+    sample_weight: Optional[np.ndarray],
+    k: int,
+    label: str,
+    warn_stacklevel: int,
+) -> Tuple[Any, int, Optional[np.ndarray]]:
+    """Fit a fresh deep copy of ``learner`` on ``fit_idx`` (fold ``k``).
+
+    Universal degeneracy pre-checks raise ``DegenerateFoldError`` directly; a
+    learner ``ValueError`` is re-raised as ``DegenerateFoldError`` chained via
+    ``raise ... from exc``; a learner-raised ``DegenerateFoldError`` passes
+    through unwrapped. Returns ``(fitted_learner, n_fit, w_fit)``.
+    """
+    n_fit = int(fit_idx.shape[0])
+    w_fit = None if sample_weight is None else sample_weight[fit_idx]
+
+    # (a) Universal cheap pre-checks -> DegenerateFoldError directly.
+    if n_fit == 0:
+        raise DegenerateFoldError(
+            f"{label}fold {k}: the fit subset is empty (train size "
+            f"{n_train}, fit_mask keeps 0). Reduce n_folds, widen "
+            "fit_mask, or check the stratify labels."
+        )
+    if w_fit is not None and not np.any(w_fit > 0):
+        raise DegenerateFoldError(
+            f"{label}fold {k}: all {n_fit} fit rows have zero sample_weight. "
+            "Reduce n_folds or check the weights."
+        )
+    if kind == "classifier":
+        labels = y[fit_idx] if w_fit is None else y[fit_idx][w_fit > 0]
+        if np.unique(labels).shape[0] < 2:
+            raise DegenerateFoldError(
+                f"{label}fold {k}: the fit subset has a single "
+                f"{'positive-weight ' if w_fit is not None else ''}class "
+                f"(n_fit={n_fit}). A classifier needs both classes in every "
+                "fold's complement; reduce n_folds or stratify by the label."
+            )
+
+    # (b) Learner errors during the fold -> DegenerateFoldError, chained.
+    try:
+        fold_learner = _fresh_learner(learner, stacklevel=warn_stacklevel)
+        # Unweighted path calls fit(X, y) WITHOUT the keyword: the
+        # advertised duck-typed contract is fit/predict(_proba), so a
+        # learner whose fit signature is only (X, y) must work when no
+        # weights are in play. sample_weight= is passed only on
+        # genuinely weighted paths, where an unsupported signature
+        # raises TypeError — a caller protocol violation that PROPAGATES
+        # (the DegenerateFoldError wrapper below catches ValueError
+        # only; fold-data degeneracy, not signature bugs).
+        fit_kwargs = {} if w_fit is None else {"sample_weight": w_fit}
+        if kind == "regressor":
+            cast(RegressorLearner, fold_learner).fit(X[fit_idx], y[fit_idx], **fit_kwargs)
+        else:
+            cast(ClassifierLearner, fold_learner).fit(X[fit_idx], y[fit_idx], **fit_kwargs)
+    except DegenerateFoldError:
+        raise
+    except ValueError as exc:
+        raise _learner_error(exc, k=k, label=label, n_fit=n_fit, w_fit=w_fit) from exc
+    return fold_learner, n_fit, w_fit
+
+
+def _predict_subset(
+    fold_learner: Any,
+    X_rows: np.ndarray,
+    *,
+    kind: str,
+    k: int,
+    label: str,
+    n_fit: int,
+    w_fit: Optional[np.ndarray],
+) -> np.ndarray:
+    """Predict ``X_rows`` with a fitted fold learner and validate the output.
+
+    Same exception contract as :func:`_fit_subset` (chained
+    ``DegenerateFoldError`` on a learner ``ValueError``; pass-through of a
+    learner-raised ``DegenerateFoldError``).
+    """
+    try:
+        if kind == "regressor":
+            raw_pred = cast(RegressorLearner, fold_learner).predict(X_rows)
+        else:
+            raw_pred = cast(ClassifierLearner, fold_learner).predict_proba(X_rows)
+        return _validate_predictions(
+            raw_pred,
+            X_rows.shape[0],
+            kind=kind,
+            context=f"{label}fold {k}",
+            classes=(getattr(fold_learner, "classes_", None) if kind == "classifier" else None),
+        )
+    except DegenerateFoldError:
+        raise
+    except ValueError as exc:
+        raise _learner_error(exc, k=k, label=label, n_fit=n_fit, w_fit=w_fit) from exc
+
+
+def _fold_loss(
+    kind: str, y_test: np.ndarray, pred: np.ndarray, w_test: Optional[np.ndarray]
+) -> float:
+    """Out-of-fold MSE (regressor) or log-loss (classifier); NaN for a zero-weight fold."""
+    if kind == "regressor":
+        errs = (y_test - pred) ** 2
+    else:
+        p_clip = np.clip(pred, _LOG_LOSS_CLIP, 1.0 - _LOG_LOSS_CLIP)
+        errs = -(y_test * np.log(p_clip) + (1.0 - y_test) * np.log(1.0 - p_clip))
+    if w_test is None:
+        return float(np.mean(errs))
+    if np.sum(w_test) > 0:
+        return float(np.sum(w_test * errs) / np.sum(w_test))
+    return float(np.nan)
+
+
+def _iter_fold_fits_impl(
+    learner: object,
+    X: np.ndarray,
+    y: np.ndarray,
+    folds: FoldAssignment,
+    fit_mask_arr: np.ndarray,
+    sample_weight: Optional[np.ndarray],
+    kind: str,
+    label: str,
+    warn_stacklevel: int,
+) -> Iterator[FoldFit]:
+    for k, train_idx, test_idx in folds.iter_folds():
+        fit_idx = train_idx[fit_mask_arr[train_idx]]
+        fitted, n_fit, w_fit = _fit_subset(
+            learner,
+            X,
+            y,
+            fit_idx,
+            n_train=int(train_idx.shape[0]),
+            kind=kind,
+            sample_weight=sample_weight,
+            k=k,
+            label=label,
+            warn_stacklevel=warn_stacklevel,
+        )
+        yield FoldFit(
+            k=k,
+            learner=fitted,
+            fit_idx=fit_idx,
+            train_idx=train_idx,
+            test_idx=test_idx,
+            n_fit=n_fit,
+            w_fit=w_fit,
+            kind=kind,
+            label=label,
+            X=X,
+            y=y,
+            sample_weight=sample_weight,
+        )
+
+
+def iter_fold_fits(
+    learner: object,
+    X: np.ndarray,
+    y: np.ndarray,
+    folds: FoldAssignment,
+    *,
+    fit_mask: Optional[np.ndarray] = None,
+    predict_method: str = "predict",
+    sample_weight: Optional[np.ndarray] = None,
+    context_label: str = "",
+    warn_stacklevel: int = 4,
+) -> Iterator[FoldFit]:
+    """Per-fold fitted learners (the building block under ``cross_fit_predict``).
+
+    Validation runs EAGERLY at the call (not at the first ``__next__``), then
+    the returned iterator yields one :class:`FoldFit` per fold in ascending
+    ``k``, each holding a fresh deep copy of ``learner`` fit on
+    ``train_mask(k) & fit_mask``. Predictions are the caller's job via
+    ``_predict_subset``; this is what lets a consumer fit a NESTED nuisance on
+    fold ``k``'s own training units. ``warn_stacklevel`` is the frame the
+    deep-copy-failure warning is attributed to (default: the frame advancing
+    the iterator).
+    """
+    X64, y64, fit_mask_arr, sw, kind = _prepare_cross_fit_inputs(
+        learner,
+        X,
+        y,
+        folds,
+        fit_mask=fit_mask,
+        predict_method=predict_method,
+        sample_weight=sample_weight,
+    )
+    label = f"{context_label}: " if context_label else ""
+    return _iter_fold_fits_impl(
+        learner, X64, y64, folds, fit_mask_arr, sw, kind, label, warn_stacklevel
+    )
+
+
 @overload
 def cross_fit_predict(
     learner: RegressorLearner,
@@ -451,152 +764,36 @@ def cross_fit_predict(
     ``DegenerateFoldError`` message to identify WHICH cross-fit failed.
     """
     n_units = folds.n_units
-    label = f"{context_label}: " if context_label else ""
-
-    if predict_method not in ("predict", "predict_proba"):
-        raise ValueError(
-            f"predict_method must be 'predict' or 'predict_proba', got {predict_method!r}"
-        )
-    kind = "regressor" if predict_method == "predict" else "classifier"
-    validate_learner(learner, kind=kind, param_name="learner")
-
-    X = np.asarray(X, dtype=np.float64)
-    y = np.asarray(y, dtype=np.float64)
-    if X.ndim != 2 or X.shape[0] != n_units:
-        raise ValueError(
-            f"X must be 2-dimensional with folds.n_units={n_units} rows, " f"got shape {X.shape}"
-        )
-    if y.ndim != 1 or y.shape[0] != n_units:
-        raise ValueError(
-            f"y must be 1-dimensional with folds.n_units={n_units} entries, " f"got shape {y.shape}"
-        )
-    if not np.isfinite(X).all():
-        raise ValueError("X contains NaN or Inf values")
-    if not np.isfinite(y).all():
-        raise ValueError("y contains NaN or Inf values")
-
-    if fit_mask is None:
-        fit_mask_arr = np.ones(n_units, dtype=bool)
-    else:
-        raw_mask = np.asarray(fit_mask)
-        if raw_mask.ndim != 1 or raw_mask.shape[0] != n_units:
-            raise ValueError(
-                f"fit_mask must be 1-dimensional with {n_units} entries, "
-                f"got shape {raw_mask.shape}"
-            )
-        if raw_mask.dtype != np.bool_:
-            raise ValueError(
-                f"fit_mask must be a boolean array, got dtype {raw_mask.dtype} "
-                "(an int/float mask would silently select the wrong rows)"
-            )
-        fit_mask_arr = raw_mask
-
-    if sample_weight is not None:
-        sample_weight = np.asarray(sample_weight, dtype=np.float64)
-        if sample_weight.ndim != 1:
-            raise ValueError(
-                f"sample_weight must be 1-dimensional, got ndim={sample_weight.ndim} "
-                "(a column vector like (n, 1) is not accepted)"
-            )
-        if sample_weight.shape[0] != n_units:
-            raise ValueError(
-                f"sample_weight has length {sample_weight.shape[0]}, expected {n_units}"
-            )
-        if not np.isfinite(sample_weight).all():
-            raise ValueError("sample_weight contains NaN or Inf values")
-        if np.any(sample_weight < 0):
-            raise ValueError("sample_weight must be non-negative")
-
-    if predict_method == "predict_proba" and not np.all((y == 0.0) | (y == 1.0)):
-        raise ValueError(
-            "y must be strictly binary 0/1 for predict_method='predict_proba' "
-            "(the logit solver silently saturates on other encodings)"
-        )
-
     oof = np.empty(n_units, dtype=np.float64)
     fold_losses = np.empty(folds.n_folds, dtype=np.float64)
     n_fit_per_fold = np.empty(folds.n_folds, dtype=np.int64)
 
-    for k, train_idx, test_idx in folds.iter_folds():
-        fit_idx = train_idx[fit_mask_arr[train_idx]]
-        n_fit = fit_idx.shape[0]
-        n_fit_per_fold[k] = n_fit
-        w_fit = None if sample_weight is None else sample_weight[fit_idx]
-
-        # (a) Universal cheap pre-checks -> DegenerateFoldError directly.
-        if n_fit == 0:
-            raise DegenerateFoldError(
-                f"{label}fold {k}: the fit subset is empty (train size "
-                f"{train_idx.shape[0]}, fit_mask keeps 0). Reduce n_folds, widen "
-                "fit_mask, or check the stratify labels."
-            )
-        if w_fit is not None and not np.any(w_fit > 0):
-            raise DegenerateFoldError(
-                f"{label}fold {k}: all {n_fit} fit rows have zero sample_weight. "
-                "Reduce n_folds or check the weights."
-            )
-        if predict_method == "predict_proba":
-            labels = y[fit_idx] if w_fit is None else y[fit_idx][w_fit > 0]
-            if np.unique(labels).shape[0] < 2:
-                raise DegenerateFoldError(
-                    f"{label}fold {k}: the fit subset has a single "
-                    f"{'positive-weight ' if w_fit is not None else ''}class "
-                    f"(n_fit={n_fit}). A classifier needs both classes in every "
-                    "fold's complement; reduce n_folds or stratify by the label."
-                )
-
-        # (b) Learner errors during the fold -> DegenerateFoldError, chained.
-        try:
-            fold_learner = _fresh_learner(learner)
-            # Unweighted path calls fit(X, y) WITHOUT the keyword: the
-            # advertised duck-typed contract is fit/predict(_proba), so a
-            # learner whose fit signature is only (X, y) must work when no
-            # weights are in play. sample_weight= is passed only on
-            # genuinely weighted paths, where an unsupported signature
-            # raises TypeError — a caller protocol violation that PROPAGATES
-            # (the DegenerateFoldError wrapper below catches ValueError
-            # only; fold-data degeneracy, not signature bugs).
-            fit_kwargs = {} if w_fit is None else {"sample_weight": w_fit}
-            if kind == "regressor":
-                reg = cast(RegressorLearner, fold_learner)
-                reg.fit(X[fit_idx], y[fit_idx], **fit_kwargs)
-                raw_pred = reg.predict(X[test_idx])
-            else:
-                clf = cast(ClassifierLearner, fold_learner)
-                clf.fit(X[fit_idx], y[fit_idx], **fit_kwargs)
-                raw_pred = clf.predict_proba(X[test_idx])
-            pred = _validate_predictions(
-                raw_pred,
-                test_idx.shape[0],
-                kind=kind,
-                context=f"{label}fold {k}",
-                classes=(getattr(fold_learner, "classes_", None) if kind == "classifier" else None),
-            )
-        except DegenerateFoldError:
-            raise
-        except ValueError as exc:
-            raise DegenerateFoldError(
-                f"{label}learner error in fold {k}: {exc}; the fold's fit subset "
-                f"has n={n_fit}"
-                + (f", n_pos_weight={int(np.sum(w_fit > 0))}" if w_fit is not None else "")
-                + ". Reduce n_folds, widen fit_mask, or check the fold's data."
-            ) from exc
-
-        oof[test_idx] = pred
-
-        # Out-of-fold loss (diagnostic; NaN sentinel for zero-weight folds).
-        w_test = None if sample_weight is None else sample_weight[test_idx]
-        if predict_method == "predict":
-            errs = (y[test_idx] - pred) ** 2
-        else:
-            p_clip = np.clip(pred, _LOG_LOSS_CLIP, 1.0 - _LOG_LOSS_CLIP)
-            errs = -(y[test_idx] * np.log(p_clip) + (1.0 - y[test_idx]) * np.log(1.0 - p_clip))
-        if w_test is None:
-            fold_losses[k] = float(np.mean(errs))
-        elif np.sum(w_test) > 0:
-            fold_losses[k] = float(np.sum(w_test * errs) / np.sum(w_test))
-        else:
-            fold_losses[k] = np.nan
+    # stacklevel 5: _fresh_learner -> _fit_subset -> generator frame ->
+    # cross_fit_predict -> the user's call site.
+    for ff in iter_fold_fits(
+        learner,
+        X,
+        y,
+        folds,
+        fit_mask=fit_mask,
+        predict_method=predict_method,
+        sample_weight=sample_weight,
+        context_label=context_label,
+        warn_stacklevel=5,
+    ):
+        n_fit_per_fold[ff.k] = ff.n_fit
+        pred = _predict_subset(
+            ff.learner,
+            ff.X[ff.test_idx],
+            kind=ff.kind,
+            k=ff.k,
+            label=ff.label,
+            n_fit=ff.n_fit,
+            w_fit=ff.w_fit,
+        )
+        oof[ff.test_idx] = pred
+        w_test = None if ff.sample_weight is None else ff.sample_weight[ff.test_idx]
+        fold_losses[ff.k] = _fold_loss(ff.kind, ff.y[ff.test_idx], pred, w_test)
 
     return CrossFitResult(
         oof_predictions=oof,

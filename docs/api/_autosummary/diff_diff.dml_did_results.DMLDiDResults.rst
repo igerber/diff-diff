@@ -13,6 +13,7 @@
 
       ~DMLDiDResults.__init__
       ~DMLDiDResults.aggregate
+      ~DMLDiDResults.bad_control_summary
       ~DMLDiDResults.epv_summary
       ~DMLDiDResults.print_summary
       ~DMLDiDResults.summary
@@ -30,6 +31,9 @@
       ~DMLDiDResults.alpha
       ~DMLDiDResults.anticipation
       ~DMLDiDResults.att
+      ~DMLDiDResults.bad_control
+      ~DMLDiDResults.bad_control_covariates
+      ~DMLDiDResults.bad_control_diagnostics
       ~DMLDiDResults.base_period
       ~DMLDiDResults.bootstrap_results
       ~DMLDiDResults.bootstrap_weights

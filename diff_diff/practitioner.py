@@ -544,6 +544,14 @@ def _handle_dml_did(results: Any):
                 "alt = DMLDiD(outcome_learner='sieve', seed=0"
                 + (", panel=False" if getattr(results, "panel", True) is False else "")
                 + (
+                    # Bad-control fits carry the comparison group forward: a
+                    # Proposition 2 not-yet-treated fit must not silently
+                    # revert to the never-treated constructor default.
+                    f", control_group={getattr(results, 'control_group', None)!r}"
+                    if getattr(results, "bad_control", None) is not None
+                    else ""
+                )
+                + (
                     # cluster_name covers bare cluster=, a design-injected
                     # cluster (survey_design without PSU + cluster=), and a
                     # design-owned PSU (where re-passing the same column is a
@@ -559,6 +567,15 @@ def _handle_dml_did(results: Any):
                 + (
                     ",\n    survey_design=...  # the original fit's SurveyDesign"
                     if getattr(results, "survey_metadata", None) is not None
+                    else ""
+                )
+                + (
+                    # Carry the bad-control specification forward so the
+                    # refit targets the same (Caetano et al. 2026) estimand.
+                    f",\n    bad_control={getattr(results, 'bad_control', None)!r},"
+                    f"\n    bad_control_covariates="
+                    f"{list(getattr(results, 'bad_control_covariates', None) or ())!r}"
+                    if getattr(results, "bad_control", None) is not None
                     else ""
                 )
                 + ")\n"

@@ -887,3 +887,362 @@ class TestChangS422MonteCarloCoverage:
         coverage = hits / n_reps
         lo_band, hi_band = (0.90, 0.99) if n_reps >= 100 else (0.80, 1.00)
         assert lo_band <= coverage <= hi_band, coverage
+
+
+# ===========================================================================
+# CCPS (2026) bad-control lane: Supplementary Appendix SD DGPs, numpy oracle
+# of Equation 11 / Algorithm 1, the Assumption-8 plug-in identity, and the
+# split-half branch via oracle user learners (docs/methodology/papers/
+# caetano-2026-review.md, "Monte Carlo evidence" + Section 6.2)
+# ===========================================================================
+#
+# Common SA DGP (review lines 854-880), two periods t = 1, 2 (t* = 2):
+#   Z ~ N(0,1), eta ~ N(0,1), all noise N(0,1) mutually independent
+#   W       = 0.8 eta + 0.3 Z + 0.2 e_W
+#   D       = 1{0.2 Z + 0.4 W + 0.3 eta + e_D > 0}
+#   X_1     = 0.5 eta + 0.4 Z + 0.3 e_X1
+#   X_2(0)  = per DGP (below);  X_2(1) = X_2(0) + lambda, lambda = 0.5
+#   Y_t(0)  = theta_t + 0.5 eta + 0.3 Z + X_t(0) + 0.3 e_Yt, theta_1 = 0.3, theta_2 = 0.6
+#   Y_2(1)  = Y_2(0) + (X_2(1) - X_2(0)) + delta, delta = 0.5
+#   True ATT = delta + lambda = 1.00; true ATT_X = lambda = 0.50.
+# DGP 1: X_2(0) = 0.7 X_1 + 0.3 Z + 0.2 W + 0.15 + 0.3 e   (linear W)
+# DGP 4: X_2(0) =     X_1 + 0.3 Z + 0.2 W + 0.15 + 0.3 e   (PT for the bad control)
+# Table S1 marks the parametric DR estimator consistent on DGPs 1 and 4 only;
+# DGPs 2/3/5 (nonlinear W / X) need a flexible-learner fixture (TODO.md).
+from diff_diff._dr_scores import ccps_panel_score, ccps_panel_score_augmented  # noqa: E402
+
+CCPS_TRUE_ATT = 1.0
+CCPS_TRUE_ATT_X = 0.5
+CCPS_FIT_KW = dict(outcome="y", unit="unit", time="time", first_treat="first_treat")
+
+
+def ccps_two_period_frame(n=1000, dgp=1, seed=0):
+    """SA common DGP in long panel form; cohort 2 treated at period 2."""
+    rng = np.random.default_rng(seed)
+    Z = rng.standard_normal(n)
+    eta = rng.standard_normal(n)
+    W = 0.8 * eta + 0.3 * Z + 0.2 * rng.standard_normal(n)
+    D = ((0.2 * Z + 0.4 * W + 0.3 * eta + rng.standard_normal(n)) > 0).astype(float)
+    X1 = 0.5 * eta + 0.4 * Z + 0.3 * rng.standard_normal(n)
+    e2 = rng.standard_normal(n)
+    if dgp == 1:
+        X2_0 = 0.7 * X1 + 0.3 * Z + 0.2 * W + 0.15 + 0.3 * e2
+    elif dgp == 2:
+        X2_0 = 0.7 * X1 + 0.3 * Z + 0.2 * W + 0.03 * W**2 + 0.15 + 0.3 * e2
+    elif dgp == 3:
+        X2_0 = 0.7 * X1 + 0.3 * Z + 0.4 * X1 * Z + 0.2 * X1**2 + 0.15 + 0.3 * e2
+    elif dgp == 4:
+        X2_0 = X1 + 0.3 * Z + 0.2 * W + 0.15 + 0.3 * e2
+    elif dgp == 5:
+        X2_0 = 0.7 * X1 + 0.3 * Z + 0.2 * W + 0.03 * W**2 + 0.05 * X1 * W + 0.15 + 0.3 * e2
+    else:
+        raise ValueError(dgp)
+    X2_1 = X2_0 + 0.5
+    Y1 = 0.3 + 0.5 * eta + 0.3 * Z + X1 + 0.3 * rng.standard_normal(n)
+    Y2_0 = 0.6 + 0.5 * eta + 0.3 * Z + X2_0 + 0.3 * rng.standard_normal(n)
+    Y2_1 = Y2_0 + (X2_1 - X2_0) + 0.5
+    X2 = np.where(D == 1, X2_1, X2_0)
+    Y2 = np.where(D == 1, Y2_1, Y2_0)
+    rows = []
+    for i in range(n):
+        g = 2 if D[i] == 1 else 0
+        rows.append((i, 1, g, Y1[i], X1[i], Z[i], W[i]))
+        rows.append((i, 2, g, Y2[i], X2[i], Z[i], W[i]))
+    return pd.DataFrame(rows, columns=["unit", "time", "first_treat", "y", "x", "z", "w"])
+
+
+def _ccps_cell_arrays(df, w_cols=("w", "y")):
+    """Hand-built cell arrays in DMLDiD's canonical unit order: R = [xt, xb, Z],
+    S = [xb, W (listed order; 'y' = Y at the base period), Z]."""
+    unit_info = df.groupby("unit")["first_treat"].first()
+    order = unit_info.index
+    D = (unit_info.to_numpy() > 0).astype(float)
+    wide = {
+        c: df.pivot(index="unit", columns="time", values=c).reindex(order)
+        for c in ("y", "x", "z", "w")
+    }
+    dY = wide["y"][2].to_numpy() - wide["y"][1].to_numpy()
+    xt = wide["x"][2].to_numpy()
+    xb = wide["x"][1].to_numpy()
+    Z = wide["z"][1].to_numpy()[:, None]
+    W = (
+        np.column_stack([wide[c][1].to_numpy() for c in w_cols])
+        if w_cols
+        else np.empty((len(D), 0))
+    )
+    R = np.column_stack([xt, xb, Z])
+    S = np.column_stack([xb, W, Z])
+    return D, dY, xt, xb, R, S
+
+
+def _naive_include_xt_contrast(df):
+    """The paper's Section 3.1 'use the bad control' estimand: regression
+    adjustment of dY on (X_t, Z) among controls, evaluated at treated units."""
+    D, dY, xt, xb, R, S = _ccps_cell_arrays(df, w_cols=())
+    Xn = np.column_stack([np.ones(len(D)), xt, S[:, -1]])
+    ctrl = D == 0.0
+    beta, *_ = np.linalg.lstsq(Xn[ctrl], dY[ctrl], rcond=None)
+    return float(np.mean(dY[D == 1.0] - Xn[D == 1.0] @ beta))
+
+
+class TestCCPSFrameShape:
+    """Pin the DGP's defining moments BEFORE any estimator runs (recovery
+    alone passes under plausible mis-codings)."""
+
+    def test_dgp1_moments(self):
+        df = ccps_two_period_frame(n=200_000, dgp=1, seed=1)
+        base = df[df["time"] == 1].set_index("unit")
+        post = df[df["time"] == 2].set_index("unit")
+        w = base["w"].to_numpy()
+        np.testing.assert_allclose(w.mean(), 0.0, atol=0.02)
+        np.testing.assert_allclose(w.var(), 0.64 + 0.09 + 0.04, rtol=0.03)
+        np.testing.assert_allclose((base["first_treat"] > 0).mean(), 0.5, atol=0.01)
+        # X_2(0) coefficients on (X_1, Z, W) among CONTROLS = (0.7, 0.3, 0.2).
+        ctrl = base["first_treat"] == 0
+        Xr = np.column_stack(
+            [np.ones(ctrl.sum()), base.loc[ctrl, "x"], base.loc[ctrl, "z"], base.loc[ctrl, "w"]]
+        )
+        beta, *_ = np.linalg.lstsq(Xr, post.loc[ctrl, "x"].to_numpy(), rcond=None)
+        np.testing.assert_allclose(beta, [0.15, 0.7, 0.3, 0.2], atol=0.02)
+        # Treated units' bad control jumps by lambda = 0.5 relative to controls
+        # with the same (X_1, Z, W).
+        Xt = np.column_stack(
+            [
+                np.ones((~ctrl).sum()),
+                base.loc[~ctrl, "x"],
+                base.loc[~ctrl, "z"],
+                base.loc[~ctrl, "w"],
+            ]
+        )
+        gap = float(np.mean(post.loc[~ctrl, "x"].to_numpy() - Xt @ beta))
+        np.testing.assert_allclose(gap, CCPS_TRUE_ATT_X, atol=0.03)
+
+    def test_dgp4_moments(self):
+        df = ccps_two_period_frame(n=200_000, dgp=4, seed=2)
+        base = df[df["time"] == 1].set_index("unit")
+        post = df[df["time"] == 2].set_index("unit")
+        ctrl = base["first_treat"] == 0
+        Xr = np.column_stack(
+            [np.ones(ctrl.sum()), base.loc[ctrl, "x"], base.loc[ctrl, "z"], base.loc[ctrl, "w"]]
+        )
+        beta, *_ = np.linalg.lstsq(Xr, post.loc[ctrl, "x"].to_numpy(), rcond=None)
+        np.testing.assert_allclose(beta, [0.15, 1.0, 0.3, 0.2], atol=0.02)
+
+
+class TestCCPSNumpyOracle:
+    def test_parametric_lane_matches_hand_algorithm_1(self):
+        """Equation 11 / Algorithm 1 with the parametric (in-sample nested
+        target) convention, folds re-derived from the same spawned seed."""
+        df = ccps_two_period_frame(n=600, dgp=1, seed=3)
+        seed, trim = 9, 0.01
+        res = DMLDiD(seed=seed, pscore_trim=trim).fit(
+            df, **CCPS_FIT_KW, covariates=["z"], bad_control="x", bad_control_covariates=["w", "y"]
+        )
+        D, dY, xt, xb, R, S = _ccps_cell_arrays(df, w_cols=("w", "y"))
+        n = len(D)
+        rng = np.random.default_rng(np.random.SeedSequence(entropy=seed, spawn_key=(0, 1)))
+        folds = assign_folds(n, 5, rng=rng, stratify=D)
+        ctrl = D == 0.0
+        m_hat = np.empty(n)
+        ps_raw = np.empty(n)
+        nu_hat = np.empty(n)
+        om_raw = np.empty(n)
+        for k, train, test in folds.iter_folds():
+            fit_idx = train[ctrl[train]]
+            m_k = LinearLearner().fit(R[fit_idx], dY[fit_idx])
+            p_k = LogitLearner().fit(S[train], D[train])
+            m_hat[test] = m_k.predict(R[test])
+            ps_raw[test] = p_k.predict_proba(S[test])[:, 1]
+            m_tr = m_k.predict(R[fit_idx])
+            p_tr = np.clip(p_k.predict_proba(S[fit_idx])[:, 1], trim, 1 - trim)
+            nu_hat[test] = LinearLearner().fit(S[fit_idx], m_tr).predict(S[test])
+            om_raw[test] = LinearLearner().fit(R[fit_idx], p_tr / (1 - p_tr)).predict(R[test])
+        ps = np.clip(ps_raw, trim, 1 - trim)
+        omega = np.clip(om_raw, 0.0, (1 - trim) / trim)
+        p_hat = float(D.mean())
+        summand = ccps_panel_score(dY, D, m_hat, nu_hat, ps, omega, p_hat)
+        theta = float(np.mean(summand))
+        psi_bar = ccps_panel_score_augmented(summand, D, theta, p_hat)
+        se = float(np.sqrt(np.mean(psi_bar**2) / n))
+        np.testing.assert_allclose(res.att, theta, rtol=1e-12, atol=0)
+        np.testing.assert_allclose(res.se, se, rtol=1e-12, atol=0)
+        # ATT_X: AIPW with mu_X = cross-fitted control regression of xt on S.
+        mu = cross_fit_predict(
+            LinearLearner(), S, xt, folds, predict_method="predict", fit_mask=ctrl
+        )
+        sx = chang_panel_score(xt, D, mu.oof_predictions, ps, p_hat)
+        att_x = float(np.mean(sx))
+        se_x = float(np.sqrt(np.mean(chang_panel_score_augmented(sx, D, att_x, p_hat) ** 2) / n))
+        entry = res.bad_control_diagnostics[(2, 2)]
+        np.testing.assert_allclose(entry["effect"], att_x, rtol=1e-12, atol=0)
+        np.testing.assert_allclose(entry["se"], se_x, rtol=1e-12, atol=0)
+        assert res.cross_fit_diagnostics[(2, 2)]["nested_stage"] == "in_sample"
+
+    def test_gapped_time_grid_uses_preceding_observed_period(self):
+        """Periods relabelled to a gapped grid: the bad control, W and dY are
+        read at the preceding OBSERVED period (positional base), so the fit
+        equals the fit on the unit-spaced labels."""
+        df = ccps_two_period_frame(n=400, dgp=1, seed=8)
+        a = DMLDiD(seed=1).fit(
+            df, **CCPS_FIT_KW, covariates=["z"], bad_control="x", bad_control_covariates=["y"]
+        )
+        gapped = df.replace({"time": {1: 1997, 2: 2003}, "first_treat": {2: 2003}})
+        b = DMLDiD(seed=1).fit(
+            gapped, **CCPS_FIT_KW, covariates=["z"], bad_control="x", bad_control_covariates=["y"]
+        )
+        assert a.att == b.att and a.se == b.se
+        assert (
+            b.bad_control_diagnostics[(2003, 2003)]["effect"]
+            == a.bad_control_diagnostics[(2, 2)]["effect"]
+        )
+
+
+class TestCCPSPlugInIdentity:
+    def test_native_nested_stage_is_assumption_8_plug_in(self):
+        """Per fold, OLS of the in-sample fitted R'beta on S among training
+        controls equals beta_1 * OLS(xt ~ S) + beta_2 xb + beta_3 Z (Section 6.1
+        plug-in), because xb and Z are columns of S."""
+        df = ccps_two_period_frame(n=500, dgp=1, seed=5)
+        D, dY, xt, xb, R, S = _ccps_cell_arrays(df, w_cols=("w",))
+        n = len(D)
+        folds = assign_folds(n, 5, rng=np.random.default_rng(0), stratify=D)
+        est = DMLDiD(seed=0)
+        _, _, nu_hat, _, stage = est._ccps_nuisances(
+            R, S, dY, D, folds, np.random.default_rng(1), None, False, "identity"
+        )
+        assert stage["nested_stage"] == "in_sample"
+        ctrl = D == 0.0
+        nu_hand = np.empty(n)
+        for k, train, test in folds.iter_folds():
+            fit_idx = train[ctrl[train]]
+            Rc = np.column_stack([np.ones(fit_idx.size), R[fit_idx]])
+            beta, *_ = np.linalg.lstsq(Rc, dY[fit_idx], rcond=None)
+            Sc = np.column_stack([np.ones(fit_idx.size), S[fit_idx]])
+            gamma, *_ = np.linalg.lstsq(Sc, xt[fit_idx], rcond=None)
+            S_test = np.column_stack([np.ones(test.size), S[test]])
+            xt_proj = S_test @ gamma
+            # R = [xt, xb, Z]; S = [xb, w, Z] -> xb = S[:, 0], Z = S[:, -1]
+            nu_hand[test] = (
+                beta[0] + beta[1] * xt_proj + beta[2] * S[test, 0] + beta[3] * S[test, -1]
+            )
+        np.testing.assert_allclose(nu_hat, nu_hand, rtol=0, atol=1e-10)
+
+
+class TestCCPSOracleLearnersSplitHalf:
+    def test_oracle_user_learners_match_closed_form(self):
+        """Foreign (oracle) learners take the split-half branch; with exact
+        nuisances the two half-models coincide and the fit equals the
+        closed-form score mean. DGP: xt(0) = 0.7 xb + 0.3 Z + e, m0 = xt (so
+        nu0 = mu_X = 0.7 xb + 0.3 Z), p(S) = expit(0.5 xb + 0.3 Z) on S = (xb, Z)
+        (W empty), so omega0(R) = exp(0.5 xb + 0.3 Z) exactly."""
+        rng = np.random.default_rng(12)
+        n = 800
+        xb = rng.standard_normal(n)
+        Z = rng.standard_normal(n)
+        p = 1 / (1 + np.exp(-(0.5 * xb + 0.3 * Z)))
+        D = (rng.uniform(size=n) < p).astype(float)
+        xt0 = 0.7 * xb + 0.3 * Z + 0.3 * rng.standard_normal(n)
+        xt = xt0 + 0.5 * D
+        y0 = rng.standard_normal(n)
+        dY = xt0 + 1.0 * D + 0.4 * rng.standard_normal(n)
+        rows = []
+        for i in range(n):
+            g = 2 if D[i] else 0
+            rows.append((i, 1, g, y0[i], xb[i], Z[i]))
+            rows.append((i, 2, g, y0[i] + dY[i], xt[i], Z[i]))
+        df = pd.DataFrame(rows, columns=["unit", "time", "first_treat", "y", "x", "z"])
+
+        class OracleProp:
+            def fit(self, X, y, sample_weight=None):
+                return self
+
+            def predict_proba(self, X):  # S = [xb, Z]
+                q = 1 / (1 + np.exp(-(0.5 * X[:, 0] + 0.3 * X[:, 1])))
+                return np.column_stack([1 - q, q])
+
+        class OracleReg:
+            omega = False
+
+            def fit(self, X, y, sample_weight=None):
+                # omega targets (odds) are strictly positive; dY / xt are not.
+                self.omega = X.shape[1] == 3 and bool(np.all(y > 0))
+                return self
+
+            def predict(self, X):
+                if X.shape[1] == 2:  # nu0(S) == mu_X(S)
+                    return 0.7 * X[:, 0] + 0.3 * X[:, 1]
+                if self.omega:  # omega0(R) with R = [xt, xb, Z]
+                    return np.exp(0.5 * X[:, 1] + 0.3 * X[:, 2])
+                return X[:, 0]  # m0(R) = xt
+
+        trim = 0.01
+        res = DMLDiD(
+            propensity_learner=OracleProp(), outcome_learner=OracleReg(), seed=0, pscore_trim=trim
+        ).fit(df, **CCPS_FIT_KW, covariates=["z"], bad_control="x")
+        assert res.cross_fit_diagnostics[(2, 2)]["nested_stage"] == "split_half"
+        ps = np.clip(p, trim, 1 - trim)
+        omega = np.clip(np.exp(0.5 * xb + 0.3 * Z), 0.0, (1 - trim) / trim)
+        p_hat = float(D.mean())
+        summand = ccps_panel_score(dY, D, xt, 0.7 * xb + 0.3 * Z, ps, omega, p_hat)
+        theta = float(np.mean(summand))
+        se = float(np.sqrt(np.mean(ccps_panel_score_augmented(summand, D, theta, p_hat) ** 2) / n))
+        np.testing.assert_allclose(res.att, theta, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(res.se, se, rtol=0, atol=1e-12)
+        sx = chang_panel_score(xt, D, 0.7 * xb + 0.3 * Z, ps, p_hat)
+        np.testing.assert_allclose(
+            res.bad_control_diagnostics[(2, 2)]["effect"], float(np.mean(sx)), rtol=0, atol=1e-12
+        )
+
+
+class TestCCPSRecovery:
+    """Seed-pinned recovery on SA DGPs 1 and 4 (parametric DR: Tables S2 / S5)."""
+
+    @pytest.mark.parametrize("dgp,seed", [(1, 101), (1, 102), (4, 103), (4, 104)])
+    def test_att_and_att_x_recovery(self, dgp, seed):
+        df = ccps_two_period_frame(n=2000, dgp=dgp, seed=seed)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = DMLDiD(seed=seed).fit(
+                df, **CCPS_FIT_KW, covariates=["z"], bad_control="x", bad_control_covariates=["w"]
+            )
+        err = abs(res.att - CCPS_TRUE_ATT)
+        assert err < 3 * res.se, (res.att, res.se)
+        assert err < 0.15, (res.att, res.se)
+        # Discriminating assertion: the naive 'include X_t' contrast is biased
+        # (Section 3.1; the paper's TWFE-with-bad-control column carries the
+        # full -lambda = -0.50 bias, the regression-adjusted contrast here a
+        # partial share of it because X_t enters through a fitted slope).
+        naive_err = abs(_naive_include_xt_contrast(df) - CCPS_TRUE_ATT)
+        assert err < naive_err and naive_err > 0.1, (err, naive_err)
+        entry = res.bad_control_diagnostics[(2, 2)]
+        assert abs(entry["effect"] - CCPS_TRUE_ATT_X) < 3 * entry["se"], entry
+        assert abs(entry["effect"] - CCPS_TRUE_ATT_X) < 0.1, entry
+
+
+@pytest.mark.slow
+class TestCCPSMonteCarloCoverage:
+    @pytest.mark.parametrize("dgp", [1, 4])
+    def test_coverage_sanity(self, ci_params, dgp):
+        # Sanity check, not a calibration claim; band conditional on the
+        # scaled rep count (Tables S2 / S5 report ~0.95 for the parametric DR).
+        n_reps = ci_params.bootstrap(200)
+        hits_att = 0
+        hits_x = 0
+        for rep in range(n_reps):
+            df = ccps_two_period_frame(n=500, dgp=dgp, seed=50_000 + rep)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                res = DMLDiD(seed=rep).fit(
+                    df,
+                    **CCPS_FIT_KW,
+                    covariates=["z"],
+                    bad_control="x",
+                    bad_control_covariates=["w"],
+                )
+            lo, hi = res.conf_int
+            hits_att += int(lo <= CCPS_TRUE_ATT <= hi)
+            ci = res.bad_control_diagnostics[(2, 2)]["conf_int"]
+            hits_x += int(ci[0] <= CCPS_TRUE_ATT_X <= ci[1])
+        lo_band, hi_band = (0.90, 0.99) if n_reps >= 100 else (0.80, 1.00)
+        assert lo_band <= hits_att / n_reps <= hi_band, hits_att / n_reps
+        assert lo_band <= hits_x / n_reps <= hi_band, hits_x / n_reps

@@ -577,7 +577,10 @@ The six scenarios above cover the most common business use cases.
   λ-corrected variance). Survey/cluster support on both lanes:
   ``survey_design=`` (pweight full-design TSL or replicate weights via
   IF-reweighting — a documented library extension of Chang's i.i.d.
-  theory) and coarser-than-unit ``cluster=``.
+  theory) and coarser-than-unit ``cluster=``. A covariate that treatment
+  can affect (a "bad control") goes in ``fit(bad_control=...)`` for the
+  Caetano et al. (2026) orthogonal score and the ``ATT_X(g,t)`` pre-test
+  (panel only, ``cluster=`` only).
 
 For the full academic decision tree with all estimators, see :doc:`choosing_estimator`.
 
