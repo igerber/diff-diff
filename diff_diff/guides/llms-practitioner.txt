@@ -670,9 +670,13 @@ Executed end-to-end examples: tutorials 29 (PyMC-Marketing lift test) and
    paper's covariate-unconfoundedness approach, which allows treatment to
    affect the control's path: `DMLDiD(...).fit(..., bad_control="x",
    bad_control_covariates=[outcome])` (a `fit()` argument, never a
-   constructor argument), then check `results.bad_control_summary()` -
-   a nonzero ATT_X in pre-periods is one-sided evidence the covariate is
-   a bad control. Time-invariant covariates are always safe.
+   constructor argument), then read `results.bad_control_summary()` by
+   period: nonzero PRE-period ATT_X (t < g) indicates a possible MP-5 /
+   MP-8 violation (the identifying assumptions for the bad control's
+   untreated evolution; these rows should be zero), while nonzero
+   POST-period ATT_X (t >= g) is evidence that treatment affects the
+   covariate (Condition 2) - a zero value does not establish the
+   converse. Time-invariant covariates are always safe.
 
 4. **Ignoring sensitivity analysis**: Without HonestDiD or placebo tests,
    you cannot assess how robust your results are to assumption violations.

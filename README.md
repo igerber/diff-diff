@@ -126,7 +126,7 @@ Full guide: `diff_diff.get_llm_guide("practitioner")`.
 
 ## Diagnostics & Sensitivity
 
-- [Bad-control pre-test](https://diff-diff.readthedocs.io/en/stable/api/dml_did.html) - Caetano, Callaway, Payne & Sant'Anna (2026) Remark 6 `ATT_X(g,t)`: the effect of treatment on a suspected bad control itself, per (g,t) cell (`DMLDiDResults.bad_control_summary()`; analytical SE, one-sided evidence that a covariate is a bad control)
+- [Bad-control pre-test](https://diff-diff.readthedocs.io/en/stable/api/dml_did.html) - Caetano, Callaway, Payne & Sant'Anna (2026) Remark 6 `ATT_X(g,t)`: the effect of treatment on a suspected bad control itself, per (g,t) cell (`DMLDiDResults.bad_control_summary()`; analytical SE; pre-period rows pre-test the identifying assumptions MP-5 / MP-8 and should be zero, post-period rows are the Condition-2 check that treatment affects the covariate)
 - [RD Plots](https://diff-diff.readthedocs.io/en/stable/api/regression_discontinuity.html) - Calonico, Cattaneo & Titiunik (2015) optimal data-driven RD plots (`RDPlot`): all 8 rdrobust `binselect` bin selectors, implied-scale/WIMSE-weight reporting, optional matplotlib rendering
 - [Manipulation Testing](https://diff-diff.readthedocs.io/en/stable/api/regression_discontinuity.html) - Cattaneo, Jansson & Ma (2020) density-discontinuity test (`RDDensityTest`): rddensity 3.0 parity, robust bias-corrected inference, unrestricted/restricted models, mass-point adjustment
 - [Parallel Trends Testing](https://diff-diff.readthedocs.io/en/stable/api/diagnostics.html) - simple and Wasserstein-robust parallel trends tests, equivalence testing (TOST)

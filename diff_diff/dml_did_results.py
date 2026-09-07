@@ -119,7 +119,9 @@ class DMLDiDResults(CallawaySantAnnaResults):
         without ``W``; ``None`` on plain fits.
     bad_control_diagnostics : dict, optional
         Per-``(g, t)`` ``ATT_X(g, t)`` pre-test (Remark 6): the AIPW
-        mean-effect of treatment on the bad control at ``t`` with keys
+        mean-effect of treatment on the bad control at ``t`` (pre-period
+        cells assess MP-5 / MP-8 and should be zero; post-period cells check
+        that treatment affects the covariate) with keys
         ``effect``/``se``/``t_stat``/``p_value``/``conf_int``/``n_treated``/
         ``n_control``. Analytical SE only (never bootstrapped or
         aggregated). Retained cells only; ``None`` on plain fits. Read

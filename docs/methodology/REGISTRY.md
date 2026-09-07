@@ -3298,10 +3298,15 @@ the conditioning set (the paper's p. 31 application form), and estimated as
 the AIPW `chang_panel_score(xt, D, μ̂_X, p̂, π̂)` with `μ̂_X` the cross-fitted
 control regression of `xt` on `S`; SE from its own augmented-score payload
 through the same branch (and the same `df`) as the ATT. It is a MEAN-effect
-diagnostic: one-sided evidence for Condition 2 (a nonzero ATT_X shows the
-control is bad), silent on Condition 1; a zero ATT_X is not evidence that the
-control is good (review lines 100-103). Pre-period cells give the MP-5 / MP-8
-pre-test. Not the SC / S17 "parallel trends for X" estimand.
+diagnostic whose reading depends on the period (Remark 6, review lines
+100-103 and 126-130): POST-period cells (`t ≥ g`) are one-sided evidence for
+Condition 2 (a nonzero post-period ATT_X shows treatment affects the
+control), silent on Condition 1, and a zero value is not evidence that the
+control is good; PRE-period cells (`t < g`) are the pre-test of the
+identifying assumptions MP-5 / MP-8 (covariate unconfoundedness for the bad
+control's untreated evolution) and should be zero - a nonzero pre-period
+ATT_X flags a possible violation of those assumptions, NOT a bad control.
+Not the SC / S17 "parallel trends for X" estimand.
 
 - **Note:** Nested-stage convention. The paper's Algorithm 1 leaves the
   nested pseudo-outcome construction to the practitioner (footnote 9 warns

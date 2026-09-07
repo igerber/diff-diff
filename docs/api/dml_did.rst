@@ -118,7 +118,11 @@ half (footnote 9). The variance is the same augmented-score plug-in as the
 plain lane. Each cell also reports :math:`\widehat{ATT}_X(g,t)`, the
 paper's Remark 6 pre-test (the effect of treatment on the bad control
 itself, an AIPW mean-effect diagnostic with its own analytical SE), via
-``results.bad_control_summary()``. Restrictions: panel lane only, bare
+``results.bad_control_summary()``: pre-period rows (:math:`t < g`) assess
+the identifying assumptions MP-5 / MP-8 and should be zero (a nonzero
+value flags a possible violation), post-period rows (:math:`t \ge g`) are
+the Condition-2 check (a nonzero value is evidence treatment affects the
+covariate; a zero value does not establish the converse). Restrictions: panel lane only, bare
 ``cluster=`` only (``survey_design=`` raises), ``anticipation=0`` and
 ``base_period='varying'`` only. The headline ``att`` keeps the CS
 "simple" weighting, not the paper's Remark 4 overall. Validated against
@@ -191,7 +195,8 @@ comparison group:
        bad_control_covariates=["y"],
    )
    print(bc.summary())
-   print(bc.bad_control_summary())   # per-cell ATT_X(g, t): the paper's pre-test
+   print(bc.bad_control_summary())   # per-cell ATT_X(g, t): pre-period rows should be ~0 (MP-5 / MP-8);
+                                     # nonzero post-period rows = treatment moves the covariate
 
 Learner configuration
 ---------------------

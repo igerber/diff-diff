@@ -688,8 +688,10 @@ insensitive to the nuisance learners' regularization bias.
   ``covariates``), optionally with ``bad_control_covariates=[outcome]``;
   the cell score becomes the paper's orthogonal doubly-robust score and
   ``results.bad_control_summary()`` reports the per-cell ``ATT_X(g,t)``
-  pre-test. Panel only, bare ``cluster=`` only, ``anticipation=0`` and
-  the varying base only.
+  pre-test (pre-period rows should be zero - they assess MP-5 / MP-8;
+  nonzero post-period rows show treatment affects the covariate). Panel
+  only, bare ``cluster=`` only, ``anticipation=0`` and the varying base
+  only.
 
 **vs Callaway-Sant'Anna**: same cell architecture and aggregation surface;
 DMLDiD replaces CS's parametric nuisances with cross-fitted ML learners —

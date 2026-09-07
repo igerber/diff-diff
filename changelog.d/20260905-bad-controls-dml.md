@@ -13,7 +13,8 @@
   (footnote 9); `omega` clipped to `[0, (1-trim)/trim]` with a warning. Every cell also
   reports the paper's Remark 6 pre-test `ATT_X(g,t)` (the effect of treatment on the bad
   control itself, an AIPW mean-effect diagnostic with its own analytical SE, sharing the
-  ATT's cluster / df branch) via `results.bad_control_summary()` /
+  ATT's cluster / df branch; pre-period rows pre-test MP-5 / MP-8 and should be zero,
+  post-period rows check that treatment affects the covariate) via `results.bad_control_summary()` /
   `results.bad_control_diagnostics`, with `att_x` / `se_x` joined into
   `to_dataframe()` and new `summary()` header lines. Panel lane only, bare `cluster=`
   only (`survey_design=` raises), `anticipation=0` and `base_period="varying"` only;
