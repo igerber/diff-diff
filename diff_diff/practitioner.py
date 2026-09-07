@@ -76,8 +76,11 @@ def _estimator_display(type_name: str, results: Any) -> str:
 
     ``ChangesInChangesResults`` is shared by CiC and QDiD (``QDiDResults``
     is an alias), so the static per-type map cannot distinguish them; the
-    ``method`` field ("cic"/"qdid") does. Defensive: mock results may
-    lack the field, in which case the static entry is the fallback.
+    ``method`` field ("cic"/"qdid") does. ``DMLDiDResults`` likewise
+    serves two lanes: a fit with ``bad_control`` set runs the Caetano,
+    Callaway, Payne & Sant'Anna (2026) bad-control score and is named for
+    it, the plain fit keeps the Chang (2020) label. Defensive: mock results
+    may lack the fields, in which case the static entry is the fallback.
     """
     if type_name == "ChangesInChangesResults":
         kind = _distributional_kind(results)
@@ -85,6 +88,10 @@ def _estimator_display(type_name: str, results: Any) -> str:
             return "ChangesInChanges (CiC)"
         if kind == "qdid":
             return "QDiD"
+    if type_name == "DMLDiDResults" and getattr(results, "bad_control", None) is not None:
+        # The bad-control lane runs the Caetano, Callaway, Payne & Sant'Anna
+        # (2026) score, not Chang's; the results banner says the same.
+        return "DMLDiD (CCPS 2026 bad-control score)"
     return _ESTIMATOR_NAMES.get(type_name, type_name)
 
 

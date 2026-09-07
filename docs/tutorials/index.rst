@@ -1,5 +1,5 @@
 .. meta::
-   :description: Hands-on diff-diff tutorials — 33 Jupyter notebooks covering basic 2x2 DiD, staggered adoption, synthetic DiD, power analysis, and business applications.
+   :description: Hands-on diff-diff tutorials — 34 Jupyter notebooks covering basic 2x2 DiD, staggered adoption, synthetic DiD, power analysis, and business applications.
    :keywords: DiD tutorial, difference-in-differences examples, causal inference notebooks
 
 Tutorials
@@ -252,6 +252,14 @@ Modern estimators for designs the basic toolkit cannot handle.
       Cross-fitted ML nuisances for nonlinear confounding - watch a
       misspecified linear model fail where the sieve recovers the truth.
 
+   .. grid-item-card:: Bad Controls (Caetano et al.)
+      :link: 33_bad_controls
+      :link-type: doc
+
+      Covariates that treatment can change: the include-at-t bias,
+      Approach 1 via base-period covariates, the DMLDiD bad-control
+      lane, and reading the ATT_X pre-test.
+
 
 .. toctree::
    :maxdepth: 1
@@ -270,6 +278,7 @@ Modern estimators for designs the basic toolkit cannot handle.
    Regression Discontinuity (RDD) <28_rdd_scholarship_illusion>
    LWDiD Rolling Transformations <31_lwdid>
    Double ML DiD (Chang 2020) <32_dml_did>
+   Bad Controls (Caetano et al.) <33_bad_controls>
 
 Study Design
 ------------

@@ -186,6 +186,13 @@ Chang (2020) double/debiased machine learning DiD: cross-fitted ML nuisances on 
 - The repeated-cross-section lane (`panel=False`) with a `SurveyDesign` (PSU-cohesive folds, design-df t inference)
 - Companion drift-test file (`tests/test_t32_dml_did_drift.py`)
 
+### 33. Bad Controls (`33_bad_controls.ipynb`)
+Caetano, Callaway, Payne & Sant'Anna (2026) "bad controls" - covariates that treatment can change - on a staggered version of the paper's DGP 1:
+- The naive TWFE regression with the bad control at `t` misses by the full treatment effect on the covariate (the paper's `tau^use` bias)
+- Approach 1 (the pre-treatment bad control as a base-period covariate) with and without the confounders `W`
+- The `DMLDiD` bad-control lane (`fit(bad_control=, bad_control_covariates=)`), the choice of `W` (Remark 5's lagged outcome), reading `bad_control_summary()` (pre rows pre-test MP-5/MP-8, post rows check that treatment moves the covariate), a ridge refit through the split-half nested stage, and the lane's restrictions
+- Companion drift-test file (`tests/test_t33_bad_controls_drift.py`)
+
 ## Running the Notebooks
 
 1. Install diff-diff with dependencies:

@@ -119,6 +119,8 @@ The site is organized into 5 sections, each with a landing page:
 - [16 Wooldridge ETWFE](https://diff-diff.readthedocs.io/en/stable/tutorials/16_wooldridge_etwfe.html): Wooldridge (2023, 2025) ETWFE — saturated OLS, logit/Poisson (ASF-based ATT), aggregation types
 - [22 HAD Survey-Weighted Workflow](https://diff-diff.readthedocs.io/en/stable/tutorials/22_had_survey_design.html): HeterogeneousAdoptionDiD + did_had_pretest_workflow under SurveyDesign(strata, psu, weights, fpc) — BRFSS-shape panel, modest SE inflation explanation, Phase 4.5 C0 QUG-deferred verdict
 - [26 Composition Drift & Calibration](https://diff-diff.readthedocs.io/en/stable/tutorials/26_composition_drift_calibration.html): When differential non-response biases the DiD itself — per-state raking with Meta's balance package, `balance.interop.diff_diff` adapter, raking-granularity lesson (requires `pip install balance`)
+- [32 Double ML DiD](https://diff-diff.readthedocs.io/en/stable/tutorials/32_dml_did.html): Chang (2020) DMLDiD — cross-fitted ML nuisances on a staggered panel with nonlinear confounding, learner comparison, cross-fitting diagnostics, event study + HonestDiD, the repeated-cross-section lane with a survey design
+- [33 Bad Controls](https://diff-diff.readthedocs.io/en/stable/tutorials/33_bad_controls.html): Caetano, Callaway, Payne & Sant'Anna (2026) bad controls — the include-at-t bias, Approach 1 via base-period covariates (with and without W), the DMLDiD bad-control lane (`fit(bad_control=, bad_control_covariates=)`), reading `bad_control_summary()` (pre rows pre-test MP-5/MP-8, post rows check treatment moves the covariate), ridge refit via the split-half nested stage
 
 ## Survey Support
 

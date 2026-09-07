@@ -2813,6 +2813,11 @@ class TestBadControlAPI:
         )
 
         out = practitioner_next_steps(bc_fitted, verbose=False)
+        assert out["estimator"] == "DMLDiD (CCPS 2026 bad-control score)"
+        assert (
+            practitioner_next_steps(fitted, verbose=False)["estimator"]
+            == "DMLDiD (Chang 2020 double/debiased ML)"
+        )
         step = next(s for s in out["next_steps"] if "alt = DMLDiD(" in (s.get("code") or ""))
         code = step["code"]
         fit_part = code.split(".fit(", 1)[1]
