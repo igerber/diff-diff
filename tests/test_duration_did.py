@@ -236,6 +236,44 @@ class TestFitValidation:
         with pytest.raises(ValueError, match="Unbalanced panel"):
             fit_quiet(DurationDiD(n_bootstrap=0), df, last_pre_period=3)
 
+    @pytest.mark.parametrize("method", ["cd", "ph"])
+    @pytest.mark.parametrize("ordered", [False, True])
+    @pytest.mark.parametrize("string_units", [False, True])
+    def test_unused_categorical_units_match_observed_panel(self, method, ordered, string_units):
+        # Filtering a categorical identifier need not remove its unused levels.
+        # Category order and unobserved identifiers must not affect the sample
+        # or its seeded whole-individual bootstrap.
+        df = simulate_panel()
+        if string_units:
+            df["unit"] = df["unit"].map(lambda value: f"unit-{value:04d}")
+        reference = fit_quiet(
+            DurationDiD(method=method, n_bootstrap=60, seed=3), df, last_pre_period=4
+        )
+        unused = "unused-unit" if string_units else -1
+        categories = [unused, *reversed(df["unit"].unique().tolist())]
+        df["unit"] = pd.Categorical(df["unit"], categories=categories, ordered=ordered)
+        original = df.copy(deep=True)
+        result = fit_quiet(
+            DurationDiD(method=method, n_bootstrap=60, seed=3), df, last_pre_period=4
+        )
+        pd.testing.assert_frame_equal(df, original)
+        assert result.n_units == reference.n_units == 800
+        assert result.n_treated == reference.n_treated == 400
+        assert result.n_control == reference.n_control == 400
+        assert result.inference_status == reference.inference_status == "ok"
+        assert result.att == reference.att and result.se == reference.se
+        np.testing.assert_array_equal(result.att_by_period, reference.att_by_period)
+        np.testing.assert_array_equal(result.vcov, reference.vcov)
+        np.testing.assert_array_equal(result.bootstrap_effects, reference.bootstrap_effects)
+        np.testing.assert_array_equal(result.pretest.contrast, reference.pretest.contrast)
+        np.testing.assert_array_equal(result.pretest.se, reference.pretest.se)
+
+    def test_unused_categories_do_not_hide_missing_cells(self):
+        df = micro_panel()
+        df["unit"] = pd.Categorical(df["unit"], categories=[-1, *df["unit"].unique()])
+        with pytest.raises(ValueError, match=r"Unbalanced panel:.*1 unit\(s\)"):
+            fit_quiet(DurationDiD(n_bootstrap=0), df.iloc[1:], last_pre_period=3)
+
     def test_unequal_spacing(self):
         df = micro_panel(times=[1, 2, 3, 5, 6])
         with pytest.raises(ValueError, match="equally spaced"):

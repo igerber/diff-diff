@@ -214,7 +214,7 @@ def _validate_and_arrange(
             f"DurationDiD requires exactly one row per (unit, period); found duplicate "
             f"({unit!r}, {time!r}) combinations"
         )
-    counts = data.groupby(unit, sort=True)[time].size()
+    counts = data.groupby(unit, sort=True, observed=True)[time].size()
     n_periods = len(grid)
     incomplete = counts[counts != n_periods]
     if len(incomplete) > 0:

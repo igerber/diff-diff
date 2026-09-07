@@ -22,6 +22,7 @@
   inference family is either fully available or fully withheld with a named
   `inference_status` (invalid imputed counterfactual curve, failed bootstrap
   draws, zero SE); failed draws are never retried or silently dropped.
+  Unused categorical unit levels are excluded from panel balance checks.
   `results.aggregate("event_study")` returns the unified `EventStudyResults`
   container (event time 0 = first post-treatment date, reference -1).
   Covariates, staggered adoption, censoring, survey and cluster inference are
