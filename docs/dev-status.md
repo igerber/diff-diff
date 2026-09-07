@@ -59,7 +59,7 @@ Target: ideally < 1000 lines per module; modules ≥3000 lines are candidates fo
 | `datasets.py` | 1224 | Acceptable |
 | `rdd.py` | 1218 | Acceptable |
 | `staggered_aggregation.py` | 1204 | Acceptable |
-| `duration_did.py` | 1239 | Acceptable — validation + numerical core + bootstrap + inference assembly in one module (results split into `duration_did_results.py`) |
+| `duration_did.py` | 1256 | Acceptable — validation + numerical core + bootstrap + inference assembly in one module (results split into `duration_did_results.py`) |
 | `chaisemartin_dhaultfoeuille_bootstrap.py` | 1175 | Acceptable |
 | `conley.py` | 1140 | Acceptable |
 | `rdplot.py` | 1135 | Acceptable |

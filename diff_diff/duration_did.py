@@ -114,6 +114,19 @@ def _validate_draws(n_bootstrap: Any) -> None:
         )
 
 
+def _validate_all_params(params: Dict[str, Any]) -> None:
+    """Validate the full hyperparameter dict (used by ``__init__`` and ``fit``).
+
+    ``fit()`` re-runs this on ``get_params()`` before touching the data, so a
+    direct attribute mutation after construction (``est.method = "typo"``)
+    raises instead of silently selecting an estimation branch.
+    """
+    _validate_method(params["method"])
+    _validate_draws(params["n_bootstrap"])
+    _validate_alpha(params["alpha"])
+    _validate_seed(params["seed"])
+
+
 # =============================================================================
 # Numerical core (pure numpy; a leading draw axis where noted)
 # =============================================================================
@@ -362,10 +375,12 @@ def _estimate_from_survival(
             H2 = D2[:, fit_idx] / e_fit
             c = (H1 - H2) @ w
             R0 = R1[:, :1] + D2 + elapsed[None, :] * c[:, None]
-        else:
+        elif method == "ph":
             ratio = D1[:, fit_idx] / D2[:, fit_idx]
             c = ratio @ w
             R0 = R1[:, :1] + c[:, None] * D2
+        else:  # pragma: no cover - fit() validates method first
+            raise ValueError(f"method must be 'cd' or 'ph', got {method!r}")
         S0 = np.exp(-R0)
         tau = S0 - S1
     return c, R0, S0, tau
@@ -862,10 +877,9 @@ class DurationDiD(BaseEstimator):
         alpha: float = 0.05,
         seed: Optional[int] = None,
     ):
-        _validate_method(method)
-        _validate_draws(n_bootstrap)
-        _validate_alpha(alpha)
-        _validate_seed(seed)
+        _validate_all_params(
+            {"method": method, "n_bootstrap": n_bootstrap, "alpha": alpha, "seed": seed}
+        )
         self.method = method
         self.n_bootstrap = n_bootstrap
         self.alpha = alpha
@@ -919,6 +933,9 @@ class DurationDiD(BaseEstimator):
         -------
         DurationDiDResults
         """
+        # Re-validate the configuration BEFORE any data work: attributes can
+        # be mutated directly after construction (bypassing set_params).
+        _validate_all_params(self.get_params())
         method = self.method
         arranged = _validate_and_arrange(data, outcome, unit, time, treatment, last_pre_period)
         Y: np.ndarray = arranged["Y"]

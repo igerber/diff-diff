@@ -153,6 +153,38 @@ class TestParamSurface:
         est.set_params(method="ph")
         assert est.method == "ph"
 
+    @pytest.mark.parametrize(
+        "attr, bad, msg",
+        [
+            ("method", "typo", "method must be 'cd' or 'ph'"),
+            ("method", "PH", "method must be 'cd' or 'ph'"),
+            ("n_bootstrap", 1, "at least 2"),
+            ("n_bootstrap", -5, "n_bootstrap must be a non-negative integer"),
+            ("alpha", 1.5, "alpha"),
+            ("alpha", "0.05", "alpha"),
+            ("seed", -1, "seed"),
+            ("seed", 2.5, "seed"),
+        ],
+    )
+    def test_direct_attribute_mutation_rejected_at_fit(self, attr, bad, msg):
+        # Bypassing set_params must not reach an estimation branch: an unknown
+        # method would otherwise fall through to PH.
+        est = DurationDiD(n_bootstrap=0)
+        setattr(est, attr, bad)
+        with pytest.raises(ValueError, match=msg):
+            fit_quiet(est, micro_panel(), last_pre_period=3)
+
+    def test_mutation_is_checked_before_any_data_work(self):
+        # The configuration error wins over a data error, proving the check
+        # runs before the panel is read.
+        est = DurationDiD(n_bootstrap=0)
+        est.method = "typo"
+        with pytest.raises(ValueError, match="method must be 'cd' or 'ph'"):
+            est.fit(pd.DataFrame(), "exited", "unit", "time", "treated", last_pre_period=3)
+        est.method = "cd"
+        with pytest.raises(ValueError, match="outcome column 'exited' not found"):
+            est.fit(pd.DataFrame(), "exited", "unit", "time", "treated", last_pre_period=3)
+
     def test_selectors_are_fit_time_not_params(self):
         assert "pre_periods" not in DurationDiD().get_params()
         assert "last_pre_period" not in DurationDiD().get_params()
