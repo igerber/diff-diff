@@ -5,3 +5,5 @@
   a stored fixed-anchor hazard pretest, owned results and event-study aggregation, native
   reporting, and an executed tutorial. Unsupported domains and failed bootstrap families
   retain explicit availability metadata; no survey, covariate or cluster extensions.
+  Constructor parameters are revalidated on every fit, including after direct attribute
+  updates; invalid configurations raise without replacing a previous fitted result.

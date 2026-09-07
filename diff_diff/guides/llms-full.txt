@@ -66,6 +66,10 @@ est.fit(data, outcome, treatment, unit, time, *, post_periods,
         fit_periods=None, time_weights=None) -> DurationDiDResults
 ```
 
+All four constructor parameters are validated on construction, through `set_params`,
+and before each fit. Invalid direct attribute updates raise `ValueError` before panel
+processing and preserve any previous fitted result; valid updates apply on the next fit.
+
 `treatment` is fixed binary group membership; `post_periods` is an explicit
 nonempty observed suffix. Equal-spaced numeric/Timestamp/Timedelta clock. The
 preceding date is last untreated; never infer timing from absorption.

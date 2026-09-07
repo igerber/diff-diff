@@ -277,30 +277,34 @@ class DurationDiD(BaseEstimator):
         alpha: float = 0.05,
         seed: Optional[int] = None,
     ):
-        if method not in ("common_dynamics", "proportional_hazards"):
-            raise ValueError("method must be 'common_dynamics' or 'proportional_hazards'")
-        validate_n_bootstrap(n_bootstrap)
-        if n_bootstrap < 2:
-            raise ValueError("n_bootstrap must be >= 2 for DurationDiD")
-        if (
-            isinstance(alpha, (bool, np.bool_))
-            or not isinstance(alpha, (int, float, np.integer, np.floating))
-            or not np.isfinite(alpha)
-            or not 0 < alpha < 1
-        ):
-            raise ValueError("alpha must be finite and between 0 and 1")
-        if seed is not None and (
-            isinstance(seed, (bool, np.bool_))
-            or not isinstance(seed, (int, np.integer))
-            or seed < 0
-        ):
-            raise ValueError("seed must be a nonnegative integer or None")
         self.method = method
         self.n_bootstrap = n_bootstrap
         self.alpha = alpha
         self.seed = seed
+        self._validate_params()
         self.results_: Optional[DurationDiDResults] = None
         self.is_fitted_ = False
+
+    def _validate_params(self) -> None:
+        """Apply the constructor contract again before fitting mutable parameters."""
+        if self.method not in ("common_dynamics", "proportional_hazards"):
+            raise ValueError("method must be 'common_dynamics' or 'proportional_hazards'")
+        validate_n_bootstrap(self.n_bootstrap)
+        if self.n_bootstrap < 2:
+            raise ValueError("n_bootstrap must be >= 2 for DurationDiD")
+        if (
+            isinstance(self.alpha, (bool, np.bool_))
+            or not isinstance(self.alpha, (int, float, np.integer, np.floating))
+            or not np.isfinite(self.alpha)
+            or not 0 < self.alpha < 1
+        ):
+            raise ValueError("alpha must be finite and between 0 and 1")
+        if self.seed is not None and (
+            isinstance(self.seed, (bool, np.bool_))
+            or not isinstance(self.seed, (int, np.integer))
+            or self.seed < 0
+        ):
+            raise ValueError("seed must be a nonnegative integer or None")
 
     def fit(
         self,
@@ -339,7 +343,15 @@ class DurationDiD(BaseEstimator):
         -------
         DurationDiDResults
             Stored effects, raw survival paths, bootstrap and diagnostic metadata.
+
+        Raises
+        ------
+        ValueError
+            If constructor parameters or the panel/calibration inputs are invalid.
+            Parameters are revalidated on every call, including direct attribute
+            updates. Rejected parameters leave any previous fitted result intact.
         """
+        self._validate_params()
         y, group, periods, step = _panel(data, outcome, treatment, unit, time)
         post = _selectors(post_periods, periods, "post_periods")
         if not post:

@@ -73,6 +73,86 @@ def test_constructor_transactions(kwargs):
     assert old == est.get_params()
 
 
+@pytest.mark.parametrize("previously_fitted", [False, True])
+@pytest.mark.parametrize(
+    "name,bad",
+    [
+        ("method", "typo"),
+        ("method", None),
+        ("n_bootstrap", True),
+        ("n_bootstrap", np.bool_(True)),
+        ("n_bootstrap", -1),
+        ("n_bootstrap", 0),
+        ("n_bootstrap", 1),
+        ("n_bootstrap", 2.5),
+        ("n_bootstrap", None),
+        ("alpha", 0),
+        ("alpha", 1),
+        ("alpha", 5),
+        ("alpha", True),
+        ("alpha", np.bool_(True)),
+        ("alpha", np.nan),
+        ("alpha", np.inf),
+        ("alpha", "0.05"),
+        ("alpha", None),
+        ("seed", True),
+        ("seed", np.bool_(True)),
+        ("seed", -1),
+        ("seed", 1.5),
+        ("seed", "23"),
+    ],
+)
+def test_invalid_direct_parameters_match_constructor_validation(name, bad, previously_fitted):
+    data = duration_panel()
+    args = (data, "absorbed", "group", "id", "date")
+    est = DurationDiD(n_bootstrap=5, seed=2)
+    previous = est.fit(*args, post_periods=[4, 5]) if previously_fitted else None
+    snapshot = previous.to_dict() if previous is not None else None
+    original_params = est.get_params()
+
+    with pytest.raises(ValueError, match=name) as constructor_error:
+        DurationDiD(**{**original_params, name: bad})
+    with pytest.raises(ValueError, match=name) as set_params_error:
+        est.set_params(**{name: bad})
+    assert est.get_params() == original_params
+
+    setattr(est, name, bad)
+    with pytest.raises(ValueError, match=name) as fit_error:
+        est.fit(*args, post_periods=[4, 5])
+    assert str(fit_error.value) == str(constructor_error.value) == str(set_params_error.value)
+    assert est.is_fitted_ is previously_fitted
+    assert est.results_ is previous
+    if previous is not None:
+        assert previous.to_dict() == snapshot
+
+
+@pytest.mark.parametrize("previously_fitted", [False, True])
+@pytest.mark.parametrize("method", ["common_dynamics", "proportional_hazards"])
+def test_valid_direct_parameter_updates_match_fresh_fit(method, previously_fitted):
+    data = duration_panel()
+    args = (data, "absorbed", "group", "id", "date")
+    other_method = "proportional_hazards" if method == "common_dynamics" else "common_dynamics"
+    est = DurationDiD(method=other_method, n_bootstrap=5, seed=2)
+    previous = est.fit(*args, post_periods=[4, 5]) if previously_fitted else None
+    snapshot = previous.to_dict() if previous is not None else None
+    updated = dict(
+        method=method, n_bootstrap=np.int64(19), alpha=np.float64(0.1), seed=np.int64(23)
+    )
+    for name, value in updated.items():
+        setattr(est, name, value)
+
+    result = est.fit(*args, post_periods=[4, 5])
+    expected = DurationDiD(**updated).fit(*args, post_periods=[4, 5])
+    assert result.to_dict() == expected.to_dict()
+    assert result.method == method
+    assert result.coefficient == pytest.approx(0 if method == "common_dynamics" else 1)
+    assert result.alpha == 0.1 and result.seed == 23
+    assert result.n_bootstrap == 19 and result.bootstrap_effects.shape == (19, 2)
+    assert est.is_fitted_ and est.results_ is result
+    if previous is not None:
+        assert previous.to_dict() == snapshot
+
+
 def test_refits_and_shuffle_reproducibility():
     data = duration_panel()
     estimator = DurationDiD(n_bootstrap=15, seed=23)

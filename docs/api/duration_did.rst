@@ -7,6 +7,11 @@ The outcome is 0 before absorption and 1 afterward. Treatment is a fixed group
 indicator; ``post_periods`` separately declares the treated observation suffix.
 Keep baseline-absorbed people in the panel. Positive ATT increases absorption.
 
+Constructor parameters are validated on construction, through ``set_params()``,
+and at the start of every ``fit()`` call. Invalid direct attribute updates raise
+``ValueError`` before panel processing and leave any previous fitted result intact.
+Valid parameter updates take effect on the next fit.
+
 Identification and supported designs
 ------------------------------------
 
