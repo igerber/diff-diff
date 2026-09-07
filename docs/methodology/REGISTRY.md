@@ -5835,10 +5835,13 @@ individuals stay in the estimand (their effects are zero under the assumptions).
   on outcome levels. Tested separately by the Algorithm 2 pretest below; a
   non-rejection does not establish identification.
 - **Data shape:** exactly one row per (individual, date); every individual on the
-  same equally spaced numeric time grid (relative check
-  `allclose(diffs, diffs[0], rtol=1e-8, atol=0)`, at least three distinct dates:
+  same equally spaced real numeric time grid (relative check on native
+  differences, `abs(diff - first_diff) <= 1e-8 * abs(first_diff)`, zero absolute
+  tolerance; at least three distinct dates:
   baseline, `tstar`, one post-date); missing cells, late entry, dropout,
-  datetime `time`, NaN identifiers/cells, non-numeric binary columns all raise.
+  datetime/object/string/boolean/complex `time`, NaN identifiers/cells, and
+  non-real binary columns all raise. Binary columns must have real numeric or
+  boolean dtype, with values 0/1; numeric strings are not coerced.
   Baseline survival and survival at `tstar` must be positive in both groups.
 - **Bootstrap validity:** independent individuals with arbitrary serial
   dependence within a history (Section 3.2); `n_bootstrap=0` gives point
@@ -5862,9 +5865,10 @@ The treated baseline `R_hat[1,1]` sits outside the PH exponent
   or before `tstar`, equal weights. Eligibility: positive survival in both groups
   (implied by positive survival at `tstar`) and, under PH, a positive control
   cumulative-hazard increment. `pre_periods` selects a subset (an ordered list of
-  values of `time`, validated against the grid; duplicates, sets, scalars,
-  strings and baseline/post dates raise); `pre_period_weights` (requires
-  `pre_periods`; finite, nonnegative, not all zero) is normalized to sum to one
+  values of `time`, matched by exact numeric identity against the grid;
+  duplicates, sets, scalars, strings, boolean/complex/nonfinite date values
+  and baseline/post dates raise); `pre_period_weights` (requires
+  `pre_periods`; finite, real, nonnegative, not all zero) is normalized to sum to one
   scale-invariantly (divided by its maximum before its sum, so weights near the
   float64 limit cannot overflow); a zero weight drops that date. Eligibility
   exclusions warn and renormalize the remaining weights; an empty fitting set
@@ -6008,7 +6012,17 @@ equivalently `p <= alpha`.
   discreteness: with `B` draws the p-value has resolution `1/B`.
 - **Note:** Equally spaced numeric time grid required in this version (elapsed
   durations are used internally, so unequal spacing is a later relaxation, not a
-  formula change).
+  formula change). Signed/unsigned integer labels retain exact identity across
+  their supported column dtype ranges, including nullable integer columns
+  without missing values; object columns remain unsupported. Native scalar
+  subtraction precedes conversion of offsets to float64, avoiding integer
+  overflow and loss from large absolute origins. Spacing is checked before
+  this conversion, and float64 elapsed offsets must remain finite and strictly
+  increasing. Absolute floating labels must be finite and exactly representable
+  as float64 (float32 and exactly representable longdouble values are supported).
+  Date selectors use exact numeric identity; a rounded float cannot select an
+  adjacent integer. Inference arithmetic uses float64 elapsed durations and
+  cannot reconstruct precision already lost by callers when creating floats.
 - **Note:** `n_bootstrap=0` = point estimates with joint-NaN inference (library
   convention shared with CiC/ContinuousDiD); `n_bootstrap=1` rejected.
 - **Note:** `n_units` = individuals (the resampling unit), `n_obs` = panel rows

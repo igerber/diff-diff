@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import math
 import warnings
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -33,6 +33,7 @@ from diff_diff.bootstrap_chunking import compute_block_size
 from diff_diff.duration_did_results import (
     DurationDiDPretestResults,
     DurationDiDResults,
+    _native_time_label,
     invalid_curve_message,
 )
 from diff_diff.utils import (
@@ -60,6 +61,25 @@ _MAX_CHUNK_ROWS = 256
 def _errstate() -> Any:
     """Silence every floating-point warning class (CONTRIBUTING: protect all arithmetic)."""
     return np.errstate(divide="ignore", invalid="ignore", over="ignore", under="ignore")
+
+
+def _time_scalar(value: Any, name: str) -> Union[int, float]:
+    """Validate a real date without rounding integer identity or floating labels."""
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+        value, (int, float, np.integer, np.floating)
+    ):
+        raise ValueError(f"{name} must be a numeric real time value, got {value!r}")
+    if isinstance(value, (int, np.integer)):
+        # Selectors can be arbitrarily large absent integers. Never send them
+        # through float() or isfinite(), even just to validate them.
+        return int(value)
+    if not np.isfinite(value):
+        raise ValueError(f"{name} must be a finite numeric time value, got {value!r}")
+    with _errstate():
+        native = float(value)
+    if not math.isfinite(native) or type(value)(native) != value:
+        raise ValueError(f"{name} floating time values must be exactly representable as float64")
+    return native
 
 
 # Per-family draw-failure reasons, in FIRST-MATCH precedence order.
@@ -172,12 +192,17 @@ def _validate_and_arrange(
             "values to a numeric elapsed scale (e.g. days since the spell "
             "start) before fitting"
         )
-    if pd.api.types.is_bool_dtype(t_col) or not pd.api.types.is_numeric_dtype(t_col):
+    if (
+        pd.api.types.is_bool_dtype(t_col)
+        or pd.api.types.is_complex_dtype(t_col)
+        or not pd.api.types.is_numeric_dtype(t_col)
+    ):
         raise ValueError(f"time column {time!r} must be numeric (got dtype {t_col.dtype})")
-    if t_col.isna().any() or not np.all(np.isfinite(t_col.to_numpy(dtype=float))):
+    if t_col.isna().any():
         raise ValueError(f"time column {time!r} contains missing or non-finite values")
 
     grid = np.unique(t_col.to_numpy())
+    labels = [_time_scalar(p, f"time column {time!r}") for p in grid]
     if len(data) == 0 or len(grid) < _MIN_PERIODS:
         raise ValueError(
             "DurationDiD requires at least three distinct time periods (baseline, "
@@ -201,22 +226,30 @@ def _validate_and_arrange(
             "an administrative end of a complete window is fine."
         )
 
-    grid_f = grid.astype(float)
-    diffs = np.diff(grid_f)
+    # Subtract native scalars BEFORE conversion: machine integers can wrap,
+    # while casting absolute dates to float64 can erase entire time steps.
+    diffs = [right - left for left, right in zip(labels, labels[1:])]
     step = diffs[0]
-    if not (np.isfinite(step) and step > 0):
+    if not all(math.isfinite(d) and d > 0 for d in diffs):
         raise ValueError("time grid must have a positive finite common spacing")
-    if not np.allclose(diffs, step, rtol=_SPACING_RTOL, atol=0.0):
+    if any(abs(d - step) > _SPACING_RTOL * abs(step) for d in diffs):
         raise ValueError(
             "DurationDiD requires an equally spaced time grid (relative tolerance "
-            f"{_SPACING_RTOL:g}); found spacings {np.unique(diffs).tolist()[:5]}"
+            f"{_SPACING_RTOL:g}); found spacings {sorted(set(diffs))[:5]}"
+        )
+    elapsed = np.asarray([p - labels[0] for p in labels], dtype=float)
+    if not np.all(np.isfinite(elapsed)) or np.any(elapsed[1:] <= elapsed[:-1]):
+        raise ValueError(
+            "time grid must give finite, strictly increasing float64 elapsed durations"
         )
 
     # Binary columns: explicit float coercion, then missing/non-finite, then
     # the 0/1 domain (validate_binary strips NaN before its membership test).
     coerced: Dict[str, np.ndarray] = {}
     for name, col in (("outcome", outcome), ("treatment", treatment)):
-        if not (pd.api.types.is_numeric_dtype(data[col]) or pd.api.types.is_bool_dtype(data[col])):
+        if pd.api.types.is_complex_dtype(data[col]) or not (
+            pd.api.types.is_numeric_dtype(data[col]) or pd.api.types.is_bool_dtype(data[col])
+        ):
             bad_vals = pd.unique(data[col].astype(object))[:5].tolist()
             raise ValueError(
                 f"{name} column {col!r} must be a numeric 0/1 column (got dtype "
@@ -243,10 +276,15 @@ def _validate_and_arrange(
 
     # Internal frame with fixed names, so a user column named like a temporary
     # (or a role column named "unit"/"time") can never collide.
+    # Pandas indexes need float64 for some floating dtypes (e.g. float16).
+    # This conversion is lossless after _time_scalar validation; retain the
+    # original grid dtype in results. Integer labels never enter this path.
+    floating_clock = pd.api.types.is_float_dtype(t_col)
+    index_grid = grid.astype(float) if floating_clock else grid
     frame = pd.DataFrame(
         {
             "unit": data[unit].to_numpy(),
-            "time": data[time].to_numpy(),
+            "time": t_col.to_numpy(dtype=float) if floating_clock else t_col.to_numpy(),
             "y": coerced["outcome"],
             "g": coerced["treatment"],
         }
@@ -261,7 +299,7 @@ def _validate_and_arrange(
             f"units with varying values include {bad}"
         )
 
-    y_wide = frame.pivot(index="unit", columns="time", values="y").reindex(columns=grid)
+    y_wide = frame.pivot(index="unit", columns="time", values="y").reindex(columns=index_grid)
     g_units = frame.groupby("unit")["g"].first().reindex(y_wide.index)
     Y = y_wide.to_numpy(dtype=float)
     G = g_units.to_numpy(dtype=float)
@@ -282,20 +320,13 @@ def _validate_and_arrange(
             f"e.g. {bad_units}"
         )
 
-    if isinstance(last_pre_period, (bool, str)) or not isinstance(
-        last_pre_period, (int, float, np.integer, np.floating)
-    ):
-        raise ValueError(
-            f"last_pre_period must be a numeric value of the time column, got {last_pre_period!r}"
-        )
-    tstar_val = float(last_pre_period)
-    matches = np.nonzero(grid_f == tstar_val)[0]
-    if len(matches) != 1:
+    tstar_val = _time_scalar(last_pre_period, "last_pre_period")
+    if tstar_val not in labels:
         raise ValueError(
             f"last_pre_period {last_pre_period!r} is not a value of the time column "
             f"(grid: {grid.tolist()[:8]}{'...' if len(grid) > 8 else ''})"
         )
-    tstar_idx = int(matches[0])
+    tstar_idx = labels.index(tstar_val)
     if tstar_idx == 0:
         raise ValueError(
             "last_pre_period equals the first date; at least two pre-treatment dates "
@@ -311,7 +342,7 @@ def _validate_and_arrange(
         "Y": np.ascontiguousarray(Y[order]),
         "n_treated": n_treated,
         "grid": grid,
-        "elapsed": grid_f - grid_f[0],
+        "elapsed": elapsed,
         "tstar_idx": tstar_idx,
     }
 
@@ -462,7 +493,7 @@ def _resolve_fit_periods(
     are renormalized to sum to one. ``F`` and the weights are frozen for
     every bootstrap draw.
     """
-    grid_f = grid.astype(float)
+    labels = [_native_time_label(p) for p in grid]
     if pre_period_weights is not None and pre_periods is None:
         raise ValueError("pre_period_weights requires pre_periods (the dates the weights refer to)")
 
@@ -475,10 +506,9 @@ def _resolve_fit_periods(
             raise ValueError("pre_periods must name at least one pre-treatment date")
         idx_list: List[int] = []
         for p in req:
-            hit = np.nonzero(grid_f == p)[0]
-            if len(hit) != 1:
+            if p not in labels:
                 raise ValueError(f"Pre-period '{_fmt(p)}' not found in time column")
-            k = int(hit[0])
+            k = labels.index(p)
             if k < 1 or k > tstar_idx:
                 raise ValueError(
                     f"pre_periods value {_fmt(p)} must lie strictly after the baseline "
@@ -511,7 +541,7 @@ def _resolve_fit_periods(
     keep_w: List[float] = []
     S1, S2, D2 = S[0], S[1], D[1]
     for k, w in zip(cand_idx.tolist(), cand_w.tolist()):
-        label = grid[k].item() if hasattr(grid[k], "item") else grid[k]
+        label = _label(grid, k)
         if w == 0:
             excluded[label] = "zero_weight"
         elif S1[k] <= 0:
@@ -557,7 +587,7 @@ def _resolve_fit_periods(
 
 
 def _selector_array(value: Any, name: str, kind: str) -> np.ndarray:
-    """Coerce a fit-time selector to a 1-d float array with a typed guard.
+    """Flatten ordered inputs, preserving date identity separately from weights.
 
     Scalars, strings and bytes are rejected explicitly: ``list("34")`` would
     otherwise split a numeric string into two different dates and silently
@@ -573,20 +603,26 @@ def _selector_array(value: Any, name: str, kind: str) -> np.ndarray:
             f"to align with its companion selector), got {value!r}"
         )
     try:
-        arr = np.asarray(list(value), dtype=float).ravel()
-    except (TypeError, ValueError):
-        raise ValueError(f"{name} must be a list of numeric {kind}, got {value!r}") from None
+        raw = np.asarray(list(value), dtype=object).ravel()
+        if name == "pre_periods":
+            arr = np.asarray([_time_scalar(p, name) for p in raw], dtype=object)
+        else:
+            if any(isinstance(p, (complex, np.complexfloating)) for p in raw):
+                raise ValueError("weights must be real")
+            with _errstate():
+                arr = np.asarray(raw, dtype=float)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{name} must be a list of numeric {kind}, got {value!r}: {exc}") from None
     return arr
 
 
 def _label(grid: np.ndarray, k: int) -> Any:
     """Native Python scalar for a grid date (never a numpy repr in messages)."""
-    v = grid[k]
-    return v.item() if hasattr(v, "item") else v
+    return _native_time_label(grid[k])
 
 
-def _fmt(p: float) -> Any:
-    return int(p) if float(p).is_integer() else p
+def _fmt(p: Union[int, float]) -> Union[int, float]:
+    return int(p) if isinstance(p, float) and p.is_integer() else p
 
 
 def _pretest_contrasts(
@@ -908,24 +944,37 @@ class DurationDiD(BaseEstimator):
         data : pd.DataFrame
             Long panel with exactly one row per (individual, date).
         outcome : str
-            Binary absorbing spell-ended indicator column (0/1; once 1,
+            Real numeric or boolean absorbing spell-ended indicator (0/1; once 1,
             always 1 within an individual). Baseline absorption is allowed.
         unit : str
             Individual identifier column.
         time : str
-            Numeric calendar or elapsed-duration column; every individual
-            must be observed at the same equally spaced dates.
+            Real numeric calendar or elapsed-duration column; every individual
+            must be observed at the same equally spaced dates (relative
+            tolerance 1e-8, zero absolute tolerance). Signed/unsigned integer
+            labels, including nullable integer dtypes without missing values,
+            retain exact identity across their dtype's range. Differences are
+            computed before conversion to float64 elapsed durations, which
+            must remain finite and strictly increasing. Floating labels must
+            be finite and exactly representable as float64; this includes
+            float32 and exactly representable longdouble values. Object,
+            string, boolean and complex time columns are not supported.
+            Precision already lost in caller-created floats cannot be recovered.
         treatment : str
-            Fixed 0/1 group indicator (constant within individual).
+            Fixed real numeric or boolean 0/1 group indicator (constant
+            within individual).
         last_pre_period : value of ``time``
             The last untreated date (``tstar``); the intervention occurs
-            strictly afterwards. Never inferred from the data.
+            strictly afterwards. Matched by exact numeric identity, never
+            inferred from the data. Boolean, string, complex and nonfinite
+            date selectors are rejected.
         pre_periods : list of ``time`` values, optional
             Pre-treatment dates used to fit the hazard relationship (strictly
             after the baseline, at or before ``last_pre_period``). Default:
-            every eligible pre-treatment date after the baseline.
+            every eligible pre-treatment date after the baseline. Dates use
+            the same exact numeric matching as ``last_pre_period``.
         pre_period_weights : array-like, optional
-            Nonnegative weights aligned with ``pre_periods`` (normalized to
+            Finite real nonnegative weights aligned with ``pre_periods`` (normalized to
             sum to one; a zero weight drops that date). Requires
             ``pre_periods``. Default: equal weights over the eligible set.
 
@@ -1159,9 +1208,7 @@ class DurationDiD(BaseEstimator):
         pretest = DurationDiDPretestResults(
             method=method,
             periods=grid[J] if n_J else grid[:0],
-            anchor_period=(
-                grid[tstar_idx].item() if hasattr(grid[tstar_idx], "item") else grid[tstar_idx]
-            ),
+            anchor_period=_label(grid, tstar_idx),
             contrast=np.asarray(delta, dtype=float),
             se=pre_se,
             band_lower=pre_lo,
@@ -1199,9 +1246,6 @@ class DurationDiD(BaseEstimator):
         for msg in messages:
             warnings.warn(msg, UserWarning, stacklevel=2)
 
-        def unit_label(k: int) -> Any:
-            return grid[k].item() if hasattr(grid[k], "item") else grid[k]
-
         results = DurationDiDResults(
             att=headline,
             se=se_head,
@@ -1220,7 +1264,7 @@ class DurationDiD(BaseEstimator):
             n_control=int(n_control),
             n_periods=int(n_periods),
             periods=grid.copy(),
-            last_pre_period=unit_label(tstar_idx),
+            last_pre_period=_label(grid, tstar_idx),
             post_periods=grid[post_idx].copy(),
             pre_periods=grid[fit_idx].copy(),
             pre_period_weights=fit_w.copy(),

@@ -1021,3 +1021,436 @@ class TestConsumers:
             warnings.simplefilter("ignore")
             exec(code, ns)
         assert "placebo" in ns
+
+
+# ---------------------------------------------------------------------------
+# Numeric clock identity, real-input guards and downstream date consumers
+# ---------------------------------------------------------------------------
+
+
+def _relabel_panel(data, clock, dtype=None):
+    """Assign the full typed array so pandas row construction cannot hide its dtype."""
+    result = data.copy()
+    values = np.tile(clock, len(data) // len(clock))
+    result["time"] = pd.array(values, dtype=dtype) if dtype is not None else values
+    return result
+
+
+class TestNumericClock:
+    @pytest.mark.parametrize("method", ["cd", "ph"])
+    @pytest.mark.parametrize(
+        "dtype, origin",
+        [
+            ("int64", 2**53),
+            ("int64", 2**53 + 1),
+            ("int64", -(2**63)),
+            ("int64", 2**63 - 15),
+            ("uint64", 2**64 - 15),
+            ("Int64", 2**53 + 1),
+            ("UInt64", 2**64 - 15),
+        ],
+    )
+    def test_integer_translation_preserves_full_inference(self, method, dtype, origin):
+        data = simulate_panel(n=600, method=method, c=0.05 if method == "cd" else 1.3)
+        small = np.arange(8) * 2
+        clock = np.array([origin + int(t) for t in small], dtype=dtype.lower())
+        original = fit_quiet(
+            DurationDiD(method=method, n_bootstrap=40, seed=7),
+            _relabel_panel(data, small),
+            last_pre_period=6,
+            pre_periods=[2, 6],
+            pre_period_weights=[1, 3],
+        )
+        translated = fit_quiet(
+            DurationDiD(method=method, n_bootstrap=40, seed=7),
+            _relabel_panel(data, clock, dtype),
+            last_pre_period=int(clock[3]),
+            pre_periods=[clock[1], int(clock[3])],
+            pre_period_weights=[1, 3],
+        )
+        assert original.inference_status == translated.inference_status == "ok"
+        assert original.pretest.status == translated.pretest.status == "ok"
+        for field in (
+            "coefficient",
+            "att",
+            "se",
+            "t_stat",
+            "p_value",
+            "conf_int",
+            "att_by_period",
+            "counterfactual_survival",
+            "se_by_period",
+            "conf_int_by_period",
+            "cband_lower",
+            "cband_upper",
+            "cband_crit_value",
+            "joint_p_value",
+            "vcov",
+            "bootstrap_effects",
+        ):
+            np.testing.assert_array_equal(getattr(translated, field), getattr(original, field))
+        for field in (
+            "contrast",
+            "se",
+            "band_lower",
+            "band_upper",
+            "statistic",
+            "p_value",
+            "reject",
+        ):
+            np.testing.assert_array_equal(
+                getattr(translated.pretest, field), getattr(original.pretest, field)
+            )
+        assert translated.curve_status == original.curve_status
+        assert translated.period_status == original.period_status
+        assert translated.bootstrap_failure_reasons == original.bootstrap_failure_reasons
+        assert translated.n_draws_invalid_counterfactual == original.n_draws_invalid_counterfactual
+        expected = [origin + int(t) for t in small]
+        assert translated.periods.tolist() == expected
+        labels = translated.to_dict()
+        assert labels["periods"] == expected
+        assert all(type(p) is int for p in labels["periods"])
+        assert labels["last_pre_period"] == expected[3]
+        assert json.loads(json.dumps(labels))["periods"] == expected
+
+    @pytest.mark.parametrize("method", ["cd", "ph"])
+    def test_native_unequal_large_origin_rejected(self, method):
+        clock = [2**53, 2**53 + 2, 2**53 + 3]
+        data = build_from_survivors(100, [100, 80, 50], 100, [100, 90, 70], times=clock)
+        with pytest.raises(ValueError, match="equally spaced"):
+            DurationDiD(method=method, n_bootstrap=0).fit(data, **FIT_KW, last_pre_period=clock[1])
+
+    @pytest.mark.parametrize("origin", [0, 2**53 + 1])
+    @pytest.mark.parametrize(
+        "deviation, accepted", [(-11, False), (-9, True), (9, True), (11, False)]
+    )
+    def test_spacing_tolerance_uses_first_native_step(self, origin, deviation, accepted):
+        clock = [origin, origin + 10**9, origin + 2 * 10**9 + deviation]
+        data = build_from_survivors(100, [100, 80, 50], 100, [100, 90, 70], times=clock)
+        if accepted:
+            result = fit_quiet(DurationDiD(n_bootstrap=0), data, last_pre_period=clock[1])
+            # Keep the actual duration even when its spacing is within tolerance.
+            c = (math.log(100 / 80) - math.log(100 / 90)) / 10**9
+            expected = math.exp(-math.log(100 / 70) - (2 * 10**9 + deviation) * c) - 0.5
+            assert result.att == pytest.approx(expected, abs=1e-14)
+        else:
+            with pytest.raises(ValueError, match="equally spaced"):
+                DurationDiD(n_bootstrap=0).fit(data, **FIT_KW, last_pre_period=clock[1])
+
+    @pytest.mark.parametrize("sign", [-1, 1])
+    @pytest.mark.parametrize("margin, accepted", [(-1, True), (1, False)])
+    def test_large_spacing_comparison_precedes_float_rounding(self, sign, margin, accepted):
+        deviation = sign * (10**10 + margin)
+        clock = [0, 10**18, 2 * 10**18 + deviation]
+        data = build_from_survivors(100, [100, 80, 50], 100, [100, 90, 70], times=clock)
+        assert (abs(deviation) <= 10**10) == accepted
+        if accepted:
+            result = fit_quiet(DurationDiD(n_bootstrap=0), data, last_pre_period=clock[1])
+            assert np.isfinite(result.att)
+        else:
+            with pytest.raises(ValueError, match="equally spaced"):
+                DurationDiD(n_bootstrap=0).fit(data, **FIT_KW, last_pre_period=clock[1])
+
+    @pytest.mark.parametrize(
+        "delta, accepted", [(9e-9, True), (11e-9, False), (-9e-9, True), (-11e-9, False)]
+    )
+    def test_float_spacing_boundary(self, delta, accepted):
+        data = build_from_survivors(
+            100, [100, 80, 50], 100, [100, 90, 70], times=[0.0, 1.0, 2.0 + delta]
+        )
+        if accepted:
+            assert np.isfinite(fit_quiet(DurationDiD(n_bootstrap=0), data, last_pre_period=1.0).att)
+        else:
+            with pytest.raises(ValueError, match="equally spaced"):
+                DurationDiD(n_bootstrap=0).fit(data, **FIT_KW, last_pre_period=1.0)
+
+    def test_elapsed_offsets_do_not_wrap_signed_integer_range(self):
+        step = 2**62 + 1
+        clock = np.array([-(2**63) + k * step for k in range(4)], dtype=np.int64)
+        data = build_from_survivors(100, [100, 80, 60, 40], 100, [100, 90, 80, 70], times=clock)
+        result = fit_quiet(
+            DurationDiD(n_bootstrap=0),
+            data,
+            last_pre_period=int(clock[2]),
+            pre_period_weights=[1, 3],
+            pre_periods=[int(clock[1]), int(clock[2])],
+        )
+        elapsed = np.array([int(t) - int(clock[0]) for t in clock], dtype=float)
+        reference = sum(
+            w * (math.log(100 / s1) - math.log(100 / s2)) / e
+            for w, s1, s2, e in zip([0.25, 0.75], [80, 60], [90, 80], elapsed[1:3])
+        )
+        np.testing.assert_allclose(result.coefficient, reference, rtol=1e-14, atol=0)
+        arranged = dd_module._validate_and_arrange(data, **FIT_KW, last_pre_period=int(clock[2]))
+        np.testing.assert_array_equal(arranged["elapsed"], elapsed)
+        assert int(clock[2]) - int(clock[0]) > np.iinfo(np.int64).max
+
+    @pytest.mark.parametrize("clock", [[1, 2, 3], [1.0, 2.0, 3.0], [10**400 + k for k in range(3)]])
+    def test_numeric_object_clock_remains_unsupported(self, clock):
+        data = build_from_survivors(100, [100, 80, 50], 100, [100, 90, 70])
+        data["time"] = pd.Series(
+            np.tile(np.array(clock, dtype=object), len(data) // 3), dtype=object
+        )
+        with pytest.raises(ValueError, match="time column 'time' must be numeric.*object"):
+            DurationDiD(n_bootstrap=0).fit(data, **FIT_KW, last_pre_period=clock[1])
+
+    @pytest.mark.parametrize("clock", [[-1.7e308, 0.0, 1.7e308], [-1.7e308, -1.6e308, 1.7e308]])
+    def test_unrepresentable_elapsed_clock_rejected(self, clock):
+        data = build_from_survivors(100, [100, 80, 50], 100, [100, 90, 70], times=clock)
+        with pytest.raises(ValueError, match="finite"):
+            DurationDiD(n_bootstrap=0).fit(data, **FIT_KW, last_pre_period=clock[1])
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+    def test_nonfinite_clock_rejected_before_panel_arrangement(self, value):
+        data = micro_panel()
+        data["time"] = data["time"].astype(float)
+        data.loc[0, "time"] = value
+        with pytest.raises(ValueError, match="time column 'time'.*finite"):
+            DurationDiD(n_bootstrap=0).fit(data, **FIT_KW, last_pre_period=3)
+
+    @pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64, np.longdouble])
+    def test_representable_float_clock_and_json(self, dtype):
+        clock = np.array([0.125, 0.25, 0.375, 0.5, 0.625], dtype=dtype)
+        data = _relabel_panel(micro_panel(), clock)
+        assert data.time.to_numpy().dtype.type is dtype
+        result = fit_quiet(
+            DurationDiD(n_bootstrap=0),
+            data,
+            last_pre_period=dtype(0.375),
+            pre_periods=[dtype(0.25), dtype(0.375)],
+            pre_period_weights=[0, 1],
+        )
+        assert result.periods.dtype.type is dtype
+        assert type(result.last_pre_period) is float
+        assert type(result.pretest.anchor_period) is float
+        assert list(result.excluded_pre_periods) == [0.25]
+        assert type(next(iter(result.excluded_pre_periods))) is float
+        d = json.loads(json.dumps(result.to_dict()))
+        p = json.loads(json.dumps(result.pretest.to_dict()))
+        assert d["periods"] == [0.125, 0.25, 0.375, 0.5, 0.625]
+        assert d["excluded_pre_periods"] == {"0.25": "zero_weight"}
+        assert p["anchor_period"] == d["last_pre_period"] == 0.375
+        assert p["periods"] == [0.25]
+        assert "np." not in result.summary() + result.pretest.summary()
+        for frame in [result.to_dataframe(), result.pretest.to_dataframe()]:
+            assert np.isfinite(frame["period"].to_numpy()).all()
+        steps = practitioner_next_steps(result, verbose=False)["next_steps"]
+        code = next(s["code"] for s in steps if "placebo_data =" in s["code"])
+        namespace = {"data": data, "DurationDiD": DurationDiD}
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            exec(code, namespace)
+        assert namespace["placebo"].last_pre_period == 0.25
+
+    @pytest.mark.skipif(
+        np.finfo(np.longdouble).nmant == np.finfo(float).nmant,
+        reason="longdouble has no extra mantissa bits on this platform",
+    )
+    @pytest.mark.parametrize("field", ["time", "last_pre_period", "pre_periods"])
+    def test_lossy_wide_float_rejected(self, field):
+        extra = np.longdouble(1) + np.finfo(np.longdouble).eps
+        data = micro_panel()
+        kw = dict(last_pre_period=3)
+        if field == "time":
+            clock = np.arange(1, 6, dtype=np.longdouble) + np.finfo(np.longdouble).eps
+            data = _relabel_panel(data, clock)
+            assert data.time.to_numpy().dtype.type is np.longdouble
+        else:
+            kw[field] = extra if field == "last_pre_period" else [extra]
+        with pytest.raises(ValueError, match="exactly representable as float64"):
+            DurationDiD(n_bootstrap=0).fit(data, **FIT_KW, **kw)
+
+
+class TestExactDateSelectors:
+    @pytest.mark.parametrize("field", ["last_pre_period", "pre_periods"])
+    @pytest.mark.parametrize(
+        "value", [True, False, np.bool_(True), np.bool_(False), "1", 1 + 0j, np.complex128(1)]
+    )
+    def test_non_real_date_rejected(self, field, value):
+        data = micro_panel(times=[-1, 0, 1, 2, 3])
+        kw = dict(last_pre_period=1)
+        kw[field] = value if field == "last_pre_period" else [value]
+        with pytest.raises(ValueError, match="numeric"):
+            DurationDiD(n_bootstrap=0).fit(data, **FIT_KW, **kw)
+
+    @pytest.mark.parametrize("field", ["last_pre_period", "pre_periods"])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            float("nan"),
+            float("inf"),
+            float("-inf"),
+            np.float32("nan"),
+            np.float64("inf"),
+            np.float64("-inf"),
+        ],
+    )
+    def test_nonfinite_date_rejected_before_lookup(self, field, value):
+        kw = dict(last_pre_period=3)
+        kw[field] = value if field == "last_pre_period" else [value]
+        with pytest.raises(ValueError, match="finite numeric time"):
+            DurationDiD(n_bootstrap=0).fit(micro_panel(), **FIT_KW, **kw)
+
+    @pytest.mark.parametrize("field", ["last_pre_period", "pre_periods"])
+    def test_oversized_absent_integer_is_reported_exactly(self, field):
+        absent = 10**400
+        kw = dict(last_pre_period=3)
+        kw[field] = absent if field == "last_pre_period" else [absent]
+        with pytest.raises(ValueError) as err:
+            DurationDiD(n_bootstrap=0).fit(micro_panel(), **FIT_KW, **kw)
+        assert str(absent) in str(err.value)
+        assert "not " in str(err.value)
+
+    @pytest.mark.parametrize("field", ["last_pre_period", "pre_periods"])
+    def test_rounded_float_cannot_select_odd_integer(self, field):
+        clock = np.array([2**53 + 1 + 2 * k for k in range(5)], dtype=np.int64)
+        kw = dict(last_pre_period=int(clock[2]))
+        value = float(int(clock[2]))
+        assert value != int(clock[2])
+        kw[field] = value if field == "last_pre_period" else [value]
+        with pytest.raises(ValueError, match="not (a value|found)"):
+            DurationDiD(n_bootstrap=0).fit(_relabel_panel(micro_panel(), clock), **FIT_KW, **kw)
+
+    @pytest.mark.parametrize("field", ["last_pre_period", "pre_periods"])
+    @pytest.mark.parametrize("scalar_type", [int, np.int64])
+    def test_absent_integer_neighbor_does_not_match(self, field, scalar_type):
+        clock = np.array([2**53 + 1 + 2 * k for k in range(5)], dtype=np.int64)
+        absent = scalar_type(2**53 + 4)
+        kw = dict(last_pre_period=int(clock[2]))
+        kw[field] = absent if field == "last_pre_period" else [absent]
+        with pytest.raises(ValueError, match="not (a value|found)"):
+            DurationDiD(n_bootstrap=0).fit(_relabel_panel(micro_panel(), clock), **FIT_KW, **kw)
+
+    @pytest.mark.parametrize("field", ["last_pre_period", "pre_periods"])
+    def test_integer_cannot_alias_neighboring_float_grid(self, field):
+        clock = np.array([2**53 + 2 * k for k in range(5)], dtype=float)
+        absent = 2**53 + 3
+        kw = dict(last_pre_period=float(clock[2]))
+        kw[field] = absent if field == "last_pre_period" else [absent]
+        with pytest.raises(ValueError, match="not (a value|found)"):
+            DurationDiD(n_bootstrap=0).fit(_relabel_panel(micro_panel(), clock), **FIT_KW, **kw)
+
+    def test_mixed_selector_list_preserves_adjacent_large_integers(self):
+        origin = 2**53
+        clock = np.array([origin + k for k in range(5)], dtype=np.int64)
+        result = fit_quiet(
+            DurationDiD(n_bootstrap=0),
+            _relabel_panel(micro_panel(), clock),
+            last_pre_period=np.int64(origin + 3),
+            pre_periods=[origin + 1, float(origin + 2), np.int64(origin + 3)],
+            pre_period_weights=[0, 1, 3],
+        )
+        assert result.pre_periods.tolist() == [origin + 2, origin + 3]
+        assert result.last_pre_period == origin + 3
+        assert result.excluded_pre_periods == {origin + 1: "zero_weight"}
+        assert result.to_dict()["excluded_pre_periods"] == {str(origin + 1): "zero_weight"}
+        np.testing.assert_array_equal(result.pre_period_weights, [0.25, 0.75])
+
+    @pytest.mark.parametrize("shape", ["2d", "generator"])
+    def test_ordered_selector_flattening_preserves_alignment(self, shape):
+        periods = [[3, 2]] if shape == "2d" else (p for p in [3, 2])
+        weights = [[3, 1]] if shape == "2d" else (w for w in [3, 1])
+        result = fit_quiet(
+            DurationDiD(n_bootstrap=0),
+            micro_panel(),
+            last_pre_period=3.0,
+            pre_periods=periods,
+            pre_period_weights=weights,
+        )
+        reference = fit_quiet(
+            DurationDiD(n_bootstrap=0),
+            micro_panel(),
+            last_pre_period=3,
+            pre_periods=[3.0, 2.0],
+            pre_period_weights=[3, 1],
+        )
+        np.testing.assert_array_equal(result.pre_periods, reference.pre_periods)
+        np.testing.assert_array_equal(result.pre_period_weights, reference.pre_period_weights)
+        assert result.coefficient == reference.coefficient
+
+
+class TestRealInputs:
+    @pytest.mark.parametrize(
+        "column, message", [("exited", "outcome"), ("treated", "treatment"), ("time", "time")]
+    )
+    @pytest.mark.parametrize("imaginary", [0, 1])
+    def test_complex_columns_rejected_before_coercion(self, column, message, imaginary):
+        data = micro_panel()
+        data[column] = data[column].astype(complex) + imaginary * 1j
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with pytest.raises(ValueError, match=message):
+                DurationDiD(n_bootstrap=0).fit(data, **FIT_KW, last_pre_period=3)
+
+    @pytest.mark.parametrize(
+        "weights",
+        [
+            np.array([1 + 1j, 3 + 2j]),
+            np.array([1, 3 + 0j], dtype=object),
+            [1, np.complex64(3 + 1j)],
+        ],
+    )
+    def test_complex_weights_rejected_before_coercion(self, weights):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with pytest.raises(ValueError, match="pre_period_weights.*real"):
+                DurationDiD(n_bootstrap=0).fit(
+                    micro_panel(),
+                    **FIT_KW,
+                    last_pre_period=3,
+                    pre_periods=[2, 3],
+                    pre_period_weights=weights,
+                )
+
+    @pytest.mark.parametrize("dtype", [bool, int, float])
+    def test_real_binary_inputs_keep_the_same_fit(self, dtype):
+        data = micro_panel()
+        data[["exited", "treated"]] = data[["exited", "treated"]].astype(dtype)
+        reference = fit_quiet(DurationDiD(n_bootstrap=0), micro_panel(), last_pre_period=3)
+        result = fit_quiet(DurationDiD(n_bootstrap=0), data, last_pre_period=3)
+        assert result.att == reference.att
+        assert result.coefficient == reference.coefficient
+
+
+class TestTranslatedDateConsumers:
+    @pytest.mark.parametrize("anchor_idx", [1, 2, 3])
+    def test_placebo_eligibility_and_executable_anchor(self, anchor_idx):
+        origin = 2**53
+        clock = np.array([origin + k for k in range(5)], dtype=np.int64)
+        data = _relabel_panel(micro_panel(), clock)
+        result = fit_quiet(DurationDiD(n_bootstrap=0), data, last_pre_period=int(clock[anchor_idx]))
+        steps = practitioner_next_steps(result, verbose=False)["next_steps"]
+        step = next(s for s in steps if "placebo" in s["label"].lower())
+        if anchor_idx == 1:
+            assert "not applicable" in step["label"]
+        else:
+            namespace = {"data": data, "DurationDiD": DurationDiD}
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                exec(step["code"], namespace)
+            assert namespace["placebo"].last_pre_period == int(clock[anchor_idx - 1])
+            assert namespace["placebo"].post_periods.tolist() == [int(clock[anchor_idx])]
+
+    @pytest.mark.parametrize("pre_violation", [False, True])
+    def test_invalid_curve_message_keeps_exact_pre_post_boundary(self, pre_violation):
+        origin = 2**53 + 1
+        clock = np.array([origin + k for k in range(5)], dtype=np.int64)
+        if pre_violation:
+            data = build_from_survivors(
+                1000, [1000, 1000, 900, 800, 700], 1000, [1000, 200, 100, 10, 1]
+            )
+        else:
+            data = build_from_survivors(30, [18, 9, 4, 2, 1], 10, [8, 6, 4, 2, 0])
+        data = _relabel_panel(data, clock)
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always")
+            result = DurationDiD(n_bootstrap=0).fit(data, **FIT_KW, last_pre_period=int(clock[2]))
+        message = next(str(w.message) for w in captured if "Invalid imputed" in str(w.message))
+        if pre_violation:
+            assert f"at {int(clock[2])} (counterfactual_survival_above_one)" in message
+            assert "cannot repair it: change the fit" in message
+            assert "at or before" not in message
+        else:
+            assert f"at or before {int(clock[3])} and refit" in message
+            assert "cannot repair" not in message
+        assert message in result.summary()

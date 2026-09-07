@@ -33,10 +33,25 @@ retried or silently dropped.
 .. note::
 
    Requirements: exactly one row per (individual, date) on a common, equally
-   spaced numeric time grid; a fixed 0/1 group indicator; a 0/1 absorbing
+   spaced real numeric time grid; a fixed real numeric or boolean 0/1 group
+   indicator; a real numeric or boolean 0/1 absorbing
    outcome (baseline absorption is allowed and those individuals stay in the
    estimand). ``last_pre_period`` (the last untreated date) is required and
-   never inferred. Covariates, staggered adoption, censoring, survey weights
+   never inferred. Dates are matched by exact numeric identity. Integer
+   labels retain their identity across the supported signed/unsigned dtype
+   ranges (including nullable integer columns without missing values).
+   Spacings and offsets are subtracted before conversion to float64 elapsed
+   durations; the spacing check uses relative tolerance 1e-8 and zero absolute
+   tolerance, and elapsed durations must remain finite and strictly increasing.
+   Floating labels must be finite and exactly representable as float64
+   (including float32 and exactly representable longdouble values). Object,
+   string, boolean and complex time columns are rejected. Inference uses
+   float64 elapsed arithmetic and cannot reconstruct precision already lost
+   when callers created floating labels. Date selectors reject booleans,
+   strings, complex and nonfinite values; fitting weights must be finite,
+   real and nonnegative.
+
+   Covariates, staggered adoption, censoring, survey weights
    and cluster dependence are not supported in this version; the CD model
    can extrapolate an invalid counterfactual curve (survival above one or a
    decreasing cumulative hazard), which is reported through

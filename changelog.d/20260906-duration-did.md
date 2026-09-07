@@ -6,7 +6,13 @@
   ratio, mean-of-ratios estimator) is fitted on the pre-treatment cumulative
   hazards — by default with equal weights over every eligible pre-treatment
   date, or on a user window via `fit(pre_periods=..., pre_period_weights=...)`
-  — and the treated group's counterfactual survival is imputed from the
+  — with exact numeric date selection and finite real fitting weights.
+  Integer dates preserve their identity across supported signed/unsigned
+  dtype ranges: spacings and offsets are subtracted before float64 elapsed
+  arithmetic, which must remain finite and strictly increasing. Floating
+  dates must be losslessly representable as float64; complex inputs are
+  rejected. Result labels, JSON and practitioner guidance retain the same
+  dates. The treated group's counterfactual survival is imputed from the
   control group (Theorem 1). Reports the absorption ATT at every
   post-treatment date plus its uniform average as `att`, with the paper's
   whole-individual pooled bootstrap (Appendix B Algorithm 1: centered

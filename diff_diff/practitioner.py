@@ -2380,14 +2380,16 @@ def _handle_duration_did(results: Any):
     before the original anchor BEFORE refitting one step earlier, so the
     placebo family never contains a genuinely treated date.
     """
+    from diff_diff.duration_did_results import _native_time_label
+
     method = getattr(results, "method", "cd")
     other = "ph" if method == "cd" else "cd"
     pretest = getattr(results, "pretest", None)
     pretest_status = getattr(pretest, "status", "unknown")
     last_pre = getattr(results, "last_pre_period", None)
-    raw_periods = list(getattr(results, "periods", []))
-    periods = [float(p) for p in raw_periods]
-    n_pre = sum(1 for p in periods if last_pre is not None and p <= float(last_pre))
+    last_pre = _native_time_label(last_pre) if last_pre is not None else None
+    periods = [_native_time_label(p) for p in getattr(results, "periods", [])]
+    n_pre = sum(1 for p in periods if last_pre is not None and p <= last_pre)
 
     steps = [
         _step(
@@ -2433,9 +2435,8 @@ def _handle_duration_did(results: Any):
     if n_pre >= 3 and last_pre is not None:
         # The preceding anchor is the exact stored grid scalar (never a
         # floating-point subtraction, which would miss a decimal grid value).
-        anchor_idx = periods.index(float(last_pre))
-        earlier_raw = raw_periods[anchor_idx - 1]
-        earlier_repr = repr(earlier_raw.item() if hasattr(earlier_raw, "item") else earlier_raw)
+        anchor_idx = periods.index(last_pre)
+        earlier_repr = repr(periods[anchor_idx - 1])
         steps.append(
             _step(
                 baker_step=6,

@@ -18,7 +18,7 @@ state. Statuses name the reason.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, ClassVar, Dict, List, Optional, Tuple
+from typing import Any, ClassVar, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -30,7 +30,6 @@ from diff_diff.results_base import (
     Diagnostic,
     EventStudyResults,
     _coverage_pct,
-    _json_safe_label,
     _require_fit_alpha,
 )
 
@@ -56,9 +55,8 @@ def invalid_curve_message(periods: Any, curve_status: List[str], last_pre_period
     explicit refit on dates at or before the last date strictly before the
     first invalid post date, when at least one post date survives.
     """
-    labels = [p.item() if hasattr(p, "item") else p for p in np.asarray(periods).tolist()]
-    grid_f = np.asarray(periods, dtype=float)
-    tstar_idx = int(np.nonzero(grid_f == float(last_pre_period))[0][0])
+    labels = [_native_time_label(p) for p in np.asarray(periods).tolist()]
+    tstar_idx = labels.index(_native_time_label(last_pre_period))
     flagged = [(labels[t], s) for t, s in enumerate(curve_status) if s != "ok"]
     msg = (
         "Invalid imputed counterfactual curve at "
@@ -106,6 +104,12 @@ def _scalar(x: Any) -> Any:
     if isinstance(x, np.generic):
         return x.item()
     return x
+
+
+def _native_time_label(value: Any) -> Union[int, float]:
+    """Python scalar for an already validated numeric clock (including longdouble)."""
+    value = _scalar(value)
+    return value if isinstance(value, int) else float(value)
 
 
 @dataclass
@@ -178,7 +182,7 @@ class DurationDiDPretestResults(Diagnostic):
         """One row per tested pre-treatment date."""
         return pd.DataFrame(
             {
-                "period": np.asarray(self.periods).tolist(),
+                "period": [_native_time_label(p) for p in np.asarray(self.periods).tolist()],
                 "contrast": np.asarray(self.contrast, dtype=float),
                 "se": np.asarray(self.se, dtype=float),
                 "band_lower": np.asarray(self.band_lower, dtype=float),
@@ -190,8 +194,8 @@ class DurationDiDPretestResults(Diagnostic):
         """JSON-serializable dictionary."""
         return {
             "method": self.method,
-            "periods": [_json_safe_label(p) for p in np.asarray(self.periods).tolist()],
-            "anchor_period": _json_safe_label(self.anchor_period),
+            "periods": [_native_time_label(p) for p in np.asarray(self.periods).tolist()],
+            "anchor_period": _native_time_label(self.anchor_period),
             "contrast": _to_list(self.contrast),
             "se": _to_list(self.se),
             "band_lower": _to_list(self.band_lower),
@@ -214,7 +218,7 @@ class DurationDiDPretestResults(Diagnostic):
             f"  Contrast: {kind} at each interior pre-date minus its value at "
             f"the anchor {self.anchor_period!r}",
             f"  Status: {self.status}",
-            f"  Tested dates: {np.asarray(self.periods).tolist()}",
+            f"  Tested dates: {[_native_time_label(p) for p in np.asarray(self.periods).tolist()]}",
         ]
         if self.status == "ok":
             lines.append(
@@ -400,13 +404,13 @@ class DurationDiDResults(BaseResults, AggregationMixin):
             "n_treated": int(self.n_treated),
             "n_control": int(self.n_control),
             "n_periods": int(self.n_periods),
-            "periods": [_json_safe_label(p) for p in np.asarray(self.periods).tolist()],
-            "last_pre_period": _json_safe_label(self.last_pre_period),
-            "post_periods": [_json_safe_label(p) for p in np.asarray(self.post_periods).tolist()],
-            "pre_periods": [_json_safe_label(p) for p in np.asarray(self.pre_periods).tolist()],
+            "periods": [_native_time_label(p) for p in np.asarray(self.periods).tolist()],
+            "last_pre_period": _native_time_label(self.last_pre_period),
+            "post_periods": [_native_time_label(p) for p in np.asarray(self.post_periods).tolist()],
+            "pre_periods": [_native_time_label(p) for p in np.asarray(self.pre_periods).tolist()],
             "pre_period_weights": _to_list(self.pre_period_weights),
             "excluded_pre_periods": {
-                str(_json_safe_label(k)): v for k, v in self.excluded_pre_periods.items()
+                str(_native_time_label(k)): v for k, v in self.excluded_pre_periods.items()
             },
             "coefficient": float(self.coefficient),
             "ph_ratio_boundary": bool(self.ph_ratio_boundary),
@@ -464,7 +468,9 @@ class DurationDiDResults(BaseResults, AggregationMixin):
             ci = np.asarray(self.conf_int_by_period, dtype=float).reshape(-1, 2)
             return pd.DataFrame(
                 {
-                    "period": np.asarray(self.post_periods).tolist(),
+                    "period": [
+                        _native_time_label(p) for p in np.asarray(self.post_periods).tolist()
+                    ],
                     "att": np.asarray(self.att_by_period, dtype=float),
                     "se": np.asarray(self.se_by_period, dtype=float),
                     "t_stat": np.asarray(self.t_stat_by_period, dtype=float),
@@ -494,7 +500,7 @@ class DurationDiDResults(BaseResults, AggregationMixin):
             f"Observations: {self.n_obs}; Periods: {self.n_periods}",
             f"Last pre-treatment period: {self.last_pre_period!r}; "
             f"post-treatment periods: {len(self.post_periods)}",
-            f"Fitting periods: {np.asarray(self.pre_periods).tolist()} "
+            f"Fitting periods: {[_native_time_label(p) for p in np.asarray(self.pre_periods).tolist()]} "
             f"(weights {np.round(np.asarray(self.pre_period_weights, dtype=float), 4).tolist()})",
             f"Fitted coefficient: {self.coefficient:.6f}",
             "",
@@ -512,12 +518,7 @@ class DurationDiDResults(BaseResults, AggregationMixin):
         ]
         frame = self.to_dataframe(level="periods")
         lines.append(frame.to_string(index=False, float_format=lambda v: f"{v:.6f}"))
-        flagged = [
-            (p, s)
-            for p, s in zip(np.asarray(self.periods).tolist(), self.curve_status)
-            if s != "ok"
-        ]
-        if flagged:
+        if any(status != "ok" for status in self.curve_status):
             lines.append("")
             lines.append(
                 invalid_curve_message(self.periods, self.curve_status, self.last_pre_period)
