@@ -228,6 +228,8 @@ Is treatment adoption staggered (multiple cohorts, different timing)?
 |   |                             cell; covariates REQUIRED, aggregation
 |   |                             post-fit, set seed= for reproducible
 |   |                             fold draws; panel=False = declared
+|   |                             RCS; fit(bad_control=) = Caetano
+|   |                             et al. (2026) bad-control lane
 |   |                             repeated cross sections (Case 2,
 |   |                             lambda-corrected variance);
 |   |                             survey_design=/cluster= supported on
@@ -658,8 +660,23 @@ Executed end-to-end examples: tutorials 29 (PyMC-Marketing lift test) and
    to reject a pre-trends test does NOT prove parallel trends holds. Use
    HonestDiD to bound how large a violation could be.
 
-3. **Including "bad controls"**: Covariates affected by treatment will bias
-   estimates. Only include pre-treatment or time-invariant covariates.
+3. **Including "bad controls"**: A covariate that treatment can affect
+   (Caetano, Callaway, Payne & Sant'Anna 2026) must NEVER enter at period t
+   - that is the "include the bad control" bias. Two valid routes: (a)
+   condition only on its PRE-treatment value under parallel trends given
+   the pre-treatment bad control (Assumption 4/5, MP-8/MP-9) - on the
+   panel lane `CallawaySantAnna` / `DMLDiD` read `covariates` at each
+   cell's base period, so passing the column there does this; (b) the
+   paper's covariate-unconfoundedness approach, which allows treatment to
+   affect the control's path: `DMLDiD(...).fit(..., bad_control="x",
+   bad_control_covariates=[outcome])` (a `fit()` argument, never a
+   constructor argument), then read `results.bad_control_summary()` by
+   period: nonzero PRE-period ATT_X (t < g) indicates a possible MP-5 /
+   MP-8 violation (the identifying assumptions for the bad control's
+   untreated evolution; these rows should be zero), while nonzero
+   POST-period ATT_X (t >= g) is evidence that treatment affects the
+   covariate (Condition 2) - a zero value does not establish the
+   converse. Time-invariant covariates are always safe.
 
 4. **Ignoring sensitivity analysis**: Without HonestDiD or placebo tests,
    you cannot assess how robust your results are to assumption violations.

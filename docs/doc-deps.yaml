@@ -977,13 +977,20 @@ sources:
         section: "Current Limitations"
         type: user_guide
       - path: docs/methodology/REGISTRY.md
-        section: "DMLDiD"
+        section: "DMLDiD (incl. the 'Bad-control extension (CCPS 2026)' block) + CallawaySantAnna Approach-1 Note"
         type: methodology
+      - path: docs/methodology/papers/caetano-2026-review.md
+        section: "Requirements checklist annotations + Implementation Notes '(library: ...)' parentheticals"
+        type: methodology
+        note: "Bad-control lane: fit(bad_control=, bad_control_covariates=), nested nu/omega stages, ATT_X diagnostic; R badcontrols black-box goldens (benchmarks/R/generate_badcontrols_golden.R, tests/test_dml_did_bad_controls_parity.py)."
+      - path: docs/api/staggered.rst
+        section: "CallawaySantAnna 'Covariates and bad controls' paragraph (Approach 1)"
+        type: api_reference
       - path: docs/methodology/survey-theory.md
         section: "IF-based TSL roster / variance-dispatch table / PSU-multiplier-bootstrap roster"
         type: methodology
       - path: docs/methodology/variance-conventions.md
-        section: "dml_did / dml_did_rcs inventory rows (CI-pinned to tests/test_variance_conventions.py)"
+        section: "dml_did / dml_did_rcs / dml_did_bad_control inventory rows (CI-pinned to tests/test_variance_conventions.py)"
         type: methodology
       - path: docs/index.rst
         section: "Supported Estimators (one-line catalog row)"
@@ -999,7 +1006,10 @@ sources:
       - path: docs/methodology/REGISTRY.md
         section: "DMLDiD"
         type: methodology
-        note: "DMLDiDResults subclasses CallawaySantAnnaResults (kit-based post-fit aggregate(), bootstrap replay); adds learner/fold/cross-fit provenance and the seed/n_bootstrap/bootstrap_weights/cband inference-provenance fields."
+        note: "DMLDiDResults subclasses CallawaySantAnnaResults (kit-based post-fit aggregate(), bootstrap replay); adds learner/fold/cross-fit provenance, the seed/n_bootstrap/bootstrap_weights/cband inference-provenance fields, and the bad-control surface (bad_control / bad_control_covariates / bad_control_diagnostics fields, bad_control_summary(), the att_x / se_x to_dataframe join, summary() header lines)."
+      - path: docs/methodology/REPORTING.md
+        section: "DMLDiD bad-control identification / citation Note"
+        type: methodology
       - path: docs/tutorials/32_dml_did.ipynb
         type: tutorial
 
@@ -1446,7 +1456,7 @@ sources:
       - path: docs/methodology/REGISTRY.md
         section: "Cross-fitting, DR-score, and ridge infrastructure (DML)"
         type: methodology
-        note: "Unit/cluster-level replayable K-fold assignment (assign_folds/FoldAssignment: state captured by value pre-draw, BootstrapReplaySpec discipline; global fold cursor across sorted strata) + out-of-fold nuisance prediction (cross_fit_predict: fit on complement & fit_mask, predict every unit; DegenerateFoldError contract; loss-only log-loss clip, oof predictions unclipped)."
+        note: "Unit/cluster-level replayable K-fold assignment (assign_folds/FoldAssignment: state captured by value pre-draw, BootstrapReplaySpec discipline; global fold cursor across sorted strata) + out-of-fold nuisance prediction (cross_fit_predict: fit on complement & fit_mask, predict every unit; DegenerateFoldError contract; loss-only log-loss clip, oof predictions unclipped) + the per-fold generator iter_fold_fits / FoldFit (eager validation; fitted per-fold deep copies; _predict_subset is the caller's job) that cross_fit_predict and the DMLDiD bad-control nested stages consume; deep-copy warning prefix '_crossfit: could not deep-copy'."
 
   diff_diff/_learners.py:
     drift_risk: low
@@ -1467,7 +1477,10 @@ sources:
       - path: docs/methodology/REGISTRY.md
         section: "Cross-fitting, DR-score, and ridge infrastructure (DML)"
         type: methodology
-        note: "Shared DR panel scores: drdid_panel_inf_func (Sant'Anna-Zhao locally efficient IF, relocated verbatim from ContinuousDiD._dr_cell_inf_func, oracle-pinned in tests/test_dr_scores.py) and the Chang (2020) Case 1 orthogonal score pair (chang_panel_score / chang_panel_score_augmented) and Case 2 RCS family (chang_rcs_score / chang_rcs_lambda_slope / chang_rcs_score_augmented, lambda-corrected Theorem 2 variance) consumed by the DMLDiD estimator (panel=True/False). The two families are NOT interchangeable (Chang normalizes by the unconditional treated share; SZ is self-normalized)."
+        note: "Shared DR panel scores: drdid_panel_inf_func (Sant'Anna-Zhao locally efficient IF, relocated verbatim from ContinuousDiD._dr_cell_inf_func, oracle-pinned in tests/test_dr_scores.py), the Chang (2020) Case 1 orthogonal score pair (chang_panel_score / chang_panel_score_augmented), the Case 2 RCS family (chang_rcs_score / chang_rcs_lambda_slope / chang_rcs_score_augmented, lambda-corrected Theorem 2 variance), and the Caetano et al. (2026) bad-control family (ccps_panel_score / ccps_panel_score_augmented, Eq. 10-11; reduces to chang_panel_score with nu=m, omega=ps/(1-ps)) consumed by the DMLDiD estimator (panel=True/False; bad-control lane). The families are NOT interchangeable (Chang/CCPS normalize by the unconditional treated share; SZ is self-normalized)."
+      - path: docs/methodology/papers/caetano-2026-review.md
+        type: methodology
+        note: "The paper review's Relation section and requirements checklist name ccps_panel_score / ccps_panel_score_augmented as the Eq. 10 score location; keep the cross-reference and the checklist annotations current if functions move."
       - path: docs/methodology/papers/chang-2020-review.md
         type: methodology
         note: "The paper review's 'Relation to Existing diff-diff Estimators' section names drdid_panel_inf_func as the DRDID-parity score location; keep the cross-reference current if functions move."

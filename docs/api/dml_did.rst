@@ -85,6 +85,52 @@ both periods. RCS aggregation weights are FIXED cohort row masses (the
 CS-RCS convention, keeping the variance the influence function of the
 reported aggregate); ``aggregate('total')`` is unavailable on RCS fits.
 
+**Bad controls (Caetano, Callaway, Payne & Sant'Anna 2026;**
+``fit(..., bad_control=, bad_control_covariates=)``\ **).** A "bad control"
+is a time-varying covariate :math:`X_t` that treatment can affect.
+Conditioning on it at :math:`t` biases DiD; conditioning only on its
+pre-treatment value (pass it in ``covariates`` - the panel lane reads
+covariates at the cell's base period) is the paper's Approach 1. This
+lane implements the paper's covariate-unconfoundedness approach: parallel
+trends conditional on the bad control's UNTREATED path, with the bad
+control's untreated evolution identified given its base-period value, the
+optional ``bad_control_covariates`` :math:`W` (the outcome name means the
+base-period outcome, the paper's Remark 5 recommendation), and the
+covariates :math:`Z`. Per cell, with :math:`R = [X_t, X_b, Z]` and
+:math:`S = [X_b, W, Z]`, the Neyman-orthogonal doubly-robust score
+(paper Equation 10) is
+
+.. math::
+
+   \text{summand}_i = \frac{D_i}{\hat\pi}\bigl(\Delta Y_i - \hat\nu(S_i)\bigr)
+   - \frac{1 - D_i}{\hat\pi}\Bigl[\bigl(\hat m(R_i) - \hat\nu(S_i)\bigr)\frac{\hat p(S_i)}{1 - \hat p(S_i)}
+   + \bigl(\Delta Y_i - \hat m(R_i)\bigr)\hat\omega(R_i)\Bigr]
+
+with four cross-fitted nuisances: the control outcome-change regression
+:math:`\hat m` on :math:`R`, the propensity :math:`\hat p` on :math:`S`, and
+two NESTED second-stage regressions - :math:`\hat\nu` (the first-stage
+predictions regressed on :math:`S` among training controls) and
+:math:`\hat\omega` (the propensity odds regressed on :math:`R`, clipped to
+:math:`[0, (1-\text{trim})/\text{trim}]` with a warning). With the parametric
+built-in learners the nested targets are the paper's own plug-in; with
+``ridge`` / ``sieve`` / user learners the training complement is split in
+half (footnote 9). The variance is the same augmented-score plug-in as the
+plain lane. Each cell also reports :math:`\widehat{ATT}_X(g,t)`, the
+paper's Remark 6 pre-test (the effect of treatment on the bad control
+itself, an AIPW mean-effect diagnostic with its own analytical SE), via
+``results.bad_control_summary()``: pre-period rows (:math:`t < g`) assess
+the identifying assumptions MP-5 / MP-8 and should be zero (a nonzero
+value flags a possible violation), post-period rows (:math:`t \ge g`) are
+the Condition-2 check (a nonzero value is evidence treatment affects the
+covariate; a zero value does not establish the converse). Restrictions: panel lane only, bare
+``cluster=`` only (``survey_design=`` raises), ``anticipation=0`` and
+``base_period='varying'`` only. The headline ``att`` keeps the CS
+"simple" weighting, not the paper's Remark 4 overall. Validated against
+the authors' R package ``badcontrols`` as a tolerance-based black box
+(``tests/test_dml_did_bad_controls_parity.py``) plus the paper's
+Supplementary DGPs 1 and 4; see ``docs/methodology/REGISTRY.md`` "DMLDiD"
+> "Bad-control extension (CCPS 2026)" for every convention.
+
 **Aggregation.** ``DMLDiD`` writes the CallawaySantAnna per-cell
 influence-function payload and inherits the CS aggregation and
 multiplier-bootstrap machinery: event-study / group / simple aggregations
@@ -124,6 +170,34 @@ Basic usage
    es = results.aggregate("event_study")
    print(es.to_dataframe())
 
+Bad control (Caetano et al. 2026): a covariate treatment can affect, such
+as an occupation or earnings measure, is passed as ``bad_control`` rather
+than in ``covariates``; ``bad_control_covariates=[outcome]`` conditions the
+bad control's evolution on the base-period outcome (Remark 5), and the
+explicit ``control_group="not_yet_treated"`` is the paper's Proposition 2
+comparison group:
+
+.. code-block:: python
+
+   from diff_diff import DMLDiD
+
+   data = data.assign(
+       occupation=lambda d: 0.7 * d["x1"] + 0.3 * d["x2"] + 0.5 * d["treated"] * d["post"]
+   )
+   bc = DMLDiD(control_group="not_yet_treated", seed=0).fit(
+       data,
+       outcome="y",
+       unit="unit",
+       time="time",
+       first_treat="first_treat",
+       covariates=["x3"],
+       bad_control="occupation",
+       bad_control_covariates=["y"],
+   )
+   print(bc.summary())
+   print(bc.bad_control_summary())   # per-cell ATT_X(g, t): pre-period rows should be ~0 (MP-5 / MP-8);
+                                     # nonzero post-period rows = treatment moves the covariate
+
 Learner configuration
 ---------------------
 
@@ -154,7 +228,7 @@ API Reference
 
 .. autoclass:: diff_diff.dml_did_results.DMLDiDResults
    :no-index:
-   :members: aggregate, summary, to_dict, to_dataframe
+   :members: aggregate, bad_control_summary, summary, to_dict, to_dataframe
 
 .. autoclass:: diff_diff.SieveLearner
    :no-index:
@@ -217,6 +291,15 @@ Restrictions
 - **Event-study surface is post-fit only** — fit-time
   ``event_study_effects`` is never populated; call
   ``results.aggregate('event_study')``.
+- **Bad-control lane** — ``fit(bad_control=...)`` requires
+  ``panel=True``, ``anticipation=0`` and ``base_period='varying'``, and
+  no ``survey_design`` (each raises ``NotImplementedError``; bare
+  ``cluster=`` is supported). The bad control may not appear in
+  ``covariates`` (the "include the bad control" bias); ``covariates``
+  stays required. Units with a non-finite bad control at the base period
+  or at ``t``, or a non-finite bad-control covariate at the base period,
+  leave that cell (complete cases). ``ATT_X`` is analytical only: never
+  bootstrapped or aggregated.
 
 .. seealso::
 

@@ -481,7 +481,7 @@ The total meat is sum_h V_h, computed by `_compute_stratified_psu_meat()` in
 ### IF-based TSL variance
 
 For scalar IF-based estimators (CallawaySantAnna, ImputationDiD, TwoStageDiD,
-TripleDifference, StaggeredTripleDifference, EfficientDiD, DMLDiD), the variance is
+TripleDifference, StaggeredTripleDifference, EfficientDiD, DMLDiD (bad-control lane: `cluster=` only; `survey_design` raises)), the variance is
 computed directly from per-unit influence function values without the bread
 matrix:
 
@@ -593,7 +593,7 @@ expensive.
 
 diff-diff avoids this for most IF-based estimators (CallawaySantAnna,
 EfficientDiD, ContinuousDiD, TripleDifference, StaggeredTripleDifference,
-DMLDiD) using weight-ratio rescaling: the replicate estimate is computed by
+DMLDiD (bad-control lane: `cluster=` only; `survey_design` raises)) using weight-ratio rescaling: the replicate estimate is computed by
 reweighting the per-unit IF values rather than re-running the estimator.
 The `SurveyDesign` parameter `combined_weights` controls the interpretation:
 
@@ -692,7 +692,7 @@ Each estimator uses one of three variance strategies under survey designs:
 | TwoWayFixedEffects | TSL sandwich | OLS-based, all weight types |
 | MultiPeriodDiD | TSL sandwich | OLS-based, all weight types |
 | CallawaySantAnna | TSL on IFs | pweight only |
-| DMLDiD | TSL on IFs | pweight only; cross-fitted augmented scores; replicate designs: IF-reweighting on augmented scores, per-cell + aggregate; library extension of Chang (2020) i.i.d. theory |
+| DMLDiD | TSL on IFs | pweight only; cross-fitted augmented scores; replicate designs: IF-reweighting on augmented scores, per-cell + aggregate; library extension of Chang (2020) i.i.d. theory (bad-control lane: `cluster=` only; `survey_design` raises) |
 | SunAbraham | TSL sandwich | OLS-based, all weight types |
 | TripleDifference | TSL on IFs | pweight only |
 | StaggeredTripleDifference | TSL on IFs | pweight only |
@@ -729,7 +729,7 @@ For IF-based estimators, the variance computation proceeds as:
 
 Two bootstrap strategies interact with survey designs:
 
-- **Multiplier bootstrap at PSU level** (CallawaySantAnna, DMLDiD,
+- **Multiplier bootstrap at PSU level** (CallawaySantAnna, DMLDiD (bad-control lane: `cluster=` only; `survey_design` raises),
   ImputationDiD, TwoStageDiD, ContinuousDiD, EfficientDiD,
   StaggeredTripleDifference):
   Generates multiplier weights at the PSU level within strata, with FPC

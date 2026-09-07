@@ -18,6 +18,21 @@ CallawaySantAnna
 
 Callaway & Sant'Anna (2021) estimator for heterogeneous treatment timing.
 
+**Covariates and bad controls.** On the panel lane a covariate is read at
+each cell's base period (the observed period preceding the cohort's first
+treatment for post-treatment cells), never at :math:`t`. A time-varying
+covariate that treatment can affect (a "bad control", Caetano, Callaway,
+Payne & Sant'Anna 2026) conditioned this way therefore computes the
+paper's Proposition 3 estimand - parallel trends given the PRE-treatment
+bad control (Approach 1) - not the biased "include the bad control"
+contrast; passing the pre-treatment value is the user's responsibility.
+On the repeated-cross-section lane covariates are read on the
+observation's own row, so a time-varying bad control there IS
+:math:`X_t` and Approach 1 does not apply. For the paper's
+covariate-unconfoundedness approach with extra covariates :math:`W`, use
+:class:`~diff_diff.DMLDiD` with ``fit(..., bad_control=,
+bad_control_covariates=)``.
+
 .. autoclass:: diff_diff.CallawaySantAnna
    :no-index:
    :members:

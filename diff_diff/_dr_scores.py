@@ -1,6 +1,6 @@
 """Shared doubly-robust DiD scores (private DML infrastructure).
 
-Three distinct score families live here — the repo's methodology review
+Four distinct score families live here — the repo's methodology review
 (``docs/methodology/papers/chang-2020-review.md``) pins that they are NOT
 interchangeable:
 
@@ -25,6 +25,19 @@ interchangeable:
   different from Sant'Anna-Zhao/DoubleML's four treatment-by-period outcome
   regressions, so ``doubleml.DoubleMLDIDCSBinary`` is a characterization
   anchor, not a parity oracle.
+- :func:`ccps_panel_score` / :func:`ccps_panel_score_augmented` — the
+  Caetano, Callaway, Payne & Sant'Anna (2026) Neyman-orthogonal bad-control
+  score (their Equation 10 / sample analog Equation 11; paper review at
+  ``docs/methodology/papers/caetano-2026-review.md``) with FOUR cross-fitted
+  nuisances: the outcome regression ``m_0`` on ``(X_t, X_base, Z)``, its
+  nested projection ``nu_0`` on ``(X_base, W, Z)``, the propensity ``p`` on
+  ``(X_base, W, Z)``, and the nested odds projection ``omega_0`` on
+  ``(X_t, X_base, Z)``. Every untreated term is normalized by the treated
+  share ``1/p_hat`` (not ``1/(1-p_hat)``); with ``nu_hat = m_hat`` and
+  ``omega_hat = ps/(1-ps)`` it collapses algebraically to
+  :func:`chang_panel_score`, and its augmented step IS
+  :func:`chang_panel_score_augmented` (``summand - theta - (theta/p_hat)(D -
+  p_hat) == summand - D theta / p_hat``).
 
 References
 ----------
@@ -33,6 +46,9 @@ estimators. Journal of Econometrics, 219(1), 101-122.
 
 Chang, N.-C. (2020). Double/debiased machine learning for
 difference-in-differences models. The Econometrics Journal, 23(2), 177-191.
+
+Caetano, C., Callaway, B., Payne, S., & Sant'Anna, H. (2026).
+Difference-in-differences with "bad controls". arXiv:2608.03881.
 """
 
 from typing import Optional, Tuple
@@ -45,6 +61,8 @@ __all__ = [
     "drdid_panel_inf_func",
     "chang_panel_score",
     "chang_panel_score_augmented",
+    "ccps_panel_score",
+    "ccps_panel_score_augmented",
     "chang_rcs_score",
     "chang_rcs_lambda_slope",
     "chang_rcs_score_augmented",
@@ -256,6 +274,126 @@ def chang_panel_score_augmented(
             "(p_hat = 1 means no comparison population; the estimand is unidentified)"
         )
     return summand - D * theta / p_hat
+
+
+def _validate_ccps_inputs(
+    dY: np.ndarray,
+    D: np.ndarray,
+    m_hat: np.ndarray,
+    nu_hat: np.ndarray,
+    ps: np.ndarray,
+    omega_hat: np.ndarray,
+    p_hat: float,
+    context: str,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Shared validation for the CCPS (2026) bad-control score functions."""
+    arrays = {
+        "dY": np.asarray(dY, dtype=np.float64),
+        "D": np.asarray(D, dtype=np.float64),
+        "m_hat": np.asarray(m_hat, dtype=np.float64),
+        "nu_hat": np.asarray(nu_hat, dtype=np.float64),
+        "ps": np.asarray(ps, dtype=np.float64),
+        "omega_hat": np.asarray(omega_hat, dtype=np.float64),
+    }
+    for name, arr in arrays.items():
+        if arr.ndim != 1:
+            raise ValueError(f"{context}: {name} must be 1-dimensional, got ndim={arr.ndim}")
+    n = arrays["dY"].shape[0]
+    if n == 0:
+        raise ValueError(f"{context}: inputs are empty (n=0); the score is undefined")
+    for name, arr in arrays.items():
+        if arr.shape[0] != n:
+            raise ValueError(
+                f"{context}: {name} has length {arr.shape[0]}, expected {n} (length of dY)"
+            )
+        if not np.all(np.isfinite(arr)):
+            raise ValueError(f"{context}: {name} contains non-finite values")
+    D_arr = arrays["D"]
+    if not np.all((D_arr == 0.0) | (D_arr == 1.0)):
+        raise ValueError(f"{context}: D must be strictly binary 0/1")
+    if not np.isfinite(p_hat) or not (0.0 < p_hat < 1.0):
+        raise ValueError(
+            f"{context}: p_hat must satisfy 0 < p_hat < 1 strictly, got {p_hat!r} "
+            "(p_hat = 1 means no comparison population; the estimand is unidentified)"
+        )
+    ps_arr = arrays["ps"]
+    if np.any(ps_arr < 0.0) or np.any(ps_arr >= 1.0):
+        raise ValueError(
+            f"{context}: ps must lie in [0, 1) strictly; clip/trim propensity "
+            "scores before calling (values >= 1 would divide by zero)"
+        )
+    if np.any(arrays["omega_hat"] < 0.0):
+        raise ValueError(
+            f"{context}: omega_hat must be non-negative (it estimates a conditional "
+            "expectation of the odds p/(1-p)); clip the nested odds regression "
+            "before calling"
+        )
+    return (
+        arrays["dY"],
+        D_arr,
+        arrays["m_hat"],
+        arrays["nu_hat"],
+        ps_arr,
+        arrays["omega_hat"],
+    )
+
+
+def ccps_panel_score(
+    dY: np.ndarray,
+    D: np.ndarray,
+    m_hat: np.ndarray,
+    nu_hat: np.ndarray,
+    ps: np.ndarray,
+    omega_hat: np.ndarray,
+    p_hat: float,
+) -> np.ndarray:
+    """CCPS (2026) bad-control per-unit UNCENTERED score summand (their Equation 10).
+
+    Returns::
+
+        summand_i = (D_i/p_hat) dY_i - (D_i/p_hat) nu_hat_i
+                    - ((1-D_i)/p_hat) (m_hat_i - nu_hat_i) ps_i/(1-ps_i)
+                    - ((1-D_i)/p_hat) (dY_i - m_hat_i) omega_hat_i
+
+    whose sample mean is the ATT (Equation 11's ``ATT_dr``). The four
+    nuisances are cross-fitted plug-ins: ``m_hat`` = control outcome-change
+    regression on ``(X_t, X_base, Z)``; ``nu_hat`` = its nested control
+    projection on ``(X_base, W, Z)``; ``ps`` = propensity on ``(X_base, W, Z)``
+    (trimmed by the CALLER's policy, strictly below 1); ``omega_hat`` = nested
+    control projection of the odds ``p/(1-p)`` on ``(X_t, X_base, Z)``
+    (non-negative; bounded by the caller's policy). Every untreated term is
+    normalized by the treated share ``1/p_hat`` (Lemma S2 change of measure),
+    never by ``1/(1-p_hat)``. Reduction: with ``nu_hat = m_hat`` and
+    ``omega_hat = ps/(1-ps)`` this equals :func:`chang_panel_score` exactly.
+    """
+    dY, D, m_hat, nu_hat, ps, omega_hat = _validate_ccps_inputs(
+        dY, D, m_hat, nu_hat, ps, omega_hat, p_hat, "ccps_panel_score"
+    )
+    treated = D / p_hat
+    control = (1.0 - D) / p_hat
+    return (
+        treated * dY
+        - treated * nu_hat
+        - control * (m_hat - nu_hat) * ps / (1.0 - ps)
+        - control * (dY - m_hat) * omega_hat
+    )
+
+
+def ccps_panel_score_augmented(
+    summand: np.ndarray,
+    D: np.ndarray,
+    theta: float,
+    p_hat: float,
+) -> np.ndarray:
+    """CCPS (2026) Algorithm 1 step 4 influence-function summand.
+
+    The paper writes ``phi_i = phi_{1,i} - ATT - (ATT/pi)(D_i - pi)``; since
+    ``-theta - (theta/p_hat)(D_i - p_hat) == -D_i theta / p_hat``, this is
+    exactly :func:`chang_panel_score_augmented`, which is called verbatim (the
+    centering identity is what makes the two augmented steps interchangeable;
+    both are mean-zero and ``SE = sqrt(mean(psi_bar**2) / n)``).
+    """
+    return chang_panel_score_augmented(summand, D, theta, p_hat)
 
 
 def _validate_chang_rcs_inputs(

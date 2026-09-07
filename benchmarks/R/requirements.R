@@ -19,6 +19,7 @@ required_packages <- c(
   "nprobust",      # Calonico-Cattaneo-Farrell local-linear (DIDHAD dependency)
   "Synth",         # Abadie-Diamond-Hainmueller (2010) synthetic control (SyntheticControl R-parity; ships data(basque))
   "qte",           # Callaway qte package (Athey-Imbens CiC + QDiD R-parity; ships data(lalonde))
+  "ptetools",      # Callaway ptetools (badcontrols dependency; bad-control DMLDiD lane black-box parity)
 
   # Utilities
   "jsonlite",      # JSON output for Python interop
@@ -77,7 +78,10 @@ pinned_versions <- list(
   # quantreg is pinned too: the covariate (xformla) golden fixtures embed
   # quantreg's rq/predict.rqs behavior, not just qte's.
   qte = "1.3.1",
-  quantreg = "6.1"
+  quantreg = "6.1",
+  # Bad-control DMLDiD lane (generate_badcontrols_golden.R +
+  # tests/test_dml_did_bad_controls_parity.py): badcontrols depends on ptetools.
+  ptetools = "1.0.0"
 )
 
 install_github_if_missing <- function(pkg, repo) {
@@ -90,6 +94,28 @@ install_github_if_missing <- function(pkg, repo) {
   } else {
     message(sprintf("%s is already installed.", pkg))
   }
+}
+
+# Commit-pinned GitHub package. `badcontrols` (Caetano, Callaway, Payne &
+# Sant'Anna 2026) has no tags or releases and HEAD also reports 1.0.0, so a
+# version check alone cannot detect drift: install from the pinned commit and
+# verify the installed RemoteSha (NULL-safe: a non-remotes install carries no
+# RemoteSha and must be replaced). LICENSE NOTE: badcontrols is GPL-3 and is
+# used ONLY as an executed black-box oracle by the golden generator; its
+# source is never read by diff-diff contributors (see benchmarks/R/README.md).
+install_github_pinned <- function(pkg, repo, ref, version) {
+  if (requireNamespace(pkg, quietly = TRUE)) {
+    sha <- packageDescription(pkg)$RemoteSha
+    if (as.character(packageVersion(pkg)) == version && !is.null(sha) && identical(sha, ref)) {
+      message(sprintf("%s is already at pinned version %s (%s).", pkg, version, substr(ref, 1, 8)))
+      return(invisible(NULL))
+    }
+  }
+  message(sprintf("Installing %s == %s from %s@%s ...", pkg, version, repo, substr(ref, 1, 8)))
+  if (!requireNamespace("remotes", quietly = TRUE)) {
+    install.packages("remotes", repos = "https://cloud.r-project.org/", quiet = TRUE)
+  }
+  remotes::install_github(paste0(repo, "@", ref), upgrade = "never", quiet = TRUE)
 }
 
 # Install CRAN packages
@@ -111,9 +137,16 @@ for (pkg in names(github_packages)) {
   install_github_if_missing(pkg, github_packages[[pkg]])
 }
 
+# Commit-pinned GitHub packages (after the CRAN pins so ptetools is at 1.0.0).
+message("\nInstalling commit-pinned GitHub packages...")
+install_github_pinned(
+  "badcontrols", "hugosantanna/badcontrols",
+  ref = "651ccc925776125bb9233d76867c862107ea0ba5", version = "1.0.0"
+)
+
 # Verify installation
 message("\nVerifying installation...")
-all_packages <- c(required_packages, names(github_packages))
+all_packages <- c(required_packages, names(github_packages), "badcontrols")
 installed <- sapply(all_packages, requireNamespace, quietly = TRUE)
 
 if (all(installed)) {
@@ -127,5 +160,10 @@ if (all(installed)) {
 message("\nInstalled versions:")
 for (pkg in all_packages) {
   version <- as.character(packageVersion(pkg))
-  message(sprintf("  %s: %s", pkg, version))
+  sha <- packageDescription(pkg)$RemoteSha
+  if (is.null(sha)) {
+    message(sprintf("  %s: %s", pkg, version))
+  } else {
+    message(sprintf("  %s: %s (RemoteSha %s)", pkg, version, sha))
+  }
 }

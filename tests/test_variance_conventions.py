@@ -458,6 +458,40 @@ ROWS = [
         ),
     ),
     dict(
+        key="dml_did_bad_control",
+        # The dml_did row plus a bad control that is time-varying WITH a
+        # unit-by-time interaction (so xt - xb varies within a cell and
+        # [1, xt, xb, Z] has full rank) but carries no treatment information
+        # (so S = [xb, W, Z] cannot separate D); W = the base-period outcome
+        # (Remark 5). The callable form is required: assign() exposes the
+        # in-flight x0 column only through callables.
+        fit=lambda df: diff_diff.DMLDiD(seed=0).fit(
+            df.assign(
+                x0=(df["unit"] % 7) * 0.1 + df["time"] * 0.01,
+                xb0=lambda d: 0.5 * d["x0"] + 0.1 * np.sin(d["unit"] * d["time"]),
+            ),
+            outcome="y",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            covariates=["x0"],
+            bad_control="xb0",
+            bad_control_covariates=["y"],
+        ),
+        cr1_k=(),
+        tail_df=(None,) * 31,
+        status="legitimate",
+        reason=(
+            "L3: Caetano et al. (2026) Eq. 11 augmented-score plug-in "
+            "variance (same psi_bar - D*theta/pi centering as Chang Thm 2; "
+            "per-unit influence function; normal-theory safe_inference on "
+            "no-design fits; cluster= fits use the CR1 per-cell variance with "
+            "df=df_survey t-inference) and the per-cell ATT_X diagnostic "
+            "tuple sharing the same branch and df (one extra safe_inference "
+            "call per retained cell)"
+        ),
+    ),
+    dict(
         key="dml_did_rcs",
         # Declared repeated cross sections: every ROW becomes its own
         # sampling unit (row-unique IDs), turning the shared panel fixture

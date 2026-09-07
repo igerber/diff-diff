@@ -278,6 +278,7 @@ the limitation and suggested alternative.
 | ImputationDiD | `pretrend_test()` + replicate weights | Use analytical survey design instead |
 | DiD, TWFE | `inference='wild_bootstrap'` + `survey_design` | Use analytical survey inference (default) |
 | EfficientDiD | `cluster` + `survey_design` | Use `survey_design` with PSU/strata |
+| DMLDiD | `fit(bad_control=...)` + `survey_design` | The Caetano et al. (2026) bad-control lane raises `NotImplementedError` under any `survey_design` (nested second-stage nuisances under design weights and replicate variances are unvalidated; DEFERRED.md). Use bare `cluster=` (PSU-cohesive folds, CR1 per-cell SE, t-inference) without a `survey_design`. |
 | WooldridgeDiD | Unsupported-period filtering + `survey_design` | Restrict the frame to the supported periods explicitly and re-fit. Deleting rows in-place is naive subsetting: it removes their PSUs and strata from the TSL meat and from `df_survey = n_PSU - n_strata`. Exact only if every PSU and stratum survives the restriction (true on a balanced panel; NOT in general — an unbalanced frame can hold a PSU observed only at unsupported periods). Verify before relying on it. |
 | WooldridgeDiD | Unidentified-cohort exclusion + `survey_design` | Same reason (ledger `M-123`). Drop the cohort from the frame yourself, or supply a panel where every cohort has a pre-treatment period. |
 | All bootstrap estimators | Bootstrap + replicate weights | These are alternative variance methods; pick one |

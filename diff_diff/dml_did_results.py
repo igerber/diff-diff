@@ -24,9 +24,10 @@ via ``compute_replicate_if_variance`` on the same per-cell payload
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
+import pandas as pd
 
 from diff_diff.results_base import _json_safe_label
 from diff_diff.staggered_results import CallawaySantAnnaResults
@@ -109,6 +110,22 @@ class DMLDiDResults(CallawaySantAnnaResults):
         from OS randomness.
     n_bootstrap, bootstrap_weights, cband
         Multiplier-bootstrap configuration used at fit.
+    bad_control : str, optional
+        The bad-control column of a Caetano, Callaway, Payne & Sant'Anna
+        (2026) fit (``fit(bad_control=...)``); ``None`` on plain Chang fits.
+    bad_control_covariates : tuple of str, optional
+        The ``W`` columns (user order; the outcome name means the outcome
+        at the cell's base period); ``()`` when a bad control was declared
+        without ``W``; ``None`` on plain fits.
+    bad_control_diagnostics : dict, optional
+        Per-``(g, t)`` ``ATT_X(g, t)`` pre-test (Remark 6): the AIPW
+        mean-effect of treatment on the bad control at ``t`` (pre-period
+        cells assess MP-5 / MP-8 and should be zero; post-period cells check
+        that treatment affects the covariate) with keys
+        ``effect``/``se``/``t_stat``/``p_value``/``conf_int``/``n_treated``/
+        ``n_control``. Analytical SE only (never bootstrapped or
+        aggregated). Retained cells only; ``None`` on plain fits. Read
+        through ``bad_control_summary()``.
     """
 
     propensity_learner: Any = "logit"
@@ -120,6 +137,10 @@ class DMLDiDResults(CallawaySantAnnaResults):
     n_bootstrap: int = 0
     bootstrap_weights: Optional[str] = None
     cband: bool = True
+    # CCPS (2026) bad-control lane (None / None / None on plain fits).
+    bad_control: Optional[str] = None
+    bad_control_covariates: Optional[Tuple[str, ...]] = None
+    bad_control_diagnostics: Optional[Dict[Any, Dict[str, Any]]] = field(default=None, repr=False)
 
     def __repr__(self) -> str:
         folds = f"n_folds={self.n_folds}"
@@ -182,6 +203,12 @@ class DMLDiDResults(CallawaySantAnnaResults):
             # (df=df_survey / df_inference) — the parent's t labels are
             # CORRECT there and must not be relabeled.
             base = base.replace("t-stat", "z-stat").replace("P>|t|", "P>|z|")
+        bad_control = getattr(self, "bad_control", None)
+        if bad_control is not None:
+            # 81 characters: fits inside the 85-wide '=' rules.
+            dml_banner = (
+                "DML DiD (CCPS 2026 bad-control score) Staggered Difference-in-Differences Results"
+            )
         lines = base.split("\n")
         for i, line in enumerate(lines):
             if cs_banner in line:
@@ -217,6 +244,23 @@ class DMLDiDResults(CallawaySantAnnaResults):
         ]
         if n_degenerate:
             header.append(f"{'Degenerate cells skipped:':<30} {n_degenerate:>10}")
+        if bad_control is not None:
+            w_names = getattr(self, "bad_control_covariates", None) or ()
+            w_label = ", ".join(w_names) if w_names else "(none)"
+            diag = getattr(self, "bad_control_diagnostics", None) or {}
+            n_post = sum(1 for (g, t) in diag if t >= g - self.anticipation)
+            n_pre = len(diag) - n_post
+            header += [
+                f"{'Bad control:':<30} {bad_control:>10}",
+                f"{'Bad-control covariates (W):':<30} {w_label:>10}",
+                f"{'ATT_X cells (post / pre):':<30} {f'{n_post} / {n_pre}':>10}",
+            ]
+            if self.n_bootstrap > 0:
+                header.append("ATT_X SE: analytical (not bootstrapped).")
+            header += [
+                "Overall ATT weighting: CS simple (not Remark 4; REGISTRY DMLDiD Note).",
+                "Call results.bad_control_summary() for the ATT_X pre-test table.",
+            ]
         if self.n_bootstrap > 0:
             header.append(f"{'Bootstrap iterations:':<30} {self.n_bootstrap:>10}")
             header.append(f"{'Bootstrap weights:':<30} {str(self.bootstrap_weights):>10}")
@@ -231,6 +275,61 @@ class DMLDiDResults(CallawaySantAnnaResults):
         # framed by '=' rules at indices 0 and 2; the blank line is index 3).
         insert_at = 4
         return "\n".join(lines[:insert_at] + header + [""] + lines[insert_at:])
+
+    def bad_control_summary(self) -> pd.DataFrame:
+        """Per-cell ``ATT_X(g, t)`` pre-test table (Caetano et al. 2026, Remark 6).
+
+        One row per RETAINED cell of a bad-control fit: the AIPW mean effect
+        of treatment on the bad control at ``t`` (``att_x``), its analytical
+        SE and inference, and ``post`` (``t >= g - anticipation``). Pre-period
+        rows assess covariate unconfoundedness (MP-5); post-period rows are a
+        mean-effect check of Condition 2 (a nonzero value is evidence the
+        treatment moves the bad control; a zero value does not establish the
+        converse). Typed-empty on plain fits.
+        """
+        cols = [
+            "group",
+            "time",
+            "post",
+            "att_x",
+            "se_x",
+            "t_stat",
+            "p_value",
+            "conf_int_lower",
+            "conf_int_upper",
+        ]
+        diag = getattr(self, "bad_control_diagnostics", None)
+        if not diag:
+            return pd.DataFrame(columns=cols)
+        rows = []
+        for (g, t), entry in sorted(diag.items()):
+            ci = entry.get("conf_int", (float("nan"), float("nan")))
+            rows.append(
+                {
+                    "group": g,
+                    "time": t,
+                    "post": bool(t >= g - self.anticipation),
+                    "att_x": entry.get("effect"),
+                    "se_x": entry.get("se"),
+                    "t_stat": entry.get("t_stat"),
+                    "p_value": entry.get("p_value"),
+                    "conf_int_lower": ci[0],
+                    "conf_int_upper": ci[1],
+                }
+            )
+        return pd.DataFrame(rows, columns=cols)
+
+    def to_dataframe(self, level: str = "group_time") -> pd.DataFrame:
+        """Parent DataFrame; on bad-control fits the ``group_time`` level gains
+        ``att_x`` / ``se_x`` (analytical, unlike a bootstrapped ``se``)."""
+        frame = super().to_dataframe(level=level)
+        diag = getattr(self, "bad_control_diagnostics", None)
+        if level != "group_time" or not diag:
+            return frame
+        keys = list(zip(frame["group"], frame["time"]))
+        frame["att_x"] = [diag.get(k, {}).get("effect", float("nan")) for k in keys]
+        frame["se_x"] = [diag.get(k, {}).get("se", float("nan")) for k in keys]
+        return frame
 
     def to_dict(self) -> Dict[str, Any]:
         """Headline dict extended with DML provenance (JSON-serializable)."""
@@ -257,4 +356,15 @@ class DMLDiDResults(CallawaySantAnnaResults):
         result["cross_fit_diagnostics"] = _serialize_cross_fit_diagnostics(
             self.cross_fit_diagnostics
         )
+        bad_control = getattr(self, "bad_control", None)
+        if bad_control is not None:
+            # Conditional emission (the reference_event_times precedent):
+            # plain fits keep today's exact key set.
+            result["bad_control"] = str(bad_control)
+            result["bad_control_covariates"] = list(
+                getattr(self, "bad_control_covariates", None) or ()
+            )
+            result["bad_control_diagnostics"] = _serialize_cross_fit_diagnostics(
+                getattr(self, "bad_control_diagnostics", None)
+            )
         return result

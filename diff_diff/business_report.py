@@ -560,7 +560,7 @@ class BusinessReport:
         )
         next_steps = (dr_schema or {}).get("next_steps", [])
         caveats = _build_caveats(self._results, headline, sample, dr_schema)
-        references = _references_for(estimator_name)
+        references = _references_for(estimator_name, self._results)
 
         if diagnostics_results is None:
             diagnostics_block: Dict[str, Any] = {
@@ -1604,6 +1604,37 @@ def _describe_assumption(estimator_name: str, results: Any = None) -> Dict[str, 
                 "learners to satisfy Chang (2020)'s rate conditions "
                 "(Assumption 3.1(f))." + _survey_caveat
             )
+        if getattr(results, "bad_control", None) is not None:
+            # CCPS (2026) bad-control lane: the identifying restriction is
+            # NOT plain conditional parallel trends on the supplied
+            # covariates - it conditions on the bad control's untreated
+            # potential path as well (MP-4, reduced by MP-7), whose
+            # untreated evolution is identified by covariate
+            # unconfoundedness (Assumption 6 / MP-5).
+            return {
+                "parallel_trends_variant": "conditional_on_covariates",
+                "no_anticipation": True,
+                "description": (
+                    "Identification relies on CONDITIONAL parallel trends "
+                    "(Caetano, Callaway, Payne & Sant'Anna 2026, MP-4): untreated "
+                    "potential-outcome trends are parallel only after "
+                    "conditioning on the supplied covariates AND the untreated "
+                    "potential path of the bad control (reduced to its "
+                    "base-period and current values by MP-7), per treatment "
+                    "cohort and period (group-time ATT), plus no anticipation "
+                    "for the outcome and the bad control (MP-2). The bad "
+                    "control's untreated evolution is identified by covariate "
+                    "unconfoundedness given its pre-treatment value, the "
+                    "bad-control covariates W, and the supplied covariates "
+                    "(Assumption 6 / MP-5) with overlap (MP-6). Panel data only. "
+                    "The Neyman-orthogonal score makes the estimate first-order "
+                    "insensitive to machine-learning regularization bias, with "
+                    "cross-fitting (DML2) removing own-observation overfitting; "
+                    "valid normal inference additionally requires the four "
+                    "nuisance learners to satisfy the paper's product-rate "
+                    "conditions (Assumption 9)."
+                ),
+            }
         return {
             "parallel_trends_variant": "conditional_on_covariates",
             "no_anticipation": True,
@@ -1952,8 +1983,13 @@ def _pt_method_stat_label(method: Optional[str]) -> Optional[str]:
     return "joint p"
 
 
-def _references_for(estimator_name: str) -> List[Dict[str, str]]:
-    """Map the estimator to the appropriate citation references."""
+def _references_for(estimator_name: str, results: Any = None) -> List[Dict[str, str]]:
+    """Map the estimator to the appropriate citation references.
+
+    ``results`` (optional) lets estimator-specific lanes add a second
+    citation entry - a DMLDiD bad-control fit cites Caetano et al. (2026)
+    alongside Chang (2020).
+    """
     base = [
         {
             "role": "sensitivity",
@@ -2033,7 +2069,18 @@ def _references_for(estimator_name: str) -> List[Dict[str, str]]:
         },
     }
     if estimator_name in estimator_refs:
-        return [estimator_refs[estimator_name]] + base
+        refs = [estimator_refs[estimator_name]]
+        if estimator_name == "DMLDiDResults" and getattr(results, "bad_control", None) is not None:
+            refs.append(
+                {
+                    "role": "estimator",
+                    "citation": (
+                        "Caetano, C., Callaway, B., Payne, S., & Sant'Anna, H. (2026). "
+                        'Difference-in-differences with "bad controls". arXiv:2608.03881.'
+                    ),
+                }
+            )
+        return refs + base
     return base
 
 

@@ -683,6 +683,15 @@ insensitive to the nuisance learners' regularization bias.
   DoubleML at machine precision (committed parity spikes); the RCS lane
   has no DoubleML oracle (different score) and is validated by equation
   fixtures + a committed characterization spike
+- Bad controls (Caetano, Callaway, Payne & Sant'Anna 2026): a covariate
+  treatment can affect goes in ``fit(bad_control=...)`` (never in
+  ``covariates``), optionally with ``bad_control_covariates=[outcome]``;
+  the cell score becomes the paper's orthogonal doubly-robust score and
+  ``results.bad_control_summary()`` reports the per-cell ``ATT_X(g,t)``
+  pre-test (pre-period rows should be zero - they assess MP-5 / MP-8;
+  nonzero post-period rows show treatment affects the covariate). Panel
+  only, bare ``cluster=`` only, ``anticipation=0`` and the varying base
+  only.
 
 **vs Callaway-Sant'Anna**: same cell architecture and aggregation surface;
 DMLDiD replaces CS's parametric nuisances with cross-fitted ML learners —
@@ -1016,7 +1025,7 @@ estimation. The depth of support varies by estimator and variance method:
      - --
      - --
    * - ``DMLDiD``
-     - Full (pweight only)
+     - Full (pweight only; bad-control lane: ``cluster=`` only)
      - Full (TSL; df = ``n_PSU - n_strata``)
      - Full (IF-reweighting; per-cell + aggregate)
      - Multiplier (PSU)
