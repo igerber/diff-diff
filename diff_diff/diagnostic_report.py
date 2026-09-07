@@ -475,6 +475,22 @@ class DiagnosticReport:
                 "the producing estimator). EventStudyResults admission is "
                 "tracked in TODO.md."
             )
+        # DurationDiDResults (Deaner & Ku 2026) is rejected BY TYPE: the
+        # battery is keyed to mean-outcome parallel-trends diagnostics, while
+        # duration DiD identifies off a restriction on the untreated hazards
+        # of a binary absorbing outcome, so an empty applicability set would
+        # again produce a zero-check report. Admission is tracked in TODO.md.
+        from diff_diff.duration_did_results import DurationDiDResults as _DDR
+
+        if isinstance(results, _DDR):
+            raise TypeError(
+                "DiagnosticReport does not support DurationDiDResults: its "
+                "checks are keyed to mean-outcome parallel-trends diagnostics, "
+                "while DurationDiD identifies off an untreated-hazard "
+                "restriction on an absorbing outcome. Use results.pretest (the "
+                "Algorithm 2 hazard-restriction test) and results.summary(); "
+                "DurationDiD admission is tracked in TODO.md."
+            )
         # Marked diagnostic results (spec section 3.5, ledger row M-091)
         # are rejected BY TYPE — except Bacon, whose dedicated read-out
         # is retained. Before the marker, such inputs silently produced

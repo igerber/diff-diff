@@ -213,6 +213,16 @@ see REGISTRY HeterogeneousAdoptionDiD edge cases):
 |        (BRFSS / CPS / NHANES shape), see Tutorial 22:
 |        docs/tutorials/22_had_survey_design.ipynb.
 |
+Is the outcome a binary ABSORBING event (spell ended: job found, churned,
+discharged) observed over time for a treated and a control group?
+|-- YES: Use DurationDiD (Deaner & Ku 2026) -- two groups, common
+|        timing. Identification is a restriction on the UNTREATED
+|        HAZARDS (method='cd' additive gap, method='ph' ratio), not on
+|        outcome levels; whole-individual bootstrap pointwise +
+|        simultaneous bands; fit(..., last_pre_period=) is REQUIRED;
+|        read results.pretest (fixed-anchor specification test) instead
+|        of check_parallel_trends(); HonestDiD does not apply.
+|
 Is treatment adoption staggered (multiple cohorts, different timing)?
 |-- YES: Do NOT use plain TWFE. Use one of:
 |   |-- CallawaySantAnna (CS)  -- most general, doubly robust, recommended default

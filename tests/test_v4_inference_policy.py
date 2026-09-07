@@ -41,6 +41,7 @@ from diff_diff import (
     ContinuousDiD,
     DifferenceInDifferences,
     DMLDiD,
+    DurationDiD,
     EfficientDiD,
     HeterogeneousAdoptionDiD,
     ImputationDiD,
@@ -106,6 +107,9 @@ VALIDATED_CLASSES = [
     TripleDifference,
     ChangesInChanges,
     QDiD,
+    # Bootstrap-only whole-individual resampling: 0 is legal (point
+    # estimates, NaN inference), 1 is rejected by a local floor, >= 2 runs.
+    DurationDiD,
     # Type-guard alignment (post-M-081 follow-up): dCDH's floor is 0, so it
     # satisfies the full roster contract (zero legal at construction).
     ChaisemartinDHaultfoeuille,

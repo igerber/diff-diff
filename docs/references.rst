@@ -331,6 +331,13 @@ Rolling-Transformation DiD (Lee-Wooldridge)
 
   Exact small-sample inference layer: collapsed cross-sectional regressions with exact ``t`` reference distributions (valid down to a single treated unit), HC3 and randomization-inference alternatives, and the composite-outcome aggregate regression for staggered designs. Reference Stata package ``lwdid`` (Hur, Lee & Wooldridge; SSC s459672), whose MIT-licensed ancillary datasets back ``load_prop99()`` and ``load_walmart()``. Paper review on file at ``docs/methodology/papers/lee-wooldridge-2026-review.md``.
 
+Causal Duration DiD
+-------------------
+
+- **Deaner, B., & Ku, H. (2026).** "Causal Duration Analysis with Diff-in-Diff." arXiv:2405.05220v2 (working paper revision, May 2026). https://arxiv.org/abs/2405.05220v2
+
+  Primary source for the ``DurationDiD`` estimator: two-group, common-timing difference-in-differences for a binary absorbing outcome under a restriction on the groups' untreated hazards (common dynamics or proportional hazards, Theorem 1), the whole-individual pooled bootstrap with centered pointwise and simultaneous bands (Appendix B, Algorithm 1), and the fixed-anchor pre-treatment specification test (Algorithm 2). Paper review on file at ``docs/methodology/papers/deaner-ku-2026-review.md``.
+
 Changes-in-Changes / Distributional DiD
 ---------------------------------------
 

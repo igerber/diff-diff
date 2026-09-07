@@ -33,6 +33,7 @@ RST_FILES = [
     "api/utils.rst",
     "api/prep.rst",
     "api/two_stage.rst",
+    "api/duration_did.rst",
     "api/bacon.rst",
     "api/visualization.rst",
     "api/honest_did.rst",
@@ -433,8 +434,12 @@ _CONTEXT_DEPENDENT_SNIPPETS = {
     "test_id, code, skip_reason",
     [pytest.param(tid, c, s, id=tid) for tid, c, s in _CASES],
 )
-def test_doc_snippet(test_id: str, code: str, skip_reason: Optional[str]):
+def test_doc_snippet(test_id: str, code: str, skip_reason: Optional[str], tmp_path, monkeypatch):
     """Execute a documentation code snippet and assert no API/runtime errors.
+
+    Runs in a temporary working directory so ``savefig``-bearing snippets
+    (visualization / honest_did / pretrends pages) never write PNGs into the
+    repository root.
 
     ``os.environ`` is snapshot/restored around the exec: snippets may
     legitimately mutate the environment (e.g. the troubleshooting
@@ -446,6 +451,7 @@ def test_doc_snippet(test_id: str, code: str, skip_reason: Optional[str]):
     if skip_reason:
         pytest.skip(skip_reason)
 
+    monkeypatch.chdir(tmp_path)
     ns = _build_namespace()
     env_snapshot = os.environ.copy()
     try:

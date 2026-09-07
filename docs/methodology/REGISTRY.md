@@ -30,6 +30,7 @@ This document provides the academic foundations and key implementation requireme
    - [TROP](#trop)
    - [HeterogeneousAdoptionDiD](#heterogeneousadoptiondid)
    - [ChangesInChanges (CiC) + QDiD](#changesinchanges-cic)
+   - [DurationDiD](#durationdid)
    - [SpilloverDiD](#spilloverdid)
 4. [Regression Discontinuity](#regression-discontinuity)
    - [RegressionDiscontinuity](#regressiondiscontinuity)
@@ -5796,6 +5797,274 @@ where `Q7` is the R default type-7 (linear-interpolation) quantile (numpy `metho
 
 **Reference implementation(s):**
 - R: `qte::QDiD()` (v1.3.1, pinned) - same fixture/test infrastructure as CiC.
+
+---
+
+## DurationDiD
+
+**Primary source:** Deaner, B., & Ku, H. (2026). *Causal Duration Analysis with Diff-in-Diff*. arXiv:2405.05220v2 (working paper revision, May 2026). https://arxiv.org/abs/2405.05220v2 — reviewed in `docs/methodology/papers/deaner-ku-2026-review.md` (all page/line references below are to that review, which reconciles the paper's printed formulas).
+
+Two-group, common-timing difference-in-differences for a binary **absorbing**
+outcome (`Y_it = 1` once the spell has ended, e.g. reemployment, churn,
+discharge). Ordinary DiD on the cumulative indicator imposes a constant gap in
+event *probabilities*, which mechanically forces the survivors' hazards to
+diverge (Appendix A.1, review lines 484-499). `DurationDiD` restricts the two
+groups' **untreated hazards** instead — a constant additive gap (`method="cd"`,
+common dynamics, Equation 2.3) or a constant ratio (`method="ph"`, proportional
+hazards, Equation 2.4) — fits the coefficient on the pre-treatment cumulative
+hazards, imputes the treated group's counterfactual survival from the control
+group (Theorem 1), and reports the absorption ATT
+`tau[t] = E[Y_it - Y_it(0) | treated]` at every post-treatment date (positive =
+more cumulative exit). The headline `att` is the uniform average of the
+post-date effects — a library aggregate of probability effects across dates,
+not a paper-defined overall ATT or a mean-duration effect. Baseline-absorbed
+individuals stay in the estimand (their effects are zero under the assumptions).
+
+**Key implementation requirements:**
+
+*Assumption checks / warnings:*
+
+- **Absorbing binary outcomes on a fixed population (Assumption 1):** validated
+  (once 1, always 1 within an individual; reversals raise). Both groups must be
+  present; `treatment` must be constant within individual (a group indicator,
+  not received treatment).
+- **No anticipation before the common intervention and unaffected controls
+  (Assumption 2):** untestable; `last_pre_period` (`tstar`, the last untreated
+  date) is REQUIRED and never inferred from absorption.
+- **Untreated-hazard restriction (2.3 / 2.4):** on counterfactual hazards, never
+  on outcome levels. Tested separately by the Algorithm 2 pretest below; a
+  non-rejection does not establish identification.
+- **Data shape:** exactly one row per (individual, date); every individual on the
+  same equally spaced real numeric time grid (relative check on native
+  differences, `abs(diff - first_diff) <= 1e-8 * abs(first_diff)`, zero absolute
+  tolerance; at least three distinct dates:
+  baseline, `tstar`, one post-date); missing cells, late entry, dropout,
+  datetime/object/string/boolean/complex `time`, NaN identifiers/cells, and
+  non-real binary columns all raise. Binary columns must have real numeric or
+  boolean dtype, with values 0/1; numeric strings are not coerced.
+  Baseline survival and survival at `tstar` must be positive in both groups.
+- **Bootstrap validity:** independent individuals with arbitrary serial
+  dependence within a history (Section 3.2); `n_bootstrap=0` gives point
+  estimates only, `1` is rejected (a SD needs two draws), `>= 2` runs.
+
+*Estimator equation (Theorem 1; Equations 3.1-3.4 with the PH choice below), as implemented with the actual elapsed time `e_t = time_t - time_1` (Remark 3):*
+
+    S_hat[k,t] = 1 - mean(Y[i,t] | G[i]=k)          fixed whole-group denominator n_k
+    R_hat[k,t] = -log(S_hat[k,t]);  D_hat[k,t] = R_hat[k,t] - R_hat[k,1];  H_hat[k,t] = D_hat[k,t] / e_t
+    CD: c_hat = sum_t alpha[t] (H_hat[1,t] - H_hat[2,t]);   R0_hat[1,t] = R_hat[1,1] + D_hat[2,t] + e_t c_hat
+    PH: c_hat = sum_t alpha[t] D_hat[1,t] / D_hat[2,t];     R0_hat[1,t] = R_hat[1,1] + c_hat D_hat[2,t]
+    tau_hat[t] = exp(-R0_hat[1,t]) - S_hat[1,t],  t > tstar
+
+with `alpha` the normalized fitting weights over the realized fitting set `F`.
+The treated baseline `R_hat[1,1]` sits outside the PH exponent
+(`S_1t(0) = S_11 (S_2t/S_21)^c`, review lines 258-266).
+
+*Fitting dates and weights (`fit(pre_periods=, pre_period_weights=)`):*
+
+- Default: every eligible pre-treatment date strictly after the baseline and at
+  or before `tstar`, equal weights. Eligibility: positive survival in both groups
+  (implied by positive survival at `tstar`) and, under PH, a positive control
+  cumulative-hazard increment. `pre_periods` selects a subset (an ordered list of
+  values of `time`, matched by exact numeric identity against the grid;
+  duplicates, sets, scalars, strings, boolean/complex/nonfinite date values
+  and baseline/post dates raise); `pre_period_weights` (requires
+  `pre_periods`; finite, real, nonnegative, not all zero) is normalized to sum to one
+  scale-invariantly (divided by its maximum before its sum, so weights near the
+  float64 limit cannot overflow); a zero weight drops that date. Eligibility
+  exclusions warn and renormalize the remaining weights; an empty fitting set
+  raises. The realized set and weights are frozen for every bootstrap draw and
+  echoed as `results.pre_periods` / `results.pre_period_weights` /
+  `results.excluded_pre_periods`.
+
+*Standard errors (Section 3.2; Appendix B Algorithm 1), whole-individual pooled bootstrap:*
+
+1. `n_bootstrap` draws of `n` indices with replacement from the pooled sample
+   (`numpy.random.default_rng(seed)`); complete histories travel together;
+   duplicates are separate sampled individuals (count-weight GEMM, bit-identical
+   to a per-draw loop).
+2. Every draw recomputes survival, log-survival moments, the coefficient on the
+   frozen fitting set, the counterfactual, the post effects, the headline and the
+   pretest contrasts.
+3. On the COMPLETE draws of a family: `vcov = cov(draws, ddof=1)`,
+   `se = sqrt(diag(vcov))` (derived from the covariance, so `se == sqrt(diag(vcov))`
+   holds exactly by construction), centered pivots `z = |draw - point| / se`,
+   pointwise critical value `Q_{1-alpha}(z[:,t])` and simultaneous critical
+   value `Q_{1-alpha}(max_t z[:,t])` with an inverse-empirical-CDF quantile
+   (`ceil((1-alpha) B)`-th order statistic), symmetric bands `point +/- crit * se`,
+   p-values as the empirical tail fractions (equality counted). The headline
+   family is the per-draw uniform mean of the post effects. No wild/multiplier
+   weights, no stratification, no percentile intervals.
+4. `results.aggregate("event_study")` relays the post rows into
+   `EventStudyResults` (event time 0 = first post date, reference `-1`,
+   `n_kind="units"`, `vcov` + `vcov_index` over the post rows, `cband_*`).
+
+*Pre-treatment diagnostic (Appendix B Algorithm 2, fixed anchor), `results.pretest`:*
+
+    CD: delta_hat[t] = (H_hat[1,t] - H_hat[2,t]) - (H_hat[1,tstar] - H_hat[2,tstar])
+    PH: delta_hat[t] = D_hat[1,t] / D_hat[2,t] - D_hat[1,tstar] / D_hat[2,tstar]
+    for the interior pre-dates J = {2, ..., tstar-1}; M = max_J |delta_hat / sigma_delta|,
+    simultaneous band delta_hat +/- Q_{1-alpha}(M*) sigma_delta, p = mean(M* >= M)
+
+Same `alpha` as the effect inference (the paper's application used 60%
+diagnostic coverage; not adopted). `reject` is the band rule (`M > crit`),
+equivalently `p <= alpha`.
+
+*Edge cases:*
+
+- **Invalid imputed counterfactual curve (review lines 920-924):** the validity
+  gate is on the imputed curve `R0` itself over the WHOLE path (fitted pre-dates
+  included), evaluated per date in this order: `control_survival_zero` (a post
+  date with zero control survival; `R0 = +inf`), `counterfactual_nonfinite`,
+  `counterfactual_survival_above_one` (`R0 < 0`), `counterfactual_nonmonotone`
+  (a decreasing step, i.e. an implied negative untreated hazard), else `ok`.
+  Both sign comparisons use a scale-aware roundoff tolerance, `1e-12` times
+  the largest magnitude summed into `R0` (`R_11`, `D_2t`, `e_t c` or `c D_2t`),
+  floored at `1e-12`, so an exact mathematical boundary — an imputed
+  cumulative hazard of exactly zero when the treated group has no
+  pre-treatment exits, or a zero step — is never flagged on the few ulps of
+  roundoff that a time relabelling can flip in sign; the same tolerance
+  governs the `n_draws_invalid_counterfactual` count
+  (`results.curve_status` over all dates, `results.period_status` over the post
+  dates). If ANY date is not `ok`, `inference_status = "unavailable_invalid_periods"`
+  and the whole post-period family is withheld (headline, per-date `se/t/p/CI`,
+  pointwise critical values, simultaneous band, `vcov=None`); the pretest family
+  is unaffected. `att_by_period` and `counterfactual_survival` keep the raw
+  extrapolation only where it is finite and a counterfactual exists (NaN for
+  `control_survival_zero`, `counterfactual_nonfinite`, and any overflowed
+  value). A `UserWarning` (and `summary()`) names the flagged dates and the
+  remedy that can actually help, in three branches: a violation at a FITTED
+  PRE-treatment date cannot be repaired by a shorter horizon — the fit must
+  change (`method`, `pre_periods` / `pre_period_weights`) or the design; a
+  violation at a later post date admits an explicit refit on the dates at or
+  before the last date strictly preceding the first invalid post date
+  (subset the data and refit); a violation at the first post date admits no
+  shorter horizon with a valid counterfactual. Under PH the curve is structurally
+  valid (`R_11 >= 0`, `c >= 0`, `D_2` nondecreasing), so the flags are a CD
+  phenomenon in practice. Complete bootstrap draws whose imputed curve leaves
+  the domain are NOT failures (the effect is a well-defined statistic); their
+  count is reported as `n_draws_invalid_counterfactual` in `summary()` and
+  `to_dict()` as a diagnostic of extrapolation support.
+- **Failed bootstrap draws:** fixed draws, no retries, no stratification. Two
+  complete-draw masks, one per family. Post-family failure reasons in first-match
+  order: `group_empty`, `zero_survival_baseline`, `zero_survival_last_pre`,
+  `zero_control_increment` (PH), `control_survival_zero`,
+  `nonfinite_counterfactual` (a non-finite `c*`, `R0*` or `S0*` — a `+inf`
+  coefficient yields a FINITE artifact effect, so the effect alone cannot detect
+  it), `nonfinite_effect`. Pretest-family reasons: `group_empty`,
+  `zero_survival_baseline`, `zero_survival_last_pre`, `zero_control_increment`,
+  `nonfinite_contrast`. Any failed draw marks that family's inference
+  unavailable (`unavailable_failed_draws`); counts are reported per family in
+  `bootstrap_failure_reasons`, the raw draw matrix is retained as a diagnostic
+  (statistics of the completed draws are never inference), and one `UserWarning`
+  names the counts and remedies.
+- **Zero or non-finite SE in any column:** the whole family is withheld
+  (`unavailable_zero_se`): the entire SE vector is set to NaN before the single
+  `safe_inference` / `safe_inference_batch` gate, so every column is jointly NaN
+  (the helper gates per element and would otherwise keep good columns). Exactly
+  constant bootstrap columns have their covariance rows and columns set to
+  zero before standardization, avoiding spurious positive SEs from mean
+  roundoff. No tolerance-based cutoff is applied to distinct draws.
+- **Status precedence** (first applicable label wins, pipeline order):
+  `disabled` > `unavailable_invalid_periods` > `unavailable_failed_draws` >
+  `unavailable_zero_se` > `ok`; pretest: `disabled` >
+  `unavailable_insufficient_pre_periods` (only two pre-dates; also a fit-time
+  warning) > `unavailable_ph_support` (a zero control increment at a tested date
+  or the anchor) > `unavailable_nonfinite_moments` > `unavailable_failed_draws` >
+  `unavailable_zero_se` > `ok`. `results.pretest` is always populated.
+- **PH boundary:** a fitted ratio of exactly zero (no treated exits over the
+  fitting dates) is reported (`ph_ratio_boundary=True`) with a warning; inference
+  is mechanically defined but outside the interior regularity argument.
+- **Zero treated post-survival** is fine (the ATT uses survival directly, no
+  treated post-log is needed).
+
+**Implementation choices / deviations (Notes):**
+
+- **Note:** PH coefficient is the mean of usable ratios `sum alpha[t] D1[t]/D2[t]`
+  (Theorem 1 direction, matching the authors' MATLAB/Stata code), not the paper's
+  printed Equation 3.5 (which returns the reciprocal under exact PH) nor the
+  repaired cumulative-increment or average-hazard least-squares slopes; the three
+  finite-sample choices coincide under exact PH and differ under sampling noise
+  (review lines 281-323). The alternatives are a `TODO.md` row.
+- **Note:** Default fitting weights are equal over every eligible pre-treatment
+  date after the baseline; optional `pre_periods` / `pre_period_weights` (fit-time
+  arguments, following the library's `post_periods` / `violation_weights`
+  conventions) reproduce the application's "last k pre-dates with zero earlier
+  weights" choice. Zero-weight dates are excluded, eligibility exclusions
+  renormalize the remaining weights with a warning. The selectors never change
+  the diagnostic's scope: `J` is the review's unconditional interior set.
+- **Note:** The pretest is Appendix B Algorithm 2's fixed-anchor contrast (anchor
+  = `tstar`, always, even when the fitting set omits it), not the main text's
+  moving final-window contrast (review lines 449-465); both are valid null
+  contrasts, only one is implemented. It uses the same `alpha` as the bands, not
+  the application's 60% coverage.
+- **Note:** Whole-path curve-validity gate on the imputed `R0` (finite, `R0 >= 0`,
+  nondecreasing steps, fitted pre-dates included), with the whole post family
+  withheld on any violation and the branch-specific remedy above. The observed
+  treated hazard at `tstar` is never the anchor of that gate (the
+  fitted-versus-observed gap is the pretest's object).
+- **Note:** Per-family complete-draw failure masks with first-match reasons; an
+  in-draw finite invalid curve is counted (`n_draws_invalid_counterfactual`),
+  not failed; a `+inf` coefficient is caught on `c*`/`R0*`/`S0*`, not on the
+  effect.
+- **Note:** Band-based decisions: `is_significant` and `pretest.reject` follow the
+  paper's "band excludes zero" rule, which is exactly `p_value <= alpha` under the
+  inverse-empirical-CDF quantile (the empirical tail fraction with equality
+  counted). The order-statistic index `ceil((1-alpha) B)` is evaluated with a
+  `1e-9` tie guard so a product within floating-point noise of an integer
+  selects that integer (the `utils._frac_gt` convention). Finite-bootstrap
+  discreteness: with `B` draws the p-value has resolution `1/B`.
+- **Note:** Equally spaced numeric time grid required in this version (elapsed
+  durations are used internally, so unequal spacing is a later relaxation, not a
+  formula change). Signed/unsigned integer labels retain exact identity across
+  their supported column dtype ranges, including nullable integer columns
+  without missing values; object columns remain unsupported. Native scalar
+  subtraction precedes conversion of offsets to float64, avoiding integer
+  overflow and loss from large absolute origins. Spacing is checked before
+  this conversion, and float64 elapsed offsets must remain finite and strictly
+  increasing. Absolute floating labels must be finite and exactly representable
+  as float64 (float32 and exactly representable longdouble values are supported).
+  Date selectors use exact numeric identity; a rounded float cannot select an
+  adjacent integer. Inference arithmetic uses float64 elapsed durations and
+  cannot reconstruct precision already lost by callers when creating floats.
+- **Note:** `n_bootstrap=0` = point estimates with joint-NaN inference (library
+  convention shared with CiC/ContinuousDiD); `n_bootstrap=1` rejected.
+- **Note:** `n_units` = individuals (the resampling unit), `n_obs` = panel rows
+  (`n_units * n_periods`, the library-wide "observations" meaning printed by
+  `summary()`); the event-study `n`/`n_kind` use `n_units`/`"units"`.
+- **Note:** Weak-support warning: when the SURVIVOR COUNT backing a used
+  log-survival moment (a group's survivors at the baseline, at `tstar`, at a
+  fitting date, or the control group at a post date) is positive but below
+  `5` individuals, `fit()` warns "weak numerical support". The count rule (a
+  survival proportion is never below `1/n_group`, so a proportion threshold
+  would be unreachable) and the constant are library choices — the paper
+  declines to supply a cutoff (review lines 917-918) — and change no behavior.
+- **Note:** M-080 unit auto-cluster is satisfied by construction: the bootstrap
+  resamples individuals. No `cluster=`, `vcov_type=`, survey design, covariates,
+  staggered adoption, censoring, or repeated cross-sections in this version
+  (the review's deferred extensions).
+- **Note:** `DiagnosticReport` and `BusinessReport` reject `DurationDiDResults`
+  by type (their batteries are keyed to mean-outcome parallel-trends
+  diagnostics; a `TODO.md` row tracks admission); `practitioner_next_steps` has a
+  dedicated handler with a hazard-restriction assumptions step and an
+  anticipation placebo that truncates the frame before refitting one date earlier
+  (emitted only with at least three pre-dates). HonestDiD does not apply.
+
+**Reference implementation(s):** Authors' MATLAB `durationDiD.m` and Stata
+`durationdid.ado` at the pinned commit (static audit only in the review; not
+executed, not vendored). Differences adopted deliberately: the baseline row is
+excluded from the moments (Stata's default `burnin=1` includes it), zero SDs are
+never replaced by `1e-100`, and the pretest statistic is `max|delta/SD|` rather
+than `|max(delta/SD)|`.
+
+**Requirements checklist:**
+- [x] Balanced individual-panel validation and explicit exit-ATT estimand
+- [x] CD weighted gap and PH mean-ratio coefficient with baseline normalization; optional fitting dates and weights
+- [x] Whole-individual bootstrap with complete nuisance re-estimation
+- [x] Coherent centered-bootstrap pointwise, simultaneous, and scalar inference
+- [x] Separate fixed-anchor pre-treatment diagnostics and unavailable-test states
+- [x] Domain, invalid-curve, failed-draw, and joint-NaN inference handling
+- [x] `BaseEstimator`/results/serialization/event-study integration and documentation
+- [x] Regression scenarios (`tests/test_duration_did.py`, `tests/test_methodology_duration_did.py`)
 
 ---
 

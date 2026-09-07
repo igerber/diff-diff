@@ -1,7 +1,10 @@
 """
-BusinessReport — plain-English stakeholder narrative from any diff-diff result.
+BusinessReport — plain-English stakeholder narrative from a diff-diff result.
 
-Wraps any of the 16 fitted result types and produces:
+Wraps the fitted result types it dispatches on (every scalar estimator
+result except the two rejected by type: ``EventStudyResults`` surfaces and
+``DurationDiDResults`` — see the constructor's rejection branches) and
+produces:
 
 - ``summary()``: a short paragraph block suitable for an email or Slack message.
 - ``full_report()``: a multi-section markdown report with headline, assumptions,
@@ -92,7 +95,11 @@ class BusinessContext:
 
 
 class BusinessReport:
-    """Produce a stakeholder-ready narrative from any diff-diff results object.
+    """Produce a stakeholder-ready narrative from a diff-diff results object.
+
+    Accepts every scalar estimator result except the two rejected by type:
+    ``EventStudyResults`` surfaces and ``DurationDiDResults`` (see the
+    constructor's rejection branches).
 
     Parameters
     ----------
@@ -202,6 +209,23 @@ class BusinessReport:
                 "TwoWayFixedEffects fit); use the event-study surface "
                 "with HonestDiD, PreTrendsPower, or plot_event_study. "
                 "EventStudyResults admission is tracked in TODO.md."
+            )
+        # DurationDiDResults (Deaner & Ku 2026) is rejected BY TYPE: the
+        # narrative's parallel-trends framing does not describe a
+        # duration-DiD fit (untreated-hazard restriction on an absorbing
+        # outcome) and its headline is a uniform average of per-date
+        # absorption ATTs with a separate hazard pretest. Admission is
+        # tracked in TODO.md.
+        from diff_diff.duration_did_results import DurationDiDResults as _DDR
+
+        if isinstance(results, _DDR):
+            raise TypeError(
+                "BusinessReport does not support DurationDiDResults: the "
+                "narrative is keyed to mean-outcome parallel-trends estimators, "
+                "while DurationDiD identifies off an untreated-hazard "
+                "restriction on an absorbing outcome. Use results.summary(), "
+                "results.pretest, and results.aggregate('event_study') instead; "
+                "DurationDiD admission is tracked in TODO.md."
             )
         # Marked diagnostic results are rejected BY TYPE (spec section
         # 3.5, ledger row M-091): BusinessReport's primary input is a

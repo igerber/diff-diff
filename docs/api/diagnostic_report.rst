@@ -5,7 +5,10 @@ DiagnosticReport
 functions (parallel trends, pre-trends power, HonestDiD sensitivity,
 Goodman-Bacon, design-effect, EPV, heterogeneity, and estimator-native
 checks for SyntheticDiD and TROP) into a single report with a stable
-AI-legible schema.
+AI-legible schema. ``EventStudyResults`` surfaces and ``DurationDiDResults``
+are rejected by type (the battery is keyed to scalar mean-outcome
+parallel-trends estimators; for DurationDiD use ``results.pretest`` and
+``results.summary()``).
 
 Construction is free; accessing ``applicable_checks`` may derive the
 fit's post-fit event-study surface once (a view or kit recompute via

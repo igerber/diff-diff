@@ -75,7 +75,26 @@ def make_constructed_diagnostics() -> Dict[str, Any]:
         n_obs=50,
     )
 
+    duration_pretest = diff_diff.DurationDiDPretestResults(
+        method="cd",
+        periods=np.array([2, 3]),
+        anchor_period=4,
+        contrast=np.array([0.01, -0.02]),
+        se=np.array([0.05, 0.04]),
+        band_lower=np.array([-0.1, -0.11]),
+        band_upper=np.array([0.12, 0.07]),
+        crit_value=2.2,
+        statistic=0.5,
+        p_value=0.8,
+        reject=False,
+        alpha=0.05,
+        n_bootstrap=99,
+        n_bootstrap_valid=99,
+        status="ok",
+    )
+
     instances: Dict[str, Any] = {
+        "DurationDiDPretestResults": duration_pretest,
         "RDPlotResult": diff_diff.RDPlotResult(
             coef=coef,
             vars_bins=rng_bins,

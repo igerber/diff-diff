@@ -94,6 +94,7 @@ BAD_VALUES = {
     "StackedDiD": {"control_group": "not_a_mode"},
     "LPDiD": {"alpha": 5.0},
     "ChangesInChanges": {"alpha": 5.0},
+    "DurationDiD": {"method": "not_a_method"},
     "QDiD": {"alpha": 5.0},
     "HeterogeneousAdoptionDiD": {"design": "not_a_design"},
     "RegressionDiscontinuity": {"kernel": "not_a_kernel"},

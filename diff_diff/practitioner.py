@@ -49,6 +49,7 @@ _ESTIMATOR_NAMES: Dict[str, str] = {
     "HeterogeneousAdoptionDiDResults": "HeterogeneousAdoptionDiD (HAD)",
     "HeterogeneousAdoptionDiDEventStudyResults": "HeterogeneousAdoptionDiD (Event Study)",
     "ChangesInChangesResults": "ChangesInChanges / QDiD",
+    "DurationDiDResults": "DurationDiD (Deaner & Ku 2026 duration DiD)",
 }
 
 
@@ -182,6 +183,12 @@ def practitioner_next_steps(
     # (same step_name, so completed_steps filtering is unchanged).
     if type_name == "ChangesInChangesResults":
         pre_estimation[1] = _cic_assumptions_step(results)
+    # DurationDiDResults: identification rests on a restriction on the
+    # UNTREATED HAZARDS of a binary absorbing outcome (Deaner & Ku 2026),
+    # not on mean parallel trends - swap in the hazard-restriction
+    # statement (same step_name, so completed_steps filtering is unchanged).
+    if type_name == "DurationDiDResults":
+        pre_estimation[1] = _duration_did_assumptions_step(results)
 
     if not diagnostic_input:
         steps = pre_estimation + steps
@@ -2320,6 +2327,177 @@ def _handle_generic(results: Any):
 
 
 # ---------------------------------------------------------------------------
+# DurationDiD (Deaner & Ku 2026) handler
+# ---------------------------------------------------------------------------
+
+
+def _duration_did_assumptions_step(results: Any) -> Dict[str, Any]:
+    """Step-2 (assumptions) override for ``DurationDiDResults``.
+
+    The generic Step 2 asks for a parallel-trends VARIANT; DurationDiD's
+    identifying restriction is on the untreated hazards of an absorbing
+    outcome, so the parallel-trends prompt would be the wrong question.
+    Same baker_step/step_name, so ``completed_steps`` filtering is unchanged.
+    """
+    method = getattr(results, "method", "cd")
+    restriction = (
+        "a constant ADDITIVE gap between the two groups' untreated hazards "
+        "(common dynamics, Equation 2.3)"
+        if method == "cd"
+        else "a constant RATIO between the two groups' untreated hazards "
+        "(proportional hazards, Equation 2.4)"
+    )
+    return _step(
+        baker_step=2,
+        label="State identification assumptions (untreated-hazard restriction)",
+        why=(
+            "Name the duration-DiD assumptions you are invoking - not a mean "
+            f"parallel-trends variant: {restriction}; a binary ABSORBING outcome "
+            "on a fixed population; no anticipation before last_pre_period; "
+            "controls unaffected by the intervention; and, for the "
+            "whole-individual bootstrap, independence across individuals "
+            "(arbitrary serial dependence within a history is fine). The "
+            "restriction is on untreated hazards, never on outcome levels "
+            "(Deaner & Ku 2026, Section 2 and Appendix A.1)."
+        ),
+        code=(
+            "# Which untreated-hazard restriction (CD gap / PH ratio)? Absorbing "
+            "outcome? No anticipation before last_pre_period? Unaffected controls?"
+        ),
+        priority="high",
+        step_name="assumptions",
+    )
+
+
+def _handle_duration_did(results: Any):
+    """DurationDiD guidance (Deaner & Ku 2026).
+
+    HonestDiD and ``check_parallel_trends`` are deliberately never
+    recommended: the estimator's identification is a hazard restriction on
+    an absorbing outcome, and its event-study container carries no
+    pre-treatment ATT rows. The anticipation placebo is emitted only when the
+    fit has a third pre-date; its code truncates the frame to dates at or
+    before the original anchor BEFORE refitting one step earlier, so the
+    placebo family never contains a genuinely treated date.
+    """
+    from diff_diff.duration_did_results import _native_time_label
+
+    method = getattr(results, "method", "cd")
+    other = "ph" if method == "cd" else "cd"
+    pretest = getattr(results, "pretest", None)
+    pretest_status = getattr(pretest, "status", "unknown")
+    last_pre = getattr(results, "last_pre_period", None)
+    last_pre = _native_time_label(last_pre) if last_pre is not None else None
+    periods = [_native_time_label(p) for p in getattr(results, "periods", [])]
+    n_pre = sum(1 for p in periods if last_pre is not None and p <= last_pre)
+
+    steps = [
+        _step(
+            baker_step=3,
+            label="Read the Algorithm 2 pre-treatment specification test",
+            why=(
+                "DurationDiD fits the hazard restriction on pre-treatment "
+                "moments and tests it with a fixed-anchor contrast at every "
+                "interior pre-date (simultaneous centered-bootstrap band). "
+                f"Current status: {pretest_status!r}. A rejection is evidence "
+                "against the chosen restriction; a non-rejection cannot "
+                "establish post-treatment identification or rule out low power. "
+                "Do NOT run check_parallel_trends() on the binary outcome: "
+                "constant outcome-level gaps are not the identifying assumption "
+                "(Appendix A.1)."
+            ),
+            code=(
+                "print(results.pretest.summary())\n"
+                "results.pretest.to_dataframe()  # contrast, se, simultaneous band"
+            ),
+            step_name="parallel_trends",
+        ),
+        _step(
+            baker_step=6,
+            label="Sensitivity: refit under the other hazard restriction and window",
+            why=(
+                "CD and PH need not agree outside settings where the pre-treatment "
+                "hazards are close; report both, and vary the fitting window "
+                "(pre_periods=/pre_period_weights=) to show the imputed "
+                "counterfactual is not driven by early pre-dates."
+            ),
+            code=(
+                f"alt = DurationDiD(method='{other}', n_bootstrap={getattr(results, 'n_bootstrap', 1000)}, "
+                "seed=42).fit(\n"
+                "    data, outcome='exited', unit='unit', time='time', treatment='treated',\n"
+                f"    last_pre_period={last_pre!r})\n"
+                "# Narrow the fitting window to the last k pre-dates:\n"
+                "# ... .fit(..., pre_periods=[...last k dates...])"
+            ),
+            step_name="sensitivity",
+        ),
+    ]
+    if n_pre >= 3 and last_pre is not None:
+        # The preceding anchor is the exact stored grid scalar (never a
+        # floating-point subtraction, which would miss a decimal grid value).
+        anchor_idx = periods.index(last_pre)
+        earlier_repr = repr(periods[anchor_idx - 1])
+        steps.append(
+            _step(
+                baker_step=6,
+                label="Anticipation placebo (last pre-date as a fake post-date)",
+                why=(
+                    "Truncate the panel to dates at or before the original "
+                    "last_pre_period, then refit with the anchor one date "
+                    "earlier: the placebo post family is exactly the original "
+                    "last pre-date and contains no genuinely treated date. A "
+                    "significant placebo effect suggests anticipation (the "
+                    "paper's days-203-209 check)."
+                ),
+                code=(
+                    f"placebo_data = data[data['time'] <= {last_pre!r}]  # drop every treated date\n"
+                    f"placebo = DurationDiD(method='{method}', n_bootstrap="
+                    f"{getattr(results, 'n_bootstrap', 1000)}, seed=42).fit(\n"
+                    "    placebo_data, outcome='exited', unit='unit', time='time', "
+                    "treatment='treated',\n"
+                    f"    last_pre_period={earlier_repr})\n"
+                    "print(placebo.att, placebo.conf_int)"
+                ),
+                step_name="placebo",
+            )
+        )
+    else:
+        steps.append(
+            _step(
+                baker_step=6,
+                label="Anticipation placebo: not applicable",
+                why=(
+                    "The anticipation placebo needs a third pre-date (baseline, "
+                    "a fake post-date, and an earlier anchor); this fit has only "
+                    "two pre-treatment dates. Extend the pre-treatment window to "
+                    "run it."
+                ),
+                code="# Extend the pre-treatment window, then rerun practitioner_next_steps().",
+                priority="medium",
+                step_name="placebo",
+            )
+        )
+    steps.append(
+        _step(
+            baker_step=7,
+            label="Report the simultaneous band with the per-date effects",
+            why=(
+                "Per-date absorption ATTs are a path; the simultaneous "
+                "(max-|t|) band is the paper's uniform inference. Report "
+                "inference_status and period_status: a withheld family means "
+                "no valid causal inference on that path."
+            ),
+            code=(
+                "results.to_dataframe()  # att, pointwise CI, simultaneous band, status\n"
+                "results.aggregate('event_study').to_dataframe()"
+            ),
+            step_name="heterogeneity",
+        )
+    )
+    return steps, _check_nan_att(results)
+
+
+# ---------------------------------------------------------------------------
 # Handler registry — maps result type *names* (not classes) to avoid
 # import-time circular dependencies
 # ---------------------------------------------------------------------------
@@ -2342,6 +2520,7 @@ _HANDLERS = {
     "HeterogeneousAdoptionDiDResults": _handle_had,
     "HeterogeneousAdoptionDiDEventStudyResults": _handle_had_event_study,
     "ChangesInChangesResults": _handle_cic,
+    "DurationDiDResults": _handle_duration_did,
 }
 
 

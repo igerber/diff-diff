@@ -15,8 +15,9 @@ The reviewed version was submitted May 25, 2026; its title page is dated May 26,
 This is not evidence of acceptance or journal publication; the citation above
 deliberately identifies the reviewed working paper revision.
 
-This document is a methodology foundation, not a shipped estimator. The
-maintainer-approved first implementation is a two-group `DurationDiD` with common
+This document is the methodology foundation for the shipped `DurationDiD`
+estimator (`diff_diff/duration_did.py`; production registry entry in
+`REGISTRY.md`). The maintainer-approved first implementation is a two-group `DurationDiD` with common
 treatment timing, common dynamics and proportional hazards, individual bootstrap
 inference, and pre-treatment diagnostics. Covariate adjustment and staggered
 adoption are deferred from that implementation. They, and all other appendices,
@@ -65,9 +66,10 @@ digests were verified against the cached files.
 
 ## Methodology Registry Entry
 
-This prospective entry follows [REGISTRY.md](../REGISTRY.md)'s format. Keep it
-here until the estimator ships; no public API, catalog, or production registry
-entry is added by this review.
+This entry, written in [REGISTRY.md](../REGISTRY.md)'s format before the
+estimator existed, was transplanted into the production registry when
+`DurationDiD` shipped (with the implemented conventions recorded there as
+Notes). It is kept here as the review record.
 
 ## DurationDiD
 
@@ -162,14 +164,18 @@ numerical equivalence have not been established.
 
 **Requirements checklist:**
 
-- [ ] Balanced individual-panel validation and explicit exit-ATT estimand.
-- [ ] CD weighted gap and PH mean-ratio coefficient with baseline normalization.
-- [ ] Whole-individual bootstrap with complete nuisance re-estimation.
-- [ ] Coherent centered-bootstrap pointwise, simultaneous, and scalar inference.
-- [ ] Separate fixed-anchor pre-treatment diagnostics and unavailable-test states.
-- [ ] Domain, invalid-curve, failed-draw, and joint-NaN inference handling.
-- [ ] `BaseEstimator`/results/serialization/event-study integration and documentation.
-- [ ] Regression scenarios and independent reference checks specified below.
+- [x] Balanced individual-panel validation and explicit exit-ATT estimand.
+- [x] CD weighted gap and PH mean-ratio coefficient with baseline normalization.
+- [x] Whole-individual bootstrap with complete nuisance re-estimation.
+- [x] Coherent centered-bootstrap pointwise, simultaneous, and scalar inference.
+- [x] Separate fixed-anchor pre-treatment diagnostics and unavailable-test states.
+- [x] Domain, invalid-curve, failed-draw, and joint-NaN inference handling.
+- [x] `BaseEstimator`/results/serialization/event-study integration and documentation.
+- [x] Regression scenarios and independent reference checks specified below.
+
+All eight items shipped with the `DurationDiD` estimator PR (fitting dates and
+weights, `pre_periods`/`pre_period_weights`, were added at the maintainer's
+request; the tutorial notebook is deferred and tracked in `TODO.md`).
 
 ## Identification and estimator derivation
 
@@ -888,7 +894,7 @@ spells, covariates, staggered adoption, survey weights, and arbitrary clustering
 in this first interface rather than silently interpreting them.
 
 Use `DurationDiD(BaseEstimator)` and `DurationDiDResults(BaseResults)` under
-current 3.x conventions; no interface is implemented in this PR. The time path
+current 3.x conventions (implemented in the estimator PR that followed this review). The time path
 is primary. A proposed headline scalar is the uniform average of explicitly
 reported post-period absorption ATTs, with those same weights applied within
 every bootstrap draw. This is an average of probability effects across dates,
@@ -964,8 +970,9 @@ preserved. No Rust work is necessary for this documentation foundation.
 
 ### Tuning Parameters
 
-All defaults in this table are recommendations for subsequent estimator design,
-not parameters currently available in diff-diff.
+All defaults in this table were recommendations for the estimator design; the
+shipped `DurationDiD` follows them except where its REGISTRY.md Notes record a
+different convention (fitting dates and weights are `fit()` arguments).
 
 | Parameter / decision | Type | Proposed default | Basis / restriction |
 |---|---|---|---|
@@ -1034,9 +1041,9 @@ CD post absorption effects: [-0.01044616 -0.01754019]
 PH mean/increment-slope/average-slope: [2.5      2.9      2.692308]
 ```
 
-The later estimator PR should test these identities on admissible individual
-panels and add the following behavioral scenarios, with requirements still
-unchecked above:
+The estimator PR tests these identities on admissible individual panels and
+covers the following behavioral scenarios (`tests/test_duration_did.py`,
+`tests/test_methodology_duration_did.py`):
 
 - No treatment effect under both models, unequal initial survival, non-unit
   PH ratio, known exit-effect sign, and finite-sample PH choices that differ.

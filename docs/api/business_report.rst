@@ -1,7 +1,10 @@
 BusinessReport
 ==============
 
-``BusinessReport`` wraps any fitted diff-diff result object and produces
+``BusinessReport`` wraps a fitted diff-diff estimator result object (every
+scalar estimator result except the two rejected by type: ``EventStudyResults``
+surfaces and ``DurationDiDResults`` — use ``results.summary()``,
+``results.pretest`` and ``results.aggregate("event_study")`` there) and produces
 stakeholder-ready output:
 
 - ``summary()`` — a short paragraph block suitable for an email or Slack.

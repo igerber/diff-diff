@@ -49,6 +49,7 @@ ESTIMATOR_RESULTS = [
     "TROPResults",
     "SyntheticControlResults",
     "ChangesInChangesResults",
+    "DurationDiDResults",
     "HeterogeneousAdoptionDiDResults",
     "HeterogeneousAdoptionDiDEventStudyResults",
     "RegressionDiscontinuityResults",

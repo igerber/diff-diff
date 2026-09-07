@@ -36,6 +36,7 @@ regression discontinuity, and the Goodman-Bacon decomposition diagnostic:
    diff_diff.QDiD
    diff_diff.LWDiD
    diff_diff.DMLDiD
+   diff_diff.DurationDiD
    diff_diff.BaconDecomposition
    diff_diff.StaggeredTripleDifference
    diff_diff.RegressionDiscontinuity
@@ -81,6 +82,8 @@ Result containers returned by estimators:
    diff_diff.changes_in_changes_results.ChangesInChangesResults
    diff_diff.lwdid_results.LWDiDResults
    diff_diff.dml_did_results.DMLDiDResults
+   diff_diff.duration_did_results.DurationDiDResults
+   diff_diff.duration_did_results.DurationDiDPretestResults
    diff_diff.Comparison2x2
    diff_diff.StaggeredTripleDiffResults
    diff_diff.TWFEWeightsResult
@@ -372,6 +375,7 @@ Estimators
    changes_in_changes
    lwdid
    dml_did
+   duration_did
    bacon
 
 Infrastructure

@@ -485,6 +485,7 @@ _RULE1_TIME_SURFACES = (
     "CallawaySantAnna.fit[time]",
     "ChaisemartinDHaultfoeuille.fit[time]",
     "DMLDiD.fit[time]",
+    "DurationDiD.fit[time]",
     "ChangesInChanges.fit[time]",
     "ContinuousDiD.fit[time]",
     "DiagnosticReport.__init__[time]",

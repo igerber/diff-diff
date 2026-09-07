@@ -350,6 +350,7 @@ supported / out of scope; `warn` supported but with documented caveats;
 | `WooldridgeDiD` (ETWFE) | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ |
 | `LWDiD` | ✓ | ✓ | ✗ | ✗ | ✓ | warn | partial | ✗ | ✓ |
 | `DMLDiD` | ✓ | ✓ | ✗ | ✗ | partial | ✓ (REQUIRED) | ✗ | ✗ | ✓ (pweight full-design TSL + replicate weights + coarser cluster=; PSU-cohesive folds; panel=False = declared RCS; bad-control lane `fit(bad_control=)`: panel only, `cluster=` only) |
+| `DurationDiD` | ✓ (absorbing 0/1 outcome REQUIRED; two groups, common timing) | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ (whole-individual bootstrap only; no cluster=/survey) |
 | `EfficientDiD` | ✓ | ✓ | ✗ | ✗ | partial | ✓ | ✗ | ✗ | ✓ |
 | `SyntheticDiD` | ✓ | ✗ | ✗ | ✗ | ✓ | ✓ | ✓ | ✗ | partial |
 | `TROP` | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | partial |
@@ -529,6 +530,15 @@ estimators:
   (`results.bad_control_summary()`); panel only, `cluster=` only,
   `anticipation=0` + varying base only; never put the bad control in
   `covariates`.
+- `DurationDiD` (Deaner & Ku 2026) - causal duration DiD for a binary
+  ABSORBING outcome in a two-group common-timing design: restricts the
+  groups' UNTREATED HAZARDS (`method='cd'` additive gap / `method='ph'`
+  ratio), never outcome levels. `fit(..., last_pre_period=)` is REQUIRED;
+  optional `pre_periods=`/`pre_period_weights=` fitting window. Per-date
+  absorption ATTs with whole-individual bootstrap pointwise + simultaneous
+  bands; `results.pretest` is the specification test (not
+  `check_parallel_trends`; HonestDiD does not apply). Every inference
+  family is fully available or fully withheld (`inference_status`).
 
 Diagnostic: `BaconDecomposition().fit(df, ...)` shows the weight allocation of a
 TWFE fit to 2×2 comparison types. Forbidden-comparison weight > 10% is a

@@ -520,9 +520,37 @@ ROWS = [
             "CR1 sandwich)"
         ),
     ),
+    dict(
+        key="duration_did",
+        # Deterministic absorbing exit indicator derived from the shared
+        # fixture: unit-specific exit date 2 + unit % 7 (values 2..8) on the
+        # 1..6 grid, so both groups (grp = unit % 2) have full baseline
+        # survival, positive survival at last_pre_period=3, and survivors at
+        # every post date.
+        fit=lambda df: diff_diff.DurationDiD(n_bootstrap=0).fit(
+            df.assign(exited=(df["time"] >= 2 + df["unit"] % 7).astype(int)),
+            outcome="exited",
+            unit="unit",
+            time="time",
+            treatment="grp",
+            last_pre_period=3,
+        ),
+        cr1_k=(),
+        # One safe_inference (headline) + one safe_inference_batch (per-period)
+        # call per fit, both df=None: the centered-bootstrap p/CI override
+        # never passes a df.
+        tail_df=(None, None),
+        status="legitimate",
+        reason=(
+            "L3: Deaner & Ku (2026) whole-individual pooled bootstrap "
+            "(centered absolute-deviation pointwise and simultaneous bands); "
+            "no CR1 sandwich, normal-theory safe_inference gate only"
+        ),
+    ),
 ]
 
 _FAST_KEYS = {
+    "duration_did",
     "did_absorb_hc1_cluster_unit",
     "did_fixed_effects_hc1_cluster_unit",
     "twfe_hc1_cluster_unit_time_post",

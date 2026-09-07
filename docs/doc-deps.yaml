@@ -83,6 +83,9 @@ groups:
   dml_did:
     - diff_diff/dml_did.py
     - diff_diff/dml_did_results.py
+  duration_did:
+    - diff_diff/duration_did.py
+    - diff_diff/duration_did_results.py
   lwdid:
     - diff_diff/lwdid.py
     - diff_diff/lwdid_results.py
@@ -830,6 +833,62 @@ sources:
         type: user_guide
       - path: docs/migration-4.0.md
         type: user_guide
+
+  # ── DurationDiD (duration_did group) ────────────────────────────────
+
+  diff_diff/duration_did.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "DurationDiD"
+        type: methodology
+      - path: docs/methodology/papers/deaner-ku-2026-review.md
+        type: methodology
+        note: "Source review; ship-time status and requirements checklist"
+      - path: docs/methodology/variance-conventions.md
+        section: "duration_did inventory row + L3 bullet"
+        type: methodology
+      - path: docs/api/duration_did.rst
+        type: api_reference
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "DurationDiD"
+        type: user_guide
+      - path: diff_diff/guides/llms-practitioner.txt
+        section: "Step 4 decision tree"
+        type: user_guide
+      - path: diff_diff/guides/llms-autonomous.txt
+        section: "Estimator-support matrix"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/practitioner_decision_tree.rst
+        type: user_guide
+      - path: docs/survey-roadmap.md
+        section: "Current Limitations"
+        type: user_guide
+      - path: docs/index.rst
+        section: "Supported Estimators (one-line catalog row)"
+        type: user_guide
+
+  diff_diff/duration_did_results.py:
+    drift_risk: low
+    docs:
+      - path: docs/api/duration_did.rst
+        type: api_reference
+      - path: docs/methodology/REGISTRY.md
+        section: "DurationDiD"
+        type: methodology
+      - path: docs/methodology/REPORTING.md
+        section: "Module (DurationDiDResults rejected by type)"
+        type: methodology
 
   # ── ChangesInChanges + QDiD (changes_in_changes group) ────────────
 

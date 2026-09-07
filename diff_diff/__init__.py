@@ -98,6 +98,8 @@ from diff_diff.diagnostics import (
 )
 from diff_diff.dml_did import DMLDiD
 from diff_diff.dml_did_results import DMLDiDResults
+from diff_diff.duration_did import DurationDiD
+from diff_diff.duration_did_results import DurationDiDPretestResults, DurationDiDResults
 from diff_diff.efficient_did import (
     EDiDBootstrapResults,
     EfficientDiD,
@@ -471,6 +473,10 @@ __all__ = [
     "DMLDiD",
     "DMLDiDResults",
     "SieveLearner",
+    # DurationDiD (Deaner & Ku 2026 causal duration DiD)
+    "DurationDiD",
+    "DurationDiDResults",
+    "DurationDiDPretestResults",
     # Visualization
     "plot_bacon",
     "plot_event_study",
