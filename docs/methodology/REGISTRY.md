@@ -5960,7 +5960,10 @@ equivalently `p <= alpha`.
 - **Zero or non-finite SE in any column:** the whole family is withheld
   (`unavailable_zero_se`): the entire SE vector is set to NaN before the single
   `safe_inference` / `safe_inference_batch` gate, so every column is jointly NaN
-  (the helper gates per element and would otherwise keep good columns).
+  (the helper gates per element and would otherwise keep good columns). Exactly
+  constant bootstrap columns have their covariance rows and columns set to
+  zero before standardization, avoiding spurious positive SEs from mean
+  roundoff. No tolerance-based cutoff is applied to distinct draws.
 - **Status precedence** (first applicable label wins, pipeline order):
   `disabled` > `unavailable_invalid_periods` > `unavailable_failed_draws` >
   `unavailable_zero_se` > `ok`; pretest: `disabled` >

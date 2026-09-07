@@ -239,6 +239,36 @@ class TestCenteredBootstrap:
         assert s["vcov"].shape == (1, 1)
         assert s["crit_sim"] == s["crit"][0]
 
+    @pytest.mark.parametrize("value", [1.0 / 3.0, 0.1])
+    @pytest.mark.parametrize("constant_column", [0, 1, 2])
+    def test_constant_columns_have_exact_zero_covariance(self, value, constant_column):
+        # Nonconstant columns have hand-calculated sample variance 1 and 4,
+        # covariance 2. A constant column must have zero covariance with both.
+        draws = np.insert(
+            np.array([[-1.0, -2.0], [0.0, 0.0], [1.0, 2.0]]),
+            constant_column,
+            value,
+            axis=1,
+        )
+        s = _centered_bootstrap_summary(np.zeros(3), draws, 0.05)
+        varying = [i for i in range(3) if i != constant_column]
+        assert s["se"][constant_column] == 0.0
+        np.testing.assert_array_equal(s["vcov"][constant_column], np.zeros(3))
+        np.testing.assert_array_equal(s["vcov"][:, constant_column], np.zeros(3))
+        np.testing.assert_array_equal(s["vcov"][np.ix_(varying, varying)], [[1.0, 2.0], [2.0, 4.0]])
+        np.testing.assert_array_equal(s["se"], np.sqrt(np.diag(s["vcov"])))
+
+    def test_small_nonzero_variance_is_preserved(self):
+        # Neighboring floats are distinct draws, even though their spread is
+        # tiny. There is no absolute or relative "almost constant" cutoff.
+        value = 1.0 / 3.0
+        gap = np.spacing(value)
+        draws = np.array([[value - gap], [value], [value + gap]])
+        s = _centered_bootstrap_summary(np.array([value]), draws, 0.05)
+        assert s["se"][0] > 0
+        assert s["se"][0] == pytest.approx(gap, rel=1e-12, abs=0)
+        assert np.isfinite(s["crit_sim"]) and np.isfinite(s["p_joint"])
+
 
 # ---------------------------------------------------------------------------
 # Sampling behavior on the exact DGP

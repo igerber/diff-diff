@@ -660,19 +660,93 @@ class TestInferenceContract:
         assert r.bootstrap_failure_reasons["post"] == {"nonfinite_counterfactual": 2}
         assert r.pretest.status == "unavailable_nonfinite_moments"
 
-    def test_zero_se_gate_every_column(self, monkeypatch):
-        df = micro_panel()
+    @pytest.mark.parametrize("method", ["cd", "ph"])
+    @pytest.mark.parametrize("n_boot", [3, 1000])
+    @pytest.mark.parametrize("panel", ["micro", "simulation"])
+    def test_zero_se_gate_every_column(self, monkeypatch, method, n_boot, panel):
+        df = micro_panel() if panel == "micro" else simulate_panel(n=800)
+        last_pre = 3 if panel == "micro" else 4
         monkeypatch.setattr(
             dd_module, "_draw_indices", lambda rng, n, size: np.tile(np.arange(n), (size, 1))
         )
-        r = fit_quiet(DurationDiD(n_bootstrap=3, seed=0), df, last_pre_period=3)
+        r = fit_quiet(
+            DurationDiD(method=method, n_bootstrap=n_boot, seed=0), df, last_pre_period=last_pre
+        )
+        assert np.all(r.bootstrap_effects == r.bootstrap_effects[0])
+        assert r.n_bootstrap_valid == n_boot and r.n_bootstrap_valid_pretest == n_boot
         assert r.inference_status == "unavailable_zero_se"
         assert np.all(np.isnan(r.se_by_period)) and np.all(np.isnan(r.p_value_by_period))
+        assert np.all(np.isnan(r.t_stat_by_period)) and np.all(np.isnan(r.conf_int_by_period))
         assert np.all(np.isnan(r.pointwise_crit_values)) and r.vcov is None
         assert np.all(np.isnan(r.cband_lower)) and np.isnan(r.cband_crit_value)
+        assert np.all(np.isnan(r.cband_upper)) and np.isnan(r.joint_p_value)
         assert_nan_inference(
             {"se": r.se, "t_stat": r.t_stat, "p_value": r.p_value, "conf_int": r.conf_int}
         )
+        assert r.pretest.status == "unavailable_zero_se"
+        assert np.all(np.isnan(r.pretest.se))
+        assert np.all(np.isnan(r.pretest.band_lower))
+        assert np.all(np.isnan(r.pretest.band_upper))
+        assert np.isnan(r.pretest.statistic) and np.isnan(r.pretest.p_value)
+        assert np.isnan(r.pretest.crit_value) and r.pretest.reject is None
+
+    def test_seeded_constant_draws_withhold_inference(self):
+        # Real pooled resamples, with no mocking: all three estimates have the
+        # same non-binary-exact value. Mean roundoff previously admitted an
+        # SE around 7e-17, a zero p-value and a point CI as valid inference.
+        df = build_from_survivors(3, [3, 2, 0], 3, [3, 2, 1])
+        r = fit_quiet(DurationDiD(n_bootstrap=3, seed=11461), df, last_pre_period=2)
+        assert r.n_bootstrap_valid == 3
+        assert np.all(r.bootstrap_effects == r.bootstrap_effects[0])
+        assert r.bootstrap_effects[0, 0] == pytest.approx(1.0 / 3.0)
+        assert r.inference_status == "unavailable_zero_se"
+        assert r.vcov is None and np.all(np.isnan(r.se_by_period))
+        assert np.all(np.isnan(r.p_value_by_period))
+        assert np.all(np.isnan(r.conf_int_by_period))
+        assert_nan_inference(
+            {"se": r.se, "t_stat": r.t_stat, "p_value": r.p_value, "conf_int": r.conf_int}
+        )
+
+    @pytest.mark.parametrize("constant_statistic", ["period", "headline", "pretest"])
+    def test_constant_statistic_withholds_only_its_family(self, monkeypatch, constant_statistic):
+        # Inject controlled replicate statistics after otherwise valid pooled
+        # resampling, isolating each gate while the other family still varies.
+        original_bootstrap = dd_module._run_bootstrap
+
+        def controlled_bootstrap(*args, **kwargs):
+            boot = original_bootstrap(*args, **kwargs)
+            assert boot["ok_post"].all() and boot["ok_pretest"].all()
+            if constant_statistic == "pretest":
+                boot["delta_star"][:, 0] = 1.0 / 3.0
+            else:
+                if constant_statistic == "period":
+                    boot["tau_star"][:, 0] = 1.0 / 3.0
+                else:
+                    offset = np.arange(1, 4) / 64.0
+                    boot["tau_star"] = np.column_stack([1.0 / 3.0 - offset, 1.0 / 3.0 + offset])
+                    assert np.all(np.ptp(boot["tau_star"], axis=0) > 0)
+                boot["head_star"] = boot["tau_star"].mean(axis=1)
+                if constant_statistic == "headline":
+                    assert np.all(boot["head_star"] == boot["head_star"][0])
+            return boot
+
+        monkeypatch.setattr(dd_module, "_run_bootstrap", controlled_bootstrap)
+        r = fit_quiet(
+            DurationDiD(n_bootstrap=3, seed=3),
+            simulate_panel(n=800, n_periods=6),
+            last_pre_period=4,
+        )
+        if constant_statistic == "pretest":
+            assert r.inference_status == "ok" and np.isfinite(r.se)
+            assert r.pretest.status == "unavailable_zero_se"
+            assert np.all(np.isnan(r.pretest.se)) and np.isnan(r.pretest.p_value)
+        else:
+            assert r.pretest.status == "ok" and np.isfinite(r.pretest.p_value)
+            assert r.inference_status == "unavailable_zero_se"
+            assert r.vcov is None and np.all(np.isnan(r.se_by_period))
+            assert_nan_inference(
+                {"se": r.se, "t_stat": r.t_stat, "p_value": r.p_value, "conf_int": r.conf_int}
+            )
 
 
 class TestCurveValidity:

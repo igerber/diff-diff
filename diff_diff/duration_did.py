@@ -673,14 +673,27 @@ def _centered_bootstrap_summary(
     draws = np.asarray(draws, dtype=float).reshape(draws.shape[0], -1)
     with _errstate():
         vcov = np.atleast_2d(np.cov(draws, rowvar=False, ddof=1))
+        # Summing identical floats can round their mean away from the stored
+        # value, creating spurious positive variance. Enforce exact degeneracy
+        # without treating legitimate small variation as zero.
+        constant = np.all(draws == draws[0], axis=0)
+        vcov[constant, :] = 0.0
+        vcov[:, constant] = 0.0
         se = np.sqrt(np.diag(vcov))
-        z = np.abs(draws - point[None, :]) / se[None, :]
-        crit = np.array([_quantile_inverted_cdf(z[:, k], 1.0 - alpha) for k in range(z.shape[1])])
-        t_abs = np.abs(point / se)
-        p = np.mean(z >= t_abs[None, :], axis=0)
-        m = np.max(z, axis=1)
-        crit_sim = _quantile_inverted_cdf(m, 1.0 - alpha)
-        p_joint = float(np.mean(m >= np.max(t_abs)))
+        crit = np.full(point.shape, np.nan)
+        p = np.full(point.shape, np.nan)
+        crit_sim = p_joint = statistic = float("nan")
+        if np.all(np.isfinite(se)) and np.all(se > 0):
+            z = np.abs(draws - point[None, :]) / se[None, :]
+            crit = np.array(
+                [_quantile_inverted_cdf(z[:, k], 1.0 - alpha) for k in range(z.shape[1])]
+            )
+            t_abs = np.abs(point / se)
+            p = np.mean(z >= t_abs[None, :], axis=0)
+            m = np.max(z, axis=1)
+            crit_sim = _quantile_inverted_cdf(m, 1.0 - alpha)
+            p_joint = float(np.mean(m >= np.max(t_abs)))
+            statistic = float(np.max(t_abs))
     return {
         "vcov": vcov,
         "se": se,
@@ -692,7 +705,7 @@ def _centered_bootstrap_summary(
         "band_lower": point - crit_sim * se,
         "band_upper": point + crit_sim * se,
         "p_joint": p_joint,
-        "statistic": float(np.max(t_abs)),
+        "statistic": statistic,
     }
 
 
