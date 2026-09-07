@@ -1,5 +1,6 @@
 """Tests for WooldridgeDiD estimator and WooldridgeDiDResults."""
 
+import pickle
 import warnings
 
 import numpy as np
@@ -4339,6 +4340,290 @@ class TestComparisonSupportFiltering:
             )
         assert np.isfinite(res.overall_att)
         assert np.isfinite(res.overall_se)
+
+
+class TestUnsupportedPeriodAction:
+    """M-147: opt out of period deletion without weakening identification."""
+
+    @staticmethod
+    def _panel(supported=False):
+        rng = np.random.default_rng(147)
+        rows = []
+        for j, g in enumerate((0, 3, 6)):
+            for u in range(20):
+                fe = rng.normal(0, 0.2)
+                stop = 7 if supported or g else 5
+                for t in range(1, stop):
+                    eta = fe + 0.05 * t + 0.4 * (g > 0 and t >= g) + rng.normal(0, 0.2)
+                    rows.append((20 * j + u, t, g, 1 / (1 + np.exp(-eta))))
+        return pd.DataFrame(rows, columns=["unit", "time", "cohort", "y"])
+
+    @staticmethod
+    def _fit(est, df, **kwargs):
+        return est.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort", **kwargs)
+
+    @staticmethod
+    def _assert_same_estimates(left, right):
+        assert left.n_obs == right.n_obs
+        assert left.groups == right.groups
+        assert left.time_periods == right.time_periods
+        pd.testing.assert_frame_equal(left.to_dataframe(level="gt"), right.to_dataframe(level="gt"))
+        np.testing.assert_equal(left._gt_vcov, right._gt_vcov)
+        for level in ("simple", "group", "calendar", "event_study"):
+            left.aggregate(level)
+            right.aggregate(level)
+            pd.testing.assert_frame_equal(
+                left.to_dataframe(level=level), right.to_dataframe(level=level)
+            )
+
+    def test_parameter_roundtrip_and_switch(self):
+        est = WooldridgeDiD()
+        assert est.get_params()["unsupported_period_action"] == "drop"
+        for action in ("error", "drop"):
+            assert est.set_params(unsupported_period_action=action) is est
+            assert est.unsupported_period_action == action
+            assert WooldridgeDiD(**est.get_params()).get_params() == est.get_params()
+
+    @pytest.mark.parametrize(
+        "bad",
+        ["warn", "DROP", "", None, True, 0, 1.0, ["drop"], np.array(["drop"]), {"drop": True}],
+    )
+    def test_invalid_policy_is_transactional_and_rechecked(self, bad):
+        with pytest.raises(ValueError, match="unsupported_period_action must be"):
+            WooldridgeDiD(unsupported_period_action=bad)
+        est = WooldridgeDiD(unsupported_period_action="error")
+        original = est.get_params()
+        with pytest.raises(ValueError, match="unsupported_period_action must be"):
+            est.set_params(alpha=0.1, unsupported_period_action=bad)
+        assert est.get_params() == original
+        est.unsupported_period_action = bad
+        with pytest.raises(ValueError, match="unsupported_period_action must be"):
+            self._fit(est, self._panel(supported=True))
+        assert not est.is_fitted_
+
+    @pytest.mark.parametrize("method", ["ols", "logit", "poisson"])
+    @pytest.mark.parametrize("control", ["never_treated", "not_yet_treated"])
+    @pytest.mark.parametrize("rank", ["warn", "error", "silent"])
+    def test_unsupported_matrix(self, method, control, rank, monkeypatch):
+        df = self._panel()
+        original = df.copy(deep=True)
+        options = dict(method=method, control_group=control, rank_deficient_action=rank)
+        periods = [5, 6] if method == "ols" and control == "never_treated" else [6]
+        n_dropped = int(df.time.isin(periods).sum())
+        with warnings.catch_warnings(record=True) as implicit_warnings:
+            warnings.simplefilter("always")
+            implicit = self._fit(WooldridgeDiD(**options), df)
+        with warnings.catch_warnings(record=True) as explicit_warnings:
+            warnings.simplefilter("always")
+            explicit = self._fit(WooldridgeDiD(**options, unsupported_period_action="drop"), df)
+        assert [(w.category, str(w.message)) for w in implicit_warnings] == [
+            (w.category, str(w.message)) for w in explicit_warnings
+        ]
+        assert any(
+            f"Dropped {n_dropped} of {len(df)} observations" in str(w.message)
+            for w in explicit_warnings
+        )
+        assert explicit.n_obs == len(df) - n_dropped
+        assert explicit.time_periods == [t for t in range(1, 7) if t not in periods]
+        assert np.isfinite(explicit.att) and np.isfinite(explicit.se)
+        self._assert_same_estimates(implicit, explicit)
+        assert explicit.to_dict()["unsupported_period_action"] == "drop"
+
+        def forbidden_build(*args, **kwargs):
+            pytest.fail("unsupported-period refusal must precede interaction construction")
+
+        monkeypatch.setattr("diff_diff.wooldridge._build_interaction_matrix", forbidden_build)
+        strict = WooldridgeDiD(**options, unsupported_period_action="error")
+        with warnings.catch_warnings(record=True) as strict_warnings:
+            warnings.simplefilter("always")
+            with pytest.raises(ValueError) as exc:
+                self._fit(strict, df)
+        message = str(exc.value)
+        assert (
+            f"Period(s) {', '.join(map(str, periods))} have no eligible comparison group" in message
+        )
+        assert f"{n_dropped} of {len(df)} observations" in message
+        assert "unsupported_period_action='error'" in message
+        assert "unsupported_period_action='drop'" in message
+        assert not strict_warnings
+        assert not strict.is_fitted_
+        with pytest.raises(RuntimeError, match="fit"):
+            _ = strict.results_
+        pd.testing.assert_frame_equal(df, original)
+
+    @pytest.mark.parametrize("method", ["ols", "logit", "poisson"])
+    @pytest.mark.parametrize("control", ["never_treated", "not_yet_treated"])
+    @pytest.mark.parametrize("rank", ["warn", "error", "silent"])
+    def test_supported_matrix_and_result_provenance(self, method, control, rank):
+        df = self._panel(supported=True)
+        options = dict(method=method, control_group=control, rank_deficient_action=rank)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            dropped = self._fit(WooldridgeDiD(**options), df)
+            est = WooldridgeDiD(**options, unsupported_period_action="error")
+            strict = self._fit(est, df)
+        assert not caught
+        assert strict.n_obs == len(df)
+        assert np.isfinite(strict.att) and np.isfinite(strict.se)
+        self._assert_same_estimates(dropped, strict)
+        est.set_params(unsupported_period_action="drop")
+        for result in (strict, pickle.loads(pickle.dumps(strict))):
+            assert result.unsupported_period_action == "error"
+            assert result.to_dict()["unsupported_period_action"] == "error"
+            assert "Unsupported period action: error" in result.summary()
+        # Failed updates/refits must not overwrite the last completed fit's provenance.
+        with pytest.raises(ValueError, match="unsupported_period_action must be"):
+            est.set_params(unsupported_period_action=None)
+        est.set_params(unsupported_period_action="error")
+        with pytest.raises(ValueError, match="no eligible comparison group"):
+            self._fit(est, self._panel())
+        assert est.results_ is strict
+        assert strict.to_dict()["unsupported_period_action"] == "error"
+
+    def test_legacy_result_state_defaults_to_drop(self):
+        result = _make_minimal_results()
+        assert result.unsupported_period_action == "drop"
+        del result.__dict__["unsupported_period_action"]
+        restored = pickle.loads(pickle.dumps(result))
+        assert restored.__dict__["unsupported_period_action"] == "drop"
+        assert restored.to_dict()["unsupported_period_action"] == "drop"
+        assert "Unsupported period action: drop" in restored.summary()
+
+    @pytest.mark.parametrize("method", ["logit", "poisson"])
+    @pytest.mark.parametrize(
+        "invalid", ["missing_outcome", "invalid_outcome", "exovar", "xtvar", "xgvar", "cluster"]
+    )
+    def test_support_refusal_can_precede_later_input_validation(self, method, invalid):
+        """The policy preserves the existing pipeline, not a full-input preflight."""
+        df = self._panel()
+        fit_options = {}
+        options = dict(method=method)
+        if invalid == "missing_outcome":
+            df = df.drop(columns="y")
+            expected_error, match = KeyError, "y"
+        elif invalid == "invalid_outcome":
+            # Invalid on a RETAINED period too, so the default fitter must reject it.
+            df.loc[df.time == 3, "y"] = -1.0
+            expected_error, match = ValueError, f"method='{method}' requires"
+        elif invalid == "cluster":
+            options["cluster"] = "missing_cluster"
+            expected_error, match = KeyError, "missing_cluster"
+        else:
+            fit_options[invalid] = ["missing_covariate"]
+            expected_error, match = KeyError, "missing_covariate"
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with pytest.raises(ValueError, match="no eligible comparison group"):
+                self._fit(
+                    WooldridgeDiD(**options, unsupported_period_action="error"), df, **fit_options
+                )
+        assert not caught
+        # When filtering is allowed (or already performed), the existing input
+        # error surfaces at its normal point rather than being silently accepted.
+        with pytest.warns(UserWarning, match="Dropped"):
+            with pytest.raises(expected_error, match=match):
+                self._fit(WooldridgeDiD(**options), df, **fit_options)
+        with pytest.raises(expected_error, match=match):
+            self._fit(
+                WooldridgeDiD(**options, unsupported_period_action="error"),
+                df[df.time < 6],
+                **fit_options,
+            )
+
+    @pytest.mark.parametrize("method", ["logit", "poisson"])
+    def test_outcomes_in_discarded_periods_are_not_preflighted(self, method):
+        """Full-frame outcome validation would break an existing successful fit."""
+        df = self._panel()
+        df.loc[df.time == 6, "y"] = 2.0 if method == "logit" else -1.0
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = self._fit(WooldridgeDiD(method=method), df)
+            supported = self._fit(
+                WooldridgeDiD(method=method, unsupported_period_action="error"), df[df.time < 6]
+            )
+        assert result.n_obs == len(df[df.time < 6])
+        assert np.isfinite(result.att) and np.isfinite(result.se)
+        self._assert_same_estimates(result, supported)
+
+    @pytest.mark.parametrize("method", ["ols", "logit", "poisson"])
+    @pytest.mark.parametrize("control", ["never_treated", "not_yet_treated"])
+    @pytest.mark.parametrize("action", ["drop", "error"])
+    def test_survey_positive_weight_support_and_validation(self, method, control, action):
+        from diff_diff.survey import SurveyDesign
+
+        df = self._panel(supported=True)
+        df["w"] = 1.0
+        df["psu"] = df.unit
+        design = SurveyDesign(weights="w", psu="psu")
+        est = WooldridgeDiD(method=method, control_group=control, unsupported_period_action=action)
+        result = self._fit(est, df, survey_design=design)
+        reference = self._fit(
+            WooldridgeDiD(method=method, control_group=control), df, survey_design=design
+        )
+        self._assert_same_estimates(result, reference)
+        assert result.n_obs == len(df)
+        assert result.survey_metadata is not None
+        assert result.to_dict()["unsupported_period_action"] == action
+        # Observed but zero-weight controls cannot supply comparison support.
+        df.loc[(df.cohort == 0) & (df.time >= 5), "w"] = 0.0
+        error_type = ValueError if action == "error" else NotImplementedError
+        with pytest.raises(error_type, match="no eligible comparison group") as exc:
+            self._fit(est, df, survey_design=design)
+        periods = "5, 6" if method == "ols" and control == "never_treated" else "6"
+        assert f"Period(s) {periods} have no eligible comparison group" in str(exc.value)
+        # Invalid design metadata in an unsupported period must not be hidden by the policy.
+        df.loc[(df.cohort == 3) & (df.time == 6), "psu"] = np.nan
+        with pytest.raises(ValueError) as exc:
+            self._fit(est, df, survey_design=design)
+        assert "no eligible comparison group" not in str(exc.value)
+        assert "psu" in str(exc.value).lower()
+
+    @pytest.mark.parametrize("anticipation", [0, 1, 2])
+    @pytest.mark.parametrize("method", ["ols", "logit", "poisson"])
+    def test_all_treated_anticipation_threshold(self, anticipation, method):
+        df = self._panel()
+        df = df[df.cohort > 0]
+        periods = list(range(6 - anticipation, 7))
+        n_unsupported = int(df.time.isin(periods).sum())
+        with pytest.raises(ValueError) as exc:
+            self._fit(
+                WooldridgeDiD(
+                    method=method, anticipation=anticipation, unsupported_period_action="error"
+                ),
+                df,
+            )
+        assert f"Period(s) {', '.join(map(str, periods))} have no eligible comparison group" in str(
+            exc.value
+        )
+        assert f"{n_unsupported} of {len(df)} observations" in str(exc.value)
+
+    @pytest.mark.parametrize("action", ["drop", "error"])
+    def test_policy_does_not_disable_unidentified_cohort_exclusion(self, action):
+        df = self._panel(supported=True)
+        df.loc[df.cohort == 6, "cohort"] = 1
+        with pytest.warns(UserWarning, match="observations are EXCLUDED"):
+            result = self._fit(WooldridgeDiD(unsupported_period_action=action), df)
+        assert result.n_obs == len(df[df.cohort != 1])
+        assert result.groups == [3]
+        assert np.isfinite(result.att)
+
+    @pytest.mark.parametrize("options", [{"n_bootstrap": 49, "seed": 147}, {"cohort_trends": True}])
+    def test_bootstrap_and_cohort_trends(self, options, ci_params):
+        if options.get("n_bootstrap"):
+            options = dict(options, n_bootstrap=ci_params.bootstrap(options["n_bootstrap"]))
+        df = self._panel(supported=True)
+        dropped = self._fit(WooldridgeDiD(**options), df)
+        strict = self._fit(WooldridgeDiD(**options, unsupported_period_action="error"), df)
+        self._assert_same_estimates(dropped, strict)
+        assert np.isfinite(strict.att) and np.isfinite(strict.se)
+        assert strict.unsupported_period_action == "error"
+        if options.get("n_bootstrap"):
+            assert strict._bootstrap_used
+        else:
+            assert set(strict.cohort_trend_coefs) == {3, 6}
+        with pytest.raises(ValueError, match="unsupported_period_action='error'"):
+            self._fit(WooldridgeDiD(**options, unsupported_period_action="error"), self._panel())
 
 
 class TestWooldridgeDfConvention:
