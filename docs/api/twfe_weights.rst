@@ -92,7 +92,7 @@ Inspecting what a TWFE regression weights
        base_period="universal",   # required for aggregation="twfe"
    ).fit(
        panel, outcome="lemp", unit="countyreal", time="year",
-       first_treat="first.treat",
+       first_treat="first_treat",
    )
 
    weights = diff_diff.attgt_weights(cs, aggregation="twfe")
@@ -108,6 +108,16 @@ between ``implied_att`` values is the cost of the TWFE specification:
 
 .. code-block:: python
 
+   import diff_diff
+
+   panel = diff_diff.load_mpdta()
+   cs = diff_diff.CallawaySantAnna(
+       control_group="never_treated", base_period="universal",
+   ).fit(
+       panel, outcome="lemp", unit="countyreal", time="year",
+       first_treat="first_treat",
+   )
+
    for aggregation in ("twfe", "overall", "simple"):
        w = diff_diff.attgt_weights(cs, aggregation=aggregation)
        print(f"{aggregation:8s} {w.implied_att: .4f}  "
@@ -118,10 +128,14 @@ Separating treatment effects from pre-trend violations
 
 .. code-block:: python
 
+   import diff_diff
+
+   panel = diff_diff.load_mpdta()
+
    decomposition = diff_diff.decompose_twfe_weights(
        panel,
        outcome="lemp", unit="countyreal", time="year",
-       first_treat="first.treat",
+       first_treat="first_treat",
        covariates=["lpop"],
        balance_covariates=["lpop"],
    )

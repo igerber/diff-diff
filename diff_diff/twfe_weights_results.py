@@ -76,12 +76,23 @@ class ATTGTWeightsResult(Diagnostic):
         ``sum(weight * att)`` - what the estimand delivers given these
         ATT(g, t). For ``aggregation="twfe"`` this is the TWFE coefficient.
     n_negative : int
-        Number of cells receiving a negative weight. Non-zero is the
-        classic staggered-adoption pathology: the regression is subtracting
-        treatment effects it should be adding.
+        Number of cells - PRE and post - receiving a negative weight. Under
+        ``aggregation="twfe"`` the weights over the full ``g != 0`` grid sum
+        to zero (post to +1, pre to -1), so this is non-zero in every
+        staggered design; read ``n_negative_post`` for the pathology.
     negative_weight_share : float
-        ``sum(|w| : w < 0) / sum(|w|)`` - how much of the total weight mass
-        points the wrong way. ``0.0`` when no weight is negative.
+        ``sum(|w| : w < 0) / sum(|w|)`` over ALL cells - how much of the total
+        weight mass points the wrong way. Near 0.5 is normal under
+        ``"twfe"`` for the same reason. ``0.0`` when no weight is negative.
+    n_negative_post : int
+        Number of POST-treatment cells receiving a negative weight. This is
+        the classic staggered-adoption pathology: the regression subtracts
+        treatment effects it should be adding. Zero for ``"overall"`` and
+        ``"simple"`` by construction.
+    negative_post_weight_share : float
+        ``sum(|w| : w < 0, post) / sum(|w| : post)`` - the share of
+        post-treatment weight mass that is negative. No R counterpart; see
+        the methodology registry.
     n_cells : int
         Number of ``(g, t)`` cells contributing.
     source : str or None
@@ -98,6 +109,8 @@ class ATTGTWeightsResult(Diagnostic):
     implied_att: float
     n_negative: int
     negative_weight_share: float
+    n_negative_post: int
+    negative_post_weight_share: float
     n_cells: int
     source: Optional[str] = None
     control_group: Optional[str] = None
@@ -146,15 +159,24 @@ class ATTGTWeightsResult(Diagnostic):
             "-" * width,
             "",
             f"{'Implied estimate:':<28} {_fmt(self.implied_att)}",
-            f"{'Negative-weight cells:':<28} {self.n_negative:>12}",
-            f"{'Negative-weight share:':<28} {_fmt(self.negative_weight_share)}",
+            f"{'Negative POST-period cells:':<28} {self.n_negative_post:>12}",
+            f"{'Negative POST-weight share:':<28} {_fmt(self.negative_post_weight_share)}",
+            f"{'Negative cells (all):':<28} {self.n_negative:>12}",
+            f"{'Negative share (all):':<28} {_fmt(self.negative_weight_share)}",
             "",
         ]
-        if self.n_negative:
+        if self.n_negative_post:
             lines += [
-                "Note: negative weights mean this estimand subtracts some ATT(g, t).",
-                "      Under heterogeneous effects the estimate need not lie in the",
-                "      convex hull of the underlying group-time effects.",
+                "Note: negative POST-period weights mean this estimand subtracts some",
+                "      treatment-period ATT(g, t). Under heterogeneous effects the",
+                "      estimate need not lie in the convex hull of those effects.",
+                "",
+            ]
+        elif self.n_negative:
+            lines += [
+                "Note: the negative weights fall on PRE-treatment cells only, which is",
+                "      how the TWFE weights sum to zero over the full grid; no",
+                "      treatment-period effect is being subtracted.",
                 "",
             ]
         lines.append("=" * width)
@@ -176,6 +198,8 @@ class ATTGTWeightsResult(Diagnostic):
             "n_cells": self.n_cells,
             "n_negative": self.n_negative,
             "negative_weight_share": self.negative_weight_share,
+            "n_negative_post": self.n_negative_post,
+            "negative_post_weight_share": self.negative_post_weight_share,
             "n_dropped_cells": self.n_dropped_cells,
             "source": self.source,
             "control_group": self.control_group,
@@ -186,29 +210,27 @@ class ATTGTWeightsResult(Diagnostic):
 
 @dataclass
 class TWFEDecompositionResult(Diagnostic):
-    """Decomposition of a TWFE (or AIPW) estimate into weighted ATT(g, t).
+    """Decomposition of a TWFE estimate into weighted ATT(g, t).
 
     Returned by :func:`diff_diff.decompose_twfe_weights`.
 
     Attributes
     ----------
     cells : pd.DataFrame
-        Columns ``group``, ``time``, ``post``, ``att``, ``weight``, ``ess``,
-        and (``method="fwl"`` only) ``remainder``. ``weight`` is the implicit
-        weight the regression places on that cell's ATT(g, t) - R's
-        ``alpha_weight`` under ``method="fwl"`` and ``att_weight`` under
-        ``method="aipw"``.
+        Columns ``group``, ``time``, ``post``, ``att``, ``weight``, ``ess``
+        and ``remainder``. ``weight`` is the implicit weight the regression
+        places on that cell's ATT(g, t) - R's ``alpha_weight``.
     method : str
-        ``"fwl"`` (Frisch-Waugh-Lovell residual weights from the TWFE
-        regression) or ``"aipw"`` (per-cell doubly-robust weights).
+        ``"fwl"`` - Frisch-Waugh-Lovell residual weights from the TWFE
+        regression. (The only method currently implemented; upstream's AIPW
+        decomposition is a documented follow-up.)
     estimate : float
         The estimate being decomposed - ``decomposition + remainder``.
     decomposition : float
         ``sum(weight * att)`` over all cells, pre and post.
     remainder : float
         Part of ``estimate`` not attributable to any ATT(g, t) cell.
-        Identically ``0.0`` except under ``method="fwl"`` with
-        ``base_period="gmin1"``.
+        Identically ``0.0`` except under ``base_period="gmin1"``.
     pretrend_bias : float
         ``sum(weight * att)`` over PRE-treatment cells only. Under parallel
         trends every pre-treatment ATT(g, t) is zero and this vanishes; a
@@ -217,7 +239,7 @@ class TWFEDecompositionResult(Diagnostic):
     post_only : float
         ``sum(weight * att)`` over post-treatment cells only.
     base_period : str or None
-        ``"first_period"`` or ``"gmin1"`` (``method="fwl"`` only).
+        ``"first_period"`` or ``"gmin1"``.
     covariates : tuple of str
         Covariates the regression adjusted for. Empty tuple when none.
     effective_sample_size : float
@@ -258,7 +280,6 @@ class TWFEDecompositionResult(Diagnostic):
         width = 78
         method_label = {
             "fwl": "TWFE regression (Frisch-Waugh-Lovell implicit weights)",
-            "aipw": "AIPW (doubly-robust per-cell weights)",
         }.get(self.method, self.method)
         covs = ", ".join(self.covariates) if self.covariates else "(none)"
         lines = [
@@ -399,17 +420,23 @@ class TWFEDecompositionResult(Diagnostic):
 
         weights = self.cells.set_index(["group", "time"])["weight"]
         keys = pd.MultiIndex.from_arrays([table["group"], table["time"]])
-        cell_weight = weights.reindex(keys).to_numpy()
+        table["_w"] = weights.reindex(keys).to_numpy()
         if post_only:
-            cell_weight = cell_weight * table["post"].to_numpy()
+            # Mask on the `post` COLUMN, not on a zero roll-up weight: R's
+            # post-only helper never touches the pre cells, but a post cell
+            # whose implicit weight happens to be exactly zero still
+            # contributes - and still propagates its NA.
+            table = table[table["post"].to_numpy().astype(bool)]
 
-        table["_w"] = cell_weight
-        rolled = (
-            table[list(_BALANCE_STATS)]
-            .mul(table["_w"], axis=0)
-            .groupby(table["covariate"].to_numpy(), sort=False)
-            .sum()
-        )
+        # R propagates NA: if ANY contributing cell of a (covariate, statistic)
+        # is NA, the summary is NA. pandas' sum() skips NaN, which would turn
+        # the documented NA return of frac_treated_extreme (fewer than three
+        # distinct values) into a spurious 0.0.
+        stats = table[list(_BALANCE_STATS)].mul(table["_w"], axis=0)
+        groups = table["covariate"].to_numpy()
+        rolled = stats.groupby(groups, sort=False).sum(min_count=1)
+        any_nan = table[list(_BALANCE_STATS)].isna().groupby(groups, sort=False).any()
+        rolled = rolled.mask(any_nan)
         rolled.index.name = "covariate"
         out = rolled.reset_index()
         if standardize:

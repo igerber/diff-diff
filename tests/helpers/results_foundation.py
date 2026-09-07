@@ -332,12 +332,27 @@ def make_constructed_diagnostics() -> Dict[str, Any]:
             interpretation="All applicable checks passed.",
             applicable_checks=("parallel_trends",),
         ),
+        # Every count / share is DERIVED from the cells so the fixture cannot
+        # drift from the object it imitates.
         "ATTGTWeightsResult": diff_diff.ATTGTWeightsResult(
             weights=attgt_weight_cells,
             aggregation="twfe",
             implied_att=float((attgt_weight_cells["weight"] * attgt_weight_cells["att"]).sum()),
-            n_negative=1,
-            negative_weight_share=0.25,
+            n_negative=int((attgt_weight_cells["weight"] < 0).sum()),
+            negative_weight_share=float(
+                attgt_weight_cells["weight"].clip(upper=0).abs().sum()
+                / attgt_weight_cells["weight"].abs().sum()
+            ),
+            n_negative_post=int(
+                ((attgt_weight_cells["weight"] < 0) & (attgt_weight_cells["post"] == 1)).sum()
+            ),
+            negative_post_weight_share=float(
+                attgt_weight_cells.loc[attgt_weight_cells["post"] == 1, "weight"]
+                .clip(upper=0)
+                .abs()
+                .sum()
+                / attgt_weight_cells.loc[attgt_weight_cells["post"] == 1, "weight"].abs().sum()
+            ),
             n_cells=len(attgt_weight_cells),
             source="CallawaySantAnnaResults",
             control_group="never_treated",
@@ -349,11 +364,25 @@ def make_constructed_diagnostics() -> Dict[str, Any]:
             estimate=float((decomposition_cells["weight"] * decomposition_cells["att"]).sum()),
             decomposition=float((decomposition_cells["weight"] * decomposition_cells["att"]).sum()),
             remainder=0.0,
-            pretrend_bias=0.0,
-            post_only=0.5,
+            pretrend_bias=float(
+                (decomposition_cells["weight"] * decomposition_cells["att"])[
+                    decomposition_cells["post"] == 0
+                ].sum()
+            ),
+            post_only=float(
+                (decomposition_cells["weight"] * decomposition_cells["att"])[
+                    decomposition_cells["post"] == 1
+                ].sum()
+            ),
             base_period="first_period",
             covariates=("x1",),
-            effective_sample_size=42.0,
+            # Module identity: post_count * sum_post(weight * ess).
+            effective_sample_size=float(
+                (decomposition_cells["post"] == 1).sum()
+                * (decomposition_cells["weight"] * decomposition_cells["ess"])[
+                    decomposition_cells["post"] == 1
+                ].sum()
+            ),
             n_units=12,
             n_periods=4,
             balance=decomposition_balance,

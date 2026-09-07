@@ -1563,10 +1563,44 @@ decompose_twfe_weights(
 plot_twfe_weights(result, kind="auto")   # "weights" | "balance"
 ```
 
-`aggregation="twfe"` requires a fit with `base_period="universal"` and
-`control_group="never_treated"`; it raises otherwise. ATT^O and ATT^simple
-weights are non-negative and sum to one, so comparing `implied_att` across
-the three aggregations shows what the TWFE specification costs.
+`aggregation="twfe"` requires a fit with `base_period="universal"`,
+`control_group="never_treated"` AND no covariates (R twfe_weights' three
+restrictions); it raises otherwise. ATT^O and ATT^simple weights are
+non-negative and sum to one, so comparing `implied_att` across the three
+aggregations shows what the TWFE specification costs.
+
+Both entry points fail closed on input R never faced: NaN / `-inf` cohort
+labels (never-treated is exactly `0` or `+inf`), duplicated or non-finite
+ATT(g,t) cells, an incomplete group-time grid (`"twfe"` needs every cohort x
+period cell, the CS estimands every post cell), and sampling weights that are
+not finite, non-negative and positive-mass. Two structural gaps mirror R
+rather than raising, each with a `UserWarning`: a cohort with no estimable
+post cell is dropped from the table and the cohort shares (`did`'s
+first-period drop), and under `control_group="not_yet_treated"` the cells CS
+marks `zero_treated_control` are treated as structurally absent, so
+`"overall"`/`"simple"` average over each cohort's AVAILABLE post periods
+(`aggte`). `n_negative_post` / `negative_post_weight_share` report the
+pathology (negative weight on POST cells); `n_negative` counts pre cells too,
+and is near-half in every staggered design because the TWFE weights sum to
+zero over the full grid.
+
+### plot_twfe_weights
+
+```python
+plot_twfe_weights(
+    results,                        # ATTGTWeightsResult | TWFEDecompositionResult
+    kind="auto",                    # "weights" | "balance" ("auto" picks balance
+                                    #   when the result carries a balance table)
+    standardize=True, absolute_value=True,   # balance view
+    annotate=False, ax=None, show=True,
+    backend="matplotlib",           # or "plotly"
+)
+```
+
+`kind="weights"` scatters weight against ATT(g,t), coloured by pre/post - points
+left of the vertical zero line carry negative weight. `kind="balance"` scatters
+unweighted against implicitly-weighted covariate differences; points near the
+horizontal axis are covariates the implicit weights balance.
 
 `decompose_twfe_weights` takes the raw panel rather than a fitted result
 because it re-estimates. It is tied to `attgt_weights` by an identity:

@@ -1204,7 +1204,7 @@ sources:
       - path: docs/r_comparison.rst
         type: user_guide
 
-  # ── BaconDecomposition ───���─────────────────────────────────────────
+  # ── TWFE Weight Diagnostics ───���─────────────────────────────────────────
 
   diff_diff/twfe_weights.py:
     drift_risk: low
@@ -1233,6 +1233,9 @@ sources:
       - path: docs/methodology/REGISTRY.md
         section: "TWFE Weight Diagnostics"
         type: methodology
+
+  # ── BaconDecomposition ───���─────────────────────────────────────────
+
   diff_diff/bacon.py:
     drift_risk: low
     docs:

@@ -55,12 +55,13 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Un
 
 import numpy as np
 import pandas as pd
-from scipy.linalg import qr as scipy_qr
 
+from diff_diff.linalg import solve_ols
 from diff_diff.twfe_weights_results import (
     ATTGTWeightsResult,
     TWFEDecompositionResult,
 )
+from diff_diff.utils import within_transform
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from diff_diff.staggered_results import CallawaySantAnnaResults
@@ -74,10 +75,40 @@ def _is_never(values: np.ndarray) -> np.ndarray:
     """Boolean mask for never-treated cohort labels.
 
     diff-diff and R ``did`` have both used ``0`` and ``+inf`` as the
-    never-treated sentinel over time; accept either and normalize to ``0``.
+    never-treated sentinel over time; accept exactly those two and normalize
+    to ``0``. Every OTHER non-finite label (NaN, ``-inf``) is an input error -
+    see :func:`_validate_cohort_labels` - not a never-treated unit.
     """
     arr = np.asarray(values, dtype=float)
-    return ~np.isfinite(arr) | (arr == 0)
+    return (arr == 0) | (arr == np.inf)
+
+
+def _validate_cohort_labels(
+    values: np.ndarray, *, unit_ids: Optional[np.ndarray] = None, what: str = "first_treat"
+) -> None:
+    """Reject NaN / ``-inf`` cohort labels instead of silently treating them as never-treated."""
+    arr = np.asarray(values, dtype=float)
+    bad = np.isnan(arr) | (arr == -np.inf)
+    if bad.any():
+        idx = np.flatnonzero(bad)[:5]
+        who = [unit_ids[i] for i in idx] if unit_ids is not None else idx.tolist()
+        raise ValueError(
+            f"{what!r} contains NaN or -inf cohort label(s) for unit(s) {who!r}; "
+            "never-treated units must be coded exactly 0 or +inf, and every "
+            "other unit needs a finite first-treatment period"
+        )
+
+
+def _validate_time_labels(values: np.ndarray, *, what: str = "time") -> None:
+    """Reject NaN / non-finite period labels before any grid is formed."""
+    arr = pd.to_numeric(pd.Series(np.asarray(values)), errors="coerce").to_numpy(dtype=float)
+    bad = ~np.isfinite(arr)
+    if bad.any():
+        raise ValueError(
+            f"{what!r} contains {int(bad.sum())} non-finite or non-numeric period "
+            f"label(s) (first at row {int(np.flatnonzero(bad)[0])}); every observation "
+            "must carry a finite period"
+        )
 
 
 def _positional_grid(
@@ -117,10 +148,42 @@ def _to_positional_cohort(cohorts: np.ndarray, grid: Dict[float, int]) -> np.nda
     return out
 
 
+def _validate_unit_weights(
+    w: np.ndarray, is_never: np.ndarray, *, require_control_mass: bool
+) -> None:
+    """Shared contract for unit-level sampling weights.
+
+    Finite, non-negative, positive total, positive TREATED mass; positive
+    never-treated mass only where the never-treated group enters the formula
+    (``aggregation="twfe"`` and the decomposition) - ATT^O / ATT^simple are
+    defined without one.
+    """
+    if not np.all(np.isfinite(w)):
+        raise ValueError("unit weights must be finite; got NaN or infinite weight(s)")
+    if (w < 0).any():
+        idx = np.flatnonzero(w < 0)[:5].tolist()
+        raise ValueError(
+            f"unit weights must be non-negative; negative weight(s) at unit index {idx!r}"
+        )
+    if w.sum() <= 0:
+        raise ValueError("unit weights sum to zero; cannot form cohort shares")
+    if w[~is_never].sum() <= 0:
+        raise ValueError(
+            "the ever-treated units carry zero total weight; cannot form cohort shares"
+        )
+    if require_control_mass and w[is_never].sum() <= 0:
+        raise ValueError(
+            "the never-treated comparison group carries zero total weight, so "
+            "every group-time contrast is undefined"
+        )
+
+
 def _cohort_masses(
     unit_cohorts: np.ndarray,
     grid: Dict[float, int],
     weights: Optional[np.ndarray],
+    *,
+    require_control_mass: bool = False,
 ) -> Tuple[Dict[int, float], Dict[int, float], Dict[int, float], float]:
     """Cohort shares and treated-share-by-period, all in positional time.
 
@@ -140,19 +203,15 @@ def _cohort_masses(
     w = np.ones(len(g_pos)) if weights is None else np.asarray(weights, dtype=float)
     if len(w) != len(g_pos):
         raise ValueError(f"weights has length {len(w)} but there are {len(g_pos)} units")
+    _validate_unit_weights(w, g_pos == 0, require_control_mass=require_control_mass)
     total = w.sum()
-    if total <= 0:
-        raise ValueError("unit weights sum to zero; cannot form cohort shares")
 
     treated = g_pos != 0
     treated_mass = w[treated].sum()
 
     cohorts = sorted({int(g) for g in g_pos if g != 0})
     p_all = {g: float(w[g_pos == g].sum() / total) for g in cohorts}
-    if treated_mass > 0:
-        p_treated = {g: float(w[g_pos == g].sum() / treated_mass) for g in cohorts}
-    else:  # pragma: no cover - guarded upstream by the never-treated check
-        p_treated = {g: 0.0 for g in cohorts}
+    p_treated = {g: float(w[g_pos == g].sum() / treated_mass) for g in cohorts}
 
     periods = sorted(grid.values())
     e_dt = {t: float(w[treated & (g_pos <= t)].sum() / total) for t in periods}
@@ -197,17 +256,22 @@ def _overall_weight_vector(
     times: np.ndarray,
     n_periods: int,
     p_treated: Dict[int, float],
+    n_post_available: Optional[Dict[int, int]] = None,
 ) -> np.ndarray:
     """ATT^O weights: ``1[t >= g] * pbar_g / (maxT - g + 1)``.
 
     Not renormalized - the ``(maxT - g + 1)`` divisor already makes them sum
-    to one over a complete post-treatment grid.
+    to one over a complete post-treatment grid. ``n_post_available`` replaces
+    that divisor with each cohort's number of AVAILABLE post periods when
+    some post cells are structurally absent (``control_group="not_yet_treated"``
+    runs out of comparison units) - what R ``aggte(type="group")`` averages
+    over on such a fit.
     """
-    return (
-        (times >= groups).astype(float)
-        * np.array([p_treated[int(g)] for g in groups])
-        / (n_periods - groups + 1.0)
-    )
+    if n_post_available is None:
+        divisor = n_periods - groups + 1.0
+    else:
+        divisor = np.array([float(n_post_available[int(g)]) for g in groups])
+    return (times >= groups).astype(float) * np.array([p_treated[int(g)] for g in groups]) / divisor
 
 
 def _simple_weight_vector(
@@ -228,35 +292,42 @@ def _simple_weight_vector(
 
 def _attgt_from_cs(
     results: "CallawaySantAnnaResults",
-) -> Tuple[pd.DataFrame, int]:
+) -> Tuple[pd.DataFrame, Dict[Tuple[Any, Any], Optional[str]]]:
     """Extract the ``(g, t, att)`` table from a fitted CS result.
 
-    Non-estimable cells (``skip_reason`` set, NaN effect) are dropped and
-    counted, so a partially-estimable fit still produces weights over the
-    cells that exist rather than propagating NaN through every aggregate.
+    Non-estimable cells (``skip_reason`` set, NaN effect) are left out of the
+    table and reported in the returned ``{(g, t): skip_reason}`` map, so the
+    caller can decide - per aggregation - whether the gap is structural, a
+    harmless pre-period drop, or a hard error.
     """
     rows: List[Dict[str, Any]] = []
-    dropped = 0
+    skipped: Dict[Tuple[Any, Any], Optional[str]] = {}
     for (g, t), cell in results.group_time_effects.items():
         effect = cell.get("effect", np.nan)
         if cell.get("skip_reason") is not None or not np.isfinite(effect):
-            dropped += 1
+            skipped[(g, t)] = cell.get("skip_reason")
             continue
         rows.append({"group": g, "time": t, "att": float(effect)})
     if not rows:
         raise ValueError(
-            "the fitted result has no estimable group-time cells; there is " "nothing to weight"
+            "the fitted result has no estimable group-time cells; there is nothing to weight"
         )
     table = pd.DataFrame(rows).sort_values(["group", "time"]).reset_index(drop=True)
-    return table, dropped
+    return table, skipped
 
 
-def _attgt_from_frame(frame: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
+def _attgt_from_frame(
+    frame: pd.DataFrame,
+) -> Tuple[pd.DataFrame, Dict[Tuple[Any, Any], Optional[str]]]:
     """Extract ``(g, t, att)`` from a user-supplied ATT(g, t) frame.
 
     ``effect`` is preferred over ``att`` because that is the column
     ``CallawaySantAnnaResults.to_dataframe("group_time")`` emits - so the
-    fallback consumes our own frame verbatim.
+    fallback consumes our own frame verbatim, including its ``skip_reason``
+    column when present. Duplicate cells and non-finite ``group`` / ``time``
+    labels are rejected; a non-finite effect is reported in the skip map, not
+    silently kept (an ``inf`` ATT would otherwise propagate into
+    ``implied_att``).
     """
     missing = {"group", "time"} - set(frame.columns)
     if missing:
@@ -272,18 +343,38 @@ def _attgt_from_frame(frame: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
         raise ValueError(
             "ATT(g,t) frame must carry an 'effect' or 'att' column; got " f"{list(frame.columns)!r}"
         )
-    table = pd.DataFrame(
-        {
-            "group": frame["group"].to_numpy(),
-            "time": frame["time"].to_numpy(),
-            "att": pd.to_numeric(frame[value_col], errors="coerce").to_numpy(),
-        }
+    groups = pd.to_numeric(frame["group"], errors="coerce").to_numpy(dtype=float)
+    times = pd.to_numeric(frame["time"], errors="coerce").to_numpy(dtype=float)
+    _validate_cohort_labels(groups, what="group")
+    _validate_time_labels(frame["time"].to_numpy(), what="time")
+    key = pd.MultiIndex.from_arrays([frame["group"].to_numpy(), frame["time"].to_numpy()])
+    if key.duplicated().any():
+        dupes = sorted({tuple(k) for k in key[key.duplicated()].tolist()})[:5]
+        raise ValueError(
+            f"ATT(g,t) frame has duplicated (group, time) cell(s) {dupes!r}; each "
+            "cell must appear exactly once"
+        )
+    att = pd.to_numeric(frame[value_col], errors="coerce").to_numpy(dtype=float)
+    reasons = (
+        frame["skip_reason"].tolist() if "skip_reason" in frame.columns else [None] * len(frame)
     )
-    dropped = int(table["att"].isna().sum())
-    table = table.dropna(subset=["att"])
+    table = pd.DataFrame(
+        {"group": frame["group"].to_numpy(), "time": frame["time"].to_numpy(), "att": att}
+    )
+    finite = np.isfinite(att)
+    skipped: Dict[Tuple[Any, Any], Optional[str]] = {}
+    for i in np.flatnonzero(~finite):
+        reason = reasons[i]
+        skipped[(table["group"].iat[i], table["time"].iat[i])] = (
+            None
+            if reason is None or (isinstance(reason, float) and np.isnan(reason))
+            else str(reason)
+        )
+    table = table[finite]
     if table.empty:
         raise ValueError("ATT(g,t) frame has no finite effects to weight")
-    return table.sort_values(["group", "time"]).reset_index(drop=True), dropped
+    _ = groups, times  # validated above; positional mapping happens in the caller
+    return table.sort_values(["group", "time"]).reset_index(drop=True), skipped
 
 
 def _unit_cohorts_from_frame(
@@ -293,14 +384,19 @@ def _unit_cohorts_from_frame(
     for col in (unit, time, first_treat):
         if col not in data.columns:
             raise ValueError(f"column {col!r} not found in data")
-    per_unit = data.groupby(unit, sort=True)[first_treat].nunique()
+    _validate_time_labels(data[time].to_numpy(), what=time)
+    # dropna=False: a unit whose label is NaN in one period must fail the
+    # invariance check, not slip through because nunique() skipped the NaN.
+    per_unit = data.groupby(unit, sort=True)[first_treat].nunique(dropna=False)
     if (per_unit > 1).any():
         offenders = per_unit[per_unit > 1].index.tolist()[:5]
         raise ValueError(
             f"{first_treat!r} varies within unit(s) {offenders!r}; cohort "
             "membership must be time-invariant"
         )
-    cohorts = data.groupby(unit, sort=True)[first_treat].first().to_numpy()
+    firsts = data.groupby(unit, sort=True)[first_treat].first()
+    cohorts = firsts.to_numpy()
+    _validate_cohort_labels(cohorts, unit_ids=firsts.index.to_numpy(), what=first_treat)
     periods = np.asarray(sorted(data[time].unique()))
     return cohorts, periods, None
 
@@ -341,6 +437,13 @@ def _guard_cs_design(results: "CallawaySantAnnaResults", aggregation: str) -> No
     These are hard errors rather than warnings: a silently wrong weight table
     is worse than no weight table, and every one of these has a concrete fix.
     """
+    from diff_diff.staggered_results import CallawaySantAnnaResults
+
+    if not isinstance(results, CallawaySantAnnaResults):
+        raise TypeError(
+            "attgt_weights takes a CallawaySantAnna (or DMLDiD) fitted result, or an "
+            f"ATT(g,t) DataFrame; got {type(results).__name__}"
+        )
     if not getattr(results, "panel", True):
         raise ValueError(
             "attgt_weights requires a panel fit: E_t[D] and the cohort shares "
@@ -371,6 +474,31 @@ def _guard_cs_design(results: "CallawaySantAnnaResults", aggregation: str) -> No
             "grid, including the pre-treatment cells that a varying base does "
             "not report. Refit with base_period='universal'."
         )
+    # R's third restriction: xformla == ~1. The fit records its covariate
+    # column names on the aggregation kit; a kit without the key predates that
+    # bookkeeping (an old pickle) and can only be warned about. A missing kit
+    # is left to _resolve_cs_inputs, whose error is the useful one.
+    kit = getattr(results, "_aggregation_kit", None)
+    if kit is None:
+        return
+    bookkeeping = getattr(kit, "bookkeeping", {}) or {}
+    if "covariates" not in bookkeeping:
+        warnings.warn(
+            "this fit predates covariate bookkeeping, so attgt_weights cannot "
+            "verify it used no covariates; the TWFE weight formula assumes an "
+            "unadjusted regression (R twfe_weights requires xformla == ~1)",
+            UserWarning,
+            stacklevel=3,
+        )
+    elif bookkeeping["covariates"]:
+        raise ValueError(
+            f"aggregation='twfe' requires a fit without covariates, but this one "
+            f"adjusted for {list(bookkeeping['covariates'])!r}. The TWFE weight "
+            "formula describes the unadjusted regression (R's twfe_weights stops "
+            "unless xformla == ~1); refit with covariates=None, or use "
+            "decompose_twfe_weights(covariates=...) for the covariate-adjusted "
+            "decomposition."
+        )
 
 
 def attgt_weights(
@@ -396,9 +524,13 @@ def attgt_weights(
     ----------
     results : CallawaySantAnnaResults or pd.DataFrame
         A fitted Callaway & Sant'Anna result (preferred), or a frame with
-        ``group`` / ``time`` / ``effect`` (or ``att``) columns. On the frame
-        path, ``data``, ``unit``, ``time`` and ``first_treat`` are required
-        so cohort shares can be formed.
+        ``group`` / ``time`` / ``effect`` (or ``att``) columns - the output of
+        ``result.to_dataframe("group_time")`` is consumed verbatim, including
+        its ``skip_reason`` column. On the frame path, ``data``, ``unit``,
+        ``time`` and ``first_treat`` are required so cohort shares can be
+        formed, and the caller is responsible for the fit having used no
+        covariates under ``aggregation="twfe"`` (a frame carries no record of
+        that; the fitted path checks it).
     aggregation : {"twfe", "overall", "simple"}, default "twfe"
         Which estimand's weights to report.
     data : pd.DataFrame, optional
@@ -409,23 +541,46 @@ def attgt_weights(
     weights : str or array-like, optional
         Unit-level sampling weights (R's ``w=``): a column name in ``data``,
         or one value per unit. Rejected when the fit already carries survey
-        weights, which take precedence.
+        weights, which take precedence. Must be finite and non-negative with
+        positive treated mass (and positive never-treated mass for ``"twfe"``).
 
     Returns
     -------
     ATTGTWeightsResult
-        Per-cell weights plus the negative-weight roll-up.
+        Per-cell weights plus the negative-weight roll-ups.
 
     Raises
     ------
     ValueError
         On an unknown ``aggregation``; on a design the formula does not
         support (repeated cross-sections, unbalanced fallback, and - for
-        ``aggregation="twfe"`` - a non-never-treated control group or a
-        non-universal base period); or on an incomplete fallback spec.
+        ``aggregation="twfe"`` - a non-never-treated control group, a
+        non-universal base period, or a covariate-adjusted fit); on NaN /
+        ``-inf`` cohort labels, invalid weights, duplicated or non-finite
+        cells; or on an INCOMPLETE grid: ``"twfe"`` needs every cohort x period
+        cell, ``"overall"`` / ``"simple"`` every post-treatment cell.
+    TypeError
+        When ``results`` is neither a CallawaySantAnna-family result nor a
+        DataFrame.
 
     Notes
     -----
+    Two structural gaps are handled rather than raised, mirroring R:
+
+    * A cohort with NO estimable post-treatment cell (typically one treated in
+      the first observed period, which has no base period) is dropped from the
+      table AND from the cohort masses with a warning - what
+      ``did::pre_process_did`` does when it drops units already treated in the
+      first period.
+    * Under ``control_group="not_yet_treated"`` the last cohorts run out of
+      comparison units, and CS marks those post cells ``zero_treated_control``.
+      For ``"overall"`` / ``"simple"`` they are treated as structurally absent:
+      ``"overall"`` divides each cohort by its number of AVAILABLE post periods
+      and ``"simple"`` renormalizes over the available post cells - what
+      R ``aggte()`` computes on such a fit. A warning names the cells.
+      (``"twfe"`` requires a never-treated control group and never reaches
+      this branch.)
+
     R's ``keep_untreated=TRUE`` is not exposed. It synthesizes ``G = 0`` rows
     with ``attgt = 0`` to mirror an internal vector layout; those rows are
     excluded from every normalization and contribute exactly zero, so the
@@ -446,6 +601,7 @@ def attgt_weights(
         )
 
     frame_path = isinstance(results, pd.DataFrame)
+    frame = results if isinstance(results, pd.DataFrame) else None
     fallback_args = {"data": data, "unit": unit, "time": time, "first_treat": first_treat}
     supplied = {k: v for k, v in fallback_args.items() if v is not None}
 
@@ -460,12 +616,14 @@ def attgt_weights(
             )
         assert data is not None and unit is not None
         assert time is not None and first_treat is not None
-        table, dropped = _attgt_from_frame(results)
+        assert frame is not None
+        table, skipped = _attgt_from_frame(frame)
         cohorts, periods, _ = _unit_cohorts_from_frame(data, unit, time, first_treat)
         unit_weights = _resolve_frame_weights(weights, data, unit)
         source = "DataFrame"
         control_group = None
         base_period = None
+        has_skip_reasons = "skip_reason" in frame.columns
     else:
         if supplied:
             raise ValueError(
@@ -475,7 +633,7 @@ def attgt_weights(
                 "result.to_dataframe('group_time') as the first argument."
             )
         _guard_cs_design(results, aggregation)
-        table, dropped = _attgt_from_cs(results)
+        table, skipped = _attgt_from_cs(results)
         cohorts, survey_weights = _resolve_cs_inputs(results)
         if survey_weights is not None and weights is not None:
             raise ValueError(
@@ -495,32 +653,126 @@ def attgt_weights(
         source = "CallawaySantAnnaResults"
         control_group = getattr(results, "control_group", None)
         base_period = getattr(results, "base_period", None)
+        has_skip_reasons = True
 
-    if dropped:
-        warnings.warn(
-            f"{dropped} group-time cell(s) had no estimable ATT(g,t) and were "
-            "excluded from the weight table; the reported weights renormalize "
-            "over the remaining cells",
-            UserWarning,
-            stacklevel=2,
-        )
-
+    _validate_cohort_labels(cohorts, what="first_treat")
     grid = _positional_grid(periods)
     n_periods = len(grid)
-    p_all, p_treated, e_dt, mean_e_dt = _cohort_masses(cohorts, grid, unit_weights)
-    if not p_treated:
+    first_period_pos = 1
+
+    # Positional mapping FIRST: the cohort universe the masses are formed over
+    # must be known before the masses are formed.
+    unit_g_pos = _to_positional_cohort(cohorts, grid)
+    if not (unit_g_pos != 0).any():
         raise ValueError(
             "no ever-treated units found; cohort labels are all never-treated "
             "sentinels (0 or inf)"
         )
-
     g_pos = _to_positional_cohort(table["group"].to_numpy(), grid)
     t_pos = np.array([grid[float(t)] for t in table["time"].to_numpy()])
+    post_mask = t_pos >= g_pos
+
+    # --- whole-cohort exclusion (R did drops units treated in the first period)
+    panel_cohorts = sorted({int(g) for g in unit_g_pos if g != 0})
+    cohorts_with_post = {int(g) for g in g_pos[post_mask]}
+    excluded = [g for g in panel_cohorts if g not in cohorts_with_post]
+    if excluded:
+        if not has_skip_reasons:
+            not_structural = [g for g in excluded if g != first_period_pos]
+            if not_structural:
+                labels = [_label_for(grid, g) for g in not_structural]
+                raise ValueError(
+                    f"cohort(s) {labels!r} are present in data= but have no "
+                    "post-treatment cell in the ATT(g,t) frame. A bare frame "
+                    "cannot say why; pass result.to_dataframe('group_time') "
+                    "verbatim (it carries skip_reason) or the fitted result itself."
+                )
+        n_units_excl = int(np.isin(unit_g_pos, excluded).sum())
+        warnings.warn(
+            f"cohort(s) {[_label_for(grid, g) for g in excluded]!r} ({n_units_excl} "
+            "unit(s)) have no estimable post-treatment cell and were dropped from "
+            "the weight table and the cohort shares, matching R did's drop of units "
+            "already treated in the first observed period",
+            UserWarning,
+            stacklevel=2,
+        )
+        keep_units = ~np.isin(unit_g_pos, excluded)
+        cohorts = cohorts[keep_units]
+        unit_g_pos = unit_g_pos[keep_units]
+        if unit_weights is not None:
+            unit_weights = np.asarray(unit_weights, dtype=float)[keep_units]
+        keep_rows = ~np.isin(g_pos, excluded)
+        table = table[keep_rows].reset_index(drop=True)
+        g_pos, t_pos, post_mask = g_pos[keep_rows], t_pos[keep_rows], post_mask[keep_rows]
+        skipped = {k: v for k, v in skipped.items() if _pos_of(grid, k[0]) not in excluded}
+
+    p_all, p_treated, e_dt, mean_e_dt = _cohort_masses(
+        cohorts, grid, unit_weights, require_control_mass=(aggregation == "twfe")
+    )
+
+    # --- grid completeness
+    present = set(zip(g_pos.tolist(), t_pos.tolist()))
+    surviving = sorted(cohorts_with_post)
+    if aggregation == "twfe":
+        required = {(g, t) for g in surviving for t in range(1, n_periods + 1)}
+    else:
+        required = {(g, t) for g in surviving for t in range(g, n_periods + 1)}
+    missing_cells = sorted(required - present)
+    structurally_absent: List[Tuple[Any, Any]] = []
+    if missing_cells:
+        carve_out_ok = aggregation != "twfe" and control_group == "not_yet_treated"
+        hard: List[Tuple[Tuple[Any, Any], Optional[str]]] = []
+        for g, t in missing_cells:
+            label = (_label_for(grid, g), _label_for(grid, t))
+            reason = skipped.get(label)
+            if carve_out_ok and reason == "zero_treated_control":
+                structurally_absent.append(label)
+            else:
+                hard.append((label, reason))
+        if hard:
+            what = "cohort x period" if aggregation == "twfe" else "post-treatment"
+            detail = ", ".join(
+                f"{lab} [{reason or 'not in source table'}]" for lab, reason in hard[:6]
+            )
+            raise ValueError(
+                f"aggregation={aggregation!r} needs the complete {what} grid, but "
+                f"{len(hard)} required cell(s) are missing: {detail}. A weight table "
+                "over a partial grid is not the named estimand. Fix the source fit "
+                "(or pass the complete to_dataframe('group_time') output)."
+            )
+        warnings.warn(
+            f"{len(structurally_absent)} post-treatment cell(s) {structurally_absent[:6]!r} "
+            "have no not-yet-treated comparison units (skip_reason "
+            "'zero_treated_control') and are treated as structurally absent: "
+            f"aggregation={aggregation!r} averages over each cohort's AVAILABLE "
+            "post periods, as R aggte() does on a not-yet-treated fit",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    # Non-estimable PRE cells of surviving cohorts are the only drops left;
+    # the CS estimands ignore pre cells, so they change nothing.
+    dropped = sum(
+        1
+        for (g_lab, t_lab) in skipped
+        if _pos_of(grid, g_lab) in cohorts_with_post and _pos_of(grid, t_lab) < _pos_of(grid, g_lab)
+    )
+    if dropped and aggregation != "twfe":
+        warnings.warn(
+            f"{dropped} pre-treatment group-time cell(s) had no estimable ATT(g,t) "
+            f"and were excluded; aggregation={aggregation!r} places no weight on "
+            "pre-treatment cells, so the weights are unaffected",
+            UserWarning,
+            stacklevel=2,
+        )
 
     if aggregation == "twfe":
         weight_vec = _twfe_weight_vector(g_pos, t_pos, n_periods, p_all, e_dt, mean_e_dt)
     elif aggregation == "overall":
-        weight_vec = _overall_weight_vector(g_pos, t_pos, n_periods, p_treated)
+        n_post_available = None
+        if structurally_absent:
+            n_post_available = {g: int(((g_pos == g) & post_mask).sum()) for g in surviving}
+        weight_vec = _overall_weight_vector(g_pos, t_pos, n_periods, p_treated, n_post_available)
     else:
         weight_vec = _simple_weight_vector(g_pos, t_pos, p_treated)
 
@@ -528,7 +780,7 @@ def attgt_weights(
         {
             "group": table["group"].to_numpy(),
             "time": table["time"].to_numpy(),
-            "post": (t_pos >= g_pos).astype(int),
+            "post": post_mask.astype(int),
             "weight": weight_vec,
             "att": table["att"].to_numpy(),
         }
@@ -536,6 +788,8 @@ def attgt_weights(
 
     negative = weight_vec < 0
     abs_total = float(np.abs(weight_vec).sum())
+    negative_post = negative & post_mask
+    abs_post_total = float(np.abs(weight_vec[post_mask]).sum())
     return ATTGTWeightsResult(
         weights=out,
         aggregation=aggregation,
@@ -544,12 +798,37 @@ def attgt_weights(
         negative_weight_share=(
             float(np.abs(weight_vec[negative]).sum() / abs_total) if abs_total > 0 else 0.0
         ),
+        n_negative_post=int(negative_post.sum()),
+        negative_post_weight_share=(
+            float(np.abs(weight_vec[negative_post]).sum() / abs_post_total)
+            if abs_post_total > 0
+            else 0.0
+        ),
         n_cells=len(out),
         source=source,
         control_group=control_group,
         base_period=base_period,
         n_dropped_cells=dropped,
     )
+
+
+def _label_for(grid: Dict[float, int], pos: int) -> Any:
+    """Positional period -> original label (inverse of ``_positional_grid``)."""
+    for label, p in grid.items():
+        if p == pos:
+            return int(label) if float(label).is_integer() else label
+    return pos
+
+
+def _pos_of(grid: Dict[float, int], label: Any) -> int:
+    """Original label -> positional period; never-treated sentinel stays 0."""
+    try:
+        value = float(label)
+    except (TypeError, ValueError):
+        return -1
+    if value == 0 or value == np.inf:
+        return 0
+    return grid.get(value, -1)
 
 
 def _resolve_frame_weights(
@@ -563,7 +842,7 @@ def _resolve_frame_weights(
     if isinstance(weights, str):
         if weights not in data.columns:
             raise ValueError(f"weights column {weights!r} not found in data")
-        per_unit = data.groupby(unit, sort=True)[weights].nunique()
+        per_unit = data.groupby(unit, sort=True)[weights].nunique(dropna=False)
         if (per_unit > 1).any():
             offenders = per_unit[per_unit > 1].index.tolist()[:5]
             raise ValueError(
@@ -585,78 +864,6 @@ def _weighted_mean(values: np.ndarray, weights: np.ndarray) -> float:
     if total == 0:
         return float("nan")
     return float((values * weights).sum() / total)
-
-
-def _demean_two_way(
-    values: np.ndarray,
-    weights: np.ndarray,
-    *,
-    tol: float = 1e-12,
-    max_iter: int = 100,
-) -> np.ndarray:
-    """Two-way (unit and period) demeaning of a ``(n_units, n_periods, k)`` block.
-
-    Alternating projections, matching what ``fixest::demean`` does. On a
-    balanced panel with uniform weights this converges after a single sweep
-    to the closed form ``x - xbar_i - xbar_t + xbar``; the loop exists so
-    sampling weights (which break that identity) are still handled exactly
-    rather than approximately.
-
-    ``weights`` is ``(n_units, n_periods)`` and broadcasts over the trailing
-    covariate axis.
-    """
-    out = np.array(values, dtype=float, copy=True)
-    if out.size == 0:
-        return out
-    w = weights[:, :, None]
-    for _ in range(max_iter):
-        unit_mass = w.sum(axis=1, keepdims=True)
-        out -= np.divide(
-            (out * w).sum(axis=1, keepdims=True),
-            unit_mass,
-            out=np.zeros_like(unit_mass),
-            where=unit_mass > 0,
-        )
-        time_mass = w.sum(axis=0, keepdims=True)
-        shift = np.divide(
-            (out * w).sum(axis=0, keepdims=True),
-            time_mass,
-            out=np.zeros_like(time_mass),
-            where=time_mass > 0,
-        )
-        out -= shift
-        if np.max(np.abs(shift)) < tol:
-            break
-    return out
-
-
-def _drop_collinear(matrix: np.ndarray) -> Tuple[np.ndarray, List[int]]:
-    """Drop linearly dependent columns via a pivoted QR.
-
-    Mirrors ``BMisc::drop_collinear`` (which delegates to
-    ``caret::findLinearCombos``) in effect: keep a maximal independent set,
-    dropping later columns first.
-    """
-    if matrix.shape[1] == 0:
-        return matrix, []
-    _, r_mat, piv = scipy_qr(matrix, mode="economic", pivoting=True)
-    diag = np.abs(np.diag(r_mat))
-    if diag.size == 0:
-        return matrix[:, :0], list(range(matrix.shape[1]))
-    tol = diag.max() * max(matrix.shape) * np.finfo(float).eps
-    rank = int((diag > tol).sum())
-    keep = sorted(piv[:rank].tolist())
-    dropped = [j for j in range(matrix.shape[1]) if j not in keep]
-    return matrix[:, keep], dropped
-
-
-def _wls_coefficients(design: np.ndarray, target: np.ndarray, weights: np.ndarray) -> np.ndarray:
-    """Weighted least squares through the origin (R's ``lm(y ~ -1 + X, w)``)."""
-    if design.shape[1] == 0:
-        return np.zeros(0)
-    root_w = np.sqrt(weights)
-    coef, *_ = np.linalg.lstsq(design * root_w[:, None], target * root_w, rcond=None)
-    return coef
 
 
 def _effective_sample_size(est_weights: np.ndarray, sampling_weights: np.ndarray) -> float:
@@ -694,6 +901,7 @@ class _Panel:
         if weights is not None and weights not in data.columns:
             raise ValueError(f"weights column {weights!r} not found in data")
 
+        _validate_time_labels(data[time].to_numpy(), what=time)
         frame = data.sort_values([unit, time]).reset_index(drop=True)
         units = frame[unit].to_numpy()
         periods = frame[time].to_numpy()
@@ -720,26 +928,42 @@ class _Panel:
         self.n_periods = n_periods
 
         cohort_long = frame[first_treat].to_numpy()
-        per_unit = frame.groupby(unit, sort=True)[first_treat].nunique()
+        # dropna=False: a NaN label in one period must fail invariance, not
+        # be skipped by nunique().
+        per_unit = frame.groupby(unit, sort=True)[first_treat].nunique(dropna=False)
         if (per_unit > 1).any():
             offenders = per_unit[per_unit > 1].index.tolist()[:5]
             raise ValueError(
                 f"{first_treat!r} varies within unit(s) {offenders!r}; cohort "
                 "membership must be time-invariant"
             )
-        self.cohorts = _to_positional_cohort(
-            cohort_long.reshape(n_units, n_periods)[:, 0], self.grid
-        )
+        raw_cohorts = cohort_long.reshape(n_units, n_periods)[:, 0]
+        _validate_cohort_labels(raw_cohorts, unit_ids=self.unit_ids, what=first_treat)
+        self.cohorts = _to_positional_cohort(raw_cohorts, self.grid)
+        if not (self.cohorts == 0).any():
+            raise ValueError(
+                "decompose_twfe_weights needs never-treated units as the "
+                "comparison group; none were found (matching R's twfeweights, "
+                "which supports only a never-treated comparison)"
+            )
         self.outcome = frame[outcome].to_numpy(dtype=float).reshape(n_units, n_periods)
         if weights is None:
             self.weights = np.ones((n_units, n_periods))
         else:
-            self.weights = frame[weights].to_numpy(dtype=float).reshape(n_units, n_periods)
-            if not np.allclose(self.weights, self.weights[:, :1]):
+            block = frame[weights].to_numpy(dtype=float).reshape(n_units, n_periods)
+            # Finite check FIRST: np.allclose is False on any NaN, which would
+            # otherwise be misreported as "varies within unit".
+            if not np.all(np.isfinite(block)):
+                raise ValueError(
+                    f"weights column {weights!r} must be finite; got NaN or infinite weight(s)"
+                )
+            if not np.allclose(block, block[:, :1]):
                 raise ValueError(
                     f"weights column {weights!r} varies within unit; sampling "
                     "weights must be time-invariant"
                 )
+            _validate_unit_weights(block[:, 0], self.cohorts == 0, require_control_mass=True)
+            self.weights = block
         self.covariates = tuple(covariates)
         if covariates:
             self.design = (
@@ -754,6 +978,43 @@ class _Panel:
         self.treated = (
             (periods_positional[None, :] >= self.cohorts[:, None]) & (self.cohorts[:, None] != 0)
         ).astype(float)
+
+        # Two-way demeaning through the house helper (the same alternating
+        # projections fixest::demean runs), on the sorted long frame so the
+        # (unit, period) reshape afterwards is a plain view. The treatment
+        # indicator is DERIVED from cohorts x positional periods, not an input
+        # column, so it is synthesized here before the call. Both the RAW and
+        # the demeaned covariate blocks are kept: the annihilation filter in
+        # _fwl_residuals compares one against the other.
+        demean_frame = pd.DataFrame(
+            {"_unit": frame[unit].to_numpy(), "_time": frame[time].to_numpy()}
+        )
+        demean_frame["_treated"] = self.treated.reshape(-1)
+        for j, name in enumerate(self.covariates):
+            demean_frame[f"_x{j}"] = self.design[:, :, j].reshape(-1)
+        row_weights = None if weights is None else self.weights.reshape(-1)
+        demeaned = within_transform(
+            demean_frame,
+            ["_treated", *(f"_x{j}" for j in range(len(self.covariates)))],
+            "_unit",
+            "_time",
+            weights=row_weights,
+            suffix="_dm",
+            tol=1e-12,
+        )
+        self.treated_demeaned = (
+            demeaned["_treated_dm"].to_numpy(dtype=float).reshape(n_units, n_periods)
+        )
+        if self.covariates:
+            self.design_demeaned = np.stack(
+                [
+                    demeaned[f"_x{j}_dm"].to_numpy(dtype=float).reshape(n_units, n_periods)
+                    for j in range(len(self.covariates))
+                ],
+                axis=2,
+            )
+        else:
+            self.design_demeaned = np.zeros((n_units, n_periods, 0))
 
     def covariate_block(
         self, names: Sequence[str], data: pd.DataFrame, unit: str, time: str
@@ -788,8 +1049,8 @@ def _fwl_residuals(panel: _Panel) -> Tuple[np.ndarray, float]:
     builds for ``xformula = ~1``.
     """
     weights = panel.weights
-    d_dot = _demean_two_way(panel.treated[:, :, None], weights)[:, :, 0]
-    x_dot = _demean_two_way(panel.design, weights)
+    d_dot = panel.treated_demeaned
+    x_dot = panel.design_demeaned
 
     flat_d = d_dot.reshape(-1)
     flat_w = weights.reshape(-1)
@@ -798,14 +1059,19 @@ def _fwl_residuals(panel: _Panel) -> Tuple[np.ndarray, float]:
     # on which fixest::demean segfaults; here it simply has to be spelled out.
     flat_x = x_dot.reshape(panel.n_units * panel.n_periods, x_dot.shape[2])
 
-    # Drop covariates that double-demeaning ANNIHILATED before anything is
-    # projected on them. A time-invariant regressor leaves a column of pure
-    # rounding noise (~1e-16 against a raw scale of ~1), and regressing on
-    # that amplifies the noise by ~1e16 - which silently corrupts the per-cell
-    # weights. The test is scale-relative: a column counts as having no
-    # within-variation when its demeaned norm is negligible NEXT TO ITS OWN
-    # raw norm, which a rank test on the demeaned matrix alone cannot see
-    # (there, 1e-16 is simply the largest pivot).
+    # Numerical hygiene: drop covariates that double-demeaning ANNIHILATED
+    # before anything is projected on them. A time-invariant regressor leaves a
+    # column of pure rounding noise (~1e-16 against a raw scale of ~1). Keeping
+    # it is not catastrophic - the column lies in the FE span and is orthogonal
+    # to the treatment residual, so on mpdta's `lpop` it moves the FWL residual
+    # by ~2e-18 - but regressing on an exactly-zero column is meaningless, and
+    # dropping it is what makes covariates=None and covariates=[<invariant>]
+    # agree exactly. The test is scale-relative: a column counts as having no
+    # within-variation when its demeaned norm is negligible NEXT TO ITS OWN raw
+    # norm, which a rank test on the demeaned matrix alone cannot see (there,
+    # 1e-16 is simply the largest pivot). The 1e-10 relative threshold is a
+    # blunt instrument: a covariate with a large level and genuinely small
+    # within-variation can trip it, which is why the warning says so.
     raw_scale = np.linalg.norm(
         panel.design.reshape(panel.n_units * panel.n_periods, x_dot.shape[2]),
         axis=0,
@@ -816,26 +1082,44 @@ def _fwl_residuals(panel: _Panel) -> Tuple[np.ndarray, float]:
         names = [panel.covariates[j] for j in np.flatnonzero(annihilated)]
         warnings.warn(
             f"covariate(s) {names!r} have no within-unit-and-period variation "
-            "and were dropped: two-way demeaning annihilates them, so they "
-            "cannot affect a two-way fixed effects regression",
+            "(or within-variation below 1e-10 of their own level) and were "
+            "dropped: two-way demeaning annihilates them, so they cannot affect "
+            "a two-way fixed effects regression. If that is not intended, "
+            "centre or rescale the covariate so its within-variation is not "
+            "negligible next to its level",
             UserWarning,
             stacklevel=3,
         )
     flat_x = flat_x[:, ~annihilated]
     surviving = [name for name, drop in zip(panel.covariates, annihilated) if not drop]
 
-    kept, dropped = _drop_collinear(flat_x)
-    if dropped:
-        names = [surviving[j] for j in dropped]
-        warnings.warn(
-            f"dropped collinear covariate column(s) {names!r} after "
-            "double-demeaning; they carry no within-variation independent of "
-            "the others",
-            UserWarning,
-            stacklevel=3,
+    if flat_x.shape[1]:
+        # House solver: WLS through the origin (R's lm(y ~ -1 + X, w)). On a
+        # rank-deficient design it fits the maximal independent set, sets the
+        # dropped coefficients to NaN (R-style) and computes the residual from
+        # the identified ones - so the residual is the FWL residual we need
+        # and the NaN positions name the collinear columns.
+        gamma, resid, _ = solve_ols(
+            flat_x,
+            flat_d,
+            weights=flat_w,
+            return_vcov=False,
+            rank_deficient_action="silent",
+            column_names=list(surviving),
         )
-    gamma = _wls_coefficients(kept, flat_d, flat_w)
-    resid = flat_d - (kept @ gamma if kept.shape[1] else 0.0)
+        dropped = np.flatnonzero(np.isnan(gamma))
+        if dropped.size:
+            names = [surviving[j] for j in dropped]
+            warnings.warn(
+                f"dropped collinear covariate column(s) {names!r} after "
+                "double-demeaning; they carry no within-variation independent of "
+                "the others",
+                UserWarning,
+                stacklevel=3,
+            )
+        resid = np.asarray(resid, dtype=float)
+    else:
+        resid = flat_d
     alpha_den = _weighted_mean(resid * flat_d, flat_w)
     if not np.isfinite(alpha_den) or alpha_den == 0:
         raise ValueError(
@@ -992,22 +1276,22 @@ def _decompose_fwl(
         )
 
     frame = pd.DataFrame(cells)
-    weight_col = frame["weight"].to_numpy()
+    weight_vec = frame["weight"].to_numpy()
     att_col = frame["att"].to_numpy()
     post_col = frame["post"].to_numpy().astype(bool)
-    decomposition = float((weight_col * att_col).sum())
-    remainder_total = float((frame["remainder"].to_numpy() * weight_col).sum())
+    decomposition = float((weight_vec * att_col).sum())
+    remainder_total = float((frame["remainder"].to_numpy() * weight_vec).sum())
     ess_col = frame["ess"].to_numpy()
     return {
         "cells": frame,
         "estimate": decomposition + remainder_total,
         "decomposition": decomposition,
         "remainder": remainder_total,
-        "pretrend_bias": float((weight_col[~post_col] * att_col[~post_col]).sum()),
-        "post_only": float((weight_col[post_col] * att_col[post_col]).sum()),
+        "pretrend_bias": float((weight_vec[~post_col] * att_col[~post_col]).sum()),
+        "post_only": float((weight_vec[post_col] * att_col[post_col]).sum()),
         # summary.decomposed_twfe: post cells only, on both factors
         "effective_sample_size": float(
-            post_col.sum() * (weight_col[post_col] * ess_col[post_col]).sum()
+            post_col.sum() * (weight_vec[post_col] * ess_col[post_col]).sum()
         ),
         "balance": pd.DataFrame(balance_rows) if balance_block is not None else None,
     }
@@ -1025,8 +1309,16 @@ def _weighted_ecdf(values: np.ndarray, weights: np.ndarray) -> Tuple[np.ndarray,
     values, and ``F(knot_j) = mean(w * (y <= knot_j))``.
     """
     w = weights / weights.mean()
+    # Sort once and read cumulative mass at each unique-value boundary, rather
+    # than rescanning the full vector per knot (the naive form is O(n * k), and
+    # this runs per covariate x cohort x period). `np.unique` returns the
+    # sorted knots, so a single searchsorted locates each boundary.
+    order = np.argsort(values, kind="stable")
+    sorted_values = values[order]
+    cumulative = np.cumsum(w[order])
     knots = np.unique(values)
-    heights = np.array([float((w * (values <= knot)).mean()) for knot in knots])
+    last = np.searchsorted(sorted_values, knots, side="right") - 1
+    heights = cumulative[last] / len(values)
     return knots, heights
 
 

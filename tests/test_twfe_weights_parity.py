@@ -6,7 +6,8 @@ Loads pre-computed golden values from
 implementation matches R ``twfeweights`` 0.9.0.
 
 **R is only needed to regenerate the JSON**, never to run these tests. The
-committed JSON plus its sibling panel CSVs are the source of truth and the
+committed JSON plus the panel CSVs it names (two simulated siblings, plus
+the shared ``mpdta_stata_panel.csv``) are the source of truth and the
 assertions run on any Python-only environment. Tests skip ONLY if a fixture
 file is absent.
 
@@ -54,11 +55,21 @@ def golden():
 
 
 def _fixture(golden, name):
+    """Panel for a fixture, with any golden-declared derived columns applied.
+
+    ``fixtures.mpdta`` points at the SHARED ``mpdta_stata_panel.csv`` rather
+    than a renamed copy of it, and declares its one derived column
+    (``lpop_t``) as an expression evaluated against that file's own names.
+    Fixtures without a ``derived_columns`` block are unaffected.
+    """
     payload = golden["fixtures"][name]
     path = DATA_DIR / payload["data_file"]
     if not path.exists():
         pytest.skip(f"panel {path} not found; run: {REGENERATE}")
-    return payload, pd.read_csv(path)
+    df = pd.read_csv(path)
+    for column, expression in (payload.get("derived_columns") or {}).items():
+        df[column] = df.eval(expression)
+    return payload, df
 
 
 def _sorted_golden_weights(block):
@@ -285,6 +296,16 @@ def _decompose(df, cols, **kwargs):
     )
 
 
+def _assert_cell_labels(cells, golden_cells):
+    """Row-for-row (group, time, post) agreement before any value comparison."""
+    for column in ("group", "time", "post"):
+        np.testing.assert_array_equal(
+            cells[column].to_numpy(dtype=float),
+            np.asarray(golden_cells[column], dtype=float),
+            err_msg=f"cell {column!r} labels differ from the golden",
+        )
+
+
 def _degenerate_mask(cells, golden_cells):
     """Rows where R's ATT(g,t) is a 0/0 artifact rather than a disagreement.
 
@@ -330,6 +351,7 @@ class TestDecompositionParityFWL:
         assert without.estimate == pytest.approx(with_invariant.estimate, abs=1e-15)
 
         for result in (without, with_invariant):
+            _assert_cell_labels(result.cells, expected["cells"])
             np.testing.assert_allclose(result.estimate, expected["estimate"], atol=DEMEAN_ATOL)
             np.testing.assert_allclose(
                 result.cells["weight"].to_numpy(),
@@ -360,17 +382,47 @@ class TestDecompositionParityFWL:
         # leaving their sum exact.
         np.testing.assert_allclose(result.estimate, expected["estimate"], atol=atol)
 
-        split_atol = atol
-        if _degenerate_mask(result.cells, expected["cells"]).any():
-            split_atol = DEGENERATE_CELL_ATOL
+        _assert_cell_labels(result.cells, expected["cells"])
+        degenerate = _degenerate_mask(result.cells, expected["cells"])
+        # The decomposition/remainder SPLIT only moves under gmin1 (the remainder
+        # is built from the degenerate comparison-group weights). Under
+        # first_period the remainder is identically zero, so the split is gated
+        # tight even where the mask fires (observed gap on sim_staggered/fwl_nocov
+        # is 3e-15).
+        split_atol = DEGENERATE_CELL_ATOL if (degenerate.any() and key == "fwl_gmin1") else atol
         for field in ("decomposition", "remainder"):
             np.testing.assert_allclose(getattr(result, field), expected[field], atol=split_atol)
+
+        # pretrend_bias / post_only straddle the pre/post split, so R's 0/0 noise
+        # at the degenerate cells (which sit on opposite sides of it on
+        # sim_staggered) moves each by ~1.2e-4 while their sum stays exact.
+        pp_atol = DEGENERATE_CELL_ATOL if degenerate.any() else atol
+        for field in ("pretrend_bias", "post_only"):
+            np.testing.assert_allclose(getattr(result, field), expected[field], atol=pp_atol)
+
+        # effective_sample_size: post_count * sum_post(weight * ess). At the
+        # degenerate cells R's ess is a ratio of rounding errors (gap ~0.99 on
+        # sim_staggered), so the expected value is rebuilt from R's OWN cells,
+        # substituting our limit ess only where R's is noise - independent of
+        # our implementation, and not a tautology.
+        g_cells = expected["cells"]
+        r_w = np.asarray(g_cells["weight"], dtype=float)
+        r_ess = np.asarray(g_cells["ess"], dtype=float)
+        r_post = np.asarray(g_cells["post"], dtype=bool)
+        our_ess = result.cells["ess"].to_numpy(dtype=float)
+        ess_ref = np.where(degenerate, our_ess, r_ess)
+        expected_ess = r_post.sum() * float((r_w[r_post] * ess_ref[r_post]).sum())
+        np.testing.assert_allclose(result.effective_sample_size, expected_ess, atol=1e-6)
+        if not degenerate.any():
+            np.testing.assert_allclose(
+                result.effective_sample_size, expected["effective_sample_size"], atol=1e-6
+            )
 
         # estimate == decomposition + remainder is an identity, not a fit
         assert result.estimate == pytest.approx(result.decomposition + result.remainder, abs=1e-12)
 
     @pytest.mark.parametrize("fixture", FIXTURES)
-    @pytest.mark.parametrize("key", ["fwl_nocov", "fwl_cov"])
+    @pytest.mark.parametrize("key", ["fwl_nocov", "fwl_cov", "fwl_gmin1"])
     def test_cells(self, golden, fixture, key):
         payload, df = _fixture(golden, fixture)
         cols = payload["columns"]
@@ -378,10 +430,15 @@ class TestDecompositionParityFWL:
         kwargs = {
             "fwl_nocov": {"covariates": None},
             "fwl_cov": {"covariates": [cols["varying_cov"]]},
+            "fwl_gmin1": {"covariates": None, "base_period": "gmin1"},
         }[key]
         atol = DEMEAN_COV_ATOL if key == "fwl_cov" else DEMEAN_ATOL
 
         result = _decompose(df, cols, **kwargs)
+        # Label alignment: the golden now carries ORIGINAL period labels in
+        # every block, so the row-for-row comparisons below are anchored rather
+        # than merely positional.
+        _assert_cell_labels(result.cells, expected["cells"])
         np.testing.assert_allclose(
             result.cells["weight"].to_numpy(),
             np.asarray(expected["cells"]["weight"]),
@@ -398,6 +455,15 @@ class TestDecompositionParityFWL:
                 golden_att[degenerate],
                 atol=DEGENERATE_CELL_ATOL,
             )
+
+        # Cell ess / remainder: tight where R is a valid reference; at the
+        # degenerate cells R divides rounding errors (cell-ess gap up to ~0.53
+        # on sim_staggered), so only finiteness is asserted there.
+        for field in ("ess", "remainder"):
+            ours = result.cells[field].to_numpy(dtype=float)
+            theirs = np.asarray(expected["cells"][field], dtype=float)
+            np.testing.assert_allclose(ours[~degenerate], theirs[~degenerate], atol=atol)
+            assert np.isfinite(ours[degenerate]).all()
 
 
 class TestDecompositionIsExactAtDegenerateCells:
@@ -453,6 +519,12 @@ class TestBalanceParity:
         expected = expected.sort_values(key).reset_index(drop=True)
         actual = actual.sort_values(key).reset_index(drop=True)
         assert actual["covariate"].tolist() == expected["covariate"].tolist()
+        for column in ("group", "time", "post"):
+            np.testing.assert_array_equal(
+                actual[column].to_numpy(dtype=float),
+                expected[column].to_numpy(dtype=float),
+                err_msg=f"balance cell {column!r} labels differ from the golden",
+            )
 
         for r_name, our_name in R_BALANCE_COLUMNS.items():
             np.testing.assert_allclose(

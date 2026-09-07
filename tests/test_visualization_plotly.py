@@ -662,3 +662,63 @@ class TestPlotDoseResponsePlotly:
         results.alpha = 0.025
         fig_r_frac = plot_dose_response(results, backend="plotly", show=False)
         assert self._band_traces(fig_r_frac)[0].name == "97.5% CI"
+
+
+class TestPlotlyTWFEWeights:
+    """Plotly backend for plot_twfe_weights (both views)."""
+
+    @staticmethod
+    def _panel_and_fit():
+        import pandas as pd
+
+        import diff_diff
+
+        rng = np.random.RandomState(11)
+        first_treat = np.repeat(np.array([0, 3, 4]), 30)
+        rows = []
+        for t in range(1, 6):
+            treated = (first_treat != 0) & (t >= first_treat)
+            rows.append(
+                pd.DataFrame(
+                    {
+                        "unit": np.arange(len(first_treat)),
+                        "period": t,
+                        "first_treat": first_treat,
+                        "outcome": rng.normal(size=len(first_treat)) + treated * 1.0,
+                        "x": rng.normal(size=len(first_treat)),
+                    }
+                )
+            )
+        df = pd.concat(rows, ignore_index=True)
+        fit = diff_diff.CallawaySantAnna(
+            control_group="never_treated", base_period="universal"
+        ).fit(df, outcome="outcome", unit="unit", time="period", first_treat="first_treat")
+        return df, fit
+
+    def test_weights_view(self):
+        import diff_diff
+
+        _, fit = self._panel_and_fit()
+        fig = diff_diff.plot_twfe_weights(
+            diff_diff.attgt_weights(fit), backend="plotly", show=False
+        )
+        assert isinstance(fig, go.Figure)
+        assert len(fig.data) == 2  # post + pre traces
+        assert len(fig.layout.shapes) >= 2  # zero lines
+
+    def test_balance_view(self):
+        import diff_diff
+
+        df, _ = self._panel_and_fit()
+        dec = diff_diff.decompose_twfe_weights(
+            df,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            covariates=["x"],
+            balance_covariates=["x"],
+        )
+        fig = diff_diff.plot_twfe_weights(dec, backend="plotly", show=False)
+        assert isinstance(fig, go.Figure)
+        assert any(trace.name == "no improvement" for trace in fig.data)

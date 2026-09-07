@@ -4,9 +4,12 @@
 # Requires: twfeweights (>= 0.9.0, MIT, Brantly Callaway), did, fixest, BMisc,
 #           DRDID, jsonlite
 # Output:   benchmarks/data/twfeweights_golden.json
-#           benchmarks/data/twfeweights_mpdta_panel.csv
 #           benchmarks/data/twfeweights_sim_panel.csv
 #           benchmarks/data/twfeweights_unbalanced_panel.csv
+#
+# The mpdta fixture reads the EXISTING benchmarks/data/mpdta_stata_panel.csv
+# rather than writing a renamed copy of it; this script asserts the two agree
+# bit-for-bit on every shared column before using it.
 #
 # Run from the repository root:
 #   Rscript benchmarks/R/generate_twfeweights_golden.R
@@ -23,9 +26,15 @@
 #                                      implicit_aipw_weights
 #
 # plus covariate balance as a result-object method (<- twfe_cov_bal /
-# aipw_cov_bal / mp_covariate_bal_summary_helper) and two private two-period
-# kernels (<- two_period_reg_weights / two_period_aipw_weights) that are
-# pinned here because they have no public Python surface of their own.
+# aipw_cov_bal / mp_covariate_bal_summary_helper).
+#
+# RESERVED BLOCKS (pinned, but not yet read by any test): `decompose.aipw`,
+# `balance.aipw` and `two_period.*` pin implicit_aipw_weights, aipw_cov_bal
+# and the two_period_reg_weights / two_period_aipw_weights kernels. None of
+# these has a Python surface yet - `method="aipw"` is a documented follow-up -
+# so they are captured here so that follow-up needs no R re-run. Note the AIPW
+# golden is COVARIATE-ADJUSTED: a time-invariant covariate is annihilated by
+# double-demeaning but is NOT a no-op in a propensity score.
 #
 # ---------------------------------------------------------------------------
 # NOTE (upstream bug — do NOT "simplify" the no-covariate calls below)
@@ -101,7 +110,17 @@ extract_mp_weights <- function(obj) {
   )
 }
 
-extract_fwl <- function(obj) {
+# implicit_* run in POSITIONAL time (BMisc::orig2t), so their $g / $tp are
+# 1..T. attgt_weights' goldens carry RAW labels. Map back here so every block
+# in the JSON shares one convention and the Python tests can assert labels.
+to_orig <- function(pos, periods) {
+  out <- as.numeric(pos)
+  keep <- !is.na(out) & out >= 1 & out <= length(periods)
+  out[keep] <- as.numeric(periods[out[keep]])
+  out
+}
+
+extract_fwl <- function(obj, periods) {
   cells <- obj$twfe_gt
   g <- unlist(BMisc::getListElement(cells, "g"))
   tp <- unlist(BMisc::getListElement(cells, "tp"))
@@ -110,6 +129,8 @@ extract_fwl <- function(obj) {
   ess <- unlist(BMisc::getListElement(cells, "ess"))
   rem <- unlist(BMisc::getListElement(cells, "remainder"))
   post <- 1 * (tp >= g)
+  g <- to_orig(g, periods)
+  tp <- to_orig(tp, periods)
   list(
     cells = list(
       group = as.numeric(g), time = as.numeric(tp), post = as.integer(post),
@@ -126,7 +147,7 @@ extract_fwl <- function(obj) {
   )
 }
 
-extract_aipw <- function(obj) {
+extract_aipw <- function(obj, periods) {
   cells <- obj$aipw_gt
   g <- unlist(BMisc::getListElement(cells, "g"))
   tp <- unlist(BMisc::getListElement(cells, "tp"))
@@ -134,6 +155,8 @@ extract_aipw <- function(obj) {
   wt <- unlist(BMisc::getListElement(cells, "att_weight"))
   ess <- unlist(BMisc::getListElement(cells, "ess"))
   post <- 1 * (tp >= g)
+  g <- to_orig(g, periods)
+  tp <- to_orig(tp, periods)
   list(
     cells = list(
       group = as.numeric(g), time = as.numeric(tp), post = as.integer(post),
@@ -151,14 +174,17 @@ extract_aipw <- function(obj) {
 }
 
 # Per-cell balance tables, one row per (g, t) x covariate.
-extract_balance_cells <- function(cells) {
+extract_balance_cells <- function(cells, periods) {
   g <- unlist(BMisc::getListElement(cells, "g"))
   tp <- unlist(BMisc::getListElement(cells, "tp"))
   dfs <- BMisc::getListElement(cells, "cov_bal_df")
+  post_i <- 1 * (tp >= g)
+  g_o <- to_orig(g, periods)
+  tp_o <- to_orig(tp, periods)
   rows <- do.call(rbind.data.frame, lapply(seq_along(dfs), function(i) {
     d <- dfs[[i]]
     cbind.data.frame(
-      group = g[i], time = tp[i], post = 1 * (tp[i] >= g[i]),
+      group = g_o[i], time = tp_o[i], post = post_i[i],
       covariate = rownames(d), d, row.names = NULL
     )
   }))
@@ -192,9 +218,12 @@ extract_two_period <- function(obj) {
 # ---------------------------------------------------------------------------
 
 build_fixture <- function(df, data_file, outcome, unit, time, first_treat,
-                          invariant_cov, varying_cov, two_period_g) {
+                          invariant_cov, varying_cov, two_period_g,
+                          data_file_out = NULL, columns_out = NULL,
+                          derived_columns = NULL) {
   stopifnot(all(tapply(df[[invariant_cov]], df[[unit]],
                        function(z) length(unique(z))) == 1))
+  periods <- sort(unique(df[[time]]))
 
   # Slice the two-period sub-panel FIRST. Several upstream entry points
   # (did::att_gt, and BMisc helpers reached from implicit_*) call
@@ -249,11 +278,15 @@ build_fixture <- function(df, data_file, outcome, unit, time, first_treat,
   tp_aipw <- quiet(do.call(two_period_aipw_weights,
                            c(sub_common, list(xformula = var_f))))
 
-  list(
-    data_file = data_file,
-    columns = list(outcome = outcome, unit = unit, time = time,
-                   first_treat = first_treat,
-                   invariant_cov = invariant_cov, varying_cov = varying_cov),
+  out <- list(
+    data_file = if (is.null(data_file_out)) data_file else data_file_out,
+    columns = if (is.null(columns_out)) {
+      list(outcome = outcome, unit = unit, time = time,
+           first_treat = first_treat,
+           invariant_cov = invariant_cov, varying_cov = varying_cov)
+    } else {
+      columns_out
+    },
     two_period_group = two_period_g,
     attgt_weights = list(
       twfe = extract_mp_weights(quiet(twfe_weights(ag))),
@@ -261,20 +294,24 @@ build_fixture <- function(df, data_file, outcome, unit, time, first_treat,
       simple = extract_mp_weights(quiet(att_simple_weights(ag)))
     ),
     decompose = list(
-      fwl_nocov = extract_fwl(fwl_nocov),
-      fwl_cov = extract_fwl(fwl_cov),
-      fwl_gmin1 = extract_fwl(fwl_gmin1),
-      aipw = extract_aipw(aipw)
+      fwl_nocov = extract_fwl(fwl_nocov, periods),
+      fwl_cov = extract_fwl(fwl_cov, periods),
+      fwl_gmin1 = extract_fwl(fwl_gmin1, periods),
+      aipw = extract_aipw(aipw, periods)
     ),
     balance = list(
-      fwl = list(cells = extract_balance_cells(bal_fwl$twfe_gt),
+      fwl = list(cells = extract_balance_cells(bal_fwl$twfe_gt, periods),
                  summary = extract_balance_summary(bal_fwl$twfe_gt)),
-      aipw = list(cells = extract_balance_cells(bal_aipw$aipw_gt),
+      aipw = list(cells = extract_balance_cells(bal_aipw$aipw_gt, periods),
                   summary = extract_balance_summary(bal_aipw$aipw_gt))
     ),
     two_period = list(reg = extract_two_period(tp_reg),
                       aipw = extract_two_period(tp_aipw))
   )
+  if (!is.null(derived_columns)) {
+    out$derived_columns <- derived_columns
+  }
+  out
 }
 
 # ---------------------------------------------------------------------------
@@ -298,13 +335,49 @@ mpdta_df <- mpdta_df[order(mpdta_df$unit, mpdta_df$period), ]
 # the covariate-adjusted branch is non-degenerate on this fixture too.
 mpdta_df$lpop_t <- mpdta_df$lpop * (mpdta_df$period - 2002) / 5
 
+# The fixture READS benchmarks/data/mpdta_stata_panel.csv (already in the repo
+# for the Stata parity suites) instead of writing a renamed copy. Assert the
+# two sources agree bit-for-bit on every shared column, so they cannot drift.
+stata_path <- file.path(out_dir, "mpdta_stata_panel.csv")
+if (!file.exists(stata_path)) {
+  stop("expected ", stata_path, " (the mpdta fixture now reads it)")
+}
+stata_df <- read.csv(stata_path)
+stata_df <- stata_df[order(stata_df$countyreal, stata_df$year), ]
+# The identifiers must match exactly; the float columns are compared at CSV
+# round-trip precision, NOT bit-for-bit. write.csv emits 15 significant digits,
+# so a CSV column always sits within ~1e-15 relative of the in-memory double it
+# came from. That gap is pre-existing and unchanged by this switch: the fixture
+# previously read twfeweights_mpdta_panel.csv, itself a 15-digit round-trip of
+# these same values, and the parity tolerances already absorb it.
+rt_tol <- 1e-14
+stopifnot(
+  nrow(stata_df) == nrow(mpdta_df),
+  identical(as.numeric(stata_df$countyreal), mpdta_df$unit),
+  identical(as.numeric(stata_df$year), mpdta_df$period),
+  identical(as.numeric(stata_df$first.treat), mpdta_df$first_treat),
+  max(abs(as.numeric(stata_df$lemp) - mpdta_df$outcome)) <=
+    rt_tol * max(1, max(abs(mpdta_df$outcome))),
+  max(abs(as.numeric(stata_df$lpop) - mpdta_df$lpop)) <=
+    rt_tol * max(1, max(abs(mpdta_df$lpop)))
+)
+
 # ---------------------------------------------------------------------------
 # Fixture 2 — sim_staggered (simulated)
 #
-# Well-conditioned by construction: 3 equal cohorts of 100 so no (g,t) cell is
-# degenerate and 100 controls per cell keep the AIPW propensity score bounded
-# away from 0/1; `0.3 * x1 * period` induces a REAL pre-trend so
-# pretrend_bias != 0 and the diagnostic is not testing a trivial zero.
+# 3 equal cohorts of 100, which keeps the AIPW propensity score bounded away
+# from 0/1 (100 controls per cell). The equal cohorts are also exactly what
+# makes the comparison-group normalizer VANISH at t = 3 (-1/3 + 1/3), so this
+# fixture deliberately exercises the documented 0/0 cells - it is not a
+# "no cell is degenerate" design.
+#
+# `0.3 * x1 * period` gives each unit a trend, so pretrend_bias is non-zero,
+# but x1 is iid and cohorts are assigned by unit INDEX, so E[x1 | g] does not
+# vary by cohort: the differential pre-trend is zero in expectation and the
+# observed value (~0.093) is sampling noise, not a designed pre-trend.
+# `xtv`'s two structured terms (0.2 * period and 0.5 * x1) are absorbed by the
+# two-way fixed effects, so the covariate branch regresses on the residual
+# noise - adequate for parity, but not a "well-conditioned" design.
 # ---------------------------------------------------------------------------
 
 make_sim <- function(seed, cohort_sizes, cohort_times, n_periods) {
@@ -344,17 +417,24 @@ unb_df <- make_sim(20260901, c(120, 70, 60), c(0, 3, 5), 6)
 # Build + write
 # ---------------------------------------------------------------------------
 
-write.csv(mpdta_df, file.path(out_dir, "twfeweights_mpdta_panel.csv"),
-          row.names = FALSE)
 write.csv(sim_df, file.path(out_dir, "twfeweights_sim_panel.csv"),
           row.names = FALSE)
 write.csv(unb_df, file.path(out_dir, "twfeweights_unbalanced_panel.csv"),
           row.names = FALSE)
 
 cat("building mpdta ...\n")
-fx_mpdta <- build_fixture(mpdta_df, "twfeweights_mpdta_panel.csv",
-                          "outcome", "unit", "period", "first_treat",
-                          "lpop", "lpop_t", two_period_g = 2004)
+fx_mpdta <- build_fixture(
+  mpdta_df, "twfeweights_mpdta_panel.csv",
+  "outcome", "unit", "period", "first_treat",
+  "lpop", "lpop_t", two_period_g = 2004,
+  # Emitted names point at the SHARED stata panel; the R calls above keep
+  # using mpdta_df's own names, so nothing inside build_fixture changes.
+  data_file_out = "mpdta_stata_panel.csv",
+  columns_out = list(outcome = "lemp", unit = "countyreal", time = "year",
+                     first_treat = "first.treat",
+                     invariant_cov = "lpop", varying_cov = "lpop_t"),
+  derived_columns = list(lpop_t = "lpop * (year - 2002) / 5")
+)
 cat("building sim_staggered ...\n")
 fx_sim <- build_fixture(sim_df, "twfeweights_sim_panel.csv",
                         "outcome", "unit", "period", "first_treat",
@@ -382,6 +462,27 @@ payload <- list(
     BMisc_version = as.character(packageVersion("BMisc")),
     DRDID_version = as.character(packageVersion("DRDID")),
     seeds = list(sim_staggered = 20260831L, unbalanced_cohorts = 20260901L),
+    mpdta_provenance = paste(
+      "fixtures.mpdta is data(mpdta, package = \"did\") version",
+      as.character(packageVersion("did")),
+      "- read from the shared benchmarks/data/mpdta_stata_panel.csv, whose",
+      "columns this generator asserts are bit-identical to data(mpdta).",
+      "`lpop_t` is derived (see fixtures.mpdta.derived_columns)."
+    ),
+    reserved_blocks = paste(
+      "decompose.aipw, balance.aipw and two_period.* are PINNED BUT UNUSED:",
+      "they capture implicit_aipw_weights, aipw_cov_bal and the",
+      "two_period_reg_weights / two_period_aipw_weights kernels, none of which",
+      "has a Python surface yet (method=\"aipw\" is a documented follow-up).",
+      "They are kept so that follow-up needs no R re-run. NOTE the AIPW golden",
+      "is covariate-adjusted: a time-invariant covariate is annihilated by",
+      "double-demeaning but is NOT a no-op in a propensity score."
+    ),
+    label_convention = paste(
+      "Every cells block (attgt_weights.*, decompose.*, balance.*) carries",
+      "ORIGINAL period labels. implicit_* run in positional time internally;",
+      "the generator maps them back before emitting."
+    ),
     no_covariate_note = paste(
       "decompose.fwl_nocov is generated with xformula = ~<time-invariant col>,",
       "which is numerically the ~1 branch (double-demeaning annihilates a",
