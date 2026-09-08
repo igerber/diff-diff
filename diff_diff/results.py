@@ -1284,7 +1284,7 @@ class SyntheticDiDResults(BaseResults):
         if "placebo_effects" in state and "variance_effects" not in state:
             state = dict(state)
             state["variance_effects"] = state.pop("placebo_effects")
-        # Pre-v3.11.2 pickles: ``pre_treatment_fit`` was the LEVEL-inclusive
+        # Pre-v3.12.0 pickles: ``pre_treatment_fit`` was the LEVEL-inclusive
         # RMSE and the shape-only / placebo-reference fields did not exist.
         # Never relabel the stale value as shape-only: recompute both
         # statistics from the stored trajectories when they are present
