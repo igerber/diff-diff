@@ -154,7 +154,7 @@ jobs:
 
       - name: Install test dependencies
         # Keep in sync with pyproject.toml [project.dependencies] and [project.optional-dependencies.dev]
-        run: pip install pytest pytest-xdist numpy pandas scipy
+        run: pip install pytest pytest-xdist numpy pandas scipy scikit-learn
 
       - name: Install OpenBLAS (Linux)
         if: runner.os == 'Linux'
@@ -255,7 +255,7 @@ jobs:
 
       - name: Install dependencies
         # Keep in sync with pyproject.toml [project.dependencies] and [project.optional-dependencies.dev]
-        run: pip install numpy pandas scipy pytest pytest-xdist
+        run: pip install numpy pandas scipy pytest pytest-xdist scikit-learn
 
       - name: Verify pure Python mode
         run: |
