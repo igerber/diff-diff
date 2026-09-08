@@ -142,8 +142,10 @@ only. :class:`~diff_diff.SieveLearner` is the exported configurable
 learner (``DMLDiD(outcome_learner=SieveLearner(k_max=3))``).
 
 Custom learner templates must support ``copy.deepcopy`` and return a distinct
-top-level object. DMLDiD checks this before fitting any cell and raises a
-targeted ``TypeError`` if copying fails or returns the original object. A
+top-level object. DMLDiD preflights one copy of each template before fitting
+any cell and raises a targeted ``TypeError`` if copying fails or returns the
+original object; a clone failure in a later fold propagates as the same
+``TypeError`` rather than a NaN-cell skip. A
 custom ``__deepcopy__`` implementation remains responsible for isolating its
 nested mutable state.
 
@@ -220,7 +222,9 @@ Restrictions
   fold-time learner ``ValueError``) is recorded as a NaN cell with a
   machine-readable ``skip_reason`` and reported in a consolidated warning;
   surviving cells still aggregate. Learner-configuration errors, including
-  an uncloneable template, raise ``TypeError`` before any cell is estimated.
+  an uncloneable template, raise ``TypeError`` at the preflight before any
+  cell is estimated; a per-fold clone failure later in the fit propagates as
+  a hard ``TypeError`` too, never as a NaN cell.
 - **Event-study surface is post-fit only** — fit-time
   ``event_study_effects`` is never populated; call
   ``results.aggregate('event_study')``.

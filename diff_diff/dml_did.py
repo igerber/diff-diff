@@ -293,9 +293,10 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         (PSU-cohesive folds consume the RNG differently than stratified
         folds — a config change, not a reproducibility break). A user-supplied
         STOCHASTIC learner object must additionally be seeded by the user
-        (e.g. sklearn ``random_state``) — ``cross_fit_predict`` deep-copies
-        the learner template where copyable but never seeds its internal
-        RNG.
+        (e.g. sklearn ``random_state``). The supplied template must be
+        unfitted; ``cross_fit_predict`` requires a distinct deep copy and
+        raises ``TypeError`` otherwise, but never seeds the learner's
+        internal RNG.
     base_period : str, default "varying"
         ``"varying"`` or ``"universal"`` (CS semantics; universal
         materializes per-cohort zero reference cells).
