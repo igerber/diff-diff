@@ -2587,7 +2587,7 @@ class TestPreTreatmentFitWarning:
         assert res.att == pytest.approx(5.0, abs=1.5)
 
     def test_flat_noise_treated_does_not_warn(self):
-        """The pre-v3.11.2 'poor fit' fixture (treated ~100, controls ~10, both
+        """The pre-v3.12.0 'poor fit' fixture (treated ~100, controls ~10, both
         flat) is a textbook GOOD SDID design: a pure level offset. It must no
         longer warn, and the offset must surface as the level gap."""
         np.random.seed(42)
@@ -2652,7 +2652,7 @@ class TestPreTreatmentFitWarning:
     def test_noiseless_controls_still_warn(self):
         """Noiseless, exactly parallel controls are fit exactly by every
         placebo draw (placebo RMSE 0), so a trending treated series is worse
-        than all of them and warns (this input warned under the pre-v3.11.2
+        than all of them and warns (this input warned under the pre-v3.12.0
         level rule too)."""
         rows = []
         for u in range(10):
@@ -2758,7 +2758,7 @@ class TestPreTreatmentFitWarning:
         )
 
     def test_legacy_pickle_state_migrates_level_rmse(self):
-        """CI review P1 on PR #818: a results object pickled before v3.11.2
+        """CI review P1 on PR #818: a results object pickled before v3.12.0
         carries the LEVEL-inclusive RMSE in ``pre_treatment_fit`` and none of
         the new fields. ``__setstate__`` must recompute the shape-only RMSE
         and the level gap from the stored trajectories (never relabel the

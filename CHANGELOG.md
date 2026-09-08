@@ -9,6 +9,241 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- entries live in changelog.d/*.md; compiled at release by .claude/scripts/changelog_compile.py -->
 
+## [3.12.0] - 2026-09-08
+
+### Added
+- **`SyntheticDiDResults.pre_treatment_level_gap`**: signed mean pre-period
+  gap (treated minus synthetic), the constant offset absorbed by the DiD
+  step, reported in `summary()` and `to_dict()` for inspection.
+- **`SyntheticDiDResults.pre_fit_placebo_rmse` / `pre_fit_placebo_pvalue`**:
+  the placebo pre-fit reference distribution and the treated fit's placebo
+  p-value behind the poor-fit warning (p-value also in `to_dict()`).
+- **`DMLDiD` bad-control lane (Caetano, Callaway, Payne & Sant'Anna 2026, "Difference-in-differences with 'bad controls'", arXiv:2608.03881; PR-B of the bad-controls initiative).**
+  `DMLDiD(...).fit(..., bad_control="x", bad_control_covariates=[...])` swaps the per-cell
+  Chang (2020) score for the paper's Neyman-orthogonal doubly-robust score (Eq. 10 / 11,
+  Algorithm 1; `ccps_panel_score` / `ccps_panel_score_augmented` in `_dr_scores.py`):
+  parallel trends conditional on the bad control's UNTREATED path, with its untreated
+  evolution identified by covariate unconfoundedness given its base-period value, the
+  optional `W` covariates (`[outcome]` = the base-period outcome, the paper's Remark 5
+  recommendation; default no `W`) and the covariates `Z`. Four cross-fitted nuisances
+  per cell, including the two NESTED second stages (`nu`, `omega`): in-sample fold-k
+  targets for the parametric `linear`/`logit` built-ins (the paper's Assumption-8
+  plug-in), split-half swap-and-average for `ridge` / `sieve` / user learners
+  (footnote 9); `omega` clipped to `[0, (1-trim)/trim]` with a warning. Every cell also
+  reports the paper's Remark 6 pre-test `ATT_X(g,t)` (the effect of treatment on the bad
+  control itself, an AIPW mean-effect diagnostic with its own analytical SE, sharing the
+  ATT's cluster / df branch; pre-period rows pre-test MP-5 / MP-8 and should be zero,
+  post-period rows check that treatment affects the covariate) via `results.bad_control_summary()` /
+  `results.bad_control_diagnostics`, with `att_x` / `se_x` joined into
+  `to_dataframe()` and new `summary()` header lines. Panel lane only, bare `cluster=`
+  only (`survey_design=` raises), `anticipation=0` and `base_period="varying"` only;
+  the bad control may not appear in `covariates`; `bad_control=None` is the untouched
+  pre-existing code path (bit-identical). The headline `att` keeps the CS "simple"
+  weighting (not the paper's Remark 4 overall; TODO row). Validation: score-level
+  paired double robustness + four-direction Neyman orthogonality + reduction to
+  `chang_panel_score` at 1e-14; a numpy oracle of Eq. 11 / Algorithm 1 at 1e-12
+  (ATT, SE, ATT_X); oracle user learners on the split-half branch; the Supplementary
+  Appendix's DGP 1 / DGP 4 recovery (`ATT = 1.00`, `ATT_X = 0.50`) with slow MC
+  coverage; and tolerance-based black-box goldens against the authors' GPL-3 R package
+  `badcontrols` 1.0.0 (executed only, never read; 10-seed means on both sides,
+  `|Δatt| < 0.5 SE` per cell) in `tests/test_dml_did_bad_controls_parity.py` with the
+  generator `benchmarks/R/generate_badcontrols_golden.R` and commit-pinned installer
+  in `benchmarks/R/requirements.R`. `BusinessReport` / target-parameter /
+  `practitioner_next_steps` carry the bad-control identification text, the second
+  citation and the refit snippet arguments.
+- **WooldridgeDiD comparison-support policy** ([M-147]): set
+  `unsupported_period_action="error"` to refuse periods lacking eligible comparison
+  support before removing them. The default `"drop"` preserves filtering and warnings.
+  The option works across OLS, logit and Poisson independently of
+  `rank_deficient_action`; results record the fit-time policy in `summary()` and
+  `to_dict()`. Existing survey and identification checks remain active.
+- **DurationDiD estimator** (Deaner & Ku 2026, *Causal Duration Analysis with
+  Diff-in-Diff*, arXiv:2405.05220v2): two-group, common-timing difference-in-
+  differences for a binary absorbing outcome. `method="cd"` (constant additive
+  gap between the groups' untreated hazards) or `method="ph"` (constant hazard
+  ratio, mean-of-ratios estimator) is fitted on the pre-treatment cumulative
+  hazards — by default with equal weights over every eligible pre-treatment
+  date, or on a user window via `fit(pre_periods=..., pre_period_weights=...)`
+  — with exact numeric date selection and finite real fitting weights.
+  Integer dates preserve their identity across supported signed/unsigned
+  dtype ranges: spacings and offsets are subtracted before float64 elapsed
+  arithmetic, which must remain finite and strictly increasing. Floating
+  dates must be losslessly representable as float64; complex inputs are
+  rejected. Result labels, JSON and practitioner guidance retain the same
+  dates. The treated group's counterfactual survival is imputed from the
+  control group (Theorem 1). Reports the absorption ATT at every
+  post-treatment date plus its uniform average as `att`, with the paper's
+  whole-individual pooled bootstrap (Appendix B Algorithm 1: centered
+  absolute-deviation pointwise intervals and a simultaneous max-|t| band) and
+  the Algorithm 2 fixed-anchor pre-treatment specification test
+  (`results.pretest`, a `DurationDiDPretestResults` diagnostic). Every
+  inference family is either fully available or fully withheld with a named
+  `inference_status` (invalid imputed counterfactual curve, failed bootstrap
+  draws, zero SE); failed draws are never retried or silently dropped.
+  Unused categorical unit levels are excluded from panel balance checks.
+  `results.aggregate("event_study")` returns the unified `EventStudyResults`
+  container (event time 0 = first post-treatment date, reference -1).
+  Covariates, staggered adoption, censoring, survey and cluster inference are
+  deferred. `DiagnosticReport` and `BusinessReport` reject `DurationDiDResults`
+  by type (their batteries are keyed to mean-outcome parallel-trends
+  diagnostics; admission is tracked in `TODO.md`); `practitioner_next_steps`
+  gains a DurationDiD handler with a hazard-restriction assumptions step.
+  A tutorial notebook is deferred (tracked in `TODO.md`), a documented
+  deviation from the new-estimator documentation checklist; the executed
+  examples on the API page are the hands-on reference.
+
+### Changed
+- **`_crossfit.py` deep-copy fallback warning** now reads `"_crossfit: could not
+  deep-copy ..."` (was `"cross_fit_predict: ..."`) and is attributed to the frame that
+  advances the fold generator; the module gains the per-fold generator
+  `iter_fold_fits` / `FoldFit` that `cross_fit_predict` is now a consumer of
+  (behavior-preserving refactor; every existing pin unchanged).
+- **`practitioner_next_steps()` names the bad-control lane**: on a `DMLDiD` fit with
+  `bad_control` set the guidance banner reads "DMLDiD (CCPS 2026 bad-control score)"
+  instead of the Chang (2020) label, matching the results `summary()` banner.
+
+### Fixed
+- **Exact fractional confidence-level labels, family-wide**: every text surface
+  that names a confidence level now prints the exact coverage (`97.5%` for
+  `alpha=0.025`; previously truncated to `97%` by `int((1 - alpha) * 100)` or
+  rounded to `98%` by `int(round(...))` / `:.0f`) via one shared
+  `results_base._coverage_pct` formatter: the 14 `summary()` headers
+  (DiD/TWFE/MultiPeriod/SyntheticDiD, CallawaySantAnna, staggered and 2x2x2
+  TripleDifference, StackedDiD, ImputationDiD, TwoStageDiD, EfficientDiD,
+  ContinuousDiD, dCDH, SunAbraham, TROP), the `EventStudyResults` / HAD / RDD /
+  ETWFE / LWDiD / LPDiD / ChangesInChanges table headers, the CS and dCDH sup-t
+  band labels, the dCDH HonestDiD block (whose "Significant at" line printed
+  `2%` for `alpha=0.025`; now `2.5%`), `WildBootstrapResults` and the LWDiD
+  wild-cluster-bootstrap summaries, `HonestDiDResults` / `PlaceboTestResults`
+  summaries, and BusinessReport / DiagnosticReport prose. The BusinessReport
+  headline `ci_level` field carries the exact level as an `int` when integral
+  (`95` is byte-unchanged) and a `float` otherwise (`97.5`); no schema-version
+  bump (REPORTING.md Note). Default-alpha output is byte-identical. A source
+  guard (`tests/test_coverage_label.py`) rejects any reintroduced inline
+  percent computation.
+- **SyntheticDiD `pre_treatment_fit` is now shape-only**: the reported
+  pre-treatment RMSE (and the "Pre-treatment fit is poor" warning) previously
+  measured the raw level residual between the treated mean and the synthetic
+  control, while the Frank-Wolfe unit weights are fit on column-centered
+  outcomes (`intercept=True`, matching R `synthdid`) and deliberately leave a
+  constant level gap to the DiD step. A parallel treated series sitting at a
+  different level therefore reported a large RMSE and a false poor-fit
+  warning even when the ATT was recovered exactly. The RMSE is now taken on
+  the pre-period residual after removing its mean, which is the data-fit
+  component of the centered Frank-Wolfe objective, computed on the
+  normalized outcome scale and rescaled (so a large common outcome level
+  cannot perturb it); `in_time_placebo()` and `sensitivity_to_zeta_omega()`
+  report the same shape-only `pre_fit_rmse`. Results pickled before this
+  release are migrated on load: the shape RMSE and the level gap are
+  recomputed from the stored trajectories and replace the stale level RMSE
+  (which is cleared when no trajectories were stored), never relabeled. Estimates, standard errors
+  and weights are unchanged.
+- **Zero-weight observations do not invalidate HC2/HC3 inference:** excluded
+  rows contribute zero to the covariance and cannot trigger the leverage
+  guard. Zero-frequency rows now agree with dropping those rows or expanding
+  the frequency counts literally.
+- **LWDiD uses the shared HC2 covariance guard:** leverage-one regressions
+  retain their point estimate and unavailable influence contribution while
+  emitting one covariance warning per regression, without a duplicate local
+  warning.
+
+### Documentation
+- REGISTRY `DMLDiD` "Bad-control extension (CCPS 2026)" block (equations as
+  implemented, nested-stage / omega-clip / W-default / base-period / anticipation /
+  fail-closed / complete-case / aggregation-weight / ATT_X / validation-scope Notes),
+  the CallawaySantAnna Approach-1 Note (a pre-treatment bad control in `covariates`
+  computes Proposition 3 on the panel lane), the infrastructure section's fourth score
+  family and `iter_fold_fits` contract; `docs/api/dml_did.rst` methodology sub-block,
+  restrictions and a runnable snippet; `docs/api/staggered.rst` "Covariates and bad
+  controls"; the paper review's requirements checklist flipped with library
+  annotations; guides (`llms.txt` signature + Diagnostics entry, `llms-full.txt`,
+  practitioner pitfall 3 rewrite, autonomous matrix); `choosing_estimator.rst`,
+  `practitioner_decision_tree.rst`, `docs/index.rst`, README one-liners; survey
+  roadmap / survey theory carve-outs; `docs/references.rst`; the regenerated
+  variance-conventions table (`dml_did_bad_control` row); `benchmarks/R/README.md`.
+- **Caetano, Callaway, Payne & Sant'Anna (2026) "bad controls" paper review on file
+  (PR-A).** Added `docs/methodology/papers/caetano-2026-review.md`, a paper-sourced
+  fidelity review of the arXiv preprint 2608.03881v2 (plus its Supplementary Appendix
+  v1, both SHA-256 pinned) - the Step-1 artifact for a prospective bad-controls
+  extension of the DiD-with-covariates family. Transcribes the formal definition of a
+  bad control (Conditions 1-2), the identification failure and the bias of the
+  include / discard conventions (Section 3), the two new identification approaches
+  (pre-treatment conditioning, Theorem 1 / Proposition 1; covariate unconfoundedness,
+  Theorem 2), the staggered results (Theorem 3, Propositions 2-3, pre-tests incl.
+  `ATT_X(g,t)`), the imputation estimator (Eqs. 5-7, influence function S8) and the
+  Neyman-orthogonal DR / DML estimator (Eqs. 8-11, Algorithm 1, Propositions 5-7,
+  Assumptions 9 / S2), the SC linearity alternative, all five Monte Carlo DGPs with
+  Tables S1-S6 in full, and the NLSY job-displacement application. Records the
+  GPL-3 status of the authors' `badcontrols` R package (black-box oracle only, no
+  source port) and a `Relation to Existing diff-diff Estimators` section mapping
+  Approach 1 onto `CallawaySantAnna` base-period covariates and the DR estimator onto
+  the `DMLDiD` cross-fitting stack. Docs-only; no code change. This is a deliberate
+  exception to the published-source rule, made for the authors' standing.
+- Added a full-paper and appendix review of Deaner and Ku's *Causal Duration
+  Analysis with Diff-in-Diff* (arXiv 2405.05220v2), including identification,
+  bootstrap inference, diagnostics, deferred extensions, and a pinned reference-code
+  audit. Records requirements for a prospective two-group `DurationDiD` estimator;
+  no estimator or public API is introduced.
+- **Tutorial 33, "Bad Controls - Covariates That Treatment Can Affect"**
+  (`docs/tutorials/33_bad_controls.ipynb`; PR-C of the Caetano, Callaway, Payne &
+  Sant'Anna 2026 bad-controls initiative). On a staggered version of the paper's DGP 1
+  it shows the naive TWFE regression with the bad control at `t` missing by the full
+  treatment effect on the covariate, Approach 1 through base-period covariates with and
+  without the confounders `W`, the `DMLDiD` bad-control lane and the choice of `W`
+  (Remark 5's lagged outcome), how to read `bad_control_summary()` (pre-period rows
+  pre-test MP-5/MP-8 and should be zero; post-period rows check that treatment moves the
+  covariate), the event study, a ridge refit through the split-half nested stage, and
+  the lane's restrictions. Registered in the tutorials index, `docs/tutorials/README.md`,
+  `diff_diff/guides/llms.txt` (together with a line for tutorial 32) and
+  `docs/doc-deps.yaml`; pinned by `tests/test_t33_bad_controls_drift.py` (code-cell
+  hashes, quoted numbers, DGP re-derivation, pre-period narrative guard).
+
+### Behavioral Changes
+- **`summary(alpha=...)` never recomputes or relabels stored inference,
+  family-wide** ([M-146] completion): a non-fit `alpha` now raises `ValueError`
+  at seven more sites - `DiDResults` (and `SpilloverDiDResults` by
+  inheritance), `MultiPeriodDiDResults`, `SyntheticDiDResults`,
+  `TripleDifferenceResults`, `TROPResults`, `ContinuousDiDResults` (all
+  previously printed a requested-alpha header over fit-time stored intervals),
+  and `SyntheticControlResults` (previously a silent no-op `alpha`); `alpha=0.0`,
+  previously swallowed by a falsy-`or` default, raises too. Re-fit at the
+  desired alpha instead.
+- **`plot_dose_response` honest bands and labels**: DataFrame-`se` input masks
+  non-positive/non-finite `se` rows from the confidence band with a warning
+  (previously a zero-SE row drew a finite zero-width band) and validates
+  `alpha` strictly inside (0, 1); the band legend is alpha-derived on the `se`
+  branch, `results.alpha`-derived on `results=` input, and the level-free
+  "CI" for bare-curve/explicit-CI input (previously hard-coded "95% CI"
+  regardless of the requested alpha); an explicitly passed `alpha` on
+  non-`se` input warns instead of being silently ignored; the plotly band
+  polygon filters non-finite-CI rows (a NaN vertex previously mangled the
+  `toself` band) and both renderers suppress an all-masked band.
+- **SyntheticDiD pre-fit diagnostic redefinition**: `pre_treatment_fit` and
+  the `pre_fit_rmse` diagnostic columns drop the level gap, so their values
+  fall for any design with a treated-vs-synthetic level offset, and are NaN
+  with a single pre-period. The poor-fit warning is now anchored to an
+  in-space placebo fit reference (Abadie, Diamond & Hainmueller 2010; Abadie
+  2021): the treated fit is compared with the same statistic over up to 20
+  placebo fits of control units treated as if treated (Algorithm 4 draws at
+  the fit-time zeta), and the warning fires when the placebo p-value is at
+  or below 0.05 (at the 20-draw default: worse than every placebo draw),
+  replacing the unreachable `1 x std(treated pre-outcomes)` rule. The reference is computed for every variance method (one extra
+  Frank-Wolfe solve per draw) from a private RNG stream, so SE draws are
+  unchanged; it needs at least 19 successful draws (`n_bootstrap >= 19`) to
+  fire and is absent when no pseudo-control remains. A treated unit far
+  noisier than every control still fits worse than every placebo and warns;
+  the warning text says so. `summary()` labels the values
+  `Pre-fit RMSE (shape)`, `Pre-fit level gap` and `Pre-fit placebo p-value`.
+- **HC2 and unweighted, unclustered HC2-BM now fail closed at leverage one:**
+  an effective observation with hat-matrix leverage at least `1 - 1e-8`
+  produces a warning and entirely NaN covariance (and requested degrees of
+  freedom), preserving point estimates while suppressing undefined inference.
+  Python and Rust agree; over-one leverage no longer substitutes HC1.
+  Older Rust extensions without the fail-closed HC2 capability use NumPy
+  for HC2 while retaining their other accelerations.
+  Weighted and clustered HC2-BM retain their separate CR2 conventions,
+  including all-ones probability weights.
+
 ## [3.11.1] - 2026-08-30
 
 ### Added
@@ -5595,6 +5830,7 @@ for the full feature history leading to this release.
 [2.1.2]: https://github.com/igerber/diff-diff/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/igerber/diff-diff/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/igerber/diff-diff/compare/v2.0.3...v2.1.0
+[3.12.0]: https://github.com/igerber/diff-diff/compare/v3.11.1...v3.12.0
 [3.11.1]: https://github.com/igerber/diff-diff/compare/v3.11.0...v3.11.1
 [3.11.0]: https://github.com/igerber/diff-diff/compare/v3.10.0...v3.11.0
 [3.10.0]: https://github.com/igerber/diff-diff/compare/v3.9.1...v3.10.0
