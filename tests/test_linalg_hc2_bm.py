@@ -16,24 +16,30 @@ Weighted CR2 Bell-McCaffrey (``hc2_bm`` + ``weights=``, both one-way and
 clustered) is now supported via the clubSandwich WLS-CR2 port. Parity against
 ``clubSandwich::vcovCR(lm(weights=w), type="CR2") + coef_test(test=
 "Satterthwaite")$df_Satt`` is locked in ``tests/test_methodology_wls_cr2.py``;
-this file's tests cover backward-compat (unweighted is bit-equal to prior).
+this file covers healthy-design compatibility and the leverage-one NaN policy.
 """
 
 from __future__ import annotations
+
+import warnings
 
 import numpy as np
 import pytest
 
 from diff_diff.linalg import (
+    LinearRegression,
+    _compute_bm_dof_from_contrasts,
     _compute_bm_dof_oneway,
     _compute_cr2_bm,
     _compute_cr2_bm_contrast_dof,
     _compute_cr2_bm_vcov_and_dof,
     _compute_hat_diagonals,
+    _compute_robust_vcov_numpy,
     _cr2_adjustment_matrix,
     compute_robust_vcov,
     solve_ols,
 )
+from tests.conftest import assert_nan_inference
 
 # =============================================================================
 # Fixtures: deterministic OLS datasets with hand-computable properties
@@ -64,6 +70,193 @@ def _fit_unweighted(X, y):
 # =============================================================================
 # Classical (non-robust) VCOV
 # =============================================================================
+
+
+class TestLeverageOneInference:
+    """Effective leverage-one observations suppress the whole HC covariance."""
+
+    @staticmethod
+    def _design():
+        X = np.column_stack([np.ones(4), [0.0, 0.0, 0.0, 1.0]])
+        return X, np.array([0.0, 1.0, 2.0, 5.0])
+
+    @pytest.mark.parametrize("vcov_type", ["hc2", "hc2_bm", "hc3"])
+    @pytest.mark.parametrize("return_dof", [False, True])
+    @pytest.mark.parametrize("compute", [compute_robust_vcov, _compute_robust_vcov_numpy])
+    def test_leverage_one_nan_shapes_and_warning(self, vcov_type, return_dof, compute):
+        X, _ = self._design()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = compute(
+                X,
+                np.array([-1.0, 0.0, 1.0, 0.0]),
+                vcov_type=vcov_type,
+                return_dof=return_dof,
+            )
+        vcov = result[0] if return_dof else result
+        assert vcov.shape == (2, 2) and np.isnan(vcov).all()
+        if return_dof:
+            assert result[1].shape == (2,) and np.isnan(result[1]).all()
+        assert len(caught) == 1
+        assert caught[0].category is UserWarning
+        family = "HC2-BM" if vcov_type == "hc2_bm" else vcov_type.upper()
+        assert f"{family} variance is undefined: 1 observation(s)" in str(caught[0].message)
+        assert "Returning NaN vcov" in str(caught[0].message)
+
+    @pytest.mark.parametrize("vcov_type", ["hc2", "hc2_bm", "hc3"])
+    @pytest.mark.parametrize("h", [1 - 2e-8, 1 - 1e-8, 1 - 5e-9, 1.0, 1.00001])
+    def test_inclusive_threshold_and_over_one(self, monkeypatch, vcov_type, h):
+        # Drive the exact comparison independently of BLAS rounding at the cutoff.
+        import diff_diff.linalg as la
+
+        X, _ = self._design()
+        monkeypatch.setattr(
+            la, "_compute_hat_diagonals", lambda *a, **k: np.array([h, 0.2, 0.2, 0.2])
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            v = la._compute_robust_vcov_numpy(
+                X, np.array([1.0, -1.0, 0.0, 0.0]), vcov_type=vcov_type
+            )
+        if h >= 1 - 1e-8:
+            assert np.isnan(v).all() and len(caught) == 1
+            assert "variance is undefined" in str(caught[0].message)
+        else:
+            assert np.isfinite(v).all() and not caught
+
+    @pytest.mark.parametrize("vcov_type", ["hc2", "hc2_bm"])
+    @pytest.mark.parametrize("rank_reduced", [False, True])
+    def test_solve_and_regression_preserve_points(self, vcov_type, rank_reduced):
+        X, y = self._design()
+        if rank_reduced:
+            X = np.column_stack([X, X[:, 1]])
+        baseline = solve_ols(
+            X, y, return_fitted=True, return_vcov=False, rank_deficient_action="silent"
+        )
+        with pytest.warns(UserWarning, match="variance is undefined"):
+            coef, resid, fitted, vcov = solve_ols(
+                X, y, vcov_type=vcov_type, return_fitted=True, rank_deficient_action="silent"
+            )
+        for actual, expected in zip((coef, resid, fitted), baseline[:3]):
+            np.testing.assert_allclose(actual, expected, atol=1e-14, equal_nan=True)
+        assert np.isnan(vcov).all()
+        with pytest.warns(UserWarning, match="variance is undefined"):
+            reg = LinearRegression(
+                vcov_type=vcov_type, include_intercept=False, rank_deficient_action="silent"
+            ).fit(X, y)
+        np.testing.assert_allclose(reg.coefficients_, baseline[0], equal_nan=True)
+        for j in np.flatnonzero(np.isfinite(coef)):
+            inference = reg.get_inference(j)
+            assert np.isfinite(inference.coefficient) and np.isnan(inference.se)
+            assert_nan_inference(vars(inference))
+
+    @pytest.mark.parametrize("return_dof", [False, True])
+    def test_hc2_bm_all_ones_weights_keep_cr2_boundary(self, return_dof):
+        X, _ = self._design()
+        resid = np.array([-1.0, 0.0, 1.0, 0.0])
+        with pytest.warns(UserWarning, match="HC2-BM variance is undefined") as caught:
+            plain = compute_robust_vcov(X, resid, vcov_type="hc2_bm", return_dof=return_dof)
+        assert len(caught) == 1
+        assert np.isnan(plain[0] if return_dof else plain).all()
+        if return_dof:
+            assert np.isnan(plain[1]).all()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            weighted = compute_robust_vcov(
+                X,
+                resid,
+                weights=np.ones(4),
+                weight_type="pweight",
+                vcov_type="hc2_bm",
+                return_dof=return_dof,
+            )
+            dof = _compute_bm_dof_from_contrasts(
+                X, X.T @ X, np.array([1 / 3, 1 / 3, 1 / 3, 1.0]), np.eye(2), weights=np.ones(4)
+            )
+        assert not caught
+        expected = np.array([[1.0, -1.0], [-1.0, 1.0]]) / 3
+        np.testing.assert_allclose(weighted[0] if return_dof else weighted, expected, atol=1e-12)
+        np.testing.assert_allclose(dof, [2.0, 2.0], atol=1e-12)
+        if return_dof:
+            np.testing.assert_allclose(weighted[1], [2.0, 2.0], atol=1e-12)
+
+    @pytest.mark.parametrize("weight_type", ["pweight", "aweight"])
+    @pytest.mark.parametrize("delta", [0.0, 5e-9, 2e-8])
+    def test_weighted_hc2_near_one(self, weight_type, delta):
+        # Weighted bread = 1; the first row's WLS leverage is 1 - delta.
+        w = np.array([2.0, 3.0])
+        X = np.sqrt(np.array([(1 - delta) / w[0], delta / w[1]]))[:, None]
+        resid = np.array([0.1, -0.2])
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            vcov, dof = compute_robust_vcov(
+                X, resid, weights=w, weight_type=weight_type, vcov_type="hc2", return_dof=True
+            )
+        if delta < 1e-8:
+            assert np.isnan(vcov).all() and np.isnan(dof).all()
+            assert len(caught) == 1 and "HC2 variance is undefined" in str(caught[0].message)
+        else:
+            assert not caught and np.isfinite(vcov).all()
+            np.testing.assert_array_equal(dof, [1.0])
+
+    @pytest.mark.parametrize("weight_type", ["pweight", "aweight", "fweight"])
+    @pytest.mark.parametrize("vcov_type, expected", [("hc2", 1 / 3), ("hc3", 4 / 9)])
+    @pytest.mark.parametrize("z", [2.0, 10.0])
+    def test_zero_weight_rows_have_no_contribution(self, weight_type, vcov_type, expected, z):
+        X, y, w = (
+            np.array([[1.0], [1.0], [z]]),
+            np.array([0.0, 2.0, 7.0]),
+            np.array([2.0, 2.0, 0.0]),
+        )
+        # Includes exact unit leverage and over-one fweight quadratic forms.
+        resid = y - X[:, 0]
+        with (
+            warnings.catch_warnings(record=True) as caught,
+            np.errstate(divide="raise", invalid="raise", over="raise"),
+        ):
+            warnings.simplefilter("always")
+            v, df = compute_robust_vcov(
+                X, resid, weights=w, weight_type=weight_type, vcov_type=vcov_type, return_dof=True
+            )
+            dropped, df_dropped = compute_robust_vcov(
+                X[:2],
+                resid[:2],
+                weights=w[:2],
+                weight_type=weight_type,
+                vcov_type=vcov_type,
+                return_dof=True,
+            )
+            coef, _, v_fit = solve_ols(
+                X, y, weights=w, weight_type=weight_type, vcov_type=vcov_type
+            )
+        assert not caught and np.isfinite(v).all()
+        np.testing.assert_allclose(v, dropped, atol=1e-14)
+        np.testing.assert_allclose(v_fit, dropped, atol=1e-14)
+        np.testing.assert_allclose(coef, [1.0], atol=1e-14)
+        np.testing.assert_array_equal(df, df_dropped)
+        if weight_type == "fweight":
+            Xe, ye = np.repeat(X, w.astype(int), axis=0), np.repeat(y, w.astype(int))
+            _, re, ve = solve_ols(Xe, ye, vcov_type=vcov_type)
+            _, df_e = compute_robust_vcov(Xe, re, vcov_type=vcov_type, return_dof=True)
+            np.testing.assert_allclose(v, [[expected]], atol=1e-14)
+            np.testing.assert_allclose(v, ve, atol=1e-14)
+            np.testing.assert_array_equal(df, [3.0])
+            np.testing.assert_array_equal(df, df_e)
+
+    @pytest.mark.parametrize("vcov_type", ["hc2", "hc3"])
+    @pytest.mark.parametrize("count", [1, 2])
+    def test_fweight_singleton_vs_repeated(self, vcov_type, count):
+        X, y = self._design()
+        w = np.array([2, 2, 2, count])
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            _, _, vc = solve_ols(X, y, weights=w, weight_type="fweight", vcov_type=vcov_type)
+            _, _, ve = solve_ols(np.repeat(X, w, axis=0), np.repeat(y, w), vcov_type=vcov_type)
+        if count == 1:
+            assert np.isnan(vc).all() and np.isnan(ve).all() and len(caught) == 2
+        else:
+            assert not caught and np.isfinite(vc).all()
+            np.testing.assert_allclose(vc, ve, atol=1e-12)
 
 
 class TestClassicalVcov:

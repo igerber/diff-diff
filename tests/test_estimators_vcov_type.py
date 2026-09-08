@@ -39,6 +39,56 @@ def _make_did_panel(n_units: int = 30, seed: int = 20260420) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+class TestLeverageOneEstimatorInference:
+    """Shared fail-closed covariance reaches scalar and event-study results."""
+
+    @pytest.mark.parametrize("vcov_type", ["hc2", "hc2_bm"])
+    @pytest.mark.parametrize("event_study", [False, True])
+    def test_single_treated_observation_per_period(self, vcov_type, event_study):
+        from tests.conftest import assert_nan_inference
+
+        rng = np.random.default_rng(182)
+        data = pd.DataFrame(
+            [
+                dict(unit=u, time=t, treated=int(u == 0), y=rng.normal() + int(u == 0) * (t + 1))
+                for u in range(12)
+                for t in range(4 if event_study else 2)
+            ]
+        )
+        kwargs = dict(outcome="y", treatment="treated")
+        if event_study:
+            cls = MultiPeriodDiD
+            kwargs.update(time="time", unit="unit", post_periods=[2, 3], reference_period=1)
+        else:
+            cls = DifferenceInDifferences
+            kwargs.update(post="time")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            baseline = cls(vcov_type="hc1").fit(data, **kwargs)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = cls(vcov_type=vcov_type).fit(data, **kwargs)
+        family = "HC2-BM" if vcov_type == "hc2_bm" else "HC2"
+        # MPD's additional contrast-DOF calculation must not warn a second time.
+        assert sum(f"{family} variance is undefined" in str(w.message) for w in caught) == 1
+        assert np.isnan(result.vcov).all() and np.isnan(result.se)
+        assert result.att == pytest.approx(baseline.att)
+        assert_nan_inference(
+            dict(
+                se=result.se, t_stat=result.t_stat, p_value=result.p_value, conf_int=result.conf_int
+            )
+        )
+        np.testing.assert_allclose(result.residuals, baseline.residuals, atol=1e-13)
+        np.testing.assert_allclose(result.fitted_values, baseline.fitted_values, atol=1e-13)
+        if event_study:
+            for period, effect in result.period_effects.items():
+                if period == result.reference_period:
+                    continue
+                assert effect.effect == pytest.approx(baseline.period_effects[period].effect)
+                assert np.isnan(effect.se)
+                assert_nan_inference(vars(effect))
+
+
 # =============================================================================
 # robust <-> vcov_type alias resolution
 # =============================================================================

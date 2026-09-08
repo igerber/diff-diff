@@ -2956,10 +2956,10 @@ class LWDiD(BaseEstimator):
         if self.vcov_type in ("hc2", "hc3"):
             raw_leverage = np.sum((X @ xtx_inv) * X, axis=1)
             if self.vcov_type in ("hc2", "hc3") and np.any(raw_leverage >= 1.0 - 1e-8):
-                # Match the shared linalg fail-closed contract (round-10
-                # review: clipping fabricated a finite HC3 influence
-                # vector for a design whose HC3 vcov is NaN, so aggregate
-                # inference disagreed with the cell's own).
+                # Match the shared HC2/HC3 covariance guard. Keep this
+                # safeguard when reconstructing influence contributions so
+                # aggregate inference cannot reuse a finite vector from a
+                # design whose covariance is unavailable.
                 return np.full_like(psi, np.nan)
             leverage = np.clip(raw_leverage, 0.0, 1.0 - 1e-10)
             if self.vcov_type == "hc2":
@@ -3129,25 +3129,6 @@ class LWDiD(BaseEstimator):
         used_scales[used_scales == 0] = 1.0
         X_scaled = X_used / used_scales
         xtx_inv = np.linalg.pinv(X_scaled.T @ X_scaled) / np.outer(used_scales, used_scales)
-        if self.vcov_type == "hc2" and cluster_ids is None:
-            # Round-21 review: the shared hc2 kernel keeps its RELEASED
-            # 1 - h floor (tracked separately), but the NEW LWDiD surface
-            # must not report a fabricated finite variance for a
-            # perfectly-leveraged design - fail closed HERE, mirroring
-            # hc3 (point retained, inference NaN).
-            leverage_used = np.sum((X_used @ xtx_inv) * X_used, axis=1)
-            if np.any(leverage_used >= 1.0 - 1e-8):
-                n_lev1 = int(np.sum(leverage_used >= 1.0 - 1e-8))
-                warnings.warn(
-                    f"HC2 variance is undefined for this design: {n_lev1} "
-                    f"observation(s) have hat-matrix leverage ~1 (e.g. a "
-                    f"single treated unit). Returning NaN inference (point "
-                    f"retained); use vcov_type='classical' exact inference "
-                    f"or add treated units.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-                se = np.nan
         influence = self._finalize_influence(
             self._ols_treatment_influence(
                 X_used,

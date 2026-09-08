@@ -9,6 +9,8 @@ These tests verify that:
 Tests are skipped if the Rust backend is not available.
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -3538,14 +3540,77 @@ class TestBatchedRidgeCholSolve:
             _batched_chol_symbol(np.zeros((2, 3, 3)), np.zeros(5))
 
 
+class TestHC2BackendCompatibility:
+    """Older successful HC2 kernels must not bypass the leverage-one policy."""
+
+    @pytest.mark.parametrize("backend_mode", ["auto", "rust"])
+    @pytest.mark.parametrize("return_dof", [False, True])
+    @pytest.mark.parametrize("leverage_one", [False, True])
+    def test_legacy_symbol_uses_numpy(self, monkeypatch, backend_mode, return_dof, leverage_one):
+        import runpy
+
+        import diff_diff._backend as backend
+        import diff_diff.linalg as la
+
+        native = pytest.importorskip("diff_diff._rust_backend")
+        X = np.column_stack([np.ones(4), [0.0, 0.0, 0.0 if leverage_one else 1.0, 1.0]])
+        residuals = np.array([-1.0, 0.0, 1.0, 0.0])
+        calls = []
+
+        def legacy_hc2(X, residuals):
+            # Supplied base kernel: unit leverage returns successfully because
+            # its denominator floor turns 0/0 into a finite contribution.
+            calls.append(True)
+            bread_inv = np.linalg.inv(X.T @ X)
+            h = np.sum((X @ bread_inv) * X, axis=1)
+            factor = residuals**2 / np.maximum(1.0 - h, 1e-10)
+            return bread_inv @ (X.T @ (X * factor[:, None])) @ bread_inv
+
+        if leverage_one:
+            np.testing.assert_allclose(
+                legacy_hc2(X, residuals), np.array([[1.0, -1.0], [-1.0, 1.0]]) / 3
+            )
+            calls.clear()
+        monkeypatch.setattr(native, "compute_robust_vcov_hc2", legacy_hc2)
+        monkeypatch.delattr(native, "compute_robust_vcov_hc2_v2", raising=False)
+        monkeypatch.setenv("DIFF_DIFF_BACKEND", backend_mode)
+        # Execute import selection in an isolated namespace, avoiding reloads
+        # that change class identities in other modules/tests.
+        selected = runpy.run_path(backend.__file__)
+        monkeypatch.setattr(la, "HAS_RUST_BACKEND", selected["HAS_RUST_BACKEND"])
+        monkeypatch.setattr(
+            la, "_rust_compute_robust_vcov_hc2", selected["_rust_compute_robust_vcov_hc2"]
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = la.compute_robust_vcov(X, residuals, vcov_type="hc2", return_dof=return_dof)
+        vcov = result[0] if return_dof else result
+        assert vcov.shape == (2, 2)
+        if leverage_one:
+            assert np.isnan(vcov).all()
+            assert len(caught) == 1 and "HC2 variance is undefined" in str(caught[0].message)
+            if return_dof:
+                assert result[1].shape == (2,) and np.isnan(result[1]).all()
+        else:
+            assert not caught
+            np.testing.assert_allclose(vcov, [[0.5, -0.5], [-0.5, 1.0]], atol=1e-14)
+            if return_dof:
+                np.testing.assert_array_equal(result[1], [2.0, 2.0])
+        assert not calls, "legacy HC2 must never be used, even if its symbol exists"
+        assert selected["_rust_compute_robust_vcov_hc2"] is None
+        assert selected["HAS_RUST_BACKEND"]
+        assert selected["_rust_solve_ols"] is native.solve_ols
+        assert selected["_rust_compute_robust_vcov"] is native.compute_robust_vcov
+
+
 @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
 class TestRustHC2Vcov:
     """Rust HC2 (leverage-corrected) vcov parity with the NumPy hc2 branch.
 
     The kernel mirrors `_compute_robust_vcov_numpy`'s unweighted `hc2` path
-    exactly (hat diagonals off the same bread, `u^2 / max(1 - h, 1e-10)` meat,
-    NO n/(n-k) factor); the near-singular hat-diagonal guard stays Python-side
-    (sentinel error -> documented warn-and-fall-back-to-HC1)."""
+    exactly (hat diagonals off the same bread, `u^2 / (1 - h)` meat,
+    NO n/(n-k) factor). At leverage ~1 the native sentinel becomes a
+    Python warning and all-NaN covariance."""
 
     @staticmethod
     def _design(n=400, k=5, seed=0):
@@ -3575,10 +3640,8 @@ class TestRustHC2Vcov:
         np.testing.assert_allclose(v, v.T, rtol=0, atol=1e-12)
         assert np.all(np.diag(v) > 0)
 
-    def test_exact_unit_leverage_clamp_parity(self):
-        """h_ii == 1 exactly (a one-obs dummy is its own perfect predictor)
-        does NOT trip the > 1 + 1e-6 guard in either backend — both take the
-        max(1 - h, 1e-10) clamp path and must agree."""
+    def test_exact_unit_leverage_fails_closed_in_both_backends(self):
+        """A one-observation dummy produces NaN covariance in both backends."""
         from diff_diff.linalg import _compute_robust_vcov_numpy, compute_robust_vcov
 
         n = 60
@@ -3589,14 +3652,14 @@ class TestRustHC2Vcov:
         y = X @ np.array([1.0, 2.0, 0.5]) + rng.normal(size=n)
         resid = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
 
-        v_rust_path = compute_robust_vcov(X, resid, vcov_type="hc2")
-        v_numpy_path = _compute_robust_vcov_numpy(X, resid, None, vcov_type="hc2")
-        np.testing.assert_allclose(v_rust_path, v_numpy_path, rtol=1e-9, atol=1e-12)
+        for compute in (compute_robust_vcov, _compute_robust_vcov_numpy):
+            with pytest.warns(UserWarning, match="HC2 variance is undefined") as caught:
+                v = compute(X, resid, vcov_type="hc2")
+            assert len(caught) == 1
+            assert v.shape == (3, 3) and np.isnan(v).all()
 
-    def test_sentinel_error_falls_back_to_hc1_with_warning(self, monkeypatch):
-        """The kernel's near-singular sentinel error must reproduce the NumPy
-        branch's warn-and-fall-back-to-HC1 through the dispatcher (the guard
-        decision is Python-side; the kernel only signals)."""
+    def test_legacy_sentinel_fails_closed_with_warning(self, monkeypatch):
+        """A legacy over-one sentinel must never return mislabeled HC1."""
         import diff_diff.linalg as la
 
         X, resid = self._design()
@@ -3607,10 +3670,70 @@ class TestRustHC2Vcov:
             )
 
         monkeypatch.setattr(la, "_rust_compute_robust_vcov_hc2", _sentinel)
-        with pytest.warns(UserWarning, match="Falling back to HC1"):
+        with pytest.warns(UserWarning, match="HC2 variance is undefined") as caught:
             v = la.compute_robust_vcov(X, resid, vcov_type="hc2")
-        v_hc1 = la._compute_robust_vcov_numpy(X, resid, None, vcov_type="hc1")
-        np.testing.assert_allclose(v, v_hc1, rtol=1e-12, atol=1e-15)
+        assert len(caught) == 1 and np.isnan(v).all()
+        assert "Falling back to HC1" not in str(caught[0].message)
+
+    @pytest.mark.parametrize("symbol", ["compute_robust_vcov_hc2", "compute_robust_vcov_hc2_v2"])
+    @pytest.mark.parametrize("delta", [0.0, 5e-9, 2e-8])
+    def test_native_threshold_sentinel_and_public_parity(self, delta, symbol):
+        import diff_diff._rust_backend as rust_backend
+
+        from diff_diff.linalg import _compute_robust_vcov_numpy, compute_robust_vcov
+
+        compute_robust_vcov_hc2 = getattr(rust_backend, symbol)
+        X = np.sqrt(np.array([[1 - delta], [delta]]))
+        resid = np.array([0.1, -0.2])
+        if delta < 1e-8:
+            with pytest.raises(ValueError, match="HC2 variance is undefined: 1 observation"):
+                compute_robust_vcov_hc2(X, resid)
+            for compute in (compute_robust_vcov, _compute_robust_vcov_numpy):
+                with pytest.warns(UserWarning, match="HC2 variance is undefined") as caught:
+                    v = compute(X, resid, vcov_type="hc2")
+                assert len(caught) == 1 and np.isnan(v).all()
+        else:
+            native = compute_robust_vcov_hc2(X, resid)
+            numpy = _compute_robust_vcov_numpy(X, resid, vcov_type="hc2")
+            assert np.isfinite(native).all()
+            np.testing.assert_allclose(native, numpy, rtol=1e-8)
+
+    def test_public_dispatch_uses_versioned_kernel(self, monkeypatch):
+        import diff_diff._rust_backend as native
+
+        import diff_diff.linalg as la
+
+        assert la._rust_compute_robust_vcov_hc2 is native.compute_robust_vcov_hc2_v2
+        calls = []
+
+        def tracked(X, residuals):
+            calls.append(True)
+            return native.compute_robust_vcov_hc2_v2(X, residuals)
+
+        monkeypatch.setattr(la, "_rust_compute_robust_vcov_hc2", tracked)
+        X, residuals = self._design()
+        vcov = la.compute_robust_vcov(X, residuals, vcov_type="hc2")
+        assert calls == [True] and np.isfinite(vcov).all()
+
+    @pytest.mark.parametrize("fallback", ["missing", "unstable"])
+    def test_leverage_one_fails_closed_on_numpy_fallback(self, monkeypatch, fallback):
+        import diff_diff.linalg as la
+
+        X = np.column_stack([np.ones(4), [0.0, 0.0, 0.0, 1.0]])
+        resid = np.array([-1.0, 0.0, 1.0, 0.0])
+
+        def unstable(*args, **kwargs):
+            raise ValueError("Matrix inversion numerically unstable (residual check failed)")
+
+        monkeypatch.setattr(
+            la, "_rust_compute_robust_vcov_hc2", None if fallback == "missing" else unstable
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            v = la.compute_robust_vcov(X, resid, vcov_type="hc2")
+        assert np.isnan(v).all()
+        assert sum("HC2 variance is undefined" in str(w.message) for w in caught) == 1
+        assert len(caught) == (1 if fallback == "missing" else 2)
 
     def test_dispatch_declined_for_dof_and_weights(self):
         """return_dof / weights / cluster requests stay on the NumPy path

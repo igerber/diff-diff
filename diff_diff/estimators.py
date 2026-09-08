@@ -109,6 +109,8 @@ class DifferenceInDifferences(BaseEstimator):
           (library default). With ``cluster=``, uses CR1 (Liang-Zeger).
         - ``"hc2"``: leverage-corrected meat (one-way only). Errors with
           ``cluster=``; use ``"hc2_bm"`` for clustered Bell-McCaffrey.
+          Effective leverage ``h_ii >= 1 - 1e-8`` produces a warning and
+          entirely NaN covariance/inference, retaining point estimates.
         - ``"hc2_bm"``: one-way HC2 + Imbens-Kolesar (2016) Satterthwaite DOF;
           with ``cluster=``, Pustejovsky-Tipton (2018) CR2 cluster-robust.
           ``MultiPeriodDiD(cluster=..., vcov_type="hc2_bm")`` is supported and
@@ -116,6 +118,8 @@ class DifferenceInDifferences(BaseEstimator):
           post-period-average ATT (see ``_compute_cr2_bm_contrast_dof`` in
           ``linalg.py`` and the REGISTRY.md note). Weighted CR2-BM
           (``survey_design=`` paths) is a separate gate.
+          Unweighted, unclustered fits share HC2's leverage-one NaN guard;
+          clustered CR2 and design-based survey inference are separate.
         - ``"hc3"``: jackknife-style leverage correction, meat
           ``e_i^2 / (1 - h_ii)^2`` (one-way only; errors with ``cluster=``).
           A leverage-one observation has no defined HC3 variance and the
@@ -2513,12 +2517,16 @@ class MultiPeriodDiD(DifferenceInDifferences):
           (library default). With ``cluster=``, uses CR1 (Liang-Zeger).
         - ``"hc2"``: leverage-corrected meat (one-way only). Errors with
           ``cluster=``; use ``"hc2_bm"`` without cluster for Bell-McCaffrey.
+          Effective leverage ``h_ii >= 1 - 1e-8`` produces a warning and
+          entirely NaN covariance/inference, retaining point estimates.
         - ``"hc2_bm"``: one-way HC2 + Imbens-Kolesar (2016) Satterthwaite DOF
           per coefficient plus a contrast-aware DOF for the post-period-average
           ATT. With ``cluster=``, dispatches to Pustejovsky-Tipton (2018)
           CR2 cluster-robust with a Bell-McCaffrey Satterthwaite contrast DOF
           on the post-period average (see ``cluster`` above for parity
           details). Weighted CR2-BM (``survey_design=``) is still gated.
+          Unweighted, unclustered fits share HC2's leverage-one NaN guard
+          for covariance and all contrast DOFs, including the average ATT.
         - ``"hc3"``: jackknife-style leverage correction, meat
           ``e_i^2 / (1 - h_ii)^2`` (one-way only; errors with ``cluster=``).
           A leverage-one observation has no defined HC3 variance and the
