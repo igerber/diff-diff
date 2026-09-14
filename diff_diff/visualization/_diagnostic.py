@@ -951,12 +951,16 @@ def _twfe_weights_payload(
         if table is None:
             table = results.cells
         weight = table["weight"].to_numpy(dtype=float)
+        post = table["post"].to_numpy().astype(bool)
         return {
-            "post": table["post"].to_numpy().astype(bool),
+            "post": post,
             "weight": weight,
             "att": table["att"].to_numpy(dtype=float),
             "labels": [f"({g}, {t})" for g, t in zip(table["group"], table["time"])],
-            "n_negative": int((weight < 0).sum()),
+            # POST-only: over the full grid the TWFE weights sum to zero, so a
+            # healthy staggered panel would still count ~half its cells as
+            # negative. The pathology is negative weight on post cells.
+            "n_negative_post": int(((weight < 0) & post).sum()),
         }
     balance = results.covariate_balance(level="summary", standardize=standardize)
     suffix = "_std_diff" if standardize else "_diff"
@@ -978,6 +982,7 @@ def _twfe_weights_payload(
         "weighted": weighted,
         "labels": [str(c) for c in balance["covariate"]],
         "limit": limit,
+        "absolute_value": absolute_value,
     }
 
 
@@ -1028,17 +1033,20 @@ def _render_twfe_weights_mpl(
         ax.set_xlabel(xlabel or "Implicit weight")
         ax.set_ylabel(ylabel or "ATT(g, t)")
         default_title = "Implicit weights on group-time effects"
-        if payload["n_negative"]:
-            default_title += f"  ({payload['n_negative']} negative)"
+        if payload["n_negative_post"]:
+            default_title += f"  ({payload['n_negative_post']} negative post)"
         ax.set_title(title or default_title)
         ax.legend(frameon=False)
     else:
         unweighted, weighted, limit = payload["unweighted"], payload["weighted"], payload["limit"]
         ax.axhline(0, color="0.4", linewidth=1.2, zorder=1)
         ax.scatter(unweighted, weighted, s=markersize, alpha=alpha, color=post_color, zorder=3)
+        # The "no improvement" diagonal: on a SIGNED plot differences can be
+        # negative, so the line must span [-limit, limit], not [0, limit].
+        diagonal_lo = 0.0 if payload["absolute_value"] else -limit
         ax.plot(
-            [0, limit],
-            [0, limit],
+            [diagonal_lo, limit],
+            [diagonal_lo, limit],
             color="0.6",
             linestyle="--",
             linewidth=1.0,
@@ -1097,19 +1105,20 @@ def _render_twfe_weights_plotly(
                         y=att[mask],
                         mode=mode,
                         name=name,
-                        text=labels[mask] if annotate else None,
+                        # `text` always carries the labels: with mode="markers"
+                        # they feed the hover template; with "markers+text"
+                        # (annotate=True) they also render.
+                        text=labels[mask],
                         textposition="top right",
                         marker={"size": marker_px, "color": color, "opacity": alpha},
                         hovertemplate="%{text}<br>weight=%{x:.4f}<br>ATT(g,t)=%{y:.4f}<extra></extra>",
-                        customdata=None,
                     )
                 )
-                fig.data[-1].text = labels[mask]
         fig.add_hline(y=0, line={"color": "gray", "width": 1.2})
         fig.add_vline(x=0, line={"color": "gray", "width": 1.2})
         default_title = "Implicit weights on group-time effects"
-        if payload["n_negative"]:
-            default_title += f"  ({payload['n_negative']} negative)"
+        if payload["n_negative_post"]:
+            default_title += f"  ({payload['n_negative_post']} negative post)"
         fig.update_layout(
             title=title or default_title,
             xaxis_title=xlabel or "Implicit weight",
@@ -1129,10 +1138,11 @@ def _render_twfe_weights_plotly(
                 hovertemplate="%{text}<br>unweighted=%{x:.4f}<br>weighted=%{y:.4f}<extra></extra>",
             )
         )
+        diagonal_lo = 0.0 if payload["absolute_value"] else -limit
         fig.add_trace(
             go.Scatter(
-                x=[0, limit],
-                y=[0, limit],
+                x=[diagonal_lo, limit],
+                y=[diagonal_lo, limit],
                 mode="lines",
                 name="no improvement",
                 line={"color": "gray", "dash": "dash", "width": 1.0},

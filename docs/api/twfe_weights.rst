@@ -15,8 +15,10 @@ back into its building blocks.
 
 - You have a staggered design and want to see, cell by cell, what your TWFE
   specification is actually averaging
-- You want to quantify how much of a TWFE estimate comes from *pre-treatment*
-  cells -- i.e. from parallel-trends violations rather than from treatment
+- You want to quantify what the *pre-treatment* cells contribute to a TWFE
+  estimate -- a sample contribution that can reflect parallel-trends
+  violations, but can also be sampling variation, so read it as diagnostic
+  evidence rather than proof
 - Your TWFE and :class:`~diff_diff.CallawaySantAnna` estimates disagree and
   you want to see which cells drive the gap
 - You adjusted for covariates and want to check whether the regression's
@@ -123,8 +125,8 @@ between ``implied_att`` values is the cost of the TWFE specification:
        print(f"{aggregation:8s} {w.implied_att: .4f}  "
              f"({w.n_negative} negative weights)")
 
-Separating treatment effects from pre-trend violations
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Separating treatment effects from the pre-period contribution
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
@@ -141,7 +143,7 @@ Separating treatment effects from pre-trend violations
    )
 
    print(decomposition.summary())
-   print("from pre-treatment cells:", decomposition.pretrend_bias)
+   print("from pre-treatment cells:", decomposition.pre_period_contribution)
 
    # Do the implicit weights balance the covariates?
    print(decomposition.covariate_balance())

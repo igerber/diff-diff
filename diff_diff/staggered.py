@@ -5192,6 +5192,11 @@ def _build_aggregation_kit(
     # mirrors R twfe_weights' ``xformla == ~1`` restriction). Column NAMES
     # only - never values - so the data-minimization contract holds.
     bookkeeping["covariates"] = tuple(covariates or ())
+    # Panel balance, recorded so ``attgt_weights`` can reject an unbalanced
+    # fitted result: its cohort shares and E_t[D] assume the same units in
+    # every period. Defaults True when the key is absent (a legacy kit, or a
+    # producer that never computed it).
+    bookkeeping["is_balanced"] = bool((precomputed or {}).get("is_balanced", True))
 
     # Data minimization: the results object is picklable and users share
     # result artifacts, so the kit must not turn it into a carrier for raw

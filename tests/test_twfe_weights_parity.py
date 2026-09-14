@@ -209,10 +209,24 @@ class TestATTGTWeightsFromCSFit:
         assert twfe.n_negative > 0
         assert twfe.negative_weight_share > 0
 
+        # Post-only negative fields, anchored to R's OWN golden weights rather
+        # than to our implementation (which would be a tautology).
+        block = payload["attgt_weights"]["twfe"]
+        g_w = np.asarray(block["weight"], dtype=float)
+        g_post = np.asarray(block["post"], dtype=bool)
+        neg_post = (g_w < 0) & g_post
+        abs_post = float(np.abs(g_w[g_post]).sum())
+        assert twfe.n_negative_post == int(neg_post.sum())
+        assert twfe.negative_post_weight_share == pytest.approx(
+            float(np.abs(g_w[neg_post]).sum() / abs_post), abs=1e-12
+        )
+
         for aggregation in ("overall", "simple"):
             benign = attgt_weights(fit, aggregation=aggregation)
             assert benign.n_negative == 0
             assert benign.negative_weight_share == 0.0
+            assert benign.n_negative_post == 0
+            assert benign.negative_post_weight_share == 0.0
 
     @pytest.mark.parametrize("fixture", FIXTURES)
     def test_target_estimand_weights_sum_to_one(self, golden, fixture):
@@ -393,11 +407,11 @@ class TestDecompositionParityFWL:
         for field in ("decomposition", "remainder"):
             np.testing.assert_allclose(getattr(result, field), expected[field], atol=split_atol)
 
-        # pretrend_bias / post_only straddle the pre/post split, so R's 0/0 noise
+        # pre_period_contribution / post_only straddle the pre/post split, so R's 0/0 noise
         # at the degenerate cells (which sit on opposite sides of it on
         # sim_staggered) moves each by ~1.2e-4 while their sum stays exact.
         pp_atol = DEGENERATE_CELL_ATOL if degenerate.any() else atol
-        for field in ("pretrend_bias", "post_only"):
+        for field in ("pre_period_contribution", "post_only"):
             np.testing.assert_allclose(getattr(result, field), expected[field], atol=pp_atol)
 
         # effective_sample_size: post_count * sum_post(weight * ess). At the
@@ -456,14 +470,22 @@ class TestDecompositionParityFWL:
                 atol=DEGENERATE_CELL_ATOL,
             )
 
-        # Cell ess / remainder: tight where R is a valid reference; at the
-        # degenerate cells R divides rounding errors (cell-ess gap up to ~0.53
-        # on sim_staggered), so only finiteness is asserted there.
-        for field in ("ess", "remainder"):
-            ours = result.cells[field].to_numpy(dtype=float)
-            theirs = np.asarray(expected["cells"][field], dtype=float)
-            np.testing.assert_allclose(ours[~degenerate], theirs[~degenerate], atol=atol)
-            assert np.isfinite(ours[degenerate]).all()
+        # Cell ESS: tight against R where R is a valid reference; at a 0/0 cell
+        # the comparison weights are all one, so the cell ESS is exactly
+        # n_control - an anchor independent of BOTH implementations.
+        ours_ess = result.cells["ess"].to_numpy(dtype=float)
+        theirs_ess = np.asarray(expected["cells"]["ess"], dtype=float)
+        np.testing.assert_allclose(ours_ess[~degenerate], theirs_ess[~degenerate], atol=atol)
+        n_control = int((df.groupby(cols["unit"])[cols["first_treat"]].first() == 0).sum())
+        np.testing.assert_allclose(ours_ess[degenerate], float(n_control), rtol=1e-12)
+
+        # remainder: at the degenerate cells R divides rounding errors
+        # (cell-ess gap up to ~0.53 on sim_staggered), so only finiteness is
+        # asserted there.
+        ours_rem = result.cells["remainder"].to_numpy(dtype=float)
+        theirs_rem = np.asarray(expected["cells"]["remainder"], dtype=float)
+        np.testing.assert_allclose(ours_rem[~degenerate], theirs_rem[~degenerate], atol=atol)
+        assert np.isfinite(ours_rem[degenerate]).all()
 
 
 class TestDecompositionIsExactAtDegenerateCells:

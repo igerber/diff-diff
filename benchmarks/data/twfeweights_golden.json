@@ -12,7 +12,7 @@
       "sim_staggered": 20260831,
       "unbalanced_cohorts": 20260901
     },
-    "mpdta_provenance": "fixtures.mpdta is data(mpdta, package = \"did\") version 2.5.1 - read from the shared benchmarks/data/mpdta_stata_panel.csv, whose columns this generator asserts are bit-identical to data(mpdta). `lpop_t` is derived (see fixtures.mpdta.derived_columns).",
+    "mpdta_provenance": "fixtures.mpdta is data(mpdta, package = \"did\") version 2.5.1 - read from the shared benchmarks/data/mpdta_stata_panel.csv, whose integer identifier columns this generator asserts are identical to data(mpdta) and whose float columns it asserts agree to CSV round-trip precision (1e-14 relative). `lpop_t` is derived (see fixtures.mpdta.derived_columns).",
     "reserved_blocks": "decompose.aipw, balance.aipw and two_period.* are PINNED BUT UNUSED: they capture implicit_aipw_weights, aipw_cov_bal and the two_period_reg_weights / two_period_aipw_weights kernels, none of which has a Python surface yet (method=\"aipw\" is a documented follow-up). They are kept so that follow-up needs no R re-run. NOTE the AIPW golden is covariate-adjusted: a time-invariant covariate is annihilated by double-demeaning but is NOT a no-op in a propensity score.",
     "label_convention": "Every cells block (attgt_weights.*, decompose.*, balance.*) carries ORIGINAL period labels. implicit_* run in positional time internally; the generator maps them back before emitting.",
     "no_covariate_note": "decompose.fwl_nocov is generated with xformula = ~<time-invariant col>, which is numerically the ~1 branch (double-demeaning annihilates a time-invariant regressor exactly). The ~1 branch itself cannot be called: fixest::demean segfaults on the zero-column model matrix it builds. See the comment block at the top of the generator."
@@ -69,7 +69,7 @@
           "estimate": -0.0365489366740672,
           "decomposition": -0.0365489366740672,
           "remainder": 0,
-          "pretrend_bias": -0.00817768207864544,
+          "pre_period_contribution": -0.00817768207864544,
           "post_only": -0.0283712545954217,
           "effective_sample_size": 2163
         },
@@ -86,7 +86,7 @@
           "estimate": -0.0398490715024001,
           "decomposition": -0.0398490715024001,
           "remainder": 0,
-          "pretrend_bias": 0.0206741188438872,
+          "pre_period_contribution": 0.0206741188438872,
           "post_only": -0.0605231903462873,
           "effective_sample_size": 1650.8229562172
         },
@@ -103,7 +103,7 @@
           "estimate": -0.0365489366740662,
           "decomposition": -0.0365489366740672,
           "remainder": 9.57567358739198e-16,
-          "pretrend_bias": -0.00893136238322589,
+          "pre_period_contribution": -0.00893136238322589,
           "post_only": -0.0276175742908413,
           "effective_sample_size": 2163
         },
@@ -119,7 +119,7 @@
           "estimate": -0.0328195971622414,
           "decomposition": -0.0328195971622414,
           "remainder": 0,
-          "pretrend_bias": 0,
+          "pre_period_contribution": 0,
           "post_only": -0.0328195971622414,
           "effective_sample_size": 2002.7927075831
         }
@@ -259,7 +259,7 @@
           "estimate": 1.38176729464315,
           "decomposition": 1.38176729464315,
           "remainder": 0,
-          "pretrend_bias": 0.0929885879714431,
+          "pre_period_contribution": 0.0929885879714431,
           "post_only": 1.28877870667171,
           "effective_sample_size": 499.00962938647
         },
@@ -276,7 +276,7 @@
           "estimate": 1.38188157642338,
           "decomposition": 1.38188157642338,
           "remainder": 0,
-          "pretrend_bias": -12.4573008473221,
+          "pre_period_contribution": -12.4573008473221,
           "post_only": 13.8391824237455,
           "effective_sample_size": 312.37838960871
         },
@@ -293,7 +293,7 @@
           "estimate": 1.38176729464315,
           "decomposition": 1.38628305525382,
           "remainder": -0.00451576061067098,
-          "pretrend_bias": -0.0508955308063108,
+          "pre_period_contribution": -0.0508955308063108,
           "post_only": 1.43717858606014,
           "effective_sample_size": 499.00962938647
         },
@@ -309,7 +309,7 @@
           "estimate": 1.80832529747437,
           "decomposition": 1.80832529747437,
           "remainder": 0,
-          "pretrend_bias": 0,
+          "pre_period_contribution": 0,
           "post_only": 1.80832529747437,
           "effective_sample_size": 491.268276272983
         }
@@ -446,7 +446,7 @@
           "estimate": 1.88846922090823,
           "decomposition": 1.88846922090823,
           "remainder": 0,
-          "pretrend_bias": -0.0541461639412249,
+          "pre_period_contribution": -0.0541461639412249,
           "post_only": 1.94261538484946,
           "effective_sample_size": 719.999999999998
         },
@@ -463,7 +463,7 @@
           "estimate": 1.88897945007637,
           "decomposition": 1.88897945007637,
           "remainder": 0,
-          "pretrend_bias": -0.0567591745747959,
+          "pre_period_contribution": -0.0567591745747959,
           "post_only": 1.94573862465116,
           "effective_sample_size": 630.228235498893
         },
@@ -480,7 +480,7 @@
           "estimate": 1.88846922090823,
           "decomposition": 1.88846922090823,
           "remainder": -1.52655665885959e-16,
-          "pretrend_bias": -0.0613032635598606,
+          "pre_period_contribution": -0.0613032635598606,
           "post_only": 1.94977248446809,
           "effective_sample_size": 719.999999999998
         },
@@ -496,7 +496,7 @@
           "estimate": 2.20641349591344,
           "decomposition": 2.20641349591344,
           "remainder": 0,
-          "pretrend_bias": 0,
+          "pre_period_contribution": 0,
           "post_only": 2.20641349591344,
           "effective_sample_size": 706.0420149054
         }

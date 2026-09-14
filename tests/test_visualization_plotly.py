@@ -722,3 +722,33 @@ class TestPlotlyTWFEWeights:
         fig = diff_diff.plot_twfe_weights(dec, backend="plotly", show=False)
         assert isinstance(fig, go.Figure)
         assert any(trace.name == "no improvement" for trace in fig.data)
+
+    def test_signed_balance_reference_line_spans_negative(self):
+        import diff_diff
+
+        df, _ = self._panel_and_fit()
+        dec = diff_diff.decompose_twfe_weights(
+            df,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            covariates=["x"],
+            balance_covariates=["x"],
+        )
+        fig = diff_diff.plot_twfe_weights(
+            dec, kind="balance", absolute_value=False, backend="plotly", show=False
+        )
+        line = next(trace for trace in fig.data if trace.name == "no improvement")
+        assert min(line.x) < 0
+
+    def test_hover_labels_do_not_need_annotation(self):
+        """Item 18: `text` feeds the hover template even when it is not drawn."""
+        import diff_diff
+
+        _, fit = self._panel_and_fit()
+        fig = diff_diff.plot_twfe_weights(
+            diff_diff.attgt_weights(fit), backend="plotly", annotate=False, show=False
+        )
+        assert fig.data[0].mode == "markers"
+        assert len(fig.data[0].text) > 0

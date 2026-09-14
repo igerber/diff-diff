@@ -1584,24 +1584,6 @@ pathology (negative weight on POST cells); `n_negative` counts pre cells too,
 and is near-half in every staggered design because the TWFE weights sum to
 zero over the full grid.
 
-### plot_twfe_weights
-
-```python
-plot_twfe_weights(
-    results,                        # ATTGTWeightsResult | TWFEDecompositionResult
-    kind="auto",                    # "weights" | "balance" ("auto" picks balance
-                                    #   when the result carries a balance table)
-    standardize=True, absolute_value=True,   # balance view
-    annotate=False, ax=None, show=True,
-    backend="matplotlib",           # or "plotly"
-)
-```
-
-`kind="weights"` scatters weight against ATT(g,t), coloured by pre/post - points
-left of the vertical zero line carry negative weight. `kind="balance"` scatters
-unweighted against implicitly-weighted covariate differences; points near the
-horizontal axis are covariates the implicit weights balance.
-
 `decompose_twfe_weights` takes the raw panel rather than a fitted result
 because it re-estimates. It is tied to `attgt_weights` by an identity:
 `attgt_weights(cs, aggregation="twfe").implied_att == decompose_twfe_weights(panel, ...).estimate`.
@@ -2108,8 +2090,9 @@ Diagnostic result from `decompose_twfe_weights`.
 - `cells`: DataFrame with `group`, `time`, `post`, `att`, `weight`, `ess`,
   `remainder`
 - `estimate` == `decomposition` + `remainder`
-- `pretrend_bias`: contribution of PRE-treatment cells, i.e. of
-  parallel-trends violations rather than of treatment
+- `pre_period_contribution`: sample contribution of the PRE-treatment cells
+  (can reflect differential pre-trends OR sampling variation; diagnostic
+  evidence, not proof the post-treatment assumption fails)
 - `post_only`, `effective_sample_size`, `covariates`, `base_period`
 - `covariate_balance(level="summary"|"cell", standardize=True,
   post_only=True)`: implicit-weight covariate balance; raises when
@@ -2630,6 +2613,28 @@ plot_bacon(
     show=True,
 )
 ```
+
+### plot_twfe_weights
+
+```python
+from diff_diff import plot_twfe_weights
+
+plot_twfe_weights(
+    results,                        # ATTGTWeightsResult | TWFEDecompositionResult
+    kind="auto",                    # "weights" | "balance" ("auto" picks balance
+                                    #   when the result carries a balance table)
+    standardize=True, absolute_value=True,   # balance view
+    annotate=False, ax=None, show=True,
+    backend="matplotlib",           # or "plotly"
+)
+```
+
+`kind="weights"` scatters weight against ATT(g,t), coloured by pre/post - points
+left of the vertical zero line carry negative weight; the title counts POST-only
+negatives. `kind="balance"` scatters unweighted against implicitly-weighted
+covariate differences; points near the horizontal axis are covariates the
+implicit weights balance. With `absolute_value=False` the reference diagonal
+spans `[-limit, limit]` so signed differences read correctly.
 
 ### plot_power_curve
 

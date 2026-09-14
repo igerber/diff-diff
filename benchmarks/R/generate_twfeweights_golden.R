@@ -8,8 +8,9 @@
 #           benchmarks/data/twfeweights_unbalanced_panel.csv
 #
 # The mpdta fixture reads the EXISTING benchmarks/data/mpdta_stata_panel.csv
-# rather than writing a renamed copy of it; this script asserts the two agree
-# bit-for-bit on every shared column before using it.
+# rather than writing a renamed copy of it; this script asserts the integer
+# identifier columns match exactly and the float columns agree to CSV
+# round-trip precision (1e-14 relative) before using it.
 #
 # Run from the repository root:
 #   Rscript benchmarks/R/generate_twfeweights_golden.R
@@ -140,7 +141,7 @@ extract_fwl <- function(obj, periods) {
     estimate = obj$est,
     decomposition = obj$decomposition_est,
     remainder = obj$decomposition_remainder,
-    pretrend_bias = obj$pt_violations_bias,
+    pre_period_contribution = obj$pt_violations_bias,
     post_only = sum(wt[post == 1] * att[post == 1]),
     # summary.decomposed_twfe:351
     effective_sample_size = sum(post) * sum(wt[post == 1] * ess[post == 1])
@@ -165,7 +166,7 @@ extract_aipw <- function(obj, periods) {
     estimate = obj$est,
     decomposition = obj$decomposition_est,
     remainder = obj$decomposition_remainder,
-    pretrend_bias = obj$pt_violations_bias,
+    pre_period_contribution = obj$pt_violations_bias,
     post_only = sum(wt[post == 1] * att[post == 1]),
     # summary.decomposed_aipw:1006 — note the inner sum is NOT post-filtered,
     # unlike the twfe roll-up. Preserved verbatim.
@@ -371,7 +372,7 @@ stopifnot(
 # fixture deliberately exercises the documented 0/0 cells - it is not a
 # "no cell is degenerate" design.
 #
-# `0.3 * x1 * period` gives each unit a trend, so pretrend_bias is non-zero,
+# `0.3 * x1 * period` gives each unit a trend, so pre_period_contribution is non-zero,
 # but x1 is iid and cohorts are assigned by unit INDEX, so E[x1 | g] does not
 # vary by cohort: the differential pre-trend is zero in expectation and the
 # observed value (~0.093) is sampling noise, not a designed pre-trend.
@@ -466,7 +467,9 @@ payload <- list(
       "fixtures.mpdta is data(mpdta, package = \"did\") version",
       as.character(packageVersion("did")),
       "- read from the shared benchmarks/data/mpdta_stata_panel.csv, whose",
-      "columns this generator asserts are bit-identical to data(mpdta).",
+      "integer identifier columns this generator asserts are identical to",
+      "data(mpdta) and whose float columns it asserts agree to CSV round-trip",
+      "precision (1e-14 relative).",
       "`lpop_t` is derived (see fixtures.mpdta.derived_columns)."
     ),
     reserved_blocks = paste(

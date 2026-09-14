@@ -61,8 +61,15 @@ def fitted(panel):
 class TestPublicSurface:
     def test_exported_from_package_root(self):
         assert diff_diff.attgt_weights is attgt_weights
-        for name in ("attgt_weights", "ATTGTWeightsResult", "TWFEDecompositionResult"):
-            assert name in diff_diff.__all__
+        for name in (
+            "attgt_weights",
+            "decompose_twfe_weights",
+            "ATTGTWeightsResult",
+            "TWFEDecompositionResult",
+            "plot_twfe_weights",
+        ):
+            assert name in diff_diff.__all__, name
+            assert hasattr(diff_diff, name), name
 
     def test_name_is_distinct_from_the_dcdh_surface(self):
         """The two weight surfaces must stay separately addressable."""
@@ -90,12 +97,6 @@ class TestPublicSurface:
 
 
 class TestAggregationBehaviour:
-    @pytest.mark.parametrize("aggregation", ["twfe", "overall", "simple"])
-    def test_implied_att_is_the_weighted_sum(self, fitted, aggregation):
-        result = attgt_weights(fitted, aggregation=aggregation)
-        expected = (result.weights["weight"] * result.weights["att"]).sum()
-        assert result.implied_att == pytest.approx(expected, abs=1e-14)
-
     @pytest.mark.parametrize("aggregation", ["overall", "simple"])
     def test_target_estimands_are_convex(self, fitted, aggregation):
         """ATT^O / ATT^simple weights are non-negative and sum to one."""
@@ -391,7 +392,7 @@ class TestWeightedRegressionPin:
         "nocov": dict(
             kwargs={},
             estimate=1.4221735897240102,
-            pretrend_bias=0.5127724996498023,
+            pre_period_contribution=0.5127724996498023,
             post_only=0.9094010900742079,
             ess=59.999999999999986,
             weight=[
@@ -422,7 +423,7 @@ class TestWeightedRegressionPin:
         "cov": dict(
             kwargs={"covariates": ["x"]},
             estimate=1.3930847792561663,
-            pretrend_bias=0.5397671816632773,
+            pre_period_contribution=0.5397671816632773,
             post_only=0.8533175975928889,
             ess=58.816020983744,
             weight=[
@@ -453,7 +454,7 @@ class TestWeightedRegressionPin:
         "gmin1": dict(
             kwargs={"base_period": "gmin1"},
             estimate=1.4221735897240106,
-            pretrend_bias=-0.3554385674608017,
+            pre_period_contribution=-0.3554385674608017,
             post_only=1.777612157184812,
             ess=59.999999999999986,
             weight=None,  # identical to nocov (weights do not depend on the base period)
@@ -480,7 +481,9 @@ class TestWeightedRegressionPin:
             df, outcome="y", unit="id", time="t", first_treat="g", weights="w", **spec["kwargs"]
         )
         assert result.estimate == pytest.approx(spec["estimate"], abs=1e-12)
-        assert result.pretrend_bias == pytest.approx(spec["pretrend_bias"], abs=1e-12)
+        assert result.pre_period_contribution == pytest.approx(
+            spec["pre_period_contribution"], abs=1e-12
+        )
         assert result.post_only == pytest.approx(spec["post_only"], abs=1e-12)
         assert result.effective_sample_size == pytest.approx(spec["ess"], abs=1e-9)
         expected_w = spec["weight"] if spec["weight"] is not None else self._DEC["nocov"]["weight"]
@@ -997,7 +1000,7 @@ class TestDecompositionEdgeCases:
     def test_identities_hold(self, panel, fitted):
         result = diff_diff.decompose_twfe_weights(panel, **self.COMMON)
         assert result.estimate == pytest.approx(result.decomposition + result.remainder, abs=1e-12)
-        assert result.pretrend_bias + result.post_only == pytest.approx(
+        assert result.pre_period_contribution + result.post_only == pytest.approx(
             result.decomposition, abs=1e-12
         )
         assert result.remainder == 0.0
@@ -1025,8 +1028,21 @@ class TestPlotTWFEWeights:
         result = attgt_weights(fitted, aggregation="twfe")
         ax = diff_diff.plot_twfe_weights(result, show=False)
         assert ax.get_xlabel() == "Implicit weight"
-        assert "negative" in ax.get_title()
+        # Item 9: the title counts POST-only negatives. This panel has negative
+        # weights, but all of them are on pre cells, so the title must not claim
+        # any negative treatment-period weight.
+        assert result.n_negative > 0
+        assert result.n_negative_post == 0
+        assert "negative" not in ax.get_title()
         assert len(ax.collections) == 2  # post + pre scatters
+
+    def test_weights_title_reports_post_only_count(self):
+        """A panel WITH negative post weight labels the post-only count."""
+        fit = _fit(_panel(cohorts=(0, 2, 4)))
+        result = attgt_weights(fit, aggregation="twfe")
+        assert result.n_negative_post > 0
+        ax = diff_diff.plot_twfe_weights(result, show=False)
+        assert f"({result.n_negative_post} negative post)" in ax.get_title()
 
     def test_ax_reuse_and_annotate(self, fitted):
         import matplotlib.pyplot as plt
@@ -1082,3 +1098,304 @@ class TestPlotTWFEWeights:
             diff_diff.plot_twfe_weights(result, kind="heat", show=False)
         with pytest.raises(ValueError, match="backend must be"):
             diff_diff.plot_twfe_weights(result, backend="bokeh", show=False)
+
+
+# ---------------------------------------------------------------------------
+# Second review round (PR #812): canonical time keys, anticipation, balance/
+# provenance, and an independent multi-covariate pin.
+# ---------------------------------------------------------------------------
+
+_DECO = dict(outcome="outcome", unit="unit", time="period", first_treat="first_treat")
+
+
+class TestCanonicalTimeKey:
+    """Item 1: numeric and numeric-string period labels must agree.
+
+    ``"10" < "2"`` lexicographically, so a raw-label sort desynchronizes the
+    reshape from the positional grid and silently rebuilds a different panel.
+    """
+
+    @staticmethod
+    def _gapped(panel, labels):
+        df = panel.copy()
+        remap = {1: labels[0], 2: labels[1], 3: labels[2], 4: labels[3], 5: labels[4]}
+        df["period"] = df["period"].map(remap)
+        df["first_treat"] = df["first_treat"].map(lambda g: remap.get(g, 0))
+        return df
+
+    def test_numeric_string_labels_agree(self, panel):
+        as_int = diff_diff.decompose_twfe_weights(self._gapped(panel, [1, 2, 10, 11, 12]), **_DECO)
+        as_str = diff_diff.decompose_twfe_weights(
+            self._gapped(panel, ["1", "2", "10", "11", "12"]), **_DECO
+        )
+        assert as_str.estimate == pytest.approx(as_int.estimate, abs=1e-12)
+        np.testing.assert_allclose(
+            as_str.cells["weight"].to_numpy(), as_int.cells["weight"].to_numpy(), atol=1e-12
+        )
+        np.testing.assert_allclose(
+            as_str.cells["att"].to_numpy(), as_int.cells["att"].to_numpy(), atol=1e-12
+        )
+
+
+class TestAnticipation:
+    """Item 2: the anticipation window shifts the CS estimands, never TWFE."""
+
+    @staticmethod
+    def _fit(df, anticipation, control_group):
+        return diff_diff.CallawaySantAnna(
+            control_group=control_group, base_period="universal", anticipation=anticipation
+        ).fit(df, **_DECO)
+
+    @staticmethod
+    def _group_overall(fit, panel):
+        group = fit.aggregate("group")
+        ever = panel.drop_duplicates("unit")["first_treat"].to_numpy()
+        ever = ever[ever != 0]
+        vals, counts = np.unique(ever, return_counts=True)
+        pg = dict(zip(vals.tolist(), (counts / counts.sum()).tolist()))
+        return sum(pg[lab] * att for lab, att in zip(group.label, group.att))
+
+    @pytest.mark.parametrize("control_group", ["never_treated", "not_yet_treated"])
+    def test_simple_matches_aggregate(self, panel, control_group):
+        fit = self._fit(panel, 1, control_group)
+        got = attgt_weights(fit, aggregation="simple").implied_att
+        assert got == pytest.approx(fit.aggregate("simple").att[0], abs=1e-12)
+
+    @pytest.mark.parametrize("control_group", ["never_treated", "not_yet_treated"])
+    def test_overall_matches_group_combination(self, panel, control_group):
+        fit = self._fit(panel, 1, control_group)
+        got = attgt_weights(fit, aggregation="overall").implied_att
+        assert got == pytest.approx(self._group_overall(fit, panel), abs=1e-12)
+
+    def test_twfe_ignores_anticipation(self, panel):
+        ant0 = attgt_weights(self._fit(panel, 0, "never_treated"), aggregation="twfe")
+        ant1 = attgt_weights(self._fit(panel, 1, "never_treated"), aggregation="twfe")
+        np.testing.assert_allclose(
+            ant1.weights["weight"].to_numpy(), ant0.weights["weight"].to_numpy(), atol=1e-12
+        )
+
+    def test_frame_path_takes_explicit_anticipation(self, panel):
+        fit = self._fit(panel, 1, "never_treated")
+        from_fit = attgt_weights(fit, aggregation="simple")
+        from_frame = attgt_weights(
+            fit.to_dataframe("group_time"),
+            aggregation="simple",
+            data=panel,
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            anticipation=1,
+        )
+        assert from_frame.implied_att == pytest.approx(from_fit.implied_att, abs=1e-15)
+
+    def test_rejects_negative_anticipation(self, fitted):
+        with pytest.raises(ValueError, match="non-negative"):
+            attgt_weights(fitted, anticipation=-1)
+
+    def test_fitted_path_rejects_the_kwarg(self, panel):
+        fit = self._fit(panel, 1, "never_treated")
+        with pytest.raises(ValueError, match="only for the DataFrame fallback"):
+            attgt_weights(fit, anticipation=1)
+
+
+class TestUnbalancedFittedResult:
+    """Item 3: cohort shares assume a balanced panel; reject otherwise."""
+
+    def test_unbalanced_fitted_result_is_rejected(self):
+        df = _panel()
+        broken = df.copy()
+        broken.loc[broken.index[0], "outcome"] = np.nan  # row present, value missing
+        fit = diff_diff.CallawaySantAnna(
+            control_group="never_treated", base_period="universal"
+        ).fit(broken, **_DECO)
+        assert fit._aggregation_kit.bookkeeping["is_balanced"] is False
+        with pytest.raises(ValueError, match="balanced panel"):
+            attgt_weights(fit, aggregation="twfe")
+
+    def test_balanced_fit_records_the_flag(self, fitted):
+        assert fitted._aggregation_kit.bookkeeping["is_balanced"] is True
+
+    def test_frame_path_requires_one_obs_per_unit_period(self, fitted, panel):
+        broken = panel.drop(panel.index[(panel["unit"] == 7) & (panel["period"] == 3)])
+        with pytest.raises(ValueError, match="exactly one observation per unit-period"):
+            _frame_call(_gt_frame(fitted), broken)
+
+    def test_frame_path_rejects_duplicate_cells(self, fitted, panel):
+        dup = pd.concat([panel, panel.iloc[[0]]], ignore_index=True)
+        with pytest.raises(ValueError, match="duplicate \\(unit, period\\)"):
+            _frame_call(_gt_frame(fitted), dup)
+
+
+class TestFiniteInputs:
+    """Item 4: NaN inputs fail closed instead of returning an all-NaN result."""
+
+    def test_nan_outcome_is_rejected(self, panel):
+        df = panel.copy()
+        df.loc[df.index[0], "outcome"] = np.nan
+        with pytest.raises(ValueError, match="outcome.*non-finite"):
+            diff_diff.decompose_twfe_weights(df, **_DECO)
+
+    def test_nan_covariate_is_rejected(self, panel):
+        df = panel.copy()
+        df["x"] = 1.0
+        df.loc[df.index[0], "x"] = np.inf
+        with pytest.raises(ValueError, match="covariate.*non-finite"):
+            diff_diff.decompose_twfe_weights(df, covariates=["x"], **_DECO)
+
+    def test_nan_balance_covariate_is_rejected(self, panel):
+        df = panel.copy()
+        df["x"] = 1.0
+        df.loc[df.index[0], "x"] = np.nan
+        with pytest.raises(ValueError, match="balance covariate.*non-finite"):
+            diff_diff.decompose_twfe_weights(df, balance_covariates=["x"], **_DECO)
+
+
+class TestCarveOutConsistency:
+    """Item 5: the frame path honours zero_treated_control, not control_group."""
+
+    def test_paths_agree_on_a_not_yet_treated_fit(self):
+        df = _panel(cohorts=(3, 4, 5), n_periods=6)
+        fit = _fit(df, control_group="not_yet_treated")
+        with pytest.warns(UserWarning, match="structurally absent"):
+            from_fit = attgt_weights(fit, aggregation="overall")
+        with pytest.warns(UserWarning, match="structurally absent"):
+            from_frame = attgt_weights(
+                fit.to_dataframe("group_time"),
+                aggregation="overall",
+                data=df,
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+            )
+        np.testing.assert_allclose(
+            from_fit.weights["weight"].to_numpy(),
+            from_frame.weights["weight"].to_numpy(),
+            atol=1e-15,
+        )
+        assert from_fit.implied_att == pytest.approx(from_frame.implied_att, abs=1e-15)
+
+
+class TestCohortDropIsStructural:
+    """Item 6: a mid cohort blanked out for a non-structural reason fails closed."""
+
+    def test_fitted_mid_cohort_without_a_reason_raises(self):
+        fit = _fit(_panel())
+        for t in (4, 5):
+            cell = fit.group_time_effects[(4, t)]
+            cell["effect"] = np.nan
+            cell["skip_reason"] = None
+        with pytest.raises(ValueError, match="do not all carry"):
+            attgt_weights(fit, aggregation="overall")
+
+    def test_frame_mid_cohort_without_a_reason_raises(self, fitted, panel):
+        frame = _gt_frame(fitted).copy()
+        mask = (frame["group"] == 4) & (frame["time"] >= 4)
+        frame.loc[mask, "effect"] = np.nan
+        frame.loc[mask, "skip_reason"] = None
+        with pytest.raises(ValueError, match="do not all carry"):
+            _frame_call(frame, panel, aggregation="overall")
+
+
+class TestWeightsLength:
+    """Item 11: a wrong-length weights= is a clear error, never an IndexError."""
+
+    def test_wrong_length_with_an_excluded_cohort(self):
+        fit = _fit(_panel(cohorts=(0, 1, 3, 4)))
+        n_units = len(fit._aggregation_kit.bookkeeping["unit_cohorts"])
+        with pytest.raises(ValueError, match="weights has length"):
+            attgt_weights(fit, aggregation="overall", weights=np.ones(n_units - 1))
+
+
+class TestMultiCovariatePin:
+    """Item 13: a frozen-numbers pin for the multi-column solve_ols branch.
+
+    Two NON-collinear covariates are the first coverage of ``k > 1`` (the only
+    prior test used an exactly collinear pair, which exercises the rank-drop
+    path, not the multi-column solve). Captured from the implementation; any
+    refactor must leave these green at 1e-12.
+    """
+
+    @staticmethod
+    def _panel_two_covariates():
+        rng = np.random.default_rng(20260914)
+        n_per, n_periods = 15, 5
+        cohorts = [0] * n_per + [3] * n_per + [4] * n_per
+        rows = []
+        for i, g in enumerate(cohorts):
+            alpha = rng.normal()
+            x1u, x2u = rng.normal(), rng.normal()
+            for t in range(1, n_periods + 1):
+                x1 = x1u + 0.4 * t + rng.normal(scale=0.1)
+                x2 = x2u - 0.2 * t + rng.normal(scale=0.1)
+                effect = 1.0 * (t - g + 1) if (g and t >= g) else 0.0
+                y = alpha + 0.2 * t + 0.5 * x1 - 0.3 * x2 + effect + rng.normal(scale=0.3)
+                rows.append({"id": i, "t": t, "g": g, "y": y, "x1": x1, "x2": x2})
+        return pd.DataFrame(rows)
+
+    def test_two_covariate_decomposition(self):
+        df = self._panel_two_covariates()
+        result = diff_diff.decompose_twfe_weights(
+            df, outcome="y", unit="id", time="t", first_treat="g", covariates=["x1", "x2"]
+        )
+        assert result.estimate == pytest.approx(1.5221483563387275, abs=1e-12)
+        assert result.pre_period_contribution == pytest.approx(-0.0878362103974791, abs=1e-12)
+        assert result.post_only == pytest.approx(1.6099845667362065, abs=1e-12)
+        assert result.remainder == 0.0
+        assert result.covariates == ("x1", "x2")
+        np.testing.assert_allclose(
+            result.cells["weight"].to_numpy(),
+            [
+                -0.245653467623804,
+                -0.253634060114308,
+                0.381887799688092,
+                0.055465013979673,
+                0.061934714070347,
+                -0.068055542075608,
+                -0.055903047966494,
+                -0.376753882219787,
+                0.256467817300994,
+                0.244244654960894,
+            ],
+            atol=1e-12,
+        )
+
+
+class TestSignedBalancePlot:
+    """Item 10: the signed balance view draws the full reference diagonal."""
+
+    @pytest.fixture(autouse=True)
+    def _agg_backend(self):
+        matplotlib = pytest.importorskip("matplotlib")
+        matplotlib.use("Agg")
+        yield
+        import matplotlib.pyplot as plt
+
+        plt.close("all")
+
+    @staticmethod
+    def _decomposed(panel):
+        df = panel.copy()
+        df["x"] = np.random.RandomState(8).normal(size=len(df))
+        return diff_diff.decompose_twfe_weights(
+            df,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            covariates=["x"],
+            balance_covariates=["x"],
+        )
+
+    def test_signed_reference_line_spans_negative(self, panel):
+        ax = diff_diff.plot_twfe_weights(
+            self._decomposed(panel), kind="balance", absolute_value=False, show=False
+        )
+        line = next(ln for ln in ax.lines if ln.get_label() == "no improvement")
+        assert line.get_xdata()[0] < 0
+
+    def test_absolute_reference_line_starts_at_zero(self, panel):
+        ax = diff_diff.plot_twfe_weights(
+            self._decomposed(panel), kind="balance", absolute_value=True, show=False
+        )
+        line = next(ln for ln in ax.lines if ln.get_label() == "no improvement")
+        assert line.get_xdata()[0] == 0

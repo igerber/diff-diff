@@ -231,11 +231,13 @@ class TWFEDecompositionResult(Diagnostic):
     remainder : float
         Part of ``estimate`` not attributable to any ATT(g, t) cell.
         Identically ``0.0`` except under ``base_period="gmin1"``.
-    pretrend_bias : float
-        ``sum(weight * att)`` over PRE-treatment cells only. Under parallel
-        trends every pre-treatment ATT(g, t) is zero and this vanishes; a
-        non-zero value is the contribution of parallel-trends violations to
-        ``estimate``.
+    pre_period_contribution : float
+        ``sum(weight * att)`` over PRE-treatment cells only. This is the sample
+        contribution of the pre-treatment cells to ``estimate``. It can reflect
+        differential pre-trends, but it can also be sampling variation, since
+        the diagnostic carries no inference; read it as diagnostic evidence,
+        not as proof that the identifying assumption fails in the
+        post-treatment counterfactual.
     post_only : float
         ``sum(weight * att)`` over post-treatment cells only.
     base_period : str or None
@@ -258,7 +260,7 @@ class TWFEDecompositionResult(Diagnostic):
     estimate: float
     decomposition: float
     remainder: float
-    pretrend_bias: float
+    pre_period_contribution: float
     post_only: float
     base_period: Optional[str]
     covariates: Tuple[str, ...]
@@ -271,7 +273,7 @@ class TWFEDecompositionResult(Diagnostic):
         return (
             f"TWFEDecompositionResult(method={self.method!r}, "
             f"estimate={self.estimate:.4f}, "
-            f"pretrend_bias={self.pretrend_bias:.4f}, "
+            f"pre_period_contribution={self.pre_period_contribution:.4f}, "
             f"n_cells={len(self.cells)})"
         )
 
@@ -313,17 +315,20 @@ class TWFEDecompositionResult(Diagnostic):
             f"{'Estimate:':<30} {_fmt(self.estimate)}",
             f"{'  from ATT(g,t) cells:':<30} {_fmt(self.decomposition)}",
             f"{'  post-treatment only:':<30} {_fmt(self.post_only)}",
-            f"{'  pre-trend violations:':<30} {_fmt(self.pretrend_bias)}",
+            f"{'  from pre-period cells:':<30} {_fmt(self.pre_period_contribution)}",
             f"{'  remainder:':<30} {_fmt(self.remainder)}",
             "",
             f"{'Effective sample size:':<30} {_fmt(self.effective_sample_size)}",
             "",
         ]
-        if abs(self.pretrend_bias) > 1e-10:
+        if abs(self.pre_period_contribution) > 1e-10:
             lines += [
-                "Note: a non-zero pre-trend contribution means pre-treatment",
-                "      ATT(g, t) are not zero, so part of the estimate reflects",
-                "      parallel-trends violations rather than treatment effects.",
+                "Note: the pre-period contribution is the sample contribution of",
+                "      the pre-treatment cells. It can reflect differential",
+                "      pre-trends, but it can also be sampling variation - this",
+                "      diagnostic carries no inference - so treat it as evidence",
+                "      about the earlier-period restrictions, not as proof that the",
+                "      identifying assumption fails post-treatment.",
                 "",
             ]
         if self.balance is not None:
@@ -349,7 +354,7 @@ class TWFEDecompositionResult(Diagnostic):
             "estimate": self.estimate,
             "decomposition": self.decomposition,
             "remainder": self.remainder,
-            "pretrend_bias": self.pretrend_bias,
+            "pre_period_contribution": self.pre_period_contribution,
             "post_only": self.post_only,
             "base_period": self.base_period,
             "covariates": list(self.covariates),

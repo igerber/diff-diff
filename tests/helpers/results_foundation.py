@@ -364,7 +364,7 @@ def make_constructed_diagnostics() -> Dict[str, Any]:
             estimate=float((decomposition_cells["weight"] * decomposition_cells["att"]).sum()),
             decomposition=float((decomposition_cells["weight"] * decomposition_cells["att"]).sum()),
             remainder=0.0,
-            pretrend_bias=float(
+            pre_period_contribution=float(
                 (decomposition_cells["weight"] * decomposition_cells["att"])[
                     decomposition_cells["post"] == 0
                 ].sum()
