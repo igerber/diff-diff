@@ -5188,7 +5188,7 @@ def _build_aggregation_kit(
     # aggregate(). Legacy kits without the key default at the read site.
     bookkeeping["bootstrap_label"] = getattr(estimator, "_BOOTSTRAP_LABEL", "CallawaySantAnna")
     # Covariate usage, recorded so downstream diagnostics can refuse designs
-    # their formulas do not cover (``attgt_weights(aggregation="twfe")``
+    # their formulas do not cover (``attgt_weights(type="twfe")``
     # mirrors R twfe_weights' ``xformla == ~1`` restriction). Column NAMES
     # only - never values - so the data-minimization contract holds.
     bookkeeping["covariates"] = tuple(covariates or ())

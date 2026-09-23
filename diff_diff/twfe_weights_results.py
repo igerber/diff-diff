@@ -15,7 +15,7 @@ decomposition is an algebraic identity, exactly like
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, ClassVar, Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -69,15 +69,17 @@ class ATTGTWeightsResult(Diagnostic):
         ``0`` for pre-treatment cells. ``att`` is the ATT(g, t) the weight
         multiplies, carried through from the source so that
         ``(weight * att).sum()`` reproduces ``implied_att``.
-    aggregation : str
-        Which estimand's weights these are: ``"twfe"``, ``"overall"``
-        (ATT^O), or ``"simple"`` (ATT^simple).
+    level : str
+        The ``type=`` this result was built with, one of :attr:`LEVELS`:
+        ``"twfe"``, ``"overall"`` (ATT^O) or ``"simple"`` (ATT^simple).
+        Unrelated to :meth:`TWFEDecompositionResult.covariate_balance`'s
+        ``level=`` (an output granularity).
     implied_att : float
         ``sum(weight * att)`` - what the estimand delivers given these
-        ATT(g, t). For ``aggregation="twfe"`` this is the TWFE coefficient.
+        ATT(g, t). For ``type="twfe"`` this is the TWFE coefficient.
     n_negative : int
         Number of cells - PRE and post - receiving a negative weight. Under
-        ``aggregation="twfe"`` the weights over the full ``g != 0`` grid sum
+        ``type="twfe"`` the weights over the full ``g != 0`` grid sum
         to zero (post to +1, pre to -1), so this is non-zero in every
         staggered design; read ``n_negative_post`` for the pathology.
     negative_weight_share : float
@@ -102,10 +104,20 @@ class ATTGTWeightsResult(Diagnostic):
         Design metadata carried from the source fit, when available.
     n_dropped_cells : int
         Cells excluded because their ATT(g, t) was non-estimable (NaN).
+    LEVELS : tuple of str
+        The values ``level`` can take: ``("twfe", "overall", "simple")``.
+        ``"overall"`` here is ATT^O (R ``did``'s ``attO``) and is unrelated
+        to the ``"overall"`` row label an :class:`~diff_diff.AggregationResult`
+        carries under ``level="simple"``.
     """
 
+    # Accepted ``type=`` values, declared on the class the way the results
+    # classes declare ``_AGGREGATE_SUPPORTED``. ``ClassVar`` keeps it out of
+    # the dataclass fields (see stacked_did_results.py for the trap).
+    LEVELS: ClassVar[Tuple[str, ...]] = ("twfe", "overall", "simple")
+
     weights: pd.DataFrame
-    aggregation: str
+    level: str
     implied_att: float
     n_negative: int
     negative_weight_share: float
@@ -119,7 +131,7 @@ class ATTGTWeightsResult(Diagnostic):
 
     def __repr__(self) -> str:
         return (
-            f"ATTGTWeightsResult(aggregation={self.aggregation!r}, "
+            f"ATTGTWeightsResult(level={self.level!r}, "
             f"implied_att={self.implied_att:.4f}, "
             f"n_cells={self.n_cells}, n_negative={self.n_negative})"
         )
@@ -127,7 +139,7 @@ class ATTGTWeightsResult(Diagnostic):
     def summary(self) -> str:
         """Formatted per-cell weight table with the negative-weight roll-up."""
         width = 72
-        label = _AGGREGATION_LABELS.get(self.aggregation, self.aggregation)
+        label = _AGGREGATION_LABELS.get(self.level, self.level)
         lines = [
             "=" * width,
             "Implicit Weights on ATT(g, t)".center(width),
@@ -193,7 +205,7 @@ class ATTGTWeightsResult(Diagnostic):
     def to_dict(self) -> Dict[str, Any]:
         """Serializable view of the result."""
         return {
-            "aggregation": self.aggregation,
+            "level": self.level,
             "implied_att": self.implied_att,
             "n_cells": self.n_cells,
             "n_negative": self.n_negative,

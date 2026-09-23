@@ -21,7 +21,7 @@
 # `diff_diff/twfe_weights.py` exposes two entry points, each folding several
 # upstream R functions:
 #
-#   attgt_weights(aggregation=)     <- twfe_weights / attO_weights /
+#   attgt_weights(type=)            <- twfe_weights / attO_weights /
 #                                      att_simple_weights
 #   decompose_twfe_weights(method=) <- implicit_twfe_weights /
 #                                      implicit_aipw_weights

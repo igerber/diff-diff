@@ -1545,9 +1545,10 @@ ATT(g,t) parameters. Ported from Brantly Callaway's `twfeweights` R package
 ```python
 attgt_weights(
     results,                        # CallawaySantAnnaResults, or a (g,t) frame
-    aggregation="twfe",             # "twfe" | "overall" (ATT^O) | "simple"
+    type="twfe",                    # "twfe" | "overall" (ATT^O) | "simple"
     data=None, unit=None, time=None, first_treat=None,   # frame path only
     weights=None,                   # unit-level sampling weights
+    anticipation=None,              # frame path only; the fit's own otherwise
 ) -> ATTGTWeightsResult
 
 decompose_twfe_weights(
@@ -1563,11 +1564,12 @@ decompose_twfe_weights(
 plot_twfe_weights(result, kind="auto")   # "weights" | "balance"
 ```
 
-`aggregation="twfe"` requires a fit with `base_period="universal"`,
+`type="twfe"` requires a fit with `base_period="universal"`,
 `control_group="never_treated"` AND no covariates (R twfe_weights' three
 restrictions); it raises otherwise. ATT^O and ATT^simple weights are
 non-negative and sum to one, so comparing `implied_att` across the three
-aggregations shows what the TWFE specification costs.
+types shows what the TWFE specification costs. The result records its
+`type=` as `.level` (`ATTGTWeightsResult.LEVELS` lists the values).
 
 Both entry points fail closed on input R never faced: NaN / `-inf` cohort
 labels (never-treated is exactly `0` or `+inf`), duplicated or non-finite
@@ -1586,7 +1588,7 @@ zero over the full grid.
 
 `decompose_twfe_weights` takes the raw panel rather than a fitted result
 because it re-estimates. It is tied to `attgt_weights` by an identity:
-`attgt_weights(cs, aggregation="twfe").implied_att == decompose_twfe_weights(panel, ...).estimate`.
+`attgt_weights(cs, type="twfe").implied_att == decompose_twfe_weights(panel, ...).estimate`.
 
 ### StaggeredTripleDifference
 
@@ -2078,9 +2080,12 @@ decomposition is an algebraic identity.
 
 - `weights`: DataFrame with `group`, `time`, `post`, `weight`, `att`
 - `implied_att`: `sum(weight * att)` - the TWFE coefficient when
-  `aggregation="twfe"`
-- `n_negative`, `negative_weight_share`: the staggered-TWFE pathology
-- `aggregation`, `source`, `control_group`, `base_period`, `n_cells`
+  `type="twfe"`
+- `n_negative_post`, `negative_post_weight_share`: the staggered-TWFE
+  pathology (negative weight on POST cells); `n_negative`,
+  `negative_weight_share` count every cell and are structural under `"twfe"`
+- `level` (the `type=` used), `source`, `control_group`, `base_period`,
+  `n_cells`
 - `summary()`, `to_dataframe()`, `to_dict()`
 
 ### TWFEDecompositionResult

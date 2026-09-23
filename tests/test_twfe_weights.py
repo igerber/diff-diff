@@ -92,21 +92,21 @@ class TestPublicSurface:
         # to_dataframe hands back a copy, not the live table
         frame.loc[0, "weight"] = 999.0
         assert result.weights.loc[0, "weight"] != 999.0
-        assert set(result.to_dict()) >= {"aggregation", "implied_att", "weights"}
-        assert "aggregation='twfe'" in repr(result)
+        assert set(result.to_dict()) >= {"level", "implied_att", "weights"}
+        assert "level='twfe'" in repr(result)
 
 
 class TestAggregationBehaviour:
-    @pytest.mark.parametrize("aggregation", ["overall", "simple"])
-    def test_target_estimands_are_convex(self, fitted, aggregation):
+    @pytest.mark.parametrize("level", ["overall", "simple"])
+    def test_target_estimands_are_convex(self, fitted, level):
         """ATT^O / ATT^simple weights are non-negative and sum to one."""
-        weights = attgt_weights(fitted, aggregation=aggregation).weights["weight"]
+        weights = attgt_weights(fitted, type=level).weights["weight"]
         assert (weights >= 0).all()
         assert weights.sum() == pytest.approx(1.0, abs=1e-12)
 
     def test_twfe_weights_can_be_negative(self, fitted):
         """The whole point of the diagnostic: staggered TWFE is not convex."""
-        result = attgt_weights(fitted, aggregation="twfe")
+        result = attgt_weights(fitted, type="twfe")
         assert result.n_negative > 0
         assert 0.0 < result.negative_weight_share < 1.0
         assert "Negative POST-period cells:" in result.summary()
@@ -114,34 +114,34 @@ class TestAggregationBehaviour:
 
     def test_pre_treatment_cells_carry_weight_under_twfe(self, fitted):
         """TWFE loads on pre-treatment cells; the CS estimands do not."""
-        twfe = attgt_weights(fitted, aggregation="twfe").weights
+        twfe = attgt_weights(fitted, type="twfe").weights
         assert (twfe.loc[twfe["post"] == 0, "weight"].abs() > 0).any()
-        for aggregation in ("overall", "simple"):
-            benign = attgt_weights(fitted, aggregation=aggregation).weights
+        for level in ("overall", "simple"):
+            benign = attgt_weights(fitted, type=level).weights
             assert (benign.loc[benign["post"] == 0, "weight"] == 0).all()
 
-    def test_rejects_unknown_aggregation(self, fitted):
-        with pytest.raises(ValueError, match="aggregation must be one of"):
-            attgt_weights(fitted, aggregation="everything")
+    def test_rejects_unknown_type(self, fitted):
+        with pytest.raises(ValueError, match="type must be one of"):
+            attgt_weights(fitted, type="everything")
 
 
 class TestDesignGuards:
     def test_rejects_non_universal_base_period_for_twfe(self, panel):
         fit = _fit(panel, base_period="varying")
         with pytest.raises(ValueError, match="base_period='universal'"):
-            attgt_weights(fit, aggregation="twfe")
+            attgt_weights(fit, type="twfe")
 
     def test_varying_base_is_fine_for_the_cs_estimands(self, panel):
         """Only the TWFE formula needs the complete grid."""
         fit = _fit(panel, base_period="varying")
-        for aggregation in ("overall", "simple"):
-            result = attgt_weights(fit, aggregation=aggregation)
+        for level in ("overall", "simple"):
+            result = attgt_weights(fit, type=level)
             assert result.weights["weight"].sum() == pytest.approx(1.0, abs=1e-12)
 
     def test_rejects_not_yet_treated_control_for_twfe(self, panel):
         fit = _fit(panel, control_group="not_yet_treated")
         with pytest.raises(ValueError, match="control_group='never_treated'"):
-            attgt_weights(fit, aggregation="twfe")
+            attgt_weights(fit, type="twfe")
 
     def test_rejects_repeated_cross_sections(self, panel):
         # A true RCS needs one observation per unit id, so re-key the rows
@@ -224,13 +224,13 @@ class TestNonConsecutiveTimeLabels:
     """Positional rescaling: gapped period labels must not change the weights."""
 
     def test_gapped_periods_match_consecutive_ones(self, panel):
-        consecutive = attgt_weights(_fit(panel), aggregation="twfe")
+        consecutive = attgt_weights(_fit(panel), type="twfe")
 
         gapped = panel.copy()
         remap = {1: 10, 2: 20, 3: 30, 4: 40, 5: 50}
         gapped["period"] = gapped["period"].map(remap)
         gapped["first_treat"] = gapped["first_treat"].map(lambda g: remap.get(g, 0))
-        result = attgt_weights(_fit(gapped), aggregation="twfe")
+        result = attgt_weights(_fit(gapped), type="twfe")
 
         np.testing.assert_allclose(
             result.weights["weight"].to_numpy(),
@@ -244,7 +244,7 @@ class TestSamplingWeights:
     def test_uniform_weights_are_a_no_op(self, fitted, panel):
         baseline = attgt_weights(
             fitted.to_dataframe("group_time"),
-            aggregation="overall",
+            type="overall",
             data=panel,
             unit="unit",
             time="period",
@@ -253,7 +253,7 @@ class TestSamplingWeights:
         weighted_panel = panel.assign(w=1.0)
         weighted = attgt_weights(
             fitted.to_dataframe("group_time"),
-            aggregation="overall",
+            type="overall",
             data=weighted_panel,
             unit="unit",
             time="period",
@@ -268,7 +268,7 @@ class TestSamplingWeights:
         """Doubling a cohort's sampling weight raises its share of ATT^O."""
         baseline = attgt_weights(
             fitted.to_dataframe("group_time"),
-            aggregation="overall",
+            type="overall",
             data=panel,
             unit="unit",
             time="period",
@@ -277,7 +277,7 @@ class TestSamplingWeights:
         tilted_panel = panel.assign(w=np.where(panel["first_treat"] == 3, 2.0, 1.0))
         tilted = attgt_weights(
             fitted.to_dataframe("group_time"),
-            aggregation="overall",
+            type="overall",
             data=tilted_panel,
             unit="unit",
             time="period",
@@ -337,7 +337,7 @@ class TestDegenerateInputs:
         with pytest.warns(UserWarning, match="had no estimable ATT"):
             result = attgt_weights(
                 frame,
-                aggregation="overall",
+                type="overall",
                 data=panel,
                 unit="unit",
                 time="period",
@@ -538,15 +538,15 @@ class TestWeightedRegressionPin:
         ),
     }
 
-    @pytest.mark.parametrize("aggregation", ["twfe", "overall", "simple"])
-    def test_attgt_weighted_branches(self, aggregation):
+    @pytest.mark.parametrize("level", ["twfe", "overall", "simple"])
+    def test_attgt_weighted_branches(self, level):
         df = self._weighted_panel()
         cs = diff_diff.CallawaySantAnna(base_period="universal", control_group="never_treated").fit(
             df, outcome="y", unit="id", time="t", first_treat="g"
         )
         unit_w = df.groupby("id", sort=True)["w"].first().to_numpy()
-        result = attgt_weights(cs, aggregation=aggregation, weights=unit_w)
-        implied, weight = self._AGG[aggregation]
+        result = attgt_weights(cs, type=level, weights=unit_w)
+        implied, weight = self._AGG[level]
         assert result.implied_att == pytest.approx(implied, abs=1e-12)
         np.testing.assert_allclose(result.weights["weight"].to_numpy(), weight, atol=1e-12)
         assert list(zip(result.weights["group"], result.weights["time"])) == [
@@ -694,9 +694,9 @@ class TestCovariateGuard:
         )
         assert fit._aggregation_kit.bookkeeping["covariates"] == ("x",)
         with pytest.raises(ValueError, match="requires a fit without covariates"):
-            attgt_weights(fit, aggregation="twfe")
+            attgt_weights(fit, type="twfe")
         # The CS estimands do not depend on the regression specification.
-        assert attgt_weights(fit, aggregation="overall").n_negative_post == 0
+        assert attgt_weights(fit, type="overall").n_negative_post == 0
 
     def test_unadjusted_fit_records_empty_covariates(self, fitted):
         assert fitted._aggregation_kit.bookkeeping["covariates"] == ()
@@ -706,7 +706,7 @@ class TestCovariateGuard:
         saved = kit.bookkeeping.pop("covariates")
         try:
             with pytest.warns(UserWarning, match="predates covariate bookkeeping"):
-                attgt_weights(fitted, aggregation="twfe")
+                attgt_weights(fitted, type="twfe")
         finally:
             kit.bookkeeping["covariates"] = saved
 
@@ -733,39 +733,39 @@ class TestFrameValidationAndGrid:
         with pytest.raises(ValueError, match="NaN or -inf cohort label"):
             _frame_call(frame, panel)
 
-    @pytest.mark.parametrize("aggregation", ["twfe", "overall", "simple"])
-    def test_inf_att_on_a_post_cell_is_an_incomplete_grid(self, fitted, panel, aggregation):
+    @pytest.mark.parametrize("level", ["twfe", "overall", "simple"])
+    def test_inf_att_on_a_post_cell_is_an_incomplete_grid(self, fitted, panel, level):
         frame = _gt_frame(fitted)
         idx = frame.index[(frame["group"] == 3) & (frame["time"] == 3)][0]
         frame.loc[idx, "effect"] = np.inf
         with pytest.raises(ValueError, match="complete .* grid"):
-            _frame_call(frame, panel, aggregation=aggregation)
+            _frame_call(frame, panel, type=level)
 
-    @pytest.mark.parametrize("aggregation", ["twfe", "overall", "simple"])
-    def test_missing_post_cell_raises_for_every_aggregation(self, fitted, panel, aggregation):
+    @pytest.mark.parametrize("level", ["twfe", "overall", "simple"])
+    def test_missing_post_cell_raises_for_every_type(self, fitted, panel, level):
         frame = _gt_frame(fitted)
         frame = frame[~((frame["group"] == 3) & (frame["time"] == 3))]
         with pytest.raises(ValueError, match="required cell\\(s\\) are missing"):
-            _frame_call(frame, panel, aggregation=aggregation)
+            _frame_call(frame, panel, type=level)
 
     def test_missing_pre_cell_raises_for_twfe_but_warns_for_cs_estimands(self, fitted, panel):
         frame = _gt_frame(fitted)
         frame = frame[~((frame["group"] == 4) & (frame["time"] == 1))]
         with pytest.raises(ValueError, match="complete cohort x period grid"):
-            _frame_call(frame, panel, aggregation="twfe")
-        complete = _frame_call(_gt_frame(fitted), panel, aggregation="overall")
-        for aggregation in ("overall", "simple"):
+            _frame_call(frame, panel, type="twfe")
+        complete = _frame_call(_gt_frame(fitted), panel, type="overall")
+        for level in ("overall", "simple"):
             # An ABSENT pre row is not a drop: nothing to warn about, weights unchanged.
-            partial = _frame_call(frame, panel, aggregation=aggregation)
+            partial = _frame_call(frame, panel, type=level)
             assert partial.n_dropped_cells == 0
             assert len(partial.weights) == len(frame)
-            ref = _frame_call(_gt_frame(fitted), panel, aggregation=aggregation)
+            ref = _frame_call(_gt_frame(fitted), panel, type=level)
             assert partial.implied_att == pytest.approx(ref.implied_att, abs=1e-15)
         # A NaN pre cell (present but non-estimable) is what n_dropped_cells counts.
         frame = _gt_frame(fitted)
         frame.loc[frame.index[(frame["group"] == 4) & (frame["time"] == 1)][0], "effect"] = np.nan
         with pytest.warns(UserWarning, match="pre-treatment group-time cell"):
-            dropped = _frame_call(frame, panel, aggregation="overall")
+            dropped = _frame_call(frame, panel, type="overall")
         assert dropped.n_dropped_cells == 1
         assert dropped.implied_att == pytest.approx(complete.implied_att, abs=1e-15)
 
@@ -773,12 +773,12 @@ class TestFrameValidationAndGrid:
         df = _panel(cohorts=(0, 1, 3, 4), n_periods=5)
         fit = _fit(df)
         with pytest.warns(UserWarning, match="no estimable post-treatment cell"):
-            result = attgt_weights(fit, aggregation="overall")
+            result = attgt_weights(fit, type="overall")
         assert 1 not in set(result.weights["group"])
         assert result.weights["weight"].sum() == pytest.approx(1.0, abs=1e-12)
         # Same numbers as fitting on the panel with those units removed up front.
         pre_filtered = _fit(df[df["first_treat"] != 1])
-        reference = attgt_weights(pre_filtered, aggregation="overall")
+        reference = attgt_weights(pre_filtered, type="overall")
         np.testing.assert_allclose(
             result.weights["weight"].to_numpy(), reference.weights["weight"].to_numpy(), atol=1e-12
         )
@@ -787,13 +787,13 @@ class TestFrameValidationAndGrid:
         frame = _gt_frame(fitted).drop(columns=["skip_reason"], errors="ignore")
         frame = frame[frame["group"] != 4]
         with pytest.raises(ValueError, match="no post-treatment cell in the ATT"):
-            _frame_call(frame, panel, aggregation="overall")
+            _frame_call(frame, panel, type="overall")
 
     def test_not_yet_treated_carve_out_mirrors_aggte(self):
         df = _panel(cohorts=(3, 4, 5), n_periods=6)
         fit = _fit(df, control_group="not_yet_treated")
         with pytest.warns(UserWarning) as record:
-            result = attgt_weights(fit, aggregation="overall")
+            result = attgt_weights(fit, type="overall")
         messages = " | ".join(str(w.message) for w in record)
         assert "structurally absent" in messages  # (3,5),(3,6),(4,5),(4,6)
         assert "no estimable post-treatment cell" in messages  # cohort 5
@@ -810,7 +810,7 @@ class TestFrameValidationAndGrid:
         expected = float((post["weight"] * post["att"]).sum())
         assert result.implied_att == pytest.approx(expected, abs=1e-12)
         with pytest.raises(ValueError, match="control_group='never_treated'"):
-            attgt_weights(fit, aggregation="twfe")
+            attgt_weights(fit, type="twfe")
 
 
 class TestWeightValidation:
@@ -828,15 +828,15 @@ class TestWeightValidation:
     def test_bad_unit_weights_are_rejected(self, fitted, mutate, match):
         w = mutate(np.ones(len(fitted._aggregation_kit.bookkeeping["unit_cohorts"])))
         with pytest.raises(ValueError, match=match):
-            attgt_weights(fitted, aggregation="overall", weights=w)
+            attgt_weights(fitted, type="overall", weights=w)
 
     def test_zero_control_mass_only_matters_where_controls_enter(self, fitted, panel):
         cohorts = np.asarray(fitted._aggregation_kit.bookkeeping["unit_cohorts"], dtype=float)
         w = np.where(cohorts == 0, 0.0, 1.0)
         with pytest.raises(ValueError, match="never-treated comparison group carries zero"):
-            attgt_weights(fitted, aggregation="twfe", weights=w)
-        for aggregation in ("overall", "simple"):
-            assert attgt_weights(fitted, aggregation=aggregation, weights=w).n_cells > 0
+            attgt_weights(fitted, type="twfe", weights=w)
+        for level in ("overall", "simple"):
+            assert attgt_weights(fitted, type=level, weights=w).n_cells > 0
 
     def test_decompose_reports_a_nan_weight_as_non_finite(self, panel):
         df = panel.copy()
@@ -856,14 +856,14 @@ class TestWeightValidation:
 class TestNegativePostWeights:
     """Item 9: the pathology is negative weight on POST cells."""
 
-    @pytest.mark.parametrize("aggregation", ["overall", "simple"])
-    def test_cs_estimands_have_no_negative_post_weight(self, fitted, aggregation):
-        result = attgt_weights(fitted, aggregation=aggregation)
+    @pytest.mark.parametrize("level", ["overall", "simple"])
+    def test_cs_estimands_have_no_negative_post_weight(self, fitted, level):
+        result = attgt_weights(fitted, type=level)
         assert result.n_negative_post == 0
         assert result.negative_post_weight_share == 0.0
 
     def test_twfe_reports_both_labelled(self, fitted):
-        result = attgt_weights(fitted, aggregation="twfe")
+        result = attgt_weights(fitted, type="twfe")
         assert result.n_negative_post <= result.n_negative
         assert 0.0 <= result.negative_post_weight_share <= 1.0
         d = result.to_dict()
@@ -872,7 +872,7 @@ class TestNegativePostWeights:
 
 
 class TestWeightedTwfeExtension:
-    """Item 17: weighted aggregation="twfe" has no R counterpart; tie it to the decomposition."""
+    """Item 17: weighted type="twfe" has no R counterpart; tie it to the decomposition."""
 
     def test_weighted_twfe_weights_match_the_weighted_decomposition(self, panel):
         df = panel.copy()
@@ -883,7 +883,7 @@ class TestWeightedTwfeExtension:
         )
         df["w"] = df["unit"].map(unit_w)
         fit = _fit(df)
-        weighted = attgt_weights(fit, aggregation="twfe", weights=unit_w.to_numpy())
+        weighted = attgt_weights(fit, type="twfe", weights=unit_w.to_numpy())
         decomposed = diff_diff.decompose_twfe_weights(
             df,
             outcome="outcome",
@@ -914,7 +914,7 @@ class TestHandComputedWeights:
             for t in (1, 2, 3):
                 rows.append({"unit": u, "period": t, "first_treat": g, "outcome": 0.0})
         panel = pd.DataFrame(rows)
-        result = _frame_call(frame, panel, aggregation="overall")
+        result = _frame_call(frame, panel, type="overall")
         # pbar_2 = 10/40, pbar_3 = 30/40; cohort 2 has 2 post periods, cohort 3 has 1.
         expected = (10 / 40) / 2 * (1.0 + 2.0) + (30 / 40) / 1 * 4.0
         assert result.implied_att == pytest.approx(expected, abs=1e-15)
@@ -1004,7 +1004,7 @@ class TestDecompositionEdgeCases:
             result.decomposition, abs=1e-12
         )
         assert result.remainder == 0.0
-        assert attgt_weights(fitted, aggregation="twfe").implied_att == pytest.approx(
+        assert attgt_weights(fitted, type="twfe").implied_att == pytest.approx(
             result.estimate, abs=1e-6
         )
         gmin1 = diff_diff.decompose_twfe_weights(panel, base_period="gmin1", **self.COMMON)
@@ -1025,7 +1025,7 @@ class TestPlotTWFEWeights:
         plt.close("all")
 
     def test_weights_view(self, fitted):
-        result = attgt_weights(fitted, aggregation="twfe")
+        result = attgt_weights(fitted, type="twfe")
         ax = diff_diff.plot_twfe_weights(result, show=False)
         assert ax.get_xlabel() == "Implicit weight"
         # Item 9: the title counts POST-only negatives. This panel has negative
@@ -1039,7 +1039,7 @@ class TestPlotTWFEWeights:
     def test_weights_title_reports_post_only_count(self):
         """A panel WITH negative post weight labels the post-only count."""
         fit = _fit(_panel(cohorts=(0, 2, 4)))
-        result = attgt_weights(fit, aggregation="twfe")
+        result = attgt_weights(fit, type="twfe")
         assert result.n_negative_post > 0
         ax = diff_diff.plot_twfe_weights(result, show=False)
         assert f"({result.n_negative_post} negative post)" in ax.get_title()
@@ -1049,7 +1049,7 @@ class TestPlotTWFEWeights:
 
         _, ax = plt.subplots()
         out = diff_diff.plot_twfe_weights(
-            attgt_weights(fitted, aggregation="overall"), ax=ax, annotate=True, show=False
+            attgt_weights(fitted, type="overall"), ax=ax, annotate=True, show=False
         )
         assert out is ax
         assert len(ax.texts) == 10
@@ -1158,28 +1158,28 @@ class TestAnticipation:
     @pytest.mark.parametrize("control_group", ["never_treated", "not_yet_treated"])
     def test_simple_matches_aggregate(self, panel, control_group):
         fit = self._fit(panel, 1, control_group)
-        got = attgt_weights(fit, aggregation="simple").implied_att
+        got = attgt_weights(fit, type="simple").implied_att
         assert got == pytest.approx(fit.aggregate("simple").att[0], abs=1e-12)
 
     @pytest.mark.parametrize("control_group", ["never_treated", "not_yet_treated"])
     def test_overall_matches_group_combination(self, panel, control_group):
         fit = self._fit(panel, 1, control_group)
-        got = attgt_weights(fit, aggregation="overall").implied_att
+        got = attgt_weights(fit, type="overall").implied_att
         assert got == pytest.approx(self._group_overall(fit, panel), abs=1e-12)
 
     def test_twfe_ignores_anticipation(self, panel):
-        ant0 = attgt_weights(self._fit(panel, 0, "never_treated"), aggregation="twfe")
-        ant1 = attgt_weights(self._fit(panel, 1, "never_treated"), aggregation="twfe")
+        ant0 = attgt_weights(self._fit(panel, 0, "never_treated"), type="twfe")
+        ant1 = attgt_weights(self._fit(panel, 1, "never_treated"), type="twfe")
         np.testing.assert_allclose(
             ant1.weights["weight"].to_numpy(), ant0.weights["weight"].to_numpy(), atol=1e-12
         )
 
     def test_frame_path_takes_explicit_anticipation(self, panel):
         fit = self._fit(panel, 1, "never_treated")
-        from_fit = attgt_weights(fit, aggregation="simple")
+        from_fit = attgt_weights(fit, type="simple")
         from_frame = attgt_weights(
             fit.to_dataframe("group_time"),
-            aggregation="simple",
+            type="simple",
             data=panel,
             unit="unit",
             time="period",
@@ -1210,7 +1210,7 @@ class TestUnbalancedFittedResult:
         ).fit(broken, **_DECO)
         assert fit._aggregation_kit.bookkeeping["is_balanced"] is False
         with pytest.raises(ValueError, match="balanced panel"):
-            attgt_weights(fit, aggregation="twfe")
+            attgt_weights(fit, type="twfe")
 
     def test_balanced_fit_records_the_flag(self, fitted):
         assert fitted._aggregation_kit.bookkeeping["is_balanced"] is True
@@ -1257,11 +1257,11 @@ class TestCarveOutConsistency:
         df = _panel(cohorts=(3, 4, 5), n_periods=6)
         fit = _fit(df, control_group="not_yet_treated")
         with pytest.warns(UserWarning, match="structurally absent"):
-            from_fit = attgt_weights(fit, aggregation="overall")
+            from_fit = attgt_weights(fit, type="overall")
         with pytest.warns(UserWarning, match="structurally absent"):
             from_frame = attgt_weights(
                 fit.to_dataframe("group_time"),
-                aggregation="overall",
+                type="overall",
                 data=df,
                 unit="unit",
                 time="period",
@@ -1285,7 +1285,7 @@ class TestCohortDropIsStructural:
             cell["effect"] = np.nan
             cell["skip_reason"] = None
         with pytest.raises(ValueError, match="do not all carry"):
-            attgt_weights(fit, aggregation="overall")
+            attgt_weights(fit, type="overall")
 
     def test_frame_mid_cohort_without_a_reason_raises(self, fitted, panel):
         frame = _gt_frame(fitted).copy()
@@ -1293,7 +1293,7 @@ class TestCohortDropIsStructural:
         frame.loc[mask, "effect"] = np.nan
         frame.loc[mask, "skip_reason"] = None
         with pytest.raises(ValueError, match="do not all carry"):
-            _frame_call(frame, panel, aggregation="overall")
+            _frame_call(frame, panel, type="overall")
 
 
 class TestWeightsLength:
@@ -1303,7 +1303,7 @@ class TestWeightsLength:
         fit = _fit(_panel(cohorts=(0, 1, 3, 4)))
         n_units = len(fit._aggregation_kit.bookkeeping["unit_cohorts"])
         with pytest.raises(ValueError, match="weights has length"):
-            attgt_weights(fit, aggregation="overall", weights=np.ones(n_units - 1))
+            attgt_weights(fit, type="overall", weights=np.ones(n_units - 1))
 
 
 class TestMultiCovariatePin:

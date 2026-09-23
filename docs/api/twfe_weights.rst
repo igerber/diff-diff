@@ -71,6 +71,10 @@ Result Objects
    :show-inheritance:
    :no-index:
 
+``ATTGTWeightsResult.LEVELS`` lists the accepted ``type=`` values
+(``"twfe"``, ``"overall"``, ``"simple"``); the result records the one it was
+built with as ``.level``.
+
 .. autoclass:: diff_diff.TWFEDecompositionResult
    :members:
    :undoc-members:
@@ -91,20 +95,20 @@ Inspecting what a TWFE regression weights
 
    cs = diff_diff.CallawaySantAnna(
        control_group="never_treated",
-       base_period="universal",   # required for aggregation="twfe"
+       base_period="universal",   # required for type="twfe"
    ).fit(
        panel, outcome="lemp", unit="countyreal", time="year",
        first_treat="first_treat",
    )
 
-   weights = diff_diff.attgt_weights(cs, aggregation="twfe")
+   weights = diff_diff.attgt_weights(cs, type="twfe")
    print(weights.summary())
    print(weights.n_negative, "cells carry negative weight")
 
 Comparing against the estimand you meant to report
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``aggregation="overall"`` and ``"simple"`` give the Callaway & Sant'Anna
+``type="overall"`` and ``"simple"`` give the Callaway & Sant'Anna
 target-parameter weights, which are non-negative and sum to one. The gap
 between ``implied_att`` values is the cost of the TWFE specification:
 
@@ -120,9 +124,9 @@ between ``implied_att`` values is the cost of the TWFE specification:
        first_treat="first_treat",
    )
 
-   for aggregation in ("twfe", "overall", "simple"):
-       w = diff_diff.attgt_weights(cs, aggregation=aggregation)
-       print(f"{aggregation:8s} {w.implied_att: .4f}  "
+   for level in ("twfe", "overall", "simple"):
+       w = diff_diff.attgt_weights(cs, type=level)
+       print(f"{level:8s} {w.implied_att: .4f}  "
              f"({w.n_negative} negative weights)")
 
 Separating treatment effects from the pre-period contribution

@@ -2,9 +2,10 @@
 - **TWFE weight diagnostics** (port of Brantly Callaway's `twfeweights` R
   package, MIT): what a two-way fixed effects regression *implicitly* weights
   on staggered-adoption data.
-  - `attgt_weights(results, aggregation="twfe"|"overall"|"simple")` reports the
+  - `attgt_weights(results, type="twfe"|"overall"|"simple")` reports the
     weight a TWFE regression, ATT^O, or ATT^simple places on each ATT(g,t),
-    plus post-period negative-weight counts. Returns `ATTGTWeightsResult`.
+    plus post-period negative-weight counts. Returns `ATTGTWeightsResult`
+    (`.level` records the type).
     The CS estimands honour the fit's `anticipation` window (an explicit
     `anticipation=` on the frame path); `"twfe"` keeps `t >= g`.
   - `decompose_twfe_weights(data, ..., method="fwl")` re-derives the estimate
@@ -15,7 +16,7 @@
     covariate balance. `plot_twfe_weights()` renders either view (matplotlib
     or plotly).
   - Validation: rejects NaN / `-inf` cohort labels, covariate-adjusted fits
-    under `aggregation="twfe"`, unbalanced panels, non-finite outcomes /
+    under `type="twfe"`, unbalanced panels, non-finite outcomes /
     covariates, duplicated or non-finite ATT(g,t) cells, an incomplete
     group-time grid, and invalid sampling weights. Two structural gaps are
     handled as R does instead of raising: a cohort with no estimable post cell

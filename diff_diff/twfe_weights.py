@@ -68,7 +68,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 __all__ = ["attgt_weights", "decompose_twfe_weights"]
 
-_AGGREGATIONS = ("twfe", "overall", "simple")
+_TYPES = ATTGTWeightsResult.LEVELS
 
 
 def _is_never(values: np.ndarray) -> np.ndarray:
@@ -162,7 +162,7 @@ def _validate_unit_weights(
 
     Finite, non-negative, positive total, positive TREATED mass; positive
     never-treated mass only where the never-treated group enters the formula
-    (``aggregation="twfe"`` and the decomposition) - ATT^O / ATT^simple are
+    (``type="twfe"`` and the decomposition) - ATT^O / ATT^simple are
     defined without one.
     """
     if not np.all(np.isfinite(w)):
@@ -300,7 +300,7 @@ def _attgt_from_cs(
 
     Non-estimable cells (``skip_reason`` set, NaN effect) are left out of the
     table and reported in the returned ``{(g, t): skip_reason}`` map, so the
-    caller can decide - per aggregation - whether the gap is structural, a
+    caller can decide - per estimand type - whether the gap is structural, a
     harmless pre-period drop, or a hard error.
     """
     rows: List[Dict[str, Any]] = []
@@ -461,7 +461,7 @@ def _resolve_cs_inputs(
     )
 
 
-def _guard_cs_design(results: "CallawaySantAnnaResults", aggregation: str) -> None:
+def _guard_cs_design(results: "CallawaySantAnnaResults", estimand: str) -> None:
     """Reject fits whose design breaks the weight formulas.
 
     These are hard errors rather than warnings: a silently wrong weight table
@@ -486,12 +486,12 @@ def _guard_cs_design(results: "CallawaySantAnnaResults", aggregation: str) -> No
             "unbalanced panel, so the cohort shares are not comparable across "
             "periods. Balance the panel (diff_diff.balance_panel) and refit."
         )
-    if aggregation != "twfe":
+    if estimand != "twfe":
         return
     control_group = getattr(results, "control_group", None)
     if control_group not in (None, "never_treated"):
         raise ValueError(
-            f"aggregation='twfe' requires control_group='never_treated', got "
+            f"type='twfe' requires control_group='never_treated', got "
             f"{control_group!r}. The TWFE weight formula is derived against a "
             "never-treated comparison group (matching R's twfe_weights, which "
             "raises the same restriction)."
@@ -499,13 +499,13 @@ def _guard_cs_design(results: "CallawaySantAnnaResults", aggregation: str) -> No
     base_period = getattr(results, "base_period", None)
     if base_period not in (None, "universal"):
         raise ValueError(
-            f"aggregation='twfe' requires base_period='universal', got "
+            f"type='twfe' requires base_period='universal', got "
             f"{base_period!r}. The formula needs the complete cohort x period "
             "grid, including the pre-treatment cells that a varying base does "
             "not report. Refit with base_period='universal'."
         )
     # R's third restriction: xformla == ~1. The fit records its covariate
-    # column names on the aggregation kit; a kit without the key predates that
+    # column names on the estimand kit; a kit without the key predates that
     # bookkeeping (an old pickle) and can only be warned about. A missing kit
     # is left to _resolve_cs_inputs, whose error is the useful one.
     kit = getattr(results, "_aggregation_kit", None)
@@ -522,7 +522,7 @@ def _guard_cs_design(results: "CallawaySantAnnaResults", aggregation: str) -> No
         )
     elif bookkeeping["covariates"]:
         raise ValueError(
-            f"aggregation='twfe' requires a fit without covariates, but this one "
+            f"type='twfe' requires a fit without covariates, but this one "
             f"adjusted for {list(bookkeeping['covariates'])!r}. The TWFE weight "
             "formula describes the unadjusted regression (R's twfe_weights stops "
             "unless xformla == ~1); refit with covariates=None, or use "
@@ -534,7 +534,7 @@ def _guard_cs_design(results: "CallawaySantAnnaResults", aggregation: str) -> No
 def attgt_weights(
     results: Union["CallawaySantAnnaResults", pd.DataFrame],
     *,
-    aggregation: str = "twfe",
+    type: str = "twfe",  # noqa: A002 - matches results.aggregate(type=) vocabulary
     data: Optional[pd.DataFrame] = None,
     unit: Optional[str] = None,
     time: Optional[str] = None,
@@ -560,10 +560,13 @@ def attgt_weights(
         its ``skip_reason`` column. On the frame path, ``data``, ``unit``,
         ``time`` and ``first_treat`` are required so cohort shares can be
         formed, and the caller is responsible for the fit having used no
-        covariates under ``aggregation="twfe"`` (a frame carries no record of
+        covariates under ``type="twfe"`` (a frame carries no record of
         that; the fitted path checks it).
-    aggregation : {"twfe", "overall", "simple"}, default "twfe"
-        Which estimand's weights to report.
+    type : {"twfe", "overall", "simple"}, default "twfe"
+        Which estimand's weights to report (the same keyword as
+        ``results.aggregate(type=...)``; the accepted values are
+        ``ATTGTWeightsResult.LEVELS``). ``"overall"`` is ATT^O, R ``did``'s
+        ``attO``. The result records the choice as ``.level``.
     data : pd.DataFrame, optional
         Balanced panel backing the ATT(g, t) frame. Only for the fallback
         path; passing it alongside a fitted result raises.
@@ -580,7 +583,7 @@ def attgt_weights(
         anticipation``). Only meaningful on the DataFrame path, where a bare
         frame carries no record of the source fit's setting; the fitted path
         reads it off the fit and rejects an explicit ``anticipation=``. It does
-        NOT affect ``aggregation="twfe"``: the TWFE regression's own treatment
+        NOT affect ``type="twfe"``: the TWFE regression's own treatment
         indicator is ``1[t >= g]`` regardless of how the CS estimands treat the
         run-up, and R's ``twfe_weights`` has no anticipation argument either.
 
@@ -592,9 +595,9 @@ def attgt_weights(
     Raises
     ------
     ValueError
-        On an unknown ``aggregation``; on a design the formula does not
+        On an unknown ``type``; on a design the formula does not
         support (repeated cross-sections, an unbalanced panel, and - for
-        ``aggregation="twfe"`` - a non-never-treated control group, a
+        ``type="twfe"`` - a non-never-treated control group, a
         non-universal base period, or a covariate-adjusted fit); on NaN /
         ``-inf`` cohort labels, invalid weights, duplicated or non-finite
         cells; or on an INCOMPLETE grid: ``"twfe"`` needs every cohort x period
@@ -641,13 +644,11 @@ def attgt_weights(
     >>> cs = diff_diff.CallawaySantAnna(base_period="universal")  # doctest: +SKIP
     >>> res = cs.fit(df, outcome="y", unit="id", time="t",
     ...              first_treat="g")  # doctest: +SKIP
-    >>> w = diff_diff.attgt_weights(res, aggregation="twfe")  # doctest: +SKIP
+    >>> w = diff_diff.attgt_weights(res, type="twfe")  # doctest: +SKIP
     >>> print(w.summary())  # doctest: +SKIP
     """
-    if aggregation not in _AGGREGATIONS:
-        raise ValueError(
-            f"aggregation must be one of {list(_AGGREGATIONS)!r}, got " f"{aggregation!r}"
-        )
+    if type not in _TYPES:
+        raise ValueError(f"type must be one of {list(_TYPES)!r}, got " f"{type!r}")
     if anticipation is not None:
         if isinstance(anticipation, bool) or not isinstance(anticipation, (int, np.integer)):
             raise ValueError(f"anticipation must be a non-negative integer, got {anticipation!r}")
@@ -694,7 +695,7 @@ def attgt_weights(
                 "Drop anticipation=, or pass result.to_dataframe('group_time') "
                 "as the first argument."
             )
-        _guard_cs_design(results, aggregation)
+        _guard_cs_design(results, type)
         table, skipped = _attgt_from_cs(results)
         cohorts, survey_weights, window, is_balanced = _resolve_cs_inputs(results)
         if not is_balanced:
@@ -751,13 +752,13 @@ def attgt_weights(
     # Post-treatment mask. The TWFE regression's own indicator is 1[t >= g]
     # regardless of the CS anticipation window; the CS target estimands shift
     # it to 1[t >= g - anticipation].
-    if aggregation == "twfe":
+    if type == "twfe":
         post_mask = t_pos >= g_pos
     else:
         post_mask = t_pos >= (g_pos - window)
 
     def _post_start(g: int) -> int:
-        raw = g if aggregation == "twfe" else g - window
+        raw = g if type == "twfe" else g - window
         return max(1, raw)
 
     # --- whole-cohort exclusion (R did drops units treated in the first period)
@@ -825,13 +826,13 @@ def attgt_weights(
         skipped = {k: v for k, v in skipped.items() if _pos_of(grid, k[0]) not in excluded}
 
     p_all, p_treated, e_dt, mean_e_dt = _cohort_masses(
-        cohorts, grid, unit_weights, require_control_mass=(aggregation == "twfe")
+        cohorts, grid, unit_weights, require_control_mass=(type == "twfe")
     )
 
     # --- grid completeness
     present = set(zip(g_pos.tolist(), t_pos.tolist()))
     surviving = sorted(cohorts_with_post)
-    if aggregation == "twfe":
+    if type == "twfe":
         required = {(g, t) for g in surviving for t in range(1, n_periods + 1)}
     else:
         required = {(g, t) for g in surviving for t in range(_post_start(g), n_periods + 1)}
@@ -842,7 +843,7 @@ def attgt_weights(
         # not on control_group: that reason is only ever emitted on a
         # not-yet-treated fit, and the frame path has no control_group to read,
         # so keying on the reason is what makes the two paths agree.
-        carve_out_ok = aggregation != "twfe"
+        carve_out_ok = type != "twfe"
         hard: List[Tuple[Tuple[Any, Any], Optional[str]]] = []
         for g, t in missing_cells:
             label = (_label_for(grid, g), _label_for(grid, t))
@@ -852,12 +853,12 @@ def attgt_weights(
             else:
                 hard.append((label, reason))
         if hard:
-            what = "cohort x period" if aggregation == "twfe" else "post-treatment"
+            what = "cohort x period" if type == "twfe" else "post-treatment"
             detail = ", ".join(
                 f"{lab} [{reason or 'not in source table'}]" for lab, reason in hard[:6]
             )
             raise ValueError(
-                f"aggregation={aggregation!r} needs the complete {what} grid, but "
+                f"type={type!r} needs the complete {what} grid, but "
                 f"{len(hard)} required cell(s) are missing: {detail}. A weight table "
                 "over a partial grid is not the named estimand. Fix the source fit "
                 "(or pass the complete to_dataframe('group_time') output)."
@@ -866,7 +867,7 @@ def attgt_weights(
             f"{len(structurally_absent)} post-treatment cell(s) {structurally_absent[:6]!r} "
             "have no not-yet-treated comparison units (skip_reason "
             "'zero_treated_control') and are treated as structurally absent: "
-            f"aggregation={aggregation!r} averages over each cohort's AVAILABLE "
+            f"type={type!r} averages over each cohort's AVAILABLE "
             "post periods, as R aggte() does on a not-yet-treated fit",
             UserWarning,
             stacklevel=2,
@@ -880,18 +881,18 @@ def attgt_weights(
         gp, tp = _pos_of(grid, g_lab), _pos_of(grid, t_lab)
         if gp in surviving_positional and tp < _post_start(gp):
             dropped += 1
-    if dropped and aggregation != "twfe":
+    if dropped and type != "twfe":
         warnings.warn(
             f"{dropped} pre-treatment group-time cell(s) had no estimable ATT(g,t) "
-            f"and were excluded; aggregation={aggregation!r} places no weight on "
+            f"and were excluded; type={type!r} places no weight on "
             "pre-treatment cells, so the weights are unaffected",
             UserWarning,
             stacklevel=2,
         )
 
-    if aggregation == "twfe":
+    if type == "twfe":
         weight_vec = _twfe_weight_vector(g_pos, t_pos, n_periods, p_all, e_dt, mean_e_dt)
-    elif aggregation == "overall":
+    elif type == "overall":
         n_post_available = {g: int(((g_pos == g) & post_mask).sum()) for g in surviving}
         weight_vec = _overall_weight_vector(g_pos, p_treated, post_mask, n_post_available)
     else:
@@ -913,7 +914,7 @@ def attgt_weights(
     abs_post_total = float(np.abs(weight_vec[post_mask]).sum())
     return ATTGTWeightsResult(
         weights=out,
-        aggregation=aggregation,
+        level=type,
         implied_att=float((weight_vec * table["att"].to_numpy()).sum()),
         n_negative=int(negative.sum()),
         negative_weight_share=(
@@ -1700,7 +1701,7 @@ def decompose_twfe_weights(
     by an identity that holds when the fit used ``base_period="universal"``,
     ``control_group="never_treated"`` and no covariates::
 
-        sum(attgt_weights(cs, aggregation="twfe").weights.eval("weight * att"))
+        sum(attgt_weights(cs, type="twfe").weights.eval("weight * att"))
             == decompose_twfe_weights(panel, ...).estimate
 
     Parameters

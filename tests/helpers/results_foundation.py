@@ -336,7 +336,7 @@ def make_constructed_diagnostics() -> Dict[str, Any]:
         # drift from the object it imitates.
         "ATTGTWeightsResult": diff_diff.ATTGTWeightsResult(
             weights=attgt_weight_cells,
-            aggregation="twfe",
+            level="twfe",
             implied_att=float((attgt_weight_cells["weight"] * attgt_weight_cells["att"]).sum()),
             n_negative=int((attgt_weight_cells["weight"] < 0).sum()),
             negative_weight_share=float(

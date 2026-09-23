@@ -34,7 +34,7 @@ AGGREGATIONS = ("twfe", "overall", "simple")
 
 # Closed-form weights: both sides evaluate the same rational expression in
 # cohort masses in double precision, so only representation error separates
-# them. Observed max deviation across all 3 fixtures x 3 aggregations is
+# them. Observed max deviation across all 3 fixtures x 3 estimand types is
 # 4.7e-16 - two orders of margin below this gate.
 WEIGHT_ATOL = 1e-12
 WEIGHT_RTOL = 0.0
@@ -109,16 +109,16 @@ class TestATTGTWeightsParity:
     """
 
     @pytest.mark.parametrize("fixture", FIXTURES)
-    @pytest.mark.parametrize("aggregation", AGGREGATIONS)
-    def test_weight_column(self, golden, fixture, aggregation):
+    @pytest.mark.parametrize("level", AGGREGATIONS)
+    def test_weight_column(self, golden, fixture, level):
         payload, df = _fixture(golden, fixture)
-        expected = _sorted_golden_weights(payload["attgt_weights"][aggregation])
+        expected = _sorted_golden_weights(payload["attgt_weights"][level])
 
         gt_frame = expected[["group", "time", "att"]].rename(columns={"att": "effect"})
         cols = payload["columns"]
         result = attgt_weights(
             gt_frame,
-            aggregation=aggregation,
+            type=level,
             data=df,
             unit=cols["unit"],
             time=cols["time"],
@@ -138,16 +138,16 @@ class TestATTGTWeightsParity:
         )
 
     @pytest.mark.parametrize("fixture", FIXTURES)
-    @pytest.mark.parametrize("aggregation", AGGREGATIONS)
-    def test_implied_att(self, golden, fixture, aggregation):
+    @pytest.mark.parametrize("level", AGGREGATIONS)
+    def test_implied_att(self, golden, fixture, level):
         payload, df = _fixture(golden, fixture)
-        block = payload["attgt_weights"][aggregation]
+        block = payload["attgt_weights"][level]
         expected = _sorted_golden_weights(block)
         cols = payload["columns"]
 
         result = attgt_weights(
             expected[["group", "time", "att"]].rename(columns={"att": "effect"}),
-            aggregation=aggregation,
+            type=level,
             data=df,
             unit=cols["unit"],
             time=cols["time"],
@@ -171,11 +171,11 @@ class TestATTGTWeightsFromCSFit:
     """
 
     @pytest.mark.parametrize("fixture", FIXTURES)
-    @pytest.mark.parametrize("aggregation", AGGREGATIONS)
-    def test_end_to_end(self, golden, fixture, aggregation):
+    @pytest.mark.parametrize("level", AGGREGATIONS)
+    def test_end_to_end(self, golden, fixture, level):
         payload, df = _fixture(golden, fixture)
-        block = payload["attgt_weights"][aggregation]
-        result = attgt_weights(_fit_cs(df, payload["columns"]), aggregation=aggregation)
+        block = payload["attgt_weights"][level]
+        result = attgt_weights(_fit_cs(df, payload["columns"]), type=level)
         actual = result.weights.sort_values(["group", "time"]).reset_index(drop=True)
         expected = _sorted_golden_weights(block)
 
@@ -205,7 +205,7 @@ class TestATTGTWeightsFromCSFit:
         payload, df = _fixture(golden, fixture)
         fit = _fit_cs(df, payload["columns"])
 
-        twfe = attgt_weights(fit, aggregation="twfe")
+        twfe = attgt_weights(fit, type="twfe")
         assert twfe.n_negative > 0
         assert twfe.negative_weight_share > 0
 
@@ -221,8 +221,8 @@ class TestATTGTWeightsFromCSFit:
             float(np.abs(g_w[neg_post]).sum() / abs_post), abs=1e-12
         )
 
-        for aggregation in ("overall", "simple"):
-            benign = attgt_weights(fit, aggregation=aggregation)
+        for level in ("overall", "simple"):
+            benign = attgt_weights(fit, type=level)
             assert benign.n_negative == 0
             assert benign.negative_weight_share == 0.0
             assert benign.n_negative_post == 0
@@ -233,8 +233,8 @@ class TestATTGTWeightsFromCSFit:
         """ATT^O and ATT^simple are proper averages of the post cells."""
         payload, df = _fixture(golden, fixture)
         fit = _fit_cs(df, payload["columns"])
-        for aggregation in ("overall", "simple"):
-            weights = attgt_weights(fit, aggregation=aggregation).weights
+        for level in ("overall", "simple"):
+            weights = attgt_weights(fit, type=level).weights
             np.testing.assert_allclose(weights["weight"].sum(), 1.0, atol=1e-12)
 
 
@@ -242,16 +242,16 @@ class TestCSFitAndFrameAgree:
     """The DataFrame fallback reproduces the fitted-result path exactly."""
 
     @pytest.mark.parametrize("fixture", FIXTURES)
-    @pytest.mark.parametrize("aggregation", AGGREGATIONS)
-    def test_paths_agree(self, golden, fixture, aggregation):
+    @pytest.mark.parametrize("level", AGGREGATIONS)
+    def test_paths_agree(self, golden, fixture, level):
         payload, df = _fixture(golden, fixture)
         cols = payload["columns"]
         fit = _fit_cs(df, cols)
 
-        from_fit = attgt_weights(fit, aggregation=aggregation)
+        from_fit = attgt_weights(fit, type=level)
         from_frame = attgt_weights(
             fit.to_dataframe("group_time"),
-            aggregation=aggregation,
+            type=level,
             data=df,
             unit=cols["unit"],
             time=cols["time"],
@@ -605,7 +605,7 @@ class TestCrossSurfaceIdentity:
         payload, df = _fixture(golden, fixture)
         cols = payload["columns"]
 
-        weighted = attgt_weights(_fit_cs(df, cols), aggregation="twfe")
+        weighted = attgt_weights(_fit_cs(df, cols), type="twfe")
         decomposed = _decompose(df, cols, covariates=None)
 
         assert weighted.implied_att == pytest.approx(decomposed.estimate, abs=1e-6)
