@@ -5,6 +5,8 @@ covers the behaviour that is ours rather than R's - the input guards, the
 result-object surface, and the design restrictions we enforce as errors.
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -701,11 +703,12 @@ class TestCovariateGuard:
     def test_unadjusted_fit_records_empty_covariates(self, fitted):
         assert fitted._aggregation_kit.bookkeeping["covariates"] == ()
 
-    def test_legacy_kit_without_the_key_warns(self, fitted):
+    def test_legacy_kit_without_the_key_raises(self, fitted):
+        """A kit pickled by <= 3.12.0 fails closed rather than warn-then-continue."""
         kit = fitted._aggregation_kit
         saved = kit.bookkeeping.pop("covariates")
         try:
-            with pytest.warns(UserWarning, match="predates covariate bookkeeping"):
+            with pytest.raises(ValueError, match="does not record the bookkeeping"):
                 attgt_weights(fitted, type="twfe")
         finally:
             kit.bookkeeping["covariates"] = saved
@@ -724,6 +727,14 @@ class TestFrameValidationAndGrid:
     def test_duplicate_cells_are_rejected(self, fitted, panel):
         frame = _gt_frame(fitted)
         dup = pd.concat([frame, frame.iloc[[2]]], ignore_index=True)
+        with pytest.raises(ValueError, match="duplicated \\(group, time\\)"):
+            _frame_call(dup, panel)
+
+    def test_duplicate_cells_are_detected_on_numeric_keys(self, fitted, panel):
+        """``time=3`` and ``time="3"`` are one cell on the positional grid."""
+        frame = _gt_frame(fitted).astype({"time": object})
+        twin = frame[(frame["group"] == 3) & (frame["time"] == 3)].assign(time="3")
+        dup = pd.concat([frame, twin], ignore_index=True)
         with pytest.raises(ValueError, match="duplicated \\(group, time\\)"):
             _frame_call(dup, panel)
 
@@ -895,6 +906,26 @@ class TestWeightedTwfeExtension:
         np.testing.assert_allclose(
             weighted.weights["weight"].to_numpy(), decomposed.cells["weight"].to_numpy(), atol=1e-12
         )
+
+    def test_weighted_identity_with_the_same_survey_weights_on_both_sides(self, panel):
+        """``implied_att == decompose(...).estimate`` for a fit built with the weights."""
+        df = panel.copy()
+        rng = np.random.RandomState(9)
+        unit_w = pd.Series(
+            rng.choice([0.5, 1.0, 2.0], size=df["unit"].nunique()),
+            index=sorted(df["unit"].unique()),
+        )
+        df["w"] = df["unit"].map(unit_w)
+        fit = diff_diff.CallawaySantAnna(
+            control_group="never_treated", base_period="universal"
+        ).fit(df, survey_design=diff_diff.SurveyDesign(weights="w"), **_DECO)
+        weighted = attgt_weights(fit, type="twfe")
+        decomposed = diff_diff.decompose_twfe_weights(df, weights="w", **_DECO)
+        assert weighted.implied_att == pytest.approx(decomposed.estimate, abs=1e-10)
+        # ...and an UNWEIGHTED decomposition breaks it, which is why the identity
+        # is stated with "the same unit weights on both sides".
+        unweighted = diff_diff.decompose_twfe_weights(df, **_DECO)
+        assert abs(weighted.implied_att - unweighted.estimate) > 1e-6
 
 
 class TestHandComputedWeights:
@@ -1136,6 +1167,36 @@ class TestCanonicalTimeKey:
             as_str.cells["att"].to_numpy(), as_int.cells["att"].to_numpy(), atol=1e-12
         )
 
+    def test_reporting_labels_are_the_original_time_values(self, panel):
+        """The numeric key is internal; cells and balance rows carry the input labels."""
+        df = panel.copy()
+        df["x"] = np.random.RandomState(6).normal(size=len(df))
+        assert df["period"].dtype == np.int64 and df["first_treat"].dtype == np.int64
+        dec = diff_diff.decompose_twfe_weights(df, balance_covariates=["x"], **_DECO)
+        assert dec.cells["time"].dtype == df["period"].dtype
+        assert sorted(dec.cells["time"].unique().tolist()) == sorted(df["period"].unique().tolist())
+        assert set(dec.cells["group"].tolist()) == set(
+            df.loc[df["first_treat"] != 0, "first_treat"]
+        )
+        balance = dec.covariate_balance(level="cell")
+        assert (
+            balance[["group", "time"]].values.tolist()
+            == dec.cells[["group", "time"]].values.tolist()
+        )
+
+    def test_string_labels_round_trip(self, panel):
+        labels = ["1", "2", "10", "11", "12"]
+        dec = diff_diff.decompose_twfe_weights(self._gapped(panel, labels), **_DECO)
+        assert set(dec.cells["time"]) == set(labels)
+        assert set(dec.cells["group"]) == {"10", "11"}
+        assert "10" in dec.summary()
+
+    def test_mixed_representations_of_one_period_are_rejected(self, panel):
+        df = panel.copy().astype({"period": object})
+        df.loc[(df["period"] == 2) & (df["unit"] < 60), "period"] = "2"
+        with pytest.raises(ValueError, match="mixes representations"):
+            diff_diff.decompose_twfe_weights(df, **_DECO)
+
 
 class TestAnticipation:
     """Item 2: the anticipation window shifts the CS estimands, never TWFE."""
@@ -1168,6 +1229,9 @@ class TestAnticipation:
         assert got == pytest.approx(self._group_overall(fit, panel), abs=1e-12)
 
     def test_twfe_ignores_anticipation(self, panel):
+        """Holds when no cohort is dropped: cohorts 3 and 4 keep estimable cells
+        under ``anticipation=1``. A cohort the window makes non-estimable is
+        dropped for every ``type`` (``TestAnticipationStructuralDrop``)."""
         ant0 = attgt_weights(self._fit(panel, 0, "never_treated"), type="twfe")
         ant1 = attgt_weights(self._fit(panel, 1, "never_treated"), type="twfe")
         np.testing.assert_allclose(
@@ -1214,6 +1278,114 @@ class TestUnbalancedFittedResult:
 
     def test_balanced_fit_records_the_flag(self, fitted):
         assert fitted._aggregation_kit.bookkeeping["is_balanced"] is True
+
+    def test_inf_outcome_is_incomplete(self, panel):
+        """``isnan`` alone would miss it; the kit predicate is ``isfinite``."""
+        broken = panel.copy()
+        broken.loc[broken.index[0], "outcome"] = np.inf
+        fit = _fit(broken)
+        assert fit._aggregation_kit.bookkeeping["is_balanced"] is False
+        with pytest.raises(ValueError, match="present and finite"):
+            attgt_weights(fit, type="overall")
+
+    def test_cs_nan_covariate_fallback_is_not_a_rejection(self, panel):
+        """CS falls back to unconditional estimation and keeps the cohort masses."""
+        df = panel.copy()
+        df["x"] = np.random.RandomState(2).normal(size=len(df))
+        df.loc[(df["unit"] == 3) & (df["period"] == 1), "x"] = np.nan
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # CS's own fallback / skip warnings
+            fit = diff_diff.CallawaySantAnna(
+                control_group="never_treated", base_period="universal"
+            ).fit(df, covariates=["x"], **_DECO)
+        assert fit._aggregation_kit.bookkeeping["is_balanced"] is True
+        assert attgt_weights(fit, type="overall").n_cells > 0
+
+    @pytest.mark.parametrize("producer", ["cs", "dml"])
+    def test_legacy_kit_without_the_record_raises(self, producer):
+        from tests.test_dml_did import COV, FIT_KW, make_staggered_dml_data
+
+        if producer == "cs":
+            fit = _fit(_panel())
+        else:
+            fit = diff_diff.DMLDiD(seed=0).fit(make_staggered_dml_data(), **FIT_KW, **COV)
+        kit = fit._aggregation_kit
+        saved = kit.bookkeeping.pop("is_balanced")
+        try:
+            with pytest.raises(ValueError, match="does not record the bookkeeping"):
+                attgt_weights(fit, type="overall")
+        finally:
+            kit.bookkeeping["is_balanced"] = saved
+
+
+class TestDMLCompleteCaseRecord:
+    """DMLDiD records its own per-cell complete-case drops on the kit.
+
+    Its cell loops fold outcomes, ``dY``, base-period covariates, bad-control
+    columns and ``W`` into one validity mask and collect every excluded unit;
+    the kit turns that into ``is_balanced`` so ``attgt_weights`` refuses a fit
+    whose cohort masses are reduced. A NaN in a period no cell reads is NOT a
+    drop, and must not false-reject.
+    """
+
+    @staticmethod
+    def _dml_fit(df, **extra):
+        from tests.test_dml_did import COV, FIT_KW
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return diff_diff.DMLDiD(seed=0).fit(df, **FIT_KW, **COV, **extra)
+
+    @pytest.fixture(scope="class")
+    def data(self):
+        from tests.test_dml_did import make_staggered_dml_data
+
+        return make_staggered_dml_data()
+
+    def test_balanced_dml_fit_is_accepted(self, data):
+        fit = self._dml_fit(data)
+        assert fit._aggregation_kit.bookkeeping["is_balanced"] is True
+        assert attgt_weights(fit, type="overall").n_cells > 0
+
+    def test_nan_outcome_is_rejected(self, data):
+        df = data.copy()
+        df.loc[df.index[0], "y"] = np.nan
+        fit = self._dml_fit(df)
+        assert fit._aggregation_kit.bookkeeping["is_balanced"] is False
+        with pytest.raises(ValueError, match="complete-case"):
+            attgt_weights(fit, type="overall")
+
+    def test_nan_base_period_covariate_is_rejected(self, data):
+        """Every cell reads the universal base period's covariates."""
+        df = data.copy()
+        df.loc[(df["unit"] == 3) & (df["time"] == 2000), "x1"] = np.nan
+        fit = self._dml_fit(df)
+        assert fit._aggregation_kit.bookkeeping["is_balanced"] is False
+        with pytest.raises(ValueError, match="complete-case"):
+            attgt_weights(fit, type="overall")
+
+    def test_nan_covariate_in_an_unread_period_is_accepted(self, data):
+        """A post-period covariate cell is never read under a universal base."""
+        df = data.copy()
+        df.loc[(df["unit"] == 3) & (df["time"] == 2003), "x1"] = np.nan
+        fit = self._dml_fit(df)
+        assert fit._aggregation_kit.bookkeeping["is_balanced"] is True
+        assert attgt_weights(fit, type="overall").n_cells > 0
+
+    def test_bad_control_lane_records_its_drops(self, data):
+        """Pins the ``_compute_ccps_gt`` lane: a non-finite bad-control cell drops the unit."""
+        from tests.test_dml_did import BC_KW, add_bad_control
+
+        bc = add_bad_control(data)
+        fit = self._dml_fit(bc, **BC_KW)
+        assert fit._aggregation_kit.bookkeeping["is_balanced"] is True
+        broken = bc.copy()
+        treated_unit = broken.loc[broken["first_treat"] == 2001, "unit"].iloc[0]
+        broken.loc[(broken["unit"] == treated_unit) & (broken["time"] == 2001), "xbad"] = np.nan
+        fit = self._dml_fit(broken, **BC_KW)
+        assert fit._aggregation_kit.bookkeeping["is_balanced"] is False
+        with pytest.raises(ValueError, match="complete-case"):
+            attgt_weights(fit, type="overall")
 
     def test_frame_path_requires_one_obs_per_unit_period(self, fitted, panel):
         broken = panel.drop(panel.index[(panel["unit"] == 7) & (panel["period"] == 3)])
@@ -1342,6 +1514,15 @@ class TestMultiCovariatePin:
         assert result.post_only == pytest.approx(1.6099845667362065, abs=1e-12)
         assert result.remainder == 0.0
         assert result.covariates == ("x1", "x2")
+        # Independent anchor: the pin is the covariate-adjusted TWFE coefficient,
+        # so a brute-force OLS of y on the treatment indicator, x1, x2 and unit
+        # and time dummies must land on the same number.
+        df = df.sort_values(["id", "t"]).reset_index(drop=True)
+        treated = ((df["g"] != 0) & (df["t"] >= df["g"])).astype(float).to_numpy()
+        dummies = pd.get_dummies(df[["id", "t"]].astype(str), drop_first=True).to_numpy(dtype=float)
+        design = np.column_stack([treated, df[["x1", "x2"]].to_numpy(), np.ones(len(df)), dummies])
+        beta, *_ = np.linalg.lstsq(design, df["y"].to_numpy(), rcond=None)
+        assert result.estimate == pytest.approx(beta[0], abs=1e-10)
         np.testing.assert_allclose(
             result.cells["weight"].to_numpy(),
             [
@@ -1399,3 +1580,237 @@ class TestSignedBalancePlot:
         )
         line = next(ln for ln in ax.lines if ln.get_label() == "no improvement")
         assert line.get_xdata()[0] == 0
+
+
+# ---------------------------------------------------------------------------
+# Maintainer follow-up (PR #812 takeover): anticipation in raw time, the
+# structural-drop rule keyed on skip_reason, and the bare-frame shortcut.
+# ---------------------------------------------------------------------------
+
+
+def _cs(df, **kwargs):
+    params = {"control_group": "never_treated", "base_period": "universal"}
+    params.update(kwargs)
+    return diff_diff.CallawaySantAnna(**params).fit(df, **_DECO)
+
+
+def _group_overall_over(fit, panel, surviving):
+    """Cohort-share-weighted combination of ``aggregate("group")`` rows,
+    with the shares RENORMALIZED over ``surviving`` (the cohorts
+    ``attgt_weights`` kept)."""
+    group = fit.aggregate("group")
+    ever = panel.drop_duplicates("unit")["first_treat"].to_numpy()
+    ever = ever[np.isin(ever, list(surviving))]
+    vals, counts = np.unique(ever, return_counts=True)
+    share = dict(zip(vals.tolist(), (counts / counts.sum()).tolist()))
+    return sum(share[lab] * att for lab, att in zip(group.label, group.att) if lab in share)
+
+
+class TestAnticipationStructuralDrop:
+    """A cohort CS cannot estimate at all under the window is dropped for every
+    type, exactly as ``aggregate()`` leaves it out; a cohort with one estimable
+    post cell is kept and averaged over what it has; a cohort blanked without
+    a reason still fails closed."""
+
+    def test_window_drops_the_cohort_for_every_type(self):
+        # cohorts 2, 4, 5 on periods 1..6 under anticipation=1: cohort 2's
+        # window starts at period 1, the universal base, so it has no
+        # estimable cell at all (every cell is missing_period); 4 and 5 survive,
+        # so the renormalization over surviving cohorts is exercised.
+        df = _panel(n_periods=6, cohorts=(0, 2, 4, 5))
+        fit = _cs(df, anticipation=1)
+        with pytest.warns(UserWarning, match="skip_reason \\['missing_period'\\]"):
+            simple = attgt_weights(fit, type="simple")
+        assert set(simple.weights["group"]) == {4, 5}
+        assert simple.implied_att == pytest.approx(fit.aggregate("simple").att[0], abs=1e-12)
+        with pytest.warns(UserWarning, match="dropped from the weight table"):
+            overall = attgt_weights(fit, type="overall")
+        assert overall.implied_att == pytest.approx(_group_overall_over(fit, df, {4, 5}), abs=1e-12)
+        # "twfe" drops the cohort too, and the surviving cohorts' masses and
+        # weights are those of the panel WITHOUT it (prefiltered refit).
+        with pytest.warns(UserWarning, match="dropped from the weight table"):
+            twfe = attgt_weights(fit, type="twfe")
+        assert 2 not in set(twfe.weights["group"])
+        reference = attgt_weights(_cs(df[df["first_treat"] != 2], anticipation=1), type="twfe")
+        np.testing.assert_allclose(
+            twfe.weights["weight"].to_numpy(), reference.weights["weight"].to_numpy(), atol=1e-12
+        )
+        assert twfe.implied_att == pytest.approx(reference.implied_att, abs=1e-12)
+        # The frame path (skip_reason carried, matching window) agrees for all three.
+        for level, from_fit in (("simple", simple), ("overall", overall), ("twfe", twfe)):
+            with pytest.warns(UserWarning, match="dropped from the weight table"):
+                from_frame = _frame_call(_gt_frame(fit), df, type=level, anticipation=1)
+            np.testing.assert_allclose(
+                from_frame.weights["weight"].to_numpy(),
+                from_fit.weights["weight"].to_numpy(),
+                atol=1e-15,
+            )
+
+    def test_varying_base_keeps_a_cohort_through_one_estimable_cell(self):
+        # base_period="varying", anticipation=2, cohorts (0,3,5): CS keeps cohort 3
+        # through its single estimable cell (3,2) and aggregate() includes it,
+        # while every other windowed cell is missing_period. R's pre_process_did
+        # would drop the cohort outright; attgt_weights follows diff-diff's own
+        # aggregates (documented deviation).
+        df = _panel(n_periods=6, cohorts=(0, 3, 5))
+        fit = _cs(df, anticipation=2, base_period="varying")
+        reasons = {t: fit.group_time_effects[(3, t)].get("skip_reason") for t in range(1, 7)}
+        assert reasons[2] is None and all(reasons[t] == "missing_period" for t in (1, 3, 4, 5, 6))
+        with pytest.warns(UserWarning, match="structurally absent") as record:
+            simple = attgt_weights(fit, type="simple")
+            overall = attgt_weights(fit, type="overall")
+        assert "missing_period" in " | ".join(str(w.message) for w in record)
+        assert set(simple.weights["group"]) == {3, 5}
+        assert simple.implied_att == pytest.approx(fit.aggregate("simple").att[0], abs=1e-12)
+        assert overall.implied_att == pytest.approx(_group_overall_over(fit, df, {3, 5}), abs=1e-12)
+        assert overall.weights.query("group == 3 and post == 1")["time"].tolist() == [2]
+        with pytest.raises(ValueError, match="base_period='universal'"):
+            attgt_weights(fit, type="twfe")
+
+    @pytest.mark.parametrize("anticipation", [1, 3])
+    def test_blanked_mid_cohort_still_fails_closed(self, anticipation):
+        """The fitted path has no raw-time shortcut: a reason-less blank raises
+        under any window, including one wide enough to reach the first period."""
+        df = _panel(n_periods=6, cohorts=(0, 2, 4, 5))
+        fit = _cs(df, anticipation=anticipation)
+        for (g, t), cell in fit.group_time_effects.items():
+            if g == 4 and t >= 4 - anticipation:
+                cell["effect"] = np.nan
+                cell["skip_reason"] = None
+        with pytest.raises(ValueError, match="do not all carry"):
+            attgt_weights(fit, type="overall")
+        with pytest.raises(ValueError, match="do not all carry"):
+            _frame_call(_gt_frame(fit), df, type="overall", anticipation=anticipation)
+
+
+class TestAnticipationGappedCalendar:
+    """The window is applied in the calendar's own units, as CS applies it."""
+
+    @staticmethod
+    def _gapped():
+        rng = np.random.RandomState(11)
+        first_treat = np.repeat(np.array([0, 30, 40]), 40)
+        unit_fe = rng.normal(size=len(first_treat))
+        rows = []
+        for t in (10, 20, 30, 40, 50, 60):
+            treated = (first_treat != 0) & (t >= first_treat)
+            rows.append(
+                pd.DataFrame(
+                    {
+                        "unit": np.arange(len(first_treat)),
+                        "period": t,
+                        "first_treat": first_treat,
+                        "outcome": unit_fe
+                        + 0.05 * t
+                        + 0.1 * treated * (t - first_treat + 10) / 10
+                        + rng.normal(scale=0.3, size=len(first_treat)),
+                    }
+                )
+            )
+        return pd.concat(rows, ignore_index=True)
+
+    @pytest.mark.parametrize("level", ["simple", "overall"])
+    def test_window_counts_raw_time_units(self, level):
+        df = self._gapped()
+        fits = {a: _cs(df, anticipation=a) for a in (0, 1, 10)}
+        results = {a: attgt_weights(fit, type=level) for a, fit in fits.items()}
+
+        def oracle(a):
+            if level == "simple":
+                return fits[a].aggregate("simple").att[0]
+            return _group_overall_over(fits[a], df, {30, 40})
+
+        def post_flag(a, g, t):
+            row = results[a].weights.query("group == @g and time == @t")
+            return int(row["post"].iloc[0])
+
+        # anticipation=1 on a calendar stepping by 10 shifts nothing.
+        np.testing.assert_allclose(
+            results[1].weights["weight"].to_numpy(),
+            results[0].weights["weight"].to_numpy(),
+            atol=1e-14,
+        )
+        assert results[1].weights["post"].tolist() == results[0].weights["post"].tolist()
+        assert results[1].implied_att == pytest.approx(results[0].implied_att, abs=1e-14)
+        assert post_flag(1, 30, 20) == 0
+        # anticipation=10 shifts exactly one period.
+        assert post_flag(10, 30, 20) == 1 and post_flag(10, 30, 10) == 0
+        assert results[10].implied_att != pytest.approx(results[0].implied_att, abs=1e-6)
+        for a in (0, 1, 10):
+            assert results[a].implied_att == pytest.approx(oracle(a), abs=1e-12)
+
+    def test_twfe_is_identical_across_windows(self):
+        df = self._gapped()
+        results = [attgt_weights(_cs(df, anticipation=a), type="twfe") for a in (0, 1, 10)]
+        for other in results[1:]:
+            np.testing.assert_allclose(
+                other.weights["weight"].to_numpy(),
+                results[0].weights["weight"].to_numpy(),
+                atol=1e-14,
+            )
+            assert other.weights["post"].tolist() == results[0].weights["post"].tolist()
+
+
+class TestZeroWeightMassDrop:
+    """``zero_weight_mass`` is the third structural reason. On a panel fit the
+    survey weight is per unit, so a zero-mass cohort has NO estimable cell and
+    takes the drop branch (the carve-out branch needs per-period mass, which
+    only repeated cross-sections could produce, and those are rejected)."""
+
+    def test_zero_mass_cohort_is_dropped_like_aggregate(self, panel):
+        df = panel.copy()
+        rng = np.random.RandomState(9)
+        unit_w = pd.Series(
+            rng.choice([0.5, 1.0, 2.0], size=df["unit"].nunique()),
+            index=sorted(df["unit"].unique()),
+        )
+        df["w"] = df["unit"].map(unit_w)
+        df.loc[df["first_treat"] == 3, "w"] = 0.0
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # CS's consolidated skip warning
+            fit = diff_diff.CallawaySantAnna(
+                control_group="never_treated", base_period="universal"
+            ).fit(df, survey_design=diff_diff.SurveyDesign(weights="w"), **_DECO)
+        reasons = {c.get("skip_reason") for (g, _), c in fit.group_time_effects.items() if g == 3}
+        assert reasons == {"zero_weight_mass"}
+        with pytest.warns(UserWarning, match="skip_reason \\['zero_weight_mass'\\]"):
+            result = attgt_weights(fit, type="overall")
+        assert set(result.weights["group"]) == {4}
+        assert result.weights["weight"].sum() == pytest.approx(1.0, abs=1e-12)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # pweight normalization notice
+            reference = diff_diff.CallawaySantAnna(
+                control_group="never_treated", base_period="universal"
+            ).fit(
+                df[df["first_treat"] != 3],
+                survey_design=diff_diff.SurveyDesign(weights="w"),
+                **_DECO,
+            )
+        np.testing.assert_allclose(
+            result.weights["weight"].to_numpy(),
+            attgt_weights(reference, type="overall").weights["weight"].to_numpy(),
+            atol=1e-12,
+        )
+
+
+class TestBareFrameFirstPeriodShortcut:
+    """Without ``skip_reason`` the only structural route is R did's first-period
+    rule in raw time: ``group - anticipation <= first period``."""
+
+    def test_in_window_cohort_is_dropped_and_matches_the_fitted_path(self):
+        df = _panel(n_periods=6, cohorts=(0, 2, 4, 5))
+        fit = _cs(df, anticipation=1)
+        bare = _gt_frame(fit).drop(columns=["skip_reason"])
+        assert "skip_reason" not in bare.columns
+        with pytest.warns(UserWarning, match="first observed period plus the anticipation"):
+            from_bare = _frame_call(bare, df, type="simple", anticipation=1)
+        assert set(from_bare.weights["group"]) == {4, 5}
+        np.testing.assert_allclose(
+            from_bare.weights["weight"].to_numpy(),
+            attgt_weights(fit, type="simple").weights["weight"].to_numpy(),
+            atol=1e-15,
+        )
+        # The same bare frame under the WRONG window (0) has cohort 2 out of
+        # reach of the shortcut, so it fails closed - the caller owns the window.
+        with pytest.raises(ValueError, match="A bare frame cannot say why"):
+            _frame_call(bare, df, type="simple", anticipation=0)

@@ -65,10 +65,11 @@ class ATTGTWeightsResult(Diagnostic):
     ----------
     weights : pd.DataFrame
         Columns ``group``, ``time``, ``post``, ``weight``, ``att``. ``post``
-        is ``1`` when ``time >= group`` (the cells the estimand targets),
-        ``0`` for pre-treatment cells. ``att`` is the ATT(g, t) the weight
-        multiplies, carried through from the source so that
-        ``(weight * att).sum()`` reproduces ``implied_att``.
+        is ``1`` for the cells the estimand targets - ``time >= group`` for
+        ``level="twfe"``, ``time >= group - anticipation`` (raw time units)
+        for the CS estimands - and ``0`` for pre-treatment cells. ``att`` is
+        the ATT(g, t) the weight multiplies, carried through from the source
+        so that ``(weight * att).sum()`` reproduces ``implied_att``.
     level : str
         The ``type=`` this result was built with, one of :attr:`LEVELS`:
         ``"twfe"``, ``"overall"`` (ATT^O) or ``"simple"`` (ATT^simple).
@@ -103,7 +104,10 @@ class ATTGTWeightsResult(Diagnostic):
     control_group, base_period : str or None
         Design metadata carried from the source fit, when available.
     n_dropped_cells : int
-        Cells excluded because their ATT(g, t) was non-estimable (NaN).
+        PRE-window cells of surviving cohorts excluded because their ATT(g, t)
+        was non-estimable (NaN); the CS estimands place no weight there, so
+        the count is informational. Post-window cells the estimator could not
+        form are carved out of the grid (with a warning), not counted here.
     LEVELS : tuple of str
         The values ``level`` can take: ``("twfe", "overall", "simple")``.
         ``"overall"`` here is ATT^O (R ``did``'s ``attO``) and is unrelated
@@ -290,7 +294,7 @@ class TWFEDecompositionResult(Diagnostic):
         )
 
     def summary(self) -> str:
-        """Formatted decomposition table with the pre-trend contribution."""
+        """Formatted decomposition table with the pre-period contribution."""
         width = 78
         method_label = {
             "fwl": "TWFE regression (Frisch-Waugh-Lovell implicit weights)",

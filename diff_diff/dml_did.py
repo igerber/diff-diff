@@ -3352,6 +3352,11 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             bad_control_covariates=(tuple(w_names) if w_names is not None else None),
             bad_control_diagnostics=(bad_control_diagnostics if bad_control_diagnostics else None),
         )
+        # Every unit a cell loop excluded by its complete-case mask (outcome,
+        # dY, base-period covariates, bad-control columns, W) lands in
+        # ``dropped_units``; the kit records whether that ever happened so
+        # ``attgt_weights`` can refuse a fit whose cohort masses are reduced.
+        precomputed["complete_case_drops"] = bool(dropped_units)
         results._aggregation_kit = _build_aggregation_kit(
             cast(Any, self),  # duck-typed host contract (alpha/anticipation/cband)
             precomputed,

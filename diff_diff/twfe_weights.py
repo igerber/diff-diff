@@ -6,8 +6,9 @@ estimate a simple average of the underlying ATT(g, t). It estimates a
 coefficient need not lie in the convex hull of the effects it summarizes.
 :func:`attgt_weights` reports those weights, next to the weights the target
 estimands ATT^O and ATT^simple would use. :func:`decompose_twfe_weights`
-re-derives the regression from its building blocks and separates the part
-driven by pre-treatment parallel-trends violations.
+re-derives the regression from its building blocks and separates the sample
+contribution of the pre-treatment cells, which can reflect differential
+pre-trends or sampling variation.
 
 Distinct from :func:`diff_diff.twowayfeweights`, which implements the de
 Chaisemartin & D'Haultfoeuille (2020) Theorem 1 decomposition: that one
@@ -69,6 +70,14 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 __all__ = ["attgt_weights", "decompose_twfe_weights"]
 
 _TYPES = ATTGTWeightsResult.LEVELS
+
+# ``skip_reason`` values CS / DMLDiD emit for cells they structurally could not
+# form: no base period under the anticipation window (``missing_period``), no
+# comparison units (``zero_treated_control``), or zero survey mass
+# (``zero_weight_mass``). A cohort whose only gaps carry these reasons is
+# handled the way ``aggregate()`` handles it - dropped when it has no estimable
+# post cell, otherwise averaged over the cells it has; any other gap fails closed.
+_STRUCTURAL_REASONS = frozenset({"missing_period", "zero_treated_control", "zero_weight_mass"})
 
 
 def _is_never(values: np.ndarray) -> np.ndarray:
@@ -264,14 +273,16 @@ def _overall_weight_vector(
     post_mask: np.ndarray,
     n_post_available: Dict[int, int],
 ) -> np.ndarray:
-    """ATT^O weights: ``1[t >= g - anticipation] * pbar_g / n_post_g``.
+    """ATT^O weights: ``1[label(t) >= label(g) - a] * pbar_g / n_post(g)``.
 
-    Not renormalized - the per-cohort divisor is each cohort's number of
-    AVAILABLE post periods, so the weights already sum to one (the
-    ``pbar_g`` sum to one over cohorts). Counting the available cells rather
-    than writing ``(maxT - g + 1)`` analytically is what makes the
-    anticipation window and the structurally-absent ``zero_treated_control``
-    cells come out right, and the two agree exactly on a complete grid.
+    Not renormalized - the per-cohort divisor ``n_post(g)`` is each cohort's
+    number of AVAILABLE post cells under the anticipation window ``a`` (raw
+    time units), so the weights already sum to one (the ``pbar_g`` sum to one
+    over cohorts). On a complete grid that is ``maxT - post_start(g) + 1``,
+    which reduces to R's ``(maxT - g + 1)`` only when ``a == 0``; counting the
+    available cells rather than writing it analytically is what makes the
+    window and the structurally-absent cells (no comparison units, no base
+    period, zero survey mass) come out right.
     """
     divisor = np.array([float(n_post_available[int(g)]) for g in groups])
     return post_mask.astype(float) * np.array([p_treated[int(g)] for g in groups]) / divisor
@@ -282,7 +293,11 @@ def _simple_weight_vector(
     p_treated: Dict[int, float],
     post_mask: np.ndarray,
 ) -> np.ndarray:
-    """ATT^simple weights: ``1[t >= g - anticipation] * pbar_g``, normalized."""
+    """ATT^simple weights: ``1[label(t) >= label(g) - a] * pbar_g``, normalized.
+
+    ``a`` is the anticipation window in raw time units; the vector
+    self-normalizes, so no per-cohort divisor is needed.
+    """
     raw = post_mask.astype(float) * np.array([p_treated[int(g)] for g in groups])
     total = raw.sum()
     if total == 0:
@@ -328,9 +343,11 @@ def _attgt_from_frame(
     ``CallawaySantAnnaResults.to_dataframe("group_time")`` emits - so the
     fallback consumes our own frame verbatim, including its ``skip_reason``
     column when present. Duplicate cells and non-finite ``group`` / ``time``
-    labels are rejected; a non-finite effect is reported in the skip map, not
-    silently kept (an ``inf`` ATT would otherwise propagate into
-    ``implied_att``).
+    labels are rejected - duplicates are detected on the NUMERIC keys, so two
+    spellings of one period (``3`` and ``"3"``) are the same cell, exactly as
+    the positional grid treats them; a non-finite effect is reported in the
+    skip map, not silently kept (an ``inf`` ATT would otherwise propagate
+    into ``implied_att``).
     """
     missing = {"group", "time"} - set(frame.columns)
     if missing:
@@ -350,12 +367,13 @@ def _attgt_from_frame(
     times = pd.to_numeric(frame["time"], errors="coerce").to_numpy(dtype=float)
     _validate_cohort_labels(groups, what="group")
     _validate_time_labels(frame["time"].to_numpy(), what="time")
-    key = pd.MultiIndex.from_arrays([frame["group"].to_numpy(), frame["time"].to_numpy()])
+    key = pd.MultiIndex.from_arrays([groups, times])
     if key.duplicated().any():
         dupes = sorted({tuple(k) for k in key[key.duplicated()].tolist()})[:5]
         raise ValueError(
             f"ATT(g,t) frame has duplicated (group, time) cell(s) {dupes!r}; each "
-            "cell must appear exactly once"
+            "cell must appear exactly once (labels compare as numbers, so '3' and "
+            "3.0 name the same cell)"
         )
     att = pd.to_numeric(frame[value_col], errors="coerce").to_numpy(dtype=float)
     reasons = (
@@ -449,16 +467,26 @@ def _resolve_cs_inputs(
         )
     weights = bookkeeping.get("survey_weights")
     anticipation = int(getattr(kit, "anticipation", 0) or 0)
-    # Default True: DMLDiD builds its kit through the same builder but its
-    # precomputed mapping predates the balance flag, and a false rejection
-    # would be worse than the (already-CS-only) check.
-    is_balanced = bool(bookkeeping.get("is_balanced", True))
+    # Fail closed on a kit without the completeness record: a result pickled
+    # by diff-diff <= 3.12.0 cannot say whether its cohort masses are those of
+    # a complete panel, and a silently wrong weight table is worse than a
+    # refit. (Same policy as the missing-`covariates` key in _guard_cs_design.)
+    if "is_balanced" not in bookkeeping:
+        raise ValueError(_LEGACY_KIT_MESSAGE)
+    is_balanced = bool(bookkeeping["is_balanced"])
     return (
         np.asarray(cohorts),
         (None if weights is None else np.asarray(weights, dtype=float)),
         anticipation,
         is_balanced,
     )
+
+
+_LEGACY_KIT_MESSAGE = (
+    "this result was fitted by diff-diff <= 3.12.0 and does not record the "
+    "bookkeeping attgt_weights needs (panel completeness and covariate usage); "
+    "refit it to use attgt_weights"
+)
 
 
 def _guard_cs_design(results: "CallawaySantAnnaResults", estimand: str) -> None:
@@ -505,22 +533,17 @@ def _guard_cs_design(results: "CallawaySantAnnaResults", estimand: str) -> None:
             "not report. Refit with base_period='universal'."
         )
     # R's third restriction: xformla == ~1. The fit records its covariate
-    # column names on the estimand kit; a kit without the key predates that
-    # bookkeeping (an old pickle) and can only be warned about. A missing kit
-    # is left to _resolve_cs_inputs, whose error is the useful one.
+    # column names on the aggregation kit; a kit without the key predates that
+    # bookkeeping (a result pickled by <= 3.12.0) and fails closed, the same
+    # policy as the missing completeness record in _resolve_cs_inputs. A
+    # missing kit is left to _resolve_cs_inputs, whose error is the useful one.
     kit = getattr(results, "_aggregation_kit", None)
     if kit is None:
         return
     bookkeeping = getattr(kit, "bookkeeping", {}) or {}
     if "covariates" not in bookkeeping:
-        warnings.warn(
-            "this fit predates covariate bookkeeping, so attgt_weights cannot "
-            "verify it used no covariates; the TWFE weight formula assumes an "
-            "unadjusted regression (R twfe_weights requires xformla == ~1)",
-            UserWarning,
-            stacklevel=3,
-        )
-    elif bookkeeping["covariates"]:
+        raise ValueError(_LEGACY_KIT_MESSAGE)
+    if bookkeeping["covariates"]:
         raise ValueError(
             f"type='twfe' requires a fit without covariates, but this one "
             f"adjusted for {list(bookkeeping['covariates'])!r}. The TWFE weight "
@@ -559,9 +582,13 @@ def attgt_weights(
         ``result.to_dataframe("group_time")`` is consumed verbatim, including
         its ``skip_reason`` column. On the frame path, ``data``, ``unit``,
         ``time`` and ``first_treat`` are required so cohort shares can be
-        formed, and the caller is responsible for the fit having used no
-        covariates under ``type="twfe"`` (a frame carries no record of
-        that; the fitted path checks it).
+        formed. A frame carries no record of the producing fit, so on this
+        path the caller is responsible for what the fitted path checks: the
+        fit used no covariates under ``type="twfe"``; it dropped no unit from
+        any cell by its own complete-case rules; ``anticipation=`` is the
+        window the fit used; and no cell was hand-built for a cohort the
+        estimator would not have estimated. None of these can be detected
+        from the frame.
     type : {"twfe", "overall", "simple"}, default "twfe"
         Which estimand's weights to report (the same keyword as
         ``results.aggregate(type=...)``; the accepted values are
@@ -578,14 +605,19 @@ def attgt_weights(
         weights, which take precedence. Must be finite and non-negative with
         positive treated mass (and positive never-treated mass for ``"twfe"``).
     anticipation : int, optional
-        Anticipation window for the CS estimands, i.e. the number of periods
-        before ``g`` whose cells count as post-treatment (``t >= g -
-        anticipation``). Only meaningful on the DataFrame path, where a bare
-        frame carries no record of the source fit's setting; the fitted path
-        reads it off the fit and rejects an explicit ``anticipation=``. It does
-        NOT affect ``type="twfe"``: the TWFE regression's own treatment
-        indicator is ``1[t >= g]`` regardless of how the CS estimands treat the
-        run-up, and R's ``twfe_weights`` has no anticipation argument either.
+        Anticipation window for the CS estimands, in the calendar's own time
+        units exactly as ``CallawaySantAnna(anticipation=)`` counts them: a
+        cell counts as post-treatment when ``time >= group - anticipation``
+        on the raw labels (on a calendar 10, 20, 30 an ``anticipation=10``
+        shifts the window by one period; ``anticipation=1`` shifts it by
+        none). Only accepted on the DataFrame path, where it must be the value
+        the producing fit used; the fitted path reads it off the fit and
+        rejects an explicit ``anticipation=``. It does not change
+        ``type="twfe"``'s post window, which stays ``1[t >= g]`` (the
+        regression's own indicator; R's ``twfe_weights`` has no anticipation
+        argument) - but a cohort the estimator could not estimate at all under
+        the window is dropped for every ``type``, and the remaining cohorts'
+        masses and weights are those of the panel without it.
 
     Returns
     -------
@@ -600,38 +632,58 @@ def attgt_weights(
         ``type="twfe"`` - a non-never-treated control group, a
         non-universal base period, or a covariate-adjusted fit); on NaN /
         ``-inf`` cohort labels, invalid weights, duplicated or non-finite
-        cells; or on an INCOMPLETE grid: ``"twfe"`` needs every cohort x period
-        cell, ``"overall"`` / ``"simple"`` every post-treatment cell.
+        cells; on a fitted result that carries no completeness / covariate
+        bookkeeping (pickled by diff-diff <= 3.12.0); or on an INCOMPLETE
+        grid: ``"twfe"`` needs every cohort x period cell, ``"overall"`` /
+        ``"simple"`` every cell in the anticipation window that the estimator
+        did not itself mark structurally absent (see Notes).
     TypeError
         When ``results`` is neither a CallawaySantAnna-family result nor a
         DataFrame.
 
     Notes
     -----
-    Two structural gaps are handled rather than raised, mirroring R:
+    Gaps the estimator itself could not fill are handled rather than raised,
+    the way ``results.aggregate()`` handles them. A cell is *structurally
+    absent* when its ``skip_reason`` is one of ``missing_period`` (no base
+    period under the anticipation window - R ``did``'s first-period drop),
+    ``zero_treated_control`` (no comparison units, as under
+    ``control_group="not_yet_treated"`` for the last cohorts) or
+    ``zero_weight_mass`` (zero survey mass in the cell). Then:
 
-    * A cohort with NO estimable post-treatment cell (typically one treated in
-      the first observed period, which has no base period) is dropped from the
-      table AND from the cohort masses with a warning - what
+    * A cohort with NO estimable post-treatment cell, every missing post cell
+      of which is structurally absent, is dropped from the table AND from the
+      cohort masses with a warning, for every ``type`` - what
       ``did::pre_process_did`` does when it drops units already treated in the
-      first period. This drop is allowed ONLY when the cohort is treated in the
-      first observed period, or when every one of its missing post cells
-      carries ``skip_reason="zero_treated_control"``; a mid cohort blanked out
-      by some other mechanism raises rather than disappearing.
-    * Under ``control_group="not_yet_treated"`` the last cohorts run out of
-      comparison units, and CS marks those post cells ``zero_treated_control``.
-      For ``"overall"`` / ``"simple"`` they are treated as structurally absent:
-      ``"overall"`` divides each cohort by its number of AVAILABLE post periods
-      and ``"simple"`` renormalizes over the available post cells - what
-      R ``aggte()`` computes on such a fit. A warning names the cells. The
-      carve-out keys on the ``skip_reason`` values themselves (that reason is
-      only ever emitted on a not-yet-treated fit), so the fitted and frame
-      paths behave identically. (``"twfe"`` requires a never-treated control
-      group and never reaches this branch.)
+      first period (or within the anticipation window). The remaining cohorts'
+      masses and weights are those of the panel without it. A cohort blanked
+      out any other way (NaN effects with no reason) raises rather than
+      disappearing.
+    * A cohort that keeps at least one estimable post cell is kept, and for
+      ``"overall"`` / ``"simple"`` its structurally absent post cells are left
+      out of the grid: ``"overall"`` divides the cohort by its number of
+      AVAILABLE post cells and ``"simple"`` renormalizes over the available
+      cells - what R ``aggte()`` computes on a not-yet-treated fit, and what
+      ``aggregate()`` computes on a varying-base fit that keeps a cohort
+      through a single estimable cell. A warning names the cells and the
+      reasons. (``"twfe"`` requires a never-treated, universal-base fit and
+      never reaches this branch.)
 
-    Cohort shares assume a BALANCED panel - the same units observed in every
-    period - so an unbalanced fitted result is rejected (as
-    :func:`decompose_twfe_weights` already rejects an unbalanced panel).
+    The classification keys on the ``skip_reason`` values, so a
+    ``to_dataframe("group_time")`` frame behaves exactly like the fitted
+    result. A bare frame WITHOUT ``skip_reason`` has only one structural
+    route: a cohort whose window starts at or before the first observed
+    period (``group - anticipation <= first period``, R's
+    ``g <= first.period + anticipation``) may be dropped; every other gap
+    fails closed, being indistinguishable from user truncation.
+
+    Cohort shares assume a COMPLETE panel - the same units in every period -
+    so a fitted result is rejected unless every unit-period outcome cell is
+    present and finite and the estimator dropped no unit from any cell by its
+    own complete-case rules (DMLDiD records its drops; CallawaySantAnna's
+    NaN-covariate fallback keeps the cohort masses intact and is not a
+    rejection cause). :func:`decompose_twfe_weights` rejects an unbalanced
+    panel the same way.
 
     R's ``keep_untreated=TRUE`` is not exposed. It synthesizes ``G = 0`` rows
     with ``attgt = 0`` to mirror an internal vector layout; those rows are
@@ -700,9 +752,12 @@ def attgt_weights(
         cohorts, survey_weights, window, is_balanced = _resolve_cs_inputs(results)
         if not is_balanced:
             raise ValueError(
-                "attgt_weights requires a balanced panel: the cohort shares and "
-                "E_t[D] assume the same units are observed in every period. "
-                "Balance the panel (diff_diff.balance_panel) and refit."
+                "attgt_weights requires a balanced panel: every unit-period "
+                "outcome cell present and finite, and no unit dropped by the "
+                "producing estimator's per-cell complete-case rules, because the "
+                "cohort shares and E_t[D] assume the same units in every period. "
+                "Balance the panel (diff_diff.balance_panel), clean the "
+                "non-finite cells, and refit."
             )
         if survey_weights is not None and weights is not None:
             raise ValueError(
@@ -748,35 +803,43 @@ def attgt_weights(
 
     g_pos = _to_positional_cohort(table["group"].to_numpy(), grid)
     t_pos = np.array([grid[float(t)] for t in table["time"].to_numpy()])
+    # Raw label of each position, 1-based (index 0 unused): the anticipation
+    # window is defined in the calendar's own units, as CallawaySantAnna
+    # applies it (``t < g - anticipation`` on labels), NOT in positions - on a
+    # gapped calendar the two differ.
+    label_of = np.array([np.nan] + sorted(grid))
+    g_int = g_pos.astype(int)
 
     # Post-treatment mask. The TWFE regression's own indicator is 1[t >= g]
     # regardless of the CS anticipation window; the CS target estimands shift
-    # it to 1[t >= g - anticipation].
+    # it to 1[label(t) >= label(g) - anticipation] in raw time units.
     if type == "twfe":
         post_mask = t_pos >= g_pos
     else:
-        post_mask = t_pos >= (g_pos - window)
+        post_mask = label_of[t_pos] >= label_of[g_int] - window
+
+    def _cs_post_start(g: int) -> int:
+        """First position whose raw label is ``>= label(g) - window``; never below 1."""
+        return int(np.searchsorted(label_of[1:], label_of[g] - window, side="left")) + 1
 
     def _post_start(g: int) -> int:
-        raw = g if type == "twfe" else g - window
-        return max(1, raw)
+        return g if type == "twfe" else _cs_post_start(g)
 
-    # --- whole-cohort exclusion (R did drops units treated in the first period)
+    # --- whole-cohort exclusion (R did drops cohorts it cannot estimate at all)
     present = set(zip(g_pos.tolist(), t_pos.tolist()))
     panel_cohorts = sorted({int(g) for g in unit_g_pos if g != 0})
     cohorts_with_post = {int(g) for g in g_pos[post_mask]}
     excluded = [g for g in panel_cohorts if g not in cohorts_with_post]
     if excluded:
-        # A cohort may be dropped ONLY when the drop is structural: it is
-        # treated in the first observed period (R did's first-period drop), or
-        # every one of its missing post cells carries zero_treated_control
-        # (it ran out of comparison units). Any other blanked-out cohort must
-        # fail closed rather than disappear.
+        # A cohort may be dropped ONLY when the drop is structural. With
+        # skip_reason available (fitted result, or its to_dataframe frame):
+        # every one of its missing post cells carries a reason the estimator
+        # itself emits for a cell it could not form (no base period under the
+        # window, no comparison units, zero survey mass). On a bare frame the
+        # only route is R did's first-period rule in raw time, g - anticipation
+        # <= first period. Any other blanked-out cohort fails closed.
         structural: List[int] = []
         for g in excluded:
-            if g == first_period_pos:
-                structural.append(g)
-                continue
             if has_skip_reasons:
                 missing_post = [
                     (_label_for(grid, g), _label_for(grid, t))
@@ -784,9 +847,11 @@ def attgt_weights(
                     if (g, t) not in present
                 ]
                 if missing_post and all(
-                    skipped.get(lab) == "zero_treated_control" for lab in missing_post
+                    skipped.get(lab) in _STRUCTURAL_REASONS for lab in missing_post
                 ):
                     structural.append(g)
+            elif _cs_post_start(g) <= first_period_pos:
+                structural.append(g)
         not_structural = [g for g in excluded if g not in structural]
         if not_structural:
             labels = [_label_for(grid, g) for g in not_structural]
@@ -800,18 +865,33 @@ def attgt_weights(
             raise ValueError(
                 f"cohort(s) {labels!r} are present in data= but have no estimable "
                 "post-treatment cell, and their missing post cell(s) do not all "
-                "carry skip_reason 'zero_treated_control'. A cohort is only dropped "
-                "like R did's first-period cohort, or when it runs out of comparison "
-                "units; blanking a mid cohort's effects is not one of those, so it "
-                "fails closed instead of silently leaving the estimand."
+                "carry a structural skip_reason (one of "
+                f"{sorted(_STRUCTURAL_REASONS)!r}: no base period under the "
+                "anticipation window, no comparison units, or zero survey mass). "
+                "A cohort is only dropped when the estimator itself could not "
+                "form any of its post cells; blanking a mid cohort's effects is "
+                "not that, so it fails closed instead of silently leaving the "
+                "estimand."
             )
         n_units_excl = int(np.isin(unit_g_pos, excluded).sum())
+        reasons_seen = sorted(
+            {
+                str(skipped[lab])
+                for lab in skipped
+                if _pos_of(grid, lab[0]) in excluded and skipped[lab] in _STRUCTURAL_REASONS
+            }
+        )
+        why = (
+            f"skip_reason {reasons_seen!r}"
+            if reasons_seen
+            else "treated at or before the first observed period plus the anticipation window"
+        )
         warnings.warn(
             f"cohort(s) {[_label_for(grid, g) for g in excluded]!r} ({n_units_excl} "
-            "unit(s)) have no estimable post-treatment cell and were dropped from "
-            "the weight table and the cohort shares: either treated in the first "
-            "observed period (R did's first-period drop) or run out of comparison "
-            "units under a not-yet-treated control group (R did's panel truncation)",
+            "unit(s)) have no estimable post-treatment cell under the anticipation "
+            f"window ({why}) and were dropped from the weight table and the cohort "
+            "shares, as R did drops cohorts it cannot estimate; the remaining "
+            "cohorts' masses and weights are those of the panel without them",
             UserWarning,
             stacklevel=2,
         )
@@ -839,17 +919,20 @@ def attgt_weights(
     missing_cells = sorted(required - present)
     structurally_absent: List[Tuple[Any, Any]] = []
     if missing_cells:
-        # The zero_treated_control carve-out is keyed on the skip_reason VALUE,
-        # not on control_group: that reason is only ever emitted on a
-        # not-yet-treated fit, and the frame path has no control_group to read,
-        # so keying on the reason is what makes the two paths agree.
+        # The carve-out is keyed on the skip_reason VALUE, not on control_group
+        # or base_period: the estimator emits these reasons only for cells it
+        # structurally could not form, and the frame path has no design
+        # metadata to read, so keying on the reason is what makes the two
+        # paths agree. `aggregate()` finite-masks the same cells.
         carve_out_ok = type != "twfe"
         hard: List[Tuple[Tuple[Any, Any], Optional[str]]] = []
+        absent_reasons: set = set()
         for g, t in missing_cells:
             label = (_label_for(grid, g), _label_for(grid, t))
             reason = skipped.get(label)
-            if carve_out_ok and reason == "zero_treated_control":
+            if carve_out_ok and reason in _STRUCTURAL_REASONS:
                 structurally_absent.append(label)
+                absent_reasons.add(str(reason))
             else:
                 hard.append((label, reason))
         if hard:
@@ -865,10 +948,11 @@ def attgt_weights(
             )
         warnings.warn(
             f"{len(structurally_absent)} post-treatment cell(s) {structurally_absent[:6]!r} "
-            "have no not-yet-treated comparison units (skip_reason "
-            "'zero_treated_control') and are treated as structurally absent: "
-            f"type={type!r} averages over each cohort's AVAILABLE "
-            "post periods, as R aggte() does on a not-yet-treated fit",
+            f"could not be estimated (skip_reason {sorted(absent_reasons)!r}: no "
+            "comparison units, no base period under the anticipation window, or "
+            "zero survey mass) and are treated as structurally absent: "
+            f"type={type!r} averages over each cohort's AVAILABLE post cells, as "
+            "R aggte() and results.aggregate() do",
             UserWarning,
             stacklevel=2,
         )
@@ -1047,9 +1131,12 @@ class _Panel:
         units = frame[unit].to_numpy()
         periods = frame["_twfe_time_key"].to_numpy(dtype=float)
         self.unit_ids = np.asarray(sorted(pd.unique(units)))
-        self.period_labels = np.asarray(sorted(pd.unique(periods)))
+        # The numeric key orders, reshapes and maps cohorts; the ORIGINAL
+        # labels are what every reporting surface (cells, summary(), balance
+        # rows, plots) shows, so a string-labelled panel reports strings.
+        self.period_keys = np.asarray(sorted(pd.unique(periods)))
         n_units = len(self.unit_ids)
-        n_periods = len(self.period_labels)
+        n_periods = len(self.period_keys)
         if len(frame) != n_units * n_periods:
             raise ValueError(
                 f"decompose_twfe_weights requires a balanced panel: got "
@@ -1064,9 +1151,16 @@ class _Panel:
                 "are missing periods"
             )
 
-        self.grid = _positional_grid(self.period_labels)
+        self.grid = _positional_grid(self.period_keys)
         self.n_units = n_units
         self.n_periods = n_periods
+        labels = frame.groupby("_twfe_time_key")[time]
+        if (labels.nunique() > 1).any():
+            raise ValueError(
+                f"{time!r} mixes representations of the same period (e.g. '2' and "
+                "2.0); use one label per period"
+            )
+        self.period_labels = labels.first().loc[self.period_keys].to_numpy()
 
         cohort_long = frame[first_treat].to_numpy()
         # dropna=False: a NaN label in one period must fail invariance, not
@@ -1699,7 +1793,12 @@ def decompose_twfe_weights(
     contrasts, so there is no ATT(g, t) table it could consume. Its companion
     :func:`attgt_weights` is the fitted-result surface, and the two are tied
     by an identity that holds when the fit used ``base_period="universal"``,
-    ``control_group="never_treated"`` and no covariates::
+    ``control_group="never_treated"`` and no covariates, no cohort was
+    dropped by :func:`attgt_weights`' structural rule (every cohort has at
+    least one estimable post cell under the fit's anticipation window - a
+    cohort treated in the first observed period is dropped there but kept
+    here under ``base_period="first_period"``), and both sides use the same
+    unit weights::
 
         sum(attgt_weights(cs, type="twfe").weights.eval("weight * att"))
             == decompose_twfe_weights(panel, ...).estimate

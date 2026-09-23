@@ -5192,11 +5192,21 @@ def _build_aggregation_kit(
     # mirrors R twfe_weights' ``xformla == ~1`` restriction). Column NAMES
     # only - never values - so the data-minimization contract holds.
     bookkeeping["covariates"] = tuple(covariates or ())
-    # Panel balance, recorded so ``attgt_weights`` can reject an unbalanced
-    # fitted result: its cohort shares and E_t[D] assume the same units in
-    # every period. Defaults True when the key is absent (a legacy kit, or a
-    # producer that never computed it).
-    bookkeeping["is_balanced"] = bool((precomputed or {}).get("is_balanced", True))
+    # Panel completeness, recorded so ``attgt_weights`` can reject a fitted
+    # result whose cohort shares and E_t[D] are not those of a fixed unit set:
+    # every unit-period outcome cell present and finite, AND the producer
+    # dropped no unit from any cell by its own complete-case mask (DMLDiD
+    # sets ``complete_case_drops``; CS's NaN-covariate fallback keeps the
+    # masses intact and sets nothing). False for RCS precomputes (no outcome
+    # matrix). Stricter than CallawaySantAnna's own ``is_balanced`` (an
+    # ``isnan``-only check for its fast paths), which stays as it is.
+    _pre = precomputed or {}
+    _om = _pre.get("outcome_matrix")
+    bookkeeping["is_balanced"] = bool(
+        _om is not None
+        and np.isfinite(np.asarray(_om, dtype=float)).all()
+        and not _pre.get("complete_case_drops", False)
+    )
 
     # Data minimization: the results object is picklable and users share
     # result artifacts, so the kit must not turn it into a carrier for raw
