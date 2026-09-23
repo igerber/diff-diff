@@ -31,7 +31,7 @@ back into its building blocks.
   functions here weight **ATT(g, t) parameters**.
 - :class:`diff_diff.BaconDecomposition` decomposes TWFE into **2x2 DiD
   comparisons**. :func:`diff_diff.decompose_twfe_weights` decomposes it into
-  **group-time effects**, plus a pre-trend-violation term.
+  **group-time effects**, plus the pre-period contribution.
 
 **Reference:** Baker, A., Callaway, B., Cunningham, S., Goodman-Bacon, A., &
 Sant'Anna, P. H. C. (2025). Difference-in-Differences Designs: A
@@ -103,7 +103,7 @@ Inspecting what a TWFE regression weights
 
    weights = diff_diff.attgt_weights(cs, type="twfe")
    print(weights.summary())
-   print(weights.n_negative, "cells carry negative weight")
+   print(weights.n_negative_post, "post-treatment cells carry negative weight")
 
 Comparing against the estimand you meant to report
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -127,7 +127,7 @@ between ``implied_att`` values is the cost of the TWFE specification:
    for level in ("twfe", "overall", "simple"):
        w = diff_diff.attgt_weights(cs, type=level)
        print(f"{level:8s} {w.implied_att: .4f}  "
-             f"({w.n_negative} negative weights)")
+             f"({w.n_negative_post} negative post-treatment weights)")
 
 Separating treatment effects from the pre-period contribution
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

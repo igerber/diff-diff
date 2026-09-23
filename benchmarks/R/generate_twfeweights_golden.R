@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 # Generate R `twfeweights` parity goldens for the diff-diff TWFE weight diagnostics.
 #
-# Requires: twfeweights (>= 0.9.0, MIT, Brantly Callaway), did, fixest, BMisc,
+# Requires: twfeweights (== 0.9.0, MIT, Brantly Callaway), did, fixest, BMisc,
 #           DRDID, jsonlite
 # Output:   benchmarks/data/twfeweights_golden.json
 #           benchmarks/data/twfeweights_sim_panel.csv
@@ -338,7 +338,8 @@ mpdta_df$lpop_t <- mpdta_df$lpop * (mpdta_df$period - 2002) / 5
 
 # The fixture READS benchmarks/data/mpdta_stata_panel.csv (already in the repo
 # for the Stata parity suites) instead of writing a renamed copy. Assert the
-# two sources agree bit-for-bit on every shared column, so they cannot drift.
+# two sources agree on every shared column - integer identifiers exactly, float
+# columns at CSV round-trip precision (1e-14) - so they cannot drift.
 stata_path <- file.path(out_dir, "mpdta_stata_panel.csv")
 if (!file.exists(stata_path)) {
   stop("expected ", stata_path, " (the mpdta fixture now reads it)")
