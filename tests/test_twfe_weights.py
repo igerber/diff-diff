@@ -304,9 +304,16 @@ class TestSamplingWeights:
                 weights="w",
             )
 
-    def test_rejects_a_weights_column_name_on_the_fitted_path(self, fitted):
-        with pytest.raises(ValueError, match="only name a column"):
+    def test_rejects_weights_on_the_fitted_path(self, fitted):
+        """The fit's own survey weights are the only weights a fitted result
+        can carry: its ATT(g, t) were estimated under them, and a different
+        vector would make implied_att neither the weighted nor the unweighted
+        estimand (a hybrid measured at 1.4349 vs 1.4222 on the weighted pin)."""
+        n_units = len(fitted._aggregation_kit.bookkeeping["unit_cohorts"])
+        with pytest.raises(ValueError, match="only for the DataFrame path"):
             attgt_weights(fitted, weights="w")
+        with pytest.raises(ValueError, match="only for the DataFrame path"):
+            attgt_weights(fitted, weights=np.ones(n_units))
 
 
 class TestDegenerateInputs:
@@ -492,9 +499,12 @@ class TestWeightedRegressionPin:
         np.testing.assert_allclose(result.cells["weight"].to_numpy(), expected_w, atol=1e-12)
         np.testing.assert_allclose(result.cells["att"].to_numpy(), spec["att"], atol=1e-12)
 
+    # Captured from a fit made NATIVELY under the panel's weights
+    # (``SurveyDesign(weights="w")``); the "twfe" implied_att is the weighted
+    # TWFE coefficient and equals ``_DEC["nocov"]["estimate"]``.
     _AGG = {
         "twfe": (
-            1.4348838554104435,
+            1.4221735897240106,
             [
                 -0.2638376383763837,
                 -0.2638376383763837,
@@ -509,7 +519,7 @@ class TestWeightedRegressionPin:
             ],
         ),
         "overall": (
-            2.101822892918353,
+            2.0885406501592416,
             [
                 0,
                 0,
@@ -524,7 +534,7 @@ class TestWeightedRegressionPin:
             ],
         ),
         "simple": (
-            2.239531384413449,
+            2.221649894556495,
             [
                 0,
                 0,
@@ -543,14 +553,28 @@ class TestWeightedRegressionPin:
     @pytest.mark.parametrize("level", ["twfe", "overall", "simple"])
     def test_attgt_weighted_branches(self, level):
         df = self._weighted_panel()
-        cs = diff_diff.CallawaySantAnna(base_period="universal", control_group="never_treated").fit(
-            df, outcome="y", unit="id", time="t", first_treat="g"
-        )
-        unit_w = df.groupby("id", sort=True)["w"].first().to_numpy()
-        result = attgt_weights(cs, type=level, weights=unit_w)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # pweight normalization notice
+            cs = diff_diff.CallawaySantAnna(
+                base_period="universal", control_group="never_treated"
+            ).fit(
+                df,
+                outcome="y",
+                unit="id",
+                time="t",
+                first_treat="g",
+                survey_design=diff_diff.SurveyDesign(weights="w"),
+            )
+        result = attgt_weights(cs, type=level)
         implied, weight = self._AGG[level]
         assert result.implied_att == pytest.approx(implied, abs=1e-12)
         np.testing.assert_allclose(result.weights["weight"].to_numpy(), weight, atol=1e-12)
+        # Independent anchors: the weighted TWFE coefficient is the weighted
+        # decomposition's estimate; ATT^simple is CS's own weighted aggregate.
+        if level == "twfe":
+            assert result.implied_att == pytest.approx(self._DEC["nocov"]["estimate"], abs=1e-12)
+        if level == "simple":
+            assert result.implied_att == pytest.approx(cs.aggregate("simple").att[0], abs=1e-12)
         assert list(zip(result.weights["group"], result.weights["time"])) == [
             (3, 1),
             (3, 2),
@@ -636,28 +660,30 @@ class TestCohortLabelValidation:
             )
 
 
+@pytest.fixture(scope="module")
+def decomposed():
+    """Balance table with <3-distinct-value covariates (TestBalanceNaNPropagation)."""
+    df = _panel()
+    rng = np.random.RandomState(3)
+    df["binary"] = rng.binomial(1, 0.4, size=len(df)).astype(float)
+    df["const"] = 1.0
+    df["cont"] = rng.normal(size=len(df))
+    # Make the binary / constant columns unit-invariant so the unit mean
+    # keeps them at <3 distinct values.
+    df["binary"] = df.groupby("unit")["binary"].transform("first")
+    return diff_diff.decompose_twfe_weights(
+        df,
+        outcome="outcome",
+        unit="unit",
+        time="period",
+        first_treat="first_treat",
+        covariates=["cont"],
+        balance_covariates=["binary", "const", "cont"],
+    )
+
+
 class TestBalanceNaNPropagation:
     """Item 2: frac_extreme's NA for <3 distinct values survives the summary roll-up."""
-
-    @pytest.fixture(scope="class")
-    def decomposed(self):
-        df = _panel()
-        rng = np.random.RandomState(3)
-        df["binary"] = rng.binomial(1, 0.4, size=len(df)).astype(float)
-        df["const"] = 1.0
-        df["cont"] = rng.normal(size=len(df))
-        # Make the binary / constant columns unit-invariant so the unit mean
-        # keeps them at <3 distinct values.
-        df["binary"] = df.groupby("unit")["binary"].transform("first")
-        return diff_diff.decompose_twfe_weights(
-            df,
-            outcome="outcome",
-            unit="unit",
-            time="period",
-            first_treat="first_treat",
-            covariates=["cont"],
-            balance_covariates=["binary", "const", "cont"],
-        )
 
     def test_cell_level_is_nan_for_degenerate_covariates(self, decomposed):
         cells = decomposed.covariate_balance(level="cell")
@@ -836,18 +862,20 @@ class TestWeightValidation:
             (lambda w: np.zeros_like(w), "sum to zero"),
         ],
     )
-    def test_bad_unit_weights_are_rejected(self, fitted, mutate, match):
-        w = mutate(np.ones(len(fitted._aggregation_kit.bookkeeping["unit_cohorts"])))
+    def test_bad_unit_weights_are_rejected(self, fitted, panel, mutate, match):
+        w = mutate(np.ones(panel["unit"].nunique()))
         with pytest.raises(ValueError, match=match):
-            attgt_weights(fitted, type="overall", weights=w)
+            _frame_call(_gt_frame(fitted), panel, type="overall", weights=w)
 
     def test_zero_control_mass_only_matters_where_controls_enter(self, fitted, panel):
-        cohorts = np.asarray(fitted._aggregation_kit.bookkeeping["unit_cohorts"], dtype=float)
+        cohorts = (
+            panel.sort_values("unit").drop_duplicates("unit")["first_treat"].to_numpy(dtype=float)
+        )
         w = np.where(cohorts == 0, 0.0, 1.0)
         with pytest.raises(ValueError, match="never-treated comparison group carries zero"):
-            attgt_weights(fitted, type="twfe", weights=w)
+            _frame_call(_gt_frame(fitted), panel, type="twfe", weights=w)
         for level in ("overall", "simple"):
-            assert attgt_weights(fitted, type=level, weights=w).n_cells > 0
+            assert _frame_call(_gt_frame(fitted), panel, type=level, weights=w).n_cells > 0
 
     def test_decompose_reports_a_nan_weight_as_non_finite(self, panel):
         df = panel.copy()
@@ -893,8 +921,10 @@ class TestWeightedTwfeExtension:
             index=sorted(df["unit"].unique()),
         )
         df["w"] = df["unit"].map(unit_w)
-        fit = _fit(df)
-        weighted = attgt_weights(fit, type="twfe", weights=unit_w.to_numpy())
+        fit = diff_diff.CallawaySantAnna(
+            control_group="never_treated", base_period="universal"
+        ).fit(df, survey_design=diff_diff.SurveyDesign(weights="w"), **_DECO)
+        weighted = attgt_weights(fit, type="twfe")
         decomposed = diff_diff.decompose_twfe_weights(
             df,
             outcome="outcome",
@@ -1318,6 +1348,13 @@ class TestUnbalancedFittedResult:
             kit.bookkeeping["is_balanced"] = saved
 
 
+@pytest.fixture(scope="module")
+def dml_data():
+    from tests.test_dml_did import make_staggered_dml_data
+
+    return make_staggered_dml_data()
+
+
 class TestDMLCompleteCaseRecord:
     """DMLDiD records its own per-cell complete-case drops on the kit.
 
@@ -1336,18 +1373,14 @@ class TestDMLCompleteCaseRecord:
             warnings.simplefilter("ignore")
             return diff_diff.DMLDiD(seed=0).fit(df, **FIT_KW, **COV, **extra)
 
-    @pytest.fixture(scope="class")
-    def data(self):
-        from tests.test_dml_did import make_staggered_dml_data
-
-        return make_staggered_dml_data()
-
-    def test_balanced_dml_fit_is_accepted(self, data):
+    def test_balanced_dml_fit_is_accepted(self, dml_data):
+        data = dml_data
         fit = self._dml_fit(data)
         assert fit._aggregation_kit.bookkeeping["is_balanced"] is True
         assert attgt_weights(fit, type="overall").n_cells > 0
 
-    def test_nan_outcome_is_rejected(self, data):
+    def test_nan_outcome_is_rejected(self, dml_data):
+        data = dml_data
         df = data.copy()
         df.loc[df.index[0], "y"] = np.nan
         fit = self._dml_fit(df)
@@ -1355,7 +1388,8 @@ class TestDMLCompleteCaseRecord:
         with pytest.raises(ValueError, match="complete-case"):
             attgt_weights(fit, type="overall")
 
-    def test_nan_base_period_covariate_is_rejected(self, data):
+    def test_nan_base_period_covariate_is_rejected(self, dml_data):
+        data = dml_data
         """Every cell reads the universal base period's covariates."""
         df = data.copy()
         df.loc[(df["unit"] == 3) & (df["time"] == 2000), "x1"] = np.nan
@@ -1364,7 +1398,8 @@ class TestDMLCompleteCaseRecord:
         with pytest.raises(ValueError, match="complete-case"):
             attgt_weights(fit, type="overall")
 
-    def test_nan_covariate_in_an_unread_period_is_accepted(self, data):
+    def test_nan_covariate_in_an_unread_period_is_accepted(self, dml_data):
+        data = dml_data
         """A post-period covariate cell is never read under a universal base."""
         df = data.copy()
         df.loc[(df["unit"] == 3) & (df["time"] == 2003), "x1"] = np.nan
@@ -1372,7 +1407,8 @@ class TestDMLCompleteCaseRecord:
         assert fit._aggregation_kit.bookkeeping["is_balanced"] is True
         assert attgt_weights(fit, type="overall").n_cells > 0
 
-    def test_bad_control_lane_records_its_drops(self, data):
+    def test_bad_control_lane_records_its_drops(self, dml_data):
+        data = dml_data
         """Pins the ``_compute_ccps_gt`` lane: a non-finite bad-control cell drops the unit."""
         from tests.test_dml_did import BC_KW, add_bad_control
 
@@ -1472,10 +1508,11 @@ class TestWeightsLength:
     """Item 11: a wrong-length weights= is a clear error, never an IndexError."""
 
     def test_wrong_length_with_an_excluded_cohort(self):
-        fit = _fit(_panel(cohorts=(0, 1, 3, 4)))
-        n_units = len(fit._aggregation_kit.bookkeeping["unit_cohorts"])
+        df = _panel(cohorts=(0, 1, 3, 4))
+        fit = _fit(df)
+        n_units = df["unit"].nunique()
         with pytest.raises(ValueError, match="weights has length"):
-            attgt_weights(fit, type="overall", weights=np.ones(n_units - 1))
+            _frame_call(_gt_frame(fit), df, type="overall", weights=np.ones(n_units - 1))
 
 
 class TestMultiCovariatePin:
@@ -1814,3 +1851,59 @@ class TestBareFrameFirstPeriodShortcut:
         # reach of the shortcut, so it fails closed - the caller owns the window.
         with pytest.raises(ValueError, match="A bare frame cannot say why"):
             _frame_call(bare, df, type="simple", anticipation=0)
+
+
+class TestZeroMassCohortInDecomposition:
+    """A treated cohort with zero sampling weight fails closed by name instead of
+    poisoning the decomposition with NaN."""
+
+    def test_zero_mass_treated_cohort_is_rejected(self, panel):
+        df = panel.copy()
+        df["w"] = 1.0
+        df.loc[df["first_treat"] == 3, "w"] = 0.0
+        with pytest.raises(ValueError, match=r"cohort\(s\) \[3\] carry zero total sampling weight"):
+            diff_diff.decompose_twfe_weights(df, weights="w", **_DECO)
+
+
+class TestFramePathLabelDtypes:
+    """Structural-skip lookups key on canonical labels, so a numeric-string
+    frame and panel behave exactly like the integer-labelled ones."""
+
+    def test_string_labels_keep_the_structural_carve_out(self):
+        df = _panel(cohorts=(3, 4, 5), n_periods=6)
+        fit = _fit(df, control_group="not_yet_treated")
+        gt = _gt_frame(fit)
+        gt_str = gt.assign(group=gt["group"].astype(str), time=gt["time"].astype(str))
+        df_str = df.assign(
+            period=df["period"].astype(str), first_treat=df["first_treat"].astype(str)
+        )
+        with pytest.warns(UserWarning, match="structurally absent"):
+            reference = _frame_call(gt, df, type="overall")
+        with pytest.warns(UserWarning, match="structurally absent"):
+            as_str = _frame_call(gt_str, df_str, type="overall")
+        np.testing.assert_allclose(
+            as_str.weights["weight"].to_numpy(), reference.weights["weight"].to_numpy(), atol=1e-15
+        )
+        assert as_str.implied_att == pytest.approx(reference.implied_att, abs=1e-15)
+
+    def test_phantom_cohort_in_the_frame_is_rejected(self, fitted, panel):
+        """A group on the period grid but absent from data='s cohorts is a clear error."""
+        gt = _gt_frame(fitted)
+        phantom = pd.concat([gt, gt[gt["group"] == 3].assign(group=2)], ignore_index=True)
+        for level in ("twfe", "overall"):
+            with pytest.raises(ValueError, match=r"cohort\(s\) \[2\] that no unit in data="):
+                _frame_call(phantom, panel, type=level)
+
+
+class TestEffectiveSampleSizeIsUpstreams:
+    """``effective_sample_size`` is R's: the sampling weights cancel."""
+
+    def test_sampling_weights_cancel(self):
+        from diff_diff.twfe_weights import _effective_sample_size
+
+        est = np.ones(3)
+        assert _effective_sample_size(est, np.array([1.0, 0.0, 0.0])) == pytest.approx(3.0)
+        assert _effective_sample_size(est, np.ones(3)) == pytest.approx(3.0)
+        # ...and the estimation weights alone drive it: sum(w)^2 / sum(w^2).
+        est = np.array([1.0, 3.0])
+        assert _effective_sample_size(est, np.ones(2)) == pytest.approx(16.0 / 10.0)

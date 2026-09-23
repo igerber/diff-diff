@@ -143,6 +143,18 @@ def _positional_grid(
     return {t: i + 1 for i, t in enumerate(ordered)}
 
 
+def _canonical_label(value: Any) -> Any:
+    """One representation per period label: ``int`` for integral values,
+    ``float`` otherwise, so ``"3"``, ``3.0`` and ``np.int64(3)`` key the same
+    cell. This is the form ``_label_for`` emits, so ``skipped`` lookups keyed
+    here always find their cell whatever the caller's label dtype."""
+    try:
+        as_float = float(value)
+    except (TypeError, ValueError):
+        return value
+    return int(as_float) if as_float.is_integer() else as_float
+
+
 def _to_positional_cohort(cohorts: np.ndarray, grid: Dict[float, int]) -> np.ndarray:
     """Cohort labels -> positional time; never-treated stays 0.
 
@@ -323,7 +335,7 @@ def _attgt_from_cs(
     for (g, t), cell in results.group_time_effects.items():
         effect = cell.get("effect", np.nan)
         if cell.get("skip_reason") is not None or not np.isfinite(effect):
-            skipped[(g, t)] = cell.get("skip_reason")
+            skipped[(_canonical_label(g), _canonical_label(t))] = cell.get("skip_reason")
             continue
         rows.append({"group": g, "time": t, "att": float(effect)})
     if not rows:
@@ -386,7 +398,7 @@ def _attgt_from_frame(
     skipped: Dict[Tuple[Any, Any], Optional[str]] = {}
     for i in np.flatnonzero(~finite):
         reason = reasons[i]
-        skipped[(table["group"].iat[i], table["time"].iat[i])] = (
+        skipped[(_canonical_label(groups[i]), _canonical_label(times[i]))] = (
             None
             if reason is None or (isinstance(reason, float) and np.isnan(reason))
             else str(reason)
@@ -586,9 +598,9 @@ def attgt_weights(
         path the caller is responsible for what the fitted path checks: the
         fit used no covariates under ``type="twfe"``; it dropped no unit from
         any cell by its own complete-case rules; ``anticipation=`` is the
-        window the fit used; and no cell was hand-built for a cohort the
-        estimator would not have estimated. None of these can be detected
-        from the frame.
+        window the fit used; ``weights=`` are the weights the fit used; and
+        no cell was hand-built for a cohort the estimator would not have
+        estimated. None of these can be detected from the frame.
     type : {"twfe", "overall", "simple"}, default "twfe"
         Which estimand's weights to report (the same keyword as
         ``results.aggregate(type=...)``; the accepted values are
@@ -600,10 +612,16 @@ def attgt_weights(
     unit, time, first_treat : str, optional
         Column names in ``data``. Required together with ``data``.
     weights : str or array-like, optional
-        Unit-level sampling weights (R's ``w=``): a column name in ``data``,
-        or one value per unit. Rejected when the fit already carries survey
-        weights, which take precedence. Must be finite and non-negative with
-        positive treated mass (and positive never-treated mass for ``"twfe"``).
+        Unit-level sampling weights (R's ``w=``), DataFrame path only: a
+        column name in ``data``, or one value per unit. The fitted path uses
+        the fit's own survey weights (``SurveyDesign(weights=)``) and rejects
+        an explicit ``weights=``: the ATT(g, t) were estimated under the
+        fit's weights, and a different weight vector would make
+        ``implied_att`` neither the weighted nor the unweighted estimand. The
+        same contract binds the frame path - the frame's ATT(g, t) must have
+        been estimated under these weights. Must be finite and non-negative
+        with positive treated mass (and positive never-treated mass for
+        ``"twfe"``).
     anticipation : int, optional
         Anticipation window for the CS estimands, in the calendar's own time
         units exactly as ``CallawaySantAnna(anticipation=)`` counts them: a
@@ -759,20 +777,17 @@ def attgt_weights(
                 "Balance the panel (diff_diff.balance_panel), clean the "
                 "non-finite cells, and refit."
             )
-        if survey_weights is not None and weights is not None:
+        if weights is not None:
             raise ValueError(
-                "this fit already carries survey weights; passing weights= as "
-                "well is ambiguous. Drop weights= to use the fit's own."
+                "weights= is only for the DataFrame path. A fitted result's "
+                "ATT(g,t) were estimated under the fit's own survey weights (if "
+                "any); combining them with a different weight vector would report "
+                "an implied_att that is neither the weighted nor the unweighted "
+                "estimand. Refit with survey_design=SurveyDesign(weights=...) - "
+                "the fitted path then uses those weights automatically - or pass "
+                "result.to_dataframe('group_time') with data= and weights=."
             )
-        if weights is not None and not isinstance(weights, str):
-            unit_weights = np.asarray(weights, dtype=float)
-        elif isinstance(weights, str):
-            raise ValueError(
-                "weights= may only name a column on the DataFrame path; pass "
-                "an array of per-unit weights instead"
-            )
-        else:
-            unit_weights = survey_weights
+        unit_weights = survey_weights
         periods = np.asarray(results.time_periods)
         source = "CallawaySantAnnaResults"
         control_group = getattr(results, "control_group", None)
@@ -803,6 +818,13 @@ def attgt_weights(
 
     g_pos = _to_positional_cohort(table["group"].to_numpy(), grid)
     t_pos = np.array([grid[float(t)] for t in table["time"].to_numpy()])
+    phantom = sorted({int(g) for g in g_pos} - {int(g) for g in unit_g_pos if g != 0})
+    if phantom:
+        raise ValueError(
+            f"ATT(g,t) frame carries cohort(s) {[_label_for(grid, g) for g in phantom]!r} "
+            "that no unit in data= belongs to; every group in the frame must be a "
+            "first_treat value of the panel"
+        )
     # Raw label of each position, 1-based (index 0 unused): the anticipation
     # window is defined in the calendar's own units, as CallawaySantAnna
     # applies it (``t < g - anticipation`` on labels), NOT in positions - on a
@@ -1073,7 +1095,15 @@ def _weighted_mean(values: np.ndarray, weights: np.ndarray) -> float:
 
 
 def _effective_sample_size(est_weights: np.ndarray, sampling_weights: np.ndarray) -> float:
-    """``sum(w)^2 / sum(w^2)`` after normalizing both weight vectors."""
+    """``sum(w)^2 / sum(w^2)`` after normalizing both weight vectors.
+
+    Verbatim ``twfeweights::effective_sample_size``: the sampling weights
+    enter ONLY through the mean-one normalization of the estimation weights,
+    and since the ratio is scale-invariant they cancel - the statistic
+    measures the concentration of the ESTIMATION weights alone, not of a
+    composite ``sampling * estimation`` weight. Preserved for parity (the
+    per-cell ``ess`` is R-gated at 1e-9); documented in the registry.
+    """
     sw = sampling_weights / sampling_weights.mean()
     ew = est_weights / _weighted_mean(est_weights, sw)
     denom = float((ew**2).sum())
@@ -1202,6 +1232,22 @@ class _Panel:
                     "weights must be time-invariant"
                 )
             _validate_unit_weights(block[:, 0], self.cohorts == 0, require_control_mass=True)
+            # Per-cohort mass: a treated cohort whose units all carry zero
+            # weight has no cohort share and no cell contrast, and every one
+            # of its cells would come out NaN and poison the decomposition
+            # silently. Fail closed and name the cohort.
+            zero_mass = [
+                g
+                for g in sorted({int(c) for c in self.cohorts if c != 0})
+                if block[self.cohorts == g, 0].sum() <= 0
+            ]
+            if zero_mass:
+                labels = [_label_for(self.grid, g) for g in zero_mass]
+                raise ValueError(
+                    f"cohort(s) {labels!r} carry zero total sampling weight in "
+                    f"{weights!r}, so their cohort share and cells are undefined; "
+                    "drop those units or give them positive weight"
+                )
             self.weights = block
         self.covariates = tuple(covariates)
         if covariates:
@@ -1454,6 +1500,12 @@ def _decompose_fwl(
     degenerate_cells: List[Tuple[Any, Any]] = []
     for g in treated_cohorts:
         treated_mask = cohorts == g
+        # Cohort share of the (weighted) sample, R's ``pg``; constant over
+        # periods on a balanced panel, so computed once per cohort.
+        p_g = _weighted_mean(
+            treated_mask.astype(float)[:, None].repeat(panel.n_periods, axis=1).reshape(-1),
+            flat_w,
+        )
         for t_pos in range(1, panel.n_periods + 1):
             col = t_pos - 1
             w_treated = weights[treated_mask, col]
@@ -1476,10 +1528,6 @@ def _decompose_fwl(
             gpart = _weighted_mean(gpart_w * adjusted[treated_mask], w_treated)
             upart = _weighted_mean(upart_w * adjusted[control_mask], w_control)
 
-            p_g = _weighted_mean(
-                (cohorts == g).astype(float)[:, None].repeat(panel.n_periods, axis=1).reshape(-1),
-                flat_w,
-            )
             alpha_weight = (
                 _weighted_mean(r_treated, w_treated) * p_g / (alpha_den * panel.n_periods)
             )

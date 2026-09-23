@@ -1547,7 +1547,7 @@ attgt_weights(
     results,                        # CallawaySantAnnaResults, or a (g,t) frame
     type="twfe",                    # "twfe" | "overall" (ATT^O) | "simple"
     data=None, unit=None, time=None, first_treat=None,   # frame path only
-    weights=None,                   # unit-level sampling weights
+    weights=None,                   # frame path only; a fitted result uses its own survey weights
     anticipation=None,              # frame path only; the fit's own otherwise
 ) -> ATTGTWeightsResult
 

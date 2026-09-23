@@ -22,7 +22,8 @@
     unit by their per-cell complete-case rules or that carry no completeness
     record (fitted by <= 3.12.0), non-finite outcomes / covariates,
     duplicated or non-finite ATT(g,t) cells, an incomplete group-time grid,
-    and invalid sampling weights. Gaps the estimator itself could not fill
+    invalid sampling weights, an explicit `weights=` on a fitted result (the
+    fit's own survey weights are used), and a zero-mass treated cohort. Gaps the estimator itself could not fill
     (`skip_reason` missing_period / zero_treated_control / zero_weight_mass)
     are handled as `aggregate()` does instead of raising: a cohort with no
     estimable post cell under the window is dropped, and the CS estimands
