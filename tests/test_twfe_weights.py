@@ -291,6 +291,40 @@ class TestSamplingWeights:
         assert mass_3_after > mass_3_before
         assert tilted.weights["weight"].sum() == pytest.approx(1.0, abs=1e-12)
 
+    def test_weights_align_by_unit_label_on_a_shuffled_panel(self):
+        """Non-monotonic unit ids, shuffled rows, non-uniform weights: the
+        column route, a Series in ANY order, and an array in sorted-id order
+        agree; a Series that does not cover the units is rejected."""
+        df = _panel()
+        rng = np.random.RandomState(3)
+        ids = rng.permutation(np.arange(1000, 1000 + df["unit"].nunique()))
+        df["unit"] = df["unit"].map(dict(enumerate(ids)))
+        w_by_unit = pd.Series(rng.choice([0.5, 1.0, 2.0], size=len(ids)), index=ids)
+        df["w"] = df["unit"].map(w_by_unit)
+        df = df.sample(frac=1, random_state=1)
+        fit = _fit(df)
+        gt = _gt_frame(fit)
+        kw = dict(unit="unit", time="period", first_treat="first_treat", type="overall")
+        via_column = attgt_weights(gt, data=df, weights="w", **kw)
+        panel_order = df.drop_duplicates("unit")["unit"].to_numpy()
+        via_series = attgt_weights(gt, data=df, weights=w_by_unit.loc[panel_order], **kw)
+        via_array = attgt_weights(gt, data=df, weights=w_by_unit.loc[sorted(ids)].to_numpy(), **kw)
+        for other in (via_series, via_array):
+            np.testing.assert_allclose(
+                other.weights["weight"].to_numpy(),
+                via_column.weights["weight"].to_numpy(),
+                atol=1e-15,
+            )
+            assert other.implied_att == pytest.approx(via_column.implied_att, abs=1e-15)
+        # The weights are non-uniform, so misalignment would have moved the number.
+        uniform = attgt_weights(gt, data=df, **kw)
+        assert abs(via_column.implied_att - uniform.implied_att) > 1e-6
+        with pytest.raises(ValueError, match="indexed by exactly the units"):
+            attgt_weights(gt, data=df, weights=w_by_unit.iloc[1:], **kw)
+        with pytest.raises(ValueError, match="indexed by exactly the units"):
+            extra = pd.concat([w_by_unit, pd.Series([1.0], index=[-1])])
+            attgt_weights(gt, data=df, weights=extra, **kw)
+
     def test_rejects_time_varying_sampling_weights(self, fitted, panel):
         broken = panel.copy()
         broken["w"] = np.arange(len(broken), dtype=float)

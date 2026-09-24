@@ -448,7 +448,7 @@ def _unit_cohorts_from_frame(
     cohorts = firsts.to_numpy()
     _validate_cohort_labels(cohorts, unit_ids=firsts.index.to_numpy(), what=first_treat)
     periods = np.asarray(sorted(pd.unique(key)))
-    return cohorts, periods, None
+    return cohorts, periods, firsts.index.to_numpy()
 
 
 def _resolve_cs_inputs(
@@ -611,9 +611,14 @@ def attgt_weights(
         path; passing it alongside a fitted result raises.
     unit, time, first_treat : str, optional
         Column names in ``data``. Required together with ``data``.
-    weights : str or array-like, optional
+    weights : str, pd.Series or array-like, optional
         Unit-level sampling weights (R's ``w=``), DataFrame path only: a
-        column name in ``data``, or one value per unit. The fitted path uses
+        column name in ``data`` (time-invariant within unit), a ``pd.Series``
+        indexed by unit id (aligned by label, so its order does not matter;
+        it must cover exactly the units in ``data``), or a bare array with
+        one value per unit in SORTED unit-id order (``sorted(data[unit].unique())``,
+        the order the cohort vector is built in - a label-free vector has no
+        other meaning, so prefer the column or the Series). The fitted path uses
         the fit's own survey weights (``SurveyDesign(weights=)``) and rejects
         an explicit ``weights=``: the ATT(g, t) were estimated under the
         fit's weights, and a different weight vector would make
@@ -743,8 +748,8 @@ def attgt_weights(
         assert time is not None and first_treat is not None
         assert frame is not None
         table, skipped = _attgt_from_frame(frame)
-        cohorts, periods, _ = _unit_cohorts_from_frame(data, unit, time, first_treat)
-        unit_weights = _resolve_frame_weights(weights, data, unit)
+        cohorts, periods, unit_ids = _unit_cohorts_from_frame(data, unit, time, first_treat)
+        unit_weights = _resolve_frame_weights(weights, data, unit, unit_ids)
         source = "DataFrame"
         control_group = None
         base_period = None
@@ -1060,11 +1065,19 @@ def _pos_of(grid: Dict[float, int], label: Any) -> int:
 
 
 def _resolve_frame_weights(
-    weights: Optional[Union[str, np.ndarray]],
+    weights: Optional[Union[str, np.ndarray, pd.Series]],
     data: pd.DataFrame,
     unit: str,
+    unit_ids: np.ndarray,
 ) -> Optional[np.ndarray]:
-    """Turn ``weights=`` into one value per unit, or None."""
+    """Turn ``weights=`` into one value per unit, aligned to ``unit_ids``.
+
+    ``unit_ids`` is the sorted unit-id order the cohort vector was built in.
+    A column name is collapsed per unit in that order; a ``pd.Series`` is
+    aligned BY LABEL (its index must be exactly the unit ids); a bare array
+    is taken positionally and must therefore already be in sorted unit-id
+    order - the only order a label-free vector can mean.
+    """
     if weights is None:
         return None
     if isinstance(weights, str):
@@ -1078,6 +1091,17 @@ def _resolve_frame_weights(
                 f"{offenders!r}; sampling weights must be time-invariant"
             )
         return data.groupby(unit, sort=True)[weights].first().to_numpy(dtype=float)
+    if isinstance(weights, pd.Series):
+        if weights.index.has_duplicates:
+            raise ValueError("weights Series index has duplicate unit labels")
+        missing = [u for u in unit_ids if u not in weights.index]
+        extra = [u for u in weights.index if u not in set(unit_ids.tolist())]
+        if missing or extra:
+            raise ValueError(
+                "weights Series must be indexed by exactly the units in data=; "
+                f"missing {missing[:5]!r}, unexpected {extra[:5]!r}"
+            )
+        return weights.reindex(unit_ids).to_numpy(dtype=float)
     return np.asarray(weights, dtype=float)
 
 
