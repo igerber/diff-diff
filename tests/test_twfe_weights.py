@@ -325,6 +325,38 @@ class TestSamplingWeights:
             extra = pd.concat([w_by_unit, pd.Series([1.0], index=[-1])])
             attgt_weights(gt, data=df, weights=extra, **kw)
 
+    def test_categorical_unit_ids_use_value_order_not_category_order(self):
+        """groupby orders a categorical column by CATEGORY order; the array
+        contract is value order, so cohorts and weights are reindexed to it."""
+        df = _panel()
+        ids = np.arange(1000, 1000 + df["unit"].nunique())
+        df["unit"] = df["unit"].map(dict(enumerate(ids)))
+        rng = np.random.RandomState(5)
+        w_by_unit = pd.Series(rng.choice([0.5, 1.0, 2.0], size=len(ids)), index=ids)
+        df["w"] = df["unit"].map(w_by_unit)
+        reversed_categories = pd.CategoricalDtype(categories=list(ids[::-1]), ordered=True)
+        categorical = df.assign(unit=df["unit"].astype(reversed_categories))
+        gt = _gt_frame(_fit(df))
+        kw = dict(unit="unit", time="period", first_treat="first_treat", type="overall")
+        reference = attgt_weights(gt, data=df, weights="w", **kw)
+        via_column = attgt_weights(gt, data=categorical, weights="w", **kw)
+        via_series = attgt_weights(gt, data=categorical, weights=w_by_unit, **kw)
+        via_array = attgt_weights(
+            gt, data=categorical, weights=w_by_unit.loc[sorted(ids)].to_numpy(), **kw
+        )
+        for other in (via_column, via_series, via_array):
+            np.testing.assert_allclose(
+                other.weights["weight"].to_numpy(),
+                reference.weights["weight"].to_numpy(),
+                atol=1e-15,
+            )
+            assert other.implied_att == pytest.approx(reference.implied_att, abs=1e-15)
+        # decompose_twfe_weights aligns everything through one sorted frame and
+        # is unaffected by the category order.
+        as_int = diff_diff.decompose_twfe_weights(df, weights="w", **_DECO)
+        as_cat = diff_diff.decompose_twfe_weights(categorical, weights="w", **_DECO)
+        assert as_cat.estimate == pytest.approx(as_int.estimate, abs=1e-12)
+
     def test_rejects_time_varying_sampling_weights(self, fitted, panel):
         broken = panel.copy()
         broken["w"] = np.arange(len(broken), dtype=float)

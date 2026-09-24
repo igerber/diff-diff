@@ -410,6 +410,12 @@ def _attgt_from_frame(
     return table.sort_values(["group", "time"]).reset_index(drop=True), skipped
 
 
+def _sorted_unit_ids(units: pd.Series) -> np.ndarray:
+    """Value-sorted unit ids, as plain values (a categorical column's category
+    order is NOT used - the documented array contract is value order)."""
+    return np.asarray(sorted(pd.unique(np.asarray(units))))
+
+
 def _unit_cohorts_from_frame(
     data: pd.DataFrame, unit: str, time: str, first_treat: str
 ) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
@@ -437,18 +443,26 @@ def _unit_cohorts_from_frame(
         )
     # dropna=False: a unit whose label is NaN in one period must fail the
     # invariance check, not slip through because nunique() skipped the NaN.
-    per_unit = data.groupby(unit, sort=True)[first_treat].nunique(dropna=False)
+    # observed=True: a categorical unit column must not contribute ghost
+    # groups for unused categories.
+    per_unit = data.groupby(unit, sort=True, observed=True)[first_treat].nunique(dropna=False)
     if (per_unit > 1).any():
         offenders = per_unit[per_unit > 1].index.tolist()[:5]
         raise ValueError(
             f"{first_treat!r} varies within unit(s) {offenders!r}; cohort "
             "membership must be time-invariant"
         )
-    firsts = data.groupby(unit, sort=True)[first_treat].first()
+    # ONE explicit unit order - value-sorted - for the cohort vector and for
+    # everything aligned to it (a bare weights= array, a weights column). A
+    # groupby(sort=True) on a categorical column orders by CATEGORY order,
+    # which need not be value order, so the cohorts are reindexed to the
+    # value-sorted ids rather than taken in groupby order.
+    unit_ids = _sorted_unit_ids(data[unit])
+    firsts = data.groupby(unit, sort=True, observed=True)[first_treat].first().reindex(unit_ids)
     cohorts = firsts.to_numpy()
-    _validate_cohort_labels(cohorts, unit_ids=firsts.index.to_numpy(), what=first_treat)
+    _validate_cohort_labels(cohorts, unit_ids=unit_ids, what=first_treat)
     periods = np.asarray(sorted(pd.unique(key)))
-    return cohorts, periods, firsts.index.to_numpy()
+    return cohorts, periods, unit_ids
 
 
 def _resolve_cs_inputs(
@@ -617,8 +631,9 @@ def attgt_weights(
         indexed by unit id (aligned by label, so its order does not matter;
         it must cover exactly the units in ``data``), or a bare array with
         one value per unit in SORTED unit-id order (``sorted(data[unit].unique())``,
-        the order the cohort vector is built in - a label-free vector has no
-        other meaning, so prefer the column or the Series). The fitted path uses
+        the order the cohort vector is built in, value order even for a
+        categorical unit column - a label-free vector has no other meaning,
+        so prefer the column or the Series). The fitted path uses
         the fit's own survey weights (``SurveyDesign(weights=)``) and rejects
         an explicit ``weights=``: the ATT(g, t) were estimated under the
         fit's weights, and a different weight vector would make
@@ -1083,19 +1098,25 @@ def _resolve_frame_weights(
     if isinstance(weights, str):
         if weights not in data.columns:
             raise ValueError(f"weights column {weights!r} not found in data")
-        per_unit = data.groupby(unit, sort=True)[weights].nunique(dropna=False)
+        per_unit = data.groupby(unit, sort=True, observed=True)[weights].nunique(dropna=False)
         if (per_unit > 1).any():
             offenders = per_unit[per_unit > 1].index.tolist()[:5]
             raise ValueError(
                 f"weights column {weights!r} varies within unit(s) "
                 f"{offenders!r}; sampling weights must be time-invariant"
             )
-        return data.groupby(unit, sort=True)[weights].first().to_numpy(dtype=float)
+        return (
+            data.groupby(unit, sort=True, observed=True)[weights]
+            .first()
+            .reindex(unit_ids)
+            .to_numpy(dtype=float)
+        )
     if isinstance(weights, pd.Series):
         if weights.index.has_duplicates:
             raise ValueError("weights Series index has duplicate unit labels")
+        known = set(unit_ids.tolist())
         missing = [u for u in unit_ids if u not in weights.index]
-        extra = [u for u in weights.index if u not in set(unit_ids.tolist())]
+        extra = [u for u in weights.index if u not in known]
         if missing or extra:
             raise ValueError(
                 "weights Series must be indexed by exactly the units in data=; "
@@ -1184,7 +1205,9 @@ class _Panel:
         frame = frame.sort_values([unit, "_twfe_time_key"]).reset_index(drop=True)
         units = frame[unit].to_numpy()
         periods = frame["_twfe_time_key"].to_numpy(dtype=float)
-        self.unit_ids = np.asarray(sorted(pd.unique(units)))
+        # Row order of the sorted frame (category order for a categorical unit
+        # column), i.e. the order every reshaped block below is in.
+        self.unit_ids = pd.unique(units)
         # The numeric key orders, reshapes and maps cohorts; the ORIGINAL
         # labels are what every reporting surface (cells, summary(), balance
         # rows, plots) shows, so a string-labelled panel reports strings.
