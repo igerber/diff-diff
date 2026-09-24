@@ -298,6 +298,14 @@ from diff_diff.trop import (
     TROPResults,
     trop,
 )
+from diff_diff.twfe_weights import (
+    attgt_weights,
+    decompose_twfe_weights,
+)
+from diff_diff.twfe_weights_results import (
+    ATTGTWeightsResult,
+    TWFEDecompositionResult,
+)
 from diff_diff.two_stage import (
     TwoStageBootstrapResults,
     TwoStageDiD,
@@ -323,6 +331,7 @@ from diff_diff.visualization import (
     plot_sensitivity,
     plot_staircase,
     plot_synth_weights,
+    plot_twfe_weights,
 )
 from diff_diff.wooldridge import WooldridgeDiD
 from diff_diff.wooldridge_results import WooldridgeDiDResults
@@ -459,6 +468,13 @@ __all__ = [
     "TWFEWeightsResult",
     "chaisemartin_dhaultfoeuille",
     "twowayfeweights",
+    # TWFE weight diagnostics (Callaway `twfeweights` port) - distinct from
+    # the dCDH `twowayfeweights` surface above: these weight ATT(g,t)
+    # parameters, not (unit, time) cells.
+    "ATTGTWeightsResult",
+    "TWFEDecompositionResult",
+    "attgt_weights",
+    "decompose_twfe_weights",
     # WooldridgeDiD (ETWFE)
     "WooldridgeDiD",
     "WooldridgeDiDResults",
@@ -479,6 +495,7 @@ __all__ = [
     "DurationDiDPretestResults",
     # Visualization
     "plot_bacon",
+    "plot_twfe_weights",
     "plot_event_study",
     "plot_group_effects",
     "plot_sensitivity",

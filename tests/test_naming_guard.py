@@ -565,6 +565,21 @@ SURFACE_ALLOWLIST = {
     "TripleDifference.fit[group]": (
         "rule-3 reserved treated-group 0/1 indicator (v4-design section 8 rule 3)"
     ),
+    # The TWFE weight diagnostics share vocabulary with three rename families
+    # without reading any of them. `time=` here is the panel PERIOD COLUMN
+    # NAME (the same role as CallawaySantAnna.fit[time], which no row touches),
+    # not the two-period 0/1 post dummy M-030/M-031/M-082/M-137/M-138 rename to
+    # `post`: both functions are staggered-only. (`attgt_weights(type=)` /
+    # `ATTGTWeightsResult.level` reuse the `aggregate(type=)` / `.level` pair
+    # as an ESTIMAND selector, distinct from the M-044 granularity sense.)
+    **{
+        f"{fn}[time]": (
+            "panel PERIOD COLUMN NAME (as in CallawaySantAnna.fit[time]), not "
+            "the two-period 0/1 post dummy renamed to `post` by "
+            "M-030/M-031/M-082/M-137/M-138; survives 4.0"
+        )
+        for fn in ("attgt_weights", "decompose_twfe_weights")
+    },
     "run_placebo_test[time]": (
         "OVERLOADED pass-through, redesign pending (TODO.md): forwarded as "
         "the calendar column to placebo_timing_test/placebo_group_test AND "
@@ -989,6 +1004,14 @@ CONSUMER_ALLOWLIST = {
     # field. The one file that DID name it - diff_diff/guides/llms-full.txt -
     # was migrated in this same diff (migrate-first rule) and remains a lane
     # hit only through its unrelated backticked schema key.
+    # The TWFE weight diagnostics document their own `time=` (panel period
+    # COLUMN) on this surface; it does not read a renamed name. See the
+    # SURFACE_ALLOWLIST entries for attgt_weights / decompose_twfe_weights.
+    ("time", "diff_diff/guides/llms.txt"): (
+        "attgt_weights / decompose_twfe_weights document a panel PERIOD COLUMN "
+        "named `time`, not the two-period 0/1 post dummy renamed by "
+        "M-030/M-031/M-082/M-137/M-138"
+    ),
     ("estimator", "diff_diff/aggregation.py"): (
         "AggregationResult.estimator - independent field holding a CLASS NAME"
     ),

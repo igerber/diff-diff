@@ -194,6 +194,12 @@ plot_bacon
 
 Visualize Goodman-Bacon decomposition results.
 
+.. seealso::
+
+   :func:`diff_diff.plot_twfe_weights` renders the implicit ATT(g, t) weights
+   and their covariate balance. It is documented on its own page,
+   :doc:`twfe_weights`, and supports the same ``backend=`` options.
+
 .. autofunction:: diff_diff.plot_bacon
 
 Example

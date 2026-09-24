@@ -7,7 +7,7 @@ including the Callaway-Sant'Anna (2021) estimator.
 
 import bisect
 import warnings
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -3056,6 +3056,7 @@ class CallawaySantAnna(
             group_time_effects,
             is_survey_fit=survey_metadata is not None,
             bootstrap_results=bootstrap_results,
+            covariates=covariates,
         )
 
         self.is_fitted_ = True
@@ -5151,6 +5152,7 @@ def _build_aggregation_kit(
     *,
     is_survey_fit: bool = False,
     bootstrap_results: Optional["CSBootstrapResults"] = None,
+    covariates: Optional[Sequence[str]] = None,
 ) -> Optional["AggregationKit"]:
     """Distil the fit-time state post-fit re-aggregation needs.
 
@@ -5185,6 +5187,26 @@ def _build_aggregation_kit(
     # (or DDD) survey fit does not warn as "CallawaySantAnna" on post-fit
     # aggregate(). Legacy kits without the key default at the read site.
     bookkeeping["bootstrap_label"] = getattr(estimator, "_BOOTSTRAP_LABEL", "CallawaySantAnna")
+    # Covariate usage, recorded so downstream diagnostics can refuse designs
+    # their formulas do not cover (``attgt_weights(type="twfe")``
+    # mirrors R twfe_weights' ``xformla == ~1`` restriction). Column NAMES
+    # only - never values - so the data-minimization contract holds.
+    bookkeeping["covariates"] = tuple(covariates or ())
+    # Panel completeness, recorded so ``attgt_weights`` can reject a fitted
+    # result whose cohort shares and E_t[D] are not those of a fixed unit set:
+    # every unit-period outcome cell present and finite, AND the producer
+    # dropped no unit from any cell by its own complete-case mask (DMLDiD
+    # sets ``complete_case_drops``; CS's NaN-covariate fallback keeps the
+    # masses intact and sets nothing). False for RCS precomputes (no outcome
+    # matrix). Stricter than CallawaySantAnna's own ``is_balanced`` (an
+    # ``isnan``-only check for its fast paths), which stays as it is.
+    _pre = precomputed or {}
+    _om = _pre.get("outcome_matrix")
+    bookkeeping["is_balanced"] = bool(
+        _om is not None
+        and np.isfinite(np.asarray(_om, dtype=float)).all()
+        and not _pre.get("complete_case_drops", False)
+    )
 
     # Data minimization: the results object is picklable and users share
     # result artifacts, so the kit must not turn it into a carrier for raw

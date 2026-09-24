@@ -47,6 +47,7 @@ RST_FILES = [
     "api/dml_did.rst",
     "api/mmm.rst",
     "api/triple_diff.rst",
+    "api/twfe_weights.rst",
     "practitioner_decision_tree.rst",
     "practitioner_getting_started.rst",
     "python_comparison.rst",

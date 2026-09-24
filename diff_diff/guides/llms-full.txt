@@ -1534,6 +1534,69 @@ results.print_summary()
 plot_bacon(results)
 ```
 
+### TWFE Weight Diagnostics
+
+What a TWFE regression implicitly weights on staggered data. Distinct from
+`twowayfeweights` (dCDH), which weights (unit, time) cells: these weight
+ATT(g,t) parameters. Ported from Brantly Callaway's `twfeweights` R package
+(MIT); methodology Baker, Callaway, Cunningham, Goodman-Bacon & Sant'Anna
+(2025).
+
+```python
+attgt_weights(
+    results,                        # CallawaySantAnnaResults, or a (g,t) frame
+    type="twfe",                    # "twfe" | "overall" (ATT^O) | "simple"
+    data=None, unit=None, time=None, first_treat=None,   # frame path only
+    weights=None,                   # frame path only; a fitted result uses its own survey weights
+    anticipation=None,              # frame path only; the fit's own otherwise
+) -> ATTGTWeightsResult
+
+decompose_twfe_weights(
+    data,                           # balanced long panel (it re-estimates)
+    outcome=, unit=, time=, first_treat=,
+    method="fwl",
+    covariates=None,
+    base_period="first_period",     # or "gmin1"
+    balance_covariates=None,        # enables result.covariate_balance()
+    weights=None,
+) -> TWFEDecompositionResult
+
+plot_twfe_weights(result, kind="auto")   # "weights" | "balance"
+```
+
+`type="twfe"` requires a fit with `base_period="universal"`,
+`control_group="never_treated"` AND no covariates (R twfe_weights' three
+restrictions); it raises otherwise. ATT^O and ATT^simple weights are
+non-negative and sum to one, so comparing `implied_att` across the three
+types shows what the TWFE specification costs. The result records its
+`type=` as `.level` (`ATTGTWeightsResult.LEVELS` lists the values).
+
+Both entry points fail closed on input R never faced: NaN / `-inf` cohort
+labels (never-treated is exactly `0` or `+inf`), duplicated or non-finite
+ATT(g,t) cells, an incomplete group-time grid (`"twfe"` needs every cohort x
+period cell, the CS estimands every post cell), and sampling weights that are
+not finite, non-negative and positive-mass. A fitted result is rejected
+unless every unit-period outcome cell is present and finite and the estimator
+dropped no unit by its own complete-case rules (DMLDiD records this; results
+pickled by <= 3.12.0 carry no record and are refused). Gaps the estimator
+itself could not fill are handled rather than raised, each with a
+`UserWarning`, keyed on the cells' `skip_reason` (`missing_period`,
+`zero_treated_control`, `zero_weight_mass`): a cohort with no estimable post
+cell under the anticipation window is dropped from the table and the cohort
+shares for every `type` (`did`'s first-period drop), and a cohort that keeps
+one estimable post cell has its absent cells carved out, so `"overall"` /
+`"simple"` average over each cohort's AVAILABLE post cells (`aggte`,
+`aggregate()`). The window counts raw time units, as CallawaySantAnna does;
+`"twfe"`'s own post window stays `t >= g`. `n_negative_post` /
+`negative_post_weight_share` report the
+pathology (negative weight on POST cells); `n_negative` counts pre cells too,
+and is near-half in every staggered design because the TWFE weights sum to
+zero over the full grid.
+
+`decompose_twfe_weights` takes the raw panel rather than a fitted result
+because it re-estimates. It is tied to `attgt_weights` by an identity:
+`attgt_weights(cs, type="twfe").implied_att == decompose_twfe_weights(panel, ...).estimate`.
+
 ### StaggeredTripleDifference
 
 DEPRECATED in 3.9, removed in 4.0 (ledger row M-013). Use
@@ -2016,6 +2079,37 @@ Returned by `BaconDecomposition.fit()` (and the deprecated `bacon_decompose()` w
 | `decomposition_error` | `float` | Error: TWFE minus weighted sum |
 
 **Methods:** `summary()`, `print_summary()`, `to_dataframe()`
+
+### ATTGTWeightsResult
+
+Diagnostic result from `attgt_weights`. No inference quintet - the
+decomposition is an algebraic identity.
+
+- `weights`: DataFrame with `group`, `time`, `post`, `weight`, `att`
+- `implied_att`: `sum(weight * att)` - the TWFE coefficient when
+  `type="twfe"`
+- `n_negative_post`, `negative_post_weight_share`: the staggered-TWFE
+  pathology (negative weight on POST cells); `n_negative`,
+  `negative_weight_share` count every cell and are structural under `"twfe"`
+- `level` (the `type=` used), `source`, `control_group`, `base_period`,
+  `n_cells`
+- `summary()`, `to_dataframe()`, `to_dict()`
+
+### TWFEDecompositionResult
+
+Diagnostic result from `decompose_twfe_weights`.
+
+- `cells`: DataFrame with `group`, `time`, `post`, `att`, `weight`, `ess`,
+  `remainder`
+- `estimate` == `decomposition` + `remainder`
+- `pre_period_contribution`: sample contribution of the PRE-treatment cells
+  (can reflect differential pre-trends OR sampling variation; diagnostic
+  evidence, not proof the post-treatment assumption fails)
+- `post_only`, `effective_sample_size`, `covariates`, `base_period`
+- `covariate_balance(level="summary"|"cell", standardize=True,
+  post_only=True)`: implicit-weight covariate balance; raises when
+  `balance_covariates=` was not requested
+- `summary()`, `to_dataframe()`, `to_dict()`
 
 ### Comparison2x2
 
@@ -2531,6 +2625,28 @@ plot_bacon(
     show=True,
 )
 ```
+
+### plot_twfe_weights
+
+```python
+from diff_diff import plot_twfe_weights
+
+plot_twfe_weights(
+    results,                        # ATTGTWeightsResult | TWFEDecompositionResult
+    kind="auto",                    # "weights" | "balance" ("auto" picks balance
+                                    #   when the result carries a balance table)
+    standardize=True, absolute_value=True,   # balance view
+    annotate=False, ax=None, show=True,
+    backend="matplotlib",           # or "plotly"
+)
+```
+
+`kind="weights"` scatters weight against ATT(g,t), coloured by pre/post - points
+left of the vertical zero line carry negative weight; the title counts POST-only
+negatives. `kind="balance"` scatters unweighted against implicitly-weighted
+covariate differences; points near the horizontal axis are covariates the
+implicit weights balance. With `absolute_value=False` the reference diagonal
+spans `[-limit, limit]` so signed differences read correctly.
 
 ### plot_power_curve
 
