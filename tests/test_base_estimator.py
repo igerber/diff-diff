@@ -19,9 +19,8 @@ the contract):
   ``_normalize_set_params`` hook (so DiD's robust-alone re-derivation is
   inside the contract, not an exemption);
 - fitted-state attrs are never touched by ``set_params``;
-- ``sklearn.base.clone`` round-trip under ``importorskip`` (config-equality
-  is the always-running contract; clone identity is opportunistic local
-  coverage - scikit-learn is deliberately not a dev dependency).
+- ``sklearn.base.clone`` round-trip with the dev dependency installed;
+  ``importorskip`` keeps this optional outside development environments.
 """
 
 import inspect
