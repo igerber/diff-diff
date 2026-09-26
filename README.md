@@ -11,6 +11,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Downloads](https://static.pepy.tech/badge/diff-diff)](https://pepy.tech/projects/diff-diff)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19646175.svg)](https://doi.org/10.5281/zenodo.19646175)
+[![Lint](https://github.com/igerber/diff-diff/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/igerber/diff-diff/actions/workflows/lint.yml)
+[![Rust Backend Tests](https://github.com/igerber/diff-diff/actions/workflows/rust-test.yml/badge.svg?branch=main)](https://github.com/igerber/diff-diff/actions/workflows/rust-test.yml)
+[![Documentation Tests](https://github.com/igerber/diff-diff/actions/workflows/docs-tests.yml/badge.svg?branch=main)](https://github.com/igerber/diff-diff/actions/workflows/docs-tests.yml)
 
 A Python library for Difference-in-Differences (DiD) causal inference - sklearn-like estimators with statsmodels-style outputs, built for econometricians, marketing analysts, and data scientists running campaign-lift, policy, and staggered-rollout analyses.
 
