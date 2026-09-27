@@ -1566,7 +1566,7 @@ sources:
       - path: docs/methodology/REGISTRY.md
         section: "Cross-fitting, DR-score, and ridge infrastructure (DML)"
         type: methodology
-        note: "Unit/cluster-level replayable K-fold assignment (assign_folds/FoldAssignment: state captured by value pre-draw, BootstrapReplaySpec discipline; global fold cursor across sorted strata) + out-of-fold nuisance prediction (cross_fit_predict: fit on complement & fit_mask, predict every unit; DegenerateFoldError contract; loss-only log-loss clip, oof predictions unclipped) + the per-fold generator iter_fold_fits / FoldFit (eager validation; fitted per-fold deep copies; _predict_subset is the caller's job) that cross_fit_predict and the DMLDiD bad-control nested stages consume; deep-copy warning prefix '_crossfit: could not deep-copy'."
+        note: "Unit/cluster-level replayable K-fold assignment (assign_folds/FoldAssignment: state captured by value pre-draw, BootstrapReplaySpec discipline; global fold cursor across sorted strata) + out-of-fold nuisance prediction (cross_fit_predict: fit on complement & fit_mask, predict every unit; DegenerateFoldError contract; loss-only log-loss clip, oof predictions unclipped) + the per-fold generator iter_fold_fits / FoldFit (eager validation; fitted per-fold deep copies; _predict_subset is the caller's job) that cross_fit_predict and the DMLDiD bad-control nested stages consume; lazy per-fold clone failures propagate as sanitised TypeError, never template reuse or DegenerateFoldError skips."
 
   diff_diff/_learners.py:
     drift_risk: low

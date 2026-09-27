@@ -855,10 +855,11 @@ then it yields one `FoldFit` per fold in ascending `k` (the fitted per-fold
 deep copy, `fit_idx == train_idx[fit_mask[train_idx]]`, `train_idx`,
 `test_idx`, the coerced arrays); predictions are the caller's job via
 `_predict_subset`, which is what lets a consumer fit a NESTED nuisance on a
-fold's training complement before predicting the held-out fold. The
-deep-copy fallback warning is attributed to the frame that advances the
-generator (the user's `cross_fit_predict` call site, or `dml_did.py` for the
-internal routes) and reads `"_crossfit: could not deep-copy ..."`.
+fold's training complement before predicting the held-out fold. Per-fold
+cloning remains lazy: clone failures raise a sanitised `TypeError` when the
+generator advances, and the template is never reused. These errors propagate
+through `cross_fit_predict` and the DMLDiD bad-control lane rather than
+becoming `DegenerateFoldError` skips.
 
 **Learner contract (`_learners.py`)** — duck-typed `RegressorLearner` /
 `ClassifierLearner` Protocols (sklearn-compatible `fit`/`predict`/
