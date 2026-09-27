@@ -1,6 +1,7 @@
 """Tests for unit-level K-fold cross-fitting (PR-B0)."""
 
 import pickle
+import traceback
 
 import numpy as np
 import pytest
@@ -11,6 +12,7 @@ from diff_diff._crossfit import (
     FoldAssignment,
     assign_folds,
     cross_fit_predict,
+    iter_fold_fits,
 )
 from diff_diff._learners import LinearLearner, LogitLearner
 from diff_diff.linalg import solve_logit, solve_ols
@@ -337,11 +339,13 @@ class TestCrossFitPredict:
         y = np.zeros(n)
         folds = assign_folds(n, 2, rng=_rng(20))
         y[folds.test_mask(0)] = 1.0  # fold 0's outcomes differ from fold 1's
-        res = cross_fit_predict(AccumulatingMean(), X, y, folds)
+        template = AccumulatingMean()
+        res = cross_fit_predict(template, X, y, folds)
         # Each fold's prediction equals a FRESH fit on its complement alone.
         for k, train, test in folds.iter_folds():
             expected = float(np.mean(y[train]))
-            np.testing.assert_allclose(res.oof_predictions[test], expected)
+            np.testing.assert_array_equal(res.oof_predictions[test], expected)
+        assert template._seen_y == []
 
     def test_composite_learner_isolated_per_fold(self):
         # The per-fold deep copy isolates composites too: the template (and
@@ -432,10 +436,43 @@ class TestCrossFitPredict:
                 sample_weight=np.full(n, 1e10),
             )
 
-    def test_copy_failure_warns_loudly(self):
+    @pytest.mark.parametrize("entrypoint", [cross_fit_predict, iter_fold_fits])
+    def test_copy_failure_raises_targeted_error(self, entrypoint):
         class Undeepcopyable:
+            def __init__(self):
+                self.fit_calls = 0
+
             def __deepcopy__(self, memo):
-                raise TypeError("cannot deep-copy this learner")
+                raise TypeError("token=SECRET-DCOPY /home/user/private.csv")
+
+            def fit(self, X, y, sample_weight=None):
+                self.fit_calls += 1
+                self.mean_ = float(np.mean(y))
+                return self
+
+            def predict(self, X):
+                return np.full(len(X), self.mean_)
+
+        X, y = _reg_setup()
+        folds = assign_folds(len(y), 2, rng=_rng(22))
+        template = Undeepcopyable()
+        with pytest.raises(TypeError, match="Undeepcopyable.*TypeError") as exc_info:
+            result = entrypoint(template, X, y, folds)
+            if entrypoint is iter_fold_fits:
+                list(result)
+        error = exc_info.value
+        assert "SECRET-DCOPY" not in str(error)
+        assert error.__cause__ is None
+        assert error.__context__ is None
+        formatted = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        assert "SECRET-DCOPY" not in formatted
+        assert template.fit_calls == 0
+
+    @pytest.mark.parametrize("entrypoint", [cross_fit_predict, iter_fold_fits])
+    def test_self_returning_deepcopy_raises_targeted_error(self, entrypoint):
+        class SelfCopying:
+            def __deepcopy__(self, memo):
+                return self
 
             def fit(self, X, y, sample_weight=None):
                 self.mean_ = float(np.mean(y))
@@ -446,9 +483,85 @@ class TestCrossFitPredict:
 
         X, y = _reg_setup()
         folds = assign_folds(len(y), 2, rng=_rng(22))
-        with pytest.warns(UserWarning, match="could not deep-copy"):
-            res = cross_fit_predict(Undeepcopyable(), X, y, folds)
+        with pytest.raises(TypeError, match="SelfCopying.*original object"):
+            result = entrypoint(SelfCopying(), X, y, folds)
+            if entrypoint is iter_fold_fits:
+                list(result)
+
+    @pytest.mark.parametrize("entrypoint", [cross_fit_predict, iter_fold_fits])
+    def test_fold_clone_must_keep_the_learner_protocol(self, entrypoint):
+        class CloneLosesProtocol:
+            def __init__(self):
+                self.deepcopy_calls = 0
+                self.fit_calls = 0
+
+            def __deepcopy__(self, memo):
+                self.deepcopy_calls += 1
+                if self.deepcopy_calls == 2:
+                    return object()
+                return type(self)()
+
+            def fit(self, X, y, sample_weight=None):
+                self.fit_calls += 1
+                self.mean_ = float(np.mean(y))
+                return self
+
+            def predict(self, X):
+                return np.full(len(X), self.mean_)
+
+        X, y = _reg_setup()
+        folds = assign_folds(len(y), 2, rng=_rng(22))
+        template = CloneLosesProtocol()
+        with pytest.raises(TypeError, match="fold 1 learner.*object.*fit"):
+            result = entrypoint(template, X, y, folds)
+            if entrypoint is iter_fold_fits:
+                list(result)
+        assert template.deepcopy_calls == 2
+        assert template.fit_calls == 0
+
+    @pytest.mark.parametrize("entrypoint", [cross_fit_predict, iter_fold_fits])
+    def test_weighted_fold_clone_must_accept_sample_weight(self, entrypoint):
+        class CloneWithoutSampleWeight:
+            def fit(self, X, y):
+                self.mean_ = float(np.mean(y))
+                return self
+
+            def predict(self, X):
+                return np.full(len(X), self.mean_)
+
+        class Template:
+            def __init__(self):
+                self.fit_calls = 0
+
+            def __deepcopy__(self, memo):
+                return CloneWithoutSampleWeight()
+
+            def fit(self, X, y, sample_weight=None):
+                self.fit_calls += 1
+                return self
+
+            def predict(self, X):
+                return np.zeros(len(X))
+
+        X, y = _reg_setup()
+        folds = assign_folds(len(y), 2, rng=_rng(22))
+        template = Template()
+        with pytest.raises(TypeError, match="fold 0 learner.*sample_weight"):
+            result = entrypoint(template, X, y, folds, sample_weight=np.ones(len(y)))
+            if entrypoint is iter_fold_fits:
+                list(result)
+        assert template.fit_calls == 0
+
+    def test_sklearn_estimator_passes_distinct_clone_contract(self):
+        pytest.importorskip("sklearn")
+        from sklearn.linear_model import LinearRegression
+
+        X, y = _reg_setup()
+        folds = assign_folds(len(y), 2, rng=_rng(22))
+        template = LinearRegression()
+        res = cross_fit_predict(template, X, y, folds)
         assert np.isfinite(res.oof_predictions).all()
+        assert not hasattr(template, "coef_")
 
     def test_result_picklable(self):
         X, y = _reg_setup()
@@ -664,7 +777,6 @@ class TestIterFoldFits:
                 sample_weight=None,
                 k=3,
                 label="",
-                warn_stacklevel=2,
             )
 
     def test_predict_subset_chains_learner_error(self):
@@ -703,58 +815,3 @@ class TestIterFoldFits:
             cross_fit_predict(SelfDegenerate(), X, y, folds)
         assert str(ei.value) == "my own message"
         assert ei.value.__cause__ is None
-
-    def test_deep_copy_warning_attribution(self):
-        import warnings as _w
-
-        import pandas as pd
-
-        from diff_diff import DMLDiD
-
-        class Undeepcopyable:
-            def __deepcopy__(self, memo):
-                raise TypeError("cannot deep-copy this learner")
-
-            def fit(self, X, y, sample_weight=None):
-                self.mean_ = float(np.mean(y))
-                return self
-
-            def predict(self, X):
-                return np.full(len(X), self.mean_)
-
-        X, y = _reg_setup()
-        folds = assign_folds(len(y), 2, rng=_rng(22))
-        with _w.catch_warnings(record=True) as rec:
-            _w.simplefilter("always")
-            cross_fit_predict(Undeepcopyable(), X, y, folds)
-        hits = [r for r in rec if "could not deep-copy" in str(r.message)]
-        assert hits and all(r.filename == __file__ for r in hits)
-        assert str(hits[0].message).startswith("_crossfit: could not deep-copy")
-
-        # Bad-control fit: a foreign learner takes the split-half branch, so
-        # both the iter_fold_fits route (default stacklevel) and the direct
-        # _fit_subset route attribute to dml_did.py.
-        rng = np.random.default_rng(3)
-        rows = []
-        for i in range(60):
-            g = 2 if i % 2 else 0
-            for t in (1, 2):
-                rows.append(
-                    (i, t, g, rng.normal() + (t == 2) * (g == 2), rng.normal(), rng.normal())
-                )
-        df = pd.DataFrame(rows, columns=["unit", "time", "first_treat", "y", "x", "z"])
-        import diff_diff.dml_did as dml_mod
-
-        with _w.catch_warnings(record=True) as rec:
-            _w.simplefilter("always")
-            DMLDiD(outcome_learner=Undeepcopyable(), seed=0).fit(
-                df,
-                outcome="y",
-                unit="unit",
-                time="time",
-                first_treat="first_treat",
-                covariates=["z"],
-                bad_control="x",
-            )
-        hits = [r for r in rec if "could not deep-copy" in str(r.message)]
-        assert hits and {r.filename for r in hits} == {dml_mod.__file__}

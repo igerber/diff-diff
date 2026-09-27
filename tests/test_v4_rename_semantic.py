@@ -396,6 +396,25 @@ class TestCleanControlRename:
             clone = StackedDiD(**params)
         assert clone.control_group == "strict"
 
+    @pytest.mark.parametrize("parameter", ["control_group", "clean_control"])
+    def test_sklearn_clone_preserves_explicit_control_parameter(self, parameter):
+        from diff_diff import StackedDiD
+
+        base = pytest.importorskip("sklearn.base")
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always", FutureWarning)
+            est = StackedDiD(**{parameter: "strict"})
+            cloned = base.clone(est)
+        assert cloned is not est
+        assert cloned.get_params() == est.get_params()
+        assert cloned.control_group == est.control_group == "strict"
+        future_warnings = [w for w in record if issubclass(w.category, FutureWarning)]
+        if parameter == "clean_control":
+            assert len(future_warnings) == 2
+            assert all("clean_control=" in str(w.message) for w in future_warnings)
+        else:
+            assert future_warnings == []
+
     def test_set_params_migrates_both_directions(self):
         from diff_diff import StackedDiD
 

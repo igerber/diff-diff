@@ -19,6 +19,7 @@ surface pins here:
   emits the dual keys.
 """
 
+import copy
 import pickle
 import warnings
 from dataclasses import dataclass, fields
@@ -51,6 +52,19 @@ class TestDeprecationHelpers:
     def test_sentinel_repr(self):
         assert repr(NOT_SUPPLIED) == "<not supplied>"
         assert isinstance(NOT_SUPPLIED, _NotSupplied)
+
+    @pytest.mark.parametrize("copier", [copy.copy, copy.deepcopy])
+    def test_sentinel_copy_preserves_identity(self, copier):
+        assert copier(NOT_SUPPLIED) is NOT_SUPPLIED
+
+    def test_deepcopy_params_preserves_sentinel_and_isolates_mutable_values(self):
+        params = {"missing": NOT_SUPPLIED, "nested": [NOT_SUPPLIED, []]}
+        cloned = copy.deepcopy(params)
+        assert cloned is not params
+        assert cloned["missing"] is NOT_SUPPLIED
+        assert cloned["nested"][0] is NOT_SUPPLIED
+        cloned["nested"][1].append("changed")
+        assert params["nested"][1] == []
 
     def test_message_template(self):
         msg = deprecated_kwarg_message("Cls.fit", "old", "use new= instead")

@@ -52,6 +52,13 @@ class _NotSupplied:
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return "<not supplied>"
 
+    # Parameter cloning must preserve this stateless marker's identity.
+    def __copy__(self) -> "_NotSupplied":
+        return self
+
+    def __deepcopy__(self, memo: Any) -> "_NotSupplied":
+        return self
+
 
 NOT_SUPPLIED = _NotSupplied()
 

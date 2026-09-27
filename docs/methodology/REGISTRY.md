@@ -855,19 +855,23 @@ then it yields one `FoldFit` per fold in ascending `k` (the fitted per-fold
 deep copy, `fit_idx == train_idx[fit_mask[train_idx]]`, `train_idx`,
 `test_idx`, the coerced arrays); predictions are the caller's job via
 `_predict_subset`, which is what lets a consumer fit a NESTED nuisance on a
-fold's training complement before predicting the held-out fold. The
-deep-copy fallback warning is attributed to the frame that advances the
-generator (the user's `cross_fit_predict` call site, or `dml_did.py` for the
-internal routes) and reads `"_crossfit: could not deep-copy ..."`.
+fold's training complement before predicting the held-out fold. Per-fold
+cloning remains lazy: clone failures raise a sanitised `TypeError` when the
+generator advances, and the template is never reused. These errors propagate
+through `cross_fit_predict` and the DMLDiD bad-control lane rather than
+becoming `DegenerateFoldError` skips.
 
 **Learner contract (`_learners.py`)** — duck-typed `RegressorLearner` /
 `ClassifierLearner` Protocols (sklearn-compatible `fit`/`predict`/
 `predict_proba`); learners always receive raw `X` with NO intercept column and
-manage the intercept internally; `fit` fully re-initializes (fit-reset
-semantics). Cross-fitting fits a DEEP COPY of the user's never-fit learner
-template in every fold, so no state — nested estimators and container
-parameters included — can carry across folds; an un-deep-copyable learner is
-reused with a loud `UserWarning` (the only residual reliance on fit-reset). Native
+manage the intercept internally. Cross-fitting requires the user's never-fit
+template to `deepcopy` to a distinct top-level object for every fold; an
+uncopyable template, or one whose `__deepcopy__` returns itself, fails closed
+with `TypeError` rather than being reused.
+- **Note:** Custom `__deepcopy__` implementations are trusted to isolate nested
+  mutable state; the library checks only that the top-level copy is distinct.
+
+Native
 learners (`"linear"`, `"ridge"`, `"logit"`, `"sieve"`) wrap `solve_ols` /
 `solve_ridge` / `solve_logit` and the EfficientDiD polynomial sieve basis.
 Rank deficiency: the unpenalized fixed-design learners `LinearLearner` and
@@ -2973,8 +2977,9 @@ the finite-dimensional `p_0` is handled by the variance correction below.
   (`SeedSequence(entropy=seed, spawn_key=(g_idx, t_idx))` over sorted
   cohort/period roster positions, invariant to other cells' estimability) and
   the bootstrap stream separately. A user-supplied STOCHASTIC learner object
-  must be seeded by the user (the cross-fitting deep-copies the template
-  where copyable but never seeds its internal RNG).
+  must be seeded by the user. The supplied template must be unfitted;
+  cross-fitting requires a distinct deep copy and raises `TypeError`
+  otherwise, but never seeds the learner's internal RNG.
 - **Note:** Label normalization + magnitude bound (hardening beyond CS's bare
   `pd.to_numeric`) — `time`/`first_treat` are normalized to ONE canonical
   dtype (int64 when losslessly castable, else float64, both certified by
@@ -3022,8 +3027,12 @@ the finite-dimensional `p_0` is handled by the variance correction below.
   meanings; `zero_weight_mass` (declared-survey fits only, the CS meaning) =
   a required group has rows but zero survey mass, so the weighted p̂/λ̂ would
   leave (0, 1); `cross_fit_degenerate`
-  = fold assignment or a fail-closed learner made the cell un-cross-fittable
-  (chained learner message quoted in the consolidated skip warning);
+  = fold assignment or a fold-time learner `ValueError` made the cell
+  un-cross-fittable (chained learner message quoted in the consolidated skip
+  warning); a learner-configuration error, including an uncloneable template,
+  raises `TypeError` at the one-copy preflight before any cell exists, and a
+  per-fold clone failure later in the fit propagates as a hard `TypeError`
+  (never a NaN cell);
   `non_finite_score` = the score/variance computation produced or received
   non-finite values. NaN cells carry NO influence-function payload entry.
 - **Note:** Covariates REQUIRED — `fit(covariates=None/[])` raises with a

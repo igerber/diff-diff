@@ -60,6 +60,7 @@ dev = [
     "pytest>=7.0",
     "pytest-xdist>=3.0",
     "pytest-cov>=4.0",
+    "scikit-learn",
     # Lint/format/type tools are pinned exactly so local results match the
     # Lint CI workflow (.github/workflows/lint.yml) — update both together.
     # NOTE: black/mypy require Python >= 3.10 (dev tooling only; the library

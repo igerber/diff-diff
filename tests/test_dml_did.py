@@ -5,6 +5,7 @@ TestDoubleMLGoldenParity there.
 """
 
 import json
+import traceback
 import warnings
 
 import numpy as np
@@ -77,6 +78,20 @@ class TestConstructionValidation:
         est = DMLDiD(n_folds=np.int64(5))
         assert type(est.n_folds) is int
 
+    def test_clone_must_keep_the_required_learner_protocol(self):
+        class CloneWithoutPredict:
+            def __deepcopy__(self, memo):
+                return object()
+
+            def fit(self, X, y, sample_weight=None):
+                return self
+
+            def predict(self, X):
+                return np.zeros(len(X))
+
+        with pytest.raises(TypeError, match="outcome_learner.*object.*fit"):
+            DMLDiD(outcome_learner=CloneWithoutPredict())
+
     @pytest.mark.parametrize("bad", [0.0, 1.0, -0.1, 1.1, True, "0.05", np.nan])
     def test_alpha_bounds_both_sides(self, bad):
         with pytest.raises(ValueError, match="alpha"):
@@ -120,6 +135,17 @@ class TestConstructionValidation:
             DMLDiD(outcome_learner=object())
         with pytest.raises(TypeError, match="propensity_learner"):
             DMLDiD(propensity_learner=object())
+
+    def test_sklearn_learners_pass_cloneability_preflight(self):
+        pytest.importorskip("sklearn")
+        from sklearn.linear_model import LinearRegression, LogisticRegression
+
+        est = DMLDiD(
+            propensity_learner=LogisticRegression(),
+            outcome_learner=LinearRegression(),
+        )
+        assert type(est.propensity_learner) is LogisticRegression
+        assert type(est.outcome_learner) is LinearRegression
 
     def test_get_set_params_roundtrip_learner_object_identity(self):
         learner = SieveLearner(k_max=2)
@@ -1080,6 +1106,167 @@ class TestFullConfigMutationDefense:
         with pytest.raises((ValueError, TypeError)):
             est.fit(data, **FIT_KW, **COV)
 
+    def test_mutated_uncopyable_learner_raises_before_any_cell(self, data):
+        class UndeepcopyableRegressor:
+            def __init__(self):
+                self.fit_calls = 0
+
+            def __deepcopy__(self, memo):
+                raise TypeError("cannot clone this learner")
+
+            def fit(self, X, y):
+                self.fit_calls += 1
+                return self
+
+            def predict(self, X):
+                return np.zeros(len(X))
+
+        learner = UndeepcopyableRegressor()
+        est = DMLDiD(seed=0)
+        est.outcome_learner = learner
+        with pytest.raises(TypeError, match="outcome_learner.*UndeepcopyableRegressor.*TypeError"):
+            est.fit(data, **FIT_KW, **COV)
+        assert learner.fit_calls == 0
+
+    @pytest.mark.parametrize("panel,data_fixture", [(True, "data"), (False, "rcs_data")])
+    def test_fold_copy_failure_propagates_as_a_hard_error(self, request, panel, data_fixture):
+        class CopyFailsDuringCrossFit:
+            def __init__(self):
+                self.deepcopy_calls = 0
+                self.fit_calls = 0
+
+            def __deepcopy__(self, memo):
+                self.deepcopy_calls += 1
+                if self.deepcopy_calls == 3:
+                    raise OSError("token=SECRET-FOLD-COPY /home/user/private.csv")
+                return type(self)()
+
+            def fit(self, X, y, sample_weight=None):
+                self.fit_calls += 1
+                self.mean_ = float(np.mean(y))
+                return self
+
+            def predict(self, X):
+                return np.full(len(X), self.mean_)
+
+        learner = CopyFailsDuringCrossFit()
+        data = request.getfixturevalue(data_fixture)
+        est = DMLDiD(n_folds=2, panel=panel, seed=0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            previous = est.fit(data, **FIT_KW, **COV)
+        assert est.results_ is previous and est.is_fitted_ is True
+        est.outcome_learner = learner
+        with warnings.catch_warnings(record=True) as recorded:
+            warnings.simplefilter("always")
+            with pytest.raises(
+                TypeError,
+                match="DMLDiD.*outcome_learner.*fold 1.*CopyFailsDuringCrossFit.*OSError",
+            ) as exc_info:
+                est.fit(data, **FIT_KW, **COV)
+        error = exc_info.value
+        assert error.__cause__ is None
+        assert error.__context__ is None
+        formatted = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        assert "SECRET-FOLD-COPY" not in formatted
+        assert learner.fit_calls == 0
+        assert learner.deepcopy_calls == 3
+        assert est.results_ is None and est.is_fitted_ is False
+        assert not any("cross_fit_degenerate" in str(w.message) for w in recorded)
+
+    @pytest.mark.parametrize(
+        "parameter,fail_on,stage",
+        [
+            ("outcome_learner", 2, "outcome_learner"),
+            ("propensity_learner", 2, "propensity_learner"),
+            ("outcome_learner", 3, "split-half m outcome_learner"),
+            ("propensity_learner", 3, "split-half p propensity_learner"),
+            ("outcome_learner", 4, "nu outcome_learner"),
+            ("outcome_learner", 5, "omega outcome_learner"),
+        ],
+    )
+    def test_bad_control_copy_failure_propagates_as_a_hard_error(
+        self, bc_data, parameter, fail_on, stage
+    ):
+        class CopyFailsDuringBadControlFit:
+            def __init__(self):
+                self.deepcopy_calls = 0
+                self.fit_calls = 0
+
+            def __deepcopy__(self, memo):
+                self.deepcopy_calls += 1
+                if self.deepcopy_calls == fail_on:
+                    raise OSError("token=SECRET-BAD-CONTROL /home/user/private.csv")
+                return type(self)()
+
+            def fit(self, X, y):
+                self.fit_calls += 1
+                self.mean_ = float(np.mean(y))
+                return self
+
+            def predict(self, X):
+                return np.full(len(X), self.mean_)
+
+            def predict_proba(self, X):
+                return np.column_stack([1 - self.predict(X), self.predict(X)])
+
+        est = DMLDiD(n_folds=2, seed=0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            previous = est.fit(bc_data, **FIT_KW, **COV, **BC_KW)
+        assert est.results_ is previous and est.is_fitted_ is True
+        learner = CopyFailsDuringBadControlFit()
+        setattr(est, parameter, learner)
+        with warnings.catch_warnings(record=True) as recorded:
+            warnings.simplefilter("always")
+            with pytest.raises(
+                TypeError, match=f"DMLDiD.*{stage}.*fold 0.*CopyFailsDuringBadControlFit.*OSError"
+            ) as exc_info:
+                est.fit(bc_data, **FIT_KW, **COV, **BC_KW)
+        error = exc_info.value
+        assert error.__cause__ is None and error.__context__ is None
+        formatted = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        assert "SECRET-BAD-CONTROL" not in formatted
+        assert learner.deepcopy_calls == fail_on and learner.fit_calls == 0
+        assert est.results_ is None and est.is_fitted_ is False
+        assert not any(
+            "cross_fit_degenerate" in str(w.message) or "REUSING" in str(w.message)
+            for w in recorded
+        )
+
+    def test_survey_clone_must_accept_sample_weight_before_any_cell(self, data):
+        from diff_diff.survey import SurveyDesign
+
+        class CloneWithoutSampleWeight:
+            def fit(self, X, y):
+                self.mean_ = float(np.mean(y))
+                return self
+
+            def predict(self, X):
+                return np.full(len(X), self.mean_)
+
+        class Template:
+            def __init__(self):
+                self.fit_calls = 0
+
+            def __deepcopy__(self, memo):
+                return CloneWithoutSampleWeight()
+
+            def fit(self, X, y, sample_weight=None):
+                self.fit_calls += 1
+                return self
+
+            def predict(self, X):
+                return np.zeros(len(X))
+
+        learner = Template()
+        df = data.assign(w=1.0)
+        with pytest.raises(TypeError, match="outcome_learner.*sample_weight"):
+            DMLDiD(outcome_learner=learner, seed=0).fit(
+                df, **FIT_KW, **COV, survey_design=SurveyDesign(weights="w")
+            )
+        assert learner.fit_calls == 0
+
 
 class TestReportingWeightingLabel:
     def test_target_parameter_names_complete_case_weighting(self, fitted):
@@ -1600,9 +1787,9 @@ class TestSummaryAlphaContract:
         assert "z-stat" in s and "P>|z|" in s
         assert "t-stat" not in s and "P>|t|" not in s
 
-    def test_deepcopy_failure_message_not_leaked(self, data):
-        # A foreign learner whose __deepcopy__ raises with sensitive text:
-        # the reuse warning names only the exception CLASS.
+    def test_deepcopy_failure_raises_sanitized_error(self, data):
+        # A foreign learner whose __deepcopy__ raises with sensitive text
+        # fails closed during configuration validation, before any cell fit.
         class LeakyDeepcopy:
             def __deepcopy__(self, memo):
                 raise ValueError("token=SECRET-DCOPY /home/user/x.csv")
@@ -1614,16 +1801,16 @@ class TestSummaryAlphaContract:
             def predict(self, X):
                 return np.full(len(X), self.m)
 
-        with warnings.catch_warnings(record=True) as rec:
-            warnings.simplefilter("always")
-            res = DMLDiD(outcome_learner=LeakyDeepcopy(), seed=0).fit(data, **FIT_KW, **COV)
-        texts = [str(w.message) for w in rec]
-        assert not any("SECRET-DCOPY" in s for s in texts)
-        assert any("could not deep-copy" in s and "ValueError" in s for s in texts)
-        import json
-
-        assert "SECRET-DCOPY" not in json.dumps(res.to_dict())
-        assert "SECRET-DCOPY" not in res.summary()
+        with pytest.raises(
+            TypeError, match="outcome_learner.*LeakyDeepcopy.*ValueError"
+        ) as exc_info:
+            DMLDiD(outcome_learner=LeakyDeepcopy(), seed=0)
+        error = exc_info.value
+        assert "SECRET-DCOPY" not in str(error)
+        assert error.__cause__ is None
+        assert error.__context__ is None
+        formatted = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        assert "SECRET-DCOPY" not in formatted
 
     def test_bootstrap_summary_labels_percentile_p(self, data):
         with warnings.catch_warnings():

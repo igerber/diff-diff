@@ -32,7 +32,6 @@ skip-reason vocabulary) and the DoubleML parity anchors.
 """
 
 import decimal
-import inspect
 import secrets
 import warnings
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Union, cast
@@ -46,6 +45,8 @@ from diff_diff._crossfit import (
     _fit_subset,
     _fold_loss,
     _predict_subset,
+    _probe_learner_cloneability,
+    _validate_sample_weight_support,
     assign_folds,
     cross_fit_predict,
     iter_fold_fits,
@@ -109,7 +110,9 @@ def _validate_n_folds(value: Any) -> int:
     return int(value)
 
 
-def _validate_learner_spec(spec: Any, *, kind: str, param_name: str) -> None:
+def _validate_learner_spec(
+    spec: Any, *, kind: str, param_name: str, require_sample_weight: bool = False
+) -> None:
     """Eager learner-spec validation naming the ACTUAL constructor param.
 
     ``make_learner`` hard-codes ``param_name="learner"`` for objects, which
@@ -124,38 +127,9 @@ def _validate_learner_spec(spec: Any, *, kind: str, param_name: str) -> None:
             )
         return
     validate_learner(spec, kind=kind, param_name=param_name)
-
-
-def _validate_learner_sample_weight_support(spec: Any, param_name: str) -> None:
-    """Reject a user learner whose ``fit`` cannot take ``sample_weight``.
-
-    Declared-survey fits pass ``sample_weight`` into ``cross_fit_predict``,
-    which forwards it BY KEYWORD (``fit_kwargs = {"sample_weight": w_fit}``)
-    and deliberately propagates the learner's ``TypeError`` — so a learner
-    whose ``fit`` has neither a keyword-addressable ``sample_weight``
-    parameter (POSITIONAL_OR_KEYWORD or KEYWORD_ONLY; POSITIONAL_ONLY does
-    not qualify) nor ``**kwargs`` would hard-crash mid-fit. Raises
-    ``TypeError`` up front instead (the ``validate_learner`` convention for
-    object-capability failures).
-    """
-    try:
-        sig = inspect.signature(spec.fit)
-    except (TypeError, ValueError):  # pragma: no cover - exotic callables
-        return  # cannot introspect; let cross_fit_predict surface any error
-    for param in sig.parameters.values():
-        if param.kind is inspect.Parameter.VAR_KEYWORD:
-            return
-        if param.name == "sample_weight" and param.kind in (
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            inspect.Parameter.KEYWORD_ONLY,
-        ):
-            return
-    raise TypeError(
-        f"survey_design= requires learners whose fit() accepts sample_weight "
-        f"by keyword; the {param_name} object {type(spec).__name__!r} does not. "
-        "Add a sample_weight parameter (or **kwargs) to its fit(), or use a "
-        "library-native learner name."
-    )
+    clone = _probe_learner_cloneability(spec, kind=kind, param_name=param_name)
+    if require_sample_weight:
+        _validate_sample_weight_support(clone, param_name=param_name)
 
 
 def _raw_label_is_infinite(value: Any) -> bool:
@@ -349,9 +323,10 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         (PSU-cohesive folds consume the RNG differently than stratified
         folds — a config change, not a reproducibility break). A user-supplied
         STOCHASTIC learner object must additionally be seeded by the user
-        (e.g. sklearn ``random_state``) — ``cross_fit_predict`` deep-copies
-        the learner template where copyable but never seeds its internal
-        RNG.
+        (e.g. sklearn ``random_state``). The supplied template must be
+        unfitted; ``cross_fit_predict`` requires a distinct deep copy and
+        raises ``TypeError`` otherwise, but never seeds the learner's
+        internal RNG.
     base_period : str, default "varying"
         ``"varying"`` or ``"universal"`` (CS semantics; universal
         materializes per-cohort zero reference cells).
@@ -432,7 +407,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         self.results_: Optional[DMLDiDResults] = None
         self.is_fitted_ = False
 
-    def _revalidate_config(self) -> None:
+    def _revalidate_config(self, *, require_sample_weight: bool = False) -> None:
         """Validate + normalize EVERY config param from current attributes.
 
         Called at ``__init__`` and again at the start of ``fit()`` (the
@@ -445,9 +420,17 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         """
         self.anticipation = validate_anticipation(self.anticipation)
         _validate_learner_spec(
-            self.propensity_learner, kind="classifier", param_name="propensity_learner"
+            self.propensity_learner,
+            kind="classifier",
+            param_name="propensity_learner",
+            require_sample_weight=require_sample_weight,
         )
-        _validate_learner_spec(self.outcome_learner, kind="regressor", param_name="outcome_learner")
+        _validate_learner_spec(
+            self.outcome_learner,
+            kind="regressor",
+            param_name="outcome_learner",
+            require_sample_weight=require_sample_weight,
+        )
         # Specs stored VERBATIM (a passed learner object is the same object
         # in get_params()); fit-time make_learner does the resolution.
         self.n_folds = _validate_n_folds(self.n_folds)
@@ -512,6 +495,8 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         bad_control: Optional[str] = None,
         bad_control_covariates: Optional[Iterable[str]] = None,
         has_survey_design: bool = False,
+        *,
+        require_sample_weight: bool = False,
     ) -> Tuple[pd.DataFrame, List[str], Optional[List[str]]]:
         """Validate inputs; return the numeric working frame, covariate list,
         and the materialized bad-control covariate list (``None`` when no bad
@@ -520,7 +505,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         # leads inside _revalidate_config — the ordering is load-bearing for
         # the anticipation-policy suite, which fits a bare DataFrame and
         # requires the config error to precede column checks).
-        self._revalidate_config()
+        self._revalidate_config(require_sample_weight=require_sample_weight)
 
         # Bad-control lane (CCPS 2026): unsupported-combination gates right
         # after the config validation (config errors first), then the
@@ -1464,7 +1449,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     D_cell,
                     folds,
                     predict_method="predict_proba",
-                    context_label=f"{context} propensity",
+                    context_label=f"{context} propensity_learner",
                     sample_weight=w_cell,
                 )
                 or_res = cross_fit_predict(
@@ -1474,7 +1459,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     folds,
                     predict_method="predict",
                     fit_mask=(D_cell == 0.0),
-                    context_label=f"{context} outcome",
+                    context_label=f"{context} outcome_learner",
                     sample_weight=w_cell,
                 )
         except DegenerateFoldError as exc:
@@ -1975,7 +1960,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     folds,
                     predict_method="predict",
                     fit_mask=(D_cell == 0.0),
-                    context_label=f"{context} bad-control outcome",
+                    context_label=f"{context} bad-control outcome_learner",
                 )
             mu_diag = {
                 "fold_losses": [float(v) for v in mu_res.fold_losses],
@@ -2072,8 +2057,8 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
         p_nfit = np.empty(n_folds, dtype=np.int64)
         nu_nfit = np.empty(n_folds, dtype=np.int64)
         om_nfit = np.empty(n_folds, dtype=np.int64)
-        nu_label = f"{context} nu: "
-        om_label = f"{context} omega: "
+        nu_label = f"{context} nu outcome_learner: "
+        om_label = f"{context} omega outcome_learner: "
 
         gen_m = iter_fold_fits(
             outc,
@@ -2082,7 +2067,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             folds,
             fit_mask=controls,
             predict_method="predict",
-            context_label=f"{context} outcome",
+            context_label=f"{context} outcome_learner",
         )
         gen_p = iter_fold_fits(
             prop,
@@ -2090,7 +2075,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             D,
             folds,
             predict_method="predict_proba",
-            context_label=f"{context} propensity",
+            context_label=f"{context} propensity_learner",
         )
         for ff_m, ff_p in zip(gen_m, gen_p):
             k = ff_m.k
@@ -2157,7 +2142,6 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     sample_weight=None,
                     k=k,
                     label=nu_label,
-                    warn_stacklevel=3,
                 )
                 nu_hat[test] = _predict_subset(
                     nu_learner,
@@ -2180,7 +2164,6 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     sample_weight=None,
                     k=k,
                     label=om_label,
-                    warn_stacklevel=3,
                 )
                 omega_raw[test] = _predict_subset(
                     om_learner,
@@ -2224,8 +2207,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     kind="regressor",
                     sample_weight=None,
                     k=k,
-                    label=f"{context} split-half m: ",
-                    warn_stacklevel=3,
+                    label=f"{context} split-half m outcome_learner: ",
                 )
                 p_a, n_pa, _ = _fit_subset(
                     prop,
@@ -2236,15 +2218,14 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     kind="classifier",
                     sample_weight=None,
                     k=k,
-                    label=f"{context} split-half p: ",
-                    warn_stacklevel=3,
+                    label=f"{context} split-half p propensity_learner: ",
                 )
                 m_b = _predict_subset(
                     m_a,
                     R[b_ctrl],
                     kind="regressor",
                     k=k,
-                    label=f"{context} split-half m: ",
+                    label=f"{context} split-half m outcome_learner: ",
                     n_fit=n_ma,
                     w_fit=None,
                 )
@@ -2254,7 +2235,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                         S[b_ctrl],
                         kind="classifier",
                         k=k,
-                        label=f"{context} split-half p: ",
+                        label=f"{context} split-half p propensity_learner: ",
                         n_fit=n_pa,
                         w_fit=None,
                     ),
@@ -2273,7 +2254,6 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     sample_weight=None,
                     k=k,
                     label=nu_label,
-                    warn_stacklevel=3,
                 )
                 y_om = np.zeros(n)
                 y_om[b_ctrl] = p_b / (1.0 - p_b)
@@ -2287,7 +2267,6 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     sample_weight=None,
                     k=k,
                     label=om_label,
-                    warn_stacklevel=3,
                 )
                 nu_pred += 0.5 * _predict_subset(
                     nu_h,
@@ -2562,7 +2541,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     D_cell,
                     folds,
                     predict_method="predict_proba",
-                    context_label=f"{context} propensity",
+                    context_label=f"{context} propensity_learner",
                     sample_weight=w_cell,
                 )
                 r_cell = (T_cell - lam_hat) * y_cell
@@ -2573,7 +2552,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                     folds,
                     predict_method="predict",
                     fit_mask=(D_cell == 0.0),
-                    context_label=f"{context} outcome",
+                    context_label=f"{context} outcome_learner",
                     sample_weight=w_cell,
                 )
         except DegenerateFoldError as exc:
@@ -2813,6 +2792,8 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             ``None`` = no ``W`` (matches the R ``badcontrols`` default);
             results store ``()``. Requires ``bad_control``.
         """
+        self.results_ = None
+        self.is_fitted_ = False
         df, covariates, w_names = self._validate_and_prepare(
             data,
             outcome,
@@ -2823,6 +2804,7 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
             bad_control=bad_control,
             bad_control_covariates=bad_control_covariates,
             has_survey_design=survey_design is not None,
+            require_sample_weight=survey_design is not None,
         )
 
         # --- Survey/cluster resolution (CS transliteration, staggered.py) ---
@@ -2940,17 +2922,6 @@ class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, B
                 )
 
         weighted_moments = survey_design is not None
-        if weighted_moments:
-            # Learner capability gate: cross_fit_predict passes sample_weight
-            # BY KEYWORD, so a user learner without a keyword-addressable
-            # sample_weight (or **kwargs) would raise a raw TypeError mid-fit.
-            for spec, pname in (
-                (self.propensity_learner, "propensity_learner"),
-                (self.outcome_learner, "outcome_learner"),
-            ):
-                if isinstance(spec, str):
-                    continue  # native learners all accept sample_weight
-                _validate_learner_sample_weight_support(spec, pname)
 
         if self.panel:
             precomputed = self._precompute(
