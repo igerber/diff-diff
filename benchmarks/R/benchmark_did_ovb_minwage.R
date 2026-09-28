@@ -66,12 +66,11 @@ for (fold in 0:(n_folds - 1L)) {
   train <- !test
   ps_fit <- ranger(
     x = as.data.frame(x[train, , drop = FALSE]),
-    y = factor(d[train], levels = c(0, 1)),
+    y = d[train],
     num.trees = num_trees,
     mtry = mtry,
     min.node.size = min_node_size,
-    splitrule = "gini",
-    probability = TRUE,
+    splitrule = splitrule,
     seed = seed + fold
   )
   out_fit <- ranger(
@@ -83,7 +82,7 @@ for (fold in 0:(n_folds - 1L)) {
     splitrule = splitrule,
     seed = seed + fold
   )
-  ps[test] <- predict(ps_fit, data = as.data.frame(x[test, , drop = FALSE]))$predictions[, "1"]
+  ps[test] <- predict(ps_fit, data = as.data.frame(x[test, , drop = FALSE]))$predictions
   m[test] <- predict(out_fit, data = as.data.frame(x[test, , drop = FALSE]))$predictions
 }
 

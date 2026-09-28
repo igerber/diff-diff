@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 
+import numpy as np
 import pandas as pd
 
 from diff_diff import DIDOVBSensitivity
@@ -38,15 +39,12 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+        from sklearn.ensemble import RandomForestRegressor
     except ImportError as exc:  # pragma: no cover - exercised by environments
         raise SystemExit("Install the optional scikit-learn dependency first") from exc
 
     data = pd.read_csv(args.csv)
-    data = data.loc[
-        data["year"].isin([2006, 2007])
-        & data["first.treat"].isin([0, 2007])
-    ].copy()
+    data = data.loc[data["year"].isin([2006, 2007]) & data["first.treat"].isin([0, 2007])].copy()
     data["treated"] = (data["first.treat"] == 2007).astype(int)
 
     forest_kwargs = {
@@ -56,10 +54,42 @@ def main() -> None:
         "random_state": args.seed,
         "n_jobs": -1,
     }
-    propensity = RandomForestClassifier(**forest_kwargs)
+
+    from sklearn.base import BaseEstimator
+    from sklearn.ensemble import ExtraTreesRegressor, RandomForestRegressor
+
+    class _RegressionPropensity(BaseEstimator):
+        def __init__(
+            self,
+            n_estimators=1000,
+            max_features=2,
+            min_samples_leaf=10,
+            random_state=42,
+            n_jobs=-1,
+        ):
+            self.n_estimators = n_estimators
+            self.max_features = max_features
+            self.min_samples_leaf = min_samples_leaf
+            self.random_state = random_state
+            self.n_jobs = n_jobs
+
+        def fit(self, X, y):
+            self.model_ = RandomForestRegressor(
+                n_estimators=self.n_estimators,
+                max_features=self.max_features,
+                min_samples_leaf=self.min_samples_leaf,
+                random_state=self.random_state,
+                n_jobs=self.n_jobs,
+            ).fit(X, y)
+            return self
+
+        def predict_proba(self, X):
+            probability = self.model_.predict(X)
+            return np.column_stack([1 - probability, probability])
+
+    propensity = _RegressionPropensity(**forest_kwargs)
     outcome = RandomForestRegressor(**forest_kwargs)
     if args.tune:
-        from sklearn.ensemble import ExtraTreesClassifier, ExtraTreesRegressor
         from sklearn.model_selection import GridSearchCV
 
         # This is the sklearn analogue of the paper's ranger grid.  The
@@ -67,12 +97,19 @@ def main() -> None:
         # existing cross-fitting machinery.
         prop_grid = [
             {
-                "model": [RandomForestClassifier(**forest_kwargs)],
+                "model": [_RegressionPropensity(**forest_kwargs)],
                 "model__max_features": [2, 4, 6],
                 "model__min_samples_leaf": [10, 15, 25, 50, 75, 100, 125, 150],
             },
             {
-                "model": [ExtraTreesClassifier(**forest_kwargs)],
+                "model": [
+                    _RegressionPropensity(
+                        n_estimators=forest_kwargs["n_estimators"],
+                        min_samples_leaf=forest_kwargs["min_samples_leaf"],
+                        random_state=forest_kwargs["random_state"],
+                        n_jobs=forest_kwargs["n_jobs"],
+                    )
+                ],
                 "model__max_features": [2, 4, 6],
                 "model__min_samples_leaf": [10, 15, 25, 50, 75, 100, 125, 150],
             },
@@ -120,7 +157,7 @@ def main() -> None:
                 return self.search_.predict_proba(X)
 
         propensity = _GridLearner(
-            estimator=Pipeline([("model", RandomForestClassifier(**forest_kwargs))]),
+            estimator=Pipeline([("model", _RegressionPropensity(**forest_kwargs))]),
             grid=prop_grid,
             scoring="neg_root_mean_squared_error",
             cv=3,
