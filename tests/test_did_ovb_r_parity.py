@@ -16,9 +16,7 @@ def test_python_matches_independent_r_application_fixture():
     root = Path(__file__).parents[1]
     fixture = json.loads((root / "benchmarks/data/did_ovb_r_results.json").read_text())
     data = pd.read_csv(root / "benchmarks/data/real/mpdta.csv")
-    data = data[
-        data["year"].isin([2006, 2007]) & data["first.treat"].isin([0, 2007])
-    ].copy()
+    data = data[data["year"].isin([2006, 2007]) & data["first.treat"].isin([0, 2007])].copy()
     data["treated"] = (data["first.treat"] == 2007).astype(int)
     data = data.sort_values(["countyreal", "year"], kind="stable").reset_index(drop=True)
     fold_ids = np.arange(fixture["n_obs"], dtype=int) % fixture["settings"]["n_folds"]
@@ -39,9 +37,7 @@ def test_python_matches_independent_r_application_fixture():
 
     bounds = result.bounds(trend_r2=1.0, selection_r2=0.5)
     for name in ("lower", "upper", "radius", "lower_se", "upper_se", "lower_ci", "upper_ci"):
-        assert getattr(bounds, name) == pytest.approx(
-            expected["bounds"][name], rel=5e-5, abs=5e-7
-        )
+        assert getattr(bounds, name) == pytest.approx(expected["bounds"][name], rel=5e-5, abs=5e-7)
 
     robustness = result.robustness_value(
         null_value=expected["settings"]["null_value"], alpha=expected["settings"]["alpha"]

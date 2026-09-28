@@ -70,9 +70,7 @@ def test_components_obey_scale_identity(panel):
         covariates=["x"],
     )
 
-    assert result.scale == pytest.approx(
-        np.sqrt(result.sigma2_control * result.nu2_selection)
-    )
+    assert result.scale == pytest.approx(np.sqrt(result.sigma2_control * result.nu2_selection))
     assert result.sigma2_control > 0
     assert result.nu2_selection >= 1
 

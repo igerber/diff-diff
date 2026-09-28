@@ -142,6 +142,28 @@ paper's tuned `ranger` specification. Its output is a diagnostic, not a paper
 replication claim; exact application parity requires matching `ranger`, its
 cross-validation choices, fold assignments, and multiplier-bootstrap settings.
 
+An R oracle using the actual `ranger` implementation is also provided. It
+writes the fold assignment used by the R run so the Python estimator can use
+the same units and folds:
+
+```bash
+R_LIBS_USER=/path/to/r-library Rscript benchmarks/R/benchmark_did_ovb_minwage.R \
+  /path/to/min_wage_CS.rds /tmp/did_ovb_minwage_r.json \
+  /tmp/did_ovb_minwage_folds.csv 42 5 1000 2 10 variance
+PYTHONPATH=. python benchmarks/python/benchmark_did_ovb_minwage.py \
+  /path/to/min_wage_CS.csv --folds-csv /tmp/did_ovb_minwage_folds.csv \
+  --n-estimators 1000 --max-features 2 --min-samples-leaf 10 \
+  --seed 42 --n-folds 5 --output /tmp/did_ovb_minwage_python.json
+```
+
+The R and Python forests are deliberately reported as separate estimates:
+`ranger` and sklearn do not implement identical tree-growth and probability
+prediction rules. The shared fold file isolates that learner implementation
+difference from sample construction and cross-fitting differences. The
+published application estimate is approximately `-0.0366`; the Python
+diagnostic with the fixed seed and default learner settings is approximately
+`-0.0362` on the shared data.
+
 The Appendix E.1 simulation DGP has a shared R/Python fixture runner:
 
 ```bash

@@ -10,6 +10,7 @@ instead of claiming that sklearn's random forest is identical to R's ranger.
 from __future__ import annotations
 
 import argparse
+import json
 
 import pandas as pd
 
@@ -24,6 +25,11 @@ def main() -> None:
     parser.add_argument("--min-samples-leaf", type=int, default=10)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--n-folds", type=int, default=5)
+    parser.add_argument(
+        "--folds-csv",
+        help="Optional countyreal/fold_id CSV produced by the R application oracle",
+    )
+    parser.add_argument("--output", help="Optional JSON output path")
     parser.add_argument(
         "--tune",
         action="store_true",
@@ -126,6 +132,18 @@ def main() -> None:
             cv=3,
         )
 
+    fit_kwargs = {}
+    if args.folds_csv:
+        folds = pd.read_csv(args.folds_csv)
+        if not {"countyreal", "fold_id"}.issubset(folds.columns):
+            raise SystemExit("--folds-csv must contain countyreal and fold_id columns")
+        unit_order = data.loc[data["year"] == 2006, "countyreal"].drop_duplicates()
+        fold_map = dict(zip(folds["countyreal"], folds["fold_id"], strict=True))
+        try:
+            fit_kwargs["fold_ids"] = unit_order.map(fold_map).to_numpy(dtype=int)
+        except (TypeError, ValueError) as exc:
+            raise SystemExit("--folds-csv does not cover every application unit") from exc
+
     result = DIDOVBSensitivity(
         n_folds=args.n_folds,
         seed=args.seed,
@@ -138,11 +156,31 @@ def main() -> None:
         time="year",
         unit="countyreal",
         covariates=["region", "white", "hs", "pov", "lpop", "lmedinc"],
+        **fit_kwargs,
     )
 
     print(result.summary())
     print("RV:", result.robustness_value().rv)
     print("XRV:", result.robustness_value().xrv)
+    payload = {
+        "n": result.n_obs,
+        "treated": result.n_treated,
+        "control": result.n_control,
+        "n_folds": result.n_folds,
+        "seed": result.seed,
+        "short_att": result.short_att,
+        "short_se": result.short_se,
+        "sigma2_control": result.sigma2_control,
+        "nu2_selection": result.nu2_selection,
+        "scale": result.scale,
+        "rv": result.robustness_value().rv,
+        "xrv": result.robustness_value().xrv,
+    }
+    print(json.dumps(payload, indent=2))
+    if args.output:
+        with open(args.output, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+            handle.write("\n")
 
 
 if __name__ == "__main__":

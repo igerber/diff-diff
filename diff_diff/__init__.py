@@ -96,14 +96,14 @@ from diff_diff.diagnostics import (
     run_all_placebo_tests,
     run_placebo_test,
 )
-from diff_diff.dml_did import DMLDiD
-from diff_diff.dml_did_results import DMLDiDResults
 from diff_diff.did_ovb import (
     DIDOVBBounds,
     DIDOVBRobustness,
     DIDOVBSensitivity,
     DIDOVBSensitivityResults,
 )
+from diff_diff.dml_did import DMLDiD
+from diff_diff.dml_did_results import DMLDiDResults
 from diff_diff.duration_did import DurationDiD
 from diff_diff.duration_did_results import DurationDiDPretestResults, DurationDiDResults
 from diff_diff.efficient_did import (

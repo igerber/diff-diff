@@ -159,6 +159,7 @@ class DIDOVBSensitivityResults:
             selection_r2=float(selection_r2),
             alpha=alpha,
         )
+
     def robustness_value(
         self, *, null_value: float = 0.0, alpha: float = 0.05, tolerance: float = 1e-10
     ) -> DIDOVBRobustness:
