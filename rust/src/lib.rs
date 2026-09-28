@@ -14,7 +14,11 @@ extern crate blas_src;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
+#[cfg(feature = "alloc-profile")]
+mod alloc_profile;
+mod batched_solve;
 mod bootstrap;
+mod demean;
 mod linalg;
 mod trop;
 mod weights;
@@ -28,8 +32,10 @@ fn _rust_backend(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
 
-    // Synthetic control weights (legacy projected gradient descent)
-    m.add_function(wrap_pyfunction!(weights::compute_synthetic_weights, m)?)?;
+    // FE-absorption MAP demeaning kernel
+    m.add_function(wrap_pyfunction!(demean::demean_map, m)?)?;
+
+    // Simplex projection
     m.add_function(wrap_pyfunction!(weights::project_simplex, m)?)?;
 
     // SDID weights (Frank-Wolfe matching R's synthdid)
@@ -37,10 +43,31 @@ fn _rust_backend(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(weights::compute_time_weights, m)?)?;
     m.add_function(wrap_pyfunction!(weights::compute_noise_level, m)?)?;
     m.add_function(wrap_pyfunction!(weights::sc_weight_fw, m)?)?;
+    m.add_function(wrap_pyfunction!(weights::sc_weight_fw_with_convergence, m)?)?;
+    m.add_function(wrap_pyfunction!(weights::sc_weight_fw_weighted, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        weights::sc_weight_fw_weighted_with_convergence,
+        m
+    )?)?;
 
     // Linear algebra operations
     m.add_function(wrap_pyfunction!(linalg::solve_ols, m)?)?;
+    m.add_function(wrap_pyfunction!(linalg::solve_ols_chol, m)?)?;
     m.add_function(wrap_pyfunction!(linalg::compute_robust_vcov, m)?)?;
+    m.add_function(wrap_pyfunction!(linalg::compute_robust_vcov_hc2, m)?)?;
+    // Versioned capability: Python must not dispatch HC2 to older kernels
+    // that silently floor the leverage denominator. Keep the original name
+    // as an alias for callers using the extension directly.
+    m.add(
+        "compute_robust_vcov_hc2_v2",
+        m.getattr("compute_robust_vcov_hc2")?,
+    )?;
+
+    // Batched ridge-regularized SPD solve (EfficientDiD per-unit weights)
+    m.add_function(wrap_pyfunction!(
+        batched_solve::batched_ridge_chol_solve_ones,
+        m
+    )?)?;
 
     // TROP estimator acceleration (local method)
     m.add_function(wrap_pyfunction!(trop::compute_unit_distance_matrix, m)?)?;
@@ -53,6 +80,13 @@ fn _rust_backend(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Diagnostics
     m.add_function(wrap_pyfunction!(rust_backend_info, m)?)?;
+
+    // Allocation profiling (measurement builds only; --features alloc-profile)
+    #[cfg(feature = "alloc-profile")]
+    {
+        m.add_function(wrap_pyfunction!(alloc_profile::reset_alloc_high_water, m)?)?;
+        m.add_function(wrap_pyfunction!(alloc_profile::alloc_high_water_bytes, m)?)?;
+    }
 
     // Version info
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

@@ -1,0 +1,22 @@
+name: CI Gate
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions: {}
+
+jobs:
+  ci-gate:
+    name: CI Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require ready-for-ci label on PRs
+        if: >-
+          github.event_name == 'pull_request'
+          && !contains(github.event.pull_request.labels.*.name, 'ready-for-ci')
+        run: |
+          echo "::error::The 'ready-for-ci' label is required to run CI tests."
+          echo "Add the label to trigger CI."
+          exit 1

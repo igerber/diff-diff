@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: wide_to_long
+   :no-index:

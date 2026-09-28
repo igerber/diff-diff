@@ -24,7 +24,8 @@ Files that need updating:
 | `pyproject.toml` | `version = "X.Y.Z"` | ~7 |
 | `rust/Cargo.toml` | `version = "X.Y.Z"` | ~3 |
 | `CHANGELOG.md` | Section header + comparison link | Top + bottom |
-| `docs/llms-full.txt` | `- Version: X.Y.Z` | ~5 |
+| `diff_diff/guides/llms-full.txt` | `- Version: X.Y.Z` | ~5 |
+| `CITATION.cff` | `version: "X.Y.Z"` + `date-released: "YYYY-MM-DD"` | ~10, ~11 |
 
 ## Instructions
 
@@ -34,38 +35,48 @@ Files that need updating:
    - If invalid, ask user to provide a valid version
 
 2. **Get current version**:
-   - Read `diff_diff/__init__.py` and extract the current `__version__` value
-   - Store as `OLD_VERSION` for comparison link generation
+   - Read `diff_diff/__init__.py` and note the current `__version__` value —
+     the "old version" used for comparison-link generation and sanity checks
+     in the steps below
 
-3. **Check CHANGELOG entry**:
-   - Search `CHANGELOG.md` for `## [NEW_VERSION]` section header
-   - If found: Verify it has content (at least one `### Added/Changed/Fixed` subsection with bullet points)
-   - If not found or empty: Generate entry from git commits (step 4)
-   - If found with content: Skip to step 5
+3. **Compile the changelog and resolve `RELEASE_DATE`** (release notes come
+   exclusively from `changelog.d/` fragments; the old git-log generation step
+   is removed). Shell variables do NOT persist across Bash calls, so
+   `OLD_VERSION` is resolved inside the SAME block that consumes it (never
+   substitute it as prose — an empty expansion would fail the compiler's
+   `--previous-version` cross-check on every normal release):
 
-4. **Generate CHANGELOG from git** (only if needed):
-   - Run: `git log v{OLD_VERSION}..HEAD --oneline`
-   - If no tag exists, use: `git log --oneline -50`
-   - Categorize commits using these heuristics:
-     - **Added**: commits containing "add", "new", "implement", "introduce", "create"
-     - **Changed**: commits containing "update", "change", "improve", "optimize", "refactor", "enhance"
-     - **Fixed**: commits containing "fix", "bug", "correct", "repair", "resolve"
-   - Get today's date in YYYY-MM-DD format
-   - Create CHANGELOG entry in this format:
-     ```markdown
-     ## [X.Y.Z] - YYYY-MM-DD
+   ```bash
+   OLD_VERSION="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' diff_diff/__init__.py)"
+   python3 .claude/scripts/changelog_compile.py compile --version NEW_VERSION --date "$(date +%F)" --previous-version "$OLD_VERSION"
+   ```
 
-     ### Added
-     - Feature description from commit message
+   (Substitute the literal target version for `NEW_VERSION`; it was validated
+   against the semver pattern in step 1.)
 
-     ### Changed
-     - Change description from commit message
+   Key off the exit code:
+   - **Exit 0** (compiled): the `## [NEW_VERSION]` section and comparison link
+     were written and the fragments deleted. `RELEASE_DATE` = today (the
+     `--date` you passed).
+   - **Exit 4** (already compiled): the section already exists with content and
+     no fragments remain — an idempotent re-run after a partial bump. The
+     compiler prints the existing header's date; use THAT as `RELEASE_DATE`.
+     On such a re-run, verify EACH version file in the table individually
+     (step 5's blind `OLD_VERSION → NEW_VERSION` replacement no-ops once
+     `diff_diff/__init__.py` is already bumped, so grep every file rather than
+     trusting the replacements).
+   - **Any other exit**: surface the compiler's message and stop. For a
+     legitimately fragment-free cycle (all merged PRs CI/tooling-only), write
+     a minimal `### Internal` stub fragment describing the release, **commit
+     it**, then re-run (an uncommitted fragment is rejected by the compiler's
+     dirty-fragment guard — deliberately, so nothing unreviewed is swept into
+     a release and deleted).
 
-     ### Fixed
-     - Fix description from commit message
-     ```
-   - Only include sections that have commits (omit empty sections)
-   - Insert the new entry after the changelog header (after the "adheres to Semantic Versioning" line)
+   `RELEASE_DATE` is the single source of truth for the release date across every file
+   touched in this bump. Do not recompute it downstream.
+
+4. *(Removed — the compiler owns changelog generation; the fragment format is
+   documented in `changelog.d/README.md`.)*
 
 5. **Update version in all files**:
    Use the Edit tool to update each file:
@@ -80,17 +91,20 @@ Files that need updating:
      Replace `version = "OLD_VERSION"` (the first version line under [package]) with `version = "NEW_VERSION"`
      Note: Rust version may differ from Python version; always sync to the new version
 
-   - `docs/llms-full.txt`:
+   - `diff_diff/guides/llms-full.txt`:
      Replace `- Version: OLD_VERSION` with `- Version: NEW_VERSION`
 
-6. **Update CHANGELOG comparison links**:
-   - Run `git remote get-url origin` to determine the repository's GitHub URL
-     (strip `.git` suffix, convert SSH format to HTTPS if needed)
-   - At the bottom of `CHANGELOG.md`, after `[OLD_VERSION]:`, add the new comparison link:
-     ```
-     [NEW_VERSION]: https://github.com/OWNER/REPO/compare/vOLD_VERSION...vNEW_VERSION
-     ```
-     using the owner/repo derived from the remote URL.
+   - `CITATION.cff`:
+     Replace `version: "OLD_VERSION"` with `version: "NEW_VERSION"`.
+     Also update `date-released: "OLD_DATE"` to `date-released: "{RELEASE_DATE}"`
+     using the `RELEASE_DATE` resolved in step 3. Both fields are quoted strings;
+     preserve the quoting style. `RELEASE_DATE` must match the CHANGELOG header
+     date; never substitute a freshly computed "today" value here.
+
+6. **CHANGELOG comparison link** — written by the compiler in step 3 (format
+   `[NEW]: <base>/compare/vOLD...vNEW`, both versions `v`-prefixed, inserted
+   immediately above the previous version's link line; the base URL is taken
+   from that line, not from the git remote). Nothing to do manually.
 
 7. **Report summary**:
    Display a summary of all changes made:
@@ -101,8 +115,9 @@ Files that need updating:
    - diff_diff/__init__.py: __version__ = "NEW_VERSION"
    - pyproject.toml: version = "NEW_VERSION"
    - rust/Cargo.toml: version = "NEW_VERSION"
-   - docs/llms-full.txt: Version: NEW_VERSION
-   - CHANGELOG.md: Added/verified [NEW_VERSION] entry
+   - diff_diff/guides/llms-full.txt: Version: NEW_VERSION
+   - CITATION.cff: version: NEW_VERSION, date-released: YYYY-MM-DD
+   - CHANGELOG.md: compiled [NEW_VERSION] from changelog.d/
 
    Next steps:
    1. Review changes: git diff
@@ -114,6 +129,14 @@ Files that need updating:
 ## Notes
 
 - The Rust version in `rust/Cargo.toml` is always synced to match the Python version
-- If CHANGELOG already has the target version entry with content, it will not be overwritten
-- Commit messages are cleaned up (prefixes like "feat:", "fix:" are removed) for CHANGELOG
-- The comparison link format uses `v` prefix for tags (e.g., `v2.2.0`)
+- If CHANGELOG already has the target version section (and `changelog.d/` is empty),
+  the compiler exits 4 and the bump proceeds as a re-run — the existing section is
+  never overwritten
+- Release notes come from curated `changelog.d/` fragments; commit messages are never read
+- `CITATION.cff` `date-released` and the `CHANGELOG.md` section header share a single
+  `RELEASE_DATE` resolved in step 3: an already-compiled header's date wins via the
+  compiler's exit-4 path (so a re-run after a partial bump doesn't silently drift
+  from the CITATION date); otherwise today's date is used for both. If the release
+  is cut on a different day than the bump, update both surfaces manually — drift
+  causes auto-citation tools (Zenodo, GitHub's "cite this repository", reference
+  managers) to report stale metadata.

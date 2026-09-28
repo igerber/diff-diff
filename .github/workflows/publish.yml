@@ -4,149 +4,18 @@ on:
   release:
     types: [published]
 
+permissions:
+  contents: read
+
 jobs:
-  # Build wheels on Linux using manylinux containers
-  build-linux:
-    name: Build Linux ${{ matrix.arch }} wheels
-    runs-on: ${{ matrix.runner }}
-    container: ${{ matrix.container }}
-    strategy:
-      matrix:
-        include:
-          - arch: x86_64
-            runner: ubuntu-latest
-            container: quay.io/pypa/manylinux_2_28_x86_64
-            artifact: wheels-linux-x86_64
-          - arch: aarch64
-            runner: ubuntu-24.04-arm
-            container: quay.io/pypa/manylinux_2_28_aarch64
-            artifact: wheels-linux-aarch64
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: dnf install -y openssl-devel perl-IPC-Cmd openblas-devel
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install maturin
-        run: /opt/python/cp312-cp312/bin/pip install maturin
-
-      - name: Build wheels
-        run: |
-          expected=0
-          for pyver in 39 310 311 312 313; do
-            pybin="/opt/python/cp${pyver}-cp${pyver}/bin/python"
-            if [ ! -f "$pybin" ]; then
-              echo "ERROR: Expected Python interpreter not found: $pybin"
-              exit 1
-            fi
-            /opt/python/cp312-cp312/bin/maturin build --release --out dist -i "$pybin" --features extension-module,openblas
-            expected=$((expected + 1))
-          done
-          actual=$(ls dist/*.whl 2>/dev/null | wc -l)
-          echo "Built $actual wheels (expected $expected)"
-          if [ "$actual" -ne "$expected" ]; then
-            echo "ERROR: Expected $expected wheels but found $actual"
-            exit 1
-          fi
-
-      - name: Upload wheels
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: dist/*.whl
-
-  # Build wheels on macOS ARM64 (native build)
-  # Note: macOS x86_64 skipped - Intel runners retired, users can install from sdist
-  build-macos-arm:
-    name: Build macOS ARM64 wheels
-    runs-on: macos-14
-    strategy:
-      matrix:
-        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13']
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install maturin
-        run: pip install maturin
-
-      - name: Build wheel
-        run: maturin build --release --out dist --features extension-module,accelerate
-
-      - name: Upload wheels
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheels-macos-arm64-py${{ matrix.python-version }}
-          path: dist/*.whl
-
-  # Build wheels on Windows
-  build-windows:
-    name: Build Windows wheels
-    runs-on: windows-latest
-    strategy:
-      matrix:
-        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13']
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install maturin
-        run: pip install maturin
-
-      - name: Build wheel
-        run: maturin build --release --out dist --features extension-module
-
-      - name: Upload wheels
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheels-windows-py${{ matrix.python-version }}
-          path: dist/*.whl
-
-  # Build source distribution
-  build-sdist:
-    name: Build source distribution
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install maturin
-        run: pip install maturin
-
-      - name: Build sdist
-        run: maturin sdist --out dist
-
-      - name: Upload sdist
-        uses: actions/upload-artifact@v4
-        with:
-          name: sdist
-          path: dist/*.tar.gz
+  # Build the full wheel matrix via the shared reusable workflow.
+  build:
+    uses: ./.github/workflows/build-wheels.yml
 
   # Publish to PyPI
   publish:
     name: Publish to PyPI
-    needs: [build-linux, build-macos-arm, build-windows, build-sdist]
+    needs: build
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -154,10 +23,10 @@ jobs:
 
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: dist
           merge-multiple: true
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1

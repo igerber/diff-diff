@@ -4,29 +4,27 @@
 .. currentmodule:: diff_diff
 
 .. autoclass:: PowerResults
+   :no-members:
 
-   
-   .. automethod:: __init__
 
-   
    .. rubric:: Methods
 
    .. autosummary::
-   
+
       ~PowerResults.__init__
       ~PowerResults.print_summary
       ~PowerResults.summary
       ~PowerResults.to_dataframe
       ~PowerResults.to_dict
-   
-   
 
-   
-   
+
+
+
    .. rubric:: Attributes
 
    .. autosummary::
-   
+
+      ~PowerResults.deff
       ~PowerResults.design
       ~PowerResults.rho
       ~PowerResults.power
@@ -40,5 +38,4 @@
       ~PowerResults.n_pre
       ~PowerResults.n_post
       ~PowerResults.sigma
-   
-   
+

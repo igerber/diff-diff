@@ -29,11 +29,18 @@ if _requested_backend in ("python", "rust"):
 import numpy as np
 import pandas as pd
 
-# Add parent to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+# Add repo root to path for benchmarks.python.utils. When
+# DIFF_DIFF_BENCH_USE_INSTALLED=1 (isolated-venv refresh runs), APPEND so the
+# venv's installed diff-diff wheel wins over the dev tree; otherwise PREPEND
+# (historical behavior: benchmark the working tree).
+_REPO_ROOT = str(Path(__file__).parent.parent.parent)
+if os.environ.get("DIFF_DIFF_BENCH_USE_INSTALLED") == "1":
+    sys.path.append(_REPO_ROOT)
+else:
+    sys.path.insert(0, _REPO_ROOT)
 
 from diff_diff import CallawaySantAnna, HAS_RUST_BACKEND
-from benchmarks.python.utils import BenchmarkResult, Timer
+from benchmarks.python.utils import BenchmarkResult, Timer, collect_provenance
 
 
 def parse_args():
@@ -58,6 +65,10 @@ def parse_args():
         "--backend", default="auto", choices=["auto", "python", "rust"],
         help="Backend to use: auto (default), python (pure Python), rust (Rust backend)"
     )
+    parser.add_argument(
+        "--warmup", action="store_true",
+        help="Run one untimed fit before the timed fit (JIT/cache warm-up)"
+    )
     return parser.parse_args()
 
 
@@ -81,6 +92,22 @@ def main():
     print("Running Callaway-Sant'Anna estimation...")
     # Use analytical SE (n_bootstrap=0) - matches R's did package after
     # influence function aggregation fix (accounts for covariance)
+    if args.warmup:
+        print("Warm-up fit (untimed)...")
+        CallawaySantAnna(
+            estimation_method=args.method,
+            control_group=args.control_group,
+            n_bootstrap=0,
+            seed=42,
+        ).fit(
+            df,
+            outcome="outcome",
+            time="time",
+            unit="unit",
+            first_treat="first_treat",
+            aggregate="all",
+        )
+
     cs = CallawaySantAnna(
         estimation_method=args.method,
         control_group=args.control_group,
@@ -163,7 +190,10 @@ def main():
             "n_units": n_units,
             "n_periods": n_periods,
             "n_obs": n_obs,
+            "warmup": args.warmup,
         },
+        # Wheel/backend provenance (refresh runs hard-fail on mismatch)
+        "provenance": collect_provenance(),
     }
 
     # Write output

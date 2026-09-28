@@ -37,6 +37,7 @@ Main estimator class for the Goodman-Bacon decomposition.
    :undoc-members:
    :show-inheritance:
    :inherited-members:
+   :no-index:
 
    .. rubric:: Methods
 
@@ -55,6 +56,7 @@ Results container for the Bacon decomposition.
    :members:
    :undoc-members:
    :show-inheritance:
+   :no-index:
 
    .. rubric:: Methods
 
@@ -75,6 +77,7 @@ Container for an individual 2x2 DiD comparison within the decomposition.
    :members:
    :undoc-members:
    :show-inheritance:
+   :no-index:
 
 Convenience Function
 --------------------

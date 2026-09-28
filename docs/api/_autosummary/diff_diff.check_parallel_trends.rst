@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: check_parallel_trends
+   :no-index:

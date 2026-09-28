@@ -1,0 +1,492 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 1718665e..8defaf20 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -40,6 +40,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
+   `survey_design=SurveyDesign(psu=<cluster_col>)`. No behavior change for unclustered fits.
+ 
+ ### Fixed
++- **Unweighted clustered CR2 / Bell-McCaffrey per-coefficient Satterthwaite DOF no
++  longer returns non-physical values** for high-leverage FE-dummy / collinear nuisance
++  columns. The simple `(tr B)²/tr(B²)` form could produce a garbage DOF there (float64
++  noise in `trace_B2` → up to ~1e61, or a finite-but-inflated value above the cluster
++  count). The unweighted path now carries the same noise-floor guard as the weighted
++  path plus a `DOF ≤ G` (cluster-count) physical bound, NaN-ing those columns with a
++  warning. The treatment / event-study / compound-average contrasts that estimators
++  actually consume are unchanged and match R clubSandwich; this only affects direct
++  `LinearRegression(vcov_type="hc2_bm", cluster_ids=...)` callers reading full
++  per-coefficient DOF vectors.
++- **`ChaisemartinDHaultfoeuille` phase-1 placebo (`DID_M^pl`) point estimate sign
++  corrected.** The single-horizon (`L_max=None`) `placebo_effect` used the opposite
++  (forward) difference order from the multi-horizon placebo path and R
++  `did_multiplegt_dyn`, so it was sign-flipped on pure-direction panels (magnitude was
++  bit-identical). It now uses the backward-difference × switch-direction convention,
++  matching R to working precision on `joiners_only` / `leavers_only`. Mixed-direction
++  panels retain the separately-documented period-vs-cohort control-set deviation. SEs
++  (NaN by design for the single-period placebo) and the multi-horizon placebo path are
++  unaffected.
++- **`HonestDiD(method="smoothness")` now returns a finite FLCI when the estimated
++  identified set is empty**, instead of silently NaN-propagating all inference. When the
++  observed pre-trend's curvature exceeds `M`, the `δ_pre = β_pre`-pinned identified-set LP
++  is infeasible (`lb`/`ub` = NaN) — but the optimal FLCI does not depend on that LP (its
++  worst-case bias is taken over `δ ∈ Δ^SD(M)` treating β as random), so it is well-defined
++  given `(Σ, M)`. R's `HonestDiD::createSensitivityResults` returns the FLCI in exactly this
++  case; previously `fit()` returned all-NaN, so smoothness sensitivity analysis yielded no
++  inference on any event study with non-trivial pre-trend curvature. The FLCI now matches R
++  to ~1e-3 at `M=0`; a known optimizer/center divergence at intermediate `M` (up to ~9% on
++  wide pre/post windows, CI *width* unaffected) is documented in `REGISTRY.md` and deferred.
+ - **`CallawaySantAnna` panel reg/ipw standard errors now match `DRDID` /
+   R `did` exactly** (point estimates unchanged — the omitted terms are mean-zero,
+   which is why ATTs always matched R at ~1e-11 while SEs drifted). Two defects:
+diff --git a/TODO.md b/TODO.md
+index 3e50c7ca..f0c2ebca 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -36,6 +36,7 @@ The `Origin` column (Actionable tables) and the `PR` column (Deferred tables) bo
+ | `CallawaySantAnna` no-covariate ipw treats the propensity as unconditional (no correction term); R's `did` fits an intercept-only logit whose estimation effect is identically zero in the IF, so values match — decide whether to document-only (current REGISTRY note) or mirror R's code path for structural parity. | `staggered.py::_ipw_estimation` (no-cov branch) | CS-scaling | Quick | Low |
+ | Fold the R `did` 2.5.1 ipw aggregation yardsticks (hardcoded with provenance in `test_golden_ipw_aggregation_se_vs_r_did_251`) into `csdid_golden_values.json` on the next fixture regeneration — the generator already emits the ipw `aggte` blocks; switch the test to read the JSON. | `benchmarks/R/generate_csdid_test_values.R`, `tests/test_csdid_ported.py` | CS-scaling | Quick | Low |
+ | TWFE's HC2/HC2-BM inline full-dummy build (`twfe.py:280-315`) duplicates the dummy-construction logic in `DifferenceInDifferences(fixed_effects=...)` (`estimators.py:478-486`). Extract a shared helper, or delegate TWFE's HC2/HC2-BM path to DiD's `fixed_effects=` branch (with TWFE-specific cluster-default threading), to reduce drift risk on FE naming / survey behavior / result-surface conventions. Substantive refactor — touches both estimators. | `twfe.py::fit`, `estimators.py::DifferenceInDifferences.fit` | follow-up | Heavy | Low |
++| `HonestDiD` Δ^SD optimal-FLCI affine-estimator optimizer (Nelder-Mead over slope weights) diverges from R `.FLCI.computeFLCI` at intermediate small M (~`[0.005, 0.02]`): the CI **center** shifts up to ~9% on wide pre/post windows while the **width** matches to ~1e-3. Not a local-minimum artifact (multi-start does not move it); the two implementations land on different affine estimators of near-equal length. Coverage is unaffected. Reconcile our FLCI optimization with R's exact algorithm. Exposed when the identified-set NaN gate was removed (finite CIs now surface at all M). | `honest_did.py::_compute_optimal_flci` | SE-audit | Mid | Low |
+ 
+ ### Performance
+ 
+diff --git a/diff_diff/chaisemartin_dhaultfoeuille.py b/diff_diff/chaisemartin_dhaultfoeuille.py
+index 1c675c69..58e6c30d 100644
+--- a/diff_diff/chaisemartin_dhaultfoeuille.py
++++ b/diff_diff/chaisemartin_dhaultfoeuille.py
+@@ -4665,7 +4665,12 @@ def _compute_placebo(
+         else:
+             joiner_avg = float((y_prev[joiner_mask] - y_pre_prev[joiner_mask]).mean())
+             stable0_avg = float((y_prev[stable0_mask] - y_pre_prev[stable0_mask]).mean())
+-            placebo_plus_t = joiner_avg - stable0_avg
++            # Backward-difference convention (pre-period minus reference,
++            # Y_{t-2} - Y_{t-1}), matching the multi-horizon placebo path
++            # `_compute_multi_horizon_placebos` (`switcher_change - ctrl_avg`
++            # with `Y_bwd - Y_ref`, times switch_direction=+1 for joiners) and
++            # R `did_multiplegt_dyn`. Equivalently `stable0_avg - joiner_avg`.
++            placebo_plus_t = stable0_avg - joiner_avg
+ 
+         # Leavers side: symmetric A11 distinction
+         if n_01 == 0:
+@@ -4678,7 +4683,10 @@ def _compute_placebo(
+         else:
+             stable1_avg = float((y_prev[stable1_mask] - y_pre_prev[stable1_mask]).mean())
+             leaver_avg = float((y_prev[leaver_mask] - y_pre_prev[leaver_mask]).mean())
+-            placebo_minus_t = stable1_avg - leaver_avg
++            # Backward-difference convention times switch_direction=-1 for
++            # leavers (see the joiners-side note above): the multi-horizon path
++            # contributes `leaver_avg - stable1_avg` here.
++            placebo_minus_t = leaver_avg - stable1_avg
+ 
+         placebo_plus_per_t.append(placebo_plus_t)
+         placebo_minus_per_t.append(placebo_minus_t)
+diff --git a/diff_diff/honest_did.py b/diff_diff/honest_did.py
+index 624f8736..bf6da448 100644
+--- a/diff_diff/honest_did.py
++++ b/diff_diff/honest_did.py
+@@ -2466,14 +2466,20 @@ class HonestDiD:
+         # Construct constraints
+         A_ineq, b_ineq = _construct_constraints_sd(num_pre, num_post, M)
+ 
+-        # Solve for identified set bounds with delta_pre = beta_pre pinned
++        # Solve for the identified set bounds with delta_pre = beta_pre pinned.
++        # When the observed pre-trend's own curvature exceeds M this LP is
++        # infeasible and the ESTIMATED identified set is empty (lb/ub = NaN) - the
++        # point estimate rejects Delta^SD(M). That does NOT invalidate the FLCI: the
++        # optimal FLCI is an affine estimator whose worst-case bias is taken over
++        # delta in Delta^SD(M) treating beta as random, so it is well-defined given
++        # (sigma, M) regardless of whether the realized beta_pre lies in Delta. R's
++        # HonestDiD::createSensitivityResults returns the FLCI in exactly this case,
++        # so we compute and return it (leaving lb/ub = NaN to flag the empty
++        # estimated id-set) rather than NaN-propagating the whole result.
+         lb, ub = _solve_bounds_lp(beta_pre, beta_post, l_vec, A_ineq, b_ineq, num_pre)
+ 
+-        # Propagate infeasibility: if bounds are NaN, CI is NaN too
+-        if np.isnan(lb) or np.isnan(ub):
+-            return np.nan, np.nan, np.nan, np.nan
+-
+-        # Compute optimal FLCI (Rambachan & Roth Section 4.1)
++        # Compute optimal FLCI (Rambachan & Roth Section 4.1) - independent of the
++        # identified-set LP above.
+         if sigma_full.shape[0] == num_pre + num_post:
+             ci_lb, ci_ub = _compute_optimal_flci(
+                 beta_pre,
+@@ -2487,7 +2493,12 @@ class HonestDiD:
+                 df=df,
+             )
+         else:
+-            # Fallback to naive FLCI when full sigma unavailable
++            # The naive fallback FLCI extends the identified set by z*se, so it
++            # genuinely needs finite id-set bounds; when the LP was infeasible the
++            # naive CI is undefined (this branch is only reachable without the full
++            # covariance matrix).
++            if np.isnan(lb) or np.isnan(ub):
++                return lb, ub, np.nan, np.nan
+             se = np.sqrt(l_vec @ sigma_post @ l_vec)
+             ci_lb, ci_ub = _compute_flci(lb, ub, se, self.alpha, df=df)
+ 
+diff --git a/diff_diff/linalg.py b/diff_diff/linalg.py
+index d122784a..33183803 100644
+--- a/diff_diff/linalg.py
++++ b/diff_diff/linalg.py
+@@ -2055,10 +2055,14 @@ def _cr2_bm_dof_inner(
+     omega_all = {g: A_g_Xbi[g] @ contrasts for g in unique_clusters}
+ 
+     dof_vec = np.empty(m)
++    # Retain max|B_{g,h}| per contrast so we can NaN-guard noise-floor
++    # degeneracies in a second pass (mirrors `_cr2_bm_dof_inner_weighted`).
++    max_abs_B_arr = np.zeros(m)
+     for j in range(m):
+         q = Q[:, j]
+         trace_B = float(np.sum(q * q))
+         trace_B2 = 0.0
++        max_abs_B = 0.0
+         omega_cache = {g: omega_all[g][:, j] for g in unique_clusters}
+         for g in unique_clusters:
+             idx_g = cluster_idx[g]
+@@ -2069,8 +2073,85 @@ def _cr2_bm_dof_inner(
+                 M_gh = M[np.ix_(idx_g, idx_h)]
+                 val = float(omega_g @ M_gh @ omega_h)
+                 trace_B2 += val * val
++                if abs(val) > max_abs_B:
++                    max_abs_B = abs(val)
++        max_abs_B_arr[j] = max_abs_B
+         dof_vec[j] = (trace_B * trace_B) / trace_B2 if trace_B2 > 0 else np.nan
+ 
++    # Noise-floor NaN-guard (unweighted analogue of the guard in
++    # `_cr2_bm_dof_inner_weighted`). For a high-leverage FE-dummy / collinear
++    # nuisance column, `trace_B2 = sum_{g,h} B_{g,h}²` collapses to float64
++    # accumulation noise while `trace_B` stays O(1), so `(trace_B)²/trace_B2`
++    # blows up to a non-physical DOF (observed up to ~1e61 on the absorbed-FE
++    # golden). `trace_B2 > 0` alone does not catch this because the roundoff is
++    # positive. The Satterthwaite DOF is scale-invariant, so a contrast whose
++    # `max|B_{g,h}|` sits at the accumulation floor is unreliable and
++    # BLAS-order-dependent; we return NaN with a warning rather than ship it.
++    # Two union-wise criteria:
++    #   1. Batch-relative: a contrast's max|B| is 1e-10× below the largest
++    #      contrast's, i.e. it sits at the accumulation floor relative to a
++    #      well-conditioned column (per-coefficient sweeps, `contrasts=eye(k)`).
++    #      `B_{g,h}` scales as ‖c‖² while the Satterthwaite DOF is scale-invariant,
++    #      so the comparison is done on `max|B| / ‖c‖²` - otherwise the same
++    #      contrast passed at two scales in one batch would spuriously flag the
++    #      smaller copy (‖c‖² differs by the scale²). For `contrasts=eye(k)` every
++    #      `‖c‖²=1`, so this is a no-op on the per-coefficient path.
++    #   2. Absolute (single-contrast safe): max|B| < (EPS·n·k·bread_scale)².
++    #      Calibrated for the O(1)-scale contrasts estimators pass (per-coef unit
++    #      vectors, the averaging-weight compound contrast).
++    # The treatment / event-study / compound-average contrasts that estimators
++    # actually consume are well-conditioned and unaffected.
++    _EPS = np.finfo(np.float64).eps
++    n_obs, k_X = X.shape
++    bread_scale = float(np.max(np.abs(bread_inv))) if bread_inv.size else 1.0
++    abs_noise_floor = (_EPS * n_obs * k_X * max(bread_scale, 1.0)) ** 2
++    abs_degenerate = max_abs_B_arr < abs_noise_floor
++    if m > 1:
++        contrast_sq_norm = np.einsum("ij,ij->j", contrasts, contrasts)
++        contrast_sq_norm = np.where(contrast_sq_norm > 0, contrast_sq_norm, 1.0)
++        scaled_max_B = max_abs_B_arr / contrast_sq_norm
++        max_scaled_overall = float(np.max(scaled_max_B))
++        rel_degenerate = (
++            scaled_max_B < 1e-10 * max_scaled_overall
++            if max_scaled_overall > 0
++            else np.zeros(m, dtype=bool)
++        )
++    else:
++        rel_degenerate = np.zeros(m, dtype=bool)
++    at_noise_floor = abs_degenerate | rel_degenerate
++    # Physical-bound guard. The Bell-McCaffrey Satterthwaite DOF is
++    # `(tr B)²/tr(B²)` with `B` PSD and cluster-structured, so it is bounded by
++    # `rank(B) <= G` (the number of clusters) - it can approach G when clusters
++    # are small (few obs each), so the bound is G, NOT the residual dof `n-k`
++    # (which can be smaller than G and would wrongly flag legitimate near-G
++    # DOFs on short panels). A value above G is non-physical. The simple
++    # unweighted `(tr B)²/tr(B²)` form is numerically less faithful than
++    # clubSandwich's P-array form (used on the weighted path) for high-leverage
++    # FE-dummy columns and can return a finite-but-inflated DOF there (observed
++    # ~32.7 and ~16.3 vs R's 6 and 3 on the absorbed-FE golden, G=8) that is NOT
++    # at the noise floor. Rather than ship an impossible DOF we NaN it; exact
++    # clubSandwich reproduction of these non-user-facing nuisance DOFs would
++    # require porting the P-array form and is out of scope (estimators consume
++    # only the well-conditioned treatment / event-study / compound-average
++    # contrasts, which are unaffected).
++    n_clusters = len(unique_clusters)
++    non_physical = np.isfinite(dof_vec) & (dof_vec > n_clusters + 1e-6)
++    degenerate = at_noise_floor | non_physical
++    n_degenerate = int(np.sum(degenerate))
++    if n_degenerate > 0:
++        dof_vec[degenerate] = np.nan
++        warnings.warn(
++            f"Satterthwaite DOF for {n_degenerate} of {m} contrast(s) is "
++            f"unreliable (at the float64 noise floor, or above the cluster-count "
++            f"bound G={n_clusters}); reporting NaN. This affects high-leverage "
++            f"FE-dummy / collinear nuisance coefficients; the resulting DOF is "
++            f"BLAS-order-dependent / non-physical. The coefficient SEs remain "
++            f"valid — only the Satterthwaite DOF (and any t-test / CI depending "
++            f"on it) is suppressed.",
++            UserWarning,
++            stacklevel=3,
++        )
++
+     return dof_vec
+ 
+ 
+diff --git a/docs/methodology/REGISTRY.md b/docs/methodology/REGISTRY.md
+index 46c209c9..f5772e20 100644
+--- a/docs/methodology/REGISTRY.md
++++ b/docs/methodology/REGISTRY.md
+@@ -243,6 +243,7 @@ where V is the VCV sub-matrix for post-treatment δ_e coefficients.
+   `_compute_cr2_bm_contrast_dof` (DOF-only for arbitrary contrasts) are thin wrappers
+   over that shared core, so every CR2 caller routes through one implementation. The
+   consolidation is bit-identical to the prior two-call path (proven at atol=0).
++- **Note (unweighted per-coef DOF guard):** the unweighted clustered CR2-BM per-coefficient DOF (`_cr2_bm_dof_inner`, the simple `(tr B)²/tr(B²)` form) carries the same two-part reliability guard as the weighted P-array path. (1) **Noise floor:** for a high-leverage FE-dummy / collinear nuisance column `trace_B2 = Σ B_{g,h}²` collapses to float64 accumulation noise while `trace_B` stays O(1), inflating the ratio to a non-physical DOF (observed ~1e61 on the absorbed-FE golden); a contrast whose `max|B_{g,h}|` sits below the batch-relative (`1e-10×max`, computed on the scale-normalized `max|B|/‖c‖²` since `B ∝ ‖c‖²` while the DOF is scale-invariant) or absolute (`(EPS·n·k·bread_scale)²`) floor is NaN'd. (2) **Cluster-count bound:** the Bell-McCaffrey Satterthwaite DOF is `(tr B)²/tr(B²)` with `B` PSD and cluster-structured, so it is bounded by `rank(B) ≤ G` (number of clusters); the simple unweighted form is numerically less faithful than clubSandwich's P-array form on high-leverage columns and can return a finite-but-inflated DOF above `G` (observed ~32.7 and ~16.3 vs R's 6 and 3, `G=8`), which is NaN'd as non-physical. The well-conditioned contrasts estimators consume — the treatment effect, event-study coefficients, and the compound post-period-average — are unaffected and match R clubSandwich; only the non-user-facing high-leverage nuisance DOFs are suppressed (exact P-array reproduction of those is deferred). A `UserWarning` fires per fit. Regression: `tests/test_estimators_vcov_type.py::TestDiDAbsorbedFERParity::test_unweighted_cr2_bm_per_coef_dof_no_nonphysical`.
+ - **Note:** `LinearRegression.get_se()` / `get_inference()` clamp the vcov diagonal at 0
+   before `sqrt`. A high-leverage / degenerate coefficient (an absorbed-FE dummy
+   near-collinear with the treatment, whose Satterthwaite DOF already hits the noise-floor
+@@ -752,6 +753,8 @@ DID_M^pl = (1/N_S^pl) * sum_{t>=3} (
+           )
+ ```
+ 
++**Note (sign convention):** the reported `placebo_effect` uses the **backward-difference × switch-direction** convention of the multi-horizon placebo path (`_compute_multi_horizon_placebos`: `switcher_change - ctrl_avg` with `Y_bwd - Y_ref`, times `S_g = +1` joiners / `-1` leavers) and R `did_multiplegt_dyn`. In the phase-1 (`L_max=None`) code this is `placebo_plus_t = stable0_avg - joiner_avg` (joiners) and `placebo_minus_t = leaver_avg - stable1_avg` (leavers). Prior to this the phase-1 path used the opposite (forward-difference) order, so `placebo_effect` was **sign-flipped vs R** on pure-direction panels (magnitude bit-identical); the multi-horizon path was always correct. Pinned by `tests/test_chaisemartin_dhaultfoeuille_parity.py::TestDCDHDynRParity::test_parity_{joiners,leavers}_only`. On **mixed-direction** panels the placebo magnitude additionally carries the documented period-vs-cohort stable-control-set / equal-cell-weighting deviation (see the `**Note (deviation from R DIDmultiplegtDYN):**` above), so it is not gate-asserted against R there.
++
+ *Phase 2: Multi-horizon event study (Equation 3 and 5 of the dynamic companion paper):*
+ 
+ When `L_max >= 1`, the estimator computes the per-group building block `DID_{g,l}` and the aggregate `DID_l` for each horizon. When `L_max=1`, `overall_att` holds `DID_1` (the per-group estimand, not the per-period `DID_M`). When `L_max >= 2`, `overall_att` holds the cost-benefit delta. When `L_max=None`, the per-period `DID_M` path is used:
+@@ -3519,6 +3522,8 @@ CRITICAL: δ_pre = β_pre pins pre-treatment violations to observed coefficients
+ - M̄=0 for Δ^RM: post-treatment first differences = 0, point identification
+ - Breakdown point: smallest M where CI includes zero
+ - Negative M: not valid (constraints become infeasible)
++- **Note:** Δ^SD **empty estimated identified set** (the observed pre-trend's curvature exceeds M, so the `δ_pre = β_pre`-pinned identified-set LP is infeasible → `lb`/`ub` = NaN) does **not** suppress the FLCI. The optimal FLCI is an affine estimator whose worst-case bias is taken over `δ ∈ Δ^SD(M)` treating β as random, so it is well-defined given (Σ, M) regardless of whether the realized `β_pre` lies in Δ; R's `HonestDiD::createSensitivityResults` returns it in exactly this case. `_compute_smoothness_bounds` therefore returns the finite FLCI with `lb`/`ub` = NaN (empty id-set), matching R (prior behavior NaN-propagated the whole result, silently yielding no inference on high-curvature pre-trends). The naive fallback FLCI (diagonal Σ only) still requires finite id-set bounds and returns NaN CI when infeasible. Guarded by `test_infeasible_smoothness_fit_returns_flci_with_empty_idset`.
++- **Note (deviation from R — Δ^SD FLCI optimizer at intermediate M):** The optimal-FLCI affine-estimator optimization (Nelder-Mead over slope weights) agrees with R `createSensitivityResults` to ~1e-3 at M=0 and at larger M, but diverges at **intermediate small M** (roughly `M ∈ [0.005, 0.02]` on wide pre/post windows): the CI **width** matches R to ~1e-3 while the **center** shifts by up to ~9% (npre=6/npost=4 event study). Not a local-minimum artifact (multi-start does not move it); the two implementations land on different affine estimators of near-equal length. Reconciliation with R's `.FLCI.computeFLCI` algorithm is deferred (see TODO.md). Coverage is unaffected (widths match); the shift is in the reported CI location.
+ - **Note:** Phase 7d: survey variance support. When input results carry `survey_metadata` with `df_survey`, Delta^SD smoothness uses folded non-central t critical values (`scipy.stats.nct`); Delta^RM and naive FLCI paths use `_get_critical_value(alpha, df)` (standard t-distribution). `df_survey=0` → NaN inference. CallawaySantAnnaResults stores `event_study_vcov` (full cross-event-time VCV from IF vectors), which HonestDiD uses instead of the diagonal fallback. For replicate-weight designs, the event-study VCV falls back to diagonal (multivariate replicate VCV deferred).
+ - **Note (deviation from R):** When HonestDiD receives bootstrap-fitted CallawaySantAnna results (`n_bootstrap > 0`), the full event-study covariance is unavailable (cleared to prevent mixing analytical VCV with bootstrap SEs). HonestDiD falls back to `diag(se^2)` from the bootstrap SEs with a UserWarning. R's `honest_did.AGGTEobj` computes a full covariance from the influence function matrix; implementing bootstrap event-study covariance is deferred. For full covariance structure in HonestDiD, use analytical SEs (`n_bootstrap=0`).
+ - **Note (deviation from R):** When CallawaySantAnna results are passed to HonestDiD, `base_period != "universal"` emits a warning but does not error. R's `honest_did::honest_did.AGGTEobj` requires universal base period. Our implementation warns because the varying-base pre-treatment coefficients use consecutive comparisons (not a common reference), which changes the parallel-trends restriction interpretation.
+diff --git a/tests/test_chaisemartin_dhaultfoeuille_parity.py b/tests/test_chaisemartin_dhaultfoeuille_parity.py
+index 604941a6..01a98feb 100644
+--- a/tests/test_chaisemartin_dhaultfoeuille_parity.py
++++ b/tests/test_chaisemartin_dhaultfoeuille_parity.py
+@@ -174,6 +174,10 @@ class TestDCDHDynRParity:
+         assert results.overall_se == pytest.approx(
+             r_results["overall_se"], rel=self.PURE_DIRECTION_SE_RTOL
+         )
++        # Phase-1 placebo DID_M^pl point estimate: backward-difference x
++        # switch_direction convention (matches the multi-horizon placebo path
++        # and R). On pure-direction panels this equals R to working precision.
++        assert results.placebo_effect == pytest.approx(r_results["placebo_effect"], abs=1e-8)
+ 
+     def test_parity_leavers_only(self, golden_values):
+         scenario = golden_values.get("leavers_only")
+@@ -187,6 +191,9 @@ class TestDCDHDynRParity:
+         assert results.overall_se == pytest.approx(
+             r_results["overall_se"], rel=self.PURE_DIRECTION_SE_RTOL
+         )
++        # Phase-1 placebo point estimate matches R on pure-direction panels
++        # (leavers side: switch_direction = -1). Guards the sign convention.
++        assert results.placebo_effect == pytest.approx(r_results["placebo_effect"], abs=1e-8)
+ 
+     def test_parity_mixed_single_switch(self, golden_values):
+         scenario = golden_values.get("mixed_single_switch")
+diff --git a/tests/test_estimators_vcov_type.py b/tests/test_estimators_vcov_type.py
+index b831e40f..4a060b99 100644
+--- a/tests/test_estimators_vcov_type.py
++++ b/tests/test_estimators_vcov_type.py
+@@ -1559,6 +1559,109 @@ class TestDiDAbsorbedFERParity:
+         # standalone field on DiDResults; the SE+ATT parity above suffices).
+         _ = expected_dof_slope
+ 
++    def test_unweighted_cr2_bm_per_coef_dof_no_nonphysical(self):
++        """Unweighted clustered CR2-BM per-coef DOF: physical or NaN, never garbage.
++
++        Direct `_compute_cr2_bm_contrast_dof(..., weights=None)` on the full-dummy
++        absorbed-FE design. The well-conditioned contrasts estimators actually
++        consume (`treat_post`, the period dummies) match R clubSandwich; the
++        high-leverage FE-dummy / intercept nuisance columns previously returned
++        non-physical DOF (~1e61 from float64-noise `trace_B2`, and ~32.7 / ~16.3
++        vs R's 6 / 3 from the simple `(tr B)²/tr(B²)` form). The noise-floor +
++        cluster-count (`DOF <= G`) guards now NaN those instead of shipping them.
++        """
++        import numpy as np
++
++        from diff_diff.linalg import _compute_cr2_bm_contrast_dof
++
++        d = self._load_golden()
++        names = d["coef_names"]
++        n = len(d["y"])
++        treated = np.asarray(d["treated"], dtype=float)
++        post = np.asarray(d["post"], dtype=float)
++        unit = np.asarray(d["unit"])
++        period = np.asarray(d["period"])
++        tp = treated * post
++
++        def _col(nm):
++            if nm == "(Intercept)":
++                return np.ones(n)
++            if nm == "treat_post":
++                return tp
++            if nm.startswith("period"):
++                return (period == int(nm[len("period") :])).astype(float)
++            if nm.startswith("unit"):
++                return (unit == int(nm[len("unit") :])).astype(float)
++            return np.zeros(n)
++
++        X = np.column_stack([_col(nm) for nm in names])
++        k = X.shape[1]
++        G = len(np.unique(unit))
++        gold = d["dof_cr2"]
++
++        with pytest.warns(UserWarning, match="noise floor|cluster-count"):
++            dof = _compute_cr2_bm_contrast_dof(X, unit, X.T @ X, np.eye(k), weights=None)
++
++        # No finite DOF exceeds the cluster count (rigorous Satterthwaite bound).
++        finite = np.isfinite(dof)
++        assert np.all(dof[finite] <= G + 1e-6), (
++            f"non-physical DOF (> G={G}): "
++            f"{[(names[i], dof[i]) for i in range(k) if finite[i] and dof[i] > G + 1e-6]}"
++        )
++        # The user-facing / well-conditioned contrasts still match R clubSandwich.
++        for nm in ["treat_post", "period2", "period3", "period4"]:
++            i = names.index(nm)
++            assert dof[i] == pytest.approx(float(gold[i]), abs=1e-6), f"{nm} DOF vs R"
++        # The high-leverage nuisance columns are suppressed to NaN, not garbage.
++        assert np.isnan(dof[names.index("unit2")]), "collinear unit dummy DOF should be NaN"
++
++    def test_unweighted_cr2_bm_dof_scale_invariant_batch(self):
++        """The batch-relative noise-floor guard is contrast-scale invariant.
++
++        Satterthwaite DOF is scale-invariant, but the guard statistic `max|B|`
++        scales as ‖c‖². The batch-relative floor divides by ‖c‖² so the same
++        contrast passed at two scales in one batch yields identical finite DOF -
++        without the normalization the smaller-scale copy would be spuriously
++        NaN'd (its `max|B|` sits `scale²` below the larger copy's).
++        """
++        import numpy as np
++
++        from diff_diff.linalg import _compute_cr2_bm_contrast_dof
++
++        d = self._load_golden()
++        names = d["coef_names"]
++        n = len(d["y"])
++        treated = np.asarray(d["treated"], dtype=float)
++        post = np.asarray(d["post"], dtype=float)
++        unit = np.asarray(d["unit"])
++        X = np.column_stack(
++            [np.ones(n) if nm == "(Intercept)" else np.zeros(n) for nm in names]
++        )
++        # Rebuild the full design (same as the sibling test).
++        period = np.asarray(d["period"])
++        tp = treated * post
++        for j, nm in enumerate(names):
++            if nm == "treat_post":
++                X[:, j] = tp
++            elif nm.startswith("period"):
++                X[:, j] = (period == int(nm[len("period") :])).astype(float)
++            elif nm.startswith("unit"):
++                X[:, j] = (unit == int(nm[len("unit") :])).astype(float)
++        k = X.shape[1]
++        c = np.zeros(k)
++        c[names.index("treat_post")] = 1.0
++        # Same contrast direction at scale 1 and 1e6 in a single batch. Both are
++        # the well-conditioned treatment contrast, so neither is degenerate and no
++        # warning fires (the guard must not spuriously flag the smaller-scale copy).
++        contrasts = np.column_stack([c, 1e6 * c])
++        import warnings as _warnings
++
++        with _warnings.catch_warnings():
++            _warnings.simplefilter("error")  # any noise-floor warning here is a bug
++            dof = _compute_cr2_bm_contrast_dof(X, unit, X.T @ X, contrasts, weights=None)
++        assert np.all(np.isfinite(dof)), f"scale-only difference should not NaN: {dof}"
++        assert dof[0] == pytest.approx(dof[1], rel=1e-12), "DOF must be scale-invariant"
++
+     def test_absorb_hc2_matches_sandwich_vcovhc(self):
+         """`absorb=` + `hc2` matches `lm() + sandwich::vcovHC(type="HC2")`.
+ 
+diff --git a/tests/test_methodology_honest_did.py b/tests/test_methodology_honest_did.py
+index 2f378a31..efdfb1d7 100644
+--- a/tests/test_methodology_honest_did.py
++++ b/tests/test_methodology_honest_did.py
+@@ -411,11 +411,20 @@ class TestOptimalFLCI:
+             f"Infeasible LP should return NaN, got [{lb}, {ub}]"
+         )
+ 
+-    def test_infeasible_smoothness_fit_returns_nan_ci(self):
+-        """Fit-level: infeasible smoothness restriction returns NaN CI."""
++    def test_infeasible_smoothness_fit_returns_flci_with_empty_idset(self):
++        """Fit-level: an empty ESTIMATED identified set still yields a finite FLCI.
++
++        When the observed pre-trend's curvature exceeds M, the identified-set LP
++        (which pins delta_pre = beta_pre) is infeasible, so ``lb``/``ub`` are NaN.
++        The FLCI does not depend on that LP - it is an affine estimator whose
++        worst-case bias is taken over delta in Delta^SD(M) treating beta as random,
++        so it is well-defined given (sigma, M). R's ``HonestDiD::createSensitivityResults``
++        returns the FLCI in exactly this case, and so do we (previously the fit
++        NaN-propagated the whole result, silently yielding no inference).
++        """
+         from diff_diff.results import MultiPeriodDiDResults, PeriodEffect
+ 
+-        # Non-linear pre-trends: inconsistent with Delta^SD(M=0.01)
++        # Non-linear pre-trends: inconsistent with Delta^SD(M=0.0)
+         period_effects = {
+             1: PeriodEffect(period=1, effect=1.0, se=0.1, t_stat=10.0,
+                            p_value=0.0, conf_int=(0.8, 1.2)),
+@@ -436,13 +445,18 @@ class TestOptimalFLCI:
+ 
+         honest = HonestDiD(method="smoothness", M=0.0)
+         r = honest.fit(results)
+-        # Non-linear pre-trends should make M=0 infeasible
+-        assert np.isnan(r.lb) and np.isnan(r.ub), f"Expected NaN bounds, got [{r.lb}, {r.ub}]"
+-        assert np.isnan(r.ci_lb) and np.isnan(r.ci_ub), f"Expected NaN CI, got [{r.ci_lb}, {r.ci_ub}]"
+-        # NaN CIs must NOT be classified as significant
+-        assert not r.is_significant, "NaN CI should not be significant"
+-        assert r.significance_stars == "", "NaN CI should have no significance stars"
+-        assert "undefined" in repr(r).lower(), "NaN CI repr should indicate undefined"
++        # Estimated identified set is empty -> NaN bounds ...
++        assert np.isnan(r.lb) and np.isnan(r.ub), f"Expected NaN id-set bounds, got [{r.lb}, {r.ub}]"
++        # ... but the FLCI is finite and matches R createSensitivityResults(M=0):
++        # [2.082644, 2.488866] (verified against HonestDiD 0.2.6).
++        assert np.isfinite(r.ci_lb) and np.isfinite(r.ci_ub), (
++            f"Expected finite FLCI, got [{r.ci_lb}, {r.ci_ub}]"
++        )
++        assert abs(r.ci_lb - 2.082644) < 1e-3, f"ci_lb={r.ci_lb:.6f} vs R 2.082644"
++        assert abs(r.ci_ub - 2.488866) < 1e-3, f"ci_ub={r.ci_ub:.6f} vs R 2.488866"
++        # Finite CI excluding 0 -> significant, with a star.
++        assert r.is_significant, "CI [2.08, 2.49] excludes 0 -> significant"
++        assert r.significance_stars == "*"
+ 
+     def test_smoothness_df_survey_zero_returns_nan(self):
+         """Smoothness with df_survey=0 should return NaN CI."""
+@@ -458,6 +472,36 @@ class TestOptimalFLCI:
+         )
+         assert np.isnan(ci_lb) and np.isnan(ci_ub), "df=0 should give NaN CI"
+ 
++    def test_smoothness_flci_finite_across_M_grid_and_matches_r_at_zero(self):
++        """Smoothness FLCI is finite across an M grid; tight R parity at M=0.
++
++        Regression guard for the identified-set NaN-gate bug: an empty estimated
++        identified set must not suppress the FLCI (previously it did). The FLCI must
++        stay finite for every M. At M=0 the affine-estimator optimum is unambiguous
++        and matches R ``createSensitivityResults`` to <1e-3; at intermediate M there
++        is a known optimizer/center divergence from R (up to ~9% on wide pre/post
++        windows, CI width unaffected; see REGISTRY.md and TODO.md), so this test only
++        pins finiteness there.
++        """
++        from diff_diff.honest_did import _compute_optimal_flci
++
++        beta_pre = np.array([1.0, 0.0, 1.0])
++        beta_post = np.array([2.0])
++        sigma = np.eye(4) * 0.01
++        lvec = np.array([1.0])
++        for M in [0.0, 0.01, 0.02, 0.05, 0.1]:
++            ci_lb, ci_ub = _compute_optimal_flci(
++                beta_pre, beta_post, sigma, lvec, 3, 1, M=M, df=None
++            )
++            assert np.isfinite(ci_lb) and np.isfinite(ci_ub), f"M={M}: non-finite FLCI"
++            assert ci_ub > ci_lb, f"M={M}: degenerate CI"
++        # M=0: tight R parity (R HonestDiD 0.2.6: [2.082644, 2.488866]).
++        ci_lb, ci_ub = _compute_optimal_flci(
++            beta_pre, beta_post, sigma, lvec, 3, 1, M=0.0, df=None
++        )
++        assert abs(ci_lb - 2.082644) < 1e-3, f"M=0 ci_lb={ci_lb:.6f} vs R 2.082644"
++        assert abs(ci_ub - 2.488866) < 1e-3, f"M=0 ci_ub={ci_ub:.6f} vs R 2.488866"
++
+ 
+ # =============================================================================
+ # TestBreakdownValueMethodology

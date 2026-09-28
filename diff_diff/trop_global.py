@@ -24,9 +24,17 @@ from diff_diff._backend import (
     _rust_bootstrap_trop_variance_global,
     _rust_loocv_grid_search_global,
 )
-from diff_diff.trop_local import _soft_threshold_svd
+from diff_diff.bootstrap_utils import (
+    stratified_bootstrap_indices,
+    warn_bootstrap_failure_rate,
+)
+from diff_diff.trop_local import (
+    _run_trop_bootstrap_loop,
+    _setup_trop_data,
+    _soft_threshold_svd,
+)
 from diff_diff.trop_results import TROPResults
-from diff_diff.utils import safe_inference
+from diff_diff.utils import safe_inference, warn_if_not_converged
 
 
 class TROPGlobalMixin:
@@ -156,6 +164,7 @@ class TROPGlobalMixin:
         Y: np.ndarray,
         delta: np.ndarray,
         lambda_nn: float,
+        _nonconvergence_tracker: Optional[List[int]] = None,
     ) -> Tuple[float, np.ndarray, np.ndarray, np.ndarray]:
         """
         Dispatch to no-lowrank or with-lowrank solver based on lambda_nn.
@@ -168,7 +177,12 @@ class TROPGlobalMixin:
             L = np.zeros((n_periods, n_units))
         else:
             mu, alpha, beta, L = self._solve_global_with_lowrank(
-                Y, delta, lambda_nn, self.max_iter, self.tol
+                Y,
+                delta,
+                lambda_nn,
+                self.max_iter,
+                self.tol,
+                _nonconvergence_tracker=_nonconvergence_tracker,
             )
         return mu, alpha, beta, L
 
@@ -273,6 +287,7 @@ class TROPGlobalMixin:
 
         tau_sq_sum = 0.0
         n_valid = 0
+        nonconverg_tracker: List[int] = []
 
         for t_ex, i_ex in control_obs:
             # Create modified delta with excluded observation zeroed out
@@ -280,7 +295,12 @@ class TROPGlobalMixin:
             delta_ex[t_ex, i_ex] = 0.0
 
             try:
-                mu, alpha, beta, L = self._solve_global_model(Y, delta_ex, lambda_nn)
+                mu, alpha, beta, L = self._solve_global_model(
+                    Y,
+                    delta_ex,
+                    lambda_nn,
+                    _nonconvergence_tracker=nonconverg_tracker,
+                )
 
                 # Pseudo treatment effect: tau = Y - mu - alpha - beta - L
                 if np.isfinite(Y[t_ex, i_ex]):
@@ -291,6 +311,16 @@ class TROPGlobalMixin:
             except (np.linalg.LinAlgError, ValueError):
                 # Any failure means this lambda combination is invalid per Equation 5
                 return np.inf
+
+        if nonconverg_tracker:
+            warn_if_not_converged(
+                False,
+                f"TROP global LOOCV: {len(nonconverg_tracker)} of {len(control_obs)} "
+                f"per-observation fits did not converge "
+                f"(\u03bb=({lambda_time}, {lambda_unit}, {lambda_nn}))",
+                self.max_iter,
+                self.tol,
+            )
 
         if n_valid == 0:
             return np.inf
@@ -370,6 +400,13 @@ class TROPGlobalMixin:
             coeffs, _, _, _ = np.linalg.lstsq(X_weighted, y_weighted, rcond=None)
         except np.linalg.LinAlgError:
             # Fallback: use pseudo-inverse
+            warnings.warn(
+                "Least-squares solver failed in TROP global estimation; "
+                "falling back to pseudo-inverse. Results may be less "
+                "numerically stable.",
+                UserWarning,
+                stacklevel=2,
+            )
             coeffs = np.dot(np.linalg.pinv(X_weighted), y_weighted)
 
         # Extract parameters
@@ -388,6 +425,7 @@ class TROPGlobalMixin:
         lambda_nn: float,
         max_iter: int = 100,
         tol: float = 1e-6,
+        _nonconvergence_tracker: Optional[List[int]] = None,
     ) -> Tuple[float, np.ndarray, np.ndarray, np.ndarray]:
         """
         Solve TWFE + low-rank on control data via alternating minimization.
@@ -438,6 +476,9 @@ class TROPGlobalMixin:
         # Initialize L = 0
         L = np.zeros((n_periods, n_units))
 
+        _FISTA_MAX_ITER = 20
+        inner_nonconverged_count = 0
+        outer_converged = False
         for iteration in range(max_iter):
             L_old = L.copy()
 
@@ -456,7 +497,8 @@ class TROPGlobalMixin:
             L_inner_prev = L_inner  # share reference initially (no copy needed)
             t_fista = 1.0
 
-            for _ in range(20):
+            inner_converged = False
+            for _ in range(_FISTA_MAX_ITER):
                 # FISTA momentum
                 t_fista_new = (1.0 + np.sqrt(1.0 + 4.0 * t_fista**2)) / 2.0
                 momentum = (t_fista - 1.0) / t_fista_new
@@ -472,13 +514,28 @@ class TROPGlobalMixin:
 
                 # Convergence check (L_inner_prev holds the pre-SVD value)
                 if np.max(np.abs(L_inner - L_inner_prev)) < tol:
+                    inner_converged = True
                     break
+            if not inner_converged:
+                inner_nonconverged_count += 1
 
             L = L_inner
 
             # Outer convergence check
             if np.max(np.abs(L - L_old)) < tol:
+                outer_converged = True
                 break
+
+        if not outer_converged:
+            if _nonconvergence_tracker is not None:
+                _nonconvergence_tracker.append(inner_nonconverged_count)
+            else:
+                detail = (
+                    f"TROP global alternating minimization "
+                    f"(inner FISTA non-converged in {inner_nonconverged_count}/{max_iter} "
+                    f"outer iterations, FISTA max_iter={_FISTA_MAX_ITER})"
+                )
+                warn_if_not_converged(False, detail, max_iter, tol)
 
         # Final re-solve with converged L (match Rust behavior)
         Y_adj = Y_safe - L
@@ -531,84 +588,38 @@ class TROPGlobalMixin:
         across units, use `method="local"` which computes observation-specific
         weights that naturally handle heterogeneous timing.
         """
-        # Data setup (same as local method)
-        all_units = sorted(data[unit].unique())
-        all_periods = sorted(data[time].unique())
-
-        # Extract per-unit survey weights for weighted ATT aggregation
-        if resolved_survey is not None:
-            from diff_diff.survey import _extract_unit_survey_weights
-
-            unit_weight_arr = _extract_unit_survey_weights(data, unit, survey_design, all_units)
-        else:
-            unit_weight_arr = None
-
-        n_units = len(all_units)
-        n_periods = len(all_periods)
-
-        idx_to_unit = {i: u for i, u in enumerate(all_units)}
-        idx_to_period = {i: p for i, p in enumerate(all_periods)}
-
-        # Create matrices
-        Y = (
-            data.pivot(index=time, columns=unit, values=outcome)
-            .reindex(index=all_periods, columns=all_units)
-            .values
-        )
-
-        D_raw = data.pivot(index=time, columns=unit, values=treatment).reindex(
-            index=all_periods, columns=all_units
-        )
-        missing_mask = pd.isna(D_raw).values
-        D = D_raw.fillna(0).astype(int).values
-
-        # Validate absorbing state
-        violating_units = []
-        for unit_idx in range(n_units):
-            observed_mask = ~missing_mask[:, unit_idx]
-            observed_d = D[observed_mask, unit_idx]
-            if len(observed_d) > 1 and np.any(np.diff(observed_d) < 0):
-                violating_units.append(all_units[unit_idx])
-
-        if violating_units:
+        # The global method's post-hoc weighting and bootstrap bake in a
+        # contiguous, simultaneous treated block (see Notes above), which is
+        # incompatible with general on/off assignment. Non-absorbing support is
+        # local-method only (Athey et al. 2025 Eq. 12 / Algorithm 2).
+        if getattr(self, "non_absorbing", False):
             raise ValueError(
-                f"Treatment indicator is not an absorbing state for units: {violating_units}. "
-                f"D[t, unit] must be monotonic non-decreasing (once treated, always treated). "
-                f"If this is event-study style data, convert to absorbing state: "
-                f"D[t, i] = 1 for all t >= first treatment period."
+                "non_absorbing=True requires method='local'; the global method "
+                "requires block (simultaneous) treatment assignment. Use "
+                "TROP(method='local', non_absorbing=True) for on/off treatment."
             )
 
-        # Identify treated observations
-        treated_mask = D == 1
-        n_treated_obs = np.sum(treated_mask)
-
-        if n_treated_obs == 0:
-            raise ValueError("No treated observations found")
-
-        # Identify treated and control units
-        unit_ever_treated = np.any(D == 1, axis=0)
-        treated_unit_idx = np.where(unit_ever_treated)[0]
-        control_unit_idx = np.where(~unit_ever_treated)[0]
-
-        if len(control_unit_idx) == 0:
-            raise ValueError("No control units found")
-
-        # Determine pre/post periods
-        first_treat_period = None
-        for t in range(n_periods):
-            if np.any(D[t, :] == 1):
-                first_treat_period = t
-                break
-
-        if first_treat_period is None:
-            raise ValueError("Could not infer post-treatment periods from D matrix")
-
-        n_pre_periods = first_treat_period
+        # Data setup (shared with local method via _setup_trop_data helper). The
+        # global path always validates absorbing-state (non_absorbing=False); it
+        # additionally requires simultaneous block adoption (checked below).
+        _ctx = _setup_trop_data(
+            data, outcome, treatment, unit, time, resolved_survey, survey_design
+        )
+        n_units = _ctx["n_units"]
+        n_periods = _ctx["n_periods"]
+        idx_to_unit = _ctx["idx_to_unit"]
+        idx_to_period = _ctx["idx_to_period"]
+        unit_weight_arr = _ctx["unit_weight_arr"]
+        Y = _ctx["Y"]
+        D = _ctx["D"]
+        missing_mask = _ctx["missing_mask"]
+        n_treated_obs = _ctx["n_treated_obs"]
+        treated_unit_idx = _ctx["treated_unit_idx"]
+        control_unit_idx = _ctx["control_unit_idx"]
+        first_treat_period = _ctx["first_treat_period"]
+        n_pre_periods = _ctx["n_pre_periods"]
+        n_post_periods = _ctx["n_post_periods"]
         treated_periods = n_periods - first_treat_period
-        n_post_periods = int(np.sum(np.any(D[first_treat_period:, :] == 1, axis=1)))
-
-        if n_pre_periods < 2:
-            raise ValueError("Need at least 2 pre-treatment periods")
 
         # Check for staggered adoption (global method requires simultaneous treatment)
         # Use only observed periods (skip missing) to avoid false positives on unbalanced panels
@@ -691,6 +702,13 @@ class TROPGlobalMixin:
                 # Fall back to Python implementation on error
                 logger.debug(
                     "Rust LOOCV grid search (global) failed, falling back to Python: %s", e
+                )
+                warnings.warn(
+                    f"Rust backend failed for LOOCV grid search (global); "
+                    f"falling back to Python. Performance may be reduced. "
+                    f"Error: {e}",
+                    UserWarning,
+                    stacklevel=2,
                 )
                 best_lambda = None
                 best_score = np.inf
@@ -830,6 +848,9 @@ class TROPGlobalMixin:
             n_bootstrap=self.n_bootstrap,
             bootstrap_distribution=bootstrap_dist if len(bootstrap_dist) > 0 else None,
             survey_metadata=survey_metadata,
+            # Global method requires block assignment (non_absorbing=True is
+            # rejected at the top of _fit_global), so this is always absorbing.
+            non_absorbing=False,
         )
 
         self.is_fitted_ = True
@@ -906,6 +927,21 @@ class TROPGlobalMixin:
                 survey_design,
             )
 
+        # Stratified bootstrap pools (shared by Rust and Python paths)
+        unit_ever_treated = data.groupby(unit)[treatment].max()
+        treated_units = np.array(unit_ever_treated[unit_ever_treated == 1].index.tolist())
+        control_units = np.array(unit_ever_treated[unit_ever_treated == 0].index.tolist())
+        n_treated_units = len(treated_units)
+        n_control_units = len(control_units)
+
+        # Pre-generate stratified bootstrap indices via numpy (Python-canonical RNG).
+        # Both backends consume these indices so SE is identical under the same seed
+        # (silent-failures finding #23, bootstrap half).
+        rng = np.random.default_rng(self.seed)
+        control_idx, treated_idx = stratified_bootstrap_indices(
+            rng, n_control_units, n_treated_units, self.n_bootstrap
+        )
+
         # Try Rust backend for parallel bootstrap (5-15x speedup)
         # Only used for pweight-only designs (no strata/PSU/FPC)
         if HAS_RUST_BACKEND and _rust_bootstrap_trop_variance_global is not None:
@@ -936,83 +972,73 @@ class TROPGlobalMixin:
                     self.n_bootstrap,
                     self.max_iter,
                     self.tol,
-                    self.seed if self.seed is not None else 0,
+                    control_idx,
+                    treated_idx,
                     unit_weight_arr,
                 )
 
-                if len(bootstrap_estimates) < 10:
-                    warnings.warn(
-                        f"Only {len(bootstrap_estimates)} bootstrap iterations succeeded.",
-                        UserWarning,
-                    )
-                    if len(bootstrap_estimates) == 0:
-                        return np.nan, np.array([])
+                warn_bootstrap_failure_rate(
+                    n_success=len(bootstrap_estimates),
+                    n_attempted=self.n_bootstrap,
+                    context="TROP global bootstrap (Rust)",
+                )
+                if len(bootstrap_estimates) == 0:
+                    return np.nan, np.array([])
 
                 return float(se), np.array(bootstrap_estimates)
 
             except Exception as e:
                 logger.debug("Rust bootstrap (global) failed, falling back to Python: %s", e)
-
-        # Python fallback implementation
-        rng = np.random.default_rng(self.seed)
-
-        # Stratified bootstrap sampling
-        unit_ever_treated = data.groupby(unit)[treatment].max()
-        treated_units = np.array(unit_ever_treated[unit_ever_treated == 1].index.tolist())
-        control_units = np.array(unit_ever_treated[unit_ever_treated == 0].index.tolist())
-
-        n_treated_units = len(treated_units)
-        n_control_units = len(control_units)
-
-        bootstrap_estimates_list: List[float] = []
-
-        for _ in range(self.n_bootstrap):
-            # Stratified sampling
-            if n_control_units > 0:
-                sampled_control = rng.choice(control_units, size=n_control_units, replace=True)
-            else:
-                sampled_control = np.array([], dtype=object)
-
-            if n_treated_units > 0:
-                sampled_treated = rng.choice(treated_units, size=n_treated_units, replace=True)
-            else:
-                sampled_treated = np.array([], dtype=object)
-
-            sampled_units = np.concatenate([sampled_control, sampled_treated])
-
-            # Create bootstrap sample
-            boot_data = pd.concat(
-                [
-                    data[data[unit] == u].assign(**{unit: f"{u}_{idx}"})
-                    for idx, u in enumerate(sampled_units)
-                ],
-                ignore_index=True,
-            )
-
-            try:
-                tau = self._fit_global_with_fixed_lambda(
-                    boot_data,
-                    outcome,
-                    treatment,
-                    unit,
-                    time,
-                    optimal_lambda,
-                    treated_periods,
-                    survey_design=survey_design,
+                warnings.warn(
+                    f"Rust backend failed for bootstrap variance (global); "
+                    f"falling back to Python. Performance may be reduced. "
+                    f"Error: {e}",
+                    UserWarning,
+                    stacklevel=2,
                 )
-                if np.isfinite(tau):
-                    bootstrap_estimates_list.append(tau)
-            except (ValueError, np.linalg.LinAlgError, KeyError):
-                continue
+
+        # Python fallback: consume the same indices the Rust branch would have used.
+        bootstrap_estimates_list, nonconverg_tracker = _run_trop_bootstrap_loop(
+            data,
+            unit,
+            control_units,
+            treated_units,
+            control_idx,
+            treated_idx,
+            n_control_units,
+            n_treated_units,
+            self.n_bootstrap,
+            lambda boot_data, tracker: self._fit_global_with_fixed_lambda(
+                boot_data,
+                outcome,
+                treatment,
+                unit,
+                time,
+                optimal_lambda,
+                treated_periods,
+                survey_design=survey_design,
+                _nonconvergence_tracker=tracker,
+            ),
+        )
 
         bootstrap_estimates = np.array(bootstrap_estimates_list)
 
-        if len(bootstrap_estimates) < 10:
-            warnings.warn(
-                f"Only {len(bootstrap_estimates)} bootstrap iterations succeeded.", UserWarning
+        if nonconverg_tracker:
+            warn_if_not_converged(
+                False,
+                f"TROP global bootstrap: {len(nonconverg_tracker)} of "
+                f"{self.n_bootstrap} replicate fits did not converge",
+                self.max_iter,
+                self.tol,
             )
-            if len(bootstrap_estimates) == 0:
-                return np.nan, np.array([])
+
+        warn_bootstrap_failure_rate(
+            n_success=len(bootstrap_estimates),
+            n_attempted=self.n_bootstrap,
+            context="TROP global bootstrap",
+        )
+        if len(bootstrap_estimates) == 0:
+            return np.nan, np.array([])
 
         se = np.std(bootstrap_estimates, ddof=1)
         return float(se), bootstrap_estimates
@@ -1150,6 +1176,7 @@ class TROPGlobalMixin:
         )
 
         bootstrap_estimates_list: List[float] = []
+        nonconverg_tracker: List[int] = []
 
         for _ in range(self.n_bootstrap):
             try:
@@ -1168,7 +1195,12 @@ class TROPGlobalMixin:
                 delta = self._compute_global_weights(
                     Y, D, lambda_time, lambda_unit, treated_periods, n_units, n_periods
                 )
-                mu, alpha, beta, L = self._solve_global_model(Y, delta, lambda_nn)
+                mu, alpha, beta, L = self._solve_global_model(
+                    Y,
+                    delta,
+                    lambda_nn,
+                    _nonconvergence_tracker=nonconverg_tracker,
+                )
 
                 # Extract weighted ATT using Rao-Wu rescaled weights
                 att, _, _ = self._extract_posthoc_tau(
@@ -1182,13 +1214,22 @@ class TROPGlobalMixin:
 
         bootstrap_estimates = np.array(bootstrap_estimates_list)
 
-        if len(bootstrap_estimates) < 10:
-            warnings.warn(
-                f"Only {len(bootstrap_estimates)} bootstrap iterations succeeded.",
-                UserWarning,
+        if nonconverg_tracker:
+            warn_if_not_converged(
+                False,
+                f"TROP global Rao-Wu bootstrap: {len(nonconverg_tracker)} of "
+                f"{self.n_bootstrap} replicate fits did not converge",
+                self.max_iter,
+                self.tol,
             )
-            if len(bootstrap_estimates) == 0:
-                return np.nan, np.array([])
+
+        warn_bootstrap_failure_rate(
+            n_success=len(bootstrap_estimates),
+            n_attempted=self.n_bootstrap,
+            context="TROP global Rao-Wu bootstrap",
+        )
+        if len(bootstrap_estimates) == 0:
+            return np.nan, np.array([])
 
         se = np.std(bootstrap_estimates, ddof=1)
         return float(se), bootstrap_estimates
@@ -1203,6 +1244,7 @@ class TROPGlobalMixin:
         fixed_lambda: Tuple[float, float, float],
         treated_periods: int,
         survey_design=None,
+        _nonconvergence_tracker: Optional[List[int]] = None,
     ) -> float:
         """
         Fit global model with fixed tuning parameters.
@@ -1244,7 +1286,12 @@ class TROPGlobalMixin:
         )
 
         # Fit model on control data and extract post-hoc tau
-        mu, alpha, beta, L = self._solve_global_model(Y, delta, lambda_nn)
+        mu, alpha, beta, L = self._solve_global_model(
+            Y,
+            delta,
+            lambda_nn,
+            _nonconvergence_tracker=_nonconvergence_tracker,
+        )
         att, _, _ = self._extract_posthoc_tau(
             Y, D, mu, alpha, beta, L, unit_weights=local_weight_arr
         )

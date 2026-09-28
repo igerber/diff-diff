@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: generate_panel_data
+   :no-index:

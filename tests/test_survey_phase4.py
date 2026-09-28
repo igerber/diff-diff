@@ -18,6 +18,21 @@ from diff_diff import (
 )
 from diff_diff.linalg import solve_logit
 
+# ---------------------------------------------------------------------------
+# Rows M-021/M-022 (+ M-118/M-119): ImputationDiD / TwoStageDiD
+# ``fit(aggregate=, balance_e=)`` is deprecated (3.9, removed 4.0) and warns on
+# ANY supplied value. The deprecated fit-time route is kept DELIBERATELY here:
+# these tests pin FIT-TIME surface behaviour (bit-equality grids, bootstrap
+# aggregation, R/Stata parity, replicate overrides, native effect dicts) that
+# the post-fit ``results.aggregate(...)`` container route does not reproduce
+# shape-for-shape. The shim warning is therefore filtered BY MESSAGE, scoped to
+# these two estimators only - every other FutureWarning (including the other
+# estimators' aggregate() shims) still surfaces.
+# ---------------------------------------------------------------------------
+pytestmark = pytest.mark.filterwarnings(
+    r"ignore:(ImputationDiD|TwoStageDiD)\.fit\((aggregate=|balance_e=|aggregate= / balance_e=)\):FutureWarning"
+)
+
 # =============================================================================
 # Shared Fixtures
 # =============================================================================
@@ -442,14 +457,15 @@ class TestImputationDiDSurvey:
         from diff_diff import imputation_did
 
         sd = SurveyDesign(weights="weight")
-        r_wrapper = imputation_did(
-            staggered_survey_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            survey_design=sd,
-        )
+        with pytest.warns(FutureWarning, match=r"imputation_did\(\) is deprecated"):
+            r_wrapper = imputation_did(
+                staggered_survey_data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                survey_design=sd,
+            )
         r_direct = ImputationDiD().fit(
             staggered_survey_data,
             "outcome",
@@ -505,18 +521,20 @@ class TestImputationDiDSurvey:
                 survey_design=sd,
             )
 
-    def test_fpc_raises(self, staggered_survey_data):
-        """FPC survey design should raise NotImplementedError."""
+    def test_fpc_accepted(self, staggered_survey_data):
+        """FPC survey design is now supported (Phase 8b)."""
         sd = SurveyDesign(weights="weight", fpc="fpc")
-        with pytest.raises(NotImplementedError, match="FPC"):
-            ImputationDiD().fit(
-                staggered_survey_data,
-                "outcome",
-                "unit",
-                "period",
-                "first_treat",
-                survey_design=sd,
-            )
+        result = ImputationDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd,
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.overall_se > 0
 
 
 # =============================================================================
@@ -654,14 +672,15 @@ class TestTwoStageDiDSurvey:
         from diff_diff import two_stage_did
 
         sd = SurveyDesign(weights="weight")
-        r_wrapper = two_stage_did(
-            staggered_survey_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            survey_design=sd,
-        )
+        with pytest.warns(FutureWarning, match=r"two_stage_did\(\) is deprecated"):
+            r_wrapper = two_stage_did(
+                staggered_survey_data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                survey_design=sd,
+            )
         r_direct = TwoStageDiD().fit(
             staggered_survey_data,
             "outcome",
@@ -737,18 +756,20 @@ class TestTwoStageDiDSurvey:
                 survey_design=sd,
             )
 
-    def test_fpc_raises(self, staggered_survey_data):
-        """FPC survey design should raise NotImplementedError."""
+    def test_fpc_accepted(self, staggered_survey_data):
+        """FPC survey design is now supported (Phase 8b)."""
         sd = SurveyDesign(weights="weight", fpc="fpc")
-        with pytest.raises(NotImplementedError, match="FPC"):
-            TwoStageDiD().fit(
-                staggered_survey_data,
-                "outcome",
-                "unit",
-                "period",
-                "first_treat",
-                survey_design=sd,
-            )
+        result = TwoStageDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd,
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.overall_se > 0
 
 
 # =============================================================================

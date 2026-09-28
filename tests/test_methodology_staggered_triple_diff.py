@@ -9,13 +9,15 @@ CSV fixtures are generated on-the-fly via R if available, or tests skip.
 import json
 import os
 import subprocess
+import warnings
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from diff_diff import StaggeredTripleDifference
+from diff_diff import StaggeredTripleDifference, generate_staggered_ddd_data
+from diff_diff.survey import SurveyDesign
 
 BENCHMARK_DIR = Path(__file__).parent.parent / "benchmarks" / "data" / "synthetic"
 RESULTS_FILE = BENCHMARK_DIR / "staggered_ddd_r_results.json"
@@ -46,7 +48,9 @@ def _r_triplediff_available() -> bool:
     try:
         result = subprocess.run(
             ["Rscript", "-e", "library(triplediff); library(jsonlite); cat('OK')"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         return result.returncode == 0 and "OK" in result.stdout
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
@@ -57,8 +61,9 @@ def _ensure_csv_fixtures():
     """Generate CSV fixtures via R if they don't exist and R is available."""
     # Check if any CSV is missing
     needed_keys = ["s42_dgp1", "s123_dgp1", "s99_dgp1"]
-    missing = [k for k in needed_keys
-               if not (BENCHMARK_DIR / f"staggered_ddd_data_{k}.csv").exists()]
+    missing = [
+        k for k in needed_keys if not (BENCHMARK_DIR / f"staggered_ddd_data_{k}.csv").exists()
+    ]
     if not missing:
         return True  # All present
 
@@ -69,7 +74,9 @@ def _ensure_csv_fixtures():
     try:
         result = subprocess.run(
             ["Rscript", str(R_SCRIPT)],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True,
+            text=True,
+            timeout=120,
             cwd=str(Path(__file__).parent.parent),
         )
         return result.returncode == 0
@@ -95,10 +102,7 @@ def _load_r_data(seed: int, dgp: int) -> pd.DataFrame:
     """Load the CSV data that R used for a given scenario."""
     csv_path = BENCHMARK_DIR / f"staggered_ddd_data_s{seed}_dgp{dgp}.csv"
     if not csv_path.exists():
-        pytest.skip(
-            f"Data file not found: {csv_path}. "
-            "Requires R + triplediff to generate."
-        )
+        pytest.skip(f"Data file not found: {csv_path}. " "Requires R + triplediff to generate.")
     data = pd.read_csv(csv_path)
     return data.rename(columns=R_TO_PY_COLS)
 
@@ -111,7 +115,12 @@ def _run_python(data, method, control_group):
         base_period="varying",
     )
     return est.fit(
-        data, "outcome", "unit", "period", "first_treat", "eligibility",
+        data,
+        "outcome",
+        "unit",
+        "period",
+        "first_treat",
+        "eligibility",
         aggregate="event_study",
     )
 
@@ -153,16 +162,19 @@ class TestStaggeredDDDNevertreated:
 
         py_gt = sorted(res.group_time_effects.items())
         r_gt = list(zip(r["gt_groups"], r["gt_periods"]))
-        assert len(py_gt) == len(r["gt_att"]), (
-            f"{key}: Python has {len(py_gt)} GT cells, R has {len(r['gt_att'])}"
-        )
+        assert len(py_gt) == len(
+            r["gt_att"]
+        ), f"{key}: Python has {len(py_gt)} GT cells, R has {len(r['gt_att'])}"
         for i, ((g, t), eff) in enumerate(py_gt):
-            assert (g, t) == (r_gt[i][0], r_gt[i][1]), (
-                f"{key}: GT cell mismatch at index {i}: Python=({g},{t}), R={r_gt[i]}"
-            )
+            assert (g, t) == (
+                r_gt[i][0],
+                r_gt[i][1],
+            ), f"{key}: GT cell mismatch at index {i}: Python=({g},{t}), R={r_gt[i]}"
             _assert_close(
-                eff["effect"], r["gt_att"][i],
-                ATT_RTOL, ATT_ATOL,
+                eff["effect"],
+                r["gt_att"][i],
+                ATT_RTOL,
+                ATT_ATOL,
                 f"{key} ATT(g={g},t={t})",
             )
 
@@ -173,13 +185,15 @@ class TestStaggeredDDDNevertreated:
         res = _run_python(data, r["est_method"], r["control_group"])
 
         py_gt = sorted(res.group_time_effects.items())
-        assert len(py_gt) == len(r["gt_se"]), (
-            f"{key}: Python has {len(py_gt)} GT cells, R has {len(r['gt_se'])}"
-        )
+        assert len(py_gt) == len(
+            r["gt_se"]
+        ), f"{key}: Python has {len(py_gt)} GT cells, R has {len(r['gt_se'])}"
         for i, ((g, t), eff) in enumerate(py_gt):
             _assert_close(
-                eff["se"], r["gt_se"][i],
-                SE_RTOL, SE_ATOL,
+                eff["se"],
+                r["gt_se"][i],
+                SE_RTOL,
+                SE_ATOL,
                 f"{key} SE(g={g},t={t})",
             )
 
@@ -208,16 +222,19 @@ class TestStaggeredDDDNotyettreated:
 
         py_gt = sorted(res.group_time_effects.items())
         r_gt = list(zip(r["gt_groups"], r["gt_periods"]))
-        assert len(py_gt) == len(r["gt_att"]), (
-            f"{key}: Python has {len(py_gt)} GT cells, R has {len(r['gt_att'])}"
-        )
+        assert len(py_gt) == len(
+            r["gt_att"]
+        ), f"{key}: Python has {len(py_gt)} GT cells, R has {len(r['gt_att'])}"
         for i, ((g, t), eff) in enumerate(py_gt):
-            assert (g, t) == (r_gt[i][0], r_gt[i][1]), (
-                f"{key}: GT cell mismatch at index {i}: Python=({g},{t}), R={r_gt[i]}"
-            )
+            assert (g, t) == (
+                r_gt[i][0],
+                r_gt[i][1],
+            ), f"{key}: GT cell mismatch at index {i}: Python=({g},{t}), R={r_gt[i]}"
             _assert_close(
-                eff["effect"], r["gt_att"][i],
-                ATT_RTOL, ATT_ATOL,
+                eff["effect"],
+                r["gt_att"][i],
+                ATT_RTOL,
+                ATT_ATOL,
                 f"{key} ATT(g={g},t={t})",
             )
 
@@ -228,13 +245,15 @@ class TestStaggeredDDDNotyettreated:
         res = _run_python(data, r["est_method"], r["control_group"])
 
         py_gt = sorted(res.group_time_effects.items())
-        assert len(py_gt) == len(r["gt_se"]), (
-            f"{key}: Python has {len(py_gt)} GT cells, R has {len(r['gt_se'])}"
-        )
+        assert len(py_gt) == len(
+            r["gt_se"]
+        ), f"{key}: Python has {len(py_gt)} GT cells, R has {len(r['gt_se'])}"
         for i, ((g, t), eff) in enumerate(py_gt):
             _assert_close(
-                eff["se"], r["gt_se"][i],
-                SE_RTOL, SE_ATOL,
+                eff["se"],
+                r["gt_se"][i],
+                SE_RTOL,
+                SE_ATOL,
                 f"{key} SE(g={g},t={t})",
             )
 
@@ -247,16 +266,24 @@ ALL_SCENARIOS = NT_SCENARIOS + NYT_SCENARIOS
 
 
 class TestStaggeredDDDAggregation:
-    """Cross-validate event study and overall ATT aggregation.
+    """Cross-validate event study and overall ATT aggregation against R.
 
-    Note: Aggregation weights differ between R's agg_ddd() and the
-    CallawaySantAnna mixin we reuse. The group-time ATT(g,t) values
-    match R exactly (0.00%), but aggregation introduces small differences
-    due to the weighting scheme. We use 10% tolerance here.
+    The eligible-treated aggregation weighting (REGISTRY deviation) propagates into
+    the individual per-relative-time ES(e) values and the simple overall, so those
+    are checked at a loose 25% envelope (the per-(g,t) ATT(g,t) themselves match R
+    exactly, 0.00%). The Eq. 4.14 overall (``overall_att_es``) is the unweighted MEAN
+    of the post-treatment ES(e), where the weighting deviation largely averages out
+    -- empirically <=5% on ATT and <=0.5% on SE across all benchmark scenarios -- so
+    it is checked at a much tighter, dedicated envelope.
     """
 
-    AGG_RTOL = 0.25  # 25% — aggregation weighting differs from R's agg_ddd
+    AGG_RTOL = 0.25  # per-e ES + simple overall: weighting deviation on individual values
     AGG_ATOL = 3.0
+    # Eq. 4.14 overall_att_es: the weighting deviation averages out in the mean
+    # (max observed across all scenarios: ATT 5.0%, SE 0.4%); tight-but-safe envelope.
+    OVERALL_ES_ATT_RTOL = 0.10
+    OVERALL_ES_SE_RTOL = 0.03
+    OVERALL_ES_ATOL = 0.5
 
     @pytest.mark.parametrize("key", ALL_SCENARIOS)
     def test_event_study_att_close_to_r(self, r_results, key):
@@ -271,8 +298,10 @@ class TestStaggeredDDDAggregation:
         for e, eff in res.event_study_effects.items():
             if e in r_es:
                 _assert_close(
-                    eff["effect"], r_es[e],
-                    self.AGG_RTOL, self.AGG_ATOL,
+                    eff["effect"],
+                    r_es[e],
+                    self.AGG_RTOL,
+                    self.AGG_ATOL,
                     f"{key} ES ATT(e={e})",
                 )
 
@@ -288,10 +317,586 @@ class TestStaggeredDDDAggregation:
             base_period="varying",
         )
         res = est.fit(
-            data, "outcome", "unit", "period", "first_treat", "eligibility",
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
         )
         _assert_close(
-            res.overall_att, r["overall_att_simple"],
-            self.AGG_RTOL, self.AGG_ATOL,
+            res.overall_att,
+            r["overall_att_simple"],
+            self.AGG_RTOL,
+            self.AGG_ATOL,
             f"{key} overall ATT (simple)",
         )
+
+    @pytest.mark.parametrize("key", ALL_SCENARIOS)
+    def test_overall_att_es_close_to_r(self, r_results, key):
+        """Paper Eq. 4.14 overall (event-study average) vs R agg_ddd(type='eventstudy').
+
+        R's ``agg_ddd(type="eventstudy")$overall.att`` / ``overall.se`` ARE the
+        paper's Eq. 4.14 overall and its analytical SE; the library exposes them
+        opt-in as ``overall_att_es`` / ``overall_se_es``. The AGG_RTOL tolerance
+        reflects the documented eligible-treated weighting (REGISTRY deviation)
+        propagating from ES(e) into the overall -- NOT a new deviation; per-(g,t)
+        ATT(g,t) match R exactly, and empirically the overall agreement is far
+        tighter than AGG_RTOL.
+        """
+        r = r_results[key]
+        r_att = r.get("overall_att_es")
+        if r_att is None or (isinstance(r_att, float) and np.isnan(r_att)):
+            pytest.skip("No event-study overall in R")
+        data = _load_r_data(r["seed"], r["dgp_type"])
+        res = _run_python(data, r["est_method"], r["control_group"])
+        assert res.overall_att_es is not None
+        _assert_close(
+            res.overall_att_es,
+            r_att,
+            self.OVERALL_ES_ATT_RTOL,
+            self.OVERALL_ES_ATOL,
+            f"{key} overall ATT (Eq 4.14, event-study avg)",
+        )
+        r_se = r.get("overall_se_es")
+        if r_se is not None and not (isinstance(r_se, float) and np.isnan(r_se)):
+            _assert_close(
+                res.overall_se_es,
+                r_se,
+                self.OVERALL_ES_SE_RTOL,
+                self.OVERALL_ES_ATOL,
+                f"{key} overall SE (Eq 4.14, event-study avg)",
+            )
+
+
+# ---------------------------------------------------------------------------
+# Paper-equation-anchored Verified Components
+#
+# These validate the implementation against properties the paper STATES
+# (Ortiz-Villavicencio & Sant'Anna 2025, arXiv:2505.09942v3), using synthetic
+# panels from ``generate_staggered_ddd_data`` (DDD-CPT holds by construction).
+# They need no R and run in the pure-Python CI fallback. Paper assumptions:
+# S (random sampling), SO (strong overlap), NA (no anticipation), DDD-CPT
+# (conditional parallel trends).
+# ---------------------------------------------------------------------------
+
+_FIT_COLS = ("outcome", "unit", "period", "first_treat", "eligibility")
+
+
+class TestTheorem41Identification:
+    """Theorem 4.1 / Eq. (4.5): nonparametric ATT(g,t) identification, with the
+    regression-adjustment (RA), IPW, and doubly-robust (DR) estimands all equal.
+
+    Observable implication tested: with no covariates the three ``est_method``
+    paths reduce to the same DiD building block, so ATT(g,t) must coincide.
+    """
+
+    def test_ra_ipw_dr_agree_without_covariates(self):
+        data = generate_staggered_ddd_data(n_units=600, treatment_effect=3.0, seed=11)
+        fits = {
+            m: StaggeredTripleDifference(estimation_method=m, control_group="nevertreated").fit(
+                data, *_FIT_COLS
+            )
+            for m in ("dr", "ipw", "reg")
+        }
+        for k in fits["dr"].group_time_effects:
+            a = fits["dr"].group_time_effects[k]["effect"]
+            b = fits["ipw"].group_time_effects[k]["effect"]
+            c = fits["reg"].group_time_effects[k]["effect"]
+            if np.isfinite(a) and np.isfinite(b) and np.isfinite(c):
+                assert abs(a - b) < 1e-6 and abs(a - c) < 1e-6, (
+                    f"RA=IPW=DR identification (Thm 4.1) violated at {k}: "
+                    f"dr={a:.6f}, ipw={b:.6f}, reg={c:.6f}"
+                )
+
+
+class TestEquation41Decomposition:
+    """Eq. (4.1): the three-term DR DDD estimand (DiD_A + DiD_B - DiD_C).
+
+    Observable implication tested: under a constant treatment effect with
+    DDD-CPT holding (the DGP's eligibility trend is common across enabling
+    groups), post-treatment ATT(g,t) recover the true effect.
+    """
+
+    def test_recovers_constant_effect(self):
+        tau = 2.5
+        data = generate_staggered_ddd_data(n_units=800, treatment_effect=tau, noise_sd=0.3, seed=21)
+        res = StaggeredTripleDifference(estimation_method="dr", control_group="notyettreated").fit(
+            data, *_FIT_COLS, aggregate="event_study"
+        )
+        post = [
+            v["effect"]
+            for (g, t), v in res.group_time_effects.items()
+            if t >= g and np.isfinite(v["effect"])
+        ]
+        assert len(post) > 0
+        assert (
+            abs(float(np.mean(post)) - tau) < 0.3
+        ), f"mean post ATT(g,t)={np.mean(post):.4f} vs true tau={tau}"
+
+
+class TestEquations411412GMM:
+    """Eqs. (4.11)-(4.12): optimal GMM combination across comparison cohorts.
+
+    Verified components: the optimal weights sum to one (Eq. 4.12 normalization
+    ``w = Omega^{-1} 1 / (1' Omega^{-1} 1)``); a single comparison group reduces
+    to ``w=[1]``; multiple not-yet-treated cohorts yield a multi-weight
+    combination. (Variance-minimization optimality is by construction via the
+    ``Omega^{-1}`` weights; ``Omega`` is not exposed for a separate inequality
+    test, so it is not asserted here.)
+    """
+
+    def test_weights_sum_to_one_multi_group(self):
+        data = generate_staggered_ddd_data(
+            n_units=600, cohort_periods=[3, 5, 7], treatment_effect=3.0, seed=31
+        )
+        res = StaggeredTripleDifference(estimation_method="dr", control_group="notyettreated").fit(
+            data, *_FIT_COLS
+        )
+        assert res.gmm_weights is not None
+        multi = {k: w for k, w in res.gmm_weights.items() if len(w) > 1}
+        assert multi, "expected at least one (g,t) with multiple comparison cohorts"
+        for k, w in multi.items():
+            assert (
+                abs(sum(w.values()) - 1.0) < 1e-9
+            ), f"GMM weights at {k} sum to {sum(w.values())}, expected 1.0"
+
+    def test_single_group_reduces_to_unit_weight(self):
+        data = generate_staggered_ddd_data(n_units=400, treatment_effect=3.0, seed=32)
+        res = StaggeredTripleDifference(estimation_method="dr", control_group="nevertreated").fit(
+            data, *_FIT_COLS
+        )
+        assert res.gmm_weights is not None
+        for k, w in res.gmm_weights.items():
+            assert len(w) == 1, f"nevertreated should use one comparison group at {k}, got {w}"
+            assert abs(next(iter(w.values())) - 1.0) < 1e-12
+
+
+class TestEquation413EventStudy:
+    """Eq. (4.13): event-study ES(e) is the eligible-treated-cohort-share-weighted
+    average of ATT(g, g+e) across cohorts at each relative time e.
+    """
+
+    def test_es_is_cohort_share_weighted_average(self):
+        data = generate_staggered_ddd_data(
+            n_units=600,
+            cohort_periods=[3, 5],
+            treatment_effect=3.0,
+            dynamic_effects=True,
+            effect_growth=0.4,
+            seed=41,
+        )
+        res = StaggeredTripleDifference(estimation_method="dr", control_group="nevertreated").fit(
+            data, *_FIT_COLS, aggregate="event_study"
+        )
+        assert res.event_study_effects is not None
+        gt = res.group_time_effects
+        checked_multi = False
+        for e, es in res.event_study_effects.items():
+            contrib = [
+                (g, t) for (g, t) in gt if (t - g) == e and np.isfinite(gt[(g, t)]["effect"])
+            ]
+            if len(contrib) < 2:
+                continue
+            checked_multi = True
+            w = np.array([gt[(g, t)]["n_treated"] for (g, t) in contrib], dtype=float)
+            eff = np.array([gt[(g, t)]["effect"] for (g, t) in contrib])
+            expected = float(np.sum(w / w.sum() * eff))
+            assert (
+                abs(es["effect"] - expected) < 1e-9
+            ), f"ES(e={e})={es['effect']:.6f} != cohort-share-weighted avg {expected:.6f}"
+        assert checked_multi, "DGP did not produce a multi-cohort relative time to check"
+
+
+class TestEquation414Overall:
+    """Eq. (4.14) / Corollary 4.2: ``overall_att_es`` is the UNWEIGHTED mean of the
+    post-treatment event-study effects ES(e); opt-in via ``aggregate='event_study'``;
+    ``None`` otherwise; the default ``overall_att`` is undisturbed.
+    """
+
+    def _fit(self, aggregate, anticipation=0, seed=51):
+        data = generate_staggered_ddd_data(
+            n_units=600,
+            cohort_periods=[3, 5],
+            treatment_effect=3.0,
+            dynamic_effects=True,
+            effect_growth=0.3,
+            seed=seed,
+        )
+        est = StaggeredTripleDifference(
+            estimation_method="dr", control_group="nevertreated", anticipation=anticipation
+        )
+        return est.fit(data, *_FIT_COLS, aggregate=aggregate)
+
+    def test_overall_es_is_unweighted_mean_of_post_es(self):
+        res = self._fit("event_study")
+        assert res.overall_att_es is not None
+        assert res.event_study_effects is not None
+        post = [
+            es["effect"]
+            for e, es in res.event_study_effects.items()
+            if e >= 0 and np.isfinite(es["effect"])
+        ]
+        assert abs(res.overall_att_es - float(np.mean(post))) < 1e-10
+
+    def test_overall_es_none_without_event_study(self):
+        assert self._fit("simple").overall_att_es is None
+        assert self._fit(None).overall_att_es is None
+
+    def test_overall_es_respects_anticipation_window(self):
+        # anticipation=1 => post-treatment is e >= -1 (matches the default overall_att set)
+        res = self._fit("event_study", anticipation=1)
+        assert res.overall_att_es is not None
+        assert res.event_study_effects is not None
+        post = [
+            es["effect"]
+            for e, es in res.event_study_effects.items()
+            if e >= -1 and np.isfinite(es["effect"])
+        ]
+        assert abs(res.overall_att_es - float(np.mean(post))) < 1e-10
+
+    def test_overall_es_does_not_disturb_default_overall(self):
+        res_es = self._fit("event_study")
+        res_simple = self._fit("simple")
+        # Default overall_att stays the CS-simple aggregation regardless of ES opt-in
+        assert abs(res_es.overall_att - res_simple.overall_att) < 1e-9
+        assert res_es.overall_se_es is not None
+        assert np.isfinite(res_es.overall_se_es) and res_es.overall_se_es > 0
+
+
+class TestEquation414OverallBootstrap:
+    """Cross-surface: the Eq. 4.14 overall is finite under the multiplier bootstrap
+    (its SE is overridden by the per-draw mean of post-treatment ES(e) draws).
+    """
+
+    def test_bootstrap_overall_es_finite(self):
+        data = generate_staggered_ddd_data(
+            n_units=500, cohort_periods=[3, 5], treatment_effect=3.0, seed=61
+        )
+        res = StaggeredTripleDifference(
+            estimation_method="dr",
+            control_group="nevertreated",
+            n_bootstrap=199,
+            seed=7,
+        ).fit(data, *_FIT_COLS, aggregate="event_study")
+        assert res.overall_att_es is not None
+        assert np.isfinite(res.overall_att_es)
+        assert res.overall_se_es is not None
+        assert np.isfinite(res.overall_se_es) and res.overall_se_es > 0
+
+    def test_balance_e_empties_event_study_fails_soft(self):
+        """A balance_e that removes every event-study cohort must fail SOFT (NaN +
+        warning), not raise, on BOTH the analytical and multiplier-bootstrap paths.
+
+        Regression for the empty-rel_periods ``np.column_stack`` crash in the shared
+        bootstrap mixin: ``balance_e=100`` (no cohort reaches relative time 100)
+        empties the event study, so the Eq. 4.14 overall is "requested but
+        undefined" -> NaN. The default ``overall_att`` (CS-simple, balance_e-
+        independent) stays finite.
+        """
+        data = generate_staggered_ddd_data(
+            n_units=400, cohort_periods=[3, 5], treatment_effect=3.0, seed=71
+        )
+        for nb in (0, 10):
+            est = StaggeredTripleDifference(
+                estimation_method="dr", control_group="nevertreated", n_bootstrap=nb, seed=3
+            )
+            with pytest.warns(UserWarning):
+                res = est.fit(data, *_FIT_COLS, aggregate="event_study", balance_e=100)
+            # requested-but-undefined -> NaN (not a stale value, not a crash)
+            assert res.overall_att_es is not None and np.isnan(res.overall_att_es)
+            assert res.overall_se_es is None or np.isnan(res.overall_se_es)
+            # default overall_att is balance_e-independent and stays finite
+            assert np.isfinite(res.overall_att)
+
+
+class TestAggregationReturnContract:
+    """`CallawaySantAnnaAggregationMixin._compute_aggregated_se_with_wif` must keep a
+    consistent return arity on its empty/non-finite-IF branches: `return_psi=True` ->
+    3-tuple `(se, psi, effective_df)`, `return_psi=False` -> 2-tuple `(se, effective_df)`.
+
+    Regression for the refactor where the early-return branches still yielded a
+    2-tuple / bare float while `_aggregate_event_study` unpacks three values -- a
+    degenerate (empty / non-finite) combined IF would then raise a tuple-unpack
+    ValueError instead of failing soft (NaN SE), which is exactly the edge case the
+    Eq. 4.14 overall's NaN-SE contract relies on.
+    """
+
+    def test_degenerate_if_branch_returns_consistent_arity(self):
+        est = StaggeredTripleDifference()
+        est.anticipation = 0  # mixin reads self.anticipation
+        empty = np.array([])
+        df0 = pd.DataFrame({"unit": []})  # empty design -> empty combined IF
+        r3 = est._compute_aggregated_se_with_wif(
+            [], empty, empty, empty, {}, df0, "unit", return_psi=True
+        )
+        assert (
+            isinstance(r3, tuple) and len(r3) == 3
+        ), f"return_psi=True must be 3-tuple, got {r3!r}"
+        r2 = est._compute_aggregated_se_with_wif(
+            [], empty, empty, empty, {}, df0, "unit", return_psi=False
+        )
+        assert (
+            isinstance(r2, tuple) and len(r2) == 2
+        ), f"return_psi=False must be 2-tuple, got {r2!r}"
+
+
+class TestRankGuardedAnalyticalSE:
+    """Rank-guarded influence-function SE under a constant/collinear covariate.
+
+    The per-pair outcome-regression bread and propensity-score Hessian are
+    near-singular when a covariate is constant/collinear. Previously
+    np.linalg.solve / np.linalg.inv returned a garbage inverse (overall_se
+    inflated 30-100x); the rank-guarded inverse drops the redundant direction,
+    giving a finite SE equal to fitting without the redundant covariate.
+    """
+
+    def _data(self):
+        return generate_staggered_ddd_data(seed=42, add_covariates=True)
+
+    @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
+    def test_constant_covariate_finite_se_matches_drop_one(self, method):
+        data = self._data()
+        data_const = data.copy()
+        data_const["xc"] = 5.0  # constant -> collinear with the intercept
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            drop_one = StaggeredTripleDifference(
+                estimation_method=method, control_group="nevertreated"
+            ).fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
+                covariates=["x1"],
+            )
+            with_const = StaggeredTripleDifference(
+                estimation_method=method, control_group="nevertreated"
+            ).fit(
+                data_const,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
+                covariates=["x1", "xc"],
+            )
+
+        assert np.isfinite(with_const.overall_se)
+        assert with_const.overall_se < 1.0  # was 30-100x inflated
+        np.testing.assert_allclose(with_const.overall_se, drop_one.overall_se, rtol=1e-9)
+
+    def test_constant_covariate_emits_rank_guard_warning(self):
+        # reg uses the OR bread only -> exactly one OR-path rank-guard warning.
+        data = self._data()
+        data["xc"] = 5.0
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            StaggeredTripleDifference(estimation_method="reg", control_group="nevertreated").fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
+                covariates=["x1", "xc"],
+            )
+        rank_guard = [w for w in caught if "rank-guarded inverse" in str(w.message)]
+        assert len(rank_guard) == 1
+
+    def test_well_conditioned_no_rank_guard_warning(self):
+        data = self._data()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = StaggeredTripleDifference(
+                estimation_method="dr", control_group="nevertreated"
+            ).fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
+                covariates=["x1", "x2"],
+            )
+        assert not any("rank-guarded inverse" in str(w.message) for w in caught)
+        assert np.isfinite(res.overall_se)
+
+    @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
+    def test_survey_weighted_constant_covariate_finite_se(self, method):
+        # Exercises the *survey-weighted* OR bread / PS Hessian branches
+        # (`or_x = PAa*survey_weights*covX`, `W *= survey_weights`), distinct
+        # from the unweighted path above. Panel estimator -> weights must be
+        # constant within unit.
+        data = self._data()
+        rng = np.random.default_rng(7)
+        units = data["unit"].unique()
+        unit_w = dict(zip(units, rng.uniform(0.5, 2.0, len(units))))
+        data["weight"] = data["unit"].map(unit_w)
+        data_const = data.copy()
+        data_const["xc"] = 5.0
+        sd = SurveyDesign(weights="weight")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            drop_one = StaggeredTripleDifference(
+                estimation_method=method, control_group="nevertreated"
+            ).fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
+                covariates=["x1"],
+                survey_design=sd,
+            )
+            with_const = StaggeredTripleDifference(
+                estimation_method=method, control_group="nevertreated"
+            ).fit(
+                data_const,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
+                covariates=["x1", "xc"],
+                survey_design=sd,
+            )
+        assert np.isfinite(with_const.overall_se)
+        assert with_const.overall_se < 1.0
+        np.testing.assert_allclose(with_const.overall_se, drop_one.overall_se, rtol=1e-9)
+
+    @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
+    def test_notyettreated_silent_constant_covariate(self, method):
+        # The not-yet-treated control group exercises the GMM-combination path
+        # (multiple comparison cohorts). Confirm a constant covariate still
+        # yields a finite SE and that rank_deficient_action="silent" suppresses
+        # the rank-guard warning on this control group too.
+        data = self._data()
+        data["xc"] = 5.0
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = StaggeredTripleDifference(
+                estimation_method=method,
+                control_group="notyettreated",
+                rank_deficient_action="silent",
+            ).fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
+                covariates=["x1", "xc"],
+            )
+        assert np.isfinite(res.overall_se)
+        assert res.overall_se < 1.0
+        assert not any("rank-guarded inverse" in str(w.message) for w in caught)
+
+    @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
+    def test_error_mode_raises_before_rank_guard(self, method):
+        # rank_deficient_action="error" raises upstream at the point-estimate
+        # solve when the covariate DESIGN is rank-deficient at its 1e-7 threshold
+        # (here an EXACT duplicate), before the IF rank-guard. It does not promise
+        # every near-singular IF bread raises: a design-full-rank but near-singular
+        # cell can pass this gate and still be IF-column-dropped (the IF guard's
+        # 1e-10 equilibrated-Gram threshold is stricter than the 1e-7 design check);
+        # see REGISTRY "rank_deficient_action enforcement".
+        data = self._data()
+        data["x1c"] = 2.0 * data["x1"]  # exactly collinear with x1
+        with pytest.raises(ValueError, match="(?i)rank-deficient"):
+            StaggeredTripleDifference(
+                estimation_method=method,
+                control_group="nevertreated",
+                rank_deficient_action="error",
+            ).fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
+                covariates=["x1", "x1c"],
+            )
+
+    @pytest.mark.parametrize("method", ["reg", "dr"])
+    def test_control_cell_aliasing_close_to_drop_one(self, method):
+        # Column-drop rank-guard: a covariate collinear ONLY within the
+        # never-treated control cell (x2d == 2*x1 there, varying in treated) is
+        # dropped from the central control OR regression (column-drop, matching
+        # the point estimate / R), so the SE is FINITE (not the prior 1e13
+        # garbage) and ≈ dropping the covariate. The small residual (< a few %)
+        # is the covariate's genuine effect in the treated-side / propensity
+        # terms, where it is full-rank. See the CallawaySantAnna "rank-guarded
+        # IF standard errors" Note.
+        data = self._data()
+        rng = np.random.default_rng(0)
+        nt = (data["first_treat"] == 0).to_numpy()
+        x2d = np.where(nt, 2.0 * data["x1"].to_numpy(), rng.normal(size=len(data)))
+        data["x2d"] = pd.Series(x2d, index=data.index).groupby(data["unit"]).transform("first")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            drop_one = StaggeredTripleDifference(
+                estimation_method=method, control_group="nevertreated"
+            ).fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
+                covariates=["x1"],
+            )
+            with_deg = StaggeredTripleDifference(
+                estimation_method=method, control_group="nevertreated"
+            ).fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
+                covariates=["x1", "x2d"],
+            )
+        assert np.isfinite(with_deg.overall_se) and with_deg.overall_se > 0
+        np.testing.assert_allclose(with_deg.overall_se, drop_one.overall_se, rtol=5e-2)
+
+
+class TestStaggeredTripleDiffCovariateScaleEquilibration:
+    """StaggeredTripleDifference covariate outcome-regression is scale-robust.
+
+    The OR nuisance (``_compute_or``) is fit through the shared scale-equilibrated
+    ``solve_ols`` (column-equilibrated SVD/gelsd), matching ``TripleDifference``
+    and R's ``lm()``/QR. Adding a large constant offset to a covariate is absorbed
+    by the regression intercept and MUST NOT change ATT(g,t). The prior
+    ``cho_solve(X'X)`` cache path was not scale-equilibrated. Anchored on
+    ``est_method="reg"`` so the perturbation routes purely through the OR fit.
+    """
+
+    def _fit(self, offset):
+        data = generate_staggered_ddd_data(
+            n_units=600, treatment_effect=3.0, add_covariates=True, seed=11
+        )
+        data = data.copy()
+        data["x1"] = data["x1"] + offset
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return StaggeredTripleDifference(
+                estimation_method="reg", control_group="nevertreated"
+            ).fit(data, *_FIT_COLS, covariates=["x1"])
+
+    def test_or_fit_offset_invariant(self):
+        """A 1e6 constant offset on the covariate (absorbed by the intercept)
+        leaves ATT(g,t) unchanged — the OR fit is scale-equilibrated."""
+        base = self._fit(0.0)
+        shifted = self._fit(1e6)
+        common = set(base.group_time_effects) & set(shifted.group_time_effects)
+        assert common, "no shared (g,t) cells"
+        for gt in common:
+            b = base.group_time_effects[gt]["effect"]
+            s = shifted.group_time_effects[gt]["effect"]
+            if np.isfinite(b):
+                assert b == pytest.approx(s, abs=1e-7), f"ATT{gt} not offset-invariant"

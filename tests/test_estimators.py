@@ -1,5 +1,7 @@
 """Tests for difference-in-differences estimators."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -12,6 +14,7 @@ from diff_diff import (
     PeriodEffect,
     SyntheticDiD,
     SyntheticDiDResults,
+    TwoWayFixedEffects,
 )
 
 
@@ -77,7 +80,7 @@ class TestDifferenceInDifferences:
     def test_basic_fit(self, simple_2x2_data):
         """Test basic model fitting."""
         did = DifferenceInDifferences()
-        results = did.fit(simple_2x2_data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(simple_2x2_data, outcome="outcome", treatment="treated", post="post")
 
         assert isinstance(results, DiDResults)
         assert did.is_fitted_
@@ -88,7 +91,7 @@ class TestDifferenceInDifferences:
     def test_att_direction(self, simple_did_data):
         """Test that ATT is estimated in correct direction."""
         did = DifferenceInDifferences()
-        results = did.fit(simple_did_data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(simple_did_data, outcome="outcome", treatment="treated", post="post")
 
         # True ATT is 3.0, estimate should be close
         assert results.att > 0
@@ -111,14 +114,14 @@ class TestDifferenceInDifferences:
 
     def test_robust_vs_classical_se(self, simple_did_data):
         """Test that robust and classical SEs differ."""
-        did_robust = DifferenceInDifferences(robust=True)
-        did_classical = DifferenceInDifferences(robust=False)
+        did_robust = DifferenceInDifferences()
+        did_classical = DifferenceInDifferences(vcov_type="classical")
 
         results_robust = did_robust.fit(
-            simple_did_data, outcome="outcome", treatment="treated", time="post"
+            simple_did_data, outcome="outcome", treatment="treated", post="post"
         )
         results_classical = did_classical.fit(
-            simple_did_data, outcome="outcome", treatment="treated", time="post"
+            simple_did_data, outcome="outcome", treatment="treated", post="post"
         )
 
         # The vcov matrices should differ (HC1 vs classical)
@@ -131,7 +134,7 @@ class TestDifferenceInDifferences:
     def test_confidence_interval(self, simple_did_data):
         """Test confidence interval properties."""
         did = DifferenceInDifferences(alpha=0.05)
-        results = did.fit(simple_did_data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(simple_did_data, outcome="outcome", treatment="treated", post="post")
 
         lower, upper = results.conf_int
         assert lower < results.att < upper
@@ -139,10 +142,13 @@ class TestDifferenceInDifferences:
 
     def test_get_set_params(self):
         """Test sklearn-compatible get_params and set_params."""
-        did = DifferenceInDifferences(robust=True, alpha=0.05)
+        did = DifferenceInDifferences(alpha=0.05)
 
         params = did.get_params()
-        assert params["robust"] is True
+        # get_params returns the RAW sentinel-era robust arg (None when not
+        # supplied - row M-045); the resolved legacy bool stays on the attr.
+        assert params["robust"] is None
+        assert did.robust is True
         assert params["alpha"] == 0.05
 
         did.set_params(alpha=0.10)
@@ -151,7 +157,7 @@ class TestDifferenceInDifferences:
     def test_summary_output(self, simple_2x2_data):
         """Test that summary produces string output."""
         did = DifferenceInDifferences()
-        did.fit(simple_2x2_data, outcome="outcome", treatment="treated", time="post")
+        did.fit(simple_2x2_data, outcome="outcome", treatment="treated", post="post")
 
         summary = did.summary()
         assert isinstance(summary, str)
@@ -170,7 +176,7 @@ class TestDifferenceInDifferences:
 
         did = DifferenceInDifferences()
         with pytest.raises(ValueError, match="binary"):
-            did.fit(data, outcome="outcome", treatment="treated", time="post")
+            did.fit(data, outcome="outcome", treatment="treated", post="post")
 
     def test_missing_column_error(self):
         """Test error when column is missing."""
@@ -183,7 +189,7 @@ class TestDifferenceInDifferences:
 
         did = DifferenceInDifferences()
         with pytest.raises(ValueError, match="Missing columns"):
-            did.fit(data, outcome="outcome", treatment="treated", time="post")
+            did.fit(data, outcome="outcome", treatment="treated", post="post")
 
     def test_unfitted_model_error(self):
         """Test error when accessing results before fitting."""
@@ -204,7 +210,7 @@ class TestDifferenceInDifferences:
                 data,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 covariates=["collinear_cov"],
             )
 
@@ -224,7 +230,7 @@ class TestDifferenceInDifferences:
                 data,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 covariates=["collinear_cov"],
             )
 
@@ -256,11 +262,11 @@ class TestDifferenceInDifferences:
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            results = did.fit(
+            did.fit(
                 data,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 covariates=["collinear_cov"],
             )
 
@@ -279,7 +285,7 @@ class TestDiDResults:
     def test_repr(self, simple_2x2_data):
         """Test string representation."""
         did = DifferenceInDifferences()
-        results = did.fit(simple_2x2_data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(simple_2x2_data, outcome="outcome", treatment="treated", post="post")
 
         repr_str = repr(results)
         assert "DiDResults" in repr_str
@@ -288,7 +294,7 @@ class TestDiDResults:
     def test_to_dict(self, simple_2x2_data):
         """Test conversion to dictionary."""
         did = DifferenceInDifferences()
-        results = did.fit(simple_2x2_data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(simple_2x2_data, outcome="outcome", treatment="treated", post="post")
 
         result_dict = results.to_dict()
         assert "att" in result_dict
@@ -298,7 +304,7 @@ class TestDiDResults:
     def test_to_dataframe(self, simple_2x2_data):
         """Test conversion to DataFrame."""
         did = DifferenceInDifferences()
-        results = did.fit(simple_2x2_data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(simple_2x2_data, outcome="outcome", treatment="treated", post="post")
 
         df = results.to_dataframe()
         assert isinstance(df, pd.DataFrame)
@@ -308,7 +314,7 @@ class TestDiDResults:
     def test_significance_stars(self, simple_did_data):
         """Test significance star notation."""
         did = DifferenceInDifferences()
-        results = did.fit(simple_did_data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(simple_did_data, outcome="outcome", treatment="treated", post="post")
 
         # With true effect of 3.0 and n=200, should be significant
         assert results.significance_stars in ["*", "**", "***"]
@@ -316,7 +322,7 @@ class TestDiDResults:
     def test_is_significant_property(self, simple_did_data):
         """Test is_significant property."""
         did = DifferenceInDifferences(alpha=0.05)
-        results = did.fit(simple_did_data, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(simple_did_data, outcome="outcome", treatment="treated", post="post")
 
         # Boolean check
         assert isinstance(results.is_significant, bool)
@@ -371,7 +377,7 @@ class TestFixedEffects:
             panel_data_with_fe,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             fixed_effects=["state"],
         )
 
@@ -387,7 +393,7 @@ class TestFixedEffects:
             panel_data_with_fe,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             fixed_effects=["state"],
         )
 
@@ -399,7 +405,7 @@ class TestFixedEffects:
         """Test absorbed (within-transformed) fixed effects."""
         did = DifferenceInDifferences()
         results = did.fit(
-            panel_data_with_fe, outcome="outcome", treatment="treated", time="post", absorb=["unit"]
+            panel_data_with_fe, outcome="outcome", treatment="treated", post="post", absorb=["unit"]
         )
 
         assert results is not None
@@ -413,14 +419,14 @@ class TestFixedEffects:
         did_with_fe = DifferenceInDifferences()
 
         results_no_fe = did_no_fe.fit(
-            panel_data_with_fe, outcome="outcome", treatment="treated", time="post"
+            panel_data_with_fe, outcome="outcome", treatment="treated", post="post"
         )
 
         results_with_fe = did_with_fe.fit(
             panel_data_with_fe,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             fixed_effects=["state"],
         )
 
@@ -439,7 +445,7 @@ class TestFixedEffects:
                 panel_data_with_fe,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 fixed_effects=["nonexistent_column"],
             )
 
@@ -451,7 +457,7 @@ class TestFixedEffects:
                 panel_data_with_fe,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 absorb=["nonexistent_column"],
             )
 
@@ -465,7 +471,7 @@ class TestFixedEffects:
             panel_data_with_fe,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             fixed_effects=["state", "industry"],
         )
 
@@ -486,7 +492,7 @@ class TestFixedEffects:
             panel_data_with_fe,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             covariates=["size"],
             fixed_effects=["state"],
         )
@@ -761,7 +767,7 @@ class TestEdgeCases:
                 data,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 covariates=["duplicate_treated"],
             )
             # Should emit a warning about rank deficiency
@@ -914,7 +920,7 @@ class TestTwoWayFixedEffects:
 
         twfe = TwoWayFixedEffects()
         results = twfe.fit(
-            twfe_panel_data, outcome="outcome", treatment="treated", time="post", unit="unit"
+            twfe_panel_data, outcome="outcome", treatment="treated", post="post", unit="unit"
         )
 
         assert results is not None
@@ -937,7 +943,7 @@ class TestTwoWayFixedEffects:
             twfe_panel_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
             covariates=["size"],
         )
@@ -955,7 +961,7 @@ class TestTwoWayFixedEffects:
                 twfe_panel_data,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 unit="nonexistent_unit",
             )
 
@@ -965,7 +971,7 @@ class TestTwoWayFixedEffects:
 
         twfe = TwoWayFixedEffects()
         results = twfe.fit(
-            twfe_panel_data, outcome="outcome", treatment="treated", time="post", unit="unit"
+            twfe_panel_data, outcome="outcome", treatment="treated", post="post", unit="unit"
         )
 
         # Cluster should NOT be mutated (remains None) - clustering is handled internally
@@ -1007,7 +1013,7 @@ class TestTwoWayFixedEffects:
         # The key is that it should NOT silently produce misleading results
         try:
             results = twfe.fit(
-                df_collinear, outcome="outcome", treatment="treated", time="post", unit="unit"
+                df_collinear, outcome="outcome", treatment="treated", post="post", unit="unit"
             )
             # If we get here without error, the ATT should still be computed
             # (this means only covariates were dropped, not the treatment)
@@ -1032,7 +1038,7 @@ class TestTwoWayFixedEffects:
                 twfe_panel_data,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 unit="unit",
                 covariates=["collinear_cov"],
             )
@@ -1040,6 +1046,7 @@ class TestTwoWayFixedEffects:
     def test_rank_deficient_action_silent_no_warning(self, twfe_panel_data):
         """Test that rank_deficient_action='silent' produces no warning."""
         import warnings
+
         from diff_diff.estimators import TwoWayFixedEffects
 
         # Add a covariate that is perfectly collinear with another
@@ -1055,7 +1062,7 @@ class TestTwoWayFixedEffects:
                 twfe_panel_data,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 unit="unit",
                 covariates=["size", "size_dup"],
             )
@@ -1102,12 +1109,12 @@ class TestClusterRobustSE:
 
         # With clustering
         did_cluster = DifferenceInDifferences(cluster="cluster")
-        results_cluster = did_cluster.fit(df, outcome="outcome", treatment="treated", time="post")
+        results_cluster = did_cluster.fit(df, outcome="outcome", treatment="treated", post="post")
 
         # Without clustering
-        did_no_cluster = DifferenceInDifferences(robust=True)
+        did_no_cluster = DifferenceInDifferences()
         results_no_cluster = did_no_cluster.fit(
-            df, outcome="outcome", treatment="treated", time="post"
+            df, outcome="outcome", treatment="treated", post="post"
         )
 
         # ATT should be similar
@@ -1428,7 +1435,7 @@ class TestMultiPeriodDiD:
     def test_cluster_robust_se(self, multi_period_data):
         """Test cluster-robust standard errors."""
         did_cluster = MultiPeriodDiD(cluster="unit")
-        did_robust = MultiPeriodDiD(robust=True)
+        did_robust = MultiPeriodDiD()
 
         results_cluster = did_cluster.fit(
             multi_period_data,
@@ -1967,9 +1974,16 @@ class TestMultiPeriodDiDEventStudy:
                 time="period",
                 post_periods=[3, 4, 5],
             )
-        future_warnings = [x for x in w if issubclass(x.category, FutureWarning)]
-        assert len(future_warnings) > 0, "Expected FutureWarning for reference_period default"
-        assert "reference_period" in str(future_warnings[0].message)
+        # Select BY MESSAGE, not index: MultiPeriodDiD's construction now
+        # emits its own deprecation FutureWarning first (row M-010), and
+        # simplefilter("always") resets the filter list, so the pyproject
+        # ignore cannot shield this record-based block.
+        ref_warnings = [
+            x
+            for x in w
+            if issubclass(x.category, FutureWarning) and "reference_period" in str(x.message)
+        ]
+        assert len(ref_warnings) > 0, "Expected FutureWarning for reference_period default"
 
     def test_pre_period_effects_near_zero(self, panel_data):
         """Under parallel trends DGP, pre-period effects should be ~0."""
@@ -2553,8 +2567,8 @@ class TestSyntheticDiD:
         )
 
         assert results.variance_method == "placebo"
-        assert results.placebo_effects is not None
-        assert len(results.placebo_effects) > 0
+        assert results.variance_effects is not None
+        assert len(results.variance_effects) > 0
         assert results.se > 0
 
     def test_bootstrap_inference(self, sdid_panel_data, ci_params):
@@ -2574,6 +2588,28 @@ class TestSyntheticDiD:
         assert results.n_bootstrap == n_boot
         assert results.se > 0
         assert results.conf_int[0] < results.att < results.conf_int[1]
+
+    def test_jackknife_inference(self, sdid_panel_data):
+        """Test jackknife-based variance estimation."""
+        sdid = SyntheticDiD(variance_method="jackknife", seed=42)
+        results = sdid.fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7],
+        )
+        assert results.variance_method == "jackknife"
+        assert results.se > 0
+        assert results.conf_int[0] < results.att < results.conf_int[1]
+        # n_bootstrap should be None for jackknife
+        assert results.n_bootstrap is None
+
+    def test_jackknife_valid_method(self):
+        """Test that 'jackknife' is accepted as a variance_method."""
+        sdid = SyntheticDiD(variance_method="jackknife")
+        assert sdid.variance_method == "jackknife"
 
     def test_invalid_variance_method(self):
         """Test that invalid variance_method raises ValueError."""
@@ -2630,6 +2666,8 @@ class TestSyntheticDiD:
 
         assert results.pre_treatment_fit is not None
         assert results.pre_treatment_fit >= 0
+        assert isinstance(results.pre_treatment_level_gap, float)
+        assert np.isfinite(results.pre_treatment_level_gap)
 
     def test_summary_output(self, sdid_panel_data, ci_params):
         """Test that summary produces string output."""
@@ -2669,6 +2707,10 @@ class TestSyntheticDiD:
         assert "n_pre_periods" in result_dict
         assert "n_post_periods" in result_dict
         assert "pre_treatment_fit" in result_dict
+        assert "pre_treatment_level_gap" in result_dict
+        assert np.isfinite(result_dict["pre_treatment_level_gap"])
+        assert "pre_fit_placebo_pvalue" in result_dict
+        assert 0.0 < result_dict["pre_fit_placebo_pvalue"] <= 1.0
 
     def test_to_dataframe(self, sdid_panel_data, ci_params):
         """Test conversion to DataFrame."""
@@ -3102,25 +3144,9 @@ class TestSyntheticWeightsUtils:
         assert abs(np.sum(projected) - 1.0) < 1e-6
         assert np.all(projected >= 0)
 
-    def test_compute_synthetic_weights(self):
-        """Test synthetic weight computation."""
-        from diff_diff.utils import compute_synthetic_weights
-
-        np.random.seed(42)
-        n_pre = 5
-        n_control = 10
-
-        Y_control = np.random.randn(n_pre, n_control)
-        Y_treated = np.random.randn(n_pre)
-
-        weights = compute_synthetic_weights(Y_control, Y_treated)
-
-        # Weights should sum to 1
-        assert abs(np.sum(weights) - 1.0) < 1e-6
-        # Weights should be non-negative
-        assert np.all(weights >= 0)
-        # Should have correct length
-        assert len(weights) == n_control
+    # test_compute_synthetic_weights removed in the silent-failures audit
+    # post-cleanup (finding #22). Helper deleted; behavior now covered via
+    # tests/test_prep.py::TestRankControlUnits (its sole caller).
 
     def test_compute_time_weights(self):
         """Test time weight computation with Frank-Wolfe solver."""
@@ -3210,7 +3236,7 @@ class TestUnbalancedPanels:
         df = pd.DataFrame(data)
 
         did = DifferenceInDifferences()
-        results = did.fit(df, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(df, outcome="outcome", treatment="treated", post="post")
 
         # Should still produce valid results
         assert np.isfinite(results.att)
@@ -3258,11 +3284,25 @@ class TestUnbalancedPanels:
         df = pd.DataFrame(data)
 
         twfe = TwoWayFixedEffects()
-        results = twfe.fit(df, outcome="outcome", treatment="post", unit="unit", time="period")
+        # NOTE: this test previously passed treatment="post" with time="period",
+        # making the treatment interaction a pure function of the period FE -
+        # an unidentifiable specification that "worked" only because the
+        # FE-spanned junk column survived rank detection and produced a finite
+        # garbage ATT. The v3.6.x span guard now routes that spec into TWFE's
+        # collinearity error, so the test uses the well-specified form.
+        results = twfe.fit(df, outcome="outcome", treatment="treated", unit="unit", post="post")
 
         # Should produce valid results
         assert np.isfinite(results.att)
         assert results.se > 0
+        # the degenerate spec now raises the pre-existing identification error
+        # (routed there deterministically by the FE-span snap):
+        with pytest.raises(ValueError, match="cannot be identified"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                TwoWayFixedEffects().fit(
+                    df, outcome="outcome", treatment="post", unit="unit", post="period"
+                )
 
     def test_multiperiod_with_sparse_data(self):
         """Test MultiPeriodDiD with sparse data across periods."""
@@ -3337,7 +3377,7 @@ class TestSingleTreatedUnit:
         df = pd.DataFrame(data)
 
         did = DifferenceInDifferences()
-        results = did.fit(df, outcome="outcome", treatment="treated", time="post")
+        results = did.fit(df, outcome="outcome", treatment="treated", post="post")
 
         # Should produce valid results
         assert np.isfinite(results.att)
@@ -3434,7 +3474,7 @@ class TestCollinearityDetection:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             result = did.fit(
-                data, outcome="outcome", treatment="treated", time="post", covariates=["x1", "x2"]
+                data, outcome="outcome", treatment="treated", post="post", covariates=["x1", "x2"]
             )
             # Should emit a warning about rank deficiency
             rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)]
@@ -3469,7 +3509,7 @@ class TestCollinearityDetection:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             result = did.fit(
-                data, outcome="outcome", treatment="treated", time="post", covariates=["constant_x"]
+                data, outcome="outcome", treatment="treated", post="post", covariates=["constant_x"]
             )
             # Should emit a warning about rank deficiency
             rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)]
@@ -3496,7 +3536,7 @@ class TestCollinearityDetection:
 
         # Near-collinear should work (not perfectly rank-deficient)
         results = did.fit(
-            data, outcome="outcome", treatment="treated", time="post", covariates=["x1", "x2"]
+            data, outcome="outcome", treatment="treated", post="post", covariates=["x1", "x2"]
         )
 
         assert np.isfinite(results.att)
@@ -3543,9 +3583,578 @@ class TestCollinearityDetection:
         # absorbed by unit FE (becomes zero after within-transformation)
         twfe = TwoWayFixedEffects(rank_deficient_action="silent")
         results = twfe.fit(
-            df, outcome="outcome", treatment="treated", unit="unit",
-            time="post", covariates=["unit_covariate"],
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            post="post",
+            covariates=["unit_covariate"],
         )
 
         assert np.isfinite(results.att)
         assert results.se > 0
+
+
+class TestCovariateNameCollision:
+    """PR3: a covariate whose name equals a reserved structural term silently
+    overwrote that coefficient in the zip()-built coef_dict (dict last-write-wins).
+    The DiD-family estimators now raise ValueError; non-colliding covariates leave
+    the structural coefficients intact. TWFE collision tests live in
+    tests/test_estimators_vcov_type.py (next to the full-dummy invariant)."""
+
+    @staticmethod
+    def _did_data():
+        rng = np.random.default_rng(7)
+        rows = []
+        for unit in range(60):
+            treated = int(unit < 30)
+            for post in (0, 1):
+                y = 1.0 + 2.0 * treated * post + rng.normal()
+                rows.append({"unit": unit, "treated": treated, "post": post, "outcome": y})
+        df = pd.DataFrame(rows)
+        df["x1"] = np.random.default_rng(11).normal(size=len(df))
+        return df
+
+    @staticmethod
+    def _mpd_data():
+        rng = np.random.default_rng(7)
+        rows = []
+        for unit in range(60):
+            treated = int(unit < 30)
+            ueff = rng.normal()
+            for period in range(6):
+                y = (
+                    10.0
+                    + ueff
+                    + 0.5 * period
+                    + (3.0 if (treated and period >= 3) else 0.0)
+                    + rng.normal(0, 0.5)
+                )
+                rows.append({"unit": unit, "treated": treated, "time": period, "outcome": y})
+        df = pd.DataFrame(rows)
+        df["x1"] = np.random.default_rng(11).normal(size=len(df))
+        return df
+
+    def test_did_collision_for_each_structural_name(self):
+        # Drive the reserved set from a clean fit's actual coefficient keys so
+        # the test cannot drift from the real var_names (const/treated/post/
+        # treated:post), plus the internal _treat_time working column.
+        data = self._did_data()
+        clean = DifferenceInDifferences().fit(data, "outcome", "treated", "post", covariates=["x1"])
+        reserved = [k for k in clean.coefficients if k != "x1"] + ["_treat_time"]
+        assert "const" in reserved and "treated:post" in reserved  # sanity
+        for name in reserved:
+            d2 = data.copy()
+            if name not in d2.columns:
+                d2[name] = np.random.default_rng(5).normal(size=len(d2))
+            with pytest.raises(ValueError, match="collide"):
+                DifferenceInDifferences().fit(d2, "outcome", "treated", "post", covariates=[name])
+
+    def test_did_fixed_effects_dummy_collision(self):
+        # get_dummies(region, prefix="region", drop_first=True) drops "region_A"
+        # and keeps "region_B" -> a covariate named "region_B" collides.
+        data = self._did_data()
+        data["region"] = np.where(data["unit"] % 2 == 0, "A", "B")
+        data["region_B"] = np.random.default_rng(2).normal(size=len(data))
+        with pytest.raises(ValueError, match="collide"):
+            DifferenceInDifferences().fit(
+                data,
+                "outcome",
+                "treated",
+                "post",
+                covariates=["region_B"],
+                fixed_effects=["region"],
+            )
+
+    def test_did_noncolliding_preserves_structural_coefs(self):
+        data = self._did_data()
+        r = DifferenceInDifferences().fit(data, "outcome", "treated", "post", covariates=["x1"])
+        ck = r.coefficients
+        assert np.isfinite(ck["const"]) and np.isfinite(ck["treated:post"])
+        assert "x1" in ck and ck["x1"] != ck["treated:post"]
+        # No key was overwritten: dict size matches the vcov rank.
+        assert len(ck) == r.vcov.shape[0]
+
+    def test_did_formula_colliding_raises(self):
+        data = self._did_data()
+        data["const"] = np.random.default_rng(3).normal(size=len(data))
+        with pytest.raises(ValueError, match="collide"):
+            DifferenceInDifferences().fit(data, formula="outcome ~ treated*post + const")
+
+    def test_did_formula_noncolliding_works(self):
+        data = self._did_data()
+        r = DifferenceInDifferences().fit(data, formula="outcome ~ treated*post + x1")
+        assert "x1" in r.coefficients
+
+    def test_did_duplicate_covariates_raise(self):
+        data = self._did_data()
+        with pytest.raises(ValueError, match="duplicate"):
+            DifferenceInDifferences().fit(
+                data, "outcome", "treated", "post", covariates=["x1", "x1"]
+            )
+
+    def test_mpd_collision_for_each_structural_name(self):
+        data = self._mpd_data()
+        clean = MultiPeriodDiD().fit(data, "outcome", "treated", "time", covariates=["x1"])
+        # const/treated/period_*/treated:period_* (actual keys) + internal column.
+        reserved = [k for k in clean.coefficients if k != "x1"] + ["_did_treatment"]
+        assert any(k.startswith("period_") for k in reserved)  # sanity
+        for name in reserved:
+            d2 = data.copy()
+            if name not in d2.columns:
+                d2[name] = np.random.default_rng(5).normal(size=len(d2))
+            with pytest.raises(ValueError, match="collide"):
+                MultiPeriodDiD().fit(d2, "outcome", "treated", "time", covariates=[name])
+
+    def test_mpd_noncolliding_preserves_structural_coefs(self):
+        data = self._mpd_data()
+        r = MultiPeriodDiD().fit(data, "outcome", "treated", "time", covariates=["x1"])
+        ck = r.coefficients
+        assert "x1" in ck and np.isfinite(ck["const"])
+        assert any(k.startswith("period_") for k in ck)
+        assert len(ck) == r.vcov.shape[0]
+
+    def test_mpd_fixed_effect_dummy_collides_with_period_keys(self):
+        # Backstop: a NON-time fixed effect whose get_dummies names match the
+        # structural period_{p} event-study keys must raise (would otherwise
+        # silently overwrite those coefficients) — the FE dummy is appended to
+        # var_names directly, so the upfront covariate guard cannot catch it.
+        data = self._mpd_data()
+        data["period"] = data["time"]  # FE column 'period' -> 'period_1'... dummies
+        with pytest.raises(ValueError, match="collide"):
+            MultiPeriodDiD().fit(
+                data,
+                "outcome",
+                "treated",
+                "time",
+                covariates=["x1"],
+                fixed_effects=["period"],
+            )
+
+    def test_synthetic_did_unaffected_by_guard(self):
+        # SyntheticDiD overrides fit() and never reaches the base-class guard;
+        # a covariate must still fit (regression lock that the guard didn't leak).
+        rng = np.random.default_rng(42)
+        rows = []
+        for unit in range(30):
+            treated = int(unit < 5)
+            ueff = rng.normal(0, 3)
+            for period in range(8):
+                y = (
+                    10.0
+                    + ueff
+                    + 0.5 * period
+                    + (5.0 if (treated and period >= 4) else 0.0)
+                    + rng.normal(0, 0.5)
+                )
+                rows.append({"unit": unit, "period": period, "treated": treated, "outcome": y})
+        d = pd.DataFrame(rows)
+        d["x1"] = rng.normal(size=len(d))
+        r = SyntheticDiD().fit(
+            d,
+            "outcome",
+            "treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7],
+            covariates=["x1"],
+        )
+        assert np.isfinite(r.att)
+
+
+class TestAbsorbedRegressorSnap:
+    """FE-spanned regressors snap to zero -> deterministic NaN + warning
+    (REGISTRY 'Absorbed Fixed Effects'; the pre-snap junk columns perturbed
+    identified coefficients at ~1e-5, tolerance- and implementation-dependent).
+    """
+
+    @staticmethod
+    def _geo_frame(seed=0, n_states=20, n_months=12, n_rows=4_000):
+        rng = np.random.default_rng(seed)
+        state = rng.integers(0, n_states, n_rows)
+        month = rng.integers(0, n_months, n_rows)
+        treated = (state < n_states // 2).astype(int)
+        post = (month >= n_months // 2).astype(int)
+        y = (
+            rng.normal(0, 1, n_states)[state]
+            + rng.normal(0, 0.5, n_months)[month]
+            + 0.3 * treated * post
+            + rng.normal(size=n_rows)
+        )
+        return pd.DataFrame(
+            {"y": y, "treated": treated, "post": post, "state": state, "month": month}
+        )
+
+    def test_did_absorb_spanned_main_effects_nan_with_cause_warning(self):
+        df = self._geo_frame()
+        est = DifferenceInDifferences()
+        with pytest.warns(UserWarning, match="collinear with the absorbed"):
+            res = est.fit(
+                df,
+                outcome="y",
+                treatment="treated",
+                post="post",
+                absorb=["state", "month"],
+            )
+        assert np.isnan(res.coefficients["treated"])
+        assert np.isnan(res.coefficients["post"])
+        assert np.isfinite(res.att) and np.isfinite(res.se)
+
+    def test_did_absorb_att_matches_clean_fwl_ground_truth(self):
+        """With the junk columns snapped, ATT must equal the regression on the
+        demeaned interaction ALONE (the identified FWL estimand) at 1e-10."""
+        from diff_diff.utils import demean_by_groups
+
+        df = self._geo_frame(seed=1)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = DifferenceInDifferences().fit(
+                df,
+                outcome="y",
+                treatment="treated",
+                post="post",
+                absorb=["state", "month"],
+            )
+        d = df.copy()
+        d["_tt"] = d["treated"].values.astype(float) * d["post"].values.astype(float)
+        out, _ = demean_by_groups(d, ["y", "_tt"], ["state", "month"], suffix="_dm", tol=1e-12)
+        tt = out["_tt_dm"].values
+        gt = float(np.dot(tt, out["y_dm"].values) / np.dot(tt, tt))
+        assert res.att == pytest.approx(gt, abs=1e-10)
+
+    def test_multiperiod_absorb_spanned_period_dummies_snap(self):
+        """MPD with an absorbed time dimension: the period dummies are spanned
+        (NaN), the interaction effects stay identified."""
+        df = self._geo_frame(seed=2)
+        est = MultiPeriodDiD()
+        with pytest.warns(UserWarning, match="collinear with the absorbed"):
+            res = est.fit(
+                df,
+                outcome="y",
+                treatment="treated",
+                time="month",
+                absorb=["state", "month"],
+            )
+        assert any(np.isfinite(e.effect) for e in res.period_effects.values())
+
+    def test_twfe_unit_constant_covariate_nan_att_unaffected(self):
+        rng = np.random.default_rng(3)
+        n_units, n_periods = 80, 6
+        unit = np.repeat(np.arange(n_units), n_periods)
+        time = np.tile(np.arange(n_periods), n_units)
+        treated = (unit < n_units // 2).astype(int)
+        post = (time >= n_periods // 2).astype(int)
+        y = 0.4 * treated * post + rng.normal(size=unit.size)
+        df = pd.DataFrame({"y": y, "treated": treated, "post": post, "unit": unit, "time": time})
+        df["xc"] = np.repeat(rng.normal(size=n_units), n_periods)  # unit-constant
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            base = TwoWayFixedEffects().fit(
+                df, outcome="y", treatment="treated", post="post", unit="unit"
+            )
+        with pytest.warns(UserWarning, match="collinear with the absorbed"):
+            res = TwoWayFixedEffects().fit(
+                df,
+                outcome="y",
+                treatment="treated",
+                post="post",
+                unit="unit",
+                covariates=["xc"],
+            )
+        # TWFE results expose only the ATT coefficient; the snapped covariate
+        # column is dropped by rank handling, so the fit must reduce EXACTLY
+        # to the no-covariate design.
+        assert res.att == pytest.approx(base.att, abs=1e-10)
+        assert res.se == pytest.approx(base.se, rel=1e-8)
+
+
+class TestReplicateRefitSnap:
+    """Replicate refits must fail closed when a regressor becomes FE-spanned
+    within a replicate's effective half-sample (local-review follow-up)."""
+
+    def test_replicate_local_spanning_yields_finite_inference(self):
+        from diff_diff.survey import SurveyDesign
+
+        rng = np.random.default_rng(30)
+        n_states, n_months, n_rows = 8, 10, 4_000
+        state = rng.integers(0, n_states, n_rows)
+        month = rng.integers(0, n_months, n_rows)
+        treated = (state < n_states // 2).astype(int)
+        post = (month >= n_months // 2).astype(int)
+        # covariate varies ONLY within state 0's rows; on any replicate that
+        # zeroes state 0 it becomes state-spanned in the effective sample
+        xc = np.where(state == 0, rng.normal(size=n_rows), 1.0)
+        y = (
+            rng.normal(0, 1, n_states)[state]
+            + rng.normal(0, 0.3, n_months)[month]
+            + 0.3 * treated * post
+            + 0.1 * xc
+            + rng.normal(size=n_rows)
+        )
+        df = pd.DataFrame(
+            {
+                "y": y,
+                "treated": treated,
+                "post": post,
+                "xc": xc,
+                "state": state,
+                "month": month,
+                "w": np.ones(n_rows),
+            }
+        )
+        # BRR-style replicates; replicate 1 zeroes states {0, 1} so xc is
+        # constant (spanned by state FE) on its effective sample
+        halves = [
+            np.array([1, 0, 1, 0, 1, 0, 1, 0]),
+            np.array([0, 1, 0, 1, 1, 0, 0, 1]),
+            np.array([1, 1, 0, 0, 0, 1, 1, 0]),
+            np.array([0, 0, 1, 1, 0, 1, 0, 1]),
+        ]
+        for i, h in enumerate(halves, 1):
+            df[f"rw{i}"] = 2.0 * h[state]
+        design = SurveyDesign(
+            weights="w",
+            replicate_weights=[f"rw{i}" for i in range(1, 5)],
+            replicate_method="BRR",
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = DifferenceInDifferences().fit(
+                df,
+                outcome="y",
+                treatment="treated",
+                post="post",
+                absorb=["state", "month"],
+                covariates=["xc"],
+                survey_design=design,
+            )
+        # fail-closed contract: inference is finite (invalid replicates are
+        # dropped by compute_replicate_refit_variance), never junk-inflated
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se) and res.se > 0
+
+
+class TestJointSpanCovariateSnap:
+    """Local-review P0 end-to-end: a covariate exactly in the joint span of
+    the absorbed dimensions must be dropped (NaN + warning) and leave the
+    identified ATT untouched, even when MAP truncation masks it from the
+    fast-path norm test (unbalanced, correlated FE incidence)."""
+
+    @staticmethod
+    def _frame(seed=7):
+        rng = np.random.default_rng(seed)
+        n_units, n_periods, span = 150, 30, 9
+        unit = np.repeat(np.arange(n_units), n_periods)
+        time = np.tile(np.arange(n_periods), n_units)
+        entry = rng.integers(0, n_periods - span, n_units)
+        keep = (time >= entry[unit]) & (time < entry[unit] + span)
+        unit, time = unit[keep], time[keep]
+        treated = (unit < n_units // 2).astype(int)
+        post = (time >= n_periods // 2).astype(int)
+        y = 0.4 * treated * post + rng.normal(size=unit.size)
+        a = rng.normal(0, 1, n_units)
+        b = rng.normal(0, 1, n_periods)
+        return pd.DataFrame(
+            {
+                "y": y,
+                "treated": treated,
+                "post": post,
+                "unit": unit,
+                "time": time,
+                "xspan": a[unit] + b[time],
+            }
+        )
+
+    def test_did_absorb_joint_span_covariate_dropped_att_stable(self):
+        df = self._frame()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            base = DifferenceInDifferences().fit(
+                df,
+                outcome="y",
+                treatment="treated",
+                post="post",
+                absorb=["unit", "time"],
+            )
+        with pytest.warns(UserWarning, match=r"xspan.*collinear with the absorbed"):
+            res = DifferenceInDifferences().fit(
+                df,
+                outcome="y",
+                treatment="treated",
+                post="post",
+                absorb=["unit", "time"],
+                covariates=["xspan"],
+            )
+        assert np.isnan(res.coefficients["xspan"])
+        assert res.att == pytest.approx(base.att, abs=1e-10)
+
+    def test_sun_abraham_joint_span_covariate_dropped_att_stable(self):
+        from diff_diff import SunAbraham
+
+        df = self._frame(seed=8)
+        first = np.where(np.arange(df["unit"].nunique()) % 3 == 0, 0, 15)[
+            df["unit"].values % df["unit"].nunique()
+        ]
+        df = df.assign(first_treat=first)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            base = SunAbraham().fit(
+                df, outcome="y", unit="unit", time="time", first_treat="first_treat"
+            )
+        with pytest.warns(UserWarning, match="collinear with the absorbed"):
+            res = SunAbraham().fit(
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["xspan"],
+            )
+        assert res.att == pytest.approx(base.att, abs=1e-8)
+
+
+# ---------------------------------------------------------------------------
+# Family-wide summary(alpha=) contract (M-146 completion)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def did_alpha_fitted():
+    np.random.seed(11)
+    n = 40
+    rows = []
+    for unit in range(n):
+        for post in (0, 1):
+            rows.append(
+                {
+                    "unit": unit,
+                    "post": post,
+                    "treated": int(unit < n // 2),
+                    "outcome": np.random.normal() + 2.0 * (unit < n // 2) * post,
+                }
+            )
+    data = pd.DataFrame(rows)
+    return DifferenceInDifferences().fit(data, outcome="outcome", treatment="treated", time="post")
+
+
+@pytest.fixture(scope="module")
+def mpd_alpha_fitted():
+    np.random.seed(12)
+    n, t = 40, 6
+    rows = []
+    for unit in range(n):
+        for period in range(t):
+            rows.append(
+                {
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(unit < n // 2),
+                    "outcome": np.random.normal()
+                    + 0.3 * period
+                    + 1.5 * (unit < n // 2) * (period >= 3),
+                }
+            )
+    data = pd.DataFrame(rows)
+    return MultiPeriodDiD().fit(
+        data, outcome="outcome", treatment="treated", time="period", post_periods=[3, 4, 5]
+    )
+
+
+@pytest.fixture(scope="module")
+def sdid_alpha_fitted(ci_params):
+    np.random.seed(13)
+    n, t = 30, 8
+    rows = []
+    for unit in range(n):
+        ue = np.random.normal(0, 3)
+        for period in range(t):
+            rows.append(
+                {
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(unit < 5),
+                    "outcome": 10.0
+                    + ue
+                    + 0.5 * period
+                    + 5.0 * (unit < 5) * (period >= 4)
+                    + np.random.normal(0, 0.5),
+                }
+            )
+    data = pd.DataFrame(rows)
+    n_boot = ci_params.bootstrap(20)
+    return SyntheticDiD(n_bootstrap=n_boot, seed=42).fit(
+        data,
+        outcome="outcome",
+        treatment="treated",
+        unit="unit",
+        time="period",
+        post_periods=[4, 5, 6, 7],
+    )
+
+
+class TestSummaryAlphaContractNonStaggered:
+    """summary(alpha=...) never recomputes stored inference (M-146 family-wide).
+
+    A non-fit alpha raises instead of silently relabeling the
+    confidence-interval header over fit-time stored intervals; alpha=0.0
+    (previously swallowed by the falsy `alpha or self.alpha` idiom) raises
+    too. The five generic-message sites must emit the accurate shared
+    message, never the staggered default's bootstrap-percentile rationale.
+    """
+
+    @pytest.mark.parametrize("bad_alpha", [0.10, 0.0])
+    @pytest.mark.parametrize(
+        "fixture", ["did_alpha_fitted", "mpd_alpha_fitted", "sdid_alpha_fitted"]
+    )
+    def test_summary_rejects_non_fit_alpha(self, request, fixture, bad_alpha):
+        fitted = request.getfixturevalue(fixture)
+        with pytest.raises(ValueError, match="never recomputes") as exc:
+            fitted.summary(alpha=bad_alpha)
+        msg = str(exc.value)
+        assert "re-fit with the desired alpha" in msg
+        assert "bootstrap percentile" not in msg
+
+    @pytest.mark.parametrize(
+        "fixture", ["did_alpha_fitted", "mpd_alpha_fitted", "sdid_alpha_fitted"]
+    )
+    def test_summary_accepts_fit_alpha(self, request, fixture):
+        fitted = request.getfixturevalue(fixture)
+        assert fitted.summary(alpha=fitted.alpha) == fitted.summary()
+
+    def test_print_summary_relays_the_guard(self, did_alpha_fitted):
+        with pytest.raises(ValueError, match="never recomputes"):
+            did_alpha_fitted.print_summary(alpha=0.10)
+
+
+class TestRequireFitAlphaMessageOverride:
+    """The helper's message= override replaces the whole message; the default
+    stays byte-identical (staggered pins depend on it)."""
+
+    def test_default_message_unchanged(self):
+        from diff_diff.results_base import _require_fit_alpha
+
+        with pytest.raises(ValueError) as exc:
+            _require_fit_alpha(0.10, 0.05)
+        assert str(exc.value) == (
+            "This result stores intervals computed at alpha=0.05; "
+            "summary() never recomputes or relabels stored inference "
+            "(requested alpha=0.1). Re-fit with the desired alpha "
+            "(bootstrap percentile intervals cannot be reconstructed from "
+            "the reported SE)."
+        )
+
+    def test_message_override_replaces_and_formats(self):
+        from diff_diff.results_base import _require_fit_alpha
+
+        with pytest.raises(ValueError) as exc:
+            _require_fit_alpha(
+                0.10, 0.05, message="custom never recomputes a={alpha} f={fit_alpha}"
+            )
+        assert str(exc.value) == "custom never recomputes a=0.1 f=0.05"
+
+    def test_none_and_fit_alpha_pass(self):
+        from diff_diff.results_base import _require_fit_alpha
+
+        assert _require_fit_alpha(None, 0.05, message="x never recomputes") == 0.05
+        assert _require_fit_alpha(0.05, 0.05) == 0.05

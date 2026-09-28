@@ -1,0 +1,106 @@
+name: Bug report
+description: Report a defect or unexpected behavior in diff-diff
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. Please fill out the
+        sections below so the maintainer can reproduce the issue quickly.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of the bug.
+      placeholder: When I call `DifferenceInDifferences.fit(...)` with ..., the result has ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproducer
+    attributes:
+      label: Minimal reproducer
+      description: |
+        Smallest possible code snippet that reproduces the issue. Inline data is
+        ideal; if you must attach a file, please scrub any sensitive content.
+      render: python
+      placeholder: |
+        import numpy as np
+        import pandas as pd
+        from diff_diff import DifferenceInDifferences
+
+        df = pd.DataFrame({...})
+        est = DifferenceInDifferences()
+        results = est.fit(df, outcome='y', treatment='treated', time='post')
+        print(results.att)
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened? Include the full traceback if applicable.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: diff-diff version
+      description: Output of `python -c "import diff_diff; print(diff_diff.__version__)"`
+      placeholder: "3.3.1"
+    validations:
+      required: true
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      placeholder: "3.11"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      description: |
+        Run `python -c "from diff_diff import HAS_RUST_BACKEND; print(HAS_RUST_BACKEND)"`
+      options:
+        - "Rust (HAS_RUST_BACKEND=True)"
+        - "Pure Python (HAS_RUST_BACKEND=False)"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux (x86_64)
+        - Linux (aarch64)
+        - Windows
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Anything else that might be relevant — relevant references, similar issues, workarounds you tried, etc.

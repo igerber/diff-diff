@@ -1,0 +1,66 @@
+{
+  "scenario": "brand_awareness_survey_small",
+  "backend": "python",
+  "has_rust_backend": false,
+  "total_seconds": 0.22668149999999998,
+  "memory": {
+    "available": true,
+    "start_mb": 115.44,
+    "peak_mb": 130.16,
+    "growth_mb": 14.72,
+    "sampler_interval_s": 0.01
+  },
+  "phases": {
+    "1_naive_fit_no_survey_design": {
+      "seconds": 0.00165958300000002,
+      "ok": true,
+      "error": null
+    },
+    "2_tsl_strata_psu_fpc": {
+      "seconds": 0.006191999999999975,
+      "ok": true,
+      "error": null
+    },
+    "3_replicate_weights_jk1": {
+      "seconds": 0.02364570900000007,
+      "ok": true,
+      "error": null
+    },
+    "4_multi_outcome_loop_3_metrics": {
+      "seconds": 0.07623400000000002,
+      "ok": true,
+      "error": null
+    },
+    "5_check_parallel_trends": {
+      "seconds": 0.009393082999999969,
+      "ok": true,
+      "error": null
+    },
+    "6_placebo_refit_pre_period": {
+      "seconds": 0.02586829199999996,
+      "ok": true,
+      "error": null
+    },
+    "7_event_study_plus_honest_did": {
+      "seconds": 0.08367512499999996,
+      "ok": true,
+      "error": null
+    }
+  },
+  "metadata": {
+    "scale": "small",
+    "n_units": 200,
+    "n_periods": 12,
+    "n_obs": 2400,
+    "n_strata": 10,
+    "n_psu_per_stratum": 4,
+    "n_replicate_weights": 40,
+    "outcomes": [
+      "outcome",
+      "consideration",
+      "purchase_intent"
+    ]
+  },
+  "diff_diff_version": "3.1.3",
+  "numpy_version": "2.0.2"
+}

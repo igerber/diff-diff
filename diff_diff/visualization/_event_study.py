@@ -1,14 +1,19 @@
 """Event study visualization functions."""
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+import warnings
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Union
 
 import numpy as np
 import pandas as pd
 
 if TYPE_CHECKING:
+    from diff_diff.chaisemartin_dhaultfoeuille_results import (
+        ChaisemartinDHaultfoeuilleResults,
+    )
     from diff_diff.honest_did import HonestDiDResults
     from diff_diff.imputation import ImputationDiDResults
     from diff_diff.results import MultiPeriodDiDResults
+    from diff_diff.results_base import EventStudyResults
     from diff_diff.stacked_did import StackedDiDResults
     from diff_diff.staggered import CallawaySantAnnaResults
     from diff_diff.sun_abraham import SunAbrahamResults
@@ -22,6 +27,8 @@ PlottableResults = Union[
     "ImputationDiDResults",
     "TwoStageDiDResults",
     "StackedDiDResults",
+    "ChaisemartinDHaultfoeuilleResults",
+    "EventStudyResults",
     pd.DataFrame,
 ]
 
@@ -63,9 +70,12 @@ def plot_event_study(
 
     Parameters
     ----------
-    results : MultiPeriodDiDResults, CallawaySantAnnaResults, or DataFrame, optional
-        Results object from MultiPeriodDiD, CallawaySantAnna, or a DataFrame
-        with columns 'period', 'effect', 'se' (and optionally 'conf_int_lower',
+    results : MultiPeriodDiDResults, CallawaySantAnnaResults, EventStudyResults, or DataFrame, optional
+        Results object from MultiPeriodDiD, CallawaySantAnna, a unified
+        :class:`~diff_diff.results_base.EventStudyResults` container (from
+        any producer's ``aggregate('event_study')`` or
+        ``build_event_study_surface``), or a DataFrame with columns
+        'period', 'effect', 'se' (and optionally 'conf_int_lower',
         'conf_int_upper'). If None, must provide effects and se directly.
     effects : dict, optional
         Dictionary mapping periods to effect estimates. Used if results is None.
@@ -83,7 +93,13 @@ def plot_event_study(
     post_periods : list, optional
         List of post-treatment periods. Used for shading.
     alpha : float, default=0.05
-        Significance level for confidence intervals.
+        Significance level for confidence intervals. Applies to intervals
+        recomputed from the SE (dict/DataFrame-without-cband inputs and
+        explicit-normalization replots). An ``EventStudyResults``
+        container's STORED intervals are drawn at the fit's own level -
+        bootstrap/t-based intervals cannot be re-leveled from the SE - and
+        a ``UserWarning`` names the mismatch when it differs from
+        ``alpha``.
     figsize : tuple, default=(10, 6)
         Figure size (width, height) in inches.
     title : str, default="Event Study"
@@ -129,12 +145,13 @@ def plot_event_study(
 
     Examples
     --------
-    Using with MultiPeriodDiD results:
+    Using with TwoWayFixedEffects event-study results:
 
-    >>> from diff_diff import MultiPeriodDiD, plot_event_study
-    >>> did = MultiPeriodDiD()
-    >>> results = did.fit(data, outcome='y', treatment='treated',
-    ...                   time='period', post_periods=[3, 4, 5])
+    >>> from diff_diff import TwoWayFixedEffects, plot_event_study
+    >>> twfe = TwoWayFixedEffects()
+    >>> results = twfe.fit(data, outcome='y', treatment='treated',
+    ...                    unit='unit', event_study=True,
+    ...                    time='period', post_periods=[3, 4, 5])
     >>> plot_event_study(results)
 
     Using with a DataFrame:
@@ -179,6 +196,7 @@ def plot_event_study(
     # Extract data from results if provided
     ci_lower_override = None
     ci_upper_override = None
+    reference_marks: Optional[Set[Any]] = None
     if results is not None:
         (
             effects,
@@ -190,14 +208,22 @@ def plot_event_study(
             reference_inferred,
             ci_lower_override,
             ci_upper_override,
+            pw_lower_override,
+            pw_upper_override,
+            reference_marks,
         ) = _extract_plot_data(results, periods, pre_periods, post_periods, reference_period)
         # If reference was inferred from results, it was NOT explicitly provided
         if reference_inferred:
             reference_period_explicit = False
-        # Suppress simultaneous confidence band overrides when user opts out
+        # Channel selection: the band channel when the user wants
+        # simultaneous bands; otherwise the POINTWISE channel - the
+        # producer's stored intervals (NaN preserved), for input routes
+        # that carry one. Routes without a pointwise channel keep the
+        # legacy behavior (overrides cleared -> pointwise recomputation
+        # from the SE downstream).
         if not use_cband:
-            ci_lower_override = None
-            ci_upper_override = None
+            ci_lower_override = pw_lower_override
+            ci_upper_override = pw_upper_override
     elif effects is None or se is None:
         raise ValueError("Must provide either 'results' or both 'effects' and 'se'")
 
@@ -225,6 +251,39 @@ def plot_event_study(
             # Set reference SE to NaN (it's now a constraint, not an estimate)
             # This follows fixest convention where the omitted category has no SE/CI
             se = {p: (np.nan if p == reference_period else s) for p, s in se.items()}
+            # REGISTRY (Event Study Plotting): after explicit normalization,
+            # CIs are RECOMPUTED from the normalized effects and original
+            # SEs, and the reference CI becomes (NaN, NaN). Any simultaneous
+            # bands were computed around the UN-normalized effects - keeping
+            # them would draw intervals centered on stale estimates (and a
+            # finite interval on the constraint row) - so discard them and
+            # fall through to the pointwise recomputation below.
+            ci_lower_override = None
+            ci_upper_override = None
+
+    # An EventStudyResults container's stored intervals are at the FIT's
+    # level - bootstrap-percentile / survey-t / Bell-McCaffrey intervals
+    # cannot be reconstructed from the SE at another level - so ``alpha``
+    # does not apply to them. Warn instead of silently relabeling coverage.
+    # (The explicit-normalization path above discards the overrides and
+    # recomputes at the requested ``alpha``, so it never reaches here with
+    # overrides active.)
+    if results is not None and ci_lower_override is not None:
+        from diff_diff.results_base import EventStudyResults, _coverage_pct
+
+        if isinstance(results, EventStudyResults):
+            stored_alpha = getattr(results, "alpha", None)
+            if stored_alpha is not None and not np.isclose(float(stored_alpha), alpha):
+                warnings.warn(
+                    f"plot_event_study(alpha={alpha}) does not apply to an "
+                    "EventStudyResults container: the stored intervals "
+                    f"drawn here are at the fit's alpha={stored_alpha} "
+                    f"({_coverage_pct(stored_alpha)}% coverage). "
+                    "Re-aggregate from a fit at the desired level to "
+                    "change the plotted coverage.",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
     plot_data = []
     for period in periods:
@@ -240,7 +299,18 @@ def plot_event_study(
             ci_lower = ci_lower_override[period]
             assert ci_upper_override is not None
             ci_upper = ci_upper_override[period]
-        elif np.isfinite(std_err):
+        elif np.isfinite(std_err) and (
+            std_err > 0 or (period == reference_period and effect == 0.0 and std_err == 0.0)
+        ):
+            # A zero/negative-SE row has all-NaN stored inference
+            # (safe_inference), and effect +/- z*0 would draw a finite
+            # zero-width interval for it - the prohibited partial-NaN
+            # pattern (plot_group_effects twin). The one retention: an
+            # auto-inferred reference row (effect exactly 0, se 0) keeps
+            # its degenerate constraint bar per the REGISTRY Event Study
+            # Plotting contract; the effect == 0.0 conjunct stops the
+            # unconditional -1 reference fallback from retaining a
+            # genuinely estimated zero-SE row.
             ci_lower = effect - critical_value * std_err
             ci_upper = effect + critical_value * std_err
         else:
@@ -254,7 +324,11 @@ def plot_event_study(
                 "se": std_err,
                 "ci_lower": ci_lower,
                 "ci_upper": ci_upper,
-                "is_reference": period == reference_period,
+                # Row-aligned marks (multi-reference containers) hollow
+                # every normalization anchor; the scalar covers the
+                # single-reference routes.
+                "is_reference": period == reference_period
+                or (reference_marks is not None and period in reference_marks),
             }
         )
 
@@ -303,6 +377,25 @@ def plot_event_study(
     )
 
 
+def _pre_shading_runs(pre_x: List[int]) -> List[Tuple[int, int]]:
+    """Contiguous runs of pre-period x-positions, as (start, end) pairs.
+
+    The pre-period set need not be contiguous: a calendar surface with
+    non-suffix ``post_periods`` provenance (legal on MultiPeriodDiD /
+    the TWFE event-study mode) interleaves post periods between pre
+    periods, and a single min-to-max span would shade those post periods
+    as pre-treatment. One span per contiguous run keeps the shading
+    truthful on every partition shape.
+    """
+    runs: List[Tuple[int, int]] = []
+    for x in sorted(pre_x):
+        if runs and x == runs[-1][1] + 1:
+            runs[-1] = (runs[-1][0], x)
+        else:
+            runs.append((x, x))
+    return runs
+
+
 def _render_event_study_mpl(
     df,
     *,
@@ -339,11 +432,13 @@ def _render_event_study_mpl(
     period_to_x = {p: i for i, p in enumerate(df["period"])}
     x_vals = [period_to_x[p] for p in df["period"]]
 
-    # Shade pre-treatment region
+    # Shade pre-treatment region - one span per CONTIGUOUS run of pre
+    # positions (a single min-to-max span would shade interleaved post
+    # periods as pre on non-suffix partitions).
     if shade_pre and pre_periods is not None:
         pre_x = [period_to_x[p] for p in pre_periods if p in period_to_x]
-        if pre_x:
-            ax.axvspan(min(pre_x) - 0.5, max(pre_x) + 0.5, color=shade_color, alpha=0.5, zorder=0)
+        for run_start, run_end in _pre_shading_runs(pre_x):
+            ax.axvspan(run_start - 0.5, run_end + 0.5, color=shade_color, alpha=0.5, zorder=0)
 
     # Draw horizontal zero line
     if show_zero_line:
@@ -355,19 +450,21 @@ def _render_event_study_mpl(
             ref_x = period_to_x[reference_period]
             ax.axvline(x=ref_x, color="gray", linestyle=":", linewidth=1, zorder=1)
 
-    # Plot error bars (only for entries with finite CI)
+    # Plot error bars (only for entries with finite CI). Bars are drawn
+    # ENDPOINT-BASED - anchored at the interval midpoint with symmetric
+    # yerr, so the segment is exactly [ci_lower, ci_upper]. Centering on
+    # the estimate breaks on stored percentile/bootstrap intervals, which
+    # need not contain it (negative yerr -> matplotlib ValueError).
     has_ci = df["ci_lower"].notna() & df["ci_upper"].notna()
     if has_ci.any():
         df_with_ci = df[has_ci]
         x_with_ci = [period_to_x[p] for p in df_with_ci["period"]]
-        yerr = [
-            df_with_ci["effect"] - df_with_ci["ci_lower"],
-            df_with_ci["ci_upper"] - df_with_ci["effect"],
-        ]
+        ci_mid = (df_with_ci["ci_lower"] + df_with_ci["ci_upper"]) / 2.0
+        ci_half = (df_with_ci["ci_upper"] - df_with_ci["ci_lower"]).abs() / 2.0
         ax.errorbar(
             x_with_ci,
-            df_with_ci["effect"],
-            yerr=yerr,
+            ci_mid,
+            yerr=ci_half,
             fmt="none",
             color=color,
             capsize=capsize,
@@ -456,13 +553,16 @@ def _render_event_study_plotly(
     x_vals = list(range(len(periods)))
     tick_labels = [str(p) for p in periods]
 
-    # Shade pre-treatment region
+    # Shade pre-treatment region - one vrect per CONTIGUOUS run of pre
+    # positions (mirrors the matplotlib renderer; a single min-to-max
+    # vrect would shade interleaved post periods as pre on non-suffix
+    # partitions).
     if shade_pre and pre_periods is not None:
         pre_x = [period_to_x[p] for p in pre_periods if p in period_to_x]
-        if pre_x:
+        for run_start, run_end in _pre_shading_runs(pre_x):
             fig.add_vrect(
-                x0=min(pre_x) - 0.5,
-                x1=max(pre_x) + 0.5,
+                x0=run_start - 0.5,
+                x1=run_end + 0.5,
                 fillcolor=_color_to_rgba(shade_color, 0.5),
                 line_width=0,
                 layer="below",
@@ -559,7 +659,20 @@ def _extract_plot_data(
     pre_periods: Optional[List[Any]],
     post_periods: Optional[List[Any]],
     reference_period: Optional[Any],
-) -> Tuple[Dict, Dict, List, List, List, Any, bool, Optional[Dict], Optional[Dict]]:
+) -> Tuple[
+    Dict,
+    Dict,
+    List,
+    List,
+    List,
+    Any,
+    bool,
+    Optional[Dict],
+    Optional[Dict],
+    Optional[Dict],
+    Optional[Dict],
+    Optional[Set[Any]],
+]:
     """
     Extract plotting data from various result types.
 
@@ -581,10 +694,160 @@ def _extract_plot_data(
         True if reference_period was auto-detected from results
         rather than explicitly provided by the user.
     ci_lower_override : dict or None
-        Simultaneous confidence band lower bounds, if available.
+        BAND-channel lower bounds (simultaneous bands, falling back
+        per-row to a stored pointwise interval where the producer carries
+        one), if available. Selected by the caller when ``use_cband=True``.
     ci_upper_override : dict or None
-        Simultaneous confidence band upper bounds, if available.
+        Band-channel upper bounds.
+    pw_lower_override : dict or None
+        POINTWISE-channel lower bounds: the producer's STORED intervals
+        (NaN preserved - a stored NaN means undefined inference and must
+        not be recomputed from the SE). Selected when ``use_cband=False``.
+        None for input routes that carry no stored intervals.
+    pw_upper_override : dict or None
+        Pointwise-channel upper bounds.
+    reference_marks : set or None
+        Row-aligned reference marking for surfaces with MULTIPLE
+        reference rows (the CS gapped-grid universal case): every listed
+        period renders hollow even though the scalar ``reference_period``
+        cannot name them all. None on every single/zero-reference route.
     """
+    # Unified EventStudyResults container (any producer - unlike HonestDiD /
+    # PreTrendsPower there is NO source scoping here: plotting is
+    # label-faithful for every producer, convention and time scale).
+    from diff_diff.results_base import EventStudyResults
+
+    if isinstance(results, EventStudyResults):
+        surface = results
+        keys = list(surface.event_time.tolist())
+        effects = {k: float(a) for k, a in zip(keys, surface.att)}
+        se = {k: float(s) for k, s in zip(keys, surface.se)}
+
+        # Interval channels. The container carries the producer's ACTUAL
+        # inference (bootstrap-percentile, survey-t, Bell-McCaffrey
+        # intervals differ from att +/- z*se), so both channels cover
+        # EVERY row and preserve stored NaN (undefined inference must not
+        # be recomputed from a finite SE - e.g. a zero-SE row):
+        # - band channel: the simultaneous band where finite, else the
+        #   stored pointwise interval (use_cband=True selection);
+        # - pointwise channel: the stored intervals verbatim
+        #   (use_cband=False selection).
+        # (Explicit reference_period= normalization still discards the
+        # selected overrides in the renderer and recomputes around the
+        # normalized effects, per the REGISTRY plotting contract.)
+        band_lo: Dict[Any, float] = {}
+        band_hi: Dict[Any, float] = {}
+        pw_lo: Dict[Any, float] = {}
+        pw_hi: Dict[Any, float] = {}
+        for i, k in enumerate(keys):
+            ci_lo = float(surface.conf_int_lower[i])
+            ci_hi = float(surface.conf_int_upper[i])
+            pw_lo[k], pw_hi[k] = ci_lo, ci_hi
+            cb_lo = float(surface.cband_lower[i]) if surface.cband_lower is not None else np.nan
+            cb_hi = float(surface.cband_upper[i]) if surface.cband_upper is not None else np.nan
+            if np.isfinite(cb_lo) and np.isfinite(cb_hi):
+                band_lo[k], band_hi[k] = cb_lo, cb_hi
+            else:
+                band_lo[k], band_hi[k] = ci_lo, ci_hi
+        ci_lower_override: Optional[Dict[Any, float]] = band_lo
+        ci_upper_override: Optional[Dict[Any, float]] = band_hi
+        pw_lower_override: Optional[Dict[Any, float]] = pw_lo
+        pw_upper_override: Optional[Dict[Any, float]] = pw_hi
+
+        if periods is None:
+            periods = keys
+
+        # The renderer hollows rows by a per-row is_reference flag; the
+        # scalar reference_period is the single-reference convenience (it
+        # also drives the optional vertical reference line and explicit
+        # normalization). Exactly one is_reference row -> that label.
+        # MULTIPLE reference rows (legal on the container - the CS
+        # gapped-grid universal case carries one per cohort's positional
+        # base) are carried ROW-ALIGNED through ``reference_marks`` so
+        # every normalization anchor renders hollow - never silently
+        # dropped, never presented as a filled estimate. Explicitly
+        # renormalizing such a surface around a period that is NOT one of
+        # its reference rows fails closed: each anchor is a constraint
+        # under its own cohort base, so no single shift represents them
+        # faithfully.
+        reference_inferred = False
+        reference_marks: Optional[Set[Any]] = None
+        ref_rows = surface.event_time[surface.is_reference].tolist()
+        if len(ref_rows) > 1:
+            if reference_period is not None and reference_period not in ref_rows:
+                raise ValueError(
+                    "Cannot renormalize an event-study container with "
+                    f"multiple reference rows ({sorted(ref_rows)}) around "
+                    f"reference_period={reference_period!r}: each reference "
+                    "row is a normalization constraint under its own base, "
+                    "so re-basing to a different period is not defined. "
+                    "Plot without reference_period=, or re-estimate with a "
+                    "single common reference."
+                )
+            reference_marks = set(ref_rows)
+        elif reference_period is None and len(ref_rows) == 1:
+            reference_period = ref_rows[0]
+            reference_inferred = True
+
+        if pre_periods is None or post_periods is None:
+            if surface.time_scale == "relative":
+                # Anticipation-aware split: with anticipation=k the window
+                # [e=-k, -1] carries anticipated TREATMENT effects
+                # (REGISTRY contract; HonestDiD/pretrends apply the same
+                # boundary), so pre-shading covers e < -k only.
+                _post_start = -int(surface.anticipation or 0)
+                derived_pre = [p for p in periods if p < _post_start]
+                derived_post = [p for p in periods if p >= _post_start]
+            elif surface.post_periods is not None:
+                # Calendar labels with the AUTHORITATIVE partition
+                # provenance (row M-092 amendment #5, threaded by
+                # _from_mpd / the TWFE event-study producer): the declared
+                # post set may be an arbitrary subset (non-suffix splits
+                # are legal on MultiPeriodDiD), so the positional
+                # fallback below would mislabel it - always prefer the
+                # provenance. Pre = non-reference complement.
+                _post_set = set(surface.post_periods)
+                derived_post = [p for p in periods if p in _post_set]
+                derived_pre = [
+                    p
+                    for p in periods
+                    if p not in _post_set
+                    and p != reference_period
+                    and (reference_marks is None or p not in reference_marks)
+                ]
+            else:
+                # Calendar labels (possibly str/Timestamp) WITHOUT
+                # partition provenance: numeric `p < 0` is undefined -
+                # split POSITIONALLY around the reference row (rows before
+                # it in event_time order are pre); with no reference row,
+                # all rows are post.
+                if reference_period is not None and reference_period in keys:
+                    ref_pos = keys.index(reference_period)
+                    derived_pre = [p for p in periods if p in keys and keys.index(p) < ref_pos]
+                    derived_post = [p for p in periods if p in keys and keys.index(p) > ref_pos]
+                else:
+                    derived_pre = []
+                    derived_post = [p for p in periods]
+            if pre_periods is None:
+                pre_periods = derived_pre
+            if post_periods is None:
+                post_periods = derived_post
+
+        return (
+            effects,
+            se,
+            periods,
+            pre_periods,
+            post_periods,
+            reference_period,
+            reference_inferred,
+            ci_lower_override,
+            ci_upper_override,
+            pw_lower_override,
+            pw_upper_override,
+            reference_marks,
+        )
+
     # Handle DataFrame input
     if isinstance(results, pd.DataFrame):
         if "period" not in results.columns:
@@ -621,6 +884,9 @@ def _extract_plot_data(
             False,
             ci_lower_override,
             ci_upper_override,
+            None,
+            None,
+            None,
         )
 
     # Handle MultiPeriodDiDResults
@@ -661,6 +927,66 @@ def _extract_plot_data(
             ref_inferred,
             None,
             None,
+            None,
+            None,
+            None,
+        )
+
+    # Handle ChaisemartinDHaultfoeuilleResults (dCDH event study)
+    # Must come before the generic event_study_effects branch because
+    # dCDH results also have event_study_effects but additionally have
+    # placebo_event_study with negative horizon keys.
+    if hasattr(results, "placebo_event_study") and hasattr(results, "L_max"):
+        effects = {}
+        se_dict: Dict = {}
+        ci_lower_override = {}
+        ci_upper_override = {}
+        has_cband = False
+
+        # Merge placebo horizons (negative keys)
+        if results.placebo_event_study:
+            for h, entry in results.placebo_event_study.items():
+                effects[h] = entry["effect"]
+                se_dict[h] = entry["se"]
+                if "cband_conf_int" in entry:
+                    ci_lower_override[h] = entry["cband_conf_int"][0]
+                    ci_upper_override[h] = entry["cband_conf_int"][1]
+                    has_cband = True
+
+        # Reference period at 0
+        effects[0] = 0.0
+        se_dict[0] = float("nan")
+
+        # Positive horizons
+        if results.event_study_effects:
+            for h, entry in results.event_study_effects.items():
+                effects[h] = entry["effect"]
+                se_dict[h] = entry["se"]
+                if "cband_conf_int" in entry:
+                    ci_lower_override[h] = entry["cband_conf_int"][0]
+                    ci_upper_override[h] = entry["cband_conf_int"][1]
+                    has_cband = True
+
+        if periods is None:
+            periods = sorted(effects.keys())
+        if pre_periods is None:
+            pre_periods = [p for p in periods if p < 0]
+        if post_periods is None:
+            post_periods = [p for p in periods if p > 0]
+
+        return (
+            effects,
+            se_dict,
+            periods,
+            pre_periods,
+            post_periods,
+            0,  # reference_period is always 0 for dCDH
+            True,  # inferred
+            ci_lower_override if has_cband else None,
+            ci_upper_override if has_cband else None,
+            None,
+            None,
+            None,
         )
 
     # Handle CallawaySantAnnaResults (event study aggregation)
@@ -687,24 +1013,38 @@ def _extract_plot_data(
         # Track if reference_period was explicitly provided vs auto-inferred
         reference_inferred = False
 
-        # Reference period is typically -1 for event study
+        # Reference period is typically -1 for event study.
         if reference_period is None:
             reference_inferred = True  # We're about to infer it
-            # Detect reference period from n_groups=0 marker (normalization constraint)
-            # This handles anticipation > 0 where reference is at e = -1 - anticipation
-            for period, effect_data in results.event_study_effects.items():
-                if effect_data.get("n_groups", 1) == 0 or effect_data.get("n_obs", 1) == 0:
-                    reference_period = period
-                    break
-            # Fallback to -1 if no marker found (backward compatibility)
-            if reference_period is None:
-                reference_period = -1
+            # Prefer an explicit `reference_period` attribute on the result
+            # (Wave C ``SpilloverDiDResults`` sets this directly). The
+            # legacy `n_obs == 0` heuristic was ambiguous for rectangular
+            # outputs like SpilloverDiD's `event_study_effects`, which
+            # legitimately emits multiple empty non-reference horizons.
+            explicit_ref = getattr(results, "reference_period", None)
+            if explicit_ref is not None:
+                reference_period = int(explicit_ref)
+            else:
+                # Detect reference period from n_groups=0 marker (normalization
+                # constraint). This handles anticipation > 0 where reference
+                # is at e = -1 - anticipation.
+                for period, effect_data in results.event_study_effects.items():
+                    if effect_data.get("n_groups", 1) == 0 or effect_data.get("n_obs", 1) == 0:
+                        reference_period = period
+                        break
+                # Fallback to -1 if no marker found (backward compatibility).
+                if reference_period is None:
+                    reference_period = -1
 
+        # Anticipation-aware split, mirroring the container branch: with
+        # anticipation=k the window [e=-k, -1] carries anticipated
+        # treatment effects, so pre-shading covers e < -k only.
+        _post_start = -int(getattr(results, "anticipation", 0) or 0)
         if pre_periods is None:
-            pre_periods = [p for p in periods if p < 0]
+            pre_periods = [p for p in periods if p < _post_start]
 
         if post_periods is None:
-            post_periods = [p for p in periods if p >= 0]
+            post_periods = [p for p in periods if p >= _post_start]
 
         return (
             effects,
@@ -716,13 +1056,74 @@ def _extract_plot_data(
             reference_inferred,
             ci_lower_override if has_cband else None,
             ci_upper_override if has_cband else None,
+            None,
+            None,
+            None,
         )
 
     raise TypeError(
         f"Cannot extract plot data from {type(results).__name__}. "
         "Expected MultiPeriodDiDResults, CallawaySantAnnaResults, "
-        "SunAbrahamResults, ImputationDiDResults, or DataFrame."
+        "SunAbrahamResults, ImputationDiDResults, "
+        "ChaisemartinDHaultfoeuilleResults, EventStudyResults, or DataFrame. "
+        "For DMLDiDResults (no fit-time event-study surface), plot the "
+        "post-fit container: plot_event_study(results.aggregate("
+        "'event_study'))."
     )
+
+
+def _honest_raw_route_periods(
+    periods: Optional[List[Any]],
+    effects_dict: Dict[Any, float],
+    se_dict: Dict[Any, float],
+    anchor_period: Optional[Any],
+) -> List[Any]:
+    """Period roster for the raw (non-container) honest-plot routes.
+
+    Mirrors the container route's ``_retained`` semantics: rows with
+    undefined inference (non-finite or zero SE) carry no honest interval
+    and would otherwise be painted with a zero-width original CI plus the
+    aggregate honest interval (or KeyError on per-period bounds), so they
+    are excluded up front; the reference row is kept as a
+    normalization-only anchor. ``anchor_period`` is the VERIFIED anchor
+    (result metadata or the producer's constraint-row signature, resolved
+    by the caller) - a bare ``reference_period=`` label is never passed
+    through, so it cannot promote an estimated zero-SE row past the gate,
+    even one with effect exactly 0.0.
+    """
+
+    def _defined(p: Any) -> bool:
+        s = se_dict.get(p, float("nan"))
+        return bool(np.isfinite(s) and float(s) > 0)
+
+    def _is_anchor(p: Any) -> bool:
+        return anchor_period is not None and p == anchor_period
+
+    if periods is None:
+        retained = [p for p in sorted(effects_dict.keys()) if _defined(p) or _is_anchor(p)]
+    else:
+        _bad = [p for p in periods if p in se_dict and not _defined(p) and not _is_anchor(p)]
+        if _bad:
+            raise ValueError(
+                f"Requested periods {_bad} have undefined inference "
+                "(non-finite or zero SE) on this event-study surface: "
+                "HonestDiD excludes such rows from the sensitivity "
+                "analysis and they carry no honest interval."
+            )
+        retained = list(periods)
+    # The reference row is a normalization anchor, not an estimate: with no
+    # defined ESTIMATED period retained - an all-undefined surface, or an
+    # explicit periods=[reference] selection - raise rather than render a
+    # meaningless anchor-only figure (REGISTRY all-undefined rejection;
+    # applies to BOTH the implicit and explicit selection branches).
+    if not any(_defined(p) for p in retained):
+        raise ValueError(
+            "No valid data to plot: no retained period on this "
+            "event-study surface carries defined inference (non-finite "
+            "or zero SE everywhere, or only the reference anchor was "
+            "selected)."
+        )
+    return retained
 
 
 def plot_honest_event_study(
@@ -754,9 +1155,14 @@ def plot_honest_event_study(
     honest_results : HonestDiDResults
         Results from HonestDiD.fit() that include event_study_bounds.
     periods : list, optional
-        Periods to plot. If None, uses all available periods.
+        Periods to plot. If None, uses all periods with defined inference
+        (non-container routes exclude zero/non-finite-SE rows, which carry
+        no honest interval; explicitly requesting one raises ValueError).
     reference_period : any, optional
-        Reference period to show as hollow marker.
+        Reference period to show as hollow marker. If None, inferred from
+        the results object where possible (a ``reference_period``
+        attribute, the container's reference marks, or a
+        normalization-constraint row on fit-time dict surfaces).
     figsize : tuple, default=(10, 6)
         Figure size.
     title : str
@@ -801,39 +1207,171 @@ def plot_honest_event_study(
         raise ValueError("HonestDiDResults must have original_results to plot event study")
 
     # Extract data from original results
-    if hasattr(original_results, "period_effects"):
+    from diff_diff.results_base import EventStudyResults as _ESR
+
+    stored_ci_lower: Optional[Dict[Any, float]] = None
+    stored_ci_upper: Optional[Dict[Any, float]] = None
+    if isinstance(original_results, _ESR):
+        # Unified container route (HonestDiD.fit stored the container the
+        # user passed): non-reference rows carry the estimates, and the
+        # container's STORED intervals are the producer's actual inference
+        # (bootstrap-percentile / survey-t / Bell-McCaffrey - NOT
+        # att +/- z*se); NaN stored bounds mean undefined inference and
+        # are preserved rather than recomputed from a finite SE.
+        keys = list(original_results.event_time.tolist())
+        # Rows plotted: the rows HonestDiD retained (non-reference, finite
+        # positive SE) PLUS reference rows, which render as
+        # normalization-only anchors (stored att=0.0, NaN inference - no
+        # standard or honest interval). Undefined NON-reference rows were
+        # absent from beta_hat, so painting them with the aggregate honest
+        # interval would show sensitivity inference that was never
+        # computed, and per-period bounds are keyed on the retained set.
+        _retained = [
+            i
+            for i, (r, s) in enumerate(zip(original_results.is_reference, original_results.se))
+            if r or (np.isfinite(s) and float(s) > 0)
+        ]
+        effects_dict = {keys[i]: float(original_results.att[i]) for i in _retained}
+        se_dict = {keys[i]: float(original_results.se[i]) for i in _retained}
+        stored_ci_lower = {keys[i]: float(original_results.conf_int_lower[i]) for i in _retained}
+        stored_ci_upper = {keys[i]: float(original_results.conf_int_upper[i]) for i in _retained}
+        # Infer the container's single reference for the hollow-marker
+        # contract when the caller passed none (multi-reference containers
+        # cannot reach HonestDiD - the common-reference guard rejects
+        # them - so the single-scalar convention suffices here).
+        _ref_labels = [keys[i] for i, r in enumerate(original_results.is_reference) if r]
+        if reference_period is None and len(_ref_labels) == 1:
+            reference_period = _ref_labels[0]
+        # Verified anchor: the container's own is_reference metadata, not
+        # the caller's label.
+        _anchor_period = reference_period if reference_period in _ref_labels else None
+        if periods is None:
+            periods = sorted(effects_dict.keys())
+        else:
+            _missing = [p for p in periods if p not in effects_dict]
+            if _missing:
+                raise ValueError(
+                    f"Requested periods {_missing} are not retained by "
+                    "HonestDiD on this event-study container: rows with "
+                    "undefined inference (non-finite or zero SE) are "
+                    "excluded from the sensitivity analysis and carry no "
+                    "honest interval."
+                )
+    elif hasattr(original_results, "period_effects"):
         # MultiPeriodDiDResults
         effects_dict = {p: pe.effect for p, pe in original_results.period_effects.items()}
         se_dict = {p: pe.se for p, pe in original_results.period_effects.items()}
-        if periods is None:
-            periods = list(original_results.period_effects.keys())
+        if reference_period is None:
+            reference_period = getattr(original_results, "reference_period", None)
+        # Verified anchor: only the result's own reference_period metadata
+        # - a caller label that does not match it is never an anchor on
+        # this route (period_effects rows carry no constraint signature to
+        # verify against).
+        _anchor_period = (
+            reference_period
+            if reference_period is not None
+            and reference_period == getattr(original_results, "reference_period", None)
+            else None
+        )
+        periods = _honest_raw_route_periods(periods, effects_dict, se_dict, _anchor_period)
     elif hasattr(original_results, "event_study_effects"):
-        # CallawaySantAnnaResults
+        # CallawaySantAnnaResults (fit-time dict surface)
         effects_dict = {
             t: data["effect"] for t, data in original_results.event_study_effects.items()
         }
         se_dict = {t: data["se"] for t, data in original_results.event_study_effects.items()}
-        if periods is None:
-            periods = sorted(original_results.event_study_effects.keys())
+        if reference_period is None:
+            reference_period = getattr(original_results, "reference_period", None)
+        if reference_period is None:
+            # HonestDiD's own reference signature (honest_did.py): a
+            # normalization-constraint row, NOT any row whose inference
+            # happens to be undefined. No signature match (e.g. a
+            # marker-less varying-base surface) means no inferred
+            # reference - deliberately no -1 fallback here.
+            for t, data in original_results.event_study_effects.items():
+                if (
+                    data.get("n_groups", data.get("n_obs", 1)) == 0
+                    and data["effect"] == 0.0
+                    and not np.isfinite(data["se"])
+                ):
+                    reference_period = t
+                    break
+        # Verified anchor: the resolved reference (attribute, signature
+        # match, or caller label) counts only if its row carries the
+        # producers' constraint signature - zero group/obs count, effect
+        # exactly 0.0, and no defined SE (NaN for CS, 0.0 for the
+        # Imputation/TwoStage/Stacked-style markers). An estimated row
+        # (positive count) is never an anchor, even at effect 0, se 0.
+        _anchor_period = None
+        _ref_data = original_results.event_study_effects.get(reference_period)
+        if (
+            _ref_data is not None
+            and _ref_data.get("n_groups", _ref_data.get("n_obs", 1)) == 0
+            and _ref_data["effect"] == 0.0
+            and not (np.isfinite(_ref_data["se"]) and float(_ref_data["se"]) > 0)
+        ):
+            _anchor_period = reference_period
+        periods = _honest_raw_route_periods(periods, effects_dict, se_dict, _anchor_period)
     else:
         raise TypeError("Cannot extract event study data from original_results")
 
-    # Compute CIs
+    # Original CIs: the container's STORED intervals where available
+    # (NaN preserved); z-reconstruction from the SE only for input routes
+    # that carry no stored intervals (MPD / fit-time CS dict surfaces).
     alpha_val = honest_results.alpha
+    if stored_ci_lower is not None:
+        container_alpha = getattr(original_results, "alpha", None)
+        if container_alpha is not None and not np.isclose(float(container_alpha), alpha_val):
+            # Stored intervals cannot be re-leveled from the SE; label the
+            # mismatch instead of silently mixing coverage levels.
+            warnings.warn(
+                "plot_honest_event_study: the original confidence intervals "
+                "drawn are the container's stored intervals at "
+                f"alpha={container_alpha}, while the HonestDiD intervals "
+                f"are at alpha={alpha_val}. Re-aggregate the container at "
+                "the HonestDiD level for matching coverage.",
+                UserWarning,
+                stacklevel=2,
+            )
     z = scipy_stats.norm.ppf(1 - alpha_val / 2)
 
     effects = [effects_dict[p] for p in periods]
-    original_ci_lower = [effects_dict[p] - z * se_dict[p] for p in periods]
-    original_ci_upper = [effects_dict[p] + z * se_dict[p] for p in periods]
-
-    # Get honest bounds if available for each period
-    if honest_results.event_study_bounds:
-        honest_ci_lower = [honest_results.event_study_bounds[p]["ci_lb"] for p in periods]
-        honest_ci_upper = [honest_results.event_study_bounds[p]["ci_ub"] for p in periods]
+    if stored_ci_lower is not None and stored_ci_upper is not None:
+        original_ci_lower = [stored_ci_lower[p] for p in periods]
+        original_ci_upper = [stored_ci_upper[p] for p in periods]
     else:
-        # Use scalar bounds applied to all periods
-        honest_ci_lower = [honest_results.ci_lb] * len(periods)
-        honest_ci_upper = [honest_results.ci_ub] * len(periods)
+        original_ci_lower = [effects_dict[p] - z * se_dict[p] for p in periods]
+        original_ci_upper = [effects_dict[p] + z * se_dict[p] for p in periods]
+
+    # Get honest bounds if available for each period. Suppression is keyed
+    # on the VERIFIED anchor, not the caller's reference_period label - a
+    # mislabeled estimated row keeps its computed honest interval.
+    _nan_bounds = {"ci_lb": np.nan, "ci_ub": np.nan}
+    if honest_results.event_study_bounds:
+        # The reference row is a normalization constraint with no honest
+        # interval: tolerate its absence from per-period bounds (other
+        # rows stay strict - a missing real row is a caller error).
+        honest_ci_lower = [
+            (
+                honest_results.event_study_bounds.get(p, _nan_bounds)
+                if p == _anchor_period
+                else honest_results.event_study_bounds[p]
+            )["ci_lb"]
+            for p in periods
+        ]
+        honest_ci_upper = [
+            (
+                honest_results.event_study_bounds.get(p, _nan_bounds)
+                if p == _anchor_period
+                else honest_results.event_study_bounds[p]
+            )["ci_ub"]
+            for p in periods
+        ]
+    else:
+        # Scalar bounds apply to every ESTIMATED period; the reference is
+        # a constraint, never painted with the aggregate honest interval.
+        honest_ci_lower = [np.nan if p == _anchor_period else honest_results.ci_lb for p in periods]
+        honest_ci_upper = [np.nan if p == _anchor_period else honest_results.ci_ub for p in periods]
 
     if backend == "plotly":
         return _render_honest_event_study_plotly(
@@ -916,15 +1454,18 @@ def _render_honest_event_study_mpl(
     # Zero line
     ax.axhline(y=0, color="gray", linestyle="--", linewidth=1, alpha=0.5)
 
+    # Interval bars are drawn ENDPOINT-BASED (midpoint anchor, symmetric
+    # yerr) so each segment is exactly [lower, upper]: stored percentile/
+    # bootstrap intervals - and honest bounds - need not contain the point
+    # estimate, and estimate-centered yerr goes negative there.
+
     # Plot original CIs (thinner, background)
-    yerr_orig = [
-        [e - lower for e, lower in zip(effects, original_ci_lower)],
-        [u - e for e, u in zip(effects, original_ci_upper)],
-    ]
+    mid_orig = [(lo + hi) / 2.0 for lo, hi in zip(original_ci_lower, original_ci_upper)]
+    half_orig = [abs(hi - lo) / 2.0 for lo, hi in zip(original_ci_lower, original_ci_upper)]
     ax.errorbar(
         x_vals,
-        effects,
-        yerr=yerr_orig,
+        mid_orig,
+        yerr=half_orig,
         fmt="none",
         color=original_color,
         capsize=capsize - 1,
@@ -934,14 +1475,12 @@ def _render_honest_event_study_mpl(
     )
 
     # Plot honest CIs (thicker, foreground)
-    yerr_honest = [
-        [e - lower for e, lower in zip(effects, honest_ci_lower)],
-        [u - e for e, u in zip(effects, honest_ci_upper)],
-    ]
+    mid_honest = [(lo + hi) / 2.0 for lo, hi in zip(honest_ci_lower, honest_ci_upper)]
+    half_honest = [abs(hi - lo) / 2.0 for lo, hi in zip(honest_ci_lower, honest_ci_upper)]
     ax.errorbar(
         x_vals,
-        effects,
-        yerr=yerr_honest,
+        mid_honest,
+        yerr=half_honest,
         fmt="none",
         color=honest_color,
         capsize=capsize,

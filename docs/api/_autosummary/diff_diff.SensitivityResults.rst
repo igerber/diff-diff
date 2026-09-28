@@ -4,29 +4,26 @@
 .. currentmodule:: diff_diff
 
 .. autoclass:: SensitivityResults
+   :no-members:
 
-   
-   .. automethod:: __init__
 
-   
    .. rubric:: Methods
 
    .. autosummary::
-   
+
       ~SensitivityResults.__init__
       ~SensitivityResults.plot
       ~SensitivityResults.print_summary
       ~SensitivityResults.summary
       ~SensitivityResults.to_dataframe
-   
-   
 
-   
-   
+
+
+
    .. rubric:: Attributes
 
    .. autosummary::
-   
+
       ~SensitivityResults.alpha
       ~SensitivityResults.has_breakdown
       ~SensitivityResults.M_values
@@ -36,5 +33,4 @@
       ~SensitivityResults.method
       ~SensitivityResults.original_estimate
       ~SensitivityResults.original_se
-   
-   
+

@@ -1,0 +1,149 @@
+{
+  "suite": "fe_absorption",
+  "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "python": "3.14.4",
+  "versions": {
+    "diff_diff": "3.6.1",
+    "numpy": "2.5.0",
+    "pandas": "3.0.3"
+  },
+  "backend_requested": "python",
+  "repeats": 3,
+  "quick": false,
+  "tolerances": {
+    "att_atol": 1e-09,
+    "se_rtol": 1e-07,
+    "se_rtol_survey": 1e-06,
+    "gate_exempt": [
+      "tail_stress"
+    ]
+  },
+  "results": [
+    {
+      "scenario": "county_policy",
+      "n_obs": 177289,
+      "checksum": 6315.071127371084,
+      "att": 0.28037854139903007,
+      "se": 0.031244864610216142,
+      "fit_median_s": 3.8655,
+      "fit_min_s": 3.7841,
+      "fit_max_s": 4.0366,
+      "fit_cv": 0.0253,
+      "noisy": false,
+      "n_timed_fits": 9,
+      "datagen_s": 0.005,
+      "peak_rss_mb": 3547.5,
+      "backend_resolved": "python",
+      "warnings": []
+    },
+    {
+      "scenario": "firm_churn",
+      "n_obs": 2400000,
+      "checksum": 240997.06223418942,
+      "att": 0.3144327184497805,
+      "se": 0.005837281701254032,
+      "fit_median_s": 92.9567,
+      "fit_min_s": 91.5167,
+      "fit_max_s": 93.0237,
+      "fit_cv": 0.0092,
+      "noisy": false,
+      "n_timed_fits": 3,
+      "datagen_s": 0.075,
+      "peak_rss_mb": 11550.3,
+      "backend_resolved": "python",
+      "warnings": []
+    },
+    {
+      "scenario": "scanner_twfe",
+      "n_obs": 3255000,
+      "checksum": 76832.22571739106,
+      "att": 0.2511641314956207,
+      "se": 0.0024149387421607484,
+      "fit_median_s": 1.5491,
+      "fit_min_s": 1.5475,
+      "fit_max_s": 1.5551,
+      "fit_cv": 0.0026,
+      "noisy": false,
+      "n_timed_fits": 3,
+      "datagen_s": 0.08,
+      "peak_rss_mb": 980.1,
+      "backend_resolved": "python",
+      "warnings": []
+    },
+    {
+      "scenario": "geo_experiment",
+      "n_obs": 5000000,
+      "checksum": 443696.3834000407,
+      "att": 0.2519437259991462,
+      "se": 0.0017886316514778143,
+      "fit_median_s": 2.6299,
+      "fit_min_s": 2.6156,
+      "fit_max_s": 2.6465,
+      "fit_cv": 0.0059,
+      "noisy": false,
+      "n_timed_fits": 3,
+      "datagen_s": 0.062,
+      "peak_rss_mb": 1631.5,
+      "backend_resolved": "python",
+      "warnings": [
+        "Rank-deficient design matrix: dropping 1 of 4 columns (column 1). Coefficients for these columns are set to NA"
+      ]
+    },
+    {
+      "scenario": "survey_absorb",
+      "n_obs": 500000,
+      "checksum": -176482.6014001448,
+      "att": 0.24553586050769946,
+      "se": 0.007662904200749773,
+      "fit_median_s": 7.3845,
+      "fit_min_s": 7.3301,
+      "fit_max_s": 8.5032,
+      "fit_cv": 0.0856,
+      "noisy": false,
+      "n_timed_fits": 3,
+      "datagen_s": 0.109,
+      "peak_rss_mb": 3621.1,
+      "backend_resolved": "python",
+      "warnings": [
+        "Rank-deficient design matrix: dropping 1 of 4 columns (column 1). Coefficients for these columns are set to NA"
+      ]
+    },
+    {
+      "scenario": "tail_stress",
+      "n_obs": 5000000,
+      "checksum": 376703.7248141762,
+      "att": 0.25020825600819235,
+      "se": 0.004392831033439421,
+      "fit_median_s": 26.2715,
+      "fit_min_s": 26.125,
+      "fit_max_s": 26.3224,
+      "fit_cv": 0.0039,
+      "noisy": false,
+      "n_timed_fits": 3,
+      "datagen_s": 0.072,
+      "peak_rss_mb": 1632.3,
+      "backend_resolved": "python",
+      "warnings": [
+        "Rank-deficient design matrix: dropping 1 of 4 columns (column 1). Coefficients for these columns are set to NA",
+        "demean_by_groups alternating projection (variables: ['y', 'post', '_treat_time']) did not converge in 100 iter"
+      ]
+    },
+    {
+      "scenario": "guard_small",
+      "n_obs": 20000,
+      "checksum": -571.6190664591859,
+      "att": 0.2515087011451766,
+      "se": 0.028726073333820948,
+      "fit_median_s": 0.0046,
+      "fit_min_s": 0.0044,
+      "fit_max_s": 0.0051,
+      "fit_cv": 0.0414,
+      "noisy": false,
+      "n_timed_fits": 21,
+      "datagen_s": 0.001,
+      "peak_rss_mb": 145.1,
+      "backend_resolved": "python",
+      "warnings": []
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "scenario": "dose_response",
+  "backend": "rust",
+  "has_rust_backend": true,
+  "total_seconds": 0.6261942910000001,
+  "memory": {
+    "available": true,
+    "start_mb": 113.95,
+    "peak_mb": 123.27,
+    "growth_mb": 9.31,
+    "sampler_interval_s": 0.01
+  },
+  "phases": {
+    "1_cdid_cubic_spline_bootstrap199": {
+      "seconds": 0.1623119999999999,
+      "ok": true,
+      "error": null
+    },
+    "2_extract_dose_response_dataframes": {
+      "seconds": 0.0007812500000000666,
+      "ok": true,
+      "error": null
+    },
+    "3_cdid_event_study_pretrend": {
+      "seconds": 0.15469937500000008,
+      "ok": true,
+      "error": null
+    },
+    "4_binarized_did_comparison": {
+      "seconds": 0.001991167000000016,
+      "ok": true,
+      "error": null
+    },
+    "5_spline_sensitivity_degree1": {
+      "seconds": 0.15138845899999998,
+      "ok": true,
+      "error": null
+    },
+    "6_spline_sensitivity_num_knots2": {
+      "seconds": 0.15501741599999996,
+      "ok": true,
+      "error": null
+    }
+  },
+  "metadata": {
+    "n_units": 500,
+    "n_periods": 6,
+    "n_bootstrap": 199,
+    "spline_configs": [
+      "degree=3,k=1",
+      "degree=1,k=0",
+      "degree=3,k=2"
+    ]
+  },
+  "diff_diff_version": "3.1.3",
+  "numpy_version": "2.0.2"
+}

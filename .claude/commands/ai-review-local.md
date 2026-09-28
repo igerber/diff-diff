@@ -1,35 +1,87 @@
 ---
-description: Run AI code review locally using OpenAI API before opening a PR
-argument-hint: "[--context minimal|standard|deep] [--include-files <files>] [--token-budget <n>] [--force-fresh] [--full-registry] [--model <model>] [--timeout <seconds>] [--dry-run]"
+description: Run AI code review locally using Codex CLI or OpenAI API before opening a PR
+argument-hint: "[--backend auto|codex|api] [--context minimal|standard|deep] [--include-files <files>] [--token-budget <n>] [--force-fresh] [--full-registry] [--model <model>] [--timeout <seconds>] [--dry-run]"
 ---
 
 # Local AI Code Review
 
-Run a structured code review using the OpenAI Responses API. Reviews changes
+Run a structured code review using either the **Codex CLI** (agentic, matches CI
+quality) or the **OpenAI Responses API** (single-shot, faster). Reviews changes
 against the same methodology criteria used by the CI reviewer, but adapted for local
 pre-PR use. Designed for iterative review/revision cycles before submitting a PR.
+
+## Backend selection
+
+Two backends are supported:
+
+| Backend | Latency | Cost | Quality |
+|---|---|---|---|
+| `api` (`gpt-5.6-sol`) | 30-60s | ~$0.10-1.00/run, metered via `OPENAI_API_KEY` | Single-shot — won't grep, can't load files on its own initiative |
+| `codex` (any auth) | 3-15 min | depends on your `codex login` mode (subscription vs API key) — see codex docs | Agentic — matches CI Codex reviewer, can grep / load files / multi-turn |
+
+Choose with `--backend {auto,codex,api}` (default `auto`):
+
+- **`auto`**: pick `codex` if the `codex` CLI is installed AND `~/.codex/auth.json`
+  exists (i.e. `codex login` has been completed); otherwise fall back to `api`.
+- **`codex`**: requires `codex` CLI installed (`brew install --cask codex` or
+  `npm install -g @openai/codex`) and `codex login` completed.
+- **`api`**: requires `OPENAI_API_KEY` env var. Fast iteration mode.
+
+Notes:
+- `codex` uses `--sandbox read-only`, which permits shell command execution
+  (`rg`, `grep`, `git diff`) inside Codex's agentic loop — the "read-only" name
+  refers to filesystem writes and network access, not shell exec. This is what
+  enables the agentic audits.
+- Long Codex runs (3-15 min) can be cancelled with CTRL-C; the partial output is
+  cleaned up automatically.
+- `--context` and `--token-budget` are ignored under the codex backend (Codex
+  chooses what to load on its own); the script warns if you pass them.
+- **Surface area (informational, non-blocking)**: under the codex backend,
+  Codex reads any file under the repo root via `--cd`. This is intrinsic to
+  using `codex` as an agentic reviewer — the same surface anyone running
+  `codex` directly already accepts via `codex login`. Before invoking codex
+  the script does a quick recursive filename scan for obvious secret-bearing
+  patterns (`.env`, `.env.local`, `id_rsa`, `*.pem`, `*.key`,
+  `secrets.{yml,yaml,json}`, `.netrc`, `.npmrc`, `.pypirc`, etc.; safe
+  template variants like `.env.example` excluded; case-insensitive). If any
+  matches exist, a stderr notice lists them and codex still runs. CTRL-C and
+  switch to `--backend api` (or sanitize the worktree) if you don't want
+  Codex to see those files. This is a notice, not a gate — real secret
+  prevention belongs at gitignore + code review, not at codex invocation.
 
 ## Arguments
 
 `$ARGUMENTS` may contain optional flags:
-- `--context {minimal,standard,deep}`: Context depth (default: `standard`)
+- `--backend {auto,codex,api}`: Reviewer backend (default: `auto`). See above.
+- `--context {minimal,standard,deep}`: Context depth (default: `standard`).
+  *Api backend only.*
   - `minimal`: Diff only (original behavior)
   - `standard`: Diff + full contents of changed `diff_diff/` source files
   - `deep`: Standard + import-graph expansion (files imported by changed files)
 - `--include-files <file1,file2,...>`: Extra files to include as read-only context
-  (filenames resolve under `diff_diff/`, or use paths relative to repo root)
+  (filenames resolve under `diff_diff/`, or use paths relative to repo root).
+  *Api backend only.*
 - `--token-budget <n>`: Max estimated input tokens before dropping import-context
   files (default: 200000). Changed source files are always included regardless of budget.
+  *Api backend only.*
 - `--force-fresh`: Skip delta-diff mode, run a full fresh review even if previous state exists
 - `--full-registry`: Include the entire REGISTRY.md instead of selective sections
-- `--model <name>`: Override the OpenAI model (default: `gpt-5.4`)
-- `--timeout <seconds>`: HTTP request timeout (default: 300). Use 900 for reasoning models.
-- `--dry-run`: Print the compiled prompt without calling the API
+- `--model <name>`: Override the model (default: `gpt-5.6-sol`). Applies to both backends.
+- `--timeout <seconds>`: HTTP request timeout. If omitted, defaults to 900 for reasoning models (gpt-5.4/gpt-5.5/gpt-5.6*, *-pro, o1/o3/o4) and 300 otherwise. *Api backend only.*
+- `--dry-run`: Print the compiled prompt without invoking the chosen backend
+  (no API call, no codex subprocess)
 
-**Reasoning models** (`gpt-5.4-pro`, `o3`, `o4-mini`, etc.): Reviews may take 10-15
-minutes. For deep reviews with reasoning models, combine `--token-budget` with `--model`:
+**Reasoning models** (`gpt-5.4-pro`, `o3`, `o4-mini`, etc.) on the api backend:
+Reviews may take 10-15 minutes. For deep reviews with reasoning models, combine
+`--token-budget` with `--model`:
 ```
-/ai-review-local --model gpt-5.4-pro --token-budget 500000 --context deep
+/ai-review-local --backend api --model gpt-5.4-pro --token-budget 500000 --context deep
+```
+
+**Codex backend** for CI-quality review:
+```
+/ai-review-local --backend codex
+# or just `/ai-review-local` if codex is installed + logged in (auto-detects)
 ```
 
 ## Constraints
@@ -39,15 +91,23 @@ This skill does not modify source code files. It may:
 - Create/update review artifacts in `.claude/reviews/` (gitignored)
 - Write temporary files to `/tmp/` (cleaned up in Step 8)
 
-Step 5 makes a single external API call to OpenAI. Step 3b runs a secret scan
-before any data is sent externally.
+Step 5 invokes the chosen backend:
+- **api backend**: single external HTTP call to OpenAI Responses API. Step 3b/3c
+  run the canonical pre-upload secret scan before any data is sent.
+- **codex backend**: spawns `codex exec` as a subprocess, which talks to
+  OpenAI iteratively under a read-only sandbox. The script prints a stderr
+  notice if obvious sensitive-filename patterns are present in the repo
+  (informational; codex still runs). The api-backend's Step 3b/3c scans
+  don't apply — Codex's read surface is the whole repo, intrinsic to using
+  it as an agentic reviewer.
 
 ## Instructions
 
 ### Step 1: Parse Arguments
 
 Parse `$ARGUMENTS` for the optional flags listed above. All flags are optional —
-the default behavior (standard context, selective registry, gpt-5.4, live API call)
+the default behavior (auto-detect backend, standard context for api or
+agentic loading for codex, selective registry, gpt-5.6-sol)
 requires no arguments.
 
 ### Step 2: Validate Prerequisites
@@ -55,21 +115,36 @@ requires no arguments.
 Run these checks in parallel:
 
 ```bash
-# Check API key is set (never echo/log the actual value)
+# Check api-backend key is set (only required if backend resolves to api)
 test -n "$OPENAI_API_KEY" && echo "API key: set" || echo "API key: MISSING"
+
+# Check codex backend availability (auto-detect)
+which codex >/dev/null 2>&1 && test -f ~/.codex/auth.json \
+  && echo "Codex: installed + logged in" \
+  || echo "Codex: not available (install + run 'codex login' to enable)"
 
 # Check script exists
 test -f .claude/scripts/openai_review.py && echo "Script: found" || echo "Script: MISSING"
 ```
 
-If the API key is missing (and not `--dry-run`):
-```
-Error: OPENAI_API_KEY is not set.
+The script resolves the backend itself (`auto` picks codex if available, else
+api). The OpenAI API key is only required when the resolved backend is `api`.
 
-To set it up:
-1. Get a key from https://platform.openai.com/api-keys
-2. Add to your shell: echo 'export OPENAI_API_KEY=sk-...' >> ~/.zshrc
-3. Reload: source ~/.zshrc
+If the resolved backend will be `api` (no codex available, or `--backend api`)
+and the key is missing (and not `--dry-run`):
+```
+Error: OPENAI_API_KEY is not set (required for api backend).
+
+Options:
+1. Install + log in to codex (matches CI quality):
+   brew install --cask codex
+   codex login
+   (then run /ai-review-local — auto-detect picks codex)
+
+2. Set up an API key:
+   Get a key from https://platform.openai.com/api-keys
+   echo 'export OPENAI_API_KEY=sk-...' >> ~/.zshrc
+   source ~/.zshrc
 ```
 
 If the script is missing:
@@ -302,10 +377,11 @@ review via `--previous-review`.
 ### Step 5: Run the Review Script
 
 Build and run the command. Include optional arguments only when their conditions are met:
+- `--backend`: pass through from parsed arguments (default `auto`); the script auto-detects
 - `--previous-review`: only if `.claude/reviews/local-review-previous.md` exists AND `--force-fresh` was NOT set
 - `--delta-diff` and `--delta-changed-files`: only if delta files were generated in Step 4
 - `--review-state`, `--commit-sha`, `--base-ref`: always include (even with `--force-fresh`, to seed a new baseline)
-- `--context`, `--include-files`, `--token-budget`: pass through from parsed arguments
+- `--context`, `--include-files`, `--token-budget`: pass through from parsed arguments (only meaningful for `--backend api`; ignored under codex)
 
 ```bash
 python3 .claude/scripts/openai_review.py \
@@ -316,6 +392,7 @@ python3 .claude/scripts/openai_review.py \
     --output .claude/reviews/local-review-latest.md \
     --branch-info "$branch_name" \
     --repo-root "$(pwd)" \
+    --backend "$backend" \
     --context "$context_level" \
     --review-state .claude/reviews/review-state.json \
     --commit-sha "$(git rev-parse HEAD)" \
@@ -331,17 +408,25 @@ python3 .claude/scripts/openai_review.py \
     [--dry-run]
 ```
 
+Always pass `--backend "$backend"` (where `$backend` is the parsed value, defaulting
+to `auto`). The script handles auto-detection internally; forwarding the flag means
+explicit `/ai-review-local --backend codex` and `/ai-review-local --backend api`
+choices are honored end-to-end. Without forwarding, the user's `--backend` selection
+would be silently ignored.
+
 Note: `--force-fresh` is a skill-only flag — it controls whether delta diffs are
 generated in Step 4 and is NOT passed to the script.
 
-**Reasoning model handling:** If the model contains `-pro` or starts with `o1`/`o3`/`o4`
-(e.g., `gpt-5.4-pro`, `o3`, `o4-mini`):
-- Pass `--timeout 900` to the script (unless the user explicitly specified `--timeout`)
+**Reasoning model handling:** If the model starts with `gpt-5.4`/`gpt-5.5`/`gpt-5.6`, contains `-pro`, or starts with
+`o1`/`o3`/`o4` (e.g., `gpt-5.6-sol`, `gpt-5.4-pro`, `o3`, `o4-mini`):
+- The script auto-resolves `--timeout` to 900s for reasoning models when omitted, so
+  no extra flag is required unless overriding
 - Run the Bash command with `run_in_background: true` (bypasses the 600s Bash tool timeout cap)
 - After the background command completes, continue to Step 6
 
 If `--dry-run`: display the prompt output and stop. Report the estimated token count,
-cost estimate, and model that would be used.
+backend, and model that would be used. Cost estimate is shown only for the api
+backend (codex doesn't expose token counts up front).
 
 If the script exits non-zero, display the error output and stop.
 
@@ -444,32 +529,35 @@ runs `--force-fresh` or when a rebase invalidates the tracked commit.
 ## Examples
 
 ```bash
-# Standard review of current branch vs main (default: full source file context)
+# Auto-detect backend (codex if installed + logged in, else api). Default flow.
 /ai-review-local
 
-# Review with minimal context (diff only, original behavior)
-/ai-review-local --context minimal
+# Force the agentic codex backend (matches CI quality)
+/ai-review-local --backend codex
 
-# Review with deep context (changed files + imported files)
-/ai-review-local --context deep
+# Force the fast api backend (single-shot, $0.05-0.50/run)
+/ai-review-local --backend api
 
-# Include specific files as extra context
-/ai-review-local --include-files linalg.py,utils.py
+# Api backend, minimal context (diff only)
+/ai-review-local --backend api --context minimal
 
-# Preview the compiled prompt without calling the API
+# Api backend, deep context (changed files + imported files)
+/ai-review-local --backend api --context deep
+
+# Api backend, extra context files
+/ai-review-local --backend api --include-files linalg.py,utils.py
+
+# Preview the compiled prompt without invoking the chosen backend
 /ai-review-local --dry-run
 
 # Force a fresh review (ignore previous review state)
 /ai-review-local --force-fresh
 
-# Use a different model with full registry
-/ai-review-local --model gpt-4.1 --full-registry
+# Different model with full registry
+/ai-review-local --backend api --model gpt-4.1 --full-registry
 
-# Deep review with reasoning model (may take 10-15 minutes)
-/ai-review-local --model gpt-5.4-pro --token-budget 500000 --context deep
-
-# Limit token budget for faster/cheaper reviews
-/ai-review-local --token-budget 100000
+# Deep api review with reasoning model (10-15 min)
+/ai-review-local --backend api --model gpt-5.4-pro --token-budget 500000 --context deep
 ```
 
 ## Notes
@@ -477,20 +565,24 @@ runs `--force-fresh` or when a rebase invalidates the tracked commit.
 - This skill does NOT modify source files — it only generates temp files and
   review artifacts in `.claude/reviews/` (which is gitignored). It may also
   create a commit if there are uncommitted changes (Step 3).
-- **Context levels**: By default (`standard`), the full contents of changed
-  `diff_diff/` source files are sent alongside the diff. This catches "sins of
-  omission" — code that should have changed but wasn't (e.g., a wrapper missing
-  a new parameter). Use `--context deep` to also include files imported by
-  changed files as read-only reference.
+- **Context levels** (api backend): By default (`standard`), the full contents
+  of changed `diff_diff/` source files are sent alongside the diff. This catches
+  "sins of omission" — code that should have changed but wasn't (e.g., a wrapper
+  missing a new parameter). Use `--context deep` to also include files imported
+  by changed files as read-only reference. Codex backend ignores `--context`
+  (it loads files agentically as needed).
 - **Delta-diff re-review**: When `review-state.json` exists from a previous run,
   the script automatically generates a delta diff (changes since the last reviewed
   commit) and focuses the reviewer on those changes. The full branch diff is
-  included as reference context. Use `--force-fresh` to bypass this.
+  included as reference context. Use `--force-fresh` to bypass this. Applies to
+  both backends.
 - **Finding tracking**: The script writes structured findings to `review-state.json`
   after each review. On re-review, previous findings are shown in a table with
   their status (open/addressed), enabling the reviewer to focus on what changed.
-- **Cost visibility**: The script shows estimated cost before the API call and
-  actual cost (from the API response) after completion.
+- **Cost visibility** (api backend): The script shows estimated cost before the
+  API call and actual cost (from the API response) after completion. Codex
+  backend doesn't expose token counts; cost depends on your `codex login` mode
+  (subscription unmetered within plan, API key metered).
 - Re-review mode activates automatically when a previous review exists in
   `.claude/reviews/local-review-latest.md`
 - The review criteria are adapted from `.github/codex/prompts/pr_review.md` (same
@@ -498,10 +590,17 @@ runs `--force-fresh` or when a rebase invalidates the tracked commit.
   code-change review rather than PR review
 - The CI review (Codex action with full repo access) remains the authoritative final
   check — local review is a fast first pass to catch most issues early
-- **Data transmission**: In non-dry-run mode, this skill transmits the unified diff,
-  changed-file metadata, full source file contents (in standard/deep mode),
-  import-context files (in deep mode), selected methodology registry text, and
-  prior review context (if present) to OpenAI via the Chat Completions API.
-  Use `--dry-run` to preview exactly what would be sent.
+- **Data transmission**: In non-dry-run mode:
+  - **api backend**: this skill transmits the unified diff, changed-file
+    metadata, full source file contents (in standard/deep mode), import-context
+    files (in deep mode), selected methodology registry text, and prior review
+    context (if present) to OpenAI via the Responses API.
+  - **codex backend**: the compiled prompt (criteria + diff + previous review)
+    is piped to `codex exec`'s stdin, and Codex itself reads additional repo
+    files agentically (read-only sandbox) and talks to OpenAI iteratively. A
+    one-off stderr notice surfaces obvious sensitive-filename matches before
+    invoking codex (see "Surface area" above) — informational only.
+
+  Use `--dry-run` to preview the compiled prompt without invoking either backend.
 - This skill pairs naturally with the iterative workflow:
   `/ai-review-local` -> address findings -> `/ai-review-local` -> `/submit-pr`

@@ -1,7 +1,8 @@
 [package]
 name = "diff_diff_rust"
-version = "2.8.0"
+version = "3.12.0"
 edition = "2021"
+rust-version = "1.85"
 description = "Rust backend for diff-diff DiD library"
 license = "MIT"
 
@@ -18,23 +19,28 @@ extension-module = ["pyo3/extension-module"]
 # When enabled, ndarray's .dot() and general_mat_vec_mul dispatch to BLAS dgemv/dgemm
 accelerate = ["ndarray/blas", "dep:blas-src", "blas-src/accelerate"]
 openblas = ["ndarray/blas"]
+# Counting global allocator for memory-footprint measurement builds ONLY
+# (never enabled in wheels/CI): exposes reset_alloc_high_water /
+# alloc_high_water_bytes pyfunctions. See rust/src/alloc_profile.rs.
+alloc-profile = []
 
 [dependencies]
-# PyO3 0.22 supports Python 3.8-3.13
-pyo3 = "0.22"
-numpy = "0.22"
-ndarray = { version = "0.16", features = ["rayon"] }
-rand = "0.8"
-rand_xoshiro = "0.6"
+# PyO3 0.29 supports Python 3.9-3.14
+pyo3 = "0.29"
+numpy = "0.29"
+ndarray = { version = "0.17", features = ["rayon"] }
+rand = "0.10"
+rand_xoshiro = "0.8"
 rayon = "1.8"
 
 # Pure Rust linear algebra for SVD/matrix inversion (no external deps).
 # BLAS for matrix-vector products is optional via accelerate/openblas features.
 faer = "0.24"
 
-# BLAS backend (optional, activated by accelerate/openblas features)
-# blas-src 0.10 is ndarray's tested version (see ndarray/crates/blas-tests/Cargo.toml)
-blas-src = { version = "0.10", optional = true }
+# BLAS backend — linker-only crate, pulled in ONLY by the `accelerate`
+# (macOS) feature; OpenBLAS (Linux) is linked via build.rs, not blas-src
+# (see src/lib.rs). 0.14 links the same system Accelerate.framework as 0.10.
+blas-src = { version = "0.14", optional = true }
 
 [profile.release]
 lto = true

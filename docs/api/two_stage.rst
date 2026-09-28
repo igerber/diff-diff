@@ -39,6 +39,7 @@ TwoStageDiD
 Main estimator class for two-stage DiD estimation.
 
 .. autoclass:: diff_diff.TwoStageDiD
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -58,6 +59,7 @@ TwoStageDiDResults
 Results container for two-stage DiD estimation.
 
 .. autoclass:: diff_diff.TwoStageDiDResults
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -66,9 +68,11 @@ Results container for two-stage DiD estimation.
 
    .. autosummary::
 
+      ~TwoStageDiDResults.aggregate
       ~TwoStageDiDResults.summary
       ~TwoStageDiDResults.print_summary
       ~TwoStageDiDResults.to_dataframe
+      ~TwoStageDiDResults.to_dict
 
 TwoStageBootstrapResults
 ------------------------
@@ -76,6 +80,7 @@ TwoStageBootstrapResults
 Bootstrap inference results.
 
 .. autoclass:: diff_diff.TwoStageBootstrapResults
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -104,9 +109,10 @@ Event study with visualization::
 
     est = TwoStageDiD()
     results = est.fit(data, outcome='outcome', unit='unit',
-                      time='period', first_treat='first_treat',
-                      aggregate='event_study')
-    plot_event_study(results)
+                      time='period', first_treat='first_treat')
+    es = results.aggregate('event_study')   # post-fit (M-022)
+    total = results.aggregate('total')      # estimator-owned total (3.10)
+    plot_event_study(es)
 
 Comparison with other estimators::
 

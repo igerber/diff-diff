@@ -22,6 +22,7 @@ PowerAnalysis
 Main class for analytical power calculations.
 
 .. autoclass:: diff_diff.PowerAnalysis
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -63,6 +64,7 @@ PowerResults
 Results from power analysis.
 
 .. autoclass:: diff_diff.PowerResults
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -73,6 +75,7 @@ SimulationPowerResults
 Results from simulation-based power analysis.
 
 .. autoclass:: diff_diff.SimulationPowerResults
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -83,6 +86,7 @@ SimulationMDEResults
 Results from simulation-based MDE search.
 
 .. autoclass:: diff_diff.SimulationMDEResults
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -93,6 +97,7 @@ SimulationSampleSizeResults
 Results from simulation-based sample size search.
 
 .. autoclass:: diff_diff.SimulationSampleSizeResults
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -141,6 +146,13 @@ simulate_sample_size
 Simulation-based sample size for any DiD estimator.
 
 .. autofunction:: diff_diff.simulate_sample_size
+
+plot_power_curve
+~~~~~~~~~~~~~~~~
+
+Visualization for a power curve from ``PowerAnalysis`` results.
+
+.. autofunction:: diff_diff.plot_power_curve
 
 Complete Example
 ----------------

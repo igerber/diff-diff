@@ -12,6 +12,13 @@ library(data.table)
 # Parse command line arguments
 args <- commandArgs(trailingOnly = TRUE)
 
+parse_bool <- function(x, flag) {
+  v <- tolower(x)
+  if (v %in% c("true", "t", "1", "yes")) return(TRUE)
+  if (v %in% c("false", "f", "0", "no")) return(FALSE)
+  stop(sprintf("Invalid boolean for %s: '%s' (use true/false)", flag, x))
+}
+
 parse_args <- function(args) {
   result <- list(
     data = NULL,
@@ -19,7 +26,8 @@ parse_args <- function(args) {
     cluster = "unit",
     n_pre = NULL,
     n_post = NULL,
-    reference_period = NULL
+    reference_period = NULL,
+    warmup = FALSE
   )
 
   i <- 1
@@ -42,8 +50,13 @@ parse_args <- function(args) {
     } else if (args[i] == "--reference-period") {
       result$reference_period <- as.integer(args[i + 1])
       i <- i + 2
+    } else if (args[i] == "--warmup") {
+      result$warmup <- parse_bool(args[i + 1], "--warmup")
+      i <- i + 2
     } else {
-      i <- i + 1
+      # Unknown flags used to be silently skipped, which turned typos into
+      # silent protocol changes. Fail loudly instead.
+      stop(sprintf("Unknown flag: %s", args[i]))
     }
   }
 
@@ -74,6 +87,15 @@ message(sprintf("n_pre: %d, n_post: %d", config$n_pre, config$n_post))
 
 # Create factor for time with reference level
 data[, time_f := relevel(factor(time), ref = as.character(ref_period))]
+
+# Warm-up: run the full estimation once untimed so byte-compiler JIT and
+# first-call setup costs stay out of the timing window.
+cluster_formula_warm <- as.formula(paste0("~", config$cluster))
+if (config$warmup) {
+  message("Warm-up fit (untimed)...")
+  invisible(feols(outcome ~ treated * time_f | unit, data = data,
+                  cluster = cluster_formula_warm))
+}
 
 # Run benchmark
 message("Running MultiPeriodDiD estimation (fixest::feols)...")
@@ -186,6 +208,9 @@ results <- list(
   metadata = list(
     r_version = R.version.string,
     fixest_version = as.character(packageVersion("fixest")),
+    nthreads = fixest::getFixest_nthreads(),
+    dt_threads = data.table::getDTthreads(),
+    warmup = config$warmup,
     n_units = length(unique(data$unit)),
     n_periods = length(unique(data$time)),
     n_obs = nrow(data),

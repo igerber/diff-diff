@@ -4,15 +4,13 @@
 .. currentmodule:: diff_diff
 
 .. autoclass:: TROPResults
+   :no-members:
 
-   
-   .. automethod:: __init__
 
-   
    .. rubric:: Methods
 
    .. autosummary::
-   
+
       ~TROPResults.__init__
       ~TROPResults.get_time_effects_df
       ~TROPResults.get_treatment_effects_df
@@ -21,22 +19,24 @@
       ~TROPResults.summary
       ~TROPResults.to_dataframe
       ~TROPResults.to_dict
-   
-   
 
-   
-   
+
+
+
    .. rubric:: Attributes
 
    .. autosummary::
-   
+
       ~TROPResults.alpha
       ~TROPResults.bootstrap_distribution
+      ~TROPResults.coef_var
       ~TROPResults.is_significant
       ~TROPResults.n_bootstrap
       ~TROPResults.n_post_periods
       ~TROPResults.n_pre_periods
+      ~TROPResults.non_absorbing
       ~TROPResults.significance_stars
+      ~TROPResults.survey_metadata
       ~TROPResults.att
       ~TROPResults.se
       ~TROPResults.t_stat
@@ -55,5 +55,4 @@
       ~TROPResults.factor_matrix
       ~TROPResults.effective_rank
       ~TROPResults.loocv_score
-   
-   
+

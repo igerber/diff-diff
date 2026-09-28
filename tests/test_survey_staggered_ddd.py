@@ -5,6 +5,8 @@ uniform weight equivalence, scale invariance, nontrivial weight effects,
 full design (strata/PSU/FPC), replicate weights, and bootstrap + survey.
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -843,7 +845,7 @@ class TestWeightedPscoreFallback:
         # logit failure in at least some subgroups
         data["collinear_x"] = data["eligibility"].astype(float) * 100.0
         sd = SurveyDesign(weights="weight")
-        est = StaggeredTripleDifference(estimation_method="ipw")
+        est = StaggeredTripleDifference(estimation_method="ipw", pscore_fallback="unconditional")
         import warnings
 
         with warnings.catch_warnings():
@@ -898,3 +900,166 @@ class TestZeroMassSubgroupSkip:
         assert len(mass_warnings) > 0, "Expected zero-mass subgroup warning"
         # Result should still be finite (other cohorts contribute)
         assert np.isfinite(res.overall_att)
+
+
+# ---------------------------------------------------------------------------
+# Paper Eq. 4.14 overall (event-study average) under survey weighting
+# ---------------------------------------------------------------------------
+
+
+class TestSurveyOverallAttEs:
+    """The opt-in ``overall_att_es`` (paper Eq. 4.14) honours survey weights: its
+    analytical SE routes through the same survey-aware variance estimator as the
+    per-event-time effects, so uniform weights reproduce the unweighted result,
+    nontrivial weights move the SE, and a full strata/PSU design stays finite.
+    """
+
+    def test_uniform_weight_equivalence(self):
+        data = _make_staggered_ddd_data(n_units=200, seed=42)
+        data["weight"] = 1.0
+        sd = SurveyDesign(weights="weight")
+        res_w = StaggeredTripleDifference(estimation_method="reg").fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+            aggregate="event_study",
+            survey_design=sd,
+        )
+        res_u = StaggeredTripleDifference(estimation_method="reg").fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+            aggregate="event_study",
+        )
+        assert res_w.overall_att_es is not None and res_u.overall_att_es is not None
+        assert np.isclose(res_w.overall_att_es, res_u.overall_att_es, atol=1e-8)
+        assert res_w.overall_se_es is not None and res_u.overall_se_es is not None
+        assert np.isclose(res_w.overall_se_es, res_u.overall_se_es, atol=1e-8)
+
+    def test_nontrivial_weights_change_se(self):
+        data = _make_staggered_ddd_data(n_units=200, seed=42)  # variable weights
+        sd = SurveyDesign(weights="weight")
+        res_w = StaggeredTripleDifference(estimation_method="reg").fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+            aggregate="event_study",
+            survey_design=sd,
+        )
+        res_u = StaggeredTripleDifference(estimation_method="reg").fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+            aggregate="event_study",
+        )
+        assert res_w.overall_se_es is not None and res_u.overall_se_es is not None
+        # Variable survey weights change the Eq-4.14 overall SE
+        assert not np.isclose(res_w.overall_se_es, res_u.overall_se_es, atol=1e-6)
+
+    def test_full_design_overall_es_finite(self):
+        data = _make_staggered_ddd_data(n_units=200, seed=42)
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
+        res = StaggeredTripleDifference(estimation_method="reg").fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+            aggregate="event_study",
+            survey_design=sd,
+        )
+        assert res.overall_att_es is not None and np.isfinite(res.overall_att_es)
+        assert res.overall_se_es is not None and np.isfinite(res.overall_se_es)
+        assert res.overall_se_es > 0
+
+    def test_replicate_weight_overall_es_finite(self):
+        """The Eq. 4.14 overall (overall_att_es) is computed and finite under a
+        replicate-weight (BRR) survey design, routing its SE through the replicate
+        variance path. Regression for the P1 fix that overall_att_es uses its OWN
+        per-statistic effective df (compute_replicate_if_variance), not the simple
+        overall's mutated df.
+        """
+        data = _make_staggered_ddd_data(n_units=200, seed=42)
+        rng = np.random.default_rng(99)
+        unit_ids = sorted(data["unit"].unique())
+        base_w = data.groupby("unit")["weight"].first().reindex(unit_ids).values
+        n_rep = 20
+        for r in range(n_rep):
+            factor = np.abs(1.0 + rng.standard_normal(len(unit_ids)) * 0.1)
+            data[f"rep_{r}"] = data["unit"].map(dict(zip(unit_ids, base_w * factor)))
+        sd = SurveyDesign(
+            weights="weight",
+            replicate_weights=[f"rep_{r}" for r in range(n_rep)],
+            replicate_method="BRR",
+        )
+        res = StaggeredTripleDifference(estimation_method="reg").fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+            aggregate="event_study",
+            survey_design=sd,
+        )
+        assert res.overall_att_es is not None and np.isfinite(res.overall_att_es)
+        assert res.overall_se_es is not None and np.isfinite(res.overall_se_es)
+        assert res.overall_se_es > 0
+        # default overall_att (simple) also computed under the replicate design
+        assert np.isfinite(res.overall_att) and np.isfinite(res.overall_se)
+
+    def test_single_psu_bootstrap_cluster_unidentified(self):
+        """Under a single-PSU survey design with n_bootstrap>0, the Eq. 4.14 overall
+        keeps its (analytical) point estimate but its SE is unidentified -> NaN, and
+        the inference fields are NaN-consistent.
+
+        Regression for the P2 warning-misdiagnosis fix: when overall_se_es is NaN the
+        terminal warning must not attribute it *solely* to a non-finite influence
+        function -- a single-PSU/cluster design is the actual cause here, and the
+        authoritative "variance unidentified" warning is raised by the bootstrap. The
+        Eq. 4.14 warning, when emitted, must name the unidentified-variance cause.
+        """
+        data = _make_staggered_ddd_data(n_units=120, seed=42).copy()
+        data["psu"] = 0  # collapse to a single PSU -> variance/cluster unidentified
+        data["fpc_col"] = 10**6  # design-based variance so the PSU is retained
+        sd = SurveyDesign(weights="weight", psu="psu", fpc="fpc_col")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = StaggeredTripleDifference(estimation_method="reg", n_bootstrap=50, seed=7).fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
+                aggregate="event_study",
+                survey_design=sd,
+            )
+        # Point estimate survives; SE + inference are NaN-consistent (never a stale value).
+        assert res.overall_att_es is not None and np.isfinite(res.overall_att_es)
+        assert res.overall_se_es is not None and np.isnan(res.overall_se_es)
+        assert res.overall_t_stat_es is not None and np.isnan(res.overall_t_stat_es)
+        assert res.overall_p_value_es is not None and np.isnan(res.overall_p_value_es)
+        assert res.overall_conf_int_es is not None
+        assert np.isnan(res.overall_conf_int_es[0]) and np.isnan(res.overall_conf_int_es[1])
+        msgs = [str(w.message) for w in caught]
+        # The bootstrap raises the authoritative "variance unidentified" warning.
+        assert any("unidentified" in m for m in msgs)
+        # The Eq. 4.14 overall warning is cause-accurate (would fail on the old wording
+        # that attributed the NaN solely to a non-finite influence function).
+        es_warns = [m for m in msgs if "overall_att_es)" in m]
+        assert es_warns, "expected the Eq. 4.14 overall warning under single-PSU bootstrap"
+        assert all("unidentified" in m for m in es_warns)

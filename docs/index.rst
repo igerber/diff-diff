@@ -10,17 +10,27 @@ It provides sklearn-like estimators with statsmodels-style output for econometri
 
 .. code-block:: python
 
-   from diff_diff import DifferenceInDifferences
+   from diff_diff import DifferenceInDifferences, generate_did_data
+
+   # Simulate a panel: 100 units, 10 periods, true treatment lift of 5.0
+   data = generate_did_data(
+       n_units=100,
+       n_periods=10,
+       treatment_effect=5.0,
+       treatment_period=5,
+       treatment_fraction=0.5,
+       seed=42,
+   )
 
    # Fit a basic DiD model
    did = DifferenceInDifferences()
-   results = did.fit(data, outcome='y', treatment='treated', time='post')
+   results = did.fit(data, outcome='outcome', treatment='treated', post='post')
    print(results.summary())
 
 Key Features
 ------------
 
-- **13+ Estimators**: Basic DiD, TWFE, Event Study, Synthetic DiD, plus modern staggered estimators (Callaway-Sant'Anna, Sun-Abraham, Imputation, Two-Stage, Stacked DiD), advanced methods (TROP, Continuous DiD, Efficient DiD, Triple Difference), and Bacon Decomposition diagnostics
+- **20+ Estimators**: Basic DiD, TWFE, Event Study, Synthetic DiD/Control, modern staggered estimators (Callaway-Sant'Anna, Sun-Abraham, Imputation, Two-Stage, Stacked, LP-DiD), reversible and heterogeneous-adoption designs (dCDH, HAD), distributional methods (Changes-in-Changes), Regression Discontinuity, and Bacon Decomposition diagnostics
 - **Modern Inference**: Robust standard errors, cluster-robust SEs, wild cluster bootstrap, and multiplier bootstrap
 - **Assumption Testing**: Parallel trends tests, placebo tests, Bacon decomposition, and comprehensive diagnostics
 - **Sensitivity Analysis**: Honest DiD (Rambachan & Roth 2023) for robust inference under parallel trends violations
@@ -44,70 +54,66 @@ For development:
 Quick Links
 -----------
 
+- :doc:`practitioner_getting_started` - Measuring campaign impact? Start here
+- :doc:`practitioner_decision_tree` - Which method fits your business problem?
 - :doc:`quickstart` - Installation and your first DiD analysis
 - :doc:`choosing_estimator` - Which estimator should I use?
+- :func:`~diff_diff.aggregate_survey` - Have BRFSS/ACS/CPS microdata? Bridge it to a geographic panel for DiD
 - :doc:`tutorials/01_basic_did` - Hands-on basic tutorial
 - :doc:`troubleshooting` - Common issues and solutions
 - :doc:`r_comparison` - Coming from R?
 - :doc:`api/index` - Full API reference
 
-.. toctree::
-   :maxdepth: 2
-   :caption: Getting Started
-   :hidden:
+Explore the Documentation
+-------------------------
 
-   quickstart
-   choosing_estimator
-   troubleshooting
+.. grid:: 1 2 2 3
+   :gutter: 3
 
-.. toctree::
-   :maxdepth: 1
-   :caption: Tutorials: Fundamentals
-   :hidden:
+   .. grid-item-card:: Getting Started
+      :link: getting_started
+      :link-type: doc
 
-   tutorials/01_basic_did
-   tutorials/02_staggered_did
-   tutorials/03_synthetic_did
-   tutorials/08_triple_diff
-   tutorials/09_real_world_examples
+      Install, run your first DiD analysis, and pick the right estimator
+      for your design.
 
-.. toctree::
-   :maxdepth: 1
-   :caption: Tutorials: Advanced Methods
-   :hidden:
+   .. grid-item-card:: Practitioner Guide
+      :link: practitioners
+      :link-type: doc
 
-   tutorials/10_trop
-   tutorials/11_imputation_did
-   tutorials/12_two_stage_did
-   tutorials/13_stacked_did
-   tutorials/14_continuous_did
-   tutorials/15_efficient_did
+      Measuring campaign impact? A business-first path through DiD, no
+      econometrics background required.
 
-.. toctree::
-   :maxdepth: 1
-   :caption: Tutorials: Study Design
-   :hidden:
+   .. grid-item-card:: Tutorials
+      :link: tutorials/index
+      :link-type: doc
 
-   tutorials/04_parallel_trends
-   tutorials/05_honest_did
-   tutorials/06_power_analysis
-   tutorials/07_pretrends_power
+      31 hands-on notebooks, from basic 2x2 DiD to survey-weighted and
+      spillover-aware designs.
 
-.. toctree::
-   :maxdepth: 1
-   :caption: Comparisons & Benchmarks
-   :hidden:
+   .. grid-item-card:: User Guide
+      :link: user_guide
+      :link-type: doc
 
-   r_comparison
-   python_comparison
-   benchmarks
+      References, R and Python comparisons, benchmarks, the 4.0 migration
+      guide, and the methodology registry.
+
+   .. grid-item-card:: API Reference
+      :link: api/index
+      :link-type: doc
+
+      Complete reference for all estimators, results classes, diagnostics,
+      and utilities.
 
 .. toctree::
    :maxdepth: 2
-   :caption: API Reference
    :hidden:
 
-   api/index
+   Getting Started <getting_started>
+   Practitioner Guide <practitioners>
+   Tutorials <tutorials/index>
+   User Guide <user_guide>
+   API Reference <api/index>
 
 What is Difference-in-Differences?
 ----------------------------------
@@ -120,7 +126,7 @@ public policy evaluation, and social science research.
 Why diff-diff?
 --------------
 
-- **Complete method coverage**: 13+ estimators from basic 2x2 DiD to cutting-edge methods like Efficient DiD (Chen et al. 2025) and TROP (Athey et al. 2025)
+- **Complete method coverage**: 20+ estimators from basic 2x2 DiD to cutting-edge methods like Efficient DiD (Chen et al. 2025), TROP (Athey et al. 2025), and HAD (de Chaisemartin et al. 2026)
 - **Familiar API**: sklearn-like ``fit()`` interface — if you know scikit-learn, you know diff-diff
 - **Modern staggered methods**: Callaway-Sant'Anna, Sun-Abraham, Imputation DiD, Two-Stage DiD, and Stacked DiD handle heterogeneous treatment timing correctly
 - **Robust inference**: Heteroskedasticity-robust, cluster-robust, wild cluster bootstrap, and multiplier bootstrap
@@ -142,25 +148,51 @@ Supported Estimators
    * - :class:`~diff_diff.TwoWayFixedEffects`
      - Panel data with unit and time fixed effects
    * - :class:`~diff_diff.MultiPeriodDiD`
-     - Event study with period-specific treatment effects
+     - Event study with period-specific treatment effects (deprecated 3.9 — use :class:`~diff_diff.TwoWayFixedEffects` ``event_study=True``)
    * - :class:`~diff_diff.CallawaySantAnna`
-     - Callaway & Sant'Anna (2021) for staggered adoption
+     - Callaway & Sant'Anna (2021) group-time ATT for staggered adoption
+   * - :class:`~diff_diff.ChaisemartinDHaultfoeuille`
+     - de Chaisemartin & D'Haultfoeuille (2020/2022) for reversible (non-absorbing) treatments
    * - :class:`~diff_diff.SunAbraham`
      - Sun & Abraham (2021) interaction-weighted estimator
    * - :class:`~diff_diff.ImputationDiD`
      - Borusyak, Jaravel & Spiess (2024) imputation estimator
    * - :class:`~diff_diff.TwoStageDiD`
      - Gardner (2022) two-stage residualized estimator
+   * - :class:`~diff_diff.SpilloverDiD`
+     - Butts (2021) ring-indicator spillover-aware DiD
    * - :class:`~diff_diff.SyntheticDiD`
      - Synthetic DiD combining DiD and synthetic control
+   * - :class:`~diff_diff.SyntheticControl`
+     - Abadie, Diamond & Hainmueller (2010) classic synthetic control
    * - :class:`~diff_diff.StackedDiD`
      - Wing, Freedman & Hollingsworth (2024) stacked DiD
    * - :class:`~diff_diff.EfficientDiD`
      - Chen, Sant'Anna & Xie (2025) efficient DiD
    * - :class:`~diff_diff.TripleDifference`
      - Triple difference (DDD) estimator
+   * - :class:`~diff_diff.StaggeredTripleDifference`
+     - Ortiz-Villavicencio & Sant'Anna (2025) staggered DDD with group-time ATT (deprecated 3.9 - use :class:`~diff_diff.TripleDifference` with ``first_treat=``)
    * - :class:`~diff_diff.ContinuousDiD`
-     - Continuous treatment DiD
+     - Callaway, Goodman-Bacon & Sant'Anna (2024) continuous-treatment dose-response DiD
+   * - :class:`~diff_diff.HeterogeneousAdoptionDiD`
+     - de Chaisemartin, Ciccia, D'Haultfoeuille & Knau (2026) for designs with no untreated units
+   * - :class:`~diff_diff.LPDiD`
+     - Dube, Girardi, Jorda & Taylor (2025) local-projections DiD
+   * - :class:`~diff_diff.WooldridgeDiD`
+     - Wooldridge (2023, 2025) extended TWFE (ETWFE) via saturated OLS or QMLE
+   * - :class:`~diff_diff.ChangesInChanges`
+     - Athey & Imbens (2006) distributional DiD with quantile treatment effects
+   * - :class:`~diff_diff.LWDiD`
+     - Lee & Wooldridge (2025, 2026) rolling-transformation DiD; ``rolling='detrend'`` handles heterogeneous linear trends
+   * - :class:`~diff_diff.DMLDiD`
+     - Chang (2020) double/debiased ML DiD; staggered ATT(g,t) with cross-fitted nuisance learners (panel or declared repeated cross sections; survey/cluster support); Caetano et al. (2026) bad-control score via ``fit(bad_control=)`` (bad-control lane: panel only, ``cluster=`` only)
+   * - :class:`~diff_diff.DurationDiD`
+     - Deaner & Ku (2026) causal duration DiD for binary absorbing outcomes; untreated-hazard restriction (common dynamics or proportional hazards), whole-individual bootstrap bands
+   * - :class:`~diff_diff.QDiD`
+     - Quantile DiD comparison estimator applying DiD quantile-by-quantile (deprecated 3.9 - use :class:`~diff_diff.ChangesInChanges` with ``method="qdid"``)
+   * - :class:`~diff_diff.RegressionDiscontinuity`
+     - Calonico, Cattaneo & Titiunik (2014) sharp/fuzzy RD with robust bias-corrected inference
    * - :class:`~diff_diff.TROP`
      - Triply Robust Panel with factor model adjustment (Athey et al. 2025)
    * - :class:`~diff_diff.BaconDecomposition`

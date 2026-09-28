@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: load_divorce_laws
+   :no-index:

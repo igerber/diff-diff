@@ -4,25 +4,21 @@
 .. currentmodule:: diff_diff
 
 .. autoclass:: DeltaRM
+   :no-members:
 
-   
-   .. automethod:: __init__
 
-   
    .. rubric:: Methods
 
    .. autosummary::
-   
-      ~DeltaRM.__init__
-   
-   
 
-   
-   
+      ~DeltaRM.__init__
+
+
+
+
    .. rubric:: Attributes
 
    .. autosummary::
-   
+
       ~DeltaRM.Mbar
-   
-   
+

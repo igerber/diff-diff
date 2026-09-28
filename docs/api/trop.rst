@@ -12,7 +12,7 @@ which combines three robustness components:
 2. **Exponential distance-based unit weights**: ω_j = exp(-λ_unit × d(j,i))
    where d(j,i) is the pairwise RMSE between units over pre-treatment periods
 
-3. **Exponential time decay weights**: θ_s = exp(-λ_time × |t-s|)
+3. **Exponential time decay weights**: θ_s = exp(-λ_time × :math:`|t-s|`)
    weighting periods by proximity to the specific treatment period t
 
 **When to use TROP:**
@@ -25,14 +25,13 @@ which combines three robustness components:
 **Reference:** Athey, S., Imbens, G. W., Qu, Z., & Viviano, D. (2025). Triply Robust
 Panel Estimators. *Working Paper*. `arXiv:2508.21536 <https://arxiv.org/abs/2508.21536>`_
 
-.. module:: diff_diff.trop
-
 TROP
 ----
 
 Main estimator class for Triply Robust Panel estimation.
 
 .. autoclass:: diff_diff.TROP
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -51,7 +50,8 @@ TROPResults
 
 Results container for TROP estimation.
 
-.. autoclass:: diff_diff.trop.TROPResults
+.. autoclass:: diff_diff.TROPResults
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -145,10 +145,6 @@ For the paper's full per-treated-cell estimator (Algorithm 2), use
 The global method is **faster** (single optimization vs N_treated optimizations).
 Treatment effects are **heterogeneous** per-observation residuals; ATT is their mean.
 
-``method='twostep'`` is a deprecated alias for ``method='local'`` and will be
-removed in v3.0. ``method='joint'`` is a deprecated alias for ``method='global'``
-and will be removed in v3.0.
-
 .. list-table::
    :header-rows: 1
    :widths: 20 40 40
@@ -172,6 +168,36 @@ and will be removed in v3.0.
 Use ``method='local'`` for observation-specific weight optimization.
 Use ``method='global'`` for faster estimation with global weights.
 
+Non-absorbing (on/off) treatment
+--------------------------------
+
+By default TROP requires an **absorbing-state** treatment indicator (once treated,
+always treated) and rejects a non-monotonic indicator with a ``ValueError``. This
+guards against the common mistake of encoding absorbing treatment as an event-style
+spike (a single ``D=1`` period), which would silently bias the ATT.
+
+The paper, however, supports **general assignment patterns** including treatment that
+switches on and off (§2.1: "units moving into and out of treatment"; Eq. 12 /
+Algorithm 2). Enable this with the opt-in ``non_absorbing=True`` (``method='local'``
+only)::
+
+    from diff_diff import TROP
+
+    trop = TROP(method='local', non_absorbing=True)
+    results = trop.fit(data, outcome='y', treatment='treated',
+                       unit='unit_id', time='period')
+
+Caveats (a ``UserWarning`` is emitted on fit):
+
+- Validity relies on the paper's **no-spillover / no-dynamic-effects (no carryover)**
+  assumption.
+- The point estimator (Eq. 12) is general, but the formal **triple-robustness
+  guarantee (Theorem 5.1) is proven only under block assignment**; the bootstrap is
+  offered generally but its validity requires a growing number of treated units, so
+  interpret standard errors with care.
+- ``non_absorbing=True`` is supported for ``method='local'`` only;
+  ``TROP(method='global', non_absorbing=True)`` raises a ``ValueError``.
+
 Example Usage
 -------------
 
@@ -188,8 +214,11 @@ Basic usage::
     )
 
     # Note: TROP infers treatment periods from the treatment indicator column.
-    # The treatment column should be an absorbing state (D=1 for all periods
-    # during and after treatment starts).
+    # By default the treatment column must be an absorbing state (D=1 for all
+    # periods during and after treatment starts); a non-monotonic indicator
+    # raises ValueError. For treatment that genuinely switches on and off,
+    # pass non_absorbing=True (method='local' only) -- see "Non-absorbing
+    # (on/off) treatment" below.
     results = trop.fit(
         data,
         outcome='y',
@@ -199,17 +228,17 @@ Basic usage::
     )
     results.print_summary()
 
-Quick estimation with convenience function::
+Quick one-call estimation (the ``trop()`` wrapper is deprecated since
+3.9 and removed in 4.0)::
 
-    from diff_diff import trop
+    from diff_diff import TROP
 
-    results = trop(
+    results = TROP(n_bootstrap=200).fit(
         data,
-        outcome='y',
-        treatment='treated',
-        unit='unit_id',
-        time='period',
-        n_bootstrap=200
+        'y',
+        'treated',
+        'unit_id',
+        'period',
     )
 
 Using the global method for faster estimation::

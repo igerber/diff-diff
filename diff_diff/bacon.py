@@ -12,13 +12,19 @@ Reference:
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
+from diff_diff._base import BaseEstimator
 from diff_diff.results import _format_survey_block
+from diff_diff.results_base import Diagnostic
+from diff_diff.utils import pre_demean_norms, snap_absorbed_regressors
 from diff_diff.utils import within_transform as _within_transform_util
+
+if TYPE_CHECKING:
+    from diff_diff.survey import SurveyDesign
 
 
 @dataclass
@@ -32,6 +38,13 @@ class Comparison2x2:
         The timing group used as "treated" in this comparison.
     control_group : Any
         The timing group used as "control" in this comparison.
+        For ``comparison_type="treated_vs_never"``, this is the literal
+        string ``"never_treated"``, which refers to the **post-remap U
+        bucket** (the paper's ``U`` per Goodman-Bacon 2021 footnote 11).
+        On inputs with no remapped always-treated units this is exactly
+        the true never-treated set; with remapping it is the broader U
+        bucket. Check ``BaconDecompositionResults.n_never_treated`` and
+        ``n_always_treated_remapped`` for the precise composition.
     comparison_type : str
         Type of comparison: "treated_vs_never", "earlier_vs_later",
         or "later_vs_earlier".
@@ -65,7 +78,7 @@ class Comparison2x2:
 
 
 @dataclass
-class BaconDecompositionResults:
+class BaconDecompositionResults(Diagnostic):
     """
     Results from Goodman-Bacon decomposition of TWFE.
 
@@ -94,6 +107,17 @@ class BaconDecompositionResults:
         Number of distinct treatment timing groups.
     n_never_treated : int
         Number of never-treated units.
+    n_always_treated_remapped : int
+        Number of units whose ``first_treat`` was at or before the first
+        observable period (``first_treat <= min(time)``, excluding the
+        never-treated sentinels ``0`` and ``np.inf``) and which were
+        automatically remapped to the ``U`` (untreated) bucket per
+        Goodman-Bacon (2021) footnote 11. Detection uses ordered-time
+        logic so negative or zero-crossing period labels work correctly.
+        Zero on inputs where the user only used the ``first_treat ∈ {0,
+        np.inf}`` sentinels. The user's original ``first_treat`` column
+        is preserved unchanged on the input ``data`` frame; remapping
+        happens in an internal column.
     timing_groups : List[Any]
         List of treatment timing cohorts.
     """
@@ -111,6 +135,9 @@ class BaconDecompositionResults:
     timing_groups: List[Any]
     n_obs: int = 0
     decomposition_error: float = field(default=0.0)
+    # Count of units auto-remapped from 0 < first_treat <= min(time) into the
+    # U bucket per Goodman-Bacon (2021) footnote 11. Always 0 on legacy inputs.
+    n_always_treated_remapped: int = 0
     # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
     survey_metadata: Optional[Any] = field(default=None)
 
@@ -139,8 +166,12 @@ class BaconDecompositionResults:
             f"{'Treatment timing groups:':<35} {self.n_timing_groups:>10}",
             f"{'Never-treated units:':<35} {self.n_never_treated:>10}",
             f"{'Total 2x2 comparisons:':<35} {len(self.comparisons):>10}",
-            "",
         ]
+        if self.n_always_treated_remapped > 0:
+            lines.append(
+                f"{'Always-treated remapped to U:':<35} " f"{self.n_always_treated_remapped:>10}"
+            )
+        lines.append("")
 
         # Add survey design info
         if self.survey_metadata is not None:
@@ -241,6 +272,36 @@ class BaconDecompositionResults:
         """Calculate total weight (should be 1.0)."""
         return sum(c.weight for c in self.comparisons)
 
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Convert the decomposition headline to a dictionary.
+
+        Returns
+        -------
+        Dict[str, Any]
+            TWFE estimate, per-comparison-type weights and averages, and
+            counts. This is a diagnostic container - there is no causal
+            inference row. The per-comparison table is available via
+            ``to_dataframe()``.
+        """
+        result = {
+            "twfe_estimate": self.twfe_estimate,
+            "total_weight_treated_vs_never": self.total_weight_treated_vs_never,
+            "total_weight_earlier_vs_later": self.total_weight_earlier_vs_later,
+            "total_weight_later_vs_earlier": self.total_weight_later_vs_earlier,
+            "weighted_avg_treated_vs_never": self.weighted_avg_treated_vs_never,
+            "weighted_avg_earlier_vs_later": self.weighted_avg_earlier_vs_later,
+            "weighted_avg_later_vs_earlier": self.weighted_avg_later_vs_earlier,
+            "n_timing_groups": self.n_timing_groups,
+            "n_never_treated": self.n_never_treated,
+            "n_obs": self.n_obs,
+            "n_comparisons": len(self.comparisons),
+            "decomposition_error": self.decomposition_error,
+        }
+        if self.n_always_treated_remapped:
+            result["n_always_treated_remapped"] = self.n_always_treated_remapped
+        return result
+
     def to_dataframe(self) -> pd.DataFrame:
         """
         Convert comparisons to a DataFrame.
@@ -298,7 +359,7 @@ class BaconDecompositionResults:
         }
 
 
-class BaconDecomposition:
+class BaconDecomposition(BaseEstimator):
     """
     Goodman-Bacon (2021) decomposition of Two-Way Fixed Effects estimator.
 
@@ -322,14 +383,19 @@ class BaconDecomposition:
 
     Parameters
     ----------
-    weights : str, default="approximate"
+    weights : str, default="exact"
         Weight calculation method:
+
+        - "exact" (default): Variance-based weights from Goodman-Bacon (2021)
+          Theorem 1, Eqs. 7-9 and 10e-g. Produces the paper-faithful
+          decomposition where the weighted sum matches the TWFE estimate
+          to machine precision. Use for publication-quality work and the
+          standard methodology contract.
         - "approximate": Fast simplified formula using group shares and
-          treatment variance. Good for diagnostic purposes where relative
-          weights are sufficient to identify problematic comparisons.
-        - "exact": Variance-based weights from Goodman-Bacon (2021) Theorem 1.
-          Use for publication-quality decompositions where the weighted sum
-          must closely match the TWFE estimate.
+          treatment variance, with post-hoc sum-to-1 normalization. Opt
+          in for speed-sensitive diagnostic loops where the relative weight
+          structure is sufficient. Approximate-mode results may differ
+          numerically from R ``bacondecomp::bacon()``.
 
     Attributes
     ----------
@@ -393,16 +459,18 @@ class BaconDecomposition:
     TwoWayFixedEffects : The TWFE estimator being decomposed
     """
 
-    def __init__(self, weights: str = "approximate"):
+    def __init__(self, weights: str = "exact"):
         """
         Initialize BaconDecomposition.
 
         Parameters
         ----------
-        weights : str, default="approximate"
+        weights : str, default="exact"
             Weight calculation method:
-            - "approximate": Fast simplified formula (default)
-            - "exact": Variance-based weights from Goodman-Bacon (2021)
+
+            - "exact" (default): Variance-based weights from Goodman-Bacon
+              (2021) Theorem 1 (paper-faithful Eqs. 7-9 and 10e-g).
+            - "approximate": Fast simplified formula. Opt in for speed.
         """
         if weights not in ("approximate", "exact"):
             raise ValueError(f"weights must be 'approximate' or 'exact', got '{weights}'")
@@ -433,8 +501,34 @@ class BaconDecomposition:
         time : str
             Name of time period column.
         first_treat : str
-            Name of column indicating when unit was first treated.
-            Use 0 (or np.inf) for never-treated units.
+            Name of column indicating when unit was first treated. The
+            values ``0`` and ``np.inf`` are **reserved as never-treated
+            sentinels** (not configurable today); a real treatment cohort
+            with ``first_treat == 0`` would be folded into ``U`` and
+            should instead be re-labeled to a non-sentinel value before
+            fitting. Units whose ``first_treat`` is at or before the
+            first observable period (``first_treat <= min(time)``,
+            excluding the never-treated sentinels ``0`` and ``np.inf``)
+            are automatically remapped to the ``U`` (untreated) bucket
+            per Goodman-Bacon (2021) footnote 11, with a
+            ``UserWarning``. **Library boundary extension:** the paper
+            uses the strict inequality ``t_i < 1`` (units treated
+            *before* the first observable period); the library uses the
+            **inclusive** ``first_treat <= min(time)`` rule, additionally
+            folding units treated *at* the first observable period
+            (``first_treat == min(time)``) into ``U`` because such units
+            have no untreated cell in-panel. See REGISTRY's
+            ``**Deviation (first-period boundary extension on
+            always-treated remap)**`` block for the full contract. Detection uses ordered-time logic on the
+            **time axis** so panels whose ``time`` column contains
+            negative or zero-crossing labels (e.g. event-time
+            ``time ∈ [-2,..,3]``) are handled correctly; the ``0``
+            sentinel restriction applies only to ``first_treat``, not to
+            ``time``. The user's original ``first_treat`` column on
+            ``data`` is preserved unchanged; remapping happens in an
+            internal column. The count of remapped units is exposed on
+            the result as
+            ``BaconDecompositionResults.n_always_treated_remapped``.
         survey_design : SurveyDesign, optional
             Survey design specification for weighted estimation.
             When provided, all means and group shares use survey weights.
@@ -486,6 +580,58 @@ class BaconDecomposition:
         df[time] = pd.to_numeric(df[time])
         df[first_treat] = pd.to_numeric(df[first_treat])
 
+        # Preserve the user-provided column name so we can count TRUE
+        # never-treated units below (post-remap, `first_treat` will be
+        # rebound to the internal column which folds remapped always-treated
+        # into the same `0` sentinel bucket as never-treated).
+        user_first_treat_col = first_treat
+
+        # Always-treated remap (Goodman-Bacon 2021, footnote 11):
+        # The paper convention puts units treated before the first observable
+        # period into the U bucket alongside never-treated units. The library's
+        # prior sentinel-only convention (`first_treat ∈ {0, np.inf}`) is
+        # narrower than the paper's U.
+        #
+        # Detection uses ORDERED-TIME logic on the `time` axis
+        # (`first_treat <= min(time)`), NOT positive-sign restriction, so
+        # panels whose `time` column has negative or zero-crossing labels
+        # (e.g. event-time `time ∈ [-2,..,3]`) are handled correctly.
+        # Sentinel rows (`first_treat ∈ {0, np.inf}`) are excluded from
+        # the remap so the never-treated contract is preserved. NOTE: the
+        # `0` sentinel restriction applies to `first_treat` only, not to
+        # `time`; a real treatment cohort with `first_treat == 0` is not
+        # supported today and would be folded into `U` (re-label such
+        # cohorts to a non-sentinel value before fitting).
+        # Remapping writes to an internal column; the user's `first_treat`
+        # column is preserved unchanged (df = data.copy() above).
+        df["__bacon_first_treat_internal__"] = df[first_treat]
+        min_period = df[time].min()
+        is_U_sentinel = (df["__bacon_first_treat_internal__"] == 0) | (
+            df["__bacon_first_treat_internal__"] == np.inf
+        )
+        always_treated_mask = (~is_U_sentinel) & (
+            df["__bacon_first_treat_internal__"] <= min_period
+        )
+        n_always_treated_remapped = int(df.loc[always_treated_mask, unit].nunique())
+        if n_always_treated_remapped > 0:
+            warnings.warn(
+                f"Detected {n_always_treated_remapped} always-treated units "
+                f"(first_treat <= {min_period}, excluding sentinel values "
+                f"0 and np.inf). Remapping to U bucket per Goodman-Bacon "
+                f"(2021) footnote 11. The original first_treat column is "
+                f"preserved; remapping happens in an internal column. To "
+                f"silence this warning, recode the affected rows' "
+                f"first_treat values to 0 or np.inf in your input data "
+                f"before fitting.",
+                UserWarning,
+                stacklevel=2,
+            )
+            df.loc[always_treated_mask, "__bacon_first_treat_internal__"] = 0
+        # Rebind the local first_treat name to the internal column so all
+        # downstream df[first_treat] reads (and helper-function passthroughs)
+        # see the remapped data without per-site rewrites.
+        first_treat = "__bacon_first_treat_internal__"
+
         # Check for balanced panel
         periods_per_unit = df.groupby(unit)[time].count()
         if periods_per_unit.nunique() > 1:
@@ -500,13 +646,41 @@ class BaconDecomposition:
         time_periods = sorted(df[time].unique())
 
         # Identify never-treated and timing groups
-        # Never-treated: first_treat = 0 or inf
+        # Never-treated: first_treat = 0 or np.inf (library sentinels).
+        # Timing groups: every other value in the (post-remap) internal
+        # column. Do NOT restrict to positive values — negative-coded
+        # event-time cohorts (e.g. first_treat=-1 on a panel with
+        # min(time)=-2) are valid timing groups.
         never_treated_mask = (df[first_treat] == 0) | (df[first_treat] == np.inf)
-        timing_groups = sorted([g for g in df[first_treat].unique() if g > 0 and g != np.inf])
+        timing_groups = sorted([g for g in df[first_treat].unique() if g != 0 and g != np.inf])
 
-        # Get unit-level treatment timing
-        unit_info = df.groupby(unit).agg({first_treat: "first"}).reset_index()
-        n_never_treated = ((unit_info[first_treat] == 0) | (unit_info[first_treat] == np.inf)).sum()
+        # `n_never_treated` reports TRUE never-treated units, computed from
+        # the original user-provided column BEFORE the remap. Remapped
+        # always-treated units are reported separately via
+        # `n_always_treated_remapped` so the two counts do not double-count.
+        unit_info_user = df.groupby(unit).agg({user_first_treat_col: "first"}).reset_index()
+        n_never_treated = int(
+            (
+                (unit_info_user[user_first_treat_col] == 0)
+                | (unit_info_user[user_first_treat_col] == np.inf)
+            ).sum()
+        )
+
+        # `n_units_in_U_bucket` is the POST-remap count used to decide
+        # whether `treated_vs_never` (β̂_{kU}^{2x2}) comparisons should
+        # be generated. It includes BOTH true never-treated AND remapped
+        # always-treated units, since the paper convention puts them in
+        # the same `U` bucket (Goodman-Bacon 2021 footnote 11). Without
+        # this distinction from `n_never_treated`, panels whose U is
+        # composed entirely of remapped always-treated units would
+        # silently drop all β̂_{kU}^{2x2} terms and break the Theorem 1
+        # identity at the loop gate.
+        unit_info_internal = df.groupby(unit).agg({first_treat: "first"}).reset_index()
+        n_units_in_U_bucket = int(
+            (
+                (unit_info_internal[first_treat] == 0) | (unit_info_internal[first_treat] == np.inf)
+            ).sum()
+        )
 
         # Create treatment indicator (D_it = 1 if treated at time t)
         # Use unique internal name to avoid conflicts with user data
@@ -521,8 +695,11 @@ class BaconDecomposition:
         # Perform decomposition
         comparisons = []
 
-        # 1. Treated vs Never-treated comparisons
-        if n_never_treated > 0:
+        # 1. Treated vs Never-treated comparisons.
+        # Gate on the POST-remap U bucket count so panels whose U is
+        # composed entirely of remapped always-treated units still emit
+        # β̂_{kU}^{2x2} terms (paper Goodman-Bacon 2021 footnote 11).
+        if n_units_in_U_bucket > 0:
             for g in timing_groups:
                 comp = self._compute_treated_vs_never(
                     df,
@@ -636,6 +813,7 @@ class BaconDecomposition:
             timing_groups=timing_groups,
             n_obs=len(df),
             decomposition_error=decomp_error,
+            n_always_treated_remapped=n_always_treated_remapped,
             survey_metadata=survey_metadata,
         )
 
@@ -653,12 +831,26 @@ class BaconDecomposition:
     ) -> float:
         """Compute TWFE estimate using within-transformation."""
         # Apply two-way within transformation (weighted if survey weights provided)
+        _pre_norms = pre_demean_norms(df, [treat_col], weights=weights)
         df_dm = _within_transform_util(
             df,
             [outcome, treat_col],
             unit,
             time,
             suffix="_within",
+            weights=weights,
+        )
+        # Snap an FE-spanned treatment to exact zero: the d_var == 0 guard
+        # below then returns its deterministic 0.0 (with the cause warning)
+        # instead of an arbitrary junk/junk division.
+        snap_absorbed_regressors(
+            df_dm,
+            [treat_col],
+            _pre_norms,
+            absorbed_desc=f"unit '{unit}' and time '{time}' fixed effects",
+            group_vars=[unit, time],
+            suffix="_within",
+            display_names={treat_col: "treatment"},
             weights=weights,
         )
 
@@ -688,117 +880,153 @@ class BaconDecomposition:
         weights: Optional[np.ndarray] = None,
     ) -> None:
         """
-        Recompute weights using exact variance-based formula from Theorem 1.
+        Recompute weights using the exact Theorem 1 formula from
+        Goodman-Bacon (2021).
 
-        This modifies comparison weights in-place to use the exact formula
-        from Goodman-Bacon (2021) which accounts for within-group variance
-        of the treatment indicator in each 2x2 comparison window.
+        Implements Eqs. 7-9 (subsample FE-adjusted treatment-dummy
+        variances) and Eqs. 10e-g (decomposition weights). Only the
+        NUMERATORS of Eqs. 10e-g are written here; the post-hoc
+        sum-to-1 normalization in ``fit()`` handles the ``V̂^D``
+        denominator, which is mathematically equivalent per Theorem 1's
+        identity ``V̂^D = Σ numerators``.
 
-        When survey weights are provided, uses weighted unit counts and
-        within-group variance of the treatment indicator.
+        Notation (per paper §2, pp. 256-258):
+            n_k        sample share of timing group k (fraction of units)
+            n_kU       relative size of group k in pair (k, U): n_k/(n_k+n_U)
+            D̄_k        share of periods group k spends treated: (T-k+1)/T
+
+        Equations:
+            V̂_{kU}^D     = n_{kU}(1-n_{kU}) · D̄_k(1-D̄_k)                 (Eq. 7)
+            V̂_{kℓ}^{D,k} = n_{kℓ}(1-n_{kℓ}) · (D̄_k-D̄_ℓ)/(1-D̄_ℓ)
+                          · (1-D̄_k)/(1-D̄_ℓ)                              (Eq. 8)
+            V̂_{kℓ}^{D,ℓ} = n_{kℓ}(1-n_{kℓ}) · D̄_ℓ/D̄_k
+                          · (D̄_k-D̄_ℓ)/D̄_k                                (Eq. 9)
+
+            s_{kU}    ∝ (n_k+n_U)^2 · V̂_{kU}^D                            (Eq. 10e)
+            s_{kℓ}^k  ∝ ((n_k+n_ℓ)(1-D̄_ℓ))^2 · V̂_{kℓ}^{D,k}                (Eq. 10f)
+            s_{kℓ}^ℓ  ∝ ((n_k+n_ℓ)·D̄_k)^2 · V̂_{kℓ}^{D,ℓ}                   (Eq. 10g)
+
+        When survey weights are provided, sample shares use weighted unit
+        counts (constant-within-unit weights are required and enforced
+        upstream by ``_validate_unit_constant_survey``). The ``D̄_k`` term
+        is panel-share-based and unaffected by sampling weights.
+
+        Modifies ``comparisons[i].weight`` in place. The caller then
+        normalizes to sum to 1.
         """
-        n_total_obs = len(df)
-        w_arr = weights if weights is not None else np.ones(n_total_obs)
-        # Store weights as a column for safe label-based subsetting
-        df = df.copy()
-        df["_sw"] = w_arr
-        w_total = np.sum(w_arr)
-        n_total_units = df[unit].nunique()
+        # Panel length T (Eq. 7-9 use share-of-periods D̄_k = (T-k+1)/T)
+        T = len(time_periods)
+        if T <= 0:
+            for comp in comparisons:
+                comp.weight = 0.0
+            return
+
+        # Per-unit first observation (treatment timing is unit-invariant)
+        df_copy = df.copy()
+        df_copy["_sw"] = weights if weights is not None else np.ones(len(df))
+        unit_first = df_copy.groupby(unit).agg({first_treat: "first", "_sw": "first"})
+        ft_per_unit = unit_first[first_treat]
+        sw_per_unit = unit_first["_sw"]
+
+        # Total weighted unit mass (denominator for n_k, n_U)
+        if weights is None:
+            unit_mass_total = float(len(ft_per_unit))
+
+            def _mass(mask: pd.Series) -> float:
+                return float(int(mask.sum()))
+
+        else:
+            unit_mass_total = float(sw_per_unit.sum())
+
+            def _mass(mask: pd.Series) -> float:
+                return float(sw_per_unit[mask].sum())
+
+        if unit_mass_total <= 0:
+            for comp in comparisons:
+                comp.weight = 0.0
+            return
+
+        # U bucket sample share (never-treated + always-treated post-remap;
+        # remap to 0/inf already happened in fit() via __bacon_first_treat_internal__).
+        is_U = (ft_per_unit == 0) | (ft_per_unit == np.inf)
+        n_U = _mass(is_U) / unit_mass_total
+
+        # Per-cohort sample shares n_g and panel-share D̄_g.
+        # Timing groups: exclude only the U sentinels (0, np.inf). Negative
+        # event-time cohorts (e.g. first_treat=-1 on a panel with min(time)=-2)
+        # are valid timing groups.
+        timing_groups = sorted(g for g in ft_per_unit.unique() if g != 0 and g != np.inf)
+        n_g: Dict[Any, float] = {
+            g: _mass(ft_per_unit == g) / unit_mass_total for g in timing_groups
+        }
+        # D̄_g = share of periods group g spends treated.
+        # For absorbing treatment with first-treatment time g over panel
+        # periods [1, T], the treated periods are [g, T], i.e. T - g + 1
+        # periods. We use the actual period values from time_periods to
+        # handle panels indexed from 0 / arbitrary start.
+        t_arr = np.asarray(sorted(time_periods))
+        D_bar: Dict[Any, float] = {g: float(np.sum(t_arr >= g)) / T for g in timing_groups}
 
         for comp in comparisons:
-            # Get data for this specific comparison
             if comp.comparison_type == "treated_vs_never":
-                pre_periods = [t for t in time_periods if t < comp.treated_group]
-                post_periods = [t for t in time_periods if t >= comp.treated_group]
-                # Get units in each group
-                units_treated = df[df[first_treat] == comp.treated_group][unit].unique()
-                units_control = df[(df[first_treat] == 0) | (df[first_treat] == np.inf)][
-                    unit
-                ].unique()
+                k = comp.treated_group
+                n_k = n_g.get(k, 0.0)
+                if n_k <= 0 or n_U <= 0:
+                    comp.weight = 0.0
+                    continue
+                n_kU = n_k / (n_k + n_U)
+                D_k = D_bar.get(k, 0.0)
+                # Eq. 7
+                V_kU = n_kU * (1.0 - n_kU) * D_k * (1.0 - D_k)
+                # Eq. 10e numerator
+                comp.weight = (n_k + n_U) ** 2 * V_kU
             elif comp.comparison_type == "earlier_vs_later":
-                g_early = comp.treated_group
-                g_late = comp.control_group
-                pre_periods = [t for t in time_periods if t < g_early]
-                post_periods = [t for t in time_periods if g_early <= t < g_late]
-                units_treated = df[df[first_treat] == g_early][unit].unique()
-                units_control = df[df[first_treat] == g_late][unit].unique()
+                # k = early (treated in 2x2), ℓ = late (control during MID)
+                k = comp.treated_group
+                ell = comp.control_group
+                n_k = n_g.get(k, 0.0)
+                n_ell = n_g.get(ell, 0.0)
+                if n_k <= 0 or n_ell <= 0:
+                    comp.weight = 0.0
+                    continue
+                D_k = D_bar.get(k, 0.0)
+                D_ell = D_bar.get(ell, 0.0)
+                # Eq. 8 requires D̄_ℓ < 1 (denominators 1 - D̄_ℓ)
+                if D_ell >= 1.0:
+                    comp.weight = 0.0
+                    continue
+                n_kl = n_k / (n_k + n_ell)
+                # Eq. 8
+                V_kl_k = (
+                    n_kl
+                    * (1.0 - n_kl)
+                    * (D_k - D_ell)
+                    / (1.0 - D_ell)
+                    * (1.0 - D_k)
+                    / (1.0 - D_ell)
+                )
+                # Eq. 10f numerator
+                comp.weight = ((n_k + n_ell) * (1.0 - D_ell)) ** 2 * V_kl_k
             else:  # later_vs_earlier
-                g_late = comp.treated_group
-                g_early = comp.control_group
-                pre_periods = [t for t in time_periods if g_early <= t < g_late]
-                post_periods = [t for t in time_periods if t >= g_late]
-                units_treated = df[df[first_treat] == g_late][unit].unique()
-                units_control = df[df[first_treat] == g_early][unit].unique()
-
-            if not pre_periods or not post_periods:
-                comp.weight = 0.0
-                continue
-
-            # Subset to the 2x2 comparison sample
-            relevant_periods = set(pre_periods) | set(post_periods)
-            all_units = set(units_treated) | set(units_control)
-
-            df_22 = df[(df[unit].isin(all_units)) & (df[time].isin(relevant_periods))]
-
-            if len(df_22) == 0:
-                comp.weight = 0.0
-                continue
-
-            # Count units in this comparison
-            n_k = len(units_treated)
-            n_l = len(units_control)
-
-            if n_k == 0 or n_l == 0:
-                comp.weight = 0.0
-                continue
-
-            # Weighted observation counts for the 2x2 sample
-            w_22 = df_22["_sw"].values
-            w_22_sum = np.sum(w_22)
-
-            # Sample share of this comparison (weighted)
-            sample_share = w_22_sum / w_total
-
-            # Weighted group shares within the 2x2
-            treated_mask_22 = df_22[unit].isin(units_treated)
-            w_k = np.sum(w_22[treated_mask_22.values])
-            n_k_share = w_k / w_22_sum if w_22_sum > 0 else 0.0
-
-            # Create treatment indicator for the 2x2
-            T_pre = len(pre_periods)
-            T_post = len(post_periods)
-            T_window = T_pre + T_post
-
-            # Variance of D within the 2x2 for treated group
-            # D = 0 in pre, D = 1 in post for treated units
-            # D = 0 for all periods for control units in this window
-            D_k = T_post / T_window  # proportion treated for treated group
-
-            # Within-comparison variance of treatment (weighted)
-            # Var(D) = n_k/(n_k+n_l) * D_k * (1-D_k) for the 2x2
-            var_D_22 = n_k_share * D_k * (1 - D_k)
-
-            # Exact weight: proportional to sample share * variance
-            # Scale by weighted unit share to account for subsample
-            # Use survey-weighted unit mass when weights present
-            if weights is not None:
-                # Sum of per-unit weights for treated + control units in this 2x2
-                unit_w_k = (
-                    df_22.loc[treated_mask_22, "_sw"]
-                    .groupby(df_22.loc[treated_mask_22, unit])
-                    .first()
-                    .sum()
-                )
-                unit_w_l = (
-                    df_22.loc[~treated_mask_22, "_sw"]
-                    .groupby(df_22.loc[~treated_mask_22, unit])
-                    .first()
-                    .sum()
-                )
-                unit_share = (unit_w_k + unit_w_l) / w_total
-            else:
-                unit_share = (n_k + n_l) / n_total_units
-            comp.weight = sample_share * var_D_22 * unit_share
+                # ℓ = late (treated in 2x2), k = early (already-treated control)
+                ell = comp.treated_group
+                k = comp.control_group
+                n_k = n_g.get(k, 0.0)
+                n_ell = n_g.get(ell, 0.0)
+                if n_k <= 0 or n_ell <= 0:
+                    comp.weight = 0.0
+                    continue
+                D_k = D_bar.get(k, 0.0)
+                D_ell = D_bar.get(ell, 0.0)
+                # Eq. 9 requires D̄_k > 0 (denominators D̄_k)
+                if D_k <= 0.0:
+                    comp.weight = 0.0
+                    continue
+                n_kl = n_k / (n_k + n_ell)
+                # Eq. 9
+                V_kl_l = n_kl * (1.0 - n_kl) * D_ell / D_k * (D_k - D_ell) / D_k
+                # Eq. 10g numerator
+                comp.weight = ((n_k + n_ell) * D_k) ** 2 * V_kl_l
 
     def _compute_treated_vs_never(
         self,
@@ -1027,19 +1255,7 @@ class BaconDecomposition:
             time_window=time_window,
         )
 
-    def get_params(self) -> Dict[str, Any]:
-        """Get estimator parameters (sklearn-compatible)."""
-        return {"weights": self.weights}
-
-    def set_params(self, **params) -> "BaconDecomposition":
-        """Set estimator parameters (sklearn-compatible)."""
-        if "weights" in params:
-            if params["weights"] not in ("approximate", "exact"):
-                raise ValueError(
-                    f"weights must be 'approximate' or 'exact', " f"got '{params['weights']}'"
-                )
-            self.weights = params["weights"]
-        return self
+    # get_params/set_params come from BaseEstimator.
 
     def summary(self) -> str:
         """Get summary of decomposition results."""
@@ -1059,11 +1275,16 @@ def bacon_decompose(
     unit: str,
     time: str,
     first_treat: str,
-    weights: str = "approximate",
-    survey_design: object = None,
+    weights: str = "exact",
+    survey_design: Optional["SurveyDesign"] = None,
 ) -> BaconDecompositionResults:
     """
     Convenience function for Goodman-Bacon decomposition.
+
+    .. deprecated:: 3.9
+        ``bacon_decompose()`` is deprecated and will be removed in 4.0
+        (row M-076). Construct the diagnostic instead:
+        ``BaconDecomposition(...).fit(data, ...)``.
 
     Decomposes a TWFE estimate into weighted 2x2 DiD comparisons,
     showing which comparisons drive the estimate and whether
@@ -1080,19 +1301,48 @@ def bacon_decompose(
     time : str
         Name of time period column.
     first_treat : str
-        Name of column indicating when unit was first treated.
-        Use 0 (or np.inf) for never-treated units.
-    weights : str, default="approximate"
+        Name of column indicating when unit was first treated. The
+        values ``0`` and ``np.inf`` are **reserved as never-treated
+        sentinels**; a real treatment cohort with ``first_treat == 0``
+        would be folded into ``U`` and should be re-labeled to a
+        non-sentinel value before fitting. Units whose ``first_treat``
+        is at or before the first observable period
+        (``first_treat <= min(time)``, excluding the sentinels) are
+        automatically remapped to the ``U`` (untreated) bucket per
+        Goodman-Bacon (2021) footnote 11, with a ``UserWarning``. See
+        ``BaconDecomposition.fit()`` for the full contract and
+        ``BaconDecompositionResults.n_always_treated_remapped`` for the
+        count. The user's original ``first_treat`` column is preserved
+        unchanged.
+    weights : str, default="exact"
         Weight calculation method:
-        - "approximate": Fast simplified formula (default). Good for
-          diagnostic purposes where relative weights are sufficient.
-        - "exact": Variance-based weights from Goodman-Bacon (2021)
-          Theorem 1. Use for publication-quality decompositions.
+
+        - "exact" (default): Variance-based weights from Goodman-Bacon
+          (2021) Theorem 1, Eqs. 7-9 and 10e-g. Paper-faithful.
+        - "approximate": Fast simplified formula. Opt in for
+          speed-sensitive diagnostic loops; numerical output may differ
+          from R ``bacondecomp::bacon()``.
+    survey_design : SurveyDesign, optional
+        Survey design specification for weighted estimation. When provided,
+        cell means, group shares, and within-transform use survey weights.
+        The decomposition remains diagnostic (no survey vcov needed).
+
+        **Default-flip caveat (PR-B, 2026-05-16):** the new
+        ``weights="exact"`` default routes through
+        ``_validate_unit_constant_survey``, which **rejects survey
+        designs whose weights / strata / PSU / FPC columns vary within
+        a unit across periods** (the exact path collapses to per-unit
+        aggregation via ``groupby().first()``). Users whose survey
+        design has time-varying within-unit columns must either (a)
+        collapse the columns to be unit-constant or (b) pass explicit
+        ``weights="approximate"`` to retain the legacy observation-level
+        weighted-means path.
 
     Returns
     -------
     BaconDecompositionResults
         Object containing decomposition results with:
+
         - twfe_estimate: The overall TWFE coefficient
         - comparisons: List of all 2x2 comparisons with estimates and weights
         - Weight totals by comparison type
@@ -1102,7 +1352,17 @@ def bacon_decompose(
     --------
     >>> from diff_diff import bacon_decompose
     >>>
-    >>> # Quick diagnostic (default)
+    >>> # Default: paper-faithful Goodman-Bacon (2021) Theorem 1 weights
+    >>> # (weights="exact"); matches R bacondecomp::bacon() at atol=1e-6 on
+    >>> # the aggregate (TWFE coefficient + weights-sum) across all panels,
+    >>> # and on the per-component breakdown when there are no
+    >>> # always-treated / first-period-treated cohorts (i.e. all
+    >>> # non-sentinel first_treat values are strictly greater than
+    >>> # min(time)). For panels with always-treated units, the
+    >>> # per-component breakdown diverges by convention (Python remaps
+    >>> # to U per paper footnote 11; R emits `Later vs Always Treated`);
+    >>> # see REGISTRY note on R parity convention divergence. Validated
+    >>> # via tests/test_methodology_bacon.py::TestBaconParityR.
     >>> results = bacon_decompose(
     ...     data=panel_df,
     ...     outcome='earnings',
@@ -1111,14 +1371,15 @@ def bacon_decompose(
     ...     first_treat='treatment_year'
     ... )
     >>>
-    >>> # Publication-quality exact decomposition
-    >>> results = bacon_decompose(
+    >>> # Opt-in: simplified-variance fast path for diagnostic loops
+    >>> # (numerical output may differ from R; sum-to-1 still holds).
+    >>> results_approx = bacon_decompose(
     ...     data=panel_df,
     ...     outcome='earnings',
     ...     unit='state',
     ...     time='year',
     ...     first_treat='treatment_year',
-    ...     weights='exact'
+    ...     weights='approximate'
     ... )
     >>>
     >>> # View summary
@@ -1136,5 +1397,11 @@ def bacon_decompose(
     plot_bacon : Visualize the decomposition
     CallawaySantAnna : Robust estimator that avoids forbidden comparisons
     """
+    warnings.warn(
+        "bacon_decompose() is deprecated and will be removed in 4.0; "
+        "construct the diagnostic instead: BaconDecomposition(...).fit(data, ...).",
+        FutureWarning,
+        stacklevel=2,
+    )
     decomp = BaconDecomposition(weights=weights)
     return decomp.fit(data, outcome, unit, time, first_treat, survey_design=survey_design)

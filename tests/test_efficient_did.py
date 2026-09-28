@@ -16,10 +16,13 @@ import pytest
 from edid_dgp import make_compustat_dgp
 
 from diff_diff import CallawaySantAnna, EDiD, EfficientDiD
+from diff_diff._backend import HAS_RUST_BACKEND
+from diff_diff._backend import _rust_batched_ridge_chol_solve as _ridge_chol_symbol
 from diff_diff.efficient_did_results import EfficientDiDResults
 from diff_diff.efficient_did_weights import (
     enumerate_valid_triples,
 )
+from diff_diff.survey import SurveyDesign
 
 # =============================================================================
 # Helpers
@@ -209,25 +212,28 @@ class TestAggregation:
 
     def test_event_study_aggregation(self):
         df = _make_simple_panel()
-        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="event_study")
-        assert result.event_study_effects is not None
+        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        es = result.aggregate("event_study")
+        assert es is not None
         # Should have pre and post-treatment event times
-        keys = sorted(result.event_study_effects.keys())
+        keys = sorted(int(e) for e in es.event_time)
         assert any(e < 0 for e in keys), "Should have pre-treatment event times"
         assert any(e >= 0 for e in keys), "Should have post-treatment event times"
 
     def test_group_aggregation(self):
         df = _make_staggered_panel()
-        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="group")
-        assert result.group_effects is not None
-        assert 3.0 in result.group_effects
-        assert 5.0 in result.group_effects
+        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        grp = result.aggregate("group")
+        assert grp is not None
+        labels = [float(g) for g in grp.label]
+        assert 3.0 in labels
+        assert 5.0 in labels
 
     def test_aggregate_all(self):
         df = _make_staggered_panel()
-        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="all")
-        assert result.event_study_effects is not None
-        assert result.group_effects is not None
+        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        assert result.aggregate("event_study") is not None
+        assert result.aggregate("group") is not None
 
 
 class TestValidation:
@@ -317,23 +323,24 @@ class TestOutputFormats:
 
     def test_summary_and_dataframe(self):
         df = _make_simple_panel()
-        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="all")
+        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
 
         # summary() returns a string
         s = result.summary()
         assert isinstance(s, str)
         assert "Efficient DiD" in s
 
-        # to_dataframe at different levels
+        # to_dataframe at the native group-time level
         df_gt = result.to_dataframe("group_time")
         assert isinstance(df_gt, pd.DataFrame)
         assert "effect" in df_gt.columns
 
-        df_es = result.to_dataframe("event_study")
-        assert "relative_period" in df_es.columns
+        # aggregated tables come from the post-fit containers
+        df_es = result.aggregate("event_study").to_dataframe()
+        assert "event_time" in df_es.columns
 
-        df_g = result.to_dataframe("group")
-        assert "group" in df_g.columns
+        df_g = result.aggregate("group").to_dataframe()
+        assert "label" in df_g.columns
 
     def test_to_dataframe_raises_without_aggregation(self):
         df = _make_simple_panel()
@@ -380,20 +387,20 @@ class TestPretreatment:
     def test_pretreatment_placebo_near_zero(self):
         """Under correct PT, pre-treatment ATT(g,t) for t < g should be near 0."""
         df = _make_simple_panel(n_units=200, effect=2.0, sigma=0.3)
-        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="event_study")
+        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        es = result.aggregate("event_study")
         # Check pre-treatment effects are near zero
-        for e, d in result.event_study_effects.items():
+        for e, a in zip(es.event_time, es.att):
             if e < 0:
-                assert (
-                    abs(d["effect"]) < 1.0
-                ), f"Pre-treatment effect at e={e} is {d['effect']:.4f}, expected ~0"
+                assert abs(a) < 1.0, f"Pre-treatment effect at e={e} is {a:.4f}, expected ~0"
 
     def test_pretreatment_in_event_study(self):
         """Placebo effects should appear with negative event-time keys."""
         df = _make_simple_panel(n_periods=6, treat_period=3)
-        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="event_study")
-        assert result.event_study_effects is not None
-        neg_keys = [e for e in result.event_study_effects if e < 0]
+        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        es = result.aggregate("event_study")
+        assert es is not None
+        neg_keys = [e for e in es.event_time if e < 0]
         assert len(neg_keys) > 0, "Should have negative event-time keys"
 
     def test_pretreatment_detects_violation(self):
@@ -419,9 +426,10 @@ class TestPretreatment:
                 "y": y,
             }
         )
-        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="event_study")
+        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        es = result.aggregate("event_study")
         # Pre-treatment effects should be significantly non-zero
-        pre_effects = [d["effect"] for e, d in result.event_study_effects.items() if e < 0]
+        pre_effects = [a for e, a in zip(es.event_time, es.att) if e < 0]
         assert any(
             abs(e) > 0.1 for e in pre_effects
         ), f"Pre-trend should be detected; pre effects: {pre_effects}"
@@ -448,7 +456,13 @@ class TestWeightBehavior:
                     assert w.std() > 0
 
     def test_condition_number_warning(self):
-        """Near-singular Omega* should trigger a warning."""
+        """Near-singular Omega* should trigger a warning (legacy path).
+
+        Re-scoped to omega_ridge=0 with the v3.7 ridge default: this test
+        exercises the legacy inv/pinv path's per-cell warning contract, which
+        the default ridge path intentionally replaces with one aggregate
+        fit-level warning (see TestOmegaRidge).
+        """
         # Use a perfectly collinear DGP to produce near-singular Omega*
         n_units, n_periods = 100, 5
         units = np.repeat(np.arange(n_units), n_periods)
@@ -468,7 +482,7 @@ class TestWeightBehavior:
         )
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+            EfficientDiD(omega_ridge=0.0).fit(df, "y", "unit", "time", "first_treat")
             # Should get a warning about condition number or zero matrix
             warning_msgs = [str(x.message) for x in w]
             assert any(
@@ -478,6 +492,603 @@ class TestWeightBehavior:
                 or "uniform" in m.lower()
                 for m in warning_msgs
             ), f"Expected condition/zero warning, got: {warning_msgs}"
+
+
+class TestOmegaRidge:
+    """omega_ridge parameter surface, warning contract, and engagement lock.
+
+    The v3.7 default (OMEGA_RIDGE_DEFAULT) ridge-regularizes the Omega*
+    inversion behind the efficient weights; omega_ridge=0 restores the exact
+    legacy inv/pinv code path. See REGISTRY.md (EfficientDiD, Omega* ridge
+    regularization note).
+    """
+
+    @staticmethod
+    def _duplicated_period_panel(n_units=120, seed=11):
+        """Panel where period 3 duplicates period 2 exactly.
+
+        The never-treated moments for t_pre=2 and t_pre=3 become identical,
+        so every overidentified cell's Omega* is exactly singular
+        (cond > 1e12) WITHOUT being the all-zero matrix.
+        """
+        rng = np.random.default_rng(seed)
+        n_periods = 6
+        ft = np.full(n_units, np.inf)
+        ft[: n_units // 2] = 5
+        y_wide = rng.normal(0, 1.0, (n_units, n_periods))
+        y_wide[:, 2] = y_wide[:, 1]  # period 3 == period 2
+        treated = (ft[:, None] < np.inf) & (np.arange(1, n_periods + 1)[None, :] >= ft[:, None])
+        y_wide = y_wide + 2.0 * treated
+        return pd.DataFrame(
+            {
+                "unit": np.repeat(np.arange(n_units), n_periods),
+                "time": np.tile(np.arange(1, n_periods + 1), n_units),
+                "first_treat": np.repeat(ft, n_periods),
+                "y": y_wide.ravel(),
+            }
+        )
+
+    def test_param_surface(self):
+        from diff_diff.efficient_did_covariates import OMEGA_RIDGE_DEFAULT
+
+        est = EfficientDiD()
+        assert est.get_params()["omega_ridge"] == OMEGA_RIDGE_DEFAULT
+        est.set_params(omega_ridge=0.0)
+        assert est.omega_ridge == 0.0
+        est.set_params(omega_ridge=1e-4)
+        assert est.get_params()["omega_ridge"] == 1e-4
+
+    @pytest.mark.parametrize("bad", [-1e-6, np.nan, np.inf, -np.inf])
+    def test_validation_rejects_bad_values(self, bad):
+        with pytest.raises(ValueError, match="omega_ridge"):
+            EfficientDiD(omega_ridge=bad)
+
+    def test_set_params_transactional(self):
+        from diff_diff.efficient_did_covariates import OMEGA_RIDGE_DEFAULT
+
+        est = EfficientDiD()
+        with pytest.raises(ValueError):
+            est.set_params(omega_ridge=-1.0)
+        assert est.omega_ridge == OMEGA_RIDGE_DEFAULT
+
+    def test_results_echo(self):
+        df = _make_staggered_panel()
+        res = EfficientDiD(omega_ridge=1e-5).fit(df, "y", "unit", "time", "first_treat")
+        assert res.omega_ridge == 1e-5
+
+    def test_aggregate_warning_payload_and_legacy_per_cell(self):
+        """Default ridge: ONE fit-level warning whose cell count matches the
+        number of genuinely ill-conditioned cells; omega_ridge=0: the legacy
+        per-cell pseudoinverse warnings for the same cells."""
+        import re
+
+        df = self._duplicated_period_panel()
+
+        with warnings.catch_warnings(record=True) as w_ridge:
+            warnings.simplefilter("always")
+            EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        agg = [str(x.message) for x in w_ridge if "regularization handled" in str(x.message)]
+        assert len(agg) == 1, f"expected exactly one aggregate warning, got {agg}"
+        m = re.search(r"in (\d+) of (\d+) \(g, t\) cells", agg[0])
+        assert m is not None, agg[0]
+        n_ill, n_cells = int(m.group(1)), int(m.group(2))
+        assert 1 <= n_ill <= n_cells
+
+        with warnings.catch_warnings(record=True) as w_legacy:
+            warnings.simplefilter("always")
+            EfficientDiD(omega_ridge=0.0).fit(df, "y", "unit", "time", "first_treat")
+        legacy_msgs = [str(x.message) for x in w_legacy]
+        per_cell = [m_ for m_ in legacy_msgs if "using pseudoinverse for weights" in m_]
+        # Same pathology surfaces per-cell on the legacy path. The legacy pair
+        # set additionally contains the degenerate (g'=g, t_pre=t) self-pair
+        # for pre-treatment cells (dropped on the ridge path), so legacy may
+        # warn on MORE cells - never fewer.
+        assert len(per_cell) >= n_ill
+        assert not any("regularization handled" in m_ for m_ in legacy_msgs)
+
+    def test_ridge_engaged_and_overall_stable(self):
+        """Default vs omega_ridge=0 on an overidentified panel: overall ATT
+        agrees tightly while at least one per-cell effect differs (proves the
+        ridge path is actually engaged)."""
+        df = _make_staggered_panel(n_per_group=80, n_control=100)
+        res_r = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        res_l = EfficientDiD(omega_ridge=0.0).fit(df, "y", "unit", "time", "first_treat")
+        assert res_r.overall_att == pytest.approx(res_l.overall_att, rel=1e-4)
+        diffs = [
+            abs(res_r.group_time_effects[k]["effect"] - res_l.group_time_effects[k]["effect"])
+            for k in res_r.group_time_effects
+        ]
+        assert max(diffs) > 0.0
+
+    def test_degenerate_self_pair_dropped_only_on_ridge_path(self):
+        """Pre-treatment cells lose the identically-zero (g'=g, t_pre=t)
+        self-pair under ridge (stored nocov weights shrink by exactly one),
+        while post-treatment cells keep the same pair count."""
+        df = _make_staggered_panel()
+        res_r = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        res_l = EfficientDiD(omega_ridge=0.0).fit(df, "y", "unit", "time", "first_treat")
+        assert res_r.efficient_weights is not None
+        assert res_l.efficient_weights is not None
+        period_1 = min(res_r.time_periods)
+        for gt, w_l in res_l.efficient_weights.items():
+            g, t = gt
+            w_r = res_r.efficient_weights[gt]
+            if t < g and t != period_1:
+                assert len(w_r) == len(w_l) - 1, f"cell {gt}"
+            else:
+                assert len(w_r) == len(w_l), f"cell {gt}"
+
+    def test_pretreatment_placebos_remain_data_driven(self):
+        """Under default ridge, pre-treatment placebo cells stay data-driven
+        (nonzero noise), NOT deterministically zero - the degenerate-pair
+        drop preserves the pre-trend diagnostic."""
+        df = _make_staggered_panel(rho=0.3, seed=99)
+        res = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        pre = [
+            abs(v["effect"])
+            for (g, t), v in res.group_time_effects.items()
+            if t < g and np.isfinite(v["effect"])
+        ]
+        assert pre, "expected pre-treatment cells"
+        assert max(pre) > 1e-8
+
+
+class TestFusedConditionalPath:
+    """The v3.7 fused unit-tiled GEMM conditional path (default ridge):
+    semantic equivalence to the dense construction, tile invariance, and the
+    1-ulp stability contract that motivated the ridge."""
+
+    @staticmethod
+    def _cov_df(n_units=200, n_periods=9, seed=42):
+        return _make_covariate_panel(n_units=n_units, n_periods=n_periods, seed=seed)
+
+    @staticmethod
+    def _surfaces(res):
+        gt = {k: (v["effect"], v["se"]) for k, v in res.group_time_effects.items()}
+        es = (
+            {k: (v["effect"], v["se"]) for k, v in res.event_study_effects.items()}
+            if res.event_study_effects
+            else {}
+        )
+        return gt, es, (res.overall_att, res.overall_se)
+
+    @classmethod
+    def _assert_close_surfaces(cls, r1, r2, rtol, atol=1e-12):
+        gt1, es1, ov1 = cls._surfaces(r1)
+        gt2, es2, ov2 = cls._surfaces(r2)
+        np.testing.assert_allclose(ov1, ov2, rtol=rtol, atol=atol)
+        for k in gt2:
+            np.testing.assert_allclose(gt1[k], gt2[k], rtol=rtol, atol=atol, err_msg=str(k))
+        for k in es2:
+            np.testing.assert_allclose(es1[k], es2[k], rtol=rtol, atol=atol, err_msg=str(k))
+
+    def test_fused_matches_dense_reference(self):
+        """Fused tiled GEMM cells match a dense reference built from the
+        legacy compute_omega_star_conditional + the same ridge solve. The
+        residual is the omega GEMM's ~1e-15 reassociation drift amplified by
+        the ridge's bounded 1/lambda sensitivity (~1e6) - i.e. <= ~1e-8, the
+        designed stability, vs ~1e-2 under the legacy pseudoinverse."""
+        import diff_diff.efficient_did as ed_mod
+        from diff_diff.efficient_did_covariates import (
+            _ridge_solve_weights,
+            compute_generated_outcomes_cov,
+            compute_omega_star_conditional,
+        )
+
+        def dense_reference(
+            cell_specs,
+            outcome_wide,
+            covariate_matrix,
+            cohort_masks,
+            never_treated_mask,
+            period_to_col,
+            cohort_fractions,
+            m_hat_cache,
+            r_hat_cache,
+            s_hat_cache,
+            bandwidth,
+            omega_ridge,
+            unit_weights=None,
+            never_treated_val=np.inf,
+            tile_bytes=None,
+        ):
+            out = {}
+            for spec in cell_specs:
+                g, t, pairs = spec["g"], spec["t"], spec["pairs"]
+                gen_out = compute_generated_outcomes_cov(
+                    target_g=g,
+                    target_t=t,
+                    valid_pairs=pairs,
+                    outcome_wide=outcome_wide,
+                    cohort_masks=cohort_masks,
+                    never_treated_mask=never_treated_mask,
+                    period_to_col=period_to_col,
+                    period_1_col=spec["y1_col"],
+                    cohort_fractions=cohort_fractions,
+                    m_hat_cache=m_hat_cache,
+                    r_hat_cache=r_hat_cache,
+                )
+                if len(pairs) == 1:
+                    scores = gen_out[:, 0]
+                else:
+                    omega = compute_omega_star_conditional(
+                        target_g=g,
+                        target_t=t,
+                        valid_pairs=pairs,
+                        outcome_wide=outcome_wide,
+                        cohort_masks=cohort_masks,
+                        never_treated_mask=never_treated_mask,
+                        period_to_col=period_to_col,
+                        period_1_col=spec["y1_col"],
+                        cohort_fractions=cohort_fractions,
+                        covariate_matrix=covariate_matrix,
+                        s_hat_cache=s_hat_cache,
+                        bandwidth=bandwidth,
+                        unit_weights=unit_weights,
+                    )
+                    w = _ridge_solve_weights(omega, omega_ridge)
+                    scores = np.sum(w * gen_out, axis=1)
+                att = (
+                    float(np.average(scores, weights=unit_weights))
+                    if unit_weights is not None
+                    else float(np.mean(scores))
+                )
+                out[(g, t)] = (att, scores - att)
+            return out
+
+        df = self._cov_df()
+        fit_kwargs = dict(covariates=["x1", "x2"], aggregate="all")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_fused = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        orig = ed_mod.compute_conditional_cells_tiled
+        ed_mod.compute_conditional_cells_tiled = dense_reference
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                r_ref = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        finally:
+            ed_mod.compute_conditional_cells_tiled = orig
+        self._assert_close_surfaces(r_fused, r_ref, rtol=1e-6, atol=1e-8)
+
+    def test_tile_forced_twin(self, monkeypatch):
+        """Forcing one-unit tiles must reproduce the single-tile fit
+        (rel 1e-10) - and must actually execute multi-tile."""
+        import diff_diff.efficient_did_covariates as cov_mod
+
+        df = self._cov_df(n_units=150)
+        fit_kwargs = dict(covariates=["x1", "x2"], aggregate="all")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_single = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+
+        calls = {"n": 0}
+        orig_kwm = cov_mod._kernel_weights_matrix
+
+        def counting_kwm(*args, **kwargs):
+            calls["n"] += 1
+            return orig_kwm(*args, **kwargs)
+
+        monkeypatch.setattr(cov_mod, "_TARGET_OMEGA_TILE_BYTES", 1)
+        monkeypatch.setattr(cov_mod, "_kernel_weights_matrix", counting_kwm)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_tiled = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        # one-unit tiles -> at least n_units kernel-matrix builds (vs ~4 for
+        # a single tile), proving the multi-tile path executed
+        assert calls["n"] >= 150, calls["n"]
+        self._assert_close_surfaces(r_tiled, r_single, rtol=1e-10, atol=1e-12)
+
+    def test_tile_forced_twin_survey_weights(self, monkeypatch):
+        """Tile invariance under survey weights (weighted kernels, weighted
+        ATT averaging)."""
+        import diff_diff.efficient_did_covariates as cov_mod
+
+        df = self._cov_df(n_units=150)
+        rng = np.random.default_rng(5)
+        n_units = df["unit"].nunique()
+        pw = np.exp(rng.normal(0, 0.4, n_units))
+        df = df.merge(pd.DataFrame({"unit": sorted(df["unit"].unique()), "pw": pw}), on="unit")
+        fit_kwargs = dict(
+            covariates=["x1", "x2"], aggregate="all", survey_design=SurveyDesign(weights="pw")
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_single = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        monkeypatch.setattr(cov_mod, "_TARGET_OMEGA_TILE_BYTES", 1)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_tiled = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        self._assert_close_surfaces(r_tiled, r_single, rtol=1e-10, atol=1e-12)
+
+    def test_table_build_count_proportional_to_tiles(self, monkeypatch):
+        """v3.8 hoisting proof: the per-group kcov table is built once per
+        (group-with-keys, tile) - NOT once per cell. Forcing one-unit tiles
+        must scale the build count by exactly n_units."""
+        import diff_diff.efficient_did_covariates as cov_mod
+
+        n_units = 40
+        df = self._cov_df(n_units=n_units)
+        fit_kwargs = dict(covariates=["x1", "x2"], aggregate="all")
+
+        calls = {"n": 0}
+        orig_build = cov_mod._build_group_kcov_table
+
+        def counting_build(*args, **kwargs):
+            calls["n"] += 1
+            return orig_build(*args, **kwargs)
+
+        monkeypatch.setattr(cov_mod, "_build_group_kcov_table", counting_build)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        single_tile_calls = calls["n"]
+        # one build per group-with-keys (2 cohorts + never-treated), far
+        # fewer than the number of H >= 2 cells
+        assert single_tile_calls == 3, single_tile_calls
+
+        calls["n"] = 0
+        monkeypatch.setattr(cov_mod, "_TARGET_OMEGA_TILE_BYTES", 1)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        assert calls["n"] == single_tile_calls * n_units, calls["n"]
+
+    def test_pt_post_builds_no_tables(self, monkeypatch):
+        """Under pt_assumption="post" every cell has a single pair (H == 1),
+        so the hoisted path must build ZERO kcov tables and ZERO kernel
+        matrices - guarding the no-regression contract for that path."""
+        import diff_diff.efficient_did_covariates as cov_mod
+
+        df = self._cov_df(n_units=120)
+        calls = {"tables": 0, "kernels": 0}
+        orig_build = cov_mod._build_group_kcov_table
+        orig_kwm = cov_mod._kernel_weights_matrix
+
+        def counting_build(*args, **kwargs):
+            calls["tables"] += 1
+            return orig_build(*args, **kwargs)
+
+        def counting_kwm(*args, **kwargs):
+            calls["kernels"] += 1
+            return orig_kwm(*args, **kwargs)
+
+        monkeypatch.setattr(cov_mod, "_build_group_kcov_table", counting_build)
+        monkeypatch.setattr(cov_mod, "_kernel_weights_matrix", counting_kwm)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r = EfficientDiD(pt_assumption="post").fit(
+                df,
+                "y",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1", "x2"],
+                aggregate="all",
+            )
+        assert calls["tables"] == 0
+        assert calls["kernels"] == 0
+        assert np.isfinite(r.att)
+
+    def test_mid_size_tile_twin_with_chunked_products(self, monkeypatch):
+        """Multi-tile execution at a realistic tile width, with the product
+        GEMM forced through multiple column chunks: results must match the
+        single-tile fit (rel 1e-10)."""
+        import diff_diff.efficient_did_covariates as cov_mod
+
+        df = self._cov_df(n_units=150)
+        fit_kwargs = dict(covariates=["x1", "x2"], aggregate="all")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_single = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        monkeypatch.setattr(cov_mod, "_TARGET_OMEGA_TILE_BYTES", 1_000_000)
+        monkeypatch.setattr(cov_mod, "_KCOV_PRODUCT_CHUNK", 3)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_tiled = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        self._assert_close_surfaces(r_tiled, r_single, rtol=1e-10, atol=1e-12)
+
+    def test_one_ulp_stability_conditional(self):
+        """THE stability contract: a 1-ulp outcome perturbation moves
+        per-cell and event-study ATTs and SEs by <= 1e-6 relative under the
+        default ridge (the legacy pseudoinverse path moves ~1e-4)."""
+        df = self._cov_df()
+        fit_kwargs = dict(covariates=["x1", "x2"], aggregate="all")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_base = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        df_ulp = df.copy()
+        df_ulp["y"] = np.nextafter(df_ulp["y"].to_numpy(), np.inf)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_ulp = EfficientDiD().fit(df_ulp, "y", "unit", "time", "first_treat", **fit_kwargs)
+        self._assert_close_surfaces(r_ulp, r_base, rtol=1e-6, atol=1e-9)
+
+    def test_one_ulp_stability_nocov(self):
+        """Same stability contract on the no-covariates PT-All path."""
+        df = _make_staggered_panel(n_per_group=80, n_control=100)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_base = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="all")
+        df_ulp = df.copy()
+        df_ulp["y"] = np.nextafter(df_ulp["y"].to_numpy(), np.inf)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_ulp = EfficientDiD().fit(df_ulp, "y", "unit", "time", "first_treat", aggregate="all")
+        self._assert_close_surfaces(r_ulp, r_base, rtol=1e-6, atol=1e-9)
+
+
+_requires_rust_chol = pytest.mark.skipif(
+    not HAS_RUST_BACKEND or _ridge_chol_symbol is None,
+    reason="Rust batched-Cholesky kernel not available",
+)
+
+
+class TestRidgeSolveRustDispatch:
+    """v3.8: `_ridge_solve_weights` dispatches to the Rust batched-Cholesky
+    kernel (`batched_ridge_chol_solve_ones`) on the rust backend.
+
+    Dispatch is on availability + float64 dtype ONLY - no batch-size cutoff,
+    so the tile-invariance twins above (which force one-unit batches) stay
+    same-algorithm on both sides. Cholesky and LU legitimately differ at the
+    cond*eps level (~1e-7 on the near-singular ridged Omega*, cond ~1e6-1e8),
+    so cross-backend fit comparisons use loose tolerances while
+    row-level semantic contracts (legacy recompute of non-finite rows,
+    symbol-None degradation) are exact.
+    """
+
+    @staticmethod
+    def _spd_stack(m=40, H=6, seed=0):
+        rng = np.random.default_rng(seed)
+        b = rng.standard_normal((m, H, H))
+        return b @ b.transpose(0, 2, 1) + 1.0 * np.eye(H)
+
+    @staticmethod
+    def _legacy_weights(omega_stack, omega_ridge):
+        """`_ridge_solve_weights` with the rust symbol disabled."""
+        import diff_diff.efficient_did_covariates as cov_mod
+
+        orig = cov_mod._rust_batched_ridge_chol_solve
+        cov_mod._rust_batched_ridge_chol_solve = None
+        try:
+            return cov_mod._ridge_solve_weights(omega_stack, omega_ridge)
+        finally:
+            cov_mod._rust_batched_ridge_chol_solve = orig
+
+    @_requires_rust_chol
+    def test_rust_kernel_called_on_conditional_fit(self, monkeypatch):
+        """The conditional covariate fit routes its per-cell solves through
+        the rust kernel when the backend is active."""
+        import diff_diff.efficient_did_covariates as cov_mod
+
+        calls = {"n": 0}
+        orig = cov_mod._rust_batched_ridge_chol_solve
+
+        def spy(a_stack, ridge):
+            calls["n"] += 1
+            return orig(a_stack, ridge)
+
+        monkeypatch.setattr(cov_mod, "_rust_batched_ridge_chol_solve", spy)
+        df = _make_covariate_panel(n_units=80, n_periods=9, seed=42)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            EfficientDiD().fit(
+                df,
+                "y",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1", "x2"],
+                aggregate="all",
+            )
+        assert calls["n"] > 0, "rust kernel never dispatched on the conditional fit"
+
+    @_requires_rust_chol
+    def test_backend_ab_conditional_fit(self, monkeypatch):
+        """Rust-vs-legacy end-to-end fit A/B (in-process: the legacy arm
+        monkeypatches the dispatch symbol to None; DIFF_DIFF_BACKEND cannot
+        be flipped in-process). Tolerance is the Cholesky-vs-LU cond*eps
+        band on the ridged Omega* (~1e-7 raw, measured), NOT reassociation
+        noise - do not tighten toward the tile-twin 1e-10."""
+        import diff_diff.efficient_did_covariates as cov_mod
+
+        df = _make_covariate_panel(n_units=150, n_periods=9, seed=42)
+        fit_kwargs = dict(covariates=["x1", "x2"], aggregate="all")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_rust = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        monkeypatch.setattr(cov_mod, "_rust_batched_ridge_chol_solve", None)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_py = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        TestFusedConditionalPath._assert_close_surfaces(r_rust, r_py, rtol=1e-5, atol=1e-9)
+
+    def test_symbol_none_degrades_to_legacy_exactly(self):
+        """With the dispatch symbol None (stale extension / pure-python
+        backend), `_ridge_solve_weights` must be the byte-identical legacy
+        chain - locks the mixed-version degradation contract."""
+        om = self._spd_stack(m=25, H=5, seed=3)
+        got = self._legacy_weights(om, 1e-6)
+
+        # hand-computed legacy chain (same expressions, same op order)
+        n, H, _ = om.shape
+        trace = np.trace(om, axis1=1, axis2=2)
+        ridge = 1e-6 * np.maximum(trace / H, 0.0)
+        om_ridged = om + ridge[:, None, None] * np.eye(H)[None]
+        num = np.linalg.solve(om_ridged, np.ones((n, H, 1)))[..., 0]
+        den = num @ np.ones(H)
+        expected = num / den[:, None]
+        np.testing.assert_array_equal(got, expected)
+
+    @_requires_rust_chol
+    def test_bad_row_recompute_matches_legacy_exactly(self):
+        """A row the kernel flags non-finite (all-NaN omega) is recomputed
+        via the legacy numpy chain: THAT row must equal the legacy result
+        exactly. Good rows in the same batch keep Cholesky results and
+        legitimately differ from legacy at ~1e-15..1e-10 - they are only
+        checked loosely."""
+        import diff_diff.efficient_did_covariates as cov_mod
+
+        om = self._spd_stack(m=6, H=4, seed=7)
+        om[2] = np.nan  # forces Cholesky fail -> LU NaN -> python recompute
+        w_rust = cov_mod._ridge_solve_weights(om, 1e-6)
+        w_py = self._legacy_weights(om, 1e-6)
+
+        np.testing.assert_array_equal(w_rust[2], w_py[2])
+        good = [0, 1, 3, 4, 5]
+        np.testing.assert_allclose(w_rust[good], w_py[good], rtol=1e-9, atol=1e-12)
+
+    def test_exact_singular_pinv_arm(self):
+        """diag(1, -2, 0): trace < 0 -> zero ridge; exactly singular. Legacy:
+        batched solve raises -> per-row solve raises -> pinv gives
+        num = [1, -0.5, 0], den = 0.5 -> weights [2, -1, 0]. The rust path
+        must reach the identical pinv arm via NaN-poisoning + recompute
+        (a bare batched re-solve would crash instead)."""
+        import diff_diff.efficient_did_covariates as cov_mod
+
+        om = np.zeros((1, 3, 3))
+        om[0, 0, 0] = 1.0
+        om[0, 1, 1] = -2.0
+        w = cov_mod._ridge_solve_weights(om, 1e-6)
+        w_legacy = self._legacy_weights(om, 1e-6)
+        np.testing.assert_array_equal(w, w_legacy)
+        np.testing.assert_allclose(w[0], [2.0, -1.0, 0.0], atol=1e-12)
+
+    def test_f32_stack_declines_dispatch(self):
+        """A float32 stack (reachable via the public compute_per_unit_weights)
+        must decline rust dispatch - no silent coercion - and match the
+        legacy path exactly."""
+        from diff_diff.efficient_did_covariates import compute_per_unit_weights
+
+        om64 = self._spd_stack(m=10, H=4, seed=11)
+        om32 = om64.astype(np.float32)
+        got = compute_per_unit_weights(om32, omega_ridge=1e-6)
+        expected = self._legacy_weights(om32, 1e-6)
+        np.testing.assert_array_equal(got, expected)
+
+    def test_zero_mask_arms_all_zero_mixed_none(self):
+        """Zero-mask handling across all three arms after the no-copy fast
+        path (v3.7 prep shave): an all-zero stack returns uniform 1/H; a
+        mixed stack gives zero rows uniform 1/H while solved rows match a
+        standalone solve of the nonzero sub-stack byte-for-byte (each row's
+        solve is independent, so batch composition must not matter); a
+        no-zero stack takes the direct fast path, already locked
+        byte-identical to the legacy chain by
+        test_symbol_none_degrades_to_legacy_exactly."""
+        import diff_diff.efficient_did_covariates as cov_mod
+
+        H = 4
+        w0 = cov_mod._ridge_solve_weights(np.zeros((3, H, H)), 1e-6)
+        np.testing.assert_array_equal(w0, np.full((3, H), 1.0 / H))
+
+        mixed = self._spd_stack(m=5, H=H, seed=13)
+        mixed[[1, 3]] = 0.0
+        w_mixed = cov_mod._ridge_solve_weights(mixed, 1e-6)
+        np.testing.assert_array_equal(w_mixed[1], np.full(H, 1.0 / H))
+        np.testing.assert_array_equal(w_mixed[3], np.full(H, 1.0 / H))
+        keep = [0, 2, 4]
+        w_sub = cov_mod._ridge_solve_weights(mixed[keep], 1e-6)
+        np.testing.assert_array_equal(w_mixed[keep], w_sub)
 
 
 class TestValidTriples:
@@ -854,23 +1465,20 @@ class TestClusterRobustSE:
     def test_clustered_aggregate_event_study(self):
         """Clustered SE with aggregate='event_study' should produce finite results."""
         df = self._make_clustered_panel(n_clusters=60, units_per_cluster=3)
-        result = EfficientDiD(cluster="cluster_id").fit(
-            df, "y", "unit", "time", "first_treat", aggregate="event_study"
-        )
-        assert result.event_study_effects is not None
-        for e, d in result.event_study_effects.items():
-            assert np.isfinite(d["se"])
+        result = EfficientDiD(cluster="cluster_id").fit(df, "y", "unit", "time", "first_treat")
+        es = result.aggregate("event_study")
+        assert es is not None
+        assert np.isfinite(es.se[~es.is_reference]).all()
 
     def test_clustered_aggregate_all(self):
         """Clustered SE with aggregate='all' should produce finite results."""
         df = self._make_clustered_panel(n_clusters=60, units_per_cluster=3)
-        result = EfficientDiD(cluster="cluster_id").fit(
-            df, "y", "unit", "time", "first_treat", aggregate="all"
-        )
-        assert result.event_study_effects is not None
-        assert result.group_effects is not None
-        for g, d in result.group_effects.items():
-            assert np.isfinite(d["se"])
+        result = EfficientDiD(cluster="cluster_id").fit(df, "y", "unit", "time", "first_treat")
+        es = result.aggregate("event_study")
+        grp = result.aggregate("group")
+        assert es is not None
+        assert grp is not None
+        assert np.isfinite(grp.se).all()
 
     def test_cluster_bootstrap(self, ci_params):
         """Cluster bootstrap should produce finite inference."""
@@ -955,9 +1563,12 @@ class TestClusterRobustSE:
         """Clustered bootstrap with aggregate='all' should produce finite results."""
         n_boot = ci_params.bootstrap(99)
         df = self._make_clustered_panel(n_clusters=60, units_per_cluster=3)
-        result = EfficientDiD(cluster="cluster_id", n_bootstrap=n_boot, seed=42).fit(
-            df, "y", "unit", "time", "first_treat", aggregate="all"
-        )
+        # Deprecated fit-time kwarg kept as the parity REFERENCE: post-fit
+        # aggregate() now REPLAYS the fit-time bootstrap on n_bootstrap > 0.
+        with pytest.warns(FutureWarning):
+            result = EfficientDiD(cluster="cluster_id", n_bootstrap=n_boot, seed=42).fit(
+                df, "y", "unit", "time", "first_treat", aggregate="all"
+            )
         assert result.event_study_effects is not None
         assert result.group_effects is not None
         for e, d in result.event_study_effects.items():
@@ -1125,6 +1736,39 @@ class TestLastCohortControl:
         with pytest.raises(ValueError, match="No treated cohorts"):
             EfficientDiD(control_group="last_cohort").fit(df, "y", "unit", "time", "first_treat")
 
+    def test_last_cohort_with_anticipation_trims_at_last_g_minus_anticipation(self):
+        """last_cohort + anticipation>0 trims at `last_g - anticipation`, not `last_g`.
+
+        Regression guard for PR #230 deferral: the code at efficient_did.py:470 uses
+        `effective_last = last_g - self.anticipation` so anticipation-contaminated periods
+        are excluded from the pseudo-control's pre-treatment window. If a future change
+        reverts to `t < last_g`, this test will catch it by checking the trimmed
+        `time_periods` set exposed on EfficientDiDResults.
+        """
+        df = _make_staggered_panel(
+            n_per_group=60,
+            n_control=0,
+            groups=(3, 5, 7),
+            effects={3: 2.0, 5: 1.5, 7: 1.0},
+        )
+        # _make_staggered_panel default n_periods=7, last_g=7, times 1..7.
+        # anticipation=0: effective_last=7, time_periods=[1..6]
+        # anticipation=1: effective_last=6, time_periods=[1..5]
+        result_a0 = EfficientDiD(
+            pt_assumption="all", control_group="last_cohort", anticipation=0
+        ).fit(df, "y", "unit", "time", "first_treat")
+        result_a1 = EfficientDiD(
+            pt_assumption="all", control_group="last_cohort", anticipation=1
+        ).fit(df, "y", "unit", "time", "first_treat")
+
+        assert max(result_a0.time_periods) == 6
+        assert max(result_a1.time_periods) == 5
+        assert len(result_a1.time_periods) == len(result_a0.time_periods) - 1
+        assert np.isfinite(result_a0.overall_att)
+        assert np.isfinite(result_a1.overall_att)
+        assert 7 not in result_a0.groups
+        assert 7 not in result_a1.groups
+
     def test_last_cohort_aggregate_event_study(self):
         """last_cohort with aggregate='event_study' should produce finite results."""
         df = _make_staggered_panel(
@@ -1134,12 +1778,12 @@ class TestLastCohortControl:
             effects={3: 2.0, 5: 1.5, 7: 1.0},
         )
         result = EfficientDiD(control_group="last_cohort").fit(
-            df, "y", "unit", "time", "first_treat", aggregate="event_study"
+            df, "y", "unit", "time", "first_treat"
         )
-        assert result.event_study_effects is not None
+        es = result.aggregate("event_study")
+        assert es is not None
         assert 7 not in result.groups
-        for e, d in result.event_study_effects.items():
-            assert np.isfinite(d["effect"])
+        assert np.isfinite(es.att).all()
 
     def test_last_cohort_aggregate_all(self):
         """last_cohort with aggregate='all' should produce finite results."""
@@ -1150,14 +1794,16 @@ class TestLastCohortControl:
             effects={3: 2.0, 5: 1.5, 7: 1.0},
         )
         result = EfficientDiD(control_group="last_cohort").fit(
-            df, "y", "unit", "time", "first_treat", aggregate="all"
+            df, "y", "unit", "time", "first_treat"
         )
-        assert result.event_study_effects is not None
-        assert result.group_effects is not None
+        es = result.aggregate("event_study")
+        grp = result.aggregate("group")
+        assert es is not None
+        assert grp is not None
         assert 7 not in result.groups
-        for g, d in result.group_effects.items():
+        for g, a in zip(grp.label, grp.att):
             assert g != 7
-            assert np.isfinite(d["effect"])
+            assert np.isfinite(a)
 
     def test_last_cohort_bootstrap(self, ci_params):
         """last_cohort with bootstrap should produce finite inference."""
@@ -1182,32 +1828,27 @@ class TestBalanceE:
     def test_balance_e_basic(self):
         """balance_e restricts event study to cohorts present at anchor horizon."""
         df = _make_staggered_panel(n_per_group=80, n_control=80, groups=(3, 5))
-        result = EfficientDiD().fit(
-            df,
-            "y",
-            "unit",
-            "time",
-            "first_treat",
-            aggregate="event_study",
-            balance_e=0,
-        )
-        assert result.event_study_effects is not None
-        for e, d in result.event_study_effects.items():
-            assert np.isfinite(d["effect"])
+        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        es = result.aggregate("event_study", balance_e=0)
+        assert es is not None
+        assert np.isfinite(es.att).all()
 
     def test_balance_e_with_bootstrap(self, ci_params):
         """Bootstrap balance_e should produce finite SEs."""
         n_boot = ci_params.bootstrap(99)
         df = _make_staggered_panel(n_per_group=80, n_control=80, groups=(3, 5))
-        result = EfficientDiD(n_bootstrap=n_boot, seed=42).fit(
-            df,
-            "y",
-            "unit",
-            "time",
-            "first_treat",
-            aggregate="event_study",
-            balance_e=0,
-        )
+        # Deprecated fit-time kwargs kept as the parity REFERENCE: post-fit
+        # aggregate() now REPLAYS the fit-time bootstrap on n_bootstrap > 0.
+        with pytest.warns(FutureWarning):
+            result = EfficientDiD(n_bootstrap=n_boot, seed=42).fit(
+                df,
+                "y",
+                "unit",
+                "time",
+                "first_treat",
+                aggregate="event_study",
+                balance_e=0,
+            )
         assert result.event_study_effects is not None
         for e, d in result.event_study_effects.items():
             if np.isfinite(d["effect"]):
@@ -1275,14 +1916,39 @@ class TestBootstrap:
     def test_bootstrap_with_aggregation(self, ci_params):
         n_boot = ci_params.bootstrap(99)
         df = _make_simple_panel()
-        result = EfficientDiD(n_bootstrap=n_boot, seed=42).fit(
-            df, "y", "unit", "time", "first_treat", aggregate="all"
-        )
+        # Deprecated fit-time kwarg kept as the parity REFERENCE: post-fit
+        # aggregate() now REPLAYS the fit-time bootstrap on n_bootstrap > 0.
+        with pytest.warns(FutureWarning):
+            result = EfficientDiD(n_bootstrap=n_boot, seed=42).fit(
+                df, "y", "unit", "time", "first_treat", aggregate="all"
+            )
         assert result.bootstrap_results is not None
         if result.event_study_effects:
             for e, d in result.event_study_effects.items():
                 if np.isfinite(d["effect"]):
                     assert np.isfinite(d["se"])
+
+    def test_bootstrap_override_t_is_effect_over_se(self, ci_params):
+        # Committed pin for the t-recompute semantics of the shared
+        # percentile-override appliers (bootstrap_utils): on every ES and
+        # group row, t == effect/se where se is finite-positive, NaN
+        # otherwise (the two clauses of the safe_inference contract).
+        # Portable across OS/backends - it pins the relationship, not the
+        # draw values - and catches a misaligned or altered t routine.
+        n_boot = ci_params.bootstrap(99)
+        df = _make_simple_panel()
+        with pytest.warns(FutureWarning):
+            result = EfficientDiD(n_bootstrap=n_boot, seed=42).fit(
+                df, "y", "unit", "time", "first_treat", aggregate="all"
+            )
+        rows = list(result.event_study_effects.values()) + list(result.group_effects.values())
+        assert rows
+        for d in rows:
+            se = float(d["se"])
+            if np.isfinite(se) and se > 0:
+                assert d["t_stat"] == pytest.approx(float(d["effect"]) / se, rel=1e-15)
+            else:
+                assert np.isnan(d["t_stat"])
 
     def test_bootstrap_coverage_basic(self, ci_params):
         """Rough coverage check: true effect should be in CI."""
@@ -1309,7 +1975,7 @@ class TestSimulationValidation:
     def test_synthetic_staggered_unbiased(self):
         """Single run at rho=0, verify ATT estimates near true values."""
         df = _make_compustat_dgp(rho=0.0, seed=42)
-        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="all")
+        result = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
 
         # Check individual ATT(g,t) estimates
         # ATT(5,5) should be near 0.154
@@ -1840,12 +2506,11 @@ class TestCovariatesPTAssumptions:
             "time",
             "first_treat",
             covariates=["x1"],
-            aggregate="event_study",
         )
-        assert result.event_study_effects is not None
-        assert len(result.event_study_effects) > 0
-        for e, eff in result.event_study_effects.items():
-            assert np.isfinite(eff["effect"])
+        es = result.aggregate("event_study")
+        assert es is not None
+        assert len(es.event_time) > 0
+        assert np.isfinite(es.att).all()
 
     def test_covariates_aggregate_group(self):
         df = _make_covariate_panel()
@@ -1856,10 +2521,10 @@ class TestCovariatesPTAssumptions:
             "time",
             "first_treat",
             covariates=["x1"],
-            aggregate="group",
         )
-        assert result.group_effects is not None
-        assert len(result.group_effects) > 0
+        grp = result.aggregate("group")
+        assert grp is not None
+        assert len(grp.label) > 0
 
     def test_covariates_aggregate_all(self):
         df = _make_covariate_panel()
@@ -1870,10 +2535,9 @@ class TestCovariatesPTAssumptions:
             "time",
             "first_treat",
             covariates=["x1"],
-            aggregate="all",
         )
-        assert result.event_study_effects is not None
-        assert result.group_effects is not None
+        assert result.aggregate("event_study") is not None
+        assert result.aggregate("group") is not None
         assert np.isfinite(result.overall_att)
 
 
@@ -2000,15 +2664,18 @@ class TestCovariatesBootstrap:
     def test_covariates_pt_all_bootstrap(self):
         """PT-All + bootstrap + covariates end-to-end."""
         df = _make_covariate_panel(n_units=300)
-        result = EfficientDiD(pt_assumption="all", n_bootstrap=99, seed=42).fit(
-            df,
-            "y",
-            "unit",
-            "time",
-            "first_treat",
-            covariates=["x1"],
-            aggregate="all",
-        )
+        # Deprecated fit-time kwarg kept as the parity REFERENCE: post-fit
+        # aggregate() now REPLAYS the fit-time bootstrap on n_bootstrap > 0.
+        with pytest.warns(FutureWarning):
+            result = EfficientDiD(pt_assumption="all", n_bootstrap=99, seed=42).fit(
+                df,
+                "y",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1"],
+                aggregate="all",
+            )
         assert result.bootstrap_results is not None
         assert result.event_study_effects is not None
         assert result.group_effects is not None
@@ -2052,3 +2719,870 @@ class TestSieveFallbacks:
         assert np.all(np.isfinite(s_hat))
         # Should fall back to unconditional n/n_group = 100/2 = 50
         assert np.allclose(s_hat, 50.0)
+
+
+# ---------------------------------------------------------------------------
+# Silent-failure audit PR #9: finding #18 — estimate_*_sieve silently
+# `continue`'d past rank-deficient K values. Now we track skipped K and
+# warn when we ship a result that wasn't the IC-winner across all K.
+# ---------------------------------------------------------------------------
+
+
+class TestSievePartialKSkipWarning:
+    """Finding #18 (axis A): partial K-failure no longer silent."""
+
+    def test_ratio_sieve_partial_skip_warns(self):
+        """If some K's are rank-deficient but at least one succeeds,
+        the function warns about the partial skip instead of swallowing it."""
+        from diff_diff.efficient_did_covariates import estimate_propensity_ratio_sieve
+
+        rng = np.random.default_rng(7)
+        n = 200
+        # 1D covariate with discrete support {0, 1}. At K=1 the basis is
+        # [1, x]; at K>=2 the basis reaches size >= n_gp for most groups
+        # before hitting singularity, but with this discrete support the
+        # polynomial powers x^2, x^3, ... equal x, yielding rank-deficient
+        # normal equations deterministically.
+        X = rng.integers(0, 2, size=(n, 1)).astype(float)
+        mask_g = np.zeros(n, dtype=bool)
+        mask_g[:100] = True
+        mask_gp = np.zeros(n, dtype=bool)
+        mask_gp[100:] = True
+        with pytest.warns(UserWarning) as caught:
+            ratio = estimate_propensity_ratio_sieve(X, mask_g, mask_gp, k_max=3)
+        assert np.all(np.isfinite(ratio))
+        partial_skip_msgs = [str(w.message) for w in caught if "skipped K=" in str(w.message)]
+        assert partial_skip_msgs, (
+            "Expected a partial-K-skip warning when some K's are rank deficient "
+            "but at least one succeeds; got none."
+        )
+        # Message should name the specific K values that were skipped.
+        assert any("K=" in m for m in partial_skip_msgs)
+
+    def test_inverse_propensity_sieve_partial_skip_warns(self):
+        """Same contract for the inverse propensity sieve."""
+        from diff_diff.efficient_did_covariates import estimate_inverse_propensity_sieve
+
+        rng = np.random.default_rng(7)
+        n = 200
+        X = rng.integers(0, 2, size=(n, 1)).astype(float)
+        mask = np.zeros(n, dtype=bool)
+        mask[:100] = True
+        with pytest.warns(UserWarning) as caught:
+            s_hat = estimate_inverse_propensity_sieve(X, mask, k_max=3)
+        assert np.all(np.isfinite(s_hat))
+        partial_skip_msgs = [str(w.message) for w in caught if "skipped K=" in str(w.message)]
+        assert partial_skip_msgs
+
+    def test_ratio_sieve_no_warning_when_no_skips(self):
+        """Clean, well-conditioned covariates → no partial-skip warning."""
+        from diff_diff.efficient_did_covariates import estimate_propensity_ratio_sieve
+
+        rng = np.random.default_rng(101)
+        n = 300
+        X = rng.normal(0, 1, (n, 2))
+        mask_g = np.zeros(n, dtype=bool)
+        mask_g[:150] = True
+        mask_gp = np.zeros(n, dtype=bool)
+        mask_gp[150:] = True
+        import warnings as _w
+
+        with _w.catch_warnings(record=True) as caught:
+            _w.simplefilter("always")
+            ratio = estimate_propensity_ratio_sieve(X, mask_g, mask_gp, k_max=3)
+        assert np.all(np.isfinite(ratio))
+        partial_skip_msgs = [str(w.message) for w in caught if "skipped K=" in str(w.message)]
+        assert (
+            partial_skip_msgs == []
+        ), f"Unexpected partial-skip warning on clean data: {partial_skip_msgs}"
+
+
+# =============================================================================
+# Phase 1b interstitial #4: vcov_type input contract on EfficientDiD
+# =============================================================================
+
+
+def _efficient_clustered_panel(
+    seed: int = 71,
+    n_units: int = 60,
+    n_periods: int = 6,
+    n_states: int = 8,
+) -> pd.DataFrame:
+    """Staggered-adoption panel with a ``state`` cluster column.
+
+    States carry random effects so ``cluster=state`` shifts the analytical
+    SE relative to the default ``cluster=None`` per-unit EIF SE.
+    """
+    rng = np.random.default_rng(seed)
+    units = np.repeat(np.arange(n_units), n_periods)
+    times = np.tile(np.arange(n_periods), n_units)
+
+    unit_to_state = rng.integers(0, n_states, size=n_units)
+    state = np.repeat(unit_to_state, n_periods)
+    state_re = rng.standard_normal(n_states) * 1.2
+
+    cohorts = np.array([2, 3, 4])
+    n_never = n_units // 2
+    n_treated = n_units - n_never
+    first_treat = np.zeros(n_units, dtype=int)
+    first_treat[n_never:] = cohorts[rng.integers(0, len(cohorts), size=n_treated)]
+    first_treat_expanded = np.repeat(first_treat, n_periods)
+
+    unit_fe = rng.standard_normal(n_units) * 1.2
+    time_fe = np.linspace(0, 0.5, n_periods)
+    unit_fe_expanded = np.repeat(unit_fe, n_periods)
+    time_fe_expanded = np.tile(time_fe, n_units)
+    state_fe_expanded = state_re[state]
+
+    post = (times >= first_treat_expanded) & (first_treat_expanded > 0)
+    outcome = (
+        unit_fe_expanded
+        + time_fe_expanded
+        + state_fe_expanded
+        + 1.5 * post
+        + rng.standard_normal(len(units)) * 0.4
+    )
+
+    return pd.DataFrame(
+        {
+            "unit": units,
+            "time": times,
+            "y": outcome,
+            "first_treat": first_treat_expanded,
+            "state": state,
+        }
+    )
+
+
+def _efficient_survey_panel(
+    seed: int = 71,
+    n_units: int = 80,
+    n_periods: int = 5,
+    n_psu: int = 16,
+    n_strata: int = 4,
+) -> pd.DataFrame:
+    """Staggered-adoption panel with analytical survey columns (pweight +
+    panel-constant PSU + stratum). Used for TSL-survey bit-equality tests."""
+    rng = np.random.default_rng(seed)
+    units = np.repeat(np.arange(n_units), n_periods)
+    times = np.tile(np.arange(n_periods), n_units)
+
+    unit_psu = rng.integers(0, n_psu, size=n_units)
+    psu = np.repeat(unit_psu, n_periods)
+    psu_to_stratum = rng.integers(0, n_strata, size=n_psu)
+    stratum = psu_to_stratum[psu]
+
+    cohorts = np.array([2, 3])
+    n_never = n_units // 2
+    n_treated = n_units - n_never
+    first_treat = np.zeros(n_units, dtype=int)
+    first_treat[n_never:] = cohorts[rng.integers(0, len(cohorts), size=n_treated)]
+    first_treat_expanded = np.repeat(first_treat, n_periods)
+
+    unit_fe = rng.standard_normal(n_units) * 1.0
+    time_fe = np.linspace(0, 0.4, n_periods)
+    unit_fe_expanded = np.repeat(unit_fe, n_periods)
+    time_fe_expanded = np.tile(time_fe, n_units)
+
+    post = (times >= first_treat_expanded) & (first_treat_expanded > 0)
+    outcome = (
+        unit_fe_expanded + time_fe_expanded + 1.2 * post + rng.standard_normal(len(units)) * 0.35
+    )
+
+    unit_weight = 1.0 + rng.exponential(0.3, n_units)
+    weight = np.repeat(unit_weight, n_periods)
+
+    return pd.DataFrame(
+        {
+            "unit": units,
+            "time": times,
+            "y": outcome,
+            "first_treat": first_treat_expanded,
+            "psu": psu,
+            "stratum": stratum,
+            "weight": weight,
+        }
+    )
+
+
+def _efficient_replicate_panel(
+    seed: int = 89, n_units: int = 40, n_periods: int = 5, n_rep: int = 8
+):
+    """Staggered-adoption panel with JK1 replicate-weight columns."""
+    rng = np.random.default_rng(seed)
+    units = np.repeat(np.arange(n_units), n_periods)
+    times = np.tile(np.arange(n_periods), n_units)
+
+    cohorts = np.array([2, 3])
+    n_never = n_units // 2
+    n_treated = n_units - n_never
+    first_treat = np.zeros(n_units, dtype=int)
+    first_treat[n_never:] = cohorts[rng.integers(0, len(cohorts), size=n_treated)]
+    first_treat_expanded = np.repeat(first_treat, n_periods)
+
+    unit_fe = rng.standard_normal(n_units) * 1.0
+    time_fe = np.linspace(0, 0.4, n_periods)
+    unit_fe_expanded = np.repeat(unit_fe, n_periods)
+    time_fe_expanded = np.tile(time_fe, n_units)
+
+    post = (times >= first_treat_expanded) & (first_treat_expanded > 0)
+    outcome = (
+        unit_fe_expanded + time_fe_expanded + 1.0 * post + rng.standard_normal(len(units)) * 0.4
+    )
+
+    unit_weight = 1.0 + rng.exponential(0.2, n_units)
+    weight = np.repeat(unit_weight, n_periods)
+
+    data = pd.DataFrame(
+        {
+            "unit": units,
+            "time": times,
+            "y": outcome,
+            "first_treat": first_treat_expanded,
+            "weight": weight,
+        }
+    )
+
+    units_per_rep = max(n_units // n_rep, 1)
+    rep_cols = []
+    for r in range(n_rep):
+        w_r = unit_weight.copy()
+        start = r * units_per_rep
+        end = min((r + 1) * units_per_rep, n_units)
+        w_r[start:end] = 0.0
+        nonzero = w_r > 0
+        w_r[nonzero] = w_r[nonzero] * n_rep / (n_rep - 1)
+        col = f"rep_{r}"
+        data[col] = np.repeat(w_r, n_periods)
+        rep_cols.append(col)
+    return data, rep_cols
+
+
+class TestEfficientDiDVcovType:
+    """Phase 1b interstitial #4: vcov_type input contract on EfficientDiD.
+
+    EfficientDiD uses IF-based variance per Chen-Sant'Anna-Xie (2025) achieving
+    the semiparametric efficiency bound; ``vcov_type`` is permanently narrow
+    to ``{"hc1"}``. Analytical-sandwich families ``{classical, hc2, hc2_bm}``
+    and ``conley`` are rejected at ``__init__`` / ``set_params`` with
+    methodology-rooted messages. Mirrors ImputationDiD PR #492 template.
+
+    Key divergence from ImputationDiD: default ``cluster=None`` SE is the
+    per-unit EIF SE ``sqrt(mean(EIF²)/n)`` — methodologically HC1-style
+    (NOT auto-cluster-at-unit). The summary label "HC1 heteroskedasticity-
+    robust" is methodologically correct here, and ``cluster_name``/``n_clusters``
+    stay None under unclustered fits.
+
+    7-surface matrix:
+      1. Default preserved bit-equally across all 4 aggregate modes
+      2. Cluster path preserved bit-equally across the same aggregate grid
+      3. TSL-survey path preserved bit-equally across the same aggregate grid
+      4. Replicate-survey path preserved bit-equally across the same aggregate grid
+      5. Bootstrap × cluster + bootstrap × survey bit-equal
+      6. set_params(vcov_type=bad) eager revalidation
+      7. Bootstrap n_psu<2 NaN propagation (defensive fix regression)
+
+    Plus 7 introspection tests, 5 input-rejection pins, the
+    ``cluster + replicate_weights`` rejection, and a DR-path bit-equality test.
+    """
+
+    # ---- Surface 1: default bit-equal across aggregation modes ------------
+
+    @pytest.mark.parametrize("aggregate", [None, "event_study", "group", "all"])
+    def test_default_hc1_bit_equal_baseline(self, aggregate):
+        data = _efficient_clustered_panel()
+        common = dict(
+            data=data,
+            outcome="y",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate=aggregate,
+        )
+        # Subject is bit equality, not the deprecated fit-time shim - keep
+        # all four aggregate arms and silence the FutureWarning.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            r_default = EfficientDiD().fit(**common)
+            r_explicit = EfficientDiD(vcov_type="hc1").fit(**common)
+        assert r_default.overall_att == r_explicit.overall_att
+        assert r_default.overall_se == r_explicit.overall_se
+
+    # ---- Surface 2: cluster path bit-equal --------------------------------
+
+    @pytest.mark.parametrize("aggregate", [None, "event_study", "group", "all"])
+    def test_cluster_hc1_bit_equal_baseline(self, aggregate):
+        data = _efficient_clustered_panel()
+        common = dict(
+            data=data,
+            outcome="y",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate=aggregate,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            r_default = EfficientDiD(cluster="state").fit(**common)
+            r_explicit = EfficientDiD(cluster="state", vcov_type="hc1").fit(**common)
+        assert r_default.overall_att == r_explicit.overall_att
+        assert r_default.overall_se == r_explicit.overall_se
+
+    # ---- Surface 3: TSL-survey path bit-equal -----------------------------
+
+    @pytest.mark.parametrize("aggregate", [None, "event_study", "group", "all"])
+    def test_survey_tsl_hc1_bit_equal_baseline(self, aggregate):
+        data = _efficient_survey_panel()
+        design = SurveyDesign(weights="weight", psu="psu", strata="stratum", weight_type="pweight")
+        common = dict(
+            data=data,
+            outcome="y",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate=aggregate,
+            survey_design=design,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            r_default = EfficientDiD().fit(**common)
+            r_explicit = EfficientDiD(vcov_type="hc1").fit(**common)
+        assert r_default.overall_att == r_explicit.overall_att
+        assert r_default.overall_se == r_explicit.overall_se
+
+    # ---- Surface 4: replicate-survey path bit-equal -----------------------
+
+    @pytest.mark.parametrize("aggregate", [None, "event_study", "group", "all"])
+    def test_survey_replicate_hc1_bit_equal_baseline(self, aggregate):
+        data, rep_cols = _efficient_replicate_panel()
+        design = SurveyDesign(
+            weights="weight",
+            replicate_weights=rep_cols,
+            replicate_method="JK1",
+            weight_type="pweight",
+        )
+        common = dict(
+            data=data,
+            outcome="y",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            survey_design=design,
+            aggregate=aggregate,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            r_default = EfficientDiD().fit(**common)
+            r_explicit = EfficientDiD(vcov_type="hc1").fit(**common)
+        assert r_default.overall_att == r_explicit.overall_att
+        assert r_default.overall_se == r_explicit.overall_se
+        # Per-horizon / per-group SE override branches must also agree under
+        # the replicate-weight variance path.
+        if aggregate in ("event_study", "all"):
+            assert r_default.event_study_effects is not None
+            assert r_explicit.event_study_effects is not None
+            for h in r_default.event_study_effects:
+                assert (
+                    r_default.event_study_effects[h]["se"]
+                    == r_explicit.event_study_effects[h]["se"]
+                )
+        if aggregate in ("group", "all"):
+            assert r_default.group_effects is not None
+            assert r_explicit.group_effects is not None
+            for g in r_default.group_effects:
+                assert r_default.group_effects[g]["se"] == r_explicit.group_effects[g]["se"]
+
+    # ---- Surface 5: bootstrap × cluster / × survey bit-equal --------------
+
+    def test_bootstrap_cluster_hc1_bit_equal(self, ci_params):
+        data = _efficient_clustered_panel()
+        n_boot = ci_params.bootstrap(199)
+        common = dict(
+            data=data,
+            outcome="y",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="all",
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            r_default = EfficientDiD(cluster="state", n_bootstrap=n_boot, seed=11).fit(**common)
+            r_explicit = EfficientDiD(
+                cluster="state", n_bootstrap=n_boot, seed=11, vcov_type="hc1"
+            ).fit(**common)
+        assert r_default.bootstrap_results is not None
+        assert r_explicit.bootstrap_results is not None
+        assert (
+            r_default.bootstrap_results.overall_att_se
+            == r_explicit.bootstrap_results.overall_att_se
+        )
+        # Per-horizon / per-group bootstrap SE override branches at
+        # efficient_did.py:1090-1115 must also agree.
+        assert r_default.bootstrap_results.event_study_ses is not None
+        assert r_explicit.bootstrap_results.event_study_ses is not None
+        for h, se in r_default.bootstrap_results.event_study_ses.items():
+            assert se == r_explicit.bootstrap_results.event_study_ses[h]
+        assert r_default.bootstrap_results.group_effect_ses is not None
+        assert r_explicit.bootstrap_results.group_effect_ses is not None
+        for g, se in r_default.bootstrap_results.group_effect_ses.items():
+            assert se == r_explicit.bootstrap_results.group_effect_ses[g]
+
+    def test_bootstrap_survey_hc1_bit_equal(self, ci_params):
+        data = _efficient_survey_panel()
+        design = SurveyDesign(weights="weight", psu="psu", strata="stratum", weight_type="pweight")
+        n_boot = ci_params.bootstrap(199)
+        common = dict(
+            data=data,
+            outcome="y",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            survey_design=design,
+            aggregate="all",
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            r_default = EfficientDiD(n_bootstrap=n_boot, seed=23).fit(**common)
+            r_explicit = EfficientDiD(n_bootstrap=n_boot, seed=23, vcov_type="hc1").fit(**common)
+        assert r_default.bootstrap_results is not None
+        assert r_explicit.bootstrap_results is not None
+        assert (
+            r_default.bootstrap_results.overall_att_se
+            == r_explicit.bootstrap_results.overall_att_se
+        )
+
+    # ---- Surface 6: set_params eager revalidation -------------------------
+
+    def test_set_params_bad_vcov_caught_immediately(self):
+        # set_params validates eagerly via the BaseEstimator probe re-init -
+        # the uniform contract across all estimators since the 2(c)-i mixin
+        # (ImputationDiD/TripleDifference/CallawaySantAnna flipped with it).
+        ed = EfficientDiD()
+        with pytest.raises(ValueError, match="influence-function"):
+            ed.set_params(vcov_type="classical")
+
+    def test_set_params_unknown_vcov_caught_immediately(self):
+        ed = EfficientDiD()
+        with pytest.raises(ValueError, match="hc4"):
+            ed.set_params(vcov_type="hc4")
+
+    def test_set_params_rollback_on_validation_failure(self):
+        # set_params is atomic: when validation rejects a batched call, NO
+        # attribute mutation persists. Pre-fix, set_params assigned every
+        # kwarg before invoking _validate_params, so a rejected
+        # `set_params(vcov_type="classical", alpha=0.1, anticipation=2)`
+        # raised but left all three attributes mutated — weakening eager-
+        # validation for callers that catch ValueError and keep using the
+        # estimator.
+        ed = EfficientDiD()
+        original_vcov = ed.vcov_type
+        original_alpha = ed.alpha
+        original_anticipation = ed.anticipation
+        with pytest.raises(ValueError, match="influence-function"):
+            ed.set_params(vcov_type="classical", alpha=0.1, anticipation=2)
+        assert ed.vcov_type == original_vcov
+        assert ed.alpha == original_alpha
+        assert ed.anticipation == original_anticipation
+
+    # ---- Surface 7: bootstrap n_psu<2 NaN propagation ---------------------
+
+    def test_bootstrap_n_psu_less_than_2_returns_nan(self):
+        # Single-PSU survey design forces the survey-PSU bootstrap path to
+        # hit the n_psu<2 BLAS-roundoff guard. Survey weight_type must be
+        # pweight per EfficientDiD's survey contract.
+        data = _efficient_survey_panel(seed=42)
+        data["single_psu"] = 0
+        data["single_stratum"] = 0
+        design = SurveyDesign(
+            weights="weight",
+            psu="single_psu",
+            strata="single_stratum",
+            weight_type="pweight",
+        )
+        with pytest.warns(UserWarning, match="n_psu=1"):
+            results = EfficientDiD(n_bootstrap=199, seed=5).fit(
+                data,
+                outcome="y",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                survey_design=design,
+            )
+        assert results.bootstrap_results is not None
+        assert np.isnan(results.bootstrap_results.overall_att_se)
+        assert np.isnan(results.bootstrap_results.overall_att_p_value)
+        assert all(np.isnan(x) for x in results.bootstrap_results.overall_att_ci)
+        # Derived coef_var propagates NaN through the alias property.
+        assert np.isnan(results.coef_var)
+
+    # ---- DR (covariates) path bit-equal -----------------------------------
+
+    def test_dr_path_hc1_bit_equal(self):
+        # Doubly-robust (covariates=) path uses the same _eif_se / _aggregate_*
+        # variance funnel as the no-cov path — only EIF *construction* differs.
+        # Validates the variance machinery passes through the sieve/OLS DR path
+        # unchanged under explicit vcov_type="hc1".
+        data = make_compustat_dgp(seed=23, n_units=80, n_periods=5)
+        # Use one panel-constant synthetic covariate so DR path engages.
+        rng = np.random.default_rng(23)
+        n_units = data["unit"].nunique()
+        x1_per_unit = rng.standard_normal(n_units)
+        unit_to_x1 = dict(zip(sorted(data["unit"].unique()), x1_per_unit))
+        data = data.copy()
+        data["x1"] = data["unit"].map(unit_to_x1)
+        common = dict(
+            data=data,
+            outcome="y",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            covariates=["x1"],
+        )
+        r_default = EfficientDiD().fit(**common)
+        r_explicit = EfficientDiD(vcov_type="hc1").fit(**common)
+        assert r_default.estimation_path == "dr"
+        assert r_explicit.estimation_path == "dr"
+        assert r_default.overall_att == r_explicit.overall_att
+        assert r_default.overall_se == r_explicit.overall_se
+
+    # ---- Input rejection: methodology-rooted messages ---------------------
+
+    @pytest.mark.parametrize(
+        "bad_vcov,keyword",
+        [
+            ("classical", "influence-function"),
+            ("hc2", "Chen"),
+            ("hc2_bm", "Bell-McCaffrey"),
+            ("hc2_bm", "hat matrix"),
+        ],
+    )
+    def test_reject_invalid_vcov_at_init(self, bad_vcov, keyword):
+        with pytest.raises(ValueError, match=keyword):
+            EfficientDiD(vcov_type=bad_vcov)
+
+    def test_reject_conley_at_init(self):
+        with pytest.raises(ValueError, match="spatial-HAC"):
+            EfficientDiD(vcov_type="conley")
+
+    def test_reject_unknown_vcov_at_init(self):
+        with pytest.raises(ValueError, match="hc4"):
+            EfficientDiD(vcov_type="hc4")
+
+    # ---- cluster + survey blanket rejection (covers replicate subset) -----
+
+    def test_cluster_plus_replicate_weights_rejected(self):
+        # cluster + survey_design is blanket-rejected at efficient_did.py:357,
+        # which transitively covers cluster + replicate_weights. Asserting
+        # via NotImplementedError on a JK1 replicate design.
+        data, rep_cols = _efficient_replicate_panel()
+        data["state"] = (data["unit"] // 4).astype(int)
+        design = SurveyDesign(
+            weights="weight",
+            replicate_weights=rep_cols,
+            replicate_method="JK1",
+            weight_type="pweight",
+        )
+        with pytest.raises(NotImplementedError, match="cluster and survey_design"):
+            EfficientDiD(cluster="state").fit(
+                data,
+                outcome="y",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                survey_design=design,
+            )
+
+    # ---- Introspection / safety-gate tests --------------------------------
+
+    def test_default_vcov_type_is_hc1(self):
+        assert EfficientDiD().vcov_type == "hc1"
+
+    def test_get_params_includes_vcov_type(self):
+        params = EfficientDiD().get_params()
+        assert "vcov_type" in params
+        assert params["vcov_type"] == "hc1"
+
+    def test_results_carries_vcov_type(self):
+        data = _efficient_clustered_panel()
+        r = EfficientDiD().fit(
+            data, outcome="y", unit="unit", time="time", first_treat="first_treat"
+        )
+        assert r.vcov_type == "hc1"
+
+    def test_to_dict_includes_vcov_type(self):
+        data = _efficient_clustered_panel()
+        r = EfficientDiD().fit(
+            data, outcome="y", unit="unit", time="time", first_treat="first_treat"
+        )
+        d = r.to_dict()
+        assert d["vcov_type"] == "hc1"
+        # Headline alias keys are present per the TripleDifference precedent.
+        for k in ("att", "se", "t_stat", "p_value", "conf_int_lower", "conf_int_upper"):
+            assert k in d
+        # Default unclustered fit → no cluster_name / n_clusters in dict.
+        assert "cluster_name" not in d
+        assert "n_clusters" not in d
+        assert d["inference_method"] == "heteroskedasticity_robust"
+
+    def test_to_dict_under_cluster(self):
+        data = _efficient_clustered_panel()
+        r = EfficientDiD(cluster="state").fit(
+            data, outcome="y", unit="unit", time="time", first_treat="first_treat"
+        )
+        d = r.to_dict()
+        assert d["cluster_name"] == "state"
+        assert d["n_clusters"] is not None and d["n_clusters"] > 1
+        assert d["inference_method"] == "cluster_robust"
+
+    def test_summary_includes_vcov_type_label_default(self):
+        # Default cluster=None (no survey, no bootstrap) → HC1 label, NOT CR1.
+        # This is methodologically correct for EfficientDiD: the per-unit EIF
+        # SE `sqrt(mean(EIF²)/n)` is HC1-style (no Liang-Zeger G/(G-1)
+        # finite-sample correction). Diverges from ImputationDiD (BJS Theorem 3
+        # auto-clusters at unit by construction).
+        data = _efficient_clustered_panel()
+        r = EfficientDiD().fit(
+            data, outcome="y", unit="unit", time="time", first_treat="first_treat"
+        )
+        text = r.summary()
+        assert "Variance estimator:" in text
+        assert "HC1 heteroskedasticity-robust" in text
+        # No CR1 cluster label under default cluster=None.
+        assert "CR1 cluster-robust" not in text
+        # Results metadata stays None under default fits (no auto-cluster-at-unit).
+        assert r.cluster_name is None
+        assert r.n_clusters is None
+
+    def test_summary_renders_cluster_label_under_cluster(self):
+        data = _efficient_clustered_panel()
+        r = EfficientDiD(cluster="state").fit(
+            data, outcome="y", unit="unit", time="time", first_treat="first_treat"
+        )
+        text = r.summary()
+        assert "Variance estimator:" in text
+        assert "CR1 cluster-robust" in text
+        assert "state" in text
+        assert "Number of clusters:" in text
+        assert r.cluster_name == "state"
+        assert r.n_clusters is not None and r.n_clusters > 1
+
+    def test_summary_suppresses_variance_label_under_bootstrap(self, ci_params):
+        # Under bootstrap fits, bootstrap_results overwrites SE/CI/p-value, so
+        # the analytical variance-family label would misstate the inference
+        # source. Mirror the canonical DiDResults gate at results.py:213-226.
+        data = _efficient_clustered_panel()
+        n_boot = ci_params.bootstrap(199)
+        r = EfficientDiD(n_bootstrap=n_boot, seed=7).fit(
+            data, outcome="y", unit="unit", time="time", first_treat="first_treat"
+        )
+        text = r.summary()
+        assert "Inference method:" in text
+        assert "bootstrap" in text
+        # Analytical variance-family label must be suppressed.
+        assert "Variance estimator:" not in text
+        assert "HC1 heteroskedasticity-robust" not in text
+        assert "CR1 cluster-robust" not in text
+
+    def test_cluster_name_suppressed_under_survey(self):
+        data = _efficient_survey_panel()
+        design = SurveyDesign(weights="weight", psu="psu", strata="stratum", weight_type="pweight")
+        r = EfficientDiD().fit(
+            data,
+            outcome="y",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            survey_design=design,
+        )
+        assert r.cluster_name is None
+        assert r.n_clusters is None
+
+    def test_cluster_name_suppressed_under_replicate_survey(self):
+        # Replicate-weight survey designs have psu=None — gate must be on
+        # `resolved_survey is not None`, NOT `resolved_survey.psu is not None`.
+        # Mirror ImputationDiD R2 fix pattern.
+        data, rep_cols = _efficient_replicate_panel()
+        design = SurveyDesign(
+            weights="weight",
+            replicate_weights=rep_cols,
+            replicate_method="JK1",
+            weight_type="pweight",
+        )
+        r = EfficientDiD().fit(
+            data,
+            outcome="y",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            survey_design=design,
+        )
+        assert r.cluster_name is None
+        assert r.n_clusters is None
+        text = r.summary()
+        assert "Number of clusters:" not in text
+        assert "CR1 cluster-robust" not in text
+
+    def test_fit_clone_idempotent_on_vcov_type(self):
+        data = _efficient_clustered_panel()
+        ed1 = EfficientDiD(vcov_type="hc1")
+        r1 = ed1.fit(data, outcome="y", unit="unit", time="time", first_treat="first_treat")
+        ed2 = EfficientDiD(**ed1.get_params())
+        r2 = ed2.fit(data, outcome="y", unit="unit", time="time", first_treat="first_treat")
+        assert r1.overall_att == r2.overall_att
+        assert r1.overall_se == r2.overall_se
+        assert r1.vcov_type == r2.vcov_type
+
+
+class TestSieveBasisCache:
+    """The per-fit sieve-basis cache shares ``_polynomial_sieve_basis(X, K)`` across the
+    three DR nuisance helpers. Because the basis is a pure function of ``(X, degree)`` and
+    the helpers only read it, caching is bit-identical to rebuilding — these tests pin the
+    cache mechanism (the end-to-end bit-identity is also proven against an origin/main
+    capture during development)."""
+
+    def test_cache_hit_returns_same_object_and_is_bit_identical(self):
+        from diff_diff.efficient_did_covariates import (
+            _polynomial_sieve_basis,
+            _sieve_basis_cached,
+        )
+
+        rng = np.random.default_rng(0)
+        X = rng.normal(size=(40, 2))
+        cache: dict = {}
+        a = _sieve_basis_cached(X, 2, cache)
+        b = _sieve_basis_cached(X, 2, cache)
+        # Cache hit returns the SAME object (so downstream reads see identical bytes)...
+        assert a is b
+        assert len(cache) == 1
+        # ...and it equals a fresh build bit-for-bit.
+        np.testing.assert_array_equal(a, _polynomial_sieve_basis(X, 2))
+        # A different degree adds a second, distinct entry.
+        c = _sieve_basis_cached(X, 3, cache)
+        assert len(cache) == 2
+        assert c is not a
+        np.testing.assert_array_equal(c, _polynomial_sieve_basis(X, 3))
+
+    def test_default_call_byte_identical_after_stats_kwargs(self):
+        # PR-B1 added keyword-only center/scale/return_stats to
+        # _polynomial_sieve_basis; the DEFAULT call path must stay
+        # byte-identical, and the returned stats must reproduce it exactly.
+        from diff_diff.efficient_did_covariates import _polynomial_sieve_basis
+
+        rng = np.random.default_rng(7)
+        X = rng.normal(size=(60, 3))
+        base = _polynomial_sieve_basis(X, 3)
+        with_stats, center, scale = _polynomial_sieve_basis(X, 3, return_stats=True)
+        np.testing.assert_array_equal(base, with_stats)
+        # Returned scale carries the zero-variance guard applied; feeding the
+        # stats back reproduces the basis bit-for-bit.
+        np.testing.assert_array_equal(
+            base, _polynomial_sieve_basis(X, 3, center=center, scale=scale)
+        )
+        # Zero-variance column: guard applied in the RETURNED scale too.
+        Xc = X.copy()
+        Xc[:, 1] = 5.0
+        _, _, scale_c = _polynomial_sieve_basis(Xc, 2, return_stats=True)
+        assert scale_c[1] == 1.0
+        # Supplying only one of center/scale is rejected.
+        with pytest.raises(ValueError, match="both center and scale"):
+            _polynomial_sieve_basis(X, 2, center=center)
+
+    def test_cache_none_is_plain_passthrough(self):
+        from diff_diff.efficient_did_covariates import (
+            _polynomial_sieve_basis,
+            _sieve_basis_cached,
+        )
+
+        rng = np.random.default_rng(1)
+        X = rng.normal(size=(30, 2))
+        a = _sieve_basis_cached(X, 2, None)
+        b = _sieve_basis_cached(X, 2, None)
+        # No cache: distinct fresh arrays, each equal to a direct build.
+        assert a is not b
+        np.testing.assert_array_equal(a, b)
+        np.testing.assert_array_equal(a, _polynomial_sieve_basis(X, 2))
+
+    def test_reads_do_not_mutate_cached_basis(self):
+        from diff_diff.efficient_did_covariates import (
+            _polynomial_sieve_basis,
+            _sieve_basis_cached,
+        )
+
+        rng = np.random.default_rng(2)
+        X = rng.normal(size=(50, 2))
+        pristine = _polynomial_sieve_basis(X, 2)
+        cache: dict = {}
+        cached = _sieve_basis_cached(X, 2, cache)
+        # The representative reads the helpers perform on basis_all.
+        mask = np.arange(50) % 2 == 0
+        _ = cached[mask]
+        _ = cached @ np.ones(cached.shape[1])
+        _ = (np.ones(50)[:, None] * cached).sum(axis=0)
+        _ = cached.sum(axis=0)
+        # Re-fetch: still the same object and still bit-identical to the pristine build.
+        again = _sieve_basis_cached(X, 2, cache)
+        assert again is cached
+        np.testing.assert_array_equal(again, pristine)
+
+    def test_fit_builds_each_degree_once_across_helpers(self, monkeypatch):
+        """End-to-end: a covariate DR fit requests the basis many times (3 helpers ×
+        multiple (g,t) cells) but builds each distinct degree exactly once, proving the
+        per-fit cache actually shares work."""
+        import diff_diff.efficient_did_covariates as cov
+
+        real_build = cov._polynomial_sieve_basis
+        real_cached = cov._sieve_basis_cached
+        build_keys: list = []  # one entry per ACTUAL _polynomial_sieve_basis build
+        request_keys: list = []  # one entry per _sieve_basis_cached request
+
+        def counting_build(X, degree):
+            build_keys.append((id(X), degree))
+            return real_build(X, degree)
+
+        def counting_cached(X, degree, cache):
+            request_keys.append((id(X), degree))
+            return real_cached(X, degree, cache)
+
+        monkeypatch.setattr(cov, "_polynomial_sieve_basis", counting_build)
+        monkeypatch.setattr(cov, "_sieve_basis_cached", counting_cached)
+
+        df = _make_covariate_panel(n_units=150)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = EfficientDiD(pt_assumption="post").fit(
+                df, "y", "unit", "time", "first_treat", covariates=["x1", "x2"]
+            )
+        assert np.isfinite(result.overall_att)
+        # The path was exercised through the cache.
+        assert request_keys, "covariate DR path did not run the sieve helpers"
+        # Each distinct (X, degree) was built exactly once (perfect dedup)...
+        assert len(build_keys) == len(set(build_keys))
+        assert len(build_keys) == len(set(request_keys))
+        # ...and there was genuine redundancy for the cache to eliminate.
+        assert len(request_keys) > len(build_keys)
+
+
+@pytest.fixture(scope="module")
+def alpha_fitted():
+    return EfficientDiD(pt_assumption="all").fit(
+        _make_simple_panel(), "y", "unit", "time", "first_treat"
+    )
+
+
+class TestSummaryAlphaContract:
+    """summary(alpha=...) never recomputes stored inference.
+
+    Family-wide guard (results_base._require_fit_alpha): a non-fit alpha
+    raises instead of silently relabeling the confidence-interval header
+    over fit-time stored intervals; alpha=0.0 (previously swallowed by the
+    falsy `alpha or self.alpha` idiom) now raises too.
+    """
+
+    @pytest.mark.parametrize("bad_alpha", [0.10, 0.0])
+    def test_summary_rejects_non_fit_alpha(self, alpha_fitted, bad_alpha):
+        with pytest.raises(ValueError, match="never recomputes"):
+            alpha_fitted.summary(alpha=bad_alpha)
+
+    def test_summary_accepts_fit_alpha(self, alpha_fitted):
+        assert alpha_fitted.summary(alpha=alpha_fitted.alpha) == alpha_fitted.summary()

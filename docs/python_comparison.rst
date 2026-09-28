@@ -375,7 +375,7 @@ Basic DiD
    from diff_diff import DifferenceInDifferences
 
    did = DifferenceInDifferences()
-   results = did.fit(data, outcome='y', treatment='treated', time='post')
+   results = did.fit(data, outcome='y', treatment='treated', post='post')
    print(results.summary())
 
 .. code-block:: python
@@ -412,10 +412,9 @@ Staggered DiD (Callaway-Sant'Anna)
        unit='unit',
        time='time',
        first_treat='first_treat',
-       covariates=['x1', 'x2'],
-       aggregate='event_study'
+       covariates=['x1', 'x2']
    )
-   event_study = results.event_study_effects
+   event_study = results.aggregate('event_study')
 
 .. code-block:: python
 

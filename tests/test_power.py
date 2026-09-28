@@ -20,6 +20,7 @@ from diff_diff import (
     SimulationSampleSizeResults,
     StackedDiD,
     SunAbraham,
+    SurveyPowerConfig,
     SyntheticDiD,
     TripleDifference,
     TwoStageDiD,
@@ -37,6 +38,7 @@ from diff_diff.power import (
     _basic_fit_kwargs,
     _ddd_dgp_kwargs,
     _ddd_fit_kwargs,
+    _ddd_panel_viable_min_n,
     _extract_multiperiod,
     _extract_simple,
     _extract_staggered,
@@ -167,14 +169,21 @@ class TestPowerAnalysis:
         assert result_6period.design == "panel"
 
     def test_icc_effect(self):
-        """Test that intra-cluster correlation affects power."""
+        """Within-unit (serial) equicorrelation lowers the panel-DiD MDE.
+
+        Burlig, Preonas & Woerman (2020), Eq. 2 (equicorrelated case) gives a
+        panel variance with a ``(1 - rho)`` factor, so higher within-unit
+        correlation makes the DiD *easier* to detect (differencing cancels the
+        shared within-unit component) -- the opposite of a cross-sectional ICC
+        penalty.
+        """
         pa = PowerAnalysis(power=0.80)
 
         result_no_icc = pa.mde(n_treated=50, n_control=50, sigma=1.0, n_pre=3, n_post=3, rho=0.0)
         result_with_icc = pa.mde(n_treated=50, n_control=50, sigma=1.0, n_pre=3, n_post=3, rho=0.5)
 
-        # Higher ICC should increase MDE (less independent information)
-        assert result_with_icc.mde > result_no_icc.mde
+        # Higher rho LOWERS the MDE (Burlig 2020 Eq. 2 equicorrelated (1 - rho) factor)
+        assert result_with_icc.mde < result_no_icc.mde
 
     def test_power_curve(self):
         """Test power curve generation."""
@@ -286,17 +295,23 @@ class TestPowerAnalysis:
         assert abs(result_pos.power - result_neg.power) < 0.01
 
     def test_extreme_icc(self):
-        """Test power calculation with extreme intra-cluster correlation."""
+        """Extreme within-unit equicorrelation drives the panel MDE toward zero.
+
+        Per Burlig (2020) Eq. 2 (equicorrelated), the panel variance carries a
+        ``(1 - rho)`` factor; as ``rho -> 1`` the shared within-unit component is
+        almost fully differenced out, so the MDE *shrinks* (not grows) while
+        staying finite and strictly positive.
+        """
         pa = PowerAnalysis(power=0.80)
 
-        # Test with very high ICC (0.99)
+        # Test with very high within-unit correlation (0.99)
         result_extreme = pa.mde(n_treated=50, n_control=50, sigma=1.0, n_pre=5, n_post=5, rho=0.99)
 
         result_moderate = pa.mde(n_treated=50, n_control=50, sigma=1.0, n_pre=5, n_post=5, rho=0.5)
 
-        # Extreme ICC should have higher MDE (less independent info)
-        assert result_extreme.mde > result_moderate.mde
-        # MDE should still be finite and reasonable
+        # Higher rho LOWERS the MDE (Burlig 2020 Eq. 2); rho=0.99 -> smaller than rho=0.5
+        assert result_extreme.mde < result_moderate.mde
+        # MDE should still be finite and strictly positive
         assert result_extreme.mde < float("inf")
         assert result_extreme.mde > 0
 
@@ -554,6 +569,162 @@ class TestSimulatePower:
             )
             # Should have completed successfully without warning
             assert len([x for x in w if "simulations" in str(x.message)]) == 0
+
+    def test_simulation_failure_counter_on_result(self):
+        """`n_simulation_failures` on the result object surfaces the internal counter."""
+        from diff_diff.prep import generate_did_data
+
+        class AlternatingFailingEstimator:
+            """Raises ValueError on every other call — ~50% failure rate."""
+
+            def __init__(self):
+                self.call_count = 0
+
+            def fit(self, data, **kwargs):
+                self.call_count += 1
+                if self.call_count % 2 == 0:
+                    raise ValueError("forced simulated failure")
+
+                class Result:
+                    att = 5.0
+                    se = 1.0
+                    p_value = 0.01
+                    conf_int = (3.0, 7.0)
+
+                return Result()
+
+        estimator = AlternatingFailingEstimator()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            results = simulate_power(
+                estimator=estimator,
+                n_simulations=20,
+                progress=False,
+                data_generator=generate_did_data,
+            )
+
+        assert results.n_simulation_failures == 10
+        assert results.n_simulations == 10
+        assert results.n_simulation_failures + results.n_simulations == 20
+
+    def test_simulation_failure_counter_zero_on_clean_run(self):
+        """Clean run: counter is exactly 0, not omitted or None."""
+        did = DifferenceInDifferences()
+        results = simulate_power(
+            estimator=did,
+            n_units=50,
+            n_periods=4,
+            treatment_effect=5.0,
+            sigma=2.0,
+            n_simulations=15,
+            seed=42,
+            progress=False,
+        )
+        assert results.n_simulation_failures == 0
+
+    def test_simulation_does_not_swallow_programming_errors(self):
+        """`TypeError` (programming error) must propagate, not be absorbed as a failure."""
+        from diff_diff.prep import generate_did_data
+
+        class TypeErrorEstimator:
+            """Raises TypeError — a programming bug signal, not a DGP failure."""
+
+            def fit(self, data, **kwargs):
+                raise TypeError("programming bug — must propagate")
+
+        with pytest.raises(TypeError, match="programming bug"):
+            simulate_power(
+                estimator=TypeErrorEstimator(),
+                n_simulations=5,
+                progress=False,
+                data_generator=generate_did_data,
+            )
+
+    def test_simulation_all_failed_raises_runtime_error(self):
+        """All simulations failing: narrow-except path still raises RuntimeError."""
+        from diff_diff.prep import generate_did_data
+
+        class AlwaysFailingEstimator:
+            def fit(self, data, **kwargs):
+                raise ValueError("every replicate fails")
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            with pytest.raises(RuntimeError, match="All simulations failed"):
+                simulate_power(
+                    estimator=AlwaysFailingEstimator(),
+                    n_simulations=5,
+                    progress=False,
+                    data_generator=generate_did_data,
+                )
+
+    def test_simulation_failure_counter_survives_serialization(self):
+        """`n_simulation_failures` round-trips through to_dict/to_dataframe."""
+        from diff_diff.prep import generate_did_data
+
+        class AlternatingFailingEstimator:
+            def __init__(self):
+                self.call_count = 0
+
+            def fit(self, data, **kwargs):
+                self.call_count += 1
+                if self.call_count % 2 == 0:
+                    raise ValueError("forced simulated failure")
+
+                class Result:
+                    att = 5.0
+                    se = 1.0
+                    p_value = 0.01
+                    conf_int = (3.0, 7.0)
+
+                return Result()
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            results = simulate_power(
+                estimator=AlternatingFailingEstimator(),
+                n_simulations=20,
+                progress=False,
+                data_generator=generate_did_data,
+            )
+
+        serialized = results.to_dict()
+        assert "n_simulation_failures" in serialized
+        assert serialized["n_simulation_failures"] == results.n_simulation_failures == 10
+
+    def test_simulation_failure_rate_warning_above_threshold(self):
+        """10% threshold: >10% failure still warns with the per-effect-size message."""
+        from diff_diff.prep import generate_did_data
+
+        class MostlyFailingEstimator:
+            """Fails 16/20 calls (80% failure rate) — triggers warning."""
+
+            def __init__(self):
+                self.call_count = 0
+
+            def fit(self, data, **kwargs):
+                self.call_count += 1
+                if self.call_count % 5 != 0:
+                    raise ValueError("forced failure")
+
+                class Result:
+                    att = 5.0
+                    se = 1.0
+                    p_value = 0.01
+                    conf_int = (3.0, 7.0)
+
+                return Result()
+
+        with pytest.warns(UserWarning, match=r"simulations .* failed for effect_size="):
+            results = simulate_power(
+                estimator=MostlyFailingEstimator(),
+                n_simulations=20,
+                progress=False,
+                data_generator=generate_did_data,
+            )
+
+        assert results.n_simulation_failures == 16
+        assert results.n_simulations == 4
 
 
 class TestVisualization:
@@ -940,13 +1111,13 @@ class TestEstimatorCoverage:
         self._assert_valid_result(result, "TripleDifference")
 
     def test_ddd_warns_ignored_params(self):
-        """TripleDifference warns when simulation params don't match DDD design."""
-        with pytest.warns(UserWarning, match="n_periods=6 is ignored"):
+        """Cross-sectional DDD (n_periods<=2) warns when params don't match the design."""
+        with pytest.warns(UserWarning, match="treatment_fraction=0.3 is ignored"):
             simulate_power(
                 TripleDifference(),
                 n_units=80,
-                n_periods=6,
-                treatment_period=3,
+                n_periods=2,
+                treatment_period=1,
                 treatment_fraction=0.3,
                 n_simulations=2,
                 seed=42,
@@ -1013,7 +1184,7 @@ class TestEstimatorCoverage:
                     outcome="outcome",
                     group="group",
                     partition="partition",
-                    time="time",
+                    post="time",
                 ),
                 n_simulations=2,
                 seed=42,
@@ -1021,13 +1192,14 @@ class TestEstimatorCoverage:
             )
 
     def test_ddd_no_warn_n_per_cell_override(self):
-        """n_per_cell override suppresses rounding warning but not ignored-param warnings."""
-        with pytest.warns(UserWarning, match="n_periods=6 is ignored"):
+        """Cross-sectional: n_per_cell suppresses the rounding warning but not ignored-param warnings."""
+        with pytest.warns(UserWarning, match="treatment_fraction=0.3 is ignored"):
             simulate_power(
                 TripleDifference(),
                 n_units=80,
-                n_periods=6,
+                n_periods=2,
                 treatment_period=1,
+                treatment_fraction=0.3,
                 data_generator_kwargs=dict(n_per_cell=10),
                 n_simulations=2,
                 seed=42,
@@ -1079,6 +1251,155 @@ class TestEstimatorCoverage:
         assert result.effective_n_units is None
         assert result.to_dict()["effective_n_units"] is None
         assert "Effective sample size" not in result.summary()
+
+    # --- Panel DDD routing (n_periods > 2 → generate_ddd_panel_data) ---
+
+    def test_ddd_panel_routing(self):
+        """n_periods>2 routes DDD power to the panel DGP and honors n_periods."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = simulate_power(
+                TripleDifference(cluster="unit"),
+                n_units=80,
+                n_periods=6,
+                treatment_period=3,
+                treatment_fraction=0.5,
+                n_simulations=10,
+                seed=42,
+                progress=False,
+            )
+        self._assert_valid_result(result, "TripleDifference")
+        # Panel path honors n_periods/treatment_period (no "ignored" warning),
+        # and cluster="unit" suppresses the clustering caveat.
+        msgs = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+        assert not any("ignored" in m for m in msgs), msgs
+        assert not any("overstate power" in m for m in msgs), msgs
+
+    def test_ddd_panel_warns_without_cluster(self):
+        """Panel DDD power warns when the estimator lacks cluster='unit'."""
+        with pytest.warns(UserWarning, match="overstate power"):
+            simulate_power(
+                TripleDifference(),
+                n_units=80,
+                n_periods=6,
+                treatment_period=3,
+                treatment_fraction=0.5,
+                n_simulations=5,
+                seed=42,
+                progress=False,
+            )
+
+    def test_ddd_panel_no_warn_with_cluster(self):
+        """No warning on the panel path with cluster='unit' and a balanced split."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            simulate_power(
+                TripleDifference(cluster="unit"),
+                n_units=80,
+                n_periods=6,
+                treatment_period=3,
+                treatment_fraction=0.5,
+                n_simulations=2,
+                seed=42,
+                progress=False,
+            )
+
+    def test_ddd_panel_rejects_n_per_cell(self):
+        """n_per_cell is cross-sectional-only; the panel path rejects it clearly."""
+        with pytest.raises(ValueError, match="n_per_cell"):
+            simulate_power(
+                TripleDifference(cluster="unit"),
+                n_units=80,
+                n_periods=6,
+                treatment_period=3,
+                data_generator_kwargs=dict(n_per_cell=10),
+                n_simulations=2,
+                seed=42,
+                progress=False,
+            )
+
+    @pytest.mark.slow
+    def test_ddd_panel_mde(self):
+        """simulate_mde routes to the panel DGP for n_periods>2 (effective_n_units=None)."""
+        result = simulate_mde(
+            TripleDifference(cluster="unit"),
+            n_units=80,
+            n_periods=6,
+            treatment_period=3,
+            n_simulations=5,
+            effect_range=(0.5, 5.0),
+            seed=42,
+            progress=False,
+        )
+        assert isinstance(result, SimulationMDEResults)
+        assert result.mde > 0
+        assert result.effective_n_units is None
+
+    @pytest.mark.slow
+    def test_ddd_panel_sample_size(self):
+        """simulate_sample_size uses a continuous (step-1) search on the panel path."""
+        result = simulate_sample_size(
+            TripleDifference(cluster="unit"),
+            n_periods=6,
+            treatment_period=3,
+            treatment_effect=1.0,
+            n_simulations=10,
+            n_range=(20, 160),
+            seed=3,
+            progress=False,
+        )
+        assert isinstance(result, SimulationSampleSizeResults)
+        assert result.required_n > 0
+        # Panel path is NOT snapped to the cross-sectional multiple-of-8 grid:
+        # the bisection must be able to explore non-multiples of 8.
+        assert result.search_path
+        assert any(
+            int(step["n_units"]) % 8 != 0 for step in result.search_path
+        ), "panel sample-size search should explore non-multiples of 8 (step-1 grid)"
+
+    @pytest.mark.slow
+    def test_ddd_panel_sample_size_unbalanced_split(self):
+        """Unbalanced group_frac/partition_frac override raises the panel floor so
+        the search never probes an infeasible (empty-cell) n."""
+        result = simulate_sample_size(
+            TripleDifference(cluster="unit"),
+            n_periods=6,
+            treatment_period=3,
+            treatment_effect=2.0,
+            n_simulations=8,
+            seed=1,
+            progress=False,
+            data_generator_kwargs={"group_frac": 0.1, "partition_frac": 0.1},
+        )
+        assert isinstance(result, SimulationSampleSizeResults)
+        assert result.required_n > 0
+        # Every probed n must populate all 4 (group, partition) cells (>= the
+        # split-aware viable floor); none should hit the infeasible n=16 default.
+        viable_floor = _ddd_panel_viable_min_n(0.1, 0.1)
+        assert viable_floor > 16  # skewed split needs more than the balanced floor
+        assert all(int(step["n_units"]) >= viable_floor for step in result.search_path)
+
+    def test_ddd_panel_sample_size_low_n_range_raises(self):
+        """An n_range whose upper bound is below the split-aware viable floor raises clearly."""
+        with pytest.raises(ValueError, match="below the minimum panel-DDD"):
+            simulate_sample_size(
+                TripleDifference(cluster="unit"),
+                n_periods=6,
+                treatment_period=3,
+                n_range=(8, 20),
+                n_simulations=2,
+                seed=1,
+                progress=False,
+                data_generator_kwargs={"group_frac": 0.1, "partition_frac": 0.1},
+            )
+
+    def test_ddd_panel_viable_min_n_validates_split(self):
+        """The viable-floor helper rejects out-of-range fractions with the DGP's
+        clear message (not a misleading n_range/bracketing error)."""
+        with pytest.raises(ValueError, match=r"group_frac must be in \(0, 1\)"):
+            _ddd_panel_viable_min_n(0.0, 0.5)
+        with pytest.raises(ValueError, match=r"partition_frac must be in \(0, 1\)"):
+            _ddd_panel_viable_min_n(0.5, 1.0)
 
     @pytest.mark.slow
     def test_ddd_mde(self):
@@ -1383,7 +1704,7 @@ class TestEstimatorCoverage:
         result = simulate_power(
             _UnregisteredEstimator(),
             data_generator=generate_did_data,
-            estimator_kwargs=dict(outcome="outcome", treatment="treated", time="post"),
+            estimator_kwargs=dict(outcome="outcome", treatment="treated", post="post"),
             n_simulations=5,
             seed=42,
             progress=False,
@@ -1427,7 +1748,7 @@ class TestEstimatorCoverage:
         result = simulate_power(
             _UnregisteredEstimator(),
             data_generator=generate_did_data,
-            estimator_kwargs=dict(outcome="outcome", treatment="treated", time="post"),
+            estimator_kwargs=dict(outcome="outcome", treatment="treated", post="post"),
             result_extractor=_custom_extractor,
             n_simulations=5,
             seed=42,
@@ -1453,7 +1774,7 @@ class TestEstimatorCoverage:
         result = simulate_mde(
             _UnregisteredEstimator(),
             data_generator=generate_did_data,
-            estimator_kwargs=dict(outcome="outcome", treatment="treated", time="post"),
+            estimator_kwargs=dict(outcome="outcome", treatment="treated", post="post"),
             result_extractor=_custom_extractor,
             n_simulations=5,
             effect_range=(0.5, 5.0),
@@ -1489,7 +1810,7 @@ class TestEstimatorCoverage:
         """Auto DGP warns when StackedDiD has clean_control='strict'."""
         with pytest.warns(UserWarning, match="strict"):
             simulate_power(
-                StackedDiD(clean_control="strict"),
+                StackedDiD(control_group="strict"),
                 n_simulations=3,
                 seed=42,
                 progress=False,
@@ -1513,6 +1834,8 @@ class TestEstimatorCoverage:
 
         with warnings.catch_warnings():
             warnings.simplefilter("error", UserWarning)
+            # Skip warning is expected for not_yet_treated (some cells non-estimable)
+            warnings.filterwarnings("ignore", message=".*could not be estimated.*")
             simulate_power(
                 CallawaySantAnna(control_group="not_yet_treated"),
                 data_generator=_custom_staggered,
@@ -1533,6 +1856,8 @@ class TestEstimatorCoverage:
         """data_generator_kwargs with cohort_periods suppresses warning."""
         with warnings.catch_warnings():
             warnings.simplefilter("error", UserWarning)
+            # Skip warning is expected for not_yet_treated (some cells non-estimable)
+            warnings.filterwarnings("ignore", message=".*could not be estimated.*")
             result = simulate_power(
                 CallawaySantAnna(control_group="not_yet_treated"),
                 n_periods=6,
@@ -1564,7 +1889,7 @@ class TestEstimatorCoverage:
     def test_stacked_did_strict_with_matching_dgp(self):
         """StackedDiD with clean_control='strict' and multi-cohort DGP."""
         result = simulate_power(
-            StackedDiD(clean_control="strict", kappa_pre=1, kappa_post=1),
+            StackedDiD(control_group="strict", kappa_pre=1, kappa_post=1),
             n_units=80,
             n_periods=8,
             treatment_period=4,
@@ -1930,11 +2255,15 @@ class TestDGPKeyCollisions:
         )
 
     def test_allow_n_per_cell_override(self):
-        """n_per_cell is not a protected key — no collision for DDD."""
-        # Should not raise (n_per_cell is in DDD builder output but not
-        # in _PROTECTED_DGP_KEYS, so 3-way intersection is empty)
+        """n_per_cell is not a protected key — no collision for cross-sectional DDD."""
+        # Should not raise (n_per_cell is in the cross-sectional DDD builder
+        # output but not in _PROTECTED_DGP_KEYS, so 3-way intersection is empty).
+        # n_periods=2 pins the cross-sectional path; on the panel path
+        # (n_periods > 2) n_per_cell is rejected (see test_ddd_panel_rejects_n_per_cell).
         simulate_power(
             TripleDifference(),
+            n_periods=2,
+            treatment_period=1,
             n_simulations=2,
             seed=42,
             progress=False,
@@ -2014,6 +2343,8 @@ class TestStaggeredSingleCohort:
         """CS with cohort_periods=[2, 4] does NOT warn."""
         with warnings.catch_warnings():
             warnings.simplefilter("error")
+            # Skip warning is expected for not_yet_treated (some cells non-estimable)
+            warnings.filterwarnings("ignore", message=".*could not be estimated.*")
             simulate_power(
                 CallawaySantAnna(control_group="not_yet_treated"),
                 n_units=60,
@@ -2032,7 +2363,7 @@ class TestStaggeredSingleCohort:
         """StackedDiD clean_control='strict' with cohort_periods=[2] warns."""
         with pytest.warns(UserWarning, match="DGP mismatch"):
             simulate_power(
-                StackedDiD(clean_control="strict"),
+                StackedDiD(control_group="strict"),
                 n_units=60,
                 n_periods=6,
                 treatment_period=3,
@@ -2115,3 +2446,616 @@ class TestSDIDPlaceboCustomDGP:
                 seed=42,
                 progress=False,
             )
+
+
+# ---------------------------------------------------------------------------
+# Survey-aware power tests
+# ---------------------------------------------------------------------------
+
+# Small survey config for fast tests
+_SURVEY_CFG = SurveyPowerConfig(n_strata=3, psu_per_stratum=4, icc=0.05)
+_SIM_KW = dict(n_units=100, n_periods=4, treatment_period=2, sigma=1.0, progress=False)
+
+
+class TestSurveyPower:
+    """Tests for survey-aware power analysis (SurveyPowerConfig + deff)."""
+
+    # -- Simulation path: smoke tests for each estimator group --
+
+    def test_survey_simulate_power_cs(self):
+        """CallawaySantAnna with survey_config runs and returns valid power."""
+        result = simulate_power(
+            CallawaySantAnna(),
+            treatment_effect=3.0,
+            n_simulations=20,
+            seed=42,
+            survey_config=_SURVEY_CFG,
+            **_SIM_KW,
+        )
+        assert 0 <= result.power <= 1
+        assert result.survey_config is not None
+        assert isinstance(result, SimulationPowerResults)
+
+    def test_survey_simulate_power_basic_did(self):
+        """DifferenceInDifferences with survey_config produces finite estimates."""
+        result = simulate_power(
+            DifferenceInDifferences(),
+            treatment_effect=3.0,
+            n_simulations=20,
+            seed=42,
+            survey_config=_SURVEY_CFG,
+            **_SIM_KW,
+        )
+        assert 0 <= result.power <= 1
+        # Verify non-degenerate: finite mean estimate and SE (not rank-deficient)
+        assert np.isfinite(result.mean_estimate)
+        assert np.isfinite(result.mean_se)
+        assert result.mean_se > 0
+
+    def test_survey_simulate_power_twfe(self):
+        """TwoWayFixedEffects with survey_config produces finite estimates."""
+        result = simulate_power(
+            TwoWayFixedEffects(),
+            treatment_effect=3.0,
+            n_simulations=20,
+            seed=42,
+            survey_config=_SURVEY_CFG,
+            **_SIM_KW,
+        )
+        assert 0 <= result.power <= 1
+        assert np.isfinite(result.mean_estimate)
+        assert np.isfinite(result.mean_se)
+        assert result.mean_se > 0
+
+    def test_survey_simulate_power_multiperiod(self):
+        """MultiPeriodDiD with survey_config produces finite estimates."""
+        result = simulate_power(
+            MultiPeriodDiD(),
+            treatment_effect=3.0,
+            n_simulations=20,
+            seed=42,
+            survey_config=_SURVEY_CFG,
+            **_SIM_KW,
+        )
+        assert 0 <= result.power <= 1
+        assert np.isfinite(result.mean_estimate)
+        assert np.isfinite(result.mean_se)
+        assert result.mean_se > 0
+
+    @pytest.mark.parametrize(
+        "estimator_cls",
+        [SunAbraham, ImputationDiD, TwoStageDiD, StackedDiD, EfficientDiD],
+    )
+    def test_survey_staggered_estimators(self, estimator_cls):
+        """All staggered estimators work with survey_config."""
+        result = simulate_power(
+            estimator_cls(),
+            treatment_effect=3.0,
+            n_simulations=10,
+            seed=42,
+            survey_config=_SURVEY_CFG,
+            **_SIM_KW,
+        )
+        assert 0 <= result.power <= 1
+
+    # -- Validation: unsupported estimators --
+
+    def test_survey_rejects_trop(self):
+        with pytest.raises(ValueError, match="not supported with TROP"):
+            simulate_power(TROP(), n_simulations=1, seed=42, survey_config=_SURVEY_CFG, **_SIM_KW)
+
+    def test_survey_rejects_sdid(self):
+        with pytest.raises(ValueError, match="not supported with SyntheticDiD"):
+            simulate_power(
+                SyntheticDiD(),
+                n_simulations=1,
+                seed=42,
+                survey_config=_SURVEY_CFG,
+                **_SIM_KW,
+            )
+
+    def test_survey_rejects_ddd(self):
+        with pytest.raises(ValueError, match="not supported with TripleDifference"):
+            simulate_power(
+                TripleDifference(),
+                n_simulations=1,
+                seed=42,
+                survey_config=_SURVEY_CFG,
+                **_SIM_KW,
+            )
+
+    def test_survey_rejects_custom_dgp(self):
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            simulate_power(
+                CallawaySantAnna(),
+                data_generator=lambda **kw: None,
+                survey_config=_SURVEY_CFG,
+                n_simulations=1,
+                seed=42,
+                **_SIM_KW,
+            )
+
+    # -- Metadata --
+
+    def test_survey_metadata(self):
+        """mean_deff and mean_icc_realized populated in results."""
+        result = simulate_power(
+            CallawaySantAnna(),
+            treatment_effect=3.0,
+            n_simulations=10,
+            seed=42,
+            survey_config=_SURVEY_CFG,
+            **_SIM_KW,
+        )
+        assert result.mean_deff is not None
+        assert result.mean_deff > 1.0
+        assert result.mean_icc_realized is not None
+        assert result.mean_icc_realized > 0
+
+    def test_survey_power_curve(self):
+        """survey_config works with effect_sizes (power curve)."""
+        result = simulate_power(
+            CallawaySantAnna(),
+            effect_sizes=[1.0, 3.0],
+            n_simulations=10,
+            seed=42,
+            survey_config=_SURVEY_CFG,
+            **_SIM_KW,
+        )
+        assert len(result.powers) == 2
+        assert result.powers[1] >= result.powers[0]
+
+    # -- Validation: data_generator_kwargs conflicts --
+
+    def test_survey_data_gen_kwargs_blocked(self):
+        """Survey-config-managed keys in data_generator_kwargs raise ValueError."""
+        with pytest.raises(ValueError, match="managed by survey_config"):
+            simulate_power(
+                CallawaySantAnna(),
+                data_generator_kwargs={"n_strata": 10},
+                survey_config=_SURVEY_CFG,
+                n_simulations=1,
+                seed=42,
+                **_SIM_KW,
+            )
+
+    def test_survey_data_gen_kwargs_passthrough(self):
+        """Allowed keys (unit_fe_sd) pass through."""
+        result = simulate_power(
+            CallawaySantAnna(),
+            treatment_effect=3.0,
+            data_generator_kwargs={"unit_fe_sd": 0.5},
+            survey_config=_SURVEY_CFG,
+            n_simulations=10,
+            seed=42,
+            **_SIM_KW,
+        )
+        assert 0 <= result.power <= 1
+
+    def test_survey_treatment_period_validation(self):
+        """treatment_period=0 raises with survey_config."""
+        with pytest.raises(ValueError, match="treatment_period must be >= 1"):
+            simulate_power(
+                CallawaySantAnna(),
+                treatment_period=0,
+                survey_config=_SURVEY_CFG,
+                n_simulations=1,
+                seed=42,
+                n_units=100,
+                n_periods=4,
+                sigma=1.0,
+                progress=False,
+            )
+
+    # -- simulate_mde and simulate_sample_size --
+
+    def test_survey_mde(self):
+        """simulate_mde with survey_config."""
+        result = simulate_mde(
+            CallawaySantAnna(),
+            n_simulations=10,
+            max_steps=3,
+            seed=42,
+            survey_config=_SURVEY_CFG,
+            **_SIM_KW,
+        )
+        assert isinstance(result, SimulationMDEResults)
+        assert result.mde > 0
+        assert result.survey_config is not None
+
+    def test_survey_sample_size_min_n_floor(self):
+        """simulate_sample_size with survey_config respects min_viable_n."""
+        cfg = SurveyPowerConfig(n_strata=5, psu_per_stratum=8)
+        # Use small effect so bisection needs larger N
+        result = simulate_sample_size(
+            CallawaySantAnna(),
+            treatment_effect=0.5,
+            sigma=3.0,
+            n_simulations=10,
+            max_steps=3,
+            seed=42,
+            survey_config=cfg,
+            n_periods=4,
+            treatment_period=2,
+            progress=False,
+        )
+        assert isinstance(result, SimulationSampleSizeResults)
+        assert result.required_n >= cfg.min_viable_n
+        assert result.survey_config is not None
+
+    def test_survey_sample_size_large_effect_floor(self):
+        """Large effect early-return still respects min_viable_n."""
+        cfg = SurveyPowerConfig(n_strata=5, psu_per_stratum=8)
+        # Large effect - first probe likely achieves target power immediately
+        result = simulate_sample_size(
+            CallawaySantAnna(),
+            treatment_effect=10.0,
+            sigma=1.0,
+            n_simulations=10,
+            max_steps=3,
+            seed=42,
+            survey_config=cfg,
+            n_periods=4,
+            treatment_period=2,
+            progress=False,
+        )
+        assert result.required_n >= cfg.min_viable_n  # must be >= 80
+
+    def test_survey_sample_size_large_floor_auto_bracket(self):
+        """Auto-bracketing hi respects min_viable_n > 100."""
+        cfg = SurveyPowerConfig(n_strata=10, psu_per_stratum=10)
+        # min_viable_n = 10 * 10 * 2 = 200, which exceeds default hi=100
+        result = simulate_sample_size(
+            CallawaySantAnna(),
+            treatment_effect=0.5,
+            sigma=3.0,
+            n_simulations=10,
+            max_steps=3,
+            seed=42,
+            survey_config=cfg,
+            n_periods=4,
+            treatment_period=2,
+            progress=False,
+        )
+        assert result.required_n >= cfg.min_viable_n  # must be >= 200
+
+    def test_survey_sample_size_explicit_n_range_clamped(self):
+        """Explicit n_range below survey floor is clamped to min_viable_n."""
+        cfg = SurveyPowerConfig(n_strata=5, psu_per_stratum=8)
+        # n_range=(10, 200) but min_viable_n=80, so lo should be clamped to 80
+        result = simulate_sample_size(
+            CallawaySantAnna(),
+            treatment_effect=3.0,
+            sigma=1.0,
+            n_range=(10, 200),
+            n_simulations=10,
+            max_steps=3,
+            seed=42,
+            survey_config=cfg,
+            n_periods=4,
+            treatment_period=2,
+            progress=False,
+        )
+        assert result.required_n >= cfg.min_viable_n  # must be >= 80
+
+    def test_survey_rejects_heterogeneous_te(self):
+        """heterogeneous_te_by_strata=True rejected with simulation power."""
+        cfg = SurveyPowerConfig(heterogeneous_te_by_strata=True)
+        with pytest.raises(ValueError, match="heterogeneous_te_by_strata"):
+            simulate_power(
+                CallawaySantAnna(),
+                n_simulations=1,
+                seed=42,
+                survey_config=cfg,
+                **_SIM_KW,
+            )
+
+    def test_survey_rejects_te_covariate_interaction(self):
+        """te_covariate_interaction != 0 rejected (diverges population ATT)."""
+        with pytest.raises(ValueError, match="te_covariate_interaction"):
+            simulate_power(
+                CallawaySantAnna(),
+                data_generator_kwargs={
+                    "add_covariates": True,
+                    "te_covariate_interaction": 1.0,
+                },
+                survey_config=_SURVEY_CFG,
+                n_simulations=1,
+                seed=42,
+                **_SIM_KW,
+            )
+
+    def test_survey_rejects_panel_false_for_panel_only(self):
+        """panel=False rejected for panel-only estimators (e.g., TWFE)."""
+        with pytest.raises(ValueError, match="panel=False.*not supported"):
+            simulate_power(
+                TwoWayFixedEffects(),
+                data_generator_kwargs={"panel": False},
+                survey_config=_SURVEY_CFG,
+                n_simulations=1,
+                seed=42,
+                **_SIM_KW,
+            )
+
+    def test_survey_allows_panel_false_for_cs(self):
+        """panel=False allowed for CallawaySantAnna(panel=False) (supports RCS)."""
+        result = simulate_power(
+            CallawaySantAnna(panel=False),
+            treatment_effect=3.0,
+            data_generator_kwargs={"panel": False},
+            survey_config=_SURVEY_CFG,
+            n_simulations=10,
+            seed=42,
+            **_SIM_KW,
+        )
+        assert 0 <= result.power <= 1
+
+    def test_survey_rejects_cs_panel_mismatch_dgp_rcs(self):
+        """CS(panel=True) + DGP panel=False rejected."""
+        with pytest.raises(ValueError, match="CallawaySantAnna.panel=True"):
+            simulate_power(
+                CallawaySantAnna(),  # panel=True by default
+                data_generator_kwargs={"panel": False},
+                survey_config=_SURVEY_CFG,
+                n_simulations=1,
+                seed=42,
+                **_SIM_KW,
+            )
+
+    def test_survey_rejects_cs_panel_mismatch_est_rcs(self):
+        """CS(panel=False) + default DGP (panel=True) rejected."""
+        with pytest.raises(ValueError, match="panel=False.*requires"):
+            simulate_power(
+                CallawaySantAnna(panel=False),
+                survey_config=_SURVEY_CFG,
+                n_simulations=1,
+                seed=42,
+                **_SIM_KW,
+            )
+
+    # -- Closed-form deff tests --
+
+    def test_closed_form_deff_default(self):
+        """deff=1.0 preserves existing behavior exactly."""
+        p1 = compute_power(effect_size=5.0, n_treated=50, n_control=50, sigma=10.0)
+        p2 = compute_power(effect_size=5.0, n_treated=50, n_control=50, sigma=10.0, deff=1.0)
+        assert p1 == p2
+
+    def test_closed_form_deff_increases_mde(self):
+        """deff > 1 increases MDE."""
+        mde1 = compute_mde(n_treated=50, n_control=50, sigma=10.0)
+        mde2 = compute_mde(n_treated=50, n_control=50, sigma=10.0, deff=2.0)
+        assert mde2 > mde1
+
+    def test_closed_form_deff_increases_required_n(self):
+        """deff > 1 increases required N."""
+        n1 = compute_sample_size(effect_size=5.0, sigma=10.0)
+        n2 = compute_sample_size(effect_size=5.0, sigma=10.0, deff=2.0)
+        assert n2 > n1
+
+    def test_closed_form_deff_and_rho(self):
+        """Both deff and rho can be set simultaneously."""
+        pa = PowerAnalysis()
+        result = pa.power(
+            effect_size=5.0,
+            n_treated=50,
+            n_control=50,
+            sigma=10.0,
+            n_pre=2,
+            n_post=2,
+            rho=0.3,
+            deff=2.0,
+        )
+        assert 0 < result.power < 1
+        assert result.deff == 2.0
+        assert result.rho == 0.3
+
+    def test_closed_form_deff_in_results(self):
+        """deff appears in PowerResults.to_dict()."""
+        pa = PowerAnalysis()
+        result = pa.power(effect_size=5.0, n_treated=50, n_control=50, sigma=10.0, deff=1.5)
+        d = result.to_dict()
+        assert "deff" in d
+        assert d["deff"] == 1.5
+
+    def test_closed_form_deff_warning(self):
+        """deff < 1.0 emits warning."""
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            compute_power(effect_size=5.0, n_treated=50, n_control=50, sigma=10.0, deff=0.8)
+            assert any("deff=0.8000 < 1.0" in str(x.message) for x in w)
+
+    def test_closed_form_deff_nan(self):
+        """deff=NaN raises ValueError."""
+        with pytest.raises(ValueError, match="deff must be finite"):
+            compute_power(effect_size=5.0, n_treated=50, n_control=50, sigma=10.0, deff=np.nan)
+
+    def test_closed_form_deff_inf(self):
+        """deff=inf raises ValueError."""
+        with pytest.raises(ValueError, match="deff must be finite"):
+            compute_power(effect_size=5.0, n_treated=50, n_control=50, sigma=10.0, deff=np.inf)
+
+    def test_closed_form_deff_invalid(self):
+        """deff <= 0 raises ValueError."""
+        with pytest.raises(ValueError, match="deff must be finite"):
+            compute_power(effect_size=5.0, n_treated=50, n_control=50, sigma=10.0, deff=0.0)
+
+    # -- SurveyPowerConfig validation --
+
+    def test_survey_config_validation_psu(self):
+        with pytest.raises(ValueError, match="psu_per_stratum"):
+            SurveyPowerConfig(psu_per_stratum=1)
+
+    def test_survey_config_validation_strata(self):
+        with pytest.raises(ValueError, match="n_strata"):
+            SurveyPowerConfig(n_strata=0)
+
+    def test_survey_config_validation_weight_variation(self):
+        with pytest.raises(ValueError, match="weight_variation"):
+            SurveyPowerConfig(weight_variation="extreme")
+
+    def test_survey_config_validation_icc(self):
+        with pytest.raises(ValueError, match="icc"):
+            SurveyPowerConfig(icc=1.5)
+
+    def test_survey_config_validation_fpc(self):
+        with pytest.raises(ValueError, match="fpc_per_stratum"):
+            SurveyPowerConfig(fpc_per_stratum=3, psu_per_stratum=8)
+
+    def test_survey_config_validation_icc_psu_re_sd_conflict(self):
+        with pytest.raises(ValueError, match="icc.*psu_re_sd"):
+            SurveyPowerConfig(icc=0.05, psu_re_sd=3.0)
+
+    def test_survey_config_validation_weight_cv_variation_conflict(self):
+        with pytest.raises(ValueError, match="weight_cv.*weight_variation"):
+            SurveyPowerConfig(weight_cv=0.5, weight_variation="high")
+
+    def test_survey_config_validation_weight_cv_nonfinite(self):
+        with pytest.raises(ValueError, match="weight_cv must be finite"):
+            SurveyPowerConfig(weight_cv=np.inf)
+
+    def test_survey_config_validation_psu_period_factor_nonfinite(self):
+        with pytest.raises(ValueError, match="psu_period_factor must be finite"):
+            SurveyPowerConfig(psu_period_factor=np.nan)
+
+    def test_survey_config_validation_psu_period_factor_negative(self):
+        with pytest.raises(ValueError, match="psu_period_factor must be finite"):
+            SurveyPowerConfig(psu_period_factor=-1.0)
+
+    def test_survey_rejects_estimator_kwargs_survey_design(self):
+        """estimator_kwargs cannot contain survey_design when survey_config set."""
+        with pytest.raises(ValueError, match="estimator_kwargs.*survey_design"):
+            simulate_power(
+                CallawaySantAnna(),
+                estimator_kwargs={"survey_design": None},
+                survey_config=_SURVEY_CFG,
+                n_simulations=1,
+                seed=42,
+                **_SIM_KW,
+            )
+
+    def test_survey_rejects_not_yet_treated(self):
+        """control_group='not_yet_treated' rejected (needs multi-cohort DGP)."""
+        with pytest.raises(ValueError, match="not_yet_treated"):
+            simulate_power(
+                CallawaySantAnna(control_group="not_yet_treated"),
+                survey_config=_SURVEY_CFG,
+                n_simulations=1,
+                seed=42,
+                **_SIM_KW,
+            )
+
+    def test_survey_rejects_last_cohort(self):
+        """control_group='last_cohort' rejected (needs multi-cohort DGP)."""
+        with pytest.raises(ValueError, match="last_cohort"):
+            simulate_power(
+                EfficientDiD(control_group="last_cohort"),
+                survey_config=_SURVEY_CFG,
+                n_simulations=1,
+                seed=42,
+                **_SIM_KW,
+            )
+
+    def test_survey_rejects_clean_control_strict(self):
+        """control_group='strict' rejected (needs multi-cohort DGP)."""
+        with pytest.raises(ValueError, match="control_group='strict'"):
+            simulate_power(
+                StackedDiD(control_group="strict"),
+                survey_config=_SURVEY_CFG,
+                n_simulations=1,
+                seed=42,
+                **_SIM_KW,
+            )
+
+    def test_survey_sample_size_rejects_strata_sizes(self):
+        """strata_sizes in data_generator_kwargs rejected for sample_size search."""
+        with pytest.raises(ValueError, match="strata_sizes.*not supported"):
+            simulate_sample_size(
+                CallawaySantAnna(),
+                treatment_effect=3.0,
+                data_generator_kwargs={"strata_sizes": [20, 20, 20]},
+                survey_config=SurveyPowerConfig(n_strata=3, psu_per_stratum=4),
+                n_simulations=10,
+                max_steps=3,
+                seed=42,
+                n_periods=4,
+                treatment_period=2,
+                sigma=1.0,
+                progress=False,
+            )
+
+    def test_survey_config_validation_psu_re_sd_negative(self):
+        with pytest.raises(ValueError, match="psu_re_sd"):
+            SurveyPowerConfig(psu_re_sd=-1.0)
+
+    def test_survey_config_validation_psu_re_sd_nan(self):
+        with pytest.raises(ValueError, match="psu_re_sd"):
+            SurveyPowerConfig(psu_re_sd=np.nan)
+
+    def test_survey_config_validation_fpc_nan(self):
+        with pytest.raises(ValueError, match="fpc_per_stratum must be finite"):
+            SurveyPowerConfig(fpc_per_stratum=np.inf)
+
+
+# ---------------------------------------------------------------------------
+# Finding #28 (axis J, silent-failures audit). `_build_survey_design`
+# previously cached the resolved design in ``self._cached_survey_design``
+# on first call and never invalidated; mutating ``config.survey_design``
+# after ``__init__`` silently returned the stale cache. The fix drops the
+# cache — construction is microseconds — so every call reflects live
+# state.
+# ---------------------------------------------------------------------------
+
+
+class TestSurveyPowerConfigDesignStaleness:
+    def test_mutating_survey_design_after_first_call_picks_up_new(self):
+        """Reassigning config.survey_design after initial _build_survey_design
+        must be reflected on the next call."""
+        from diff_diff.survey import SurveyDesign
+
+        cfg = SurveyPowerConfig()
+        first = cfg._build_survey_design()
+        # Sanity: default is the expected column-name convention.
+        assert first.weights == "weight"
+        assert first.strata == "stratum"
+
+        replacement = SurveyDesign(
+            weights="my_weight", strata="my_stratum", psu="my_psu", fpc="my_fpc"
+        )
+        cfg.survey_design = replacement
+
+        second = cfg._build_survey_design()
+        assert second is replacement, (
+            "After mutating config.survey_design, _build_survey_design must "
+            "return the new design, not the cached default."
+        )
+        assert second.weights == "my_weight"
+
+    def test_clearing_survey_design_falls_back_to_default(self):
+        """Reassigning config.survey_design back to None after a non-None
+        initialization must fall back to the default construction."""
+        from diff_diff.survey import SurveyDesign
+
+        initial = SurveyDesign(weights="w0", strata="s0", psu="p0", fpc="f0")
+        cfg = SurveyPowerConfig(survey_design=initial)
+        first = cfg._build_survey_design()
+        assert first is initial
+
+        cfg.survey_design = None
+        second = cfg._build_survey_design()
+        assert second is not initial
+        assert second.weights == "weight"
+        assert second.strata == "stratum"
+
+    def test_repeat_calls_produce_equivalent_output(self):
+        """Regression guard: no-mutation case must still work — two
+        consecutive calls on an untouched config return consistent
+        SurveyDesign column names (identity equality is not guaranteed
+        since we dropped the cache; equivalence is what matters)."""
+        cfg = SurveyPowerConfig()
+        first = cfg._build_survey_design()
+        second = cfg._build_survey_design()
+        assert first.weights == second.weights
+        assert first.strata == second.strata
+        assert first.psu == second.psu
+        assert first.fpc == second.fpc

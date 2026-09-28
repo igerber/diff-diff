@@ -12,7 +12,7 @@ main TROP class definition.
 
 import logging
 import warnings
-from typing import Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -24,7 +24,359 @@ from diff_diff._backend import (
     _rust_bootstrap_trop_variance,
     _rust_unit_distance_matrix,
 )
+from diff_diff.bootstrap_utils import (
+    stratified_bootstrap_indices,
+    warn_bootstrap_failure_rate,
+)
 from diff_diff.trop_results import _PrecomputedStructures
+from diff_diff.utils import warn_if_not_converged
+
+
+def _treated_cell_is_estimable(
+    control_mask: np.ndarray,
+    Y: np.ndarray,
+    weight_matrix: np.ndarray,
+    i: int,
+    t: int,
+) -> bool:
+    """True iff treated cell (i, t)'s counterfactual is identified by the control fit.
+
+    The working model fits unregularized unit and time fixed effects
+    ``alpha_j`` / ``beta_s`` on the weighted observed control cells, then sets
+    ``tau_it = Y_it - alpha_i - beta_t - L_it``. For that difference to be a valid
+    counterfactual rather than a fixed-effect-contaminated raw outcome, the sum
+    ``alpha_i + beta_t`` must be identified by the two-way-FE control fit.
+
+    In a two-way fixed-effect model the effects are pinned only **within each
+    connected component** of the bipartite graph whose nodes are units and
+    periods and whose edges are the positively-weighted observed control cells
+    (``usable = (D==0) & finite(Y) & weight>0``); across components there is a
+    free per-component offset. Hence ``alpha_i + beta_t`` is identified iff the
+    **target unit node and target period node lie in the same component**.
+
+    A marginal "the target unit has some usable control AND the target period has
+    some usable control" test is necessary but NOT sufficient: e.g. usable cells
+    at ``(unitA, t0)`` and ``(unitB, t1)`` with target ``(unitA, t1)`` pass it,
+    yet ``alpha_A + beta_1`` spans two disconnected components and is unidentified.
+    This connected-component check subsumes the simpler degeneracies it replaced:
+    an always-treated unit (empty unit column) or a fully-treated period (empty
+    period row) leaves the corresponding node isolated, hence non-estimable.
+
+    This is a **general correctness guard applied to every local fit** (absorbing
+    and non-absorbing): it NaNs exactly the cells whose ``alpha_i + beta_t`` is
+    unidentified. On balanced panels (and absorbing panels with an observed
+    never-treated unit, which connects every period to every unit) the whole
+    control graph is one component, so the predicate is a no-op (no behavior
+    change). Shared by the final point fit and the bootstrap fixed-lambda refit.
+
+    Cost: a bipartite BFS bounded by the usable-cell count, run per treated cell
+    only when both the unit column and period row are non-empty (the cheap
+    fast-path rejects the common degeneracies first). non_absorbing is opt-in and
+    correctness-first, so the extra work is acceptable.
+    """
+    usable = control_mask & np.isfinite(Y) & (weight_matrix > 0)
+    # Fast path: an empty target column (alpha_i) or row (beta_t) is isolated.
+    if not bool(np.any(usable[:, i])) or not bool(np.any(usable[t, :])):
+        return False
+    # Bipartite reachability from period-node t; estimable iff unit-node i reached.
+    reached_periods = np.zeros(usable.shape[0], dtype=bool)
+    reached_units = np.zeros(usable.shape[1], dtype=bool)
+    reached_periods[t] = True
+    while True:
+        # Units adjacent to any reached period, then periods adjacent to any
+        # reached unit; iterate the bipartite expansion to a fixpoint.
+        new_units = reached_units | np.any(usable[reached_periods, :], axis=0)
+        if np.any(new_units):
+            new_periods = reached_periods | np.any(usable[:, new_units], axis=1)
+        else:
+            new_periods = reached_periods
+        if np.array_equal(new_units, reached_units) and np.array_equal(
+            new_periods, reached_periods
+        ):
+            break
+        reached_units, reached_periods = new_units, new_periods
+    return bool(reached_units[i])
+
+
+def _validate_and_pivot_treatment(data, time, unit, treatment, all_periods, all_units):
+    """Validate treatment column and create D matrix with missing mask.
+
+    Rejects observed rows with missing treatment values (data quality error),
+    then pivots to (time x unit) matrix. Structural gaps from unbalanced panels
+    are filled with 0 (assumed untreated) and flagged with a warning.
+
+    Returns
+    -------
+    D : ndarray
+        Treatment matrix (n_periods x n_units), int.
+    missing_mask : ndarray
+        Boolean mask of structurally absent cells (n_periods x n_units).
+    """
+    n_nan_observed = int(data[treatment].isna().sum())
+    if n_nan_observed > 0:
+        raise ValueError(
+            f"{n_nan_observed} observation(s) have missing treatment values. "
+            f"TROP requires non-missing treatment indicators for all observed "
+            f"rows. Remove or impute missing values before fitting."
+        )
+
+    D_raw = data.pivot(index=time, columns=unit, values=treatment).reindex(
+        index=all_periods, columns=all_units
+    )
+    missing_mask = pd.isna(D_raw).values
+    n_missing_structural = int(missing_mask.sum())
+    if n_missing_structural > 0:
+        warnings.warn(
+            f"{n_missing_structural} missing treatment indicator(s) in the "
+            f"(time x unit) panel matrix filled with 0 (assumed "
+            f"untreated). This typically occurs in unbalanced panels.",
+            UserWarning,
+            stacklevel=3,
+        )
+    D = D_raw.fillna(0).astype(int).values
+    return D, missing_mask
+
+
+def _setup_trop_data(
+    data,
+    outcome,
+    treatment,
+    unit,
+    time,
+    resolved_survey,
+    survey_design,
+    non_absorbing: bool = False,
+):
+    """Shared data setup for TROP local and global fit paths.
+
+    Performs panel pivoting (long → wide), absorbing-state validation,
+    treated/control unit identification, first-treatment-period detection,
+    and pre/post period counting. Returns a dict so both callers can
+    unpack only the fields they need.
+
+    When ``non_absorbing`` is False (default) the treatment indicator must be an
+    absorbing state (monotonic non-decreasing per unit) and a non-monotonic
+    indicator raises ``ValueError``; there must be at least one never-treated
+    unit and at least 2 leading pre-treatment periods. When ``non_absorbing`` is
+    True these absorbing-specific guards are relaxed to support general (on/off)
+    assignment patterns (Athey et al. 2025 Eq. 12 / Algorithm 2): the
+    monotonicity check is skipped, identification falls back to untreated *cells*
+    (rather than requiring whole never-treated units), and the pre-period guard
+    becomes a weaker "at least 2 periods contain untreated cells" check. The
+    global fit path always calls with ``non_absorbing=False`` (it additionally
+    requires simultaneous block adoption).
+
+    The global-method-specific staggered-adoption check stays in
+    `_fit_global` as a post-helper validation because it depends on
+    estimator semantics (global method requires simultaneous treatment),
+    not data preparation.
+
+    Note: the same dict-shaped contract is also relied on by the bootstrap
+    paths (`_bootstrap_variance` / `_bootstrap_variance_global`) which
+    currently rebuild similar state per draw. Future contract changes to
+    this helper must be checked against both `_fit_*` and `_bootstrap_*`
+    call sites for cross-file sync.
+
+    Returns
+    -------
+    dict
+        With keys:
+        ``all_units, all_periods, n_units, n_periods, unit_to_idx,
+        period_to_idx, idx_to_unit, idx_to_period, unit_weight_arr,
+        Y, D, missing_mask, treated_mask, n_treated_obs,
+        treated_unit_idx, control_unit_idx, first_treat_period,
+        n_pre_periods, n_post_periods``.
+    """
+    all_units = sorted(data[unit].unique())
+    all_periods = sorted(data[time].unique())
+
+    if resolved_survey is not None:
+        from diff_diff.survey import _extract_unit_survey_weights
+
+        unit_weight_arr = _extract_unit_survey_weights(data, unit, survey_design, all_units)
+    else:
+        unit_weight_arr = None
+
+    n_units = len(all_units)
+    n_periods = len(all_periods)
+
+    unit_to_idx = {u: i for i, u in enumerate(all_units)}
+    period_to_idx = {p: i for i, p in enumerate(all_periods)}
+    idx_to_unit = {i: u for u, i in unit_to_idx.items()}
+    idx_to_period = {i: p for p, i in period_to_idx.items()}
+
+    Y = (
+        data.pivot(index=time, columns=unit, values=outcome)
+        .reindex(index=all_periods, columns=all_units)
+        .values
+    )
+
+    D, missing_mask = _validate_and_pivot_treatment(
+        data, time, unit, treatment, all_periods, all_units
+    )
+
+    # Absorbing-state (monotonic non-decreasing) validation. Skipped when the
+    # caller opts into general (on/off) assignment via non_absorbing=True.
+    if not non_absorbing:
+        violating_units = []
+        for unit_idx in range(n_units):
+            observed_mask = ~missing_mask[:, unit_idx]
+            observed_d = D[observed_mask, unit_idx]
+            if len(observed_d) > 1 and np.any(np.diff(observed_d) < 0):
+                violating_units.append(all_units[unit_idx])
+
+        if violating_units:
+            raise ValueError(
+                f"Treatment indicator is not an absorbing state for units: {violating_units}. "
+                f"D[t, unit] must be monotonic non-decreasing (once treated, always treated). "
+                f"If this is event-study style data with absorbing treatment, convert to "
+                f"absorbing state: D[t, i] = 1 for all t >= first treatment period. "
+                f"If treatment genuinely turns on and off (non-absorbing), pass "
+                f"non_absorbing=True (method='local' only; assumes no dynamic effects)."
+            )
+
+    treated_mask = D == 1
+    n_treated_obs = int(np.sum(treated_mask))
+
+    if n_treated_obs == 0:
+        raise ValueError("No treated observations found")
+
+    unit_ever_treated = np.any(D == 1, axis=0)
+    treated_unit_idx = np.where(unit_ever_treated)[0]
+    control_unit_idx = np.where(~unit_ever_treated)[0]
+
+    # Observed untreated cells. Structural panel gaps are filled with D=0
+    # (_validate_and_pivot_treatment), so identification checks under
+    # non_absorbing must exclude those filled cells (and non-finite outcomes):
+    # only an OBSERVED D=0 cell can serve as a control for the (1-W)
+    # counterfactual fit. A raw `D == 0` count would let an all-observed-treated
+    # unbalanced panel pass with no real control outcomes.
+    valid_control_mask = (D == 0) & (~missing_mask) & np.isfinite(Y)
+
+    if non_absorbing:
+        # General assignment identifies off untreated *cells* (the per-(i,t)
+        # estimator masks treated cells via (1-W) and fits the rest), so a fully
+        # toggling panel with no never-treated unit is still identified. Require
+        # at least one observed untreated cell.
+        if not np.any(valid_control_mask):
+            raise ValueError(
+                "No observed untreated (control) observations found; non_absorbing "
+                "TROP needs observed cells with D=0 (not structural panel gaps) to "
+                "impute the counterfactual."
+            )
+    else:
+        if len(control_unit_idx) == 0:
+            raise ValueError("No control units found")
+
+    first_treat_period = None
+    for t in range(n_periods):
+        if np.any(D[t, :] == 1):
+            first_treat_period = t
+            break
+
+    if first_treat_period is None:
+        raise ValueError("Could not infer post-treatment periods from D matrix")
+
+    n_pre_periods = first_treat_period
+    n_post_periods = int(np.sum(np.any(D[first_treat_period:, :] == 1, axis=1)))
+
+    if non_absorbing:
+        # "Leading all-control block" is ill-defined when treatment toggles, so
+        # the absorbing n_pre_periods>=2 guard does not apply. Require instead
+        # that at least 2 periods contain an OBSERVED untreated cell (a weak
+        # factor-model identifiability floor); finer donor-pool degeneracy is
+        # handled downstream by the LOOCV empty-control (Q=inf) and inf-distance
+        # guards.
+        n_periods_with_controls = int(np.sum(np.any(valid_control_mask, axis=1)))
+        if n_periods_with_controls < 2:
+            raise ValueError(
+                "Need at least 2 periods containing observed untreated "
+                "observations for non_absorbing TROP."
+            )
+    elif n_pre_periods < 2:
+        raise ValueError("Need at least 2 pre-treatment periods")
+
+    return {
+        "all_units": all_units,
+        "all_periods": all_periods,
+        "n_units": n_units,
+        "n_periods": n_periods,
+        "unit_to_idx": unit_to_idx,
+        "period_to_idx": period_to_idx,
+        "idx_to_unit": idx_to_unit,
+        "idx_to_period": idx_to_period,
+        "unit_weight_arr": unit_weight_arr,
+        "Y": Y,
+        "D": D,
+        "missing_mask": missing_mask,
+        "treated_mask": treated_mask,
+        "n_treated_obs": n_treated_obs,
+        "treated_unit_idx": treated_unit_idx,
+        "control_unit_idx": control_unit_idx,
+        "first_treat_period": first_treat_period,
+        "n_pre_periods": n_pre_periods,
+        "n_post_periods": n_post_periods,
+    }
+
+
+def _run_trop_bootstrap_loop(
+    data: pd.DataFrame,
+    unit: str,
+    control_units: np.ndarray,
+    treated_units: np.ndarray,
+    control_idx: np.ndarray,
+    treated_idx: np.ndarray,
+    n_control_units: int,
+    n_treated_units: int,
+    n_bootstrap: int,
+    fit_callable: Callable[[pd.DataFrame, List[int]], float],
+) -> Tuple[List[float], List[int]]:
+    """Shared per-draw resample-and-refit loop for the TROP pairs bootstrap.
+
+    Used by both ``TROP._bootstrap_variance`` (local) and
+    ``TROP._bootstrap_variance_global``, whose Python-fallback loops were
+    byte-identical apart from the refit call. RNG-free: ``control_idx`` /
+    ``treated_idx`` are pre-generated by the caller via
+    :func:`stratified_bootstrap_indices`, so the Rust and Python paths consume the
+    identical draw sequence and this loop is deterministic. ``fit_callable(boot_data,
+    nonconverg_tracker) -> float`` performs the fixed-lambda refit -- the only thing
+    that differs between the local and global methods. Returns the list of finite
+    per-draw estimates and the shared non-convergence tracker; the caller keeps its
+    own (method-specific) warnings and ``np.std(ddof=1)`` SE computation.
+    """
+    bootstrap_estimates_list: List[float] = []
+    nonconverg_tracker: List[int] = []
+
+    for b in range(n_bootstrap):
+        sampled_control = (
+            control_units[control_idx[b]]
+            if n_control_units > 0
+            else np.array([], dtype=control_units.dtype)
+        )
+        sampled_treated = (
+            treated_units[treated_idx[b]]
+            if n_treated_units > 0
+            else np.array([], dtype=treated_units.dtype)
+        )
+        sampled_units = np.concatenate([sampled_control, sampled_treated])
+
+        # Create bootstrap sample with unique unit IDs
+        boot_data = pd.concat(
+            [
+                data[data[unit] == u].assign(**{unit: f"{u}_{idx}"})
+                for idx, u in enumerate(sampled_units)
+            ],
+            ignore_index=True,
+        )
+
+        try:
+            est = fit_callable(boot_data, nonconverg_tracker)
+            if np.isfinite(est):
+                bootstrap_estimates_list.append(est)
+        except (ValueError, np.linalg.LinAlgError, KeyError):
+            continue
+
+    return bootstrap_estimates_list, nonconverg_tracker
 
 
 # Module-level convergence tolerance for SVD singular value truncation.
@@ -341,13 +693,18 @@ class TROPLocalMixin:
         - Time weights theta_s^{i,t} = exp(-lambda_time * |t - s|)
         - Unit weights omega_j^{i,t} = exp(-lambda_unit * dist_unit_{-t}(j, i))
 
-        IMPORTANT (Issue A fix): The paper's objective sums over ALL observations
-        where (1 - W_js) is non-zero, which includes pre-treatment observations of
-        eventually-treated units since W_js = 0 for those. This method computes
-        weights for ALL units where D[t, j] = 0 at the target period, not just
-        never-treated units.
+        Weights are assigned for every unit ``j != i`` (distance-based, per
+        Eq. 2/3). Treated-cell exclusion is handled by the `(1 - W_{js})`
+        factor applied inside ``_estimate_model`` via the control mask, not
+        by gating ``ω_j`` on ``D[t, j]``. Same-cohort donors therefore
+        contribute via their pre-treatment rows, and future-cohort donors
+        contribute via rows where both units are still untreated.
 
-        Uses pre-computed structures when available for efficiency.
+        Always computes from the function-argument ``Y, D``; does not read
+        ``self._precomputed``. Under bootstrap the caller passes resampled
+        ``Y, D``, and a prior version of this method silently fell through to
+        the original-panel cache via a ``_precomputed`` branch, producing
+        stale unit distances.
 
         Parameters
         ----------
@@ -376,61 +733,24 @@ class TROPLocalMixin:
         np.ndarray
             Weight matrix (n_periods x n_units) for observation (i, t).
         """
-        # Use pre-computed structures when available
-        if self._precomputed is not None:
-            # Time weights from pre-computed time distance matrix
-            # time_dist_matrix[t, s] = |t - s|
-            time_weights = np.exp(-lambda_time * self._precomputed["time_dist_matrix"][t, :])
-
-            # Unit weights - computed for ALL units where D[t, j] = 0
-            # (Issue A fix: includes pre-treatment obs of eventually-treated units)
-            unit_weights = np.zeros(n_units)
-            D_stored = self._precomputed["D"]
-            Y_stored = self._precomputed["Y"]
-
-            # Valid control units at time t: D[t, j] == 0
-            valid_control_at_t = D_stored[t, :] == 0
-
-            if lambda_unit == 0:
-                # Uniform weights when lambda_unit = 0
-                # All units not treated at time t get weight 1
-                unit_weights[valid_control_at_t] = 1.0
-            else:
-                # Use observation-specific distances with target period excluded
-                # (Issue B fix: compute exact per-observation distance)
-                for j in range(n_units):
-                    if valid_control_at_t[j] and j != i:
-                        # Compute distance excluding target period t
-                        dist = self._compute_unit_distance_for_obs(Y_stored, D_stored, j, i, t)
-                        if np.isinf(dist):
-                            unit_weights[j] = 0.0
-                        else:
-                            unit_weights[j] = np.exp(-lambda_unit * dist)
-
-            # Treated unit i gets weight 1
-            unit_weights[i] = 1.0
-
-            # Weight matrix: outer product (n_periods x n_units)
-            return np.outer(time_weights, unit_weights)
-
-        # Fallback: compute from scratch (used in bootstrap)
         # Time distance: |t - s| following paper's Equation 3 (page 7)
         dist_time = np.abs(np.arange(n_periods) - t)
         time_weights = np.exp(-lambda_time * dist_time)
 
-        # Unit weights - computed for ALL units where D[t, j] = 0
-        # (Issue A fix: includes pre-treatment obs of eventually-treated units)
+        # Unit weights ω_j = exp(-λ_unit × dist(j, i)) for all j ≠ i per Eq. 2/3.
+        # No target-period gate: same-cohort donors enter with distance-based
+        # weight (their pre-treatment rows contribute via theta_s * omega_j;
+        # their post-treatment cells are zeroed by the control mask (1-D_{js})
+        # applied inside ``_estimate_model``). Matches Rust's compute_weight_matrix.
         unit_weights = np.zeros(n_units)
 
-        # Valid control units at time t: D[t, j] == 0
-        valid_control_at_t = D[t, :] == 0
-
         if lambda_unit == 0:
-            # Uniform weights when lambda_unit = 0
-            unit_weights[valid_control_at_t] = 1.0
+            # Uniform weights when lambda_unit = 0 — all units get 1.
+            # Control masking in _estimate_model handles treated-cell exclusion.
+            unit_weights[:] = 1.0
         else:
             for j in range(n_units):
-                if valid_control_at_t[j] and j != i:
+                if j != i:
                     # Compute distance excluding target period t (Issue B fix)
                     dist = self._compute_unit_distance_for_obs(Y, D, j, i, t)
                     if np.isinf(dist):
@@ -438,8 +758,8 @@ class TROPLocalMixin:
                     else:
                         unit_weights[j] = np.exp(-lambda_unit * dist)
 
-        # Treated unit i gets weight 1 (or could be omitted since we fit on controls)
-        # We include treated unit's own observation for model fitting
+        # Target unit gets weight 1 (will be masked out in estimation via
+        # the control mask, matching the paper's (1-W_{js}) factor).
         unit_weights[i] = 1.0
 
         # Weight matrix: outer product (n_periods x n_units)
@@ -570,6 +890,7 @@ class TROPLocalMixin:
         n_units: int,
         n_periods: int,
         exclude_obs: Optional[Tuple[int, int]] = None,
+        _nonconvergence_tracker: Optional[List[int]] = None,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Estimate the model: Y = alpha + beta + L + tau*D + eps with nuclear norm penalty on L.
@@ -638,6 +959,7 @@ class TROPLocalMixin:
 
         # Alternating minimization following Algorithm 1 (page 9)
         # Minimize: sum W_{ti}(Y_{ti} - alpha_i - beta_t - L_{ti})^2 + lambda_nn||L||_*
+        converged = False
         for _ in range(self.max_iter):
             alpha_old = alpha.copy()
             beta_old = beta.copy()
@@ -678,7 +1000,18 @@ class TROPLocalMixin:
             L_diff = np.max(np.abs(L - L_old))
 
             if max(alpha_diff, beta_diff, L_diff) < self.tol:
+                converged = True
                 break
+        if not converged:
+            if _nonconvergence_tracker is not None:
+                _nonconvergence_tracker.append(1)
+            else:
+                warn_if_not_converged(
+                    converged,
+                    "TROP local alternating minimization",
+                    self.max_iter,
+                    self.tol,
+                )
 
         return alpha, beta, L
 
@@ -757,6 +1090,7 @@ class TROPLocalMixin:
 
         tau_squared_sum = 0.0
         n_valid = 0
+        nonconverg_tracker: List[int] = []
 
         for t, i in control_obs:
             try:
@@ -775,6 +1109,7 @@ class TROPLocalMixin:
                     n_units,
                     n_periods,
                     exclude_obs=(t, i),
+                    _nonconvergence_tracker=nonconverg_tracker,
                 )
 
                 # Pseudo treatment effect
@@ -792,6 +1127,16 @@ class TROPLocalMixin:
                     UserWarning,
                 )
                 return np.inf
+
+        if nonconverg_tracker:
+            warn_if_not_converged(
+                False,
+                f"TROP local LOOCV: {len(nonconverg_tracker)} of "
+                f"{len(control_obs)} per-observation fits did not converge "
+                f"(\u03bb=({lambda_time}, {lambda_unit}, {lambda_nn}))",
+                self.max_iter,
+                self.tol,
+            )
 
         # Return SUM of squared pseudo-treatment effects per Equation 5 (page 8):
         # Q(lambda) = sum_{j,s: D_js=0} [tau_js^loocv(lambda)]^2
@@ -811,9 +1156,16 @@ class TROPLocalMixin:
         survey_design=None,
         unit_weight_arr: Optional[np.ndarray] = None,
         resolved_survey=None,
+        force_python: bool = False,
     ) -> Tuple[float, np.ndarray]:
         """
         Compute bootstrap standard error using unit-level block bootstrap.
+
+        ``force_python=True`` skips the Rust happy path so the cell-specific
+        estimability guard in ``_fit_with_fixed_lambda`` is applied per draw. The
+        point fit sets this whenever it trimmed any non-estimable treated cell
+        (the Rust per-cell tau path lacks the guard), keeping the bootstrap SE
+        and the point ATT on the same estimable-cell set.
 
         When the optional Rust backend is available and the matrix parameters
         (Y, D, control_unit_idx) are provided, uses parallelized Rust
@@ -891,14 +1243,46 @@ class TROPLocalMixin:
                 survey_design,
             )
 
+        # Stratified bootstrap pools (shared by Rust and Python paths).
+        # Paper's Algorithm 3 (page 27) specifies sampling N_0 control rows
+        # and N_1 treated rows separately to preserve treatment ratio.
+        unit_ever_treated = data.groupby(unit)[treatment].max()
+        treated_units = np.array(unit_ever_treated[unit_ever_treated == 1].index)
+        control_units = np.array(unit_ever_treated[unit_ever_treated == 0].index)
+        n_treated_units = len(treated_units)
+        n_control_units = len(control_units)
+
+        # Pre-generate stratified bootstrap indices via numpy (Python-canonical RNG).
+        # Aligns the RNG layer between backends. Combined with the Rust weight-
+        # matrix de-normalization and the Python `_compute_observation_weights`
+        # cache-fallthrough removal (also shipped with this parity work), local-
+        # method Rust and Python produce matching bootstrap SE up to solver-path
+        # roundoff (~1e-7); asserted at atol=1e-5 in the parity regression guard.
+        rng = np.random.default_rng(self.seed)
+        control_idx, treated_idx = stratified_bootstrap_indices(
+            rng, n_control_units, n_treated_units, self.n_bootstrap
+        )
+
         # Try Rust backend for parallel bootstrap (5-15x speedup)
-        # Only used for pweight-only designs (no strata/PSU/FPC)
+        # Only used for pweight-only designs (no strata/PSU/FPC).
+        # Routed to the Python loop when the cell-specific estimability contract
+        # could diverge from Rust: (a) non_absorbing fits -- a fully non-absorbing
+        # panel can have zero never-treated units (empty control stratum -> Rust
+        # can return a degenerate ~0 SE), and the Rust per-cell tau path lacks the
+        # estimability guard; (b) force_python -- the point fit trimmed at least
+        # one non-estimable treated cell (e.g. an unbalanced absorbing panel), so
+        # the Rust path (no guard) would compute SE over a different cell set than
+        # the point ATT. The Python `_fit_with_fixed_lambda` enforces the guard
+        # per draw in both cases.
         if (
             HAS_RUST_BACKEND
             and _rust_bootstrap_trop_variance is not None
             and self._precomputed is not None
             and Y is not None
             and D is not None
+            and n_control_units > 0
+            and not getattr(self, "non_absorbing", False)
+            and not force_python
         ):
             try:
                 control_mask = self._precomputed["control_mask"]
@@ -915,86 +1299,71 @@ class TROPLocalMixin:
                     self.n_bootstrap,
                     self.max_iter,
                     self.tol,
-                    self.seed if self.seed is not None else 0,
+                    control_idx,
+                    treated_idx,
                     unit_weight_arr,
                 )
 
-                if len(bootstrap_estimates) >= 10:
+                if len(bootstrap_estimates) > 0:
+                    warn_bootstrap_failure_rate(
+                        n_success=len(bootstrap_estimates),
+                        n_attempted=self.n_bootstrap,
+                        context="TROP local bootstrap (Rust)",
+                    )
                     return float(se), bootstrap_estimates
-                # Fall through to Python if too few bootstrap samples
-                logger.debug(
-                    "Rust bootstrap returned only %d samples, falling back to Python",
-                    len(bootstrap_estimates),
-                )
+                logger.debug("Rust bootstrap returned 0 samples, falling back to Python")
             except Exception as e:
                 logger.debug("Rust bootstrap variance failed, falling back to Python: %s", e)
-
-        # Python implementation (fallback)
-        rng = np.random.default_rng(self.seed)
-
-        # Issue D fix: Stratified bootstrap sampling
-        # Paper's Algorithm 3 (page 27) specifies sampling N_0 control rows
-        # and N_1 treated rows separately to preserve treatment ratio
-        unit_ever_treated = data.groupby(unit)[treatment].max()
-        treated_units = np.array(unit_ever_treated[unit_ever_treated == 1].index)
-        control_units = np.array(unit_ever_treated[unit_ever_treated == 0].index)
-
-        n_treated_units = len(treated_units)
-        n_control_units = len(control_units)
-
-        bootstrap_estimates_list = []
-
-        for _ in range(self.n_bootstrap):
-            # Stratified sampling: sample control and treated units separately
-            # This preserves the treatment ratio in each bootstrap sample
-            if n_control_units > 0:
-                sampled_control = rng.choice(control_units, size=n_control_units, replace=True)
-            else:
-                sampled_control = np.array([], dtype=control_units.dtype)
-
-            if n_treated_units > 0:
-                sampled_treated = rng.choice(treated_units, size=n_treated_units, replace=True)
-            else:
-                sampled_treated = np.array([], dtype=treated_units.dtype)
-
-            # Combine stratified samples
-            sampled_units = np.concatenate([sampled_control, sampled_treated])
-
-            # Create bootstrap sample with unique unit IDs
-            boot_data = pd.concat(
-                [
-                    data[data[unit] == u].assign(**{unit: f"{u}_{idx}"})
-                    for idx, u in enumerate(sampled_units)
-                ],
-                ignore_index=True,
-            )
-
-            try:
-                # Fit with fixed lambda (skip LOOCV for speed)
-                att = self._fit_with_fixed_lambda(
-                    boot_data,
-                    outcome,
-                    treatment,
-                    unit,
-                    time,
-                    optimal_lambda,
-                    survey_design=survey_design,
+                warnings.warn(
+                    f"Rust backend failed for bootstrap variance; "
+                    f"falling back to Python. Performance may be reduced. "
+                    f"Error: {e}",
+                    UserWarning,
+                    stacklevel=2,
                 )
-                if np.isfinite(att):
-                    bootstrap_estimates_list.append(att)
-            except (ValueError, np.linalg.LinAlgError, KeyError):
-                continue
+
+        # Python fallback: consume the same indices the Rust branch would have used.
+        bootstrap_estimates_list, nonconverg_tracker = _run_trop_bootstrap_loop(
+            data,
+            unit,
+            control_units,
+            treated_units,
+            control_idx,
+            treated_idx,
+            n_control_units,
+            n_treated_units,
+            self.n_bootstrap,
+            # Fit with fixed lambda (skip LOOCV for speed)
+            lambda boot_data, tracker: self._fit_with_fixed_lambda(
+                boot_data,
+                outcome,
+                treatment,
+                unit,
+                time,
+                optimal_lambda,
+                survey_design=survey_design,
+                _nonconvergence_tracker=tracker,
+            ),
+        )
 
         bootstrap_estimates = np.array(bootstrap_estimates_list)
 
-        if len(bootstrap_estimates) < 10:
-            warnings.warn(
-                f"Only {len(bootstrap_estimates)} bootstrap iterations succeeded. "
-                "Standard errors may be unreliable.",
-                UserWarning,
+        if nonconverg_tracker:
+            warn_if_not_converged(
+                False,
+                f"TROP local bootstrap: {len(nonconverg_tracker)} non-converged "
+                f"per-observation fits across {self.n_bootstrap} bootstrap replicates",
+                self.max_iter,
+                self.tol,
             )
-            if len(bootstrap_estimates) == 0:
-                return np.nan, np.array([])
+
+        warn_bootstrap_failure_rate(
+            n_success=len(bootstrap_estimates),
+            n_attempted=self.n_bootstrap,
+            context="TROP local bootstrap",
+        )
+        if len(bootstrap_estimates) == 0:
+            return np.nan, np.array([])
 
         se = np.std(bootstrap_estimates, ddof=1)
         return float(se), bootstrap_estimates
@@ -1036,7 +1405,6 @@ class TROPLocalMixin:
         Tuple[float, np.ndarray]
             (se, bootstrap_estimates).
         """
-        import warnings
 
         from diff_diff.bootstrap_utils import generate_rao_wu_weights
         from diff_diff.linalg import _factorize_cluster_ids
@@ -1115,6 +1483,7 @@ class TROPLocalMixin:
         # weights, mirroring the physical-resampling bootstrap but using weight
         # perturbation instead of unit resampling.
         bootstrap_estimates_list = []
+        nonconverg_tracker: List[int] = []
 
         for _ in range(self.n_bootstrap):
             try:
@@ -1135,6 +1504,7 @@ class TROPLocalMixin:
                     optimal_lambda,
                     survey_design=survey_design,
                     unit_weight_arr=boot_weights,
+                    _nonconvergence_tracker=nonconverg_tracker,
                 )
 
                 if np.isfinite(att):
@@ -1144,14 +1514,22 @@ class TROPLocalMixin:
 
         bootstrap_estimates = np.array(bootstrap_estimates_list)
 
-        if len(bootstrap_estimates) < 10:
-            warnings.warn(
-                f"Only {len(bootstrap_estimates)} bootstrap iterations succeeded. "
-                "Standard errors may be unreliable.",
-                UserWarning,
+        if nonconverg_tracker:
+            warn_if_not_converged(
+                False,
+                f"TROP local Rao-Wu bootstrap: {len(nonconverg_tracker)} non-converged "
+                f"per-observation fits across {self.n_bootstrap} bootstrap replicates",
+                self.max_iter,
+                self.tol,
             )
-            if len(bootstrap_estimates) == 0:
-                return np.nan, np.array([])
+
+        warn_bootstrap_failure_rate(
+            n_success=len(bootstrap_estimates),
+            n_attempted=self.n_bootstrap,
+            context="TROP local Rao-Wu bootstrap",
+        )
+        if len(bootstrap_estimates) == 0:
+            return np.nan, np.array([])
 
         se = np.std(bootstrap_estimates, ddof=1)
         return float(se), bootstrap_estimates
@@ -1166,6 +1544,7 @@ class TROPLocalMixin:
         fixed_lambda: Tuple[float, float, float],
         survey_design=None,
         unit_weight_arr: Optional[np.ndarray] = None,
+        _nonconvergence_tracker: Optional[List[int]] = None,
     ) -> float:
         """
         Fit model with fixed tuning parameters (for bootstrap).
@@ -1243,9 +1622,23 @@ class TROPLocalMixin:
                 Y, D, i, t, lambda_time, lambda_unit, control_unit_idx, n_units, n_periods
             )
 
+            # Skip non-estimable cells (same predicate as the main fit): if the
+            # target unit or target period has no weighted observed control cell,
+            # alpha_i / beta_t are unidentified and tau leaks the fixed effect,
+            # silently biasing the draw's ATT. A draw with no estimable cell
+            # returns NaN and is counted as a failed replicate.
+            if not _treated_cell_is_estimable(control_mask, Y, weight_matrix, i, t):
+                continue
+
             # Fit model with these weights
             alpha, beta, L = self._estimate_model(
-                Y, control_mask, weight_matrix, lambda_nn, n_units, n_periods
+                Y,
+                control_mask,
+                weight_matrix,
+                lambda_nn,
+                n_units,
+                n_periods,
+                _nonconvergence_tracker=_nonconvergence_tracker,
             )
 
             # Compute treatment effect: tau_{it} = Y_{it} - alpha_i - beta_t - L_{it}
@@ -1257,5 +1650,13 @@ class TROPLocalMixin:
         if not tau_values:
             return float("nan")
         if local_weight_arr is not None:
+            # Guard against a degenerate weighted draw: after non-estimable cells
+            # are skipped, the remaining estimable cells can all carry zero
+            # (rescaled survey / Rao-Wu) weight, which would make np.average raise
+            # ZeroDivisionError. Treat such a draw as failed (NaN) per the
+            # bootstrap NaN-on-degenerate contract.
+            weight_sum = float(np.sum(tau_weights))
+            if not np.isfinite(weight_sum) or weight_sum <= 0.0:
+                return float("nan")
             return float(np.average(tau_values, weights=tau_weights))
         return float(np.mean(tau_values))

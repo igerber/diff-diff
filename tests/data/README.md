@@ -6,6 +6,15 @@
 "The Economic Consequences of Hospital Admissions." *American Economic Review*, 108(2), 308-352.
 Replication kit: https://www.openicpsr.org/openicpsr/project/116186/version/V1/view
 
+**License / redistribution:** This fixture is a derived four-column subset (de-identified HRS
+public-use person id, wave, out-of-pocket spending, and first-hospitalization wave) of the
+**publicly available** Dobkin et al. (2018) replication package deposited in the AEA's openICPSR
+repository (project 116186, distributed by ICPSR for replication of the published article). Only
+the derived subset is committed — the full source `HRS_long.dta` is **not** redistributed here
+(`.gitignore`d as `replication_data/`; regenerate from the openICPSR deposit via the snippet
+below). It is included solely as a regression-test fixture to replicate the paper's Table 6.
+Consult the openICPSR deposit page for the deposit's exact Terms of Use.
+
 **Sample selection:** Follows Sun & Abraham (2021), as used by Chen, Sant'Anna & Xie (2025)
 Section 6:
 
@@ -29,6 +38,13 @@ Section 6:
 | G=inf | 65 |
 
 **Columns:** `unit` (hhidpn), `time` (wave), `outcome` (oop_spend, 2005 dollars), `first_treat` (first_hosp)
+
+**Note on sample size (656 vs 652):** Chen, Sant'Anna & Xie (2025) Table 6 reports **652**
+individuals; this fixture yields **656**. The four-individual difference reflects a minor
+sample-selection nuance (e.g. exact age-window or first-hospitalization tie handling) not fully
+pinned down by the paper text. It is immaterial to the validation: every EDiD point estimate in
+`tests/test_efficient_did_validation.py::TestHRSReplication` matches the published Table 6 value
+to within **0.03 of the published standard error**.
 
 **Regeneration:** Requires the Dobkin et al. replication kit (`.gitignore`d as `replication_data/`).
 

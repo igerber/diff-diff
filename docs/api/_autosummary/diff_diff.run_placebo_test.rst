@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: run_placebo_test
+   :no-index:

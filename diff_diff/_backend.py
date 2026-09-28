@@ -18,32 +18,65 @@ _backend_env = os.environ.get("DIFF_DIFF_BACKEND", "auto").lower()
 # Try to import Rust backend for accelerated operations
 try:
     from diff_diff._rust_backend import (
-        generate_bootstrap_weights_batch as _rust_bootstrap_weights,
-        compute_synthetic_weights as _rust_synthetic_weights,
-        project_simplex as _rust_project_simplex,
-        solve_ols as _rust_solve_ols,
-        compute_robust_vcov as _rust_compute_robust_vcov,
-        # TROP estimator acceleration (local method)
-        compute_unit_distance_matrix as _rust_unit_distance_matrix,
-        loocv_grid_search as _rust_loocv_grid_search,
         bootstrap_trop_variance as _rust_bootstrap_trop_variance,
-        # TROP estimator acceleration (global method)
-        loocv_grid_search_global as _rust_loocv_grid_search_global,
+    )
+    from diff_diff._rust_backend import (
         bootstrap_trop_variance_global as _rust_bootstrap_trop_variance_global,
+    )
+    from diff_diff._rust_backend import (
+        compute_noise_level as _rust_compute_noise_level,
+    )
+    from diff_diff._rust_backend import (
+        compute_robust_vcov as _rust_compute_robust_vcov,
+    )
+    from diff_diff._rust_backend import (
         # SDID weights (Frank-Wolfe matching R's synthdid)
         compute_sdid_unit_weights as _rust_sdid_unit_weights,
+    )
+    from diff_diff._rust_backend import (
         compute_time_weights as _rust_compute_time_weights,
-        compute_noise_level as _rust_compute_noise_level,
-        sc_weight_fw as _rust_sc_weight_fw,
+    )
+    from diff_diff._rust_backend import (
+        # TROP estimator acceleration (local method)
+        compute_unit_distance_matrix as _rust_unit_distance_matrix,
+    )
+    from diff_diff._rust_backend import (
+        generate_bootstrap_weights_batch as _rust_bootstrap_weights,
+    )
+    from diff_diff._rust_backend import (
+        loocv_grid_search as _rust_loocv_grid_search,
+    )
+    from diff_diff._rust_backend import (
+        # TROP estimator acceleration (global method)
+        loocv_grid_search_global as _rust_loocv_grid_search_global,
+    )
+    from diff_diff._rust_backend import (
+        project_simplex as _rust_project_simplex,
+    )
+    from diff_diff._rust_backend import (
         # Diagnostics
         rust_backend_info as _rust_backend_info,
+    )
+    from diff_diff._rust_backend import (
+        sc_weight_fw as _rust_sc_weight_fw,
+    )
+    from diff_diff._rust_backend import (
+        sc_weight_fw_weighted as _rust_sc_weight_fw_weighted,
+    )
+    from diff_diff._rust_backend import (
+        sc_weight_fw_weighted_with_convergence as _rust_sc_weight_fw_weighted_with_convergence,
+    )
+    from diff_diff._rust_backend import (
+        sc_weight_fw_with_convergence as _rust_sc_weight_fw_with_convergence,
+    )
+    from diff_diff._rust_backend import (
+        solve_ols as _rust_solve_ols,
     )
 
     _rust_available = True
 except ImportError:
     _rust_available = False
     _rust_bootstrap_weights = None
-    _rust_synthetic_weights = None
     _rust_project_simplex = None
     _rust_solve_ols = None
     _rust_compute_robust_vcov = None
@@ -59,17 +92,66 @@ except ImportError:
     _rust_compute_time_weights = None
     _rust_compute_noise_level = None
     _rust_sc_weight_fw = None
+    _rust_sc_weight_fw_with_convergence = None
+    _rust_sc_weight_fw_weighted = None
+    _rust_sc_weight_fw_weighted_with_convergence = None
     _rust_backend_info = None
+
+# FE-absorption MAP demeaning kernel: imported independently so a stale or
+# mixed-version extension missing only this newer symbol degrades to the
+# numpy demeaning engine WITHOUT disabling the older Rust accelerations.
+try:
+    from diff_diff._rust_backend import demean_map as _rust_demean_map
+except ImportError:
+    _rust_demean_map = None
+
+# Batched ridge-regularized SPD solve (EfficientDiD per-unit weights):
+# imported independently for the same mixed-version reason as demean_map.
+try:
+    from diff_diff._rust_backend import (
+        batched_ridge_chol_solve_ones as _rust_batched_ridge_chol_solve,
+    )
+except ImportError:
+    _rust_batched_ridge_chol_solve = None
+
+# HC2 requires the v2 fail-closed leverage contract. An older extension can
+# export the original symbol yet return finite covariance at unit leverage,
+# so symbol presence alone is insufficient. Import v2 independently: legacy
+# extensions use NumPy HC2 while retaining every other Rust acceleration.
+try:
+    from diff_diff._rust_backend import (
+        compute_robust_vcov_hc2_v2 as _rust_compute_robust_vcov_hc2,
+    )
+except ImportError:
+    _rust_compute_robust_vcov_hc2 = None
+
+# Opt-in normal-equations Cholesky OLS fast path: imported independently
+# for the same mixed-version reason as demean_map. A stale extension
+# missing only this symbol keeps every older Rust acceleration: Rust-eligible
+# fits fall back to the legacy SVD solve_ols kernel (the knob simply has no
+# Rust acceleration there), while numpy-lane fits (weighted, non-hc1,
+# forced-python) still use the numpy Cholesky twin.
+try:
+    from diff_diff._rust_backend import solve_ols_chol as _rust_solve_ols_chol
+except ImportError:
+    _rust_solve_ols_chol = None
 
 # Determine final backend based on environment variable and availability
 if _backend_env == "python":
     # Force pure Python mode - disable Rust even if available
     HAS_RUST_BACKEND = False
     _rust_bootstrap_weights = None
-    _rust_synthetic_weights = None
     _rust_project_simplex = None
     _rust_solve_ols = None
     _rust_compute_robust_vcov = None
+    # FE-absorption MAP demeaning kernel
+    _rust_demean_map = None
+    # Batched ridge-regularized SPD solve
+    _rust_batched_ridge_chol_solve = None
+    # HC2 robust vcov
+    _rust_compute_robust_vcov_hc2 = None
+    # Opt-in normal-equations Cholesky OLS fast path
+    _rust_solve_ols_chol = None
     # TROP estimator acceleration (local method)
     _rust_unit_distance_matrix = None
     _rust_loocv_grid_search = None
@@ -82,6 +164,9 @@ if _backend_env == "python":
     _rust_compute_time_weights = None
     _rust_compute_noise_level = None
     _rust_sc_weight_fw = None
+    _rust_sc_weight_fw_with_convergence = None
+    _rust_sc_weight_fw_weighted = None
+    _rust_sc_weight_fw_weighted_with_convergence = None
     _rust_backend_info = None
 elif _backend_env == "rust":
     # Force Rust mode - fail if not available
@@ -115,10 +200,15 @@ __all__ = [
     "HAS_RUST_BACKEND",
     "rust_backend_info",
     "_rust_bootstrap_weights",
-    "_rust_synthetic_weights",
     "_rust_project_simplex",
     "_rust_solve_ols",
     "_rust_compute_robust_vcov",
+    # Opt-in normal-equations Cholesky OLS fast path
+    "_rust_solve_ols_chol",
+    # FE-absorption MAP demeaning kernel
+    "_rust_demean_map",
+    # Batched ridge-regularized SPD solve (EfficientDiD per-unit weights)
+    "_rust_batched_ridge_chol_solve",
     # TROP estimator acceleration (local method)
     "_rust_unit_distance_matrix",
     "_rust_loocv_grid_search",
@@ -131,4 +221,7 @@ __all__ = [
     "_rust_compute_time_weights",
     "_rust_compute_noise_level",
     "_rust_sc_weight_fw",
+    "_rust_sc_weight_fw_with_convergence",
+    "_rust_sc_weight_fw_weighted",
+    "_rust_sc_weight_fw_weighted_with_convergence",
 ]

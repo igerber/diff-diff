@@ -1,0 +1,8 @@
+{
+  "name": "docs-search-excerpt-smoke",
+  "private": true,
+  "description": "Pinned dependency set for search_excerpt_smoke.mjs (run via npm ci --prefix .github/scripts)",
+  "devDependencies": {
+    "jsdom": "29.1.1"
+  }
+}

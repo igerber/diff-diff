@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: balance_panel
+   :no-index:

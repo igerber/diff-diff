@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: make_post_indicator
+   :no-index:

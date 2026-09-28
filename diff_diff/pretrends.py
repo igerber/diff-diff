@@ -25,6 +25,7 @@ https://github.com/jonathandroth/pretrends - R package implementation
 diff_diff.honest_did - Sensitivity analysis for parallel trends violations
 """
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
@@ -32,7 +33,249 @@ import numpy as np
 import pandas as pd
 from scipy import optimize, stats
 
+from diff_diff._base import BaseEstimator
 from diff_diff.results import MultiPeriodDiDResults
+from diff_diff.results_base import Diagnostic, _validate_vcov_subblock
+
+
+def _compute_nis_acceptance_prob(
+    M: float,
+    weights: np.ndarray,
+    vcov: np.ndarray,
+    z_alpha: float,
+) -> float:
+    """
+    Compute the NIS box acceptance probability ``P(β̂_pre ∈ B_NIS(Σ))``.
+
+    Used by both ``PreTrendsPower._compute_power_nis`` and
+    ``PreTrendsPowerResults.power_at()`` to avoid code duplication and
+    centralize the analytical-or-MC fallback path.
+
+    Returns
+    -------
+    accept_prob : float
+        Acceptance probability in [0, 1]. Always finite — falls back to
+        Monte Carlo (N=20000) if the analytical scipy MVN CDF raises OR
+        returns a non-finite value (e.g., on numerically degenerate Σ).
+    """
+    sigma = np.sqrt(np.maximum(np.diag(vcov), 0))
+    delta = M * weights
+    upper = z_alpha * sigma - delta
+    lower = -z_alpha * sigma - delta
+
+    accept_prob: float
+    try:
+        accept_prob = float(
+            stats.multivariate_normal.cdf(
+                upper,
+                lower_limit=lower,
+                mean=np.zeros(len(weights)),
+                cov=vcov,
+                allow_singular=True,
+            )
+        )
+    except (ValueError, np.linalg.LinAlgError):
+        accept_prob = float("nan")
+
+    # MC fallback on non-finite analytical output. The scipy CDF can return
+    # nan on numerically degenerate Σ even when no exception is raised
+    # (Genz algorithm internal cancellation); detecting nan and falling
+    # back to simulation keeps the downstream MDV solver from silently
+    # propagating nan and returning a wrong-but-finite MDV.
+    if not np.isfinite(accept_prob):
+        rng = np.random.default_rng(0)
+        samples = rng.multivariate_normal(mean=np.zeros(len(weights)), cov=vcov, size=20000)
+        in_box = np.all((samples >= lower[None, :]) & (samples <= upper[None, :]), axis=1)
+        accept_prob = float(in_box.mean())
+
+    return float(np.clip(accept_prob, 0.0, 1.0))
+
+
+def _coerce_relative_times_from_reference(
+    estimated_pre_periods: List[Any],
+    reference_period: Any,
+) -> Optional[np.ndarray]:
+    """
+    Convert ``estimated_pre_periods`` to Roth-style relative-time offsets
+    from a numeric / Period / datetime ``reference_period``.
+
+    Returns ``np.ndarray`` of float relative times when conversion succeeds,
+    or ``None`` when the labels are genuinely non-numeric / unordered
+    (string period IDs, categoricals, etc.). In the ``None`` case, the
+    caller's downstream linear-violation weight construction falls back to
+    the legacy count-based normalized direction — the reported MDV is then
+    NOT in Roth's γ units. We emit a ``UserWarning`` so the user knows
+    the γ-unit contract did not hold and can re-fit with numeric labels.
+
+    Supported regimes:
+
+    - Numeric (``int`` / ``float`` / ``np.int64``): direct ``float()``
+      coercion gives the correct relative offset.
+    - ``pandas.Period`` / ``pandas.Timestamp`` / ``np.datetime64``: period
+      arithmetic returns an offset / ``Timedelta`` that we coerce to a
+      float via ``.n`` (for Period frequencies) or ``.days`` (for
+      Timedelta-like). The result is in units of the reference's
+      frequency for Period, days for Timestamp / datetime64 — the linear
+      γ-units scale is per-unit-of-frequency.
+    - Anything else (string period IDs, categoricals with no ordering,
+      mixed types): returns ``None`` with a warning.
+    """
+    # Path 1: direct float coercion (numeric scalars).
+    try:
+        ref_float = float(reference_period)
+        return np.asarray(
+            [float(p) - ref_float for p in estimated_pre_periods],
+            dtype=float,
+        )
+    except (TypeError, ValueError):
+        pass
+
+    # Path 2: pandas.Period / pandas.Timestamp / datetime64 — try
+    # subtraction-based offset arithmetic.
+    try:
+        diffs = [p - reference_period for p in estimated_pre_periods]
+        floats: List[float] = []
+        for d in diffs:
+            # pandas.tseries.offsets.* or pandas.Period offset — has `.n`.
+            n_attr = getattr(d, "n", None)
+            if n_attr is not None:
+                floats.append(float(n_attr))
+                continue
+            # pandas.Timedelta / numpy.timedelta64 — convert to days.
+            days_attr = getattr(d, "days", None)
+            if days_attr is not None:
+                floats.append(float(days_attr))
+                continue
+            # Bare numpy.timedelta64 fallback.
+            try:
+                floats.append(float(d / np.timedelta64(1, "D")))
+                continue
+            except (TypeError, ValueError):
+                raise TypeError(
+                    f"cannot coerce difference {d!r} of type {type(d).__name__} "
+                    "to float days/periods"
+                )
+        return np.asarray(floats, dtype=float)
+    except (TypeError, ValueError):
+        pass
+
+    # Path 3: genuinely non-numeric labels — warn and fall back to legacy.
+    warnings.warn(
+        f"PreTrendsPower: reference_period {reference_period!r} (type "
+        f"{type(reference_period).__name__}) is not numeric or datetime-like, "
+        "so per-period relative times cannot be derived. Linear-violation "
+        "weights will use the legacy count-based [n_pre-1, ..., 0]/||·||_2 "
+        "direction; the reported MDV is NOT in Roth (2022) γ units. Re-fit "
+        "with numeric period labels (int year, pandas.Period, datetime) to "
+        "obtain γ-unit MDV.",
+        UserWarning,
+        stacklevel=3,
+    )
+    return None
+
+
+def _extract_event_study_vcov_subblock(
+    results: Any,
+    pre_periods: List[int],
+    ses: np.ndarray,
+) -> Tuple[np.ndarray, str]:
+    """
+    Extract the pre-period sub-block of ``results.event_study_vcov`` when
+    available; otherwise fall back to ``diag(ses**2)``.
+
+    This is the canonical Σ_22 routing path for ``compute_pretrends_power``
+    when the event-study result type exposes a full event-study covariance
+    matrix (CallawaySantAnnaResults non-bootstrap fits at
+    ``staggered_results.py:126-128`` and SunAbrahamResults non-bootstrap
+    fits via the W-matrix construction added in PR-B Step 3). Bootstrap
+    fits and replicate-weight survey fits clear ``event_study_vcov`` so
+    the analytical VCV is not mixed with bootstrap / replicate SE
+    overrides — those cases naturally fall through to the diag fallback.
+
+    Parameters
+    ----------
+    results : event-study results object
+        Must have ``event_study_vcov`` and ``event_study_vcov_index``
+        attributes (CallawaySantAnnaResults and SunAbrahamResults both
+        expose them; either may be None for the bootstrap / replicate
+        paths).
+    pre_periods : list of int
+        Sorted relative-time labels of the pre-period coefficients to
+        extract.
+    ses : np.ndarray
+        Per-period standard errors (used for the ``diag(ses**2)`` fallback
+        path; must be in the same order as ``pre_periods``).
+
+    Returns
+    -------
+    vcov : np.ndarray
+        The (n_pre, n_pre) covariance sub-block. Full event_study_vcov
+        sub-block when available; diag(ses**2) otherwise.
+    source : str
+        Provenance label for downstream report-layer tier classification:
+        ``"full_pre_period_vcov"`` when the full event-study sub-block
+        was used (no off-diagonal information was discarded), or
+        ``"diag_fallback"`` when ``event_study_vcov`` was missing /
+        cleared (bootstrap / replicate-weight CS or SA paths).
+    """
+    es_vcov = getattr(results, "event_study_vcov", None)
+    es_vcov_index = getattr(results, "event_study_vcov_index", None)
+    if es_vcov is None or es_vcov_index is None:
+        return np.diag(ses**2), "diag_fallback"
+
+    try:
+        indices = [list(es_vcov_index).index(t) for t in pre_periods]
+    except ValueError as e:
+        # event_study_vcov_index out of sync with the filtered pre_periods.
+        # This is a defensive guard — should not happen on the canonical
+        # construction paths, but if it does we fail loud rather than
+        # silently substituting diag.
+        raise ValueError(
+            f"event_study_vcov_index is missing one of the pre-period labels "
+            f"{pre_periods}; cannot extract sub-block. Available index: "
+            f"{list(es_vcov_index)}. Original error: {e}"
+        ) from e
+
+    return np.asarray(es_vcov)[np.ix_(indices, indices)], "full_pre_period_vcov"
+
+
+def _extract_container_vcov_subblock(
+    surface: Any,
+    pre_periods: List[int],
+    ses: np.ndarray,
+) -> Tuple[np.ndarray, str]:
+    """Container sibling of ``_extract_event_study_vcov_subblock``.
+
+    Reads the unified ``EventStudyResults`` container's ``vcov`` /
+    ``vcov_index`` fields instead of the fit-time ``event_study_vcov``
+    channel. Deliberately a SEPARATE helper: the fit-time one is shared by
+    both the CS and SA branches, and generalizing it would put those paths
+    in the blast radius of a container-only change.
+    """
+    if surface.vcov is None or surface.vcov_index is None:
+        return np.diag(ses**2), "diag_fallback"
+
+    index_labels = list(surface.vcov_index.tolist())
+    if len(set(index_labels)) != len(index_labels):
+        raise ValueError(
+            "The event-study container's vcov_index carries duplicate "
+            f"labels ({index_labels}); the covariance sub-block is "
+            "ambiguous."
+        )
+    try:
+        indices = [index_labels.index(t) for t in pre_periods]
+    except ValueError as e:
+        raise ValueError(
+            f"The event-study container's vcov_index is missing one of the "
+            f"pre-period labels {pre_periods}; cannot extract sub-block. "
+            f"Available index: {index_labels}. Original error: {e}"
+        ) from e
+
+    sub = _validate_vcov_subblock(
+        np.asarray(surface.vcov)[np.ix_(indices, indices)], ses, "PreTrendsPower"
+    )
+    return sub, "full_pre_period_vcov"
+
 
 # =============================================================================
 # Results Classes
@@ -40,7 +283,7 @@ from diff_diff.results import MultiPeriodDiDResults
 
 
 @dataclass
-class PreTrendsPowerResults:
+class PreTrendsPowerResults(Diagnostic):
     """
     Results from pre-trends power analysis.
 
@@ -61,17 +304,47 @@ class PreTrendsPowerResults:
     n_pre_periods : int
         Number of pre-treatment periods in the event study.
     test_statistic : float
-        Expected test statistic under the specified violation.
+        Expected test statistic under the specified violation (Wald only;
+        NaN for NIS fits).
     critical_value : float
         Critical value for the pre-trends test.
     noncentrality : float
-        Non-centrality parameter under the alternative hypothesis.
+        Non-centrality parameter under the alternative hypothesis (Wald only;
+        NaN for NIS fits).
     pre_period_effects : np.ndarray
         Estimated pre-period effects from the event study.
     pre_period_ses : np.ndarray
         Standard errors of pre-period effects.
     vcov : np.ndarray
         Variance-covariance matrix of pre-period effects.
+    pretest_form : str
+        Pretest acceptance-region form used: ``'nis'`` (no-individually-
+        significant box probability — Roth 2022 Section II.A-B, default for new
+        fits) or ``'wald'`` (noncentral-chi-squared on the quadratic form
+        ``delta' Sigma_22^{-1} delta`` — paper-supported alternative, retained
+        for backwards compatibility with shipped numerical baselines).
+    nis_box_probability : float
+        Acceptance probability ``P(beta_hat_pre in B_NIS(Sigma))`` under the
+        alternative ``M * weights``. NIS-only; NaN for Wald fits.
+    violation_weights : np.ndarray, optional
+        The violation-direction vector used at fit time. Populated for all
+        violation types on fresh fits. Normalization depends on the type
+        so that ``M`` always matches the documented per-pattern contract:
+
+        - ``linear`` threaded with ``relative_times`` (post PR-B Step 4):
+          ``|t|`` directly, NOT L2-normalized, so ``δ_t = M·|t|`` and the
+          reported MDV equals Roth's γ exactly.
+        - ``linear`` without ``relative_times`` (legacy):
+          ``[n_pre-1, ..., 0]`` L2-normalized.
+        - ``constant`` (post PR-B R13): ``[1, ..., 1]`` directly, NOT
+          L2-normalized, so ``δ_t = M`` is a true per-period level shift.
+        - ``last_period``: ``[0, ..., 0, 1]`` (already unit-norm).
+        - ``custom``: user vector L2-normalized to unit norm.
+
+        Old serialized results may have ``None`` here; ``power_at()``
+        falls back to reconstruction in that case (with the PR-A
+        ``NotImplementedError`` guard retained only for
+        ``violation_type='custom'`` with ``violation_weights=None``).
     """
 
     power: float
@@ -88,6 +361,16 @@ class PreTrendsPowerResults:
     pre_period_ses: np.ndarray = field(repr=False)
     vcov: np.ndarray = field(repr=False)
     original_results: Optional[Any] = field(default=None, repr=False)
+    pretest_form: Literal["nis", "wald"] = "wald"
+    nis_box_probability: float = np.nan
+    violation_weights: Optional[np.ndarray] = field(default=None, repr=False)
+    # Provenance for downstream tier classification. Populated at fit time
+    # from `_extract_pre_period_params`. ``"full_pre_period_vcov"`` when
+    # off-diagonal pre-period covariances were used; ``"diag_fallback"``
+    # when only per-period SEs were available; ``"unknown"`` for legacy
+    # serialized results pre-PR-B (backwards-compat default). See
+    # ``diagnostic_report._infer_cov_source`` for consumer-side use.
+    covariance_source: str = "unknown"
 
     def __repr__(self) -> str:
         return (
@@ -100,13 +383,57 @@ class PreTrendsPowerResults:
         """
         Check if the pre-trends test is informative.
 
-        A pre-trends test is considered informative if the MDV is reasonably
-        small relative to typical effect sizes. This is a heuristic check;
-        see the summary for interpretation guidance.
+        A pre-trends test is considered informative if the MAX level-scale
+        pre-period violation under the MDV is reasonably small relative to
+        the per-period standard errors. Post PR-B Step 4 the `linear`
+        MDV is in Roth's γ units (a slope), so comparing the raw ``mdv``
+        scalar to the level-scale ``max(pre_period_ses)`` would mix units
+        on irregular pre-period grids. The comparable level-scale scalar
+        is ``mdv * max(|violation_weights|)`` (the largest pre-period
+        deviation under the MDV — see ``max_abs_pre_violation``).
         """
-        # Heuristic: MDV < 2x the max observed pre-period SE
         max_se = np.max(self.pre_period_ses) if len(self.pre_period_ses) > 0 else 1.0
-        return bool(self.mdv < 2 * max_se)
+        return bool(self.max_abs_pre_violation < 2 * max_se)
+
+    @property
+    def max_abs_pre_violation(self) -> float:
+        """
+        Largest level-scale pre-period deviation under the MDV.
+
+        Returns ``mdv * max(|violation_weights|)`` — the maximum
+        absolute pre-period violation ``δ_t`` when the violation
+        magnitude equals the MDV. This is the right level-scale
+        scalar for comparing pre-trends sensitivity against
+        coefficient-scale quantities (post-treatment ATT, per-period
+        SEs, HonestDiD's M bound).
+
+        Why this matters: PR-B Step 4 made the linear ``mdv`` report
+        Roth's γ units (a slope on relative time). On a regular grid
+        ``[-3, -2, -1]`` the max deviation is ``γ * 3``; on an
+        irregular grid ``[-5, -3, -1]`` it is ``γ * 5``. Raw ``mdv``
+        alone cannot be compared to level effects without applying
+        the weight scale.
+
+        For non-linear violation types under the PR-B R13 level-shift
+        convention: constant weights ``[1, ..., 1]`` (unnormalized)
+        yield ``max_abs_pre_violation = mdv * 1 = mdv`` — raw ``mdv``
+        IS the per-period level shift, so level- and γ-scales coincide.
+        Last_period ``[0, ..., 0, 1]`` yields ``max_abs_pre_violation
+        = mdv`` for the same reason. Custom uses the L2-normalized
+        user-supplied weight vector, so ``max_abs_pre_violation``
+        depends on the user's direction.
+
+        Backwards-compat: legacy serialized results without
+        ``violation_weights`` (pre-PR-B) fall back to the raw ``mdv``
+        (which under the pre-PR-B count-based L2-normalized linear
+        convention already had a roughly level-scale magnitude).
+        """
+        if self.violation_weights is None or len(self.violation_weights) == 0:
+            return float(self.mdv)
+        if not np.isfinite(self.mdv):
+            return float(self.mdv)
+        max_w = float(np.max(np.abs(self.violation_weights)))
+        return float(self.mdv * max_w)
 
     @property
     def power_adequate(self) -> bool:
@@ -132,6 +459,7 @@ class PreTrendsPowerResults:
             f"{'Significance level (alpha):':<35} {self.alpha:.3f}",
             f"{'Target power:':<35} {self.target_power:.1%}",
             f"{'Violation type:':<35} {self.violation_type}",
+            f"{'Pretest form:':<35} {self.pretest_form}",
             "",
             "-" * 70,
             "Power Analysis".center(70),
@@ -140,14 +468,23 @@ class PreTrendsPowerResults:
             f"{'Power to detect this violation:':<35} {self.power:.1%}",
             f"{'Minimum detectable violation:':<35} {self.mdv:.4f}",
             "",
-            f"{'Test statistic (expected):':<35} {self.test_statistic:.4f}",
             f"{'Critical value:':<35} {self.critical_value:.4f}",
-            f"{'Non-centrality parameter:':<35} {self.noncentrality:.4f}",
-            "",
-            "-" * 70,
-            "Interpretation".center(70),
-            "-" * 70,
         ]
+        # Dispatch on pretest_form: NIS reports the MVN box acceptance
+        # probability, Wald reports the noncentral-chi-squared noncentrality.
+        if self.pretest_form == "nis":
+            lines.append(f"{'NIS box probability (accept):':<35} {self.nis_box_probability:.4f}")
+        else:
+            lines.append(f"{'Test statistic (expected):':<35} {self.test_statistic:.4f}")
+            lines.append(f"{'Non-centrality parameter:':<35} {self.noncentrality:.4f}")
+        lines.extend(
+            [
+                "",
+                "-" * 70,
+                "Interpretation".center(70),
+                "-" * 70,
+            ]
+        )
 
         if self.power_adequate:
             lines.append(f"✓ Power ({self.power:.0%}) meets target ({self.target_power:.0%}).")
@@ -173,7 +510,25 @@ class PreTrendsPowerResults:
         print(self.summary())
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert results to dictionary."""
+        """Convert results to JSON-serializable dictionary.
+
+        Includes the post-PR-B provenance fields (``violation_weights``,
+        ``covariance_source``) so callers that round-trip the result
+        through ``to_dict``/``to_dataframe`` (e.g., for serialization
+        or downstream transport) preserve the same information the
+        reporting layer reads off the dataclass directly.
+
+        ``violation_weights`` is emitted as ``list[float]`` (or ``None``)
+        so ``json.dumps(result.to_dict())`` works out of the box. Use
+        ``self.violation_weights`` directly on the dataclass when an
+        ndarray is needed.
+        """
+        weights = self.violation_weights
+        weights_list: Optional[List[float]]
+        if weights is None:
+            weights_list = None
+        else:
+            weights_list = [float(w) for w in np.asarray(weights).ravel()]
         return {
             "power": self.power,
             "mdv": self.mdv,
@@ -185,20 +540,30 @@ class PreTrendsPowerResults:
             "test_statistic": self.test_statistic,
             "critical_value": self.critical_value,
             "noncentrality": self.noncentrality,
+            "pretest_form": self.pretest_form,
+            "nis_box_probability": self.nis_box_probability,
+            "violation_weights": weights_list,
+            "covariance_source": self.covariance_source,
             "is_informative": self.is_informative,
             "power_adequate": self.power_adequate,
         }
 
     def to_dataframe(self) -> pd.DataFrame:
-        """Convert results to DataFrame."""
+        """Convert results to DataFrame.
+
+        ``violation_weights`` is stored as a Python list in the single
+        row (pandas-friendly); ``covariance_source`` is a plain string.
+        Mirrors ``to_dict``.
+        """
         return pd.DataFrame([self.to_dict()])
 
     def power_at(self, M: float) -> float:
         """
         Compute power to detect a specific violation magnitude.
 
-        This method allows computing power at different M values without
-        re-fitting the model, using the stored variance-covariance matrix.
+        Uses the stored fitted ``violation_weights`` and the stored
+        ``pretest_form`` to dispatch to the NIS or Wald power computation
+        without re-fitting.
 
         Parameters
         ----------
@@ -209,50 +574,87 @@ class PreTrendsPowerResults:
         -------
         float
             Power to detect violation of magnitude M.
+
+        Raises
+        ------
+        NotImplementedError
+            If the result was produced by an older library version (before
+            the ``violation_weights`` field was added to ``PreTrendsPowerResults``)
+            AND ``violation_type='custom'``. The reconstruction fallback can
+            handle ``linear``/``constant``/``last_period`` from stored
+            metadata, but custom weights cannot be reconstructed; refit
+            ``PreTrendsPower(violation_type='custom', violation_weights=...)``
+            with the new ``M`` instead.
         """
         from scipy import stats
 
         n_pre = self.n_pre_periods
 
-        # Reconstruct violation weights based on violation type
-        # Must match PreTrendsPower._get_violation_weights() exactly
-        if self.violation_type == "linear":
-            # Linear trend: weights decrease toward treatment
-            # [n-1, n-2, ..., 1, 0] for n pre-periods
-            weights = np.arange(-n_pre + 1, 1, dtype=float)
-            weights = -weights  # Now [n-1, n-2, ..., 1, 0]
-        elif self.violation_type == "constant":
-            weights = np.ones(n_pre)
-        elif self.violation_type == "last_period":
-            weights = np.zeros(n_pre)
-            weights[-1] = 1.0
+        # Prefer the persisted fitted weights (populated for all violation
+        # types on fresh fits after PR-B). Fall back to reconstruction only
+        # for old serialized results lacking the field.
+        if self.violation_weights is not None:
+            weights = np.asarray(self.violation_weights, dtype=float)
         else:
-            # For custom, we can't reconstruct - use equal weights as fallback
-            weights = np.ones(n_pre)
+            if self.violation_type == "custom":
+                raise NotImplementedError(
+                    "PreTrendsPowerResults.power_at() cannot reconstruct "
+                    "custom violation weights from an older serialized result "
+                    "(violation_weights field is None). Refit "
+                    "PreTrendsPower(violation_type='custom', "
+                    "violation_weights=...) with the new M instead. "
+                    "Fresh fits from the current library version persist "
+                    "violation_weights and do not hit this guard."
+                )
+            # Reconstruction fallback for legacy serialized results.
+            # Matches the pre-PR-B count-based linear behavior (no
+            # relative_times available on an old result). Only used when
+            # violation_weights is None.
+            if self.violation_type == "linear":
+                weights = np.arange(-n_pre + 1, 1, dtype=float)
+                weights = -weights  # [n-1, n-2, ..., 1, 0]
+            elif self.violation_type == "constant":
+                weights = np.ones(n_pre)
+            elif self.violation_type == "last_period":
+                weights = np.zeros(n_pre)
+                weights[-1] = 1.0
+            else:
+                raise ValueError(
+                    f"Unknown violation_type: {self.violation_type!r}. "
+                    f"Expected one of: 'linear', 'constant', 'last_period', 'custom'."
+                )
+            # Normalize to unit L2 norm — matches the legacy normalize-at-end
+            # path in _get_violation_weights for non-relative_times callers.
+            norm = np.linalg.norm(weights)
+            if norm > 0:
+                weights = weights / norm
 
-        # Normalize weights to unit L2 norm
-        norm = np.linalg.norm(weights)
-        if norm > 0:
-            weights = weights / norm
+        # Dispatch on the stored pretest_form. Old serialized results default
+        # to pretest_form='wald' (the dataclass default) which preserves the
+        # previous power_at numerical output for backwards compat.
+        if self.pretest_form == "nis":
+            z_alpha = float(
+                self.critical_value
+                if np.isfinite(self.critical_value)
+                else stats.norm.ppf(1 - self.alpha / 2)
+            )
+            # Centralized analytical-or-MC fallback (module-level helper).
+            accept_prob = _compute_nis_acceptance_prob(M, weights, self.vcov, z_alpha)
+            return float(1.0 - accept_prob)
 
-        # Compute non-centrality parameter
+        # Wald path (legacy default, also opt-in for new fits with
+        # pretest_form='wald'). Matches the pre-PR-B numerical output.
         try:
             vcov_inv = np.linalg.inv(self.vcov)
         except np.linalg.LinAlgError:
             vcov_inv = np.linalg.pinv(self.vcov)
-
-        # delta = M * weights
-        # nc = delta' * V^{-1} * delta
         noncentrality = M**2 * (weights @ vcov_inv @ weights)
-
-        # Compute power using non-central chi-squared
         power = 1 - stats.ncx2.cdf(self.critical_value, df=n_pre, nc=noncentrality)
-
         return float(power)
 
 
 @dataclass
-class PreTrendsPowerCurve:
+class PreTrendsPowerCurve(Diagnostic):
     """
     Power curve across violation magnitudes.
 
@@ -270,6 +672,11 @@ class PreTrendsPowerCurve:
         Target power level.
     violation_type : str
         Type of violation pattern.
+    pretest_form : str
+        Pretest acceptance-region form (``'nis'`` or ``'wald'``) used to
+        compute the curve. NIS and Wald curves can differ materially under
+        correlated Σ_22; persisting the form prevents callers from
+        misinterpreting a serialized/plotted curve.
     """
 
     M_values: np.ndarray
@@ -278,16 +685,37 @@ class PreTrendsPowerCurve:
     alpha: float
     target_power: float
     violation_type: str
+    pretest_form: Literal["nis", "wald"] = "wald"
 
     def __repr__(self) -> str:
         return f"PreTrendsPowerCurve(n_points={len(self.M_values)}, " f"mdv={self.mdv:.4f})"
 
+    def summary(self) -> str:
+        """Return a formatted summary of the power curve."""
+        lines = [
+            "Pre-Trends Power Curve",
+            "=" * 60,
+            f"{'Grid points:':<28} {len(self.M_values)}",
+            f"{'Violation type:':<28} {self.violation_type}",
+            f"{'Pretest form:':<28} {self.pretest_form}",
+            f"{'Significance level (alpha):':<28} {self.alpha}",
+            f"{'Target power:':<28} {self.target_power}",
+            f"{'Minimum detectable violation:':<28} {self.mdv:.4f}",
+            "-" * 60,
+            f"{'M':>12} {'Power':>10}",
+        ]
+        for m, p in zip(self.M_values, self.powers):
+            lines.append(f"{m:>12.4f} {p:>10.4f}")
+        lines.append("=" * 60)
+        return "\n".join(lines)
+
     def to_dataframe(self) -> pd.DataFrame:
-        """Convert to DataFrame with M and power columns."""
+        """Convert to DataFrame with M, power, and pretest_form columns."""
         return pd.DataFrame(
             {
                 "M": self.M_values,
                 "power": self.powers,
+                "pretest_form": self.pretest_form,
             }
         )
 
@@ -375,7 +803,7 @@ class PreTrendsPowerCurve:
 # =============================================================================
 
 
-class PreTrendsPower:
+class PreTrendsPower(BaseEstimator):
     """
     Pre-trends power analysis (Roth 2022).
 
@@ -397,18 +825,33 @@ class PreTrendsPower:
     violation_weights : array-like, optional
         Custom weights for violation pattern. Length must equal number of
         pre-periods. Only used when violation_type='custom'.
+    pretest_form : {'nis', 'wald'}, default='nis'
+        Pre-trends test acceptance-region form:
+
+        - ``'nis'``: Roth (2022) no-individually-significant pretest (Section
+          II.A-B). Acceptance region is ``B_NIS(Σ) = { b : |b_t| <= z_{1-α/2}
+          σ_t for all t }``. Power computed via multivariate normal box
+          probability. This is the new default (PR-B 2026-05-17), matching
+          both the paper's primary analysis and the R ``pretrends`` package.
+        - ``'wald'``: Noncentral chi-squared on the quadratic form
+          ``δ' Σ_22^{-1} δ`` (the shipped behavior prior to PR-B 2026-05-17).
+          Retained as a paper-supported alternative under Propositions 1+3+4
+          (Wald acceptance region is a convex ellipsoid, so all four
+          propositions apply). Use this for backwards-compat with shipped
+          numerical baselines.
 
     Examples
     --------
     Basic usage with MultiPeriodDiD results:
 
-    >>> from diff_diff import MultiPeriodDiD
+    >>> from diff_diff import TwoWayFixedEffects
     >>> from diff_diff.pretrends import PreTrendsPower
     >>>
     >>> # Fit event study
-    >>> mp_did = MultiPeriodDiD()
-    >>> results = mp_did.fit(data, outcome='y', treatment='treated',
-    ...                      time='period', post_periods=[4, 5, 6, 7])
+    >>> twfe = TwoWayFixedEffects()
+    >>> results = twfe.fit(data, outcome='y', treatment='treated',
+    ...                    unit='unit', event_study=True,
+    ...                    time='period', post_periods=[4, 5, 6, 7])
     >>>
     >>> # Analyze pre-trends power
     >>> pt = PreTrendsPower(alpha=0.05, power=0.80)
@@ -445,6 +888,7 @@ class PreTrendsPower:
         power: float = 0.80,
         violation_type: Literal["linear", "constant", "last_period", "custom"] = "linear",
         violation_weights: Optional[np.ndarray] = None,
+        pretest_form: Literal["nis", "wald"] = "nis",
     ):
         if not 0 < alpha < 1:
             raise ValueError(f"alpha must be between 0 and 1, got {alpha}")
@@ -457,6 +901,8 @@ class PreTrendsPower:
             )
         if violation_type == "custom" and violation_weights is None:
             raise ValueError("violation_weights must be provided when violation_type='custom'")
+        if pretest_form not in ("nis", "wald"):
+            raise ValueError(f"pretest_form must be 'nis' or 'wald', got '{pretest_form}'")
 
         self.alpha = alpha
         self.target_power = power
@@ -464,28 +910,16 @@ class PreTrendsPower:
         self.violation_weights = (
             np.asarray(violation_weights) if violation_weights is not None else None
         )
+        self.pretest_form = pretest_form
 
-    def get_params(self) -> Dict[str, Any]:
-        """Get parameters for this estimator."""
-        return {
-            "alpha": self.alpha,
-            "power": self.target_power,
-            "violation_type": self.violation_type,
-            "violation_weights": self.violation_weights,
-        }
+    # get_params/set_params come from BaseEstimator.
+    _PARAM_ATTR_ALIASES = {"power": "target_power"}
 
-    def set_params(self, **params) -> "PreTrendsPower":
-        """Set parameters for this estimator."""
-        for key, value in params.items():
-            if key == "power":
-                self.target_power = value
-            elif hasattr(self, key):
-                setattr(self, key, value)
-            else:
-                raise ValueError(f"Invalid parameter: {key}")
-        return self
-
-    def _get_violation_weights(self, n_pre: int) -> np.ndarray:
+    def _get_violation_weights(
+        self,
+        n_pre: int,
+        relative_times: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
         """
         Get violation weights based on violation type.
 
@@ -493,11 +927,46 @@ class PreTrendsPower:
         ----------
         n_pre : int
             Number of pre-treatment periods.
+        relative_times : np.ndarray, optional
+            Sorted relative-time labels for the pre-period coefficients
+            (e.g., ``[-3, -2, -1]`` for a regular grid, ``[-5, -3, -1]``
+            for an irregular grid, ``[-3, -2]`` for an anticipation-shifted
+            grid with ``anticipation=1``). When provided AND
+            ``violation_type='linear'``, weights are set to ``|t|`` directly
+            with NO L2 normalization, so ``δ_t = M * |t|`` and the reported
+            MDV is in Roth's γ units (δ_t = γ·t convention). When None,
+            falls back to the legacy count-based ``[n_pre-1, ..., 1, 0] /
+            ||·||_2`` direction (preserves the pre-PR-B shipped behavior
+            for callers that bypass ``fit()`` and call this helper
+            directly without relative-time labels).
 
         Returns
         -------
         np.ndarray
-            Violation weights, normalized to have L2 norm of 1.
+            Violation weights, with per-violation-type normalization
+            conventions chosen so the magnitude `M` matches what
+            ``REGISTRY.md`` documents for the pattern:
+
+            - ``'linear'`` with ``relative_times``: ``|t|`` directly,
+              NOT L2-normalized (so ``δ_t = M * |t|`` and the reported
+              MDV is in Roth's γ units). PR-B Step 4.
+            - ``'linear'`` without ``relative_times`` (legacy): the
+              count-based ``[n_pre-1, ..., 0]`` direction, L2-normalized
+              to unit norm (preserves pre-PR-B shipped behavior).
+            - ``'constant'``: ``[1, 1, ..., 1]`` directly, NOT
+              normalized — ``δ_t = M`` per period (a true level shift,
+              matching the documented ``δ_t = c`` convention). PR-B R13
+              fix: pre-R13 normalization gave ``δ_t = M/√K``, a silent
+              rescaling that the REGISTRY/API did not document.
+            - ``'last_period'``: ``[0, ..., 0, 1]`` directly. Already
+              unit-norm so the post-normalization output was identical;
+              the unconditional early return locks the level-shift
+              contract.
+            - ``'custom'``: user-supplied ``violation_weights``,
+              L2-normalized to unit norm (M is the magnitude along the
+              user's direction; downstream
+              ``max_abs_pre_violation = M * max(|weights|)`` exposes
+              the level-scale max under the MDV).
         """
         if self.violation_type == "custom":
             assert self.violation_weights is not None
@@ -508,22 +977,58 @@ class PreTrendsPower:
                 )
             weights = self.violation_weights.copy()
         elif self.violation_type == "linear":
-            # Linear trend: weights = [-n+1, -n+2, ..., -1, 0] for periods ending at -1
-            # Normalized so that violation at period -1 = 0 and grows linearly backward
+            if relative_times is not None:
+                # Roth (2022) δ_t = γ · t convention. Use |t| because
+                # pre-period labels are negative; the resulting violation
+                # vector δ_pre = M * |t| satisfies M = γ exactly.
+                # NO L2 normalization — keep the γ-unit scale so the
+                # reported MDV is in Roth's γ units on irregular and
+                # anticipation-shifted grids. Early return; skip the
+                # normalize-at-end block below. See PR-A REGISTRY ##
+                # PreTrendsPower "Note (deviation — linear violation
+                # pattern)" — PR-B Step 4 resolves the deviation when
+                # relative_times is threaded through.
+                if len(relative_times) != n_pre:
+                    raise ValueError(
+                        f"relative_times has length {len(relative_times)}, "
+                        f"but there are {n_pre} pre-periods"
+                    )
+                return np.abs(np.asarray(relative_times)).astype(float)
+            # Backwards-compatible fallback (no relative_times threaded):
+            # legacy count-based [n_pre-1, ..., 1, 0] / ||·||_2 direction.
+            # Used by callers that bypass fit() (e.g., direct
+            # _get_violation_weights() unit tests) or by code paths that
+            # don't have access to the actual pre-period labels.
             weights = np.arange(-n_pre + 1, 1, dtype=float)
-            # Shift so that weights are positive and represent deviation from PT
             weights = -weights  # Now [n-1, n-2, ..., 1, 0]
         elif self.violation_type == "constant":
-            # Same violation in all periods
-            weights = np.ones(n_pre)
+            # δ_t = M for all pre-periods (level shift). Skip L2
+            # normalization so M is exactly the per-period level shift
+            # the REGISTRY documents (`δ_t = c`). Pre-PR-B (and the
+            # pre-R13 PR-B state) divided by sqrt(K), making `δ_t =
+            # M/sqrt(K)` and silently re-scaling reported MDV/power on
+            # constant fits by sqrt(K). PR-B R13 fix: skip the norm
+            # so the public contract matches the docs.
+            return np.ones(n_pre, dtype=float)
         elif self.violation_type == "last_period":
-            # Violation only in last pre-period (period -1)
-            weights = np.zeros(n_pre)
+            # Violation only in last pre-period (period -1). Unnormalized
+            # `[0, ..., 0, 1]` already has L2 norm 1, so this path was
+            # always equivalent to the post-normalization output; keep
+            # the early return for symmetry with constant + linear-with-
+            # relative_times so the level-shift contract is uniform
+            # across all level-pattern violation types.
+            weights = np.zeros(n_pre, dtype=float)
             weights[-1] = 1.0
+            return weights
         else:
             raise ValueError(f"Unknown violation_type: {self.violation_type}")
 
-        # Normalize to unit norm (if not all zeros)
+        # Normalize to unit norm (if not all zeros). The early-return
+        # branches above for linear-with-relative_times, constant, and
+        # last_period intentionally skip this normalization to preserve
+        # the level-shift contract documented in REGISTRY.md
+        # `## PreTrendsPower`. This block only fires for the linear-
+        # legacy-fallback path and `violation_type='custom'`.
         norm = np.linalg.norm(weights)
         if norm > 0:
             weights = weights / norm
@@ -534,14 +1039,20 @@ class PreTrendsPower:
         self,
         results: Union[MultiPeriodDiDResults, Any],
         pre_periods: Optional[List[int]] = None,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int, Optional[np.ndarray], str]:
         """
         Extract pre-period parameters from results.
 
         Parameters
         ----------
-        results : MultiPeriodDiDResults or similar
-            Results object from event study estimation.
+        results : MultiPeriodDiDResults, CallawaySantAnnaResults, SunAbrahamResults, or EventStudyResults
+            Results object from event study estimation, or the unified
+            event-study container from
+            ``CallawaySantAnnaResults.aggregate('event_study')``,
+            ``DMLDiDResults.aggregate('event_study')``, or
+            ``StackedDiDResults.aggregate('event_study')`` (CS-, DML-, and
+            Stacked-sourced containers only; Stacked containers require
+            ``kappa_pre >= 2`` so estimated pre-periods exist).
         pre_periods : list of int, optional
             Explicit list of pre-treatment periods. If None, uses results.pre_periods.
 
@@ -555,7 +1066,36 @@ class PreTrendsPower:
             Variance-covariance matrix for pre-period effects.
         n_pre : int
             Number of pre-periods.
+        relative_times : np.ndarray or None
+            Pre-period relative-time labels (Roth's δ_t = γ·t convention),
+            or None for callers that bypass the labeled-grid path.
+        covariance_source : str
+            Provenance label describing which covariance path the
+            extraction actually took:
+
+            - ``"full_pre_period_vcov"`` when a full pre-period
+              covariance sub-block was used (MPD with
+              ``interaction_indices``, CS/SA with populated
+              ``event_study_vcov``, or an admitted CS-/Stacked-sourced
+              container carrying ``vcov`` - StackedDiD persists its
+              event-study VCV in every inference mode, so Stacked
+              containers always take this tier).
+            - ``"diag_fallback"`` when only the per-period standard
+              errors were available (bootstrap / replicate-weight CS or
+              SA fits, MPD without ``interaction_indices``).
+
+            ``DiagnosticReport`` consumes this label downstream to
+            decide whether the power-tier should be conservatively
+            downgraded (REPORTING.md "conservative deviation" rule),
+            rather than re-inferring covariance provenance from the
+            result type (which would diverge from the actual extraction
+            path the moment the routing changes — see PR-B Step 3).
         """
+        from diff_diff.results_base import EventStudyResults
+
+        if isinstance(results, EventStudyResults):
+            return self._extract_container_pre_period_params(results, pre_periods)
+
         if isinstance(results, MultiPeriodDiDResults):
             # Get pre-period information - use explicit pre_periods if provided
             if pre_periods is not None:
@@ -597,10 +1137,36 @@ class PreTrendsPower:
             ):
                 indices = [results.interaction_indices[p] for p in estimated_pre_periods]
                 vcov = results.vcov[np.ix_(indices, indices)]
+                covariance_source = "full_pre_period_vcov"
             else:
                 vcov = np.diag(ses**2)
+                covariance_source = "diag_fallback"
 
-            return effects, ses, vcov, n_pre
+            # For MultiPeriodDiDResults, period identifiers are generic
+            # (often calendar years, sometimes pre-shifted relative times).
+            # Roth's δ_t = γ·t convention needs RELATIVE offsets from the
+            # treatment / reference period. Three label-type regimes:
+            #
+            #   1. Numeric (int / float / np.int64) — direct float() coercion
+            #      gives the correct relative offset.
+            #   2. pandas.Period — period arithmetic works on the Period
+            #      object directly (``p - ref`` returns ordinal-difference);
+            #      we cast via the `n` attribute on the resulting offset for
+            #      sub-period frequencies. Datetime-like labels (Timestamp,
+            #      np.datetime64) are caught the same way and converted to
+            #      days via numpy timedelta semantics.
+            #   3. Genuinely non-numeric / unordered labels (string period
+            #      IDs, categoricals without a ranking) — emit an explicit
+            #      UserWarning and fall back to the legacy count-based
+            #      [n_pre-1, ..., 0] / ||·||_2 normalized direction. The
+            #      reported MDV under this fallback is NOT in Roth's γ
+            #      units; users on non-numeric labels who need γ-unit MDV
+            #      should re-fit with numeric period labels.
+            ref = getattr(results, "reference_period", None)
+            relative_times: Optional[np.ndarray] = None
+            if ref is not None:
+                relative_times = _coerce_relative_times_from_reference(estimated_pre_periods, ref)
+            return effects, ses, vcov, n_pre, relative_times, covariance_source
 
         # Try CallawaySantAnnaResults
         try:
@@ -609,29 +1175,166 @@ class PreTrendsPower:
             if isinstance(results, CallawaySantAnnaResults):
                 if results.event_study_effects is None:
                     raise ValueError(
-                        "CallawaySantAnnaResults must have event_study_effects. "
-                        "Re-run with aggregate='event_study'."
+                        f"{type(results).__name__} must have "
+                        "event_study_effects. Pass the post-fit container "
+                        "(compute_pretrends_power(results.aggregate("
+                        "'event_study'), ...)) instead; CallawaySantAnna "
+                        "fits can alternatively use the deprecated "
+                        "aggregate='event_study' to populate the fit-time "
+                        "surface."
                     )
 
-                # Get pre-period effects (negative relative times)
-                # Filter out normalization constraints (n_groups=0) and non-finite SEs
+                # Common-reference guard, mirroring the container branch
+                # and HonestDiD: multiple distinct cohort base event
+                # times = pre-period coefficients normalized against
+                # DIFFERENT bases (gapped universal grid, including the
+                # overlapped-base layout no reference-only row marks).
+                # Provenance-less universal results (pre-3.9 pickles)
+                # must not FAIL OPEN: derive from the materialized
+                # reference cells; warn fail-safe when absent.
+                _ref_e = getattr(results, "reference_event_times", None)
+                if _ref_e is None and getattr(results, "base_period", None) == "universal":
+                    _gte = getattr(results, "group_time_effects", None) or {}
+                    _derived = {t - g for (g, t), _d in _gte.items() if _d.get("is_reference")}
+                    if _derived:
+                        _ref_e = tuple(sorted(_derived))
+                    else:
+                        warnings.warn(
+                            "This CallawaySantAnna base_period='universal' "
+                            "result carries no reference_event_times "
+                            "provenance and no materialized reference "
+                            "cells, so a common reference period cannot "
+                            "be verified (a gapped time grid may mix "
+                            "cohort-specific bases). Re-fit with the "
+                            "current version to record provenance.",
+                            UserWarning,
+                            stacklevel=4,
+                        )
+                if _ref_e is not None and len(set(_ref_e)) > 1:
+                    raise ValueError(
+                        "PreTrendsPower requires pre-period coefficients "
+                        "normalized against one common reference period, "
+                        "but this CallawaySantAnna base_period='universal' "
+                        "fit selected cohort-specific positional bases at "
+                        f"event times {sorted(set(_ref_e))} (gapped time "
+                        "grid). The hypothesized violation delta is "
+                        "defined relative to one reference, so power/MDV "
+                        "over mixed-base coefficients target an "
+                        "ill-defined alternative. Re-estimate on a "
+                        "consecutive (ungapped) time grid so every "
+                        "cohort's base falls at the same event time."
+                    )
+
+                # Varying-base interpretation warning (twin of HonestDiD's
+                # universal-base warning): the built-in ``linear``
+                # violation constructs delta as a slope on RELATIVE TIME,
+                # which assumes pre-treatment coefficients are LEVELS
+                # against one common reference. With base_period="varying"
+                # (the CS default), pre-treatment effects are
+                # consecutive-period comparisons - under a linear trend
+                # they are constant increments, not values proportional to
+                # |event_time| - so linear power/MDV target a different
+                # violation shape. Scoped to the LINEAR benchmark: the
+                # constant/last_period/custom vectors are user-specified
+                # in coefficient space.
+                if (
+                    getattr(results, "base_period", None) != "universal"
+                    and getattr(self, "violation_type", "linear") == "linear"
+                ):
+                    warnings.warn(
+                        "PreTrendsPower on CallawaySantAnna results with "
+                        "base_period='varying': pre-treatment coefficients "
+                        "are consecutive-period comparisons, but the "
+                        "'linear' violation benchmark assumes level "
+                        "coefficients against a common reference period, "
+                        "so linear power/MDV target a different violation "
+                        "shape. Re-run with CallawaySantAnna("
+                        "base_period='universal') for Roth-faithful linear "
+                        "benchmarks.",
+                        UserWarning,
+                        stacklevel=4,
+                    )
+
+                # Get pre-period effects. Anticipation-aware cutoff per
+                # REGISTRY.md §CallawaySantAnna lines 355-395: with
+                # ``anticipation=k``, true pre-periods are ``t < -k``;
+                # ``t ∈ [-k, -1]`` is the anticipation window and must
+                # not be used for pre-trends power. Filter out
+                # normalization constraints (n_groups=0) and non-finite
+                # SEs as well.
+                _ant = getattr(results, "anticipation", 0) or 0
+                try:
+                    _ant = int(_ant)
+                except (TypeError, ValueError):
+                    _ant = 0
+                _pre_cutoff = -_ant
+                # ``safe_inference`` treats ``se <= 0`` as undefined
+                # inference; filter the same way here so pre-trends
+                # power never silently includes rows whose per-period
+                # SE collapsed (round-33 P0 CI review on PR #318).
                 pre_effects = {
                     t: data
                     for t, data in results.event_study_effects.items()
-                    if t < 0 and data.get("n_groups", 1) > 0 and np.isfinite(data.get("se", np.nan))
+                    if t < _pre_cutoff
+                    and data.get("n_groups", 1) > 0
+                    and np.isfinite(data.get("se", np.nan))
+                    and float(data.get("se", 0.0)) > 0
                 }
 
                 if not pre_effects:
                     raise ValueError("No pre-treatment periods found in event study.")
+
+                # An explicitly requested pre-period subset is honored,
+                # never silently ignored (mirrors the MPD branch and the
+                # container branch).
+                if pre_periods is not None:
+                    _missing = [t for t in sorted(pre_periods) if t not in pre_effects]
+                    if _missing:
+                        raise ValueError(
+                            f"Requested pre_periods {_missing} are not "
+                            f"eligible pre-treatment periods in this event "
+                            f"study (eligible: {sorted(pre_effects)})."
+                        )
+                    pre_effects = {t: pre_effects[t] for t in sorted(pre_periods)}
+                    if not pre_effects:
+                        raise ValueError(
+                            "Pre-trends power analysis requires at least "
+                            "one pre-period; the requested pre_periods "
+                            "subset is empty."
+                        )
 
                 pre_periods = sorted(pre_effects.keys())
                 n_pre = len(pre_periods)
 
                 effects = np.array([pre_effects[t]["effect"] for t in pre_periods])
                 ses = np.array([pre_effects[t]["se"] for t in pre_periods])
-                vcov = np.diag(ses**2)
 
-                return effects, ses, vcov, n_pre
+                # Route through full event_study_vcov when available
+                # (non-bootstrap CS fits at staggered_results.py:126-128).
+                # Bootstrap CS fits clear event_study_vcov at
+                # staggered.py:2032-2036, falling through to diag.
+                vcov, covariance_source = _extract_event_study_vcov_subblock(
+                    results, pre_periods, ses
+                )
+
+                # Roth's linear violation is defined relative to the
+                # NORMALIZED ZERO (his omitted period is labeled t=0):
+                # delta must vanish at the omitted reference, so relative
+                # times are measured FROM it - |t - t_ref| - not from
+                # treatment (the MPD branch's
+                # _coerce_relative_times_from_reference precedent).
+                # Universal fits carry the anchor as the singleton
+                # reference_event_times; varying fits have no common
+                # reference (raw labels retained under the varying-base
+                # warning; transformation tracked in TODO.md).
+                if _ref_e is not None and len(set(_ref_e)) == 1:
+                    _anchor = float(next(iter(set(_ref_e))))
+                    relative_times = np.asarray(
+                        [float(t) - _anchor for t in pre_periods], dtype=float
+                    )
+                else:
+                    relative_times = np.asarray(pre_periods, dtype=float)
+                return effects, ses, vcov, n_pre, relative_times, covariance_source
         except ImportError:
             pass
 
@@ -640,32 +1343,480 @@ class PreTrendsPower:
             from diff_diff.sun_abraham import SunAbrahamResults
 
             if isinstance(results, SunAbrahamResults):
-                # Get pre-period effects (negative relative times)
-                # Filter out normalization constraints (n_groups=0) and non-finite SEs
+                # Same anticipation-aware pre-period cutoff as
+                # CallawaySantAnna above.
+                _ant = getattr(results, "anticipation", 0) or 0
+                try:
+                    _ant = int(_ant)
+                except (TypeError, ValueError):
+                    _ant = 0
+                _pre_cutoff = -_ant
+                # Mirror the ``se > 0`` filter applied on the CS branch.
                 pre_effects = {
                     t: data
                     for t, data in results.event_study_effects.items()
-                    if t < 0 and data.get("n_groups", 1) > 0 and np.isfinite(data.get("se", np.nan))
+                    if t < _pre_cutoff
+                    and data.get("n_groups", 1) > 0
+                    and np.isfinite(data.get("se", np.nan))
+                    and float(data.get("se", 0.0)) > 0
                 }
 
                 if not pre_effects:
                     raise ValueError("No pre-treatment periods found in event study.")
+
+                # Honor an explicitly requested pre-period subset (mirrors
+                # the CS branch above).
+                if pre_periods is not None:
+                    _missing = [t for t in sorted(pre_periods) if t not in pre_effects]
+                    if _missing:
+                        raise ValueError(
+                            f"Requested pre_periods {_missing} are not "
+                            f"eligible pre-treatment periods in this event "
+                            f"study (eligible: {sorted(pre_effects)})."
+                        )
+                    pre_effects = {t: pre_effects[t] for t in sorted(pre_periods)}
+                    if not pre_effects:
+                        raise ValueError(
+                            "Pre-trends power analysis requires at least "
+                            "one pre-period; the requested pre_periods "
+                            "subset is empty."
+                        )
 
                 pre_periods = sorted(pre_effects.keys())
                 n_pre = len(pre_periods)
 
                 effects = np.array([pre_effects[t]["effect"] for t in pre_periods])
                 ses = np.array([pre_effects[t]["se"] for t in pre_periods])
-                vcov = np.diag(ses**2)
 
-                return effects, ses, vcov, n_pre
+                # Route through full event_study_vcov when available
+                # (non-bootstrap SA fits — sun_abraham.py builds the matrix
+                # via W @ vcov_cohort @ W.T after _compute_iw_effects).
+                # Bootstrap SA fits and replicate-weight survey fits clear
+                # event_study_vcov, falling through to diag.
+                vcov, covariance_source = _extract_event_study_vcov_subblock(
+                    results, pre_periods, ses
+                )
+
+                # SunAbraham omits e = -1 - anticipation as its COMMON
+                # reference (saturated-regression omitted category):
+                # anchor Roth's linear violation there (see the CS
+                # branch for the normalization rationale).
+                _sa_ref = getattr(results, "reference_period", None)
+                if _sa_ref is None:
+                    _sa_ref = -1 - int(getattr(results, "anticipation", 0) or 0)
+                relative_times = np.asarray(
+                    [float(t) - float(_sa_ref) for t in pre_periods], dtype=float
+                )
+                return effects, ses, vcov, n_pre, relative_times, covariance_source
         except ImportError:
             pass
 
         raise TypeError(
             f"Unsupported results type: {type(results)}. "
-            "Expected MultiPeriodDiDResults, CallawaySantAnnaResults, or SunAbrahamResults."
+            "Expected MultiPeriodDiDResults, CallawaySantAnnaResults, "
+            "SunAbrahamResults, or an EventStudyResults container from "
+            "CallawaySantAnnaResults.aggregate('event_study'), "
+            "DMLDiDResults.aggregate('event_study'), or "
+            "StackedDiDResults.aggregate('event_study')."
         )
+
+    def _extract_calendar_container_pre_period_params(
+        self,
+        surface: Any,
+        pre_periods: Optional[List[int]] = None,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int, Optional[np.ndarray], str]:
+        """Calendar-scale container branch (TWFE event-study mode, M-010).
+
+        Reconstructs EXACTLY the inputs the native
+        ``MultiPeriodDiDResults`` branch reads: the pre-period set from
+        the container's authoritative ``post_periods`` partition
+        provenance (never a positional split), per-period effects/SEs,
+        the pre-period vcov sub-block via the container's explicit
+        ``vcov_index``, and - critically - the ``reference_period``
+        plumbed through ``_coerce_relative_times_from_reference``, so
+        Roth's gamma-unit relative times, the string-label degradation
+        warning, and the REGISTRY gamma-unit contract are reproduced
+        exactly (the native route is NOT arithmetic-free: it subtracts
+        labels from the reference).
+
+        Unlike HonestDiD's calendar route, this one is NOT
+        geometry-scoped: power/MDV consume pre-period coefficients and
+        ref-relative offsets, which are well-defined for arbitrary
+        (non-suffix) declared partitions and non-last references.
+        """
+        if surface.source != "TwoWayFixedEffects":
+            raise TypeError(
+                "PreTrendsPower accepts calendar-scale EventStudyResults "
+                "containers from the TwoWayFixedEffects event-study mode "
+                f"only (got source={surface.source!r}). For MultiPeriodDiD "
+                "pass the native MultiPeriodDiDResults object."
+            )
+        if surface.post_periods is None:
+            raise TypeError(
+                "PreTrendsPower requires the calendar container's "
+                "post_periods partition provenance (present on "
+                "producer-built TwoWayFixedEffects event-study surfaces); "
+                "a calendar surface without it cannot be partitioned into "
+                "pre/post periods - the partition is not recoverable from "
+                "event_time positions."
+            )
+
+        _all_labels = surface.event_time.tolist()
+        if len(set(_all_labels)) != len(_all_labels):
+            raise ValueError(
+                "The event-study container carries duplicate event_time "
+                f"labels ({_all_labels}); each horizon must appear "
+                "exactly once."
+            )
+
+        ref_rows = surface.event_time[surface.is_reference].tolist()
+        if len(ref_rows) != 1:
+            raise ValueError(
+                "PreTrendsPower requires exactly one reference row on a "
+                f"calendar-scale container (got {sorted(ref_rows)}): "
+                "relative times are computed against the single omitted "
+                "reference period."
+            )
+        ref = ref_rows[0]
+
+        post_set = set(surface.post_periods)
+        _by_label = {t: i for i, t in enumerate(_all_labels)}
+        # The native MPD complement rule for the declared pre grid; the
+        # eligible set then drops the reference and unusable-inference rows
+        # in CHRONOLOGICAL (sorted) order.
+        declared_pre = [p for p in sorted(_all_labels) if p not in post_set]
+        if len(declared_pre) == 0:
+            raise ValueError(
+                "No pre-treatment periods found in results. "
+                "Pre-trends power analysis requires pre-period coefficients. "
+                "If you estimated all periods as post_periods, use the pre_periods "
+                "parameter to specify which are actually pre-treatment."
+            )
+        # R9: the finite-EFFECT conjunct guards hand-built containers
+        # carrying a NaN/Inf coefficient beside a finite SE (producer
+        # surfaces NaN the whole inference row, so first-party behavior
+        # is unchanged; the native/relative routes' SE-only filters are
+        # the TODO.md one-contract alignment row).
+        eligible_pre = [
+            p
+            for p in declared_pre
+            if not bool(surface.is_reference[_by_label[p]])
+            and np.isfinite(surface.att[_by_label[p]])
+            and np.isfinite(surface.se[_by_label[p]])
+            and surface.se[_by_label[p]] > 0
+        ]
+
+        if pre_periods is not None:
+            # R8: an explicit selection is VALIDATED, never silently
+            # filtered or left in caller order (the relative container
+            # route's contract): unknown labels, the reference row,
+            # rows with unusable inference, and duplicates all fail
+            # loud, and the validated selection is arranged in calendar
+            # chronology before effects/weights/VCV construction -
+            # positional alternatives (last_period, custom weights)
+            # must target the chronological grid, not argument order.
+            requested = list(pre_periods)
+            if len(set(requested)) != len(requested):
+                raise ValueError(
+                    f"Requested pre_periods contain duplicate labels "
+                    f"({requested}); the pre-period selection is ambiguous."
+                )
+            missing = [t for t in requested if t not in eligible_pre]
+            if missing:
+                raise ValueError(
+                    f"Requested pre_periods {missing} are not eligible "
+                    f"pre-treatment periods on this event-study surface "
+                    f"(eligible: {eligible_pre})."
+                )
+            _req = set(requested)
+            estimated_pre_periods = [p for p in eligible_pre if p in _req]
+        else:
+            estimated_pre_periods = eligible_pre
+
+        if len(estimated_pre_periods) == 0:
+            raise ValueError(
+                "No estimated pre-period coefficients found. "
+                "The pre-trends test requires at least one estimated "
+                "pre-period coefficient (excluding the reference period)."
+            )
+
+        n_pre = len(estimated_pre_periods)
+        effects = np.array([float(surface.att[_by_label[p]]) for p in estimated_pre_periods])
+        ses = np.array([float(surface.se[_by_label[p]]) for p in estimated_pre_periods])
+
+        # Hardened extraction shared with the relative container route:
+        # duplicate or incomplete vcov_index fails loud, the sub-block
+        # passes _validate_vcov_subblock (PreTrendsPower keeps its
+        # documented singular handling), and the diagonal fallback is
+        # reserved for a vcov-less container.
+        vcov, covariance_source = _extract_container_vcov_subblock(
+            surface, estimated_pre_periods, ses
+        )
+
+        # Gamma-unit plumbing (the native branch's tail, verbatim
+        # semantics): numeric/Period/Timestamp labels subtract to Roth
+        # relative offsets; string labels degrade to None with the
+        # helper's pinned UserWarning (MDV then NOT in gamma units).
+        relative_times = _coerce_relative_times_from_reference(estimated_pre_periods, ref)
+        return effects, ses, vcov, n_pre, relative_times, covariance_source
+
+    def _extract_container_pre_period_params(
+        self,
+        surface: Any,
+        pre_periods: Optional[List[int]] = None,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int, Optional[np.ndarray], str]:
+        """Container branch of ``_extract_pre_period_params``.
+
+        Consumes the unified ``EventStudyResults`` surface produced by
+        ``CallawaySantAnnaResults.aggregate('event_study')``,
+        ``DMLDiDResults.aggregate('event_study')`` (row M-093 amendment;
+        same staggered ATT(g,t) payload and semantics as CS), or
+        ``StackedDiDResults.aggregate('event_study')`` (row M-024;
+        Stacked containers require ``kappa_pre >= 2`` so estimated
+        pre-periods exist). Admission is
+        SOURCE-SCOPED: containers from other producers are rejected rather
+        than silently admitted - widening is a per-estimator methodology
+        decision in each estimator's own ``aggregate()`` migration (row
+        M-093). dCDH containers in particular are rejected BY DESIGN:
+        their ``l1_first_switch`` placebo rows are a different estimand
+        from pre-trend coefficients, and PreTrendsPower has no native dCDH
+        branch either.
+        """
+        # Calendar-scale surfaces (the TWFE event-study mode, row M-010)
+        # route into the native-branch reconstruction - the relative-scale
+        # arithmetic below (anticipation cutoffs, float(ref) coercion)
+        # never applies to calendar labels.
+        if surface.time_scale == "calendar":
+            return self._extract_calendar_container_pre_period_params(surface, pre_periods)
+
+        if surface.source not in (
+            "CallawaySantAnnaResults",
+            "StackedDiDResults",
+            "DMLDiDResults",
+        ):
+            raise TypeError(
+                "PreTrendsPower accepts EventStudyResults containers "
+                "produced by CallawaySantAnnaResults.aggregate("
+                "'event_study'), DMLDiDResults.aggregate('event_study'), "
+                "StackedDiDResults.aggregate("
+                "'event_study'), or the TwoWayFixedEffects event-study "
+                "mode (calendar-scale surfaces) only "
+                f"(got source={surface.source!r}). For other estimators "
+                "pass the native results object where supported "
+                "(MultiPeriodDiDResults, CallawaySantAnnaResults, or "
+                "SunAbrahamResults); EfficientDiDResults, "
+                "ImputationDiDResults and ContinuousDiDResults containers "
+                "are rejected BY DESIGN "
+                "(their surfaces carry no joint event-study covariance - "
+                "per-horizon SEs only - and ContinuousDiD's binarized "
+                "bins additionally carry no reference-period "
+                "normalization at all; see the REGISTRY EfficientDiD, "
+                "ImputationDiD and ContinuousDiD Notes); "
+                "TwoStageDiDResults container "
+                "admission is DEFERRED pending a normalization derivation "
+                "- analytical fits carry the joint Gardner-GMM covariance, "
+                "but the pre-period coefficients are stage-1 residual "
+                "means, not contrasts against a reference period (see the "
+                "REGISTRY TwoStageDiD Note and DEFERRED.md); "
+                "HeterogeneousAdoptionDiDEventStudyResults container "
+                "admission is DEFERRED pending joint cross-horizon "
+                "covariance (per-horizon independent sandwiches only; "
+                "DEFERRED.md) - its coefficients ARE reference-normalized "
+                "(each horizon differences against the F-1 anchor), but "
+                "the anchor row itself is omitted from the container (its "
+                "coefficient is identically zero and the WAS is not "
+                "identified there), so no reference row exists for the "
+                "consumer grid (see the REGISTRY "
+                "HeterogeneousAdoptionDiD Note)."
+            )
+        _producer = surface.source.replace("Results", "")
+        if surface.time_scale != "relative":
+            raise TypeError(
+                "PreTrendsPower requires a relative-time event-study "
+                f"container; got time_scale={surface.time_scale!r}."
+            )
+
+        # Containers are publicly constructible: duplicate event-time
+        # labels would make every label-keyed subset below ambiguous.
+        _all_labels = surface.event_time.tolist()
+        if len(set(_all_labels)) != len(_all_labels):
+            raise ValueError(
+                "The event-study container carries duplicate event_time "
+                f"labels ({_all_labels}); each horizon must appear "
+                "exactly once."
+            )
+
+        # Common-reference guard: cohort-level normalization-base
+        # provenance (mirrors the fit-time CS branch and HonestDiD). A
+        # universal container WITHOUT the field (hand-built - CS-produced
+        # containers always record it) cannot be verified: warn
+        # fail-safe rather than fail open silently.
+        _ref_e = surface.reference_event_times
+        if _ref_e is None and surface.base_period == "universal":
+            warnings.warn(
+                f"This {_producer} event-study container carries no "
+                "reference_event_times provenance, so a common reference "
+                "period cannot be verified (a universal base on a gapped "
+                "time grid may mix cohort-specific bases). Producer-built "
+                "containers record it - re-aggregate from the fitted "
+                "results object.",
+                UserWarning,
+                stacklevel=4,
+            )
+        if _ref_e is not None and len(set(_ref_e)) > 1:
+            raise ValueError(
+                "PreTrendsPower requires pre-period coefficients "
+                "normalized against one common reference period, but "
+                f"this {_producer} container records DISTINCT "
+                "normalization bases at event times "
+                f"{sorted(set(_ref_e))}. The hypothesized violation "
+                "delta is defined relative to one reference, so "
+                "power/MDV over mixed-base coefficients target an "
+                "ill-defined alternative. For CallawaySantAnna and DMLDiD "
+                "this arises from base_period='universal' on a gapped time "
+                "grid - re-estimate on a consecutive (ungapped) time "
+                "grid so every cohort's base falls at the same event "
+                "time."
+            )
+
+        # Varying-base interpretation warning, mirroring the fit-time CS
+        # branch (and HonestDiD's container fail-safe): base_period=None
+        # (unknown provenance, e.g. hand-built) cannot be verified, so it
+        # warns too. CS-produced containers always carry the real value.
+        # Scoped to the LINEAR benchmark (the built-in construction the
+        # warning is about); other violation vectors are user-specified
+        # in coefficient space.
+        if (
+            surface.base_period != "universal"
+            and getattr(self, "violation_type", "linear") == "linear"
+        ):
+            provenance_clause = (
+                "This container carries no base_period provenance, so the "
+                "base-period regime cannot be verified. "
+                if surface.base_period is None
+                else "With base_period='varying', pre-treatment "
+                "coefficients are consecutive-period comparisons, but the "
+                "'linear' violation benchmark assumes level coefficients "
+                "against a common reference period, so linear power/MDV "
+                "target a different violation shape. "
+            )
+            _bp_producer = {
+                "CallawaySantAnnaResults": "CallawaySantAnna",
+                "DMLDiDResults": "DMLDiD",
+            }.get(surface.source)
+            remedy_clause = (
+                f"Re-run with {_bp_producer}(base_period='universal') "
+                "for Roth-faithful linear benchmarks."
+                if _bp_producer is not None
+                else "Rebuild the container from the fitted results "
+                "object (producer-built containers record the true "
+                "regime)."
+            )
+            warnings.warn(
+                f"PreTrendsPower on a {_producer} event-study "
+                "container without a universal (common-reference) base. "
+                + provenance_clause
+                + remedy_clause,
+                UserWarning,
+                stacklevel=4,
+            )
+
+        # Anticipation-aware cutoff, mirroring the fit-time CS branch: with
+        # anticipation=k, true pre-periods are t < -k. The container's
+        # anticipation provenance field carries the fit's value (None on a
+        # hand-built container -> 0).
+        _ant = int(surface.anticipation or 0)
+        _pre_cutoff = -_ant
+        keep = (
+            (~surface.is_reference)
+            & np.isfinite(surface.se)
+            & (surface.se > 0)
+            & (surface.event_time < _pre_cutoff)
+        )
+
+        # Withheld-inference transparency (row M-024, StackedDiD
+        # admission; sibling of the HonestDiD container branch): a
+        # retained row with finite se but non-finite p_value means the
+        # producer withheld/never computed its per-row inference
+        # (StackedDiD's hc2_bm BM-DOF fail-close and replicate-undefined
+        # designs both emit this shape). Power/MDV consume only the
+        # coefficients and covariance - both valid - so the rows are
+        # ADMITTED with a warning (no-silent-failures). Deliberately NO
+        # df_survey conjunct: pretrends never reads df_survey, so its
+        # output is finite in every df state. Shape-descriptive by
+        # design; source-scoped so no CS-path behavior changes.
+        if surface.source == "StackedDiDResults":
+            _withheld = keep & ~np.isfinite(surface.p_value)
+            if bool(np.any(_withheld)):
+                warnings.warn(
+                    "This container carries non-reference rows whose "
+                    "stored per-row inference is withheld/undefined "
+                    "(finite se, non-finite p_value) at event times "
+                    f"{surface.event_time[_withheld].tolist()}; results "
+                    "are computed from the point estimates and "
+                    "covariance alone, using this consumer's own "
+                    "reference distribution.",
+                    UserWarning,
+                    stacklevel=4,
+                )
+
+        if not keep.any():
+            raise ValueError("No pre-treatment periods found in event study.")
+
+        # CHRONOLOGICAL order, not row order: positional violation
+        # patterns (last_period assigns weights[-1] to the final entry;
+        # user-supplied custom weights are positional too) silently
+        # mis-map on a hand-built container whose rows arrive unsorted.
+        keep_idx = np.where(keep)[0]
+        keep_idx = keep_idx[np.argsort(surface.event_time[keep_idx])]
+        pre_list = list(surface.event_time[keep_idx].tolist())
+        effects = np.asarray(surface.att[keep_idx], dtype=float)
+        ses = np.asarray(surface.se[keep_idx], dtype=float)
+
+        # An explicitly requested pre-period subset is honored, never
+        # silently ignored: every requested label must be an eligible
+        # pre-period on this surface, and effects/SEs/VCV subset to
+        # exactly that (sorted) set.
+        if pre_periods is not None:
+            requested = sorted(pre_periods)
+            missing = [t for t in requested if t not in pre_list]
+            if missing:
+                raise ValueError(
+                    f"Requested pre_periods {missing} are not eligible "
+                    f"pre-treatment periods on this event-study surface "
+                    f"(eligible: {pre_list})."
+                )
+            sel = [i for i, t in enumerate(pre_list) if t in set(requested)]
+            pre_list = [pre_list[i] for i in sel]
+            effects = effects[sel]
+            ses = ses[sel]
+            if not pre_list:
+                raise ValueError(
+                    "Pre-trends power analysis requires at least one "
+                    "pre-period; the requested pre_periods subset is empty."
+                )
+
+        vcov, covariance_source = _extract_container_vcov_subblock(surface, pre_list, ses)
+
+        # Anchor Roth's linear violation at the omitted reference (see the
+        # native CS branch for the normalization rationale): the single
+        # marked reference row, else the singleton reference_event_times
+        # provenance (a universal fit whose base row was trimmed), else no
+        # common reference exists (varying) and raw labels are retained
+        # under the varying-base warning.
+        _ref_rows = surface.event_time[surface.is_reference].tolist()
+        _anchor: Optional[float]
+        if len(_ref_rows) == 1:
+            _anchor = float(_ref_rows[0])
+        elif _ref_e is not None and len(set(_ref_e)) == 1:
+            _anchor = float(next(iter(set(_ref_e))))
+        else:
+            _anchor = None
+        if _anchor is not None:
+            relative_times = np.asarray([float(t) - _anchor for t in pre_list], dtype=float)
+        else:
+            relative_times = np.asarray(pre_list, dtype=float)
+        return effects, ses, np.asarray(vcov), len(pre_list), relative_times, covariance_source
 
     def _compute_power(
         self,
@@ -673,12 +1824,25 @@ class PreTrendsPower:
         weights: np.ndarray,
         vcov: np.ndarray,
     ) -> Tuple[float, float, float, float]:
-        """
-        Compute power to detect violation of magnitude M.
+        """Dispatch to the configured pretest form (NIS by default)."""
+        if self.pretest_form == "nis":
+            return self._compute_power_nis(M, weights, vcov)
+        return self._compute_power_wald(M, weights, vcov)
 
-        The pre-trends test is a Wald test: H0: delta = 0 vs H1: delta != 0
-        Under H1 with violation delta = M * weights, the test statistic follows
-        a non-central chi-squared distribution.
+    def _compute_power_wald(
+        self,
+        M: float,
+        weights: np.ndarray,
+        vcov: np.ndarray,
+    ) -> Tuple[float, float, float, float]:
+        """
+        Compute power to detect violation of magnitude M under the Wald form.
+
+        Wald pre-trends test: H0: delta = 0 vs H1: delta != 0. Under H1 with
+        violation delta = M * weights, the test statistic ``delta' V^{-1} delta``
+        follows a non-central chi-squared distribution with df=K and
+        noncentrality lambda = M^2 * (w' V^{-1} w). Convex (ellipsoid)
+        acceptance region, so Propositions 1+3+4 of Roth (2022) all apply.
 
         Parameters
         ----------
@@ -729,15 +1893,86 @@ class PreTrendsPower:
 
         return power, noncentrality, test_stat, critical_value
 
+    def _compute_power_nis(
+        self,
+        M: float,
+        weights: np.ndarray,
+        vcov: np.ndarray,
+    ) -> Tuple[float, float, float, float]:
+        """
+        Compute power to detect violation of magnitude M under the NIS form.
+
+        NIS (no-individually-significant) pre-trends test: passes iff every
+        pre-period coefficient lies within its own ``+/- z_{1-alpha/2} * sigma_t``
+        confidence interval. Roth (2022) Section II.A-B; matches the empirical
+        convention used in 12 of 12 surveyed papers (Section I.B).
+
+        Under H1 with violation ``delta_pre = M * weights``, the rejection
+        probability is computed via the centered change-of-variable
+        ``Y = beta_hat_pre - delta_pre ~ N(0, Sigma_22)``:
+
+        .. math::
+            \\text{Power} = 1 - P\\bigl(Y_t \\in [-z\\sigma_t - \\delta_t,
+                                                 z\\sigma_t - \\delta_t]
+                                       \\text{ for all } t\\bigr)
+
+        Implemented via ``scipy.stats.multivariate_normal.cdf`` with
+        rectangular bounds (Genz method; supports K up to ~20 cleanly).
+
+        Parameters
+        ----------
+        M : float
+            Violation magnitude.
+        weights : np.ndarray
+            Violation pattern (Linear: ``|t|`` directly when fit() threads
+            ``relative_times``; constant / last_period / custom: unit-normalized).
+        vcov : np.ndarray
+            Variance-covariance matrix Sigma_22 of the pre-period coefficients.
+
+        Returns
+        -------
+        power : float
+            Probability the NIS test rejects under the alternative.
+        noncentrality : float
+            ``np.nan``. NIS does not have a noncentrality scalar; the
+            equivalent NIS-specific output is ``nis_box_probability`` (the
+            acceptance probability ``1 - power``) stored on
+            ``PreTrendsPowerResults``.
+        test_stat : float
+            ``np.nan``. NIS rejects via a rectangular acceptance event,
+            not a scalar test statistic.
+        critical_value : float
+            ``z_{1-alpha/2}``, the per-period normal critical value used
+            to define ``B_NIS(Sigma)``.
+        """
+        z_alpha = float(stats.norm.ppf(1 - self.alpha / 2))
+        # Centralized analytical-or-MC fallback (module-level helper);
+        # handles both exception and non-finite-CDF cases.
+        accept_prob = _compute_nis_acceptance_prob(M, weights, vcov, z_alpha)
+        power = float(1.0 - accept_prob)
+        return power, float("nan"), float("nan"), z_alpha
+
     def _compute_mdv(
         self,
         weights: np.ndarray,
         vcov: np.ndarray,
     ) -> float:
-        """
-        Compute minimum detectable violation.
+        """Dispatch to the configured pretest form (NIS by default)."""
+        if self.pretest_form == "nis":
+            return self._compute_mdv_nis(weights, vcov)
+        return self._compute_mdv_wald(weights, vcov)
 
-        Find the smallest M such that power >= target_power.
+    def _compute_mdv_wald(
+        self,
+        weights: np.ndarray,
+        vcov: np.ndarray,
+    ) -> float:
+        """
+        Compute minimum detectable violation under the Wald form.
+
+        Find the smallest M such that ``_compute_power_wald(M, weights, vcov)
+        >= target_power``. Uses binary search on the noncentrality parameter,
+        then converts back to M via ``nc = M^2 * (w' V^{-1} w)``.
 
         Parameters
         ----------
@@ -749,7 +1984,10 @@ class PreTrendsPower:
         Returns
         -------
         mdv : float
-            Minimum detectable violation.
+            Minimum detectable violation in units of M (interpreted relative
+            to the ``weights`` direction; for linear weights threaded with
+            ``relative_times``, this is Roth's gamma in MDV units — see
+            ``_get_violation_weights``).
         """
         n_pre = len(weights)
 
@@ -804,6 +2042,74 @@ class PreTrendsPower:
 
         return mdv
 
+    def _compute_mdv_nis(
+        self,
+        weights: np.ndarray,
+        vcov: np.ndarray,
+    ) -> float:
+        """
+        Compute minimum detectable violation under the NIS form.
+
+        Solves ``_compute_power_nis(M, weights, vcov) = target_power`` for M
+        via a doubling expansion to bracket the root, then ``brentq`` bisect.
+        Non-convergence cap at ``M_high = 1000`` returns ``np.inf`` (matches
+        the Wald path's existing 1000-cap fallback).
+
+        Parameters
+        ----------
+        weights : np.ndarray
+            Violation pattern.
+        vcov : np.ndarray
+            Variance-covariance matrix Sigma_22.
+
+        Returns
+        -------
+        mdv : float
+            Minimum detectable violation. For linear weights threaded with
+            ``relative_times``, this is Roth's gamma at the target power.
+        """
+
+        def power_minus_target(M: float) -> float:
+            return self._compute_power_nis(M, weights, vcov)[0] - self.target_power
+
+        # Boundary short-circuit: if the NIS size under the null
+        # (≈ 1 - (1-α)^K under independence) already meets target_power,
+        # the MDV is zero — no violation needed to reject at target rate.
+        # NIS size is generally LARGER than α (chi² size), so this case
+        # is reachable for small target_power (e.g., target=0.10, α=0.05,
+        # K=3 → null size ≈ 0.143 > 0.10).
+        if power_minus_target(0.0) >= 0:
+            return 0.0
+
+        # Doubling expansion to find an upper bound where power >= target.
+        # Cap M_high at 1000 to avoid pathological infinite doubling on
+        # numerically extreme Σ_22, but the cap itself does NOT mean
+        # "unreachable" — explicitly check power at the capped endpoint
+        # before returning inf (codex R2 P0 fix: previously the cap
+        # short-circuited to inf even when power(M_high) >= target,
+        # producing silently wrong MDV=inf for finite-root cases like
+        # vcov=[[50000]] where MDV lies between 512 and 1024).
+        M_high = 1.0
+        while power_minus_target(M_high) < 0 and M_high < 1000:
+            M_high *= 2
+
+        # Defensive: if the doubling exited because M_high*2 would exceed 1000,
+        # the LAST value M_high actually reached might be either above or below
+        # target. Evaluate explicitly at the final M_high to decide.
+        if power_minus_target(M_high) < 0:
+            # Power at the cap still fails to reach target_power.
+            # Genuinely unreachable in the practical range.
+            return np.inf
+
+        # Bisect on [0, M_high]. Both sign-change endpoints verified above.
+        try:
+            mdv = float(optimize.brentq(power_minus_target, 0.0, M_high))
+        except ValueError:
+            # Defensive fallback. Should be unreachable.
+            mdv = float(M_high)
+
+        return mdv
+
     def fit(
         self,
         results: Union[MultiPeriodDiDResults, Any],
@@ -815,8 +2121,13 @@ class PreTrendsPower:
 
         Parameters
         ----------
-        results : MultiPeriodDiDResults, CallawaySantAnnaResults, or SunAbrahamResults
-            Results from an event study estimation.
+        results : MultiPeriodDiDResults, CallawaySantAnnaResults, SunAbrahamResults, or EventStudyResults
+            Results from an event study estimation, or the unified
+            event-study container from
+            ``CallawaySantAnnaResults.aggregate('event_study')``,
+            ``DMLDiDResults.aggregate('event_study')``, or
+            ``StackedDiDResults.aggregate('event_study')`` (Stacked
+            containers require ``kappa_pre >= 2``).
         M : float, optional
             Specific violation magnitude to evaluate. If None, evaluates at
             a default magnitude based on the data.
@@ -831,21 +2142,37 @@ class PreTrendsPower:
         PreTrendsPowerResults
             Power analysis results including power and MDV.
         """
-        # Extract pre-period parameters
-        effects, ses, vcov, n_pre = self._extract_pre_period_params(results, pre_periods)
+        # Extract pre-period parameters (now includes relative_times for
+        # γ-unit MDV under linear violation_type, plus the covariance-source
+        # provenance label for downstream DiagnosticReport / BusinessReport
+        # tier classification).
+        (
+            effects,
+            ses,
+            vcov,
+            n_pre,
+            relative_times,
+            covariance_source,
+        ) = self._extract_pre_period_params(results, pre_periods)
 
-        # Get violation weights
-        weights = self._get_violation_weights(n_pre)
+        # Get violation weights. relative_times threaded through so the
+        # linear-violation path produces γ-unit MDV per Roth's δ_t = γ·t
+        # convention (skip L2 normalization for linear-with-relative_times).
+        weights = self._get_violation_weights(n_pre, relative_times=relative_times)
 
-        # Compute MDV
+        # Compute MDV (dispatches on self.pretest_form)
         mdv = self._compute_mdv(weights, vcov)
 
         # Default M: use MDV if not specified
         if M is None:
             M = mdv if np.isfinite(mdv) else np.max(ses)
 
-        # Compute power at specified M
+        # Compute power at specified M (dispatches on self.pretest_form)
         power, noncentrality, test_stat, critical_value = self._compute_power(M, weights, vcov)
+
+        # NIS-specific output: the box acceptance probability. Wald fits leave
+        # this as NaN; the meaningful Wald-specific scalar is `noncentrality`.
+        nis_box_probability = 1.0 - power if self.pretest_form == "nis" else float("nan")
 
         return PreTrendsPowerResults(
             power=power,
@@ -862,6 +2189,10 @@ class PreTrendsPower:
             pre_period_ses=ses,
             vcov=vcov,
             original_results=results,
+            pretest_form=self.pretest_form,
+            nis_box_probability=nis_box_probability,
+            violation_weights=weights,
+            covariance_source=covariance_source,
         )
 
     def power_at(
@@ -917,9 +2248,13 @@ class PreTrendsPower:
         PreTrendsPowerCurve
             Power curve data with plot method.
         """
-        # Extract parameters
-        _, ses, vcov, n_pre = self._extract_pre_period_params(results, pre_periods)
-        weights = self._get_violation_weights(n_pre)
+        # Extract parameters (6-tuple includes relative_times + covariance
+        # source; the source label is currently unused on the curve path but
+        # the unpack must match the helper's signature).
+        _, ses, vcov, n_pre, relative_times, _ = self._extract_pre_period_params(
+            results, pre_periods
+        )
+        weights = self._get_violation_weights(n_pre, relative_times=relative_times)
 
         # Compute MDV
         mdv = self._compute_mdv(weights, vcov)
@@ -942,6 +2277,7 @@ class PreTrendsPower:
             alpha=self.alpha,
             target_power=self.target_power,
             violation_type=self.violation_type,
+            pretest_form=self.pretest_form,
         )
 
     def sensitivity_to_honest_did(
@@ -972,22 +2308,30 @@ class PreTrendsPower:
         """
         pt_results = self.fit(results, pre_periods=pre_periods)
         mdv = pt_results.mdv
+        # Level-scale scalar for comparison against the level-scale
+        # per-period SEs. PR-B Step 4: raw `mdv` for `linear` violations
+        # is now Roth's γ units (a slope); the level-scale quantity is
+        # `mdv * max(|violation_weights|)`. See PreTrendsPowerResults.
+        max_abs_pre_violation = pt_results.max_abs_pre_violation
 
-        # The MDV represents the size of violation the test could detect
+        # The MDV represents the size of violation the test could detect.
         # In HonestDiD's relative magnitudes framework, M=1 means
-        # post-treatment violations can be as large as the max pre-period violation
-        # The MDV gives us a sense of how large that max violation could be
+        # post-treatment violations can be as large as the max pre-period
+        # violation. ``max_abs_pre_violation`` gives us that level-scale
+        # number directly.
 
         max_pre_se = np.max(pt_results.pre_period_ses)
 
         interpretation = []
         interpretation.append(f"Minimum Detectable Violation (MDV): {mdv:.4f}")
+        interpretation.append(f"Max pre-period level deviation at MDV: {max_abs_pre_violation:.4f}")
         interpretation.append(f"Max pre-period SE: {max_pre_se:.4f}")
 
-        if np.isfinite(mdv):
-            # Ratio of MDV to max SE - gives sense of how many SEs the MDV is
-            mdv_in_ses = mdv / max_pre_se if max_pre_se > 0 else np.inf
-            interpretation.append(f"MDV / max(SE): {mdv_in_ses:.2f}")
+        if np.isfinite(max_abs_pre_violation):
+            # Ratio of max-level-deviation to max SE — how many SEs the
+            # largest pre-period violation under the MDV would be.
+            mdv_in_ses = max_abs_pre_violation / max_pre_se if max_pre_se > 0 else np.inf
+            interpretation.append(f"Max level deviation / max(SE): {mdv_in_ses:.2f}")
 
             if mdv_in_ses < 1:
                 interpretation.append("→ Pre-trends test is fairly sensitive to violations.")
@@ -1006,8 +2350,13 @@ class PreTrendsPower:
 
         return {
             "mdv": mdv,
+            "max_abs_pre_violation": float(max_abs_pre_violation),
             "max_pre_se": max_pre_se,
-            "mdv_in_ses": mdv / max_pre_se if max_pre_se > 0 and np.isfinite(mdv) else np.inf,
+            "mdv_in_ses": (
+                max_abs_pre_violation / max_pre_se
+                if max_pre_se > 0 and np.isfinite(max_abs_pre_violation)
+                else np.inf
+            ),
             "interpretation": "\n".join(interpretation),
         }
 
@@ -1024,6 +2373,8 @@ def compute_pretrends_power(
     target_power: float = 0.80,
     violation_type: str = "linear",
     pre_periods: Optional[List[int]] = None,
+    violation_weights: Optional[np.ndarray] = None,
+    pretest_form: Literal["nis", "wald"] = "nis",
 ) -> PreTrendsPowerResults:
     """
     Convenience function for pre-trends power analysis.
@@ -1031,7 +2382,11 @@ def compute_pretrends_power(
     Parameters
     ----------
     results : results object
-        Event study results.
+        Event study results (MPD / CS / SA), or the unified event-study
+        container from ``CallawaySantAnnaResults.aggregate('event_study')``,
+        ``DMLDiDResults.aggregate('event_study')``,
+        or ``StackedDiDResults.aggregate('event_study')`` (Stacked
+        containers require ``kappa_pre >= 2``).
     M : float, optional
         Violation magnitude to evaluate.
     alpha : float, default=0.05
@@ -1039,10 +2394,21 @@ def compute_pretrends_power(
     target_power : float, default=0.80
         Target power for MDV calculation.
     violation_type : str, default='linear'
-        Type of violation pattern.
+        Type of violation pattern: ``linear`` / ``constant`` / ``last_period``
+        / ``custom``. For ``custom``, also pass ``violation_weights``.
     pre_periods : list of int, optional
         Explicit list of pre-treatment periods. If None, attempts to infer
         from results. Use when you've estimated all periods as post_periods.
+    violation_weights : np.ndarray, optional
+        Custom violation pattern weights. Required when
+        ``violation_type='custom'``; ignored for other violation types.
+    pretest_form : {'nis', 'wald'}, default='nis'
+        Pretest acceptance-region form. ``'nis'`` (default) implements Roth
+        (2022) Section II.A-B no-individually-significant box probability via
+        ``scipy.stats.multivariate_normal.cdf``; ``'wald'`` is the
+        noncentral-chi-squared form retained for backwards compatibility with
+        the pre-PR-B shipped numerical output (also a paper-supported
+        alternative under Propositions 1+3+4).
 
     Returns
     -------
@@ -1051,10 +2417,10 @@ def compute_pretrends_power(
 
     Examples
     --------
-    >>> from diff_diff import MultiPeriodDiD
+    >>> from diff_diff import TwoWayFixedEffects
     >>> from diff_diff.pretrends import compute_pretrends_power
     >>>
-    >>> results = MultiPeriodDiD().fit(data, ...)
+    >>> results = TwoWayFixedEffects().fit(data, ..., event_study=True)
     >>> power_results = compute_pretrends_power(results, pre_periods=[0, 1, 2, 3])
     >>> print(f"MDV: {power_results.mdv:.3f}")
     >>> print(f"Power: {power_results.power:.1%}")
@@ -1063,6 +2429,8 @@ def compute_pretrends_power(
         alpha=alpha,
         power=target_power,
         violation_type=violation_type,
+        violation_weights=violation_weights,
+        pretest_form=pretest_form,
     )
     return pt.fit(results, M=M, pre_periods=pre_periods)
 
@@ -1073,6 +2441,8 @@ def compute_mdv(
     target_power: float = 0.80,
     violation_type: str = "linear",
     pre_periods: Optional[List[int]] = None,
+    violation_weights: Optional[np.ndarray] = None,
+    pretest_form: Literal["nis", "wald"] = "nis",
 ) -> float:
     """
     Compute minimum detectable violation.
@@ -1080,16 +2450,27 @@ def compute_mdv(
     Parameters
     ----------
     results : results object
-        Event study results.
+        Event study results (MPD / CS / SA), or the unified event-study
+        container from ``CallawaySantAnnaResults.aggregate('event_study')``,
+        ``DMLDiDResults.aggregate('event_study')``,
+        or ``StackedDiDResults.aggregate('event_study')`` (Stacked
+        containers require ``kappa_pre >= 2``).
     alpha : float, default=0.05
         Significance level.
     target_power : float, default=0.80
         Target power for MDV calculation.
     violation_type : str, default='linear'
-        Type of violation pattern.
+        Type of violation pattern: ``linear`` / ``constant`` / ``last_period``
+        / ``custom``. For ``custom``, also pass ``violation_weights``.
     pre_periods : list of int, optional
         Explicit list of pre-treatment periods. If None, attempts to infer
         from results. Use when you've estimated all periods as post_periods.
+    violation_weights : np.ndarray, optional
+        Custom violation pattern weights. Required when
+        ``violation_type='custom'``; ignored for other violation types.
+    pretest_form : {'nis', 'wald'}, default='nis'
+        Pretest acceptance-region form. See ``compute_pretrends_power`` and
+        ``PreTrendsPower`` for the NIS-vs-Wald discussion.
 
     Returns
     -------
@@ -1100,6 +2481,8 @@ def compute_mdv(
         alpha=alpha,
         power=target_power,
         violation_type=violation_type,
+        violation_weights=violation_weights,
+        pretest_form=pretest_form,
     )
     result = pt.fit(results, pre_periods=pre_periods)
     return result.mdv

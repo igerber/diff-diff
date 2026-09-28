@@ -1,0 +1,16 @@
+# diff-diff
+
+> Python library for Difference-in-Differences (DiD) causal inference. sklearn-like estimators, statsmodels-style summary output, validated against R.
+
+## Guides for AI agents and LLMs
+
+- Concise API reference: https://diff-diff.readthedocs.io/en/stable/llms.txt
+- Full API reference: https://diff-diff.readthedocs.io/en/stable/llms-full.txt
+- 8-step practitioner workflow (Baker et al. 2025): https://diff-diff.readthedocs.io/en/stable/llms-practitioner.txt
+
+After `pip install diff-diff`, also accessible in-process via `from diff_diff import get_llm_guide`:
+
+- `get_llm_guide()` - concise
+- `get_llm_guide("full")` - full
+- `get_llm_guide("practitioner")` - 8-step workflow
+- `get_llm_guide("autonomous")` - autonomous-agent variant (in-wheel only; not yet on RTD)

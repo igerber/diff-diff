@@ -1,0 +1,76 @@
+{
+  "meta": {
+    "estimator": "LPDiD (Dube, Girardi, Jorda & Taylor 2025) - absorbing",
+    "r_version": "R version 4.5.2 (2025-10-31)",
+    "fixest_version": "0.13.2",
+    "lpdid_alexcardazzi_version": "0.6.1",
+    "lpdid_alexcardazzi_commit": "ba64563983861be5e616f6020842c1a1cdf17a27",
+    "seed": 20260629,
+    "pre_window": 3,
+    "post_window": 4,
+    "se_convention": "Default/weighted/direct/pmd/pooled SEs: feols cluster-robust at unit with the reghdfe-style finite-sample factor (G/(G-1))*((n-1)/(n-k)) via setFixest_ssc(adj=TRUE, cluster.adj=TRUE) - the authors' convention.",
+    "ra_se_note": "ra_cov records the RA POINT estimate (full-interaction == teffects ra atet). The canonical RA SE is Stata teffects (unconditional IF, NO finite-sample factor) - no R package computes it; the library influence-function SE is pinned on the Python side and calibration-validated by benchmarks/python/coverage_lpdid_ra.py. ra_cov[h] = c(att, conditional_CR0_se_for_reference_only).",
+    "pooled_note": "Pooled uses the authors' fixed-composition window-mean recipe (mean(y over [t,t+POST]) - y_{t-1}, clean through F.POST). alexCardazzi's pooled uses a laxer clean-control window, so its pooled value is recorded here for transparency but NOT used as the cross-check gate.",
+    "nocomp_note": "no_composition is NOT a golden parity variant: the library fixes the realized sample across all post horizons (paper Section 3.6) and excludes cohorts p_g > T-H, more faithful to the paper than alexCardazzi's looser per-horizon version (recorded below). The library path is validated by the pure-Python B1 tests.",
+    "alex_pooled_post": [3.487463576882, 0.3495904202394],
+    "alex_nocomp_looser": {
+      "-3": [-0.7532927692809, 0.5003193796022],
+      "-2": [-0.250198606317, 0.6160670067758],
+      "-1": [0, 0],
+      "0": [1.46387943226, 0.545454853302],
+      "1": [2.335727820716, 0.5511865769279],
+      "2": [2.865671038762, 0.5566693486612],
+      "3": [3.245223911323, 0.4728816808867],
+      "4": [4.100734546643, 0.4370902112454]
+    }
+  },
+  "vw_es": {
+    "0": [2.891454184758, 0.4972838592697],
+    "1": [3.215287698688, 0.4242105863868],
+    "2": [3.570283061763, 0.4502488079078],
+    "3": [3.968564586288, 0.3904079437881],
+    "4": [4.269176444588, 0.396524220757],
+    "-2": [0.1183626967809, 0.4413440724331],
+    "-3": [-0.1254433057345, 0.4292726043484]
+  },
+  "ew_es": {
+    "0": [2.903628272087, 0.4973282590126],
+    "1": [3.221973963653, 0.4235473199649],
+    "2": [3.57527972142, 0.4499773773075],
+    "3": [3.971884855509, 0.390089371568],
+    "4": [4.265997983221, 0.3934421813065],
+    "-2": [0.1195811966608, 0.4402860720602],
+    "-3": [-0.1219233071656, 0.4298940947632]
+  },
+  "pmd_es": {
+    "0": [2.832272836367, 0.4337549369753],
+    "1": [3.156106350297, 0.3522180898809],
+    "2": [3.511101713373, 0.394076563941],
+    "3": [3.902081106111, 0.3654320104818],
+    "4": [4.269986848274, 0.3537196151693],
+    "-2": [0.05918134839047, 0.2206720362165],
+    "-3": [-0.184624654125, 0.3713701578016]
+  },
+  "direct_es": {
+    "0": [2.876086144279, 0.4110153204559],
+    "1": [3.217671119032, 0.433940624349],
+    "2": [3.571778263524, 0.4571207641365],
+    "3": [3.969558831006, 0.3912243590417],
+    "4": [4.268878161094, 0.3995261701574],
+    "-2": [0.1185563879358, 0.442300060411],
+    "-3": [-0.1239894706087, 0.4328879644821]
+  },
+  "ra_cov": {
+    "0": [2.888871838355, 0.2774049784919, null],
+    "1": [3.22526891068, 0.3671167840304, null],
+    "2": [3.577950221628, 0.3920693801281, null],
+    "3": [3.973278128237, 0.363703531293, null],
+    "4": [4.265103781445, 0.3614251956151, null],
+    "-2": [0.1204444745696, 0.4103497220604, null],
+    "-3": [-0.1197046094519, 0.4026535247538, null]
+  },
+  "pooled": {
+    "post": [3.532265685012, 0.3521082333958],
+    "pre": [-0.003540304476795, 0.377308359478]
+  }
+}

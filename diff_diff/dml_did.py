@@ -1,0 +1,3345 @@
+"""DMLDiD: Double/Debiased Machine Learning DiD (Chang 2020), staggered.
+
+Implements Chang (2020, The Econometrics Journal 23(2), 177-191) as a
+staggered ATT(g,t) estimator: each Callaway-Sant'Anna style (g, t) cell is
+a 2-period Chang problem. ``panel=True`` (default) runs Case 1 (repeated
+outcomes) — cross-fitted nuisances (propensity ``g_hat`` and control
+outcome-change regression ``m_hat``), the Neyman-orthogonal score
+``psi_1`` (``chang_panel_score``), and the augmented-score plug-in
+variance (``chang_panel_score_augmented``;
+``SE = sqrt(mean(psi_bar**2)/n)``). ``panel=False`` runs Case 2 (declared
+repeated cross sections) — level outcomes, the single control-only
+``(T - lam_hat) * Y`` outcome nuisance (``chang_rcs_score``), and the
+λ-corrected Theorem 2 variance (``chang_rcs_score_augmented``). The
+classic 2-period design is the degenerate single-cell case. Covariates
+are REQUIRED (Chang's estimator exists for the high-dimensional-X
+setting; use CallawaySantAnna without covariates).
+
+``DMLDiD`` writes the CallawaySantAnna per-(g,t) ``influence_func_info``
+payload (per-sampling-unit entries ``psi_bar_i / n_cell`` — per unit on
+panel fits, per observation on RCS fits — so ``sqrt(sum(if**2))`` IS the
+cell SE on no-design fits; under ``survey_design=``/``cluster=`` the
+payload is the weighted-IF analogue ``w_i * psi_bar_i / sum(w)`` and the
+per-cell SE is the design-based CR1/weighted-IF variance instead) and
+inherits the CS aggregation + multiplier-bootstrap mixins: event study
+with sup-t bands, group/simple aggregation (plus total on panel
+non-survey fits; RCS and declared-survey fits fail ``total`` closed), and
+post-fit ``results.aggregate()`` with bootstrap replay.
+
+See docs/methodology/REGISTRY.md "DMLDiD" for equations, implementation
+Notes (global p-hat, D-stratified folds, pooled fold weighting, trimming,
+skip-reason vocabulary) and the DoubleML parity anchors.
+"""
+
+import decimal
+import secrets
+import warnings
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Union, cast
+
+import numpy as np
+import pandas as pd
+
+from diff_diff._base import BaseEstimator
+from diff_diff._crossfit import (
+    DegenerateFoldError,
+    _fit_subset,
+    _fold_loss,
+    _predict_subset,
+    _probe_learner_cloneability,
+    _validate_sample_weight_support,
+    assign_folds,
+    cross_fit_predict,
+    iter_fold_fits,
+)
+from diff_diff._dr_scores import (
+    _chang_rcs_score_augmented_with_slope,
+    ccps_panel_score,
+    ccps_panel_score_augmented,
+    chang_panel_score,
+    chang_panel_score_augmented,
+    chang_rcs_score,
+)
+from diff_diff._learners import (
+    _CLASSIFIER_NAMES,
+    _REGRESSOR_NAMES,
+    make_learner,
+    validate_learner,
+)
+from diff_diff.dml_did_results import DMLDiDResults
+from diff_diff.linalg import _check_propensity_diagnostics
+from diff_diff.staggered import (
+    _build_aggregation_kit,
+    _cluster_robust_se_from_per_gt_if,
+    _nan_gt_entry,
+)
+from diff_diff.staggered import (
+    select_base_period as _select_base_period_impl,
+)
+from diff_diff.staggered import (
+    valid_periods_for_group as _valid_periods_for_group_impl,
+)
+from diff_diff.staggered_aggregation import CallawaySantAnnaAggregationMixin
+from diff_diff.staggered_bootstrap import CallawaySantAnnaBootstrapMixin
+from diff_diff.utils import (
+    safe_inference,
+    validate_anticipation,
+    validate_covariate_names,
+    validate_n_bootstrap,
+    validate_pscore_trim,
+)
+
+if TYPE_CHECKING:
+    from diff_diff.survey import ResolvedSurveyDesign, SurveyDesign
+
+__all__ = ["DMLDiD"]
+
+# Magnitude bound for time/first_treat labels (with anticipation headroom):
+# above 2**62, a uint64 label survives an int64 round-trip check by wrapping
+# TWICE (mod-2**64 bijection) while the working values are corrupted
+# negatives, and int64 cohort arithmetic (max(t, base) + anticipation) can
+# overflow. Realistic labels — years, YYYYMMDD, unix s/ms, ns timestamps
+# (~1.8e18) — sit far below 2**62 ~ 4.6e18.
+_LABEL_MAGNITUDE_BOUND = 2**62
+
+
+def _validate_n_folds(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise ValueError(f"n_folds must be an integer >= 2, got {value!r}")
+    if value < 2:
+        raise ValueError(f"n_folds must be an integer >= 2, got {value}")
+    return int(value)
+
+
+def _validate_learner_spec(
+    spec: Any, *, kind: str, param_name: str, require_sample_weight: bool = False
+) -> None:
+    """Eager learner-spec validation naming the ACTUAL constructor param.
+
+    ``make_learner`` hard-codes ``param_name="learner"`` for objects, which
+    would mislabel the offending param; strings use the same name check.
+    """
+    if isinstance(spec, str):
+        valid = _REGRESSOR_NAMES if kind == "regressor" else _CLASSIFIER_NAMES
+        if spec not in valid:
+            raise ValueError(
+                f"Unknown {kind} learner {spec!r} for {param_name}; valid names "
+                f"for kind={kind!r} are {sorted(valid)}"
+            )
+        return
+    validate_learner(spec, kind=kind, param_name=param_name)
+    clone = _probe_learner_cloneability(spec, kind=kind, param_name=param_name)
+    if require_sample_weight:
+        _validate_sample_weight_support(clone, param_name=param_name)
+
+
+def _raw_label_is_infinite(value: Any) -> bool:
+    """True iff the RAW label element is itself infinite (either sign).
+
+    Distinguishes a genuine ``inf`` sentinel (recodable / rejectable as
+    non-finite) from a FINITE oversized value — ``Decimal("1e400")`` or the
+    string ``"1e400"`` — that ``pd.to_numeric``'s float64 conversion
+    overflowed to ``inf``. Exact semantics: Python cross-type comparison for
+    numerics (Decimal == inf is exact), exact ``int``/``Decimal`` parsing
+    for strings; non-numeric non-string elements cannot be infinite.
+    """
+    import numbers
+
+    if isinstance(value, numbers.Number) and not isinstance(value, complex):
+        try:
+            return bool(value == float("inf")) or bool(value == float("-inf"))
+        except (TypeError, decimal.InvalidOperation):  # pragma: no cover - defensive
+            return False
+    if isinstance(value, str):
+        try:
+            int(value)
+            return False
+        except ValueError:
+            try:
+                return bool(decimal.Decimal(value).is_infinite())
+            except decimal.InvalidOperation:
+                return False
+    return False
+
+
+def _raise_if_conversion_created_inf(col_label: str, raw: np.ndarray, inf_mask: np.ndarray) -> None:
+    """Reject float-conversion overflow of FINITE oversized raw labels.
+
+    ``inf_mask`` flags the positions whose float64 conversion is infinite;
+    any such position whose RAW element is finite carries a label far above
+    the 2**62 magnitude bound and must fail loudly (the +inf recode and the
+    non-finite rejection would otherwise misclassify it).
+    """
+    for pos in np.flatnonzero(inf_mask):
+        value = raw[int(pos)]
+        if not _raw_label_is_infinite(value):
+            raise ValueError(
+                f"column {col_label!r} carries label {value!r} whose numeric "
+                "conversion overflows float64 to infinity; such labels are far "
+                "above the 2**62 magnitude bound for cohort arithmetic — "
+                "rescale them (e.g. to period indices)"
+            )
+
+
+_PRIMITIVE_CONFIG_TYPES = (bool, int, float, str, type(None))
+
+
+def _config_value_is_primitive(value: Any) -> bool:
+    """EXACT primitive type check for a native learner's config value.
+
+    A subclass of ``float``/``str``/``int`` carries user code — its
+    ``__repr__`` fires inside the learner's configuration repr and its
+    value is interpolated into library error messages — so trust only
+    exact builtins (plus numpy scalars, whose reprs are library-controlled).
+    """
+    if type(value) in _PRIMITIVE_CONFIG_TYPES:
+        return True
+    return isinstance(value, (np.integer, np.floating)) and type(value).__module__ == np.__name__
+
+
+def _is_native_learner_spec(spec: Any) -> bool:
+    # EXACT type check, not isinstance: a user-defined SUBCLASS of a native
+    # learner carries arbitrary user code (overridden __repr__, raised
+    # exception text) and must stay on the untrusted/foreign path — the
+    # sanitization contract (_learner_spec_label, _sanitize_learner_error)
+    # keys off this predicate. The CONFIG VALUES must be exact primitives
+    # too: a float/str subclass stored as e.g. ridge ``alpha`` would fire
+    # its own __repr__ inside the native configuration repr and can seep
+    # into library error text, re-opening the nested leak the outer type
+    # check closes.
+    from diff_diff._learners import LinearLearner, LogitLearner, RidgeLearner, SieveLearner
+
+    if isinstance(spec, str):
+        return True
+    if type(spec) not in (LinearLearner, LogitLearner, RidgeLearner, SieveLearner):
+        return False
+    return all(
+        _config_value_is_primitive(getattr(spec, attr, None)) for attr in type(spec)._CONFIG_ATTRS
+    )
+
+
+def _is_parametric_learner_spec(spec: Any) -> bool:
+    """True for the PARAMETRIC built-in learners only: ``"linear"`` / ``"logit"``.
+
+    The CCPS (2026) nested second stage may use in-sample fold-k first-stage
+    predictions as its pseudo-outcomes ONLY when the first stage is the
+    paper's own linear/logit working model (Assumption 8's plug-in identity:
+    OLS of ``R'beta`` on ``S`` is exactly ``beta_1 * OLS(xt ~ S) + beta_2 xb +
+    beta_3 Z``). ``ridge``, ``sieve``, native SUBCLASSES and every foreign
+    learner take the split-half branch (footnote 9). The string check runs
+    FIRST so a foreign object's ``__eq__`` is never invoked; objects need the
+    exact native type plus primitive config (the ``_is_native_learner_spec``
+    trust boundary).
+    """
+    from diff_diff._learners import LinearLearner, LogitLearner
+
+    if isinstance(spec, str):
+        return spec in ("linear", "logit")
+    if type(spec) not in (LinearLearner, LogitLearner):
+        return False
+    return all(
+        _config_value_is_primitive(getattr(spec, attr, None)) for attr in type(spec)._CONFIG_ATTRS
+    )
+
+
+def _learner_spec_label(spec: Any) -> str:
+    """Results-facing label for a learner spec (repr-of-spec contract).
+
+    String names verbatim; EXACT library-native learner objects keep their
+    controlled configuration repr; everything else — subclasses of the
+    natives included — publishes only the qualified class name, since an
+    arbitrary user-defined ``__repr__`` could embed credentials, private
+    paths, or large payloads into ``summary()`` / ``to_dict()`` exports.
+    """
+    if isinstance(spec, str):
+        return spec
+    if _is_native_learner_spec(spec):
+        return repr(spec)
+    cls = type(spec)
+    return f"<{cls.__module__}.{cls.__qualname__}>"
+
+
+def _validate_seed(seed: Any) -> Optional[int]:
+    if seed is None:
+        return None
+    if isinstance(seed, bool) or not isinstance(seed, (int, np.integer)):
+        raise ValueError(f"seed must be None or a non-negative integer, got {seed!r}")
+    if seed < 0:
+        raise ValueError(f"seed must be None or a non-negative integer, got {seed}")
+    return int(seed)
+
+
+class DMLDiD(CallawaySantAnnaBootstrapMixin, CallawaySantAnnaAggregationMixin, BaseEstimator):
+    """Chang (2020) DML DiD: staggered ATT(g,t) with cross-fitted ML nuisances.
+
+    ``panel=True`` (default) estimates Case 1 on panel data; ``panel=False``
+    estimates Case 2 on declared repeated cross sections (level outcomes,
+    λ-corrected variance).
+
+    Per (g, t) cell: K-fold cross-fitting of the propensity
+    (``propensity_learner``, out-of-fold ``predict_proba``) and the
+    control-only outcome regression (``outcome_learner``, trained on the
+    cell's controls, Chang's ``I_kz^c``), then the pooled orthogonal score
+    mean and the augmented-score plug-in SE. On panel fits the folds are
+    D-stratified and the outcome nuisance is the outcome-change regression
+    ``E[dY | X, D=0]``; on RCS fits the folds are D x T stratified and the
+    nuisance is the level regression ``E[(T - lam)Y | X, D=0]`` with the
+    lambda-corrected variance. (Under a survey/cluster design whose PSU is
+    strictly coarser than the sampling unit, folds are PSU-COHESIVE
+    instead of stratified, and the per-cell SE is design-based rather than
+    the plug-in ``sqrt(mean(psi_bar**2)/n)``; declared designs also weight
+    the moments — REGISTRY DMLDiD survey Notes.) Aggregation (event study,
+    group, simple; plus total on panel non-survey fits — RCS and
+    declared-survey fits fail ``total`` closed) is POST-FIT via
+    ``results.aggregate()``.
+
+    Parameters
+    ----------
+    propensity_learner : str or object, default "logit"
+        ``"logit"``, or ANY object with ``fit``/``predict_proba`` (the
+        classifier protocol) — e.g. a user-constructed or sklearn estimator.
+        String names select library defaults only.
+    outcome_learner : str or object, default "linear"
+        ``"linear"``, ``"ridge"``, ``"sieve"``, or ANY object with
+        ``fit``/``predict`` (the regressor protocol).
+    n_folds : int, default 5
+        Cross-fitting folds K (DML2; per-cell assignment).
+    control_group : str, default "never_treated"
+        ``"never_treated"`` or ``"not_yet_treated"`` (CS semantics).
+    anticipation : int, default 0
+        Anticipation periods (shifts the base period and the
+        not-yet-treated threshold; CS semantics).
+    alpha : float, default 0.05
+        Significance level.
+    n_bootstrap : int, default 0
+        Multiplier-bootstrap iterations (0 = analytical inference).
+    bootstrap_weights : str, optional
+        ``"rademacher"`` (default), ``"mammen"``, or ``"webb"``.
+    seed : int, optional
+        Root seed for the per-cell fold draws and the bootstrap. With
+        ``seed=None``, POINT ESTIMATES vary across fits — cross-fitting
+        draws random folds; set ``seed`` for reproducible results with the
+        library's deterministic built-in learners. The same seed yields
+        DIFFERENT folds with vs without a coarser-than-unit PSU design
+        (PSU-cohesive folds consume the RNG differently than stratified
+        folds — a config change, not a reproducibility break). A user-supplied
+        STOCHASTIC learner object must additionally be seeded by the user
+        (e.g. sklearn ``random_state``). The supplied template must be
+        unfitted; ``cross_fit_predict`` requires a distinct deep copy and
+        raises ``TypeError`` otherwise, but never seeds the learner's
+        internal RNG.
+    base_period : str, default "varying"
+        ``"varying"`` or ``"universal"`` (CS semantics; universal
+        materializes per-cohort zero reference cells).
+    cband : bool, default True
+        Uniform (sup-t) bands on the post-fit event-study aggregation's
+        bootstrap replay.
+    pscore_trim : float, default 0.01
+        Propensity clip bound: fitted propensities are clipped to
+        ``[pscore_trim, 1 - pscore_trim]`` after the extremeness warning
+        (clip, never drop; Chang's paper gives no trimming rule). Must be in
+        ``(0, 0.5)`` and large enough that ``1 - pscore_trim < 1`` in
+        float64 (a sub-ulp trim would disable the upper clip).
+    panel : bool, default True
+        ``True`` estimates Chang's Case 1 (repeated outcomes) on panel data
+        (one row per unit-period, cell score on outcome CHANGES). ``False``
+        estimates Case 2 (repeated cross sections) on DECLARED
+        cross-sectional data — one observation per row with a row-unique
+        ``unit`` ID, cell score on outcome LEVELS with the post-period
+        sampling share λ̂ and the λ-corrected Theorem 2 variance. Case 2
+        additionally assumes stationary cross-sectional sampling (Chang
+        Assumption 2.3: each wave samples the SAME target population —
+        the composition of ``(D, X)`` is stable across waves, while
+        outcomes are the period-specific potential outcomes, so trends
+        and treatment effects are expected, not violations), which is not
+        data-checkable — ``fit()`` warns. ``aggregate('total')`` is unavailable on RCS fits (fails
+        closed, the library-wide RC convention).
+    cluster : str, optional
+        Column name for COARSER-than-unit clustering. The column is
+        synthesized into a ``SurveyDesign(psu=cluster)`` (or injected as
+        the PSU of a declared PSU-less design): it drives PSU-cohesive
+        cross-fitting folds (when strictly coarser than the sampling
+        unit), the per-cell cluster-robust SE, the bootstrap draw
+        structure, and ``df_inference`` — while the moment kernels stay
+        UNWEIGHTED and no ``sample_weight`` reaches the learners. When
+        ``survey_design=`` also supplies a PSU, the design's PSU wins
+        (warning on differing partitions).
+    """
+
+    _BOOTSTRAP_LABEL: str = "DMLDiD"
+
+    def __init__(
+        self,
+        propensity_learner: Union[str, object] = "logit",
+        outcome_learner: Union[str, object] = "linear",
+        n_folds: int = 5,
+        control_group: str = "never_treated",
+        anticipation: int = 0,
+        alpha: float = 0.05,
+        n_bootstrap: int = 0,
+        bootstrap_weights: Optional[str] = None,
+        seed: Optional[int] = None,
+        base_period: str = "varying",
+        cband: bool = True,
+        pscore_trim: float = 0.01,
+        panel: bool = True,
+        cluster: Optional[str] = None,
+    ) -> None:
+        # Raw assignment, then ONE shared validator (also re-run at the top
+        # of fit() as the direct-mutation defense) validates and normalizes
+        # every estimate/inference-moving parameter.
+        self.propensity_learner = propensity_learner
+        self.outcome_learner = outcome_learner
+        self.n_folds = n_folds
+        self.control_group = control_group
+        self.anticipation = anticipation
+        self.alpha = alpha
+        self.n_bootstrap = n_bootstrap
+        self.bootstrap_weights = bootstrap_weights
+        self.seed = seed
+        self.base_period = base_period
+        self.cband = cband
+        self.pscore_trim = pscore_trim
+        self.panel = panel
+        self.cluster = cluster
+        self._revalidate_config()
+
+        # Fitted-state lifecycle (house convention; not inherited under this MRO).
+        self.results_: Optional[DMLDiDResults] = None
+        self.is_fitted_ = False
+
+    def _revalidate_config(self, *, require_sample_weight: bool = False) -> None:
+        """Validate + normalize EVERY config param from current attributes.
+
+        Called at ``__init__`` and again at the start of ``fit()`` (the
+        direct-mutation defense): a mutated ``control_group``/``base_period``
+        would otherwise fall through an ``else`` branch and silently select a
+        valid-but-unintended methodology while reporting the invalid label.
+        ``anticipation`` runs FIRST (assignment form, M-144 — the
+        anticipation-policy suite's ordering contract) and normalization is
+        idempotent, so a second run is a no-op on valid state.
+        """
+        self.anticipation = validate_anticipation(self.anticipation)
+        _validate_learner_spec(
+            self.propensity_learner,
+            kind="classifier",
+            param_name="propensity_learner",
+            require_sample_weight=require_sample_weight,
+        )
+        _validate_learner_spec(
+            self.outcome_learner,
+            kind="regressor",
+            param_name="outcome_learner",
+            require_sample_weight=require_sample_weight,
+        )
+        # Specs stored VERBATIM (a passed learner object is the same object
+        # in get_params()); fit-time make_learner does the resolution.
+        self.n_folds = _validate_n_folds(self.n_folds)
+        if self.control_group not in ("never_treated", "not_yet_treated"):
+            raise ValueError(
+                f"control_group must be 'never_treated' or 'not_yet_treated', "
+                f"got '{self.control_group}'"
+            )
+        alpha = self.alpha
+        if isinstance(alpha, bool) or not isinstance(alpha, (int, float, np.integer, np.floating)):
+            raise ValueError(f"alpha must be a float in (0, 1), got {alpha!r}")
+        if not np.isfinite(alpha) or not 0 < alpha < 1:
+            raise ValueError(f"alpha must be in (0, 1), got {alpha}")
+        self.alpha = float(alpha)
+        validate_n_bootstrap(self.n_bootstrap)
+        self.n_bootstrap = int(self.n_bootstrap)
+        if self.bootstrap_weights is None:
+            self.bootstrap_weights = "rademacher"  # mixin declares str, not Optional
+        if self.bootstrap_weights not in ("rademacher", "mammen", "webb"):
+            raise ValueError(
+                f"bootstrap_weights must be 'rademacher', 'mammen', or 'webb', "
+                f"got '{self.bootstrap_weights}'"
+            )
+        self.seed = _validate_seed(self.seed)
+        if self.base_period not in ("varying", "universal"):
+            raise ValueError(
+                f"base_period must be 'varying' or 'universal', got '{self.base_period}'"
+            )
+        if not isinstance(self.cband, (bool, np.bool_)):
+            raise ValueError(
+                f"cband must be a bool, got {self.cband!r} (type "
+                f"{type(self.cband).__name__}) — truthy strings like 'False' "
+                "would silently enable bands"
+            )
+        self.cband = bool(self.cband)
+        self.pscore_trim = validate_pscore_trim(self.pscore_trim)
+        if not isinstance(self.panel, (bool, np.bool_)):
+            raise ValueError(
+                f"panel must be a bool, got {self.panel!r} (type "
+                f"{type(self.panel).__name__}) — truthy strings like 'False' "
+                "would silently select the panel lane"
+            )
+        self.panel = bool(self.panel)
+        if self.cluster is not None and not isinstance(self.cluster, str):
+            raise ValueError(
+                f"cluster must be a column name (str) or None, got "
+                f"{self.cluster!r} (type {type(self.cluster).__name__})"
+            )
+
+    # ------------------------------------------------------------------
+    # Input validation
+    # ------------------------------------------------------------------
+
+    def _validate_and_prepare(
+        self,
+        data: pd.DataFrame,
+        outcome: str,
+        unit: str,
+        time: str,
+        first_treat: str,
+        covariates: Optional[Iterable[str]],
+        bad_control: Optional[str] = None,
+        bad_control_covariates: Optional[Iterable[str]] = None,
+        has_survey_design: bool = False,
+        *,
+        require_sample_weight: bool = False,
+    ) -> Tuple[pd.DataFrame, List[str], Optional[List[str]]]:
+        """Validate inputs; return the numeric working frame, covariate list,
+        and the materialized bad-control covariate list (``None`` when no bad
+        control is declared)."""
+        # FULL config re-validation FIRST (mutation defense; anticipation
+        # leads inside _revalidate_config — the ordering is load-bearing for
+        # the anticipation-policy suite, which fits a bare DataFrame and
+        # requires the config error to precede column checks).
+        self._revalidate_config(require_sample_weight=require_sample_weight)
+
+        # Bad-control lane (CCPS 2026): unsupported-combination gates right
+        # after the config validation (config errors first), then the
+        # argument-NAME checks below once ``covariates`` is materialized.
+        if bad_control is None and bad_control_covariates is not None:
+            raise ValueError(
+                "bad_control_covariates requires bad_control: the W covariates "
+                "model the bad control's untreated evolution (Caetano, Callaway, "
+                "Payne & Sant'Anna 2026, Assumption 6) and have no role without "
+                "a bad control."
+            )
+        if bad_control is not None:
+            if not self.panel:
+                raise NotImplementedError(
+                    "bad_control is not available with panel=False: the bad-control "
+                    "identification strategies need the same unit's bad control at "
+                    "the base period and at t (Caetano et al. 2026, Remark 1: not "
+                    "available with repeated cross sections 'to a large extent')."
+                )
+            if has_survey_design:
+                raise NotImplementedError(
+                    "bad_control with survey_design= is not supported yet: the "
+                    "nested second-stage nuisances under design weights and "
+                    "replicate variances are unvalidated. cluster= is supported."
+                )
+            if self.anticipation != 0:
+                raise NotImplementedError(
+                    "bad_control requires anticipation=0: the paper's no-anticipation "
+                    "assumption (MP-2) covers the bad control as well as the outcome "
+                    "and the limited-anticipation relaxation is not developed "
+                    "(DEFERRED.md)."
+                )
+            if self.base_period != "varying":
+                raise NotImplementedError(
+                    "bad_control requires base_period='varying': under a universal "
+                    "base a pre-period cell would read the bad control at t BEFORE "
+                    "its base-period value, inverting the X_t / X_{t-1} ordering "
+                    "that covariate unconfoundedness (MP-5) conditions on "
+                    "(DEFERRED.md)."
+                )
+
+        # covariates are REQUIRED (Chang's estimator exists for the
+        # high-dimensional-X setting).
+        if isinstance(covariates, (str, bytes)):
+            raise ValueError(
+                "covariates must be a sequence of column names, not a bare "
+                f"string ({covariates!r}); wrap it in a list: covariates="
+                f"[{covariates!r}]"
+            )
+        # Materialize EXACTLY ONCE, before any check that iterates: a
+        # one-shot iterable (generator) would otherwise be consumed by the
+        # emptiness check and every later list() would see an empty
+        # sequence — an intercept-only fit silently dropping the requested
+        # covariate adjustment.
+        if covariates is not None:
+            covariates = list(covariates)
+        if covariates is None or len(covariates) == 0:
+            raise ValueError(
+                "DMLDiD requires covariates: Chang (2020)'s estimator exists "
+                "for the conditional-on-covariates setting. For an "
+                "unconditional staggered DiD, use CallawaySantAnna (with or "
+                "without covariates)."
+            )
+        validate_covariate_names(
+            covariates,
+            reserved_names=(outcome, unit, time, first_treat),
+            estimator="DMLDiD",
+        )
+        # (Already a list — materialized once above; a tuple would satisfy
+        # the sequence contract but pandas treats a tuple as ONE column key
+        # in df[covariates].)
+
+        # Role columns distinct (a collision estimates the wrong quantity
+        # silently — verified on CS, which fits outcome=time and returns 0).
+        roles = {"outcome": outcome, "unit": unit, "time": time, "first_treat": first_treat}
+        seen: Dict[str, str] = {}
+        for role, col in roles.items():
+            if col in seen:
+                raise ValueError(
+                    f"outcome/unit/time/first_treat must name distinct columns; "
+                    f"{role}={col!r} collides with {seen[col]}={col!r}"
+                )
+            seen[col] = role
+
+        # Bad-control NAME-level checks: names only, never ``data`` (so a
+        # malformed name reaches a targeted ValueError, not pandas).
+        w_names: Optional[List[str]] = None
+        if bad_control is not None:
+            w_names = self._validate_bad_control_names(
+                bad_control, bad_control_covariates, covariates, roles
+            )
+
+        required_cols = [outcome, unit, time, first_treat, *covariates]
+        if bad_control is not None:
+            required_cols.append(bad_control)
+            required_cols.extend(w for w in (w_names or []) if w != outcome)
+        missing = [c for c in required_cols if c not in data.columns]
+        if missing:
+            raise ValueError(f"Missing columns: {missing}")
+
+        df = data.loc[:, required_cols].copy()
+
+        # Identifier checks BEFORE any numeric coercion.
+        if df[unit].isna().any():
+            raise ValueError(
+                f"unit column {unit!r} contains missing values; every row "
+                "needs a unit identifier (no silent groupby drop)"
+            )
+        if df[time].isna().any():
+            raise ValueError(f"time column {time!r} contains missing values")
+        if df[first_treat].isna().any():
+            raise ValueError(
+                f"first_treat column {first_treat!r} contains missing values; "
+                "use 0 (or +inf) for never-treated units"
+            )
+
+        # Numeric coercion of the label columns (targeted error on failure).
+        raw_time = df[time].to_numpy(dtype=object)
+        raw_ft = df[first_treat].to_numpy(dtype=object)
+        try:
+            time_numeric = pd.to_numeric(df[time])
+            ft_numeric = pd.to_numeric(df[first_treat])
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"time/first_treat columns must be numeric-castable: {exc}") from exc
+        for col_label, series in ((time, time_numeric), (first_treat, ft_numeric)):
+            if pd.api.types.is_complex_dtype(series):
+                raise ValueError(f"column {col_label!r} is complex-valued; labels must be real")
+
+        # ±inf time is rejected (it would corrupt base-period arithmetic).
+        # Conversion-CREATED infinity (a finite raw label like
+        # Decimal("1e400") or "1e400" that pd.to_numeric overflowed to inf)
+        # gets its own targeted magnitude error — "non-finite values" would
+        # misdescribe a finite input.
+        time_vals = time_numeric.to_numpy()
+        time_float = time_vals.astype(np.float64)
+        time_inf = ~np.isfinite(time_float)
+        if time_inf.any():
+            _raise_if_conversion_created_inf(time, raw_time, time_inf)
+            raise ValueError(f"time column {time!r} contains non-finite values")
+
+        # first_treat: +inf -> 0 recode (CS parity), negative -> hard error.
+        # The recode applies ONLY to genuinely infinite RAW values: a finite
+        # oversized label whose conversion overflowed to +inf must NOT be
+        # silently reclassified as never-treated (the raw-verification guard
+        # masks recoded positions, so the recode is the one door around the
+        # exact-label certificate — gate it on the raw values).
+        ft_vals = ft_numeric.to_numpy()
+        ft_float = ft_vals.astype(np.float64)
+        ft_any_inf = np.isinf(ft_float)
+        if ft_any_inf.any():
+            _raise_if_conversion_created_inf(first_treat, raw_ft, ft_any_inf)
+        inf_mask = np.isposinf(ft_float)
+        if inf_mask.any():
+            n_inf_units = df.loc[inf_mask, unit].nunique()
+            warnings.warn(
+                f"{n_inf_units} unit(s) have first_treat=inf; recoding to 0 "
+                f"(never-treated). Use first_treat=0 to suppress this warning.",
+                UserWarning,
+                stacklevel=3,
+            )
+            ft_vals = ft_vals.copy()
+            ft_vals[inf_mask] = 0
+            ft_float[inf_mask] = 0.0
+        if np.isneginf(ft_float).any():
+            raise ValueError(
+                f"first_treat column {first_treat!r} contains -inf; "
+                "never-treated units are coded 0 (or +inf)"
+            )
+        if np.any(ft_float < 0):
+            raise ValueError(
+                f"first_treat column {first_treat!r} contains negative values; "
+                "cohorts are first-treatment periods (never-treated = 0)"
+            )
+
+        # Label guards (ALL run after the recode — +inf would otherwise trip
+        # the magnitude bound before the recode could fire).
+        time_norm, ft_norm = self._normalize_label_columns(
+            time_vals, ft_vals, raw_time, raw_ft, inf_mask, time, first_treat
+        )
+        # assign() replaces the columns wholesale — a setitem into an int64
+        # column with float labels would raise pandas' LossySetitemError.
+        df = df.assign(**{time: time_norm, first_treat: ft_norm})
+
+        # Outcome and covariates: numeric-castable with a targeted error
+        # naming the column, complex rejected, then CONVERTED to float64
+        # (load-bearing: pd.to_numeric preserves int64/bool, where a bool
+        # outcome TypeErrors in the subtraction and int64 overflow WRAPS to a
+        # finite wrong value invisible to errstate/isfinite).
+        numeric_cols = [outcome, *covariates]
+        if bad_control is not None:
+            numeric_cols.append(bad_control)
+            numeric_cols.extend(w for w in (w_names or []) if w != outcome)
+        for col in numeric_cols:
+            try:
+                converted = pd.to_numeric(df[col])
+            except (ValueError, TypeError) as exc:
+                raise ValueError(
+                    f"column {col!r} must be numeric-castable for DMLDiD: {exc}"
+                ) from exc
+            if pd.api.types.is_complex_dtype(converted):
+                raise ValueError(
+                    f"column {col!r} is complex-valued; casting would silently "
+                    "discard imaginary parts — supply real-valued data"
+                )
+            df[col] = converted.astype(np.float64)
+
+        # Structural design guards. Panel: one row per (unit, time) and a
+        # time-invariant cohort label. Declared RCS: one row per unit — with
+        # row-unique IDs the two panel guards below are subsumed (duplicate
+        # (unit, time) is impossible and per-row first_treat is trivially
+        # unit-constant).
+        if not self.panel:
+            if df[unit].duplicated().any():
+                raise ValueError(
+                    "panel=False requires unique unit IDs (one observation per "
+                    "unit). Found duplicate unit IDs. If your data is a panel, "
+                    "use panel=True."
+                )
+            self._check_control_group_availability(df, unit, first_treat)
+            # Emit only AFTER the declared-RCS structure has fully
+            # validated — a failing call raises without the misleading
+            # suggestion that estimation began.
+            warnings.warn(
+                "panel=False uses Chang (2020) Case 2 repeated-cross-section "
+                "scores, which assume stationary cross-sectional sampling "
+                "(Assumption 2.3): each wave samples the SAME target "
+                "population — conditional on the period, rows are i.i.d. "
+                "draws from the distribution of (Y(0), D, X) (pre) or "
+                "(Y(1), D, X) (post), so the composition of (D, X) is stable "
+                "across waves while outcomes are the period-specific "
+                "potential outcomes (trends and treatment effects are "
+                "expected, not violations). This assumption is not "
+                "data-checkable.",
+                UserWarning,
+                stacklevel=3,
+            )
+            return df, covariates, w_names
+
+        # Duplicate (unit, time) rows.
+        dup_mask = df.duplicated(subset=[unit, time], keep=False)
+        if dup_mask.any():
+            example = df.loc[dup_mask, [unit, time]].iloc[0]
+            raise ValueError(
+                f"duplicate (unit, time) rows: e.g. unit={example[unit]!r} at "
+                f"time={example[time]!r}; a panel has one row per unit-period"
+            )
+
+        # first_treat time-varying within unit.
+        ft_per_unit = df.groupby(unit)[first_treat].nunique()
+        if (ft_per_unit > 1).any():
+            bad = ft_per_unit[ft_per_unit > 1].index[0]
+            raise ValueError(
+                f"first_treat varies within unit {bad!r}; the cohort label "
+                "must be constant per unit"
+            )
+
+        self._check_control_group_availability(df, unit, first_treat)
+
+        return df, covariates, w_names
+
+    @staticmethod
+    def _validate_bad_control_names(
+        bad_control: Any,
+        bad_control_covariates: Optional[Iterable[str]],
+        covariates: List[str],
+        roles: Dict[str, str],
+    ) -> List[str]:
+        """Name-level validation of the bad-control arguments (no data access).
+
+        Returns the materialized ``W`` list (``[]`` for ``None``). The outcome
+        name is allowed inside ``W`` and means the outcome at the cell's base
+        period (Remark 5's ``W = Y_{g-1}``).
+        """
+        if not isinstance(bad_control, str):
+            raise ValueError(
+                f"bad_control must be a single column name (str), got {bad_control!r}; "
+                "the paper's notation and the R reference implementation carry ONE "
+                "bad control."
+            )
+        if bad_control in roles.values():
+            role = next(r for r, c in roles.items() if c == bad_control)
+            raise ValueError(f"bad_control={bad_control!r} collides with {role}={bad_control!r}")
+        if bad_control in covariates:
+            raise ValueError(
+                f"bad_control={bad_control!r} also appears in covariates. A bad control "
+                "must not be conditioned on at period t (the 'include the bad "
+                "control' bias, Caetano et al. 2026 Section 3.1). Pass it ONLY as "
+                "bad_control (covariate-unconfoundedness lane), or - for the "
+                "pre-treatment-conditioning lane of Theorem 1 / Proposition 3 - "
+                "drop bad_control and pass it in covariates alone, where "
+                "DMLDiD/CallawaySantAnna read it at the cell's base period."
+            )
+        if bad_control_covariates is None:
+            return []
+        if isinstance(bad_control_covariates, (str, bytes)):
+            raise ValueError(
+                "bad_control_covariates must be a sequence of column names, not a "
+                f"bare string ({bad_control_covariates!r}); wrap it in a list."
+            )
+        # Materialize EXACTLY ONCE (one-shot iterables; same rule as covariates).
+        w_list = list(bad_control_covariates)
+        for w in w_list:
+            if not isinstance(w, str):
+                raise ValueError(
+                    f"bad_control_covariates entries must be column names (str), got {w!r}"
+                )
+        dupes = sorted({w for w in w_list if w_list.count(w) > 1})
+        if dupes:
+            raise ValueError(f"bad_control_covariates contains duplicate names: {dupes}")
+        for w in w_list:
+            if w in (roles["unit"], roles["time"], roles["first_treat"]):
+                raise ValueError(
+                    f"bad_control_covariates entry {w!r} names a role column "
+                    "(unit/time/first_treat); only the outcome name is allowed there "
+                    "(meaning the outcome at the cell's base period)."
+                )
+            if w == bad_control:
+                raise ValueError(
+                    f"bad_control_covariates entry {w!r} is the bad control itself; "
+                    "its pre-treatment value is already conditioned on."
+                )
+            if w in covariates:
+                raise ValueError(
+                    f"bad_control_covariates entry {w!r} also appears in covariates; a "
+                    "column plays one role (Z enters parallel trends, W enters only "
+                    "the bad control's unconfoundedness model)."
+                )
+        return w_list
+
+    def _check_control_group_availability(
+        self, df: pd.DataFrame, unit: str, first_treat: str
+    ) -> None:
+        """Control-group availability (CS parity, incl. the NESTING).
+
+        Shared by both design lanes: on declared RCS the groupby-first
+        degenerates correctly to per-row under the unique-row-ID guard.
+        """
+        unit_cohorts_series = df.groupby(unit)[first_treat].first()
+        n_never = int((unit_cohorts_series == 0).sum())
+        n_cohorts = int(unit_cohorts_series[unit_cohorts_series > 0].nunique())
+        if n_never == 0 and self.control_group == "never_treated":
+            raise ValueError(
+                "No never-treated units found. Check 'first_treat' column. "
+                "Use control_group='not_yet_treated' if all units are eventually treated."
+            )
+        if n_never == 0 and self.control_group == "not_yet_treated":
+            if n_cohorts < 2:
+                raise ValueError(
+                    "not_yet_treated control group requires at least 2 treatment "
+                    "cohorts when there are no never-treated units."
+                )
+
+    def _normalize_label_columns(
+        self,
+        time_vals: np.ndarray,
+        ft_vals: np.ndarray,
+        raw_time: np.ndarray,
+        raw_ft: np.ndarray,
+        ft_inf_mask: np.ndarray,
+        time: str,
+        first_treat: str,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Three label guards + joint canonical-dtype normalization.
+
+        (1) elementwise exact raw-vs-normalized comparison (Python
+        cross-type equality; strings parsed exactly; nunique fallback for
+        exotic non-str non-numeric elements), (2) the 2**62 magnitude bound
+        with anticipation headroom, (3) int64-first / float64-fallback
+        normalization with round-trip certificates. Guards (2)-(3) certify
+        the post-``pd.to_numeric`` cast; guard (1) covers the coercion step
+        itself — the losslessness certificate is the conjunction.
+        """
+        # (2) magnitude bound (pre-cast; also closes the uint64 double-wrap
+        # and the int64 cohort-arithmetic overflow). Compared EXACTLY in the
+        # source dtype — a float64 cast of an int just above 2**62 rounds
+        # back DOWN to the bound and would slip through a float comparison.
+        for col_label, vals in ((time, time_vals), (first_treat, ft_vals)):
+            arr = np.asarray(vals)
+            if arr.size == 0:
+                continue
+            if np.issubdtype(arr.dtype, np.integer):
+                max_abs: Any = max(abs(int(arr.max())), abs(int(arr.min())))
+            else:
+                max_abs = float(np.max(np.abs(arr.astype(np.float64))))
+            if max_abs > _LABEL_MAGNITUDE_BOUND:
+                raise ValueError(
+                    f"column {col_label!r} carries labels above 2**62 in "
+                    f"magnitude (max |value| = {max_abs:.6g}); such labels are "
+                    "not exactly representable for cohort arithmetic — rescale "
+                    "them (e.g. to period indices)"
+                )
+            if max_abs + self.anticipation > _LABEL_MAGNITUDE_BOUND:
+                raise ValueError(
+                    f"max |{col_label}| + anticipation exceeds 2**62 "
+                    f"({max_abs:.6g} + {self.anticipation}); the not-yet-treated "
+                    "threshold arithmetic would overflow — rescale the labels"
+                )
+
+        # (3) joint canonical dtype: int64 when BOTH columns round-trip
+        # losslessly (family-consistent integer rendering), else float64
+        # when both round-trip, else targeted error.
+        def _lossless(cast: np.ndarray, orig: np.ndarray) -> bool:
+            return bool(np.array_equal(cast.astype(orig.dtype), orig))
+
+        candidates: List[np.ndarray] = []
+        int_ok = True
+        for vals in (time_vals, ft_vals):
+            arr = np.asarray(vals)
+            cast_i = arr.astype(np.int64)
+            if not _lossless(cast_i, arr):
+                int_ok = False
+                break
+            candidates.append(cast_i)
+        if not int_ok:
+            candidates = []
+            for col_label, vals in ((time, time_vals), (first_treat, ft_vals)):
+                arr = np.asarray(vals)
+                cast_f = arr.astype(np.float64)
+                if not _lossless(cast_f, arr):
+                    raise ValueError(
+                        f"column {col_label!r} labels are not exactly "
+                        "representable as int64 or float64; rescale them "
+                        "(e.g. to period indices)"
+                    )
+                candidates.append(cast_f)
+        time_norm, ft_norm = candidates
+
+        # (1) elementwise exact raw comparison (catches precision
+        # pd.to_numeric ITSELF destroyed: merges AND pure shifts). Runs
+        # BEFORE the float-lane arithmetic certificates: a coerced object
+        # column with genuinely lost precision should surface the
+        # precision diagnosis, not a downstream-arithmetic one.
+        for col_label, raw, norm, recoded in (
+            (time, raw_time, time_norm, None),
+            (first_treat, raw_ft, ft_norm, ft_inf_mask),
+        ):
+            self._verify_raw_labels(col_label, raw, norm, recoded)
+
+        # Float-lane anticipation-arithmetic exactness certificate: the
+        # magnitude bound alone does not make float64 label +/- anticipation
+        # EXACT — e.g. labels that are multiples of 512 near 2**62 pass every
+        # round-trip, yet `max(t, base) + anticipation` can round ONTO a
+        # later cohort and silently flip its not-yet-treated eligibility
+        # (and `g - anticipation` base-period arithmetic rounds the same
+        # way). Verify, per unique label, that v +/- anticipation is exact
+        # in float64 (Fraction comparison is exact); reject otherwise.
+        if not int_ok:
+            from fractions import Fraction
+
+        if not int_ok and self.anticipation > 0:
+            a = int(self.anticipation)
+            for col_label, norm in ((time, time_norm), (first_treat, ft_norm)):
+                for v in np.unique(norm):
+                    fv = float(v)
+                    exact = Fraction(fv)
+                    if Fraction(fv + a) != exact + a or Fraction(fv - a) != exact - a:
+                        raise ValueError(
+                            f"column {col_label!r}: label {fv!r} does not support "
+                            f"exact anticipation arithmetic in float64 "
+                            f"(+/- {a} rounds), so cohort-threshold and "
+                            "base-period comparisons would silently shift — "
+                            "rescale the labels (e.g. to period indices)"
+                        )
+
+        # Float-lane event-time subtraction certificate (ungated on
+        # anticipation): every event time e = t - g (base - g included; the
+        # base period is itself an observed period) must be EXACT in
+        # float64. Mixed-magnitude label sets — e.g. periods 0.5/1.0/1.5
+        # with a cohort at 2**62 - 2048 — pass every per-label certificate,
+        # yet t - g rounds all of them to the SAME event-time key, silently
+        # merging distinct horizons in the analytical and bootstrap
+        # aggregations. Exact subtraction is also injective, so distinct
+        # exact differences keep distinct keys.
+        if not int_ok:
+            period_fracs = [(float(v), Fraction(float(v))) for v in np.unique(time_norm)]
+            for gval in np.unique(ft_norm):
+                if not gval > 0:
+                    continue
+                fg = float(gval)
+                exact_g = Fraction(fg)
+                for ft_v, exact_t in period_fracs:
+                    if Fraction(ft_v - fg) != exact_t - exact_g:
+                        raise ValueError(
+                            f"event-time arithmetic is not exact in float64 for "
+                            f"period {ft_v!r} and cohort {fg!r} (t - g rounds), "
+                            "so distinct event-study horizons would silently "
+                            "merge — rescale the labels (e.g. to period indices)"
+                        )
+
+        return time_norm, ft_norm
+
+    @staticmethod
+    def _verify_raw_labels(
+        col_label: str,
+        raw: np.ndarray,
+        normalized: np.ndarray,
+        recoded_mask: Optional[np.ndarray],
+    ) -> None:
+        import numbers
+
+        expected: List[Any] = []
+        parseable = True
+        for value in raw:
+            if isinstance(value, numbers.Number) and not isinstance(value, complex):
+                # Covers int/float/bool, numpy scalars, AND registered
+                # exotic numerics (decimal.Decimal, fractions.Fraction) —
+                # Python cross-type equality against the normalized
+                # int/float is exact, so a Decimal label that
+                # pd.to_numeric shifted fails the check like any other.
+                expected.append(value)
+            elif isinstance(value, str):
+                try:
+                    expected.append(int(value))
+                except ValueError:
+                    try:
+                        # decimal.Decimal parses the string EXACTLY — a
+                        # float() parse would carry the same precision loss
+                        # as pd.to_numeric and let a shifted numeric string
+                        # (e.g. "9007199254740992.5" -> ...992.0) slip
+                        # through the equality check.
+                        expected.append(decimal.Decimal(value))
+                    except decimal.InvalidOperation:
+                        parseable = False
+                        break
+            else:
+                # Non-str non-Number element types (e.g. pandas Timestamps,
+                # whose to_numeric ns conversion is exact by construction):
+                # cardinality fallback below.
+                parseable = False
+                break
+        if not parseable:
+            # Exotic non-str non-numeric element types: fall back to the
+            # per-column cardinality comparison.
+            n_raw = len(pd.unique(raw))
+            n_norm = len(np.unique(normalized))
+            if n_raw != n_norm:
+                raise ValueError(
+                    f"column {col_label!r}: numeric coercion merged distinct "
+                    f"labels ({n_raw} unique raw values -> {n_norm} after "
+                    "coercion); labels are not exactly representable — "
+                    "rescale them (e.g. to period indices)"
+                )
+            return
+        expected_arr = np.asarray(expected, dtype=object)
+        if recoded_mask is not None and recoded_mask.any():
+            expected_arr = expected_arr.copy()
+            expected_arr[recoded_mask] = 0
+        # Compare via Python scalars (.item()): numpy-scalar == Decimal is
+        # not guaranteed exact cross-type, Python int/float == Decimal is.
+        mismatch = np.array(
+            [nv.item() != ev for nv, ev in zip(normalized, expected_arr)], dtype=bool
+        )
+        if np.any(mismatch):
+            idx = int(np.flatnonzero(mismatch)[0])
+            raise ValueError(
+                f"column {col_label!r}: numeric coercion changed label "
+                f"{raw[idx]!r} to {normalized[idx]!r} (precision loss); labels "
+                "are not exactly representable — rescale them (e.g. to period "
+                "indices)"
+            )
+
+    # ------------------------------------------------------------------
+    # Precompute (host-written, like every non-CS payload producer)
+    # ------------------------------------------------------------------
+
+    def _precompute(
+        self,
+        df: pd.DataFrame,
+        outcome: str,
+        unit: str,
+        time: str,
+        first_treat: str,
+        covariates: List[str],
+        resolved_survey: Optional["ResolvedSurveyDesign"] = None,
+        bad_control: Optional[str] = None,
+        bad_control_covariates: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        # CS groupby form — NOT sorted(unique): sorted() raises a bare
+        # TypeError on mixed-type unit labels that CS accepts.
+        unit_info = df.groupby(unit)[first_treat].first()
+        all_units = unit_info.index.values
+        unit_cohorts = unit_info.values
+        unit_to_idx = {u: i for i, u in enumerate(all_units)}
+
+        outcome_wide = df.pivot(index=unit, columns=time, values=outcome).reindex(all_units)
+        outcome_matrix = outcome_wide.values
+        period_to_col = {t: i for i, t in enumerate(outcome_wide.columns)}
+
+        treatment_groups = sorted(g for g in df[first_treat].unique() if g > 0)
+        time_periods = sorted(df[time].unique())
+
+        cohort_masks = {g: unit_cohorts == g for g in treatment_groups}
+        never_treated_mask = unit_cohorts == 0
+
+        # One pivot per covariate (not one full-frame scan per period).
+        cov_wide = {
+            c: df.pivot(index=unit, columns=time, values=c).reindex(all_units) for c in covariates
+        }
+        covariate_by_period: Dict[Any, np.ndarray] = {
+            t: np.column_stack([cov_wide[c][t].values for c in covariates]) for t in time_periods
+        }
+
+        n_units = len(all_units)
+        # obs_per_unit OMITTED deliberately: only the RC path sets it, and a
+        # non-None value divides the aggregation WIF (would silently shrink
+        # SEs on a panel). Survey keys (CS names: survey_weights /
+        # resolved_survey / resolved_survey_unit / df_survey) are set from
+        # resolved_survey when a design (declared or cluster-synthesized) is
+        # in play; absent otherwise (mixin reads are .get with panel
+        # fallbacks).
+        out: Dict[str, Any] = {
+            "all_units": all_units,
+            "unit_to_idx": unit_to_idx,
+            "unit_cohorts": unit_cohorts,
+            "outcome_matrix": outcome_matrix,
+            "period_to_col": period_to_col,
+            "observed_sorted": sorted(period_to_col),
+            "cohort_masks": cohort_masks,
+            "never_treated_mask": never_treated_mask,
+            "covariate_by_period": covariate_by_period,
+            "time_periods": time_periods,
+            "treatment_groups": treatment_groups,
+            "is_panel": True,
+            "canonical_size": n_units,
+            "n_units": n_units,
+        }
+        if bad_control is not None:
+            # CCPS (2026) lane: the bad control at EVERY period (read at t and
+            # at the base period per cell) and the W block at every period
+            # (read at the base period), in the user's listed order with the
+            # outcome name resolving to the outcome itself at that position.
+            w_names = list(bad_control_covariates or [])
+            bc_wide = df.pivot(index=unit, columns=time, values=bad_control).reindex(all_units)
+            w_wide = {
+                c: (
+                    outcome_wide
+                    if c == outcome
+                    else df.pivot(index=unit, columns=time, values=c).reindex(all_units)
+                )
+                for c in w_names
+            }
+            out["bad_control_by_period"] = {
+                t: bc_wide[t].to_numpy(dtype=np.float64) for t in time_periods
+            }
+            out["w_by_period"] = {
+                t: (
+                    np.column_stack([w_wide[c][t].to_numpy(dtype=np.float64) for c in w_names])
+                    if w_names
+                    else np.empty((n_units, 0))
+                )
+                for t in time_periods
+            }
+            out["bad_control"] = bad_control
+            out["bad_control_covariates"] = tuple(w_names)
+        if resolved_survey is not None:
+            from diff_diff.survey import collapse_survey_to_unit_level
+
+            survey_weights_unit = (
+                pd.Series(resolved_survey.weights, index=df.index)
+                .groupby(df[unit])
+                .first()
+                .reindex(all_units)
+                .to_numpy()
+            )
+            resolved_survey_unit = collapse_survey_to_unit_level(
+                resolved_survey, df, unit, all_units
+            )
+            out["survey_weights"] = survey_weights_unit
+            out["resolved_survey"] = resolved_survey
+            out["resolved_survey_unit"] = resolved_survey_unit
+            out["df_survey"] = resolved_survey_unit.df_survey
+        return out
+
+    def _precompute_rcs(
+        self,
+        df: pd.DataFrame,
+        outcome: str,
+        unit: str,
+        time: str,
+        first_treat: str,
+        covariates: List[str],
+        resolved_survey: Optional["ResolvedSurveyDesign"] = None,
+    ) -> Dict[str, Any]:
+        """Declared-RCS bookkeeping: rows ARE the sampling units.
+
+        Mirrors the minimal CS RCS precompute contract: ``all_units`` =
+        observation positions, ``unit_to_idx`` = None, per-ROW
+        ``unit_cohorts``, ``canonical_size`` = n_obs — the aggregation and
+        bootstrap mixins branch off exactly these (per-row multiplier
+        weights; per-obs cohort bincount pg basis; ``aggregate('total')``
+        fails closed on ``is_panel: False``).
+
+        ``agg_cohort_masses`` is deliberately NOT set: under unique row IDs
+        the aggregation cache's bincount fallback yields exactly the fixed
+        per-cohort row masses (never-treated included, denominator = n_obs),
+        so the WIF pg basis is already the fixed-cohort-mass one and the
+        per-cell ``agg_weight`` (from ``rcs_cohort_masses``, int-keyed by the
+        canonical labels) aligns the point-estimate weights with it.
+        Supplying the key would be a numeric no-op that routes lookups
+        through float()-keyed dict access, where distinct int64 cohorts
+        above 2**53 (admissible through 2**62 by the label pipeline)
+        collide. That rationale HOLDS under survey too: the survey branches
+        of ``fixed_cohort_agg_weights`` (native-key dict) and
+        ``_get_agg_cache`` (bincount) are collision-free, so survey cohort
+        masses flow without ``agg_cohort_masses``. ``obs_per_unit`` stays
+        omitted (true RCS is one row per unit — a non-None obs_per_unit
+        would divide the WIF). Survey keys: on RCS the rows ARE the
+        sampling units, so ``resolved_survey_unit`` is the per-obs design
+        itself (CS RCS precedent) and ``survey_weights`` are the per-obs
+        weights; ``rcs_cohort_masses`` stays unweighted (the per-cell
+        ``agg_weight`` becomes an inert fallback — survey masses win in
+        the aggregation cache).
+        """
+        n_obs = len(df)
+        unit_cohorts = df[first_treat].to_numpy()
+        treatment_groups = sorted(g for g in df[first_treat].unique() if g > 0)
+        time_periods = sorted(df[time].unique())
+        period_to_col = {t: i for i, t in enumerate(time_periods)}
+        out: Dict[str, Any] = {
+            "all_units": np.arange(n_obs),
+            "unit_to_idx": None,
+            "unit_cohorts": unit_cohorts,
+            "obs_time": df[time].to_numpy(),
+            "obs_outcome": df[outcome].to_numpy(),
+            "obs_covariates": df[covariates].to_numpy(dtype=np.float64),
+            "cohort_masks": {g: unit_cohorts == g for g in treatment_groups},
+            # +inf cohorts were recoded to 0 upstream, so == 0 is complete.
+            "never_treated_mask": unit_cohorts == 0,
+            "period_to_col": period_to_col,
+            "observed_sorted": sorted(period_to_col),
+            "time_periods": time_periods,
+            "treatment_groups": treatment_groups,
+            "is_panel": False,
+            "canonical_size": n_obs,
+            "n_units": n_obs,
+            "rcs_cohort_masses": {
+                g: int(np.count_nonzero(unit_cohorts == g)) for g in treatment_groups
+            },
+        }
+        if resolved_survey is not None:
+            out["survey_weights"] = resolved_survey.weights.copy()
+            out["resolved_survey"] = resolved_survey
+            out["resolved_survey_unit"] = resolved_survey
+            out["df_survey"] = resolved_survey.df_survey
+        return out
+
+    def _sanitize_learner_error(self, exc: BaseException) -> str:
+        """Persisted error text for cross_fit_diagnostics / to_dict exports.
+
+        Library-native learner specs produce library-controlled messages —
+        kept verbatim. With a FOREIGN learner object in play, the exception
+        text may embed credentials, private paths, or data excerpts from the
+        user's own code, so ONLY the exception type is recorded anywhere
+        (the cell fails soft to a NaN skip; nothing re-raises the full
+        message).
+        """
+        if _is_native_learner_spec(self.propensity_learner) and _is_native_learner_spec(
+            self.outcome_learner
+        ):
+            return str(exc)
+        return (
+            f"{type(exc).__name__} (message withheld: a foreign learner "
+            "object is in play and its error text may embed sensitive "
+            "content — reproduce locally by calling the learner's fit "
+            "directly on the failing cell's data to see the full message)"
+        )
+
+    # ------------------------------------------------------------------
+    # Per-cell DML computation
+    # ------------------------------------------------------------------
+
+    def _compute_dml_gt(
+        self,
+        precomputed: Dict[str, Any],
+        g: Any,
+        t: Any,
+        g_idx: int,
+        t_idx: int,
+        root_entropy: int,
+        dropped_units_out: Optional[set] = None,
+    ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """One (g, t) cell. Returns (gt_entry, if_entry|None, diagnostics|None)."""
+        if precomputed.get("bad_control") is not None:
+            return self._compute_ccps_gt(
+                precomputed, g, t, g_idx, t_idx, root_entropy, dropped_units_out
+            )
+        observed_sorted = precomputed["observed_sorted"]
+        period_to_col = precomputed["period_to_col"]
+        base = _select_base_period_impl(self.base_period, self.anticipation, g, t, observed_sorted)
+        if base is None or base not in period_to_col or t not in period_to_col:
+            return _nan_gt_entry(skip_reason="missing_period"), None, None
+
+        unit_cohorts = precomputed["unit_cohorts"]
+        outcome_matrix = precomputed["outcome_matrix"]
+        treated_mask = precomputed["cohort_masks"][g]
+        if self.control_group == "never_treated":
+            control_mask = precomputed["never_treated_mask"]
+        else:  # not_yet_treated (CS semantics: untreated at max(t, base) + k)
+            nyt_threshold = max(t, base) + self.anticipation
+            control_mask = precomputed["never_treated_mask"] | (
+                (unit_cohorts > nyt_threshold) & (unit_cohorts != g)
+            )
+
+        X_by_period = precomputed["covariate_by_period"]
+        base_col = period_to_col[base]
+        t_col = period_to_col[t]
+        with np.errstate(over="ignore", invalid="ignore"):
+            y_base = outcome_matrix[:, base_col]
+            y_post = outcome_matrix[:, t_col]
+            dY = y_post - y_base
+            X_base = X_by_period[base]
+            cov_finite = np.all(np.isfinite(X_base), axis=1)
+            valid = np.isfinite(y_base) & np.isfinite(y_post) & np.isfinite(dY) & cov_finite
+
+        treated_valid = treated_mask & valid
+        control_valid = control_mask & valid
+        if dropped_units_out is not None:
+            dropped_units_out.update(
+                np.flatnonzero((treated_mask | control_mask) & ~valid).tolist()
+            )
+        n_treated = int(np.sum(treated_valid))
+        n_control = int(np.sum(control_valid))
+        if n_treated == 0 or n_control == 0:
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="zero_treated_control",
+                ),
+                None,
+                None,
+            )
+
+        cell_mask = treated_valid | control_valid
+        cell_idx = np.flatnonzero(cell_mask)
+        n_cell = cell_idx.shape[0]
+        D_cell = treated_valid[cell_idx].astype(np.float64)
+        dY_cell = dY[cell_idx]
+        X_cell = X_base[cell_idx]
+
+        # Survey state (all .get with panel-safe fallbacks; see fit()).
+        weighted_moments = bool(precomputed.get("weighted_moments", False))
+        use_psu_folds = bool(precomputed.get("use_psu_folds", False))
+        resolved_survey_unit = precomputed.get("resolved_survey_unit")
+        survey_weights = precomputed.get("survey_weights")
+        df_survey = precomputed.get("df_survey")
+
+        w_cell: Optional[np.ndarray] = None
+        if weighted_moments and survey_weights is not None:
+            w_cell = np.asarray(survey_weights, dtype=np.float64)[cell_idx]
+            w_treated_mass = float(np.sum(w_cell[D_cell == 1.0]))
+            w_control_mass = float(np.sum(w_cell[D_cell == 0.0]))
+            if w_treated_mass <= 0.0 or w_control_mass <= 0.0:
+                # A group with rows but zero survey mass: p_hat would leave
+                # (0, 1) and mislabel the cell as non_finite_score.
+                return (
+                    _nan_gt_entry(
+                        n_treated=n_treated,
+                        n_control=n_control,
+                        skip_reason="zero_weight_mass",
+                    ),
+                    None,
+                    None,
+                )
+            p_hat = w_treated_mass / float(np.sum(w_cell))
+        else:
+            p_hat = n_treated / n_cell
+        # Empirical treated-share overlap diagnostic: every Chang bound
+        # carries powers of 1/p_0 (paper review, few-treated edge case), and
+        # the fitted-propensity check below cannot see a sparse EMPIRICAL
+        # share when a learner returns non-extreme predictions.
+        if min(p_hat, 1.0 - p_hat) < self.pscore_trim:
+            if w_cell is not None:
+                _share_detail = (
+                    f"weighted p_hat={p_hat:.4f} (treated mass "
+                    f"{float(np.sum(w_cell[D_cell == 1.0])):.4g} / control mass "
+                    f"{float(np.sum(w_cell[D_cell == 0.0])):.4g})"
+                )
+            else:
+                _share_detail = f"p_hat={p_hat:.4f} ({n_treated} treated / {n_control} control)"
+            warnings.warn(
+                f"DMLDiD cell (g={g}, t={t}): empirical treated share "
+                f"{_share_detail} is extreme (min(p, 1-p) < pscore_trim="
+                f"{self.pscore_trim}); the Chang score and variance scale "
+                "with powers of 1/p_hat, so this cell's estimate may be "
+                "unstable.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+        # Per-cell fold draw: seeded from (root, (g_idx, t_idx)) — positions
+        # in the sorted cohort/period rosters, invariant to other cells'
+        # estimability. D-stratified (DoubleML parity; documented REGISTRY
+        # deviation from Chang's plain random partition) — except under a
+        # coarser-than-unit PSU design, where folds are PSU-cohesive
+        # (cluster-cohesive splitting replaces the stratification MECHANISM;
+        # the composition requirement is one period only on this lane and
+        # stays guarded by cross_fit_predict's degenerate checks).
+        seed_seq = np.random.SeedSequence(entropy=root_entropy, spawn_key=(g_idx, t_idx))
+        rng = np.random.default_rng(seed_seq)
+        diagnostics: Dict[str, Any] = {
+            "propensity": None,
+            "outcome": None,
+            "p_hat": float(p_hat),
+            "n_clipped_ps": None,
+            "fold_seed": {"entropy": int(root_entropy), "spawn_key": [int(g_idx), int(t_idx)]},
+            "psu_folds": use_psu_folds,
+        }
+
+        try:
+            if use_psu_folds and resolved_survey_unit is not None:
+                folds = assign_folds(
+                    n_cell,
+                    int(precomputed.get("effective_n_folds", self.n_folds)),
+                    rng=rng,
+                    cluster_ids=np.asarray(resolved_survey_unit.psu)[cell_idx],
+                )
+            else:
+                folds = assign_folds(n_cell, self.n_folds, rng=rng, stratify=D_cell)
+        except ValueError as exc:
+            # Cell smaller than n_folds, or a singleton D-stratum (one
+            # treated/control unit cannot be cross-fitted).
+            diagnostics["skip_reason"] = "cross_fit_degenerate"
+            diagnostics["error"] = str(exc)
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="cross_fit_degenerate",
+                ),
+                None,
+                diagnostics,
+            )
+
+        context = f"DMLDiD (g={g}, t={t})"
+        try:
+            with np.errstate(over="ignore", invalid="ignore"):
+                ps_res = cross_fit_predict(
+                    make_learner(self.propensity_learner, kind="classifier"),
+                    X_cell,
+                    D_cell,
+                    folds,
+                    predict_method="predict_proba",
+                    context_label=f"{context} propensity_learner",
+                    sample_weight=w_cell,
+                )
+                or_res = cross_fit_predict(
+                    make_learner(self.outcome_learner, kind="regressor"),
+                    X_cell,
+                    dY_cell,
+                    folds,
+                    predict_method="predict",
+                    fit_mask=(D_cell == 0.0),
+                    context_label=f"{context} outcome_learner",
+                    sample_weight=w_cell,
+                )
+        except DegenerateFoldError as exc:
+            diagnostics["skip_reason"] = "cross_fit_degenerate"
+            diagnostics["error"] = self._sanitize_learner_error(exc)
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="cross_fit_degenerate",
+                ),
+                None,
+                diagnostics,
+            )
+
+        ps_raw = ps_res.oof_predictions
+        _check_propensity_diagnostics(ps_raw, self.pscore_trim)
+        ps = np.clip(ps_raw, self.pscore_trim, 1.0 - self.pscore_trim)
+        n_clipped = int(np.sum((ps_raw < self.pscore_trim) | (ps_raw > 1.0 - self.pscore_trim)))
+        m_hat = or_res.oof_predictions
+
+        diagnostics["propensity"] = {
+            "fold_losses": [float(v) for v in ps_res.fold_losses],
+            "n_fit_per_fold": [int(v) for v in ps_res.n_fit_per_fold],
+        }
+        diagnostics["outcome"] = {
+            "fold_losses": [float(v) for v in or_res.fold_losses],
+            "n_fit_per_fold": [int(v) for v in or_res.n_fit_per_fold],
+        }
+        diagnostics["n_clipped_ps"] = n_clipped
+
+        try:
+            with np.errstate(over="ignore", invalid="ignore"):
+                summand = chang_panel_score(dY_cell, D_cell, m_hat, ps, p_hat)
+                if w_cell is not None:
+                    theta = float(np.average(summand, weights=w_cell))
+                else:
+                    theta = float(np.mean(summand))
+                psi_bar = chang_panel_score_augmented(summand, D_cell, theta, p_hat)
+        except ValueError as exc:
+            diagnostics["skip_reason"] = "non_finite_score"
+            diagnostics["error"] = self._sanitize_learner_error(exc)
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="non_finite_score",
+                ),
+                None,
+                diagnostics,
+            )
+        if not (np.isfinite(theta) and np.all(np.isfinite(psi_bar))):
+            diagnostics["skip_reason"] = "non_finite_score"
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="non_finite_score",
+                ),
+                None,
+                diagnostics,
+            )
+
+        return self._finish_panel_cell(
+            precomputed=precomputed,
+            cell_idx=cell_idx,
+            treated_valid=treated_valid,
+            D_cell=D_cell,
+            w_cell=w_cell,
+            psi_bar=psi_bar,
+            theta=theta,
+            n_treated=n_treated,
+            n_control=n_control,
+            resolved_survey_unit=resolved_survey_unit,
+            df_survey=df_survey,
+            diagnostics=diagnostics,
+        )
+
+    def _cell_se_from_payload(
+        self,
+        *,
+        inf_full: np.ndarray,
+        if_entry: Dict[str, Any],
+        psi_bar: np.ndarray,
+        n_cell: int,
+        w_cell: Optional[np.ndarray],
+        resolved_survey_unit: Any,
+        df_survey: Optional[float],
+    ) -> Tuple[float, Optional[float]]:
+        """Per-cell SE from a scattered influence payload; returns ``(se, df)``.
+
+        Replicate designs use IF-reweighting on the Hajek payload
+        (compute_replicate_if_variance; the same psi the aggregate
+        _se_from_psi call consumes) — a zero or non-finite replicate variance
+        is degenerate and fails closed to NaN (stricter than the shared
+        aggregate clamp; REGISTRY DMLDiD Note). PSU designs (declared OR bare
+        cluster=) route through the CS per-cell CR1 helper (3-valued
+        contract: float = use it, NaN = unidentified clustered variance and
+        MUST propagate, None = malformed -> fall back). Non-PSU survey designs
+        use the weighted sqrt-sum (CS mirror: the full design enters
+        aggregate SEs only); the no-survey branch is verbatim. The returned
+        ``df`` is the CELL-LOCAL replicate-design rebind (never written back
+        to ``precomputed["df_survey"]``, which feeds the aggregation kit).
+        """
+        se: float
+        with np.errstate(over="ignore", invalid="ignore"):
+            if resolved_survey_unit is not None and resolved_survey_unit.uses_replicate_variance:
+                from diff_diff.survey import compute_replicate_if_variance
+
+                variance, n_valid_rep = compute_replicate_if_variance(
+                    inf_full, resolved_survey_unit
+                )
+                if not np.isfinite(variance) or variance <= 0.0:
+                    se = float("nan")
+                else:
+                    se = float(np.sqrt(variance))
+                # Per-cell df: min(design df, n_valid - 1) — the dCDH
+                # _effective_df_survey rule, inlined. n_valid is computed
+                # over the WHOLE replicate columns, so it equals R for every
+                # cell in practice (defensive; REGISTRY Note).
+                if df_survey is not None:
+                    df_survey = min(int(df_survey), int(n_valid_rep) - 1)
+                else:
+                    # Undefined replicate df (QR rank <= 1): df=0 sentinel
+                    # -> NaN inference (CS sentinel parity).
+                    df_survey = 0
+            elif (
+                resolved_survey_unit is not None
+                and getattr(resolved_survey_unit, "psu", None) is not None
+            ):
+                se_cr1 = _cluster_robust_se_from_per_gt_if(if_entry, resolved_survey_unit)
+                if se_cr1 is None:
+                    se = float(np.sqrt(np.sum(inf_full**2)))
+                else:
+                    se = float(se_cr1)
+            elif w_cell is not None:
+                se = float(np.sqrt(np.sum(inf_full**2)))
+            else:
+                se = float(np.sqrt(np.mean(psi_bar**2) / n_cell))
+        return se, df_survey
+
+    def _scatter_if_payload(
+        self,
+        *,
+        n_units: int,
+        cell_idx: np.ndarray,
+        treated_valid: np.ndarray,
+        psi_bar: np.ndarray,
+        w_cell: Optional[np.ndarray],
+    ) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """Scatter a cell's per-unit IF summands into the all-units index space.
+
+        No-survey payload: per-unit entries psi_bar_i / n_cell, so
+        sqrt(sum(if^2)) IS the cell SE (the CS influence_func_info contract).
+        Weighted payload: w_i * psi_bar_i / sum(w) — the Hajek analogue
+        (reduces to psi_bar/n at w == 1). Control members derive from
+        NONZERO-ness: a zero-weight control dropping from the payload is inert
+        (the per-cell CR1 helper rebuilds the full-length psi vector over the
+        complete design).
+        """
+        n_cell = psi_bar.shape[0]
+        inf_full = np.zeros(n_units)
+        if w_cell is not None:
+            inf_full[cell_idx] = w_cell * psi_bar / float(np.sum(w_cell))
+        else:
+            inf_full[cell_idx] = psi_bar / n_cell
+        treated_idx = np.flatnonzero(treated_valid).astype(np.int64)
+        control_idx = np.flatnonzero((inf_full != 0.0) & ~treated_valid).astype(np.int64)
+        if_entry = {
+            "treated_idx": treated_idx,
+            "control_idx": control_idx,
+            "treated_inf": inf_full[treated_idx],
+            "control_inf": inf_full[control_idx],
+        }
+        return inf_full, if_entry
+
+    def _finish_panel_cell(
+        self,
+        *,
+        precomputed: Dict[str, Any],
+        cell_idx: np.ndarray,
+        treated_valid: np.ndarray,
+        D_cell: np.ndarray,
+        w_cell: Optional[np.ndarray],
+        psi_bar: np.ndarray,
+        theta: float,
+        n_treated: int,
+        n_control: int,
+        resolved_survey_unit: Any,
+        df_survey: Optional[float],
+        diagnostics: Dict[str, Any],
+    ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """Shared panel-cell tail: IF payload, per-cell SE, inference, gt_entry.
+
+        Used verbatim by the Chang lane and the CCPS bad-control lane (the
+        payload schema is what the CS bootstrap/aggregation mixins consume).
+        """
+        n_cell = psi_bar.shape[0]
+        inf_full, if_entry = self._scatter_if_payload(
+            n_units=precomputed["n_units"],
+            cell_idx=cell_idx,
+            treated_valid=treated_valid,
+            psi_bar=psi_bar,
+            w_cell=w_cell,
+        )
+        se, df_survey = self._cell_se_from_payload(
+            inf_full=inf_full,
+            if_entry=if_entry,
+            psi_bar=psi_bar,
+            n_cell=n_cell,
+            w_cell=w_cell,
+            resolved_survey_unit=resolved_survey_unit,
+            df_survey=df_survey,
+        )
+        # NOTE: `se` is deliberately OUTSIDE the non_finite_score gate on the
+        # design-based branches — a NaN from the CR1 helper (or a degenerate
+        # replicate variance) is the unidentified-variance signal and must
+        # flow to safe_inference as a NaN-consistent inference tuple on a
+        # RETAINED cell.
+        if resolved_survey_unit is None and not np.isfinite(se):
+            diagnostics["skip_reason"] = "non_finite_score"
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="non_finite_score",
+                ),
+                None,
+                diagnostics,
+            )
+
+        t_stat, p_value, conf_int = safe_inference(theta, se, alpha=self.alpha, df=df_survey)
+        gt_entry = {
+            "effect": theta,
+            "se": se,
+            "t_stat": t_stat,
+            "p_value": p_value,
+            "conf_int": conf_int,
+            "n_treated": n_treated,
+            "n_control": n_control,
+            "skip_reason": None,
+        }
+        if w_cell is not None:
+            # CS cell-payload convention: the TREATED survey mass.
+            gt_entry["survey_weight_sum"] = float(np.sum(w_cell[D_cell == 1.0]))
+        return gt_entry, if_entry, diagnostics
+
+    def _compute_ccps_gt(
+        self,
+        precomputed: Dict[str, Any],
+        g: Any,
+        t: Any,
+        g_idx: int,
+        t_idx: int,
+        root_entropy: int,
+        dropped_units_out: Optional[set] = None,
+    ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """One (g, t) cell under the CCPS (2026) bad-control score (Eq. 10).
+
+        Same return contract as :meth:`_compute_dml_gt`. Panel lane only,
+        ``anticipation=0`` and ``base_period="varying"`` (fit-time gates), no
+        survey design (``cluster=`` allowed), so ``w_cell`` is always ``None``
+        here and the nuisances are unweighted.
+        """
+        observed_sorted = precomputed["observed_sorted"]
+        period_to_col = precomputed["period_to_col"]
+        base = _select_base_period_impl(self.base_period, self.anticipation, g, t, observed_sorted)
+        if base is None or base not in period_to_col or t not in period_to_col:
+            return _nan_gt_entry(skip_reason="missing_period"), None, None
+
+        unit_cohorts = precomputed["unit_cohorts"]
+        outcome_matrix = precomputed["outcome_matrix"]
+        treated_mask = precomputed["cohort_masks"][g]
+        if self.control_group == "never_treated":
+            control_mask = precomputed["never_treated_mask"]
+        else:  # not_yet_treated (CS semantics: untreated at max(t, base) + k)
+            nyt_threshold = max(t, base) + self.anticipation
+            control_mask = precomputed["never_treated_mask"] | (
+                (unit_cohorts > nyt_threshold) & (unit_cohorts != g)
+            )
+
+        Z_by_period = precomputed["covariate_by_period"]
+        bc_by_period = precomputed["bad_control_by_period"]
+        w_by_period = precomputed["w_by_period"]
+        base_col = period_to_col[base]
+        t_col = period_to_col[t]
+        with np.errstate(over="ignore", invalid="ignore"):
+            y_base = outcome_matrix[:, base_col]
+            y_post = outcome_matrix[:, t_col]
+            dY = y_post - y_base
+            Z_base = Z_by_period[base]
+            xt_all = bc_by_period[t]
+            xb_all = bc_by_period[base]
+            W_base = w_by_period[base]
+            # ONE complete-case policy for both groups: every design column of
+            # R = [xt, xb, Z] and S = [xb, W, Z] must be finite (the score
+            # needs m_hat/omega_hat on every unit, treated included).
+            valid = (
+                np.isfinite(y_base)
+                & np.isfinite(y_post)
+                & np.isfinite(dY)
+                & np.all(np.isfinite(Z_base), axis=1)
+                & np.isfinite(xt_all)
+                & np.isfinite(xb_all)
+                & np.all(np.isfinite(W_base), axis=1)
+            )
+
+        treated_valid = treated_mask & valid
+        control_valid = control_mask & valid
+        if dropped_units_out is not None:
+            dropped_units_out.update(
+                np.flatnonzero((treated_mask | control_mask) & ~valid).tolist()
+            )
+        n_treated = int(np.sum(treated_valid))
+        n_control = int(np.sum(control_valid))
+        if n_treated == 0 or n_control == 0:
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="zero_treated_control",
+                ),
+                None,
+                None,
+            )
+
+        cell_mask = treated_valid | control_valid
+        cell_idx = np.flatnonzero(cell_mask)
+        n_cell = cell_idx.shape[0]
+        D_cell = treated_valid[cell_idx].astype(np.float64)
+        dY_cell = dY[cell_idx]
+        xt = xt_all[cell_idx]
+        xb = xb_all[cell_idx]
+        # Fixed column orders (the numpy oracle and the plug-in identity test
+        # reproduce them): R = [xt, xb, Z]; S = [xb, W (user order), Z].
+        R = np.column_stack([xt, xb, Z_base[cell_idx]])
+        S = np.column_stack([xb, W_base[cell_idx], Z_base[cell_idx]])
+
+        # Survey state: survey_design fails closed on this lane, so
+        # weighted_moments is False and w_cell is None; bare cluster= still
+        # supplies a resolved PSU design for folds and the CR1 SE.
+        use_psu_folds = bool(precomputed.get("use_psu_folds", False))
+        resolved_survey_unit = precomputed.get("resolved_survey_unit")
+        df_survey = precomputed.get("df_survey")
+        w_cell: Optional[np.ndarray] = None
+        p_hat = n_treated / n_cell
+        if min(p_hat, 1.0 - p_hat) < self.pscore_trim:
+            warnings.warn(
+                f"DMLDiD cell (g={g}, t={t}): empirical treated share "
+                f"p_hat={p_hat:.4f} ({n_treated} treated / {n_control} control) is "
+                f"extreme (min(p, 1-p) < pscore_trim={self.pscore_trim}); the CCPS "
+                "score and variance scale with powers of 1/p_hat, so this cell's "
+                "estimate may be unstable.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+        seed_seq = np.random.SeedSequence(entropy=root_entropy, spawn_key=(g_idx, t_idx))
+        rng = np.random.default_rng(seed_seq)
+        diagnostics: Dict[str, Any] = {
+            "propensity": None,
+            "outcome": None,
+            "nu": None,
+            "omega": None,
+            "bad_control_outcome": None,
+            "p_hat": float(p_hat),
+            "n_clipped_ps": None,
+            "n_clipped_omega": None,
+            "nested_stage": None,
+            "fold_seed": {"entropy": int(root_entropy), "spawn_key": [int(g_idx), int(t_idx)]},
+            "psu_folds": use_psu_folds,
+        }
+
+        psu_cell: Optional[np.ndarray] = None
+        try:
+            if use_psu_folds and resolved_survey_unit is not None:
+                psu_cell = np.asarray(resolved_survey_unit.psu)[cell_idx]
+                folds = assign_folds(
+                    n_cell,
+                    int(precomputed.get("effective_n_folds", self.n_folds)),
+                    rng=rng,
+                    cluster_ids=psu_cell,
+                )
+            else:
+                folds = assign_folds(n_cell, self.n_folds, rng=rng, stratify=D_cell)
+        except ValueError as exc:
+            diagnostics["skip_reason"] = "cross_fit_degenerate"
+            diagnostics["error"] = str(exc)
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="cross_fit_degenerate",
+                ),
+                None,
+                diagnostics,
+            )
+
+        context = f"DMLDiD (g={g}, t={t})"
+        try:
+            with np.errstate(over="ignore", invalid="ignore"):
+                m_hat, ps_raw, nu_hat, omega_raw, stage = self._ccps_nuisances(
+                    R, S, dY_cell, D_cell, folds, rng, psu_cell, use_psu_folds, context
+                )
+        except DegenerateFoldError as exc:
+            diagnostics["skip_reason"] = "cross_fit_degenerate"
+            diagnostics["error"] = self._sanitize_learner_error(exc)
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="cross_fit_degenerate",
+                ),
+                None,
+                diagnostics,
+            )
+
+        _check_propensity_diagnostics(ps_raw, self.pscore_trim)
+        ps = np.clip(ps_raw, self.pscore_trim, 1.0 - self.pscore_trim)
+        n_clipped = int(np.sum((ps_raw < self.pscore_trim) | (ps_raw > 1.0 - self.pscore_trim)))
+        omega_cap = (1.0 - self.pscore_trim) / self.pscore_trim
+        omega_hat = np.clip(omega_raw, 0.0, omega_cap)
+        n_clipped_omega = int(np.sum((omega_raw < 0.0) | (omega_raw > omega_cap)))
+        if n_clipped_omega > 0:
+            warnings.warn(
+                f"DMLDiD cell (g={g}, t={t}): {n_clipped_omega} of {n_cell} nested "
+                f"odds-projection predictions (omega_hat) fell outside [0, "
+                f"{omega_cap:.4g}] and were clipped (Assumption S2(iv) boundedness; "
+                "the paper gives no rule - REGISTRY DMLDiD Note).",
+                UserWarning,
+                stacklevel=3,
+            )
+        diagnostics.update(stage)
+        diagnostics["n_clipped_ps"] = n_clipped
+        diagnostics["n_clipped_omega"] = n_clipped_omega
+
+        try:
+            with np.errstate(over="ignore", invalid="ignore"):
+                summand = ccps_panel_score(dY_cell, D_cell, m_hat, nu_hat, ps, omega_hat, p_hat)
+                theta = float(np.mean(summand))
+                psi_bar = ccps_panel_score_augmented(summand, D_cell, theta, p_hat)
+        except ValueError as exc:
+            diagnostics["skip_reason"] = "non_finite_score"
+            diagnostics["error"] = self._sanitize_learner_error(exc)
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="non_finite_score",
+                ),
+                None,
+                diagnostics,
+            )
+        if not (np.isfinite(theta) and np.all(np.isfinite(psi_bar))):
+            diagnostics["skip_reason"] = "non_finite_score"
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="non_finite_score",
+                ),
+                None,
+                diagnostics,
+            )
+
+        gt_entry, if_entry, diagnostics_out = self._finish_panel_cell(
+            precomputed=precomputed,
+            cell_idx=cell_idx,
+            treated_valid=treated_valid,
+            D_cell=D_cell,
+            w_cell=w_cell,
+            psi_bar=psi_bar,
+            theta=theta,
+            n_treated=n_treated,
+            n_control=n_control,
+            resolved_survey_unit=resolved_survey_unit,
+            df_survey=df_survey,
+            diagnostics=diagnostics,
+        )
+        if gt_entry.get("skip_reason") is not None or diagnostics_out is None:
+            return gt_entry, if_entry, diagnostics_out
+
+        # ATT_X(g, t) diagnostic (Remark 6): AIPW ATT with the bad control at t
+        # as the outcome, mu_X = cross-fitted control regression of xt on S,
+        # the same clipped propensity, and its OWN influence payload. It never
+        # affects cell retention: a degenerate mu_X cross-fit or a non-finite
+        # score leaves every ATT_X inference field NaN.
+        att_x = float("nan")
+        se_x = float("nan")
+        df_x = df_survey
+        mu_diag: Optional[Dict[str, Any]] = None
+        try:
+            with np.errstate(over="ignore", invalid="ignore"):
+                mu_res = cross_fit_predict(
+                    make_learner(self.outcome_learner, kind="regressor"),
+                    S,
+                    xt,
+                    folds,
+                    predict_method="predict",
+                    fit_mask=(D_cell == 0.0),
+                    context_label=f"{context} bad-control outcome_learner",
+                )
+            mu_diag = {
+                "fold_losses": [float(v) for v in mu_res.fold_losses],
+                "n_fit_per_fold": [int(v) for v in mu_res.n_fit_per_fold],
+            }
+            mu_x = mu_res.oof_predictions
+            try:
+                with np.errstate(over="ignore", invalid="ignore"):
+                    sx = chang_panel_score(xt, D_cell, mu_x, ps, p_hat)
+                    att_x_val = float(np.mean(sx))
+                    psi_x = chang_panel_score_augmented(sx, D_cell, att_x_val, p_hat)
+            except ValueError:
+                att_x_val = float("nan")
+                psi_x = None
+            if psi_x is not None and np.isfinite(att_x_val) and np.all(np.isfinite(psi_x)):
+                att_x = att_x_val
+                inf_x, if_x = self._scatter_if_payload(
+                    n_units=precomputed["n_units"],
+                    cell_idx=cell_idx,
+                    treated_valid=treated_valid,
+                    psi_bar=psi_x,
+                    w_cell=None,
+                )
+                se_x, df_x = self._cell_se_from_payload(
+                    inf_full=inf_x,
+                    if_entry=if_x,
+                    psi_bar=psi_x,
+                    n_cell=n_cell,
+                    w_cell=None,
+                    resolved_survey_unit=resolved_survey_unit,
+                    df_survey=df_survey,
+                )
+        except DegenerateFoldError as exc:
+            mu_diag = {"error": self._sanitize_learner_error(exc)}
+        t_x, p_x, ci_x = safe_inference(att_x, se_x, alpha=self.alpha, df=df_x)
+        diagnostics_out["bad_control_outcome"] = mu_diag
+        diagnostics_out["att_x"] = {
+            "effect": att_x,
+            "se": se_x,
+            "t_stat": t_x,
+            "p_value": p_x,
+            "conf_int": ci_x,
+            "n_treated": n_treated,
+            "n_control": n_control,
+        }
+        return gt_entry, if_entry, diagnostics_out
+
+    def _ccps_nuisances(
+        self,
+        R: np.ndarray,
+        S: np.ndarray,
+        dY: np.ndarray,
+        D: np.ndarray,
+        folds: Any,
+        rng: np.random.Generator,
+        psu_cell: Optional[np.ndarray],
+        use_psu_folds: bool,
+        context: str,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, Any]]:
+        """The four cross-fitted CCPS nuisances on one cell's folds.
+
+        First stage per fold k (fit on the training complement I_{-k}):
+        ``m0`` = outcome regression of dY on R among controls; ``p`` =
+        propensity of D on S on all units. Second stage per fold k, fit on
+        TRAINING controls only: ``nu0`` = regression on S of the fold-k m0
+        model's predictions; ``omega0`` = regression on R of the fold-k
+        propensity odds (propensity clipped by ``pscore_trim`` first). The
+        nested TARGETS come from the fold-k first-stage model's predictions on
+        its own training units when BOTH learners are the parametric built-ins
+        (Assumption 8's plug-in), and from a split-half of the training
+        complement otherwise (footnote 9: fit the first stage on half A,
+        targets on half B's controls, nested fit on B; swap; average the two
+        nested models' held-out predictions). The score's m_hat / ps on the
+        held-out fold ALWAYS come from the full-training-complement fits.
+        Returns ``(m_hat, ps_raw, nu_hat, omega_raw, stage_diagnostics)``.
+        """
+        controls = D == 0.0
+        n = D.shape[0]
+        n_folds = folds.n_folds
+        trim = self.pscore_trim
+        prop = make_learner(self.propensity_learner, kind="classifier")
+        outc = make_learner(self.outcome_learner, kind="regressor")
+        parametric = _is_parametric_learner_spec(self.propensity_learner) and (
+            _is_parametric_learner_spec(self.outcome_learner)
+        )
+
+        m_hat = np.empty(n)
+        ps_raw = np.empty(n)
+        nu_hat = np.empty(n)
+        omega_raw = np.empty(n)
+        m_losses = np.empty(n_folds)
+        p_losses = np.empty(n_folds)
+        m_nfit = np.empty(n_folds, dtype=np.int64)
+        p_nfit = np.empty(n_folds, dtype=np.int64)
+        nu_nfit = np.empty(n_folds, dtype=np.int64)
+        om_nfit = np.empty(n_folds, dtype=np.int64)
+        nu_label = f"{context} nu outcome_learner: "
+        om_label = f"{context} omega outcome_learner: "
+
+        gen_m = iter_fold_fits(
+            outc,
+            R,
+            dY,
+            folds,
+            fit_mask=controls,
+            predict_method="predict",
+            context_label=f"{context} outcome_learner",
+        )
+        gen_p = iter_fold_fits(
+            prop,
+            S,
+            D,
+            folds,
+            predict_method="predict_proba",
+            context_label=f"{context} propensity_learner",
+        )
+        for ff_m, ff_p in zip(gen_m, gen_p):
+            k = ff_m.k
+            test = ff_m.test_idx
+            train = ff_m.train_idx
+            m_test = _predict_subset(
+                ff_m.learner,
+                R[test],
+                kind="regressor",
+                k=k,
+                label=ff_m.label,
+                n_fit=ff_m.n_fit,
+                w_fit=None,
+            )
+            p_test = _predict_subset(
+                ff_p.learner,
+                S[test],
+                kind="classifier",
+                k=k,
+                label=ff_p.label,
+                n_fit=ff_p.n_fit,
+                w_fit=None,
+            )
+            m_hat[test] = m_test
+            ps_raw[test] = p_test
+            m_losses[k] = _fold_loss("regressor", dY[test], m_test, None)
+            p_losses[k] = _fold_loss("classifier", D[test], p_test, None)
+            m_nfit[k] = ff_m.n_fit
+            p_nfit[k] = ff_p.n_fit
+
+            if parametric:
+                fit_idx = ff_m.fit_idx  # training controls
+                m_tr = _predict_subset(
+                    ff_m.learner,
+                    R[fit_idx],
+                    kind="regressor",
+                    k=k,
+                    label=ff_m.label,
+                    n_fit=ff_m.n_fit,
+                    w_fit=None,
+                )
+                p_tr = np.clip(
+                    _predict_subset(
+                        ff_p.learner,
+                        S[fit_idx],
+                        kind="classifier",
+                        k=k,
+                        label=ff_p.label,
+                        n_fit=ff_p.n_fit,
+                        w_fit=None,
+                    ),
+                    trim,
+                    1.0 - trim,
+                )
+                y_nu = np.zeros(n)
+                y_nu[fit_idx] = m_tr
+                nu_learner, n_nu, _ = _fit_subset(
+                    outc,
+                    S,
+                    y_nu,
+                    fit_idx,
+                    n_train=int(train.shape[0]),
+                    kind="regressor",
+                    sample_weight=None,
+                    k=k,
+                    label=nu_label,
+                )
+                nu_hat[test] = _predict_subset(
+                    nu_learner,
+                    S[test],
+                    kind="regressor",
+                    k=k,
+                    label=nu_label,
+                    n_fit=n_nu,
+                    w_fit=None,
+                )
+                y_om = np.zeros(n)
+                y_om[fit_idx] = p_tr / (1.0 - p_tr)
+                om_learner, n_om, _ = _fit_subset(
+                    outc,
+                    R,
+                    y_om,
+                    fit_idx,
+                    n_train=int(train.shape[0]),
+                    kind="regressor",
+                    sample_weight=None,
+                    k=k,
+                    label=om_label,
+                )
+                omega_raw[test] = _predict_subset(
+                    om_learner,
+                    R[test],
+                    kind="regressor",
+                    k=k,
+                    label=om_label,
+                    n_fit=n_om,
+                    w_fit=None,
+                )
+                nu_nfit[k] = n_nu
+                om_nfit[k] = n_om
+                continue
+
+            # Split-half branch: ONE draw per outer fold, ascending k, on the
+            # shared cell rng, using the outer folds' own mechanism.
+            try:
+                if use_psu_folds and psu_cell is not None:
+                    halves = assign_folds(
+                        int(train.shape[0]), 2, rng=rng, cluster_ids=psu_cell[train]
+                    )
+                else:
+                    halves = assign_folds(int(train.shape[0]), 2, rng=rng, stratify=D[train])
+            except ValueError as exc:
+                raise DegenerateFoldError(f"{context} split-half fold {k}: {exc}") from exc
+            nu_pred = np.zeros(test.shape[0])
+            om_pred = np.zeros(test.shape[0])
+            n_nu_total = 0
+            n_om_total = 0
+            for h in (0, 1):
+                a_idx = train[halves.fold_ids == h]
+                b_idx = train[halves.fold_ids != h]
+                a_ctrl = a_idx[controls[a_idx]]
+                b_ctrl = b_idx[controls[b_idx]]
+                m_a, n_ma, _ = _fit_subset(
+                    outc,
+                    R,
+                    dY,
+                    a_ctrl,
+                    n_train=int(a_idx.shape[0]),
+                    kind="regressor",
+                    sample_weight=None,
+                    k=k,
+                    label=f"{context} split-half m outcome_learner: ",
+                )
+                p_a, n_pa, _ = _fit_subset(
+                    prop,
+                    S,
+                    D,
+                    a_idx,
+                    n_train=int(a_idx.shape[0]),
+                    kind="classifier",
+                    sample_weight=None,
+                    k=k,
+                    label=f"{context} split-half p propensity_learner: ",
+                )
+                m_b = _predict_subset(
+                    m_a,
+                    R[b_ctrl],
+                    kind="regressor",
+                    k=k,
+                    label=f"{context} split-half m outcome_learner: ",
+                    n_fit=n_ma,
+                    w_fit=None,
+                )
+                p_b = np.clip(
+                    _predict_subset(
+                        p_a,
+                        S[b_ctrl],
+                        kind="classifier",
+                        k=k,
+                        label=f"{context} split-half p propensity_learner: ",
+                        n_fit=n_pa,
+                        w_fit=None,
+                    ),
+                    trim,
+                    1.0 - trim,
+                )
+                y_nu = np.zeros(n)
+                y_nu[b_ctrl] = m_b
+                nu_h, n_nu_h, _ = _fit_subset(
+                    outc,
+                    S,
+                    y_nu,
+                    b_ctrl,
+                    n_train=int(b_idx.shape[0]),
+                    kind="regressor",
+                    sample_weight=None,
+                    k=k,
+                    label=nu_label,
+                )
+                y_om = np.zeros(n)
+                y_om[b_ctrl] = p_b / (1.0 - p_b)
+                om_h, n_om_h, _ = _fit_subset(
+                    outc,
+                    R,
+                    y_om,
+                    b_ctrl,
+                    n_train=int(b_idx.shape[0]),
+                    kind="regressor",
+                    sample_weight=None,
+                    k=k,
+                    label=om_label,
+                )
+                nu_pred += 0.5 * _predict_subset(
+                    nu_h,
+                    S[test],
+                    kind="regressor",
+                    k=k,
+                    label=nu_label,
+                    n_fit=n_nu_h,
+                    w_fit=None,
+                )
+                om_pred += 0.5 * _predict_subset(
+                    om_h,
+                    R[test],
+                    kind="regressor",
+                    k=k,
+                    label=om_label,
+                    n_fit=n_om_h,
+                    w_fit=None,
+                )
+                n_nu_total += n_nu_h
+                n_om_total += n_om_h
+            nu_hat[test] = nu_pred
+            omega_raw[test] = om_pred
+            nu_nfit[k] = n_nu_total
+            om_nfit[k] = n_om_total
+
+        nan_losses = [float("nan")] * n_folds
+        stage: Dict[str, Any] = {
+            "propensity": {
+                "fold_losses": [float(v) for v in p_losses],
+                "n_fit_per_fold": [int(v) for v in p_nfit],
+            },
+            "outcome": {
+                "fold_losses": [float(v) for v in m_losses],
+                "n_fit_per_fold": [int(v) for v in m_nfit],
+            },
+            "nu": {"fold_losses": nan_losses, "n_fit_per_fold": [int(v) for v in nu_nfit]},
+            "omega": {"fold_losses": nan_losses, "n_fit_per_fold": [int(v) for v in om_nfit]},
+            "nested_stage": "in_sample" if parametric else "split_half",
+        }
+        return m_hat, ps_raw, nu_hat, omega_raw, stage
+
+    def _compute_dml_rcs_gt(
+        self,
+        precomputed: Dict[str, Any],
+        g: Any,
+        t: Any,
+        g_idx: int,
+        t_idx: int,
+        root_entropy: int,
+        dropped_units_out: Optional[set] = None,
+    ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """One RCS (g, t) cell — Chang Case 2. Same return contract as the
+        panel cell: (gt_entry, if_entry|None, diagnostics|None).
+
+        Pooled two-period cell on LEVEL outcomes: four disjoint row groups
+        (treated/control x {t, base}), one cross-fit propensity on the pooled
+        rows, and the SINGLE Case 2 outcome nuisance — a control-only (both
+        periods, Chang's I_kz^c) regression of (T - lam_hat) * y on X.
+        """
+        observed_sorted = precomputed["observed_sorted"]
+        period_to_col = precomputed["period_to_col"]
+        base = _select_base_period_impl(self.base_period, self.anticipation, g, t, observed_sorted)
+        if base is None or base not in period_to_col or t not in period_to_col:
+            return _nan_gt_entry(skip_reason="missing_period"), None, None
+
+        unit_cohorts = precomputed["unit_cohorts"]
+        treated_mask = precomputed["cohort_masks"][g]
+        if self.control_group == "never_treated":
+            control_mask = precomputed["never_treated_mask"]
+        else:  # not_yet_treated (CS semantics: untreated at max(t, base) + k)
+            nyt_threshold = max(t, base) + self.anticipation
+            control_mask = precomputed["never_treated_mask"] | (
+                (unit_cohorts > nyt_threshold) & (unit_cohorts != g)
+            )
+
+        obs_time = precomputed["obs_time"]
+        y_obs = precomputed["obs_outcome"]
+        X_obs = precomputed["obs_covariates"]
+        at_t = obs_time == t
+        at_base = obs_time == base
+        # Per-ROW complete cases (RCS covariates live on the row itself; no
+        # base-period X exists).
+        valid = np.isfinite(y_obs) & np.all(np.isfinite(X_obs), axis=1)
+
+        treated_t = treated_mask & at_t & valid
+        treated_b = treated_mask & at_base & valid
+        control_t = control_mask & at_t & valid
+        control_b = control_mask & at_base & valid
+        if dropped_units_out is not None:
+            dropped_units_out.update(
+                np.flatnonzero((treated_mask | control_mask) & (at_t | at_base) & ~valid).tolist()
+            )
+        n_treated = int(np.sum(treated_t | treated_b))
+        n_control = int(np.sum(control_t | control_b))
+        # FOUR-group guard (CS RCS precedent): the Case 2 estimand needs
+        # treated AND control rows in BOTH periods; skip vocabulary reuses
+        # zero_treated_control for any empty group.
+        if (
+            min(
+                int(treated_t.sum()),
+                int(treated_b.sum()),
+                int(control_t.sum()),
+                int(control_b.sum()),
+            )
+            == 0
+        ):
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="zero_treated_control",
+                ),
+                None,
+                None,
+            )
+
+        cell_mask = treated_t | treated_b | control_t | control_b
+        cell_idx = np.flatnonzero(cell_mask)
+        n_cell = cell_idx.shape[0]
+        D_cell = treated_mask[cell_idx].astype(np.float64)
+        T_cell = at_t[cell_idx].astype(np.float64)
+        y_cell = y_obs[cell_idx]
+        X_cell = X_obs[cell_idx]
+
+        # Survey state (all .get with panel-safe fallbacks; see fit()).
+        weighted_moments = bool(precomputed.get("weighted_moments", False))
+        use_psu_folds = bool(precomputed.get("use_psu_folds", False))
+        resolved_survey_unit = precomputed.get("resolved_survey_unit")
+        survey_weights = precomputed.get("survey_weights")
+        df_survey = precomputed.get("df_survey")
+
+        w_cell: Optional[np.ndarray] = None
+        if weighted_moments and survey_weights is not None:
+            w_cell = np.asarray(survey_weights, dtype=np.float64)[cell_idx]
+            # FOUR-group WEIGHTED-mass guard: a group with rows but zero
+            # survey mass would push the weighted p_hat/lam_hat out of
+            # (0, 1) and mislabel the cell as non_finite_score.
+            _group_masses = (
+                float(np.sum(w_cell[(D_cell == 1.0) & (T_cell == 1.0)])),
+                float(np.sum(w_cell[(D_cell == 1.0) & (T_cell == 0.0)])),
+                float(np.sum(w_cell[(D_cell == 0.0) & (T_cell == 1.0)])),
+                float(np.sum(w_cell[(D_cell == 0.0) & (T_cell == 0.0)])),
+            )
+            if min(_group_masses) <= 0.0:
+                return (
+                    _nan_gt_entry(
+                        n_treated=n_treated,
+                        n_control=n_control,
+                        skip_reason="zero_weight_mass",
+                    ),
+                    None,
+                    None,
+                )
+        # Global-within-cell shares (REGISTRY convention: mirrors the Case 1
+        # global p_hat and DoubleML's d.mean()/t.mean()); strictly interior
+        # BY the four-group guard (weighted analogue under a declared
+        # design: Hajek shares, interior by the weighted-mass guard).
+        if w_cell is not None:
+            _w_total = float(np.sum(w_cell))
+            p_hat = float(np.sum(w_cell * D_cell) / _w_total)
+            lam_hat = float(np.sum(w_cell * T_cell) / _w_total)
+        else:
+            p_hat = float(D_cell.mean())
+            lam_hat = float(T_cell.mean())
+        if min(p_hat, 1.0 - p_hat) < self.pscore_trim:
+            if w_cell is not None:
+                _share_detail = (
+                    f"weighted p_hat={p_hat:.4f} over the pooled two-period rows "
+                    f"(treated mass {float(np.sum(w_cell * D_cell)):.4g} / control "
+                    f"mass {float(np.sum(w_cell * (1.0 - D_cell))):.4g})"
+                )
+            else:
+                _share_detail = (
+                    f"p_hat={p_hat:.4f} over the pooled two-period rows "
+                    f"({n_treated} treated / {n_control} control)"
+                )
+            warnings.warn(
+                f"DMLDiD cell (g={g}, t={t}): empirical treated share "
+                f"{_share_detail} is extreme "
+                f"(min(p, 1-p) < pscore_trim={self.pscore_trim}); the Chang "
+                "score and variance scale with powers of 1/p_hat, so this "
+                "cell's estimate may be unstable.",
+                UserWarning,
+                stacklevel=3,
+            )
+        if min(lam_hat, 1.0 - lam_hat) < self.pscore_trim:
+            warnings.warn(
+                f"DMLDiD cell (g={g}, t={t}): post-period sampling share "
+                f"lam_hat={lam_hat:.4f} is extreme (min(lam, 1-lam) < "
+                f"pscore_trim={self.pscore_trim}); Chang's Case 2 bounds "
+                "carry powers of 1/(lam*(1-lam)) up to cubes, so this cell's "
+                "estimate may be unstable.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+        # Per-cell fold draw seeded exactly like the panel lane; strata are
+        # the FOUR D x T classes (DoubleML's d + 2t encoding — REGISTRY
+        # deviation Note): every training complement then carries control
+        # rows in both periods by construction, Chang's fold-composition
+        # requirement for fitting l_2 on I_kz^c. Under a coarser-than-unit
+        # PSU design the folds are PSU-cohesive instead (the stratification
+        # MECHANISM cannot be cluster-constant), and the composition
+        # REQUIREMENT is preserved by the explicit guard below.
+        seed_seq = np.random.SeedSequence(entropy=root_entropy, spawn_key=(g_idx, t_idx))
+        rng = np.random.default_rng(seed_seq)
+        diagnostics: Dict[str, Any] = {
+            "propensity": None,
+            "outcome": None,
+            "p_hat": float(p_hat),
+            "lam_hat": float(lam_hat),
+            "n_clipped_ps": None,
+            "fold_seed": {"entropy": int(root_entropy), "spawn_key": [int(g_idx), int(t_idx)]},
+            "psu_folds": use_psu_folds,
+        }
+
+        try:
+            if use_psu_folds and resolved_survey_unit is not None:
+                folds = assign_folds(
+                    n_cell,
+                    int(precomputed.get("effective_n_folds", self.n_folds)),
+                    rng=rng,
+                    cluster_ids=np.asarray(resolved_survey_unit.psu)[cell_idx],
+                )
+            else:
+                folds = assign_folds(n_cell, self.n_folds, rng=rng, stratify=D_cell + 2.0 * T_cell)
+        except ValueError as exc:
+            # Cell smaller than n_folds, or a singleton D x T stratum (e.g.
+            # ONE treated row in the base period cannot be cross-fitted).
+            diagnostics["skip_reason"] = "cross_fit_degenerate"
+            diagnostics["error"] = str(exc)
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="cross_fit_degenerate",
+                ),
+                None,
+                diagnostics,
+            )
+
+        context = f"DMLDiD (g={g}, t={t})"
+        try:
+            # Chang's I_kz^c fold-composition requirement, checked EXPLICITLY
+            # whenever the D x T stratification no longer guarantees it (PSU
+            # folds) or per-row zero weights could hollow a period out even
+            # inside stratified folds (declared survey): every training
+            # complement needs positive-(weight-)mass control rows in BOTH
+            # periods, else the l_2 regression on r = (T - lam)y is
+            # finite-but-invalid. Raised here (inside this try) so the
+            # existing DegenerateFoldError handler skips the cell.
+            if use_psu_folds or weighted_moments:
+                _guard_w = w_cell if w_cell is not None else np.ones(n_cell)
+                for _k in range(folds.n_folds):
+                    _complement = folds.fold_ids != _k
+                    _ctrl = _complement & (D_cell == 0.0)
+                    if (
+                        float(np.sum(_guard_w[_ctrl & (T_cell == 1.0)])) <= 0.0
+                        or float(np.sum(_guard_w[_ctrl & (T_cell == 0.0)])) <= 0.0
+                    ):
+                        raise DegenerateFoldError(
+                            f"{context} outcome: fold {_k}'s training "
+                            "complement lacks positive-weight control rows in "
+                            "both periods (Chang's I_kz^c fold-composition "
+                            "requirement)"
+                        )
+            with np.errstate(over="ignore", invalid="ignore"):
+                ps_res = cross_fit_predict(
+                    make_learner(self.propensity_learner, kind="classifier"),
+                    X_cell,
+                    D_cell,
+                    folds,
+                    predict_method="predict_proba",
+                    context_label=f"{context} propensity_learner",
+                    sample_weight=w_cell,
+                )
+                r_cell = (T_cell - lam_hat) * y_cell
+                or_res = cross_fit_predict(
+                    make_learner(self.outcome_learner, kind="regressor"),
+                    X_cell,
+                    r_cell,
+                    folds,
+                    predict_method="predict",
+                    fit_mask=(D_cell == 0.0),
+                    context_label=f"{context} outcome_learner",
+                    sample_weight=w_cell,
+                )
+        except DegenerateFoldError as exc:
+            diagnostics["skip_reason"] = "cross_fit_degenerate"
+            diagnostics["error"] = self._sanitize_learner_error(exc)
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="cross_fit_degenerate",
+                ),
+                None,
+                diagnostics,
+            )
+
+        ps_raw = ps_res.oof_predictions
+        _check_propensity_diagnostics(ps_raw, self.pscore_trim)
+        ps = np.clip(ps_raw, self.pscore_trim, 1.0 - self.pscore_trim)
+        n_clipped = int(np.sum((ps_raw < self.pscore_trim) | (ps_raw > 1.0 - self.pscore_trim)))
+        m2_hat = or_res.oof_predictions
+
+        diagnostics["propensity"] = {
+            "fold_losses": [float(v) for v in ps_res.fold_losses],
+            "n_fit_per_fold": [int(v) for v in ps_res.n_fit_per_fold],
+        }
+        diagnostics["outcome"] = {
+            "fold_losses": [float(v) for v in or_res.fold_losses],
+            "n_fit_per_fold": [int(v) for v in or_res.n_fit_per_fold],
+        }
+        diagnostics["n_clipped_ps"] = n_clipped
+
+        try:
+            with np.errstate(over="ignore", invalid="ignore"):
+                summand = chang_rcs_score(y_cell, D_cell, T_cell, m2_hat, ps, p_hat, lam_hat)
+                if w_cell is not None:
+                    theta = float(np.average(summand, weights=w_cell))
+                else:
+                    theta = float(np.mean(summand))
+                psi_bar, g2_lambda = _chang_rcs_score_augmented_with_slope(
+                    summand,
+                    D_cell,
+                    T_cell,
+                    y_cell,
+                    m2_hat,
+                    ps,
+                    theta,
+                    p_hat,
+                    lam_hat,
+                    weights=w_cell,
+                )
+        except ValueError as exc:
+            diagnostics["skip_reason"] = "non_finite_score"
+            diagnostics["error"] = self._sanitize_learner_error(exc)
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="non_finite_score",
+                ),
+                None,
+                diagnostics,
+            )
+        if not (np.isfinite(theta) and np.isfinite(g2_lambda) and np.all(np.isfinite(psi_bar))):
+            diagnostics["skip_reason"] = "non_finite_score"
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="non_finite_score",
+                ),
+                None,
+                diagnostics,
+            )
+        diagnostics["g2_lambda"] = float(g2_lambda)
+
+        # Payload BEFORE the SE/inference block (the design-based per-cell
+        # SE consumes it): per-OBS entries psi_bar_i / n_cell over BOTH
+        # periods' rows, so sqrt(sum(if^2)) IS the cell SE on the no-survey
+        # path; weighted payload is the Hajek analogue w_i * psi_bar_i /
+        # sum(w). cell_idx is a flatnonzero of one mask => strictly
+        # increasing and duplicate-free, and the D-partition keeps
+        # treated_idx/control_idx disjoint (the fancy-+= scatter contract in
+        # the aggregation layer).
+        n_units = precomputed["n_units"]
+        inf_full = np.zeros(n_units)
+        if w_cell is not None:
+            inf_full[cell_idx] = w_cell * psi_bar / float(np.sum(w_cell))
+        else:
+            inf_full[cell_idx] = psi_bar / n_cell
+        treated_idx = cell_idx[D_cell == 1.0].astype(np.int64)
+        control_idx = cell_idx[D_cell == 0.0].astype(np.int64)
+        if_entry = {
+            "treated_idx": treated_idx,
+            "control_idx": control_idx,
+            "treated_inf": inf_full[treated_idx],
+            "control_inf": inf_full[control_idx],
+        }
+
+        # Per-cell SE (same dispatch as the panel cell; see the comment
+        # there): replicate designs -> IF-reweighting with the degenerate
+        # fail-closed guard and the cell-local min(df, n_valid - 1) rule;
+        # PSU designs -> CS per-cell CR1 helper (NaN propagates as
+        # the deliberate unidentified-variance signal on a RETAINED cell);
+        # non-PSU survey -> weighted sqrt-sum; no-survey verbatim.
+        se: float
+        with np.errstate(over="ignore", invalid="ignore"):
+            if resolved_survey_unit is not None and resolved_survey_unit.uses_replicate_variance:
+                from diff_diff.survey import compute_replicate_if_variance
+
+                variance, n_valid_rep = compute_replicate_if_variance(
+                    inf_full, resolved_survey_unit
+                )
+                if not np.isfinite(variance) or variance <= 0.0:
+                    se = float("nan")
+                else:
+                    se = float(np.sqrt(variance))
+                if df_survey is not None:
+                    df_survey = min(int(df_survey), int(n_valid_rep) - 1)
+                else:
+                    df_survey = 0
+            elif (
+                resolved_survey_unit is not None
+                and getattr(resolved_survey_unit, "psu", None) is not None
+            ):
+                se_cr1 = _cluster_robust_se_from_per_gt_if(if_entry, resolved_survey_unit)
+                if se_cr1 is None:
+                    se = float(np.sqrt(np.sum(inf_full**2)))
+                else:
+                    se = float(se_cr1)
+            elif w_cell is not None:
+                se = float(np.sqrt(np.sum(inf_full**2)))
+            else:
+                se = float(np.sqrt(np.mean(psi_bar**2) / n_cell))
+        if resolved_survey_unit is None and not np.isfinite(se):
+            diagnostics["skip_reason"] = "non_finite_score"
+            return (
+                _nan_gt_entry(
+                    n_treated=n_treated,
+                    n_control=n_control,
+                    skip_reason="non_finite_score",
+                ),
+                None,
+                diagnostics,
+            )
+
+        t_stat, p_value, conf_int = safe_inference(theta, se, alpha=self.alpha, df=df_survey)
+        gt_entry = {
+            "effect": theta,
+            "se": se,
+            "t_stat": t_stat,
+            "p_value": p_value,
+            "conf_int": conf_int,
+            # DISPLAY counts: pooled two-period valid rows. Aggregation
+            # weights come from agg_weight below (fixed cohort row mass, the
+            # CS-RCS convention; an inert fallback under survey — the
+            # aggregation cache's survey cohort masses win) — never from
+            # these counts.
+            "n_treated": n_treated,
+            "n_control": n_control,
+            "skip_reason": None,
+            "agg_weight": precomputed["rcs_cohort_masses"][g],
+        }
+        if w_cell is not None:
+            # CS RCS cell-payload convention: the treated-at-period-t mass.
+            gt_entry["survey_weight_sum"] = float(np.sum(w_cell[(D_cell == 1.0) & (T_cell == 1.0)]))
+        return gt_entry, if_entry, diagnostics
+
+    # ------------------------------------------------------------------
+    # Fit
+    # ------------------------------------------------------------------
+
+    def fit(
+        self,
+        data: pd.DataFrame,
+        outcome: str,
+        unit: str,
+        time: str,
+        first_treat: str,
+        covariates: Optional[Iterable[str]] = None,
+        survey_design: Optional["SurveyDesign"] = None,
+        bad_control: Optional[str] = None,
+        bad_control_covariates: Optional[Iterable[str]] = None,
+    ) -> DMLDiDResults:
+        """Estimate staggered ATT(g,t) via per-cell cross-fitted Chang scores.
+
+        Parameters
+        ----------
+        survey_design : SurveyDesign, optional
+            Complex survey design (pweight-only). Declared designs weight
+            the moment kernels (Hajek p-hat/lambda-hat/theta) and pass
+            ``sample_weight`` into the nuisance learners (user learner
+            objects must accept ``sample_weight`` by keyword — a learner
+            without it is rejected up front). Two variance lanes:
+            full-design TSL (weights/strata/PSU/FPC) switches cross-fitting
+            to PSU-cohesive folds when the PSU is strictly coarser than the
+            sampling unit and routes the per-cell and aggregate variances
+            through the design-based kernels with ``df = n_PSU - n_strata``
+            t-inference; replicate-weight designs (BRR / Fay / JK1 / JKn /
+            SDR) compute per-cell AND aggregate variances by IF-reweighting
+            the cross-fitted scores with ``df = rank(replicate matrix) - 1``
+            t-inference (nuisances are not re-estimated per replicate;
+            REGISTRY DMLDiD Note). Replicate designs reject ``cluster=``
+            and ``n_bootstrap > 0`` combinations. Survey support is a
+            documented library extension of Chang (2020), which assumes
+            i.i.d. sampling — Theorem 2's coverage claim does not carry
+            over (REGISTRY DMLDiD Notes).
+        bad_control : str, optional
+            Column name of a "bad control" (Caetano, Callaway, Payne &
+            Sant'Anna 2026): a time-varying covariate that treatment can
+            affect. When set, each panel cell runs the paper's
+            Neyman-orthogonal doubly-robust score (Equation 10 / Algorithm 1)
+            instead of the Chang score - parallel trends conditional on the
+            bad control's UNTREATED path, with its untreated evolution
+            identified by covariate unconfoundedness given its base-period
+            value, ``bad_control_covariates`` and ``covariates`` - and stores
+            the per-cell ``ATT_X(g, t)`` pre-test (Remark 6) on
+            ``results.bad_control_diagnostics`` /
+            ``results.bad_control_summary()``. The column is read at the
+            cell's base period AND at ``t`` (both must be finite for a unit
+            to join the cell) and must NOT also appear in ``covariates``
+            (the "include the bad control" bias; to condition only on its
+            pre-treatment value - the paper's Approach 1 - pass it in
+            ``covariates`` alone instead). Requires ``panel=True``,
+            ``anticipation=0``, ``base_period="varying"`` and no
+            ``survey_design`` (each raises ``NotImplementedError``; bare
+            ``cluster=`` is supported). ``covariates`` stays required.
+            Default ``None`` = the plain Chang lane (unchanged).
+        bad_control_covariates : iterable of str, optional
+            Extra pre-treatment covariates ``W`` for the bad control's
+            unconfoundedness model (the propensity design is
+            ``[X_base, W, Z]``; the outcome regressions use
+            ``[X_t, X_base, Z]``). Every entry is read at the cell's base
+            period; the ``outcome`` name is allowed and means the
+            base-period outcome (``Y_{g-1}``, the paper's Remark 5
+            recommendation: ``bad_control_covariates=[outcome]``). Names
+            may not overlap ``covariates`` or ``bad_control``. Default
+            ``None`` = no ``W`` (matches the R ``badcontrols`` default);
+            results store ``()``. Requires ``bad_control``.
+        """
+        self.results_ = None
+        self.is_fitted_ = False
+        df, covariates, w_names = self._validate_and_prepare(
+            data,
+            outcome,
+            unit,
+            time,
+            first_treat,
+            covariates,
+            bad_control=bad_control,
+            bad_control_covariates=bad_control_covariates,
+            has_survey_design=survey_design is not None,
+            require_sample_weight=survey_design is not None,
+        )
+
+        # --- Survey/cluster resolution (CS transliteration, staggered.py) ---
+        from diff_diff.survey import (
+            SurveyDesign,
+            _inject_cluster_as_psu,
+            _resolve_effective_cluster,
+            _resolve_survey_for_fit,
+            _validate_unit_constant_survey,
+            compute_survey_metadata,
+        )
+
+        (
+            resolved_survey,
+            _survey_weights_resolved,
+            survey_weight_type,
+            survey_metadata,
+        ) = _resolve_survey_for_fit(survey_design, data, "analytical")
+
+        # Replicate + bootstrap rejected FIRST (before any fit work) —
+        # replicate variance is an analytical alternative, not compatible
+        # with bootstrap (CS parity, staggered.py).
+        if (
+            self.n_bootstrap > 0
+            and resolved_survey is not None
+            and resolved_survey.uses_replicate_variance
+        ):
+            raise NotImplementedError(
+                "DMLDiD bootstrap (n_bootstrap > 0) is not supported "
+                "with replicate-weight survey designs. Replicate weights provide "
+                "analytical variance; use n_bootstrap=0 instead."
+            )
+
+        # Raw (pre-normalization) per-obs design weights, for metadata
+        # provenance only: compute_survey_metadata expects the ORIGINAL
+        # scale (resolve() rescales pweights to mean 1, so the resolved
+        # .weights would misreport sum_weights/weight_range; the
+        # scale-invariant fields — effective_n, design_effect, df — are
+        # unaffected either way).
+        raw_obs_weights: Optional[np.ndarray] = None
+        if resolved_survey is not None:
+            assert survey_design is not None
+            raw_obs_weights = (
+                data[survey_design.weights].values.astype(np.float64)
+                if survey_design.weights is not None
+                else np.ones(len(data), dtype=np.float64)
+            )
+
+        effective_survey_design = survey_design
+        cluster_ids_for_check: Optional[np.ndarray] = None
+        if self.cluster is not None:
+            if self.cluster not in data.columns:
+                raise ValueError(f"cluster column '{self.cluster}' not found in data")
+            _cluster_col = data[self.cluster]
+            if _cluster_col.isna().any():
+                raise ValueError(
+                    f"cluster column '{self.cluster}' contains missing values; "
+                    "drop or impute them before fitting"
+                )
+            cluster_ids_for_check = _cluster_col.to_numpy()
+            # Reject replicate-weight + cluster= AFTER the column checks (CS
+            # ordering: a bogus cluster name raises ValueError first).
+            # Replicate IF variance is computed by replicate reweighting and
+            # ignores PSU/cluster entirely (replicate_weights are mutually
+            # exclusive with strata/psu/fpc) — honoring cluster= would
+            # silently have no effect on the variance, and the inject-as-PSU
+            # paths below would violate that mutual exclusion.
+            if resolved_survey is not None and resolved_survey.uses_replicate_variance:
+                raise NotImplementedError(
+                    f"DMLDiD(cluster={self.cluster!r}) is not "
+                    "supported with replicate-weight survey designs. "
+                    "Replicate-weight variance is computed by replicate "
+                    "reweighting (BRR / Fay / JK1 / JKn / SDR) and ignores "
+                    "PSU/cluster entirely — setting cluster= would silently "
+                    "have no effect on the variance estimate. Either omit "
+                    "cluster= (the replicate weights encode the design "
+                    "structure implicitly) or use a non-replicate survey "
+                    "design (with explicit strata/psu/fpc)."
+                )
+            if resolved_survey is None:
+                # Bare cluster=: synthesize a PSU-only design. survey_metadata
+                # stays None DELIBERATELY (it is the declared-survey marker:
+                # the aggregate('total') gate and the weighted-kernel gate
+                # both key on it); df carried on Results.df_inference instead.
+                effective_survey_design = SurveyDesign(psu=self.cluster, weight_type="pweight")
+                (
+                    resolved_survey,
+                    _survey_weights_resolved,
+                    survey_weight_type,
+                    _synth_metadata,
+                ) = _resolve_survey_for_fit(effective_survey_design, data, "analytical")
+            elif resolved_survey.psu is None:
+                # Declared design without PSU: inject the cluster as the PSU.
+                # (resolved_survey non-None implies survey_design non-None on
+                # this branch - the bare-cluster synthesize path is above.)
+                assert survey_design is not None
+                from dataclasses import replace as _dc_replace
+
+                effective_survey_design = _dc_replace(survey_design, psu=self.cluster)
+                resolved_survey = _inject_cluster_as_psu(resolved_survey, cluster_ids_for_check)
+                assert raw_obs_weights is not None
+                survey_metadata = compute_survey_metadata(resolved_survey, raw_obs_weights)
+            else:
+                # Both supplied: the design's PSU wins (warn on differing
+                # partitions); the return value is intentionally unused.
+                _resolve_effective_cluster(resolved_survey, cluster_ids_for_check, self.cluster)
+
+        if resolved_survey is not None:
+            if self.panel:
+                _validate_unit_constant_survey(data, unit, effective_survey_design)
+            if resolved_survey.weight_type != "pweight":
+                raise ValueError(
+                    f"DMLDiD supports weight_type='pweight' survey designs only, "
+                    f"got '{resolved_survey.weight_type}'"
+                )
+
+        weighted_moments = survey_design is not None
+
+        if self.panel:
+            precomputed = self._precompute(
+                df,
+                outcome,
+                unit,
+                time,
+                first_treat,
+                covariates,
+                resolved_survey=resolved_survey,
+                bad_control=bad_control,
+                bad_control_covariates=w_names,
+            )
+            cell_fn = self._compute_dml_gt
+        else:
+            precomputed = self._precompute_rcs(
+                df, outcome, unit, time, first_treat, covariates, resolved_survey=resolved_survey
+            )
+            cell_fn = self._compute_dml_rcs_gt
+
+        # Survey metadata reflects the estimation index space (units on the
+        # panel lane; the RCS lane's per-obs design is its own unit level),
+        # recomputed with RAW weights collapsed the same way (the resolved
+        # unit weights are normalized — see raw_obs_weights above).
+        resolved_survey_unit = precomputed.get("resolved_survey_unit")
+        if survey_metadata is not None and resolved_survey_unit is not None:
+            assert raw_obs_weights is not None
+            if self.panel:
+                raw_unit_weights = (
+                    pd.Series(raw_obs_weights, index=df.index)
+                    .groupby(df[unit])
+                    .first()
+                    .reindex(precomputed["all_units"])
+                    .to_numpy(dtype=np.float64)
+                )
+            else:
+                raw_unit_weights = raw_obs_weights
+            survey_metadata = compute_survey_metadata(resolved_survey_unit, raw_unit_weights)
+        df_survey = precomputed.get("df_survey")
+
+        # PSU-cohesive folds whenever the PSU is strictly coarser than the
+        # sampling unit and cluster-cohesive splitting is POSSIBLE
+        # (>= 2 PSUs). With 2 <= n_psu < n_folds the effective fold count is
+        # REDUCED to n_psu (warned) — never silently reverting to unit folds
+        # there, because with >= 2 PSUs the clustered variance is identified
+        # and would legitimize nuisances trained with within-PSU leakage.
+        # Only the single-PSU design falls back to stratified unit folds:
+        # cohesive splitting is impossible and the clustered variance is
+        # NaN either way (the <2-PSU contract; REGISTRY Note).
+        use_psu_folds = False
+        effective_n_folds = self.n_folds
+        if resolved_survey_unit is not None and resolved_survey_unit.psu is not None:
+            _n_psu_global = int(np.unique(resolved_survey_unit.psu).size)
+            if _n_psu_global < len(resolved_survey_unit.psu) and _n_psu_global >= 2:
+                use_psu_folds = True
+                if _n_psu_global < self.n_folds:
+                    effective_n_folds = _n_psu_global
+                    warnings.warn(
+                        f"DMLDiD survey/cluster design has only {_n_psu_global} "
+                        f"PSU(s), fewer than n_folds={self.n_folds}; "
+                        f"cross-fitting uses {_n_psu_global} PSU-cohesive folds "
+                        "instead (fold count reduced to preserve cluster "
+                        "cohesion — unit-level folds would leak information "
+                        "within PSUs while the clustered variance is "
+                        "identified).",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+        precomputed["use_psu_folds"] = use_psu_folds
+        precomputed["effective_n_folds"] = effective_n_folds
+        precomputed["weighted_moments"] = weighted_moments
+
+        treatment_groups = precomputed["treatment_groups"]
+        time_periods = precomputed["time_periods"]
+        observed_sorted = precomputed["observed_sorted"]
+        unit_cohorts = precomputed["unit_cohorts"]
+
+        root_entropy = self.seed if self.seed is not None else secrets.randbits(63)
+
+        group_time_effects: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
+        influence_func_info: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
+        cross_fit_diagnostics: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
+        bad_control_diagnostics: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
+        skipped: Dict[str, List[Tuple[Any, Any]]] = {}
+        skip_errors: List[str] = []
+        dropped_units: set = set()
+
+        for g_idx, g in enumerate(treatment_groups):
+            for t in _valid_periods_for_group_impl(
+                self.base_period, self.anticipation, g, time_periods, observed_sorted
+            ):
+                t_idx = time_periods.index(t)
+                gt_entry, if_entry, diagnostics = cell_fn(
+                    precomputed, g, t, g_idx, t_idx, root_entropy, dropped_units
+                )
+                group_time_effects[(g, t)] = gt_entry
+                if if_entry is not None:
+                    influence_func_info[(g, t)] = if_entry
+                if diagnostics is not None:
+                    # MOVE the ATT_X block out of the cross-fit diagnostics so
+                    # the per-cell inference dict is stored (and serialized)
+                    # exactly once; skipped cells carry no ATT_X.
+                    att_x_entry = diagnostics.pop("att_x", None)
+                    if att_x_entry is not None:
+                        bad_control_diagnostics[(g, t)] = att_x_entry
+                    cross_fit_diagnostics[(g, t)] = diagnostics
+                reason = gt_entry.get("skip_reason")
+                if reason is not None:
+                    skipped.setdefault(reason, []).append((g, t))
+                    if diagnostics is not None and "error" in diagnostics:
+                        skip_errors.append(f"(g={g}, t={t}): {diagnostics['error']}")
+
+        # All-degenerate check BEFORE reference cells (CS ordering): a
+        # universal-base all-NaN fit must raise, not return reference-only
+        # results.
+        if not group_time_effects or not any(
+            np.isfinite(v["effect"]) for v in group_time_effects.values()
+        ):
+            raise ValueError(
+                "Could not estimate any group-time effects. "
+                "Check that data has sufficient observations."
+            )
+
+        # Consolidated skip warning (fires only when >= 1 cell survives).
+        n_skipped = sum(len(v) for v in skipped.values())
+        if n_skipped > 0:
+            parts = [
+                f"{len(cells)} {reason} {sorted(cells)}"
+                for reason, cells in sorted(skipped.items())
+            ]
+            detail = ""
+            if skip_errors:
+                detail = " Learner errors: " + " | ".join(skip_errors)
+            warnings.warn(
+                f"{n_skipped} (group, time) cell(s) could not be estimated: "
+                f"{'; '.join(parts)}.{detail}",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        # Unbalanced-input warning (no-silent-failures): units dropped from a
+        # cell they would otherwise join — missing/non-finite outcome,
+        # non-finite covariate, or a dY overflow from two finite outcomes
+        # (errstate suppresses the only runtime signal, so this warning is
+        # the sole user-visible trace). Accumulated per cell during the
+        # estimation loop — no second O(n_units x n_cells) sweep.
+        if dropped_units:
+            _has_design = precomputed.get("resolved_survey_unit") is not None
+            if self.panel:
+                _weighting_note = (
+                    "(survey/cluster fits: point and aggregation weights both "
+                    "use cohort masses — see REGISTRY.md)"
+                    if _has_design
+                    else "(point weights use per-cell valid counts; aggregation "
+                    "cohort masses use full cohorts — see REGISTRY.md)"
+                )
+                _bc_note = (
+                    ", a non-finite bad control at the cell's base period or at t, "
+                    "a non-finite bad-control covariate at the base period"
+                    if bad_control is not None
+                    else ""
+                )
+                warnings.warn(
+                    f"{len(dropped_units)} unit(s) were excluded from at least one "
+                    "(group, time) cell they would otherwise join, due to a "
+                    "missing or NON-FINITE outcome, a non-finite covariate at the "
+                    f"cell's base period{_bc_note}, or an outcome difference "
+                    "overflowing to "
+                    f"non-finite. DMLDiD estimates each cell on its complete cases "
+                    f"{_weighting_note}.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            else:
+                # Declared-survey marker, NOT resolved_survey_unit: a bare
+                # cluster='s synthesized all-ones weights reduce exactly to
+                # the fixed row masses, so it takes the no-design wording.
+                _weighting_note = (
+                    "(survey fits: aggregation weights use survey cohort masses "
+                    "— see REGISTRY.md)"
+                    if survey_metadata is not None
+                    else "(aggregation weights use fixed cohort row masses — " "see REGISTRY.md)"
+                )
+                warnings.warn(
+                    f"{len(dropped_units)} observation(s) were excluded from a "
+                    "(group, time) cell they would otherwise join, due to a "
+                    "missing or NON-FINITE outcome or a non-finite covariate "
+                    "on the row. DMLDiD estimates each cell on its complete "
+                    f"cases {_weighting_note}.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+
+        # Universal base period: per-cohort zero reference cells (full
+        # nine-key CS dict; the kit hard-reads effect AND n_treated, the
+        # aggregators read n_treated as the pg mass, renderers read se).
+        reference_event_times: Optional[Tuple[Any, ...]] = None
+        if self.base_period == "universal":
+            for g in treatment_groups:
+                base = _select_base_period_impl(
+                    self.base_period, self.anticipation, g, g, observed_sorted
+                )
+                if base is None or (g, base) in group_time_effects:
+                    continue
+                cohort_mass = float(np.count_nonzero(unit_cohorts == g))
+                if cohort_mass <= 0:
+                    continue
+                # Declared-survey fits gate materialization on the WEIGHTED
+                # cohort mass (CS precedent): a cohort with rows but zero
+                # survey mass must not materialize a reference cell.
+                _ref_weighted_mass: Optional[float] = None
+                if weighted_moments and precomputed.get("survey_weights") is not None:
+                    _ref_weighted_mass = float(
+                        np.sum(
+                            np.asarray(precomputed["survey_weights"], dtype=np.float64)[
+                                unit_cohorts == g
+                            ]
+                        )
+                    )
+                    if _ref_weighted_mass <= 0.0:
+                        continue
+                ref_entry: Dict[str, Any] = {
+                    "effect": 0.0,
+                    "se": np.nan,
+                    "t_stat": np.nan,
+                    "p_value": np.nan,
+                    "conf_int": (np.nan, np.nan),
+                    "n_treated": int(round(cohort_mass)),
+                    "n_control": 0,
+                    "skip_reason": None,
+                    "is_reference": True,
+                }
+                if _ref_weighted_mass is not None:
+                    ref_entry["survey_weight_sum"] = _ref_weighted_mass
+                if not self.panel:
+                    # Keep the RCS pg basis uniform: reference cells carry the
+                    # same fixed cohort row mass as estimated cells.
+                    ref_entry["agg_weight"] = precomputed["rcs_cohort_masses"].get(
+                        g, int(round(cohort_mass))
+                    )
+                group_time_effects[(g, base)] = ref_entry
+                influence_func_info[(g, base)] = {
+                    "treated_idx": np.array([], dtype=np.int64),
+                    "control_idx": np.array([], dtype=np.int64),
+                    "treated_inf": np.array([]),
+                    "control_inf": np.array([]),
+                }
+            ref_event_times = set()
+            for g in treatment_groups:
+                b = _select_base_period_impl(
+                    self.base_period, self.anticipation, g, g, observed_sorted
+                )
+                if b is not None:
+                    ref_event_times.add(b - g)
+            if ref_event_times:
+                reference_event_times = tuple(sorted(ref_event_times))
+
+        # Overall ATT (simple aggregation over post-treatment finite cells).
+        # overall_effective_df is non-None only when replicate variance
+        # dropped replicates (n_valid < R). MIN-CAP, not CS's replace: the
+        # QR-rank design df stays the ceiling (CS's replace convention can
+        # RAISE df above the design df — anti-conservative; deliberate
+        # documented divergence, REGISTRY DMLDiD Note + CS-parity TODO row).
+        overall_att, overall_se, overall_effective_df = self._aggregate_simple(
+            group_time_effects, influence_func_info, df, unit, precomputed
+        )
+        if overall_effective_df is not None and df_survey is not None:
+            df_survey = min(int(df_survey), int(overall_effective_df))
+            # Propagate to survey_metadata for display consistency (CS
+            # parity) — the capped value, never the sentinel below.
+            if survey_metadata is not None:
+                survey_metadata.df_survey = df_survey
+        # Replicate design with undefined df (QR rank <= 1): df=0 sentinel
+        # -> NaN inference, applied to the LOCAL df only (survey_metadata
+        # keeps None).
+        df_overall = df_survey
+        if (
+            df_survey is None
+            and resolved_survey is not None
+            and resolved_survey.uses_replicate_variance
+        ):
+            df_overall = 0
+        overall_t_stat, overall_p_value, overall_conf_int = safe_inference(
+            overall_att, overall_se, alpha=self.alpha, df=df_overall
+        )
+
+        # Optional multiplier bootstrap (keyword form; aggregate=None is the
+        # supported skip-the-event-study-prep input — post-fit aggregate()
+        # supplies its own level on replay). Adapted engine override block:
+        # the fit-time event-study sub-block and the dead cband lines are
+        # dropped; bootstrap overrides use df=None (plain normal theory)
+        # even on survey fits — the CS convention for percentile-bootstrap
+        # inference (staggered.py), NOT an oversight. The PSU-level survey
+        # bootstrap and the <2-PSU NaN contract activate inside the mixin
+        # via precomputed["resolved_survey_unit"].
+        bootstrap_results = None
+        if self.n_bootstrap > 0:
+            bootstrap_results = self._run_multiplier_bootstrap(
+                group_time_effects,
+                influence_func_info,
+                aggregate=None,
+                balance_e=None,
+                treatment_groups=treatment_groups,
+                time_periods=time_periods,
+                df=df,
+                unit=unit,
+                precomputed=precomputed,
+                cband=self.cband,
+            )
+            if bootstrap_results is not None:
+                overall_se = bootstrap_results.overall_att_se
+                overall_t_stat, overall_p_value, overall_conf_int = safe_inference(
+                    overall_att, overall_se, alpha=self.alpha, df=None
+                )
+                overall_conf_int = bootstrap_results.overall_att_ci
+                overall_p_value = bootstrap_results.overall_att_p_value
+                if bootstrap_results.group_time_ses:
+                    for gt_key in group_time_effects:
+                        if gt_key in bootstrap_results.group_time_ses:
+                            group_time_effects[gt_key]["se"] = bootstrap_results.group_time_ses[
+                                gt_key
+                            ]
+                            group_time_effects[gt_key]["conf_int"] = (
+                                bootstrap_results.group_time_cis[gt_key]
+                            )
+                            group_time_effects[gt_key]["p_value"] = (
+                                bootstrap_results.group_time_p_values[gt_key]
+                            )
+                            t_val, _, _ = safe_inference(
+                                group_time_effects[gt_key]["effect"],
+                                bootstrap_results.group_time_ses[gt_key],
+                                alpha=self.alpha,
+                                df=None,
+                            )
+                            group_time_effects[gt_key]["t_stat"] = t_val
+
+        n_treated_units = int(np.sum(unit_cohorts > 0))
+        n_control_units = int(np.sum(unit_cohorts == 0))
+
+        # Survey/cluster results provenance (CS conventions): cluster_name
+        # follows PSU precedence (declared design PSU column > cluster=);
+        # df_inference is populated ONLY on the bare-cluster path (declared
+        # designs carry their df on survey_metadata.df_survey).
+        cluster_name: Optional[str] = None
+        n_clusters: Optional[int] = None
+        df_inference: Optional[float] = None
+        if resolved_survey_unit is not None:
+            if survey_design is not None and survey_design.psu is not None:
+                cluster_name = survey_design.psu
+            elif self.cluster is not None:
+                cluster_name = self.cluster
+            if resolved_survey_unit.psu is not None:
+                n_clusters = int(np.unique(resolved_survey_unit.psu).size)
+            if survey_metadata is None and df_survey is not None:
+                df_inference = float(df_survey)
+
+        results = DMLDiDResults(
+            group_time_effects=group_time_effects,
+            overall_att=overall_att,
+            overall_se=overall_se,
+            overall_t_stat=overall_t_stat,
+            overall_p_value=overall_p_value,
+            overall_conf_int=overall_conf_int,
+            groups=treatment_groups,
+            time_periods=time_periods,
+            n_obs=int(len(df)),
+            n_treated_units=n_treated_units,
+            n_control_units=n_control_units,
+            alpha=self.alpha,
+            control_group=self.control_group,
+            base_period=self.base_period,
+            anticipation=self.anticipation,
+            pscore_trim=self.pscore_trim,
+            bootstrap_results=bootstrap_results,
+            cband_crit_value=None,  # dead at fit under aggregate=None
+            reference_event_times=reference_event_times,
+            # Repr-of-spec contract: the RESULTS object stores a string —
+            # never the learner object itself (result pickles must not
+            # retain arbitrary user objects/buffers). Library-native
+            # learners publish their controlled configuration repr; FOREIGN
+            # objects publish only the qualified class name (an arbitrary
+            # __repr__ could embed credentials/paths into summaries and
+            # to_dict exports).
+            propensity_learner=_learner_spec_label(self.propensity_learner),
+            outcome_learner=_learner_spec_label(self.outcome_learner),
+            n_folds=self.n_folds,
+            effective_n_folds=(effective_n_folds if effective_n_folds != self.n_folds else None),
+            cross_fit_diagnostics=cross_fit_diagnostics,
+            seed=self.seed,
+            n_bootstrap=self.n_bootstrap,
+            bootstrap_weights=self.bootstrap_weights,
+            cband=self.cband,
+            panel=self.panel,
+            survey_metadata=survey_metadata,
+            cluster_name=cluster_name,
+            n_clusters=n_clusters,
+            df_inference=df_inference,
+            bad_control=bad_control,
+            bad_control_covariates=(tuple(w_names) if w_names is not None else None),
+            bad_control_diagnostics=(bad_control_diagnostics if bad_control_diagnostics else None),
+        )
+        # Every unit a cell loop excluded by its complete-case mask (outcome,
+        # dY, base-period covariates, bad-control columns, W) lands in
+        # ``dropped_units``; the kit records whether that ever happened so
+        # ``attgt_weights`` can refuse a fit whose cohort masses are reduced.
+        precomputed["complete_case_drops"] = bool(dropped_units)
+        results._aggregation_kit = _build_aggregation_kit(
+            cast(Any, self),  # duck-typed host contract (alpha/anticipation/cband)
+            precomputed,
+            influence_func_info,
+            group_time_effects,
+            # Declared-survey marker: gates aggregate('total') closed on
+            # survey fits (bare cluster= keeps survey_metadata None and
+            # stays admitted).
+            is_survey_fit=survey_metadata is not None,
+            bootstrap_results=bootstrap_results,
+            covariates=covariates,
+        )
+        self.results_ = results
+        self.is_fitted_ = True
+        return results

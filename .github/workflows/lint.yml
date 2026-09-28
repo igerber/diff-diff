@@ -1,0 +1,84 @@
+name: Lint
+
+# Check-only lint + type enforcement (ruff + black + mypy). This workflow
+# never modifies code — it reads the tree and passes or fails.
+#
+# Deliberately UNGATED (no ready-for-ci label check; precedent:
+# ai_pr_review.yml): these are cheap static checks that should give feedback
+# on every PR push. The push-to-main run catches merge-skew between two
+# individually-green PRs.
+#
+# IMPORTANT: never add a `paths:` filter here. The "Lint Gate" job below is a
+# required status check; a required check whose workflow does not trigger
+# leaves the PR blocked forever on "Expected — waiting for status".
+#
+# Tool versions are pinned and MUST stay in sync with the `dev` extra in
+# pyproject.toml — update both together.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  format-lint:
+    name: Ruff + Black
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - name: Install pinned linters (keep in sync with pyproject [dev])
+        run: pip install ruff==0.16.7 black==26.5.1
+      - name: Ruff
+        run: ruff check diff_diff tests
+      - name: Black
+        run: black --check diff_diff tests
+
+  typecheck:
+    name: Mypy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      # Runtime deps MUST be installed: with ignore_missing_imports=true an
+      # absent numpy silently becomes Any and most errors vanish — CI would
+      # go green while local runs stay red. Pinning them freezes stub drift.
+      # The package itself is NOT installed (mypy analyzes source directly;
+      # no maturin/Rust build ever enters this workflow).
+      - name: Install mypy + runtime deps for their type stubs (pinned)
+        run: pip install mypy==2.3.1 numpy==2.4.5 pandas==3.0.3 scipy==1.17.1
+      - name: Mypy
+        run: mypy diff_diff
+
+  # Single stable required-check name so branch protection is configured once.
+  # New jobs extend `needs` without any protection change. `if: always()` is
+  # load-bearing: without it a failed upstream job would leave this job
+  # SKIPPED, and GitHub treats a skipped required check as satisfied.
+  lint-gate:
+    name: Lint Gate
+    runs-on: ubuntu-latest
+    needs: [format-lint, typecheck]
+    if: always()
+    steps:
+      - name: All lint jobs must succeed
+        run: |
+          for r in ${{ join(needs.*.result, ' ') }}; do
+            if [ "$r" != "success" ]; then
+              echo "::error::A lint job did not succeed (result: $r)"
+              exit 1
+            fi
+          done

@@ -1,0 +1,22 @@
+{
+  "estimator": "did2s::did2s",
+  "meta": {
+    "r_version": "R version 4.5.2 (2025-10-31)",
+    "did2s_version": "1.2.1",
+    "seed": 2024,
+    "n_units": 180,
+    "n_periods": 8,
+    "cohorts": [0, 3, 5],
+    "se_type": "Corrected Clustered (unit); bootstrap = FALSE (analytical GMM sandwich)",
+    "note": "did2s analytical corrected clustered SE = the Gardner (2022) two-stage GMM sandwich with the global Jacobian inverse and no finite-sample multiplier. Event study compares post-treatment horizons r >= 0 (i(rel_year, ref=c(-1,Inf)))."
+  },
+  "overall": {
+    "att": 2.045668026901,
+    "se": 0.0281322476332
+  },
+  "event_study": {
+    "horizons": [0, 1, 2, 3, 4, 5],
+    "att": [0.9929366801146, 1.512964957441, 2.006499440277, 2.499854710124, 2.964817090473, 3.46735160262],
+    "se": [0.0291425705467, 0.02572953717585, 0.03023588469852, 0.02950889195402, 0.04306469246781, 0.04307353806204]
+  }
+}

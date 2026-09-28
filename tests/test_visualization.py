@@ -162,7 +162,9 @@ class TestPlotEventStudy:
         )
 
         # Verify _extract_plot_data returns cband overrides
-        result = _extract_plot_data(df, periods=None, pre_periods=None, post_periods=None, reference_period=0)
+        result = _extract_plot_data(
+            df, periods=None, pre_periods=None, post_periods=None, reference_period=0
+        )
         ci_lo = result[7]
         ci_hi = result[8]
         assert ci_lo is not None, "ci_lower_override should not be None with cband columns"
@@ -191,7 +193,9 @@ class TestPlotEventStudy:
         )
 
         # All-NaN cband columns should not produce overrides
-        result = _extract_plot_data(df, periods=None, pre_periods=None, post_periods=None, reference_period=0)
+        result = _extract_plot_data(
+            df, periods=None, pre_periods=None, post_periods=None, reference_period=0
+        )
         ci_lo = result[7]
         ci_hi = result[8]
         assert ci_lo is None, "ci_lower_override should be None when cband is all-NaN"
@@ -276,8 +280,10 @@ class TestPlotEventStudy:
     def test_error_invalid_results_type(self):
         """Test error with invalid results type."""
         pytest.importorskip("matplotlib")
-        with pytest.raises(TypeError, match="Cannot extract plot data"):
+        with pytest.raises(TypeError, match="Cannot extract plot data") as exc_info:
             plot_event_study("invalid")
+        # The expected-types list names the unified container too.
+        assert "EventStudyResults" in str(exc_info.value)
 
     def test_plot_with_nan_se_reference_period(self):
         """Test that reference period with NaN SE is plotted without error bars.
@@ -314,6 +320,7 @@ class TestPlotEventStudy:
         """
         pytest.importorskip("matplotlib")
         import matplotlib.pyplot as plt
+
         from diff_diff import generate_staggered_data
 
         data = generate_staggered_data(n_units=200, n_periods=10, seed=42)
@@ -344,6 +351,7 @@ class TestPlotEventStudy:
         """
         pytest.importorskip("matplotlib")
         import matplotlib.pyplot as plt
+
         from diff_diff import generate_staggered_data
 
         data = generate_staggered_data(n_units=200, n_periods=10, seed=42)
@@ -657,6 +665,7 @@ class TestPlotEventStudyCband:
         """Test that cband CIs are used by default when available."""
         pytest.importorskip("matplotlib")
         import matplotlib.pyplot as plt
+
         from diff_diff.visualization import _extract_plot_data
 
         # Verify plot succeeds
@@ -664,7 +673,7 @@ class TestPlotEventStudyCband:
         assert ax is not None
 
         # Verify cband CIs are extracted
-        (_, _, _, _, _, _, _, ci_lower_override, ci_upper_override) = _extract_plot_data(
+        _, _, _, _, _, _, _, ci_lower_override, ci_upper_override, _, _, _ = _extract_plot_data(
             cs_cband_results, None, None, None, None
         )
         assert ci_lower_override is not None
@@ -736,3 +745,39 @@ class TestPlotEventStudyIntegration:
 
         assert ax is not None
         plt.close()
+
+
+class TestEfficientDiDPlotReference:
+    """M-023: the membership-gated ``reference_period`` property corrects the
+    plotted reference on PT-Post EfficientDiD fits.
+
+    Before M-023 the native extraction fell back to ``-1`` for EDiD; under
+    ``pt_assumption="post"`` with ``anticipation=1`` the materialized
+    mechanical anchor sits at ``e = -2``, and the property now feeds the
+    extractor the true value.  PT-All fits have no anchor (the property is
+    None) and keep the legacy ``-1`` fallback unchanged.
+    """
+
+    def test_pt_post_anticipation_reference_shifts(self):
+        pytest.importorskip("matplotlib")
+        import warnings
+
+        from diff_diff import EfficientDiD
+        from diff_diff.prep_dgp import generate_staggered_data
+        from diff_diff.visualization._event_study import _extract_plot_data
+
+        d = generate_staggered_data(n_units=80, n_periods=8, cohort_periods=[4, 6], seed=9)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            res = EfficientDiD(pt_assumption="post", anticipation=1).fit(
+                d,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                aggregate="event_study",
+            )
+        assert res.reference_period == -2
+        extracted = _extract_plot_data(res, None, None, None, None)
+        assert extracted[5] == -2  # reference_period slot
+        assert extracted[6] is True  # inferred, not caller-supplied

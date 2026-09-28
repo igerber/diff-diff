@@ -520,3 +520,235 @@ class TestPlotlyPretrendsPowerStyling:
         )
         assert fig.layout.xaxis.showgrid is False
         assert fig.layout.yaxis.showgrid is False
+
+
+class TestPlotEventStudyZeroSEPlotly:
+    """The plotly CI band omits zero-SE non-reference rows entirely (the
+    renderer filters NaN-CI rows via has_ci; the polygon interpolating
+    across the gap is the pre-existing NaN-SE convention)."""
+
+    def test_zero_se_row_absent_from_ci_band(self):
+        from diff_diff.visualization import plot_event_study
+
+        nan = float("nan")
+
+        class _Fake:
+            anticipation = 0
+
+        res = _Fake()
+        res.event_study_effects = {
+            -1: {"effect": 0.0, "se": 0.0, "conf_int": (0.0, 0.0), "n_obs": 0},
+            0: {"effect": 1.5, "se": 0.0, "conf_int": (nan, nan), "n_obs": 8},
+            1: {"effect": 1.0, "se": 0.5, "conf_int": (0.02, 1.98), "n_obs": 8},
+        }
+        fig = plot_event_study(res, show=False, backend="plotly")
+        band_traces = [t for t in fig.data if getattr(t, "fill", None) == "toself"]
+        assert band_traces, "CI band trace missing"
+        band_x = set()
+        for t in band_traces:
+            band_x.update(float(x) for x in t.x)
+        # ordinal x: -1 -> 0.0 (reference, retained), 0 -> 1.0 (gated), 1 -> 2.0
+        assert 1.0 not in band_x, "zero-SE non-reference row still in the CI band"
+        assert 0.0 in band_x and 2.0 in band_x
+
+
+# ── Dose-response band tests (plotly backend) ────────────────────────────────
+
+
+class TestPlotDoseResponsePlotly:
+    """The toself band polygon must never carry a non-finite vertex, must
+    vanish entirely when all rows are masked, and must state the confidence
+    level only where it is knowable."""
+
+    @staticmethod
+    def _band_traces(fig):
+        return [t for t in fig.data if getattr(t, "fill", None) == "toself"]
+
+    def test_masked_se_rows_filtered_from_band(self):
+        import pandas as pd
+
+        from diff_diff import plot_dose_response
+
+        df = pd.DataFrame(
+            {
+                "dose": [1.0, 2.0, 3.0, 4.0],
+                "effect": [0.1, 0.2, 0.3, 0.4],
+                "se": [0.05, 0.0, np.nan, 0.06],
+            }
+        )
+        with pytest.warns(UserWarning, match="2 row"):
+            fig = plot_dose_response(data=df, backend="plotly", show=False)
+        (band,) = self._band_traces(fig)
+        xs = [float(x) for x in band.x]
+        ys = np.asarray(band.y, dtype=float)
+        assert np.isfinite(ys).all()
+        assert 2.0 not in xs and 3.0 not in xs
+        assert 1.0 in xs and 4.0 in xs
+
+    def test_explicit_ci_nan_and_inf_rows_filtered(self):
+        import pandas as pd
+
+        from diff_diff import plot_dose_response
+
+        df = pd.DataFrame(
+            {
+                "dose": [1.0, 2.0, 3.0, 4.0],
+                "effect": [0.1, 0.2, 0.3, 0.4],
+                "conf_int_lower": [0.0, np.nan, 0.2, -np.inf],
+                "conf_int_upper": [0.2, 0.3, 0.4, 0.5],
+            }
+        )
+        fig = plot_dose_response(data=df, backend="plotly", show=False)
+        (band,) = self._band_traces(fig)
+        xs = [float(x) for x in band.x]
+        assert np.isfinite(np.asarray(band.y, dtype=float)).all()  # isfinite, not isnan
+        assert 2.0 not in xs and 4.0 not in xs
+
+    def test_string_dose_still_renders(self):
+        import pandas as pd
+
+        from diff_diff import plot_dose_response
+
+        df = pd.DataFrame(
+            {
+                "dose": ["low", "mid", "high"],
+                "effect": [0.1, 0.2, 0.3],
+                "conf_int_lower": [0.0, 0.1, 0.2],
+                "conf_int_upper": [0.2, 0.3, 0.4],
+            }
+        )
+        fig = plot_dose_response(data=df, backend="plotly", show=False)
+        (band,) = self._band_traces(fig)
+        assert band.name == "CI"
+        assert set(band.x) == {"low", "mid", "high"}
+
+    def test_all_masked_se_no_band_trace(self):
+        import pandas as pd
+
+        from diff_diff import plot_dose_response
+
+        df = pd.DataFrame({"dose": [1.0, 2.0], "effect": [0.1, 0.2], "se": [0.0, np.nan]})
+        with pytest.warns(UserWarning, match="2 row"):
+            fig = plot_dose_response(data=df, backend="plotly", show=False)
+        assert self._band_traces(fig) == []
+        assert [t.name for t in fig.data] == ["Effect"]
+
+    def test_band_labels(self):
+        import pandas as pd
+
+        from diff_diff import plot_dose_response
+
+        df_se = pd.DataFrame({"dose": [1.0, 2.0], "effect": [0.1, 0.2], "se": [0.05, 0.06]})
+        fig = plot_dose_response(data=df_se, alpha=0.10, backend="plotly", show=False)
+        assert self._band_traces(fig)[0].name == "90% CI"
+        results = MagicMock()
+        results.alpha = 0.05
+        curve = MagicMock()
+        curve.dose_grid = np.array([1.0, 2.0])
+        curve.effects = np.array([0.1, 0.2])
+        curve.conf_int_lower = np.array([0.0, 0.1])
+        curve.conf_int_upper = np.array([0.2, 0.3])
+        curve.target = "att"
+        results.dose_response_att = curve
+        fig_r = plot_dose_response(results, backend="plotly", show=False)
+        assert self._band_traces(fig_r)[0].name == "95% CI"
+        results.alpha = np.float32(0.05)  # numpy scalar fit alpha labels too
+        fig_r32 = plot_dose_response(results, backend="plotly", show=False)
+        assert self._band_traces(fig_r32)[0].name == "95% CI"
+        fig_c = plot_dose_response(curve=curve, backend="plotly", show=False)
+        assert self._band_traces(fig_c)[0].name == "CI"
+        fig_frac = plot_dose_response(data=df_se, alpha=0.025, backend="plotly", show=False)
+        assert self._band_traces(fig_frac)[0].name == "97.5% CI"
+        results.alpha = 0.025
+        fig_r_frac = plot_dose_response(results, backend="plotly", show=False)
+        assert self._band_traces(fig_r_frac)[0].name == "97.5% CI"
+
+
+class TestPlotlyTWFEWeights:
+    """Plotly backend for plot_twfe_weights (both views)."""
+
+    @staticmethod
+    def _panel_and_fit():
+        import pandas as pd
+
+        import diff_diff
+
+        rng = np.random.RandomState(11)
+        first_treat = np.repeat(np.array([0, 3, 4]), 30)
+        rows = []
+        for t in range(1, 6):
+            treated = (first_treat != 0) & (t >= first_treat)
+            rows.append(
+                pd.DataFrame(
+                    {
+                        "unit": np.arange(len(first_treat)),
+                        "period": t,
+                        "first_treat": first_treat,
+                        "outcome": rng.normal(size=len(first_treat)) + treated * 1.0,
+                        "x": rng.normal(size=len(first_treat)),
+                    }
+                )
+            )
+        df = pd.concat(rows, ignore_index=True)
+        fit = diff_diff.CallawaySantAnna(
+            control_group="never_treated", base_period="universal"
+        ).fit(df, outcome="outcome", unit="unit", time="period", first_treat="first_treat")
+        return df, fit
+
+    def test_weights_view(self):
+        import diff_diff
+
+        _, fit = self._panel_and_fit()
+        fig = diff_diff.plot_twfe_weights(
+            diff_diff.attgt_weights(fit), backend="plotly", show=False
+        )
+        assert isinstance(fig, go.Figure)
+        assert len(fig.data) == 2  # post + pre traces
+        assert len(fig.layout.shapes) >= 2  # zero lines
+
+    def test_balance_view(self):
+        import diff_diff
+
+        df, _ = self._panel_and_fit()
+        dec = diff_diff.decompose_twfe_weights(
+            df,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            covariates=["x"],
+            balance_covariates=["x"],
+        )
+        fig = diff_diff.plot_twfe_weights(dec, backend="plotly", show=False)
+        assert isinstance(fig, go.Figure)
+        assert any(trace.name == "no improvement" for trace in fig.data)
+
+    def test_signed_balance_reference_line_spans_negative(self):
+        import diff_diff
+
+        df, _ = self._panel_and_fit()
+        dec = diff_diff.decompose_twfe_weights(
+            df,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            covariates=["x"],
+            balance_covariates=["x"],
+        )
+        fig = diff_diff.plot_twfe_weights(
+            dec, kind="balance", absolute_value=False, backend="plotly", show=False
+        )
+        line = next(trace for trace in fig.data if trace.name == "no improvement")
+        assert min(line.x) < 0
+
+    def test_hover_labels_do_not_need_annotation(self):
+        """Item 18: `text` feeds the hover template even when it is not drawn."""
+        import diff_diff
+
+        _, fit = self._panel_and_fit()
+        fig = diff_diff.plot_twfe_weights(
+            diff_diff.attgt_weights(fit), backend="plotly", annotate=False, show=False
+        )
+        assert fig.data[0].mode == "markers"
+        assert len(fig.data[0].text) > 0

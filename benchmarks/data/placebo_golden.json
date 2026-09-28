@@ -1,0 +1,35 @@
+{
+  "description": "PlaceboTests R parity (BDM 2004): exact RI permutation p-value + deterministic LOO + fake-group, on a fixed 2-period panel.",
+  "panel_csv": "benchmarks/data/placebo_test_panel.csv",
+  "real_treated": [0, 1, 2],
+  "n_treated": 3,
+  "observed_att": 0.4399611333333,
+  "permutation": {
+    "convention": "exact enumeration: p = #{|ATT*| >= |ATT_obs|} / total (observed included)",
+    "count": 15,
+    "total": 56,
+    "p_exact": 0.2678571428571,
+    "boundary_gap": 0.03574946666667
+  },
+  "leave_one_out": {
+    "dropped_units": [0, 1, 2],
+    "per_drop_att": {
+      "0": 0.4580263,
+      "1": 0.1802923,
+      "2": 0.6815648
+    },
+    "mean": 0.4399611333333,
+    "se": 0.2511240579855,
+    "df": 2,
+    "t_stat": 1.751967282079,
+    "p_value": 0.2218771530393,
+    "ci_lower": -0.6405384802636,
+    "ci_upper": 1.52046074693
+  },
+  "fake_group": {
+    "fake_treated_units": [3, 4],
+    "note": "ever-treated units dropped (treatment filter); ATT is the double-difference",
+    "att": 0.006379666666667
+  },
+  "ri2_convention_checked": false
+}

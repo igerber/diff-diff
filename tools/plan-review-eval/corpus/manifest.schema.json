@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "plan-review-eval case.json",
+  "type": "object",
+  "required": ["id", "stratum", "fixture"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "stratum": {
+      "enum": ["fixture", "s1_synthetic", "s2_historical", "s3_negative"],
+      "description": "Must match the directory the case is filed under. 'fixture' is the committed fabricated case; s1 = historical plan with injected defects, s2 = historical plan whose implementation later hit plan-visible trouble, s3 = clean negative control."
+    },
+    "title": { "type": "string" },
+    "fixture": {
+      "type": "object",
+      "required": ["kind", "base_sha"],
+      "properties": {
+        "kind": { "const": "plan_at_sha" },
+        "base_sha": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repo state the plan was written against. Real cases pin a full SHA; the committed fixture uses HEAD so shallow clones can materialize it."
+        },
+        "plan": {
+          "type": "string",
+          "default": "plan.md",
+          "description": "Plan document, relative to the case directory (must not escape it)."
+        }
+      }
+    },
+    "ground_truth": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "rationale"],
+        "properties": {
+          "id": { "type": "string" },
+          "file": { "type": "string", "description": "Repo file the defect concerns, or plan.md for plan-internal defects." },
+          "bug_class": { "type": "string" },
+          "expected_severity": {
+            "enum": ["blocker", "major", "minor"],
+            "description": "NEUTRAL vocabulary only (see DECISION_RULE.md) — never CRITICAL/MEDIUM/LOW or P0-P3, so neither engine's native scale leaks into grading."
+          },
+          "must_catch": { "type": "boolean", "default": true },
+          "anchor_symbol": { "type": "string" },
+          "class_keywords": { "type": "array", "items": { "type": "string" } },
+          "rationale": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "expect_no_blockers": { "type": "boolean", "default": false },
+    "allow_severities": {
+      "type": "array",
+      "items": { "enum": ["blocker", "major", "minor"] },
+      "default": ["major", "minor"],
+      "description": "On a negative control: findings at these severities are acceptable; anything above is a false positive."
+    },
+    "known_fp_topics": { "type": "array" },
+    "notes": { "type": "string", "description": "Grading context. For s2 cases, record the hindsight-bias control: the defect must be visible in the plan text, not only in the implementation outcome." }
+  }
+}

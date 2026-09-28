@@ -2,6 +2,10 @@
 Tests for Callaway-Sant'Anna staggered DiD estimator.
 """
 
+import warnings
+from decimal import Decimal
+from fractions import Fraction
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -1002,23 +1006,28 @@ class TestCallawaySantAnnaCovariates:
         import warnings
         from unittest.mock import patch
 
+        import diff_diff.staggered as _ddstg
+
         data = generate_staggered_data_with_covariates(seed=42, n_units=100)
 
-        # Patch lstsq to return inf for one specific call to simulate numerical failure
-        original_lstsq = __import__("scipy").linalg.lstsq
+        # Poison one covariate OR solve to simulate a numerical failure. The reg
+        # path routes the OR fit through `diff_diff.staggered.solve_ols` (the
+        # scale-robust solver), NOT `scipy.linalg.lstsq` — so patch that seam.
+        original_solve_ols = _ddstg.solve_ols
         call_count = [0]
 
-        def mock_lstsq(*args, **kwargs):
+        def mock_solve_ols(*args, **kwargs):
             call_count[0] += 1
-            result = original_lstsq(*args, **kwargs)
-            if call_count[0] == 1:
-                # Poison the first lstsq result
+            result = original_solve_ols(*args, **kwargs)
+            # Poison call #7 (the (g=3, t=3) OR solve). An inf coefficient survives
+            # the dropped-column NaN zero-fill and trips the nan_cell guard.
+            if call_count[0] == 7:
                 bad_beta = np.full_like(result[0], np.inf)
                 return (bad_beta,) + result[1:]
             return result
 
-        # Use rank_deficient_action="warn" to ensure we go through the covariate reg path
-        # and also force lstsq fallback by using collinear covariates
+        # Collinear covariates force the rank-deficient OR path; reg + warn routes
+        # the OR fit through diff_diff.staggered.solve_ols.
         data["x1_dup"] = data["x1"]
         cs = CallawaySantAnna(
             n_bootstrap=0,
@@ -1029,7 +1038,7 @@ class TestCallawaySantAnnaCovariates:
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            with patch("scipy.linalg.lstsq", side_effect=mock_lstsq):
+            with patch("diff_diff.staggered.solve_ols", side_effect=mock_solve_ols):
                 results = cs.fit(
                     data,
                     outcome="outcome",
@@ -1039,19 +1048,27 @@ class TestCallawaySantAnnaCovariates:
                     covariates=["x1", "x1_dup"],
                 )
 
-        # Check that NaN cells are preserved (not dropped)
+        # The mock must actually fire (otherwise the test is vacuous).
+        assert call_count[0] >= 7, (
+            f"mock solve_ols should have been called >=7 times, got {call_count[0]} "
+            "(the OR solve seam moved — update the patch target)"
+        )
+
+        # The poisoned cell must be PRESERVED as NaN (not dropped), with NaN SE,
+        # and the non-finite-regression warning must fire.
         nan_cells = [
             (g, t) for (g, t), eff in results.group_time_effects.items() if np.isnan(eff["effect"])
         ]
-        # At least one cell should have NaN effect from our mock
-        if call_count[0] > 0:
-            # Verify warning about non-finite regression results
-            nan_warnings = [x for x in w if "non-finite regression results" in str(x.message)]
-            if nan_cells:
-                assert len(nan_warnings) > 0
-                # NaN cells should have NaN SE too
-                for g, t in nan_cells:
-                    assert np.isnan(results.group_time_effects[(g, t)]["se"])
+        assert len(nan_cells) > 0, "Expected at least one NaN cell from the poisoned OR solve"
+        nan_warnings = [x for x in w if "non-finite regression results" in str(x.message)]
+        assert len(nan_warnings) > 0, "Expected a 'non-finite regression results' warning"
+        for g, t in nan_cells:
+            assert np.isnan(
+                results.group_time_effects[(g, t)]["se"]
+            ), f"NaN cell ({g},{t}) must have NaN SE"
+            assert (
+                results.group_time_effects[(g, t)]["skip_reason"] == "non_finite_regression"
+            ), f"NaN cell ({g},{t}) must carry skip_reason='non_finite_regression'"
 
         # Overall ATT should still be finite (NaN cells excluded from aggregation)
         assert np.isfinite(results.overall_att)
@@ -1063,14 +1080,20 @@ class TestCallawaySantAnnaCovariates:
 
         data = generate_staggered_data_with_covariates(seed=42, n_units=100)
 
-        original_lstsq = __import__("scipy").linalg.lstsq
+        import diff_diff.staggered as _ddstg
+
+        original_solve_ols = _ddstg.solve_ols
         call_count = [0]
 
-        def mock_lstsq(*args, **kwargs):
+        def mock_solve_ols(*args, **kwargs):
             call_count[0] += 1
-            result = original_lstsq(*args, **kwargs)
-            # Poison call #7 — corresponds to (g=3, t=3), a post-treatment cell,
-            # so the overall ATT bootstrap aggregation path is exercised.
+            result = original_solve_ols(*args, **kwargs)
+            # Poison call #7 — the (g=3, t=3) outcome-regression solve, a
+            # post-treatment cell, so the overall ATT bootstrap aggregation path
+            # is exercised. The covariate OR fit routes through `solve_ols` (the
+            # scale-robust solver), not `scipy.linalg.lstsq` directly; an inf
+            # coefficient survives the dropped-column NaN zero-fill and trips the
+            # nan_cell guard.
             if call_count[0] == 7:
                 bad_beta = np.full_like(result[0], np.inf)
                 return (bad_beta,) + result[1:]
@@ -1087,7 +1110,7 @@ class TestCallawaySantAnnaCovariates:
 
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
-            with patch("scipy.linalg.lstsq", side_effect=mock_lstsq):
+            with patch("diff_diff.staggered.solve_ols", side_effect=mock_solve_ols):
                 results = cs.fit(
                     data,
                     outcome="outcome",
@@ -1137,13 +1160,18 @@ class TestCallawaySantAnnaCovariates:
 
         data = generate_staggered_data_with_covariates(seed=42, n_units=100)
 
-        original_lstsq = __import__("scipy").linalg.lstsq
+        import diff_diff.staggered as _ddstg
+
+        original_solve_ols = _ddstg.solve_ols
         call_count = [0]
 
-        def mock_lstsq(*args, **kwargs):
+        def mock_solve_ols(*args, **kwargs):
             call_count[0] += 1
-            result = original_lstsq(*args, **kwargs)
-            # Poison call #7: (g=3, t=3), the anchor for cohort g=3 at e=0
+            result = original_solve_ols(*args, **kwargs)
+            # Poison call #7: the (g=3, t=3) outcome-regression solve, the anchor
+            # for cohort g=3 at e=0. The OR fit routes through `solve_ols` (the
+            # scale-robust solver); an inf coefficient survives the dropped-column
+            # NaN zero-fill and trips the nan_cell guard.
             if call_count[0] == 7:
                 bad_beta = np.full_like(result[0], np.inf)
                 return (bad_beta,) + result[1:]
@@ -1160,7 +1188,7 @@ class TestCallawaySantAnnaCovariates:
 
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
-            with patch("scipy.linalg.lstsq", side_effect=mock_lstsq):
+            with patch("diff_diff.staggered.solve_ols", side_effect=mock_solve_ols):
                 results = cs.fit(
                     data,
                     outcome="outcome",
@@ -1196,6 +1224,970 @@ class TestCallawaySantAnnaCovariates:
         if results.bootstrap_results and results.bootstrap_results.event_study_ses:
             for e, se in results.bootstrap_results.event_study_ses.items():
                 assert np.isfinite(se), f"e={e}: bootstrap SE should be finite"
+
+    @pytest.mark.parametrize("action", ["silent", "warn"])
+    def test_reg_underdetermined_control_cell_no_crash(self, action):
+        """CS `reg` must not crash on an underdetermined control cell
+        (n_control < n_covariates + 1) under ``rank_deficient_action`` warn/silent.
+
+        Regression for the OR scale-equilibration change: the covariate OR fit now
+        routes through ``solve_ols``, which raises on ``n < k`` *before* it can rank-
+        drop. The optimized reg path detects the rank-deficient columns, drops them,
+        and fits the reduced (full-column-rank) design via the equilibrated lstsq —
+        the documented R-style / ``lm()`` column-drop contract, NOT a minimum-norm
+        full-design solve (CI codex P1 on the scale-equilibration PR).
+        """
+        rng = np.random.default_rng(3)
+        rows = []
+        for i in range(10):
+            g = 2 if i < 8 else 0  # 8 treated (g=2), only 2 never-treated controls
+            x1, x2, x3 = rng.normal(size=3)
+            for t in range(1, 4):
+                post = 1 if (g != 0 and t >= g) else 0
+                rows.append(
+                    {
+                        "unit": i,
+                        "time": t,
+                        "first_treat": g,
+                        "outcome": rng.normal() + 0.5 * t + 0.3 * x1 + 1.5 * post,
+                        "x1": x1,
+                        "x2": x2,
+                        "x3": x3,
+                    }
+                )
+        data = pd.DataFrame(rows)
+        # 2 controls vs intercept + 3 covariates = 4 params -> underdetermined OR cell.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = CallawaySantAnna(estimation_method="reg", rank_deficient_action=action).fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1", "x2", "x3"],
+            )
+        post_effects = [res.group_time_effects[(2, t)]["effect"] for t in (2, 3)]
+        assert all(np.isfinite(e) for e in post_effects), (
+            "underdetermined control cell should yield a finite ATT under "
+            f"rank_deficient_action={action!r}, got {post_effects}"
+        )
+        # R-style column-drop contract, NOT minimum-norm: dropping the unidentified
+        # column(s) and fitting the reduced design reproduces the prior reduced-lstsq
+        # result to working precision. A minimum-norm solve on the full n<k design
+        # would give a different (non-unique) extrapolation to the treated covariates.
+        rank_reduced = [-1.3958318723, -1.2987532126]  # prior reduced-lstsq / R lm() drop
+        minimum_norm = [-1.9213829489, -1.8180077026]  # a full n<k min-norm solve (rejected)
+        np.testing.assert_allclose(post_effects, rank_reduced, atol=1e-6)
+        assert not np.allclose(post_effects, minimum_norm, atol=1e-3), (
+            "underdetermined reg fit must use the rank-reduced column-drop solve, "
+            "not the minimum-norm full-design solve"
+        )
+
+
+def _cs_nonestimable_data(panel: bool, n: int = 25, seed: int = 0) -> pd.DataFrame:
+    """Staggered data (cohorts 2,3,4; periods 1-4; NO never-treated) where, with
+    ``control_group="not_yet_treated"``, every post cell at the final period t=4
+    has no not-yet-treated controls (no cohort treated after 4) -> deterministic
+    non-estimable cells (e.g. (4, 4)). Earlier-period post cells (g=2/3 at t=2/3)
+    stay estimable, so aggregates remain finite.
+
+    panel=True  -> each unit observed in all 4 periods (true panel).
+    panel=False -> each row is a distinct unit (true repeated cross-section).
+    """
+    rng = np.random.default_rng(seed)
+    rows = []
+    uid = 0
+    for g in (2, 3, 4):
+        for _ in range(n):
+            x = rng.normal(0, 1)  # unit-level covariate (for IPW/DR/reg covariate paths)
+            if panel:
+                fe = rng.normal(0, 1)
+                for t in range(1, 5):
+                    post = 1.0 if t >= g else 0.0
+                    rows.append(
+                        {
+                            "unit": uid,
+                            "time": t,
+                            "outcome": fe + 0.3 * t + 1.5 * post + 0.5 * x + rng.normal(0, 0.5),
+                            "first_treat": g,
+                            "x": x,
+                        }
+                    )
+                uid += 1
+            else:
+                for t in range(1, 5):
+                    post = 1.0 if t >= g else 0.0
+                    x_t = rng.normal(0, 1)
+                    rows.append(
+                        {
+                            "unit": uid,
+                            "time": t,
+                            "outcome": rng.normal(0, 1) + 0.3 * t + 1.5 * post + 0.5 * x_t,
+                            "first_treat": g,
+                            "x": x_t,
+                        }
+                    )
+                    uid += 1
+    return pd.DataFrame(rows)
+
+
+class TestCallawaySantAnnaNonEstimableMaterialization:
+    """Non-estimable (g,t) cells are materialized as NaN entries carrying a
+    machine-readable ``skip_reason``, uniformly across estimation paths, and are
+    excluded from every aggregation so aggregates/SEs stay finite (the prior
+    omit behavior; exact aggregate values are pinned by test_methodology_callaway).
+    """
+
+    _KNOWN_REASONS = {
+        "missing_period",
+        "zero_treated_control",
+        "zero_weight_mass",
+        "non_finite_regression",
+    }
+
+    @pytest.mark.parametrize(
+        "method,panel,covariates",
+        [
+            ("reg", True, None),  # no-covariate vectorized path
+            ("ipw", True, None),  # general path, no covariates
+            ("dr", True, None),  # general path, no covariates
+            ("reg", False, None),  # repeated cross-section path
+            ("reg", True, ["x"]),  # covariate-regression vectorized path
+            ("ipw", True, ["x"]),  # general path, covariate IPW
+            ("dr", True, ["x"]),  # general path, covariate DR
+            ("dr", False, ["x"]),  # repeated cross-section, covariate DR
+        ],
+    )
+    def test_materializes_nan_cell_with_skip_reason(self, method, panel, covariates):
+        """Each previously-omitting path now stores the non-estimable cell as NaN."""
+        data = _cs_nonestimable_data(panel=panel, seed=0)
+        cs = CallawaySantAnna(
+            n_bootstrap=0,
+            control_group="not_yet_treated",
+            estimation_method=method,
+            panel=panel,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=covariates,
+            )
+
+        # The (g=4, t=4) cell has no not-yet-treated controls -> materialized, not omitted.
+        key = (4, 4)
+        assert (
+            key in results.group_time_effects
+        ), f"non-estimable cell must be materialized (path={method}, panel={panel}), not omitted"
+        cell = results.group_time_effects[key]
+        assert np.isnan(cell["effect"]) and np.isnan(cell["se"])
+        assert np.isnan(cell["t_stat"]) and np.isnan(cell["p_value"])
+        assert all(np.isnan(b) for b in cell["conf_int"])
+        assert cell["skip_reason"] == "zero_treated_control"
+        # The cell genuinely has treated observations but no controls -> the
+        # materialized counts must reflect that, not a hardcoded (0, 0).
+        assert cell["n_treated"] > 0
+        assert cell["n_control"] == 0
+
+        # Every NaN cell carries a known reason + NaN SE; every estimable cell None.
+        n_finite = 0
+        for (g, t), v in results.group_time_effects.items():
+            if np.isnan(v["effect"]):
+                assert v["skip_reason"] in self._KNOWN_REASONS, (g, t, v["skip_reason"])
+                assert np.isnan(v["se"])
+            else:
+                assert v["skip_reason"] is None
+                n_finite += 1
+
+        # Non-empty dict mixing NaN + finite cells fits without raising, and the
+        # NaN cells are excluded from aggregation (the aggregation invariant).
+        assert n_finite > 0, "expected some estimable cells"
+        assert np.isfinite(results.overall_att), "NaN cells must be excluded from aggregation"
+        assert np.isfinite(results.overall_se)
+
+    def test_estimable_cells_have_skip_reason_none(self):
+        """A well-posed fit carries skip_reason=None on every cell."""
+        data = generate_staggered_data(n_units=200, seed=42)
+        cs = CallawaySantAnna(n_bootstrap=0)
+        results = cs.fit(
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+        )
+        assert len(results.group_time_effects) > 0
+        assert all(np.isfinite(v["effect"]) for v in results.group_time_effects.values())
+        assert all(v["skip_reason"] is None for v in results.group_time_effects.values())
+
+    def test_to_dataframe_includes_nan_row_and_skip_reason_column(self):
+        """to_dataframe('group_time') surfaces the NaN cell + a skip_reason column."""
+        data = _cs_nonestimable_data(panel=True, seed=0)
+        cs = CallawaySantAnna(n_bootstrap=0, control_group="not_yet_treated")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = cs.fit(
+                data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+            )
+        df = results.to_dataframe("group_time")
+        assert "skip_reason" in df.columns
+
+        nan_row = df[(df["group"] == 4) & (df["time"] == 4)]
+        assert len(nan_row) == 1, "the non-estimable cell must appear as a row"
+        assert np.isnan(nan_row["effect"].iloc[0])
+        assert nan_row["skip_reason"].iloc[0] == "zero_treated_control"
+
+        # Estimable rows carry a null skip_reason.
+        estimable = df[df["effect"].notna()]
+        assert len(estimable) > 0
+        assert estimable["skip_reason"].isna().all()
+
+    def test_general_path_nonfinite_att_materialized_as_nan_no_inf(self):
+        """A non-finite ATT(g,t) in the general (IPW/DR) path must surface as a NaN
+        cell with skip_reason, NOT a finite-but-non-finite (inf) effect carrying an
+        IF entry. Regression guard for the per-cell contract."""
+        from unittest.mock import patch
+
+        data = generate_staggered_data(n_units=120, seed=7)
+        real = CallawaySantAnna._compute_att_gt_fast
+        state = {"poisoned": None}
+
+        def wrapped(self, precomputed, g, t, covariates, **kw):
+            res = real(self, precomputed, g, t, covariates, **kw)
+            att = res[0]
+            # Poison the first estimable post cell: return inf ATT WITH a real IF
+            # entry (res[4]), mimicking a degenerate IPW/DR solve that returns a
+            # non-finite point estimate without a None sentinel.
+            if state["poisoned"] is None and att is not None and np.isfinite(att) and t >= g:
+                state["poisoned"] = (g, t)
+                return (np.inf,) + res[1:6] + (None,)
+            return res
+
+        cs = CallawaySantAnna(n_bootstrap=0, estimation_method="ipw")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with patch.object(CallawaySantAnna, "_compute_att_gt_fast", wrapped):
+                results = cs.fit(
+                    data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+                )
+
+        assert state["poisoned"] is not None, "poison hook never fired (test is vacuous)"
+        cell = results.group_time_effects[state["poisoned"]]
+        # The non-finite ATT must be materialized as NaN (not inf) with the reason.
+        assert np.isnan(cell["effect"]), "non-finite ATT must surface as NaN, not inf"
+        assert not np.isinf(cell["effect"])
+        assert cell["skip_reason"] == "non_finite_regression"
+        # Excluded from aggregation -> overall ATT still finite.
+        assert np.isfinite(results.overall_att)
+
+    def test_no_covariate_path_nonfinite_att_materialized_as_nan(self):
+        """No-covariate vectorized path: an inf outcome (passes the NaN-only valid
+        mask) yields a non-finite ATT, which must be materialized as a NaN cell
+        with skip_reason -- not stored as inf with an IF entry / batch inference."""
+        data = generate_staggered_data(n_units=200, seed=11)
+        # Inject inf into one treated unit's outcome at its treatment period; inf is
+        # not NaN so it survives the valid mask and makes that cohort's cell ATT inf.
+        fin = data[np.isfinite(data["first_treat"]) & (data["first_treat"] > 0)]
+        u = fin["unit"].iloc[0]
+        g = int(data.loc[data["unit"] == u, "first_treat"].iloc[0])
+        data.loc[(data["unit"] == u) & (data["time"] == g), "outcome"] = np.inf
+
+        cs = CallawaySantAnna(n_bootstrap=0, estimation_method="reg")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = cs.fit(
+                data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+            )
+
+        nf = [
+            (k, v)
+            for k, v in results.group_time_effects.items()
+            if v["skip_reason"] == "non_finite_regression"
+        ]
+        assert nf, "an inf outcome must yield a non_finite_regression cell"
+        for _, v in nf:
+            assert np.isnan(v["effect"]) and not np.isinf(v["effect"])
+            assert np.isnan(v["se"]) and np.isnan(v["t_stat"]) and np.isnan(v["p_value"])
+        assert np.isfinite(results.overall_att)
+
+    def test_event_study_omits_all_nonestimable_relative_time(self):
+        """An event-time bucket whose cells are ALL non-estimable is omitted from
+        event_study_effects (matches the prior omit behavior / R did::aggte),
+        not emitted as an all-NaN row."""
+        data = _cs_nonestimable_data(panel=True, seed=0)
+        cs = CallawaySantAnna(n_bootstrap=0, control_group="not_yet_treated")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                aggregate="event_study",
+            )
+        es = results.event_study_effects
+        # Relative time e=2 contains only (g=2, t=4), which is non-estimable (no
+        # not-yet-treated controls at t=4) -> the whole bucket must be omitted.
+        assert 2 not in es, "all-non-estimable relative time must be omitted, not a NaN row"
+        # Every emitted relative time has a finite effect and >=1 contributing group.
+        for e, d in es.items():
+            assert np.isfinite(d["effect"]), f"e={e} effect should be finite"
+            assert d["n_groups"] >= 1, f"e={e} should have >=1 contributing group"
+
+    def test_all_nonestimable_raises_with_materialized_cells(self):
+        """All cells non-estimable (dict non-empty, all NaN) -> ValueError via the
+        no-finite-effect guard (distinct from the empty-dict case)."""
+        rng = np.random.default_rng(3)
+        rows = []
+        uid = 0
+        # Two treated cohorts (passes the not_yet_treated >=2-cohort upfront check
+        # is N/A here since control_group is never_treated) ...
+        for g in (2, 3):
+            for _ in range(20):
+                fe = rng.normal(0, 1)
+                for t in range(1, 5):
+                    rows.append(
+                        {
+                            "unit": uid,
+                            "time": t,
+                            "outcome": fe + 0.3 * t + (1.5 if t >= g else 0.0),
+                            "first_treat": g,
+                        }
+                    )
+                uid += 1
+        # Never-treated controls present (passes the upfront control check) but with
+        # all-NaN outcomes -> every cell has zero VALID controls -> all cells NaN.
+        for _ in range(20):
+            for t in range(1, 5):
+                rows.append({"unit": uid, "time": t, "outcome": np.nan, "first_treat": np.inf})
+                uid += 1
+        data = pd.DataFrame(rows)
+        cs = CallawaySantAnna(n_bootstrap=0, control_group="never_treated")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match="Could not estimate any group-time effects"):
+                cs.fit(data, outcome="outcome", unit="unit", time="time", first_treat="first_treat")
+
+
+class TestRankGuardedAnalyticalSE:
+    """Rank-guarded influence-function SE (constant/collinear covariate).
+
+    A constant or collinear covariate makes the per-(g,t) propensity-score
+    Hessian / outcome-regression bread near-singular. The old ``_safe_inv``
+    only caught *exactly* singular matrices (``LinAlgError``), so a near-singular
+    Gram returned a garbage inverse that produced ``overall_se`` ~1e13. The
+    rank-guarded inverse drops the redundant direction -> finite SE on the
+    identified subset (equal to dropping the covariate), NaN only on true rank-0.
+    """
+
+    @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
+    def test_constant_covariate_finite_se_matches_drop_one(self, method):
+        data = generate_staggered_data_with_covariates(seed=789)
+        data_const = data.copy()
+        data_const["xc"] = 5.0  # constant -> collinear with the intercept
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            drop_one = CallawaySantAnna(estimation_method=method).fit(
+                data, "outcome", "unit", "time", "first_treat", covariates=["x1"]
+            )
+            with_const = CallawaySantAnna(estimation_method=method).fit(
+                data_const,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1", "xc"],
+            )
+
+        # Regression guard: previously ~1e13, now finite and modest.
+        assert np.isfinite(with_const.overall_se)
+        assert with_const.overall_se < 1.0
+        # Dropping the redundant covariate is equivalent to never adding it.
+        np.testing.assert_allclose(with_const.overall_se, drop_one.overall_se, rtol=1e-9)
+        np.testing.assert_allclose(with_const.overall_att, drop_one.overall_att, rtol=1e-9)
+
+    @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
+    def test_constant_covariate_emits_single_rank_guard_warning(self, method):
+        # reg/ipw now route their IF breads (OLS bread / PS Hessian) through
+        # _safe_inv like dr, so the aggregate warning fires for ALL methods
+        # on a collinear design (previously dr/survey-ipw only).
+        data = generate_staggered_data_with_covariates(seed=789)
+        data["xc"] = 5.0
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            CallawaySantAnna(estimation_method=method).fit(
+                data, "outcome", "unit", "time", "first_treat", covariates=["x1", "xc"]
+            )
+        rank_guard = [w for w in caught if "rank-guarded inverse" in str(w.message)]
+        # The per-fit aggregate warning fires exactly once, not per cell.
+        assert len(rank_guard) == 1
+
+    def test_well_conditioned_covariates_take_fast_path(self):
+        # Well-conditioned covariates must NOT trigger the rank-guard (the fast
+        # path returns the exact solve, so R-parity goldens are unchanged).
+        data = generate_staggered_data_with_covariates(seed=789)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = CallawaySantAnna(estimation_method="dr").fit(
+                data, "outcome", "unit", "time", "first_treat", covariates=["x1", "x2"]
+            )
+        assert not any("rank-guarded inverse" in str(w.message) for w in caught)
+        assert np.isfinite(res.overall_se)
+
+    def test_clustered_constant_covariate_finite_se(self):
+        # The clustered SE path reuses the same per-cell influence functions, so
+        # fixing the bread fixes it too.
+        data = generate_staggered_data_with_covariates(seed=789)
+        data["xc"] = 5.0
+        data["cl"] = data["unit"] % 20
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = CallawaySantAnna(estimation_method="dr", cluster="cl").fit(
+                data, "outcome", "unit", "time", "first_treat", covariates=["x1", "xc"]
+            )
+        assert np.isfinite(res.overall_se)
+        assert res.overall_se < 1.0
+
+    @pytest.mark.parametrize("method", ["ipw", "dr"])
+    def test_rank0_bread_propagates_nan_not_zero(self, monkeypatch, method):
+        # rank-0 is unreachable through covariates alone (the always-present
+        # intercept guarantees rank >= 1), so simulate an all-NaN bread to
+        # exercise the NaN-masking fix: var_psi becomes NaN and must yield a NaN
+        # SE, NOT 0.0 via the old ``var_psi > 0 else 0.0`` guard. ipw's PS
+        # Hessian and dr's breads are over [1, X], so all-NaN there is a true
+        # pathology that must propagate. reg is deliberately EXCLUDED: its
+        # estimation-effect bread is over the CENTERED covariate Gram (the
+        # intercept is handled analytically), where rank-0 is the benign
+        # constant-covariate case mapped to a zero correction — see
+        # test_reg_constant_only_covariate_matches_no_covariate below.
+        # The point estimate does NOT depend on the bread, so it stays
+        # finite (NaN inference on an estimable cell, not _nan_gt_entry).
+        import diff_diff.staggered as staggered_mod
+        from tests.conftest import assert_nan_inference
+
+        def _all_nan_inv(A, tracker=None):
+            k = A.shape[0]
+            return np.full((k, k), np.nan)
+
+        monkeypatch.setattr(staggered_mod, "_safe_inv", _all_nan_inv)
+        data = generate_staggered_data_with_covariates(seed=7)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = CallawaySantAnna(estimation_method=method).fit(
+                data, "outcome", "unit", "time", "first_treat", covariates=["x1", "x2"]
+            )
+        for cell in res.group_time_effects.values():
+            assert np.isfinite(cell["effect"]), "point estimate is bread-independent"
+            assert np.isnan(cell["se"]), "rank-0 bread must give NaN SE, not 0.0"
+            assert_nan_inference(cell)
+        assert np.isnan(res.overall_se)
+
+    @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
+    def test_rcs_panel_false_constant_covariate_finite_se(self, method):
+        # The repeated-cross-section (panel=False) analytical SE branches use
+        # the same _safe_inv -> _rank_guarded_inv path (the *_rc methods). Build
+        # RCS data (one row per unit) and confirm a constant covariate gives a
+        # finite SE equal to dropping it.
+        rng = np.random.default_rng(7)
+        rows = []
+        unit = 0
+        for t in range(1, 7):
+            for _ in range(120):
+                s = int(rng.integers(0, 5))
+                ft = int(rng.choice([0, 3, 5], p=[0.4, 0.3, 0.3]))
+                x1 = rng.normal()
+                y = (
+                    s
+                    + 0.3 * (t - 1)
+                    + 1.0 * x1
+                    + (1.5 if (ft > 0 and t >= ft) else 0.0)
+                    + rng.normal(0, 0.5)
+                )
+                rows.append({"unit": unit, "time": t, "first_treat": ft, "outcome": y, "x1": x1})
+                unit += 1
+        data = pd.DataFrame(rows)
+        data_const = data.copy()
+        data_const["xc"] = 5.0
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            drop_one = CallawaySantAnna(estimation_method=method, panel=False).fit(
+                data, "outcome", "unit", "time", "first_treat", covariates=["x1"]
+            )
+            with_const = CallawaySantAnna(estimation_method=method, panel=False).fit(
+                data_const,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1", "xc"],
+            )
+        assert np.isfinite(with_const.overall_se)
+        assert with_const.overall_se < 1.0
+        np.testing.assert_allclose(with_const.overall_se, drop_one.overall_se, rtol=1e-9)
+
+    @pytest.mark.parametrize("method", ["reg", "dr"])
+    def test_control_cell_aliasing_close_to_drop_one(self, method):
+        # Column-drop rank-guard: a covariate collinear ONLY within the control
+        # cell (x2 == 2*x1 for never-treated, varying in treated) is dropped from
+        # the central control OR regression (column-drop, matching the point
+        # estimate / R), so the SE is FINITE (not the old 1e13 garbage) and ≈
+        # dropping the covariate. The small residual (< a few %) is the
+        # covariate's genuine effect in the treated-side / propensity terms,
+        # where it is full-rank — not a rank-guard artifact.
+        base = generate_staggered_data_with_covariates(seed=789)
+        rng = np.random.default_rng(0)
+        d = base.copy()
+        nt = d["first_treat"] == 0
+        d["x2_deg"] = np.where(nt, 2.0 * d["x1"], rng.normal(size=len(d)))
+        d["x2_deg"] = d.groupby("unit")["x2_deg"].transform("first")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            drop_one = CallawaySantAnna(estimation_method=method).fit(
+                d, "outcome", "unit", "time", "first_treat", covariates=["x1"]
+            )
+            with_deg = CallawaySantAnna(estimation_method=method).fit(
+                d,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1", "x2_deg"],
+            )
+        assert np.isfinite(with_deg.overall_se) and with_deg.overall_se > 0
+        np.testing.assert_allclose(with_deg.overall_se, drop_one.overall_se, rtol=5e-2)
+
+    @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
+    def test_survey_weighted_constant_covariate_finite_se(self, method):
+        # Exercises the *survey-weighted* CS bread / PS-Hessian branches
+        # (W includes survey weights), mirroring the TD/SDDD weighted tests.
+        # Panel estimator -> weights constant within unit.
+        from diff_diff.survey import SurveyDesign
+
+        data = generate_staggered_data_with_covariates(seed=789)
+        rng = np.random.default_rng(3)
+        units = data["unit"].unique()
+        unit_w = dict(zip(units, rng.uniform(0.5, 2.0, len(units))))
+        data["weight"] = data["unit"].map(unit_w)
+        data_const = data.copy()
+        data_const["xc"] = 5.0
+        sd = SurveyDesign(weights="weight")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            drop_one = CallawaySantAnna(estimation_method=method).fit(
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1"],
+                survey_design=sd,
+            )
+            with_const = CallawaySantAnna(estimation_method=method).fit(
+                data_const,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1", "xc"],
+                survey_design=sd,
+            )
+        assert np.isfinite(with_const.overall_se)
+        assert with_const.overall_se < 1.0
+        np.testing.assert_allclose(with_const.overall_se, drop_one.overall_se, rtol=1e-9)
+
+    def test_aggregated_se_wif_contract(self, monkeypatch):
+        # Locks the _compute_aggregated_se_with_wif arity + fail-closed contract
+        # that motivated the staggered_aggregation fix: a non-finite influence
+        # function must propagate a NaN SE (not crash the unpacking caller), and
+        # the return arity is a 2-tuple (return_psi=False) / 3-tuple (True).
+        cs = CallawaySantAnna()
+        base_args = ([], np.array([]), np.array([]), np.array([]), {}, None, None)
+
+        def patch_psi(psi):
+            monkeypatch.setattr(
+                cs,
+                "_compute_combined_influence_function",
+                lambda *a, **k: (psi, None),
+            )
+
+        # Empty influence function -> se 0.0, documented arity.
+        patch_psi(np.array([]))
+        se, df = cs._compute_aggregated_se_with_wif(*base_args, return_psi=False)
+        assert se == 0.0 and df is None
+        triple = cs._compute_aggregated_se_with_wif(*base_args, return_psi=True)
+        assert len(triple) == 3 and triple[0] == 0.0
+
+        # Non-finite influence function -> NaN SE (fail-closed), not a crash.
+        patch_psi(np.array([1.0, np.nan, 2.0]))
+        se, df = cs._compute_aggregated_se_with_wif(*base_args, return_psi=False)
+        assert np.isnan(se) and df is None
+        triple = cs._compute_aggregated_se_with_wif(*base_args, return_psi=True)
+        assert len(triple) == 3 and np.isnan(triple[0])
+
+    @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
+    def test_error_mode_raises_before_rank_guard(self, method):
+        # rank_deficient_action="error" raises upstream at the point-estimate
+        # solve when the covariate DESIGN is rank-deficient at its 1e-7 threshold
+        # (here an EXACT duplicate), before the IF rank-guard. NOTE: this is not a
+        # promise that every near-singular IF bread raises under "error" — a cell
+        # that is near-singular yet still design-full-rank can pass this gate and
+        # still be IF-column-dropped, because the IF guard's 1e-10 equilibrated-Gram
+        # threshold is stricter than the 1e-7 design check (the Gram squares X's
+        # condition number); see REGISTRY "rank_deficient_action enforcement".
+        data = generate_staggered_data_with_covariates(seed=789)
+        data["x2c"] = 2.0 * data["x1"]  # exactly collinear with x1
+        with pytest.raises(ValueError, match="(?i)rank-deficient"):
+            CallawaySantAnna(estimation_method=method, rank_deficient_action="error").fit(
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1", "x2c"],
+            )
+
+    @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
+    def test_exact_duplicate_covariate(self, method):
+        # A WELL-SCALED exact duplicate (xdup == x1) is dropped exactly: the
+        # rank-guard's column-drop matches the point estimate, SE == dropping it.
+        # The SE is also order-invariant under exact collinearity (well-defined
+        # regardless of which proportional column is listed first), including the
+        # MIXED-SCALE case (xbig == 1e8*x1), for ALL methods: the variance flows
+        # through the equilibrated rank-guarded inverse, and since the OR
+        # scale-equilibration change the `reg`/`dr` point-estimate OR fit also
+        # routes through the equilibrated `solve_ols`. Equilibration scales x1 and
+        # 1e8*x1 to identical unit-norm columns, so the SE is order-invariant even
+        # though which member is dropped differs. (Previously `reg`'s un-equilibrated
+        # local OR solve hit a near-singular X'WX whose 1e8-scale SE was column-order-
+        # and BLAS-dependent; that is now fixed.)
+        base = generate_staggered_data_with_covariates(seed=789)
+        d = base.copy()
+        d["xdup"] = d["x1"]  # well-scaled exact duplicate
+        d["xbig"] = 1e8 * d["x1"]  # mixed-scale exact duplicate
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            drop_one = CallawaySantAnna(estimation_method=method).fit(
+                d, "outcome", "unit", "time", "first_treat", covariates=["x1"]
+            )
+            well = CallawaySantAnna(estimation_method=method).fit(
+                d, "outcome", "unit", "time", "first_treat", covariates=["x1", "xdup"]
+            )
+            big_ab = CallawaySantAnna(estimation_method=method).fit(
+                d, "outcome", "unit", "time", "first_treat", covariates=["x1", "xbig"]
+            )
+            big_ba = CallawaySantAnna(estimation_method=method).fit(
+                d, "outcome", "unit", "time", "first_treat", covariates=["xbig", "x1"]
+            )
+        # Well-scaled exact duplicate == dropping it (clean column-drop).
+        np.testing.assert_allclose(well.overall_se, drop_one.overall_se, rtol=1e-9)
+        # Mixed-scale exact duplicate: finite for every method.
+        assert np.isfinite(big_ab.overall_se) and big_ab.overall_se > 0
+        assert np.isfinite(big_ba.overall_se) and big_ba.overall_se > 0
+        # Order-invariance holds for ALL methods now: ipw/dr via the equilibrated
+        # rank-guarded inverse, and reg via the equilibrated point-estimate OR
+        # solve (post OR scale-equilibration change) — mixed-scale exact-duplicate
+        # columns become identical after equilibration, so the SE is order-invariant.
+        np.testing.assert_allclose(big_ab.overall_se, big_ba.overall_se, rtol=1e-9)
+
+    @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
+    def test_exact_duplicate_covariate_survey_weighted(self, method):
+        # Weighted branch of the exact-duplicate contract (reviewer-requested):
+        # the survey-weighted bread / PS-Hessian must give the same finite SE for
+        # a WELL-SCALED exact duplicate as dropping it, and the rank-guard's
+        # equilibrated column selection must be order-invariant under MIXED-SCALE
+        # exact collinearity (xbig == 1e8*x1) for BOTH column orders even with
+        # non-uniform survey weights in W.
+        from diff_diff.survey import SurveyDesign
+
+        base = generate_staggered_data_with_covariates(seed=789)
+        rng = np.random.default_rng(3)
+        units = base["unit"].unique()
+        unit_w = dict(zip(units, rng.uniform(0.5, 2.0, len(units))))
+        d = base.copy()
+        d["weight"] = d["unit"].map(unit_w)
+        d["xdup"] = d["x1"]  # well-scaled exact duplicate
+        d["xbig"] = 1e8 * d["x1"]  # mixed-scale exact duplicate
+        sd = SurveyDesign(weights="weight")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            drop_one = CallawaySantAnna(estimation_method=method).fit(
+                d,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1"],
+                survey_design=sd,
+            )
+            well = CallawaySantAnna(estimation_method=method).fit(
+                d,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1", "xdup"],
+                survey_design=sd,
+            )
+            big_ab = CallawaySantAnna(estimation_method=method).fit(
+                d,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1", "xbig"],
+                survey_design=sd,
+            )
+            big_ba = CallawaySantAnna(estimation_method=method).fit(
+                d,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["xbig", "x1"],
+                survey_design=sd,
+            )
+        # Well-scaled exact duplicate == dropping it, under survey weighting.
+        np.testing.assert_allclose(well.overall_se, drop_one.overall_se, rtol=1e-7)
+        # Mixed-scale exact duplicate under survey weighting: finite + order-invariant
+        # for ALL methods. reg's point-estimate OR fit now routes through the
+        # equilibrated solve_ols (post OR scale-equilibration change), so its SE is
+        # order-invariant like ipw/dr — see test_exact_duplicate_covariate.
+        assert np.isfinite(big_ab.overall_se) and big_ab.overall_se > 0
+        assert np.isfinite(big_ba.overall_se) and big_ba.overall_se > 0
+        np.testing.assert_allclose(big_ab.overall_se, big_ba.overall_se, rtol=1e-7)
+
+
+class TestRegIpwIFBehavior:
+    """Behavioral contracts of the DRDID-parity reg/ipw per-cell IF/SE fix
+    (estimation-effect terms + per-cell SE = sqrt(sum(IF^2)))."""
+
+    def test_ipw_pscore_fallback_uses_uncorrected_if_se(self, monkeypatch):
+        """When the per-cell logit fails and pscore_fallback="unconditional"
+        kicks in, the PS estimation-effect correction is SKIPPED (a constant
+        propensity has no estimated parameter) and the cell collapses to the
+        difference-in-means IF - i.e. per-cell effect AND se must equal the
+        no-covariate ipw fit on the same data."""
+        import diff_diff.staggered as staggered_mod
+
+        def _failing_logit(*args, **kwargs):
+            raise ValueError("forced logit failure for fallback test")
+
+        data = generate_staggered_data_with_covariates(seed=31)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            no_cov = CallawaySantAnna(estimation_method="ipw").fit(
+                data, "outcome", "unit", "time", "first_treat"
+            )
+            monkeypatch.setattr(staggered_mod, "solve_logit", _failing_logit)
+            fallback = CallawaySantAnna(
+                estimation_method="ipw", pscore_fallback="unconditional"
+            ).fit(data, "outcome", "unit", "time", "first_treat", covariates=["x1", "x2"])
+        assert set(fallback.group_time_effects) == set(no_cov.group_time_effects)
+        for key, cell in fallback.group_time_effects.items():
+            ref = no_cov.group_time_effects[key]
+            np.testing.assert_allclose(cell["effect"], ref["effect"], rtol=1e-12)
+            np.testing.assert_allclose(cell["se"], ref["se"], rtol=1e-12)
+
+    def test_bootstrap_nan_cell_if_poisons_only_its_own_cell(self, monkeypatch):
+        """A cell whose stored IF is non-finite (e.g. the #619 rank-0 [1,X]
+        bread semantics on ipw/dr) must NaN only its OWN bootstrap SE: in the
+        fused perturbation GEMM each cell column is an independent dot
+        product, so neighbor cells stay finite. (The overall/aggregate SEs
+        legitimately consume the poisoned cell and are not asserted here.)"""
+        from diff_diff.staggered_bootstrap import CallawaySantAnnaBootstrapMixin
+
+        orig = CallawaySantAnnaBootstrapMixin._run_multiplier_bootstrap
+        poisoned = {}
+
+        def poisoning(self, group_time_effects, influence_func_info, *args, **kwargs):
+            gt = sorted(influence_func_info)[0]
+            poisoned["gt"] = gt
+            info = influence_func_info[gt]
+            info["treated_inf"] = np.full(len(np.asarray(info["treated_inf"])), np.nan)
+            return orig(self, group_time_effects, influence_func_info, *args, **kwargs)
+
+        monkeypatch.setattr(CallawaySantAnnaBootstrapMixin, "_run_multiplier_bootstrap", poisoning)
+        data = generate_staggered_data(seed=42)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = CallawaySantAnna(n_bootstrap=99, seed=5).fit(
+                data, "outcome", "unit", "time", "first_treat"
+            )
+        gt = poisoned["gt"]
+        assert np.isnan(result.group_time_effects[gt]["se"])
+        neighbor_ses = [cell["se"] for key, cell in result.group_time_effects.items() if key != gt]
+        assert neighbor_ses and np.isfinite(neighbor_ses).all()
+
+    def test_underdetermined_control_cell_reg_no_crash(self):
+        """Cells with fewer controls than covariate columns (n_c < k+1) fit a
+        reduced design; the rank-guarded IF bread column-drops and the
+        interpolating fit leaves ~zero control residuals, so the SE is finite
+        (treated-side variation only), never a crash or a silent 0."""
+        rng = np.random.default_rng(11)
+        n_units, k = 60, 5
+        rows = []
+        for u in range(n_units):
+            ft = 0 if u < 3 else 2  # only 3 never-treated controls
+            x = rng.normal(size=k)
+            base = rng.normal()
+            for t in (1, 2):
+                y = base + 0.4 * t + (1.0 if (ft == 2 and t >= 2) else 0.0) + rng.normal(0, 0.3)
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "first_treat": ft,
+                        "outcome": y,
+                        **{f"x{j}": x[j] for j in range(k)},
+                    }
+                )
+        data = pd.DataFrame(rows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = CallawaySantAnna(estimation_method="reg", rank_deficient_action="silent").fit(
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=[f"x{j}" for j in range(k)],
+            )
+        cell = res.group_time_effects[(2, 2)]
+        assert np.isfinite(cell["effect"])
+        assert np.isfinite(cell["se"]) and cell["se"] > 0
+
+    def test_universal_base_period_anticipation_reg_smoke(self):
+        """reg+cov under base_period="universal" + anticipation=1: every
+        estimated cell has finite inference, and each cohort's positional base
+        period is materialized as a zero reference cell (att=0, se=NaN, matching
+        R `did`'s att_gt table) rather than omitted."""
+        data = generate_staggered_data_with_covariates(seed=97)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = CallawaySantAnna(
+                estimation_method="reg", base_period="universal", anticipation=1
+            ).fit(
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1", "x2"],
+            )
+        assert len(res.group_time_effects) > 0
+        for (g, t), cell in res.group_time_effects.items():
+            if cell.get("is_reference"):
+                # Zero reference cell: att=0, se=NaN by construction.
+                assert cell["effect"] == 0.0 and np.isnan(cell["se"])
+                continue
+            if cell["skip_reason"] is None:
+                assert np.isfinite(cell["se"]), f"cell ({g},{t})"
+        # The reference period is now materialized as a zero cell.
+        assert any(c.get("is_reference") for c in res.group_time_effects.values())
+        assert np.isfinite(res.overall_se)
+
+    def test_reg_constant_only_covariate_matches_no_covariate(self):
+        """A constant as the ONLY reg covariate makes the CENTERED
+        estimation-effect Gram rank-0 (all-zero). The correction on the
+        identified (intercept-only) subset is exactly zero, so effects AND
+        SEs must equal the no-covariate fit - finite, never NaN (the rank-0
+        centered bread maps to a zero correction, not an all-NaN inverse)."""
+        data = generate_staggered_data_with_covariates(seed=789)
+        data["xc"] = 5.0
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            no_cov = CallawaySantAnna(estimation_method="reg").fit(
+                data, "outcome", "unit", "time", "first_treat"
+            )
+            const_only = CallawaySantAnna(estimation_method="reg").fit(
+                data, "outcome", "unit", "time", "first_treat", covariates=["xc"]
+            )
+        assert np.isfinite(const_only.overall_se)
+        np.testing.assert_allclose(const_only.overall_att, no_cov.overall_att, rtol=1e-12)
+        np.testing.assert_allclose(const_only.overall_se, no_cov.overall_se, rtol=1e-9)
+        for key, cell in const_only.group_time_effects.items():
+            ref = no_cov.group_time_effects[key]
+            np.testing.assert_allclose(cell["effect"], ref["effect"], rtol=1e-12)
+            np.testing.assert_allclose(cell["se"], ref["se"], rtol=1e-9)
+
+    def test_reg_constant_only_covariate_matches_no_covariate_survey(self):
+        """Survey-weighted twin of the constant-only-covariate case: the
+        weighted centered Gram is also rank-0, and the general
+        (survey-branch) producer must likewise collapse to the
+        no-covariate survey fit with finite SEs."""
+        from diff_diff.survey import SurveyDesign
+
+        rng = np.random.default_rng(17)
+        data = generate_staggered_data_with_covariates(seed=789)
+        data["xc"] = 5.0
+        weights = pd.DataFrame(
+            {
+                "unit": data["unit"].unique(),
+                "weight": rng.uniform(0.5, 2.0, size=data["unit"].nunique()),
+            }
+        )
+        data = data.merge(weights, on="unit")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            no_cov = CallawaySantAnna(estimation_method="reg").fit(
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                survey_design=SurveyDesign(weights="weight"),
+            )
+            const_only = CallawaySantAnna(estimation_method="reg").fit(
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["xc"],
+                survey_design=SurveyDesign(weights="weight"),
+            )
+        assert np.isfinite(const_only.overall_se)
+        np.testing.assert_allclose(const_only.overall_att, no_cov.overall_att, rtol=1e-12)
+        np.testing.assert_allclose(const_only.overall_se, no_cov.overall_se, rtol=1e-9)
+        for key, cell in const_only.group_time_effects.items():
+            ref = no_cov.group_time_effects[key]
+            np.testing.assert_allclose(cell["se"], ref["se"], rtol=1e-9)
+
+    def test_uniform_survey_weights_match_unweighted_per_cell_se(self):
+        """Uniform survey weights route reg+cov through the general
+        (survey-branch) producer while the unweighted fit takes the
+        vectorized producer; both now share the same DRDID IF algebra, so
+        per-cell effects AND SEs must agree."""
+        from diff_diff.survey import SurveyDesign
+
+        data = generate_staggered_data_with_covariates(seed=53)
+        data["w_ones"] = 1.0
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            unweighted = CallawaySantAnna(estimation_method="reg").fit(
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1", "x2"],
+            )
+            uniform = CallawaySantAnna(estimation_method="reg").fit(
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1", "x2"],
+                survey_design=SurveyDesign(weights="w_ones"),
+            )
+        for key, cell in unweighted.group_time_effects.items():
+            ref = uniform.group_time_effects[key]
+            np.testing.assert_allclose(cell["effect"], ref["effect"], rtol=1e-9)
+            np.testing.assert_allclose(cell["se"], ref["se"], rtol=1e-9)
 
 
 class TestCallawaySantAnnaRankDeficiencyPaths:
@@ -1382,7 +2374,7 @@ class TestCallawaySantAnnaBootstrap:
         weight_types = ["rademacher", "mammen", "webb"]
 
         for wt in weight_types:
-            cs = CallawaySantAnna(n_bootstrap=n_boot, bootstrap_weight_type=wt, seed=42)
+            cs = CallawaySantAnna(n_bootstrap=n_boot, bootstrap_weights=wt, seed=42)
             results = cs.fit(
                 data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
             )
@@ -1587,9 +2579,6 @@ class TestCallawaySantAnnaBootstrap:
         # Test with new parameter name
         with pytest.raises(ValueError, match="bootstrap_weights"):
             CallawaySantAnna(bootstrap_weights="invalid")
-        # Test deprecated parameter still validates
-        with pytest.raises(ValueError, match="bootstrap_weights"):
-            CallawaySantAnna(bootstrap_weight_type="invalid")
 
     def test_bootstrap_get_params(self):
         """Test that get_params includes bootstrap_weights."""
@@ -1598,8 +2587,6 @@ class TestCallawaySantAnnaBootstrap:
 
         assert params["n_bootstrap"] == 99
         assert params["bootstrap_weights"] == "mammen"
-        # Deprecated attribute still accessible for backward compat
-        assert params["bootstrap_weight_type"] == "mammen"
         assert params["seed"] == 42
 
     def test_bootstrap_with_not_yet_treated(self, ci_params):
@@ -2640,7 +3627,7 @@ class TestCallawaySantAnnaPreTreatment:
             # Should have warning about no post-treatment effects
             warning_messages = [str(warning.message) for warning in w]
             has_warning = any("No post-treatment effects" in msg for msg in warning_messages)
-            assert has_warning, f"Expected warning about no post-treatment effects"
+            assert has_warning, "Expected warning about no post-treatment effects"
 
         # Verify overall ATT is NaN
         assert np.isnan(results.overall_att), "overall_att should be NaN"
@@ -2836,12 +3823,9 @@ class TestCallawaySantAnnaAnticipation:
 
             # There should be effects at t = g - anticipation = g - 2
             # (if the data has that period)
-            min_period = data["time"].min()
-            if g - 2 >= min_period:
-                # Period g-2 should be computed as an ATT(g,t)
-                has_antic_period = any(t == g - 2 for _, t in gt_for_group)
-                # Note: may not always have this period depending on base_period
-                # but post-treatment periods (t >= g - anticipation) should exist
+            # Note: the anticipation period t = g - 2 may or may not be
+            # present depending on base_period, so it is not asserted here;
+            # post-treatment periods (t >= g - anticipation) should exist.
 
             # Verify post-treatment periods t >= g are included
             post_treatment = [t for (gg, t) in gt_for_group if t >= g]
@@ -3220,31 +4204,15 @@ class TestPscoreTrimParameter:
         cs.set_params(pscore_trim=0.1)
         assert cs.pscore_trim == 0.1
 
-    def test_set_params_invalid_pscore_trim_rejected_at_fit(self):
-        """Invalid pscore_trim via set_params() raises ValueError at fit()."""
-        np.random.seed(42)
-        n_units, n_periods = 50, 6
-        units = np.repeat(np.arange(n_units), n_periods)
-        times = np.tile(np.arange(n_periods), n_units)
-        first_treat = np.zeros(n_units)
-        first_treat[n_units // 2 :] = 3
-        first_treat_expanded = np.repeat(first_treat, n_periods)
-        post = (times >= first_treat_expanded) & (first_treat_expanded > 0)
-        outcomes = 1.0 + 2.0 * post + np.random.randn(len(units)) * 0.5
-        data = pd.DataFrame(
-            {
-                "unit": units,
-                "time": times,
-                "outcome": outcomes,
-                "first_treat": first_treat_expanded.astype(int),
-            }
-        )
-
+    def test_set_params_invalid_pscore_trim_rejected_eagerly(self):
+        """Invalid pscore_trim raises AT set_params (BaseEstimator probe
+        re-init runs constructor validation transactionally); the
+        estimator is unchanged."""
         for bad_val in [0.0, -0.1, 0.5]:
             cs = CallawaySantAnna(estimation_method="ipw")
-            cs.set_params(pscore_trim=bad_val)
             with pytest.raises(ValueError, match="pscore_trim must be in"):
-                cs.fit(data, outcome="outcome", unit="unit", time="time", first_treat="first_treat")
+                cs.set_params(pscore_trim=bad_val)
+            assert cs.pscore_trim == 0.01
 
     def test_default_pscore_trim(self):
         """Default pscore_trim is 0.01."""
@@ -3270,6 +4238,56 @@ class TestPscoreTrimParameter:
         """pscore_trim=0.0 raises ValueError (would cause division by zero in IPW weights)."""
         with pytest.raises(ValueError, match="pscore_trim must be in"):
             CallawaySantAnna(pscore_trim=0.0)
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            None,
+            "0.01",
+            True,
+            np.array([0.01]),
+            Decimal("0.01"),
+            Fraction(1, 100),
+        ],
+    )
+    def test_pscore_trim_type_guard(self, bad):
+        """Non-real-scalar inputs raise ValueError (shared utils helper).
+
+        The old bare `0 < x < 0.5` check raised TypeError on None/str,
+        ACCEPTED a 1-element array, and accepted Decimal/Fraction.
+        """
+        with pytest.raises(ValueError, match="pscore_trim must be"):
+            CallawaySantAnna(pscore_trim=bad)
+
+    def test_pscore_trim_numpy_float_coerced(self):
+        """The shared helper coerces to a builtin float (DMLDiD precedent)."""
+        assert type(CallawaySantAnna(pscore_trim=np.float32(0.01)).pscore_trim) is float
+
+    def test_fit_revalidates_directly_mutated_pscore_trim(self):
+        """Direct attribute mutation is caught by the fit-time re-check.
+
+        Uses a TYPE-guard value (1-element array) the OLD bare range check
+        silently accepted, so this test detects a missed migration of the
+        fit-time site - an out-of-range float would raise under either.
+        """
+        np.random.seed(42)
+        n_units, n_periods = 30, 4
+        units = np.repeat(np.arange(n_units), n_periods)
+        times = np.tile(np.arange(n_periods), n_units)
+        first_treat = np.where(units < 15, 2, 0)
+        data = pd.DataFrame(
+            {
+                "unit": units,
+                "time": times,
+                "first_treat": first_treat,
+                "outcome": np.random.normal(size=n_units * n_periods)
+                + 0.5 * ((first_treat > 0) & (times >= first_treat)),
+            }
+        )
+        cs = CallawaySantAnna()
+        cs.pscore_trim = np.array([0.01])
+        with pytest.raises(ValueError, match="pscore_trim"):
+            cs.fit(data, outcome="outcome", unit="unit", time="time", first_treat="first_treat")
 
     def test_pscore_trim_in_results(self):
         """results.pscore_trim matches the estimator's setting after fit()."""
@@ -3492,7 +4510,7 @@ class TestIRLSPropensityScore:
 
         data = generate_staggered_data_with_covariates(seed=42)
 
-        cs = CallawaySantAnna(estimation_method="dr")
+        cs = CallawaySantAnna(estimation_method="dr", pscore_fallback="unconditional")
 
         with patch("diff_diff.staggered.solve_logit", side_effect=ValueError("test")):
             import warnings
@@ -3508,7 +4526,7 @@ class TestIRLSPropensityScore:
                     covariates=["x1"],
                 )
 
-            fallback_warns = [x for x in w if "Falling back to unconditional" in str(x.message)]
+            fallback_warns = [x for x in w if "unconditional propensity" in str(x.message)]
             assert len(fallback_warns) > 0, "Expected fallback warning in DR path"
             assert results.overall_att is not None
 
@@ -3552,7 +4570,7 @@ class TestIRLSPropensityScore:
 
         import warnings
 
-        with warnings.catch_warnings(record=True) as w:
+        with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
             results = cs.fit(
                 data,
@@ -3569,3 +4587,1678 @@ class TestIRLSPropensityScore:
         assert (
             abs(results.overall_att - true_effect) < 5.0
         ), f"ATT={results.overall_att} too far from true effect {true_effect}"
+
+
+class TestEPVDiagnostics:
+    """Tests for Events Per Variable (EPV) diagnostics in CallawaySantAnna."""
+
+    def test_cs_epv_diagnostics_in_results(self):
+        """fit() with small cohorts populates results.epv_diagnostics."""
+        # Create data with very small cohorts to trigger low EPV
+        data = generate_staggered_data_with_covariates(
+            n_units=30, n_periods=6, n_cohorts=3, seed=42
+        )
+        cs = CallawaySantAnna(estimation_method="ipw", pscore_fallback="unconditional")
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1", "x2"],
+            )
+        # With small cohorts and covariates, epv_diagnostics should be populated
+        assert results.epv_diagnostics is not None
+        assert len(results.epv_diagnostics) > 0
+        # Check structure of diagnostic entries
+        for key, diag in results.epv_diagnostics.items():
+            assert "epv" in diag
+            assert "n_events" in diag
+            assert "k" in diag
+            assert "is_low" in diag
+
+    def test_cs_epv_summary_method(self):
+        """results.epv_summary() returns correct DataFrame."""
+        data = generate_staggered_data_with_covariates(
+            n_units=30, n_periods=6, n_cohorts=3, seed=42
+        )
+        cs = CallawaySantAnna(estimation_method="ipw", pscore_fallback="unconditional")
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1", "x2"],
+            )
+        df = results.epv_summary()
+        assert isinstance(df, pd.DataFrame)
+        expected_cols = {"group", "time", "epv", "n_events", "n_params", "is_low"}
+        assert expected_cols.issubset(set(df.columns))
+
+    def test_cs_epv_summary_show_all(self):
+        """epv_summary(show_all=True) returns all entries, not just low ones."""
+        data = generate_staggered_data_with_covariates(
+            n_units=100, n_periods=6, n_cohorts=2, seed=42
+        )
+        cs = CallawaySantAnna(estimation_method="ipw", pscore_fallback="unconditional")
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1"],
+            )
+        if results.epv_diagnostics:
+            df_all = results.epv_summary(show_all=True)
+            df_low = results.epv_summary(show_all=False)
+            assert len(df_all) >= len(df_low)
+
+    def test_cs_epv_no_diagnostics_for_reg(self):
+        """estimation_method='reg' produces no EPV diagnostics."""
+        data = generate_staggered_data_with_covariates(seed=42)
+        cs = CallawaySantAnna(estimation_method="reg")
+        results = cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            covariates=["x1"],
+        )
+        assert results.epv_diagnostics is None
+
+    def test_cs_pscore_fallback_error_default(self):
+        """Default pscore_fallback='error' raises when logit fails."""
+        from unittest.mock import patch
+
+        data = generate_staggered_data_with_covariates(seed=42)
+        cs = CallawaySantAnna(estimation_method="ipw")  # default fallback='error'
+
+        with patch("diff_diff.staggered.solve_logit", side_effect=ValueError("test")):
+            with pytest.raises(ValueError, match="test"):
+                cs.fit(
+                    data,
+                    outcome="outcome",
+                    unit="unit",
+                    time="time",
+                    first_treat="first_treat",
+                    covariates=["x1"],
+                )
+
+    def test_cs_pscore_fallback_unconditional_opt_in(self):
+        """pscore_fallback='unconditional' restores old fallback behavior."""
+        from unittest.mock import patch
+
+        data = generate_staggered_data_with_covariates(seed=42)
+        cs = CallawaySantAnna(estimation_method="dr", pscore_fallback="unconditional")
+
+        with patch("diff_diff.staggered.solve_logit", side_effect=ValueError("test")):
+            import warnings
+
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                results = cs.fit(
+                    data,
+                    outcome="outcome",
+                    unit="unit",
+                    time="time",
+                    first_treat="first_treat",
+                    covariates=["x1"],
+                )
+            fallback_warns = [x for x in w if "unconditional propensity" in str(x.message)]
+            assert len(fallback_warns) > 0
+            assert results.overall_att is not None
+
+    def test_cs_diagnose_propensity(self):
+        """diagnose_propensity() returns DataFrame with EPV per cohort."""
+        data = generate_staggered_data_with_covariates(seed=42)
+        cs = CallawaySantAnna(estimation_method="ipw")
+        df = cs.diagnose_propensity(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            covariates=["x1", "x2"],
+        )
+        assert isinstance(df, pd.DataFrame)
+        assert "group" in df.columns
+        assert "epv" in df.columns
+        assert "status" in df.columns
+        assert len(df) > 0
+        assert all(df["status"].isin(["ok", "low", "critical"]))
+
+    def test_cs_diagnose_propensity_identifies_critical(self):
+        """diagnose_propensity flags critical EPV for tiny cohorts."""
+        # Create data with very tiny cohort
+        np.random.seed(99)
+        n_units = 60
+        n_periods = 6
+        units = np.repeat(np.arange(n_units), n_periods)
+        times = np.tile(np.arange(n_periods), n_units)
+        # 1 unit treated at period 3, rest never treated
+        first_treat = np.zeros(n_units)
+        first_treat[0] = 3
+        first_treat_exp = np.repeat(first_treat, n_periods)
+        post = (times >= first_treat_exp) & (first_treat_exp > 0)
+        outcome = np.random.randn(len(units)) + post.astype(float)
+        x1 = np.repeat(np.random.randn(n_units), n_periods)
+        x2 = np.repeat(np.random.randn(n_units), n_periods)
+        x3 = np.repeat(np.random.randn(n_units), n_periods)
+
+        data = pd.DataFrame(
+            {
+                "unit": units,
+                "time": times,
+                "first_treat": first_treat_exp,
+                "outcome": outcome,
+                "x1": x1,
+                "x2": x2,
+                "x3": x3,
+            }
+        )
+
+        cs = CallawaySantAnna(estimation_method="ipw")
+        df = cs.diagnose_propensity(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            covariates=["x1", "x2", "x3"],
+        )
+        # With 1 treated unit and 3 predictor variables: EPV = 1/3 ≈ 0.33 → critical
+        assert any(df["status"] == "critical")
+
+    def test_cs_epv_in_summary_output(self):
+        """summary() includes EPV diagnostic block when low EPV detected."""
+        data = generate_staggered_data_with_covariates(
+            n_units=30, n_periods=6, n_cohorts=3, seed=42
+        )
+        cs = CallawaySantAnna(estimation_method="ipw", pscore_fallback="unconditional")
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1", "x2"],
+            )
+        if results.epv_diagnostics:
+            low_epv = {k: v for k, v in results.epv_diagnostics.items() if v.get("is_low")}
+            if low_epv:
+                summary = results.summary()
+                assert "EPV" in summary
+                assert "Propensity Score Diagnostics" in summary
+
+    def test_cs_epv_in_to_dataframe(self):
+        """EPV column appears in group_time DataFrame when diagnostics available."""
+        data = generate_staggered_data_with_covariates(
+            n_units=30, n_periods=6, n_cohorts=3, seed=42
+        )
+        cs = CallawaySantAnna(estimation_method="ipw", pscore_fallback="unconditional")
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1", "x2"],
+            )
+        if results.epv_diagnostics:
+            df = results.to_dataframe(level="group_time")
+            assert "epv" in df.columns
+
+    def test_cs_cached_rank_deficient_pscore_no_nan(self):
+        """Cached rank-deficient logit coefficients should not produce NaN ATTs.
+
+        Regression test for P0: solve_logit returns NaN in dropped-column
+        positions. Without zero-filling before caching, cache reuse via
+        X @ beta_cached would propagate NaN into propensity scores.
+        """
+        np.random.seed(123)
+        n_units = 80
+        n_periods = 6
+        units = np.repeat(np.arange(n_units), n_periods)
+        times = np.tile(np.arange(n_periods), n_units)
+        # Two cohorts: period 3 (20 units) and never-treated (60 units)
+        first_treat = np.zeros(n_units)
+        first_treat[:20] = 3
+        first_treat_exp = np.repeat(first_treat, n_periods)
+        post = (times >= first_treat_exp) & (first_treat_exp > 0)
+        outcome = np.random.randn(len(units)) + post.astype(float) * 2.0
+        x1 = np.repeat(np.random.randn(n_units), n_periods)
+        # x2 is a duplicate of x1 — will cause rank deficiency
+        x2 = x1.copy()
+
+        data = pd.DataFrame(
+            {
+                "unit": units,
+                "time": times,
+                "first_treat": first_treat_exp,
+                "outcome": outcome,
+                "x1": x1,
+                "x2": x2,
+            }
+        )
+
+        cs = CallawaySantAnna(
+            estimation_method="ipw",
+            rank_deficient_action="warn",
+            pscore_fallback="unconditional",
+        )
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1", "x2"],
+            )
+
+        # All ATTs should be finite (no NaN from cache poisoning)
+        for (g, t), eff in results.group_time_effects.items():
+            assert np.isfinite(
+                eff["effect"]
+            ), f"ATT({g},{t}) is {eff['effect']} — NaN cache poisoning"
+        assert np.isfinite(results.overall_att)
+
+    def test_cs_strict_mode_not_swallowed_by_unconditional_fallback(self):
+        """rank_deficient_action='error' raises even with pscore_fallback='unconditional'.
+
+        Regression test for P1: pscore_fallback should not swallow strict-mode
+        errors that rank_deficient_action='error' is supposed to raise.
+        """
+        from unittest.mock import patch
+
+        data = generate_staggered_data_with_covariates(seed=42)
+        cs = CallawaySantAnna(
+            estimation_method="ipw",
+            rank_deficient_action="error",
+            pscore_fallback="unconditional",
+        )
+
+        # Simulate a ValueError from solve_logit (e.g., rank deficiency)
+        with patch(
+            "diff_diff.staggered.solve_logit",
+            side_effect=ValueError("Rank-deficient design"),
+        ):
+            with pytest.raises(ValueError, match="Rank-deficient"):
+                cs.fit(
+                    data,
+                    outcome="outcome",
+                    unit="unit",
+                    time="time",
+                    first_treat="first_treat",
+                    covariates=["x1"],
+                )
+
+    def test_cs_rc_strict_mode_not_swallowed(self):
+        """RCS path: rank_deficient_action='error' raises even with unconditional fallback."""
+        from unittest.mock import patch
+
+        # RCS data: unique unit IDs per observation
+        np.random.seed(99)
+        n = 300
+        data = pd.DataFrame(
+            {
+                "unit": np.arange(n),
+                "time": np.random.choice([0, 1, 2, 3, 4], n),
+                "outcome": np.random.randn(n),
+                "first_treat": np.where(np.arange(n) < 100, 3, 0),
+                "x1": np.random.randn(n),
+            }
+        )
+        cs = CallawaySantAnna(
+            estimation_method="ipw",
+            rank_deficient_action="error",
+            pscore_fallback="unconditional",
+            panel=False,
+        )
+        with patch(
+            "diff_diff.staggered.solve_logit",
+            side_effect=ValueError("Rank-deficient design"),
+        ):
+            with pytest.raises(ValueError, match="Rank-deficient"):
+                cs.fit(
+                    data,
+                    outcome="outcome",
+                    unit="unit",
+                    time="time",
+                    first_treat="first_treat",
+                    covariates=["x1"],
+                )
+
+    def test_cs_diagnose_propensity_rejects_not_yet_treated(self):
+        """diagnose_propensity() raises for control_group='not_yet_treated'."""
+        data = generate_staggered_data_with_covariates(seed=42)
+        cs = CallawaySantAnna(estimation_method="ipw", control_group="not_yet_treated")
+        with pytest.raises(NotImplementedError, match="not_yet_treated"):
+            cs.diagnose_propensity(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1"],
+            )
+
+
+class TestSilentWarningAudit:
+    """Tests for UserWarning emissions added by the silent warning audit."""
+
+    def test_item8_inf_to_zero_warning_in_fit(self):
+        """Item 8: Warn when first_treat=inf is recoded to 0 in fit()."""
+
+        data = generate_staggered_data(seed=42)
+        # Set some units to inf (never-treated encoding)
+        # Cast to float first for pandas >=2.0 compatibility
+        data["first_treat"] = data["first_treat"].astype(float)
+        never_units = data.loc[data["first_treat"] == 0, "unit"].unique()[:5]
+        data.loc[data["unit"].isin(never_units), "first_treat"] = np.inf
+
+        cs = CallawaySantAnna()
+        with pytest.warns(UserWarning, match="first_treat=inf"):
+            cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+
+    def test_item8_inf_to_zero_warning_in_diagnose_propensity(self):
+        """Item 8: Warn when first_treat=inf is recoded in diagnose_propensity()."""
+
+        data = generate_staggered_data_with_covariates(seed=42)
+        # Cast to float first for pandas >=2.0 compatibility
+        data["first_treat"] = data["first_treat"].astype(float)
+        never_units = data.loc[data["first_treat"] == 0, "unit"].unique()[:5]
+        data.loc[data["unit"].isin(never_units), "first_treat"] = np.inf
+
+        cs = CallawaySantAnna(estimation_method="ipw")
+        with pytest.warns(UserWarning, match="first_treat=inf"):
+            cs.diagnose_propensity(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1"],
+            )
+
+    def test_item8_no_warning_when_first_treat_zero(self):
+        """Item 8 negative: No warning when never-treated encoded as 0."""
+        import warnings
+
+        data = generate_staggered_data(seed=42)
+        cs = CallawaySantAnna()
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+        inf_warnings = [x for x in w if "first_treat=inf" in str(x.message)]
+        assert len(inf_warnings) == 0
+
+    def test_item4_consolidated_skip_warning(self):
+        """Item 4: Consolidated warning when (g,t) cells are non-estimable.
+
+        With positional base-period selection a cell is only non-estimable when
+        no earlier observed period exists. Cohort ``g=2`` treated at the earliest
+        observed period (periods ``{2,3,4,5}``) has no pre-treatment period, so
+        R cannot estimate it either -> ``missing_period`` skips + a consolidated
+        warning. Cohort ``g=4`` (base = observed period 3) is estimable.
+        """
+        import warnings
+
+        rng = np.random.default_rng(42)
+        n_units = 40
+        rows = []
+        for u in range(n_units):
+            for t in [2, 3, 4, 5]:
+                # u < 10: never-treated; u < 25: cohort g=2 (treated at the
+                # earliest observed period -> no pre-period -> skipped);
+                # rest: cohort g=4 (base = observed 3 -> succeeds)
+                if u < 10:
+                    ft = 0
+                elif u < 25:
+                    ft = 2  # no earlier observed period -> non-estimable
+                else:
+                    ft = 4  # base=3 exists -> succeeds
+                outcome = rng.standard_normal() + (2.0 if (ft > 0 and t >= ft) else 0.0)
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "outcome": outcome,
+                        "first_treat": ft,
+                    }
+                )
+        data = pd.DataFrame(rows)
+
+        cs = CallawaySantAnna(base_period="universal", estimation_method="reg")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+
+        skip_warnings = [x for x in w if "could not be estimated" in str(x.message)]
+        assert len(skip_warnings) > 0, "Expected consolidated skip warning"
+        msg = str(skip_warnings[0].message)
+        assert "missing base/post period" in msg
+
+    def test_item4_no_skip_warning_normal_data(self):
+        """Item 4 negative: No skip warning on well-formed balanced data."""
+        import warnings
+
+        data = generate_staggered_data(seed=42)
+        cs = CallawaySantAnna()
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+        skip_warnings = [x for x in w if "could not be estimated" in str(x.message)]
+        assert len(skip_warnings) == 0, f"Unexpected skip warning: {skip_warnings}"
+
+    def test_skip_warning_dr_path(self):
+        """Skip warning fires for default DR path (general path)."""
+        data = generate_staggered_data(
+            n_units=50,
+            n_periods=6,
+            n_cohorts=3,
+            never_treated_frac=0.0,
+            seed=42,
+        )
+        cs = CallawaySantAnna(control_group="not_yet_treated")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+        skip_warnings = [x for x in w if "could not be estimated" in str(x.message)]
+        assert len(skip_warnings) > 0, "Expected skip warning for DR path"
+        assert "insufficient data" in str(skip_warnings[0].message)
+
+    def test_skip_warning_panel_false(self):
+        """Skip warning fires for panel=False (RC path)."""
+        data = generate_staggered_data(
+            n_units=80,
+            n_periods=6,
+            n_cohorts=3,
+            never_treated_frac=0.0,
+            seed=42,
+        )
+        # panel=False needs unique unit IDs (repeated cross-section)
+        data["unit"] = np.arange(len(data))
+        cs = CallawaySantAnna(panel=False, control_group="not_yet_treated")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+        skip_warnings = [x for x in w if "could not be estimated" in str(x.message)]
+        assert len(skip_warnings) > 0, "Expected skip warning for RC path"
+
+    def test_skip_warning_survey_zero_mass(self):
+        """Skip warning fires when survey weights produce zero effective mass."""
+        from diff_diff.survey import SurveyDesign
+
+        data = generate_staggered_data(
+            n_units=60,
+            n_periods=6,
+            n_cohorts=2,
+            never_treated_frac=0.3,
+            seed=42,
+        )
+        # Set survey weights to 0 for ALL units in one cohort to force
+        # zero effective mass in that cohort's cells
+        data["sw"] = 1.0
+        first_cohort = sorted(data.loc[data["first_treat"] > 0, "first_treat"].unique())[0]
+        cohort_units = data.loc[data["first_treat"] == first_cohort, "unit"].unique()
+        data.loc[data["unit"].isin(cohort_units), "sw"] = 0.0
+
+        survey = SurveyDesign(weights="sw")
+        cs = CallawaySantAnna(estimation_method="reg")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                survey_design=survey,
+            )
+        skip_warnings = [x for x in w if "could not be estimated" in str(x.message)]
+        assert len(skip_warnings) > 0, "Expected skip warning for zero-mass survey cells"
+
+
+# ---------------------------------------------------------------------------
+# Silent-failure audit PR #9 follow-up: the CS analytical SE path calls
+# `_safe_inv()` in ~13 places (PS Hessian, OR bread, etc.). Previously the
+# LinAlgError → lstsq fallback was silent — a rank-deficient bread produced
+# degraded SEs with no user-visible signal. Now fit() emits ONE aggregate
+# warning tracking all fallbacks.
+# ---------------------------------------------------------------------------
+
+
+class TestCallawaySantAnnaSafeInvFallback:
+    def test_collinear_covariates_emit_safe_inv_warning(self):
+        """Perfectly collinear covariates should trigger the aggregate
+        `_safe_inv` rank-guard warning across analytical SE paths (default
+        rank_deficient_action='warn'; suppressed under 'silent')."""
+        data = generate_staggered_data(n_units=150, n_periods=6, n_cohorts=3, seed=55)
+        rng = np.random.default_rng(0)
+        # Add a covariate and a redundant (collinear) copy — forces rank-
+        # deficient X'WX in the OR bread and the PS Hessian within at
+        # least one (g, t) cell.
+        data["x1"] = rng.normal(0, 1, len(data))
+        data["x2"] = 2.0 * data["x1"]
+        cs = CallawaySantAnna(estimation_method="dr")  # default action="warn"
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1", "x2"],
+            )
+        fallback_warnings = [
+            w
+            for w in caught
+            if "analytical SE paths" in str(w.message) and "rank-guarded inverse" in str(w.message)
+        ]
+        assert len(fallback_warnings) == 1, (
+            f"Expected exactly one aggregate _safe_inv rank-guard warning; "
+            f"got {len(fallback_warnings)}: "
+            f"{[str(w.message) for w in fallback_warnings]}"
+        )
+
+    def test_well_conditioned_no_safe_inv_warning(self):
+        """Clean data should NOT trigger the aggregate warning —
+        regression-safety for the happy path."""
+        data = generate_staggered_data(n_units=200, n_periods=6, n_cohorts=3, seed=42)
+        cs = CallawaySantAnna(estimation_method="dr")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+        fallback_warnings = [
+            w
+            for w in caught
+            if "Rank-deficient matrix encountered" in str(w.message)
+            and "analytical SE paths" in str(w.message)
+        ]
+        assert fallback_warnings == [], (
+            f"Unexpected _safe_inv fallback warning on clean data: "
+            f"{[str(w.message) for w in fallback_warnings]}"
+        )
+
+
+def _generate_clustered_staggered_data(
+    n_clusters: int = 20,
+    units_per_cluster: int = 5,
+    n_periods: int = 8,
+    cluster_effect_sd: float = 3.0,
+    seed: int = 7,
+) -> pd.DataFrame:
+    """
+    Generate a staggered panel with strong intra-cluster correlation.
+
+    Each "state" cluster contributes a shared random effect to every
+    unit within it, so cluster-robust SE should differ measurably from
+    per-unit IF SE. Required for the assertive cluster-wiring tests
+    (per ``feedback_homogeneous_dgp_no_twfe_bias`` — homogeneous DGPs
+    produce zero divergence and can't distinguish wired from no-op).
+    """
+    rng = np.random.default_rng(seed)
+    n_units = n_clusters * units_per_cluster
+    state_ids = np.repeat(np.arange(n_clusters), units_per_cluster)
+    cluster_effects = rng.normal(0.0, cluster_effect_sd, n_clusters)
+
+    cohort_choices = [0, 3, 5, 7]  # 0 = never-treated
+    first_treat = rng.choice(cohort_choices, size=n_units, p=[0.4, 0.2, 0.2, 0.2])
+
+    rows = []
+    for u in range(n_units):
+        s = state_ids[u]
+        ft = first_treat[u]
+        for t in range(1, n_periods + 1):
+            y = (
+                cluster_effects[s]
+                + 0.5 * (t - 1)
+                + (2.0 if (ft > 0 and t >= ft) else 0.0)
+                + rng.normal(0.0, 0.5)
+            )
+            rows.append(
+                {
+                    "unit": u,
+                    "state": int(s),
+                    "time": t,
+                    "first_treat": int(ft),
+                    "outcome": y,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+class TestCallawaySantAnnaClusterWiring:
+    """Cluster wiring fix: bare ``cluster=`` activates cluster-robust IF.
+
+    Prior to PR fix, ``CS(cluster="state").fit(...)`` accepted the
+    parameter but never consumed it — silent unit-level inference. These
+    tests pin the fix: bare cluster= synthesizes ``SurveyDesign(psu=X)``
+    and routes through the existing PSU-meat machinery.
+    """
+
+    def test_cluster_robust_ses_differ_from_unit_level(self):
+        """Assertive: cluster=state SE differs from cluster=None SE
+        on a panel with intra-cluster correlation. This is the
+        regression test that pins the silent no-op fix."""
+        data = _generate_clustered_staggered_data(seed=7)
+
+        cs_unit = CallawaySantAnna()
+        res_unit = cs_unit.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+
+        cs_cluster = CallawaySantAnna(cluster="state")
+        res_cluster = cs_cluster.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+
+        assert np.isfinite(res_unit.overall_se) and res_unit.overall_se > 0
+        assert np.isfinite(res_cluster.overall_se) and res_cluster.overall_se > 0
+        assert abs(res_unit.overall_se - res_cluster.overall_se) > 1e-6, (
+            f"cluster=state SE ({res_cluster.overall_se:.6f}) is "
+            f"effectively identical to cluster=None SE "
+            f"({res_unit.overall_se:.6f}) — the cluster= parameter "
+            "may not be wired through to the variance machinery."
+        )
+
+    def test_bare_cluster_synthesizes_survey_design(self):
+        """bare cluster= populates Results.cluster_name and n_clusters."""
+        data = _generate_clustered_staggered_data(seed=11)
+        cs = CallawaySantAnna(cluster="state")
+        res = cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+        assert res.cluster_name == "state"
+        assert res.n_clusters is not None and res.n_clusters > 0
+        assert res.vcov_type == "hc1"
+
+    def test_survey_design_psu_overrides_cluster_warns(self):
+        """survey_design.psu wins over bare cluster=; UserWarning fires
+        if partitions differ; cluster_name reflects the canonical PSU."""
+        from diff_diff import SurveyDesign
+
+        data = _generate_clustered_staggered_data(n_clusters=20, units_per_cluster=5, seed=13)
+        # Add a coarser "region" partition: 2 regions, each with 10 states.
+        data["region"] = data["state"] // 10
+
+        cs = CallawaySantAnna(cluster="state")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                survey_design=SurveyDesign(psu="region"),
+            )
+        partition_warnings = [
+            w
+            for w in caught
+            if "psu" in str(w.message).lower()
+            or "partition" in str(w.message).lower()
+            or "different groupings" in str(w.message).lower()
+        ]
+        assert len(partition_warnings) > 0, (
+            f"Expected UserWarning about psu/partition mismatch; "
+            f"caught: {[str(w.message) for w in caught]}"
+        )
+        # Canonical PSU column wins
+        assert res.cluster_name == "region"
+
+    def test_survey_design_without_psu_plus_cluster_injects(self):
+        """survey_design without psu + cluster=X injects cluster as PSU.
+        cluster_name reflects the bare cluster (no explicit PSU to win)."""
+        from diff_diff import SurveyDesign
+
+        data = _generate_clustered_staggered_data(seed=17)
+        data["wt"] = 1.0  # uniform weights
+
+        cs = CallawaySantAnna(cluster="state")
+        res = cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            survey_design=SurveyDesign(weights="wt"),
+        )
+        assert res.cluster_name == "state"
+        assert res.n_clusters is not None and res.n_clusters > 0
+
+    def test_cluster_none_path_unchanged(self):
+        """cluster=None path: no wiring, no cluster metadata in Results.
+        Verifies the wiring guard ``if self.cluster is not None:`` prevents
+        the wiring block from firing when cluster is not set."""
+        data = _generate_clustered_staggered_data(seed=19)
+        cs = CallawaySantAnna()  # cluster=None default
+        res = cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+        assert res.cluster_name is None
+        assert res.n_clusters is None
+        assert res.vcov_type == "hc1"
+        assert np.isfinite(res.overall_se) and res.overall_se > 0
+
+    def test_invalid_cluster_column_raises(self):
+        """cluster=<nonexistent_col> raises ValueError with column name."""
+        data = _generate_clustered_staggered_data(seed=23)
+        cs = CallawaySantAnna(cluster="nonexistent_col")
+        with pytest.raises(ValueError, match="cluster column"):
+            cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+
+    def test_cluster_nan_raises_with_cluster_domain_message(self):
+        """cluster column with NaN raises ValueError citing 'cluster'
+        (not 'PSU') — verifies the cluster-domain pre-validator fires
+        BEFORE synthesis, so the error message refers to the right API."""
+        data = _generate_clustered_staggered_data(seed=29)
+        data.loc[0, "state"] = np.nan
+        cs = CallawaySantAnna(cluster="state")
+        with pytest.raises(ValueError, match="cluster column"):
+            cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+
+    def test_bare_cluster_works_with_panel_false_rcs(self):
+        """RCS coverage: panel=False + cluster=state produces clustered SE
+        that differs from cluster=None SE. Closes RCS coverage gap from
+        plan review."""
+        # Build a repeated cross-section: each obs is a distinct unit,
+        # but obs share state-level clusters.
+        rng = np.random.default_rng(31)
+        n_states = 15
+        obs_per_period = 60
+        n_periods = 6
+        state_effects = rng.normal(0.0, 3.0, n_states)
+        rows = []
+        next_unit = 0
+        for t in range(1, n_periods + 1):
+            for _ in range(obs_per_period):
+                s = int(rng.integers(0, n_states))
+                ft = int(rng.choice([0, 3, 5], p=[0.4, 0.3, 0.3]))
+                y = (
+                    state_effects[s]
+                    + 0.3 * (t - 1)
+                    + (1.5 if (ft > 0 and t >= ft) else 0.0)
+                    + rng.normal(0.0, 0.5)
+                )
+                rows.append(
+                    {
+                        "unit": next_unit,
+                        "state": s,
+                        "time": t,
+                        "first_treat": ft,
+                        "outcome": y,
+                    }
+                )
+                next_unit += 1
+        data = pd.DataFrame(rows)
+
+        cs_unit = CallawaySantAnna(panel=False)
+        res_unit = cs_unit.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+        cs_cluster = CallawaySantAnna(panel=False, cluster="state")
+        res_cluster = cs_cluster.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+        assert np.isfinite(res_unit.overall_se) and res_unit.overall_se > 0
+        assert np.isfinite(res_cluster.overall_se) and res_cluster.overall_se > 0
+        assert abs(res_unit.overall_se - res_cluster.overall_se) > 1e-6, (
+            "RCS path: cluster=state SE not measurably different from "
+            "cluster=None SE — cluster wiring may not reach the RCS code path."
+        )
+
+
+class TestCallawaySantAnnaVcovTypeNarrowContract:
+    """Narrow vcov_type contract: CS accepts {hc1} only; rejects
+    analytical-sandwich families and conley with methodology-rooted
+    messages."""
+
+    def test_default_vcov_type_is_hc1(self):
+        cs = CallawaySantAnna()
+        assert cs.vcov_type == "hc1"
+
+    def test_classical_rejected_at_init(self):
+        with pytest.raises(ValueError, match="influence-function"):
+            CallawaySantAnna(vcov_type="classical")
+
+    def test_hc2_rejected_at_init(self):
+        with pytest.raises(ValueError, match="hat matrix"):
+            CallawaySantAnna(vcov_type="hc2")
+
+    def test_hc2_bm_rejected_at_init(self):
+        with pytest.raises(ValueError, match="Bell-McCaffrey"):
+            CallawaySantAnna(vcov_type="hc2_bm")
+
+    def test_conley_rejected_at_init(self):
+        with pytest.raises(ValueError, match="(conley|spatial-HAC)"):
+            CallawaySantAnna(vcov_type="conley")
+
+    def test_unknown_vcov_type_rejected(self):
+        with pytest.raises(ValueError, match="hc4"):
+            CallawaySantAnna(vcov_type="hc4")
+
+    def test_get_params_includes_vcov_type(self):
+        cs = CallawaySantAnna()
+        params = cs.get_params()
+        assert "vcov_type" in params
+        assert params["vcov_type"] == "hc1"
+
+    def test_set_params_bad_vcov_raises_eagerly(self):
+        """set_params validates via constructor probe (transactional per
+        the locked v4 rule): a bad vcov_type raises AT set_params with the
+        same message __init__ gives, and the estimator is unchanged. The
+        fit-time re-validation stays in place as belt-and-suspenders."""
+        cs = CallawaySantAnna()
+        with pytest.raises(ValueError, match="hc4"):
+            cs.set_params(vcov_type="hc4")
+        assert cs.vcov_type == "hc1"
+
+    def test_results_carries_vcov_type(self):
+        data = _generate_clustered_staggered_data(seed=41)
+        cs = CallawaySantAnna()
+        res = cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+        assert res.vcov_type == "hc1"
+
+    def test_fit_clone_idempotent_on_vcov_type(self):
+        """get_params + reconstruct + refit produces same SE."""
+        data = _generate_clustered_staggered_data(seed=43)
+        cs1 = CallawaySantAnna(cluster="state")
+        res1 = cs1.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+        cs2 = CallawaySantAnna(**cs1.get_params())
+        res2 = cs2.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+        assert res1.overall_se == pytest.approx(res2.overall_se, rel=0, abs=0)
+        assert res1.vcov_type == res2.vcov_type == "hc1"
+        assert res1.cluster_name == res2.cluster_name == "state"
+
+
+class TestCallawaySantAnnaClusterSafetyGates:
+    """Safety gates for the cluster= wiring fix added in response to local
+    AI review findings (panel-mover validation, replicate-weight rejection,
+    df_survey propagation to HonestDiD via survey_metadata)."""
+
+    def test_inject_branch_panel_mover_raises(self):
+        """survey_design without PSU + cluster=X where a unit changes
+        cluster across periods (a 'mover') must raise via the unit-
+        constancy validator. The validator must see the injected cluster
+        column — earlier versions ran the validator on the user-provided
+        survey_design (no PSU), missing the mover entirely."""
+        from diff_diff import SurveyDesign
+
+        data = _generate_clustered_staggered_data(seed=61)
+        data["wt"] = 1.0
+        # Force unit 0 to be a mover: assign it to a different state in the
+        # later half of the panel.
+        unit_0_late_mask = (data["unit"] == 0) & (data["time"] >= 5)
+        original_state_for_unit_0 = data.loc[data["unit"] == 0, "state"].iloc[0]
+        mover_target_state = (int(original_state_for_unit_0) + 1) % 20
+        data.loc[unit_0_late_mask, "state"] = mover_target_state
+
+        cs = CallawaySantAnna(cluster="state")
+        with pytest.raises((ValueError, RuntimeError), match="(unit|constant|invariant)"):
+            cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                survey_design=SurveyDesign(weights="wt"),
+            )
+
+    def test_replicate_weight_plus_cluster_rejected(self):
+        """SurveyDesign(replicate_weights=[...]) + cluster=X must raise
+        NotImplementedError. Replicate-weight variance ignores PSU entirely,
+        so honoring bare cluster= would silently have no effect on the
+        variance estimate while populating cluster_name/n_clusters
+        dishonestly. Fail-closed per feedback_no_silent_failures."""
+        from diff_diff import SurveyDesign
+
+        data = _generate_clustered_staggered_data(seed=67)
+        data["wt"] = 1.0
+        # Add 4 BRR replicate weights (R survey package convention).
+        for r in range(1, 5):
+            data[f"repwt_{r}"] = 1.0
+
+        cs = CallawaySantAnna(cluster="state")
+        with pytest.raises(NotImplementedError, match="replicate"):
+            cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                survey_design=SurveyDesign(
+                    weights="wt",
+                    replicate_weights=["repwt_1", "repwt_2", "repwt_3", "repwt_4"],
+                    replicate_method="BRR",
+                ),
+            )
+
+    def test_bare_cluster_populates_df_inference(self):
+        """Bare cluster= must populate Results.df_inference so downstream
+        consumers (e.g., HonestDiD at honest_did.py:~652) see the cluster-
+        level df rather than silently reverting to normal-theory critical
+        values. df_inference is the canonical carrier — survey_metadata is
+        for user-provided SurveyDesign only (see
+        test_bare_cluster_does_not_set_survey_metadata for the other half
+        of the contract)."""
+        data = _generate_clustered_staggered_data(seed=71)
+        cs = CallawaySantAnna(cluster="state")
+        res = cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+        assert res.df_inference is not None and res.df_inference > 0, (
+            f"Bare cluster= must populate Results.df_inference with a "
+            f"positive integer; got {res.df_inference!r}."
+        )
+        # df_inference must equal n_clusters - 1 for the PSU-only design
+        assert res.n_clusters is not None
+        assert res.df_inference == res.n_clusters - 1, (
+            f"df_inference ({res.df_inference}) must equal n_clusters - 1 "
+            f"({res.n_clusters - 1}) for PSU-only synthesized designs."
+        )
+
+    def test_bare_cluster_does_not_set_survey_metadata(self):
+        """Bare cluster= must NOT populate Results.survey_metadata. The
+        user did not provide a SurveyDesign, so downstream consumers that
+        check ``survey_metadata is not None`` for 'original fit used a
+        survey design' must continue to see a non-survey fit. Affected
+        consumers: DiagnosticReport at diagnostic_report.py:848-856 +
+        1150-1158 (Bacon decomp + 2x2 PT skip); CallawaySantAnnaResults.
+        summary() at staggered_results.py:235-238 (survey block render).
+        df_inference carries cluster df separately (see
+        test_bare_cluster_populates_df_inference)."""
+        data = _generate_clustered_staggered_data(seed=73)
+        cs = CallawaySantAnna(cluster="state")
+        res = cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+        assert res.survey_metadata is None, (
+            "Bare cluster= must NOT populate survey_metadata — that field "
+            "is reserved for user-provided SurveyDesign. Setting it on a "
+            "non-survey fit would cause DiagnosticReport to skip checks "
+            "with 'Original fit used a survey design' and summary() to "
+            "print a misleading survey block."
+        )
+
+    def test_explicit_survey_design_does_populate_survey_metadata(self):
+        """Counterpart to test_bare_cluster_does_not_set_survey_metadata:
+        when user provides a real SurveyDesign, survey_metadata IS
+        populated (regardless of bare cluster= status). Verifies the
+        'inject' branch path: SurveyDesign(weights=...) + cluster=X →
+        survey_metadata populated; df_inference stays None per the
+        narrowed contract (canonical df carrier when survey_metadata is
+        present is survey_metadata.df_survey, which holds CS-internal
+        post-resolve-tightened df). HonestDiD reads survey_metadata
+        first, df_inference only as fallback."""
+        from diff_diff import SurveyDesign
+
+        data = _generate_clustered_staggered_data(seed=75)
+        data["wt"] = 1.0
+        cs = CallawaySantAnna(cluster="state")
+        res = cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            survey_design=SurveyDesign(weights="wt"),
+        )
+        assert (
+            res.survey_metadata is not None
+        ), "User-provided SurveyDesign must populate survey_metadata."
+        # df_inference is NARROWED to bare-cluster-synthesize path only:
+        # when survey_metadata is populated, df_inference stays None and
+        # HonestDiD reads df_survey directly from survey_metadata (which
+        # carries the actual CS-internal df, post-recompute). Prevents
+        # HonestDiD from reading a stale/wrong df_inference when CS's
+        # internal df was tightened post-resolve. See honest_did.py:
+        # _extract_event_study_params preference order: survey_metadata
+        # first, df_inference fallback.
+        assert res.df_inference is None, (
+            "Inject/conflict branches must leave df_inference=None — "
+            "survey_metadata.df_survey is the canonical df carrier when "
+            "a survey design is present."
+        )
+        sm_df = getattr(res.survey_metadata, "df_survey", None)
+        assert sm_df is not None and sm_df > 0, (
+            "survey_metadata.df_survey must be populated when an explicit "
+            "SurveyDesign is provided."
+        )
+
+    def test_bare_cluster_honest_did_uses_df_inference(self):
+        """End-to-end integration: HonestDiD.fit() on a bare-cluster CS
+        result must pick up the cluster-level df via df_inference (not
+        revert to normal-theory critical values). A future refactor that
+        stops honoring df_inference in honest_did.py would silently fall
+        back to z-critical values for clustered CS fits without failing
+        the simpler results-object-contract tests. This test pins the
+        end-to-end behavior. Per the R3 codex finding."""
+        from diff_diff.honest_did import HonestDiD
+
+        data = _generate_clustered_staggered_data(seed=79)
+        cs = CallawaySantAnna(cluster="state", base_period="universal")
+        cs_res = cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="event_study",
+        )
+
+        # Sanity: the CS fit populated df_inference but not survey_metadata
+        assert cs_res.df_inference is not None and cs_res.df_inference > 0
+        assert cs_res.survey_metadata is None, (
+            "Pre-condition for this test: bare cluster= must NOT populate "
+            "survey_metadata. If this fails, the survey/non-survey "
+            "contract regressed (see test_bare_cluster_does_not_set_survey_metadata)."
+        )
+
+        # Run HonestDiD; assert it threads df_inference into the returned df_survey
+        honest = HonestDiD(method="relative_magnitude", M=1.0)
+        honest_res = honest.fit(cs_res)
+
+        assert honest_res.df_survey is not None, (
+            "HonestDiD must preserve the cluster df from CS's df_inference. "
+            "Reading None means it silently reverted to normal-theory "
+            "critical values — the contract this test exists to guard."
+        )
+        assert int(honest_res.df_survey) == int(cs_res.df_inference), (
+            f"HonestDiDResults.df_survey ({honest_res.df_survey}) must "
+            f"equal CS Results.df_inference ({cs_res.df_inference}). "
+            "A divergence here means df_inference is not being threaded "
+            "through honest_did.py's _extract_event_study_params."
+        )
+
+    def test_bare_cluster_bootstrap_se_differs_from_unit_level(self):
+        """Bootstrap path coverage: bare cluster= must route bootstrap
+        through the PSU-level multiplier-weights branch at
+        staggered_bootstrap.py:323-347 (synthesized SurveyDesign(psu=
+        cluster) sets resolved_survey.psu, triggering the survey-PSU
+        bootstrap path). Without the fix, bootstrap drew per-unit weights
+        regardless of self.cluster — same class of silent no-op as the
+        analytical path. Per CI codex R1 P3 finding."""
+        data = _generate_clustered_staggered_data(seed=83)
+
+        # Low n_bootstrap for speed; assertion bands wide enough for stochasticity
+        cs_unit = CallawaySantAnna(n_bootstrap=99, seed=83)
+        res_unit = cs_unit.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+        cs_cluster = CallawaySantAnna(cluster="state", n_bootstrap=99, seed=83)
+        res_cluster = cs_cluster.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+        assert np.isfinite(res_unit.overall_se) and res_unit.overall_se > 0
+        assert np.isfinite(res_cluster.overall_se) and res_cluster.overall_se > 0
+        assert abs(res_unit.overall_se - res_cluster.overall_se) > 1e-6, (
+            f"Bootstrap path: cluster=state SE ({res_cluster.overall_se:.6f}) "
+            f"is effectively identical to cluster=None SE "
+            f"({res_unit.overall_se:.6f}) — the cluster= parameter may "
+            "not be reaching the bootstrap multiplier-weights routing."
+        )
+
+    def test_per_gt_analytical_se_changes_with_cluster(self):
+        """Per-(g,t) analytical SE at results.group_time_effects[(g,t)]
+        ["se"] must change when cluster= is set (mirrors the overall_se
+        contract). Pre-fix, per-(g,t) SEs were unit-level even with
+        cluster=, only the aggregate path + bootstrap honored cluster=.
+        Per CI codex R3 P0 finding."""
+        data = _generate_clustered_staggered_data(seed=97)
+
+        cs_unit = CallawaySantAnna()
+        res_unit = cs_unit.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+        cs_cluster = CallawaySantAnna(cluster="state")
+        res_cluster = cs_cluster.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+
+        # Pick a representative (g, t) cell that exists in both fits
+        gt_keys = sorted(
+            set(res_unit.group_time_effects.keys()) & set(res_cluster.group_time_effects.keys())
+        )
+        assert len(gt_keys) > 0, "expected overlapping (g, t) keys"
+
+        # At least one (g, t) cell must show measurable SE divergence —
+        # cluster-aware aggregation should differ from unit-level for at
+        # least one cell on a panel with intra-cluster correlation.
+        diffs = []
+        for gt in gt_keys:
+            se_unit = res_unit.group_time_effects[gt]["se"]
+            se_cluster = res_cluster.group_time_effects[gt]["se"]
+            if np.isfinite(se_unit) and np.isfinite(se_cluster):
+                diffs.append(abs(se_unit - se_cluster))
+        max_diff = max(diffs) if diffs else 0.0
+        assert max_diff > 1e-6, (
+            f"Per-(g,t) SEs did not change with cluster= (max diff "
+            f"across {len(diffs)} cells: {max_diff:.6g}). The cluster= "
+            "parameter may not be reaching the per-(g,t) analytical SE "
+            "computation."
+        )
+
+    def test_per_gt_se_matches_explicit_survey_design(self):
+        """When bare cluster=X and explicit SurveyDesign(psu=X) produce
+        equivalent variance contracts, the per-(g,t) SE surface must
+        also agree (modulo the deterministic synthesis path). Per CI
+        codex R3 P0 finding."""
+        from diff_diff import SurveyDesign
+
+        data = _generate_clustered_staggered_data(seed=101)
+
+        cs_bare = CallawaySantAnna(cluster="state")
+        res_bare = cs_bare.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+
+        cs_explicit = CallawaySantAnna()
+        res_explicit = cs_explicit.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            survey_design=SurveyDesign(psu="state"),
+        )
+
+        gt_keys = sorted(
+            set(res_bare.group_time_effects.keys()) & set(res_explicit.group_time_effects.keys())
+        )
+        assert len(gt_keys) > 0
+
+        for gt in gt_keys:
+            se_bare = res_bare.group_time_effects[gt]["se"]
+            se_explicit = res_explicit.group_time_effects[gt]["se"]
+            if np.isfinite(se_bare) and np.isfinite(se_explicit):
+                assert se_bare == pytest.approx(se_explicit, rel=1e-10, abs=1e-12), (
+                    f"Per-(g,t) SE divergence at {gt}: bare cluster=state "
+                    f"({se_bare}) vs explicit SurveyDesign(psu=state) "
+                    f"({se_explicit}). Both should activate the same CR1 "
+                    "aggregation."
+                )
+
+    def test_per_gt_se_matches_compute_survey_if_variance_helper(self):
+        """The per-(g,t) cluster-aware SE must use the SAME design-based
+        variance machinery as the aggregate path
+        (compute_survey_if_variance / _compute_stratified_psu_meat) —
+        applying G/(G-1) finite-sample correction, PSU centering, and
+        lonely-PSU handling uniformly. Compares per-cell SE against the
+        shared helper on a small-G design (so the finite-sample
+        correction is non-trivial). Per CI codex R4 P1/P2 findings."""
+        from diff_diff.staggered import _cluster_robust_se_from_per_gt_if
+        from diff_diff.survey import (
+            SurveyDesign,
+            _resolve_survey_for_fit,
+            compute_survey_if_variance,
+        )
+
+        # 10 PSUs (states), 4 units each = 40 units total (small-G)
+        n_clusters = 10
+        units_per_cluster = 4
+        n_units = n_clusters * units_per_cluster
+        state_ids = np.repeat(np.arange(n_clusters), units_per_cluster)
+        unit_data = pd.DataFrame({"unit": np.arange(n_units), "state": state_ids})
+
+        synthetic = SurveyDesign(psu="state", weight_type="pweight")
+        rsu, _, _, _ = _resolve_survey_for_fit(synthetic, unit_data, "analytical")
+        assert rsu is not None
+        assert rsu.psu is not None and len(rsu.psu) == n_units
+
+        # Hand-crafted per-(g,t) IF: 5 treated + 10 control units in this cell
+        rng = np.random.default_rng(7)
+        treated_idx = np.arange(0, 5)
+        control_idx = np.arange(5, 15)
+        treated_inf = rng.normal(0.0, 0.1, 5)
+        control_inf = rng.normal(0.0, 0.1, 10)
+        inf_info = {
+            "treated_idx": treated_idx,
+            "control_idx": control_idx,
+            "treated_inf": treated_inf,
+            "control_inf": control_inf,
+        }
+
+        # Helper output (function under test)
+        se_helper = _cluster_robust_se_from_per_gt_if(inf_info, rsu)
+        assert se_helper is not None
+        assert np.isfinite(se_helper) and se_helper > 0
+
+        # Direct reconstruction via compute_survey_if_variance must agree
+        # exactly — verifies the helper routes through the shared
+        # G/(G-1) + PSU centering + FPC machinery, not a bespoke formula.
+        psi_per_unit = np.zeros(n_units)
+        np.add.at(psi_per_unit, treated_idx, treated_inf)
+        np.add.at(psi_per_unit, control_idx, control_inf)
+        var_reference = compute_survey_if_variance(psi_per_unit, rsu)
+        se_reference = float(np.sqrt(var_reference))
+
+        assert se_helper == pytest.approx(se_reference, rel=0, abs=0), (
+            f"Per-(g,t) SE helper ({se_helper}) must equal "
+            f"compute_survey_if_variance reconstruction ({se_reference}) "
+            "— any divergence means the helper bypasses the shared "
+            "G/(G-1) finite-sample correction + PSU centering machinery."
+        )
+
+    def test_per_gt_se_propagates_nan_when_cluster_variance_undefined(self):
+        """When clustered design-based variance is undefined (e.g., G=1
+        — single cluster, no within-PSU variability), the per-(g,t) SE
+        must propagate NaN through the full inference surface (se,
+        t_stat, p_value, conf_int) instead of silently falling back to
+        the unit-level SE. Verifies the helper's NaN-propagation
+        contract end-to-end on a fit. Per CI codex R5 P1/P2 findings."""
+        # Build a panel where all units belong to a single cluster.
+        # compute_survey_if_variance returns NaN for G<2 designs (lonely
+        # PSU removed or single-cluster) — the per-cell helper must
+        # propagate this NaN rather than retain the unit-level SE.
+        data = _generate_clustered_staggered_data(n_clusters=2, units_per_cluster=10, seed=109)
+        # Force ALL units into a single cluster (G=1)
+        data["single_cluster"] = 0
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # lonely-PSU warnings are expected
+            cs = CallawaySantAnna(cluster="single_cluster")
+            res = cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+
+        # At least one (g, t) cell should have NaN inference under the
+        # undefined-variance contract. If ALL cells retain finite SE, the
+        # helper is silently falling back to unit-level on the NaN branch.
+        nan_cells = [gt for gt, eff in res.group_time_effects.items() if not np.isfinite(eff["se"])]
+        assert len(nan_cells) > 0, (
+            "Expected at least one (g, t) cell with NaN SE under G=1 "
+            "(undefined clustered variance), but all cells retained "
+            "finite unit-level SE — the helper's NaN-propagation "
+            "contract is broken (cells silently fall back to unit-level)."
+        )
+
+        # For each NaN-SE cell, the full inference surface must be NaN
+        # (matches the safe_inference contract for non-finite SE).
+        for gt in nan_cells:
+            eff = res.group_time_effects[gt]
+            assert np.isnan(eff["se"]), f"{gt}: se should be NaN"
+            assert np.isnan(eff["t_stat"]), f"{gt}: t_stat should be NaN"
+            assert np.isnan(eff["p_value"]), f"{gt}: p_value should be NaN"
+            ci_lo, ci_hi = eff["conf_int"]
+            assert np.isnan(ci_lo) and np.isnan(
+                ci_hi
+            ), f"{gt}: CI bounds should both be NaN, got ({ci_lo}, {ci_hi})"
+
+    def test_bare_cluster_bootstrap_propagates_nan_when_g_less_than_2(self):
+        """Bootstrap path NaN propagation: when bare cluster= produces
+        G=1 (single cluster), the PSU-multiplier-weights bootstrap path
+        at bootstrap_utils.py:557-562 returns zero PSU multipliers and
+        the downstream zero-SE guards at :365-377/:472-485 must NaN-out
+        the full bootstrap inference surface (overall_se, per-(g,t),
+        aggregate). Per CI codex R7 P3 finding."""
+        data = _generate_clustered_staggered_data(n_clusters=2, units_per_cluster=10, seed=113)
+        data["single_cluster"] = 0  # Force G=1
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # lonely-PSU + low-n_bootstrap warnings expected
+            cs = CallawaySantAnna(cluster="single_cluster", n_bootstrap=99, seed=113)
+            res = cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                aggregate="event_study",
+            )
+
+        # Overall bootstrap inference must be NaN-consistent
+        assert not np.isfinite(res.overall_se), (
+            f"Bootstrap overall_se should be NaN under G=1 cluster, " f"got {res.overall_se}."
+        )
+        assert np.isnan(res.overall_t_stat)
+        assert np.isnan(res.overall_p_value)
+        assert np.isnan(res.overall_conf_int[0]) and np.isnan(res.overall_conf_int[1])
+
+        # At least one (g, t) cell must have NaN inference (undefined
+        # clustered variance propagating through either the bootstrap or
+        # analytical layer)
+        nan_gt_cells = [
+            gt for gt, eff in res.group_time_effects.items() if not np.isfinite(eff["se"])
+        ]
+        assert len(nan_gt_cells) > 0, (
+            "Expected at least one (g, t) cell with NaN SE under "
+            "G=1 cluster + bootstrap — undefined clustered variance "
+            "must propagate through the bootstrap inference surface."
+        )
+        for gt in nan_gt_cells:
+            eff = res.group_time_effects[gt]
+            assert np.isnan(eff["se"])
+            assert np.isnan(eff["t_stat"])
+            assert np.isnan(eff["p_value"])
+            assert np.isnan(eff["conf_int"][0]) and np.isnan(eff["conf_int"][1])
+
+        # Requested aggregate (event-study) must also be NaN-consistent
+        # for any aggregated horizon whose underlying cells are NaN
+        if res.event_study_effects:
+            for h, ev in res.event_study_effects.items():
+                if not np.isfinite(ev["se"]):
+                    assert np.isnan(ev["t_stat"])
+                    assert np.isnan(ev["p_value"])
+                    assert np.isnan(ev["conf_int"][0]) and np.isnan(ev["conf_int"][1])
+
+    def test_grouped_aggregate_se_changes_with_cluster(self):
+        """The ``aggregate="group"`` aggregation path
+        (``_aggregate_by_group`` at ``staggered_aggregation.py:782-860``)
+        has its own SE computation independent of overall + event-study.
+        Asserts grouped SEs differ between cluster=None and cluster="state"
+        on a panel with intra-cluster correlation, AND that bare cluster=
+        "state" matches explicit SurveyDesign(psu="state") on the grouped
+        surface. Per CI codex R8 P3 finding."""
+        from diff_diff import SurveyDesign
+
+        data = _generate_clustered_staggered_data(seed=117)
+
+        cs_unit = CallawaySantAnna()
+        res_unit = cs_unit.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="group",
+        )
+
+        cs_cluster = CallawaySantAnna(cluster="state")
+        res_cluster = cs_cluster.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="group",
+        )
+
+        cs_explicit = CallawaySantAnna()
+        res_explicit = cs_explicit.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="group",
+            survey_design=SurveyDesign(psu="state"),
+        )
+
+        assert res_unit.group_effects is not None
+        assert res_cluster.group_effects is not None
+        assert res_explicit.group_effects is not None
+
+        # Grouped SEs must differ under cluster vs unit-level (at least
+        # one group)
+        common_groups = set(res_unit.group_effects.keys()) & set(res_cluster.group_effects.keys())
+        assert common_groups, "expected overlapping groups"
+
+        diffs = []
+        for g in common_groups:
+            se_unit = res_unit.group_effects[g]["se"]
+            se_cluster = res_cluster.group_effects[g]["se"]
+            if np.isfinite(se_unit) and np.isfinite(se_cluster):
+                diffs.append(abs(se_unit - se_cluster))
+        max_diff = max(diffs) if diffs else 0.0
+        assert max_diff > 1e-6, (
+            f"Grouped SEs did not change with cluster= (max diff: "
+            f"{max_diff:.6g}). aggregate='group' may not be routing "
+            "through the cluster-aware IF aggregation."
+        )
+
+        # Bare cluster vs explicit SurveyDesign must agree on grouped surface
+        common = set(res_cluster.group_effects.keys()) & set(res_explicit.group_effects.keys())
+        for g in common:
+            se_bare = res_cluster.group_effects[g]["se"]
+            se_explicit = res_explicit.group_effects[g]["se"]
+            if np.isfinite(se_bare) and np.isfinite(se_explicit):
+                assert se_bare == pytest.approx(se_explicit, rel=1e-10, abs=1e-12), (
+                    f"Grouped SE divergence at g={g}: bare cluster=state "
+                    f"({se_bare}) vs explicit SurveyDesign(psu=state) "
+                    f"({se_explicit})."
+                )
+
+    def test_survey_design_psu_wins_under_bootstrap(self):
+        """Bootstrap path: when survey_design=SurveyDesign(psu=Y) is
+        explicit AND cluster=X is also set with a different partition,
+        the explicit PSU partition wins for the bootstrap draws (just
+        like for the analytical sandwich). UserWarning fires for the
+        partition mismatch; bootstrap SE matches the explicit-PSU-only
+        fit, not the bare-cluster fit. Per CI codex R1 P3 finding."""
+        from diff_diff import SurveyDesign
+
+        data = _generate_clustered_staggered_data(n_clusters=20, units_per_cluster=5, seed=89)
+        data["region"] = data["state"] // 10  # 2 regions of 10 states
+
+        # Reference: explicit region PSU only (no cluster= confound)
+        cs_ref = CallawaySantAnna(n_bootstrap=99, seed=89)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res_ref = cs_ref.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                survey_design=SurveyDesign(psu="region"),
+            )
+
+        # Conflict: explicit region PSU + bare cluster=state (different partition)
+        cs_conflict = CallawaySantAnna(cluster="state", n_bootstrap=99, seed=89)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res_conflict = cs_conflict.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                survey_design=SurveyDesign(psu="region"),
+            )
+
+        partition_warnings = [
+            w
+            for w in caught
+            if "psu" in str(w.message).lower()
+            or "partition" in str(w.message).lower()
+            or "different groupings" in str(w.message).lower()
+        ]
+        assert len(partition_warnings) > 0, (
+            "Conflict case (explicit PSU + bare cluster with different "
+            "partition) must emit UserWarning."
+        )
+        # PSU wins under bootstrap too — SE must match the reference
+        # (explicit-PSU-only) fit at the same seed
+        assert res_conflict.overall_se == pytest.approx(res_ref.overall_se, rel=0, abs=0), (
+            f"Bootstrap precedence: with seed={cs_conflict.seed}, conflict "
+            f"fit SE ({res_conflict.overall_se}) must match explicit-PSU-only "
+            f"reference SE ({res_ref.overall_se}) — both bootstraps must "
+            "draw at the same effective PSU level."
+        )
+
+
+@pytest.fixture(scope="module")
+def alpha_fitted():
+    data = generate_staggered_data(n_units=40, n_periods=6)
+    return CallawaySantAnna().fit(
+        data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+    )
+
+
+class TestSummaryAlphaContract:
+    """summary(alpha=...) never recomputes stored inference.
+
+    Family-wide guard (results_base._require_fit_alpha): a non-fit alpha
+    raises instead of silently relabeling the confidence-interval header
+    over fit-time stored intervals; alpha=0.0 (previously swallowed by the
+    falsy `alpha or self.alpha` idiom) now raises too.
+    """
+
+    @pytest.mark.parametrize("bad_alpha", [0.10, 0.0])
+    def test_summary_rejects_non_fit_alpha(self, alpha_fitted, bad_alpha):
+        with pytest.raises(ValueError, match="never recomputes"):
+            alpha_fitted.summary(alpha=bad_alpha)
+
+    def test_summary_accepts_fit_alpha(self, alpha_fitted):
+        assert alpha_fitted.summary(alpha=alpha_fitted.alpha) == alpha_fitted.summary()
+
+    def test_print_summary_relays_the_guard(self, alpha_fitted):
+        with pytest.raises(ValueError, match="never recomputes"):
+            alpha_fitted.print_summary(alpha=0.10)

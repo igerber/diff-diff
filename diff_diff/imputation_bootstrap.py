@@ -20,44 +20,12 @@ from diff_diff.bootstrap_utils import (
 from diff_diff.bootstrap_utils import (
     generate_survey_multiplier_weights_batch as _generate_survey_multiplier_weights_batch,
 )
+from diff_diff.imputation_aggregation import _compute_target_weights  # noqa: F401 (shared helper)
 from diff_diff.imputation_results import ImputationBootstrapResults
 
 __all__ = [
     "ImputationDiDBootstrapMixin",
 ]
-
-
-def _compute_target_weights(
-    tau_hat: np.ndarray,
-    target_mask: np.ndarray,
-) -> "tuple[np.ndarray, int]":
-    """
-    Equal weights for finite tau_hat observations within target_mask.
-
-    Used by both aggregation and bootstrap paths to avoid weight logic
-    duplication.
-
-    Parameters
-    ----------
-    tau_hat : np.ndarray
-        Per-observation treatment effects (may contain NaN).
-    target_mask : np.ndarray
-        Boolean mask selecting the target subset within tau_hat.
-
-    Returns
-    -------
-    weights : np.ndarray
-        Weight array (same length as tau_hat). 1/n_valid for finite
-        observations in target_mask, 0 elsewhere.
-    n_valid : int
-        Number of finite observations in the target subset.
-    """
-    finite_target = np.isfinite(tau_hat) & target_mask
-    n_valid = int(finite_target.sum())
-    weights = np.zeros(len(tau_hat))
-    if n_valid > 0:
-        weights[np.where(finite_target)[0]] = 1.0 / n_valid
-    return weights, n_valid
 
 
 class ImputationDiDBootstrapMixin:
@@ -91,7 +59,8 @@ class ImputationDiDBootstrapMixin:
             cluster_var: str,
             kept_cov_mask: Optional[np.ndarray] = None,
             survey_weights_0: Optional[np.ndarray] = None,
-        ) -> Tuple[np.ndarray, np.ndarray]: ...
+            proj_cache: Optional[Dict[Any, Any]] = None,
+        ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]: ...
 
         @staticmethod
         def _build_cohort_rel_times(
@@ -132,6 +101,7 @@ class ImputationDiDBootstrapMixin:
         balance_e: Optional[int],
         survey_weights_0: Optional[np.ndarray] = None,
         survey_weights_1: Optional[np.ndarray] = None,
+        proj_cache: Optional[Dict[Any, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Pre-compute cluster-level influence function sums for each bootstrap target.
@@ -141,8 +111,10 @@ class ImputationDiDBootstrapMixin:
         bootstrap then perturbs these psi sums with multiplier weights
         (rademacher/mammen/webb; configurable via ``bootstrap_weights``).
 
-        Computational cost scales with the number of aggregation targets, since
-        each target requires its own v_untreated computation (weight-dependent).
+        The per-target v_untreated computation reuses the cached, target-invariant
+        untreated-projection factorization via ``proj_cache`` (shared with the
+        analytical path of the same ``fit()``), so the design + factorization is
+        built once rather than once per target.
         """
         result: Dict[str, Any] = {}
 
@@ -162,10 +134,13 @@ class ImputationDiDBootstrapMixin:
             cluster_var=cluster_var,
             kept_cov_mask=kept_cov_mask,
             survey_weights_0=survey_weights_0,
+            proj_cache=proj_cache,
         )
 
         # Overall ATT
-        overall_psi, cluster_ids = self._compute_cluster_psi_sums(**common, weights=overall_weights)
+        overall_psi, cluster_ids, _ = self._compute_cluster_psi_sums(
+            **common, weights=overall_weights
+        )
         result["overall"] = (overall_psi, cluster_ids)
 
         # Event study: per-horizon weights
@@ -174,18 +149,20 @@ class ImputationDiDBootstrapMixin:
             df_1 = df.loc[omega_1_mask]
             rel_times = df_1["_rel_time"].values
 
+            all_horizons = sorted(set(int(h) for h in rel_times if np.isfinite(h)))
+            if self.horizon_max is not None:
+                all_horizons = [h for h in all_horizons if abs(h) <= self.horizon_max]
+
             # Balanced cohort mask (same logic as _aggregate_event_study)
             balanced_mask = None
             if balance_e is not None:
-                all_horizons = sorted(set(int(h) for h in rel_times if np.isfinite(h)))
-                if self.horizon_max is not None:
-                    all_horizons = [h for h in all_horizons if abs(h) <= self.horizon_max]
                 cohort_rel_times = self._build_cohort_rel_times(df, first_treat)
                 balanced_mask = self._compute_balanced_cohort_mask(
                     df_1, first_treat, all_horizons, balance_e, cohort_rel_times
                 )
 
             ref_period = -1 - self.anticipation
+
             for h in event_study_effects:
                 if event_study_effects[h].get("n_obs", 0) == 0:
                     continue
@@ -193,6 +170,12 @@ class ImputationDiDBootstrapMixin:
                     continue
                 if not np.isfinite(event_study_effects[h].get("effect", np.nan)):
                     continue
+
+                # Skip pre-period horizons — their SEs come from Test 1
+                # lead regression, not bootstrap
+                if h < -self.anticipation:
+                    continue
+
                 h_mask = rel_times == h
                 if balanced_mask is not None:
                     h_mask = h_mask & balanced_mask
@@ -219,7 +202,7 @@ class ImputationDiDBootstrapMixin:
                     if n_valid_h == 0:
                         continue
 
-                psi_h, _ = self._compute_cluster_psi_sums(**common, weights=weights_h)
+                psi_h, _, _ = self._compute_cluster_psi_sums(**common, weights=weights_h)
                 result["event_study"][h] = psi_h
 
         # Group effects: per-group weights
@@ -257,10 +240,60 @@ class ImputationDiDBootstrapMixin:
                     if n_valid_g == 0:
                         continue
 
-                psi_g, _ = self._compute_cluster_psi_sums(**common, weights=weights_g)
+                psi_g, _, _ = self._compute_cluster_psi_sums(**common, weights=weights_g)
                 result["group"][g] = psi_g
 
         return result
+
+    def _build_nan_bootstrap_results(
+        self,
+        original_event_study: Optional[Dict[int, Dict[str, Any]]],
+        original_group: Optional[Dict[Any, Dict[str, Any]]],
+    ) -> ImputationBootstrapResults:
+        """Build an all-NaN ImputationBootstrapResults for degenerate-design
+        bootstrap paths (n_clusters<2 or n_psu<2).
+
+        Per-horizon and per-group dicts are populated with NaN entries keyed
+        by the same horizons/groups as the analytical originals so that the
+        downstream post-bootstrap override loop in :meth:`ImputationDiD.fit`
+        iterates over them and propagates NaN to ``event_study_effects[h]["se"]``
+        / ``group_effects[g]["se"]`` (rather than silently no-oping by
+        finding ``None``).
+        """
+        n_nan = float("nan")
+        ci_nan: Tuple[float, float] = (n_nan, n_nan)
+
+        es_ses: Optional[Dict[int, float]] = None
+        es_cis: Optional[Dict[int, Tuple[float, float]]] = None
+        es_ps: Optional[Dict[int, float]] = None
+        if original_event_study:
+            es_ses = {h: n_nan for h in original_event_study}
+            es_cis = {h: ci_nan for h in original_event_study}
+            es_ps = {h: n_nan for h in original_event_study}
+
+        g_ses: Optional[Dict[Any, float]] = None
+        g_cis: Optional[Dict[Any, Tuple[float, float]]] = None
+        g_ps: Optional[Dict[Any, float]] = None
+        if original_group:
+            g_ses = {g: n_nan for g in original_group}
+            g_cis = {g: ci_nan for g in original_group}
+            g_ps = {g: n_nan for g in original_group}
+
+        return ImputationBootstrapResults(
+            n_bootstrap=self.n_bootstrap,
+            weight_type=self.bootstrap_weights,
+            alpha=self.alpha,
+            overall_att_se=n_nan,
+            overall_att_ci=ci_nan,
+            overall_att_p_value=n_nan,
+            event_study_ses=es_ses,
+            event_study_cis=es_cis,
+            event_study_p_values=es_ps,
+            group_ses=g_ses,
+            group_cis=g_cis,
+            group_p_values=g_ps,
+            bootstrap_distribution=None,
+        )
 
     def _run_bootstrap(
         self,
@@ -303,11 +336,36 @@ class ImputationDiDBootstrapMixin:
             or resolved_survey.fpc is not None
         )
 
+        # Fail-closed when the analytical-cluster path has fewer than 2
+        # independent clusters. Without this guard, the multiplier bootstrap
+        # SE collapses to ~0 from BLAS roundoff (NOT NaN), and downstream
+        # zero-SE checks miss the degenerate-design case.
+        if not _use_survey_bootstrap and n_clusters < 2:
+            warnings.warn(
+                f"Bootstrap with n_clusters={n_clusters} (<2 independent "
+                "clusters) produces degenerate variance; returning NaN SE.",
+                UserWarning,
+                stacklevel=3,
+            )
+            return self._build_nan_bootstrap_results(original_event_study, original_group)
+
         # Generate ALL weights upfront: shape (n_bootstrap, n_clusters)
         if _use_survey_bootstrap:
             psu_weights, psu_ids = _generate_survey_multiplier_weights_batch(
                 self.n_bootstrap, resolved_survey, self.bootstrap_weights, rng
             )
+            # Fail-closed when the survey-PSU path has fewer than 2 PSUs.
+            # Same BLAS-roundoff failure mode as the non-survey cluster path
+            # above; same NaN-propagation contract.
+            if len(psu_ids) < 2:
+                warnings.warn(
+                    f"Survey-PSU bootstrap with n_psu={len(psu_ids)} (<2 "
+                    "independent PSUs) produces degenerate variance from "
+                    "BLAS roundoff; returning NaN SE.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+                return self._build_nan_bootstrap_results(original_event_study, original_group)
             # Reindex PSU weights to match cluster_ids ordering.
             # cluster_ids are unique PSU values from _compute_cluster_psi_sums;
             # psu_ids are unique PSU values from the survey weight generator.

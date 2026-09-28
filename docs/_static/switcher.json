@@ -1,0 +1,13 @@
+[
+  {
+    "name": "stable",
+    "version": "stable",
+    "url": "https://diff-diff.readthedocs.io/en/stable/",
+    "preferred": true
+  },
+  {
+    "name": "latest",
+    "version": "latest",
+    "url": "https://diff-diff.readthedocs.io/en/latest/"
+  }
+]

@@ -1,0 +1,938 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index e9f4359b..a980cddc 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
+ ## [Unreleased]
+ 
+ ### Added
++- **`LPDiD` complex-survey-design support** (Phase D1). Adds a `survey_design=` argument to
++  `LPDiD.fit()` (a `SurveyDesign` with probability weights + optional strata/PSU/FPC). On the
++  variance-weighted default path the long-difference regression at each horizon is fit by WLS on
++  the survey weights, and the standard error is the stratified-PSU Taylor-linearization (Binder
++  TSL) sandwich with `df = n_PSU - n_strata`, reusing `diff_diff/survey.py`
++  (`compute_survey_vcov` / `_compute_stratified_psu_meat`). The design is re-resolved on each
++  realized (post-clean-control) sample so weights/strata/PSU align with the regression rows; with
++  no explicit PSU the unit (LP-DiD's default cluster) is injected as the PSU. Rejects
++  `survey_design` combined with `reweight=True` (the equally-weighted / regression-adjustment
++  influence-function path), replicate-weight designs, and non-pweight (fweight/aweight) types,
++  each a deferred follow-up. `LPDiDResults` gains `survey_metadata` / `n_strata` / `n_psu`, a
++  `"survey_tsl"` `vcov_type`, and a Survey Design block in `summary()`. The non-survey path is
++  byte-for-byte unchanged. Validated against `survey::svyglm` on the stacked long difference
++  (numeric golden parity is the D2 follow-up).
+ - **`LPDiD` non-absorbing R-parity validation** (Phase C2). Pins both non-absorbing modes
+   against an independent `fixest::feols` reconstruction of the paper's Eq. 12 (`first_entry`)
+   and Eq. 13 (`effect_stabilization`) clean-sample restrictions: variance-weighted point and
+diff --git a/TODO.md b/TODO.md
+index 3569b833..177b0961 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -70,6 +70,7 @@ generic sparse-FE, QR+SVD rank-detection redundancy, `check_finite` bypass — m
+ | `ImputationDiD` covariate-path variance lacks a dedicated parity anchor — only the no-covariate staggered panel is R-parity'd, though the covariate path shares the same validated projection code. Add a small dense-design **hand-calc** for the covariate projection (no external tooling), or a covariate (time-varying X) R `didimputation` golden asserting overall/ES SE parity (the golden variant needs local R). | `tests/test_methodology_imputation.py`, `benchmarks/R/generate_didimputation_golden.R` | imputation-validation | Mid | Low |
+ | Add true half-sample BRR replicate-weight regressions per estimator family (current tests use Fay-like 0.5/1.5 perturbations; `test_survey_phase6.py` covers true BRR at the helper level). | `tests/test_replicate_weight_expansion.py` | #253 | Mid | Low |
+ | Port the CI `<notebook-prose>` extraction into the reviewer-eval harness so `docs/tutorials/*.ipynb` cases (currently guarded out of `verify-corpus`/`run`) can be reviewed with CI-equivalent context. | `tools/reviewer-eval/adapters/ci_prompt.py` | local-review | Mid | Low |
++| **`LPDiD` survey-design R-parity (PR-D2)** — pin the stratified-PSU Taylor-linearization standard errors against `survey::svyglm` on the stacked long difference (per-horizon + pooled-post point/SE/df), mirroring `benchmark_survey_estimators.R`. The D1 build ships the survey path validated by pure-Python invariants (reduction/FPC/stratification/lonely-PSU/NaN-consistency); D2 adds the numeric `svyglm` golden + parity test. | `benchmarks/R/`, `tests/test_methodology_lpdid.py` | PR-D1 | Mid | Low |
+ 
+ ---
+ 
+@@ -117,6 +118,7 @@ exists but parity can't be verified without a local toolchain.
+ | **`bias_corrected_local_linear` (lprobust) Phase-1c follow-ups:** extend golden parity to `kernel ∈ {triangular, uniform}` (epa-only today); expose `vce ∈ {hc0,hc1,hc2,hc3}` on the public wrapper once R goldens exist (port supports all four; needs a per-mode generator + a hc2/hc3 q-fit-leverage decision); clustered-DGP auto-bandwidth parity is **blocked upstream** on an nprobust singleton-cluster bug in `lpbwselect.mse.dpi` (Phase-1c DGP 4 uses manual `h=b=0.3`). | `_nprobust_port.py`, `local_linear.py`, `generate_nprobust_lprobust_golden.R` | Phase 1c | Low-Med |
+ | `HeterogeneousAdoptionDiD` Stute-family Stata-bridge parity: no public R `Stutetest` package exists; would add `benchmarks/stata/generate_stute_golden.do` + a Stata dependency. | `benchmarks/stata/`, `tests/test_stute_test_parity.py` | follow-up | Low |
+ | **`LPDiD` regression-adjustment SE — no runnable R reference.** The RA influence-function cluster SE is canonically Stata `teffects ra ... atet vce(cluster)` only; no R package computes it (`alexCardazzi/lpdid` does direct covariate inclusion, not RA). Today the RA *point* is R-anchored (~1e-12), the SE is pinned + MC-coverage-validated (`coverage_lpdid_ra.py`). Follow-up: contribute the RA path to `alexCardazzi/lpdid` so a runnable R RA reference exists — only a *trusted* anchor once cross-checked vs Stata `teffects` (else circular). | `tests/test_methodology_lpdid.py`, `benchmarks/python/coverage_lpdid_ra.py` | #B2 follow-up | Low |
++| **`LPDiD` survey scope gaps (PR-D1 deferrals).** Survey support covers the variance-weighted default path only. (a) `survey_design` + `reweight=True` (the equally-weighted / regression-adjustment IF path) is rejected: the weighted RA influence-function variance has **no runnable survey reference** (same class as the RA-SE row above - `survey::svyglm` anchors only the OLS/WLS path). (b) Replicate-weight survey designs (BRR/Fay/JK1/JKn/SDR) and (c) non-pweight (fweight/aweight) types are rejected pending demand. | `lpdid.py`, REGISTRY #8 | PR-D1 | Low |
+ | **`LPDiD` non-absorbing R-parity - DONE (PR-C2)** via an independent `fixest::feols` Eq. 12/13 reconstruction (point+SE ~1e-13/~1e-15 vw; `effect_stabilization` reweighted point + pinned SE). `alexCardazzi/lpdid`'s `nonabsorbing_lag` proved NOT a faithful Eq. 13 (off-switch clamp + non-paper boundary/placebo window; diverges ~0.01-0.05 even on a monotone panel), so it is recorded as a divergent reference, not a gate. **Residual external-reference gap:** the authors' canonical non-absorbing SE/RA is Stata `lpdid`/`teffects` only (no faithful R analogue) - same class as the absorbing RA-SE row above; revisit if a Stata toolchain or a corrected R package appears. | `benchmarks/R/generate_lpdid_golden.R`, `tests/test_methodology_lpdid.py` | PR-C2 | Low |
+ | `HeterogeneousAdoptionDiD` Phase-3 R-parity: ships coverage-rate validation on synthetic DGPs, not tight point parity vs `chaisemartin::stute_test` / `yatchew_test` (needs bootstrap-seed-semantics + `B` alignment across numpy/R). | `tests/test_had_pretests.py` | Phase 3 | Low |
+ 
+diff --git a/diff_diff/guides/llms-full.txt b/diff_diff/guides/llms-full.txt
+index 9278bdbd..825f466e 100644
+--- a/diff_diff/guides/llms-full.txt
++++ b/diff_diff/guides/llms-full.txt
+@@ -897,7 +897,7 @@ results.print_summary()
+ 
+ ### LPDiD
+ 
+-Local Projections DiD (Dube, Girardi, Jorda & Taylor 2025). Estimates a separate OLS at each event-time horizon of a long difference (`y_{i,t+h} - y_{i,t-1}`) on the treatment-switch indicator plus calendar-time fixed effects (no unit FE), restricted to a flexible "clean control" sample of newly-treated and not-yet-treated units. Excluding already-treated units from the control group removes the negative-weighting bias of naive TWFE, so the default (variance-weighted) estimand has strictly non-negative weights. `reweight=True` yields the equally-weighted ATT (numerically equivalent to Callaway-Sant'Anna); covariates then enter via regression adjustment. Standard errors on the default/weighted path are cluster-robust at the unit level (the paper specifies no SE; matches Stata `lpdid` `vce(cluster unit)`); the regression-adjustment covariate path (`reweight=True`) instead reports an influence-function cluster variance (ImputationDiD/BJS family). Scope: binary treatment; absorbing by default (rejects panels where treatment turns off), with non-absorbing (reversible) treatment available via `non_absorbing` - `"first_entry"` (Dube et al. Eq. 12, the effect of entering for the first time and staying treated) or `"effect_stabilization"` (Eq. 13, requires `stabilization_window=L`; lets units whose treatment has been stable for at least `L` periods act as clean controls, so estimation is feasible with few/no never-treated units). Non-absorbing modes require a gap-free panel within each unit's observed span.
++Local Projections DiD (Dube, Girardi, Jorda & Taylor 2025). Estimates a separate OLS at each event-time horizon of a long difference (`y_{i,t+h} - y_{i,t-1}`) on the treatment-switch indicator plus calendar-time fixed effects (no unit FE), restricted to a flexible "clean control" sample of newly-treated and not-yet-treated units. Excluding already-treated units from the control group removes the negative-weighting bias of naive TWFE, so the default (variance-weighted) estimand has strictly non-negative weights. `reweight=True` yields the equally-weighted ATT (numerically equivalent to Callaway-Sant'Anna); covariates then enter via regression adjustment. Standard errors on the default/weighted path are cluster-robust at the unit level (the paper specifies no SE; matches Stata `lpdid` `vce(cluster unit)`); the regression-adjustment covariate path (`reweight=True`) instead reports an influence-function cluster variance (ImputationDiD/BJS family). Scope: binary treatment; absorbing by default (rejects panels where treatment turns off), with non-absorbing (reversible) treatment available via `non_absorbing` - `"first_entry"` (Dube et al. Eq. 12, the effect of entering for the first time and staying treated) or `"effect_stabilization"` (Eq. 13, requires `stabilization_window=L`; lets units whose treatment has been stable for at least `L` periods act as clean controls, so estimation is feasible with few/no never-treated units). Non-absorbing modes require a gap-free panel within each unit's observed span. Complex-survey designs are supported on the variance-weighted default path via the `survey_design=` argument to `fit()` (probability weights enter the WLS point estimate; the SE is the stratified-PSU Taylor-linearization sandwich with `df = n_PSU - n_strata`, with optional FPC and lonely-PSU handling) — rejected with `reweight=True`, replicate weights, or non-pweight types.
+ 
+ ```python
+ LPDiD(
+@@ -932,6 +932,7 @@ lpdid.fit(
+     pre_pooled: int | tuple = None,    # Pooled pre-window horizons (int or (start, end))
+     only_event: bool = False,          # Compute only the event-study table
+     only_pooled: bool = False,         # Compute only the pooled pre/post table
++    survey_design: SurveyDesign = None,  # Complex-survey design (pweight + optional strata/PSU/FPC); variance-weighted default path only (rejected with reweight=True)
+ ) -> LPDiDResults
+ ```
+ 
+diff --git a/diff_diff/guides/llms.txt b/diff_diff/guides/llms.txt
+index 433006bb..5d81d8f7 100644
+--- a/diff_diff/guides/llms.txt
++++ b/diff_diff/guides/llms.txt
+@@ -69,7 +69,7 @@ Full practitioner guide: call `diff_diff.get_llm_guide("practitioner")`
+ - [TROP](https://diff-diff.readthedocs.io/en/stable/api/trop.html): Triply Robust Panel estimator (Athey et al. 2025) with nuclear norm factor adjustment
+ - [StaggeredTripleDifference](https://diff-diff.readthedocs.io/en/stable/api/staggered.html#staggeredtripledifference): Ortiz-Villavicencio & Sant'Anna (2025) staggered DDD with group-time ATT
+ - [WooldridgeDiD](https://diff-diff.readthedocs.io/en/stable/api/wooldridge_etwfe.html): Wooldridge (2023, 2025) ETWFE — saturated OLS, logit/Poisson QMLE (ASF-based ATT). Alias: ETWFE
+-- [LPDiD](https://diff-diff.readthedocs.io/en/stable/api/lpdid.html): Dube, Girardi, Jorda & Taylor (2025) Local Projections DiD: per-horizon long-difference event study on clean controls (no negative weighting); variance- or equally-weighted ATT, premean differencing, pooled pre/post, fast. Absorbing by default; non-absorbing (reversible) treatment via `non_absorbing="first_entry"` (Eq. 12) or `"effect_stabilization"` (Eq. 13, window `L`).
++- [LPDiD](https://diff-diff.readthedocs.io/en/stable/api/lpdid.html): Dube, Girardi, Jorda & Taylor (2025) Local Projections DiD: per-horizon long-difference event study on clean controls (no negative weighting); variance- or equally-weighted ATT, premean differencing, pooled pre/post, fast. Absorbing by default; non-absorbing (reversible) treatment via `non_absorbing="first_entry"` (Eq. 12) or `"effect_stabilization"` (Eq. 13, window `L`). Complex-survey designs (pweight + stratified-PSU TSL SEs) on the default path via `fit(survey_design=...)`.
+ - [BaconDecomposition](https://diff-diff.readthedocs.io/en/stable/api/bacon.html): Goodman-Bacon (2021) decomposition for diagnosing TWFE bias in staggered settings
+ 
+ ## Diagnostics and Sensitivity Analysis
+diff --git a/diff_diff/lpdid.py b/diff_diff/lpdid.py
+index 9878afa0..44b5ab91 100644
+--- a/diff_diff/lpdid.py
++++ b/diff_diff/lpdid.py
+@@ -92,6 +92,18 @@ class LPDiD:
+         rhs_columns.extend([f"_dy_lag_{lag}" for lag in range(1, dylags + 1)])
+         return rhs_columns
+ 
++    def _survey_columns(self, survey_design):
++        """Survey design column names (weights/strata/psu/fpc) to carry through the
++        panel and every per-horizon sample so the per-sample survey design can be
++        re-resolved on the realized estimation rows. Empty when no survey design.
++
++        ``survey_design`` is threaded from ``fit()`` as a local (data-binding), matching
++        the library-wide convention; it is never stored on the estimator instance."""
++        if survey_design is None:
++            return []
++        sd = survey_design
++        return [c for c in (sd.weights, sd.strata, sd.psu, sd.fpc) if c is not None]
++
+     def _prepare_panel(
+         self,
+         data,
+@@ -104,10 +116,20 @@ class LPDiD:
+         ylags=0,
+         dylags=0,
+         absorb=None,
++        survey_design=None,
+     ):
+         selected_columns = list(
+             dict.fromkeys(
+-                [unit, time, outcome, treatment, cluster, *(covariates or []), *(absorb or [])]
++                [
++                    unit,
++                    time,
++                    outcome,
++                    treatment,
++                    cluster,
++                    *(covariates or []),
++                    *(absorb or []),
++                    *self._survey_columns(survey_design),
++                ]
+             )
+         )
+         panel = data[selected_columns].copy()
+@@ -395,20 +417,26 @@ class LPDiD:
+         dylags=0,
+         absorb=None,
+         apply_no_composition: bool = True,
++        survey_design=None,
+     ):
+         rhs_columns = self._rhs_column_names(covariates=covariates, ylags=ylags, dylags=dylags)
+-        base_columns = [
+-            unit,
+-            time,
+-            "_treated",
+-            "_entry",
+-            "_first_treat",
+-            "_cluster",
+-            "_common_event_ok",
+-            *(["_delta_d", "_unit_min_t"] if self.non_absorbing is not None else []),
+-            *rhs_columns,
+-            *(absorb or []),
+-        ]
++        base_columns = list(
++            dict.fromkeys(
++                [
++                    unit,
++                    time,
++                    "_treated",
++                    "_entry",
++                    "_first_treat",
++                    "_cluster",
++                    "_common_event_ok",
++                    *(["_delta_d", "_unit_min_t"] if self.non_absorbing is not None else []),
++                    *rhs_columns,
++                    *(absorb or []),
++                    *self._survey_columns(survey_design),
++                ]
++            )
++        )
+         if self.pmd == "max":
+             base_columns.append("_pmd_all_baseline")
+         elif isinstance(self.pmd, int):
+@@ -460,15 +488,20 @@ class LPDiD:
+         sample["_event_time"] = sample[time]
+         sample["_long_diff"] = sample["_target_outcome"] - sample[baseline_column]
+         return sample[
+-            [
+-                "horizon",
+-                "_event_time",
+-                "_long_diff",
+-                "_entry",
+-                "_cluster",
+-                *rhs_columns,
+-                *(absorb or []),
+-            ]
++            list(
++                dict.fromkeys(
++                    [
++                        "horizon",
++                        "_event_time",
++                        "_long_diff",
++                        "_entry",
++                        "_cluster",
++                        *rhs_columns,
++                        *(absorb or []),
++                        *self._survey_columns(survey_design),
++                    ]
++                )
++            )
+         ]
+ 
+     def _sample_is_identified(self, sample: pd.DataFrame) -> bool:
+@@ -703,6 +736,7 @@ class LPDiD:
+         rhs_columns=None,
+         absorb_columns=None,
+         weight_column: Optional[str] = None,
++        survey_design=None,
+     ) -> Dict[str, Optional[float]]:
+         rhs_columns = list(rhs_columns or [])
+         absorb_columns = list(absorb_columns or [])
+@@ -788,6 +822,14 @@ class LPDiD:
+         response = sample[response_column].to_numpy(dtype=float)
+         cluster_ids = sample["_cluster"].to_numpy()
+         weights = None if weight_column is None else sample[weight_column].to_numpy(dtype=float)
++        if survey_design is not None:
++            # Complex-survey path: WLS point estimate weighted by the survey design,
++            # stratified-PSU Taylor-linearization (Binder TSL) sandwich variance.
++            # reweight is rejected upstream when survey_design is set, so weight_column
++            # is None here (the survey weights are the only observation weights).
++            return self._estimate_survey_sample(
++                sample, design, response, column_names, n_obs, survey_design
++            )
+         if n_obs <= design.shape[1]:
+             coef, _, _ = solve_ols(
+                 design,
+@@ -859,6 +901,76 @@ class LPDiD:
+             "n_clusters": n_clusters,
+         }
+ 
++    def _estimate_survey_sample(self, sample, design, response, column_names, n_obs, survey_design):
++        """Complex-survey variance for the (variance-weighted) long-difference
++        regression: WLS point estimate weighted by the survey design, stratified-PSU
++        Taylor-linearization sandwich (Binder TSL). Mirrors ``survey::svyglm`` on the
++        stacked long difference. ``reweight`` is rejected upstream when a survey design
++        is set, so the survey weights are the only observation weights.
++
++        ``df`` is the survey degrees of freedom (``n_PSU - n_strata``), and the reported
++        ``n_clusters`` is the realized number of PSUs in this sample.
++        """
++        from diff_diff.survey import (
++            _inject_cluster_as_psu,
++            _resolve_effective_cluster,
++            compute_survey_vcov,
++        )
++
++        cluster_ids = sample["_cluster"].to_numpy()
++        with warnings.catch_warnings():
++            warnings.filterwarnings(
++                "ignore", message="pweight weights normalized", category=UserWarning
++            )
++            resolved = survey_design.resolve(sample)
++        if resolved.psu is None:
++            # No explicit PSU: cluster LP-DiD's unit (the default cluster) as the
++            # effective PSU. The rebind is load-bearing -- _inject_cluster_as_psu
++            # returns a NEW object; dropping it would leave each observation its own
++            # PSU and silently deflate the SE.
++            resolved = _inject_cluster_as_psu(resolved, cluster_ids)
++        else:
++            # Explicit survey PSU wins; warn only if the user ALSO set an explicit
++            # cluster that partitions differently (self.cluster is None under the
++            # default unit clustering, which suppresses the warning).
++            _resolve_effective_cluster(resolved, cluster_ids, cluster_name=self.cluster)
++
++        weights = resolved.weights
++        coef, _, _ = solve_ols(
++            design,
++            response,
++            return_vcov=False,
++            rank_deficient_action=self.rank_deficient_action,
++            column_names=column_names,
++            weights=weights,
++        )
++        effect = float(coef[1])
++        se = np.nan
++        # Fail closed (never crash): an under-identified survey sample (n_obs <= k,
++        # singular X'WX) makes compute_survey_vcov raise; an unidentified design-based
++        # variance (e.g. all strata removed by lonely_psu='remove') returns NaN. Both
++        # collapse the full inference tuple to NaN via safe_inference.
++        try:
++            residuals = response - design @ coef
++            vcov = compute_survey_vcov(design, residuals, resolved)
++            if vcov.shape[0] > 1 and np.isfinite(vcov[1, 1]) and vcov[1, 1] >= 0:
++                se = float(np.sqrt(vcov[1, 1]))
++        except (ValueError, np.linalg.LinAlgError):
++            se = np.nan
++
++        df = resolved.df_survey
++        t_stat, p_value, conf_int = safe_inference(effect, se, alpha=self.alpha, df=df)
++        return {
++            "coefficient": effect,
++            "se": se,
++            "t_stat": t_stat,
++            "p_value": p_value,
++            "conf_low": conf_int[0],
++            "conf_high": conf_int[1],
++            "n_obs": n_obs,
++            "n_clusters": int(resolved.n_psu),
++        }
++
+     def _estimate_horizon(
+         self,
+         panel,
+@@ -871,6 +983,7 @@ class LPDiD:
+         ylags=0,
+         dylags=0,
+         absorb=None,
++        survey_design=None,
+     ):
+         rhs_columns = self._rhs_column_names(covariates=covariates, ylags=ylags, dylags=dylags)
+         sample = self._build_horizon_sample(
+@@ -883,6 +996,7 @@ class LPDiD:
+             ylags=ylags,
+             dylags=dylags,
+             absorb=absorb,
++            survey_design=survey_design,
+         )
+         ra_required = self.reweight and bool(rhs_columns or absorb)
+         if ra_required:
+@@ -899,6 +1013,7 @@ class LPDiD:
+             rhs_columns=rhs_columns,
+             absorb_columns=absorb,
+             weight_column="_rw_event_weight" if self.reweight else None,
++            survey_design=survey_design,
+         )
+ 
+     def _build_pooled_sample(
+@@ -914,20 +1029,26 @@ class LPDiD:
+         ylags=0,
+         dylags=0,
+         absorb=None,
++        survey_design=None,
+     ):
+         rhs_columns = self._rhs_column_names(covariates=covariates, ylags=ylags, dylags=dylags)
+-        base_columns = [
+-            unit,
+-            time,
+-            "_treated",
+-            "_entry",
+-            "_first_treat",
+-            "_cluster",
+-            "_common_pooled_ok",
+-            *(["_delta_d", "_unit_min_t"] if self.non_absorbing is not None else []),
+-            *rhs_columns,
+-            *(absorb or []),
+-        ]
++        base_columns = list(
++            dict.fromkeys(
++                [
++                    unit,
++                    time,
++                    "_treated",
++                    "_entry",
++                    "_first_treat",
++                    "_cluster",
++                    "_common_pooled_ok",
++                    *(["_delta_d", "_unit_min_t"] if self.non_absorbing is not None else []),
++                    *rhs_columns,
++                    *(absorb or []),
++                    *self._survey_columns(survey_design),
++                ]
++            )
++        )
+         if self.pmd == "max":
+             base_columns.append("_pmd_all_baseline")
+         elif isinstance(self.pmd, int):
+@@ -981,7 +1102,19 @@ class LPDiD:
+         sample["_event_time"] = sample[time]
+         sample["_pooled_diff"] = sample[target_columns].mean(axis=1) - sample[baseline_column]
+         return sample[
+-            ["_event_time", "_pooled_diff", "_entry", "_cluster", *rhs_columns, *(absorb or [])]
++            list(
++                dict.fromkeys(
++                    [
++                        "_event_time",
++                        "_pooled_diff",
++                        "_entry",
++                        "_cluster",
++                        *rhs_columns,
++                        *(absorb or []),
++                        *self._survey_columns(survey_design),
++                    ]
++                )
++            )
+         ]
+ 
+     def _estimate_window(
+@@ -997,6 +1130,7 @@ class LPDiD:
+         ylags=0,
+         dylags=0,
+         absorb=None,
++        survey_design=None,
+     ):
+         horizons = list(horizons)
+         if not horizons:
+@@ -1039,6 +1173,7 @@ class LPDiD:
+             ylags=ylags,
+             dylags=dylags,
+             absorb=absorb,
++            survey_design=survey_design,
+         )
+         if pooled_sample.empty:
+             raise ValueError(f"pooled {kind} window did not contain any horizons")
+@@ -1061,6 +1196,7 @@ class LPDiD:
+             rhs_columns=rhs_columns,
+             absorb_columns=absorb,
+             weight_column="_rw_pooled_weight" if self.reweight else None,
++            survey_design=survey_design,
+         )
+ 
+     def _resolve_pooled_horizons(self, pooled, *, kind):
+@@ -1116,10 +1252,25 @@ class LPDiD:
+         pre_pooled=None,
+         only_event=False,
+         only_pooled=False,
++        survey_design=None,
+     ):
+         self.results_ = None
+         self.is_fitted_ = False
+         self._fit_meta = None
++        # `survey_design` (complex-survey design: probability weights + optional
++        # strata/PSU/FPC) is a fit()-time data-binding threaded through as a local,
++        # matching the library-wide convention; it is never stored on the instance and
++        # is not a get_params() config field. Supported only on the variance-weighted
++        # default path (rejected with reweight=True).
++        if survey_design is not None and self.reweight:
++            raise NotImplementedError(
++                "survey_design is not supported with reweight=True. The survey "
++                "Taylor-linearization (TSL) standard errors are implemented for the "
++                "variance-weighted default path (reweight=False), which has a runnable "
++                "survey::svyglm reference; the reweighted equally-weighted ATT and the "
++                "regression-adjustment influence-function path have no validated survey "
++                "reference yet. Set reweight=False to use survey_design."
++            )
+ 
+         # Validate covariate/absorb shape and reserved names BEFORE building the
+         # required-columns list, so a string (e.g. absorb="region") raises the
+@@ -1188,6 +1339,58 @@ class LPDiD:
+             )
+ 
+         cluster = self.cluster or unit
++
++        survey_metadata = None
++        survey_n_strata = None
++        survey_n_psu = None
++        survey_cluster_name = cluster
++        if survey_design is not None:
++            from diff_diff.survey import (
++                _inject_cluster_as_psu,
++                _resolve_survey_for_fit,
++                _validate_unit_constant_survey,
++                compute_survey_metadata,
++            )
++
++            for _col in self._survey_columns(survey_design):
++                if isinstance(_col, str) and (_col.startswith("_") or _col == "horizon"):
++                    raise ValueError(
++                        f"survey_design column '{_col}' collides with an LPDiD "
++                        "reserved/internal name (names starting with '_' or named "
++                        "'horizon' are reserved by the estimator); rename it."
++                    )
++            resolved_panel, _, _, _ = _resolve_survey_for_fit(survey_design, data, "analytical")
++            if resolved_panel.weight_type != "pweight":
++                raise ValueError(
++                    "LPDiD survey support requires weight_type='pweight' (probability "
++                    f"weights); got '{resolved_panel.weight_type}'. Frequency (fweight) and "
++                    "analytic (aweight) weight types are a deferred follow-up."
++                )
++            if resolved_panel.uses_replicate_variance:
++                raise NotImplementedError(
++                    "LPDiD does not yet support replicate-weight survey designs (BRR/Fay/"
++                    "JK1/JKn/SDR); use a Taylor-linearization design (weights + optional "
++                    "strata/PSU/FPC). Replicate-weight support is a deferred follow-up."
++                )
++            _validate_unit_constant_survey(data, unit, survey_design)
++            # Panel-level effective design for the REPORTED metadata: inject the unit
++            # (LP-DiD's default cluster) as the PSU when no explicit PSU is given, so the
++            # reported design dimensions describe unit-level clustering (not implicit
++            # per-observation PSUs). The per-horizon SE uses each realized sample's own
++            # resolved design (see _estimate_survey_sample); the headline G in the
++            # SE-family line is the realized pooled-post PSU count.
++            if resolved_panel.psu is None:
++                resolved_panel = _inject_cluster_as_psu(resolved_panel, data[cluster].to_numpy())
++            raw_weights = (
++                data[survey_design.weights].to_numpy(dtype=float)
++                if survey_design.weights
++                else np.ones(len(data), dtype=float)
++            )
++            survey_metadata = compute_survey_metadata(resolved_panel, raw_weights)
++            survey_n_strata = int(resolved_panel.n_strata)
++            survey_n_psu = int(resolved_panel.n_psu)
++            survey_cluster_name = survey_design.psu or cluster
++
+         pre_horizons = self._resolve_pooled_horizons(pre_pooled, kind="pre")
+         post_horizons = self._resolve_pooled_horizons(post_pooled, kind="post")
+         panel = self._prepare_panel(
+@@ -1201,6 +1404,7 @@ class LPDiD:
+             ylags=ylags,
+             dylags=dylags,
+             absorb=absorb,
++            survey_design=survey_design,
+         )
+         panel["_common_event_ok"] = self._common_clean_sample_indicator(
+             panel,
+@@ -1244,6 +1448,7 @@ class LPDiD:
+                         ylags=ylags,
+                         dylags=dylags,
+                         absorb=absorb,
++                        survey_design=survey_design,
+                     )
+                 event_rows.append(
+                     {
+@@ -1265,6 +1470,7 @@ class LPDiD:
+                 ylags=ylags,
+                 dylags=dylags,
+                 absorb=absorb,
++                survey_design=survey_design,
+             )
+             post_estimate = self._estimate_window(
+                 panel,
+@@ -1277,6 +1483,7 @@ class LPDiD:
+                 ylags=ylags,
+                 dylags=dylags,
+                 absorb=absorb,
++                survey_design=survey_design,
+             )
+             pooled = pd.DataFrame(
+                 [
+@@ -1313,12 +1520,16 @@ class LPDiD:
+             no_composition=self.no_composition,
+             pmd=self.pmd,
+             alpha=self.alpha,
+-            cluster_name=cluster,
++            cluster_name=survey_cluster_name,
+             n_clusters=headline_n_clusters,
+             vcov_type=(
+-                "if_cluster"
+-                if (self.reweight and bool(covariates or ylags or dylags or absorb))
+-                else "hc1"
++                "survey_tsl"
++                if survey_design is not None
++                else (
++                    "if_cluster"
++                    if (self.reweight and bool(covariates or ylags or dylags or absorb))
++                    else "hc1"
++                )
+             ),
+             rank_deficient_action=self.rank_deficient_action,
+             covariates=list(covariates) if covariates else None,
+@@ -1327,6 +1538,9 @@ class LPDiD:
+             dylags=dylags,
+             non_absorbing=self.non_absorbing,
+             stabilization_window=self.stabilization_window,
++            survey_metadata=survey_metadata,
++            n_strata=survey_n_strata,
++            n_psu=survey_n_psu,
+         )
+         self._fit_meta = {"cluster": cluster, "outcome": outcome, "unit": unit, "time": time}
+         self.is_fitted_ = True
+diff --git a/diff_diff/lpdid_results.py b/diff_diff/lpdid_results.py
+index f0afbd8b..5303ab88 100644
+--- a/diff_diff/lpdid_results.py
++++ b/diff_diff/lpdid_results.py
+@@ -43,6 +43,14 @@ class LPDiDResults:
+     dylags: int = 0
+     non_absorbing: Optional[str] = None
+     stabilization_window: Optional[int] = None
++    # Survey-design (Taylor-linearization) metadata, set only when fit() received a
++    # ``survey_design``. ``survey_metadata`` is a ``SurveyMetadata`` (weight type, Kish
++    # effective N, design effect, panel-level n_strata/n_psu, survey d.f.); ``n_strata``
++    # / ``n_psu`` echo the panel-level effective design dimensions. ``vcov_type`` is then
++    # ``"survey_tsl"`` and ``n_clusters`` is the realized headline (pooled-post) PSU count.
++    survey_metadata: Optional[Any] = None
++    n_strata: Optional[int] = None
++    n_psu: Optional[int] = None
+ 
+     # ------------------------------------------------------------------
+     # internal helpers
+@@ -147,14 +155,25 @@ class LPDiDResults:
+         if self.non_absorbing is not None:
+             result["non_absorbing"] = self.non_absorbing
+             result["stabilization_window"] = self.stabilization_window
+-        result["inference_method"] = "cluster_robust"
++        if self.survey_metadata is not None:
++            result["n_strata"] = self.n_strata
++            result["n_psu"] = self.n_psu
++            result["weight_type"] = getattr(self.survey_metadata, "weight_type", None)
++            result["df_survey"] = getattr(self.survey_metadata, "df_survey", None)
++        result["inference_method"] = (
++            "survey_tsl" if self.vcov_type == "survey_tsl" else "cluster_robust"
++        )
+         return result
+ 
+     # ------------------------------------------------------------------
+     # text summary
+     # ------------------------------------------------------------------
+     def summary(self) -> str:
+-        from diff_diff.results import _format_vcov_label, _get_significance_stars
++        from diff_diff.results import (
++            _format_survey_block,
++            _format_vcov_label,
++            _get_significance_stars,
++        )
+ 
+         # Confidence intervals in the event_study / pooled tables are computed at
+         # fit time using ``self.alpha``; the displayed level must match them, so
+@@ -205,6 +224,14 @@ class LPDiDResults:
+             # (ImputationDiD/BJS family), not an OLS CR1 sandwich.
+             g = f", G={self.n_clusters}" if self.n_clusters else ""
+             vcov_label = f"Influence-function cluster-robust at {self.cluster_name}{g}"
++        elif self.vcov_type == "survey_tsl":
++            # Complex-survey path: stratified-PSU Taylor-linearization (Binder TSL)
++            # sandwich. _format_vcov_label does not know "survey_tsl", so build the
++            # label here (G = realized pooled-post PSU count). The design block below
++            # carries the full survey metadata.
++            g = f", G={self.n_clusters}" if self.n_clusters else ""
++            psu = self.cluster_name or "PSU"
++            vcov_label = f"Survey Taylor-linearization (stratified PSU) at {psu}{g}"
+         else:
+             vcov_label = _format_vcov_label(
+                 self.vcov_type,
+@@ -214,6 +241,8 @@ class LPDiDResults:
+             )
+         if vcov_label:
+             lines.append(f"Std. errors: {vcov_label}")
++        if self.survey_metadata is not None:
++            lines.extend(_format_survey_block(self.survey_metadata, width))
+ 
+         header = (
+             f"{'':>8}  {'Estimate':>10}  {'Std.Err':>10}  {'t':>8}  {'P>|t|':>8}"
+diff --git a/docs/api/lpdid.rst b/docs/api/lpdid.rst
+index ad503abd..25c6245b 100644
+--- a/docs/api/lpdid.rst
++++ b/docs/api/lpdid.rst
+@@ -27,8 +27,16 @@ estimand is a strictly non-negatively-weighted average of cohort effects.
+    each unit's observed span and cover the entry-effect estimands. The
+    non-absorbing entry-effect paths are R-parity-validated against an independent
+    ``fixest::feols`` reconstruction of the paper's Eq. 12/13 (see
+-   ``docs/methodology/REGISTRY.md``); the Appendix-C exit-event dynamics, the
+-   Stata canonical SE, and survey-design support remain planned follow-ups.
++   ``docs/methodology/REGISTRY.md``); the Appendix-C exit-event dynamics and the
++   Stata canonical SE remain planned follow-ups.
++   Complex-survey designs (probability weights + stratified-PSU
++   Taylor-linearization standard errors with optional finite-population
++   correction and lonely-PSU handling) are supported on the variance-weighted
++   default path via the ``survey_design`` argument to ``fit()`` (pass a
++   :class:`~diff_diff.SurveyDesign`); ``df = n_PSU - n_strata``. The
++   reweighted / regression-adjustment path, replicate-weight designs, and
++   non-pweight (fweight/aweight) types are not yet supported with a survey
++   design.
+    Covariates and absorbed fixed
+    effects are supported; under ``reweight=False`` they enter by direct
+    inclusion, which preserves the non-negative weighting result only under
+diff --git a/docs/choosing_estimator.rst b/docs/choosing_estimator.rst
+index 2fd1223d..69f437b3 100644
+--- a/docs/choosing_estimator.rst
++++ b/docs/choosing_estimator.rst
+@@ -877,6 +877,11 @@ estimation. The depth of support varies by estimator:
+      - Full (analytical)
+      - --
+      - --
++   * - ``LPDiD``
++     - pweight only
++     - Full (Binder TSL)
++     - --
++     - --
+    * - ``BaconDecomposition``
+      - Diagnostic
+      - Diagnostic
+diff --git a/docs/doc-deps.yaml b/docs/doc-deps.yaml
+index c6e53ef8..7753311f 100644
+--- a/docs/doc-deps.yaml
++++ b/docs/doc-deps.yaml
+@@ -616,6 +616,8 @@ sources:
+         type: user_guide
+       - path: docs/choosing_estimator.rst
+         type: user_guide
++      - path: docs/survey-roadmap.md
++        type: user_guide
+ 
+   # ── TROP (trop group) ──────────────────────────────────────────────
+ 
+diff --git a/docs/methodology/REGISTRY.md b/docs/methodology/REGISTRY.md
+index aa0c93a5..529d11f2 100644
+--- a/docs/methodology/REGISTRY.md
++++ b/docs/methodology/REGISTRY.md
+@@ -1866,10 +1866,11 @@ The paper specifies no standard-error formula (Section 1 defers to "standard, we
+ 1. **Note:** Standard errors are **cluster-robust at the unit level by default** - `cluster=None` auto-clusters at the unit identifier and the results record `cluster_name`/`n_clusters` - with a `t(G-1)` reference distribution (G = realized clusters in each horizon's clean-control sample). Matches Stata `lpdid` `vce(cluster unit)`; the paper prescribes no SE.
+ 2. **Note:** The regression-adjustment (RA) covariate path (`reweight=True` with covariates/absorb) reports an **influence-function cluster variance** `sum_c (sum_{i in c} psi_i)^2 / n^2`, in the same family as `ImputationDiD`'s Theorem-3 / BJS variance (see "IF-based variance estimators vs analytical-sandwich estimators" above). Its single Gram inversion is routed through `linalg._rank_guarded_inv` (finite SE on the identified subspace under near-collinearity; NaN at rank 0). Unlike the default/weighted `solve_ols` `hc1`-cluster path - which applies the `(G/(G-1))*((n-1)/(n-k))` finite-sample factor - the RA IF variance carries **no finite-sample factor**, while both paths share the `t(G-1)` reference. **PR-B2 validated this asymmetry as faithful to the authors' own tooling**, not a defect: the no-factor RA convention matches the canonical Stata `teffects ra ... atet vce(cluster)` (the authors' `lpdid_regression_adjustment.do` `margins`/`kmatch` degrees-of-freedom comments prove `teffects` applies neither factor), while the default path matches `feols`/`reghdfe`. The RA *point* estimate is R-anchored to ~1e-13 (full-interaction `i.dtreat##(i.time c.x)` == `teffects` point; `tests/test_methodology_lpdid.py::test_ra_covariate_point`). The RA *standard error* itself has **no runnable R reference** (no R package computes the RA IF variance - `alexCardazzi` uses direct covariate inclusion, not RA; the canonical RA SE is Stata `teffects` only), so it is **pinned** as a documented regression value (`test_ra_covariate_se_regression_pin`) and its calibration is validated by the ungated Monte-Carlo coverage study `benchmarks/python/coverage_lpdid_ra.py` (~0.95 empirical coverage of the true effect at cluster counts G in {30, 100, 300}).
+ 3. **Note:** Direct covariate inclusion (`reweight=False` with covariates/absorb) emits a `UserWarning`: per online Appendix B.2.2 it preserves the non-negative LP-DiD weighting result only under linear and homogeneous covariate effects, so the regression-adjustment path (`reweight=True`) is preferred.
+-4. **Deviation from R:** Scope - non-absorbing treatment (Section 4.2) implements the **entry-effect** estimands (`non_absorbing="first_entry"` / `"effect_stabilization"`, PR-C1). **PR-C2 R-parity-validated both modes against an INDEPENDENT `fixest::feols` reconstruction of the paper's Eq. 12 / Eq. 13 clean-sample restrictions** (point and SE match to ~1e-13/~1e-15 for the variance-weighted variants; the `effect_stabilization` reweighted point matches and its SE is pinned as a regression guard - a small weighted-cluster convention difference vs feols; `tests/test_methodology_lpdid.py::TestLPDiDNonAbsorbingParityR`). The recipe's independence was demonstrated when an earlier draft's Eq. 12 control off-by-one diverged from the already-correct library and was corrected against the paper, plus a hand-computed Python micro-check. **`alexCardazzi/lpdid`'s `nonabsorbing_lag` is NOT a faithful Eq. 13** (it clamps `treat_diff[<0]<-0`, so its clean-control window blocks only treatment turn-*ons*; it reuses a forward placebo window; and it NA-excludes pre-panel-treated rows where the library clamps pre-`min_t` to untreated): it diverges ~0.01-0.05 from Eq. 13 even on a monotone no-off-switch panel, so it is **recorded in the golden `meta` as a divergent third-party reference, not a parity gate** (the alexCardazzi-pooled precedent). The library's "no treatment change" (both directions) and backward placebo window are the more paper-faithful choices. `first_entry` (Eq. 12) has no R-package analogue (anchored on the independent feols recipe only). Appendix-C exit-event dynamics, the Stata canonical SE, and survey-design support remain deferred follow-ups.
++4. **Deviation from R:** Scope - non-absorbing treatment (Section 4.2) implements the **entry-effect** estimands (`non_absorbing="first_entry"` / `"effect_stabilization"`, PR-C1). **PR-C2 R-parity-validated both modes against an INDEPENDENT `fixest::feols` reconstruction of the paper's Eq. 12 / Eq. 13 clean-sample restrictions** (point and SE match to ~1e-13/~1e-15 for the variance-weighted variants; the `effect_stabilization` reweighted point matches and its SE is pinned as a regression guard - a small weighted-cluster convention difference vs feols; `tests/test_methodology_lpdid.py::TestLPDiDNonAbsorbingParityR`). The recipe's independence was demonstrated when an earlier draft's Eq. 12 control off-by-one diverged from the already-correct library and was corrected against the paper, plus a hand-computed Python micro-check. **`alexCardazzi/lpdid`'s `nonabsorbing_lag` is NOT a faithful Eq. 13** (it clamps `treat_diff[<0]<-0`, so its clean-control window blocks only treatment turn-*ons*; it reuses a forward placebo window; and it NA-excludes pre-panel-treated rows where the library clamps pre-`min_t` to untreated): it diverges ~0.01-0.05 from Eq. 13 even on a monotone no-off-switch panel, so it is **recorded in the golden `meta` as a divergent third-party reference, not a parity gate** (the alexCardazzi-pooled precedent). The library's "no treatment change" (both directions) and backward placebo window are the more paper-faithful choices. `first_entry` (Eq. 12) has no R-package analogue (anchored on the independent feols recipe only). Appendix-C exit-event dynamics and the Stata canonical SE remain deferred follow-ups.
+ 5. **Note:** LP-DiD's per-unit quantities (outcome lags `ylags`, first-difference lags `dylags`, integer-`pmd` premean baselines, treatment-entry detection) are **calendar** quantities (`t-1`, `t-k`), so the estimator requires integer-valued, globally consecutive `time` labels. A unit with an **interior time gap** is handled by reindexing that unit to its complete interior calendar grid `[min_t, max_t]`, computing the features on the grid, then **restricting back to the observed rows** - so a lag/first-difference spanning a gap is NaN and the observation fails closed (never the previous-*observed* row), and no synthetic gap row enters a regression. A gap-free panel skips this entirely and is bit-identical. **Entry = first OBSERVED treated period** (`min(t | D_it=1)`): an unobserved pre-onset gap cannot move a cohort earlier, the only well-defined convention when the true switch falls in an unobserved period.
+ 6. **Note (pooled estimand):** The pooled pre/post ATT (the headline `results.att` is the pooled-post row) is the **unit-equal-weighted average of each unit-event-time's mean long difference** over the window - `mean_h(y_{i,t+h}) - baseline_{i,t}`, one observation per (unit, event-time), regressed on the treatment-switch indicator with event-time fixed effects on the **fixed-composition** sample (only units observing *every* pooled target, with clean controls required through `max(h)`). This equals the mean of the per-horizon event-study coefficients on a balanced panel. **PR-B2 validated it against the authors' runnable R reference**: the pooled estimand matches the authors' own R pooled recipe (`danielegirardi/lpdid`: a `slider` window-mean minus `y_{t-1}` on the clean-through-window-end sample) to ~1e-13 (`tests/test_methodology_lpdid.py::test_pooled`). A prior version of this note speculated the authors used a horizon-**stacked** pooled regression; the authors' R reference in fact uses this same fixed-composition mean-long-difference, so that speculation was incorrect. Unlike the event-study variants (where `alexCardazzi` is a cross-check gate), pooled is anchored to the authors' recipe **only**: `alexCardazzi`'s pooled uses a **laxer** clean-control window, so it differs and is recorded in the golden `meta` for transparency, not as a parity target.
+ 7. **Deviation from R:** `no_composition` is intentionally more faithful to the paper's fixed-composition intent (Section 3.6) than the R packages: it fixes the realized sample across *all* post horizons (every post coefficient shares one sample, even on unbalanced panels) and excludes cohorts with `p_g > T-H`, whereas `alexCardazzi/lpdid` uses a looser per-horizon sample and a stricter `treat_date < T-H` cutoff. It therefore has **no exact R-package anchor** and is validated by the pure-Python tests in `tests/test_lpdid.py` (the R-parity golden omits it; `alexCardazzi`'s looser-semantics value is recorded in the golden `meta`).
++8. **Note (survey design):** Complex-survey support (`survey_design=SurveyDesign(...)`, PR-D1) covers the **variance-weighted default path** (`reweight=False`, with or without direct-inclusion covariates): each horizon's long-difference regression is fit by WLS on the survey probability weights, and the SE is the stratified-PSU **Taylor-linearization (Binder 1983 TSL)** sandwich `meat = sum_h (1-f_h)*(n_h/(n_h-1))*sum_j (S_hj - S_h_bar)(S_hj - S_h_bar)'` with `df = n_PSU - n_strata`, reusing the shared `diff_diff/survey.py` helpers (`compute_survey_vcov` / `_compute_stratified_psu_meat`). The design is re-resolved on each realized (post-clean-control) sample so weights/strata/PSU align with the regression rows; with no explicit PSU the unit (LP-DiD's default cluster) is injected as the PSU. Supports pweight + strata + PSU + FPC + lonely-PSU handling. It **rejects** `survey_design` combined with `reweight=True` (the equally-weighted / regression-adjustment IF path has no validated survey reference - the same gap as the RA SE in Deviation #2), replicate-weight designs, and non-pweight (fweight/aweight) types, each a deferred follow-up. The non-survey path is byte-for-byte unchanged (gated on `survey_design is None`). Anchored to `survey::svyglm` on the stacked long difference (numeric golden parity is PR-D2).
+ 
+ ### Implementation Checklist
+ 
+@@ -1887,7 +1888,8 @@ The paper specifies no standard-error formula (Section 1 defers to "standard, we
+ - [x] Non-absorbing extension (Section 4.2): entry-effect estimands - first-entry (Eq. 12) + effect-stabilization (Eq. 13, window `L`) via `non_absorbing`; mode-aware clean-sample masks, `C=0`-below-`min_t` boundary convention, gap-free requirement; pure-Python tests (absorbing reduction, re-entry mechanism, placebo, no-negative-weighting, stabilized-control, DGP recovery) (PR-C1)
+ - [x] Non-absorbing R-parity: both modes vs an independent `fixest::feols` Eq. 12/13 reconstruction (point+SE ~1e-13/~1e-15 vw; reweighted point + pinned SE); `alexCardazzi nonabsorbing_lag` recorded as a divergent reference (not a gate); absorbing B2 goldens byte-identical (PR-C2)
+ - [ ] Non-absorbing exit-event dynamics (Appendix C `eta_h`) + the Stata canonical RA/SE - deferred
+-- [ ] Survey-design support - deferred to a later PR
++- [x] Survey-design support (PR-D1): pweight + stratified-PSU Taylor-linearization (Binder TSL) variance on the variance-weighted default path; per-sample design re-resolution + unit-as-PSU injection; reweight (incl. RA), replicate-weight, and non-pweight designs rejected; pure-Python invariants (reduction/unit-clustering, FPC-shrinks-SE, stratification, lonely-PSU, NaN-consistency, metadata) (PR-D1)
++- [ ] Survey-design R-parity: stratified-PSU TSL SEs vs `survey::svyglm` on the stacked long difference - deferred to PR-D2
+ 
+ ---
+ 
+diff --git a/docs/survey-roadmap.md b/docs/survey-roadmap.md
+index 969a4d49..58ea5447 100644
+--- a/docs/survey-roadmap.md
++++ b/docs/survey-roadmap.md
+@@ -124,6 +124,7 @@ Files: `benchmarks/R/benchmark_realdata_*.R`, `tests/test_survey_real_data.py`,
+ - **10c.** R validation expansion — 8 of 16 estimators cross-validated against R's `survey::svyglm()`
+ - **10d.** Tutorial rewrite — flat-weight vs design-based comparison with known ground truth
+ - **10f.** WooldridgeDiD survey support — OLS, logit, Poisson paths with `pweight` + strata/PSU/FPC + TSL variance
++- **10g.** LPDiD survey support — variance-weighted default path via `fit(survey_design=...)` with `pweight` + strata/PSU/FPC + stratified-PSU Taylor-linearization variance (`survey::svyglm` parity); reweight/regression-adjustment, replicate-weight, and non-pweight designs rejected (deferred follow-ups)
+ 
+ ### v3.0.1: Survey Aggregation Helper
+ 
+diff --git a/tests/test_lpdid.py b/tests/test_lpdid.py
+index 2b917970..24c90ddf 100644
+--- a/tests/test_lpdid.py
++++ b/tests/test_lpdid.py
+@@ -1709,3 +1709,222 @@ class TestLPDiDNonAbsorbing:
+             make_lpdid_panel(n_periods=8, seed=1), only_event=True, **_FIT_KW
+         )
+         assert "non_absorbing" not in r_ab.to_dict()
++
++
++# ===========================================================================
++# Survey-design support (Phase D1): pweight + stratified-PSU TSL variance
++# ===========================================================================
++from diff_diff import SurveyDesign  # noqa: E402
++
++
++def _attach_survey_design(
++    df,
++    *,
++    n_strata=4,
++    psu_per_stratum=(2, 2, 3, 3),
++    fpc_values=(100.0, 150.0, 200.0, 250.0),
++):
++    """Attach a unit-constant complex-survey design (stratum / PSU / FPC / weight)
++    to an LP-DiD panel. Weights vary across strata (``w_h = fpc_h / n_h``) so survey
++    weighting moves the point estimate. Mirrors ``benchmark_survey_estimators.R``.
++    With ``psu_per_stratum=(1, 1, 1, 1)`` every stratum is a single-PSU (lonely)
++    stratum, used to exercise the lonely-PSU paths."""
++    units = np.sort(df["unit"].unique())
++    splits = np.array_split(units, n_strata)
++    stratum, psu, fpc, weight = {}, {}, {}, {}
++    global_psu = 0
++    for h, block in enumerate(splits):
++        n_h = len(block)
++        n_psu_h = psu_per_stratum[h]
++        fpc_h = fpc_values[h]
++        w_h = fpc_h / n_h
++        for i, u in enumerate(block):
++            stratum[u] = h + 1
++            psu[u] = global_psu + (i % n_psu_h) + 1
++            fpc[u] = fpc_h
++            weight[u] = w_h
++        global_psu += n_psu_h
++    out = df.copy()
++    out["stratum"] = out["unit"].map(stratum)
++    out["psu"] = out["unit"].map(psu)
++    out["fpc"] = out["unit"].map(fpc)
++    out["weight"] = out["unit"].map(weight)
++    return out
++
++
++def _survey_panel(seed=21):
++    df = make_lpdid_panel(cohorts=(5, 8), n_per_cohort=25, n_never=30, n_periods=12, seed=seed)
++    return _attach_survey_design(df)
++
++
++def _full_design():
++    return SurveyDesign(weights="weight", strata="stratum", psu="psu", fpc="fpc")
++
++
++class TestLPDiDSurvey:
++    # ``survey_design`` is a fit()-time argument (data-binding), matching the
++    # library-wide convention (CallawaySantAnna / SpilloverDiD / ...).
++
++    # --- reduction / clustering ---
++    def test_weights_only_clusters_at_unit(self):
++        # Constant weights + weights-only design injects the unit as the PSU, so the
++        # survey path clusters at the unit just like the default HC1 path: identical
++        # point estimate and G, SE within the small-sample-factor neighborhood.
++        df = _survey_panel()
++        df["weight"] = 1.0  # constant -> WLS point == OLS point
++        plain = LPDiD(pre_window=2, post_window=2).fit(df, **_FIT_KW)
++        surv = LPDiD(pre_window=2, post_window=2).fit(
++            df, survey_design=SurveyDesign(weights="weight"), **_FIT_KW
++        )
++        assert surv.vcov_type == "survey_tsl"
++        assert surv.n_clusters == plain.n_clusters  # injected unit-PSU == unit cluster
++        assert surv.att == pytest.approx(plain.att, rel=1e-10)
++        assert np.isfinite(surv.se)
++        assert surv.se == pytest.approx(plain.se, rel=0.25)  # CR1 vs TSL factor
++
++    # --- FPC ---
++    def test_fpc_reduces_se(self):
++        df = _survey_panel()
++        with_fpc = LPDiD(post_window=2).fit(df, survey_design=_full_design(), **_FIT_KW)
++        no_fpc = LPDiD(post_window=2).fit(
++            df,
++            survey_design=SurveyDesign(weights="weight", strata="stratum", psu="psu"),
++            **_FIT_KW,
++        )
++        assert np.isfinite(with_fpc.se) and np.isfinite(no_fpc.se)
++        assert with_fpc.se < no_fpc.se
++
++    # --- stratification ---
++    def test_stratification_changes_se(self):
++        df = _survey_panel()
++        strat = LPDiD(post_window=2).fit(
++            df,
++            survey_design=SurveyDesign(weights="weight", strata="stratum", psu="psu"),
++            **_FIT_KW,
++        )
++        nostrat = LPDiD(post_window=2).fit(
++            df, survey_design=SurveyDesign(weights="weight", psu="psu"), **_FIT_KW
++        )
++        assert np.isfinite(strat.se) and np.isfinite(nostrat.se)
++        assert strat.se != pytest.approx(nostrat.se, rel=1e-6)
++
++    # --- weighting moves the point estimate ---
++    def test_weighting_moves_point_estimate(self):
++        df = _survey_panel()  # unequal weights across strata
++        plain = LPDiD(post_window=2).fit(df, **_FIT_KW)
++        surv = LPDiD(post_window=2).fit(df, survey_design=_full_design(), **_FIT_KW)
++        assert np.isfinite(surv.att)
++        assert surv.att != pytest.approx(plain.att, rel=1e-6)
++
++    def test_survey_with_covariates_direct_inclusion_runs(self):
++        # reweight=False + covariates => direct-inclusion OLS path, survey-supported
++        # (the RA path, which is rejected, requires reweight=True).
++        df = _survey_panel()
++        df["x"] = (np.arange(len(df)) % 7).astype(float)
++        with pytest.warns(UserWarning):  # direct-inclusion homogeneity warning
++            res = LPDiD(post_window=2).fit(
++                df, covariates=["x"], survey_design=_full_design(), **_FIT_KW
++            )
++        assert res.vcov_type == "survey_tsl"
++        assert np.isfinite(res.se)
++
++    # --- metadata + idempotence ---
++    def test_metadata_populated(self):
++        df = _survey_panel()
++        res = LPDiD(post_window=2).fit(df, survey_design=_full_design(), **_FIT_KW)
++        assert res.vcov_type == "survey_tsl"
++        assert res.cluster_name == "psu"
++        assert res.n_strata == 4
++        assert res.n_psu == 10  # (2 + 2 + 3 + 3) PSUs in the panel design
++        assert res.survey_metadata is not None
++        d = res.to_dict()
++        assert d["inference_method"] == "survey_tsl"
++        assert d["weight_type"] == "pweight"
++        assert d["n_strata"] == 4 and d["n_psu"] == 10
++        assert "Survey Design" in res.summary()
++        assert "Taylor-linearization" in res.summary()
++
++    def test_fit_idempotent(self):
++        df = _survey_panel()
++        est = LPDiD(post_window=2)
++        a = est.fit(df, survey_design=_full_design(), **_FIT_KW)
++        b = est.fit(df, survey_design=_full_design(), **_FIT_KW)  # repeat, same args
++        assert a.att == pytest.approx(b.att, rel=1e-12)
++        assert a.se == pytest.approx(b.se, rel=1e-12)
++        # A re-fit WITHOUT survey_design reverts to the plain (HC1) path: survey_design
++        # is a fit()-time binding, not sticky config.
++        plain = est.fit(df, **_FIT_KW)
++        assert plain.vcov_type == "hc1"
++
++    def test_get_params_excludes_survey_design(self):
++        # survey_design is a fit()-time argument, not a get_params() config field.
++        est = LPDiD(post_window=2)
++        assert "survey_design" not in est.get_params()
++        clone = LPDiD(**est.get_params())  # config-only clone
++        c = clone.fit(_survey_panel(), survey_design=_full_design(), **_FIT_KW)
++        assert c.vcov_type == "survey_tsl"  # survey applies because passed to fit()
++
++    # --- NaN-consistency: every stratum singleton + lonely_psu="remove" ---
++    def test_all_singleton_strata_remove_is_nan(self):
++        base = _survey_panel().drop(columns=["stratum", "psu", "fpc", "weight"])
++        df = _attach_survey_design(base, psu_per_stratum=(1, 1, 1, 1))
++        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu", lonely_psu="remove")
++        res = LPDiD(post_window=2).fit(df, survey_design=sd, **_FIT_KW)
++        row = res._pooled_row("post")
++        assert_nan_inference(
++            {
++                "se": row["se"],
++                "t_stat": row["t_stat"],
++                "p_value": row["p_value"],
++                "conf_int": (row["conf_low"], row["conf_high"]),
++            }
++        )
++
++    # --- rejection paths ---
++    def test_rejects_survey_with_reweight(self):
++        # The reweight (equally-weighted / RA) path has no validated survey reference.
++        df = _survey_panel()
++        with pytest.raises(NotImplementedError):
++            LPDiD(post_window=2, reweight=True).fit(
++                df, survey_design=SurveyDesign(weights="weight"), **_FIT_KW
++            )
++
++    def test_rejects_survey_with_reweight_and_covariates(self):
++        # RA path (reweight + covariates) is a strict subset of reweight; same guard.
++        df = _survey_panel()
++        df["x"] = (np.arange(len(df)) % 5).astype(float)
++        with pytest.raises(NotImplementedError):
++            LPDiD(post_window=2, reweight=True).fit(
++                df, covariates=["x"], survey_design=_full_design(), **_FIT_KW
++            )
++
++    def test_rejects_non_pweight(self):
++        df = _survey_panel()
++        sd = SurveyDesign(weights="weight", weight_type="aweight")
++        with pytest.raises(ValueError):
++            LPDiD(post_window=2).fit(df, survey_design=sd, **_FIT_KW)
++
++    def test_rejects_replicate_weights(self):
++        df = _survey_panel()
++        for j in range(1, 5):
++            df[f"rw{j}"] = df["weight"] * (1.0 + 0.1 * ((j + df["unit"]) % 2))
++        sd = SurveyDesign(
++            weights="weight",
++            replicate_weights=[f"rw{j}" for j in range(1, 5)],
++            replicate_method="JK1",
++        )
++        with pytest.raises(NotImplementedError):
++            LPDiD(post_window=2).fit(df, survey_design=sd, **_FIT_KW)
++
++    def test_rejects_survey_column_varying_within_unit(self):
++        df = _survey_panel().copy()
++        df.loc[df.index[0], "weight"] = df["weight"].iloc[0] + 1.0  # break constancy
++        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
++        with pytest.raises(ValueError):
++            LPDiD(post_window=2).fit(df, survey_design=sd, **_FIT_KW)
++
++    def test_rejects_reserved_survey_column_name(self):
++        df = _survey_panel().rename(columns={"weight": "_weight"})
++        sd = SurveyDesign(weights="_weight", strata="stratum", psu="psu")
++        with pytest.raises(ValueError):
++            LPDiD(post_window=2).fit(df, survey_design=sd, **_FIT_KW)

@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: validate_did_data
+   :no-index:

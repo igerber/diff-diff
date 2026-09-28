@@ -1,0 +1,55 @@
+{
+  "scenario": "geo_few_markets_small",
+  "backend": "python",
+  "has_rust_backend": false,
+  "total_seconds": 3.7007011660000004,
+  "memory": {
+    "available": true,
+    "start_mb": 114.14,
+    "peak_mb": 124.05,
+    "growth_mb": 9.91,
+    "sampler_interval_s": 0.01
+  },
+  "phases": {
+    "1_sdid_jackknife_variance": {
+      "seconds": 0.5908792500000001,
+      "ok": true,
+      "error": null
+    },
+    "2_sdid_bootstrap_variance_200": {
+      "seconds": 0.593548083,
+      "ok": true,
+      "error": null
+    },
+    "3_in_time_placebo": {
+      "seconds": 1.1894560410000001,
+      "ok": true,
+      "error": null
+    },
+    "4_get_loo_effects_df": {
+      "seconds": 0.001243833000000194,
+      "ok": true,
+      "error": null
+    },
+    "5_sensitivity_to_zeta_omega": {
+      "seconds": 1.3254739579999995,
+      "ok": true,
+      "error": null
+    },
+    "6_weight_concentration": {
+      "seconds": 9.341699999954045e-05,
+      "ok": true,
+      "error": null
+    }
+  },
+  "metadata": {
+    "scale": "small",
+    "n_units": 80,
+    "n_pre": 6,
+    "n_post": 6,
+    "n_treated": 5,
+    "n_factors": 2
+  },
+  "diff_diff_version": "3.1.3",
+  "numpy_version": "2.0.2"
+}

@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: compute_sample_size
+   :no-index:

@@ -17,6 +17,7 @@ except ImportError:
     from typing_extensions import TypedDict
 
 from diff_diff.results import _format_survey_block, _get_significance_stars
+from diff_diff.results_base import BaseResults, _coverage_pct, _require_fit_alpha
 
 __all__ = [
     "_LAMBDA_INF",
@@ -64,7 +65,7 @@ class _PrecomputedStructures(TypedDict):
 
 
 @dataclass
-class TROPResults:
+class TROPResults(BaseResults):
     """
     Results from a Triply Robust Panel (TROP) estimation.
 
@@ -96,7 +97,15 @@ class TROPResults:
     time_effects : dict
         Estimated time fixed effects (beta_t).
     treatment_effects : dict
-        Individual treatment effects for each treated (unit, time) pair.
+        Individual treatment effects for each treated (unit, time) pair. The
+        value is NaN for a cell that is not estimable -- a missing outcome, or a
+        cell whose unit/time fixed effect ``alpha_i + beta_t`` is unidentified by
+        the control fit (the target unit and target period are not in the same
+        connected component of the observed-control graph: an always-treated unit,
+        a fully-treated period, or disconnected control support). This applies to
+        all local TROP fits; it is reachable mainly under ``non_absorbing=True``
+        but also on unbalanced absorbing panels. The reported ATT is the mean over
+        the finite (estimable) cells.
     lambda_time : float
         Selected time weight decay parameter from grid. 0.0 = uniform time
         weights (disabled) per Eq. 3.
@@ -122,6 +131,12 @@ class TROPResults:
         Number of bootstrap replications (if bootstrap variance).
     bootstrap_distribution : np.ndarray, optional
         Bootstrap distribution of estimates.
+    non_absorbing : bool, default=False
+        Treatment-assignment scope used for the fit. False = absorbing-state
+        treatment (default); True = general on/off assignment (``method='local'``
+        only). Recorded so a persisted result retains the assignment-scope and
+        inference-caveat context (Theorem 5.1 is block-only) after the fit-time
+        ``UserWarning`` is gone.
     """
 
     att: float
@@ -149,6 +164,11 @@ class TROPResults:
     bootstrap_distribution: Optional[np.ndarray] = field(default=None, repr=False)
     # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
     survey_metadata: Optional[Any] = field(default=None)
+    # Treatment-assignment scope used for the fit: False = absorbing (default),
+    # True = general on/off assignment (method='local'; Athey et al. 2025 Eq. 12).
+    # Recorded so a persisted result retains the assignment-scope / inference
+    # caveat context after the fit-time UserWarning is gone.
+    non_absorbing: bool = False
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -160,6 +180,15 @@ class TROPResults:
             f"p={self.p_value:.4f})"
         )
 
+    @property
+    def coef_var(self) -> float:
+        """Coefficient of variation: SE / abs(ATT). NaN when ATT is 0 or SE non-finite."""
+        if not (np.isfinite(self.se) and self.se >= 0):
+            return np.nan
+        if not np.isfinite(self.att) or self.att == 0:
+            return np.nan
+        return self.se / abs(self.att)
+
     def summary(self, alpha: Optional[float] = None) -> str:
         """
         Generate a formatted summary of the estimation results.
@@ -167,16 +196,30 @@ class TROPResults:
         Parameters
         ----------
         alpha : float, optional
-            Significance level for confidence intervals. Defaults to the
-            alpha used during estimation.
+            Accepted for signature uniformity. The stored interval was
+            computed at fit time; a value different from the stored
+            ``alpha`` raises ValueError rather than silently recomputing
+            or relabeling. Re-fit at the desired alpha instead.
 
         Returns
         -------
         str
             Formatted summary table.
         """
-        alpha = alpha or self.alpha
-        conf_level = int((1 - alpha) * 100)
+        # Tailored message: TROP's interval is a t interval at the fit alpha
+        # (arithmetically reconstructible), so the guard holds purely by the
+        # family-wide never-recompute contract - never claim otherwise.
+        alpha = _require_fit_alpha(
+            alpha,
+            self.alpha,
+            message=(
+                "This result stores a t interval computed at the fit alpha "
+                "(alpha={fit_alpha}); summary() never recomputes or relabels "
+                "stored inference by the family-wide contract "
+                "(requested alpha={alpha}); re-fit with the desired alpha."
+            ),
+        )
+        conf_level = _coverage_pct(alpha)
 
         lines = [
             "=" * 75,
@@ -186,10 +229,21 @@ class TROPResults:
             "",
             f"{'Observations:':<25} {self.n_obs:>10}",
             f"{'Treated units:':<25} {self.n_treated:>10}",
-            f"{'Control units:':<25} {self.n_control:>10}",
+            # Under non-absorbing assignment a unit can be treated in some periods
+            # and untreated in others, so n_control (never-treated units) may be 0
+            # even though many untreated control *cells* exist; label accordingly.
+            (
+                f"{'Never-treated units:':<25} {self.n_control:>10}"
+                if self.non_absorbing
+                else f"{'Control units:':<25} {self.n_control:>10}"
+            ),
             f"{'Treated observations:':<25} {self.n_treated_obs:>10}",
             f"{'Pre-treatment periods:':<25} {self.n_pre_periods:>10}",
             f"{'Post-treatment periods:':<25} {self.n_post_periods:>10}",
+        ]
+        if self.non_absorbing:
+            lines.append(f"{'Assignment scope:':<25} {'non-absorbing (on/off)':>20}")
+        lines += [
             "",
             "-" * 75,
             "Tuning Parameters (selected via LOOCV)".center(75),
@@ -224,6 +278,10 @@ class TROPResults:
                 f"{conf_level}% Confidence Interval: [{self.conf_int[0]:.4f}, {self.conf_int[1]:.4f}]",
             ]
         )
+
+        cv = self.coef_var
+        if np.isfinite(cv):
+            lines.append(f"{'CV (SE/abs(ATT)):':<25} {cv:>10.4f}")
 
         # Add significance codes
         lines.extend(
@@ -267,6 +325,7 @@ class TROPResults:
             "lambda_nn": self.lambda_nn,
             "effective_rank": self.effective_rank,
             "loocv_score": self.loocv_score,
+            "non_absorbing": self.non_absorbing,
         }
         if self.survey_metadata is not None:
             sm = self.survey_metadata

@@ -4,22 +4,24 @@
 .. currentmodule:: diff_diff
 
 .. autoclass:: ContinuousDiD
+   :no-members:
 
-   
-   .. automethod:: __init__
 
-   
    .. rubric:: Methods
 
    .. autosummary::
-   
+
       ~ContinuousDiD.__init__
       ~ContinuousDiD.fit
       ~ContinuousDiD.get_params
       ~ContinuousDiD.set_params
-   
-   
 
-   
-   
-   
+
+
+
+   .. rubric:: Attributes
+
+   .. autosummary::
+
+      ~ContinuousDiD.alpha
+

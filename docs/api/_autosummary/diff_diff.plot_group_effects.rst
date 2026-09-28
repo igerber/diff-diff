@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: plot_group_effects
+   :no-index:

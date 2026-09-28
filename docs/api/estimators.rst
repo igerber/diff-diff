@@ -21,7 +21,11 @@ Most estimators have short aliases (``TROP`` already uses its short canonical na
 
 .. code-block:: python
 
-    from diff_diff import DiD, TWFE, EventStudy, SDiD, CS, CDiD, SA, BJS, Gardner, DDD, Stacked, Bacon
+    from diff_diff import DiD, TWFE, EventStudy, SDiD, CS, SA, BJS, DDD, SCM, Bacon
+
+``CDiD``, ``Gardner`` and ``Stacked`` are deprecated since 3.9 (they emit a
+``FutureWarning`` and are removed in 4.0) — use ``ContinuousDiD``,
+``TwoStageDiD`` and ``StackedDiD``.
 
 .. module:: diff_diff.estimators
 
@@ -30,7 +34,13 @@ DifferenceInDifferences (alias: ``DiD``)
 
 Basic 2x2 DiD estimator.
 
+``DifferenceInDifferences.predict()`` is present for sklearn-like
+discoverability, but out-of-sample prediction is not currently supported. Use
+``results_.fitted_values`` for fitted training-data predictions until a broader
+post-estimation result-object contract is designed.
+
 .. autoclass:: diff_diff.DifferenceInDifferences
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -41,6 +51,7 @@ Basic 2x2 DiD estimator.
    .. autosummary::
 
       ~DifferenceInDifferences.fit
+      ~DifferenceInDifferences.predict
       ~DifferenceInDifferences.get_params
       ~DifferenceInDifferences.set_params
 
@@ -48,8 +59,12 @@ MultiPeriodDiD (alias: ``EventStudy``)
 --------------------------------------
 
 Event study estimator with period-specific treatment effects.
+*Deprecated in 3.9, removed in 4.0*: use
+:class:`~diff_diff.TwoWayFixedEffects` with ``event_study=True``
+(``spec="pooled"`` reproduces this design exactly).
 
 .. autoclass:: diff_diff.MultiPeriodDiD
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -63,6 +78,7 @@ Panel DiD with unit and time fixed effects.
 .. module:: diff_diff.twfe
 
 .. autoclass:: diff_diff.TwoWayFixedEffects
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -76,8 +92,8 @@ Synthetic control combined with DiD (Arkhangelsky et al. 2021).
 .. module:: diff_diff.synthetic_did
 
 .. autoclass:: diff_diff.SyntheticDiD
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
    :inherited-members:
-

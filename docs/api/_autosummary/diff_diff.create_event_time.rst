@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: create_event_time
+   :no-index:

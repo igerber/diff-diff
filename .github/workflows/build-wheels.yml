@@ -1,0 +1,165 @@
+name: Build wheels
+
+# Reusable wheel-build matrix shared by:
+#   - publish.yml   (on release: builds the full matrix, then uploads to PyPI)
+#   - release-build-check.yml (on PR: build-only smoke of the release path)
+# Keeping the build jobs in ONE place means the pre-merge guard can never
+# drift from what actually publishes.
+on:
+  workflow_call:
+    inputs:
+      linux_only:
+        description: "Build only the manylinux Linux wheels (PR-guard mode); skip macOS/Windows/sdist."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Build wheels on Linux using manylinux containers
+  build-linux:
+    name: Build Linux ${{ matrix.arch }} wheels
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+            container: quay.io/pypa/manylinux_2_28_x86_64
+            artifact: wheels-linux-x86_64
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            container: quay.io/pypa/manylinux_2_28_aarch64
+            artifact: wheels-linux-aarch64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install system dependencies
+        run: dnf install -y openssl-devel perl-IPC-Cmd openblas-devel
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch
+        with:
+          toolchain: stable
+
+      - name: Install maturin
+        run: /opt/python/cp312-cp312/bin/pip install maturin
+
+      - name: Build wheels
+        run: |
+          expected=0
+          for pyver in 39 310 311 312 313 314; do
+            pybin="/opt/python/cp${pyver}-cp${pyver}/bin/python"
+            if [ ! -f "$pybin" ]; then
+              echo "ERROR: Expected Python interpreter not found: $pybin"
+              exit 1
+            fi
+            /opt/python/cp312-cp312/bin/maturin build --release --out dist -i "$pybin" --features extension-module,openblas
+            expected=$((expected + 1))
+          done
+          actual=$(find dist -maxdepth 1 -name '*.whl' | wc -l)
+          echo "Built $actual wheels (expected $expected)"
+          if [ "$actual" -ne "$expected" ]; then
+            echo "ERROR: Expected $expected wheels but found $actual"
+            exit 1
+          fi
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/*.whl
+
+  # Build wheels on macOS ARM64 (native build)
+  # Note: macOS x86_64 skipped - Intel runners retired, users can install from sdist
+  build-macos-arm:
+    name: Build macOS ARM64 wheels
+    if: ${{ !inputs.linux_only }}
+    runs-on: macos-14
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13', '3.14']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch
+        with:
+          toolchain: stable
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build wheel
+        run: maturin build --release --out dist --features extension-module,accelerate
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: wheels-macos-arm64-py${{ matrix.python-version }}
+          path: dist/*.whl
+
+  # Build wheels on Windows
+  build-windows:
+    name: Build Windows wheels
+    if: ${{ !inputs.linux_only }}
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13', '3.14']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch
+        with:
+          toolchain: stable
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build wheel
+        run: maturin build --release --out dist --features extension-module
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: wheels-windows-py${{ matrix.python-version }}
+          path: dist/*.whl
+
+  # Build source distribution
+  build-sdist:
+    name: Build source distribution
+    if: ${{ !inputs.linux_only }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build sdist
+        run: maturin sdist --out dist
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: sdist
+          path: dist/*.tar.gz

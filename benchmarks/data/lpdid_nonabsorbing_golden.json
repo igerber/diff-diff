@@ -1,0 +1,56 @@
+{
+  "meta": {
+    "estimator": "LPDiD (Dube, Girardi, Jorda & Taylor 2025) - non-absorbing (Phase C2)",
+    "r_version": "R version 4.5.2 (2025-10-31)",
+    "fixest_version": "0.13.2",
+    "lpdid_alexcardazzi_version": "0.6.1",
+    "lpdid_alexcardazzi_commit": "ba64563983861be5e616f6020842c1a1cdf17a27",
+    "seed": 424242,
+    "L": 3,
+    "pre_window": 3,
+    "post_window": 4,
+    "anchor": "Both modes are anchored on an INDEPENDENT feols reconstruction of the paper's Eq. 12 (first_entry) and Eq. 13 (effect_stabilization) clean-sample restrictions (explicit per-window indexing). Validated == the library to ~1e-13 (point) and ~1e-15 (SE) for the variance-weighted variants.",
+    "reweight_se_note": "effect_stab_rw: POINT matches the library to ~1e-13; the reweighted SE has a small feols-weighted-cluster convention difference (~5e-5) vs the library, so the library reweighted SE is pinned as a regression guard on the Python side, not asserted against feols.",
+    "first_entry_note": "first_entry (Eq. 12) has NO R-package analogue (alexCardazzi only exposes the effect-stabilization nonabsorbing_lag). It is anchored on the independent feols Eq. 12 recipe + a hand-computed Python micro-check. Its absorbing reduction (first_entry == absorbing on absorbing panels) is a separate internal check, NOT an R anchor for non-absorbing behavior.",
+    "alex_note": "alexCardazzi::lpdid() `nonabsorbing_lag` is NOT a faithful paper Eq. 13: it clamps treat_diff[<0]<-0 (its clean-control window blocks only treatment turn-ONS, so a unit turning OFF inside [t-L,t+h] still counts as a control) and reuses a forward window for placebos. The library uses the literal 'no treatment change' (both directions) + the backward placebo window [t-max(L,-h),t-1] (more paper-faithful). alex diverges ~0.01-0.05 from Eq. 13 even on a monotone no-off-switch panel, so it is recorded below for transparency only, NOT used as a parity gate.",
+    "boundary_note": "Boundary convention (closes the REGISTRY 'confirm vs R in PR-C2' item): periods before a unit's first observed period are treated as untreated/no-change (the library clamps pre-min_t to 0); alexCardazzi NA-excludes such rows (first-row lag is NA). A documented divergence, not a defect.",
+    "alex_monotone_post_divergence": 0.03442711738728
+  },
+  "first_entry": {
+    "0": [1.846815337457, 0.09153686444445],
+    "1": [1.917418918492, 0.08251475771707],
+    "2": [1.954156237069, 0.09599599361364],
+    "3": [1.843000209785, 0.09321550686961],
+    "4": [1.865104589049, 0.103446008623],
+    "-2": [-0.02850800971675, 0.05995016486332],
+    "-3": [-0.1105868819491, 0.08386469485401]
+  },
+  "effect_stab": {
+    "0": [1.851991243051, 0.07114522249739],
+    "1": [1.921104469807, 0.06702437575657],
+    "2": [1.929898604367, 0.07968483555297],
+    "3": [1.913731884109, 0.07652544247632],
+    "4": [1.886119926793, 0.09228264962342],
+    "-2": [-0.08778777268896, 0.04731311562096],
+    "-3": [-0.1105312033519, 0.06317647498563]
+  },
+  "effect_stab_rw": {
+    "0": [1.854916933798, 0.07249623837132],
+    "1": [1.919465194082, 0.06780622997428],
+    "2": [1.933380912538, 0.08001315758582],
+    "3": [1.915912905771, 0.07730903341075],
+    "4": [1.886338871188, 0.09301892258318],
+    "-2": [-0.08271702126404, 0.0478189929193],
+    "-3": [-0.1074628208957, 0.06454215400419]
+  },
+  "alex_nonabsorbing_lag": {
+    "-3": [-0.145088679015, 0.09624515089736],
+    "-2": [-0.03709433061648, 0.06947456423817],
+    "-1": [0, 0],
+    "0": [1.884378366597, 0.1046700491971],
+    "1": [1.910655279694, 0.0935622160941],
+    "2": [1.517560001248, 0.1769881246961],
+    "3": [1.231229422875, 0.1947738412434],
+    "4": [1.358589829451, 0.1796027407839]
+  }
+}

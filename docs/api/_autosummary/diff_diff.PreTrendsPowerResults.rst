@@ -4,33 +4,35 @@
 .. currentmodule:: diff_diff
 
 .. autoclass:: PreTrendsPowerResults
+   :no-members:
 
-   
-   .. automethod:: __init__
 
-   
    .. rubric:: Methods
 
    .. autosummary::
-   
+
       ~PreTrendsPowerResults.__init__
       ~PreTrendsPowerResults.power_at
       ~PreTrendsPowerResults.print_summary
       ~PreTrendsPowerResults.summary
       ~PreTrendsPowerResults.to_dataframe
       ~PreTrendsPowerResults.to_dict
-   
-   
 
-   
-   
+
+
+
    .. rubric:: Attributes
 
    .. autosummary::
-   
+
+      ~PreTrendsPowerResults.covariance_source
       ~PreTrendsPowerResults.is_informative
+      ~PreTrendsPowerResults.max_abs_pre_violation
+      ~PreTrendsPowerResults.nis_box_probability
       ~PreTrendsPowerResults.original_results
       ~PreTrendsPowerResults.power_adequate
+      ~PreTrendsPowerResults.pretest_form
+      ~PreTrendsPowerResults.violation_weights
       ~PreTrendsPowerResults.power
       ~PreTrendsPowerResults.mdv
       ~PreTrendsPowerResults.violation_magnitude
@@ -44,5 +46,4 @@
       ~PreTrendsPowerResults.pre_period_effects
       ~PreTrendsPowerResults.pre_period_ses
       ~PreTrendsPowerResults.vcov
-   
-   
+

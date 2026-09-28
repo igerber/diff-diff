@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: compute_power
+   :no-index:

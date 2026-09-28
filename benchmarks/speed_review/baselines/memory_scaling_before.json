@@ -1,0 +1,75 @@
+{
+  "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "backend_requested": "python",
+  "backend_resolved": [
+    "python"
+  ],
+  "results": [
+    {
+      "label": "CS bootstrap (cluster=unit, 999)",
+      "estimator": "cs",
+      "n_units": 500000,
+      "n_bootstrap": 999,
+      "peak_rss_mb": 13172.0,
+      "runs": [
+        13089.0,
+        13255.1
+      ]
+    },
+    {
+      "label": "CS bootstrap (cluster=unit, 999)",
+      "estimator": "cs",
+      "n_units": 1000000,
+      "n_bootstrap": 999,
+      "peak_rss_mb": 13825.4,
+      "runs": [
+        12677.7,
+        14973.1
+      ]
+    },
+    {
+      "label": "EfficientDiD bootstrap (999)",
+      "estimator": "effdid",
+      "n_units": 500000,
+      "n_bootstrap": 999,
+      "peak_rss_mb": 8462.0,
+      "runs": [
+        8464.5,
+        8459.5
+      ]
+    },
+    {
+      "label": "HAD event-study cband (999)",
+      "estimator": "had",
+      "n_units": 500000,
+      "n_bootstrap": 999,
+      "peak_rss_mb": 7868.1,
+      "runs": [
+        8086.6,
+        7649.6
+      ]
+    },
+    {
+      "label": "TWFE hc1 within-transform (6 cov)",
+      "estimator": "twfe",
+      "n_units": 500000,
+      "ncov": 6,
+      "peak_rss_mb": 1009.0,
+      "runs": [
+        1009.0,
+        1008.9
+      ]
+    },
+    {
+      "label": "TWFE hc1 within-transform (6 cov)",
+      "estimator": "twfe",
+      "n_units": 1000000,
+      "ncov": 6,
+      "peak_rss_mb": 1701.2,
+      "runs": [
+        1699.3,
+        1703.0
+      ]
+    }
+  ]
+}

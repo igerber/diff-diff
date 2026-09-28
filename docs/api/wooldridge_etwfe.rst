@@ -1,0 +1,260 @@
+Wooldridge Extended Two-Way Fixed Effects (ETWFE)
+===================================================
+
+Extended Two-Way Fixed Effects estimator from Wooldridge (2025, 2023),
+based on the Stata ``jwdid`` package specification (Friosavila 2021),
+with documented SE/aggregation deviations noted in the Methodology Registry.
+
+This module implements ETWFE via a single saturated regression that:
+
+1. **Estimates ATT(g,t)** for each cohort×time treatment cell simultaneously
+2. **Supports linear (OLS), Poisson QMLE, and logit** link functions
+3. **Uses ASF-based ATT** for nonlinear models: E[f(η₁)] − E[f(η₀)]
+4. **Computes delta-method SEs** for all aggregations (event_study, group, calendar, simple)
+5. **Supports paper W2025 cohort-share aggregation** via ``aggregate(weights="cohort_share")`` (Eqs. 7.4 + 7.6; default is cell-count matching Stata ``jwdid_estat``)
+6. **Supports paper W2025 Section 8 heterogeneous cohort trends** via ``cohort_trends=True`` (OLS path only; auto-routes to full-dummy mode; requires ``control_group="not_yet_treated"`` — the default — and ``survey_design=None``; the ``never_treated`` and survey paths are fail-closed with ``NotImplementedError`` because the placebo-cell basis remaining collinear with the trend columns through the unit fixed effects / unvalidated survey-TSL composition would make the trend specification unidentified or unverified — see Methodology Registry for the full contract)
+7. **Follows the Stata jwdid specification** for OLS defaults and nonlinear paths (see Methodology Registry for documented SE/aggregation deviations)
+
+**When to use WooldridgeDiD:**
+
+- Staggered adoption design with heterogeneous treatment timing
+- Nonlinear outcomes (binary, count, non-negative continuous)
+- You want a single-regression approach matching Stata's ``jwdid``
+- You need event-study, group, calendar, or simple ATT aggregations
+- You need paper W2025 cohort-share aggregation weights as an alternative
+  to the default cell-count weighting
+- You need heterogeneous cohort-specific linear trends when parallel
+  trends is violated (paper W2025 Section 8)
+
+**References:**
+
+- Wooldridge, J. M. (2025). Two-way fixed effects, the two-way Mundlak
+  regression, and difference-in-differences estimators. *Empirical
+  Economics*, 69(5), 2545-2587. DOI 10.1007/s00181-025-02807-z.
+- Wooldridge, J. M. (2023). Simple approaches to nonlinear
+  difference-in-differences with panel data. *The Econometrics Journal*,
+  26(3), C31-C66.
+- Friosavila, F. (2021). ``jwdid``: Stata module for ETWFE. SSC s459114.
+
+.. module:: diff_diff.wooldridge
+
+WooldridgeDiD
+--------------
+
+Main estimator class for Wooldridge ETWFE.
+
+``unsupported_period_action="drop"`` (default) removes periods lacking the
+required comparison support and warns. Use
+``WooldridgeDiD(unsupported_period_action="error")`` to raise ``ValueError``
+before those periods are removed; the error names the periods and affected
+observation count. This applies to all three methods, independently of
+``rank_deficient_action``. It does not control unidentified-cohort exclusion
+or relax other identification checks.
+
+Support requires a positive-weight never-treated observation for OLS with
+``control_group="never_treated"``. All other paths also admit observations
+before their cohort's ``g - anticipation`` threshold. Unsupported periods
+can therefore occur even when never-treated units exist elsewhere in the panel.
+Existing pre-filter configuration, cohort, and survey-design checks retain
+precedence. Later checks, including covariate columns, nonlinear outcomes, and
+non-Conley explicit cluster columns, are not preflighted: an unsupported-period
+refusal can precede those input errors. With ``survey_design``, ``"error"``
+raises ``ValueError`` for unsupported periods, while ``"drop"`` retains the
+existing ``NotImplementedError`` because survey domain estimation is unsupported.
+
+.. autoclass:: diff_diff.WooldridgeDiD
+   :no-index:
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :inherited-members:
+
+   .. rubric:: Methods
+
+   .. autosummary::
+
+      ~WooldridgeDiD.fit
+      ~WooldridgeDiD.get_params
+      ~WooldridgeDiD.set_params
+
+WooldridgeDiDResults
+---------------------
+
+Results container returned by ``WooldridgeDiD.fit()``.
+
+``unsupported_period_action`` records the fit-time policy and is included in
+``to_dict()`` and ``summary()``. It remains unchanged by post-fit aggregation
+or subsequent estimator reconfiguration.
+
+``cohort_trend_coefs`` (populated under ``cohort_trends=True``, OLS path
+only): ``Dict[g → δ_g]`` keyed by treated cohort. The reported slopes
+are **relative to the baseline trend** absorbed by the design — the
+never-treated cohort's trend (when a never-treated cohort exists) OR
+the last cohort's trend (when no never-treated cohort exists, per
+paper W2025 Section 5.4's all-eventually-treated drop rule). On
+all-treated panels the last cohort is intentionally absent from the
+dict; its slope is the baseline (zero in deviation form).
+
+.. note::
+
+   With the default ``unsupported_period_action="drop"``, all-eventually-treated
+   panels **estimate**. The paper's Section 5.4
+   rule is applied to the cohort × time cells as well as the trend
+   columns: periods where no unit is untreated carry no identified
+   ATT(g, t), so they are removed from the estimation sample before the
+   solve and the last cohort becomes the reference. The reduction is
+   always reported — the number of observations and periods dropped, the
+   reason, and any cohort left without cells. Stata's ``jwdid`` performs
+   the same reduction silently, reporting only a smaller ``N``.
+
+See ``docs/methodology/REGISTRY.md`` → ``## WooldridgeDiD (ETWFE)`` →
+"Heterogeneous cohort trends" for the full normalization contract.
+
+.. autoclass:: diff_diff.wooldridge_results.WooldridgeDiDResults
+   :no-index:
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+   .. rubric:: Methods
+
+   .. autosummary::
+
+      ~WooldridgeDiDResults.aggregate
+      ~WooldridgeDiDResults.summary
+
+Example Usage
+-------------
+
+Basic OLS (follows Stata ``jwdid y, ivar(unit) tvar(time) gvar(cohort)``)::
+
+    import pandas as pd
+    from diff_diff import WooldridgeDiD
+
+    df = pd.read_stata("mpdta.dta")
+    df['first_treat'] = df['first_treat'].astype(int)
+
+    m = WooldridgeDiD()
+    r = m.fit(df, outcome='lemp', unit='countyreal', time='year', first_treat='first_treat')
+
+    r.aggregate('event_study').aggregate('group').aggregate('simple')
+    print(r.to_dataframe(level='event_study'))
+    print(r.to_dataframe(level='group'))
+    print(r.summary())
+
+.. note::
+
+   When ``method="ols"`` is applied to a binary (``{0, 1}``) or non-negative
+   integer-count outcome, ``fit()`` emits a ``UserWarning`` noting that a
+   matching nonlinear model (``method="logit"`` / ``method="poisson"``) is often
+   the *more appropriate* specification for such outcomes — it imposes parallel
+   trends on the link/index scale rather than in levels (Wooldridge 2023 notes
+   level-PT is only valid for continuous/unbounded outcomes), and in that
+   paper's simulations the linear model is both biased and less precise where
+   the nonlinear mean holds. It rests on a *different identifying assumption*
+   than linear OLS, so treat it as a recommended comparison, not an automatic
+   switch. OLS remains a valid QMLE for *any* response (Wooldridge 2023);
+   suppress the hint via ``warnings.filterwarnings``. The check is heuristic:
+   bounded discrete (binomial-style) outcomes with a known upper bound are not
+   separately detected from unbounded counts.
+
+View cohort×time cell estimates (post-treatment)::
+
+    for (g, t), v in sorted(r.group_time_effects.items()):
+        if t >= g:
+            print(f"g={g} t={t}  ATT={v['att']:.4f}  SE={v['se']:.4f}")
+
+Poisson QMLE for non-negative outcomes
+(follows Stata ``jwdid emp, method(poisson)``)::
+
+    import numpy as np
+    df['emp'] = np.exp(df['lemp'])
+
+    m_pois = WooldridgeDiD(method='poisson')
+    r_pois = m_pois.fit(df, outcome='emp', unit='countyreal',
+                        time='year', first_treat='first_treat')
+    r_pois.aggregate('event_study').aggregate('group').aggregate('simple')
+    print(r_pois.summary())
+
+Logit for binary outcomes
+(follows Stata ``jwdid y, method(logit)``)::
+
+    m_logit = WooldridgeDiD(method='logit')
+    r_logit = m_logit.fit(df, outcome='hi_emp', unit='countyreal',
+                          time='year', first_treat='first_treat')
+    r_logit.aggregate('group').aggregate('simple')
+    print(r_logit.to_dataframe(level='group'))
+
+Aggregation Methods
+-------------------
+
+Call ``.aggregate(type, weights=...)``, then export with
+``.to_dataframe(level=...)`` (``summary()`` prints the headline simple
+aggregation):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 15 30 25
+
+   * - Type
+     - Description
+     - Stata equivalent
+   * - ``'event_study'``
+     - ATT by relative time k = t − g
+     - ``estat event``
+   * - ``'group'``
+     - ATT averaged across post-treatment periods per cohort
+     - ``estat group``
+   * - ``'calendar'``
+     - ATT averaged across cohorts per calendar period
+     - ``estat calendar``
+   * - ``'simple'``
+     - Overall weighted average ATT
+     - ``estat simple``
+
+**Weighting schemes** (``weights="cell"`` default, ``weights="cohort_share"``
+opt-in):
+
+- ``weights="cell"`` (default) — cell-count ``n_{g,t}`` weighting; matches
+  Stata ``jwdid_estat``. Supported for all four aggregation types.
+- ``weights="cohort_share"`` — paper W2025 Eq. 7.4 (simple) and Eq. 7.6
+  (event, restricted to ``k >= 0``) cohort-share weighting. Supported
+  only for ``type="simple"`` and ``type="event_study"``; raises on
+  ``type ∈ {"group","calendar"}`` (no paper closed-form). Inference
+  fields (t-stat / p-value / conf-int) are fail-closed to ``NaN``
+  with a ``UserWarning`` documenting the conditional-on-shares
+  limitation (paper W2025 Section 7.5). Raises on
+  ``survey_design is not None`` (design-consistent cohort totals
+  pending follow-up).
+
+Comparison with Other Staggered Estimators
+------------------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 27 27 26
+
+   * - Feature
+     - WooldridgeDiD (ETWFE)
+     - CallawaySantAnna
+     - ImputationDiD
+   * - Approach
+     - Single saturated regression
+     - Separate 2×2 DiD per cell
+     - Impute Y(0) via FE model
+   * - Nonlinear outcomes
+     - Yes (Poisson, Logit)
+     - No
+     - No
+   * - Covariates
+     - Via regression (linear index)
+     - OR, IPW, DR
+     - Supported
+   * - SE for aggregations
+     - Delta method
+     - Multiplier bootstrap
+     - Multiplier bootstrap
+   * - Stata equivalent
+     - ``jwdid``
+     - ``csdid``
+     - ``did_imputation``

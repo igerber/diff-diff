@@ -7,16 +7,70 @@ on:
       - 'rust/**'
       - 'diff_diff/**'
       - 'tests/**'
+      # tests/test_doc_snippets.py is owned by docs-tests.yml; exclude it
+      # so a harness-only edit does not fan out into the Rust matrix.
+      - '!tests/test_doc_snippets.py'
+      # Same ownership split: the changelog-fragment guard runs in docs-tests.yml.
+      - '!tests/test_changelog_fragments.py'
+      - '!tests/test_tracking_files.py'
+      - 'tools/**'
       - 'pyproject.toml'
       - '.github/workflows/rust-test.yml'
+      # docs-tests.yml / notebooks.yml / ci-gate.yml carry ready-for-ci label
+      # contracts locked by TestCiWorkflowLabelEventGuard in
+      # tests/test_openai_review.py; include them so a regression there triggers
+      # this suite (enforced by TestRustTestWorkflowPathFilter).
+      - '.github/workflows/docs-tests.yml'
+      - '.github/workflows/notebooks.yml'
+      - '.github/workflows/mmm-interop.yml'
+      - '.github/workflows/ci-gate.yml'
+      - '.github/workflows/release-build-check.yml'
+      # lint.yml carries the ruff/black pin-sync contract locked by
+      # TestLintWorkflowPinSync in tests/test_openai_review.py; include it so
+      # a lint.yml-only edit triggers the suite that locks that contract.
+      - '.github/workflows/lint.yml'
+      # The AI-review surfaces below are tested by
+      # tests/test_openai_review.py (TestWorkflowPromptHardening,
+      # TestAdaptReviewCriteria, etc.). Without these path filters, a
+      # workflow-only or prompt-only edit would bypass the hardening
+      # suite that's specifically designed to catch regressions on these
+      # files. Locked by TestRustTestWorkflowPathFilter.
+      - '.github/workflows/ai_pr_review.yml'
+      - '.github/codex/prompts/pr_review.md'
+      - '.claude/scripts/openai_review.py'
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
     paths:
       - 'rust/**'
       - 'diff_diff/**'
       - 'tests/**'
+      - '!tests/test_doc_snippets.py'
+      # Same ownership split: the changelog-fragment guard runs in docs-tests.yml.
+      - '!tests/test_changelog_fragments.py'
+      - '!tests/test_tracking_files.py'
+      - 'tools/**'
       - 'pyproject.toml'
       - '.github/workflows/rust-test.yml'
+      # docs-tests.yml / notebooks.yml / ci-gate.yml carry ready-for-ci label
+      # contracts locked by TestCiWorkflowLabelEventGuard in
+      # tests/test_openai_review.py; include them so a regression there triggers
+      # this suite (enforced by TestRustTestWorkflowPathFilter).
+      - '.github/workflows/docs-tests.yml'
+      - '.github/workflows/notebooks.yml'
+      - '.github/workflows/mmm-interop.yml'
+      - '.github/workflows/ci-gate.yml'
+      - '.github/workflows/release-build-check.yml'
+      # lint.yml carries the ruff/black pin-sync contract locked by
+      # TestLintWorkflowPinSync in tests/test_openai_review.py; include it so
+      # a lint.yml-only edit triggers the suite that locks that contract.
+      - '.github/workflows/lint.yml'
+      - '.github/workflows/ai_pr_review.yml'
+      - '.github/codex/prompts/pr_review.md'
+      - '.claude/scripts/openai_review.py'
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -25,6 +79,12 @@ jobs:
   # Run Rust unit tests on all platforms
   rust-tests:
     name: Rust Unit Tests (${{ matrix.os }})
+    # Skip unrelated label churn: a non-ready-for-ci label add/remove won't run this job.
+    if: >-
+      github.event_name != 'pull_request'
+      || (contains(github.event.pull_request.labels.*.name, 'ready-for-ci')
+      && (github.event.action != 'labeled' && github.event.action != 'unlabeled'
+      || github.event.label.name == 'ready-for-ci'))
     runs-on: ${{ matrix.os }}
     env:
       PYO3_USE_ABI3_FORWARD_COMPATIBILITY: 1
@@ -34,10 +94,12 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest, ubuntu-24.04-arm]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch
+        with:
+          toolchain: stable
 
       - name: Install OpenBLAS (Linux)
         if: runner.os == 'Linux'
@@ -58,27 +120,41 @@ jobs:
   # Build and test with Python on multiple platforms
   python-tests:
     name: Python Tests (${{ matrix.os }}, py${{ matrix.python-version }})
+    # Skip unrelated label churn: a non-ready-for-ci label add/remove won't run this job.
+    if: >-
+      github.event_name != 'pull_request'
+      || (contains(github.event.pull_request.labels.*.name, 'ready-for-ci')
+      && (github.event.action != 'labeled' && github.event.action != 'unlabeled'
+      || github.event.label.name == 'ready-for-ci'))
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest, ubuntu-24.04-arm]
-        python-version: ['3.11', '3.13']
+        python-version: ['3.11', '3.13', '3.14']
+        include:
+          # Python 3.9 floor guard (single Linux leg): mypy >= 2.2 can no
+          # longer type-check with python_version = "3.9", so this runtime
+          # leg is the floor's only continuous CI coverage.
+          - os: ubuntu-latest
+            python-version: '3.9'
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch
+        with:
+          toolchain: stable
 
       - name: Install test dependencies
         # Keep in sync with pyproject.toml [project.dependencies] and [project.optional-dependencies.dev]
-        run: pip install pytest pytest-xdist numpy pandas scipy
+        run: pip install pytest pytest-xdist numpy pandas scipy scikit-learn
 
       - name: Install OpenBLAS (Linux)
         if: runner.os == 'Linux'
@@ -145,31 +221,41 @@ jobs:
       - name: Run tests with Rust backend (Unix)
         if: runner.os != 'Windows'
         working-directory: /tmp
-        run: DIFF_DIFF_BACKEND=rust pytest tests/ -q -n auto --dist worksteal -m ''
+        # Doc snippet tests own .github/workflows/docs-tests.yml; ignore
+        # them here to keep one workflow per surface and avoid double
+        # execution (the matrix copies tests/ to /tmp/tests without
+        # docs/, so this ignore is defensive on the Rust path).
+        run: DIFF_DIFF_BACKEND=rust pytest tests/ --ignore=tests/test_doc_snippets.py -q -n auto --dist worksteal -m ''
 
       - name: Run tests with Rust backend (Windows)
         if: runner.os == 'Windows'
         working-directory: ${{ runner.temp }}
         run: |
           $env:DIFF_DIFF_BACKEND="rust"
-          pytest tests/ -q -n auto --dist worksteal -m ''
+          pytest tests/ --ignore=tests/test_doc_snippets.py -q -n auto --dist worksteal -m ''
         shell: pwsh
 
   # Test pure Python fallback (without Rust extension)
   python-fallback:
     name: Pure Python Fallback
+    # Skip unrelated label churn: a non-ready-for-ci label add/remove won't run this job.
+    if: >-
+      github.event_name != 'pull_request'
+      || (contains(github.event.pull_request.labels.*.name, 'ready-for-ci')
+      && (github.event.action != 'labeled' && github.event.action != 'unlabeled'
+      || github.event.label.name == 'ready-for-ci'))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.13'
+          python-version: '3.14'
 
       - name: Install dependencies
         # Keep in sync with pyproject.toml [project.dependencies] and [project.optional-dependencies.dev]
-        run: pip install numpy pandas scipy pytest pytest-xdist
+        run: pip install numpy pandas scipy pytest pytest-xdist scikit-learn
 
       - name: Verify pure Python mode
         run: |
@@ -177,4 +263,8 @@ jobs:
           PYTHONPATH=. python -c "from diff_diff import HAS_RUST_BACKEND; print(f'HAS_RUST_BACKEND: {HAS_RUST_BACKEND}'); assert not HAS_RUST_BACKEND"
 
       - name: Run tests in pure Python mode
-        run: PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/ -q --ignore=tests/test_rust_backend.py -n auto --dist worksteal
+        # Doc snippet tests own .github/workflows/docs-tests.yml; ignore
+        # them here to keep one workflow per surface (this is the only
+        # invocation that actually executes test_doc_snippets.py since
+        # this job runs from the repo root, not /tmp/tests).
+        run: PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/ -q --ignore=tests/test_rust_backend.py --ignore=tests/test_doc_snippets.py -n auto --dist worksteal

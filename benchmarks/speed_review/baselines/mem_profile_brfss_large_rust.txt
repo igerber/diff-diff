@@ -1,0 +1,30 @@
+# BRFSS-1M aggregate_survey allocation attribution
+# backend: rust
+# input microdata rows: 1,000,000
+# input microdata memory: 45.8 MB
+# output panel cells: 500
+
+# tracemalloc totals during aggregate_survey
+# total net size diff across all sites: 0.5 MB
+# top single-site size diff: 0.15 MB
+# python peak traced: 84.2 MB
+# python current retained: 0.6 MB
+
+# top 15 allocation sites by size delta
+#      size diff (MB)   count diff  location
+--------------------------------------------------------------------------------
+1                0.15         1521  <site-packages>/lib/python3.9/linecache.py:148
+2                0.04            7  <repo>/.venv/lib/python3.9/site-packages/pandas/core/internals/blocks.py:822
+3                0.02          440  <repo>/.venv/lib/python3.9/site-packages/pandas/core/sorting.py:637
+4                0.01           64  <site-packages>/lib/python3.9/abc.py:123
+5                0.00            2  <repo>/.venv/lib/python3.9/site-packages/pandas/core/frame.py:12710
+6                0.00            2  <repo>/.venv/lib/python3.9/site-packages/pandas/core/frame.py:698
+7                0.00           16  <repo>/.venv/lib/python3.9/site-packages/pandas/core/indexes/base.py:5372
+8                0.00           51  <repo>/.venv/lib/python3.9/site-packages/pandas/core/groupby/ops.py:427
+9                0.00           55  <site-packages>/lib/python3.9/sre_parse.py:529
+10               0.00           43  <repo>/diff_diff/prep.py:1618
+11               0.00            2  <repo>/.venv/lib/python3.9/site-packages/pandas/core/internals/construction.py:237
+12               0.00            2  <repo>/.venv/lib/python3.9/site-packages/pandas/core/groupby/grouper.py:846
+13               0.00            2  <repo>/.venv/lib/python3.9/site-packages/pandas/core/construction.py:517
+14               0.00            2  <repo>/.venv/lib/python3.9/site-packages/pandas/core/indexes/base.py:475
+15               0.00           35  <repo>/.venv/lib/python3.9/site-packages/pandas/core/internals/managers.py:1500

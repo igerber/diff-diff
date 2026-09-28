@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: equivalence_test_trends
+   :no-index:

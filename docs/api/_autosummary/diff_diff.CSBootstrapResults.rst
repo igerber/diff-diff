@@ -4,25 +4,22 @@
 .. currentmodule:: diff_diff
 
 .. autoclass:: CSBootstrapResults
+   :no-members:
 
-   
-   .. automethod:: __init__
 
-   
    .. rubric:: Methods
 
    .. autosummary::
-   
-      ~CSBootstrapResults.__init__
-   
-   
 
-   
-   
+      ~CSBootstrapResults.__init__
+
+
+
+
    .. rubric:: Attributes
 
    .. autosummary::
-   
+
       ~CSBootstrapResults.bootstrap_distribution
       ~CSBootstrapResults.cband_crit_value
       ~CSBootstrapResults.event_study_cis
@@ -31,6 +28,9 @@
       ~CSBootstrapResults.group_effect_cis
       ~CSBootstrapResults.group_effect_p_values
       ~CSBootstrapResults.group_effect_ses
+      ~CSBootstrapResults.overall_att_es_ci
+      ~CSBootstrapResults.overall_att_es_p_value
+      ~CSBootstrapResults.overall_att_es_se
       ~CSBootstrapResults.n_bootstrap
       ~CSBootstrapResults.weight_type
       ~CSBootstrapResults.alpha
@@ -40,5 +40,4 @@
       ~CSBootstrapResults.group_time_ses
       ~CSBootstrapResults.group_time_cis
       ~CSBootstrapResults.group_time_p_values
-   
-   
+

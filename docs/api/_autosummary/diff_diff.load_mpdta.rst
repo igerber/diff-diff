@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: load_mpdta
+   :no-index:

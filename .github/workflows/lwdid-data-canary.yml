@@ -1,0 +1,69 @@
+# Real-data canary for the LWDiD replication tests (closed the former TODO
+# row "Real-data CI canary for dataset-backed replication tests").
+#
+# tests/test_methodology_lwdid.py's Prop 99 / Walmart goldens VISIBLY skip
+# when the loaders fall back to synthetic data (df.attrs["source"] !=
+# "lwdid_ssc_ancillary"), so a network/URL/sha regression at the SSC mirror
+# can stay green indefinitely. This lane makes that regression loud: the
+# canary step fails the job if either loader is on its synthetic fallback,
+# then runs the replication tests the canary de-gates (their committed-golden
+# skips remain legal).
+#
+# Cron-only + manual (no PR trigger): the download is network-dependent by
+# design, exactly what the label-gated PR lanes deliberately avoid.
+name: LWDiD Data Canary
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly Sunday 8am UTC (docs-tests/notebooks run 6am, mmm-interop 7am —
+    # offset to avoid stacking the Sunday lanes).
+    - cron: '0 8 * * 0'
+
+permissions:
+  contents: read
+
+jobs:
+  lwdid-real-data:
+    name: Prop 99 / Walmart real-data canary
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install numpy pandas scipy pytest
+          # Add repo root to Python path so tests can import diff_diff
+          # (pip install -e . requires the Rust/maturin toolchain; .pth avoids that)
+          python -c "import site; print(site.getsitepackages()[0])" | xargs -I{} sh -c 'echo "$PWD" > {}/diff_diff_dev.pth'
+
+      - name: Data canary
+        # Its own step so a download/sha/provenance failure FAILS the job
+        # loudly instead of degrading into the tests' visible-but-green
+        # synthetic-fallback skips.
+        env:
+          DIFF_DIFF_BACKEND: python
+        run: |
+          python -c "
+          import warnings
+          from diff_diff.datasets import load_prop99, load_walmart
+          with warnings.catch_warnings():
+              warnings.simplefilter('error')  # the fallback warns - make it fatal
+              for name, loader in (('prop99', load_prop99), ('walmart', load_walmart)):
+                  df = loader()
+                  src = df.attrs.get('source')
+                  assert src == 'lwdid_ssc_ancillary', f'{name}: source={src!r}'
+                  print(f'{name}: real data OK ({len(df)} rows)')
+          "
+
+      - name: Run LWDiD replication tests
+        env:
+          DIFF_DIFF_BACKEND: python
+        run: |
+          pytest tests/test_methodology_lwdid.py -q --tb=short

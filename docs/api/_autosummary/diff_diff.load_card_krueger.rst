@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: load_card_krueger
+   :no-index:

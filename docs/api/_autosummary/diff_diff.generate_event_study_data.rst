@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: generate_event_study_data
+   :no-index:

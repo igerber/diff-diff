@@ -12,30 +12,57 @@ The estimator:
 3. Aggregates imputed treatment effects with researcher-chosen weights
 
 Inference uses the conservative clustered variance estimator (Theorem 3).
+
+The ``vcov_type`` input contract is permanently narrow to ``{"hc1"}`` per
+the influence-function-based variance decomposition: the per-unit IF
+aggregation (Theorem 3 equation 7) has no equivalent single design matrix
+on which analytical-sandwich families (``classical``, ``hc2``, ``hc2_bm``)
+or spatial-HAC composition (``conley``) can be defined. ``cluster=``
+invokes per-cluster IF summation; ``survey_design=`` invokes TSL on the
+combined IF. See ``docs/methodology/REGISTRY.md`` for the cross-estimator
+IF-vs-sandwich taxonomy.
 """
 
+import dataclasses
 import warnings
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
-from scipy import sparse, stats
-from scipy.sparse.linalg import spsolve
+from scipy import stats
 
-from diff_diff.imputation_bootstrap import ImputationDiDBootstrapMixin, _compute_target_weights
+from diff_diff._base import BaseEstimator
+from diff_diff._deprecation import NOT_SUPPLIED
+from diff_diff.aggregation import AggregationKit
+from diff_diff.imputation_aggregation import (  # noqa: F401 (compat re-exports)
+    _compute_target_weights,
+    _ImputationAggregationMixin,
+    _lsmr_minnorm_normal_solve,
+    _LSMRUnconvergedError,
+    _UntreatedProjection,
+)
+from diff_diff.imputation_bootstrap import ImputationDiDBootstrapMixin
 from diff_diff.imputation_results import (  # noqa: F401 (re-export)
     ImputationBootstrapResults,
     ImputationDiDResults,
 )
-from diff_diff.linalg import solve_ols
-from diff_diff.utils import safe_inference
+from diff_diff.utils import (
+    safe_inference,
+    validate_anticipation,
+    validate_df_convention,
+    validate_n_bootstrap,
+)
+
+if TYPE_CHECKING:
+    from diff_diff.survey import SurveyDesign
+
 
 # =============================================================================
 # Main Estimator
 # =============================================================================
 
 
-class ImputationDiD(ImputationDiDBootstrapMixin):
+class ImputationDiD(ImputationDiDBootstrapMixin, _ImputationAggregationMixin, BaseEstimator):
     """
     Borusyak-Jaravel-Spiess (2024) imputation DiD estimator.
 
@@ -56,11 +83,20 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
     ----------
     anticipation : int, default=0
         Number of periods before treatment where effects may occur.
+        Must be a non-negative integer; ``bool`` is rejected.
     alpha : float, default=0.05
         Significance level for confidence intervals.
     cluster : str, optional
         Column name for cluster-robust standard errors.
         If None, clusters at the unit level by default.
+    vcov_type : str, default="hc1"
+        Variance estimator family. Permanently narrow to ``{"hc1"}`` per
+        the IF-based variance contract (Theorem 3): analytical-sandwich
+        families ``{classical, hc2, hc2_bm}`` and ``conley`` are rejected
+        at ``__init__`` with methodology-rooted messages. ``cluster=``
+        invokes per-cluster IF summation; ``survey_design=`` invokes TSL
+        on the combined IF. See REGISTRY.md for the cross-estimator
+        IF-vs-sandwich taxonomy.
     n_bootstrap : int, default=0
         Number of bootstrap iterations. If 0, uses analytical inference
         (conservative variance from Theorem 3).
@@ -75,12 +111,60 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         - "silent": Drop columns silently
     horizon_max : int, optional
         Maximum event-study horizon. If set, event study effects are only
-        computed for |h| <= horizon_max.
+        computed for abs(h) <= horizon_max.
     aux_partition : str, default="cohort_horizon"
         Controls the auxiliary model partition for Theorem 3 variance:
-        - "cohort_horizon": Groups by cohort x relative time (tightest SEs)
-        - "cohort": Groups by cohort only (more conservative)
-        - "horizon": Groups by relative time only (more conservative)
+        - "cohort_horizon": Groups by cohort x relative time (finest)
+        - "cohort": Groups by cohort only (coarser)
+        - "horizon": Groups by relative time only (coarser)
+        Coarser partitions pool more observations per auxiliary group and are
+        typically -- but not necessarily -- more conservative: on a balanced
+        panel with uniform weights "cohort" coincides exactly with the default,
+        and per-horizon "horizon" SEs can be smaller than the default's under
+        ``leave_one_out=True`` (measured against Stata ``did_imputation
+        avgeffectsby()``; see the REGISTRY ImputationDiD partition note).
+    pretrends : bool, default=False
+        If True, event study includes pre-treatment horizons for visual
+        pre-trends assessment. Pre-period effects should be ~0 under
+        parallel trends. Only affects event_study aggregation; overall
+        ATT and group aggregation are unchanged.
+    leave_one_out : bool, default=False
+        If True, apply the Borusyak-Jaravel-Spiess (2024) Supplementary
+        Appendix A.9 leave-one-out finite-sample refinement to the
+        conservative variance. The non-LOO auxiliary aggregate ``tau_tilde_g``
+        is built from the fitted ``tau_hat_it`` and thus partially overfits to
+        the noise ``epsilon_it``, biasing the variance downward. LOO recomputes
+        each unit's group aggregate excluding that unit -- implemented
+        efficiently by rescaling each treated auxiliary residual by
+        ``1 / (1 - v_ig**2 / sum_j v_jg**2)`` (App. A.9), which is exactly
+        equivalent to the direct leave-one-out at the per-unit cluster sum.
+        Yields a larger, less-downward-biased SE (Prop. A8: unbiased for an
+        upper bound). Default False preserves R ``didimputation`` parity; the
+        refinement is an option in the authors' Stata ``did_imputation``. LOO
+        is undefined for a group with a single positive-weight unit (App. A.9
+        footnote 51): such groups fall back to the non-LOO residual with a
+        UserWarning. The Prop. A8 direction (LOO >= non-LOO) is guaranteed at
+        the default unit clustering; coarser ``cluster=`` / analytical
+        ``survey_design=`` / ``n_bootstrap`` compositions apply the same rescale
+        but are a library extension beyond the paper's derivation.
+        Replicate-weight survey designs raise ``NotImplementedError`` (their
+        variance bypasses the influence-function path where the rescale lives).
+    df_convention : {"residual", "cluster", "normal"}, default "residual"
+        Degrees-of-freedom convention for the PRETRENDS lead regression's
+        per-lead t/p/CI — the one ImputationDiD surface running the shared
+        clustered CR1 sandwich (``pretrends=True``, surfaced fit-time via
+        the deprecated ``aggregate="event_study"``/``"all"`` or post-fit via
+        ``results.aggregate('event_study')``). ``"residual"`` (default) uses
+        the lead regression's residual df (``n − k_kept − absorbed
+        [time, unit] rank``) — the 3.9 fix: previously silent normal-theory
+        z on plain clustered fits; ``"cluster"`` uses ``G − 1``;
+        ``"normal"`` deliberately uses z. The full-design survey df keeps
+        precedence on survey fits. Everything else — the BJS Theorem-3
+        overall/event-study inference and the joint pretrend Wald F (which
+        keeps its cluster-robust ``F(q, G − 1)`` reference) — is
+        knob-independent; an explicitly non-default value on a
+        configuration that never surfaces the per-lead inference warns at
+        fit time. The default flips to ``"cluster"`` at v4.
 
     Attributes
     ----------
@@ -100,14 +184,14 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
     ...                   time='time', first_treat='first_treat')
     >>> results.print_summary()
 
-    With event study:
+    With a post-fit event study (M-021):
 
     >>> est = ImputationDiD()
     >>> results = est.fit(data, outcome='outcome', unit='unit',
-    ...                   time='time', first_treat='first_treat',
-    ...                   aggregate='event_study')
+    ...                   time='time', first_treat='first_treat')
+    >>> es = results.aggregate('event_study')
     >>> from diff_diff import plot_event_study
-    >>> plot_event_study(results)
+    >>> plot_event_study(es)
 
     Notes
     -----
@@ -128,12 +212,16 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         anticipation: int = 0,
         alpha: float = 0.05,
         cluster: Optional[str] = None,
+        vcov_type: str = "hc1",
         n_bootstrap: int = 0,
         bootstrap_weights: str = "rademacher",
         seed: Optional[int] = None,
         rank_deficient_action: str = "warn",
         horizon_max: Optional[int] = None,
         aux_partition: str = "cohort_horizon",
+        pretrends: bool = False,
+        leave_one_out: bool = False,
+        df_convention: str = "residual",
     ):
         if rank_deficient_action not in ("warn", "error", "silent"):
             raise ValueError(
@@ -150,16 +238,24 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 f"aux_partition must be 'cohort_horizon', 'cohort', or 'horizon', "
                 f"got '{aux_partition}'"
             )
+        self._validate_vcov_type(vcov_type)
+        self._validate_leave_one_out(leave_one_out)
+        validate_df_convention(df_convention)
 
-        self.anticipation = anticipation
+        self.anticipation = validate_anticipation(anticipation)
         self.alpha = alpha
         self.cluster = cluster
+        self.vcov_type = vcov_type
+        validate_n_bootstrap(n_bootstrap)
         self.n_bootstrap = n_bootstrap
         self.bootstrap_weights = bootstrap_weights
         self.seed = seed
         self.rank_deficient_action = rank_deficient_action
         self.horizon_max = horizon_max
         self.aux_partition = aux_partition
+        self.pretrends = pretrends
+        self.leave_one_out = leave_one_out
+        self.df_convention = df_convention
 
         self.is_fitted_ = False
         self.results_: Optional[ImputationDiDResults] = None
@@ -175,9 +271,9 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         time: str,
         first_treat: str,
         covariates: Optional[List[str]] = None,
-        aggregate: Optional[str] = None,
-        balance_e: Optional[int] = None,
-        survey_design: object = None,
+        aggregate: Any = NOT_SUPPLIED,
+        balance_e: Any = NOT_SUPPLIED,
+        survey_design: Optional["SurveyDesign"] = None,
     ) -> ImputationDiDResults:
         """
         Fit the imputation DiD estimator.
@@ -198,16 +294,24 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         covariates : list of str, optional
             List of covariate column names.
         aggregate : str, optional
-            Aggregation mode: None/"simple" (overall ATT only),
-            "event_study", "group", or "all".
+            DEPRECATED (3.9, removed in 4.0; row M-021): aggregate as a
+            post-fit step instead — ``results.aggregate('event_study')`` /
+            ``.aggregate('group')`` / ``.aggregate('simple')`` /
+            ``.aggregate('total')``. Supplying
+            ANY value (``None`` included) warns; the deprecated path still
+            works and returns exactly the numbers it always did
+            (fit-time mode: None/"simple" overall only, "event_study",
+            "group", or "all").
         balance_e : int, optional
-            When computing event study, restrict to cohorts observed at all
-            relative times in [-balance_e, max_h].
+            DEPRECATED (3.9, removed in 4.0; row M-118): moves onto
+            ``results.aggregate('event_study', balance_e=...)``. Restricts
+            the event study to cohorts observed at every relative time in
+            ``[-balance_e, max_h]`` (the balanced-window rule).
         survey_design : SurveyDesign, optional
             Survey design specification for design-based inference. Supports
-            pweight only (aweight/fweight raise ValueError). FPC raises
-            NotImplementedError. PSU is used as cluster variable for Theorem 3
-            variance. Strata enters survey df for t-distribution inference.
+            pweight only (aweight/fweight raise ValueError). Supports strata,
+            PSU, and FPC for design-based variance via compute_survey_if_variance().
+            Strata enters survey df for t-distribution inference.
             Both analytical (n_bootstrap=0) and bootstrap inference are supported.
 
         Returns
@@ -220,6 +324,48 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         ValueError
             If required columns are missing or data validation fails.
         """
+        # M-021/M-118 deprecation shim (CS-style joint warning): a plain
+        # fit() never warns; supplying EITHER param with ANY value (None
+        # included) warns once, then the legacy routing below runs
+        # unchanged - the deprecated path returns exactly the numbers it
+        # always did (no new value validation; unknown strings still act
+        # like None). The post-fit successor validates its own vocabulary.
+        # The sentinel is normalized HERE, before every downstream read of
+        # ``aggregate`` (the pretrends+replicate gate and the df_convention
+        # reachability warning below both read it).
+        _deprecated_passed = [
+            n
+            for n, v in (("aggregate", aggregate), ("balance_e", balance_e))
+            if v is not NOT_SUPPLIED
+        ]
+        if _deprecated_passed:
+            _args = " / ".join(f"{n}=" for n in _deprecated_passed)
+            warnings.warn(
+                f"ImputationDiD.fit({_args}) is deprecated and will be "
+                "removed in 4.0. Fit once, then aggregate as a post-fit "
+                "step: results = ImputationDiD().fit(...); "
+                "results.aggregate('event_study') / .aggregate('group') / "
+                ".aggregate('simple') / .aggregate('total'). balance_e moves onto aggregate() "
+                "alongside it: results.aggregate('event_study', "
+                "balance_e=2).",
+                FutureWarning,
+                stacklevel=2,
+            )
+        if aggregate is NOT_SUPPLIED:
+            aggregate = None
+        if balance_e is NOT_SUPPLIED:
+            balance_e = None
+
+        # Re-validate vcov_type at fit-time: set_params validates eagerly
+        # (BaseEstimator probe re-init), so this only catches DIRECT
+        # attribute mutation (est.vcov_type = ...).
+        self._validate_vcov_type(self.vcov_type)
+        self._validate_leave_one_out(self.leave_one_out)
+        # Same direct-mutation defense for the anticipation window (an
+        # out-of-domain value silently changes the ESTIMAND); the assignment
+        # also re-normalizes a mutated numpy scalar to a Python int.
+        self.anticipation = validate_anticipation(self.anticipation)
+
         # Validate inputs
         required_cols = [outcome, unit, time, first_treat]
         if covariates:
@@ -228,6 +374,58 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         missing = [c for c in required_cols if c not in data.columns]
         if missing:
             raise ValueError(f"Missing columns: {missing}")
+
+        # pretrends + analytical survey is supported (Phase 8e-iii).
+        # Replicate-weight surveys need per-replicate lead regression refits
+        # which are not yet implemented — reject that combination.
+        if (
+            self.pretrends
+            and survey_design is not None
+            and survey_design.replicate_method is not None
+            and aggregate in ("event_study", "all")
+        ):
+            raise NotImplementedError(
+                "pretrends=True is not yet compatible with replicate-weight "
+                "survey designs. Analytical survey designs (strata/PSU/FPC) "
+                "are supported. Use pretrends=False with replicate weights."
+            )
+
+        # Inert-config warning (no-silent-failures): the df_convention knob
+        # moves only the pretrends lead regression's per-lead t/p/CI. Since
+        # the M-021 post-fit migration that inference is REACHABLE from any
+        # analytical pretrends=True fit via results.aggregate('event_study'),
+        # so the predicate is reachability-based, not aggregate-keyed:
+        # reachable iff pretrends AND not replicate-weight (the gate above
+        # rejects fit-time ES and the post-fit path fails closed too) AND
+        # (the deprecated fit-time ES/all was supplied OR n_bootstrap <= 0 —
+        # a bootstrapped fit builds no ES surface and post-fit aggregate()
+        # fails closed on it; validate_n_bootstrap rejects negatives at
+        # __init__, so 0 is the only reachable off value and `<= 0` is
+        # equivalent to `== 0` — kept as-is, no behavior change). Reachability-BASED, not exact: a
+        # fit whose bootstrap later FAILS (bootstrap_results=None) can still
+        # aggregate post-fit, so that corner warns spuriously — the warning
+        # fires before the bootstrap runs and cannot know. (The post-fit
+        # ``pretrend_test()`` reaches the lead helper too, but consumes only
+        # gamma/V_gamma — its joint Wald F denominator is knob-independent.)
+        _is_replicate_design = (
+            survey_design is not None and survey_design.replicate_method is not None
+        )
+        _lead_inference_reachable = (
+            self.pretrends
+            and not _is_replicate_design
+            and (aggregate in ("event_study", "all") or self.n_bootstrap <= 0)
+        )
+        if self.df_convention != "residual" and not _lead_inference_reachable:
+            warnings.warn(
+                f"df_convention={self.df_convention!r} affects only the "
+                "pretrends event-study per-lead inference (pretrends=True, "
+                "surfaced fit-time via the deprecated aggregate="
+                "'event_study'/'all' or post-fit via "
+                "results.aggregate('event_study')); it has no effect on "
+                "this configuration.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # Create working copy
         df = data.copy()
@@ -244,13 +442,54 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             survey_design, data, "analytical"
         )
 
+        _uses_replicate_imp = (
+            resolved_survey is not None and resolved_survey.uses_replicate_variance
+        )
+        if _uses_replicate_imp and self.n_bootstrap > 0:
+            raise ValueError(
+                "Cannot use n_bootstrap > 0 with replicate-weight survey designs. "
+                "Replicate weights provide their own variance estimation."
+            )
+        # Reject replicate-weight + cluster=: replicate IF variance is
+        # computed by replicate reweighting (BRR / Fay / JK1 / JKn / SDR)
+        # and ignores PSU/cluster entirely (survey.py enforces that
+        # replicate_weights are mutually exclusive with strata/psu/fpc).
+        # Honoring bare cluster= here would silently have no effect on
+        # variance while populating cluster_name/n_clusters on Results
+        # dishonestly. Fail-closed mirroring CallawaySantAnna.
+        if (
+            self.cluster is not None
+            and survey_design is not None
+            and getattr(survey_design, "replicate_weights", None) is not None
+        ):
+            raise NotImplementedError(
+                f"ImputationDiD(cluster={self.cluster!r}) is not supported "
+                "with replicate-weight survey designs. Replicate-weight "
+                "variance is computed by replicate reweighting (BRR / Fay / "
+                "JK1 / JKn / SDR) and ignores PSU/cluster entirely — setting "
+                "cluster= would silently have no effect on the variance "
+                "estimate. Either omit cluster= (the replicate weights encode "
+                "the design structure implicitly) or use a non-replicate "
+                "survey design (with explicit strata/psu/fpc)."
+            )
+        # Reject replicate-weight + leave_one_out=: the BJS 2024 App. A.9
+        # refinement rescales the conservative influence-function auxiliary
+        # residuals, but replicate-weight variance is computed by per-replicate
+        # point-estimate refits (not the IF path), so leave_one_out would
+        # silently have no effect. Fail-closed (no-silent-failures).
+        if _uses_replicate_imp and self.leave_one_out:
+            raise NotImplementedError(
+                "ImputationDiD(leave_one_out=True) is not supported with "
+                "replicate-weight survey designs. The leave-one-out refinement "
+                "(Borusyak, Jaravel & Spiess 2024, Supp. App. A.9) rescales the "
+                "conservative influence-function residuals, but replicate-weight "
+                "variance is computed by per-replicate refits and does not use "
+                "that path — leave_one_out would silently have no effect. Use a "
+                "non-replicate (Taylor-linearization) survey design, or "
+                "leave_one_out=False."
+            )
         # Validate within-unit constancy for panel survey designs
         if resolved_survey is not None:
-            if resolved_survey.uses_replicate_variance:
-                raise NotImplementedError(
-                    "ImputationDiD does not yet support replicate-weight survey "
-                    "designs. Use a TSL-based survey design (strata/psu/fpc)."
-                )
             _validate_unit_constant_survey(data, unit, survey_design)
             if resolved_survey.weight_type != "pweight":
                 raise ValueError(
@@ -258,12 +497,8 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                     f"got '{resolved_survey.weight_type}'. The survey variance math "
                     f"assumes probability weights (pweight)."
                 )
-            if resolved_survey.fpc is not None:
-                raise NotImplementedError(
-                    "ImputationDiD does not yet support FPC (finite population "
-                    "correction) in SurveyDesign. Weights, strata (for survey df), "
-                    "and PSU (for cluster-robust variance) are supported."
-                )
+            # FPC is supported — threaded through compute_survey_if_variance()
+            # in _compute_conservative_variance().
 
         # Bootstrap + survey supported via PSU-level multiplier bootstrap.
 
@@ -320,6 +555,13 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         omega_0_mask = ~df["_treated"]
         omega_1_mask = df["_treated"]
 
+        # Per-fit cache of the target-invariant untreated-projection design +
+        # factorization, shared across every estimand target (overall ATT, each
+        # event-study horizon, each group) AND the bootstrap precompute. A
+        # fit-time local (not self.* state) so fit() stays idempotent; see
+        # _compute_cluster_psi_sums for the key derivation.
+        proj_cache: Dict[Any, _UntreatedProjection] = {}
+
         n_omega_0 = int(omega_0_mask.sum())
         n_omega_1 = int(omega_1_mask.sum())
 
@@ -373,9 +615,11 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             if resolved_survey.psu is not None and survey_metadata is not None:
                 from diff_diff.survey import compute_survey_metadata
 
+                # resolved_survey non-None implies survey_design was passed.
+                assert survey_design is not None
                 raw_w = (
                     data[survey_design.weights].values.astype(np.float64)
-                    if survey_design.weights
+                    if survey_design.weights is not None
                     else np.ones(len(data), dtype=np.float64)
                 )
                 survey_metadata = compute_survey_metadata(resolved_survey, raw_w)
@@ -463,49 +707,64 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         else:
             overall_att = float(np.mean(valid_tau))
 
-        # ---- Conservative variance (Theorem 3) ----
-        # Build weights matching the ATT: proportional to survey weights for
-        # finite tau_hat, uniform when no survey
-        overall_weights = np.zeros(n_omega_1)
-        n_valid = int(finite_mask.sum())
-        if n_valid > 0:
-            if survey_weights is not None:
-                treated_sw = survey_weights[omega_1_mask.values]
-                sw_finite = treated_sw[finite_mask]
-                overall_weights[finite_mask] = sw_finite / sw_finite.sum()
-            else:
-                overall_weights[finite_mask] = 1.0 / n_valid
+        # ---- Variance ----
+        _n_valid_rep_imp = None
+        _vcov_rep_imp = None
+        overall_se = np.nan  # placeholder; overridden by replicate or conservative path
 
-        if n_valid == 0:
-            overall_se = np.nan
-        else:
-            overall_se = self._compute_conservative_variance(
-                df=df,
-                outcome=outcome,
-                unit=unit,
-                time=time,
-                first_treat=first_treat,
-                covariates=covariates,
-                omega_0_mask=omega_0_mask,
-                omega_1_mask=omega_1_mask,
-                unit_fe=unit_fe,
-                time_fe=time_fe,
-                grand_mean=grand_mean,
-                delta_hat=delta_hat,
-                weights=overall_weights,
-                cluster_var=cluster_var,
-                kept_cov_mask=kept_cov_mask,
-                survey_weights=survey_weights,
-            )
+        if not _uses_replicate_imp:
+            # Conservative variance (Theorem 3)
+            overall_weights = np.zeros(n_omega_1)
+            n_valid = int(finite_mask.sum())
+            if n_valid > 0:
+                if survey_weights is not None:
+                    treated_sw = survey_weights[omega_1_mask.values]
+                    sw_finite = treated_sw[finite_mask]
+                    overall_weights[finite_mask] = sw_finite / sw_finite.sum()
+                else:
+                    overall_weights[finite_mask] = 1.0 / n_valid
+
+            if n_valid == 0:
+                overall_se = np.nan
+            else:
+                overall_se = self._compute_conservative_variance(
+                    df=df,
+                    outcome=outcome,
+                    unit=unit,
+                    time=time,
+                    first_treat=first_treat,
+                    covariates=covariates,
+                    omega_0_mask=omega_0_mask,
+                    omega_1_mask=omega_1_mask,
+                    unit_fe=unit_fe,
+                    time_fe=time_fe,
+                    grand_mean=grand_mean,
+                    delta_hat=delta_hat,
+                    weights=overall_weights,
+                    cluster_var=cluster_var,
+                    kept_cov_mask=kept_cov_mask,
+                    survey_weights=survey_weights,
+                    resolved_survey=(resolved_survey if not _uses_replicate_imp else None),
+                    proj_cache=proj_cache,
+                )
 
         # Survey degrees of freedom for t-distribution inference
         _survey_df = resolved_survey.df_survey if resolved_survey is not None else None
+        # Replicate df: rank-deficient → NaN inference; dropped replicates → n_valid-1
+        if _uses_replicate_imp and _survey_df is None:
+            _survey_df = 0  # rank-deficient replicate → NaN inference
 
+        # Kit df-provenance SEED (M-021): the exact value the analytical
+        # aggregators below receive, captured BEFORE the replicate override
+        # can rebind _survey_df — post-fit recompute must re-seed from it.
+        _survey_df_seed = _survey_df
+
+        # Compute overall inference (may be overridden by replicate below)
         overall_t, overall_p, overall_ci = safe_inference(
             overall_att, overall_se, alpha=self.alpha, df=_survey_df
         )
 
-        # Event study and group aggregation
+        # Event study and group aggregation (full-sample, for point estimates)
         event_study_effects = None
         group_effects = None
 
@@ -529,6 +788,8 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 kept_cov_mask=kept_cov_mask,
                 survey_weights=survey_weights,
                 survey_df=_survey_df,
+                resolved_survey=(resolved_survey if not _uses_replicate_imp else None),
+                proj_cache=proj_cache,
             )
 
         if aggregate in ("group", "all"):
@@ -550,6 +811,37 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 kept_cov_mask=kept_cov_mask,
                 survey_weights=survey_weights,
                 survey_df=_survey_df,
+                resolved_survey=(resolved_survey if not _uses_replicate_imp else None),
+                proj_cache=proj_cache,
+            )
+
+        # Replicate variance: derive keys from actual outputs (after filtering)
+        if _uses_replicate_imp:
+            (
+                _vcov_rep_imp,
+                _n_valid_rep_imp,
+                _survey_df,
+            ) = self._replicate_override_aggregates(
+                df=df,
+                outcome=outcome,
+                unit=unit,
+                time=time,
+                first_treat=first_treat,
+                covariates=covariates,
+                omega_0_mask=omega_0_mask,
+                omega_1_mask=omega_1_mask,
+                resolved_survey=resolved_survey,
+                overall_att=overall_att,
+                event_study_effects=event_study_effects,
+                group_effects=group_effects,
+                balance_e=balance_e,
+                survey_df_seed=_survey_df,
+            )
+            overall_se = float(np.sqrt(max(_vcov_rep_imp[0, 0], 0.0)))
+            if survey_metadata is not None:
+                survey_metadata.df_survey = _survey_df if _survey_df and _survey_df > 0 else None
+            overall_t, overall_p, overall_ci = safe_inference(
+                overall_att, overall_se, alpha=self.alpha, df=_survey_df
             )
 
         # Build treatment effects dataframe
@@ -587,6 +879,8 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             "delta_hat": delta_hat,
             "kept_cov_mask": kept_cov_mask,
             "survey_design": survey_design,
+            "resolved_survey": resolved_survey,
+            "survey_weights": survey_weights,
         }
 
         # Pre-compute cluster psi sums for bootstrap
@@ -620,6 +914,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                     balance_e=balance_e,
                     survey_weights_0=_sw_0,
                     survey_weights_1=_sw_1,
+                    proj_cache=proj_cache,
                 )
             except Exception as e:
                 warnings.warn(
@@ -682,6 +977,43 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                         group_effects[g]["t_stat"] = safe_inference(
                             eff_val, se_val, alpha=self.alpha
                         )[0]
+                        # Percentile inference replaced the analytical row —
+                        # never publish an analytical df beside it (M-021;
+                        # the EfficientDiD M-023 precedent).
+                        group_effects[g]["df_used"] = None
+
+        # Resolve cluster_name / n_clusters for Results metadata.
+        # Suppress under ANY survey design (the survey block in summary()
+        # already renders the design's PSU/strata/replicate metadata, and
+        # replicate-weight variance ignores PSU/cluster entirely — keeping
+        # cluster_name/n_clusters populated on a replicate fit would
+        # misreport the inference source).
+        # Otherwise:
+        #   bare cluster= -> populate with the user-named cluster column
+        #   cluster=None  -> the Theorem 3 variance still clusters at the
+        #                    `unit` column by default (cluster_var = unit
+        #                    at L418), so the summary label must report
+        #                    unit-cluster CR1, not generic HC1.
+        if resolved_survey is not None:
+            _cluster_name_for_results: Optional[str] = None
+            _n_clusters_for_results: Optional[int] = None
+        elif self.cluster is not None:
+            _cluster_name_for_results = self.cluster
+            _n_clusters_for_results = int(data[self.cluster].nunique())
+        else:
+            _cluster_name_for_results = unit
+            _n_clusters_for_results = int(data[unit].nunique())
+
+        # Per-row ES df provenance (M-092 completion): the FINAL survey df —
+        # on replicate fits the level-matched override value that rewrote
+        # every ES row's inference; the seed value on plain survey fits.
+        # None when no ES surface was built, under bootstrap (percentile
+        # inference used no df — the shipped producer convention), on
+        # non-survey fits, and for the replicate-undefined 0 sentinel.
+        _es_df_final: Optional[float] = None
+        if event_study_effects is not None and bootstrap_results is None:
+            if _survey_df is not None and _survey_df > 0:
+                _es_df_final = float(_survey_df)
 
         # Construct results
         self.results_ = ImputationDiDResults(
@@ -701,9 +1033,39 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             n_treated_units=n_treated_units,
             n_control_units=n_control_units,
             alpha=self.alpha,
+            anticipation=self.anticipation,
             bootstrap_results=bootstrap_results,
             _estimator_ref=self,
             survey_metadata=survey_metadata,
+            vcov_type=self.vcov_type,
+            cluster_name=_cluster_name_for_results,
+            n_clusters=_n_clusters_for_results,
+            leave_one_out=self.leave_one_out,
+            df_convention=self.df_convention,
+            event_study_df=_es_df_final,
+        )
+
+        # Attach the post-fit aggregation kit (M-021/M-118). Unconditional —
+        # including bootstrap fits, whose gate lives in _aggregate_compute
+        # (a FAILED bootstrap leaves bootstrap_results=None and the fit
+        # aggregates normally).
+        self.results_._aggregation_kit = _build_imputation_aggregation_kit(
+            fit_data=self._fit_data,
+            treatment_groups=treatment_groups,
+            overall_att=overall_att,
+            n_treated_obs=n_omega_1,
+            uses_replicate=_uses_replicate_imp,
+            survey_df_seed=_survey_df_seed,
+            survey_df_final=_survey_df,
+            survey_metadata=survey_metadata,
+            horizon_max=self.horizon_max,
+            pretrends=self.pretrends,
+            aux_partition=self.aux_partition,
+            leave_one_out=self.leave_one_out,
+            rank_deficient_action=self.rank_deficient_action,
+            df_convention=self.df_convention,
+            alpha=self.alpha,
+            anticipation=self.anticipation,
         )
 
         self.is_fitted_ = True
@@ -713,1042 +1075,20 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
     # Step 1: OLS on untreated observations
     # =========================================================================
 
-    def _iterative_fe(
-        self,
-        y: np.ndarray,
-        unit_vals: np.ndarray,
-        time_vals: np.ndarray,
-        idx: pd.Index,
-        max_iter: int = 100,
-        tol: float = 1e-10,
-        weights: Optional[np.ndarray] = None,
-    ) -> Tuple[Dict[Any, float], Dict[Any, float]]:
-        """
-        Estimate unit and time FE via iterative alternating projection (Gauss-Seidel).
-
-        Converges to the exact OLS solution for both balanced and unbalanced panels.
-        For balanced panels, converges in 1-2 iterations (identical to one-pass).
-        For unbalanced panels, typically 5-20 iterations.
-
-        Parameters
-        ----------
-        weights : np.ndarray, optional
-            Survey weights. When provided, uses weighted group means
-            (sum(w*x)/sum(w)) instead of unweighted means.
-
-        Returns
-        -------
-        unit_fe : dict
-            Mapping from unit -> unit fixed effect.
-        time_fe : dict
-            Mapping from time -> time fixed effect.
-        """
-        n = len(y)
-        alpha = np.zeros(n)  # unit FE broadcast to obs level
-        beta = np.zeros(n)  # time FE broadcast to obs level
-
-        # Precompute per-group weight sums (invariant across iterations)
-        if weights is not None:
-            w_series = pd.Series(weights, index=idx)
-            wsum_t = w_series.groupby(time_vals).transform("sum").values
-            wsum_u = w_series.groupby(unit_vals).transform("sum").values
-
-        with np.errstate(invalid="ignore", divide="ignore"):
-            for iteration in range(max_iter):
-                resid_after_alpha = y - alpha
-                if weights is not None:
-                    wr_t = pd.Series(resid_after_alpha * weights, index=idx)
-                    beta_new = wr_t.groupby(time_vals).transform("sum").values / wsum_t
-                else:
-                    beta_new = (
-                        pd.Series(resid_after_alpha, index=idx)
-                        .groupby(time_vals)
-                        .transform("mean")
-                        .values
-                    )
-
-                resid_after_beta = y - beta_new
-                if weights is not None:
-                    wr_u = pd.Series(resid_after_beta * weights, index=idx)
-                    alpha_new = wr_u.groupby(unit_vals).transform("sum").values / wsum_u
-                else:
-                    alpha_new = (
-                        pd.Series(resid_after_beta, index=idx)
-                        .groupby(unit_vals)
-                        .transform("mean")
-                        .values
-                    )
-
-                # Check convergence on FE changes
-                max_change = max(
-                    np.max(np.abs(alpha_new - alpha)),
-                    np.max(np.abs(beta_new - beta)),
-                )
-                alpha = alpha_new
-                beta = beta_new
-                if max_change < tol:
-                    break
-
-        unit_fe = pd.Series(alpha, index=idx).groupby(unit_vals).first().to_dict()
-        time_fe = pd.Series(beta, index=idx).groupby(time_vals).first().to_dict()
-        return unit_fe, time_fe
-
-    @staticmethod
-    def _iterative_demean(
-        vals: np.ndarray,
-        unit_vals: np.ndarray,
-        time_vals: np.ndarray,
-        idx: pd.Index,
-        max_iter: int = 100,
-        tol: float = 1e-10,
-        weights: Optional[np.ndarray] = None,
-    ) -> np.ndarray:
-        """Demean a vector by iterative alternating projection (unit + time FE removal).
-
-        Converges to the exact within-transformation for both balanced and
-        unbalanced panels. For balanced panels, converges in 1-2 iterations.
-
-        Parameters
-        ----------
-        weights : np.ndarray, optional
-            Survey weights. When provided, uses weighted group means
-            (sum(w*x)/sum(w)) instead of unweighted means.
-        """
-        result = vals.copy()
-
-        # Precompute per-group weight sums (invariant across iterations)
-        if weights is not None:
-            w_series = pd.Series(weights, index=idx)
-            wsum_t = w_series.groupby(time_vals).transform("sum").values
-            wsum_u = w_series.groupby(unit_vals).transform("sum").values
-
-        with np.errstate(invalid="ignore", divide="ignore"):
-            for _ in range(max_iter):
-                if weights is not None:
-                    wr_t = pd.Series(result * weights, index=idx)
-                    time_means = wr_t.groupby(time_vals).transform("sum").values / wsum_t
-                else:
-                    time_means = (
-                        pd.Series(result, index=idx).groupby(time_vals).transform("mean").values
-                    )
-                result_after_time = result - time_means
-                if weights is not None:
-                    wr_u = pd.Series(result_after_time * weights, index=idx)
-                    unit_means = wr_u.groupby(unit_vals).transform("sum").values / wsum_u
-                else:
-                    unit_means = (
-                        pd.Series(result_after_time, index=idx)
-                        .groupby(unit_vals)
-                        .transform("mean")
-                        .values
-                    )
-                result_new = result_after_time - unit_means
-                if np.max(np.abs(result_new - result)) < tol:
-                    result = result_new
-                    break
-                result = result_new
-        return result
-
-    @staticmethod
-    def _compute_balanced_cohort_mask(
-        df_treated: pd.DataFrame,
-        first_treat: str,
-        all_horizons: List[int],
-        balance_e: int,
-        cohort_rel_times: Dict[Any, Set[int]],
-    ) -> np.ndarray:
-        """Compute boolean mask selecting treated obs from balanced cohorts.
-
-        A cohort is 'balanced' if it has observations at every relative time
-        in [-balance_e, max(all_horizons)].
-
-        Parameters
-        ----------
-        df_treated : pd.DataFrame
-            Post-treatment observations (Omega_1).
-        first_treat : str
-            Column name for cohort identifier.
-        all_horizons : list of int
-            Post-treatment horizons in the event study.
-        balance_e : int
-            Number of pre-treatment periods to require.
-        cohort_rel_times : dict
-            Maps each cohort value to the set of all observed relative times
-            (including pre-treatment) from the full panel. Built by
-            _build_cohort_rel_times().
-        """
-        if not all_horizons:
-            return np.ones(len(df_treated), dtype=bool)
-
-        max_h = max(all_horizons)
-        required_range = set(range(-balance_e, max_h + 1))
-
-        balanced_cohorts = set()
-        for g, horizons in cohort_rel_times.items():
-            if required_range.issubset(horizons):
-                balanced_cohorts.add(g)
-
-        return df_treated[first_treat].isin(balanced_cohorts).values
-
-    @staticmethod
-    def _build_cohort_rel_times(
-        df: pd.DataFrame,
-        first_treat: str,
-    ) -> Dict[Any, Set[int]]:
-        """Build mapping of cohort -> set of observed relative times from full panel.
-
-        Precondition: df must have '_never_treated' and '_rel_time' columns
-        (set by fit() before any aggregation calls).
-        """
-        treated_mask = ~df["_never_treated"]
-        treated_df = df.loc[treated_mask]
-        result: Dict[Any, Set[int]] = {}
-        ft_vals = treated_df[first_treat].values
-        rt_vals = treated_df["_rel_time"].values
-        for i in range(len(treated_df)):
-            h = rt_vals[i]
-            if np.isfinite(h):
-                result.setdefault(ft_vals[i], set()).add(int(h))
-        return result
-
-    def _fit_untreated_model(
-        self,
-        df: pd.DataFrame,
-        outcome: str,
-        unit: str,
-        time: str,
-        covariates: Optional[List[str]],
-        omega_0_mask: pd.Series,
-        weights: Optional[np.ndarray] = None,
-    ) -> Tuple[
-        Dict[Any, float], Dict[Any, float], float, Optional[np.ndarray], Optional[np.ndarray]
-    ]:
-        """
-        Step 1: Estimate unit + time FE on untreated observations.
-
-        Uses iterative alternating projection (Gauss-Seidel) to compute exact
-        OLS fixed effects for both balanced and unbalanced panels. For balanced
-        panels, converges in 1-2 iterations (identical to one-pass demeaning).
-
-        Parameters
-        ----------
-        weights : np.ndarray, optional
-            Full-panel survey weights (same length as df). The untreated subset
-            is extracted internally via omega_0_mask. When None, unweighted.
-
-        Returns
-        -------
-        unit_fe : dict
-            Unit fixed effects {unit_id: alpha_i}.
-        time_fe : dict
-            Time fixed effects {time_period: beta_t}.
-        grand_mean : float
-            Grand mean (0.0 — absorbed into iterative FE).
-        delta_hat : np.ndarray or None
-            Covariate coefficients (if covariates provided).
-        kept_cov_mask : np.ndarray or None
-            Boolean mask of shape (n_covariates,) indicating which covariates
-            have finite coefficients. None if no covariates.
-        """
-        df_0 = df.loc[omega_0_mask]
-        w_0 = weights[omega_0_mask.values] if weights is not None else None
-
-        if covariates is None or len(covariates) == 0:
-            # No covariates: estimate FE via iterative alternating projection
-            # (exact OLS for both balanced and unbalanced panels)
-            y = df_0[outcome].values.copy()
-            unit_fe, time_fe = self._iterative_fe(
-                y, df_0[unit].values, df_0[time].values, df_0.index, weights=w_0
-            )
-            # grand_mean = 0: iterative FE absorb the intercept
-            return unit_fe, time_fe, 0.0, None, None
-
-        else:
-            # With covariates: iteratively demean Y and X, OLS for delta,
-            # then recover FE from covariate-adjusted outcome
-            y = df_0[outcome].values.copy()
-            X_raw = df_0[covariates].values.copy()
-            units = df_0[unit].values
-            times = df_0[time].values
-            n_cov = len(covariates)
-
-            # Step A: Iteratively demean Y and all X columns to remove unit+time FE
-            y_dm = self._iterative_demean(y, units, times, df_0.index, weights=w_0)
-            X_dm = np.column_stack(
-                [
-                    self._iterative_demean(X_raw[:, j], units, times, df_0.index, weights=w_0)
-                    for j in range(n_cov)
-                ]
-            )
-
-            # Step B: OLS for covariate coefficients on demeaned data
-            result = solve_ols(
-                X_dm,
-                y_dm,
-                return_vcov=False,
-                rank_deficient_action=self.rank_deficient_action,
-                column_names=covariates,
-                weights=w_0,
-            )
-            delta_hat = result[0]
-
-            # Mask of covariates with finite coefficients (before cleaning)
-            # Used to exclude rank-deficient covariates from variance design matrices
-            kept_cov_mask = np.isfinite(delta_hat)
-
-            # Replace NaN coefficients with 0 for adjustment
-            # (rank-deficient covariates are dropped)
-            delta_hat_clean = np.where(np.isfinite(delta_hat), delta_hat, 0.0)
-
-            # Step C: Recover FE from covariate-adjusted outcome using iterative FE
-            y_adj = y - np.dot(X_raw, delta_hat_clean)
-            unit_fe, time_fe = self._iterative_fe(y_adj, units, times, df_0.index, weights=w_0)
-
-            # grand_mean = 0: iterative FE absorb the intercept
-            return unit_fe, time_fe, 0.0, delta_hat_clean, kept_cov_mask
-
     # =========================================================================
     # Step 2: Impute counterfactuals
     # =========================================================================
-
-    def _impute_treatment_effects(
-        self,
-        df: pd.DataFrame,
-        outcome: str,
-        unit: str,
-        time: str,
-        covariates: Optional[List[str]],
-        omega_1_mask: pd.Series,
-        unit_fe: Dict[Any, float],
-        time_fe: Dict[Any, float],
-        grand_mean: float,
-        delta_hat: Optional[np.ndarray],
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Step 2: Impute Y(0) for treated observations and compute tau_hat.
-
-        Returns
-        -------
-        tau_hat : np.ndarray
-            Imputed treatment effects for each treated observation.
-        y_hat_0 : np.ndarray
-            Imputed counterfactual Y(0).
-        """
-        df_1 = df.loc[omega_1_mask]
-        n_1 = len(df_1)
-
-        # Look up unit and time FE
-        alpha_i = df_1[unit].map(unit_fe).values
-        beta_t = df_1[time].map(time_fe).values
-
-        # Handle missing FE (set to NaN)
-        alpha_i = np.where(pd.isna(alpha_i), np.nan, alpha_i).astype(float)
-        beta_t = np.where(pd.isna(beta_t), np.nan, beta_t).astype(float)
-
-        y_hat_0 = grand_mean + alpha_i + beta_t
-
-        if delta_hat is not None and covariates:
-            X_1 = df_1[covariates].values
-            y_hat_0 = y_hat_0 + np.dot(X_1, delta_hat)
-
-        tau_hat = df_1[outcome].values - y_hat_0
-
-        return tau_hat, y_hat_0
 
     # =========================================================================
     # Conservative Variance (Theorem 3)
     # =========================================================================
 
-    def _compute_cluster_psi_sums(
-        self,
-        df: pd.DataFrame,
-        outcome: str,
-        unit: str,
-        time: str,
-        first_treat: str,
-        covariates: Optional[List[str]],
-        omega_0_mask: pd.Series,
-        omega_1_mask: pd.Series,
-        unit_fe: Dict[Any, float],
-        time_fe: Dict[Any, float],
-        grand_mean: float,
-        delta_hat: Optional[np.ndarray],
-        weights: np.ndarray,
-        cluster_var: str,
-        kept_cov_mask: Optional[np.ndarray] = None,
-        survey_weights_0: Optional[np.ndarray] = None,
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Compute cluster-level influence function sums (Theorem 3).
-
-        psi_i = sum_t v_it * epsilon_tilde_it, summed within each cluster.
-
-        Returns
-        -------
-        cluster_psi_sums : np.ndarray
-            Array of cluster-level psi sums.
-        cluster_ids_unique : np.ndarray
-            Unique cluster identifiers (matching order of psi sums).
-        """
-        df_0 = df.loc[omega_0_mask]
-        df_1 = df.loc[omega_1_mask]
-        n_0 = len(df_0)
-        n_1 = len(df_1)
-
-        # ---- Compute v_it for treated observations ----
-        v_treated = weights.copy()
-
-        # ---- Compute v_it for untreated observations ----
-        if covariates is None or len(covariates) == 0:
-            # FE-only case: closed-form
-            treated_units = df_1[unit].values
-            treated_times = df_1[time].values
-
-            w_by_unit: Dict[Any, float] = {}
-            for i_idx in range(n_1):
-                u = treated_units[i_idx]
-                w_by_unit[u] = w_by_unit.get(u, 0.0) + weights[i_idx]
-
-            w_by_time: Dict[Any, float] = {}
-            for i_idx in range(n_1):
-                t = treated_times[i_idx]
-                w_by_time[t] = w_by_time.get(t, 0.0) + weights[i_idx]
-
-            w_total = float(np.sum(weights))
-
-            # Use survey-weighted sums for untreated denominators when present
-            if survey_weights_0 is not None:
-                sw0_series = pd.Series(survey_weights_0, index=df_0.index)
-                n0_by_unit = sw0_series.groupby(df_0[unit]).sum().to_dict()
-                n0_by_time = sw0_series.groupby(df_0[time]).sum().to_dict()
-                n0_denom = float(np.sum(survey_weights_0))
-            else:
-                n0_by_unit = df_0.groupby(unit).size().to_dict()
-                n0_by_time = df_0.groupby(time).size().to_dict()
-                n0_denom = n_0
-
-            untreated_units = df_0[unit].values
-            untreated_times = df_0[time].values
-            v_untreated = np.zeros(n_0)
-
-            for j in range(n_0):
-                u = untreated_units[j]
-                t = untreated_times[j]
-                w_i = w_by_unit.get(u, 0.0)
-                w_t = w_by_time.get(t, 0.0)
-                n0_i = n0_by_unit.get(u, 1)
-                n0_t = n0_by_time.get(t, 1)
-                base_v = -(w_i / n0_i + w_t / n0_t - w_total / n0_denom)
-                # WLS projection requires per-obs survey weight factor
-                if survey_weights_0 is not None:
-                    base_v *= survey_weights_0[j]
-                v_untreated[j] = base_v
-        else:
-            v_untreated = self._compute_v_untreated_with_covariates(
-                df_0,
-                df_1,
-                unit,
-                time,
-                covariates,
-                weights,
-                delta_hat,
-                kept_cov_mask=kept_cov_mask,
-                survey_weights_0=survey_weights_0,
-            )
-
-        # ---- Compute auxiliary model residuals (Equation 8) ----
-        epsilon_treated = self._compute_auxiliary_residuals_treated(
-            df_1,
-            outcome,
-            unit,
-            time,
-            first_treat,
-            covariates,
-            unit_fe,
-            time_fe,
-            grand_mean,
-            delta_hat,
-            v_treated,
-        )
-        epsilon_untreated = self._compute_residuals_untreated(
-            df_0, outcome, unit, time, covariates, unit_fe, time_fe, grand_mean, delta_hat
-        )
-
-        # ---- psi_it = v_it * epsilon_tilde_it ----
-        v_all = np.empty(len(df))
-        v_all[omega_1_mask.values] = v_treated
-        v_all[omega_0_mask.values] = v_untreated
-
-        eps_all = np.empty(len(df))
-        eps_all[omega_1_mask.values] = epsilon_treated
-        eps_all[omega_0_mask.values] = epsilon_untreated
-
-        ve_product = v_all * eps_all
-        # NaN eps from missing FE (rank condition violation). Zero their variance
-        # contribution — matches R's did_imputation which drops unimputable obs.
-        np.nan_to_num(ve_product, copy=False, nan=0.0)
-
-        # Sum within clusters
-        cluster_ids = df[cluster_var].values
-        ve_series = pd.Series(ve_product, index=df.index)
-        cluster_sums = ve_series.groupby(cluster_ids).sum()
-
-        return cluster_sums.values, cluster_sums.index.values
-
-    def _compute_conservative_variance(
-        self,
-        df: pd.DataFrame,
-        outcome: str,
-        unit: str,
-        time: str,
-        first_treat: str,
-        covariates: Optional[List[str]],
-        omega_0_mask: pd.Series,
-        omega_1_mask: pd.Series,
-        unit_fe: Dict[Any, float],
-        time_fe: Dict[Any, float],
-        grand_mean: float,
-        delta_hat: Optional[np.ndarray],
-        weights: np.ndarray,
-        cluster_var: str,
-        kept_cov_mask: Optional[np.ndarray] = None,
-        survey_weights: Optional[np.ndarray] = None,
-    ) -> float:
-        """
-        Compute conservative clustered variance (Theorem 3, Equation 7).
-
-        Parameters
-        ----------
-        weights : np.ndarray
-            Aggregation weights w_it for treated observations.
-            Shape: (n_treated,), must sum to 1.
-        survey_weights : np.ndarray, optional
-            Full-panel survey weights. When provided, untreated denominators
-            in v_it use survey-weighted sums instead of raw counts.
-
-        Returns
-        -------
-        float
-            Standard error.
-        """
-        sw_0 = survey_weights[omega_0_mask.values] if survey_weights is not None else None
-        cluster_psi_sums, _ = self._compute_cluster_psi_sums(
-            df=df,
-            outcome=outcome,
-            unit=unit,
-            time=time,
-            first_treat=first_treat,
-            covariates=covariates,
-            omega_0_mask=omega_0_mask,
-            omega_1_mask=omega_1_mask,
-            unit_fe=unit_fe,
-            time_fe=time_fe,
-            grand_mean=grand_mean,
-            delta_hat=delta_hat,
-            weights=weights,
-            cluster_var=cluster_var,
-            kept_cov_mask=kept_cov_mask,
-            survey_weights_0=sw_0,
-        )
-        sigma_sq = float((cluster_psi_sums**2).sum())
-        return np.sqrt(max(sigma_sq, 0.0))
-
-    def _compute_v_untreated_with_covariates(
-        self,
-        df_0: pd.DataFrame,
-        df_1: pd.DataFrame,
-        unit: str,
-        time: str,
-        covariates: List[str],
-        weights: np.ndarray,
-        delta_hat: Optional[np.ndarray],
-        kept_cov_mask: Optional[np.ndarray] = None,
-        survey_weights_0: Optional[np.ndarray] = None,
-    ) -> np.ndarray:
-        """
-        Compute v_it for untreated observations with covariates.
-
-        Uses the projection: v_untreated = -A_0 (A_0'A_0)^{-1} A_1' w_treated
-        When survey_weights_0 is provided, uses weighted normal equations:
-        v_untreated = -A_0 (A_0' W A_0)^{-1} A_1' w_treated
-
-        Uses scipy.sparse for FE dummy columns to reduce memory from O(N*(U+T))
-        to O(N) for the FE portion.
-        """
-        # Exclude rank-deficient covariates from design matrices
-        if kept_cov_mask is not None and not np.all(kept_cov_mask):
-            covariates = [c for c, k in zip(covariates, kept_cov_mask) if k]
-
-        units_0 = df_0[unit].values
-        times_0 = df_0[time].values
-        units_1 = df_1[unit].values
-        times_1 = df_1[time].values
-
-        all_units = np.unique(np.concatenate([units_0, units_1]))
-        all_times = np.unique(np.concatenate([times_0, times_1]))
-        unit_to_idx = {u: i for i, u in enumerate(all_units)}
-        time_to_idx = {t: i for i, t in enumerate(all_times)}
-        n_units = len(all_units)
-        n_times = len(all_times)
-        n_cov = len(covariates)
-        n_fe_cols = (n_units - 1) + (n_times - 1)
-
-        def _build_A_sparse(df_sub, unit_vals, time_vals):
-            n = len(df_sub)
-
-            # Unit dummies (drop first) — vectorized
-            u_indices = np.array([unit_to_idx[u] for u in unit_vals])
-            u_mask = u_indices > 0  # skip first unit (dropped)
-            u_rows = np.arange(n)[u_mask]
-            u_cols = u_indices[u_mask] - 1
-
-            # Time dummies (drop first) — vectorized
-            t_indices = np.array([time_to_idx[t] for t in time_vals])
-            t_mask = t_indices > 0
-            t_rows = np.arange(n)[t_mask]
-            t_cols = (n_units - 1) + t_indices[t_mask] - 1
-
-            rows = np.concatenate([u_rows, t_rows])
-            cols = np.concatenate([u_cols, t_cols])
-            data = np.ones(len(rows))
-
-            A_fe = sparse.csr_matrix((data, (rows, cols)), shape=(n, n_fe_cols))
-
-            # Covariates (dense, typically few columns)
-            if n_cov > 0:
-                A_cov = sparse.csr_matrix(df_sub[covariates].values)
-                A = sparse.hstack([A_fe, A_cov], format="csr")
-            else:
-                A = A_fe
-
-            return A
-
-        A_0 = _build_A_sparse(df_0, units_0, times_0)
-        A_1 = _build_A_sparse(df_1, units_1, times_1)
-
-        # Compute A_1' w (sparse.T @ dense -> dense)
-        A1_w = A_1.T @ weights  # shape (p,)
-
-        # Solve (A_0' [W] A_0) z = A_1' w using sparse direct solver
-        # When survey weights present, use weighted normal equations A_0' W A_0
-        if survey_weights_0 is not None:
-            A0tA0_sparse = A_0.T @ A_0.multiply(survey_weights_0[:, None])
-        else:
-            A0tA0_sparse = A_0.T @ A_0  # stays sparse
-        try:
-            z = spsolve(A0tA0_sparse.tocsc(), A1_w)
-        except Exception:
-            # Fallback to dense lstsq if sparse solver fails (e.g., singular matrix)
-            A0tA0_dense = A0tA0_sparse.toarray()
-            z, _, _, _ = np.linalg.lstsq(A0tA0_dense, A1_w, rcond=None)
-
-        # v_untreated = -[W_0] A_0 z (WLS projection requires per-obs weight)
-        v_untreated = -(A_0 @ z)
-        if survey_weights_0 is not None:
-            v_untreated = v_untreated * survey_weights_0
-        return v_untreated
-
-    def _compute_auxiliary_residuals_treated(
-        self,
-        df_1: pd.DataFrame,
-        outcome: str,
-        unit: str,
-        time: str,
-        first_treat: str,
-        covariates: Optional[List[str]],
-        unit_fe: Dict[Any, float],
-        time_fe: Dict[Any, float],
-        grand_mean: float,
-        delta_hat: Optional[np.ndarray],
-        v_treated: np.ndarray,
-    ) -> np.ndarray:
-        """
-        Compute v_it-weighted auxiliary residuals for treated obs (Equation 8).
-
-        Computes v_it-weighted tau_tilde_g per Equation 8 of Borusyak et al. (2024):
-        tau_tilde_g = sum(v_it * tau_hat_it) / sum(v_it) within group g.
-
-        epsilon_tilde_it = Y_it - alpha_i - beta_t [- X'delta] - tau_tilde_g
-        """
-        n_1 = len(df_1)
-
-        # Compute base residuals (Y - Y_hat(0) = tau_hat)
-        # NaN for missing FE (consistent with _impute_treatment_effects)
-        alpha_i = df_1[unit].map(unit_fe).values.astype(float)  # NaN for missing
-        beta_t = df_1[time].map(time_fe).values.astype(float)  # NaN for missing
-        y_hat_0 = grand_mean + alpha_i + beta_t
-
-        if delta_hat is not None and covariates:
-            y_hat_0 = y_hat_0 + np.dot(df_1[covariates].values, delta_hat)
-
-        tau_hat = df_1[outcome].values - y_hat_0
-
-        # Partition Omega_1 and compute tau_tilde for each group
-        if self.aux_partition == "cohort_horizon":
-            group_keys = list(zip(df_1[first_treat].values, df_1["_rel_time"].values))
-        elif self.aux_partition == "cohort":
-            group_keys = list(df_1[first_treat].values)
-        elif self.aux_partition == "horizon":
-            group_keys = list(df_1["_rel_time"].values)
-        else:
-            group_keys = list(range(n_1))  # each obs is its own group
-
-        # Compute v_it-weighted average tau within each partition group (Equation 8)
-        # tau_tilde_g = sum(v_it * tau_hat_it) / sum(v_it) within group g
-        group_series = pd.Series(group_keys, index=df_1.index)
-        tau_series = pd.Series(tau_hat, index=df_1.index)
-        v_series = pd.Series(v_treated, index=df_1.index)
-
-        weighted_tau_sum = (v_series * tau_series).groupby(group_series).sum()
-        weight_sum = v_series.groupby(group_series).sum()
-
-        # Guard: zero-weight groups -> their tau_tilde doesn't affect variance
-        # (v_it ~ 0 means these obs contribute nothing to the estimand)
-        # Use simple mean as fallback. This is common for event-study SE computation
-        # where weights target a specific horizon, making other partition groups zero.
-        zero_weight_groups = weight_sum.abs() < 1e-15
-        if zero_weight_groups.any():
-            simple_means = tau_series.groupby(group_series).mean()
-            tau_tilde_map = weighted_tau_sum / weight_sum
-            tau_tilde_map = tau_tilde_map.where(~zero_weight_groups, simple_means)
-        else:
-            tau_tilde_map = weighted_tau_sum / weight_sum
-
-        tau_tilde = group_series.map(tau_tilde_map).values
-
-        # Auxiliary residuals
-        epsilon_treated = tau_hat - tau_tilde
-
-        return epsilon_treated
-
-    def _compute_residuals_untreated(
-        self,
-        df_0: pd.DataFrame,
-        outcome: str,
-        unit: str,
-        time: str,
-        covariates: Optional[List[str]],
-        unit_fe: Dict[Any, float],
-        time_fe: Dict[Any, float],
-        grand_mean: float,
-        delta_hat: Optional[np.ndarray],
-    ) -> np.ndarray:
-        """Compute Step 1 residuals for untreated observations."""
-        alpha_i = df_0[unit].map(unit_fe).fillna(0.0).values
-        beta_t = df_0[time].map(time_fe).fillna(0.0).values
-        y_hat = grand_mean + alpha_i + beta_t
-
-        if delta_hat is not None and covariates:
-            y_hat = y_hat + np.dot(df_0[covariates].values, delta_hat)
-
-        return df_0[outcome].values - y_hat
-
     # =========================================================================
     # Aggregation
     # =========================================================================
 
-    def _aggregate_event_study(
-        self,
-        df: pd.DataFrame,
-        outcome: str,
-        unit: str,
-        time: str,
-        first_treat: str,
-        covariates: Optional[List[str]],
-        omega_0_mask: pd.Series,
-        omega_1_mask: pd.Series,
-        unit_fe: Dict[Any, float],
-        time_fe: Dict[Any, float],
-        grand_mean: float,
-        delta_hat: Optional[np.ndarray],
-        cluster_var: str,
-        treatment_groups: List[Any],
-        balance_e: Optional[int] = None,
-        kept_cov_mask: Optional[np.ndarray] = None,
-        survey_weights: Optional[np.ndarray] = None,
-        survey_df: Optional[int] = None,
-    ) -> Dict[int, Dict[str, Any]]:
-        """Aggregate treatment effects by event-study horizon."""
-        df_1 = df.loc[omega_1_mask]
-        tau_hat = df["_tau_hat"].loc[omega_1_mask].values
-        rel_times = df_1["_rel_time"].values
-
-        # Get all horizons
-        all_horizons = sorted(set(int(h) for h in rel_times if np.isfinite(h)))
-
-        # Apply horizon_max filter
-        if self.horizon_max is not None:
-            all_horizons = [h for h in all_horizons if abs(h) <= self.horizon_max]
-
-        # Apply balance_e filter
-        if balance_e is not None:
-            cohort_rel_times = self._build_cohort_rel_times(df, first_treat)
-            balanced_mask = pd.Series(
-                self._compute_balanced_cohort_mask(
-                    df_1, first_treat, all_horizons, balance_e, cohort_rel_times
-                ),
-                index=df_1.index,
-            )
-        else:
-            balanced_mask = pd.Series(True, index=df_1.index)
-
-        # Check Proposition 5: no never-treated units
-        has_never_treated = df["_never_treated"].any()
-        h_bar = np.inf
-        if not has_never_treated and len(treatment_groups) > 1:
-            h_bar = max(treatment_groups) - min(treatment_groups)
-
-        # Reference period
-        ref_period = -1 - self.anticipation
-
-        event_study_effects: Dict[int, Dict[str, Any]] = {}
-
-        # Add reference period marker
-        event_study_effects[ref_period] = {
-            "effect": 0.0,
-            "se": 0.0,
-            "t_stat": np.nan,
-            "p_value": np.nan,
-            "conf_int": (0.0, 0.0),
-            "n_obs": 0,
-        }
-
-        # Collect horizons with Proposition 5 violations
-        prop5_horizons = []
-
-        for h in all_horizons:
-            if h == ref_period:
-                continue
-
-            # Select treated obs at this horizon from balanced cohorts
-            h_mask = (rel_times == h) & balanced_mask.values
-            n_h = int(h_mask.sum())
-
-            if n_h == 0:
-                continue
-
-            # Proposition 5 check
-            if not has_never_treated and h >= h_bar:
-                prop5_horizons.append(h)
-                event_study_effects[h] = {
-                    "effect": np.nan,
-                    "se": np.nan,
-                    "t_stat": np.nan,
-                    "p_value": np.nan,
-                    "conf_int": (np.nan, np.nan),
-                    "n_obs": n_h,
-                }
-                continue
-
-            tau_h = tau_hat[h_mask]
-            finite_h = np.isfinite(tau_h)
-            valid_tau = tau_h[finite_h]
-
-            if len(valid_tau) == 0:
-                event_study_effects[h] = {
-                    "effect": np.nan,
-                    "se": np.nan,
-                    "t_stat": np.nan,
-                    "p_value": np.nan,
-                    "conf_int": (np.nan, np.nan),
-                    "n_obs": n_h,
-                }
-                continue
-
-            # Survey-weighted or simple mean for per-horizon effect
-            if survey_weights is not None:
-                treated_sw = survey_weights[omega_1_mask.values]
-                sw_h = treated_sw[h_mask]
-                sw_valid = sw_h[finite_h]
-                effect = float(np.average(valid_tau, weights=sw_valid))
-            else:
-                effect = float(np.mean(valid_tau))
-
-            # Compute SE via conservative variance with horizon-specific weights
-            # When survey, aggregation weights are proportional to survey weights
-            if survey_weights is not None:
-                treated_sw = survey_weights[omega_1_mask.values]
-                n_1 = len(tau_hat)
-                weights_h = np.zeros(n_1)
-                sw_h = treated_sw[h_mask]
-                finite_in_h = np.isfinite(tau_h)
-                sw_finite = sw_h[finite_in_h]
-                # Set weights proportional to survey weights, summing to 1
-                if sw_finite.sum() > 0:
-                    h_indices = np.where(h_mask)[0]
-                    finite_indices = h_indices[finite_in_h]
-                    weights_h[finite_indices] = sw_finite / sw_finite.sum()
-                n_valid = int(finite_in_h.sum())
-            else:
-                weights_h, n_valid = _compute_target_weights(tau_hat, h_mask)
-
-            se = self._compute_conservative_variance(
-                df=df,
-                outcome=outcome,
-                unit=unit,
-                time=time,
-                first_treat=first_treat,
-                covariates=covariates,
-                omega_0_mask=omega_0_mask,
-                omega_1_mask=omega_1_mask,
-                unit_fe=unit_fe,
-                time_fe=time_fe,
-                grand_mean=grand_mean,
-                delta_hat=delta_hat,
-                weights=weights_h,
-                cluster_var=cluster_var,
-                kept_cov_mask=kept_cov_mask,
-                survey_weights=survey_weights,
-            )
-
-            t_stat, p_value, conf_int = safe_inference(effect, se, alpha=self.alpha, df=survey_df)
-
-            event_study_effects[h] = {
-                "effect": effect,
-                "se": se,
-                "t_stat": t_stat,
-                "p_value": p_value,
-                "conf_int": conf_int,
-                "n_obs": n_h,
-            }
-
-        # Proposition 5 warning
-        if prop5_horizons:
-            warnings.warn(
-                f"Horizons {prop5_horizons} are not identified without "
-                f"never-treated units (Proposition 5). Set to NaN.",
-                UserWarning,
-                stacklevel=3,
-            )
-
-        # Check for empty result set after filtering
-        real_effects = [
-            h for h, v in event_study_effects.items() if h != ref_period and v.get("n_obs", 0) > 0
-        ]
-        if len(real_effects) == 0:
-            filter_info = []
-            if balance_e is not None:
-                filter_info.append(f"balance_e={balance_e}")
-            if self.horizon_max is not None:
-                filter_info.append(f"horizon_max={self.horizon_max}")
-            filter_str = " and ".join(filter_info) if filter_info else "filters"
-            warnings.warn(
-                f"Event study aggregation produced no horizons with observations "
-                f"after applying {filter_str}. The result contains only the "
-                f"reference period marker. Consider relaxing filter parameters.",
-                UserWarning,
-                stacklevel=3,
-            )
-
-        return event_study_effects
-
-    def _aggregate_group(
-        self,
-        df: pd.DataFrame,
-        outcome: str,
-        unit: str,
-        time: str,
-        first_treat: str,
-        covariates: Optional[List[str]],
-        omega_0_mask: pd.Series,
-        omega_1_mask: pd.Series,
-        unit_fe: Dict[Any, float],
-        time_fe: Dict[Any, float],
-        grand_mean: float,
-        delta_hat: Optional[np.ndarray],
-        cluster_var: str,
-        treatment_groups: List[Any],
-        kept_cov_mask: Optional[np.ndarray] = None,
-        survey_weights: Optional[np.ndarray] = None,
-        survey_df: Optional[int] = None,
-    ) -> Dict[Any, Dict[str, Any]]:
-        """Aggregate treatment effects by cohort."""
-        df_1 = df.loc[omega_1_mask]
-        tau_hat = df["_tau_hat"].loc[omega_1_mask].values
-        cohorts = df_1[first_treat].values
-
-        group_effects: Dict[Any, Dict[str, Any]] = {}
-
-        for g in treatment_groups:
-            g_mask = cohorts == g
-            n_g = int(g_mask.sum())
-
-            if n_g == 0:
-                continue
-
-            tau_g = tau_hat[g_mask]
-            finite_g = np.isfinite(tau_g)
-            valid_tau = tau_g[finite_g]
-
-            if len(valid_tau) == 0:
-                group_effects[g] = {
-                    "effect": np.nan,
-                    "se": np.nan,
-                    "t_stat": np.nan,
-                    "p_value": np.nan,
-                    "conf_int": (np.nan, np.nan),
-                    "n_obs": n_g,
-                }
-                continue
-
-            # Survey-weighted or simple mean for per-group effect
-            if survey_weights is not None:
-                treated_sw = survey_weights[omega_1_mask.values]
-                sw_g = treated_sw[g_mask]
-                sw_valid = sw_g[finite_g]
-                effect = float(np.average(valid_tau, weights=sw_valid))
-            else:
-                effect = float(np.mean(valid_tau))
-
-            # Compute SE with group-specific weights
-            # When survey, aggregation weights proportional to survey weights
-            if survey_weights is not None:
-                treated_sw = survey_weights[omega_1_mask.values]
-                n_1 = len(tau_hat)
-                weights_g = np.zeros(n_1)
-                sw_g = treated_sw[g_mask]
-                sw_finite = sw_g[finite_g]
-                if sw_finite.sum() > 0:
-                    g_indices = np.where(g_mask)[0]
-                    finite_indices = g_indices[finite_g]
-                    weights_g[finite_indices] = sw_finite / sw_finite.sum()
-            else:
-                weights_g, _ = _compute_target_weights(tau_hat, g_mask)
-
-            se = self._compute_conservative_variance(
-                df=df,
-                outcome=outcome,
-                unit=unit,
-                time=time,
-                first_treat=first_treat,
-                covariates=covariates,
-                omega_0_mask=omega_0_mask,
-                omega_1_mask=omega_1_mask,
-                unit_fe=unit_fe,
-                time_fe=time_fe,
-                grand_mean=grand_mean,
-                delta_hat=delta_hat,
-                weights=weights_g,
-                cluster_var=cluster_var,
-                kept_cov_mask=kept_cov_mask,
-                survey_weights=survey_weights,
-            )
-
-            t_stat, p_value, conf_int = safe_inference(effect, se, alpha=self.alpha, df=survey_df)
-
-            group_effects[g] = {
-                "effect": effect,
-                "se": se,
-                "t_stat": t_stat,
-                "p_value": p_value,
-                "conf_int": conf_int,
-                "n_obs": n_g,
-            }
-
-        return group_effects
-
     # =========================================================================
-    # Pre-trend test (Equation 9)
+    # Pre-trend test (Equation 9) & pre-period lead coefficients
     # =========================================================================
 
     def _pretrend_test(self, n_leads: Optional[int] = None) -> Dict[str, Any]:
@@ -1756,20 +1096,22 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         Run pre-trend test (Equation 9).
 
         Adds pre-treatment lead indicators to the Step 1 OLS on Omega_0
-        and tests their joint significance via cluster-robust Wald F-test.
+        and tests their joint significance via Wald F-test (cluster-robust
+        or design-based survey VCV when survey_design is present).
         """
         if self._fit_data is None:
             raise RuntimeError("Must call fit() before pretrend_test().")
 
-        if self._fit_data.get("survey_design") is not None:
+        fd = self._fit_data
+        resolved_survey = fd.get("resolved_survey")
+        if resolved_survey is not None and resolved_survey.uses_replicate_variance:
             raise NotImplementedError(
-                "pretrend_test() is not yet survey-aware. The pre-trend F-test "
-                "uses unweighted demeaning and cluster-count degrees of freedom, "
-                "which do not account for survey weights. Survey-weighted "
-                "pretrend_test() is planned for future work."
+                "pretrend_test() is not yet supported for replicate-weight "
+                "survey designs. Per-replicate Equation 9 lead regression "
+                "refits are not implemented. Use analytical survey designs "
+                "(strata/PSU/FPC) or call pretrend_test() without survey."
             )
 
-        fd = self._fit_data
         df = fd["df"]
         outcome = fd["outcome"]
         unit = fd["unit"]
@@ -1778,11 +1120,12 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         covariates = fd["covariates"]
         omega_0_mask = fd["omega_0_mask"]
         cluster_var = fd["cluster_var"]
+        resolved_survey = fd.get("resolved_survey")
+        survey_weights = fd.get("survey_weights")
 
         df_0 = df.loc[omega_0_mask].copy()
 
         # Compute relative time for untreated obs
-        # For not-yet-treated units in their pre-treatment periods
         rel_time_0 = np.where(
             ~df_0["_never_treated"],
             df_0[time] - df_0[first_treat],
@@ -1808,7 +1151,6 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         pre_rel_times = [h for h in pre_rel_times if h != ref]
 
         if n_leads is not None:
-            # Take the n_leads periods closest to treatment
             pre_rel_times = sorted(pre_rel_times, reverse=True)[:n_leads]
             pre_rel_times = sorted(pre_rel_times)
 
@@ -1821,49 +1163,36 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 "lead_coefficients": {},
             }
 
-        # Build lead indicators
-        lead_cols = []
-        for h in pre_rel_times:
-            col_name = f"_lead_{h}"
-            df_0[col_name] = ((rel_time_0 == h)).astype(float)
-            lead_cols.append(col_name)
+        # Survey pretrends: pass full design (subpopulation approach)
+        _sw_0_pt = None
+        _rs_full_pt = None
+        _n_full_pt = None
+        _o0_idx_pt = None
+        if survey_weights is not None and resolved_survey is not None:
+            _sw_0_pt = survey_weights[omega_0_mask.values]
+            _rs_full_pt = resolved_survey
+            _n_full_pt = len(fd["df"])
+            _o0_idx_pt = np.where(omega_0_mask.values)[0]
 
-        # Within-transform via iterative demeaning (exact for unbalanced panels)
-        y_dm = self._iterative_demean(
-            df_0[outcome].values, df_0[unit].values, df_0[time].values, df_0.index
+        # Use shared lead coefficient computation
+        effects, gamma, V_gamma = self._compute_lead_coefficients(
+            df_0,
+            outcome,
+            unit,
+            time,
+            first_treat,
+            covariates,
+            cluster_var,
+            pre_rel_times,
+            alpha=self.alpha,
+            survey_weights_0=_sw_0_pt,
+            resolved_survey_full=_rs_full_pt,
+            n_obs_full=_n_full_pt,
+            omega_0_indices=_o0_idx_pt,
+            survey_df=(resolved_survey.df_survey if resolved_survey is not None else None),
         )
 
-        all_x_cols = lead_cols[:]
-        if covariates:
-            all_x_cols.extend(covariates)
-
-        X_dm = np.column_stack(
-            [
-                self._iterative_demean(
-                    df_0[col].values, df_0[unit].values, df_0[time].values, df_0.index
-                )
-                for col in all_x_cols
-            ]
-        )
-
-        # OLS with cluster-robust SEs
-        cluster_ids = df_0[cluster_var].values
-        result = solve_ols(
-            X_dm,
-            y_dm,
-            cluster_ids=cluster_ids,
-            return_vcov=True,
-            rank_deficient_action=self.rank_deficient_action,
-            column_names=all_x_cols,
-        )
-        coefficients = result[0]
-        vcov = result[2]
-        assert vcov is not None
-
-        # Extract lead coefficients and their sub-VCV
-        n_leads_actual = len(lead_cols)
-        gamma = coefficients[:n_leads_actual]
-        V_gamma = vcov[:n_leads_actual, :n_leads_actual]
+        n_leads_actual = len(pre_rel_times)
 
         # Wald F-test: F = (gamma' V^{-1} gamma) / n_leads
         try:
@@ -1873,18 +1202,22 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         except np.linalg.LinAlgError:
             f_stat = np.nan
 
-        # P-value from F distribution
+        # P-value from F distribution (survey df when available)
         if np.isfinite(f_stat) and f_stat >= 0:
-            n_clusters = len(np.unique(cluster_ids))
-            df_denom = max(n_clusters - 1, 1)
-            p_value = float(stats.f.sf(f_stat, n_leads_actual, df_denom))
+            if resolved_survey is not None and resolved_survey.df_survey is not None:
+                df_denom = resolved_survey.df_survey
+            else:
+                cluster_ids = df_0[cluster_var].values
+                n_clusters = len(np.unique(cluster_ids))
+                df_denom = max(n_clusters - 1, 1)
+            if df_denom <= 0:
+                p_value = np.nan
+            else:
+                p_value = float(stats.f.sf(f_stat, n_leads_actual, df_denom))
         else:
             p_value = np.nan
 
-        # Store lead coefficients
-        lead_coefficients = {}
-        for j, h in enumerate(pre_rel_times):
-            lead_coefficients[h] = float(gamma[j])
+        lead_coefficients = {h: effects[h]["effect"] for h in pre_rel_times}
 
         return {
             "f_stat": f_stat,
@@ -1898,28 +1231,63 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
     # sklearn-compatible interface
     # =========================================================================
 
-    def get_params(self) -> Dict[str, Any]:
-        """Get estimator parameters (sklearn-compatible)."""
-        return {
-            "anticipation": self.anticipation,
-            "alpha": self.alpha,
-            "cluster": self.cluster,
-            "n_bootstrap": self.n_bootstrap,
-            "bootstrap_weights": self.bootstrap_weights,
-            "seed": self.seed,
-            "rank_deficient_action": self.rank_deficient_action,
-            "horizon_max": self.horizon_max,
-            "aux_partition": self.aux_partition,
-        }
+    # get_params/set_params come from BaseEstimator.
 
-    def set_params(self, **params) -> "ImputationDiD":
-        """Set estimator parameters (sklearn-compatible)."""
-        for key, value in params.items():
-            if hasattr(self, key):
-                setattr(self, key, value)
-            else:
-                raise ValueError(f"Unknown parameter: {key}")
-        return self
+    @staticmethod
+    def _validate_leave_one_out(leave_one_out: Any) -> None:
+        """Validate ``leave_one_out`` is a strict bool.
+
+        Called from ``__init__`` AND ``fit()`` so sklearn-style
+        ``set_params(leave_one_out=...)`` mutations are re-checked at use
+        time -- the naive ``set_params`` setter would otherwise accept a
+        truthy string (e.g. "yes") and silently run the LOO refinement.
+        """
+        if not isinstance(leave_one_out, bool):
+            raise TypeError(f"leave_one_out must be a bool, got {type(leave_one_out).__name__}")
+
+    @staticmethod
+    def _validate_vcov_type(vcov_type: str) -> None:
+        """Validate ``vcov_type`` membership against ImputationDiD's
+        permanently-narrow influence-function variance contract.
+
+        Called from ``__init__`` AND ``fit()``; ``set_params`` validates
+        eagerly via the BaseEstimator probe re-init, so the fit-time
+        re-check only catches direct attribute mutation.
+        Mirrors the TripleDifference / CallawaySantAnna pattern (no
+        single design matrix on which hat-matrix leverage or Bell-
+        McCaffrey Satterthwaite DOF can be defined).
+        """
+        _accepted_vcov = {"hc1"}
+        _if_incompatible_vcov = {"classical", "hc2", "hc2_bm"}
+        _deferred_vcov = {"conley"}
+
+        if vcov_type in _if_incompatible_vcov:
+            raise ValueError(
+                f"ImputationDiD(vcov_type={vcov_type!r}) is rejected: "
+                "ImputationDiD uses influence-function-based variance per "
+                "Borusyak, Jaravel, and Spiess (2024) Theorem 3. The "
+                "per-unit influence function aggregation has no equivalent "
+                "single design matrix on which hat matrix leverage or "
+                "Bell-McCaffrey Satterthwaite DOF can be defined, so "
+                "analytical-sandwich families {classical, hc2, hc2_bm} are "
+                "not paper-prescribed. Use vcov_type='hc1' (the default) "
+                "with cluster=<col> for per-cluster influence-function "
+                "summation (Theorem 3 equation 7 conservative variance)."
+            )
+        if vcov_type in _deferred_vcov:
+            raise ValueError(
+                f"ImputationDiD(vcov_type={vcov_type!r}) is not yet "
+                "supported: spatial-HAC composition with Theorem 3 "
+                "per-unit IF aggregation has no reference implementation "
+                "today. See DEFERRED.md for the deferred follow-up row. Use "
+                "vcov_type='hc1' (the default) with cluster=<col> for "
+                "cluster-robust inference."
+            )
+        if vcov_type not in _accepted_vcov:
+            raise ValueError(
+                f"ImputationDiD(vcov_type={vcov_type!r}) is invalid. "
+                f"Accepted: {sorted(_accepted_vcov)}."
+            )
 
     def summary(self) -> str:
         """Get summary of estimation results."""
@@ -1934,6 +1302,114 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
 
 
 # =============================================================================
+# Post-fit aggregation kit (M-021/M-118)
+# =============================================================================
+
+
+def _build_imputation_aggregation_kit(
+    *,
+    fit_data: Dict[str, Any],
+    treatment_groups: List[Any],
+    overall_att: float,
+    n_treated_obs: int,
+    uses_replicate: bool,
+    survey_df_seed: Optional[int],
+    survey_df_final: Optional[int],
+    survey_metadata: Optional[Any],
+    horizon_max: Optional[int],
+    pretrends: bool,
+    aux_partition: str,
+    leave_one_out: bool,
+    rank_deficient_action: str,
+    df_convention: str,
+    alpha: float,
+    anticipation: int,
+) -> AggregationKit:
+    """Build the PANEL-BACKED post-fit aggregation kit (rows M-021/M-118).
+
+    ImputationDiD's event-study/group aggregation is a target-specific
+    Theorem-3 recompute from the working panel + untreated FE model — no
+    compact influence payload can honor a different ``balance_e`` post-fit
+    — so ``bookkeeping`` holds REFERENCES to the SAME per-fit objects
+    ``self._fit_data`` already retains for ``pretrend_test()`` (passed in
+    as ``fit_data``; zero marginal memory, and pickles are unchanged via
+    memoization — ``_estimator_ref`` already ships these objects). fit()
+    rebinds a fresh ``_fit_data`` dict + a fresh working frame per call,
+    so kits from different fits never alias.
+
+    Value SNAPSHOTS (not refs) isolate recompute from public-field
+    mutation: ``treatment_groups`` is copied (fit hands the same list
+    object to the results' public cohort list), scalar config is copied
+    by value, and
+    ``survey_metadata`` is a ``dataclasses.replace`` copy (the ES carrier
+    builds from the kit copy, never the mutable public field). The three
+    df-provenance channels: ``survey_df_seed`` (what the analytical
+    aggregators received — recompute re-seeds from it),
+    ``survey_df_final`` (what the stored overall inference received —
+    the 'simple' relay's df), and the metadata copy's own ``df_survey``
+    (the fit-final container channel).
+
+    ``influence`` is EMPTY BY DESIGN: the recompute is panel-backed, not
+    IF-payload-backed, and the fit-local projection cache holds
+    unpicklable factorizations — each ``aggregate()`` call rebuilds a
+    call-local ``proj_cache``.
+    """
+    bookkeeping: Dict[str, Any] = {
+        # Panel-backed refs (the _fit_data objects)
+        "df": fit_data["df"],
+        "outcome": fit_data["outcome"],
+        "unit": fit_data["unit"],
+        "time": fit_data["time"],
+        "first_treat": fit_data["first_treat"],
+        "covariates": (list(fit_data["covariates"]) if fit_data["covariates"] else None),
+        "omega_0_mask": fit_data["omega_0_mask"],
+        "omega_1_mask": fit_data["omega_1_mask"],
+        "cluster_var": fit_data["cluster_var"],
+        "unit_fe": fit_data["unit_fe"],
+        "time_fe": fit_data["time_fe"],
+        "grand_mean": fit_data["grand_mean"],
+        "delta_hat": fit_data["delta_hat"],
+        "kept_cov_mask": fit_data["kept_cov_mask"],
+        "resolved_survey": fit_data["resolved_survey"],
+        "survey_weights": fit_data["survey_weights"],
+        # Value snapshots (isolation from public-field / estimator mutation)
+        "treatment_groups": list(treatment_groups),
+        "overall_att": float(overall_att),
+        "n_treated_obs": int(n_treated_obs),
+        # 'total' mass: the finite-tau complete-case support, SNAPSHOT at kit
+        # build - the kit's "df" above is a live reference to the _fit_data
+        # frame, so a post-fit frame edit must not be able to move the total
+        # (the snapshot-discipline rule; missing on legacy kits -> the total
+        # route fails closed with the refit message).
+        "total_support": float(
+            np.isfinite(
+                np.asarray(fit_data["df"].loc[fit_data["omega_1_mask"], "_tau_hat"], dtype=float)
+            ).sum()
+        ),
+        "uses_replicate": bool(uses_replicate),
+        "horizon_max": horizon_max,
+        "pretrends": pretrends,
+        "aux_partition": aux_partition,
+        "leave_one_out": leave_one_out,
+        "rank_deficient_action": rank_deficient_action,
+        "df_convention": df_convention,
+        "survey_df_seed": survey_df_seed,
+        "survey_df_final": survey_df_final,
+        "survey_metadata": (
+            dataclasses.replace(survey_metadata) if survey_metadata is not None else None
+        ),
+    }
+    return AggregationKit(
+        bookkeeping=bookkeeping,
+        influence={},
+        alpha=alpha,
+        anticipation=anticipation,
+        cband=False,  # no simultaneous-band concept on this estimator
+        bootstrap=None,  # replay not wired; recompute levels fail closed ('simple' relays, M-027)
+    )
+
+
+# =============================================================================
 # Convenience function
 # =============================================================================
 
@@ -1945,13 +1421,19 @@ def imputation_did(
     time: str,
     first_treat: str,
     covariates: Optional[List[str]] = None,
-    aggregate: Optional[str] = None,
-    balance_e: Optional[int] = None,
-    survey_design: object = None,
+    aggregate: Any = NOT_SUPPLIED,
+    balance_e: Any = NOT_SUPPLIED,
+    survey_design: Optional["SurveyDesign"] = None,
+    vcov_type: str = "hc1",
     **kwargs,
 ) -> ImputationDiDResults:
     """
     Convenience function for imputation DiD estimation.
+
+    .. deprecated:: 3.9
+        ``imputation_did()`` is deprecated and will be removed in 4.0
+        (row M-070). Construct the estimator instead:
+        ``ImputationDiD(...).fit(data, ...)``.
 
     This is a shortcut for creating an ImputationDiD estimator and calling fit().
 
@@ -1970,15 +1452,29 @@ def imputation_did(
     covariates : list of str, optional
         Covariate column names.
     aggregate : str, optional
-        Aggregation mode: None, "simple", "event_study", "group", "all".
+        DEPRECATED (3.9, removed in 4.0; row M-021): forwarded to ``fit()``,
+        which warns — aggregate post-fit via
+        ``results.aggregate('event_study')`` instead. A plain wrapper call
+        (kwarg not supplied) never fires the aggregate warning; since 3.9
+        every wrapper call fires the M-070 wrapper-deprecation warning.
     balance_e : int, optional
-        Balance event study to cohorts observed at all relative times.
+        DEPRECATED (3.9, removed in 4.0; row M-118): forwarded to ``fit()``,
+        which warns — moves onto ``results.aggregate('event_study',
+        balance_e=...)``.
     survey_design : SurveyDesign, optional
         Survey design specification for design-based inference. Supports
-        pweight only (aweight/fweight raise ValueError). FPC raises
-        NotImplementedError. PSU is used as cluster variable for Theorem 3
-        variance. Strata enters survey df for t-distribution inference.
+        pweight only (aweight/fweight raise ValueError). Supports strata,
+        PSU, and FPC for design-based variance. Strata enters survey df
+        for t-distribution inference.
         Both analytical (n_bootstrap=0) and bootstrap inference are supported.
+    vcov_type : str, default="hc1"
+        Variance estimator family. ImputationDiD permanently accepts
+        ``{"hc1"}`` only — analytical-sandwich families
+        ``{classical, hc2, hc2_bm}`` are rejected at ``__init__`` because the
+        Theorem 3 per-unit IF aggregation has no single design matrix on
+        which hat-matrix leverage or Bell-McCaffrey Satterthwaite DOF can
+        be defined. ``cluster=`` invokes per-cluster IF summation;
+        ``survey_design=`` invokes TSL on the combined IF.
     **kwargs
         Additional keyword arguments passed to ImputationDiD constructor.
 
@@ -1991,11 +1487,17 @@ def imputation_did(
     --------
     >>> from diff_diff import imputation_did, generate_staggered_data
     >>> data = generate_staggered_data(seed=42)
-    >>> results = imputation_did(data, 'outcome', 'unit', 'time', 'first_treat',
-    ...                          aggregate='event_study')
+    >>> results = imputation_did(data, 'outcome', 'unit', 'time', 'first_treat')
     >>> results.print_summary()
+    >>> results.aggregate('event_study').summary()  # post-fit aggregation
     """
-    est = ImputationDiD(**kwargs)
+    warnings.warn(
+        "imputation_did() is deprecated and will be removed in 4.0; "
+        "construct the estimator instead: ImputationDiD(...).fit(data, ...).",
+        FutureWarning,
+        stacklevel=2,
+    )
+    est = ImputationDiD(vcov_type=vcov_type, **kwargs)
     return est.fit(
         data,
         outcome=outcome,

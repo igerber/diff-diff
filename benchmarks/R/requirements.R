@@ -11,6 +11,17 @@ required_packages <- c(
   "HonestDiD",     # Rambachan & Roth (2023) sensitivity analysis
   "fixest",        # Fast TWFE and basic DiD
   "triplediff",    # Ortiz-Villavicencio & Sant'Anna (2025) triple difference
+  "etwfe",         # McDermott (2023) Wooldridge ETWFE estimator (R-parity for Poisson + logit paths)
+  "survey",        # Lumley (2004) complex survey analysis
+  "estimatr",      # Blair et al. (2019) weighted robust / IV SE (HAD mass-point parity)
+  "DIDHAD",        # de Chaisemartin et al. (2025) HAD estimator (HAD Phase 4 R-parity)
+  "YatchewTest",   # Yatchew (1997) linearity test (HAD yatchew R-parity)
+  "nprobust",      # Calonico-Cattaneo-Farrell local-linear (DIDHAD dependency)
+  "Synth",         # Abadie-Diamond-Hainmueller (2010) synthetic control (SyntheticControl R-parity; ships data(basque))
+  "qte",           # Callaway qte package (Athey-Imbens CiC + QDiD R-parity; ships data(lalonde))
+  "ptetools",      # Callaway ptetools (badcontrols dependency; bad-control DMLDiD lane black-box parity)
+  "BMisc",         # Callaway utility package (twfeweights dependency: weighted_ecdf, orig2t)
+  "DRDID",         # Sant'Anna & Zhao (2020) doubly-robust DiD (twfeweights AIPW dependency)
 
   # Utilities
   "jsonlite",      # JSON output for Python interop
@@ -19,7 +30,9 @@ required_packages <- c(
 
 # synthdid must be installed from GitHub
 github_packages <- list(
-  synthdid = "synth-inference/synthdid"
+  synthdid = "synth-inference/synthdid",
+  # TWFE weight diagnostics parity goldens (not on CRAN)
+  twfeweights = "bcallaway11/twfeweights"
 )
 
 install_if_missing <- function(pkg) {
@@ -30,6 +43,50 @@ install_if_missing <- function(pkg) {
     message(sprintf("%s is already installed.", pkg))
   }
 }
+
+# PR #392 R6 P3: pinned-version installer for upstream packages whose
+# version is part of the parity contract. The HAD R-parity test
+# (`tests/test_did_had_parity.py`) and the generator
+# (`benchmarks/R/generate_did_had_golden.R`) hard-pin DIDHAD,
+# YatchewTest, and nprobust to specific versions; without a
+# version-aware installer here, a fresh R environment would silently
+# install whatever CRAN currently serves and the generator's
+# `stopifnot(packageVersion(...) == "X.Y.Z")` would abort.
+install_pinned_version <- function(pkg, version) {
+  if (requireNamespace(pkg, quietly = TRUE) &&
+      as.character(packageVersion(pkg)) == version) {
+    message(sprintf("%s is already at pinned version %s.", pkg, version))
+    return(invisible(NULL))
+  }
+  message(sprintf("Installing %s == %s (pinned for HAD R-parity)...", pkg, version))
+  if (!requireNamespace("remotes", quietly = TRUE)) {
+    install.packages("remotes", repos = "https://cloud.r-project.org/", quiet = TRUE)
+  }
+  remotes::install_version(
+    pkg,
+    version = version,
+    repos = "https://cloud.r-project.org/",
+    quiet = TRUE,
+    upgrade = "never"
+  )
+}
+
+# HAD R-parity (PR #392) version pins. Bump these in lockstep with
+# the generator's `stopifnot(packageVersion(...) == "X.Y.Z")` and the
+# parity test's `test_metadata_versions_match` when re-anchoring.
+pinned_versions <- list(
+  DIDHAD = "2.0.0",
+  YatchewTest = "1.1.1",
+  nprobust = "0.5.0",
+  # CiC/QDiD R-parity (generate_qte_golden.R + tests/test_changes_in_changes_parity.py).
+  # quantreg is pinned too: the covariate (xformla) golden fixtures embed
+  # quantreg's rq/predict.rqs behavior, not just qte's.
+  qte = "1.3.1",
+  quantreg = "6.1",
+  # Bad-control DMLDiD lane (generate_badcontrols_golden.R +
+  # tests/test_dml_did_bad_controls_parity.py): badcontrols depends on ptetools.
+  ptetools = "1.0.0"
+)
 
 install_github_if_missing <- function(pkg, repo) {
   if (!requireNamespace(pkg, quietly = TRUE)) {
@@ -43,9 +100,40 @@ install_github_if_missing <- function(pkg, repo) {
   }
 }
 
+# Commit-pinned GitHub package. `badcontrols` (Caetano, Callaway, Payne &
+# Sant'Anna 2026) has no tags or releases and HEAD also reports 1.0.0, so a
+# version check alone cannot detect drift: install from the pinned commit and
+# verify the installed RemoteSha (NULL-safe: a non-remotes install carries no
+# RemoteSha and must be replaced). LICENSE NOTE: badcontrols is GPL-3 and is
+# used ONLY as an executed black-box oracle by the golden generator; its
+# source is never read by diff-diff contributors (see benchmarks/R/README.md).
+install_github_pinned <- function(pkg, repo, ref, version) {
+  if (requireNamespace(pkg, quietly = TRUE)) {
+    sha <- packageDescription(pkg)$RemoteSha
+    if (as.character(packageVersion(pkg)) == version && !is.null(sha) && identical(sha, ref)) {
+      message(sprintf("%s is already at pinned version %s (%s).", pkg, version, substr(ref, 1, 8)))
+      return(invisible(NULL))
+    }
+  }
+  message(sprintf("Installing %s == %s from %s@%s ...", pkg, version, repo, substr(ref, 1, 8)))
+  if (!requireNamespace("remotes", quietly = TRUE)) {
+    install.packages("remotes", repos = "https://cloud.r-project.org/", quiet = TRUE)
+  }
+  remotes::install_github(paste0(repo, "@", ref), upgrade = "never", quiet = TRUE)
+}
+
 # Install CRAN packages
 message("Installing CRAN packages...")
 lapply(required_packages, install_if_missing)
+
+# Reinforce the HAD R-parity pinned versions AFTER the bulk install
+# above (which may have installed any-CRAN-version of e.g. nprobust
+# as a transitive dep). install_pinned_version is idempotent if the
+# correct version is already installed.
+message("\nEnforcing HAD R-parity version pins...")
+for (pkg in names(pinned_versions)) {
+  install_pinned_version(pkg, pinned_versions[[pkg]])
+}
 
 # Install GitHub packages
 message("\nInstalling GitHub packages...")
@@ -53,9 +141,16 @@ for (pkg in names(github_packages)) {
   install_github_if_missing(pkg, github_packages[[pkg]])
 }
 
+# Commit-pinned GitHub packages (after the CRAN pins so ptetools is at 1.0.0).
+message("\nInstalling commit-pinned GitHub packages...")
+install_github_pinned(
+  "badcontrols", "hugosantanna/badcontrols",
+  ref = "651ccc925776125bb9233d76867c862107ea0ba5", version = "1.0.0"
+)
+
 # Verify installation
 message("\nVerifying installation...")
-all_packages <- c(required_packages, names(github_packages))
+all_packages <- c(required_packages, names(github_packages), "badcontrols")
 installed <- sapply(all_packages, requireNamespace, quietly = TRUE)
 
 if (all(installed)) {
@@ -69,5 +164,10 @@ if (all(installed)) {
 message("\nInstalled versions:")
 for (pkg in all_packages) {
   version <- as.character(packageVersion(pkg))
-  message(sprintf("  %s: %s", pkg, version))
+  sha <- packageDescription(pkg)$RemoteSha
+  if (is.null(sha)) {
+    message(sprintf("  %s: %s", pkg, version))
+  } else {
+    message(sprintf("  %s: %s (RemoteSha %s)", pkg, version, sha))
+  }
 }

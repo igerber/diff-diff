@@ -1,218 +1,106 @@
 # Development TODO
 
-Internal tracking for technical debt, known limitations, and maintenance tasks.
-
-For the public feature roadmap, see [ROADMAP.md](ROADMAP.md).
-
----
-
-## Known Limitations
-
-Current limitations that may affect users:
-
-| Issue | Location | Priority | Notes |
-|-------|----------|----------|-------|
-| MultiPeriodDiD wild bootstrap not supported | `estimators.py:778-784` | Low | Edge case |
-| `predict()` raises NotImplementedError | `estimators.py:567-588` | Low | Rarely needed |
-
-## Code Quality
-
-### Large Module Files
-
-Target: < 1000 lines per module for maintainability. Updated 2026-03-29.
-
-| File | Lines | Action |
-|------|-------|--------|
-| `power.py` | 2588 | Consider splitting (power analysis + MDE + sample size) |
-| `linalg.py` | 2289 | Monitor — unified backend, splitting would hurt cohesion |
-| `staggered.py` | 2275 | Monitor — grew with survey support |
-| `imputation.py` | 2009 | Monitor |
-| `triple_diff.py` | 1921 | Monitor |
-| `utils.py` | 1902 | Monitor |
-| `two_stage.py` | 1708 | Monitor |
-| `survey.py` | 1646 | Monitor — grew with Phase 6 features |
-| `continuous_did.py` | 1626 | Monitor |
-| `honest_did.py` | 1511 | Acceptable |
-| `sun_abraham.py` | 1540 | Acceptable |
-| `estimators.py` | 1357 | Acceptable |
-| `trop_local.py` | 1261 | Acceptable |
-| `trop_global.py` | 1251 | Acceptable |
-| `prep.py` | 1225 | Acceptable |
-| `pretrends.py` | 1105 | Acceptable |
-| `trop.py` | 981 | Split done — trop_global.py + trop_local.py |
-| `visualization/` | 4172 | Subpackage (split across 7 files) — OK |
-
----
-
-### Tech Debt from Code Reviews
-
-Deferred items from PR reviews that were not addressed before merge.
-
-#### Methodology/Correctness
-
-| Issue | Location | PR | Priority |
-|-------|----------|----|----------|
-| ImputationDiD dense `(A0'A0).toarray()` scales O((U+T+K)^2), OOM risk on large panels | `imputation.py` | #141 | Medium (deferred — only triggers when sparse solver fails) |
-| Multi-absorb weighted demeaning needs iterative alternating projections for N > 1 absorbed FE with survey weights; unweighted multi-absorb also uses single-pass (pre-existing, exact only for balanced panels) | `estimators.py` | #218 | Medium |
-| Replicate-weight survey df — **Resolved**. `df_survey = rank(replicate_weights) - 1` matching R's `survey::degf()`. For IF paths, `n_valid - 1` when dropped replicates reduce effective count. | `survey.py` | #238 | Resolved |
-| CallawaySantAnna survey: strata/PSU/FPC — **Resolved**. Aggregated SEs (overall, event study, group) use `compute_survey_if_variance()`. Bootstrap uses PSU-level multiplier weights. | `staggered.py` | #237 | Resolved |
-| CallawaySantAnna survey + covariates + IPW/DR — **Resolved**. DRDID panel nuisance IF corrections (PS + OR) implemented for both survey and non-survey DR paths (Phase 7a). IPW path unblocked. | `staggered.py` | #233 | Resolved |
-| SyntheticDiD/TROP survey: strata/PSU/FPC — **Resolved**. Rao-Wu rescaled bootstrap implemented for both. TROP uses cross-classified pseudo-strata. Rust TROP remains pweight-only (Python fallback for full design). | `synthetic_did.py`, `trop.py` | — | Resolved |
-| EfficientDiD hausman_pretest() clustered covariance stale `n_cl` — **Resolved**. Recompute `n_cl` and remap indices after `row_finite` filtering via `np.unique(return_inverse=True)`. | `efficient_did.py` | #230 | Resolved |
-| EfficientDiD `control_group="last_cohort"` trims at `last_g - anticipation` but REGISTRY says `t >= last_g`. With `anticipation=0` (default) these are identical. With `anticipation>0`, code is arguably more conservative (excludes anticipation-contaminated periods). Either align REGISTRY with code or change code to `t < last_g` — needs design decision. | `efficient_did.py` | #230 | Low |
-| TripleDifference power: `generate_ddd_data` is a fixed 2×2×2 cross-sectional DGP — no multi-period or unbalanced-group support. Add a `generate_ddd_panel_data` for panel DDD power analysis. | `prep_dgp.py`, `power.py` | #208 | Low |
-| ContinuousDiD event-study aggregation anticipation filter — **Resolved**. `_aggregate_event_study()` now filters `e < -anticipation` when `anticipation > 0`, matching CallawaySantAnna behavior. Bootstrap paths also filtered. | `continuous_did.py` | #226 | Resolved |
-| Survey design resolution/collapse patterns are inconsistent across panel estimators — ContinuousDiD rebuilds unit-level design in SE code, EfficientDiD builds once in fit(), StackedDiD re-resolves on stacked data; extract shared helpers for panel-to-unit collapse, post-filter re-resolution, and metadata recomputation | `continuous_did.py`, `efficient_did.py`, `stacked_did.py` | #226 | Low |
-| Survey metadata formatting dedup — **Resolved**. Extracted `_format_survey_block()` helper in `results.py`, replaced 13 occurrences across 11 files. | `results.py` + 10 results files | — | Resolved |
-| TROP: `fit()` and `_fit_global()` share ~150 lines of near-identical data setup (panel pivoting, absorbing-state validation, first-treatment detection, effective rank, NaN warnings). Both bootstrap methods also duplicate the stratified resampling loop. Extract shared helpers to eliminate cross-file sync risk. | `trop.py`, `trop_global.py`, `trop_local.py` | — | Low |
-| StaggeredTripleDifference R cross-validation: CSV fixtures not committed (gitignored); tests skip without local R + triplediff. Commit fixtures or generate deterministically. | `tests/test_methodology_staggered_triple_diff.py` | #245 | Medium |
-| StaggeredTripleDifference R parity: benchmark only tests no-covariate path (xformla=~1). Add covariate-adjusted scenarios and aggregation SE parity assertions. | `benchmarks/R/benchmark_staggered_triplediff.R` | #245 | Medium |
-| StaggeredTripleDifference: per-cohort group-effect SEs include WIF (conservative vs R's wif=NULL). Documented in REGISTRY. Could override mixin for exact R match. | `staggered_triple_diff.py` | #245 | Low |
-
-#### Performance
-
-| Issue | Location | PR | Priority |
-|-------|----------|----|----------|
-| ImputationDiD event-study SEs recompute full conservative variance per horizon (should cache A0/A1 factorization) | `imputation.py` | #141 | Low |
-| Rust faer SVD ndarray-to-faer conversion overhead (minimal vs SVD cost) | `rust/src/linalg.rs:67` | #115 | Low |
-
-#### Testing/Docs
-
-| Issue | Location | PR | Priority |
-|-------|----------|----|----------|
-| R comparison tests spawn separate `Rscript` per test (slow CI) | `tests/test_methodology_twfe.py:294` | #139 | Low |
-| CS R helpers hard-code `xformla = ~ 1`; no covariate-adjusted R benchmark for IRLS path | `tests/test_methodology_callaway.py` | #202 | Low |
-| ~376 `duplicate object description` Sphinx warnings — restructure `docs/api/*.rst` to avoid duplicate `:members:` + `autosummary` | `docs/api/*.rst` | — | Low |
-| Doc-snippet smoke tests only cover `.rst` files; `.txt` AI guides outside CI validation | `tests/test_doc_snippets.py` | #239 | Low |
-
----
-
-### Standard Error Consistency
-
-Different estimators compute SEs differently. Consider unified interface.
-
-| Estimator | Default SE Type |
-|-----------|-----------------|
-| DifferenceInDifferences | HC1 or cluster-robust |
-| TwoWayFixedEffects | Always cluster-robust (unit level) |
-| CallawaySantAnna | Simple difference-in-means SE |
-| SyntheticDiD | Bootstrap or placebo-based |
-
-**Action**: Consider adding `se_type` parameter for consistency across estimators.
-
-### Type Annotations
-
-Mypy reports 0 errors. All mixin `attr-defined` errors resolved via
-`TYPE_CHECKING`-guarded method stubs in bootstrap mixin classes.
-
-## Deprecated Code
-
-Deprecated parameters still present for backward compatibility:
-
-- `bootstrap_weight_type` in `CallawaySantAnna` (`staggered.py`)
-  - Deprecated in favor of `bootstrap_weights` parameter
-  - Remove in next major version (v3.0)
-
----
-
-## Test Coverage
-
-**Note**: 21 visualization tests are skipped when matplotlib unavailable—this is expected.
-
----
-
-## Honest DiD Improvements
-
-Enhancements for `honest_did.py`:
-
-- [ ] Improved C-LF implementation with direct optimization instead of grid search
-  (current implementation uses simplified FLCI approach with estimation uncertainty
-  adjustment; see `honest_did.py:947`)
-- [x] Support for CallawaySantAnnaResults (implemented in `honest_did.py:612-653`;
-  requires `aggregate='event_study'` when calling `CallawaySantAnna.fit()`)
-- [ ] Event-study-specific bounds for each post-period
-- [ ] Hybrid inference methods
-- [ ] Simulation-based power analysis for honest bounds
-
----
-
-## CallawaySantAnna Bootstrap Improvements
-
-- [ ] Consider aligning p-value computation with R `did` package (symmetric percentile method)
-
----
-
-## RuntimeWarnings in Linear Algebra Operations
-
-### Apple Silicon M4 BLAS Bug (numpy < 2.3)
-
-Spurious RuntimeWarnings ("divide by zero", "overflow", "invalid value") are emitted by `np.matmul`/`@` on Apple Silicon M4 + macOS Sequoia with numpy < 2.3. The warnings appear for matrices with ≥260 rows but **do not affect result correctness** — coefficients and fitted values are valid (no NaN/Inf), and the design matrices are full rank.
-
-**Root cause**: Apple's BLAS SME (Scalable Matrix Extension) kernels corrupt the floating-point status register, causing spurious FPE signals. Tracked in [numpy#28687](https://github.com/numpy/numpy/issues/28687) and [numpy#29820](https://github.com/numpy/numpy/issues/29820). Fixed in numpy ≥ 2.3 via [PR #29223](https://github.com/numpy/numpy/pull/29223).
-
-**Not reproducible** on M3, Intel, or Linux.
-
-- [ ] `linalg.py:162` - Warnings in fitted value computation (`X @ coefficients`)
-  - Caused by M4 BLAS bug, not extreme coefficient values
-  - Seen in test_prep.py during treatment effect recovery tests (n > 260)
-- [ ] `triple_diff.py:307,323` - Warnings in propensity score computation
-  - Occurs in IPW and DR estimation methods with covariates
-  - Related to logistic regression overflow in edge cases (separate from BLAS bug)
-
-- **Long-term:** Revert to `@` operator when numpy ≥ 2.3 becomes the minimum supported version.
-
----
-
-## Feature Gaps (from R `did` package comparison)
-
-Features in R's `did` package that block porting additional tests:
-
-| Feature | R tests blocked | Priority | Status |
-|---------|----------------|----------|--------|
-| Repeated cross-sections (`panel=FALSE`) | ~7 tests in test-att_gt.R + test-user_bug_fixes.R | High | **Resolved** — Phase 7b: `panel=False` on CallawaySantAnna |
-| Sampling/population weights | 7 tests incl. all JEL replication | Medium | **Resolved** (Phases 1-6 + 7a: CS IPW/DR + covariates + survey) |
-| Calendar time aggregation | 1 test in test-att_gt.R | Low | |
-
----
-
-## Performance Optimizations
-
-Potential future optimizations:
-
-- [ ] JIT compilation for bootstrap loops (numba)
-- [ ] Sparse matrix handling for large fixed effects
-
-### QR+SVD Redundancy in Rank Detection
-
-**Background**: The current `solve_ols()` implementation performs both QR (for rank detection) and SVD (for solving) decompositions on rank-deficient matrices. This is technically redundant since SVD can determine rank directly.
-
-**Current approach** (R-style, chosen for robustness):
-1. QR with pivoting for rank detection (`_detect_rank_deficiency()`)
-2. scipy's `lstsq` with 'gelsd' driver (SVD-based) for solving
-
-**Why we use QR for rank detection**:
-- QR with pivoting provides the canonical ordering of linearly dependent columns
-- R's `lm()` uses this approach for consistent dropped-column reporting
-- Ensures consistent column dropping across runs (SVD column selection can vary)
-
-**Potential optimization** (future work):
-- Skip QR when `rank_deficient_action="silent"` since we don't need column names
-- Use SVD rank directly in the Rust backend (already implemented)
-- Add `skip_rank_check` parameter for hot paths where matrix is known to be full-rank (implemented in v2.2.0)
-
-**Priority**: Low - the QR overhead is minimal compared to SVD solve, and correctness is more important than micro-optimization.
-
-### Incomplete `check_finite` Bypass
-
-**Background**: The `solve_ols()` function accepts a `check_finite=False` parameter intended to skip NaN/Inf validation for performance in hot paths where data is known to be clean.
-
-**Current limitation**: When `check_finite=False`, our explicit validation is skipped, but scipy's internal QR decomposition in `_detect_rank_deficiency()` still validates finite values. This means callers cannot fully bypass all finite checks.
-
-**Impact**: Minimal - the scipy check is fast and only affects edge cases where users explicitly pass `check_finite=False` with non-finite data (which would be a bug in their code anyway).
-
-**Potential fix** (future work):
-- Pass `check_finite=False` through to scipy's QR call (requires scipy >= 1.9.0)
-- Or skip `_detect_rank_deficiency()` entirely when `check_finite=False` and `_skip_rank_check=True`
-
-**Priority**: Low - this is an edge case optimization that doesn't affect correctness.
-
+The actionable backlog: work with a clear implementation path and no external blocker.
+**Pull from here, top row first** — rows are priority-ordered (higher priority first)
+within each section. Effort (`Quick` ≤1 day · `Mid` 3-10 CI rounds · `Heavy`
+derivation-free but large) is noted per row; `Priority` is carried from the originating
+PR review; the `Origin` column points to the originating PR number or review tag.
+
+Related tracking surfaces:
+
+- [ROADMAP.md](ROADMAP.md) — the public feature roadmap.
+- [DEFERRED.md](DEFERRED.md) — the deferral & decision registry: blocked / parked work
+  and decisions on the record. **Do not pull from there without first clearing the named
+  blocker.**
+- [docs/dev-status.md](docs/dev-status.md) — monitoring and current-state notes
+  (module sizes, SE / typing posture, platform quirks).
+
+## Actionable Backlog
+
+### Methodology / correctness
+
+| Issue | Location | Origin | Effort | Priority |
+|-------|----------|--------|--------|----------|
+| `decompose_twfe_weights(method="aipw")`: port upstream `implicit_aipw_weights` (covariate-adjusted only; `twfe_weights.py` rejects the value today and lists `"fwl"`). The R goldens already carry the `decompose.aipw` / `balance.aipw` / `two_period.*` blocks under `meta.reserved_blocks`, so no R re-run is needed | `diff_diff/twfe_weights.py` | #812 | Mid | Medium |
+| Consolidate the remaining estimator-entangled DR/logit score variants (`staggered.py::_doubly_robust` + RC twins, `triple_diff.py`, `lwdid.py`, `wooldridge.py`) onto the shared `_dr_scores.py` module, each migration with its own committed oracle capture (the ContinuousDiD lift's two-tier pattern in `tests/test_dr_scores.py`); and add a ridge vcov path to `solve_ridge` if an estimator ever needs analytical ridge inference | `diff_diff/_dr_scores.py` | dml-b0 | Mid | Low |
+| Numeric between-period cohorts (e.g. `first_treat=4.5` with integer times) are rejected by LWDiD while CallawaySantAnna estimates them and LWDiD's own datetime/Period cohorts map to the next observed period — close the dtype asymmetry by adopting the next-observed-period mapping for numeric cohorts too (contract documented in REGISTRY cohort-encodings Note + `docs/api/lwdid.rst` Input Contract). Lands only after PR #588 merges | `diff_diff/lwdid.py` | #588 | Quick | Low |
+| Implement the LW 2026 eq. 7.9/7.10 unit-average cohort estimand (regress per-unit post-average transformed outcomes on `[1, D_g]` vs never-treated) as an alternative to the documented cell-mass `cohort_effects` convention (REGISTRY within-cohort aggregation Note; the two differ on unbalanced panels, where cell-mass weights units by observed post periods). Needs the 7.10 regression + its covariance on the NT path. Lands only after PR #588 merges | `diff_diff/lwdid_staggered.py` | #588 | Quick | Low |
+| Expose cell-mass overall ATT (Stata `Post_avg` convention; = CS-simple on balanced panels) as an aggregate extra on LWDiD results — the fit's `.att` is the paper's `tau_omega` (cohort-mean-then-treated-weight, eq. 7.18); the authors' large-N display uses cell-mass weighting instead, and both are legitimate estimands (see the REGISTRY LWDiD Aggregation note). Lands only after PR #588 merges | `diff_diff/lwdid_results.py` | #588 | Quick | Low |
+| Post-fit `aggregate()` for the staggered DDD container: `StaggeredTripleDiffResults` carries no `AggregationMixin`, which is why the phase-3(b) merge had to carry fit-time `aggregate=`/`balance_e=` onto the surviving `TripleDifference` (rows M-140/M-141) as the ONE documented exception to the section-6 aggregate-postfit program. Porting the container onto the M-122 aggregation contract retires both rows; note the bootstrapped-fit recompute levels will need replay or a fail-closed relay — solved for CS, DMLDiD, and EfficientDiD via the BootstrapReplaySpec state replay (the container port can adopt the same mechanism); ImputationDiD/TwoStageDiD/ContinuousDiD still track theirs. Until it lands, the DDD docs deliberately keep teaching the fit-time kwarg (the canonical route there) | `diff_diff/staggered_triple_diff_results.py`, `diff_diff/aggregation.py`, `docs/api/triple_diff.rst`, `docs/tutorials/08_triple_diff.ipynb` | 3(b) | Heavy | Medium |
+| Staggered-DDD power support: `simulate_power`/`simulate_mde`/`simulate_sample_size` now REJECT a staggered-configured `TripleDifference` (both registered DDD generators emit 2x2x2 data and fit with `(group, partition, post)`, so a staggered config would be simulated under the wrong design). Support needs a staggered DDD DGP profile plus fit-kwargs builder, and a decision on whether the mode is selected by profile or by the estimator's own config | `diff_diff/power.py` | 3(b) | Mid | Low |
+| Bootstrap-`seed` provenance on multiplier-bootstrap results containers: neither `StaggeredTripleDiffResults` nor `CallawaySantAnnaResults` carries the `seed` that generated its bootstrap SEs / p-values / sup-t bands, so a serialized result cannot report the random configuration behind its inference. NOT a 3(b) regression - `seed` reaches the engine and `get_params()` correctly (same seed reproduces the SE bit-exactly, a different seed moves it), the gap is results-object observability only, it predates the merge, and both containers inherit it from the shared `CallawaySantAnnaBootstrapMixin`. Add `seed` (and consider `n_bootstrap`/`bootstrap_weights`/`cband`) to BOTH containers plus `to_dict()`, with seeded and unseeded pins; sequence it with the M-014 container unification rather than schema-changing one container mid-merge. Precedent for exposing it: `ContinuousDiDResults`, `EfficientDiDResults`, `SyntheticDiDResults` already do | `diff_diff/staggered_triple_diff_results.py`, `diff_diff/staggered_results.py` | 3(b) | Quick | Low |
+| Staggered-mode cluster-robust ANALYTICAL SEs: `cluster=` raises in `TripleDifference`'s staggered mode (and is accepted-then-ignored on the deprecated class), so clustered inference there is bootstrap-only. Implementing a clustered analytical path for the GMM-combined influence function would let the raise become a real lane | `diff_diff/_staggered_triple_diff_engine.py` | 3(b) | Heavy | Low |
+| diagnostic_report admission for `EventStudyResults` surfaces (the TWFE event-study mode + `aggregate('event_study')` containers): DiagnosticReport/BusinessReport now REJECT the surface explicitly (Phase 3(a); previously a silent zero-check report / all-null headline) and practitioner_next_steps serves the generic fall-through - admission needs source-aware routing (the type-name-keyed `_APPLICABILITY`/`_HANDLERS` registries cannot discriminate the unified container's producers) and a scalar-vs-per-period headline design; MPD-native results received {parallel_trends, pretrends_power, sensitivity, bacon, design_effect} | `diff_diff/diagnostic_report.py`, `diff_diff/business_report.py`, `diff_diff/practitioner.py` | 3(a) | Mid | Medium |
+| DiagnosticReport public skip bookkeeping omits RUNNER-level skips: `applicable_checks` reflects only gate outcomes, so a check whose runner returns `status="skipped"` (heterogeneity's empty/non-finite branches, `_pt_event_study`'s empty-coefs branch - a pre-existing pattern, now also reachable via a failed post-fit event-study derivation on bootstrapped / kit-less ImputationDiD/TwoStageDiD/ContinuousDiD fits) stays listed as applicable while `skipped_checks`/`schema["skipped"]` omit it, so automation reading the public fields can misclassify the check as completed; reconcile runner-returned skipped sections into the public bookkeeping (all checks, one convention) or resolve those availabilities at the gate | `diff_diff/diagnostic_report.py` | derived-ES review | Mid | Low |
+| Align the NATIVE pretrends pre_periods= contract with the container routes' fail-closed validation: `_extract_pre_period_params`'s MPD branch silently filters an explicit `pre_periods=` selection (unknown labels, the reference, unusable-inference rows dropped without error, caller order preserved) while both container routes validate every requested label and enforce calendar chronology (the relative route since M-024; the calendar route since 3(a) R8) - the relative route also silently collapses DUPLICATE requested labels (the calendar route rejects them), and both filter on SE only while the calendar route additionally requires a finite EFFECT (3(a) R9); one contract across all three routes, with pinned rejection messages | `diff_diff/pretrends.py` | 3(a) R8 | Quick | Low |
+| `EventStudyResults` inference-provenance fields: the container records no `vcov_type`/`cluster_name`/`n_clusters`/`df_convention`/Conley metadata, so a serialized surface cannot distinguish unit auto-clustering from explicit clustering, survey, Conley, or the one-way carve-out (3(a) R9 review). Adding them is a cross-producer M-092 schema amendment (six builders, to_dict/summary rendering, surface-suite pins) - follow the pre-cut amendment convention (optional fields appended last, ledger note same-diff) rather than bolting onto one producer | `diff_diff/results_base.py` | 3(a) R9 | Mid | Low |
+| Opt-in singleton-group pruning for TwoWayFixedEffects (static + event-study mode; reghdfe parity): singleton units/periods are currently RETAINED class-wide - the within-demeaned row is zero so points are unchanged, but N/G/residual-df count it and CR1/finite-sample SEs shift (~0.41019 -> 0.40962 measured; REGISTRY "Deviation from R" Note, R5 review) - reghdfe iteratively drops singletons by default while fixest retains them (diff-diff matches fixest); an opt-in knob needs iterative unit+period pruning with consistent cluster/survey/replicate/Conley array subsetting and a default-flip decision protocol (moves published SEs) | `diff_diff/twfe.py`, `diff_diff/estimators.py`, `diff_diff/utils.py` | 3(a) R5 | Mid | Low |
+| Cohort-timing validation input for the simultaneous-adoption event-study family (TWFE `event_study=True` + MultiPeriodDiD through 3.9): an optional `first_treat=`/`cohort=` column so simultaneous adoption becomes checkable under the contract-valid time-invariant `D_i` indicator - today the staggered-adoption advisory derives timing from within-unit 0->1 transitions, so it can only fire on off-contract time-varying `D_it` input, and with valid `D_i` adoption timing is not observable in the inputs at all (REGISTRY "staggered-adoption detection limit" Notes, both sections); design questions: validate-only vs steering error, and interplay with the M-011 removal | `diff_diff/twfe.py`, `diff_diff/estimators.py` | 3(a) R2 | Mid | Medium |
+| CS parity with DMLDiD's replicate conventions: per-cell replicate SEs for `CallawaySantAnna` (CS leaves per-cell SEs on the weighted sqrt-sum under replicate designs; DMLDiD now computes them via `compute_replicate_if_variance`) AND flip the replace-style effective-df relays to min-cap (`min(df_survey, n_valid - 1)`) at all five sites: CS overall (`staggered.py` overall relay), the shared event-study/group aggregation sites (`staggered_aggregation.py` `df_survey_val = min(non_none_dfs)` x2), and the staggered-DDD engine twins (`_staggered_triple_diff_engine.py` overall + event-study) — the replace convention can RAISE df above the QR-rank design df (anti-conservative); latent, fires only when `n_valid < R` (all-zero/non-finite replicate column). DMLDiD's min-cap + the pinned inherited ES/group behavior are the templates (REGISTRY DMLDiD replicate Note) | `diff_diff/staggered.py`, `diff_diff/staggered_aggregation.py`, `diff_diff/_staggered_triple_diff_engine.py` | DML replicate PR | Mid | Low |
+| ImputationDiD/TwoStageDiD `aggregate()` recompute levels on bootstrapped fits fail closed ('simple' relays since the M-027 per-level convergence; M-021/M-022); ImputationDiD's per-target psi machinery makes seeded replay tractable (the panel-backed kit retains everything the psi precompute reads), TwoStageDiD's per-level GMM scores are function-locals and would need retention | `diff_diff/imputation_results.py`, `diff_diff/two_stage_results.py`, `diff_diff/aggregation.py` | 2(b) PR-3b | Mid | Low |
+| ContinuousDiD `aggregate('event_study')` on bootstrapped fits fails closed (M-025); a seeded post-fit bootstrap-ES replay is tractable - the multiplier draws are seeded (`np.random.default_rng(self.seed)`) - but needs the FULL per-cell `_bootstrap_info` (bread/ee_treated/Psi_eval/dPsi_*/beta_pred) the pruned kit deliberately drops, so shipping it means a kit-payload change with its own memory contract | `diff_diff/continuous_did_aggregation.py`, `diff_diff/continuous_did_results.py` | 2(b) PR-3c | Mid | Low |
+| practitioner `step_name="heterogeneity"` producer-side collisions: three OTHER estimators' advice steps reuse the key with non-heterogeneity labels (`:975` ContinuousDiD dose-response, `:1022` Triple placebo-group, `:1413` LPDiD WAS arrays), so DiagnosticReport's heterogeneity completion silently drops that unrelated advice from `next_steps` via `_filter_steps` - the same latent collision fixed for StackedDiD in M-024 (renamed to `sub_experiment_balance`). Renaming these changes those estimators' report output; audit + rename with per-estimator pins. | `diff_diff/practitioner.py` | 2(b) PR-2 review R9 | Quick | Low |
+| PreTrendsPower `violation='linear'` on CS `base_period='varying'` input targets the wrong alternative: `δ_pre = M · \|t\|` assumes level coefficients against a common reference, but varying-base pre-treatment effects are consecutive-period comparisons (constant increments under a linear trend). Both CS-sourced routes now WARN (REGISTRY PreTrendsPower Note), and universal-base GAPPED grids fail closed via the `reference_event_times` common-reference guard; what remains is the varying-base resolution - either transforming the violation vector through each coefficient's actual base mapping (needs per-horizon base provenance) or requiring `base_period='universal'` for the linear benchmark - a per-estimator methodology decision with a hand-calculated linear-violation gate | `diff_diff/pretrends.py` | 2(b) PR-1 R5 | Mid | Medium |
+| `run_placebo_test`/`run_all_placebo_tests` expose ONE overloaded `time` param (calendar for timing/group tests, 0/1 post dummy forwarded into the M-137/M-138 callees - works only because a two-period 0/1 calendar column is both); redesign the wrapper signatures (dual `time=`/`post=` params or a split) so each callee gets an honestly-named argument | `diff_diff/diagnostics.py` | 2(c)-ii PR-B | Mid | Medium |
+| `absorbed_fe_rank` N>=3 general rank: the helper keeps `sum(levels-1)` for 3+ absorbed dims, exact for independent connected dims but an over-count for duplicated/nested triples (measured `a(5),b(4),c==b(4)`: true 7 vs formula 10) and for disconnected N-way graphs. Two-way is component-exact. Deriving general N-way FE rank is a hypergraph problem; do it with a reference (fixest's `fixef.rm`/reghdfe df_a) rather than a guess. See `docs/methodology/variance-conventions.md` D3. | `diff_diff/utils.py` | #variance-inventory | Mid | Low |
+| `SyntheticControl` conformal (CWZ 2021) AR / innovation-permutation path (Lemmas 5-7) for time-series proxies — the residual-permutation shortcut is only valid for time-permutation-invariant proxies (SC/Lasso/DiD); an AR proxy needs innovation permutation. | `diff_diff/conformal.py`, `diff_diff/synthetic_control_results.py` | CWZ-2021 | Heavy | Low |
+| Re-run the R-dependent benchmark refresh so `docs/benchmarks.rst`'s TWFE "SE Rel Diff 0.1%" cell reflects the 3.9 K_reference convergence (expected 0.1% -> 0.0%; the table is generated, never hand-edited — the movement is noted in the CHANGELOG entry). | `docs/benchmarks.rst`, `benchmarks/R/` | #variance-inventory | Quick | Low |
+| `SunAbraham`: a cohort not observed at its own reference relative period (`e = -1 - anticipation`) makes that cohort's block collinear, so QR drops an unnamed column (`dropping 1 of 12 columns (column 9)`) and `overall_att` comes back **NaN**. Found by auditing the sibling estimator while fixing the ETWFE analogue (#724); PRE-EXISTING, not introduced there. Lower severity than #724 — that returned a silently WRONG finite number, this returns NaN with a rank warning — but the event-study surface still looks complete, so a user may not notice the loss. SA already omits its reference explicitly and tracks `_reference_observed`, so the fix is per-cohort support for that flag rather than the ETWFE-style redesign. | `diff_diff/sun_abraham.py` | #724-audit | Mid | Low |
+| Define `N_g` (W2025 Eqs. 7.4/7.6) for UNBALANCED panels where comparison-support filtering removes every observation of some units in an estimated cohort, then replace the fail-closed guard with the defined behavior. `_n_g_per_cohort` is read off the final sample, so those units vanish from the cohort-share weights; measured on a cohort supplied with 100 units of which 90 appear only at a dropped period, `aggregate(weights="cohort_share")` moves 1.8078 -> 3.8157. The paper assumes a balanced panel and does not say whether `N_g` counts the supplied cohort or the surviving units, and the two disagree materially, so `aggregate` currently raises naming the cohorts and counts ([M-125]); `weights="cell"` is unaffected and balanced panels never trip it. Settle the estimand (likely: count the supplied cohort, since ATT(g,t) is a cohort-level quantity, but that weights units with no retained observation) and gate with a test computing Eq. 7.4 by hand on unequal cohort sizes. | `diff_diff/wooldridge_results.py`, `diff_diff/wooldridge.py` | #729-followup | Mid | Medium |
+| `WooldridgeDiD` + `survey_design=` does not support DOMAIN ESTIMATION, so BOTH row-deleting paths are currently REFUSED (`NotImplementedError`, all three methods) rather than performed: unidentified-cohort exclusion ([M-123]) and comparison-support period filtering ([M-125]). One fix unblocks both. Implementing it properly means zero-padding the excluded rows' weights while retaining strata/PSU/FPC, per REGISTRY *Subpopulation Analysis (Phase 6)* / Lumley (2004) 3.4, so TSL variance and `df_survey = n_PSU - n_strata` use the full design (naive deletion measured 22 -> 14 on a two-stratum panel). `SurveyDesign.subpopulation()` already implements the contract and SpilloverDiD Wave E.3 is the in-repo precedent; the blocker is that the weighted within-transform rejects zero-weight units, shared machinery behind 7 estimators. Landing it would turn both refusals back into supported fits. Gate with a `SurveyDesign.subpopulation()` parity test on ATT, TSL SE and survey df where the excluded cohort exhausts a PSU. | `diff_diff/wooldridge.py`, `diff_diff/utils.py` | #724-codex-R4/R5 | Heavy | Medium |
+| `WooldridgeDiD` REFUSES a fit whose only treatment cells fall inside the anticipation window, discarding estimates it successfully computed. `_require_estimable_overall_att` ([M-124]) raises when no cell has `t >= g`, because the overall ATT averages only `t >= g` (W2025 excludes anticipation leads) while cells from `t >= g - anticipation` are ESTIMATED. For a cohort never observed at or after its own treatment date, those anticipation-window ATT(g, t) are real, identified estimates and are thrown away with the fit. **The refusal is a stopgap for the missing estimand semantics, not the intended end state.** Real fix: decide what such a fit should return — most likely the per-cell ATT(g, t) plus an overall that is explicitly undefined with a stated reason (not a bare NaN, per the no-silent-NaN convention) — then relax the guard to that. Needs a REGISTRY note defining the estimand and an `aggregate()` story for the anticipation-only case. | `diff_diff/wooldridge.py` | #724-codex-R2 | Mid | Medium |
+| `WooldridgeDiD` comparison-support accounting is PARTIAL. Per-period support now runs before the solve and removes periods with no eligible comparison, reporting them (REGISTRY *per-period comparison support*). What remains is the per-`(g, t)` half: the completeness gate still refuses when a cell is lost to a cause the period filter cannot see -- treated cohorts sharing no comparison period with each other, and covariate collinearity -- so those users get a refusal naming the cell rather than an upfront diagnostic naming the cause. Real fix: compute per-cell eligible-control support and report exactly which cells are unidentified and why BEFORE solving. Note the cohort-count proxy remains invalid and is still pinned (`TestOverallAttFailsClosed::test_two_cohorts_without_same_period_controls_fail_closed`, verified unaffected by the period filter). | `diff_diff/wooldridge.py` | #724-codex-R2 | Mid | Medium |
+| `WooldridgeDiD` DROPS the observations of a cohort with no supported pre-period before `g - anticipation` ([M-123]) rather than identifying it. Excluding the rows is correct given `g-1` normalization -- leaving them in silently loads the cohort's effect onto the time FE -- but dropping a cohort a user supplied is a lossy last resort. **Route (b) is now SETTLED NEGATIVELY and is not the answer:** the paper's no-never-treated last-cohort normalization shipped (W2025 Sec 5.4, per-period comparison support), and it does NOT identify these cohorts -- `wooldridge-2025-review.md:477` is explicit that in the final period the last cohort's ATT is unidentified, and the implementation still excludes any cohort whose reference is `None`. **Route (a) remains open:** an explicit user-supplied reference period per cohort -- W2025 Section 6.1 says any pre-treatment period may serve and the pre-trend `t`-test is invariant to the choice, so a cohort with ANY supported pre-period is a candidate even when `g-1` is missing. If route (a) also fails to identify the cohort, convert this row into a REGISTRY Note recording exclusion as the deliberate final answer. | `diff_diff/wooldridge.py`, `docs/methodology/REGISTRY.md` | #724 | Heavy | Medium |
+| `WooldridgeDiD` REFUSES a panel whose units split into disconnected support groups within a cohort, rather than estimating what IS identified. The connectivity guard (REGISTRY *within-cohort support connectivity*) correctly detects that a closed component's cells are collinear with the unit FE — previously QR dropped one silently and the overall ATT averaged an incomplete set (issue #724's failure mode via unit support). **Refusing is the safe answer, not the complete one.** The connected component containing the reference is still fully identified, so the estimable resolution is either (a) estimate the connected component and report the disconnected units as excluded, with the estimand restated (a sub-population of units, so it needs a REGISTRY definition and interacts with the survey-domain row above), or (b) per-component references, if a component with its own pre-period can carry its own normalization — needs a methodology decision, since components then are not comparable on one baseline. Gate with the split-support fixture in `TestWithinCohortSupportConnectivity`. | `diff_diff/wooldridge.py` | #724-codex-R7 | Heavy | Medium |
+| `WooldridgeDiD` fully resolves the `SurveyDesign` TWICE on every supported survey fit. The pre-exclusion validation pass (added so invalid metadata cannot hide in rows that cohort exclusion deletes) calls `survey_design.resolve(sample)`, and each fitter then calls `_resolve_survey_for_wooldridge` -> `_resolve_survey_for_fit` on the same frame, repeating weight normalization, strata/PSU/FPC validation and design-array construction. Any fit that REACHES the second resolve has an unchanged sample (survey + unidentified-cohort exclusion raises first), so the first result is reusable: capture the `_resolve_survey_for_fit` 4-tuple early and thread it into the three fitters as an optional `pre_resolved`. **Caveat that makes this non-trivial:** `sample = sample.reset_index(drop=True)` runs BETWEEN the two calls, so the reused object must be verified index-independent (resolution extracts positional numpy arrays, but `_inject_cluster_as_psu` and the metadata recompute need checking), and the early call must stop suppressing warnings or the user loses the weight-normalization notice. Gate with a survey fit asserting one normalization warning and byte-identical SEs. | `diff_diff/wooldridge.py` | #724-codex-R10 | Mid | Low |
+| `ContinuousDiD` CGBS-2024 remaining extensions (earlier phases — `covariates=` reg/dr, `treatment_type="discrete"`, single-cohort `control_group="lowest_dose"` with estimand `ATT(d)−ATT(d_L)` — are already supported; see REGISTRY Note #7). Remaining (all deferred `NotImplementedError`, documented): `estimation_method="ipw"` on the dose curve (scalar-adjustment / degenerate); `covariates=` × `survey_design=` (weighted OR + weighted nuisance IF); multi-cohort **heterogeneous-support** discrete aggregation (support-aware: average each dose only over the cohorts that observe it); **multi-cohort `lowest_dose`** (within-cohort `d_L` reference + support-aware cross-cohort aggregation); and **`covariates=` × `lowest_dose`** (conditional-PT-relative-to-`d_L` estimand). Single-cohort / 2-period / shared-support multi-cohort are supported. | `continuous_did.py` | CGBS-2024 | Heavy | Low |
+| `WooldridgeDiD` does not apply the W2025 Sec 5.4 `D_{G_max} x X` covariate normalization, and three sibling covariate rank deficiencies are pre-existing. Measured with the period range pinned and only the never-treated units toggled: (1) time-invariant `exovar` is absorbed by the unit FE, 4 of 26 columns, IDENTICALLY with and without never-treated units; (2) `xgvar`'s cell x covariate block, 19 of 41, identical on both panels; (3) `xtvar` under `demean_covariates=False` does exhibit the `sum_g D_g x = x` dependency that the default demeaning removes; (4) the newly-reachable case -- time-VARYING data passed through `exovar`, which its own docstring reserves for time-invariant covariates -- where the paper's `dT_i` rule would give a deterministic `D_{G_max} x X` drop instead of QR's arbitrary pick (coefficients unaffected, `1.35e-14`; `rank_deficient_action="error"` raises). REGISTRY's narrowed Sec 5.4 note cross-references this row. **Trap for whoever takes it:** `xtvar` under the DEFAULT `demean_covariates=True` is FULL RANK -- the raw block carries demeaned values while `D_g x X` carries raw ones -- and forcing the drop there moves `overall_att` 1.11903 -> 1.46269. Pinned as-is by `TestComparisonSupportFiltering::test_cells_derived_groups_did_not_leak_into_the_design`. | `diff_diff/wooldridge.py` | #729-followup | Heavy | Medium |
+| `WooldridgeDiD.n_control_units` counts never-treated UNITS on `control_group="never_treated"` regardless of method, but on the nonlinear paths (`logit`/`poisson`) treated units' pre-treatment rows ARE the identifying comparison -- only the OLS path absorbs them into their own cells. So the reported count under-states the comparison pool exactly where the REGISTRY control-pool asymmetry note applies. Widen to `not_yet_treated or (never_treated and method != "ols")`, or document the count as never-treated-units-by-definition. Behavior is PRE-EXISTING; documented for now in the REGISTRY control-pool Note rather than changed, because widening moves a public results field and wants its own ledger row and test matrix. | `diff_diff/wooldridge.py` | #729-followup | Mid | Low |
+| Bad-control imputation estimator (Caetano et al. 2026 Section 6.1, Eqs. 5-7, S8 influence function) on a CallawaySantAnna `estimation_method="reg"` host: two untreated-sample OLS fits per cell plus the generated-regressor IF line. | `staggered.py` | bad-controls PR-B | Heavy | Low |
+| Bad-control SC "parallel trends for X" variant (Caetano et al. 2026 Section 7 / S17): a linearity-based alternative to covariate unconfoundedness with its own estimand. | `dml_did.py` | bad-controls PR-B | Heavy | Low |
+| `ATT_X(g,t)` event-study aggregation + bootstrap replay for the bad-control pre-test (today analytical per-cell only; never aggregated). | `dml_did_results.py` | bad-controls PR-B | Mid | Low |
+| Remark-4-weighted overall ATT for the bad-control lane (`sum_g sum_{t>=g} [P(G=g given G in G_bar)/(T-g+1)] ATT(g,t)`: cohort mass among the ever-treated divided by the cohort's post-period count); the headline `att` is CS "simple" (REGISTRY DMLDiD Note). | `staggered_aggregation.py` | bad-controls PR-B | Mid | Low |
+| Allow empty `Z` on the bad-control lane (the paper's `Z` may be empty; DMLDiD's covariates-required gate currently applies). | `dml_did.py` | bad-controls PR-B | Quick | Low |
+| Recover the Supplementary Appendix DGPs 2 / 3 / 5 (nonlinear `W` / `X` terms) on the bad-control ML lane - needs a flexible-learner fixture via the duck-typed learner route (the parametric built-ins are inconsistent there by design, Table S1). | `tests/test_methodology_dml_did.py` | bad-controls PR-B | Mid | Low |
+| DurationDiD alternative finite-sample PH estimators (the repaired cumulative-increment slope of Equation 3.5 and the average-hazard slope of Equation 3.6) as an opt-in beside the shipped mean-of-ratios coefficient; they coincide under exact PH and differ under sampling noise (review table, lines 306-311) | `duration_did.py` | #822 | Mid | Low |
+| `DiagnosticReport` / `BusinessReport` admission of `DurationDiDResults`: both reject it by type today (their batteries are keyed to mean-outcome parallel-trends diagnostics); admission needs a hazard-restriction check family (the Algorithm 2 pretest, the invalid-curve statuses, per-family bootstrap failure counts) and a narrative for per-date absorption ATTs | `diagnostic_report.py`, `business_report.py` | #822 | Mid | Low |
+
+### Performance
+
+Consolidates the former `#### Performance` tech-debt table and the standalone
+`## Performance Optimizations` section. (Speculative / low-value perf notes — numba JIT,
+generic sparse-FE, QR+SVD rank-detection redundancy, `check_finite` bypass — moved to
+[DEFERRED.md → Parked](DEFERRED.md#parked--pending-user-demand--out-of-scope).)
+
+| Issue | Location | Origin | Effort | Priority |
+|-------|----------|--------|--------|----------|
+| LWDiD staggered fit recomputes cohort-wide work across surfaces: each cohort's rolling transformation is built once per `fit_staggered` cohort loop, but unit-level post summaries, control-eligibility sets, and the composite path's `ydot_by_cohort` are re-derived independently by the cell, aggregate, and `_composite_regression_aggregation` paths — runtime grows ~cohorts × panel size. Cache the per-cohort transformation + post summaries in one pass and reuse; add a many-cohort unbalanced-panel benchmark | `diff_diff/lwdid_staggered.py`, `diff_diff/lwdid.py` | #588 | Mid | Low |
+| Reuse the demeaner's factorized codes in `absorbed_fe_rank`/`absorbed_fe_cr1_k_increment` instead of re-factorizing: at 186k rows the rank helper adds ~1.9 ms per absorbed fit (7.7% of the fastest Rust-served TWFE fit) and the K_reference increment ~3.2 ms per clustered-hc1 absorbed fit (~13%; see `docs/performance-plan.md` "Component-aware absorbed-FE rank"), and the helpers and `demean_by_groups` factorize the same group columns. Threading the codes through the call sites halves the factorize work; the `connected_components` call itself is ~1.1 ms. Deliberately not done in the correctness PRs. | `diff_diff/utils.py` | #variance-inventory | Quick | Low |
+| `EfficientDiD` conditional path: the largest remaining O(n) stage is the sieve/nuisance construction outside the tiled pass (~9s at 10k). (The `_ridge_solve_weights` Python-prep shave landed 2026-07-07 — the `omega_stack[rest]` fancy-index copy and tail scatter are skipped when no row is zero-masked, byte-identical outputs; the `zero_mask` abs scan itself remains, needed for correctness.) | `efficient_did_covariates.py` | CS-scaling | Mid | Low |
+| `_rq_fit` LP assembly is dense (`A_eq = [X, I, -I]` with dense identity blocks, rebuilt per cell fit): a `scipy.sparse` construction would cut memory and likely HiGHS time for large cells / bootstrap-heavy covariate CiC/QDiD fits. CAVEAT before doing it: a different matrix representation can change HiGHS's vertex selection at degenerate/tied QR optima - end-to-end covariate goldens are tie-selection-gated (fine), but the `qr_cases` tight coefficient matches may shift to the equal-loss branch; re-run the parity suite and re-calibrate if needed. | `diff_diff/changes_in_changes.py::_rq_fit` | covariates PR | Quick | Low |
+| Evaluate flipping `DIFF_DIFF_SOLVE_OLS_FASTPATH` default-ON after an opt-in soak (the 2026-07 certified normal-equations Cholesky fast path, both backends). A flip needs: golden/parity-suite recapture at the tol-bounded posture (fitted ~1e-8 abs / SE ~1e-6 rel — the default today is byte-pinned in several benchmark conventions), certification-rate telemetry across real workloads (any decline is silent-correct but forfeits the speedup), and the staged default-flip protocol used for `df_convention` (v4-class change). Lifecycle tracked in docs/v4-deprecations.yaml (M-008). | `diff_diff/linalg.py::_resolve_solve_ols_fastpath`, `rust/src/linalg.rs::solve_ols_chol` | CS-scaling | Mid | Low |
+
+### Testing / docs
+
+| Issue | Location | Origin | Effort | Priority |
+|-------|----------|--------|--------|----------|
+| TWFE-weights tutorial section: `attgt_weights` (all three `type=` values side by side) + `decompose_twfe_weights` + `plot_twfe_weights` on `mpdta`, either as a section of `02_staggered_did.ipynb` or a new notebook registered in `docs/tutorials/index.rst`; follow-on PR by decision, the feature ships without it | `docs/tutorials/02_staggered_did.ipynb` | #812 | Mid | Medium |
+| Geo-experiments tutorial: the SDiD fits on the `generate_factor_data(...)` panel (conversions ~1,500, sigma-hat ~310) hit the Frank-Wolfe iteration cap - the placebo fit warns once and the bootstrap cross-check warns on 100/100 draws - yet the narrative presents the bootstrap SE as a paper-faithful robustness check. Pre-existing on `main` under BOTH backends (surfaced when the notebook outputs were refreshed for the shape-only fit diagnostic); the committed April outputs predate the aggregated non-convergence warning. Either rescale / re-tune the DGP (or raise `max_iter` / loosen `min_decrease`) so the refits converge and re-execute, or label the bootstrap result unreliable and drop it from the "Validity evidence" claim. | `docs/tutorials/18_geo_experiments.ipynb` | local codex review of the SDiD shape-only fit-RMSE PR | Mid | Low |
+| Replicate Chang (2020) §4.2.1 ML-design RCS DGP — requires a penalized (Lasso-class) propensity learner or a maintainer fixture via the duck-typed `propensity_learner=` object route; native logit+linear verified pure noise at (N=500, p=100) across ~20 review seeds (att ~ −23..+16, SE ~4-10, EPV ~1.4-1.6 vs threshold 10, fitted out-of-fold clipping ~5-29%, mean ~14%); at (N=200, p=100) `outcome_learner="linear"` fails closed on control-fold rank deficiency even under an oracle propensity (use ridge/sieve there); §4.2.2 is replicated | `tests/test_methodology_dml_did.py`, `diff_diff/_learners.py` | DML PR-B2 | Mid | Low |
+| Optional scheduled end-to-end execution gate for the MMM tutorials (29/30): a cron-only workflow (or extension of `mmm-interop.yml`) that executes both notebooks in isolated exact-pin environments, so a stale/invalid committed posterior cannot stay green indefinitely - today the hybrid posture (deliberate: notebooks execute locally with committed outputs; CI smoke-tests the exporters without sampling; drift tests pin source + committed-output needles) leaves the MCMC claims un-re-executed in CI | `.github/workflows/mmm-interop.yml`, `docs/tutorials/29_mmm_calibration_pymc.ipynb`, `docs/tutorials/30_mmm_calibration_meridian.ipynb` | mmm-interop | Mid | Low |
+| Committed `fixest::feols` event-study golden for TWFE `event_study=True` (within + pooled specs, unbalanced + covariate panels, matched CR1 cluster convention, per-period effects + vcov block) - the in-suite gates are shared-core cross-checks (TWFE-within == MPD-absorb, pooled == MPD bit-exact), so a defect common to the shared core would pass; the live-R harness (`benchmarks/R/benchmark_multiperiod.R`, `feols(y ~ treated * time_f \| unit)`) validated the within design in `docs/benchmarks.rst` but is not a committed regression test - follow the `fixest_did_twfe_golden.json` committed-golden pattern (pytest.skip when absent) | `tests/test_fixest_did_twfe_parity.py`, `benchmarks/R/` | 3(a) R2 | Mid | Medium |
+| Evaluate adding the `BaseEstimator` param surface (get_params/set_params) to the exported classes that never had it - `PowerAnalysis`, `LinearRegression`, `BusinessReport`, `DiagnosticReport`, `TWFEWeightsResult` (a NEW public surface, deliberately out of the 2(c)-i pure-refactor scope; `LinearRegression` is the one `fit`-bearing class excluded from the contract suite's roster-completeness test). | `diff_diff/linalg.py`, `diff_diff/power.py` | mixin PR | Mid | Low |
+| Tighten the mypy suppressions that back the enforced-zero posture: burn down `prep_dgp`'s per-module `[index]` override (needs a None-vs-array restructure that preserves the seeded RNG stream), and evaluate re-enabling the globally disabled codes (`arg-type`, `return-value`, `var-annotated`, `assignment`) one at a time — `assignment` alone hid several real annotation drifts found during the 2026-07 triage. | `pyproject.toml` `[tool.mypy]`, `diff_diff/prep_dgp.py` | lint-CI | Mid | Low |
+| Route LWDiD into the practitioner code surfaces: `practitioner_next_steps` (`diff_diff/practitioner.py`), `agent_workflow.py`, `DiagnosticReport`, and `BusinessReport` never dispatch to or mention LWDiD — the AI guides now cover it, but the code surfaces need contract decisions (when to recommend it, what diagnostics to run) plus tests | `diff_diff/practitioner.py`, `diff_diff/agent_workflow.py`, `diff_diff/diagnostic_report.py`, `diff_diff/business_report.py` | LWDiD release audit | Mid | Low |
+| df-provenance completion follow-up (PR C descoping): a Wooldridge public per-row df channel (a per-key dict that can also carry the hc2_bm BM contrast dofs the scalar `_df_analytic_fallback` cannot represent — the unified surface's Wooldridge df column stays NaN until then); ImputationDiD NON-survey per-lead df (the survey-fit scalar `event_study_df` + its bootstrap clearing shipped with the M-092 completion; what remains is surfacing the `resolve_tail_df`-derived per-lead dfs on non-survey fits, which needs the `_compute_lead_coefficients` return-path change); and the `inference_df` (DiD/MPD/SA/StackedDiD) vs `df_inference` (CS/dCDH) adapter-naming unification. NOTE (M-024): StackedDiD's `df_survey=None` on analytical fits is DELIBERATE - the container resolver's `df_inference` fallback not matching `inference_df` is load-bearing (normal-theory FLCI; see the REGISTRY StackedDiD M-024 Note and the pin in `tests/test_event_study_consumers.py`) - the unification must preserve that outcome or renegotiate it explicitly. | `diff_diff/wooldridge_results.py`, `diff_diff/imputation.py`, `diff_diff/results_base.py` | #variance-PR-C | Mid | Low |
+| `worktree-rm` safety via a tested argv helper: the prose rewrite (ask-before-remove confirmation gate, detached-HEAD reachability/rescue, tip-identity force-delete guard) was reverted to the main version because editing the prose repeatedly reintroduced shell-injection (last: sourcing a state file built from a git-derived branch name). Restore those guards in a `worktree_rm.py` that takes the name via file ingress, invokes git through argv arrays, and has a metacharacter-branch/path injection regression test — the pattern that worked for `pr_prepare.py`/`premerge_scan.py`. | `.claude/commands/worktree-rm.md`, `.claude/scripts/` | skill-audit | Heavy | Medium |
+| `premerge_scan.py` should scan the staged blob (`git show :path`) for staged methodology files, not the working-tree copy — a stage-then-revert-working-copy edit currently reads the safe working version and misses the staged violation. Union staged-index findings with unstaged/untracked filesystem findings. | `.claude/scripts/premerge_scan.py` | skill-audit | Mid | Low |
+| Carousel PDF drift guard: the committed deck PDFs are build artifacts of their `generate_*.py` scripts (README rule: regenerate in the same commit), but nothing verifies a committed PDF matches its generator — a source edit without regeneration, or a stale raster chart, passes every claims test. Applies to ALL decks, not just the MMM one. fpdf embeds creation-date metadata, so a byte-compare needs fixed metadata or a per-page rendered-text manifest. Origin: mmm-carousel local review R1. | `carousel/`, `tests/` | mmm-carousel | Mid | Low |
+| Codex reviewer isolation (repo-wide): `codex --sandbox read-only` blocks writes but does NOT confine READS to the worktree/repo (verified: a probe read `/etc/hosts`), and prompt guards are not a security boundary. Affects `/ai-review-local` (which already documents and accepts this surface) and plan-review-eval dual arms equally. Evaluate OS-level isolation for codex invocations (container / `sandbox-exec` profile / dedicated low-privilege account exposing only the worktree). | `.claude/scripts/openai_review.py`, `tools/plan-review-eval/` | plan-review-eval local review R6 | Heavy | Medium |
+| plan-review-eval dual arms: terminate the surviving peer subprocess when the first reviewer of a dual pair fails (today an early Claude failure still waits out the codex peer — up to its 3600s ceiling — before the run becomes INFRA_ERROR; needs process handles threaded through `_call_claude`/`call_codex` or a shared cancellation event). | `tools/plan-review-eval/plan_adapters/plan_reviewer.py` | plan-review-eval local review R3 | Mid | Low |
+| Reimplement the retired `/review-plan` `--updated` (delta re-review, `## Delta Assessment` section) and `--pr <url>` (PR-comment feedback-coverage) modes in the plan-review skill — descoped from the initial skill ship (the advertised-but-unimplemented flags were removed). `--updated` needs prior-review load + a delta diff; `--pr` needs a `gh` comment fetch + a new reviewer-prompt token. | `.claude/skills/plan-review/SKILL.md` | plan-review skill local review | Mid | Low |
+| plan-review skill dual-mode peer cancellation: when reviewer 1 (Opus subagent) fails, terminate the concurrently-running codex `codex_review.py` subprocess instead of waiting out its 1200s ceiling (and vice-versa). Interactive analogue of the eval-harness peer-cancellation row above; needs the codex process handle surfaced from `codex_review.py` so the skill can signal it. | `.claude/skills/plan-review/SKILL.md`, `.claude/skills/plan-review/codex_review.py` | plan-review skill local review R2 | Mid | Low |
+| Clean-negative precision re-run: Campaign 1's `s3_negative` plans were base_sha-contaminated (real defects at the pinned base), so hallucination rate cleared (dual 3.4%) but trivia-flooding on a *genuinely* clean plan is unmeasured. Small future run (~30 s3-style reviews on 3-5 constructed-clean plans, not the full 120-matrix). | `tools/plan-review-eval/` | campaign-1 verdict | Mid | Low |
+| `trop-silent-drop` criteria regression: the rewritten `criteria.md` dropped a silent-failure catch the OLD criteria had (arm A caught it, B/C missed — campaign-1 A-vs-B contrast). Patch the criteria + re-validate (re-opens the criteria identity, so gated behind a re-validation run). | `.claude/skills/plan-review/criteria.md`, `tools/plan-review-eval/` | campaign-1 verdict | Mid | Medium |
+| The Stata `jwdid` parity arms cover BALANCED panels only. `jwdid_alltreated` pins the all-eventually-treated cell set, `N` and SE ratio on the `mpdta` subset (191 units, 955 rows, 764 estimated), but every arm is a balanced frame, so REGISTRY's parity claim is scoped to that case. The comparison-support predicate's UNBALANCED behavior -- where `G_max` may be unobserved at later periods so the closed form `t < G_max - anticipation` does not hold and support is set by whichever cohorts are actually observed -- is verified against the predicate directly, not against Stata. Add an unbalanced `jwdid` arm to close that gap. | `benchmarks/stata/generate_etwfe_cs_golden.do`, `tests/test_etwfe_cs_stata_parity.py` | #729-followup | Mid | Low |
+| DurationDiD tutorial notebook (Appendix C-style simulation showing the sign reversal of standard DiD on an absorbing outcome, CD vs PH, the fitting window, and the pretest), registered in `docs/tutorials/index.rst` with a drift test; deferred from the estimator PR, which relies on the executed API-page examples | `docs/tutorials/` | #822 | Mid | Low |

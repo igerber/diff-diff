@@ -17,12 +17,13 @@ Example
 
 .. code-block:: python
 
-   from diff_diff import MultiPeriodDiD, plot_event_study
+   from diff_diff import TwoWayFixedEffects, plot_event_study
 
-   # Fit event study model
-   model = MultiPeriodDiD()
+   # Fit an event study (TwoWayFixedEffects event-study mode)
+   model = TwoWayFixedEffects()
    results = model.fit(data, outcome='y', treatment='treated',
-                       time='period', unit='unit_id', reference_period=2)
+                       unit='unit_id', event_study=True, time='period',
+                       post_periods=[3, 4, 5], reference_period=2)
 
    # Create plot
    ax = plot_event_study(results)
@@ -187,6 +188,33 @@ Example
 
    # Grey out non-significant cells
    ax = plot_group_time_heatmap(results, mask_insignificant=True)
+
+plot_bacon
+----------
+
+Visualize Goodman-Bacon decomposition results.
+
+.. seealso::
+
+   :func:`diff_diff.plot_twfe_weights` renders the implicit ATT(g, t) weights
+   and their covariate balance. It is documented on its own page,
+   :doc:`twfe_weights`, and supports the same ``backend=`` options.
+
+.. autofunction:: diff_diff.plot_bacon
+
+Example
+~~~~~~~
+
+.. code-block:: python
+
+   from diff_diff import BaconDecomposition, plot_bacon
+
+   bd = BaconDecomposition()
+   results = bd.fit(data, outcome='y', unit='unit_id',
+                    time='period', first_treat='first_treat')
+
+   # Scatter of 2x2 comparisons by weight, colored by comparison type
+   ax = plot_bacon(results)
 
 Plotly Backend
 --------------

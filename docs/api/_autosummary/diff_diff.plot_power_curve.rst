@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: plot_power_curve
+   :no-index:

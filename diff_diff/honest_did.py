@@ -17,6 +17,7 @@ See Also
 https://github.com/asheshrambachan/HonestDiD - R package implementation
 """
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
@@ -24,9 +25,12 @@ import numpy as np
 import pandas as pd
 from scipy import optimize
 
+from diff_diff._base import BaseEstimator
+from diff_diff.aggregation import resolve_inference_df
 from diff_diff.results import (
     MultiPeriodDiDResults,
 )
+from diff_diff.results_base import Diagnostic, _coverage_pct, _validate_vcov_subblock
 from diff_diff.utils import _get_critical_value
 
 # =============================================================================
@@ -40,7 +44,10 @@ class DeltaSD:
     Smoothness restriction on trend violations (Delta^{SD}).
 
     Restricts the second differences of the trend violations:
-        |delta_{t+1} - 2*delta_t + delta_{t-1}| <= M
+
+    .. math::
+
+        |\\delta_{t+1} - 2\\delta_t + \\delta_{t-1}| \\le M
 
     When M=0, this enforces that violations follow a linear trend
     (linear extrapolation of pre-trends). Larger M allows more
@@ -73,18 +80,21 @@ class DeltaRM:
     """
     Relative magnitudes restriction on trend violations (Delta^{RM}).
 
-    Post-treatment violations are bounded by Mbar times the maximum
-    absolute pre-treatment violation:
-        |delta_post| <= Mbar * max(|delta_pre|)
+    Post-treatment consecutive first differences are bounded by Mbar
+    times the maximum pre-treatment first difference:
 
-    When Mbar=0, this enforces exact parallel trends post-treatment.
-    Mbar=1 means post-period violations can be as large as the worst
-    observed pre-period violation.
+    .. math::
+
+        |\\delta_{t+1} - \\delta_t| \\le \\overline{M} \\cdot \\max_{s<0} |\\delta_{s+1} - \\delta_s|
+
+    When Mbar=0, this enforces zero post-treatment first differences.
+    Mbar=1 means post-period first differences can be as large as the
+    worst observed pre-period first difference.
 
     Parameters
     ----------
     Mbar : float
-        Scaling factor for maximum pre-period violation.
+        Scaling factor for maximum pre-period first difference.
 
     Examples
     --------
@@ -109,8 +119,9 @@ class DeltaSDRM:
     Combined smoothness and relative magnitudes restriction.
 
     Imposes both:
-    1. Smoothness: |delta_{t+1} - 2*delta_t + delta_{t-1}| <= M
-    2. Relative magnitudes: |delta_post| <= Mbar * max(|delta_pre|)
+
+    1. Smoothness: :math:`|\\delta_{t+1} - 2\\delta_t + \\delta_{t-1}| \\le M`
+    2. Relative magnitudes: :math:`|\\delta_{t+1} - \\delta_t| \\le \\overline{M} \\cdot \\max_{s<0} |\\delta_{s+1} - \\delta_s|`
 
     This is more restrictive than either constraint alone.
 
@@ -119,7 +130,7 @@ class DeltaSDRM:
     M : float
         Maximum allowed second difference (smoothness).
     Mbar : float
-        Scaling factor for maximum pre-period violation (relative magnitudes).
+        Scaling factor for maximum pre-period first difference (relative magnitudes).
 
     Examples
     --------
@@ -148,7 +159,7 @@ DeltaType = Union[DeltaSD, DeltaRM, DeltaSDRM]
 
 
 @dataclass
-class HonestDiDResults:
+class HonestDiDResults(Diagnostic):
     """
     Results from Honest DiD sensitivity analysis.
 
@@ -191,14 +202,27 @@ class HonestDiDResults:
     original_se: float
     alpha: float = 0.05
     ci_method: str = "FLCI"
+    target_label: str = "Equal-weight avg over post horizons"
+    pre_periods_used: Optional[List[Any]] = field(default=None, repr=False)
+    post_periods_used: Optional[List[Any]] = field(default=None, repr=False)
     original_results: Optional[Any] = field(default=None, repr=False)
     # Event study bounds (optional)
     event_study_bounds: Optional[Dict[Any, Dict[str, float]]] = field(default=None, repr=False)
     # Survey design metadata (Phase 7d)
     survey_metadata: Optional[Any] = field(default=None, repr=False)
-    df_survey: Optional[int] = field(default=None, repr=False)
+    df_survey: Optional[float] = field(default=None, repr=False)
+
+    def _ci_is_finite(self) -> bool:
+        """Check if CI endpoints are finite (not NaN/inf)."""
+        return np.isfinite(self.ci_lb) and np.isfinite(self.ci_ub)
 
     def __repr__(self) -> str:
+        if not self._ci_is_finite():
+            return (
+                f"HonestDiDResults(bounds=[{self.lb}, {self.ub}], "
+                f"CI=[{self.ci_lb}, {self.ci_ub}] (undefined), "
+                f"M={self.M})"
+            )
         sig = "" if self.ci_lb <= 0 <= self.ci_ub else "*"
         return (
             f"HonestDiDResults(bounds=[{self.lb:.4f}, {self.ub:.4f}], "
@@ -208,7 +232,12 @@ class HonestDiDResults:
 
     @property
     def is_significant(self) -> bool:
-        """Check if CI excludes zero (effect is robust to violations)."""
+        """Check if CI excludes zero (effect is robust to violations).
+
+        Returns False for undefined (NaN) CIs.
+        """
+        if not self._ci_is_finite():
+            return False
         return not (self.ci_lb <= 0 <= self.ci_ub)
 
     @property
@@ -242,7 +271,7 @@ class HonestDiDResults:
         str
             Formatted summary.
         """
-        conf_level = int((1 - self.alpha) * 100)
+        conf_level = _coverage_pct(self.alpha)
 
         method_names = {
             "smoothness": "Smoothness (Delta^SD)",
@@ -258,6 +287,7 @@ class HonestDiDResults:
             "=" * 70,
             "",
             f"{'Method:':<30} {method_display}",
+            f"{'Target:':<30} {self.target_label}",
             f"{'Restriction parameter (M):':<30} {self.M:.4f}",
             f"{'CI method:':<30} {self.ci_method}",
             "",
@@ -278,6 +308,13 @@ class HonestDiDResults:
         ]
 
         # Interpretation
+        if self.pre_periods_used is not None:
+            lines.append(f"{'Pre horizons used:':<30} {self.pre_periods_used}")
+        if self.post_periods_used is not None:
+            lines.append(f"{'Post horizons used:':<30} {self.post_periods_used}")
+        if self.pre_periods_used is not None or self.post_periods_used is not None:
+            lines.append("")
+
         lines.extend(
             [
                 "-" * 70,
@@ -288,7 +325,7 @@ class HonestDiDResults:
 
         if self.method == "relative_magnitude":
             lines.append(
-                f"Post-treatment violations bounded at {self.M:.1f}x max pre-period violation."
+                f"Post-treatment first differences bounded at {self.M:.1f}x max pre-period first difference."
             )
         elif self.method == "smoothness":
             if self.M == 0:
@@ -325,6 +362,9 @@ class HonestDiDResults:
             "ci_ub": self.ci_ub,
             "M": self.M,
             "method": self.method,
+            "target_label": self.target_label,
+            "pre_periods_used": self.pre_periods_used,
+            "post_periods_used": self.post_periods_used,
             "original_estimate": self.original_estimate,
             "original_se": self.original_se,
             "alpha": self.alpha,
@@ -340,7 +380,7 @@ class HonestDiDResults:
 
 
 @dataclass
-class SensitivityResults:
+class SensitivityResults(Diagnostic):
     """
     Results from sensitivity analysis over a grid of M values.
 
@@ -441,7 +481,9 @@ class SensitivityResults:
                     "ub": ub,
                     "ci_lb": ci_lb,
                     "ci_ub": ci_ub,
-                    "is_significant": not (ci_lb <= 0 <= ci_ub),
+                    "is_significant": (
+                        np.isfinite(ci_lb) and np.isfinite(ci_ub) and not (ci_lb <= 0 <= ci_ub)
+                    ),
                 }
             )
         return pd.DataFrame(rows)
@@ -536,16 +578,588 @@ class SensitivityResults:
 # =============================================================================
 
 
+def _extract_calendar_container_params(
+    surface: Any,
+) -> Tuple[np.ndarray, np.ndarray, int, int, List[Any], List[Any], Optional[float]]:
+    """Calendar-scale container branch (TWFE event-study mode, row M-010).
+
+    Reconstructs EXACTLY the inputs the native ``MultiPeriodDiDResults``
+    branch reads - the authoritative pre/post partition (from the
+    container's ``post_periods`` provenance, never derived positionally),
+    the per-period estimates, the event-study vcov sub-block, and the
+    scalar ``df_survey`` - and applies the same row filter and
+    consecutive-grid validation, so the calendar route can never create a
+    third behavior. Admission is provenance-gated and GEOMETRY-SCOPED:
+
+    - ``post_periods`` provenance must be present (a hand-built calendar
+      surface without the partition is rejected - the partition is not
+      recoverable from ``event_time``/``is_reference``).
+    - Exactly ONE reference row (the native branch never needed this
+      guard - a fitted producer always has one - but containers are
+      publicly constructible, and with several references the scalar
+      ``reference_period`` is None and the boundary is undefined).
+    - Registry geometry only: the Rambachan-Roth restriction matrices are
+      built positionally around a single chronological pre/post boundary
+      (Delta^SD over consecutive second differences with delta_0 = 0 at
+      the boundary), so a non-suffix ``post_periods`` or a reference that
+      is not the last pre-period is REJECTED rather than silently fed to
+      the restriction builders. The native route does not validate
+      declared partitions (a pre-existing limitation - see the REGISTRY
+      HonestDiD Note and the DEFERRED.md row); this new route fails
+      closed instead of reproducing that geometry.
+
+    No unknown-provenance/base-period warning fires here: a first-party
+    calendar surface with the partition provenance and a marked reference
+    IS verified provenance (the native branch these surfaces replicate
+    has no such warning).
+    """
+    if surface.source != "TwoWayFixedEffects":
+        raise TypeError(
+            "HonestDiD accepts calendar-scale EventStudyResults containers "
+            "from the TwoWayFixedEffects event-study mode only (got "
+            f"source={surface.source!r}). For MultiPeriodDiD pass the "
+            "native MultiPeriodDiDResults object."
+        )
+    if surface.post_periods is None:
+        raise TypeError(
+            "HonestDiD requires the calendar container's post_periods "
+            "partition provenance (present on producer-built "
+            "TwoWayFixedEffects event-study surfaces); a calendar surface "
+            "without it cannot be partitioned into pre/post periods - the "
+            "partition is not recoverable from event_time positions."
+        )
+
+    _all_labels = surface.event_time.tolist()
+    if len(set(_all_labels)) != len(_all_labels):
+        raise ValueError(
+            "The event-study container carries duplicate event_time "
+            f"labels ({_all_labels}); each horizon must appear exactly "
+            "once."
+        )
+
+    ref_rows = surface.event_time[surface.is_reference].tolist()
+    if len(ref_rows) != 1:
+        raise ValueError(
+            "HonestDiD requires exactly one reference row on a "
+            f"calendar-scale container (got {sorted(ref_rows)}): the "
+            "Rambachan-Roth boundary (delta_0 = 0) is defined at the "
+            "single omitted reference period."
+        )
+    ref_period = ref_rows[0]
+
+    # Registry geometry scoping: chronological boundary only.
+    post_set = set(surface.post_periods)
+    sorted_labels = sorted(_all_labels)
+    n_post = len(post_set)
+    is_suffix = set(sorted_labels[-n_post:]) == post_set
+    pre_labels = [p for p in sorted_labels if p not in post_set]
+    ref_is_last_pre = bool(pre_labels) and pre_labels[-1] == ref_period
+    if not (is_suffix and ref_is_last_pre):
+        raise ValueError(
+            "HonestDiD requires Registry-valid chronological geometry on "
+            "a calendar-scale container: post_periods must be the suffix "
+            "of the sorted period grid and the reference must be the last "
+            f"pre-period (got post_periods={sorted(post_set)}, "
+            f"reference={ref_period!r}, periods={sorted_labels}). The "
+            "Rambachan-Roth restrictions are built positionally over "
+            "consecutive differences around a single pre/post boundary; "
+            "a non-chronological declared partition is not expressible in "
+            "that system (see the REGISTRY HonestDiD Note and the "
+            "DEFERRED.md transform-or-reject row)."
+        )
+
+    # String calendar labels: chronology is unverifiable, and every
+    # ordering step here (and in the FIT that produced a first-party
+    # surface - the estimator sorts its calendar the same way) assumes
+    # sorted() order. The Rambachan-Roth restrictions are positional over
+    # consecutive periods, so a true chronology that differs from lexical
+    # sorting (unpadded numeric suffixes: 'c10' sorts before 'c2') would
+    # silently shift the l_vec sensitivity target - warn loudly (the
+    # pretrends string-label degradation convention; stacklevel=5 as for
+    # the vcov-less warning below).
+    if any(isinstance(t, str) for t in _all_labels):
+        warnings.warn(
+            "The event-study container carries STRING calendar labels; "
+            "chronological order cannot be verified and is assumed to be "
+            "sorted() order (the same assumption the estimator made at "
+            "fit time). The Rambachan-Roth restrictions are positional "
+            "over consecutive periods, so a chronology that differs from "
+            "lexical sorting (e.g. unpadded numeric suffixes, where "
+            "'c10' sorts before 'c2') silently shifts the sensitivity "
+            "target. Use numeric, Period, or Timestamp calendar labels "
+            "to make the order verifiable.",
+            UserWarning,
+            stacklevel=5,
+        )
+
+    # Native-branch reconstruction. Row filter mirrors the MPD branch:
+    # non-reference rows with finite EFFECT and finite, positive SE (the
+    # native branch requires both - a NaN/Inf coefficient with a positive
+    # SE must not reach the LP/optimizer).
+    _by_label = {t: i for i, t in enumerate(_all_labels)}
+    keep_mask = (
+        (~surface.is_reference)
+        & np.isfinite(surface.att)
+        & np.isfinite(surface.se)
+        & (surface.se > 0)
+    )
+    finite_labels = {t for t, k in zip(_all_labels, keep_mask) if k}
+
+    declared_pre = [p for p in sorted_labels if p not in post_set]  # incl. reference
+    declared_post = [p for p in sorted_labels if p in post_set]
+    pre_estimated = [p for p in declared_pre if p in finite_labels]
+    post_estimated = [p for p in declared_post if p in finite_labels]
+
+    # Consecutive estimated horizons around the reference (the native
+    # branch's positional-geometry guard, verbatim semantics: the
+    # estimable grid is every non-reference row).
+    _pre_grid = [p for p in declared_pre if p != ref_period]
+    _post_grid = declared_post
+    _pre_ok = pre_estimated == _pre_grid[len(_pre_grid) - len(pre_estimated) :]
+    _post_ok = post_estimated == _post_grid[: len(post_estimated)]
+    if not (_pre_ok and _post_ok):
+        _dropped_pre = [p for p in _pre_grid if p not in finite_labels]
+        _dropped_post = [p for p in _post_grid if p not in finite_labels]
+        raise ValueError(
+            "HonestDiD requires consecutive estimated horizons around "
+            "the reference period: retained pre-periods must end "
+            "immediately before it and retained post-periods must "
+            "start immediately after it, with no interior gaps (the "
+            "Rambachan-Roth restrictions are built positionally). "
+            "Horizons with undefined inference (non-finite or zero "
+            f"SE) break that grid here: dropped pre {_dropped_pre}, "
+            f"dropped post {_dropped_post}. Only leading pre-periods "
+            "and trailing post-periods can be dropped safely."
+        )
+
+    all_estimated = pre_estimated + post_estimated
+    if not all_estimated:
+        raise ValueError(
+            "No period effects with finite estimates found. " "Cannot compute HonestDiD bounds."
+        )
+    if len(pre_estimated) == 0:
+        raise ValueError(
+            "No pre-period effects with finite estimates found. "
+            "HonestDiD requires at least one identified pre-period "
+            "coefficient."
+        )
+    if len(post_estimated) == 0:
+        raise ValueError(
+            "No post-period effects with finite estimates found. "
+            "HonestDiD requires at least one identified post-treatment "
+            "coefficient (the sensitivity target)."
+        )
+
+    beta_hat = np.array([float(surface.att[_by_label[t]]) for t in all_estimated])
+    ses = [float(surface.se[_by_label[t]]) for t in all_estimated]
+
+    # Event-study vcov sub-block via the container's explicit index
+    # (mirrors the native interaction_indices lookup), hardened to the
+    # relative container path's convention above: duplicate or incomplete
+    # vcov_index fails loud, the extracted block passes
+    # _validate_vcov_subblock with allow_singular=False (Rambachan-Roth
+    # inference assumes eigenvalues bounded away from zero), and the
+    # diagonal approximation is reserved for a vcov-less container, with
+    # the same warning.
+    ses_arr = np.asarray(ses, dtype=float)
+    if surface.vcov is not None and surface.vcov_index is not None:
+        vcov_labels = list(surface.vcov_index.tolist())
+        if len(set(vcov_labels)) != len(vcov_labels):
+            raise ValueError(
+                "The event-study container's vcov_index carries duplicate "
+                f"labels ({vcov_labels}); the covariance sub-block is "
+                "ambiguous."
+            )
+        missing = [t for t in all_estimated if t not in vcov_labels]
+        if missing:
+            raise ValueError(
+                f"The event-study container's vcov_index is missing "
+                f"retained horizon(s) {missing}; cannot extract the "
+                f"covariance sub-block. Available index: {vcov_labels}."
+            )
+        idx = [vcov_labels.index(t) for t in all_estimated]
+        sigma = _validate_vcov_subblock(
+            np.asarray(surface.vcov, dtype=float)[np.ix_(idx, idx)],
+            ses_arr,
+            "HonestDiD",
+            allow_singular=False,
+        )
+    else:
+        # stacklevel=5: one frame deeper than the relative container
+        # path's identical warning (this helper is dispatched from
+        # _extract_container_params).
+        warnings.warn(
+            "Event-study container carries no full covariance matrix; "
+            "using a diagonal approximation from the stored standard "
+            "errors. Cross-event-time covariance is unavailable on this "
+            "surface.",
+            UserWarning,
+            stacklevel=5,
+        )
+        sigma = np.diag(ses_arr**2)
+
+    return (
+        beta_hat,
+        sigma,
+        len(pre_estimated),
+        len(post_estimated),
+        pre_estimated,
+        post_estimated,
+        surface.df_survey,
+    )
+
+
+def _extract_container_params(
+    surface: Any,
+) -> Tuple[np.ndarray, np.ndarray, int, int, List[Any], List[Any], Optional[float]]:
+    """Container branch of ``_extract_event_study_params``.
+
+    Consumes the unified ``EventStudyResults`` surface produced by
+    ``CallawaySantAnnaResults.aggregate('event_study')``,
+    ``DMLDiDResults.aggregate('event_study')`` (row M-093 amendment; same
+    staggered ATT(g,t) payload and semantics as CS), or
+    ``StackedDiDResults.aggregate('event_study')`` (row M-024; Stacked
+    containers require ``kappa_pre >= 2`` so estimated pre-periods
+    exist, and a non-singular FULL retained event-study covariance
+    (the pre+post sub-block, per Rambachan-Roth's Assumption 3) - honest
+    validates with ``allow_singular=False``, so keep ``kappa_pre`` small
+    relative to the cluster count). Admission is SOURCE-SCOPED:
+    containers from other producers are rejected rather than silently
+    admitted - widening is a per-estimator methodology decision in each
+    estimator's own ``aggregate()`` migration (row M-093), not a side
+    effect of the container existing. dCDH containers in particular are
+    rejected BY DESIGN: their ``l1_first_switch`` placebo rows need the
+    native dCDH branch's mandatory reinterpretation warning and
+    consecutive-horizon trimming.
+    """
+    import warnings
+
+    # Calendar-scale surfaces (the TWFE event-study mode, row M-010) route
+    # into the native-branch reconstruction - the relative-scale arithmetic
+    # below (anticipation cutoffs, ref-gap literals) never applies to
+    # calendar labels.
+    if surface.time_scale == "calendar":
+        return _extract_calendar_container_params(surface)
+
+    if surface.source not in (
+        "CallawaySantAnnaResults",
+        "StackedDiDResults",
+        "DMLDiDResults",
+    ):
+        raise TypeError(
+            "HonestDiD accepts EventStudyResults containers produced by "
+            "CallawaySantAnnaResults.aggregate('event_study'), "
+            "DMLDiDResults.aggregate('event_study'), "
+            "StackedDiDResults.aggregate('event_study'), or the "
+            "TwoWayFixedEffects event-study mode (calendar-scale "
+            "surfaces) only "
+            f"(got source={surface.source!r}). For other estimators pass "
+            "the native results object where supported "
+            "(MultiPeriodDiDResults, CallawaySantAnnaResults, or "
+            "ChaisemartinDHaultfoeuilleResults); "
+            "EfficientDiDResults, ImputationDiDResults and "
+            "ContinuousDiDResults containers are rejected BY DESIGN "
+            "(their surfaces carry no joint event-study covariance - "
+            "per-horizon SEs only - and ContinuousDiD's binarized bins "
+            "additionally carry no reference-period normalization at "
+            "all; see the REGISTRY EfficientDiD, ImputationDiD and "
+            "ContinuousDiD Notes); TwoStageDiDResults "
+            "container admission is DEFERRED pending a normalization "
+            "derivation - analytical fits carry the joint Gardner-GMM "
+            "covariance, but the pre-period coefficients are stage-1 "
+            "residual means, not contrasts against a reference period as "
+            "HonestDiD's delta_0=0 arithmetic requires (see the REGISTRY "
+            "TwoStageDiD Note and DEFERRED.md); "
+            "HeterogeneousAdoptionDiDEventStudyResults container "
+            "admission is DEFERRED pending joint cross-horizon "
+            "covariance (per-horizon independent sandwiches only; "
+            "DEFERRED.md) - its coefficients ARE reference-normalized "
+            "(each horizon differences against the F-1 anchor), but the "
+            "anchor row itself is omitted from the container (its "
+            "coefficient is identically zero and the WAS is not "
+            "identified there), so no reference row exists for the "
+            "consumer grid (see the REGISTRY HeterogeneousAdoptionDiD "
+            "Note)."
+        )
+    _producer = surface.source.replace("Results", "")
+    if surface.time_scale != "relative":
+        raise TypeError(
+            "HonestDiD requires a relative-time event-study container; "
+            f"got time_scale={surface.time_scale!r}."
+        )
+
+    # Common-reference guard: reference_event_times is the producer's
+    # cohort-level normalization-base provenance. More than one entry
+    # means the coefficients were normalized against DIFFERENT bases
+    # (CS universal on a gapped grid) - including the layout where one
+    # cohort's base OVERLAPS another cohort's estimated horizon, which
+    # no is_reference row marks. Mirrors the native CS branch. A
+    # universal container WITHOUT the field (hand-built - CS-produced
+    # containers always record it) cannot be verified: warn fail-safe
+    # rather than fail open silently.
+    _ref_e = surface.reference_event_times
+    if _ref_e is None and surface.base_period == "universal":
+        warnings.warn(
+            f"This {_producer} event-study container carries no "
+            "reference_event_times provenance, so a common reference "
+            "period cannot be verified (a universal base on a gapped "
+            "time grid may mix cohort-specific bases). Producer-built "
+            "containers record it - re-aggregate from the fitted "
+            "results object.",
+            UserWarning,
+            stacklevel=4,
+        )
+    if _ref_e is not None and len(set(_ref_e)) > 1:
+        raise ValueError(
+            "HonestDiD requires event-study coefficients normalized "
+            "against one common reference period, but this "
+            f"{_producer} container records DISTINCT normalization bases "
+            f"at event times {sorted(set(_ref_e))}. Coefficients "
+            "normalized against different bases are not jointly "
+            "interpretable under Rambachan-Roth's delta_0 = 0 "
+            "normalization. For CallawaySantAnna and DMLDiD this arises "
+            "from base_period='universal' on a gapped time grid - "
+            "re-estimate on a consecutive (ungapped) time grid so every "
+            "cohort's base falls at the same event time."
+        )
+
+    # Universal-base interpretation warning. Fail-safe: a container with
+    # base_period=None (unknown provenance, e.g. hand-built) cannot be
+    # verified, so it warns too. CS-produced containers always carry the
+    # real value.
+    if surface.base_period != "universal":
+        provenance_clause = (
+            "This container carries no base_period provenance, so the "
+            "base-period regime cannot be verified. "
+            if surface.base_period is None
+            else "With base_period='varying', pre-treatment coefficients "
+            "use consecutive comparisons (not a common reference period), "
+            "which changes the meaning of the parallel trends restriction. "
+        )
+        # Remedy is producer-conditional: CallawaySantAnna and DMLDiD
+        # expose a base_period knob (StackedDiD is single-reference by
+        # construction and always records "universal", so a Stacked-sourced
+        # container can only land here hand-built/modified).
+        _bp_producer = {
+            "CallawaySantAnnaResults": "CallawaySantAnna",
+            "DMLDiDResults": "DMLDiD",
+        }.get(surface.source)
+        remedy_clause = (
+            f"Re-run with {_bp_producer}(base_period='universal') for "
+            "methodologically valid HonestDiD bounds."
+            if _bp_producer is not None
+            else "Rebuild the container from the fitted results object "
+            "(producer-built containers record the true regime)."
+        )
+        warnings.warn(
+            f"HonestDiD sensitivity analysis on {_producer} results "
+            "requires a universal (common-reference) base for valid "
+            "interpretation. " + provenance_clause + remedy_clause,
+            UserWarning,
+            stacklevel=4,
+        )
+
+    # Row filter: is_reference supersedes the fit-time n_groups==0 sniff;
+    # non-finite-SE rows (genuinely non-estimable horizons) drop exactly as
+    # the fit-time branch drops them. se == 0 rows drop too: safe_inference
+    # treats a zero SE as undefined inference (NaN t/p/CI), and admitting
+    # such a row here would launder undefined source inference into finite
+    # sensitivity bounds (mirrors the native CS branch and pretrends).
+    # Containers are publicly constructible: duplicate event-time labels
+    # would make every label-keyed subset below ambiguous.
+    _all_labels = surface.event_time.tolist()
+    if len(set(_all_labels)) != len(_all_labels):
+        raise ValueError(
+            "The event-study container carries duplicate event_time "
+            f"labels ({_all_labels}); each horizon must appear exactly "
+            "once."
+        )
+
+    keep = (~surface.is_reference) & np.isfinite(surface.se) & (surface.se > 0)
+
+    # Withheld-inference transparency (row M-024, StackedDiD admission):
+    # a retained row with finite se but non-finite p_value means the
+    # producer withheld/never computed its per-row inference (StackedDiD's
+    # hc2_bm BM-DOF fail-close and replicate-undefined designs both emit
+    # this shape; a hand-built container can too). The bounds below
+    # consume only the point estimates and covariance - both valid - so
+    # the row is ADMITTED, with a warning so the withheld state is never
+    # silently laundered. Shape-descriptive by design: the container
+    # cannot prove WHY the producer withheld it. Source-scoped to Stacked
+    # so no CS-path behavior changes (CS replicate-undefined containers
+    # keep their pinned silent fail-close via df_survey=0.0).
+    if surface.source == "StackedDiDResults":
+        _withheld = keep & ~np.isfinite(surface.p_value)
+        if bool(np.any(_withheld)):
+            warnings.warn(
+                "This container carries non-reference rows whose stored "
+                "per-row inference is withheld/undefined (finite se, "
+                "non-finite p_value) at event times "
+                f"{surface.event_time[_withheld].tolist()}; results are "
+                "computed from the point estimates and covariance alone, "
+                "using this consumer's own reference distribution.",
+                UserWarning,
+                stacklevel=4,
+            )
+
+    rel_times = [t for t, k in zip(surface.event_time.tolist(), keep) if k]
+
+    ref_rows = surface.event_time[surface.is_reference].tolist()
+    if len(ref_rows) > 1:
+        # No route recommendation here: the native-results path picks the
+        # first n_groups==0 marker and then fails its own consecutive-grid
+        # validation on the same gapped layout, so pointing users there
+        # would be a dead end.
+        raise ValueError(
+            "HonestDiD cannot consume an event-study container with "
+            f"multiple reference rows ({sorted(ref_rows)}): its "
+            "consecutive-grid contract is defined around a single omitted "
+            "reference. For CallawaySantAnna and DMLDiD, multiple references "
+            "arise from base_period='universal' on a gapped time grid, where "
+            "each cohort's positional base is its own reference-only "
+            "horizon - re-estimate on a consecutive (ungapped) time grid "
+            "so a single common reference is materialized."
+        )
+    ref_period = ref_rows[0] if ref_rows else None
+
+    if ref_period is not None:
+        pre_times = sorted(t for t in rel_times if t < ref_period)
+        post_times = sorted(t for t in rel_times if t > ref_period)
+    else:
+        # No reference row (varying base): the anticipation window
+        # [e = -k, -1] carries anticipated TREATMENT effects (REGISTRY
+        # anticipation contract; pretrends applies the same cutoff), so
+        # the clean pre-period set is e < -k and beta_post starts at -k.
+        # Splitting at 0 would misclassify anticipated effects as
+        # pre-trend coefficients. Mirrors the native CS branch.
+        _post_start = -int(surface.anticipation or 0)
+        pre_times = sorted(t for t in rel_times if t < _post_start)
+        post_times = sorted(t for t in rel_times if t >= _post_start)
+
+    if len(pre_times) == 0:
+        raise ValueError(
+            "No pre-period effects with finite estimates found in the "
+            "event-study container. HonestDiD requires at least one "
+            "identified pre-period coefficient."
+        )
+
+    # Consecutive-grid validation, mirroring the fit-time branch: for a
+    # universal base pre[-1]+1 = ref and ref+1 = post[0] (gap of 2); for a
+    # varying base pre ends at -1 and post starts at 0 (gap of 1).
+    if pre_times and post_times:
+        ref_gap = post_times[0] - pre_times[-1]
+        has_gap = ref_gap != (2 if ref_period is not None else 1)
+    else:
+        has_gap = False
+    for block in [pre_times, post_times]:
+        if len(block) >= 2:
+            for i in range(len(block) - 1):
+                if block[i + 1] - block[i] != 1:
+                    has_gap = True
+                    break
+    if has_gap:
+        # Remedy is producer-conditional: balance_e is CS aggregation
+        # machinery; StackedDiD's aggregate() has no balance_e level
+        # (its kappa trimming already balances retained windows), so
+        # recommending it there would point at a non-existent recovery.
+        _gap_remedy = (
+            "Ensure all event-study periods have valid estimates, "
+            "or use balance_e to restrict to a balanced subset."
+            if surface.source in ("CallawaySantAnnaResults", "DMLDiDResults")
+            else "Ensure all event-study periods have valid estimates "
+            "(for StackedDiD, an interior horizon with a non-finite SE "
+            "indicates a rank-dropped event-time column - inspect the "
+            "fit's rank_deficient_action warnings)."
+        )
+        raise ValueError(
+            "HonestDiD requires a consecutive event-time grid "
+            "around the omitted reference period. Retained "
+            f"pre-periods {pre_times} and post-periods "
+            f"{post_times} have gaps. This can happen when "
+            "some event-study horizons have non-finite SEs. " + _gap_remedy
+        )
+
+    # beta_hat/sigma are subset in EXPLICIT [sorted pre; sorted post]
+    # order: the fit-side Rambachan-Roth split takes the first num_pre
+    # entries as beta_pre, and a hand-built container's rows need not
+    # arrive sorted - row-order subsetting would silently misalign the
+    # coefficient blocks and the covariance.
+    _row_of = {t: i for i, t in enumerate(surface.event_time.tolist())}
+    ordered_times = list(pre_times) + list(post_times)
+    idx_ordered = np.asarray([_row_of[t] for t in ordered_times], dtype=int)
+    beta_hat = np.asarray(surface.att[idx_ordered], dtype=float)
+    ses = np.asarray(surface.se[idx_ordered], dtype=float)
+
+    if surface.vcov is not None and surface.vcov_index is not None:
+        vcov_labels = list(surface.vcov_index.tolist())
+        if len(set(vcov_labels)) != len(vcov_labels):
+            raise ValueError(
+                "The event-study container's vcov_index carries duplicate "
+                f"labels ({vcov_labels}); the covariance sub-block is "
+                "ambiguous."
+            )
+        missing = [t for t in ordered_times if t not in vcov_labels]
+        if missing:
+            # A SUPPLIED covariance whose index omits a retained horizon is
+            # inconsistent - fail loud rather than silently degrading to a
+            # diagonal approximation (the pretrends helper's convention;
+            # diagonal fallback is reserved for vcov is None).
+            raise ValueError(
+                f"The event-study container's vcov_index is missing "
+                f"retained horizon(s) {missing}; cannot extract the "
+                f"covariance sub-block. Available index: {vcov_labels}."
+            )
+        idx = [vcov_labels.index(t) for t in ordered_times]
+        # allow_singular=False: Rambachan-Roth inference assumes covariance
+        # eigenvalues bounded away from zero (PreTrendsPower keeps its
+        # documented singular handling and passes the default True).
+        sigma = _validate_vcov_subblock(
+            surface.vcov[np.ix_(idx, idx)], ses, "HonestDiD", allow_singular=False
+        )
+    else:
+        # Container-specific message: a vcov-less container has several
+        # documented causes (bootstrap/replicate overrides, producers that
+        # record no matrix) - do not attribute it to bootstrap.
+        warnings.warn(
+            "Event-study container carries no full covariance matrix; "
+            "using a diagonal approximation from the stored standard "
+            "errors. Cross-event-time covariance is unavailable on this "
+            "surface.",
+            UserWarning,
+            stacklevel=4,
+        )
+        sigma = np.diag(ses**2)
+
+    # Scalar df provenance threaded by the builder - exact fit-time parity,
+    # including the replicate-undefined 0.0 sentinel.
+    return (
+        beta_hat,
+        sigma,
+        len(pre_times),
+        len(post_times),
+        pre_times,
+        post_times,
+        surface.df_survey,
+    )
+
+
 def _extract_event_study_params(
     results: Union[MultiPeriodDiDResults, Any],
-) -> Tuple[np.ndarray, np.ndarray, int, int, List[Any], List[Any], Optional[int]]:
+) -> Tuple[np.ndarray, np.ndarray, int, int, List[Any], List[Any], Optional[float]]:
     """
     Extract event study parameters from results objects.
 
     Parameters
     ----------
-    results : MultiPeriodDiDResults or CallawaySantAnnaResults
-        Estimation results with event study structure.
+    results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
+        Estimation results with event study structure, or the unified
+        event-study container produced by
+        ``CallawaySantAnnaResults.aggregate('event_study')``,
+        ``DMLDiDResults.aggregate('event_study')``, or
+        ``StackedDiDResults.aggregate('event_study')`` (CS-, DML-, and
+        Stacked-sourced containers only; see
+        ``_extract_container_params``. Stacked containers need
+        ``kappa_pre >= 2`` so estimated pre-periods exist).
 
     Returns
     -------
@@ -561,24 +1175,66 @@ def _extract_event_study_params(
         Pre-period identifiers.
     post_periods : list
         Post-period identifiers.
-    df_survey : int or None
-        Survey degrees of freedom for t-distribution inference.
+    df_survey : float or None
+        Survey degrees of freedom for t-distribution inference
+        (``0.0`` = replicate design with undefined df).
     """
+    from diff_diff.results_base import EventStudyResults
+
+    if isinstance(results, EventStudyResults):
+        return _extract_container_params(results)
+
     if isinstance(results, MultiPeriodDiDResults):
         # Extract from MultiPeriodDiD
         pre_periods = results.pre_periods
         post_periods = results.post_periods
 
-        # Filter periods with finite effects/SEs, maintaining pre-then-post order
+        # Filter periods with finite effects/SEs, maintaining pre-then-post
+        # order. se <= 0 drops too: safe_inference treats it as undefined
+        # inference, and admitting such a row would launder NaN source
+        # inference into finite sensitivity bounds (mirrors the CS and
+        # container branches and pretrends).
         finite_periods = {
             p
             for p in results.period_effects.keys()
             if np.isfinite(results.period_effects[p].effect)
             and np.isfinite(results.period_effects[p].se)
+            and results.period_effects[p].se > 0
         }
 
         pre_estimated = [p for p in pre_periods if p in finite_periods]
         post_estimated = [p for p in post_periods if p in finite_periods]
+
+        # The RR constraint builders treat retained coefficients as
+        # CONSECUTIVE around the reference (they index by position, not
+        # label), so a dropped interior or reference-adjacent horizon
+        # would silently change the smoothness / first-difference
+        # geometry and return wrong bounds. Require the retained
+        # pre-periods to be a contiguous SUFFIX of the estimable pre grid
+        # (ending adjacent to the reference) and the retained
+        # post-periods a contiguous PREFIX (starting immediately after
+        # it). Leading-pre / trailing-post drops keep valid geometry;
+        # anything else fails closed (mirrors the CS branch's
+        # consecutive-grid validation).
+        _pre_grid = [p for p in pre_periods if p in results.period_effects]
+        _post_grid = [p for p in post_periods if p in results.period_effects]
+        _pre_ok = pre_estimated == _pre_grid[len(_pre_grid) - len(pre_estimated) :]
+        _post_ok = post_estimated == _post_grid[: len(post_estimated)]
+        if not (_pre_ok and _post_ok):
+            _dropped_pre = [p for p in _pre_grid if p not in finite_periods]
+            _dropped_post = [p for p in _post_grid if p not in finite_periods]
+            raise ValueError(
+                "HonestDiD requires consecutive estimated horizons around "
+                "the reference period: retained pre-periods must end "
+                "immediately before it and retained post-periods must "
+                "start immediately after it, with no interior gaps (the "
+                "Rambachan-Roth restrictions are built positionally). "
+                "Horizons with undefined inference (non-finite or zero "
+                f"SE) break that grid here: dropped pre {_dropped_pre}, "
+                f"dropped post {_dropped_post}. Only leading pre-periods "
+                "and trailing post-periods can be dropped safely."
+            )
+
         all_estimated = pre_estimated + post_estimated
 
         if not all_estimated:
@@ -599,6 +1255,12 @@ def _extract_event_study_params(
                 "HonestDiD requires at least one identified pre-period "
                 "coefficient."
             )
+        if num_post_periods == 0:
+            raise ValueError(
+                "No post-period effects with finite estimates found. "
+                "HonestDiD requires at least one identified post-treatment "
+                "coefficient (the sensitivity target)."
+            )
 
         # Extract proper sub-VCV for interaction terms
         if (
@@ -612,21 +1274,30 @@ def _extract_event_study_params(
             # Fallback: diagonal from SEs
             sigma = np.diag(np.array(ses) ** 2)
 
-        # Extract survey df. Replicate designs with undefined df → sentinel 0.
-        df_survey = None
-        if hasattr(results, "survey_metadata") and results.survey_metadata is not None:
-            sm = results.survey_metadata
-            df_survey = getattr(sm, "df_survey", None)
-            if df_survey is None and getattr(sm, "replicate_method", None) is not None:
-                df_survey = 0
+        # Extract inference df via the shared precedence helper: prefer
+        # ``survey_metadata.df_survey`` (the actual internal df, which may
+        # have been tightened post-resolve for replicate designs; undefined
+        # replicate df -> the 0.0 sentinel) over the ``df_inference``
+        # FALLBACK carrier (bare-``cluster=`` fits where
+        # ``survey_metadata`` is intentionally None). Reading
+        # ``df_inference`` first would silently overstate the denominator
+        # df on panel survey fits whose df was tightened during
+        # aggregation.
+        df_survey = resolve_inference_df(results)
 
+        # Return the ESTIMATED label lists - the ones beta_hat/sigma were
+        # built from - not the declared results.pre_periods/post_periods
+        # (which include the reference period and any dropped
+        # zero/non-finite-SE horizons). HonestDiDResults.pre_periods_used /
+        # post_periods_used relay these verbatim, so misaligned labels
+        # would claim excluded horizons entered the estimand.
         return (
             beta_hat,
             sigma,
             num_pre_periods,
             num_post_periods,
-            pre_periods,
-            post_periods,
+            pre_estimated,
+            post_estimated,
             df_survey,
         )
 
@@ -638,9 +1309,58 @@ def _extract_event_study_params(
             if isinstance(results, CallawaySantAnnaResults):
                 if results.event_study_effects is None:
                     raise ValueError(
-                        "CallawaySantAnnaResults must have event_study_effects for HonestDiD. "
-                        "Re-run CallawaySantAnna.fit() with aggregate='event_study' to compute "
-                        "event study effects."
+                        f"{type(results).__name__} must have event_study_effects "
+                        "for HonestDiD. Pass the post-fit container "
+                        "(compute_honest_did(results.aggregate('event_study')))"
+                        " instead; CallawaySantAnna fits can alternatively use "
+                        "the deprecated aggregate='event_study' to populate "
+                        "the fit-time surface."
+                    )
+
+                # Common-reference guard, mirroring the container branch:
+                # multiple distinct cohort base event times = coefficients
+                # normalized against different bases (gapped universal
+                # grid, including the overlapped-base layout no
+                # reference-only row marks). Provenance-less universal
+                # results (pre-3.9 pickles, replace()-stripped copies)
+                # must not FAIL OPEN: derive the bases from the
+                # materialized reference cells; warn fail-safe when even
+                # those are absent.
+                _ref_e = getattr(results, "reference_event_times", None)
+                if _ref_e is None and getattr(results, "base_period", None) == "universal":
+                    _gte = getattr(results, "group_time_effects", None) or {}
+                    _derived = {t - g for (g, t), _d in _gte.items() if _d.get("is_reference")}
+                    if _derived:
+                        _ref_e = tuple(sorted(_derived))
+                    else:
+                        import warnings
+
+                        warnings.warn(
+                            "This CallawaySantAnna base_period='universal' "
+                            "result carries no reference_event_times "
+                            "provenance and no materialized reference "
+                            "cells, so a common reference period cannot "
+                            "be verified (a gapped time grid may mix "
+                            "cohort-specific bases). Re-fit with the "
+                            "current version to record provenance.",
+                            UserWarning,
+                            stacklevel=4,
+                        )
+                if _ref_e is not None and len(set(_ref_e)) > 1:
+                    raise ValueError(
+                        "HonestDiD requires event-study coefficients "
+                        "normalized against one common reference period, "
+                        "but this CallawaySantAnna base_period='universal' "
+                        "fit selected cohort-specific positional bases at "
+                        f"event times {sorted(set(_ref_e))} (gapped time "
+                        "grid). On such grids a cohort's base can overlap "
+                        "another cohort's estimated horizon, so the "
+                        "coefficients are normalized against different "
+                        "bases and are not jointly interpretable under "
+                        "Rambachan-Roth's delta_0 = 0 normalization. "
+                        "Re-estimate on a consecutive (ungapped) time grid "
+                        "so every cohort's base falls at the same event "
+                        "time."
                     )
 
                 # Warn if not using universal base period (R's HonestDiD requires it)
@@ -660,11 +1380,16 @@ def _extract_event_study_params(
                     )
 
                 # Extract event study effects by relative time
-                # Filter out normalization constraints (n_groups=0) and non-finite SEs
+                # Filter out normalization constraints (n_groups=0), non-finite
+                # SEs, and zero SEs (safe_inference treats se <= 0 as undefined
+                # inference - admitting such a row would launder NaN source
+                # inference into finite sensitivity bounds; mirrors pretrends).
                 event_effects = {
                     t: data
                     for t, data in results.event_study_effects.items()
-                    if data.get("n_groups", 1) > 0 and np.isfinite(data.get("se", np.nan))
+                    if data.get("n_groups", 1) > 0
+                    and np.isfinite(data.get("se", np.nan))
+                    and float(data.get("se", 0.0)) > 0
                 }
                 rel_times = sorted(event_effects.keys())
 
@@ -687,9 +1412,16 @@ def _extract_event_study_params(
                     pre_times = [t for t in rel_times if t < ref_period]
                     post_times = [t for t in rel_times if t > ref_period]
                 else:
-                    # Varying base or no reference marker: split at t < 0 / t >= 0
-                    pre_times = [t for t in rel_times if t < 0]
-                    post_times = [t for t in rel_times if t >= 0]
+                    # Varying base or no reference marker: the anticipation
+                    # window [e = -k, -1] carries anticipated TREATMENT
+                    # effects (REGISTRY anticipation contract; pretrends
+                    # applies the same cutoff), so the clean pre-period set
+                    # is e < -k and beta_post starts at -k. Splitting at 0
+                    # would misclassify anticipated effects as pre-trend
+                    # coefficients. Mirrors the container branch.
+                    _post_start = -int(getattr(results, "anticipation", 0) or 0)
+                    pre_times = [t for t in rel_times if t < _post_start]
+                    post_times = [t for t in rel_times if t >= _post_start]
 
                 if len(pre_times) == 0:
                     raise ValueError(
@@ -780,15 +1512,168 @@ def _extract_event_study_params(
                         "or use balance_e to restrict to a balanced subset."
                     )
 
-                # Extract survey df. For replicate designs with undefined df
-                # (rank <= 1), use sentinel df=0 so _get_critical_value returns
-                # NaN, matching the safe_inference contract.
-                df_survey = None
-                if hasattr(results, "survey_metadata") and results.survey_metadata is not None:
-                    sm = results.survey_metadata
-                    df_survey = getattr(sm, "df_survey", None)
-                    if df_survey is None and getattr(sm, "replicate_method", None) is not None:
-                        df_survey = 0  # undefined replicate df → NaN inference
+                # Extract inference df via the shared precedence helper
+                # (``survey_metadata.df_survey`` -> replicate 0.0 sentinel
+                # -> ``df_inference`` fallback carrier) - the same order the
+                # MPD branch uses, so all branches agree.
+                df_survey = resolve_inference_df(results)
+
+                return (
+                    beta_hat,
+                    sigma,
+                    len(pre_times),
+                    len(post_times),
+                    pre_times,
+                    post_times,
+                    df_survey,
+                )
+        except ImportError:
+            pass
+
+        # Try ChaisemartinDHaultfoeuilleResults (dCDH estimator)
+        try:
+            from diff_diff.chaisemartin_dhaultfoeuille_results import (
+                ChaisemartinDHaultfoeuilleResults,
+            )
+
+            if isinstance(results, ChaisemartinDHaultfoeuilleResults):
+                import warnings
+
+                warnings.warn(
+                    "HonestDiD on dCDH results uses DID^{pl}_l placebo "
+                    "estimates as pre-period coefficients, not standard "
+                    "event-study pre-treatment coefficients. The Rambachan-"
+                    "Roth restrictions bound violations of the parallel "
+                    "trends assumption underlying the dCDH placebo "
+                    "estimand. This is a library extension; interpretation "
+                    "differs from canonical event-study HonestDiD.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+
+                if results.placebo_event_study is None:
+                    raise ValueError(
+                        "ChaisemartinDHaultfoeuilleResults must have placebo_event_study "
+                        "for HonestDiD. Re-run ChaisemartinDHaultfoeuille.fit() with "
+                        "L_max >= 1 to compute multi-horizon placebos."
+                    )
+                if results.event_study_effects is None:
+                    raise ValueError(
+                        "ChaisemartinDHaultfoeuilleResults must have event_study_effects "
+                        "for HonestDiD."
+                    )
+
+                # Filter for finite, strictly positive SEs in both surfaces
+                # (se <= 0 = undefined inference per safe_inference; a zero
+                # row would enter Sigma with zero variance and launder NaN
+                # source inference into finite bounds - mirrors the MPD, CS
+                # and container branches and pretrends).
+                placebo_finite = {
+                    h: data
+                    for h, data in results.placebo_event_study.items()
+                    if np.isfinite(data.get("se", np.nan)) and float(data.get("se", 0.0)) > 0
+                }
+                effects_finite = {
+                    h: data
+                    for h, data in results.event_study_effects.items()
+                    if np.isfinite(data.get("se", np.nan)) and float(data.get("se", 0.0)) > 0
+                }
+
+                pre_times = sorted(placebo_finite.keys())  # -P, ..., -1
+                post_times = sorted(effects_finite.keys())  # 1, ..., L_max
+
+                if len(pre_times) == 0:
+                    raise ValueError(
+                        "No placebo horizons with finite SEs found in dCDH results. "
+                        "HonestDiD requires at least one identified pre-period "
+                        "coefficient."
+                    )
+                if len(post_times) == 0:
+                    raise ValueError(
+                        "No event study horizons with finite SEs found in dCDH results. "
+                        "HonestDiD requires at least one post-period coefficient."
+                    )
+
+                # Consecutiveness check: more permissive than CS because
+                # trends_nonparam support-trimming can create legitimate gaps.
+                # Filter to the largest consecutive block spanning the -1/+1
+                # boundary; warn about dropped horizons.
+                def _largest_consecutive_block(times, boundary_val):
+                    """Find largest consecutive block containing boundary_val."""
+                    if not times:
+                        return []
+                    if boundary_val not in times:
+                        raise ValueError(
+                            f"HonestDiD requires horizon {boundary_val} in "
+                            f"the dCDH "
+                            f"{'placebo' if boundary_val < 0 else 'event study'}"
+                            f" surface, but it was removed by finite-SE "
+                            f"filtering. Retained horizons: {times}. Ensure "
+                            f"horizon {boundary_val} has a finite SE."
+                        )
+                    # Expand outward from boundary_val
+                    block = [boundary_val]
+                    idx = times.index(boundary_val)
+                    # Expand left
+                    for i in range(idx - 1, -1, -1):
+                        if times[i] == block[0] - 1:
+                            block.insert(0, times[i])
+                        else:
+                            break
+                    # Expand right
+                    for i in range(idx + 1, len(times)):
+                        if times[i] == block[-1] + 1:
+                            block.append(times[i])
+                        else:
+                            break
+                    return block
+
+                pre_consec = _largest_consecutive_block(pre_times, -1)
+                post_consec = _largest_consecutive_block(post_times, 1)
+
+                dropped_pre = set(pre_times) - set(pre_consec)
+                dropped_post = set(post_times) - set(post_consec)
+
+                if dropped_pre or dropped_post:
+                    import warnings
+
+                    dropped = sorted(dropped_pre | dropped_post)
+                    warnings.warn(
+                        f"HonestDiD requires a consecutive event-time grid. "
+                        f"Dropping non-consecutive horizons {dropped} from dCDH "
+                        f"results. This can happen when trends_nonparam "
+                        f"support-trimming removes horizons. Retained: "
+                        f"pre={pre_consec}, post={post_consec}.",
+                        UserWarning,
+                        stacklevel=3,
+                    )
+                    pre_times = pre_consec
+                    post_times = post_consec
+
+                if len(pre_times) == 0 or len(post_times) == 0:
+                    raise ValueError(
+                        "After filtering for consecutive horizons, no pre- or "
+                        "post-periods remain. Cannot compute HonestDiD bounds."
+                    )
+
+                # Build beta_hat and sigma (diagonal - no full VCV for dCDH)
+                effects = []
+                ses = []
+                for h in pre_times:
+                    effects.append(placebo_finite[h]["effect"])
+                    ses.append(placebo_finite[h]["se"])
+                for h in post_times:
+                    effects.append(effects_finite[h]["effect"])
+                    ses.append(effects_finite[h]["se"])
+
+                beta_hat = np.array(effects)
+                sigma = np.diag(np.array(ses) ** 2)
+
+                # Extract inference df via the shared precedence helper
+                # (``survey_metadata.df_survey`` -> replicate 0.0 sentinel
+                # -> ``df_inference`` fallback carrier) - the same order the
+                # MPD branch uses, so all branches agree.
+                df_survey = resolve_inference_df(results)
 
                 return (
                     beta_hat,
@@ -804,49 +1689,108 @@ def _extract_event_study_params(
 
         raise TypeError(
             f"Unsupported results type: {type(results)}. "
-            "Expected MultiPeriodDiDResults or CallawaySantAnnaResults."
+            "Expected MultiPeriodDiDResults, CallawaySantAnnaResults, "
+            "ChaisemartinDHaultfoeuilleResults, or an EventStudyResults "
+            "container from CallawaySantAnnaResults.aggregate('event_study'), "
+            "DMLDiDResults.aggregate('event_study'), "
+            "or StackedDiDResults.aggregate('event_study')."
         )
 
 
-def _construct_A_sd(num_periods: int) -> np.ndarray:
+def _construct_A_sd(num_pre_periods: int, num_post_periods: int) -> np.ndarray:
     """
     Construct constraint matrix for smoothness (second differences).
 
-    For T periods, creates matrix A such that:
-    A @ delta gives the second differences.
+    Builds the matrix A such that A @ delta gives the second differences,
+    accounting for the normalization delta_0 = 0 at the pre-post boundary.
+
+    The delta vector is [delta_{-T}, ..., delta_{-1}, delta_1, ..., delta_{Tbar}]
+    (delta_0 = 0 is omitted). Second differences at the boundary use delta_0 = 0:
+      t=-1: delta_{-2} - 2*delta_{-1} + 0  (if num_pre >= 2)
+      t= 0: delta_{-1} + delta_1           (bridge constraint, always present)
+      t= 1: 0 - 2*delta_1 + delta_2        (if num_post >= 2)
 
     Parameters
     ----------
-    num_periods : int
-        Number of time periods.
+    num_pre_periods : int
+        Number of pre-treatment periods (T).
+    num_post_periods : int
+        Number of post-treatment periods (Tbar).
 
     Returns
     -------
     A : np.ndarray
-        Constraint matrix of shape (num_periods - 2, num_periods).
+        Constraint matrix of shape (n_constraints, num_pre + num_post).
+        n_constraints = num_pre + num_post - 1 for sufficient periods,
+        accounting for the delta_0 = 0 boundary.
     """
-    if num_periods < 3:
-        return np.zeros((0, num_periods))
+    T = num_pre_periods
+    Tbar = num_post_periods
+    total = T + Tbar
 
-    n_constraints = num_periods - 2
-    A = np.zeros((n_constraints, num_periods))
+    if total < 2:
+        return np.zeros((0, total))
 
-    for i in range(n_constraints):
-        # Second difference: delta_{t+1} - 2*delta_t + delta_{t-1}
-        A[i, i] = 1  # delta_{t-1}
-        A[i, i + 1] = -2  # delta_t
-        A[i, i + 2] = 1  # delta_{t+1}
+    rows = []
 
-    return A
+    # Pure pre-period second differences: t = -T+1, ..., -2
+    # These involve delta[i-1], delta[i], delta[i+1] all in the pre-period block
+    # Row i corresponds to: delta_{-(T-i)} - 2*delta_{-(T-i-1)} + delta_{-(T-i-2)}
+    for i in range(T - 2):
+        row = np.zeros(total)
+        row[i] = 1  # delta_{t-1}
+        row[i + 1] = -2  # delta_t
+        row[i + 2] = 1  # delta_{t+1}
+        rows.append(row)
+
+    # Boundary constraint at t = -1: delta_{-2} - 2*delta_{-1} + delta_0
+    # With delta_0 = 0: delta_{-2} - 2*delta_{-1}
+    if T >= 2:
+        row = np.zeros(total)
+        row[T - 2] = 1  # delta_{-2}
+        row[T - 1] = -2  # delta_{-1}
+        # delta_0 = 0, no entry needed
+        rows.append(row)
+
+    # Bridge constraint at t = 0: delta_{-1} - 2*delta_0 + delta_1
+    # With delta_0 = 0: delta_{-1} + delta_1
+    if T >= 1 and Tbar >= 1:
+        row = np.zeros(total)
+        row[T - 1] = 1  # delta_{-1}
+        row[T] = 1  # delta_1
+        rows.append(row)
+
+    # Boundary constraint at t = 1: delta_0 - 2*delta_1 + delta_2
+    # With delta_0 = 0: -2*delta_1 + delta_2
+    if Tbar >= 2:
+        row = np.zeros(total)
+        row[T] = -2  # delta_1
+        row[T + 1] = 1  # delta_2
+        rows.append(row)
+
+    # Pure post-period second differences: event times t = 2, ..., Tbar-1
+    # delta_{t+1} - 2*delta_t + delta_{t-1}, all within the post-period block
+    for t in range(2, Tbar):
+        row = np.zeros(total)
+        row[T + t - 2] = 1  # delta_{t-1}
+        row[T + t - 1] = -2  # delta_t
+        row[T + t] = 1  # delta_{t+1}
+        rows.append(row)
+
+    if not rows:
+        return np.zeros((0, total))
+
+    return np.array(rows)
 
 
 def _construct_constraints_sd(
     num_pre_periods: int, num_post_periods: int, M: float
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Construct smoothness constraint matrices.
+    Construct smoothness constraint matrices for Delta^SD(M).
 
-    Returns A, b such that delta in DeltaSD iff |A @ delta| <= b.
+    Returns A, b such that delta in DeltaSD(M) iff |A @ delta| <= b.
+    Accounts for delta_0 = 0 normalization at the pre-post boundary.
 
     Parameters
     ----------
@@ -855,7 +1799,7 @@ def _construct_constraints_sd(
     num_post_periods : int
         Number of post-treatment periods.
     M : float
-        Smoothness parameter.
+        Smoothness parameter (max second difference).
 
     Returns
     -------
@@ -864,11 +1808,11 @@ def _construct_constraints_sd(
     b_ineq : np.ndarray
         Inequality constraint vector.
     """
-    total_periods = num_pre_periods + num_post_periods
-    A_base = _construct_A_sd(total_periods)
+    A_base = _construct_A_sd(num_pre_periods, num_post_periods)
 
     if A_base.shape[0] == 0:
-        return np.zeros((0, total_periods)), np.zeros(0)
+        total = num_pre_periods + num_post_periods
+        return np.zeros((0, total)), np.zeros(0)
 
     # |A @ delta| <= M becomes:
     # A @ delta <= M  and  -A @ delta <= M
@@ -878,11 +1822,21 @@ def _construct_constraints_sd(
     return A_ineq, b_ineq
 
 
-def _construct_constraints_rm(
-    num_pre_periods: int, num_post_periods: int, Mbar: float, max_pre_violation: float
+def _construct_constraints_rm_component(
+    num_pre_periods: int,
+    num_post_periods: int,
+    Mbar: float,
+    max_pre_first_diff: float,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Construct relative magnitudes constraint matrices.
+    Construct constraint matrices for one component of Delta^RM.
+
+    Delta^RM constrains post-treatment FIRST DIFFERENCES (not levels):
+        |delta_{t+1} - delta_t| <= Mbar * max_pre_first_diff, for all t >= 0
+
+    With delta_0 = 0 normalization:
+        |delta_1| <= bound                         (t=0)
+        |delta_{t+1} - delta_t| <= bound           (t=1, ..., Tbar-1)
 
     Parameters
     ----------
@@ -892,8 +1846,8 @@ def _construct_constraints_rm(
         Number of post-treatment periods.
     Mbar : float
         Relative magnitude scaling factor.
-    max_pre_violation : float
-        Maximum absolute pre-period violation (estimated from data).
+    max_pre_first_diff : float
+        The pre-period first difference for this union component.
 
     Returns
     -------
@@ -902,26 +1856,138 @@ def _construct_constraints_rm(
     b_ineq : np.ndarray
         Inequality constraint vector.
     """
-    total_periods = num_pre_periods + num_post_periods
+    T = num_pre_periods
+    Tbar = num_post_periods
+    total = T + Tbar
+    bound = Mbar * max_pre_first_diff
 
-    # Bound post-period violations: |delta_post| <= Mbar * max_pre_violation
-    bound = Mbar * max_pre_violation
+    rows = []
 
-    # Create constraints for each post-period
-    # delta_post[i] <= bound  and  -delta_post[i] <= bound
-    n_constraints = 2 * num_post_periods
-    A_ineq = np.zeros((n_constraints, total_periods))
-    b_ineq = np.full(n_constraints, bound)
+    # t=0: |delta_1 - delta_0| = |delta_1| <= bound (delta_0 = 0)
+    if Tbar >= 1:
+        row_pos = np.zeros(total)
+        row_pos[T] = 1  # delta_1 <= bound
+        rows.append(row_pos)
+        row_neg = np.zeros(total)
+        row_neg[T] = -1  # -delta_1 <= bound
+        rows.append(row_neg)
 
-    for i in range(num_post_periods):
-        post_idx = num_pre_periods + i
-        A_ineq[2 * i, post_idx] = 1  # delta <= bound
-        A_ineq[2 * i + 1, post_idx] = -1  # -delta <= bound
+    # t=1, ..., Tbar-1: |delta_{t+1} - delta_t| <= bound
+    for t in range(1, Tbar):
+        row_pos = np.zeros(total)
+        row_pos[T + t] = 1  # delta_{t+1}
+        row_pos[T + t - 1] = -1  # -delta_t
+        rows.append(row_pos)
+        row_neg = np.zeros(total)
+        row_neg[T + t] = -1  # -delta_{t+1}
+        row_neg[T + t - 1] = 1  # delta_t
+        rows.append(row_neg)
 
+    if not rows:
+        return np.zeros((0, total)), np.zeros(0)
+
+    A_ineq = np.array(rows)
+    b_ineq = np.full(len(rows), bound)
     return A_ineq, b_ineq
 
 
+def _compute_pre_first_differences(beta_pre: np.ndarray) -> np.ndarray:
+    """
+    Compute pre-period first differences for Delta^RM.
+
+    With delta_0 = 0 normalization, the pre-period first differences are:
+        fd_s = delta_{s+1} - delta_s  for s = -T, ..., -1
+
+    Since delta_pre = beta_pre (by no-anticipation):
+        fd_{-T}   = beta_{-T+1} - beta_{-T}
+        ...
+        fd_{-2}   = beta_{-1} - beta_{-2}
+        fd_{-1}   = delta_0 - beta_{-1} = -beta_{-1}  (boundary through delta_0=0)
+
+    Parameters
+    ----------
+    beta_pre : np.ndarray
+        Pre-period coefficient estimates [beta_{-T}, ..., beta_{-1}].
+
+    Returns
+    -------
+    first_diffs : np.ndarray
+        Absolute first differences |fd_{-T}|, ..., |fd_{-1}|.
+    """
+    if len(beta_pre) == 0:
+        return np.array([])
+
+    diffs = []
+    # Interior first differences: fd_s = beta_{s+1} - beta_s
+    for i in range(len(beta_pre) - 1):
+        diffs.append(abs(beta_pre[i + 1] - beta_pre[i]))
+    # Boundary: fd_{-1} = delta_0 - delta_{-1} = 0 - beta_{-1} = -beta_{-1}
+    diffs.append(abs(beta_pre[-1]))
+
+    return np.array(diffs)
+
+
+def _solve_rm_bounds_union(
+    beta_pre: np.ndarray,
+    beta_post: np.ndarray,
+    l_vec: np.ndarray,
+    num_pre_periods: int,
+    Mbar: float,
+    lp_method: str = "highs",
+) -> Tuple[float, float]:
+    """
+    Solve identified set bounds for Delta^RM via union of polyhedra.
+
+    Delta^RM is a union of polyhedra (one per location of the max pre-period
+    first difference). Per Lemma 2.2 of Rambachan & Roth (2023), the
+    identified set is the union of component identified sets.
+
+    With delta_pre = beta_pre pinned, each pre-period first difference is
+    a known scalar, so each component LP has simple box constraints on
+    post-treatment first differences.
+
+    Parameters
+    ----------
+    beta_pre : np.ndarray
+        Pre-period coefficients.
+    beta_post : np.ndarray
+        Post-period coefficients.
+    l_vec : np.ndarray
+        Weighting vector.
+    num_pre_periods : int
+        Number of pre-periods.
+    Mbar : float
+        Relative magnitudes scaling factor.
+    lp_method : str
+        LP solver method.
+
+    Returns
+    -------
+    lb : float
+        Lower bound (min over all components).
+    ub : float
+        Upper bound (max over all components).
+    """
+    pre_diffs = _compute_pre_first_differences(beta_pre)
+    num_post = len(beta_post)
+
+    if len(pre_diffs) == 0 or np.max(pre_diffs) == 0:
+        theta = np.dot(l_vec, beta_post)
+        return theta, theta
+
+    # After pinning delta_pre = beta_pre, the RM bound is determined by
+    # max(pre_diffs). Smaller components give tighter constraints and thus
+    # narrower bounds that are nested inside the max-component bounds.
+    # One LP call suffices (Lemma 2.2 union simplifies to max component).
+    max_pre_fd = float(np.max(pre_diffs))
+    A_ineq, b_ineq = _construct_constraints_rm_component(
+        num_pre_periods, num_post, Mbar, max_pre_fd
+    )
+    return _solve_bounds_lp(beta_pre, beta_post, l_vec, A_ineq, b_ineq, num_pre_periods, lp_method)
+
+
 def _solve_bounds_lp(
+    beta_pre: np.ndarray,
     beta_post: np.ndarray,
     l_vec: np.ndarray,
     A_ineq: np.ndarray,
@@ -932,15 +1998,19 @@ def _solve_bounds_lp(
     """
     Solve for identified set bounds using linear programming.
 
-    The parameter of interest is theta = l' @ (beta_post - delta_post).
-    We find min and max over delta in the constraint set.
+    Computes the bounds of the identified set S(beta, Delta) per
+    Rambachan & Roth (2023) Equations 5-6:
 
-    Note: The optimization is over delta for ALL periods (pre + post), but
-    only the post-period components contribute to the objective function.
-    This correctly handles smoothness constraints that link pre and post periods.
+        theta^lb = l'beta_post - max{ l'delta_post : delta in Delta, delta_pre = beta_pre }
+        theta^ub = l'beta_post - min{ l'delta_post : delta in Delta, delta_pre = beta_pre }
+
+    The equality constraint delta_pre = beta_pre pins the pre-treatment violations
+    to the observed pre-treatment coefficients (since tau_pre = 0 by no-anticipation).
 
     Parameters
     ----------
+    beta_pre : np.ndarray
+        Pre-period coefficient estimates (pinned as equality constraints).
     beta_post : np.ndarray
         Post-period coefficient estimates.
     l_vec : np.ndarray
@@ -958,54 +2028,58 @@ def _solve_bounds_lp(
     Returns
     -------
     lb : float
-        Lower bound.
+        Lower bound of identified set.
     ub : float
-        Upper bound.
+        Upper bound of identified set.
     """
     num_post = len(beta_post)
     total_periods = A_ineq.shape[1] if A_ineq.shape[0] > 0 else num_pre_periods + num_post
 
-    # theta = l' @ beta_post - l' @ delta_post
-    # We optimize over delta (all periods including pre for smoothness constraints)
-
-    # Extract post-period part of constraints
-    # For delta in R^total_periods, we want min/max of -l' @ delta_post
-    # where delta_post = delta[num_pre_periods:]
-
+    # Objective: min/max -l' @ delta_post over delta in R^total_periods
     c = np.zeros(total_periods)
-    c[num_pre_periods : num_pre_periods + num_post] = -l_vec  # min -l'@delta = max l'@delta
+    c[num_pre_periods : num_pre_periods + num_post] = -l_vec
 
-    # For upper bound: max l'@(beta - delta) = l'@beta + max(-l'@delta)
-    # For lower bound: min l'@(beta - delta) = l'@beta + min(-l'@delta)
+    # Equality constraints: delta_pre = beta_pre (Rambachan & Roth Eqs 5-6)
+    A_eq = np.zeros((num_pre_periods, total_periods))
+    for i in range(num_pre_periods):
+        A_eq[i, i] = 1.0
+    b_eq = beta_pre
 
-    if A_ineq.shape[0] == 0:
-        # No constraints - unbounded
+    if A_ineq.shape[0] == 0 and num_pre_periods == 0:
         return -np.inf, np.inf
 
-    # Solve for lower bound of -l'@delta (which gives upper bound of theta)
+    lp_kwargs = dict(
+        A_ub=A_ineq if A_ineq.shape[0] > 0 else None,
+        b_ub=b_ineq if A_ineq.shape[0] > 0 else None,
+        A_eq=A_eq,
+        b_eq=b_eq,
+        bounds=(None, None),
+        method=lp_method,
+    )
+
+    # Solve for min(-l'@delta_post) → gives upper bound of theta
     try:
-        result_min = optimize.linprog(
-            c, A_ub=A_ineq, b_ub=b_ineq, bounds=(None, None), method=lp_method
-        )
+        result_min = optimize.linprog(c, **lp_kwargs)
         if result_min.success:
             min_val = result_min.fun
+        elif result_min.status == 2:
+            # Infeasible: beta_pre inconsistent with Delta at this M
+            return np.nan, np.nan
         else:
             min_val = -np.inf
     except (ValueError, TypeError):
-        # Optimization failed - return unbounded
         min_val = -np.inf
 
-    # Solve for upper bound of -l'@delta (which gives lower bound of theta)
+    # Solve for max(-l'@delta_post) → gives lower bound of theta
     try:
-        result_max = optimize.linprog(
-            -c, A_ub=A_ineq, b_ub=b_ineq, bounds=(None, None), method=lp_method
-        )
+        result_max = optimize.linprog(-c, **lp_kwargs)
         if result_max.success:
             max_val = -result_max.fun
+        elif result_max.status == 2:
+            return np.nan, np.nan
         else:
             max_val = np.inf
     except (ValueError, TypeError):
-        # Optimization failed - return unbounded
         max_val = np.inf
 
     theta_base = np.dot(l_vec, beta_post)
@@ -1020,7 +2094,7 @@ def _compute_flci(
     ub: float,
     se: float,
     alpha: float = 0.05,
-    df: Optional[int] = None,
+    df: Optional[float] = None,
 ) -> Tuple[float, float]:
     """
     Compute Fixed Length Confidence Interval (FLCI).
@@ -1065,69 +2139,892 @@ def _compute_flci(
     return ci_lb, ci_ub
 
 
-def _compute_clf_ci(
-    beta_post: np.ndarray,
-    sigma_post: np.ndarray,
-    l_vec: np.ndarray,
-    Mbar: float,
-    max_pre_violation: float,
-    alpha: float = 0.05,
-    n_draws: int = 1000,
-    df: Optional[int] = None,
-) -> Tuple[float, float, float, float]:
+def _cv_alpha(t: float, alpha: float, df: Optional[float] = None) -> float:
     """
-    Compute Conditional Least Favorable (C-LF) confidence interval.
+    Compute the (1-alpha) quantile of the folded distribution |X|.
 
-    For relative magnitudes, accounts for estimation of max_pre_violation.
+    When df is None: X ~ N(t, 1) (folded normal).
+    When df > 0: X ~ nct(df, t) (folded non-central t, for survey inference).
+    Per Rambachan & Roth (2023) Equation 18.
 
     Parameters
     ----------
-    beta_post : np.ndarray
-        Post-period coefficient estimates.
-    sigma_post : np.ndarray
-        Variance-covariance matrix for post-period coefficients.
-    l_vec : np.ndarray
-        Weighting vector.
-    Mbar : float
-        Relative magnitude parameter.
-    max_pre_violation : float
-        Estimated max pre-period violation.
+    t : float
+        Non-centrality parameter (bias / se ratio).
     alpha : float
         Significance level.
-    n_draws : int
-        Number of Monte Carlo draws for conditional CI.
     df : int, optional
-        Degrees of freedom for t-distribution critical value.
+        Degrees of freedom for non-central t. None = normal theory.
 
     Returns
     -------
-    lb : float
-        Lower bound of identified set.
-    ub : float
-        Upper bound of identified set.
-    ci_lb : float
-        Lower bound of confidence interval.
-    ci_ub : float
-        Upper bound of confidence interval.
+    cv : float
+        Critical value such that P(|X| <= cv) = 1 - alpha.
     """
-    # For simplicity, use FLCI approach with adjustment for estimation uncertainty
-    # A full implementation would condition on the estimated max_pre_violation
+    from scipy.stats import norm
 
-    theta = np.dot(l_vec, beta_post)
-    se = np.sqrt(l_vec @ sigma_post @ l_vec)
+    target = 1 - alpha
+    t = abs(t)
 
-    bound = Mbar * max_pre_violation
+    if df is not None and (not np.isfinite(df) or df <= 0):
+        # A PROVIDED nonpositive/non-finite df is the replicate-undefined
+        # sentinel (df_survey=0): inference is undefined and must fail
+        # closed to NaN - matching utils._get_critical_value's
+        # t.ppf(., 0) = NaN on the naive path - never silently fall
+        # through to normal theory (that path is reserved for df=None).
+        return float("nan")
 
-    # Simple bounds: theta +/- bound
-    lb = theta - bound
-    ub = theta + bound
+    if df is not None and df > 0:
+        # Folded non-central t: P(|nct(df,t)| <= x) = F(x;df,t) - F(-x;df,t)
+        from scipy.stats import nct as nct_dist
 
-    # CI with estimation uncertainty
-    z = _get_critical_value(alpha, df)
-    ci_lb = lb - z * se
-    ci_ub = ub + z * se
+        x = nct_dist.ppf(1 - alpha / 2, df, t) + 1.0  # generous start
+        for _ in range(30):
+            f = nct_dist.cdf(x, df, t) - nct_dist.cdf(-x, df, t) - target
+            fprime = nct_dist.pdf(x, df, t) + nct_dist.pdf(-x, df, t)
+            if fprime < 1e-15:
+                break
+            x_new = x - f / fprime
+            x_new = max(x_new, 0.0)
+            if abs(x_new - x) < 1e-10:
+                break
+            x = x_new
+        return x
 
-    return lb, ub, ci_lb, ci_ub
+    # Folded normal: P(|N(t,1)| <= x) = Phi(x-t) - Phi(-x-t)
+    x = norm.ppf(1 - alpha / 2) + t
+
+    for _ in range(20):
+        f = norm.cdf(x - t) - norm.cdf(-x - t) - target
+        fprime = norm.pdf(x - t) + norm.pdf(-x - t)
+        if fprime < 1e-15:
+            break
+        x_new = x - f / fprime
+        x_new = max(x_new, 0.0)
+        if abs(x_new - x) < 1e-12:
+            break
+        x = x_new
+
+    return x
+
+
+def _build_fd_transform(num_pre: int, num_post: int) -> np.ndarray:
+    """
+    Build the matrix C mapping first-differences to levels: delta = C @ fd.
+
+    The fd vector has T+Tbar components:
+        fd = [fd_{-T}, ..., fd_{-1}, fd_0, ..., fd_{Tbar-1}]
+    where fd_s = delta_{s+1} - delta_s (with delta_0 = 0).
+
+    The delta vector is:
+        delta = [delta_{-T}, ..., delta_{-1}, delta_1, ..., delta_{Tbar}]
+
+    Pre-period (backward from delta_0=0):
+        delta_{-1} = -fd_{T-1}
+        delta_{-k} = -(fd_{T-1} + fd_{T-2} + ... + fd_{T-k})
+
+    Post-period (forward from delta_0=0):
+        delta_1 = fd_T
+        delta_k = fd_T + fd_{T+1} + ... + fd_{T+k-1}
+    """
+    T = num_pre
+    Tbar = num_post
+    total = T + Tbar
+    C = np.zeros((total, total))
+
+    # Pre-period: delta_{-k} = -(fd_{T-1} + fd_{T-2} + ... + fd_{T-k})
+    for k in range(1, T + 1):
+        delta_idx = T - k  # delta_{-k} is at index T-k
+        for j in range(k):
+            fd_idx = T - 1 - j  # fd_{T-1-j}
+            C[delta_idx, fd_idx] = -1.0
+
+    # Post-period: delta_k = fd_T + fd_{T+1} + ... + fd_{T+k-1}
+    for k in range(1, Tbar + 1):
+        delta_idx = T + k - 1  # delta_k is at index T+k-1
+        for j in range(k):
+            fd_idx = T + j  # fd_{T+j}
+            C[delta_idx, fd_idx] = 1.0
+
+    return C
+
+
+def _build_fd_smoothness_constraints(num_fd: int, M: float) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Build smoothness constraints in first-difference space.
+
+    Delta^SD(M) in fd-space: |fd_{i+1} - fd_i| <= M for all consecutive pairs.
+    This is a bounded polyhedron (unlike level-space Delta^SD which is unbounded).
+    """
+    if num_fd < 2:
+        return np.zeros((0, num_fd)), np.zeros(0)
+
+    n_constraints = num_fd - 1
+    rows = []
+    for i in range(n_constraints):
+        row_pos = np.zeros(num_fd)
+        row_pos[i + 1] = 1
+        row_pos[i] = -1
+        rows.append(row_pos)
+        row_neg = np.zeros(num_fd)
+        row_neg[i + 1] = -1
+        row_neg[i] = 1
+        rows.append(row_neg)
+
+    A = np.array(rows)
+    b = np.full(len(rows), M)
+    return A, b
+
+
+def _w_to_v(w: np.ndarray, l: np.ndarray, num_pre: int) -> np.ndarray:
+    """
+    Map slope weights w to the full estimator direction v.
+
+    The estimator is: theta_hat = l'beta_post - sum_s w_s (beta_s - beta_{s-1})
+    for s = -T+1, ..., 0 (T slopes total, including boundary slope s=0
+    where beta_0 = 0).
+
+    This gives v = (v_pre, l) where v_pre is determined by differencing w.
+
+    Parameters
+    ----------
+    w : np.ndarray
+        Weights on slopes (length T). Includes the boundary slope at s=0.
+    l : np.ndarray
+        Target parameter weights (length Tbar).
+    num_pre : int
+        Number of pre-periods (T).
+    """
+    T = num_pre
+    Tbar = len(l)
+    v = np.zeros(T + Tbar)
+
+    if len(w) > 0:
+        # v[0] = w[0] (beta_{-T} from slope s=-T+1)
+        v[0] = w[0]
+        # v[k] = -w[k-1] + w[k] for k=1,...,T-1
+        for k in range(1, T):
+            v[k] = -w[k - 1] + w[k]
+
+    v[T:] = l
+    return v
+
+
+def _compute_worst_case_bias(
+    w: np.ndarray,
+    l: np.ndarray,
+    num_pre: int,
+    num_post: int,
+    M: float,
+) -> float:
+    """
+    Compute worst-case bias of the FLCI affine estimator for Delta^SD.
+
+    Per Rambachan & Roth (2023) Eq. 17, the bias is max |v'delta| over
+    Delta^SD(M). This is computed in first-difference space where Delta^SD
+    is a bounded polyhedron |fd_{i+1} - fd_i| <= M.
+
+    The bias direction in fd-space is C'v, where C maps fd -> delta and
+    v is the estimator direction derived from slope weights w.
+
+    Parameters
+    ----------
+    w : np.ndarray
+        Slope weights (length T), sum(w) = sum_j j*l_j (Eq. 17 neutrality).
+    l : np.ndarray
+        Target parameter weights.
+    num_pre : int
+        Number of pre-periods (T).
+    num_post : int
+        Number of post-periods (Tbar).
+    M : float
+        Smoothness parameter.
+
+    Returns
+    -------
+    bias : float
+        Maximum worst-case bias (finite for M >= 0).
+    """
+    if M == 0:
+        return 0.0  # Linear trends => zero bias when sum(w)=1
+
+    total = num_pre + num_post
+    v = _w_to_v(w, l, num_pre)
+    C = _build_fd_transform(num_pre, num_post)
+    A_fd, b_fd = _build_fd_smoothness_constraints(total, M)
+
+    # Bias direction in fd-space: max (C'v)' fd subject to smoothness
+    bias_dir_fd = C.T @ v
+
+    if A_fd.shape[0] == 0:
+        return 0.0
+
+    # Centrosymmetric: max |c'fd| = max c'fd
+    try:
+        res = optimize.linprog(
+            -bias_dir_fd,
+            A_ub=A_fd,
+            b_ub=b_fd,
+            bounds=(None, None),
+            method="highs",
+        )
+        return -res.fun if res.success else np.inf
+    except (ValueError, TypeError):
+        return np.inf
+
+
+def _flci_bias_constant(l_vec: np.ndarray, num_post: int) -> float:
+    """Constant term of the worst-case-bias objective (R's
+    ``.createObjectiveObjectForBias``): ``sum_s |sum_{k=1..s} k*l[Tbar-s+k]| -
+    sum_s s*l[s]``. For NONNEGATIVE (averaging) ``l_vec`` the closed form
+    ``M*(constant + sum_i |cumsum(w)_i|)`` equals ``_compute_worst_case_bias(w,
+    ..., M)`` (the LP oracle) to machine precision; for signed/contrast ``l_vec``
+    it intentionally follows R's conservative closed form (the FLCI still matches
+    R). See REGISTRY.md Delta^SD FLCI note.
+    """
+    c = 0.0
+    for s in range(1, num_post + 1):
+        seg = l_vec[num_post - s : num_post]
+        c += abs(float(np.dot(np.arange(1, s + 1), seg)))
+    c -= float(np.dot(np.arange(1, num_post + 1), l_vec))
+    return c
+
+
+def _flci_precompute(sigma: np.ndarray, l_vec: np.ndarray, num_pre: int, num_post: int) -> dict:
+    """Precompute the FLCI inner problem's quadratic-variance and bias pieces
+    (``sigma`` ordered ``[pre; post]``). ``D`` is the first-difference operator
+    (identical to the pre-block of ``_w_to_v``), ``L`` the cumsum operator, so the
+    estimator variance is ``var(w) = w'Qw + q'w + c0`` and the linear-trend
+    neutrality target is ``sum(w) = sum_s s*l[s]`` (R & R 2023 Eq. 17)."""
+    s_pre = sigma[:num_pre, :num_pre]
+    s_pp = sigma[:num_pre, num_pre:]
+    s_post = float(l_vec @ sigma[num_pre:, num_pre:] @ l_vec)
+    d_mat = np.eye(num_pre)
+    for col in range(num_pre - 1):
+        d_mat[col + 1, col] = -1.0
+    return {
+        "Q": d_mat.T @ s_pre @ d_mat,
+        "q": 2.0 * (d_mat.T @ s_pp @ l_vec),
+        "c0": s_post,
+        "L": np.tril(np.ones((num_pre, num_pre))),
+        "target": float(np.dot(np.arange(1, num_post + 1), l_vec)),
+        "constant": _flci_bias_constant(l_vec, num_post),
+        "num_pre": num_pre,
+    }
+
+
+def _flci_var(w: np.ndarray, P: dict) -> float:
+    return float(w @ P["Q"] @ w + P["q"] @ w + P["c0"])
+
+
+def _flci_w_min(P: dict) -> np.ndarray:
+    """Minimum-variance weights subject to ``sum(w)=target`` via the
+    equality-constrained KKT system (the abs-value constraints are non-binding for
+    the min-variance objective; verified against R's ``.findLowestH``)."""
+    k = P["num_pre"]
+    kkt = np.zeros((k + 1, k + 1))
+    kkt[:k, :k] = 2.0 * P["Q"]
+    kkt[:k, k] = 1.0
+    kkt[k, :k] = 1.0
+    rhs = np.concatenate([-P["q"], [P["target"]]])
+    try:
+        sol = np.linalg.solve(kkt, rhs)
+    except np.linalg.LinAlgError:
+        sol = np.linalg.lstsq(kkt, rhs, rcond=None)[0]
+    return sol[:k]
+
+
+def _flci_h_bounds(P: dict):
+    """FLCI bracket: ``hmin`` = minimum estimator SD (R ``.findLowestH``), ``h0`` =
+    SD at the minimum-bias weights (all mass on the boundary slope, R
+    ``.findHForMinimumBias``). Both match R's closed forms to ~1e-8."""
+    w_min = _flci_w_min(P)
+    hmin = float(np.sqrt(max(_flci_var(w_min, P), 0.0)))
+    w_hi = np.zeros(P["num_pre"])
+    w_hi[-1] = P["target"]
+    h0 = float(np.sqrt(max(_flci_var(w_hi, P), 0.0)))
+    return hmin, h0, w_min
+
+
+def _flci_min_bias_given_h(P: dict, h: float, x0_w: Optional[np.ndarray] = None):
+    """Inner solve (R's ``.findWorstCaseBiasGivenH``): minimize the worst-case bias
+    ``constant + sum_i|cumsum(w)_i|`` subject to ``sum(w)=target`` and the
+    second-order-cone ``var(w) <= h^2``, as a smooth convex QCQP over ``x=[U; w]``
+    (``U >= |Lw|``) via SLSQP. Returns ``(w, bias_unit, feasible)``.
+
+    Gating is on FEASIBILITY (``var<=h^2`` and ``sum=target``), NOT ``res.success``
+    -- SLSQP frequently reports ``success=False`` on a correct convex optimum.
+    """
+    from scipy.optimize import minimize as _sp_minimize
+
+    k = P["num_pre"]
+    L = P["L"]
+    if k == 1:
+        w = np.array([P["target"]])
+        return w, P["constant"] + float(np.abs(L @ w).sum()), True
+    if x0_w is None:
+        x0_w = _flci_w_min(P)
+    x0 = np.concatenate([np.abs(L @ x0_w), x0_w])
+    c = np.concatenate([np.ones(k), np.zeros(k)])
+    cons = [
+        {
+            "type": "ineq",
+            "fun": lambda x: x[:k] - L @ x[k:],
+            "jac": lambda x: np.hstack([np.eye(k), -L]),
+        },
+        {
+            "type": "ineq",
+            "fun": lambda x: x[:k] + L @ x[k:],
+            "jac": lambda x: np.hstack([np.eye(k), L]),
+        },
+        {
+            "type": "eq",
+            "fun": lambda x: float(np.sum(x[k:]) - P["target"]),
+            "jac": lambda x: np.concatenate([np.zeros(k), np.ones(k)]),
+        },
+        {
+            "type": "ineq",
+            "fun": lambda x: h * h - _flci_var(x[k:], P),
+            "jac": lambda x: np.concatenate([np.zeros(k), -(2.0 * P["Q"] @ x[k:] + P["q"])]),
+        },
+    ]
+    res = _sp_minimize(
+        lambda x: float(c @ x),
+        x0,
+        jac=lambda x: c,
+        constraints=cons,
+        method="SLSQP",
+        options={"ftol": 1e-12, "maxiter": 500},
+    )
+    w = res.x[k:]
+    feasible = (_flci_var(w, P) <= h * h + 1e-7) and (abs(float(np.sum(w)) - P["target"]) < 1e-6)
+    return w, P["constant"] + float(np.abs(L @ w).sum()), bool(feasible)
+
+
+def _flci_optimal_h(
+    P: dict,
+    hmin: float,
+    h0: float,
+    M: float,
+    alpha: float,
+    df: Optional[float],
+    levels=(40, 120, 120),
+) -> float:
+    """Argmin over the estimator SD ``h`` of the half-length
+    ``W(h)=cv(M*bias(h)/h)*h`` (R's ``.findOptimalCIDerivativeBisection``), by a
+    multi-level GRID ZOOM. Each level restarts from ``w_min`` and warm-starts the
+    inner solve within the level (``h`` ascending), which keeps the objective
+    smooth despite ~1e-6 SLSQP noise; zooming refines resolution.
+
+    A grid zoom (not R's derivative-bisection or an envelope-theorem derivative) is
+    used deliberately: the width surface is near-flat at the optimum AND the
+    min-bias inner solutions are degenerate (most ``cumsum(w)`` components sit at
+    the abs-value kink), so ``mu`` is not recoverable from ``sign(Lw)`` and
+    finite-difference derivatives are swamped by solver noise. Matches R's
+    (deterministic) center to <3e-4 across the validated stress grid.
+    """
+    if h0 - hmin < 1e-12:
+        return h0
+    lo, hi = hmin, h0
+    gi, grid = 0, np.array([hmin])
+    for npts in levels:
+        grid = np.linspace(lo, hi, npts)
+        seed = _flci_w_min(P)
+        vals = np.full(npts, np.inf)
+        for i, h in enumerate(grid):
+            if h <= 0.0:  # rank-deficient covariance -> hmin=0; skip (M*bias/h undefined)
+                continue
+            w, bias_unit, ok = _flci_min_bias_given_h(P, h, x0_w=seed)
+            if ok and np.isfinite(bias_unit):
+                vals[i] = _cv_alpha(M * bias_unit / h, alpha, df=df) * h
+                seed = w
+        gi = int(np.argmin(vals))
+        if not np.isfinite(vals[gi]):
+            return float("nan")
+        step = (hi - lo) / (npts - 1)
+        lo = max(grid[gi] - 2 * step, hmin)
+        hi = min(grid[gi] + 2 * step, h0)
+    return float(grid[gi])
+
+
+def _flci_solve(
+    beta_pre: np.ndarray,
+    beta_post: np.ndarray,
+    sigma: np.ndarray,
+    l_vec: np.ndarray,
+    num_pre: int,
+    num_post: int,
+    M: float,
+    alpha: float = 0.05,
+    df: Optional[float] = None,
+) -> Tuple[float, float, Optional[np.ndarray]]:
+    """
+    Compute the optimal Fixed Length Confidence Interval for Delta^SD.
+
+    Per Rambachan & Roth (2023) Section 4.1, the optimal FLCI is:
+        CI = (a + v'beta_hat) ± chi
+    where (a, v) minimize the half-length chi subject to coverage.
+
+    The estimator is parameterized in terms of slope weights w on
+    pre-treatment first differences (Section 4.1.1):
+        theta_hat = l'beta_post - sum_s w_s (beta_s - beta_{s-1})
+    with constraint sum(w) = sum_j j*l_j (linear trend neutrality, Eq. 17).
+
+    The bias is computed in first-difference space where Delta^SD is
+    a bounded polyhedron, making the LP well-posed.
+
+    When df is provided, uses the folded non-central t distribution
+    for survey inference (replaces the folded normal).
+
+    Parameters
+    ----------
+    beta_pre : np.ndarray
+        Pre-period coefficients.
+    beta_post : np.ndarray
+        Post-period coefficients.
+    sigma : np.ndarray
+        Full variance-covariance matrix (pre + post periods).
+    l_vec : np.ndarray
+        Target parameter weights.
+    num_pre : int
+        Number of pre-periods (T).
+    num_post : int
+        Number of post-periods (Tbar).
+    M : float
+        Smoothness parameter.
+    alpha : float
+        Significance level.
+    df : int, optional
+        Survey degrees of freedom for folded t inference.
+
+    Returns
+    -------
+    ci_lb : float
+        Lower bound of FLCI.
+    ci_ub : float
+        Upper bound of FLCI.
+    optimal_vec : np.ndarray or None
+        The optimal affine-estimator direction ``v`` (``theta_hat = v'beta``), for
+        parity testing; ``None`` when the CI is NaN.
+    """
+    # Negative smoothness is invalid (cv_alpha's abs() would silently treat it as
+    # +|M|); guard the direct helper path too (fit()/sensitivity_analysis() also
+    # validate, but tests call this directly).
+    if M < 0:
+        raise ValueError(f"M must be non-negative, got M={M}")
+    # Survey df<=0 sentinel -> NaN inference.
+    if df is not None and df <= 0:
+        return np.nan, np.nan, None
+
+    P = _flci_precompute(sigma, l_vec, num_pre, num_post)
+    beta_full = np.concatenate([beta_pre, beta_post])
+
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        if M == 0.0:
+            # Zero worst-case bias (linear trends): the FLCI estimator is simply the
+            # minimum-variance affine estimator, so this branch is unchanged from the
+            # prior optimizer's M=0 behaviour (min variance -> half-length z*sd).
+            w_opt = _flci_w_min(P)
+            hstar = float(np.sqrt(max(_flci_var(w_opt, P), 0.0)))
+            if hstar <= 0.0:
+                # Zero estimator SD (degenerate covariance) -> undefined inference.
+                return np.nan, np.nan, None
+            chi = _cv_alpha(0.0, alpha, df=df) * hstar
+        else:
+            hmin, h0, _ = _flci_h_bounds(P)
+            hstar = _flci_optimal_h(P, hmin, h0, M, alpha, df)
+            # hstar<=0 (zero SD, e.g. degenerate covariance) would divide by zero in
+            # M*bias/hstar; NaN the inference per the zero-SE convention.
+            if not np.isfinite(hstar) or hstar <= 0.0:
+                return np.nan, np.nan, None
+            w_opt, bias_unit, feasible = _flci_min_bias_given_h(P, hstar)
+            if not feasible:
+                return np.nan, np.nan, None
+            chi = _cv_alpha(M * bias_unit / hstar, alpha, df=df) * hstar
+
+    v_opt = _w_to_v(w_opt, l_vec, num_pre)
+    theta_hat = float(v_opt @ beta_full)
+    if not np.isfinite(chi):
+        return np.nan, np.nan, None
+    return theta_hat - chi, theta_hat + chi, v_opt
+
+
+def _compute_optimal_flci(
+    beta_pre: np.ndarray,
+    beta_post: np.ndarray,
+    sigma: np.ndarray,
+    l_vec: np.ndarray,
+    num_pre: int,
+    num_post: int,
+    M: float,
+    alpha: float = 0.05,
+    df: Optional[float] = None,
+) -> Tuple[float, float]:
+    """Optimal Delta^SD FLCI ``(ci_lb, ci_ub)`` (Rambachan & Roth 2023 §4.1).
+    Thin wrapper over :func:`_flci_solve` (which also returns the optimal affine
+    estimator direction ``v`` for parity testing)."""
+    lb, ub, _ = _flci_solve(beta_pre, beta_post, sigma, l_vec, num_pre, num_post, M, alpha, df)
+    return lb, ub
+
+
+def _setup_moment_inequalities(
+    beta_hat: np.ndarray,
+    sigma_hat: np.ndarray,
+    A: np.ndarray,
+    d: np.ndarray,
+    l: np.ndarray,
+    theta_bar: float,
+    num_pre: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Transform H0: theta = theta_bar into moment inequality form.
+
+    Per Rambachan & Roth (2023) Equations 12-13.
+
+    Returns
+    -------
+    Y_tilde : np.ndarray
+        Transformed statistic.
+    X_tilde : np.ndarray
+        Transformed nuisance matrix.
+    Sigma_tilde : np.ndarray
+        Transformed covariance.
+    """
+    num_post = len(beta_hat) - num_pre
+
+    # Y_n = A @ beta_hat - d
+    Y_n = A @ beta_hat - d
+
+    # Build A_tilde: transform to eliminate tau_post nuisance
+    # A_tilde_{(.,1)} corresponds to the target direction
+    # A_tilde_{(.,rest)} corresponds to nuisance parameters
+    L_post = np.zeros((len(beta_hat), num_post))
+    L_post[num_pre:, :] = np.eye(num_post)
+
+    A_tilde = A @ L_post  # shape: (n_constraints, num_post)
+
+    # Change of basis: first column = l direction, rest = complement
+    # Use QR on l to get orthogonal complement
+    l_full = l.reshape(-1, 1)
+    Q, _ = np.linalg.qr(np.hstack([l_full, np.eye(num_post)[:, : num_post - 1]]))
+
+    A_tilde_rotated = A_tilde @ Q  # Rotate into (l, complement) basis
+
+    # Y_tilde(theta_bar) = Y_n - A_tilde_{col1} * theta_bar
+    Y_tilde = Y_n - A_tilde_rotated[:, 0] * theta_bar
+
+    # X_tilde = remaining columns (nuisance)
+    X_tilde = A_tilde_rotated[:, 1:]
+
+    # Sigma_tilde
+    Sigma_tilde = A @ sigma_hat @ A.T
+
+    return Y_tilde, X_tilde, Sigma_tilde
+
+
+def _enumerate_vertices(
+    X_tilde: np.ndarray,
+    sigma_tilde_diag: np.ndarray,
+    n_moments: int,
+) -> List[np.ndarray]:
+    """
+    Enumerate basic feasible solutions of the dual LP.
+
+    The dual feasible set is:
+        {gamma >= 0 : gamma' @ X_tilde = 0, gamma' @ sigma_tilde_diag = 1}
+
+    For small problems (typical n_moments <= 15), we enumerate all
+    possible bases using combinatorial search.
+
+    Parameters
+    ----------
+    X_tilde : np.ndarray
+        Nuisance constraint matrix, shape (n_moments, n_nuisance).
+    sigma_tilde_diag : np.ndarray
+        sqrt(diag(Sigma_tilde)), shape (n_moments,).
+    n_moments : int
+        Number of moment inequalities.
+
+    Returns
+    -------
+    vertices : list of np.ndarray
+        Feasible vertices (gamma vectors).
+    """
+    import itertools
+
+    n_nuisance = X_tilde.shape[1] if X_tilde.ndim > 1 else 0
+    n_eq = n_nuisance + 1  # nuisance zero conditions + normalization
+
+    if n_eq > n_moments:
+        return []
+
+    vertices: List[np.ndarray] = []
+    n_total = 0
+    n_linalg_error = 0
+    n_infeasible = 0
+
+    # Each vertex has exactly n_eq non-zero (basic) variables
+    for basis_idx in itertools.combinations(range(n_moments), n_eq):
+        basis_idx = list(basis_idx)
+        n_total += 1
+
+        # Build the system for basic variables
+        # gamma[basis_idx]' @ X_tilde[basis_idx, :] = 0
+        # gamma[basis_idx]' @ sigma_tilde_diag[basis_idx] = 1
+        if n_nuisance > 0:
+            A_sys = np.vstack(
+                [
+                    X_tilde[basis_idx, :].T,
+                    sigma_tilde_diag[basis_idx].reshape(1, -1),
+                ]
+            )
+        else:
+            A_sys = sigma_tilde_diag[basis_idx].reshape(1, -1)
+
+        b_sys = np.zeros(n_eq)
+        b_sys[-1] = 1.0  # normalization
+
+        try:
+            gamma_basic = np.linalg.solve(A_sys, b_sys)
+        except np.linalg.LinAlgError:
+            n_linalg_error += 1
+            continue
+
+        # Check feasibility: gamma >= 0
+        if np.all(gamma_basic >= -1e-10):
+            gamma = np.zeros(n_moments)
+            gamma[basis_idx] = np.maximum(gamma_basic, 0)
+            vertices.append(gamma)
+        else:
+            n_infeasible += 1
+
+    # Diagnostic warnings — surface vertex-search pathologies that would
+    # otherwise hide behind `_compute_arp_test` returning False
+    # (conservative non-rejection).
+    if n_total > 0 and len(vertices) == 0:
+        warnings.warn(
+            f"ARP vertex enumeration exhausted without feasible vertices: "
+            f"tried {n_total} bases, {n_linalg_error} rejected for "
+            f"LinAlgError, {n_infeasible} infeasible (negative basic "
+            f"variables). The caller (_compute_arp_test) will return False "
+            f"(conservative non-rejection). This may indicate near-singular "
+            f"nuisance constraints (X_tilde) or a degenerate "
+            f"moment-inequality system.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+    elif n_total > 0 and n_linalg_error / n_total >= 0.5:
+        warnings.warn(
+            f"ARP vertex enumeration heavily constrained: "
+            f"{n_linalg_error} of {n_total} bases ({100 * n_linalg_error / n_total:.0f}%) "
+            f"rejected for LinAlgError, {n_infeasible} infeasible. "
+            f"{len(vertices)} feasible vertex(es) recovered. Results may be "
+            f"numerically fragile; consider regularizing the moment-inequality "
+            f"system or reviewing the nuisance constraints (X_tilde).",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+
+    return vertices
+
+
+def _compute_arp_test(
+    Y_tilde: np.ndarray,
+    X_tilde: np.ndarray,
+    Sigma_tilde: np.ndarray,
+    alpha: float,
+    kappa: Optional[float] = None,
+) -> bool:
+    """
+    Run the ARP conditional-LF hybrid test.
+
+    Tests H0 using the ARP framework from Rambachan & Roth (2023)
+    Sections 3.2.1-3.2.2.
+
+    Parameters
+    ----------
+    Y_tilde : np.ndarray
+        Transformed statistic.
+    X_tilde : np.ndarray
+        Nuisance matrix.
+    Sigma_tilde : np.ndarray
+        Transformed covariance.
+    alpha : float
+        Significance level.
+    kappa : float, optional
+        First-stage LF test size. Default: alpha / 10.
+
+    Returns
+    -------
+    reject : bool
+        True if H0 is rejected.
+    """
+    from scipy.stats import truncnorm
+
+    if kappa is None:
+        kappa = alpha / 10.0
+
+    n_moments = len(Y_tilde)
+    sigma_tilde_diag = np.sqrt(np.maximum(np.diag(Sigma_tilde), 0))
+
+    # Avoid division by zero
+    if np.any(sigma_tilde_diag <= 0):
+        return False
+
+    # Enumerate vertices of the dual feasible set
+    vertices = _enumerate_vertices(X_tilde, sigma_tilde_diag, n_moments)
+
+    if not vertices:
+        # Cannot enumerate vertices; fall back to conservative non-rejection
+        return False
+
+    # Compute eta_hat = max_{gamma in vertices} gamma' @ Y_tilde
+    eta_values = [gamma @ Y_tilde for gamma in vertices]
+    eta_hat = max(eta_values)
+    opt_idx = np.argmax(eta_values)
+    gamma_star = vertices[opt_idx]
+
+    # Stage 1: LF test (size kappa)
+    # c_LF = 1-kappa quantile of max_{gamma in V} gamma' @ xi, xi ~ N(0, Sigma_tilde)
+    rng = np.random.default_rng(42)  # Fixed seed for reproducibility
+    n_sim = 5000
+    L = np.linalg.cholesky(Sigma_tilde + 1e-12 * np.eye(n_moments))
+    max_draws = np.zeros(n_sim)
+    for i in range(n_sim):
+        xi = L @ rng.standard_normal(n_moments)
+        max_draws[i] = max(gamma @ xi for gamma in vertices)
+    c_LF = np.quantile(max_draws, 1 - kappa)
+
+    if eta_hat > c_LF:
+        return True  # Reject via LF test
+
+    # Stage 2: Conditional test (size (alpha - kappa) / (1 - kappa))
+    alpha_cond = (alpha - kappa) / (1 - kappa)
+
+    # Compute conditional variance and truncation bounds
+    gamma_var = gamma_star @ Sigma_tilde @ gamma_star
+    if gamma_var <= 0:
+        return False
+
+    sigma_gamma = np.sqrt(gamma_var)
+
+    # Truncation bounds: v_lo is the next-best vertex value
+    other_eta = [ev for j, ev in enumerate(eta_values) if j != opt_idx]
+    v_lo = max(other_eta) if other_eta else -np.inf
+
+    # v_up for hybrid: min(v_up_cond, c_LF)
+    v_up = c_LF  # Upper truncation from first stage non-rejection
+
+    if v_lo >= v_up:
+        # Degenerate truncation interval
+        return False
+
+    # Truncated normal critical value
+    # Under H0, the worst case is mu = 0 (least favorable)
+    a = (v_lo - 0) / sigma_gamma
+    b = (v_up - 0) / sigma_gamma
+
+    try:
+        c_cond = truncnorm.ppf(1 - alpha_cond, a, b, loc=0, scale=sigma_gamma)
+    except (ValueError, RuntimeError):
+        return False
+
+    return eta_hat > max(0, c_cond)
+
+
+def _arp_confidence_set(
+    beta_hat: np.ndarray,
+    sigma_hat: np.ndarray,
+    A: np.ndarray,
+    d: np.ndarray,
+    l: np.ndarray,
+    num_pre: int,
+    alpha: float = 0.05,
+    kappa: Optional[float] = None,
+    n_grid: int = 200,
+) -> Tuple[float, float]:
+    """
+    Compute ARP hybrid confidence set by test inversion.
+
+    Per Rambachan & Roth (2023), the confidence set is:
+        C = {theta_bar : ARP hybrid test does not reject H0: theta = theta_bar}
+
+    Parameters
+    ----------
+    beta_hat : np.ndarray
+        Full event-study coefficient vector [pre, post].
+    sigma_hat : np.ndarray
+        Full covariance matrix.
+    A : np.ndarray
+        Polyhedral constraint matrix (for Delta).
+    d : np.ndarray
+        Polyhedral constraint vector.
+    l : np.ndarray
+        Target parameter weights.
+    num_pre : int
+        Number of pre-periods.
+    alpha : float
+        Significance level.
+    kappa : float, optional
+        Hybrid test first-stage size.
+    n_grid : int
+        Number of grid points for test inversion.
+
+    Returns
+    -------
+    ci_lb : float
+        Lower bound of confidence set.
+    ci_ub : float
+        Upper bound of confidence set.
+    """
+    beta_post = beta_hat[num_pre:]
+
+    # Point estimate and SE for grid centering
+    theta_hat = l @ beta_post
+    se = np.sqrt(l @ sigma_hat[num_pre:, num_pre:] @ l)
+
+    # Grid centered on point estimate
+    grid_half = max(5 * se, 1.0)
+    theta_grid = np.linspace(theta_hat - grid_half, theta_hat + grid_half, n_grid)
+
+    # Test inversion: find theta_bar values not rejected
+    accepted = []
+    for theta_bar in theta_grid:
+        Y_tilde, X_tilde, Sigma_tilde = _setup_moment_inequalities(
+            beta_hat, sigma_hat, A, d, l, theta_bar, num_pre
+        )
+        reject = _compute_arp_test(Y_tilde, X_tilde, Sigma_tilde, alpha, kappa)
+        if not reject:
+            accepted.append(theta_bar)
+
+    if not accepted:
+        # Everything rejected — empty confidence set (unusual)
+        return theta_hat, theta_hat
+
+    ci_lb = min(accepted)
+    ci_ub = max(accepted)
+
+    # Refine boundaries with bisection
+    for _ in range(15):
+        # Refine lower bound
+        mid = (ci_lb - grid_half / n_grid + ci_lb) / 2 if ci_lb > theta_grid[0] else ci_lb
+        if mid < ci_lb:
+            Y_tilde, X_tilde, Sigma_tilde = _setup_moment_inequalities(
+                beta_hat, sigma_hat, A, d, l, mid, num_pre
+            )
+            if not _compute_arp_test(Y_tilde, X_tilde, Sigma_tilde, alpha, kappa):
+                ci_lb = mid
+
+        # Refine upper bound
+        mid = (ci_ub + grid_half / n_grid + ci_ub) / 2 if ci_ub < theta_grid[-1] else ci_ub
+        if mid > ci_ub:
+            Y_tilde, X_tilde, Sigma_tilde = _setup_moment_inequalities(
+                beta_hat, sigma_hat, A, d, l, mid, num_pre
+            )
+            if not _compute_arp_test(Y_tilde, X_tilde, Sigma_tilde, alpha, kappa):
+                ci_ub = mid
+
+    return ci_lb, ci_ub
 
 
 # =============================================================================
@@ -1135,7 +3032,7 @@ def _compute_clf_ci(
 # =============================================================================
 
 
-class HonestDiD:
+class HonestDiD(BaseEstimator):
     """
     Honest DiD sensitivity analysis (Rambachan & Roth 2023).
 
@@ -1146,13 +3043,13 @@ class HonestDiD:
     ----------
     method : {"smoothness", "relative_magnitude", "combined"}
         Type of restriction on trend violations:
-        - "smoothness": Bounds on second differences (Delta^SD)
-        - "relative_magnitude": Post violations <= M * max pre violation (Delta^RM)
+        - "smoothness": Bounds on second differences of trend violations (Delta^SD)
+        - "relative_magnitude": Post first differences <= M * max pre first difference (Delta^RM)
         - "combined": Both restrictions (Delta^SDRM)
     M : float, optional
         Restriction parameter. Interpretation depends on method:
         - smoothness: Max second difference
-        - relative_magnitude: Scaling factor for max pre-period violation
+        - relative_magnitude: Scaling factor for max pre-period first difference
         Default is 1.0 for relative_magnitude, 0.0 for smoothness.
     alpha : float
         Significance level for confidence intervals.
@@ -1162,13 +3059,14 @@ class HonestDiD:
 
     Examples
     --------
-    >>> from diff_diff import MultiPeriodDiD
+    >>> from diff_diff import TwoWayFixedEffects
     >>> from diff_diff.honest_did import HonestDiD
     >>>
     >>> # Fit event study
-    >>> mp_did = MultiPeriodDiD()
-    >>> results = mp_did.fit(data, outcome='y', treatment='treated',
-    ...                      time='period', post_periods=[4,5,6,7])
+    >>> twfe = TwoWayFixedEffects()
+    >>> results = twfe.fit(data, outcome='y', treatment='treated',
+    ...                    unit='unit', event_study=True,
+    ...                    time='period', post_periods=[4,5,6,7])
     >>>
     >>> # Sensitivity analysis with relative magnitudes
     >>> honest = HonestDiD(method='relative_magnitude', M=1.0)
@@ -1211,24 +3109,7 @@ class HonestDiD:
         if not 0 < self.alpha < 1:
             raise ValueError(f"alpha must be between 0 and 1, got alpha={self.alpha}")
 
-    def get_params(self) -> Dict[str, Any]:
-        """Get parameters for this estimator."""
-        return {
-            "method": self.method,
-            "M": self.M,
-            "alpha": self.alpha,
-            "l_vec": self.l_vec,
-        }
-
-    def set_params(self, **params) -> "HonestDiD":
-        """Set parameters for this estimator."""
-        for key, value in params.items():
-            if hasattr(self, key):
-                setattr(self, key, value)
-            else:
-                raise ValueError(f"Invalid parameter: {key}")
-        self._validate_params()
-        return self
+    # get_params/set_params come from BaseEstimator.
 
     def fit(
         self,
@@ -1240,8 +3121,25 @@ class HonestDiD:
 
         Parameters
         ----------
-        results : MultiPeriodDiDResults or CallawaySantAnnaResults
-            Results from event study estimation.
+        results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
+            Results from event study estimation, or the unified event-study
+            container from
+            ``CallawaySantAnnaResults.aggregate('event_study')``,
+            ``DMLDiDResults.aggregate('event_study')``, or
+            ``StackedDiDResults.aggregate('event_study')`` (Stacked
+            containers require ``kappa_pre >= 2`` so estimated
+            pre-periods exist, and a non-singular FULL retained event-study
+            covariance (the pre+post sub-block) -
+            keep ``kappa_pre`` small relative to the cluster count). On
+            the container route the scalar inference df arrives via the
+            container's ``df_survey`` provenance field (for CS-sourced
+            containers, bounds and CIs match the native route exactly;
+            StackedDiD has no native HonestDiD route - the container IS
+            its route, with normal-theory critical values on analytical
+            fits), while the stored ``HonestDiDResults.survey_metadata``
+            is None - the container carries no survey-metadata object.
+            That field's only inferential consumer is the df extraction,
+            so no number diverges.
         M : float, optional
             Override the M parameter for this fit.
 
@@ -1251,22 +3149,27 @@ class HonestDiD:
             Results containing bounds and robust confidence intervals.
         """
         M = M if M is not None else self.M
+        # The fit()-time M override bypasses constructor validation; re-check here
+        # (a negative M would be silently treated as +|M| via cv_alpha's abs()).
+        if M < 0:
+            raise ValueError(f"M must be non-negative, got M={M}")
 
         # Extract event study parameters
-        (beta_hat, sigma, num_pre, num_post, pre_periods, post_periods, df_survey) = (
+        beta_hat, sigma, num_pre, num_post, pre_periods, post_periods, df_survey = (
             _extract_event_study_params(results)
         )
 
         # beta_hat contains [pre-period effects, post-period effects] in order.
-        # Extract just the post-period effects for HonestDiD bounds.
-        if len(beta_hat) == num_post:
-            # Already just post-period effects
-            beta_post = beta_hat
-        elif len(beta_hat) == num_pre + num_post:
-            # Full event study, extract post-periods
+        # Extract pre and post components for the identified set LP.
+        # The LP pins delta_pre = beta_pre (Rambachan & Roth Eqs 5-6).
+        if len(beta_hat) == num_pre + num_post:
+            beta_pre = beta_hat[:num_pre]
             beta_post = beta_hat[num_pre:]
+        elif len(beta_hat) == num_post:
+            beta_pre = np.zeros(num_pre)
+            beta_post = beta_hat
         else:
-            # Assume it's post-period effects
+            beta_pre = np.zeros(num_pre)
             beta_post = beta_hat
             num_post = len(beta_hat)
 
@@ -1276,7 +3179,6 @@ class HonestDiD:
         elif sigma.shape[0] == num_pre + num_post:
             sigma_post = sigma[num_pre:, num_pre:]
         else:
-            # Construct diagonal from available dimensions
             sigma_post = sigma[: len(beta_post), : len(beta_post)]
 
         # Update num_post to match actual data
@@ -1289,13 +3191,23 @@ class HonestDiD:
                 "coefficient to compute bounds."
             )
 
-        # Set up weighting vector
+        # Set up weighting vector and target label
         if self.l_vec is None:
             l_vec = np.ones(num_post) / num_post  # Uniform weights
+            target_label = "Equal-weight avg over post horizons"
         else:
             l_vec = np.asarray(self.l_vec)
             if len(l_vec) != num_post:
                 raise ValueError(f"l_vec must have length {num_post}, got {len(l_vec)}")
+            # Detect common patterns for a human-readable label
+            basis = np.zeros(num_post)
+            basis[0] = 1.0
+            if np.allclose(l_vec, basis):
+                target_label = "First post-treatment effect (on-impact)"
+            elif np.allclose(l_vec, np.ones(num_post) / num_post):
+                target_label = "Equal-weight avg over post horizons"
+            else:
+                target_label = f"Custom l_vec ({l_vec.tolist()})"
 
         # Compute original estimate and SE
         original_estimate = np.dot(l_vec, beta_post)
@@ -1304,13 +3216,23 @@ class HonestDiD:
         # Compute bounds based on method
         if self.method == "smoothness":
             lb, ub, ci_lb, ci_ub = self._compute_smoothness_bounds(
-                beta_post, sigma_post, l_vec, num_pre, num_post, M, df=df_survey
+                beta_pre,
+                beta_post,
+                sigma,
+                sigma_post,
+                l_vec,
+                num_pre,
+                num_post,
+                M,
+                df=df_survey,
             )
             ci_method = "FLCI"
 
         elif self.method == "relative_magnitude":
             lb, ub, ci_lb, ci_ub = self._compute_rm_bounds(
+                beta_pre,
                 beta_post,
+                sigma,
                 sigma_post,
                 l_vec,
                 num_pre,
@@ -1320,11 +3242,13 @@ class HonestDiD:
                 results,
                 df=df_survey,
             )
-            ci_method = "C-LF"
+            ci_method = "FLCI"
 
         else:  # combined
             lb, ub, ci_lb, ci_ub = self._compute_combined_bounds(
+                beta_pre,
                 beta_post,
+                sigma,
                 sigma_post,
                 l_vec,
                 num_pre,
@@ -1350,6 +3274,9 @@ class HonestDiD:
             original_se=original_se,
             alpha=self.alpha,
             ci_method=ci_method,
+            target_label=target_label,
+            pre_periods_used=list(pre_periods),
+            post_periods_used=list(post_periods),
             original_results=results,
             survey_metadata=survey_metadata,
             df_survey=df_survey,
@@ -1357,30 +3284,69 @@ class HonestDiD:
 
     def _compute_smoothness_bounds(
         self,
+        beta_pre: np.ndarray,
         beta_post: np.ndarray,
+        sigma_full: np.ndarray,
         sigma_post: np.ndarray,
         l_vec: np.ndarray,
         num_pre: int,
         num_post: int,
         M: float,
-        df: Optional[int] = None,
+        df: Optional[float] = None,
     ) -> Tuple[float, float, float, float]:
-        """Compute bounds under smoothness restriction."""
+        """Compute bounds under smoothness restriction (Delta^SD).
+
+        Uses the optimal FLCI from Rambachan & Roth (2023) Section 4.1,
+        which jointly optimizes the affine estimator direction to minimize
+        CI width. Falls back to naive FLCI if the full covariance matrix
+        is not available.
+        """
         # Construct constraints
         A_ineq, b_ineq = _construct_constraints_sd(num_pre, num_post, M)
 
-        # Solve for bounds
-        lb, ub = _solve_bounds_lp(beta_post, l_vec, A_ineq, b_ineq, num_pre)
+        # Solve for the identified set bounds with delta_pre = beta_pre pinned.
+        # When the observed pre-trend's own curvature exceeds M this LP is
+        # infeasible and the ESTIMATED identified set is empty (lb/ub = NaN) - the
+        # point estimate rejects Delta^SD(M). That does NOT invalidate the FLCI: the
+        # optimal FLCI is an affine estimator whose worst-case bias is taken over
+        # delta in Delta^SD(M) treating beta as random, so it is well-defined given
+        # (sigma, M) regardless of whether the realized beta_pre lies in Delta. R's
+        # HonestDiD::createSensitivityResults returns the FLCI in exactly this case,
+        # so we compute and return it (leaving lb/ub = NaN to flag the empty
+        # estimated id-set) rather than NaN-propagating the whole result.
+        lb, ub = _solve_bounds_lp(beta_pre, beta_post, l_vec, A_ineq, b_ineq, num_pre)
 
-        # Compute FLCI
-        se = np.sqrt(l_vec @ sigma_post @ l_vec)
-        ci_lb, ci_ub = _compute_flci(lb, ub, se, self.alpha, df=df)
+        # Compute optimal FLCI (Rambachan & Roth Section 4.1) - independent of the
+        # identified-set LP above.
+        if sigma_full.shape[0] == num_pre + num_post:
+            ci_lb, ci_ub = _compute_optimal_flci(
+                beta_pre,
+                beta_post,
+                sigma_full,
+                l_vec,
+                num_pre,
+                num_post,
+                M,
+                self.alpha,
+                df=df,
+            )
+        else:
+            # The naive fallback FLCI extends the identified set by z*se, so it
+            # genuinely needs finite id-set bounds; when the LP was infeasible the
+            # naive CI is undefined (this branch is only reachable without the full
+            # covariance matrix).
+            if np.isnan(lb) or np.isnan(ub):
+                return lb, ub, np.nan, np.nan
+            se = np.sqrt(l_vec @ sigma_post @ l_vec)
+            ci_lb, ci_ub = _compute_flci(lb, ub, se, self.alpha, df=df)
 
         return lb, ub, ci_lb, ci_ub
 
     def _compute_rm_bounds(
         self,
+        beta_pre: np.ndarray,
         beta_post: np.ndarray,
+        sigma_full: np.ndarray,
         sigma_post: np.ndarray,
         l_vec: np.ndarray,
         num_pre: int,
@@ -1388,36 +3354,43 @@ class HonestDiD:
         Mbar: float,
         pre_periods: List,
         results: Any,
-        df: Optional[int] = None,
+        df: Optional[float] = None,
     ) -> Tuple[float, float, float, float]:
-        """Compute bounds under relative magnitudes restriction."""
-        # Estimate max pre-period violation from pre-trends
-        # For relative magnitudes, we use the pre-period coefficients
-        max_pre_violation = self._estimate_max_pre_violation(results, pre_periods)
+        """Compute bounds under relative magnitudes restriction (Delta^RM).
 
-        if max_pre_violation == 0:
-            # No pre-period violations detected - use point estimate
-            theta = np.dot(l_vec, beta_post)
-            se = np.sqrt(l_vec @ sigma_post @ l_vec)
-            z = _get_critical_value(self.alpha, df)
-            return theta, theta, theta - z * se, theta + z * se
+        Uses union-of-polyhedra decomposition per Lemma 2.2 of
+        Rambachan & Roth (2023). Delta^RM constrains post-treatment
+        first differences relative to the max pre-treatment first difference.
 
-        # Compute bounds
-        lb, ub, ci_lb, ci_ub = _compute_clf_ci(
-            beta_post,
-            sigma_post,
-            l_vec,
-            Mbar,
-            max_pre_violation,
-            self.alpha,
-            df=df,
-        )
+        CI construction uses naive FLCI (conservative). The paper recommends
+        ARP hybrid confidence sets (Sections 3.2.1-3.2.2); infrastructure
+        is implemented but disabled pending calibration of the moment
+        inequality transformation.
+        """
+        # Solve identified set via union of polyhedra
+        lb, ub = _solve_rm_bounds_union(beta_pre, beta_post, l_vec, num_pre, Mbar)
+
+        # CI construction for Delta^RM.
+        # The paper recommends ARP conditional/hybrid confidence sets
+        # (Sections 3.2.1-3.2.2). The ARP infrastructure is implemented
+        # (_arp_confidence_set) but the moment inequality transformation
+        # requires further calibration to produce valid CIs consistently.
+        # Currently uses conservative naive FLCI (extends identified set
+        # by z*se); ARP will be enabled once calibrated.
+        # TODO: enable ARP hybrid for RM once transformation is validated
+        se = np.sqrt(l_vec @ sigma_post @ l_vec)
+        if np.isfinite(lb) and np.isfinite(ub):
+            ci_lb, ci_ub = _compute_flci(lb, ub, se, self.alpha, df=df)
+        else:
+            ci_lb, ci_ub = -np.inf, np.inf
 
         return lb, ub, ci_lb, ci_ub
 
     def _compute_combined_bounds(
         self,
+        beta_pre: np.ndarray,
         beta_post: np.ndarray,
+        sigma_full: np.ndarray,
         sigma_post: np.ndarray,
         l_vec: np.ndarray,
         num_pre: int,
@@ -1425,17 +3398,46 @@ class HonestDiD:
         M: float,
         pre_periods: List,
         results: Any,
-        df: Optional[int] = None,
+        df: Optional[float] = None,
     ) -> Tuple[float, float, float, float]:
         """Compute bounds under combined smoothness + RM restriction."""
+        import warnings
+
+        warnings.warn(
+            "HonestDiD method='combined' (Delta^SDRM) uses naive FLCI on the "
+            "intersection of Delta^SD and Delta^RM bounds. The paper proves "
+            "FLCI is NOT consistent for Delta^SDRM (Proposition 4.2). "
+            "Consider using method='smoothness' or method='relative_magnitude' "
+            "separately for paper-supported inference.",
+            UserWarning,
+            stacklevel=3,
+        )
         # Get smoothness bounds
         lb_sd, ub_sd, _, _ = self._compute_smoothness_bounds(
-            beta_post, sigma_post, l_vec, num_pre, num_post, M, df=df
+            beta_pre,
+            beta_post,
+            sigma_full,
+            sigma_post,
+            l_vec,
+            num_pre,
+            num_post,
+            M,
+            df=df,
         )
 
         # Get RM bounds (use M as Mbar for combined)
         lb_rm, ub_rm, _, _ = self._compute_rm_bounds(
-            beta_post, sigma_post, l_vec, num_pre, num_post, M, pre_periods, results, df=df
+            beta_pre,
+            beta_post,
+            sigma_full,
+            sigma_post,
+            l_vec,
+            num_pre,
+            num_post,
+            M,
+            pre_periods,
+            results,
+            df=df,
         )
 
         # Combined bounds are intersection
@@ -1508,8 +3510,13 @@ class HonestDiD:
 
         Parameters
         ----------
-        results : MultiPeriodDiDResults or CallawaySantAnnaResults
-            Results from event study estimation.
+        results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
+            Results from event study estimation, or the unified
+            event-study container from
+            ``CallawaySantAnnaResults.aggregate('event_study')``,
+            ``DMLDiDResults.aggregate('event_study')``, or
+            ``StackedDiDResults.aggregate('event_study')`` (Stacked
+            containers require ``kappa_pre >= 2``).
         M_grid : list of float, optional
             Grid of M values to evaluate. If None, uses default grid
             based on method.
@@ -1526,6 +3533,8 @@ class HonestDiD:
                 M_grid = [0, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0]
 
         M_values = np.array(M_grid)
+        if np.any(M_values < 0):
+            raise ValueError(f"M must be non-negative; M_grid has a negative value: {M_grid}")
         bounds_list = []
         ci_list = []
 
@@ -1559,8 +3568,14 @@ class HonestDiD:
 
         Uses binary search for precision.
         """
-        # Check if any CI includes zero
-        includes_zero = [ci_lb <= 0 <= ci_ub for ci_lb, ci_ub in ci_list]
+
+        # Check if any CI includes zero (NaN CIs are treated as undefined, not significant)
+        def _ci_includes_zero(ci_lb, ci_ub):
+            if not (np.isfinite(ci_lb) and np.isfinite(ci_ub)):
+                return True  # Undefined CIs are not "significant"
+            return ci_lb <= 0 <= ci_ub
+
+        includes_zero = [_ci_includes_zero(ci_lb, ci_ub) for ci_lb, ci_ub in ci_list]
 
         if not any(includes_zero):
             # Always significant - no breakdown
@@ -1582,7 +3597,7 @@ class HonestDiD:
                 for _ in range(20):  # 20 iterations for precision
                     mid = (lo + hi) / 2
                     result = self.fit(results, M=mid)
-                    if result.ci_lb <= 0 <= result.ci_ub:
+                    if _ci_includes_zero(result.ci_lb, result.ci_ub):
                         hi = mid
                     else:
                         lo = mid
@@ -1602,8 +3617,13 @@ class HonestDiD:
 
         Parameters
         ----------
-        results : MultiPeriodDiDResults or CallawaySantAnnaResults
-            Results from event study estimation.
+        results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
+            Results from event study estimation, or the unified
+            event-study container from
+            ``CallawaySantAnnaResults.aggregate('event_study')``,
+            ``DMLDiDResults.aggregate('event_study')``, or
+            ``StackedDiDResults.aggregate('event_study')`` (Stacked
+            containers require ``kappa_pre >= 2``).
         tol : float
             Tolerance for binary search.
 
@@ -1612,14 +3632,20 @@ class HonestDiD:
         float or None
             Breakdown value, or None if effect is always significant.
         """
+
+        def _ci_covers_zero(r):
+            if not (np.isfinite(r.ci_lb) and np.isfinite(r.ci_ub)):
+                return True  # Undefined CIs are not "significant"
+            return r.ci_lb <= 0 <= r.ci_ub
+
         # Check at M=0
         result_0 = self.fit(results, M=0)
-        if result_0.ci_lb <= 0 <= result_0.ci_ub:
+        if _ci_covers_zero(result_0):
             return 0.0
 
         # Check if significant even for large M
         result_large = self.fit(results, M=10)
-        if not (result_large.ci_lb <= 0 <= result_large.ci_ub):
+        if not _ci_covers_zero(result_large):
             return None  # Always significant
 
         # Binary search
@@ -1628,7 +3654,7 @@ class HonestDiD:
         while hi - lo > tol:
             mid = (lo + hi) / 2
             result = self.fit(results, M=mid)
-            if result.ci_lb <= 0 <= result.ci_ub:
+            if _ci_covers_zero(result):
                 hi = mid
             else:
                 lo = mid
@@ -1646,20 +3672,31 @@ def compute_honest_did(
     method: str = "relative_magnitude",
     M: float = 1.0,
     alpha: float = 0.05,
+    l_vec: Optional[np.ndarray] = None,
 ) -> HonestDiDResults:
     """
     Convenience function for computing Honest DiD bounds.
 
     Parameters
     ----------
-    results : MultiPeriodDiDResults or CallawaySantAnnaResults
-        Results from event study estimation.
+    results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
+        Results from event study estimation, or the unified event-study
+        container from ``CallawaySantAnnaResults.aggregate('event_study')``,
+        ``DMLDiDResults.aggregate('event_study')``,
+        or ``StackedDiDResults.aggregate('event_study')`` (Stacked
+        containers require ``kappa_pre >= 2``).
     method : str
         Type of restriction ("smoothness", "relative_magnitude", "combined").
     M : float
         Restriction parameter.
     alpha : float
         Significance level.
+    l_vec : np.ndarray, optional
+        Weight vector defining the scalar target ``theta = l_vec' tau``
+        over post-treatment horizons. Length must equal the number of
+        post-treatment periods. ``None`` (default) uses equal weights
+        (uniform average). To target the on-impact effect only (R's
+        default), pass ``np.array([1, 0, ..., 0])``.
 
     Returns
     -------
@@ -1671,7 +3708,7 @@ def compute_honest_did(
     >>> bounds = compute_honest_did(event_study_results, method='relative_magnitude', M=1.0)
     >>> print(f"Robust CI: [{bounds.ci_lb:.3f}, {bounds.ci_ub:.3f}]")
     """
-    honest = HonestDiD(method=method, M=M, alpha=alpha)
+    honest = HonestDiD(method=method, M=M, alpha=alpha, l_vec=l_vec)
     return honest.fit(results)
 
 
@@ -1688,8 +3725,12 @@ def sensitivity_plot(
 
     Parameters
     ----------
-    results : MultiPeriodDiDResults or CallawaySantAnnaResults
-        Results from event study estimation.
+    results : MultiPeriodDiDResults, CallawaySantAnnaResults, ChaisemartinDHaultfoeuilleResults, or EventStudyResults
+        Results from event study estimation, or the unified event-study
+        container from ``CallawaySantAnnaResults.aggregate('event_study')``,
+        ``DMLDiDResults.aggregate('event_study')``,
+        or ``StackedDiDResults.aggregate('event_study')`` (Stacked
+        containers require ``kappa_pre >= 2``).
     method : str
         Type of restriction.
     M_grid : list of float, optional

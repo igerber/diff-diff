@@ -1,0 +1,267 @@
+name: Documentation Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'diff_diff/**'
+      - 'tests/test_doc_snippets.py'
+      - 'tests/test_doc_deps_integrity.py'
+      - 'tests/test_docs_ia.py'
+      - 'tests/test_v4_matrix.py'
+      - 'tests/test_naming_guard.py'
+      # Changelog-fragment guard: the fragment store, the compiler, and
+      # CHANGELOG.md itself trigger here (their ONLY CI lane - rust-test.yml
+      # deliberately does not fire on fragment-only diffs).
+      - 'tests/test_changelog_fragments.py'
+      - 'changelog.d/**'
+      - 'CHANGELOG.md'
+      - '.claude/scripts/changelog_compile.py'
+      # Tracking-file contract guard: TODO/DEFERRED edits trigger here
+      # (their ONLY test lane - a tracking-file-only diff otherwise runs
+      # no suite that executes the guard).
+      - 'tests/test_tracking_files.py'
+      - 'TODO.md'
+      - 'DEFERRED.md'
+      - '.github/workflows/lwdid-data-canary.yml'
+      # tests/conftest.py is auto-loaded by pytest for the snippet
+      # test run and mutates sys.path + MPLBACKEND (conftest.py:14, 18);
+      # changes there can break snippet exec without touching the test
+      # file itself.
+      - 'tests/conftest.py'
+      - 'pyproject.toml'
+      # sphinx-build job mirrors RTD setup; trigger when RTD config drifts
+      # (Python version, apt packages, post_install docs deps).
+      - '.readthedocs.yaml'
+      - '.github/workflows/docs-tests.yml'
+      # Search smoke test: script + pinned jsdom manifest/lockfile.
+      - '.github/scripts/**'
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    paths:
+      - 'docs/**'
+      - 'diff_diff/**'
+      - 'tests/test_doc_snippets.py'
+      - 'tests/test_doc_deps_integrity.py'
+      - 'tests/test_docs_ia.py'
+      - 'tests/test_v4_matrix.py'
+      - 'tests/test_naming_guard.py'
+      - 'tests/test_changelog_fragments.py'
+      - 'changelog.d/**'
+      - 'CHANGELOG.md'
+      - '.claude/scripts/changelog_compile.py'
+      # Tracking-file contract guard: TODO/DEFERRED edits trigger here
+      # (their ONLY test lane - a tracking-file-only diff otherwise runs
+      # no suite that executes the guard).
+      - 'tests/test_tracking_files.py'
+      - 'TODO.md'
+      - 'DEFERRED.md'
+      - '.github/workflows/lwdid-data-canary.yml'
+      - 'tests/conftest.py'
+      - 'pyproject.toml'
+      # sphinx-build job mirrors RTD setup; trigger when RTD config drifts
+      # (Python version, apt packages, post_install docs deps).
+      - '.readthedocs.yaml'
+      - '.github/workflows/docs-tests.yml'
+      # Search smoke test: script + pinned jsdom manifest/lockfile.
+      - '.github/scripts/**'
+  schedule:
+    # Weekly Sunday 6am UTC - smoke test that snippets still execute
+    # against current upstream deps (mirrors notebooks.yml schedule).
+    - cron: '0 6 * * 0'
+
+permissions:
+  contents: read
+
+jobs:
+  doc-snippets:
+    name: Validate doc snippets + doc-deps integrity
+    # Skip unrelated label churn: a non-ready-for-ci label add/remove won't run this job.
+    if: >-
+      github.event_name != 'pull_request'
+      || (contains(github.event.pull_request.labels.*.name, 'ready-for-ci')
+      && (github.event.action != 'labeled' && github.event.action != 'unlabeled'
+      || github.event.label.name == 'ready-for-ci'))
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          # 3.14 to mirror Pure Python Fallback (the only existing job
+          # that actually ran these tests). notebooks.yml uses 3.11 for
+          # nbmake compat, not relevant here.
+          python-version: '3.14'
+
+      - name: Install dependencies
+        # Keep in sync with pyproject.toml [project.dependencies] and [project.optional-dependencies.dev]
+        run: pip install numpy pandas scipy pytest
+
+      - name: Run doc snippet tests in pure Python mode
+        # PYTHONPATH=. lets the test import diff_diff directly from
+        # source without invoking the maturin/Rust build (mirrors the
+        # `python-fallback` job in rust-test.yml).
+        run: PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/test_doc_snippets.py -v
+
+      - name: Run doc-deps integrity check
+        # Validates docs/doc-deps.yaml: no stale referenced paths, no unmapped
+        # public source modules. Same PYTHONPATH=. prefix as above because
+        # tests/conftest.py imports diff_diff at collection and the install
+        # step does not install diff_diff.
+        run: PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/test_doc_deps_integrity.py -v
+
+      - name: Run docs IA structural guards
+        # Pins the #703 information architecture: single 5-section root
+        # toctree, tutorial dual-registration (short-label toctree entry +
+        # landing-page card), homepage estimator-table parity with the API
+        # catalog, and no :no-index:-only classes (dead cross-references).
+        # All four are valid-Sphinx states the -W build cannot catch.
+        run: PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/test_docs_ia.py -v
+
+      - name: Run v4 deprecation-matrix enforcement
+        # Asserts every docs/v4-deprecations.yaml row's status against reality
+        # at HEAD (schema: docs/v4-design.md section 11). Runs here so
+        # ledger/spec-only edits (docs/** paths) cannot bypass enforcement -
+        # the main test matrix does not trigger on docs-only diffs.
+        run: PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/test_v4_matrix.py -v
+
+      - name: Run naming-completeness guard
+        # The section-8/section-9 naming guard (spec in the module docstring):
+        # public-surface vocabulary sweep, phase-table agreement in both
+        # directions, and rename consumer coverage against code_refs. Runs
+        # here for the same reason as the matrix step - docs-only ledger/spec
+        # edits must not bypass it.
+        run: PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/test_naming_guard.py -v
+
+      - name: Run changelog-fragment guard
+        # Pointer-only [Unreleased] invariant + fragment grammar + compiler
+        # behavior + these very path filters (self-pinning; see
+        # tests/test_changelog_fragments.py::TestWorkflowPins).
+        run: PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/test_changelog_fragments.py -v
+
+      - name: Run tracking-file contract guard
+        # TODO/DEFERRED conventions (no deferred-work pointers in TODO rows,
+        # no ledger-lifecycle restatements beside M-xxx links, documented
+        # table shapes + per-row column counts).
+        run: PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/test_tracking_files.py -v
+
+  sphinx-build:
+    name: Sphinx HTML build (-W warnings as errors)
+    # Skip unrelated label churn: a non-ready-for-ci label add/remove won't run this job.
+    if: >-
+      github.event_name != 'pull_request'
+      || (contains(github.event.pull_request.labels.*.name, 'ready-for-ci')
+      && (github.event.action != 'labeled' && github.event.action != 'unlabeled'
+      || github.event.label.name == 'ready-for-ci'))
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install pandoc
+        # nbsphinx invokes pandoc to render notebook markdown cells.
+        run: sudo apt-get update && sudo apt-get install -y pandoc
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          # Match the RTD build (.readthedocs.yaml:9) so CI catches drift
+          # against what users actually see on diff-diff.readthedocs.io.
+          python-version: '3.11'
+
+      - name: Install docs dependencies
+        # Keep in sync with pyproject.toml [project.optional-dependencies.docs]
+        # and .readthedocs.yaml post_install. Skips the maturin/Rust build:
+        # docs/conf.py imports diff_diff via sys.path from checked-out source.
+        # ipython provides the 'ipython3' Pygments lexer that nbsphinx uses
+        # for notebook code cells; without it -W fires highlighting_failure.
+        run: pip install "numpy>=1.20.0" "pandas>=1.3.0" "scipy>=1.10" "sphinx>=6.0" "pydata-sphinx-theme>=0.16.1" "sphinxext-opengraph>=0.9" "sphinx-sitemap>=2.5" "nbsphinx>=0.9" "myst-parser>=2.0" "sphinx-design>=0.6.1" "matplotlib>=3.5" "ipython>=8.0"
+
+      - name: Build docs with warnings as errors
+        # SPHINXOPTS="-W" turns every Sphinx warning into a build failure.
+        # PR #410 brought make html to 0 warnings; -W keeps it that way by
+        # blocking any new warning from sneaking in.
+        run: make -C docs html SPHINXOPTS="-W"
+
+      - name: Guard search-anchor invariants in built HTML
+        # Tripwires for the search-excerpt fix (searchtools-css-escape.js):
+        # 1. No digit-leading section ids may reappear in tutorial pages -
+        #    heading numbers were stripped because searchtools.js crashed
+        #    on them before the shim existed, and numberless headings are
+        #    the documented convention.
+        # 2. The CSS.escape shim must be emitted on the built search page.
+        # 3. The shim wraps Search.htmlToText; if a Sphinx upgrade renames
+        #    that hook the shim's feature-guard silently no-ops, so fail
+        #    loudly here and revisit the shim instead.
+        run: |
+          test -d docs/_build/html/tutorials
+          ! grep -rE 'id="[0-9]' docs/_build/html/tutorials/
+          grep -q 'searchtools-css-escape.js' docs/_build/html/search.html
+          grep -q 'htmlToText' docs/_build/html/_static/searchtools.js
+
+      - name: Set up Node for the search smoke test
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # Current LTS; jsdom's floor is far below this. Pinned so the
+          # smoke test doesn't float with the runner image default.
+          node-version: '24'
+
+      - name: Behavioral smoke test - search excerpts + legacy fragments
+        # Runs the BUILT searchtools.js + shims in jsdom and drives the
+        # exact search-excerpt path (Search.htmlToText) with apostrophe,
+        # parens, colon, and legacy digit anchors, asserting section-scoped
+        # excerpts render without SyntaxError; also asserts the
+        # legacy-fragment redirect rewrites pre-rename numbered hashes.
+        # Catches a Sphinx/theme upgrade changing the hook's signature or
+        # invocation semantics, which the greps above cannot. jsdom is
+        # pinned by the committed .github/scripts/package{,-lock}.json.
+        run: |
+          npm ci --prefix .github/scripts --ignore-scripts
+          node .github/scripts/search_excerpt_smoke.mjs
+
+  docs-deps-py39-smoke:
+    name: Validate docs deps install on Python 3.9 (floor compat)
+    # Skip unrelated label churn: a non-ready-for-ci label add/remove won't run this job.
+    if: >-
+      github.event_name != 'pull_request'
+      || (contains(github.event.pull_request.labels.*.name, 'ready-for-ci')
+      && (github.event.action != 'labeled' && github.event.action != 'unlabeled'
+      || github.event.label.name == 'ready-for-ci'))
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          # 3.9 is the project's declared floor (pyproject.toml requires-python
+          # >=3.9). The sphinx-build job above runs on 3.11; this job verifies
+          # the docs dependency set actually installs on the floor Python so
+          # we catch drift like pydata-sphinx-theme>=0.17.1 (which requires
+          # Python>=3.10) before it lands.
+          python-version: '3.9'
+
+      - name: Run changelog-fragment check on the floor Python
+        # The compiler promises 3.9 compatibility but its behavioral tests
+        # run in the 3.14 doc-snippets job; this stdlib-only invocation is
+        # the floor's continuous syntax + behavior smoke for the script.
+        run: python .claude/scripts/changelog_compile.py check
+
+      - name: Install docs dependencies
+        # Same pip install line as sphinx-build above. Just installs - does
+        # not run a Sphinx build (sphinx-build covers full rendering on 3.11).
+        # Failure here means the docs floor declared in pyproject.toml /
+        # .readthedocs.yaml / above is not installable on Python 3.9.
+        run: pip install "numpy>=1.20.0" "pandas>=1.3.0" "scipy>=1.10" "sphinx>=6.0" "pydata-sphinx-theme>=0.16.1" "sphinxext-opengraph>=0.9" "sphinx-sitemap>=2.5" "nbsphinx>=0.9" "myst-parser>=2.0" "sphinx-design>=0.6.1" "matplotlib>=3.5" "ipython>=8.0"
+
+      - name: Confirm pydata-sphinx-theme version
+        # Surface the resolved version in the log for future debugging.
+        # Avoid `pip show ... | head -3`: `head` closes the pipe after 3
+        # lines and `pip show` exits non-zero under bash -o pipefail
+        # (GitHub Actions default), failing the step despite a clean install.
+        run: python -c "import importlib.metadata as m; print('pydata-sphinx-theme', m.version('pydata-sphinx-theme'))"

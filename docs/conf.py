@@ -30,10 +30,43 @@ extensions = [
     "sphinxext.opengraph",
     "sphinx_sitemap",
     "nbsphinx",
+    "myst_parser",
+    "sphinx_design",
 ]
 
+# MyST renders the three in-site markdown pages (methodology/REGISTRY.md,
+# methodology/REPORTING.md, migration-4.0.md) so cross-refs use :doc: instead
+# of off-site blob/main URLs (stable-docs readers otherwise land on a different
+# revision than their package version). dollarmath/amsmath cover the registry's
+# LaTeX; heading anchors to depth 4 make its GitHub-style #section links resolve.
+myst_enable_extensions = ["dollarmath", "amsmath"]
+myst_heading_anchors = 4
+
+
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "llms.txt", "llms-full.txt"]
+# Only the two methodology pages and the 4.0 migration guide are published;
+# every other repo-internal markdown under docs/ stays out of the build
+# (performance/benchmark notes are deliberately NOT on RTD — see the repo
+# convention — and un-toctree'd .md files would fail the -W build as orphans).
+exclude_patterns = [
+    "_build",
+    "Thumbs.db",
+    ".DS_Store",
+    "business-strategy.md",
+    "dev-status.md",
+    "performance-plan.md",
+    "performance-scenarios.md",
+    "practitioner-guide-evaluation.md",
+    "survey-roadmap.md",
+    "v4-design.md",
+    "methodology/continuous-did.md",
+    "methodology/rddensity-source-notes.md",
+    "methodology/survey-theory.md",
+    "methodology/variance-conventions.md",
+    # Internal paper-review notes (methodology validation artifacts).
+    "methodology/papers/*",
+    "tutorials/README.md",
+]
 
 # -- Options for autodoc -----------------------------------------------------
 autodoc_default_options = {
@@ -64,14 +97,25 @@ napoleon_attr_annotations = True
 # -- Options for HTML output -------------------------------------------------
 html_theme = "pydata_sphinx_theme"
 html_static_path = ["_static"]
-html_title = "diff-diff: Difference-in-Differences Causal Inference for Python"
+html_title = "diff-diff documentation"
+# The homepage is a full-width card-grid landing page; suppress the (empty)
+# primary sidebar rail there. Matches only the root docname.
+html_sidebars = {"index": []}
 # Use RTD's canonical URL when available; fall back to stable for local builds.
 _canonical_url = os.environ.get(
     "READTHEDOCS_CANONICAL_URL",
     "https://diff-diff.readthedocs.io/en/stable/",
 )
 html_baseurl = _canonical_url
-html_extra_path = ["llms.txt", "llms-full.txt"]
+html_extra_path = [
+    "../diff_diff/guides/llms.txt",
+    "../diff_diff/guides/llms-full.txt",
+    "../diff_diff/guides/llms-practitioner.txt",
+    "../diff_diff/guides/llms-autonomous.txt",
+    # Overrides RTD's allow-everything default at the domain root: keeps the
+    # ~60 thin _modules/ source-view pages out of crawlers.
+    "robots.txt",
+]
 sitemap_url_scheme = "{link}"
 
 html_theme_options = {
@@ -90,9 +134,26 @@ html_theme_options = {
             "icon": "fa-brands fa-python",
         },
     ],
-    "navbar_end": ["theme-switcher", "navbar-icon-links"],
+    "navbar_end": ["version-switcher", "theme-switcher", "navbar-icon-links"],
+    # Version dropdown (stable/latest). json_url points at the latest build
+    # so new entries propagate to every published version without rebuilds.
+    # ONE-SELECTOR POLICY: this navbar switcher replaces the RTD flyout
+    # (Settings -> Addons -> Flyout menu is disabled in the RTD dashboard,
+    # decided 2026-07-20) - re-enabling the flyout would put two version
+    # controls with different version lists on every page.
+    # check_switcher=False: the build-time URL probe would fail -W on CI and
+    # on the first RTD build (the URL only exists after this change ships);
+    # the switcher itself is fetched client-side at page load.
+    "switcher": {
+        "json_url": "https://diff-diff.readthedocs.io/en/latest/_static/switcher.json",
+        "version_match": os.environ.get("READTHEDOCS_VERSION", "latest"),
+    },
+    "check_switcher": False,
     "navigation_depth": 3,
     "show_toc_level": 2,
+    # Live-filtering search overlay. Safe to enable now that search-result
+    # excerpt rendering survives notebook anchors (searchtools-css-escape.js).
+    "search_as_you_type": True,
 }
 
 # -- Options for sphinxext-opengraph -----------------------------------------
@@ -144,6 +205,18 @@ if rtd_version == "latest" or rtd_version_type == "branch":
         'Use the version selector to switch to <a href="/en/stable/">stable</a>.'
     )
 
-# -- Custom CSS --------------------------------------------------------------
+
+# -- Custom CSS / JS ---------------------------------------------------------
 def setup(app):
     app.add_css_file("custom.css")
+    # CSS.escape()s section anchors so notebook heading ids containing
+    # ' ( ) : etc. don't crash search-result excerpt rendering. NB: on
+    # search.html this file is emitted BEFORE searchtools.js (custom js
+    # renders with the early script group; searchtools comes from the
+    # search page template), so the wrapper defers to DOMContentLoaded -
+    # see the file's header comment before touching load order.
+    app.add_js_file("searchtools-css-escape.js")
+    # Keeps pre-rename numbered section deep links ("#3.-Fit-Event-Study")
+    # working after the 2026-07 heading-number strip: rewrites the hash to
+    # the renamed fragment when the legacy one no longer exists.
+    app.add_js_file("legacy-fragment-redirect.js")

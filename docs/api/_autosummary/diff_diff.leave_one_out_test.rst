@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: leave_one_out_test
+   :no-index:

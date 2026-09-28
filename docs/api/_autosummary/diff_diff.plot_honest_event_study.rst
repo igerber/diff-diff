@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: plot_honest_event_study
+   :no-index:

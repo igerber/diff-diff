@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: generate_ddd_data
+   :no-index:

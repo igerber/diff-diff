@@ -1,0 +1,21 @@
+{
+  "id": "s3-changelog-prose",
+  "stratum": "s3_negative",
+  "title": "CHANGELOG prose correction (clean negative control)",
+  "weight": 1.0,
+  "expect_no_blockers": true,
+  "allow_severities": ["P2", "P3"],
+  "fixture": {
+    "kind": "git_range",
+    "base_sha": "29d1e140540647d042cf7f5e7373008fc8eaf758",
+    "head_sha": "e16668ff5feae716640d4ac576140df04f37091f",
+    "pr_context": {
+      "title": "spillover-tva: address CI codex R10 P3 — DGP-specific d_bar identity claim",
+      "body": "Clarify a CHANGELOG line: the d_bar identity holds on this synthetic DGP only, not as a generic Butts result."
+    }
+  },
+  "ground_truth": [],
+  "expected_files": ["CHANGELOG.md"],
+  "known_fp_topics": [],
+  "notes": "Seed S3 clean control: a one-line CHANGELOG prose correction (single-file docs change). Any P0/P1 finding here is a false positive. Real merged commit 29d1e140..e16668ff, both SHAs verified to resolve 2026-05-30."
+}

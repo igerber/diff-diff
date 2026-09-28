@@ -1,0 +1,64 @@
+name: Feature request
+description: Suggest a new estimator, diagnostic, or capability
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature. The maintainer prioritizes additions
+        that have a clear methodological foundation (paper, R package, or
+        established convention) and a concrete use case.
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: |
+        What problem are you trying to solve? Describe the analysis, design, or
+        workflow that motivates this request.
+      placeholder: |
+        I'm running a staggered DiD on retailer-week panel data with treatment
+        intensity that varies continuously, and I currently have to ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-api
+    attributes:
+      label: Proposed API or behavior
+      description: |
+        Sketch what calling the feature would look like. A code example is
+        ideal, even if rough.
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    id: references
+    attributes:
+      label: Methodology references
+      description: |
+        If this implements a published method, link to the paper(s) and/or any
+        existing R / Python implementation. Estimator additions generally need
+        a paper citation.
+      placeholder: |
+        - Paper: Author et al. (Year), "Title", Journal. DOI / arXiv link.
+        - Existing implementation: e.g. R package `did`, function `att_gt()`
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: |
+        What workarounds exist today? Why aren't they sufficient?
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Anything else relevant — related estimators in diff-diff, scope concerns, etc.

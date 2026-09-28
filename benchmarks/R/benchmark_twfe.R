@@ -14,10 +14,18 @@ library(data.table)
 # Parse command line arguments
 args <- commandArgs(trailingOnly = TRUE)
 
+parse_bool <- function(x, flag) {
+  v <- tolower(x)
+  if (v %in% c("true", "t", "1", "yes")) return(TRUE)
+  if (v %in% c("false", "f", "0", "no")) return(FALSE)
+  stop(sprintf("Invalid boolean for %s: '%s' (use true/false)", flag, x))
+}
+
 parse_args <- function(args) {
   result <- list(
     data = NULL,
-    output = NULL
+    output = NULL,
+    warmup = FALSE
   )
 
   i <- 1
@@ -28,8 +36,13 @@ parse_args <- function(args) {
     } else if (args[i] == "--output") {
       result$output <- args[i + 1]
       i <- i + 2
+    } else if (args[i] == "--warmup") {
+      result$warmup <- parse_bool(args[i + 1], "--warmup")
+      i <- i + 2
     } else {
-      i <- i + 1
+      # Unknown flags used to be silently skipped, which turned typos into
+      # silent protocol changes. Fail loudly instead.
+      stop(sprintf("Unknown flag: %s", args[i]))
     }
   }
 
@@ -45,6 +58,13 @@ config <- parse_args(args)
 # Load data
 message(sprintf("Loading data from: %s", config$data))
 data <- fread(config$data)
+
+# Warm-up: run the full estimation once untimed so byte-compiler JIT and
+# first-call setup costs stay out of the timing window.
+if (config$warmup) {
+  message("Warm-up fit (untimed)...")
+  invisible(feols(outcome ~ treated:post | unit + post, data = data, cluster = ~unit))
+}
 
 # Run benchmark
 message("Running TWFE estimation with absorbed FE...")
@@ -119,6 +139,9 @@ results <- list(
   metadata = list(
     r_version = R.version.string,
     fixest_version = as.character(packageVersion("fixest")),
+    nthreads = fixest::getFixest_nthreads(),
+    dt_threads = data.table::getDTthreads(),
+    warmup = config$warmup,
     n_units = length(unique(data$unit)),
     n_periods = length(unique(data$post)),
     n_obs = nrow(data)

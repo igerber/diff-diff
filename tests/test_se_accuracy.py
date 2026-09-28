@@ -10,14 +10,25 @@ Key comparisons:
 - BasicDiD/TWFE: Should be 0% difference (exact match)
 """
 
+import os
 import time
-from typing import Dict, Tuple
+from typing import Tuple
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from diff_diff import CallawaySantAnna
+
+# Wall-clock timing assertions on shared CI runners are flaky (neighbor-VM
+# contention, BLAS path variation, cold caches). Default Python CI already
+# excludes `@pytest.mark.slow`; Rust-backend CI invokes pytest with `-m ''`
+# which overrides that filter and re-includes the slow set. GitHub Actions
+# sets ``CI=true`` on every runner, so this predicate catches both.
+_SKIP_WALLCLOCK_ON_CI = pytest.mark.skipif(
+    os.environ.get("CI") == "true",
+    reason="wall-clock timing is flaky on shared CI runners; run locally via `pytest -m slow`",
+)
 
 
 def generate_staggered_data_for_benchmark(
@@ -55,7 +66,7 @@ def generate_staggered_data_for_benchmark(
 
         idx = n_never
         for i, size in enumerate(cohort_sizes):
-            first_treat[idx:idx + size] = cohort_periods[i]
+            first_treat[idx : idx + size] = cohort_periods[i]
             idx += size
 
     first_treat_expanded = np.repeat(first_treat, n_periods)
@@ -72,18 +83,20 @@ def generate_staggered_data_for_benchmark(
 
     # Constant treatment effect (simpler for SE comparison)
     outcomes = (
-        unit_fe_expanded +
-        time_fe_expanded +
-        treatment_effect * post +
-        np.random.randn(len(units)) * 0.5
+        unit_fe_expanded
+        + time_fe_expanded
+        + treatment_effect * post
+        + np.random.randn(len(units)) * 0.5
     )
 
-    df = pd.DataFrame({
-        'unit': units,
-        'time': times,
-        'outcome': outcomes,
-        'first_treat': first_treat_expanded,
-    })
+    df = pd.DataFrame(
+        {
+            "unit": units,
+            "time": times,
+            "outcome": outcomes,
+            "first_treat": first_treat_expanded,
+        }
+    )
 
     return df
 
@@ -94,9 +107,7 @@ class TestCallawaySantAnnaSEAccuracy:
     @pytest.fixture
     def benchmark_data(self) -> pd.DataFrame:
         """Standard benchmark dataset."""
-        return generate_staggered_data_for_benchmark(
-            n_units=200, n_periods=8, seed=42
-        )
+        return generate_staggered_data_for_benchmark(n_units=200, n_periods=8, seed=42)
 
     @pytest.fixture
     def cs_results(self, benchmark_data) -> Tuple:
@@ -111,11 +122,11 @@ class TestCallawaySantAnnaSEAccuracy:
         start = time.perf_counter()
         results = cs.fit(
             benchmark_data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat',
-            aggregate='all',
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="all",
         )
         elapsed = time.perf_counter() - start
 
@@ -126,18 +137,22 @@ class TestCallawaySantAnnaSEAccuracy:
         results, _ = cs_results
 
         # Point estimate should be close to true effect (2.0)
-        assert 1.5 < results.overall_att < 2.5, \
-            f"Overall ATT {results.overall_att} not near true effect 2.0"
+        assert (
+            1.5 < results.overall_att < 2.5
+        ), f"Overall ATT {results.overall_att} not near true effect 2.0"
 
         # SE should be positive and reasonable
-        assert 0 < results.overall_se < 0.5, \
-            f"Overall SE {results.overall_se} out of expected range"
+        assert (
+            0 < results.overall_se < 0.5
+        ), f"Overall SE {results.overall_se} out of expected range"
 
     def test_individual_att_gt_se_formula(self, benchmark_data):
         """
         Test that individual ATT(g,t) SE follows expected formula.
 
-        For simple diff-in-means: SE = sqrt(var_t/n_t + var_c/n_c)
+        For simple diff-in-means the per-cell SE is derived from the
+        influence function, sqrt(sum(IF^2)) (== the ddof=0 form of
+        sqrt(var_t/n_t + var_c/n_c)), matching DRDID::reg_did_panel.
         """
         cs = CallawaySantAnna(
             estimation_method="reg",  # outcome regression (simpler)
@@ -148,15 +163,15 @@ class TestCallawaySantAnnaSEAccuracy:
 
         results = cs.fit(
             benchmark_data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat',
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
         )
 
         # Check that SE is computed and positive for all (g,t) pairs
         for (g, t), data in results.group_time_effects.items():
-            se = data['se']
+            se = data["se"]
             assert se > 0, f"SE for ({g}, {t}) should be positive"
             assert se < 1.0, f"SE for ({g}, {t}) unexpectedly large: {se}"
 
@@ -176,26 +191,25 @@ class TestCallawaySantAnnaSEAccuracy:
 
         results = cs.fit(
             benchmark_data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat',
-            aggregate='all',
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="all",
         )
 
         # Aggregated SE should be positive
         assert results.overall_se > 0
 
         # Individual SEs for comparison
-        individual_ses = [
-            data['se'] for data in results.group_time_effects.values()
-        ]
+        individual_ses = [data["se"] for data in results.group_time_effects.values()]
 
         # Aggregated SE should be smaller than individual SEs
         # (due to averaging effect)
         avg_individual_se = np.mean(individual_ses)
-        assert results.overall_se <= avg_individual_se * 1.5, \
-            "Aggregated SE unexpectedly large relative to individual SEs"
+        assert (
+            results.overall_se <= avg_individual_se * 1.5
+        ), "Aggregated SE unexpectedly large relative to individual SEs"
 
     def test_se_difference_threshold(self, cs_results):
         """
@@ -223,7 +237,7 @@ class TestCallawaySantAnnaSEAccuracy:
         """
         import os
 
-        benchmark_path = 'benchmarks/data/synthetic/staggered_small.csv'
+        benchmark_path = "benchmarks/data/synthetic/staggered_small.csv"
         if not os.path.exists(benchmark_path):
             pytest.skip(
                 f"Benchmark data not found at {benchmark_path}. "
@@ -233,9 +247,7 @@ class TestCallawaySantAnnaSEAccuracy:
         df = pd.read_csv(benchmark_path)
 
         cs = CallawaySantAnna(n_bootstrap=0, seed=42)
-        results = cs.fit(
-            df, outcome='outcome', unit='unit', time='time', first_treat='first_treat'
-        )
+        results = cs.fit(df, outcome="outcome", unit="unit", time="time", first_treat="first_treat")
 
         # Known R values from did::aggte(type="simple") on this exact data
         # Generated with: R's did package v2.3.0, method="dr", control="nevertreated"
@@ -244,25 +256,32 @@ class TestCallawaySantAnnaSEAccuracy:
 
         # ATT should match exactly (< 1e-8)
         att_diff = abs(results.overall_att - r_overall_att)
-        assert att_diff < 1e-8, \
-            f"ATT differs from R: {results.overall_att} vs {r_overall_att}"
+        assert att_diff < 1e-8, f"ATT differs from R: {results.overall_att} vs {r_overall_att}"
 
         # SE should match R exactly (< 0.01% after wif fix)
         se_diff_pct = abs(results.overall_se - r_overall_se) / r_overall_se * 100
-        assert se_diff_pct < 0.01, \
-            f"SE differs from R by {se_diff_pct:.4f}%, expected <0.01%"
+        assert se_diff_pct < 0.01, f"SE differs from R by {se_diff_pct:.4f}%, expected <0.01%"
 
+    @pytest.mark.slow
+    @_SKIP_WALLCLOCK_ON_CI
     def test_timing_performance(self, cs_results):
         """
         Ensure estimation timing doesn't regress.
 
         Baseline: ~0.005s for 200 units x 8 periods (small scale)
-        Threshold: <0.1s (20x margin for CI variance)
+        Threshold: <0.1s.
+
+        Excluded from default CI via ``@pytest.mark.slow`` AND from all CI
+        via ``skipif(CI=="true")`` — wall-clock time on shared runners is
+        noisy (BLAS path variation, neighbor VM contention, cold caches)
+        and produces false positives. The ``skipif`` layer is needed
+        because the Rust-backend CI jobs override ``-m 'not slow'`` with
+        ``-m ''`` to include the full slow suite. Run locally with
+        ``pytest -m slow`` for ad-hoc performance sanity checks.
         """
         _, elapsed = cs_results
 
-        assert elapsed < 0.1, \
-            f"Estimation took {elapsed:.3f}s, expected <0.1s"
+        assert elapsed < 0.1, f"Estimation took {elapsed:.3f}s, expected <0.1s"
 
     def test_influence_function_properties(self, benchmark_data):
         """
@@ -279,20 +298,20 @@ class TestCallawaySantAnnaSEAccuracy:
             seed=42,
         )
 
-        results = cs.fit(
+        cs.fit(
             benchmark_data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat',
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
         )
 
         # Access influence function info via internal attribute
         # This is a whitebox test to verify the influence function computation
-        if hasattr(cs, '_influence_func_info'):
+        if hasattr(cs, "_influence_func_info"):
             for (g, t), info in cs._influence_func_info.items():
-                inf_treated = info.get('treated_inf', np.array([]))
-                inf_control = info.get('control_inf', np.array([]))
+                inf_treated = info.get("treated_inf", np.array([]))
+                inf_control = info.get("control_inf", np.array([]))
 
                 # Influence functions should exist
                 assert len(inf_treated) > 0 or len(inf_control) > 0
@@ -304,24 +323,26 @@ class TestCallawaySantAnnaSEAccuracy:
         SE should scale approximately as 1/sqrt(n) with sample size.
         """
         # Small dataset
-        small_data = generate_staggered_data_for_benchmark(
-            n_units=100, n_periods=8, seed=42
-        )
+        small_data = generate_staggered_data_for_benchmark(n_units=100, n_periods=8, seed=42)
 
         cs = CallawaySantAnna(n_bootstrap=0, seed=42)
         small_results = cs.fit(
             small_data,
-            outcome='outcome', unit='unit', time='time', first_treat='first_treat',
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
         )
 
         # Large dataset
-        large_data = generate_staggered_data_for_benchmark(
-            n_units=400, n_periods=8, seed=42
-        )
+        large_data = generate_staggered_data_for_benchmark(n_units=400, n_periods=8, seed=42)
 
         large_results = cs.fit(
             large_data,
-            outcome='outcome', unit='unit', time='time', first_treat='first_treat',
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
         )
 
         # SE ratio should be approximately sqrt(400/100) = 2
@@ -329,8 +350,9 @@ class TestCallawaySantAnnaSEAccuracy:
         expected_ratio = np.sqrt(400 / 100)
 
         # Allow 50% tolerance due to different cohort compositions
-        assert 0.5 * expected_ratio < se_ratio < 2.0 * expected_ratio, \
-            f"SE scaling inconsistent: ratio={se_ratio:.2f}, expected~{expected_ratio:.1f}"
+        assert (
+            0.5 * expected_ratio < se_ratio < 2.0 * expected_ratio
+        ), f"SE scaling inconsistent: ratio={se_ratio:.2f}, expected~{expected_ratio:.1f}"
 
 
 class TestSEFormulaComparison:
@@ -341,7 +363,8 @@ class TestSEFormulaComparison:
         V <- Matrix::t(inffunc) %*% inffunc / (n)
         se <- sqrt(Matrix::diag(V) / n)
 
-    Python formula (from staggered.py _compute_aggregated_se):
+    Python formula (staggered_aggregation.py _se_from_psi, consumed by
+    _compute_aggregated_se_with_wif):
         variance = np.sum(psi_overall ** 2)
         return np.sqrt(variance)
 
@@ -350,34 +373,25 @@ class TestSEFormulaComparison:
 
     def test_influence_function_normalization(self):
         """
-        Test that our influence function normalization matches R.
+        Test the Python pre-scaled influence-function SE against the standard
+        two-sample difference-in-means formula.
 
-        R: IF_i is unscaled, then divides by n^2 at the end
-        Python: IF_i is pre-scaled by 1/n, then sums squares directly
+        Python pre-scales IF_i by the group size (1/n_t for treated, 1/n_c
+        for control) and sums squares directly; for a difference in means
+        this should approximate sqrt(var_t/n_t + var_c/n_c).
 
-        These should be mathematically equivalent.
+        Note: this deliberately does NOT check R's unscaled-IF-divided-by-n^2
+        convention — that scaling is not equivalent to the standard formula
+        for a plain difference in means (R's did package applies it to a
+        different estimand), so there is no R-side assertion here.
         """
         # Simple test case: 10 treated, 90 control
         np.random.seed(42)
         n_t, n_c = 10, 90
-        n = n_t + n_c
 
         # Simulated outcomes
         treated = np.random.randn(n_t) + 2.0
         control = np.random.randn(n_c)
-
-        # ATT
-        att = np.mean(treated) - np.mean(control)
-
-        # R-style influence function (unscaled)
-        if_treated_r = treated - np.mean(treated)
-        if_control_r = -(control - np.mean(control))
-        if_r = np.concatenate([if_treated_r, if_control_r])
-
-        # R-style SE: sqrt(sum(IF^2) / n^2)
-        # But R divides by n twice: V = IF'IF/n, se = sqrt(diag(V)/n)
-        # For scalar: se = sqrt(sum(IF^2) / n^2)
-        # Actually for diff in means, R uses a different formula...
 
         # Python-style influence function (pre-scaled)
         if_treated_py = (treated - np.mean(treated)) / n_t
@@ -385,7 +399,7 @@ class TestSEFormulaComparison:
         if_py = np.concatenate([if_treated_py, if_control_py])
 
         # Python-style SE: sqrt(sum(scaled_IF^2))
-        se_py = np.sqrt(np.sum(if_py ** 2))
+        se_py = np.sqrt(np.sum(if_py**2))
 
         # Standard formula SE for comparison
         var_t = np.var(treated, ddof=1)
@@ -394,32 +408,49 @@ class TestSEFormulaComparison:
 
         # Python SE should match standard formula (approximately)
         # Allow 20% tolerance due to ddof differences
-        assert abs(se_py - se_standard) / se_standard < 0.2, \
-            f"Python SE {se_py:.4f} doesn't match standard {se_standard:.4f}"
+        assert (
+            abs(se_py - se_standard) / se_standard < 0.2
+        ), f"Python SE {se_py:.4f} doesn't match standard {se_standard:.4f}"
 
 
+@pytest.mark.slow
+@_SKIP_WALLCLOCK_ON_CI
 class TestPerformanceRegression:
-    """Tests to prevent performance regression."""
+    """Tests to prevent performance regression.
 
-    @pytest.mark.parametrize("n_units,max_time", [
-        (100, 0.15),   # Small: <150ms (CI runners need headroom)
-        (500, 0.5),    # Medium: <500ms
-        (1000, 1.5),   # Large: <1.5s
-    ])
+    Excluded from default CI via ``@pytest.mark.slow`` AND from all CI via
+    ``skipif(CI=="true")`` — wall-clock time on shared runners is noisy
+    (BLAS path variation, neighbor VM contention, cold caches) and
+    produces false positives. The ``skipif`` layer is needed because the
+    Rust-backend CI jobs override ``-m 'not slow'`` with ``-m ''`` to
+    include the full slow suite. Run locally with ``pytest -m slow`` for
+    ad-hoc performance sanity checks.
+    """
+
+    @pytest.mark.parametrize(
+        "n_units,max_time",
+        [
+            (100, 0.15),  # Small: <150ms (CI runners need headroom)
+            (500, 0.5),  # Medium: <500ms
+            (1000, 1.5),  # Large: <1.5s
+        ],
+    )
     def test_estimation_timing(self, n_units, max_time):
         """Verify estimation completes within time budget."""
-        data = generate_staggered_data_for_benchmark(
-            n_units=n_units, n_periods=8, seed=42
-        )
+        data = generate_staggered_data_for_benchmark(n_units=n_units, n_periods=8, seed=42)
 
         cs = CallawaySantAnna(n_bootstrap=0, seed=42)
 
         start = time.perf_counter()
         cs.fit(
             data,
-            outcome='outcome', unit='unit', time='time', first_treat='first_treat',
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
         )
         elapsed = time.perf_counter() - start
 
-        assert elapsed < max_time, \
-            f"Estimation with {n_units} units took {elapsed:.3f}s, max={max_time}s"
+        assert (
+            elapsed < max_time
+        ), f"Estimation with {n_units} units took {elapsed:.3f}s, max={max_time}s"

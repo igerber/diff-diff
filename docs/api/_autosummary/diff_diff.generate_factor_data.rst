@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: generate_factor_data
+   :no-index:

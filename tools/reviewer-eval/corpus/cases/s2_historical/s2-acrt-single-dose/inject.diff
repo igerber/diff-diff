@@ -1,0 +1,1144 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index be2c23e6..b4c86d0e 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
+ ## [Unreleased]
+ 
+ ### Added
++- **`ContinuousDiD` discrete-treatment saturated regression** (`treatment_type="discrete"`) for
++  multi-valued / discrete dose (CGBS 2024 Eq. 4.1). Each distinct dose level gets its own effect
++  coefficient — `ATT(d_j) = mean_{D=d_j}(ΔY) − control` (a per-level 2×2 DiD) — instead of a B-spline
++  curve; `ACRT(d_j)` is a finite difference (forward at the lowest level, backward elsewhere). The
++  saturated fit is an exact basis swap, so analytical, multiplier-bootstrap, covariate (`reg`/`dr`),
++  and survey inference all compose and reduce analytically to the per-level 2×2 DiD standard error.
++  Multi-cohort fits with heterogeneous dose support across cohorts raise `NotImplementedError`
++  (support-aware aggregation deferred); an off-support `dvals` value raises `ValueError`. The default
++  `treatment_type="continuous"` (B-spline) path is unchanged.
+ - **`ContinuousDiD` covariate support** (`covariates=`, `estimation_method ∈ {"reg", "dr"}`) for
+   dose-response estimation under **conditional** parallel trends
+   (`E[ΔY(0) | D=d, X] = E[ΔY(0) | D=0, X]`). `reg` uses an outcome-regression control counterfactual;
+diff --git a/TODO.md b/TODO.md
+index 12c6528b..ad419d43 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -29,7 +29,7 @@ The `Origin` column (Actionable tables) and the `PR` column (Deferred tables) bo
+ | Issue | Location | Origin | Effort | Priority |
+ |-------|----------|--------|--------|----------|
+ | `SyntheticControl` conformal (CWZ 2021) extensions: (a) one-sided / signed-`t` variants (§7); (b) covariates in the conformal proxy (`X_jt`, eqs 4/6 — current proxy is outcomes-only); (c) AR / innovation-permutation path (Lemmas 5-7) for time-series proxies. The joint test, pointwise CIs, and average-effect CI have landed. | `conformal.py`, `synthetic_control_results.py` | CWZ-2021 | Heavy | Low |
+-| `ContinuousDiD` CGBS-2024 extensions. (a) `covariates=` kwarg — **DONE (reg/dr)**; remaining: (b) discrete-treatment saturated regression (integer dose currently warned, not routed to per-level coefficients); (c) lowest-dose-as-control per Remark 3.1 when `P(D=0)=0`. Also deferred from the covariate work: `estimation_method="ipw"` on the dose curve (scalar-adjustment / degenerate — documented `NotImplementedError`), and `covariates=` × `survey_design=` (weighted OR + weighted nuisance IF). | `continuous_did.py` | CGBS-2024 | Heavy | Low |
++| `ContinuousDiD` CGBS-2024 extensions. (a) `covariates=` kwarg — **DONE (reg/dr)**; (b) discrete-treatment saturated regression (`treatment_type="discrete"`) — **DONE**; remaining: (c) lowest-dose-as-control per Remark 3.1 when `P(D=0)=0`. Also deferred: `estimation_method="ipw"` on the dose curve (scalar-adjustment / degenerate — documented `NotImplementedError`); `covariates=` × `survey_design=` (weighted OR + weighted nuisance IF); and multi-cohort **heterogeneous-support** discrete aggregation (support-aware: average each dose only over the cohorts that observe it — currently `NotImplementedError`; single-cohort / 2-period / shared-support multi-cohort are supported). | `continuous_did.py` | CGBS-2024 | Heavy | Low |
+ | `ImputationDiD` LOO conservative-variance refinement (BJS 2024 Supp. Appendix A.9) — a finite-sample improvement to the auxiliary-model residuals reducing overfit of `tau_tilde_g` to `epsilon`. Asymptotic Theorem-3 variance is implemented and matches R `didimputation` (which also omits LOO by default). | `imputation.py` | imputation-validation | Mid | Low |
+ | `TwoWayFixedEffects(vcov_type in {hc2, hc2_bm})` with replicate-weight designs raises `NotImplementedError` (`twfe.py:~233`). The replicate path re-demeans per replicate, which doesn't compose with the full-dummy HC2/HC2-BM build — a correct impl needs per-replicate full-dummy refit. Workaround: `hc1` for replicate-weight CR1. | `twfe.py::fit` | follow-up | Heavy | Low |
+ | `CallawaySantAnna` reg-method aggregated SEs sit 3-20% from the R golden fixtures (`two_period` simple/group/dynamic, `dynamic_effects` dynamic) while the ATTs match at 1e-11 and the dr-method aggregated SEs match at ≤7e-6. Pre-existing (byte-identical deltas on the pre-fast-path tree); golden aggregated-SE assertions were therefore enabled for dr scenarios only (`test_golden_simple_aggregation_se`, `test_golden_event_study_aggregation_se`). Investigate the reg-path per-cell IF vs R `DRDID::reg_did_panel`'s. | `staggered.py::_outcome_regression`, `tests/test_csdid_ported.py` | CS-scaling | Mid | Medium |
+diff --git a/diff_diff/continuous_did.py b/diff_diff/continuous_did.py
+index 8c86968d..60b90aff 100644
+--- a/diff_diff/continuous_did.py
++++ b/diff_diff/continuous_did.py
+@@ -20,10 +20,14 @@ from diff_diff.bootstrap_utils import (
+     generate_bootstrap_weights_batch,
+ )
+ from diff_diff.continuous_did_bspline import (
++    SATURATED_TOL,
+     bspline_derivative_design_matrix,
+     bspline_design_matrix,
+     build_bspline_basis,
+     default_dose_grid,
++    saturated_derivative_design_matrix,
++    saturated_design_matrix,
++    saturated_dose_levels,
+ )
+ from diff_diff.continuous_did_results import (
+     ContinuousDiDResults,
+@@ -102,6 +106,17 @@ class ContinuousDiD:
+         cells are then reg-like — use only when you knowingly accept that). Note:
+         low events-per-variable emits a diagnostic warning but does not itself
+         trigger the fallback.
++    treatment_type : str, default="continuous"
++        Dose-response model: ``"continuous"`` (B-spline sieve, the default) or
++        ``"discrete"`` (saturated per-dose-level regression, CGBS 2024 Eq. 4.1).
++        On the discrete path each distinct dose level gets its own effect
++        coefficient — ``ATT(d_j) = mean_{D=d_j}(ΔY) − control`` (a per-level 2×2
++        DiD) — and ``ACRT(d_j)`` is a finite difference (forward at the lowest
++        level, backward elsewhere). It composes with ``covariates`` and
++        ``survey_design`` and reduces to the per-level 2×2 DiD standard error.
++        Multi-cohort fits must share the same dose support across cohorts (else
++        ``NotImplementedError``); an off-support ``dvals`` value raises
++        ``ValueError``.
+ 
+     Examples
+     --------
+@@ -117,6 +132,7 @@ class ContinuousDiD:
+     _VALID_CONTROL_GROUPS = {"never_treated", "not_yet_treated"}
+     _VALID_BASE_PERIODS = {"varying", "universal"}
+     _VALID_ESTIMATION_METHODS = {"reg", "dr", "ipw"}
++    _VALID_TREATMENT_TYPES = {"continuous", "discrete"}
+ 
+     def __init__(
+         self,
+@@ -136,6 +152,7 @@ class ContinuousDiD:
+         pscore_trim: float = 0.01,
+         epv_threshold: float = 10.0,
+         pscore_fallback: str = "error",
++        treatment_type: str = "continuous",
+     ):
+         self.degree = degree
+         self.num_knots = num_knots
+@@ -153,6 +170,7 @@ class ContinuousDiD:
+         self.pscore_trim = pscore_trim
+         self.epv_threshold = epv_threshold
+         self.pscore_fallback = pscore_fallback
++        self.treatment_type = treatment_type
+         self._validate_constrained_params()
+ 
+     def _validate_constrained_params(self) -> None:
+@@ -185,6 +203,11 @@ class ContinuousDiD:
+             raise ValueError(
+                 f"Invalid epv_threshold: {self.epv_threshold}. Must be finite and > 0."
+             )
++        if self.treatment_type not in self._VALID_TREATMENT_TYPES:
++            raise ValueError(
++                f"Invalid treatment_type: '{self.treatment_type}'. "
++                f"Must be one of {self._VALID_TREATMENT_TYPES}."
++            )
+ 
+     def get_params(self) -> Dict[str, Any]:
+         """Return estimator parameters as a dictionary."""
+@@ -205,6 +228,7 @@ class ContinuousDiD:
+             "pscore_trim": self.pscore_trim,
+             "epv_threshold": self.epv_threshold,
+             "pscore_fallback": self.pscore_fallback,
++            "treatment_type": self.treatment_type,
+         }
+ 
+     def set_params(self, **params) -> "ContinuousDiD":
+@@ -398,20 +422,43 @@ class ContinuousDiD:
+                 f"Dose must be strictly positive for treated units (D > 0)."
+             )
+ 
+-        # Detect discrete (integer-valued) dose among treated units
++        # Discrete-dose handling / detection.
+         unit_doses = df.loc[df[first_treat] > 0].groupby(unit)[dose].first()
+-        unique_pos_doses = unit_doses[unit_doses > 0].unique()
+-        is_integer = len(unique_pos_doses) > 0 and np.allclose(
+-            unique_pos_doses, np.round(unique_pos_doses)
+-        )
+-        if is_integer:
+-            warnings.warn(
+-                f"Dose appears discrete ({len(unique_pos_doses)} unique integer values). "
+-                "B-spline smoothing may be inappropriate for discrete treatments. "
+-                "Consider a saturated regression approach (not yet implemented).",
+-                UserWarning,
+-                stacklevel=2,
++        treated_unit_doses = unit_doses[unit_doses > 0]
++        unique_pos_doses = treated_unit_doses.unique()
++        if self.treatment_type == "discrete":
++            # Saturated regression: warn if the fit is over-parameterized
++            # (near-continuous / degenerate per-level SE) so the user can see
++            # that a saturated basis is a poor fit for near-continuous dose.
++            n_levels = len(unique_pos_doses)
++            n_treated_total = int(len(treated_unit_doses))
++            min_per_level = int(treated_unit_doses.value_counts().min()) if n_levels else 0
++            if n_levels and (min_per_level < 2 or n_levels > n_treated_total / 2):
++                warnings.warn(
++                    f"treatment_type='discrete' with {n_levels} dose level(s) over "
++                    f"{n_treated_total} treated unit(s) (min {min_per_level} unit(s) per "
++                    "level). The saturated regression is over-parameterized / "
++                    "near-continuous; per-level standard errors are degenerate when a "
++                    "level has fewer than 2 units. Consider treatment_type='continuous' "
++                    "(B-spline) if the dose is effectively continuous.",
++                    UserWarning,
++                    stacklevel=2,
++                )
++        else:
++            # Continuous B-spline path: flag an integer-valued dose so the user
++            # knows the saturated regression is available.
++            is_integer = len(unique_pos_doses) > 0 and np.allclose(
++                unique_pos_doses, np.round(unique_pos_doses)
+             )
++            if is_integer:
++                warnings.warn(
++                    f"Dose appears discrete ({len(unique_pos_doses)} unique integer "
++                    "values). B-spline smoothing may be inappropriate for discrete "
++                    "treatments; pass treatment_type='discrete' for a saturated "
++                    "(per-dose-level) regression.",
++                    UserWarning,
++                    stacklevel=2,
++                )
+ 
+         # Force dose=0 for never-treated units with nonzero dose. Report the
+         # affected row count via UserWarning so users can see whether their
+@@ -485,14 +532,78 @@ class ContinuousDiD:
+             covariates=self.covariates,
+         )
+ 
+-        # Compute dvals (evaluation grid)
++        # Compute dvals (evaluation grid); for discrete treatment, also the
++        # saturated dose levels (the global basis support).
+         all_treated_doses = precomp["dose_vector"][precomp["dose_vector"] > 0]
+-        if self.dvals is not None:
++        levels: Optional[np.ndarray] = None
++        if self.treatment_type == "discrete":
++            levels = saturated_dose_levels(all_treated_doses)
++            if self.dvals is not None:
++                # A saturated model can only be evaluated at observed dose
++                # levels; reject an off-support request (no silent snapping).
++                off_support = np.array(
++                    [not np.any(np.abs(levels - d) <= SATURATED_TOL) for d in self.dvals]
++                )
++                if off_support.any():
++                    raise ValueError(
++                        f"treatment_type='discrete': requested dvals contain "
++                        f"{int(off_support.sum())} value(s) that are not observed dose "
++                        f"levels {levels.tolist()}. The saturated basis can only be "
++                        "evaluated at observed dose levels."
++                    )
++                dvals = self.dvals
++            else:
++                dvals = levels
++            # Multi-cohort heterogeneous dose support would produce a silent-zero
++            # aggregation bias: a cohort missing a global level yields a dropped
++            # zero column -> that cell's att_d[level] = 0 -> the plain-sum dose
++            # aggregation biases that dose toward zero. Fence it off; support-aware
++            # aggregation (average each dose only over the cohorts that observe it)
++            # is a deferred follow-up. Single-cohort (incl. multi-period),
++            # 2-period, and shared-support multi-cohort are all allowed.
++            if len(treatment_groups) > 1:
++                for g in treatment_groups:
++                    g_doses = precomp["dose_vector"][
++                        (precomp["unit_cohorts"] == g) & (precomp["dose_vector"] > 0)
++                    ]
++                    g_levels = saturated_dose_levels(g_doses)
++                    if g_levels.shape != levels.shape or not np.allclose(
++                        g_levels, levels, atol=SATURATED_TOL
++                    ):
++                        raise NotImplementedError(
++                            "treatment_type='discrete' with multiple treatment cohorts "
++                            "requires every cohort to share the same dose support. "
++                            f"Cohort {g} covers {g_levels.tolist()} but the global dose "
++                            f"levels are {levels.tolist()}. Support-aware aggregation "
++                            "(averaging each dose only over the cohorts that observe it) "
++                            "is not yet implemented; use a single cohort or ensure a "
++                            "shared dose support."
++                        )
++            # Survey subpopulation weights could zero out every treated unit at a
++            # dose level, leaving that level in the (unweighted) basis support but
++            # with zero effective mass -> a dropped column -> a silent-zero ATT(d).
++            # Fail closed if any level has no positive treated weight anywhere.
++            usw = precomp.get("unit_survey_weights")
++            if usw is not None:
++                dv = precomp["dose_vector"]
++                empty = [
++                    float(d) for d in levels if not np.any(usw[np.abs(dv - d) <= SATURATED_TOL] > 0)
++                ]
++                if empty:
++                    raise ValueError(
++                        "treatment_type='discrete': dose level(s) "
++                        f"{empty} have zero positive survey weight among treated units "
++                        "(e.g. removed by a subpopulation filter). The saturated model "
++                        "cannot estimate an unweighted level; drop the level from the "
++                        "dose grid or widen the subpopulation."
++                    )
++        elif self.dvals is not None:
+             dvals = self.dvals
+         else:
+             dvals = default_dose_grid(all_treated_doses)
+ 
+-        # Build B-spline knots from all treated doses
++        # Build B-spline knots from all treated doses (unused on the discrete
++        # branch, but harmless to construct).
+         knots, degree = build_bspline_basis(
+             all_treated_doses, degree=self.degree, num_knots=self.num_knots
+         )
+@@ -512,6 +623,7 @@ class ContinuousDiD:
+                     dvals,
+                     survey_weights=precomp.get("unit_survey_weights"),
+                     resolved_survey=resolved_survey,
++                    levels=levels,
+                 )
+                 if result is not None:
+                     gt_results[(g, t)] = result
+@@ -889,6 +1001,7 @@ class ContinuousDiD:
+             pscore_trim=self.pscore_trim,
+             epv_threshold=self.epv_threshold,
+             pscore_fallback=self.pscore_fallback,
++            treatment_type=self.treatment_type,
+             degree=self.degree,
+             num_knots=self.num_knots,
+             base_period=self.base_period,
+@@ -1200,8 +1313,16 @@ class ContinuousDiD:
+         dvals: np.ndarray,
+         survey_weights: Optional[np.ndarray] = None,
+         resolved_survey: object = None,
++        levels: Optional[np.ndarray] = None,
+     ) -> Optional[Dict[str, Any]]:
+-        """Compute dose-response for a single (g,t) cell."""
++        """Compute dose-response for a single (g,t) cell.
++
++        When ``self.treatment_type == "discrete"``, ``levels`` holds the global
++        distinct dose levels and the B-spline design/derivative trio is swapped
++        for the saturated (indicator / finite-difference) trio; every downstream
++        quantity is linear in ``beta`` through these matrices, so the influence
++        function / bootstrap / covariate / survey machinery is reused unchanged.
++        """
+         period_to_col = precomp["period_to_col"]
+         outcome_matrix = precomp["outcome_matrix"]
+         unit_cohorts = precomp["unit_cohorts"]
+@@ -1310,10 +1431,56 @@ class ContinuousDiD:
+         # Treated doses
+         treated_doses = dose_vector[treated_mask]
+ 
+-        # B-spline OLS
+-        Psi = bspline_design_matrix(treated_doses, knots, degree, include_intercept=True)
++        # Dose-basis dispatch: swap the B-spline trio (design / evaluation /
++        # derivative) for the saturated indicator / finite-difference trio when
++        # treatment_type="discrete". Every downstream quantity is linear in beta
++        # through these closures, so the IF / bootstrap / covariate / survey
++        # machinery is reused unchanged.
++        if self.treatment_type == "discrete":
++
++            def _design(z: np.ndarray) -> np.ndarray:
++                return saturated_design_matrix(z, levels)
++
++            def _deriv(z: np.ndarray) -> np.ndarray:
++                return saturated_derivative_design_matrix(z, levels)
++
++        else:
++
++            def _design(z: np.ndarray) -> np.ndarray:
++                return bspline_design_matrix(z, knots, degree, include_intercept=True)
++
++            def _deriv(z: np.ndarray) -> np.ndarray:
++                return bspline_derivative_design_matrix(z, knots, degree, include_intercept=True)
++
++        # Design matrix on treated doses.
++        Psi = _design(treated_doses)
+         n_basis = Psi.shape[1]
+ 
++        # Per-cell discrete support (fail-closed). Every dose level must have
++        # positive effective treated mass in THIS (g,t) cell. A level absent
++        # here, or fully zero-weighted by survey subpopulation weights, yields
++        # an all-zero indicator column that solve_ols drops and beta_pred zeroes
++        # -> a silent-zero ATT(d_j) that would bias aggregation. The fit-time
++        # guards (shared cohort support; global positive weight) do NOT cover a
++        # level that is positive globally but empty in this cell (e.g. survey
++        # weights zero it out for one cohort while another cohort keeps it).
++        if self.treatment_type == "discrete":
++            assert levels is not None  # fit() always sets levels on the discrete path
++            level_mass = (
++                (Psi * w_treated[:, np.newaxis]).sum(axis=0)
++                if w_treated is not None
++                else Psi.sum(axis=0)
++            )
++            empty_levels = [float(levels[j]) for j in range(len(levels)) if not level_mass[j] > 0]
++            if empty_levels:
++                raise ValueError(
++                    f"treatment_type='discrete': dose level(s) {empty_levels} have "
++                    f"zero effective treated mass in cell (g={g}, t={t}); the saturated "
++                    "column is unidentified (a level with no positive survey weight in "
++                    "the cell cannot be estimated). Widen the subpopulation or drop the "
++                    "level from the dose grid."
++                )
++
+         # Check for all-same dose
+         if np.all(treated_doses == treated_doses[0]):
+             warnings.warn(
+@@ -1322,12 +1489,20 @@ class ContinuousDiD:
+                 stacklevel=3,
+             )
+ 
+-        # Skip if not enough treated units for OLS (need n > K for residual df)
+-        # When survey weights are present, use positive-weight count as
+-        # the effective sample size — subpopulation() can zero weights
+-        # leaving rows present but the weighted regression underidentified.
++        # Skip if the basis is under-identified. The B-spline path needs n > K
++        # for residual df (skip at n_eff <= n_basis). The saturated path is
++        # exactly identified at n_eff == n_basis (== J, one treated unit per
++        # level: each beta_j is that unit's value), so it only skips when
++        # truly under-identified (n_eff < n_basis) — which cannot arise on an
++        # allowed discrete fit (levels derive from the treated units, so
++        # n_treated >= J); the point estimate stays valid, with a per-level
++        # treated-side variance that is degenerate when a level has n_j = 1.
++        # When survey weights are present, use the positive-weight count as the
++        # effective sample size — subpopulation() can zero weights, leaving rows
++        # present but the weighted regression underidentified.
+         n_eff = int(np.count_nonzero(w_treated > 0)) if w_treated is not None else n_treated
+-        if n_eff <= n_basis:
++        underidentified = n_eff < n_basis if self.treatment_type == "discrete" else n_eff <= n_basis
++        if underidentified:
+             label = "positive-weight treated units" if w_treated is not None else "treated units"
+             warnings.warn(
+                 f"Not enough {label} ({n_eff}) for {n_basis} basis functions "
+@@ -1367,8 +1542,8 @@ class ContinuousDiD:
+         beta_pred = np.where(np.isnan(beta_hat), 0.0, beta_hat)
+ 
+         # Evaluate ATT(d) and ACRT(d) at dvals
+-        Psi_eval = bspline_design_matrix(dvals, knots, degree, include_intercept=True)
+-        dPsi_eval = bspline_derivative_design_matrix(dvals, knots, degree, include_intercept=True)
++        Psi_eval = _design(dvals)
++        dPsi_eval = _deriv(dvals)
+ 
+         att_d = Psi_eval @ beta_pred
+         acrt_d = dPsi_eval @ beta_pred
+@@ -1384,9 +1559,7 @@ class ContinuousDiD:
+             att_glob = float(np.mean(delta_y_treated) - mu_0)
+ 
+         # ACRT^{glob}: plug-in average of ACRT(D_i) for treated
+-        dPsi_treated = bspline_derivative_design_matrix(
+-            treated_doses, knots, degree, include_intercept=True
+-        )
++        dPsi_treated = _deriv(treated_doses)
+         if w_treated is not None:
+             acrt_glob = float(np.average(dPsi_treated @ beta_pred, weights=w_treated))
+         else:
+diff --git a/diff_diff/continuous_did_bspline.py b/diff_diff/continuous_did_bspline.py
+index 2c68d780..9cde6c78 100644
+--- a/diff_diff/continuous_did_bspline.py
++++ b/diff_diff/continuous_did_bspline.py
+@@ -15,8 +15,18 @@ __all__ = [
+     "bspline_design_matrix",
+     "bspline_derivative_design_matrix",
+     "default_dose_grid",
++    "saturated_dose_levels",
++    "saturated_design_matrix",
++    "saturated_derivative_design_matrix",
++    "SATURATED_TOL",
+ ]
+ 
++# Tolerance used consistently for BOTH discrete dose-level construction and
++# level matching in the saturated (discrete-treatment) basis. Using the same
++# value in both places guarantees a dose can never fall between two
++# near-duplicate levels or double-match one.
++SATURATED_TOL = 1e-9
++
+ 
+ def build_bspline_basis(dose, degree=3, num_knots=0):
+     """
+@@ -214,3 +224,145 @@ def default_dose_grid(dose, lower_quantile=0.10, upper_quantile=0.99):
+         return np.array([])
+     probs = np.arange(lower_quantile, upper_quantile + 0.005, 0.01)
+     return np.quantile(positive_dose, probs)
++
++
++# ----------------------------------------------------------------------
++# Saturated (discrete-treatment) basis
++#
++# For a multi-valued / discrete dose taking distinct levels d_1 < ... < d_J,
++# the dose-response is estimated by a *saturated* regression (CGBS 2024
++# Eq. 4.1): one indicator per level, so beta_j = mean_{D=d_j}(delta_tilde_Y)
++# = ATT(d_j) (a per-level 2x2 DiD). These three functions mirror the B-spline
++# trio (build_bspline_basis / bspline_design_matrix /
++# bspline_derivative_design_matrix) so ContinuousDiD can swap the basis and
++# reuse the entire linear influence-function / bootstrap / covariate / survey
++# machinery unchanged: att_d = Psi_eval @ beta, acrt_d = dPsi_eval @ beta.
++# ----------------------------------------------------------------------
++
++
++def saturated_dose_levels(dose, tol=SATURATED_TOL):
++    """
++    Distinct positive dose levels for the saturated (discrete) basis.
++
++    Sorted unique positive doses, clustered at ``tol`` (values within ``tol``
++    of an accepted level collapse to it) so level construction uses the same
++    tolerance as matching in :func:`saturated_design_matrix`. Analogous to
++    :func:`build_bspline_basis` returning the knot vector.
++
++    Parameters
++    ----------
++    dose : array-like
++        Dose values from treated units (only positive values are used).
++    tol : float, default=:data:`SATURATED_TOL`
++        Clustering tolerance.
++
++    Returns
++    -------
++    np.ndarray
++        Sorted distinct dose levels, shape ``(J,)``.
++    """
++    dose = np.asarray(dose, dtype=float)
++    positive = np.sort(dose[dose > 0])
++    levels: list = []
++    for v in positive:
++        if not levels or (v - levels[-1]) > tol:
++            levels.append(float(v))
++    return np.array(levels)
++
++
++def _match_levels(x, levels, tol):
++    """Map each ``x_i`` to the index of its dose level; raise if unmatched."""
++    x = np.asarray(x, dtype=float)
++    levels = np.asarray(levels, dtype=float)
++    if len(levels) == 0:
++        raise ValueError("saturated basis requires at least one dose level.")
++    diff = np.abs(x[:, np.newaxis] - levels[np.newaxis, :])
++    idx = np.argmin(diff, axis=1)
++    nearest = diff[np.arange(len(x)), idx]
++    if np.any(nearest > tol):
++        bad = x[nearest > tol]
++        raise ValueError(
++            f"{int(np.sum(nearest > tol))} dose value(s) match no observed dose "
++            f"level within tol={tol} (e.g. {float(bad[0])}). The saturated "
++            "(discrete) basis can only be evaluated at observed dose levels."
++        )
++    return idx
++
++
++def saturated_design_matrix(x, levels, tol=SATURATED_TOL):
++    """
++    Indicator design matrix for the saturated (discrete) basis.
++
++    Column ``j`` is ``1{x_i == levels[j]}`` (match within ``tol``). Serves both
++    the treated design (``x`` = treated doses) and the evaluation matrix
++    (``x`` = dose grid; when the grid equals ``levels`` this is the identity).
++    Fail-closed: an ``x_i`` matching no level raises ``ValueError`` (no silent
++    all-zero row). Analogous to :func:`bspline_design_matrix`.
++
++    Parameters
++    ----------
++    x : array-like
++        Evaluation points, shape ``(n,)``.
++    levels : array-like
++        Distinct dose levels (from :func:`saturated_dose_levels`), shape ``(J,)``.
++    tol : float, default=:data:`SATURATED_TOL`
++        Matching tolerance.
++
++    Returns
++    -------
++    np.ndarray
++        Indicator design matrix, shape ``(n, J)``.
++    """
++    x = np.asarray(x, dtype=float)
++    levels = np.asarray(levels, dtype=float)
++    idx = _match_levels(x, levels, tol)
++    B = np.zeros((len(x), len(levels)))
++    B[np.arange(len(x)), idx] = 1.0
++    return B
++
++
++def saturated_derivative_design_matrix(x, levels, tol=SATURATED_TOL):
++    """
++    Finite-difference derivative rows for the saturated (discrete) basis.
++
++    ACRT for a discrete dose is a finite difference of the level effects
++    (CGBS 2024): ``ACRT(d_j) = [ATT(d_j) - ATT(d_{j-1})] / (d_j - d_{j-1})``
++    for ``j >= 2`` (backward), with a **forward** difference at the lowest
++    level ``d_1`` (``[ATT(d_2) - ATT(d_1)] / (d_2 - d_1)``) so the ACRT curve
++    shares the ATT grid and ``ACRT^glob`` stays well-defined. This is a linear
++    operator ``L`` on ``beta`` (each row sums to 0, so a constant level/control
++    shift cancels), and ``acrt = L @ beta``. Returns the ``L`` row for each
++    ``x_i`` at its dose level. With ``J = 1`` (single dose) every row is 0
++    (``ACRT = 0``). Analogous to :func:`bspline_derivative_design_matrix`.
++
++    Parameters
++    ----------
++    x : array-like
++        Evaluation points, shape ``(n,)``.
++    levels : array-like
++        Distinct dose levels, shape ``(J,)``.
++    tol : float, default=:data:`SATURATED_TOL`
++        Matching tolerance.
++
++    Returns
++    -------
++    np.ndarray
++        Derivative design matrix, shape ``(n, J)``.
++    """
++    levels = np.asarray(levels, dtype=float)
++    idx = _match_levels(x, levels, tol)
++    J = len(levels)
++    L = np.zeros((J, J))
++    # Row 0: forward difference at the lowest level; rows j>=1: backward.
++    for j in range(J):
++        if J == 1:
++            break  # single dose level: derivative is 0 everywhere
++        if j == 0:
++            h = levels[1] - levels[0]
++            L[0, 0] = -1.0 / h
++            L[0, 1] = 1.0 / h
++        else:
++            h = levels[j] - levels[j - 1]
++            L[j, j - 1] = -1.0 / h
++            L[j, j] = 1.0 / h
++    return L[idx]
+diff --git a/diff_diff/continuous_did_results.py b/diff_diff/continuous_did_results.py
+index 9a5bad1e..779d5ef2 100644
+--- a/diff_diff/continuous_did_results.py
++++ b/diff_diff/continuous_did_results.py
+@@ -147,6 +147,10 @@ class ContinuousDiDResults:
+     pscore_trim: float = 0.01
+     epv_threshold: float = 10.0
+     pscore_fallback: str = "error"
++    # "continuous" (B-spline sieve dose-response) or "discrete" (saturated
++    # per-dose-level regression); the ``dose_grid`` holds the distinct dose
++    # levels when discrete.
++    treatment_type: str = "continuous"
+     event_study_effects: Optional[Dict[int, Dict[str, Any]]] = field(default=None)
+     # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
+     survey_metadata: Optional[Any] = field(default=None)
+@@ -228,11 +232,17 @@ class ContinuousDiDResults:
+             f"{'Treatment cohorts:':<30} {len(self.groups):>10}",
+             f"{'Time periods:':<30} {len(self.time_periods):>10}",
+             f"{'Control group:':<30} {self.control_group:>10}",
+-            f"{'B-spline degree:':<30} {self.degree:>10}",
+-            f"{'Interior knots:':<30} {self.num_knots:>10}",
+-            f"{'Base period:':<30} {self.base_period:>10}",
+-            f"{'Anticipation:':<30} {self.anticipation:>10}",
++            f"{'Treatment type:':<30} {self.treatment_type:>10}",
+         ]
++        # Basis metadata: B-spline degree/knots (continuous) or the number of
++        # saturated dose levels (discrete).
++        if self.treatment_type == "discrete":
++            lines.append(f"{'Dose levels:':<30} {len(self.dose_grid):>10}")
++        else:
++            lines.append(f"{'B-spline degree:':<30} {self.degree:>10}")
++            lines.append(f"{'Interior knots:':<30} {self.num_knots:>10}")
++        lines.append(f"{'Base period:':<30} {self.base_period:>10}")
++        lines.append(f"{'Anticipation:':<30} {self.anticipation:>10}")
+         if self.covariates:
+             lines.append(f"{'Covariates:':<30} {', '.join(self.covariates):>10}")
+             lines.append(f"{'Estimation method:':<30} {self.estimation_method:>10}")
+diff --git a/diff_diff/guides/llms-full.txt b/diff_diff/guides/llms-full.txt
+index 7d3177b0..a1b95251 100644
+--- a/diff_diff/guides/llms-full.txt
++++ b/diff_diff/guides/llms-full.txt
+@@ -703,6 +703,8 @@ ContinuousDiD(
+     epv_threshold: float = 10.0,              # dr propensity events-per-variable
+     pscore_fallback: str = "error",           # dr propensity-failure action: "error" (fail-closed
+                                               #   default) or "unconditional" (opt-in reg-like fallback)
++    treatment_type: str = "continuous",       # "continuous" (B-spline curve) or "discrete"
++                                              #   (saturated per-dose-level regression, CGBS Eq 4.1)
+ )
+ ```
+ 
+@@ -711,6 +713,13 @@ covariate-adjusted prediction. `reg`/`dr` share the ATT(d) *shape* and ACRT(d);
+ default) differs only in the overall_att/ATT(d) level and SE. `overall_att`+SE match DRDID
+ reg_did_panel/drdid_panel. `covariates=` + `survey_design=` is not yet supported.
+ 
++`treatment_type="discrete"` fits a **saturated regression** for a multi-valued dose: one indicator per
++distinct dose level, so `ATT(d_j) = mean_{D=d_j}(ΔY) − control` (a per-level 2×2 DiD) and `ACRT(d_j)`
++is a finite difference (forward at the lowest level, backward elsewhere). It reuses the full inference
++stack (analytical / bootstrap / covariate / survey) and reduces to the per-level 2×2 DiD SE. Multi-
++cohort fits need a shared dose support across cohorts (else `NotImplementedError`); an off-support
++`dvals` value raises `ValueError`.
++
+ **Alias:** `CDiD`
+ 
+ **fit() parameters:**
+diff --git a/docs/methodology/REGISTRY.md b/docs/methodology/REGISTRY.md
+index 29ae7e3b..c5efa774 100644
+--- a/docs/methodology/REGISTRY.md
++++ b/docs/methodology/REGISTRY.md
+@@ -937,13 +937,29 @@ mean is replaced by a per-treated-unit covariate-adjusted counterfactual (`X_i`
+   augmentation `eta_cont = odds_weighted_mean_C(Delta_Y - X' gamma_hat)`;
+   `Delta_tilde_Y_i = Delta_Y_i - X_i' gamma_hat - eta_cont`.
+ Steps 2-4 are unchanged. Because the augmentation is a constant, `reg` and `dr` share the same
+-`ACRT(d)` (a constant only shifts the B-spline intercept, which `dPsi` annihilates); they differ only
++`ACRT(d)` (a constant only shifts the B-spline intercept, which `dPsi` annihilates; on the intercept-
++free saturated basis the same identity holds via `L·1 = 0` — see below); they differ only
+ in the `ATT(d)` / `ATT^{glob}` level (by `-eta_cont`) and in the doubly-robust SE.
+ 
++**Discrete treatment: saturated regression (`treatment_type="discrete"`, CGBS 2024 Eq. 4.1).** For a
++dose taking distinct levels `d_1 < ... < d_J`, steps 2-4 swap the B-spline basis for a saturated
++(indicator) basis:
++2'. `Psi(D_i)` = indicator columns `1{D_i = d_j}` (no intercept; a partition of unity among treated).
++3'. `beta = (Psi'Psi)^{-1} Psi' Delta_tilde_Y`, so `beta_j = mean_{D=d_j}(Delta_tilde_Y) = ATT(d_j)`
++    (a per-level 2×2 DiD).
++4'. `ATT(d_j) = beta_j`; `ACRT(d_j) = (L beta)_j` where `L` is the finite-difference operator:
++    backward `[ATT(d_j) - ATT(d_{j-1})]/(d_j - d_{j-1})` for `j >= 2`, and a **forward** difference at
++    the lowest level `d_1` (each row of `L` sums to 0). `ACRT^{glob} = mean_i ACRT(D_i)`.
++The B-spline and saturated paths share the same linear influence-function / bootstrap / covariate /
++survey machinery (`bread @ psi_bar = ones(J)` makes the control-side IF reduce to the per-level 2×2
++control variance; `L·1 = 0` cancels it in ACRT). `reg`/`dr` again share `ACRT(d_j)` point AND SE
++(the indicator partition-of-unity makes residuals augmentation-invariant, and `L·1 = 0`); only the
++`ATT(d_j)` level differs. See Notes #5-#6.
++
+ ### Edge Cases
+ 
+ - **No untreated group**: Remark 3.1 (lowest-dose-as-control) not implemented; requires P(D=0) > 0.
+-- **Discrete treatment**: Detect integer-valued dose and warn; saturated regression deferred.
++- **Discrete treatment**: `treatment_type="discrete"` fits the saturated per-dose-level regression (CGBS 2024 Eq. 4.1; see Note #6). On the default `treatment_type="continuous"` path an integer-valued dose is detected and warns, pointing to `treatment_type="discrete"`.
+ - **All-same dose**: B-spline basis collapses; ACRT(d) = 0 everywhere.
+ - **Rank deficiency**: When n_treated <= n_basis, cell is skipped.
+ - **Balanced panel required**: Matches R `contdid` v0.1.0.
+@@ -972,7 +988,8 @@ labels.*
+ 2. **Note:** `bspline_derivative_design_matrix` derivative-failure `UserWarning` — Phase 2 axis-C #12 silent-failures audit fix. No R correspondence; `contdid` v0.1.0 does not implement an equivalent warning. Cross-references the § Edge Cases `**Note:**` bullet above (`bspline_derivative_design_matrix` entry) and `METHODOLOGY_REVIEW.md` § ContinuousDiD Deviations #2. Locked in `tests/test_continuous_did.py::TestBSplineDerivativeDegenerateBasis` (3 tests); source-level aggregate-warning block at `diff_diff/continuous_did_bspline.py:150-187`.
+ 3. **Note:** `+inf` → `0` never-treated recoding emits `UserWarning` reporting the affected row count; negative `first_treat` (including `-inf`) raises `ValueError`. Axis-E silent-coercion fix per Phase 2 audit. No R correspondence; `contdid` v0.1.0 silently absorbs `+inf` without a signal. Cross-references the § Implementation Checklist `**Note:**` below and `METHODOLOGY_REVIEW.md` § ContinuousDiD Deviations #3.
+ 4. **Note:** Zero-`first_treat` rows with nonzero `dose` are force-zeroed with `UserWarning` reporting the affected row count (axis-E silent-coercion). No R correspondence; `contdid` v0.1.0 has the same `first_treat = 0` → `D = 0` invariant but silently coerces without a warning. Cross-references the § Implementation Checklist `**Note:**` below and `METHODOLOGY_REVIEW.md` § ContinuousDiD Deviations #4.
+-5. **Note (covariate support — library extension beyond `contdid` v0.1.0):** `covariates=` with `estimation_method ∈ {reg, dr}` adds conditional-parallel-trends adjustment. This is a **library extension**: `contdid` v0.1.0 hard-stops on any covariate (`stop("covariates not currently supported…")`), so there is **no external R anchor for the covariate-adjusted dose *curve***. Validation instead: (a) the **scalar `overall_att` + SE** map *exactly* onto `DRDID::reg_did_panel` (reg) / `DRDID::drdid_panel` (dr) — a tight (~1e-8) component anchor, skip-guarded since DRDID is not in CI (`tests/test_methodology_continuous_did.py::TestCovariateReg`); (b) an **R-free NumPy reconstruction** of the reg/dr `att`+SE runs *in CI* at p≥2 (`test_dr_reg_numpy_crosscheck_p2`) — the guard the p=1 reduction cannot provide (at p=1 the intercept-only propensity is constant, so `eta_cont ≡ 0` and dr collapses to reg); (c) DGP recovery + MC coverage (reg 96%, dr 95%). **`ipw` restricted:** `estimation_method="ipw"` with covariates raises `NotImplementedError` — pure IPW's covariate adjustment is a single scalar (a propensity-reweighted control mean) that shifts only the ATT(d) level and leaves `ACRT(d)` identical to the unconditional fit, so it cannot adjust the dose-response *shape*. **Deviations from DRDID:** unit weights are 1 (unweighted; `covariates=` + `survey_design=` raises `NotImplementedError`, deferred); propensity trimming uses clip semantics (`pscore_trim`) rather than DRDID's drop-trimming — identical on moderate-overlap data (the anchor regime), diverging only at extreme propensities. **Fail-closed policies (no-silent-failures):** (i) missing/non-finite covariate values raise `ValueError` up front — a per-cell fallback to unconditional estimation would silently mix conditional-PT and unconditional-PT cells in the aggregate; (ii) `dr` propensity-estimation failure raises by default (`pscore_fallback="error"`) so a `dr` fit never silently degrades to a non-DR estimate — `pscore_fallback="unconditional"` opts into the graceful (warned, reg-like) fallback. Cross-references `docs/methodology/continuous-did.md` § Covariates.
++5. **Note (covariate support — library extension beyond `contdid` v0.1.0):** `covariates=` with `estimation_method ∈ {reg, dr}` adds conditional-parallel-trends adjustment. This is a **library extension**: `contdid` v0.1.0 hard-stops on any covariate (`stop("covariates not currently supported…")`), so there is **no external R anchor for the covariate-adjusted dose *curve***. Validation instead: (a) the **scalar `overall_att` + SE** map *exactly* onto `DRDID::reg_did_panel` (reg) / `DRDID::drdid_panel` (dr) — a tight (~1e-8) component anchor, skip-guarded since DRDID is not in CI (`tests/test_methodology_continuous_did.py::TestCovariateReg`); (b) an **R-free NumPy reconstruction** of the reg/dr `att`+SE runs *in CI* at p≥2 (`test_dr_reg_numpy_crosscheck_p2`) — the guard the p=1 reduction cannot provide (at p=1 the intercept-only propensity is constant, so `eta_cont ≡ 0` and dr collapses to reg); (c) DGP recovery + MC coverage (reg 96%, dr 95%). **`ipw` restricted:** `estimation_method="ipw"` with covariates raises `NotImplementedError` — pure IPW's covariate adjustment is a single scalar (a propensity-reweighted control mean) that shifts only the ATT(d) level and leaves `ACRT(d)` identical to the unconditional fit, so it cannot adjust the dose-response *shape*. **Deviations from DRDID:** unit weights are 1 (unweighted; `covariates=` + `survey_design=` raises `NotImplementedError`, deferred); propensity trimming uses clip semantics (`pscore_trim`) rather than DRDID's drop-trimming — identical on moderate-overlap data (the anchor regime), diverging only at extreme propensities. **Fail-closed policies (no-silent-failures):** (i) missing/non-finite covariate values raise `ValueError` up front — a per-cell fallback to unconditional estimation would silently mix conditional-PT and unconditional-PT cells in the aggregate; (ii) `dr` propensity-estimation failure raises by default (`pscore_fallback="error"`) so a `dr` fit never silently degrades to a non-DR estimate — `pscore_fallback="unconditional"` opts into the graceful (warned, reg-like) fallback. **`treatment_type="discrete"` composability:** the reg/dr ACRT-invariance above generalizes to the intercept-free saturated basis via a *different* mechanism (see Note #6) — the finite-difference operator annihilates the constant augmentation (`L·1 = 0`) and the indicator basis is a partition of unity (`Psi@1 = 1`, so residuals are augmentation-invariant), so reg/dr again share `ACRT(d_j)` point AND SE, differing only in the `ATT(d_j)` level. Cross-references `docs/methodology/continuous-did.md` § Covariates.
++6. **Note (discrete-treatment saturated regression — library extension beyond `contdid` v0.1.0):** `treatment_type="discrete"` estimates the dose-response by a **saturated regression** (CGBS 2024 Eq. 4.1) — one indicator per distinct dose level, so `beta_j = mean_{D=d_j}(ΔY − control) = ATT(d_j)` (a per-level 2×2 DiD) — instead of the B-spline sieve. `ACRT(d_j)` is a finite difference: backward `[ATT(d_j) − ATT(d_{j-1})]/(d_j − d_{j-1})` for `j ≥ 2`, with a **forward** difference at the lowest level `d_1` (`[ATT(d_2) − ATT(d_1)]/(d_2 − d_1)`) so ATT and ACRT share the `J`-point dose grid and `ACRT^glob` (density-weighted mean over all treated) stays well-defined. This is a **library extension**: `contdid` v0.1.0 accepts `treatment_type` in its signature but **does not implement the discrete path** (documented "Discrete treatment not yet implemented"), so there is **no external R anchor**. It is instead an *exact* basis swap of the B-spline design/evaluation/derivative trio for an indicator/identity/finite-difference trio; every downstream quantity is linear in `beta`, so the analytical-SE / multiplier-bootstrap / covariate (reg,dr) / survey machinery is reused unchanged and reduces *analytically* to the per-level 2×2 DiD (`bread @ psi_bar = ones(J)`; the common control mean cancels in ACRT since `L·1 = 0`). Validation (R-free, in CI): exact hand-calc of `ATT(d_j)`/`ACRT`/`overall_att` and the analytical SE against a direct per-level 2×2 reconstruction (`~1e-12`/`~1e-10`), DGP recovery, and MC coverage for analytical + bootstrap (`tests/test_methodology_continuous_did.py::TestDiscreteSaturated`, `tests/test_continuous_did.py::TestDiscreteSaturatedAPI`). **Fail-closed policies (no-silent-failures):** (i) multi-cohort fits with **heterogeneous dose support** across cohorts raise `NotImplementedError` — an absent global level yields a dropped zero column (`att_d[level]=0`) that the plain-sum dose aggregation would bias toward zero (support-aware aggregation is deferred; single-cohort, 2-period, and shared-support multi-cohort are supported); (ii) a requested `dvals` value that is not an observed dose level raises `ValueError` (a saturated model cannot be evaluated off-support); (iii) an over-parameterized fit (`< 2` treated units per level, or `J > n_treated/2`) warns (degenerate per-level SE); (iv) with `survey_design=`, any dose level with **zero effective treated mass in a `(g,t)` cell** raises `ValueError` — a per-cell check (not just the global positive-weight check), so a level that survey/subpopulation weights zero out for one cohort while another cohort keeps it cannot silently drop to a zero-coefficient saturated column. Cross-references `docs/methodology/continuous-did.md` § 5.1.
+ 
+ ### Implementation Checklist
+ 
+@@ -982,8 +999,8 @@ labels.*
+ - [x] Multiplier bootstrap for inference
+ - [x] Analytical SEs via influence functions
+ - [x] Equation verification tests (linear, quadratic, multi-period)
+-- [x] Covariate support (reg / dr) — conditional parallel trends. **ipw restricted** (see Note below); survey × covariate deferred; discrete-saturated & Remark 3.1 still deferred.
+-- [ ] Discrete treatment saturated regression
++- [x] Covariate support (reg / dr) — conditional parallel trends. **ipw restricted** (see Note below); survey × covariate deferred; Remark 3.1 still deferred.
++- [x] Discrete treatment saturated regression (`treatment_type="discrete"`) — CGBS 2024 Eq. 4.1; per-level ATT(d_j) + finite-difference ACRT (forward at d_1). Multi-cohort heterogeneous dose support deferred (see Note #6).
+ - [ ] Lowest-dose-as-control (Remark 3.1)
+ - [x] Survey design support (Phase 3): weighted B-spline OLS, TSL on influence functions; bootstrap+survey supported (Phase 6)
+ - **Note:** ContinuousDiD bootstrap with survey weights supported (Phase 6) via PSU-level multiplier weights
+diff --git a/docs/methodology/continuous-did.md b/docs/methodology/continuous-did.md
+index 76d8378a..3970c0d1 100644
+--- a/docs/methodology/continuous-did.md
++++ b/docs/methodology/continuous-did.md
+@@ -194,6 +194,8 @@ ACRT = ATT. Everything collapses to standard Callaway & Sant'Anna (2021).
+ 
+ ### 5.1 Discrete treatment: saturated regression
+ 
++**Implemented** via `ContinuousDiD(treatment_type="discrete")`.
++
+ When dose takes values d_1, ..., d_J (Eq. 4.1):
+ ```
+ Delta Y_i = beta_0 + sum_{j=1}^{J} 1{D_i = d_j} * beta_j + epsilon_i
+@@ -203,6 +205,24 @@ Delta Y_i = beta_0 + sum_{j=1}^{J} 1{D_i = d_j} * beta_j + epsilon_i
+ - (beta_j - beta_{j-1}) / (d_j - d_{j-1}) estimates ACRT(d_j)
+ - Standard OLS inference applies
+ 
++**Implementation notes (diff-diff):**
++- **Intercept-free form.** The library subtracts the control counterfactual first
++  (`Delta_tilde_Y_i = Delta Y_i - mean_control(Delta Y)`, or the covariate-adjusted control
++  prediction) and then regresses `Delta_tilde_Y` on the `J` **indicator columns without an
++  intercept** (`beta_j = mean_{D=d_j}(Delta_tilde_Y) = ATT(d_j)`). The paper's `beta_0` is the
++  control-group trend `E[Delta Y | D = 0]`, which is exactly what the control-mean subtraction
++  removes — so the two formulations coincide, and each `beta_j` is a per-level 2×2 DiD.
++- **ACRT boundary convention.** The finite difference is backward for `j >= 2` (as above) with a
++  **forward** difference at the lowest level `d_1` (`[ATT(d_2) - ATT(d_1)] / (d_2 - d_1)`), so ATT
++  and ACRT share the `J`-point dose grid and `ACRT^glob` (density-weighted mean over all treated)
++  stays well-defined. There is no R/paper anchor at the boundary — R `contdid` v0.1.0 does not
++  implement the discrete path (§9, "Current limitations") — so this is a documented library
++  convention (REGISTRY § ContinuousDiD Note #6).
++- **Basis swap.** Estimation reuses the entire B-spline machinery by swapping the design /
++  evaluation / derivative trio for an indicator / identity / finite-difference trio; the analytical
++  SE reduces analytically to the per-level 2×2 DiD SE. Multi-cohort fits with heterogeneous dose
++  support across cohorts raise `NotImplementedError` (support-aware aggregation is deferred).
++
+ ### 5.2 Continuous treatment: parametric (B-spline sieve)
+ 
+ **This is the default in the R package and the recommended starting point.**
+@@ -444,5 +464,6 @@ can be meaningfully aggregated.
+    Note #5.
+ 
+ ### Defer
+-- Discrete treatment (saturated regression — simpler, add later)
+ - TWFE decomposition diagnostics
++
++*Discrete treatment (saturated regression) is now implemented — see § 5.1.*
+diff --git a/docs/practitioner_decision_tree.rst b/docs/practitioner_decision_tree.rst
+index 8aeed5cc..977080fc 100644
+--- a/docs/practitioner_decision_tree.rst
++++ b/docs/practitioner_decision_tree.rst
+@@ -249,6 +249,13 @@ appropriate identification assumptions in place.
+    )
+    print(f"Average lift across dose levels: {results.overall_att:.1f}")
+ 
++.. tip::
++
++   When spending takes a **few discrete levels** (e.g. exactly $50K / $100K / $200K)
++   rather than a continuum, pass ``ContinuousDiD(treatment_type="discrete")``. This fits
++   a *saturated* regression - one effect per spending level (each a 2x2 DiD) plus the
++   step-to-step marginal response - instead of a smoothed B-spline curve.
++
+ .. warning::
+ 
+    Dose-response curves *ATT(d)* and *ACRT(d)* require **Strong Parallel Trends (SPT)** -
+diff --git a/tests/test_continuous_did.py b/tests/test_continuous_did.py
+index ba7c35db..51e73231 100644
+--- a/tests/test_continuous_did.py
++++ b/tests/test_continuous_did.py
+@@ -1721,3 +1721,208 @@ class TestCovariateAPI:
+         )
+         assert float(base.overall_att) == float(alt.overall_att)
+         assert float(base.overall_att_se) == float(alt.overall_att_se)
++
++
++# =============================================================================
++# Discrete treatment: saturated regression API (treatment_type="discrete")
++# =============================================================================
++
++
++def _discrete_panel(
++    effects, n_per=40, n_control=70, noise=0.5, seed=0, cohorts=(1,), n_periods=None
++):
++    """Balanced discrete-dose panel with known per-level effects + covariate x1."""
++    r = np.random.default_rng(seed)
++    levels = sorted(effects)
++    if n_periods is None:
++        n_periods = max(cohorts) + 1
++    periods = list(range(n_periods))
++    rows = []
++    uid = 0
++
++    def add(ft, d):
++        nonlocal uid
++        base = r.normal(0, 1)
++        x = r.normal(0, 1)
++        for p in periods:
++            on = ft > 0 and p >= ft
++            y = base + 0.3 * p + 0.4 * x + (effects[d] if on else 0.0) + r.normal(0, noise)
++            rows.append((uid, p, y, ft, d if ft > 0 else 0.0, x))
++        uid += 1
++
++    for ft in cohorts:
++        for d in levels:
++            for _ in range(n_per):
++                add(ft, d)
++    for _ in range(n_control):
++        add(0, levels[0])
++    return pd.DataFrame(rows, columns=["unit", "period", "outcome", "first_treat", "dose", "x1"])
++
++
++_DKW = dict(
++    outcome="outcome",
++    unit="unit",
++    time="period",
++    first_treat="first_treat",
++    dose="dose",
++    aggregate="dose",
++)
++
++
++class TestDiscreteSaturatedAPI:
++    """API, composition, and guard behavior for treatment_type='discrete'."""
++
++    def test_get_set_params_roundtrip_transactional(self):
++        est = ContinuousDiD(treatment_type="discrete")
++        assert est.get_params()["treatment_type"] == "discrete"
++        est2 = ContinuousDiD()
++        est2.set_params(treatment_type="discrete")
++        assert est2.treatment_type == "discrete"
++        # Transactional: an invalid update leaves config unmutated.
++        with pytest.raises(ValueError):
++            est2.set_params(treatment_type="bogus")
++        assert est2.treatment_type == "discrete"
++
++    def test_invalid_treatment_type_raises(self):
++        with pytest.raises(ValueError, match="treatment_type"):
++            ContinuousDiD(treatment_type="saturated")
++
++    def test_metadata_on_results_and_summary(self):
++        df = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, seed=1)
++        res = ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(df, **_DKW)
++        assert res.treatment_type == "discrete"
++        text = res.summary()
++        assert "discrete" in text
++        assert "Dose levels" in text  # discrete summary shows levels, not B-spline knots
++
++    def test_clone_refit_idempotent(self):
++        df = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, seed=2)
++        est = ContinuousDiD(treatment_type="discrete", n_bootstrap=0)
++        r1 = est.fit(df, **_DKW)
++        params = est.get_params()
++        r2 = est.fit(df, **_DKW)  # refit does not mutate config
++        assert est.get_params() == params
++        assert np.allclose(r1.dose_response_att.effects, r2.dose_response_att.effects)
++
++    def test_dr_discrete_acrt_identical_to_reg(self):
++        """DEFAULT covariate path (dr): ACRT(d_j) point+SE == reg; only ATT differs."""
++        df = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, seed=3)
++        reg = ContinuousDiD(
++            treatment_type="discrete", covariates=["x1"], estimation_method="reg", n_bootstrap=0
++        ).fit(df, **_DKW)
++        dr = ContinuousDiD(
++            treatment_type="discrete", covariates=["x1"], estimation_method="dr", n_bootstrap=0
++        ).fit(df, **_DKW)
++        assert np.allclose(
++            reg.dose_response_acrt.effects, dr.dose_response_acrt.effects, atol=1e-10
++        )
++        assert np.allclose(reg.dose_response_acrt.se, dr.dose_response_acrt.se, atol=1e-10)
++        # ATT levels differ (dr subtracts the augmentation eta_cont).
++        assert not np.allclose(
++            reg.dose_response_att.effects, dr.dose_response_att.effects, atol=1e-6
++        )
++
++    def test_survey_discrete_weighted_group_means(self):
++        from diff_diff import SurveyDesign
++
++        df = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, seed=4)
++        rng = np.random.default_rng(4)
++        uids = sorted(df["unit"].unique())
++        wmap = dict(zip(uids, rng.uniform(0.5, 2.0, len(uids))))
++        df["wt"] = df["unit"].map(wmap)
++        res = ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(
++            df, survey_design=SurveyDesign(weights="wt"), **_DKW
++        )
++        assert np.all(np.isfinite(res.dose_response_att.se))
++        # Hand-calc weighted ATT(d_1).
++        wide = df.pivot(index="unit", columns="period", values="outcome")
++        dy = wide[wide.columns[-1]] - wide[wide.columns[0]]
++        udose = df.groupby("unit")["dose"].first()
++        uft = df.groupby("unit")["first_treat"].first()
++        uw = df.groupby("unit")["wt"].first()
++        cm = uft == 0
++        mu0w = np.average(dy[cm], weights=uw[cm])
++        att1 = np.average(dy[udose == 1.0], weights=uw[udose == 1.0]) - mu0w
++        assert np.isclose(res.dose_response_att.effects[0], att1, atol=1e-9)
++
++    def test_exactly_identified_boundary(self):
++        """n_treated == J (one unit per level) fits (not skipped); SE finite."""
++        df = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, n_per=1, n_control=30, seed=5)
++        with pytest.warns(UserWarning):  # over-parameterization warning fires
++            res = ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(df, **_DKW)
++        assert len(res.dose_response_att.effects) == 3
++        assert np.all(np.isfinite(res.dose_response_att.effects))
++        assert np.all(np.isfinite(res.dose_response_att.se))
++
++    def test_heterogeneous_support_raises(self):
++        """Multi-cohort with different dose support -> NotImplementedError."""
++        # cohort 1 covers {1,2,4}; cohort 2 covers {1,2} only.
++        df1 = _discrete_panel(
++            {1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, n_control=0, seed=6, cohorts=(1,), n_periods=3
++        )
++        df2 = _discrete_panel({1.0: 0.5, 2.0: 1.5}, n_control=40, seed=7, cohorts=(2,), n_periods=3)
++        df2["unit"] = df2["unit"] + 10_000
++        df = pd.concat([df1, df2], ignore_index=True)
++        with pytest.raises(NotImplementedError, match="support"):
++            ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(df, **_DKW)
++
++    def test_dvals_off_support_raises(self):
++        df = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, seed=8)
++        with pytest.raises(ValueError, match="level"):
++            ContinuousDiD(treatment_type="discrete", dvals=np.array([1.5]), n_bootstrap=0).fit(
++                df, **_DKW
++            )
++
++    def test_survey_zero_weight_level_raises(self):
++        """A dose level fully zero-weighted by survey weights -> fail closed (no silent zero)."""
++        from diff_diff import SurveyDesign
++
++        df = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, seed=10)
++        df["wt"] = 1.0
++        # Zero out every treated unit at dose 2.0.
++        df.loc[df["dose"] == 2.0, "wt"] = 0.0
++        with pytest.raises(ValueError, match="positive survey weight|zero"):
++            ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(
++                df, survey_design=SurveyDesign(weights="wt"), **_DKW
++            )
++
++    @pytest.mark.parametrize("n_boot", [0, 199])
++    def test_survey_multicohort_percell_zero_support_raises(self, n_boot):
++        """A level zero-weighted in ONE cohort's cell (positive globally) -> per-cell guard raises.
++
++        The fit-time global positive-weight check passes (cohort 2 keeps dose 2 positive),
++        so the silent-zero can only be caught by the per-(g,t)-cell support check. The guard
++        runs during the initial cell pass, so it fires before inference for both the
++        analytical (n_bootstrap=0) and bootstrap (n_bootstrap>0) paths.
++        """
++        from diff_diff import SurveyDesign
++
++        df = _discrete_panel(
++            {1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, n_per=25, n_control=60, seed=11, cohorts=(1, 2)
++        )
++        df["wt"] = 1.0
++        # Zero cohort-1 units at dose 2.0; cohort-2 dose 2.0 stays positive.
++        df.loc[(df["first_treat"] == 1) & (df["dose"] == 2.0), "wt"] = 0.0
++        with pytest.raises(ValueError, match="zero effective treated mass|positive survey weight"):
++            ContinuousDiD(treatment_type="discrete", n_bootstrap=n_boot, seed=1).fit(
++                df, survey_design=SurveyDesign(weights="wt"), **_DKW
++            )
++
++    def test_over_parameterization_warning(self):
++        df = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, n_per=1, n_control=30, seed=9)
++        with pytest.warns(UserWarning, match="over-parameterized"):
++            ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(df, **_DKW)
++
++    def test_continuous_default_matches_explicit(self):
++        """Default treatment_type is 'continuous'; explicit value gives identical output."""
++        data = generate_continuous_did_data(n_units=120, n_periods=3, seed=13)
++        r_default = ContinuousDiD(n_bootstrap=0).fit(
++            data, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose"
++        )
++        r_explicit = ContinuousDiD(treatment_type="continuous", n_bootstrap=0).fit(
++            data, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose"
++        )
++        np.testing.assert_allclose(
++            r_default.dose_response_att.effects, r_explicit.dose_response_att.effects
++        )
++        np.testing.assert_allclose(r_default.overall_att, r_explicit.overall_att)
+diff --git a/tests/test_methodology_continuous_did.py b/tests/test_methodology_continuous_did.py
+index b5020018..abeaf404 100644
+--- a/tests/test_methodology_continuous_did.py
++++ b/tests/test_methodology_continuous_did.py
+@@ -1124,3 +1124,179 @@ class TestCovariateReg:
+             rate = cover / total
+             # Wide band: MC noise at 150 reps; catches a broken (too small/large) SE.
+             assert 0.88 <= rate <= 0.99, f"{method} coverage {rate:.3f} off nominal"
++
++
++# =============================================================================
++# Discrete treatment: saturated regression (treatment_type="discrete")
++# =============================================================================
++
++
++def _make_discrete_panel(
++    per_level_effect,
++    n_per_level=40,
++    n_control=80,
++    control_trend=0.3,
++    noise=0.5,
++    seed=0,
++    cohorts=(1,),
++    n_periods=None,
++):
++    """Balanced discrete-dose panel with known per-level effects.
++
++    ``per_level_effect`` maps dose level -> ATT(d). Each cohort in ``cohorts``
++    (first_treat value) gets ``n_per_level`` treated units at every level, plus
++    ``n_control`` never-treated units. Effects switch on at ``t >= first_treat``.
++    """
++    r = np.random.default_rng(seed)
++    levels = sorted(per_level_effect)
++    max_g = max(cohorts)
++    if n_periods is None:
++        n_periods = max_g + 1
++    periods = list(range(n_periods))
++    rows = []
++    uid = 0
++
++    def add_unit(ft, d):
++        nonlocal uid
++        base = r.normal(0, 1)
++        for p in periods:
++            on = ft > 0 and p >= ft
++            y = base + control_trend * p + (per_level_effect[d] if on else 0.0)
++            y += r.normal(0, noise)
++            rows.append((uid, p, y, ft, d if ft > 0 else 0.0))
++        uid += 1
++
++    for ft in cohorts:
++        for d in levels:
++            for _ in range(n_per_level):
++                add_unit(ft, d)
++    for _ in range(n_control):
++        add_unit(0, levels[0])
++    return pd.DataFrame(rows, columns=["unit", "period", "outcome", "first_treat", "dose"])
++
++
++def _hand_calc_discrete(df, levels):
++    """Independent NumPy ATT(d_j) / ACRT / overall from a 2-period panel."""
++    periods = sorted(df["period"].unique())
++    p0, p1 = periods[0], periods[-1]
++    wide = df.pivot(index="unit", columns="period", values="outcome")
++    dy = (wide[p1] - wide[p0]).to_numpy()
++    udose = df.groupby("unit")["dose"].first().to_numpy()
++    uft = df.groupby("unit")["first_treat"].first().to_numpy()
++    cm = uft == 0
++    mu0 = dy[cm].mean()
++    att = np.array([dy[udose == d].mean() - mu0 for d in levels])
++    acrt = np.empty(len(levels))
++    for j in range(len(levels)):
++        if j == 0:
++            acrt[0] = (att[1] - att[0]) / (levels[1] - levels[0])
++        else:
++            acrt[j] = (att[j] - att[j - 1]) / (levels[j] - levels[j - 1])
++    overall = (dy[~cm] - mu0).mean()
++    # Analytical per-level 2x2 SE in the sum-of-squares/n convention.
++    n_c = int(cm.sum())
++    se = np.empty(len(levels))
++    for j, d in enumerate(levels):
++        tmask = udose == d
++        n_j = int(tmask.sum())
++        it = (dy[tmask] - mu0 - att[j]) / n_j
++        ic = -(dy[cm] - mu0) / n_c
++        se[j] = np.sqrt((it**2).sum() + (ic**2).sum())
++    return att, acrt, overall, se
++
++
++class TestDiscreteSaturated:
++    """Saturated regression for discrete/multi-valued treatment (CGBS 2024 Eq 4.1)."""
++
++    _KW = dict(
++        outcome="outcome",
++        unit="unit",
++        time="period",
++        first_treat="first_treat",
++        dose="dose",
++        aggregate="dose",
++    )
++
++    def test_hand_calc_att_acrt_overall(self):
++        """ATT(d_j) = per-level 2x2 DiD; ACRT = finite diffs; overall = mean_T."""
++        levels = [1.0, 2.0, 4.0]
++        df = _make_discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, seed=1)
++        res = ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(df, **self._KW)
++        att, acrt, overall, _ = _hand_calc_discrete(df, levels)
++        assert np.allclose(res.dose_response_att.dose_grid, levels)
++        assert np.allclose(res.dose_response_att.effects, att, atol=1e-12)
++        assert np.allclose(res.dose_response_acrt.effects, acrt, atol=1e-12)
++        assert np.isclose(res.overall_att, overall, atol=1e-12)
++
++    def test_hand_calc_analytical_se(self):
++        """Saturated SE reduces exactly to the per-level 2x2 DiD SE (the gate)."""
++        levels = [1.0, 2.0, 4.0]
++        df = _make_discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, seed=2)
++        res = ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(df, **self._KW)
++        _, _, _, se = _hand_calc_discrete(df, levels)
++        assert np.allclose(res.dose_response_att.se, se, atol=1e-10)
++        assert np.all(np.isfinite(res.dose_response_att.se))
++
++    def test_acrt_boundary_forward_diff(self):
++        """ACRT(d_1) uses a forward difference; ACRT(d_j>=2) backward."""
++        levels = [1.0, 2.0, 4.0]
++        df = _make_discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, seed=3)
++        res = ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(df, **self._KW)
++        att = res.dose_response_att.effects
++        acrt = res.dose_response_acrt.effects
++        assert np.isclose(acrt[0], (att[1] - att[0]) / (levels[1] - levels[0]), atol=1e-12)
++        assert np.isclose(acrt[1], (att[1] - att[0]) / (levels[1] - levels[0]), atol=1e-12)
++        assert np.isclose(acrt[2], (att[2] - att[1]) / (levels[2] - levels[1]), atol=1e-12)
++
++    def test_dgp_recovery(self):
++        """Recover heterogeneous per-level effects (no noise -> exact)."""
++        effects = {1.0: 0.5, 2.0: 2.0, 4.0: 1.0}  # non-monotone ACRT
++        df = _make_discrete_panel(effects, n_per_level=60, n_control=100, noise=0.0, seed=4)
++        res = ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(df, **self._KW)
++        assert np.allclose(res.dose_response_att.effects, [0.5, 2.0, 1.0], atol=1e-10)
++        # ACRT steps: fwd@d1 = (2-.5)/1=1.5; bwd@d2 same; bwd@d3=(1-2)/2=-0.5
++        assert np.allclose(res.dose_response_acrt.effects, [1.5, 1.5, -0.5], atol=1e-10)
++
++    def test_staggered_shared_support(self):
++        """Multi-cohort (shared dose support) discrete fit aggregates + recovers."""
++        effects = {1.0: 0.5, 2.0: 1.5, 4.0: 2.5}
++        df = _make_discrete_panel(
++            effects, n_per_level=40, n_control=90, noise=0.0, seed=5, cohorts=(2, 3)
++        )
++        res = ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(df, **self._KW)
++        # Homogeneous effects across cohorts + no noise -> exact recovery.
++        assert np.allclose(res.dose_response_att.effects, [0.5, 1.5, 2.5], atol=1e-9)
++        assert np.all(np.isfinite(res.dose_response_att.se))
++
++    @pytest.mark.slow
++    def test_coverage(self, ci_params):
++        """Analytical & bootstrap SE achieve nominal coverage for ATT(d_j)."""
++        import warnings
++
++        levels = [1.0, 2.0, 4.0]
++        effects = {1.0: 0.5, 2.0: 1.5, 4.0: 2.5}
++        reps = 150
++        for use_boot in (False, True):
++            # Bootstrap draws are scaled down in pure-Python mode; use a wider
++            # coverage band there (mirrors the conftest small-n_boot tolerance
++            # convention). Analytical SE has no such scaling.
++            nb = ci_params.bootstrap(299, min_n=99) if use_boot else 0
++            lo_band = 0.85 if (use_boot and nb < 200) else 0.88
++            cover = np.zeros(len(levels))
++            for s in range(reps):
++                df = _make_discrete_panel(
++                    effects, n_per_level=40, n_control=80, noise=1.0, seed=20_000 + s
++                )
++                with warnings.catch_warnings():
++                    warnings.simplefilter("ignore")
++                    res = ContinuousDiD(treatment_type="discrete", n_bootstrap=nb, seed=s).fit(
++                        df, **self._KW
++                    )
++                lo = res.dose_response_att.conf_int_lower
++                hi = res.dose_response_att.conf_int_upper
++                for j, d in enumerate(levels):
++                    cover[j] += int(lo[j] <= effects[d] <= hi[j])
++            rate = cover / reps
++            assert np.all(
++                (rate >= lo_band) & (rate <= 0.995)
++            ), f"{'boot' if use_boot else 'analytic'} coverage {rate} off nominal"

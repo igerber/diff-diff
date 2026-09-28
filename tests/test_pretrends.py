@@ -19,7 +19,6 @@ from diff_diff.pretrends import (
 )
 from diff_diff.results import MultiPeriodDiDResults, PeriodEffect
 
-
 # =============================================================================
 # Fixtures
 # =============================================================================
@@ -49,13 +48,15 @@ def simple_panel_data():
 
             y += np.random.normal(0, 0.5)
 
-            data.append({
-                'unit': unit,
-                'period': period,
-                'treated': int(is_treated),
-                'post': int(post),
-                'outcome': y
-            })
+            data.append(
+                {
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(is_treated),
+                    "post": int(post),
+                    "outcome": y,
+                }
+            )
 
     return pd.DataFrame(data)
 
@@ -66,10 +67,10 @@ def multiperiod_results(simple_panel_data):
     mp_did = MultiPeriodDiD()
     results = mp_did.fit(
         simple_panel_data,
-        outcome='outcome',
-        treatment='treated',
-        time='period',
-        post_periods=[4, 5, 6, 7]
+        outcome="outcome",
+        treatment="treated",
+        time="period",
+        post_periods=[4, 5, 6, 7],
     )
     return results
 
@@ -86,53 +87,39 @@ def mock_multiperiod_results():
     # Pre-period effects (excluding reference period 3)
     period_effects = {
         0: PeriodEffect(
-            period=0, effect=0.1, se=0.5,
-            t_stat=0.2, p_value=0.84,
-            conf_int=(-0.88, 1.08)
+            period=0, effect=0.1, se=0.5, t_stat=0.2, p_value=0.84, conf_int=(-0.88, 1.08)
         ),
         1: PeriodEffect(
-            period=1, effect=-0.05, se=0.5,
-            t_stat=-0.1, p_value=0.92,
-            conf_int=(-1.03, 0.93)
+            period=1, effect=-0.05, se=0.5, t_stat=-0.1, p_value=0.92, conf_int=(-1.03, 0.93)
         ),
         2: PeriodEffect(
-            period=2, effect=0.08, se=0.5,
-            t_stat=0.16, p_value=0.87,
-            conf_int=(-0.90, 1.06)
+            period=2, effect=0.08, se=0.5, t_stat=0.16, p_value=0.87, conf_int=(-0.90, 1.06)
         ),
         # Period 3 is reference - not in period_effects
         # Post-period effects
         4: PeriodEffect(
-            period=4, effect=5.0, se=0.5,
-            t_stat=10.0, p_value=0.0001,
-            conf_int=(4.02, 5.98)
+            period=4, effect=5.0, se=0.5, t_stat=10.0, p_value=0.0001, conf_int=(4.02, 5.98)
         ),
         5: PeriodEffect(
-            period=5, effect=5.2, se=0.5,
-            t_stat=10.4, p_value=0.0001,
-            conf_int=(4.22, 6.18)
+            period=5, effect=5.2, se=0.5, t_stat=10.4, p_value=0.0001, conf_int=(4.22, 6.18)
         ),
         6: PeriodEffect(
-            period=6, effect=4.8, se=0.5,
-            t_stat=9.6, p_value=0.0001,
-            conf_int=(3.82, 5.78)
+            period=6, effect=4.8, se=0.5, t_stat=9.6, p_value=0.0001, conf_int=(3.82, 5.78)
         ),
         7: PeriodEffect(
-            period=7, effect=5.0, se=0.5,
-            t_stat=10.0, p_value=0.0001,
-            conf_int=(4.02, 5.98)
+            period=7, effect=5.0, se=0.5, t_stat=10.0, p_value=0.0001, conf_int=(4.02, 5.98)
         ),
     }
 
     # Coefficients for estimated periods (excludes reference period 3)
     coefficients = {
-        'treated:period_0': 0.1,
-        'treated:period_1': -0.05,
-        'treated:period_2': 0.08,
-        'treated:period_4': 5.0,
-        'treated:period_5': 5.2,
-        'treated:period_6': 4.8,
-        'treated:period_7': 5.0,
+        "treated:period_0": 0.1,
+        "treated:period_1": -0.05,
+        "treated:period_2": 0.08,
+        "treated:period_4": 5.0,
+        "treated:period_5": 5.2,
+        "treated:period_6": 4.8,
+        "treated:period_7": 5.0,
     }
 
     # Create vcov matrix (diagonal for simplicity)
@@ -240,15 +227,23 @@ class TestViolationWeights:
         assert len(weights) == 4
 
     def test_constant_weights(self):
-        """Test constant violation weights."""
+        """Constant violation weights are ``[1, 1, ..., 1]`` (no L2 norm).
+
+        REGISTRY ``## PreTrendsPower`` documents ``δ_t = c`` (per-period
+        level shift) for the constant violation pattern; PR-B R13 fix
+        flipped ``_get_violation_weights('constant')`` to return the
+        unnormalized direction so ``δ_t = M`` exactly. The previous
+        L2-normalized ``[1/√K, ..., 1/√K]`` direction silently re-scaled
+        the reported MDV by ``1/√K`` relative to the documented contract.
+        """
         pt = PreTrendsPower(violation_type="constant")
         weights = pt._get_violation_weights(4)
 
-        # Should be normalized to unit norm
-        assert np.isclose(np.linalg.norm(weights), 1.0)
-        # All weights should be equal
-        assert np.allclose(weights[0], weights[1])
-        assert np.allclose(weights[1], weights[2])
+        # PR-B R13: unnormalized [1, 1, 1, 1] (NOT L2-normalized) so
+        # δ_t = M reflects a per-period level shift of magnitude M.
+        np.testing.assert_allclose(weights, [1.0, 1.0, 1.0, 1.0])
+        # L2 norm should be √K, not 1.
+        assert np.isclose(np.linalg.norm(weights), 2.0)
 
     def test_last_period_weights(self):
         """Test last_period violation weights."""
@@ -278,8 +273,15 @@ class TestPowerComputation:
     """Tests for power computation."""
 
     def test_power_at_zero_equals_alpha(self):
-        """Test that power at M=0 equals alpha (size of test)."""
-        pt = PreTrendsPower(alpha=0.05)
+        """Test that power at M=0 equals alpha (size of test).
+
+        This is a Wald-form property: under H0, the noncentrality is 0 and
+        the rejection probability equals alpha exactly. Under NIS the joint
+        rejection probability at H0 is 1 - (1 - alpha)^K ≈ K*alpha for
+        small alpha (~0.14 for K=3 at alpha=0.05). Pin Wald to test the
+        Wald-specific size property.
+        """
+        pt = PreTrendsPower(alpha=0.05, pretest_form="wald")
 
         # Create simple vcov
         n_pre = 3
@@ -395,16 +397,16 @@ class TestPreTrendsPowerFit:
         pt = PreTrendsPower()
         results = pt.fit(mock_multiperiod_results)
 
-        assert hasattr(results, 'power')
-        assert hasattr(results, 'mdv')
-        assert hasattr(results, 'violation_magnitude')
-        assert hasattr(results, 'violation_type')
-        assert hasattr(results, 'alpha')
-        assert hasattr(results, 'target_power')
-        assert hasattr(results, 'n_pre_periods')
-        assert hasattr(results, 'test_statistic')
-        assert hasattr(results, 'critical_value')
-        assert hasattr(results, 'noncentrality')
+        assert hasattr(results, "power")
+        assert hasattr(results, "mdv")
+        assert hasattr(results, "violation_magnitude")
+        assert hasattr(results, "violation_type")
+        assert hasattr(results, "alpha")
+        assert hasattr(results, "target_power")
+        assert hasattr(results, "n_pre_periods")
+        assert hasattr(results, "test_statistic")
+        assert hasattr(results, "critical_value")
+        assert hasattr(results, "noncentrality")
 
     def test_results_n_pre_periods(self, mock_multiperiod_results):
         """Test that n_pre_periods matches estimated pre-periods (excluding reference)."""
@@ -413,10 +415,13 @@ class TestPreTrendsPowerFit:
 
         # n_pre_periods should be the number of estimated coefficients (3)
         # not the total number of pre-periods (4), since period 3 is the reference
-        expected_n_pre = len([
-            p for p in mock_multiperiod_results.pre_periods
-            if f"treated:period_{p}" in mock_multiperiod_results.coefficients
-        ])
+        expected_n_pre = len(
+            [
+                p
+                for p in mock_multiperiod_results.pre_periods
+                if f"treated:period_{p}" in mock_multiperiod_results.coefficients
+            ]
+        )
         assert results.n_pre_periods == expected_n_pre
         assert results.n_pre_periods == 3  # 4 pre-periods minus 1 reference
 
@@ -468,8 +473,8 @@ class TestPowerCurve:
         df = curve.to_dataframe()
 
         assert isinstance(df, pd.DataFrame)
-        assert 'M' in df.columns
-        assert 'power' in df.columns
+        assert "M" in df.columns
+        assert "power" in df.columns
 
 
 # =============================================================================
@@ -497,9 +502,9 @@ class TestPreTrendsPowerResults:
 
         d = results.to_dict()
         assert isinstance(d, dict)
-        assert 'power' in d
-        assert 'mdv' in d
-        assert 'violation_type' in d
+        assert "power" in d
+        assert "mdv" in d
+        assert "violation_type" in d
 
     def test_results_to_dataframe(self, mock_multiperiod_results):
         """Test to_dataframe method."""
@@ -524,6 +529,47 @@ class TestPreTrendsPowerResults:
 
         assert isinstance(results.power_adequate, bool)
 
+    def test_power_at_works_for_custom_violation_type(self, mock_multiperiod_results):
+        """power_at(M) now works for custom violation type (PR-B Step 5).
+
+        PR-A R18 added a NotImplementedError guard because
+        PreTrendsPowerResults did not persist fitted violation_weights.
+        PR-B persisted them on the result dataclass and refactored
+        power_at() to read them directly. This test confirms the guard
+        is lifted for fresh fits: a custom-weights PreTrendsPower fit
+        produces a result whose power_at(M) returns a finite, in-[0,1]
+        power value.
+        """
+        weights = np.array([0.1, 0.3, 0.6])
+        pt = PreTrendsPower(violation_type="custom", violation_weights=weights)
+        results = pt.fit(mock_multiperiod_results)
+
+        # No longer raises; returns a finite power value in [0, 1].
+        power = results.power_at(0.5)
+        assert np.isfinite(power)
+        assert 0.0 <= power <= 1.0
+
+    def test_power_at_raises_on_legacy_custom_result_without_weights(
+        self, mock_multiperiod_results
+    ):
+        """power_at(M) still raises for old serialized results lacking
+        violation_weights (backwards-compat guard).
+
+        The dataclass default for violation_weights is None; old serialized
+        PreTrendsPowerResults objects from before PR-B's field addition will
+        have None there. For custom fits, power_at() cannot reconstruct
+        custom weights from violation_type + n_pre_periods alone, so the
+        PR-A R18 guard is retained for that specific backwards-compat path.
+        """
+        weights = np.array([0.1, 0.3, 0.6])
+        pt = PreTrendsPower(violation_type="custom", violation_weights=weights)
+        results = pt.fit(mock_multiperiod_results)
+        # Simulate a legacy-result scenario by clearing the persisted weights.
+        results.violation_weights = None
+
+        with pytest.raises(NotImplementedError, match="custom violation weights"):
+            results.power_at(0.5)
+
 
 # =============================================================================
 # Tests for convenience functions
@@ -542,15 +588,12 @@ class TestConvenienceFunctions:
     def test_compute_pretrends_power_custom_params(self, mock_multiperiod_results):
         """Test compute_pretrends_power with custom parameters."""
         results = compute_pretrends_power(
-            mock_multiperiod_results,
-            alpha=0.10,
-            target_power=0.90,
-            violation_type='constant'
+            mock_multiperiod_results, alpha=0.10, target_power=0.90, violation_type="constant"
         )
 
         assert results.alpha == 0.10
         assert results.target_power == 0.90
-        assert results.violation_type == 'constant'
+        assert results.violation_type == "constant"
 
     def test_compute_mdv(self, mock_multiperiod_results):
         """Test compute_mdv function."""
@@ -558,6 +601,32 @@ class TestConvenienceFunctions:
 
         assert isinstance(mdv, float)
         assert mdv > 0
+
+    def test_compute_pretrends_power_rejects_custom_violation_type(self, mock_multiperiod_results):
+        """compute_pretrends_power(..., violation_type='custom') without explicit
+        ``violation_weights`` must raise ValueError.
+
+        PR-B Step 6 added the ``violation_weights`` kwarg to both helpers, so
+        ``violation_type='custom'`` is now usable from the helper API when the
+        weights vector is supplied. This regression locks the loud-fail
+        contract for the unsupplied-weights case: silently coercing a custom
+        request into a degenerate (zero / equal-weights) fit was the PR-A
+        R18 silent-failure that the loud guard prevents. See REGISTRY.md
+        PreTrendsPower section + docs/methodology/papers/roth-2022-review.md.
+        """
+        with pytest.raises(ValueError, match="violation_weights"):
+            compute_pretrends_power(mock_multiperiod_results, violation_type="custom")
+
+    def test_compute_mdv_rejects_custom_violation_type(self, mock_multiperiod_results):
+        """compute_mdv(..., violation_type='custom') without ``violation_weights``
+        must raise ValueError.
+
+        Same contract as ``compute_pretrends_power``: PR-B Step 6 made the
+        helper accept ``violation_weights``, so the rejection is now scoped
+        to the unsupplied-weights case rather than the entire custom path.
+        """
+        with pytest.raises(ValueError, match="violation_weights"):
+            compute_mdv(mock_multiperiod_results, violation_type="custom")
 
 
 # =============================================================================
@@ -570,12 +639,12 @@ class TestGetSetParams:
 
     def test_get_params(self):
         """Test get_params method."""
-        pt = PreTrendsPower(alpha=0.10, power=0.90, violation_type='constant')
+        pt = PreTrendsPower(alpha=0.10, power=0.90, violation_type="constant")
         params = pt.get_params()
 
-        assert params['alpha'] == 0.10
-        assert params['power'] == 0.90
-        assert params['violation_type'] == 'constant'
+        assert params["alpha"] == 0.10
+        assert params["power"] == 0.90
+        assert params["violation_type"] == "constant"
 
     def test_set_params(self):
         """Test set_params method."""
@@ -626,9 +695,9 @@ class TestIntegration:
         pt = PreTrendsPower()
         sensitivity = pt.sensitivity_to_honest_did(mock_multiperiod_results)
 
-        assert 'mdv' in sensitivity
-        assert 'interpretation' in sensitivity
-        assert isinstance(sensitivity['interpretation'], str)
+        assert "mdv" in sensitivity
+        assert "interpretation" in sensitivity
+        assert isinstance(sensitivity["interpretation"], str)
 
 
 # =============================================================================
@@ -641,30 +710,30 @@ class TestViolationTypes:
 
     def test_linear_violation(self, mock_multiperiod_results):
         """Test power analysis with linear violation."""
-        pt = PreTrendsPower(violation_type='linear')
+        pt = PreTrendsPower(violation_type="linear")
         results = pt.fit(mock_multiperiod_results)
 
-        assert results.violation_type == 'linear'
+        assert results.violation_type == "linear"
 
     def test_constant_violation(self, mock_multiperiod_results):
         """Test power analysis with constant violation."""
-        pt = PreTrendsPower(violation_type='constant')
+        pt = PreTrendsPower(violation_type="constant")
         results = pt.fit(mock_multiperiod_results)
 
-        assert results.violation_type == 'constant'
+        assert results.violation_type == "constant"
 
     def test_last_period_violation(self, mock_multiperiod_results):
         """Test power analysis with last_period violation."""
-        pt = PreTrendsPower(violation_type='last_period')
+        pt = PreTrendsPower(violation_type="last_period")
         results = pt.fit(mock_multiperiod_results)
 
-        assert results.violation_type == 'last_period'
+        assert results.violation_type == "last_period"
 
     def test_different_types_give_different_results(self, mock_multiperiod_results):
         """Test that different violation types can give different MDV."""
-        pt_linear = PreTrendsPower(violation_type='linear')
-        pt_constant = PreTrendsPower(violation_type='constant')
-        pt_last = PreTrendsPower(violation_type='last_period')
+        pt_linear = PreTrendsPower(violation_type="linear")
+        pt_constant = PreTrendsPower(violation_type="constant")
+        pt_last = PreTrendsPower(violation_type="last_period")
 
         mdv_linear = pt_linear.fit(mock_multiperiod_results).mdv
         mdv_constant = pt_constant.fit(mock_multiperiod_results).mdv
@@ -696,21 +765,17 @@ class TestEdgeCases:
         """
         period_effects = {
             2: PeriodEffect(
-                period=2, effect=0.1, se=0.5,
-                t_stat=0.2, p_value=0.84,
-                conf_int=(-0.88, 1.08)
+                period=2, effect=0.1, se=0.5, t_stat=0.2, p_value=0.84, conf_int=(-0.88, 1.08)
             ),
             # Period 3 is reference - not estimated
             4: PeriodEffect(
-                period=4, effect=5.0, se=0.5,
-                t_stat=10.0, p_value=0.0001,
-                conf_int=(4.02, 5.98)
+                period=4, effect=5.0, se=0.5, t_stat=10.0, p_value=0.0001, conf_int=(4.02, 5.98)
             ),
         }
 
         coefficients = {
-            'treated:period_2': 0.1,
-            'treated:period_4': 5.0,
+            "treated:period_2": 0.1,
+            "treated:period_4": 5.0,
         }
 
         results = MultiPeriodDiDResults(
@@ -747,25 +812,31 @@ class TestEdgeCases:
         period_effects = {}
         for i in range(n_pre_estimated):
             period_effects[i] = PeriodEffect(
-                period=i, effect=0.05 * (i - 4), se=0.5,
-                t_stat=0.1 * (i - 4), p_value=0.92,
-                conf_int=(-0.88, 1.08)
+                period=i,
+                effect=0.05 * (i - 4),
+                se=0.5,
+                t_stat=0.1 * (i - 4),
+                p_value=0.92,
+                conf_int=(-0.88, 1.08),
             )
 
         # Post-period effects
         for i in range(4):
             period_effects[n_pre_total + i] = PeriodEffect(
-                period=n_pre_total + i, effect=5.0, se=0.5,
-                t_stat=10.0, p_value=0.0001,
-                conf_int=(4.02, 5.98)
+                period=n_pre_total + i,
+                effect=5.0,
+                se=0.5,
+                t_stat=10.0,
+                p_value=0.0001,
+                conf_int=(4.02, 5.98),
             )
 
         # Coefficients (excluding reference period 9)
         coefficients = {}
         for i in range(n_pre_estimated):
-            coefficients[f'treated:period_{i}'] = 0.05 * (i - 4)
+            coefficients[f"treated:period_{i}"] = 0.05 * (i - 4)
         for i in range(4):
-            coefficients[f'treated:period_{n_pre_total + i}'] = 5.0
+            coefficients[f"treated:period_{n_pre_total + i}"] = 5.0
 
         results = MultiPeriodDiDResults(
             period_effects=period_effects,
@@ -792,8 +863,10 @@ class TestEdgeCases:
         """Test that unsupported results type raises TypeError."""
         pt = PreTrendsPower()
 
-        with pytest.raises(TypeError, match="Unsupported results type"):
+        with pytest.raises(TypeError, match="Unsupported results type") as exc_info:
             pt.fit("not a results object")
+        # The expected-types list names the post-fit container route too.
+        assert "EventStudyResults" in str(exc_info.value)
 
     def test_callaway_santanna_universal_base_period(self):
         """Test that reference period (e=-1) is correctly filtered out with universal base period.
@@ -808,16 +881,16 @@ class TestEdgeCases:
         cs = CallawaySantAnna(base_period="universal")
         results = cs.fit(
             data,
-            outcome='outcome',
-            unit='unit',
-            time='period',
-            first_treat='first_treat',
-            aggregate='event_study'
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            aggregate="event_study",
         )
 
         # Verify reference period exists with NaN SE
         assert -1 in results.event_study_effects
-        assert np.isnan(results.event_study_effects[-1]['se'])
+        assert np.isnan(results.event_study_effects[-1]["se"])
 
         # PreTrendsPower should work without errors (reference period filtered out)
         pt = PreTrendsPower()
@@ -841,7 +914,7 @@ class TestVisualization:
         pt = PreTrendsPower()
         curve = pt.power_curve(mock_multiperiod_results)
 
-        assert hasattr(curve, 'plot')
+        assert hasattr(curve, "plot")
         assert callable(curve.plot)
 
 
@@ -872,13 +945,17 @@ class TestPreTrendsPowerResultsPowerAt:
         assert 0 <= power_5 <= 1
 
     def test_power_at_zero(self, mock_multiperiod_results):
-        """Test power_at with M=0 (should equal alpha)."""
-        pt = PreTrendsPower(alpha=0.05)
+        """Test power_at with M=0 (should equal alpha under Wald form).
+
+        See note on TestPowerComputation.test_power_at_zero_equals_alpha:
+        the exact-equals-alpha property is Wald-specific. Pin Wald.
+        """
+        pt = PreTrendsPower(alpha=0.05, pretest_form="wald")
         results = pt.fit(mock_multiperiod_results)
 
         power_0 = results.power_at(0.0)
 
-        # At M=0, power should equal size (alpha)
+        # At M=0, power should equal size (alpha) under Wald.
         assert np.isclose(power_0, 0.05, atol=0.01)
 
     def test_power_at_matches_fit(self, mock_multiperiod_results):
@@ -944,18 +1021,26 @@ class TestPrePeriodsParameter:
         # Pre-periods (0, 1, 2) - period 3 would be reference
         for p in [0, 1, 2]:
             period_effects[p] = PeriodEffect(
-                period=p, effect=np.random.normal(0, 0.1), se=0.5,
-                t_stat=0.2, p_value=0.84, conf_int=(-0.88, 1.08)
+                period=p,
+                effect=np.random.normal(0, 0.1),
+                se=0.5,
+                t_stat=0.2,
+                p_value=0.84,
+                conf_int=(-0.88, 1.08),
             )
-            coefficients[f'treated:period_{p}'] = period_effects[p].effect
+            coefficients[f"treated:period_{p}"] = period_effects[p].effect
 
         # Post-periods (4, 5, 6, 7)
         for p in [4, 5, 6, 7]:
             period_effects[p] = PeriodEffect(
-                period=p, effect=5.0 + np.random.normal(0, 0.1), se=0.5,
-                t_stat=10.0, p_value=0.0001, conf_int=(4.02, 5.98)
+                period=p,
+                effect=5.0 + np.random.normal(0, 0.1),
+                se=0.5,
+                t_stat=10.0,
+                p_value=0.0001,
+                conf_int=(4.02, 5.98),
             )
-            coefficients[f'treated:period_{p}'] = period_effects[p].effect
+            coefficients[f"treated:period_{p}"] = period_effects[p].effect
 
         # In this scenario, pre_periods=[3] (only reference), post_periods=[0,1,2,4,5,6,7]
         vcov = np.diag([0.25] * 7)
@@ -983,10 +1068,7 @@ class TestPrePeriodsParameter:
         # Without pre_periods, would fail because results.pre_periods=[3]
         # and period 3 has no coefficient (it's the reference)
         # With explicit pre_periods=[0,1,2], should work
-        results = pt.fit(
-            event_study_all_periods_results,
-            pre_periods=[0, 1, 2]
-        )
+        results = pt.fit(event_study_all_periods_results, pre_periods=[0, 1, 2])
 
         assert results.n_pre_periods == 3
         assert results.power >= 0
@@ -997,10 +1079,7 @@ class TestPrePeriodsParameter:
         pt = PreTrendsPower()
 
         # Explicitly set pre_periods to [0, 1]
-        results = pt.fit(
-            event_study_all_periods_results,
-            pre_periods=[0, 1]
-        )
+        results = pt.fit(event_study_all_periods_results, pre_periods=[0, 1])
 
         # Should use 2 pre-periods, not what's in results
         assert results.n_pre_periods == 2
@@ -1009,11 +1088,7 @@ class TestPrePeriodsParameter:
         """Test power_at() method with pre_periods parameter."""
         pt = PreTrendsPower()
 
-        power = pt.power_at(
-            event_study_all_periods_results,
-            M=1.0,
-            pre_periods=[0, 1, 2]
-        )
+        power = pt.power_at(event_study_all_periods_results, M=1.0, pre_periods=[0, 1, 2])
 
         assert 0 <= power <= 1
 
@@ -1021,11 +1096,7 @@ class TestPrePeriodsParameter:
         """Test power_curve() with pre_periods parameter."""
         pt = PreTrendsPower()
 
-        curve = pt.power_curve(
-            event_study_all_periods_results,
-            n_points=10,
-            pre_periods=[0, 1, 2]
-        )
+        curve = pt.power_curve(event_study_all_periods_results, n_points=10, pre_periods=[0, 1, 2])
 
         assert len(curve.M_values) == 10
         assert len(curve.powers) == 10
@@ -1035,26 +1106,20 @@ class TestPrePeriodsParameter:
         pt = PreTrendsPower()
 
         sensitivity = pt.sensitivity_to_honest_did(
-            event_study_all_periods_results,
-            pre_periods=[0, 1, 2]
+            event_study_all_periods_results, pre_periods=[0, 1, 2]
         )
 
-        assert 'mdv' in sensitivity
-        assert sensitivity['mdv'] > 0
+        assert "mdv" in sensitivity
+        assert sensitivity["mdv"] > 0
 
     def test_convenience_functions_with_pre_periods(self, event_study_all_periods_results):
         """Test convenience functions with pre_periods parameter."""
         # compute_mdv
-        mdv = compute_mdv(
-            event_study_all_periods_results,
-            pre_periods=[0, 1, 2]
-        )
+        mdv = compute_mdv(event_study_all_periods_results, pre_periods=[0, 1, 2])
         assert mdv > 0
 
         # compute_pretrends_power
         results = compute_pretrends_power(
-            event_study_all_periods_results,
-            M=1.0,
-            pre_periods=[0, 1, 2]
+            event_study_all_periods_results, M=1.0, pre_periods=[0, 1, 2]
         )
         assert results.n_pre_periods == 3

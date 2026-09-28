@@ -16,12 +16,58 @@ References
 
 import warnings
 from dataclasses import dataclass, field, replace
-from typing import List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
 
 from diff_diff.linalg import _factorize_cluster_ids
+
+
+def validate_raw_weights(raw_weights: np.ndarray, weight_type: Optional[str] = None) -> None:
+    """Reject a raw (pre-normalization) weight vector that cannot be used.
+
+    Shared by ``SurveyDesign.resolve`` and by callers that must read the raw
+    weight column BEFORE resolution, so both paths raise the same errors in the
+    same order rather than drifting apart.
+
+    ``WooldridgeDiD`` is such a caller: it decides cohort-time cell SUPPORT from
+    raw weights (a cell whose rows all carry zero weight is absent from the
+    effective regression), and an unsupported reference period EXCLUDES that
+    cohort's rows. An invalid weight sitting only in the excluded rows would
+    therefore never reach ``resolve()`` -- the fit would drop a cohort, report a
+    confident finite estimate, and warn that the cohort "has no pre-treatment
+    period" when in fact its periods were merely poisoned. Validating the raw
+    vector up front closes that path.
+
+    Raises
+    ------
+    ValueError
+        If any weight is NaN, infinite, or negative, or if every weight is zero.
+    """
+    if np.any(np.isnan(raw_weights)):
+        raise ValueError("Weights contain NaN values")
+    if np.any(~np.isfinite(raw_weights)):
+        raise ValueError("Weights contain Inf values")
+    if np.any(raw_weights < 0):
+        raise ValueError("Weights must be non-negative")
+    if np.any(raw_weights == 0) and np.all(raw_weights == 0):
+        raise ValueError(
+            "All weights are zero. At least one observation must " "have a positive weight."
+        )
+    # fweight validation: must be non-negative integers. Lives here, not only in
+    # resolve(), because callers that read raw weights early must enforce EVERY
+    # documented weight-type rule -- a fractional fweight in a cohort that
+    # support-based exclusion later removes would otherwise never be seen.
+    if weight_type == "fweight":
+        pos_mask = raw_weights > 0
+        if np.any(pos_mask):
+            fractional = raw_weights[pos_mask] - np.round(raw_weights[pos_mask])
+            if np.any(np.abs(fractional) > 1e-10):
+                raise ValueError(
+                    "Frequency weights (fweight) must be non-negative integers. "
+                    "Fractional values detected. Use pweight for non-integer weights."
+                )
 
 
 @dataclass
@@ -83,7 +129,7 @@ class SurveyDesign:
                 f"lonely_psu must be one of {valid_lonely}, " f"got '{self.lonely_psu}'"
             )
         # Replicate weight validation
-        valid_rep_methods = {"BRR", "Fay", "JK1", "JKn"}
+        valid_rep_methods = {"BRR", "Fay", "JK1", "JKn", "SDR"}
         if self.replicate_method is not None:
             if self.replicate_method not in valid_rep_methods:
                 raise ValueError(
@@ -163,28 +209,7 @@ class SurveyDesign:
                 raise ValueError(f"Weight column '{self.weights}' not found in data")
             raw_weights = data[self.weights].values.astype(np.float64)
 
-            # Validate weights
-            if np.any(np.isnan(raw_weights)):
-                raise ValueError("Weights contain NaN values")
-            if np.any(~np.isfinite(raw_weights)):
-                raise ValueError("Weights contain Inf values")
-            if np.any(raw_weights < 0):
-                raise ValueError("Weights must be non-negative")
-            if np.any(raw_weights == 0) and np.all(raw_weights == 0):
-                raise ValueError(
-                    "All weights are zero. At least one observation must " "have a positive weight."
-                )
-
-            # fweight validation: must be non-negative integers
-            if self.weight_type == "fweight":
-                pos_mask = raw_weights > 0
-                if np.any(pos_mask):
-                    fractional = raw_weights[pos_mask] - np.round(raw_weights[pos_mask])
-                    if np.any(np.abs(fractional) > 1e-10):
-                        raise ValueError(
-                            "Frequency weights (fweight) must be non-negative integers. "
-                            "Fractional values detected. Use pweight for non-integer weights."
-                        )
+            validate_raw_weights(raw_weights, self.weight_type)
 
             # Normalize: pweights/aweights to sum=n (mean=1); fweights unchanged
             # Skip normalization for replicate designs — the IF path uses
@@ -192,7 +217,15 @@ class SurveyDesign:
             if self.replicate_weights is not None:
                 weights = raw_weights.copy()
             elif self.weight_type in ("pweight", "aweight"):
-                weights = raw_weights * (n / np.sum(raw_weights))
+                raw_sum = float(np.sum(raw_weights))
+                weights = raw_weights * (n / raw_sum)
+                if not np.isclose(raw_sum, n):
+                    warnings.warn(
+                        f"{self.weight_type} weights normalized to mean=1 "
+                        f"(sum={n}). Original sum was {raw_sum:.4g}.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
             else:
                 weights = raw_weights.copy()
         else:
@@ -258,6 +291,7 @@ class SurveyDesign:
                     else None
                 ),
                 mse=self.mse,
+                nest=self.nest,
             )
 
         # --- Strata ---
@@ -409,6 +443,7 @@ class SurveyDesign:
             n_strata=n_strata,
             n_psu=n_psu,
             lonely_psu=self.lonely_psu,
+            nest=self.nest,
         )
 
     def subpopulation(
@@ -572,6 +607,10 @@ class ResolvedSurveyDesign:
     replicate_scale: Optional[float] = None
     replicate_rscales: Optional[np.ndarray] = None  # (R,) per-replicate scales
     mse: bool = False
+    # Preserved from SurveyDesign for use by downstream helpers (e.g.
+    # `_inject_cluster_as_psu` honors `nest` when substituting cluster=<col>
+    # for an absent PSU column).
+    nest: bool = False
 
     @property
     def uses_replicate_variance(self) -> bool:
@@ -631,7 +670,10 @@ class ResolvedSurveyDesign:
         """Create a unit-level copy preserving replicate metadata.
 
         Used by panel estimators (ContinuousDiD, EfficientDiD) that collapse
-        panel-level survey info to one row per unit.
+        panel-level survey info to one row per unit. Callers that only have a
+        ``row_idx`` (first panel row per unit) should prefer the
+        :meth:`subset_to_units_by_row_idx` convenience wrapper, which folds the
+        index-and-recount preamble.
 
         Parameters
         ----------
@@ -662,12 +704,130 @@ class ResolvedSurveyDesign:
             replicate_scale=self.replicate_scale,
             replicate_rscales=self.replicate_rscales,
             mse=self.mse,
+            nest=self.nest,
+        )
+
+    def subset_to_units_by_row_idx(
+        self,
+        row_idx: np.ndarray,
+        unit_weights: Optional[np.ndarray] = None,
+    ) -> "ResolvedSurveyDesign":
+        """Collapse this panel-level design to unit level given a ``row_idx``.
+
+        Convenience wrapper over :meth:`subset_to_units` that folds the
+        index-and-recount preamble panel estimators (ContinuousDiD,
+        EfficientDiD) would otherwise hand-roll: index ``strata`` / ``psu`` /
+        ``fpc`` at ``row_idx`` (one panel row per unit) and recount
+        ``n_strata`` / ``n_psu`` from the collapsed arrays.
+
+        Parameters
+        ----------
+        row_idx : np.ndarray
+            First panel-row position for each unit (see
+            :func:`build_unit_first_row_index`).
+        unit_weights : np.ndarray, optional
+            Pre-collapsed unit-level weights. When ``None`` (default), uses
+            ``self.weights[row_idx]`` — identical to the caller-side
+            ``survey_weights[row_idx]`` collapse.
+        """
+        if unit_weights is None:
+            unit_weights = self.weights[row_idx]
+        unit_strata = self.strata[row_idx] if self.strata is not None else None
+        unit_psu = self.psu[row_idx] if self.psu is not None else None
+        unit_fpc = self.fpc[row_idx] if self.fpc is not None else None
+        n_strata_u = len(np.unique(unit_strata)) if unit_strata is not None else 0
+        n_psu_u = len(np.unique(unit_psu)) if unit_psu is not None else 0
+        return self.subset_to_units(
+            row_idx,
+            unit_weights,
+            unit_strata,
+            unit_psu,
+            unit_fpc,
+            n_strata_u,
+            n_psu_u,
         )
 
     @property
     def needs_survey_vcov(self) -> bool:
         """Whether survey vcov (not generic sandwich) should be used."""
         return True  # Any resolved survey design uses the survey vcov path
+
+
+def make_pweight_design(weights: np.ndarray) -> "ResolvedSurveyDesign":
+    """Construct a pweight-only ResolvedSurveyDesign from a raw weight array.
+
+    Use this on the array-in HAD pretest helpers (``stute_test``,
+    ``yatchew_hr_test``, ``stute_joint_pretest``) when the caller has only
+    a per-observation weight array and no PSU/strata/FPC structure::
+
+        from diff_diff import stute_test, make_pweight_design
+        result = stute_test(d, dy, survey_design=make_pweight_design(w))
+
+    For the data-in HAD surfaces (``HeterogeneousAdoptionDiD.fit``,
+    ``did_had_pretest_workflow``, ``joint_pretrends_test``,
+    ``joint_homogeneity_test``), prefer adding the weights as a column on
+    your dataframe and passing ``SurveyDesign(weights="col_name")`` instead;
+    those surfaces resolve column references against ``data`` at fit time
+    (the standard library convention used by ContinuousDiD, EfficientDiD,
+    and ChaisemartinDHaultfoeuille).
+
+    Internal note: this constructs a synthetic ``ResolvedSurveyDesign`` with
+    each observation as its own PSU and no strata/FPC, so PSU-level
+    multiplier-bootstrap kernels reduce bit-exactly to per-observation
+    Mammen draws while sharing the survey-aware code path with full PSU /
+    strata / FPC designs (mirrors the PR #363 synthetic-trivial-resolved
+    pattern).
+
+    Parameters
+    ----------
+    weights : np.ndarray, shape (n_obs,)
+        Per-observation positive weights. Must be 1-D (shape ``(n_obs,)``);
+        scalars, 0-D arrays, and column-vector inputs (shape ``(n, 1)``)
+        raise ``ValueError`` at the front door. Caller is responsible for
+        any non-negativity / per-unit-constancy validation. Typical usage
+        is positional (``make_pweight_design(arr)``); the parameter name
+        ``weights`` collides linguistically with the (removed, 3.7.x)
+        ``weights=`` kwarg the HAD surfaces once carried, so prefer the
+        positional form.
+
+    Returns
+    -------
+    ResolvedSurveyDesign
+        With ``weight_type="pweight"``, ``strata=psu=fpc=None``,
+        ``n_strata=0``, ``n_psu=n_obs`` (each observation is its own PSU
+        under the trivial design), ``lonely_psu="remove"``,
+        ``replicate_weights=None``.
+
+    Raises
+    ------
+    ValueError
+        If ``weights`` is not 1-D (PR #376 R3 P1: catches scalar / 0-D /
+        column-vector inputs with a clear front-door message instead of
+        bubbling a low-level numpy or dataclass exception).
+    """
+    w = np.asarray(weights, dtype=np.float64)
+    if w.ndim != 1:
+        raise ValueError(
+            f"make_pweight_design: weights must be 1-dimensional (1-D, shape "
+            f"(n_obs,)), got shape {w.shape}. Common mistakes: scalar / 0-D "
+            f"input (`make_pweight_design(1.0)`); column-vector "
+            f"(`make_pweight_design(df[['w']].to_numpy())` produces (n, 1) "
+            f"-- use `df['w'].to_numpy()` for (n,)); 2-D matrix input."
+        )
+    n_obs = int(w.shape[0])
+    return ResolvedSurveyDesign(
+        weights=w,
+        weight_type="pweight",
+        strata=None,
+        psu=None,
+        fpc=None,
+        n_strata=0,
+        n_psu=n_obs,
+        lonely_psu="remove",
+    )
+
+
+_make_trivial_resolved = make_pweight_design
 
 
 @dataclass
@@ -940,6 +1100,26 @@ def _resolve_pweight_only(resolved_survey, estimator_name):
         )
 
 
+def build_unit_first_row_index(unit_values: np.ndarray, unit_order: Sequence[Any]) -> np.ndarray:
+    """Positional index of each unit's first row, aligned to ``unit_order``.
+
+    Panel estimators that collapse a panel-level survey design to unit level
+    (ContinuousDiD, EfficientDiD) need, for each unit, the position of its first
+    row in the fit DataFrame so panel-length survey arrays can be indexed down
+    to one row per unit. ``unit_values`` is the fit frame's unit column
+    (``df[unit].values``, in row order); ``unit_order`` is the estimator's
+    canonical unit ordering (typically ``all_units = sorted(df[unit].unique())``).
+
+    Returns an ``int`` array ``idx`` where ``idx[i]`` is the first row position
+    of ``unit_order[i]``.
+    """
+    first_pos: dict = {}
+    for i, u in enumerate(unit_values):
+        if u not in first_pos:
+            first_pos[u] = i
+    return np.array([first_pos[u] for u in unit_order], dtype=int)
+
+
 def collapse_survey_to_unit_level(resolved_survey, df, unit_col, all_units):
     """Collapse observation-level ResolvedSurveyDesign to unit level.
 
@@ -1037,6 +1217,7 @@ def collapse_survey_to_unit_level(resolved_survey, df, unit_col, all_units):
         replicate_scale=resolved_survey.replicate_scale,
         replicate_rscales=resolved_survey.replicate_rscales,
         mse=resolved_survey.mse,
+        nest=resolved_survey.nest,
     )
 
 
@@ -1050,7 +1231,12 @@ def _extract_unit_survey_weights(data, unit_col, survey_design, unit_order):
     unit_col : str
         Unit identifier column name.
     survey_design : SurveyDesign
-        Survey design (uses ``weights`` column name).
+        Survey design. When ``survey_design.weights`` is a column name,
+        the weights are pulled from ``data``. When ``survey_design.weights
+        is None`` (a valid configuration — ``SurveyDesign.resolve()`` then
+        synthesizes ones), returns a vector of ones of length
+        ``len(unit_order)`` so downstream estimators can treat all units
+        as having unit survey weight 1.
     unit_order : array-like
         Ordered sequence of unit identifiers to align weights to.
 
@@ -1059,11 +1245,28 @@ def _extract_unit_survey_weights(data, unit_col, survey_design, unit_order):
     np.ndarray
         Float64 array of unit-level weights, one per unit in ``unit_order``.
     """
+    if survey_design.weights is None:
+        # SurveyDesign(weights=None, strata=..., psu=...) is a valid
+        # configuration — the design element supplies clustering /
+        # stratification without explicit per-unit weights. Synthesize
+        # uniform unit weights of 1 to match SurveyDesign.resolve()'s
+        # behavior (which emits ones when weights is None). Without this
+        # branch the groupby below would raise a KeyError on ``None``.
+        return np.ones(len(unit_order), dtype=np.float64)
     unit_w = data.groupby(unit_col)[survey_design.weights].first()
     return np.array([unit_w[u] for u in unit_order], dtype=np.float64)
 
 
-def _resolve_survey_for_fit(survey_design, data, inference_mode="analytical"):
+def _resolve_survey_for_fit(
+    survey_design: Optional["SurveyDesign"],
+    data: pd.DataFrame,
+    inference_mode: str = "analytical",
+) -> Tuple[
+    Optional["ResolvedSurveyDesign"],
+    Optional[np.ndarray],
+    str,
+    Optional["SurveyMetadata"],
+]:
     """
     Shared helper: validate and resolve a SurveyDesign for an estimator fit() call.
 
@@ -1079,14 +1282,13 @@ def _resolve_survey_for_fit(survey_design, data, inference_mode="analytical"):
     if inference_mode == "wild_bootstrap":
         raise NotImplementedError(
             "Wild bootstrap with survey weights is not yet supported. "
-            "Use inference='analytical' with survey_design, or see "
-            "docs/survey-roadmap.md for planned Phase 5 support."
+            "Use analytical survey inference (the default) instead."
         )
 
     resolved = survey_design.resolve(data)
     raw_w = (
         data[survey_design.weights].values.astype(np.float64)
-        if survey_design.weights
+        if survey_design.weights is not None
         else np.ones(len(data), dtype=np.float64)
     )
     metadata = compute_survey_metadata(resolved, raw_w)
@@ -1123,6 +1325,15 @@ def _inject_cluster_as_psu(resolved, cluster_ids):
     When survey design has no PSU but cluster_ids are provided,
     inject cluster_ids as the effective PSU for TSL variance estimation.
 
+    Honors ``resolved.nest`` matching the explicit-PSU resolver at
+    ``SurveyDesign.resolve()`` (L299-L318):
+      - ``nest=True`` (or no strata): nest cluster IDs within strata via
+        ``f"{s}_{c}"`` so repeated cluster labels across strata become
+        distinct PSUs.
+      - ``nest=False`` AND strata present: cluster labels must be
+        globally unique (no overlap across strata); raise if they
+        repeat, mirroring the explicit-PSU `nest=False` contract.
+
     Returns a new ResolvedSurveyDesign (no mutation) or the original unchanged.
     """
     if resolved is None or cluster_ids is None:
@@ -1138,11 +1349,31 @@ def _inject_cluster_as_psu(resolved, cluster_ids):
             "when used as effective PSUs for survey variance estimation."
         )
 
-    # When strata are present, make cluster IDs unique within strata
-    # (same nesting logic as SurveyDesign.resolve() with nest=True)
     if resolved.strata is not None:
-        combined = np.array([f"{s}_{c}" for s, c in zip(resolved.strata, cluster_ids)])
-        codes, uniques = pd.factorize(combined)
+        if resolved.nest:
+            # Nest cluster IDs within strata: combined `(stratum, cluster)`
+            # labels are globally unique by construction.
+            combined = np.array([f"{s}_{c}" for s, c in zip(resolved.strata, cluster_ids)])
+            codes, uniques = pd.factorize(combined)
+        else:
+            # nest=False contract: cluster labels must be globally unique
+            # across strata (same gate as `SurveyDesign.resolve()` L305-L316).
+            # Validate by checking that each cluster label appears in
+            # exactly one stratum.
+            df_check = pd.DataFrame({"stratum": resolved.strata, "cluster": cluster_ids})
+            overlap = df_check.groupby("cluster")["stratum"].nunique()
+            ambiguous = overlap[overlap > 1]
+            if len(ambiguous) > 0:
+                bad_examples = list(ambiguous.index[:5])
+                raise ValueError(
+                    f"Cluster IDs repeat across strata under nest=False: "
+                    f"{len(ambiguous)} cluster label(s) appear in multiple "
+                    f"strata (examples: {bad_examples}). Either set "
+                    f"nest=True in SurveyDesign so cluster IDs are made "
+                    f"unique within strata, or pass an explicit unique "
+                    f"`psu=<col>` to SurveyDesign."
+                )
+            codes, uniques = pd.factorize(cluster_ids)
     else:
         codes, uniques = pd.factorize(cluster_ids)
     n_clusters = len(uniques)
@@ -1297,6 +1528,573 @@ def _compute_stratified_psu_meat(
     return meat, _variance_computed, legitimate_zero_count
 
 
+@dataclass(frozen=True)
+class _PsuScaffolding:
+    """Precomputed stratum/PSU layout for amortized TSL variance.
+
+    Internal helper used by :func:`diff_diff.prep.aggregate_survey` to reuse
+    design-dependent scaffolding across hundreds of per-cell variance calls.
+    Holds integer codes, per-stratum counts, FPC ratios, and static
+    variance-computability flags that depend only on the
+    :class:`ResolvedSurveyDesign` (not on the psi / outcome being collapsed).
+
+    See :func:`_compute_if_variance_fast` for the fast variance path that
+    consumes this scaffolding.  Numerically equivalent to
+    :func:`compute_survey_if_variance` up to sub-ULP reduction-order drift.
+    """
+
+    mode: str  # "no_strata_no_psu" | "psu_only" | "stratified"
+    n: int
+    lonely_psu: str
+    variance_computable: bool
+    legitimate_zero_count: int
+    # stratified-mode fields (None in other modes):
+    psu_codes: Optional[np.ndarray] = None  # (n,) int, global PSU id 0..P-1
+    psu_stratum: Optional[np.ndarray] = None  # (P,) int, stratum of each PSU
+    n_psu_per_stratum: Optional[np.ndarray] = None  # (S,) int
+    singleton_strata: Optional[np.ndarray] = None  # (S,) bool
+    adjustment_h: Optional[np.ndarray] = None  # (S,) float, (1-f_h)*n_h/(n_h-1); 0 for singletons
+    # psu_only-mode fields (None in other modes):
+    psu_codes_only: Optional[np.ndarray] = None  # (n,) int, PSU id 0..P-1
+    n_psu_only: Optional[int] = None
+    adjustment_only: Optional[float] = None  # (1-f)*n_psu/(n_psu-1) or 0
+    # no_strata_no_psu-mode fields (None in other modes):
+    adjustment_direct: Optional[float] = None  # (1-f)*n/(n-1) or 0
+
+
+def _precompute_psu_scaffolding(resolved: "ResolvedSurveyDesign") -> _PsuScaffolding:
+    """Precompute per-design PSU/stratum scaffolding for fast per-cell variance.
+
+    Equivalent in effect to the per-call scaffolding work inside
+    :func:`_compute_stratified_psu_meat`, but done once per design instead of
+    once per output cell.  For the typical BRFSS-scale
+    :func:`~diff_diff.prep.aggregate_survey` workload (~500 cells, ~20 strata),
+    this amortizes the pandas-groupby + ``np.unique`` setup that otherwise
+    dominates the chain runtime.
+
+    Parameters
+    ----------
+    resolved : ResolvedSurveyDesign
+        Resolved survey design.  Must NOT use replicate variance
+        (``resolved.uses_replicate_variance`` False).
+
+    Returns
+    -------
+    _PsuScaffolding
+        Frozen dataclass with mode-appropriate precomputed fields.
+
+    Raises
+    ------
+    ValueError
+        Same FPC-vs-n guards as :func:`_compute_stratified_psu_meat`
+        (FPC must be >= effective PSU count in each stratum).
+    """
+    weights = resolved.weights
+    n = int(len(weights))
+    strata = resolved.strata
+    psu = resolved.psu
+    fpc = resolved.fpc
+    lonely_psu = resolved.lonely_psu
+
+    if strata is None and psu is None:
+        # Implicit per-observation PSUs
+        f = 0.0
+        lz_count = 0
+        if fpc is not None:
+            N = fpc[0]
+            if N < n:
+                raise ValueError(
+                    f"FPC ({N}) is less than the number of observations "
+                    f"({n}). FPC must be >= n_obs for implicit per-observation PSUs."
+                )
+            f = n / N
+            if f >= 1.0:
+                lz_count = 1
+        var_computable = n >= 2
+        adjustment = (1.0 - f) * (n / (n - 1)) if n >= 2 else 0.0
+        return _PsuScaffolding(
+            mode="no_strata_no_psu",
+            n=n,
+            lonely_psu=lonely_psu,
+            variance_computable=var_computable,
+            legitimate_zero_count=lz_count,
+            adjustment_direct=float(adjustment),
+        )
+
+    if strata is None and psu is not None:
+        # Single-stratum cluster-robust
+        psu_arr = np.asarray(psu)
+        codes, uniques = pd.factorize(psu_arr)
+        n_psu = int(len(uniques))
+        f = 0.0
+        lz_count = 0
+        if n_psu >= 2:
+            if fpc is not None:
+                N = fpc[0]
+                if N < n_psu:
+                    raise ValueError(
+                        f"FPC ({N}) is less than the number of effective PSUs "
+                        f"({n_psu}). FPC must be >= n_PSU."
+                    )
+                f = n_psu / N
+                if f >= 1.0:
+                    lz_count = 1
+            adjustment = (1.0 - f) * (n_psu / (n_psu - 1))
+            var_computable = True
+        else:
+            adjustment = 0.0
+            var_computable = False
+        return _PsuScaffolding(
+            mode="psu_only",
+            n=n,
+            lonely_psu=lonely_psu,
+            variance_computable=var_computable,
+            legitimate_zero_count=lz_count,
+            psu_codes_only=codes.astype(np.int64),
+            n_psu_only=n_psu,
+            adjustment_only=float(adjustment),
+        )
+
+    # Stratified branch (with or without PSU)
+    strata_arr = np.asarray(strata)
+    strata_codes, strata_uniques = pd.factorize(strata_arr, sort=True)
+    strata_codes = strata_codes.astype(np.int64)
+    S = int(len(strata_uniques))
+
+    if psu is not None:
+        # Global PSU codes unique across (stratum, psu) pairs — matches the
+        # legacy per-stratum pandas groupby which never aggregated PSU labels
+        # across strata.
+        psu_arr = np.asarray(psu)
+        psu_local_codes, _ = pd.factorize(psu_arr)
+        psu_local_codes = psu_local_codes.astype(np.int64)
+        psu_local_max = int(psu_local_codes.max()) if len(psu_local_codes) > 0 else 0
+        compound = strata_codes * (psu_local_max + 1) + psu_local_codes
+        psu_codes, _ = pd.factorize(compound)
+        psu_codes = psu_codes.astype(np.int64)
+        P = int(psu_codes.max() + 1) if len(psu_codes) > 0 else 0
+        psu_stratum = np.zeros(P, dtype=np.int64)
+        # Safe scatter: by construction, all observations sharing a global
+        # PSU code share a stratum, so repeated writes to the same position
+        # store the same value.
+        if P > 0:
+            psu_stratum[psu_codes] = strata_codes
+    else:
+        # Each observation is its own PSU within its stratum (legacy
+        # behavior when strata is not None and psu is None).
+        psu_codes = np.arange(n, dtype=np.int64)
+        P = n
+        psu_stratum = strata_codes.copy()
+
+    n_psu_per_stratum = np.bincount(psu_stratum, minlength=S).astype(np.int64)
+    singleton_strata = n_psu_per_stratum == 1
+
+    # Per-stratum FPC ratio (stratum-level attribute; read from the first
+    # observation of each stratum, matching legacy ``resolved.fpc[mask_h][0]``).
+    f_h = np.zeros(S, dtype=np.float64)
+    if fpc is not None:
+        fpc_arr = np.asarray(fpc)
+        # Vectorized "first-in-stratum" FPC lookup:
+        # pd.factorize with sort=True iterates the array in input order, so
+        # the first observation encountered for each stratum_code is the
+        # reference row.
+        first_idx = np.full(S, -1, dtype=np.int64)
+        seen = np.zeros(S, dtype=bool)
+        for i in range(n):
+            h = strata_codes[i]
+            if not seen[h]:
+                seen[h] = True
+                first_idx[h] = i
+                if seen.all():
+                    break
+        for h in range(S):
+            if first_idx[h] < 0:
+                continue
+            N_h = fpc_arr[first_idx[h]]
+            n_h = n_psu_per_stratum[h]
+            if n_h > 0 and N_h < n_h:
+                raise ValueError(
+                    f"FPC ({N_h}) is less than the number of effective PSUs "
+                    f"({n_h}) in stratum. FPC must be >= n_PSU."
+                )
+            if n_h > 0:
+                f_h[h] = n_h / N_h
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        adjustment_h = np.where(
+            n_psu_per_stratum >= 2,
+            (1.0 - f_h) * n_psu_per_stratum / np.maximum(n_psu_per_stratum - 1, 1),
+            0.0,
+        )
+
+    # Static legitimate_zero_count (design-dependent only):
+    #   - Non-singleton strata with f_h >= 1.0 contribute (legacy counter).
+    #   - Singleton strata under lonely_psu == "certainty" contribute.
+    fpc_saturated = (n_psu_per_stratum >= 2) & (f_h >= 1.0)
+    legitimate_zero_count = int(fpc_saturated.sum())
+    if lonely_psu == "certainty":
+        legitimate_zero_count += int(singleton_strata.sum())
+
+    # Static variance_computable flag:
+    #   - Any non-singleton stratum (regardless of FPC) → variance_computed=True
+    #     path is exercised.
+    #   - Under "adjust", any singleton stratum also counts (adds V_h even if 0).
+    has_non_singleton = bool(np.any(~singleton_strata))
+    has_singleton = bool(np.any(singleton_strata))
+    variance_computable = has_non_singleton or (lonely_psu == "adjust" and has_singleton)
+
+    return _PsuScaffolding(
+        mode="stratified",
+        n=n,
+        lonely_psu=lonely_psu,
+        variance_computable=variance_computable,
+        legitimate_zero_count=legitimate_zero_count,
+        psu_codes=psu_codes,
+        psu_stratum=psu_stratum,
+        n_psu_per_stratum=n_psu_per_stratum,
+        singleton_strata=singleton_strata,
+        adjustment_h=adjustment_h,
+    )
+
+
+def _compute_if_variance_fast(
+    psi: np.ndarray,
+    scaffolding: _PsuScaffolding,
+) -> float:
+    """Fast TSL variance for aggregate_survey using precomputed scaffolding.
+
+    Numerically equivalent to :func:`compute_survey_if_variance` for any
+    TSL (non-replicate) design, up to sub-ULP reduction-order drift.  The
+    speedup comes from replacing per-cell pandas groupbys and per-stratum
+    Python loops with two ``np.bincount`` passes plus a fully vectorized
+    per-stratum reduction.
+
+    Parameters
+    ----------
+    psi : np.ndarray
+        Per-unit influence function values, shape (n,).
+    scaffolding : _PsuScaffolding
+        Precomputed via :func:`_precompute_psu_scaffolding` for the same
+        resolved design.
+
+    Returns
+    -------
+    float
+        Design-based variance.  Returns ``np.nan`` when variance is
+        unidentified (matches legacy behavior).
+    """
+    psi = np.asarray(psi, dtype=np.float64).ravel()
+
+    def _finalize(meat_scalar: float) -> float:
+        if meat_scalar == 0.0:
+            if scaffolding.variance_computable or scaffolding.legitimate_zero_count > 0:
+                return 0.0
+            return float("nan")
+        return meat_scalar
+
+    if scaffolding.mode == "no_strata_no_psu":
+        # Mode invariant: the scaffolding builder fills this field for this mode.
+        assert scaffolding.adjustment_direct is not None
+        if scaffolding.n < 2:
+            return float("nan")
+        psi_mean = psi.mean()
+        centered = psi - psi_mean
+        meat = scaffolding.adjustment_direct * float(centered @ centered)
+        return _finalize(meat)
+
+    if scaffolding.mode == "psu_only":
+        # Mode invariant: the scaffolding builder fills these fields for this mode.
+        assert scaffolding.n_psu_only is not None and scaffolding.adjustment_only is not None
+        if scaffolding.n_psu_only < 2:
+            if scaffolding.legitimate_zero_count > 0:
+                return 0.0
+            return float("nan")
+        psu_sums = np.bincount(
+            scaffolding.psu_codes_only, weights=psi, minlength=scaffolding.n_psu_only
+        )
+        psu_mean = psu_sums.mean()
+        centered = psu_sums - psu_mean
+        meat = scaffolding.adjustment_only * float(centered @ centered)
+        return _finalize(meat)
+
+    # Stratified
+    S = len(scaffolding.n_psu_per_stratum)
+    P = len(scaffolding.psu_stratum)
+
+    # Mode invariant: the stratified scaffolding builder fills these fields.
+    assert scaffolding.n_psu_per_stratum is not None and scaffolding.adjustment_h is not None
+    psu_sums = np.bincount(scaffolding.psu_codes, weights=psi, minlength=P)
+    sum_by_h = np.bincount(scaffolding.psu_stratum, weights=psu_sums, minlength=S)
+    sum2_by_h = np.bincount(scaffolding.psu_stratum, weights=psu_sums * psu_sums, minlength=S)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        centered_ss = np.where(
+            scaffolding.n_psu_per_stratum >= 2,
+            sum2_by_h - (sum_by_h * sum_by_h) / np.maximum(scaffolding.n_psu_per_stratum, 1),
+            0.0,
+        )
+    meat_per_stratum = scaffolding.adjustment_h * centered_ss
+
+    if np.any(scaffolding.singleton_strata) and scaffolding.lonely_psu == "adjust":
+        # Singleton strata under "adjust": V_h = (psu_sum - global_mean)^2.
+        # For a singleton stratum, the one PSU's sum equals sum_by_h[h].
+        # No FPC, no (n-1) adjustment — matches legacy (survey.py:1276-1281).
+        if P > 0:
+            global_mean = psu_sums.mean()
+            singleton_meat = (sum_by_h - global_mean) ** 2
+            meat_per_stratum = np.where(
+                scaffolding.singleton_strata, singleton_meat, meat_per_stratum
+            )
+
+    meat = float(meat_per_stratum.sum())
+    return _finalize(meat)
+
+
+def _compute_stratified_meat_from_psu_scores(
+    psu_scores: np.ndarray,
+    psu_strata: np.ndarray,
+    fpc_per_psu: "Optional[np.ndarray]" = None,
+    lonely_psu: str = "remove",
+) -> np.ndarray:
+    """Compute stratified meat matrix from pre-aggregated PSU-level scores.
+
+    Like :func:`_compute_stratified_psu_meat`, but accepts scores that are
+    already aggregated to the PSU level (one row per PSU). Used by
+    TwoStageDiD's GMM sandwich where the score matrix ``S`` is built at
+    the cluster/PSU level.
+
+    Parameters
+    ----------
+    psu_scores : np.ndarray
+        Score matrix of shape (G, k) — one row per PSU.
+    psu_strata : np.ndarray
+        Stratum assignment per PSU, shape (G,).
+    fpc_per_psu : np.ndarray, optional
+        FPC population size per PSU, shape (G,). All PSUs in the same
+        stratum should share the same FPC value (first occurrence used).
+    lonely_psu : str
+        How to handle singleton strata: "remove", "certainty", or "adjust".
+
+    Returns
+    -------
+    meat : np.ndarray
+        Meat matrix of shape (k, k).
+    variance_computed : bool
+        Whether any actual variance computation happened.
+    legitimate_zero_count : int
+        Number of strata that legitimately contribute zero variance.
+    """
+    if psu_scores.ndim == 1:
+        psu_scores = psu_scores[:, np.newaxis]
+    k = psu_scores.shape[1]
+    meat = np.zeros((k, k))
+
+    unique_strata = np.unique(psu_strata)
+    _variance_computed = False
+    legitimate_zero_count = 0
+
+    # Pre-compute global mean for lonely_psu="adjust"
+    _global_psu_mean = None
+    if lonely_psu == "adjust":
+        _global_psu_mean = psu_scores.mean(axis=0, keepdims=True)
+
+    for h in unique_strata:
+        mask_h = psu_strata == h
+        scores_h = psu_scores[mask_h]
+        n_psu_h = scores_h.shape[0]
+
+        # Handle singleton strata
+        if n_psu_h < 2:
+            if lonely_psu == "remove":
+                continue
+            elif lonely_psu == "certainty":
+                legitimate_zero_count += 1
+                continue
+            elif lonely_psu == "adjust":
+                centered = scores_h - _global_psu_mean
+                with np.errstate(invalid="ignore", over="ignore"):
+                    meat += centered.T @ centered
+                _variance_computed = True
+                continue
+
+        # FPC
+        f_h = 0.0
+        if fpc_per_psu is not None:
+            N_h = fpc_per_psu[mask_h][0]
+            if N_h < n_psu_h:
+                raise ValueError(
+                    f"FPC ({N_h}) is less than the number of PSUs "
+                    f"({n_psu_h}) in stratum. FPC must be >= n_PSU."
+                )
+            f_h = n_psu_h / N_h
+            if f_h >= 1.0:
+                legitimate_zero_count += 1
+
+        psu_mean_h = scores_h.mean(axis=0, keepdims=True)
+        centered = scores_h - psu_mean_h
+
+        adjustment = (1.0 - f_h) * (n_psu_h / (n_psu_h - 1))
+        with np.errstate(invalid="ignore", over="ignore"):
+            meat += adjustment * (centered.T @ centered)
+        _variance_computed = True
+
+    return meat, _variance_computed, legitimate_zero_count
+
+
+def _compute_stratified_conley_meat_from_psu_scores(
+    psu_scores: np.ndarray,
+    psu_strata: np.ndarray,
+    psu_coords: np.ndarray,
+    *,
+    cutoff: float,
+    metric,
+    kernel: str,
+    fpc_per_psu: "Optional[np.ndarray]" = None,
+    lonely_psu: str = "remove",
+) -> Tuple[np.ndarray, bool, int]:
+    """Wave E.2 stratified-Conley meat on PSU-aggregated scores.
+
+    Composes Conley (1999) spatial-HAC with Gerber (2026, arXiv:2605.04124)
+    Proposition 1 Binder TSL (the Wave E.1 foundation) and the Wave D
+    Gardner GMM first-stage uncertainty correction (Butts 2021 ss3.1 +
+    Gardner 2022 ss4). Used by SpilloverDiD's Wave E.2 GMM sandwich when
+    ``vcov_type="conley"`` is combined with ``survey_design=``.
+
+    Per-stratum loop: demean PSU scores within the stratum, apply the
+    cross-sectional Conley kernel between PSU centroids in that stratum,
+    scale by the Binder finite-population correction
+    ``(1 - f_h) * n_h/(n_h-1)``. Cross-stratum kernel weights are zero by
+    sampling design (strata are exact independence partitions); total meat
+    is the sum across strata.
+
+    Parameters
+    ----------
+    psu_scores : np.ndarray
+        Score matrix of shape (G, k) — one row per PSU.
+    psu_strata : np.ndarray
+        Stratum assignment per PSU, shape (G,).
+    psu_coords : np.ndarray
+        Per-PSU spatial centroid coordinates, shape (G, 2). Typically the
+        mean of per-observation ``conley_coords`` within each PSU.
+    cutoff : float
+        Conley spatial-HAC bandwidth in the same units as ``psu_coords``
+        (km when ``metric="haversine"``).
+    metric : str or callable
+        Distance metric; ``"haversine"`` / ``"euclidean"`` / callable per
+        :mod:`diff_diff.conley` (``ConleyMetric``).
+    kernel : str
+        Spatial kernel: ``"bartlett"`` or ``"uniform"``.
+    fpc_per_psu : np.ndarray, optional
+        FPC population size per PSU, shape (G,). All PSUs in the same
+        stratum should share the same FPC value (first occurrence used).
+    lonely_psu : str
+        How to handle singleton strata: ``"remove"``, ``"certainty"``, or
+        ``"adjust"``. Matches the existing
+        :func:`_compute_stratified_meat_from_psu_scores` behaviour exactly,
+        including the ``"adjust"`` branch's ``continue`` that skips FPC
+        scaling (with ``n_h=1`` the scale ``n_h/(n_h-1)`` would divide by
+        zero).
+
+    Returns
+    -------
+    meat : np.ndarray
+        Meat matrix of shape (k, k).
+    variance_computed : bool
+        Whether any actual variance computation happened.
+    legitimate_zero_count : int
+        Number of strata that legitimately contribute zero variance.
+
+    Notes
+    -----
+    Reduction semantics (load-bearing for tests):
+
+    - bandwidth -> 0 (Bartlett: ``K(d/tiny) = 0`` for ``d > 0`` and
+      ``K(0) = 1`` on the diagonal so K is the identity matrix): the
+      within-stratum sandwich ``sum_{j,k} K_jk c_j c_k' = sum_j c_j c_j'
+      = centered.T @ centered``, which is precisely Binder's formula at
+      :func:`_compute_stratified_meat_from_psu_scores`.
+    - Single stratum (H = 1, FPC = inf): reduces to ordinary Conley
+      sandwich on PSU totals via :func:`diff_diff.conley._compute_conley_meat`.
+
+    No reference software combines all three ingredients (Conley
+    spatial-HAC + Binder TSL + Gardner GMM correction) on a two-stage
+    influence function.
+    """
+    from diff_diff.conley import _compute_conley_meat
+
+    if psu_scores.ndim == 1:
+        psu_scores = psu_scores[:, np.newaxis]
+    k = psu_scores.shape[1]
+    meat = np.zeros((k, k))
+
+    unique_strata = np.unique(psu_strata)
+    _variance_computed = False
+    legitimate_zero_count = 0
+
+    _global_psu_mean = None
+    if lonely_psu == "adjust":
+        _global_psu_mean = psu_scores.mean(axis=0, keepdims=True)
+
+    for h in unique_strata:
+        mask_h = psu_strata == h
+        scores_h = psu_scores[mask_h]
+        coords_h = psu_coords[mask_h]
+        n_psu_h = scores_h.shape[0]
+
+        if n_psu_h < 2:
+            if lonely_psu == "remove":
+                continue
+            elif lonely_psu == "certainty":
+                legitimate_zero_count += 1
+                continue
+            elif lonely_psu == "adjust":
+                # Degenerate one-PSU kernel K = [[K(0)]] = [[1.0]] for both
+                # Bartlett and uniform; equivalent to centered.T @ centered.
+                # MUST `continue` to skip the FPC block below — with n_h = 1
+                # the scale n_h/(n_h-1) divides by zero. Mirrors the Binder
+                # helper's singleton-adjust branch exactly.
+                centered = scores_h - _global_psu_mean
+                with np.errstate(invalid="ignore", over="ignore"):
+                    meat += centered.T @ centered
+                _variance_computed = True
+                continue
+
+        f_h = 0.0
+        if fpc_per_psu is not None:
+            N_h = fpc_per_psu[mask_h][0]
+            if N_h < n_psu_h:
+                raise ValueError(
+                    f"FPC ({N_h}) is less than the number of PSUs "
+                    f"({n_psu_h}) in stratum. FPC must be >= n_PSU."
+                )
+            f_h = n_psu_h / N_h
+            if f_h >= 1.0:
+                legitimate_zero_count += 1
+
+        psu_mean_h = scores_h.mean(axis=0, keepdims=True)
+        centered = scores_h - psu_mean_h
+
+        # Within-stratum Conley sandwich on PSU-centered scores. Pass
+        # ``cluster_ids=None`` explicitly: after PSU aggregation every PSU
+        # is its own cluster, so a cluster product kernel would zero all
+        # cross-PSU pairs. See Wave E.2 plan Chunk 3 step 4.
+        conley_meat_h = _compute_conley_meat(
+            centered,
+            coords_h,
+            cutoff,
+            metric,
+            kernel,
+            cluster_ids=None,
+        )
+
+        adjustment = (1.0 - f_h) * (n_psu_h / (n_psu_h - 1))
+        with np.errstate(invalid="ignore", over="ignore"):
+            meat += adjustment * conley_meat_h
+        _variance_computed = True
+
+    return meat, _variance_computed, legitimate_zero_count
+
+
 def compute_survey_vcov(
     X: np.ndarray,
     residuals: np.ndarray,
@@ -1346,6 +2144,25 @@ def compute_survey_vcov(
         if _variance_computed or legitimate_zero_count > 0:
             return np.zeros((k, k))
         return np.full((k, k), np.nan)
+
+    # Precondition check: near-singular X'WX lets np.linalg.solve return
+    # unstable values without raising (finding #19, axis A). Threshold of
+    # 1/sqrt(eps) ≈ 6.7e7 is the standard rule of thumb — above it, the
+    # sandwich bread becomes numerically unreliable and the caller should
+    # be told so.
+    with np.errstate(invalid="ignore", over="ignore"):
+        XtWX_cond = float(np.linalg.cond(XtWX))
+    cond_threshold = 1.0 / np.sqrt(np.finfo(float).eps)
+    if np.isfinite(XtWX_cond) and XtWX_cond > cond_threshold:
+        warnings.warn(
+            f"X'WX is ill-conditioned (cond={XtWX_cond:.2e}) in the "
+            f"survey sandwich variance; variance estimates may be "
+            f"numerically unstable. This typically indicates near "
+            f"multicollinearity or zero-weight strata dominating the "
+            f"bread matrix.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     # Sandwich: (X'WX)^{-1} meat (X'WX)^{-1}
     try:
@@ -1419,6 +2236,8 @@ def _replicate_variance_factor(
         return 1.0 / n_replicates
     elif method == "Fay":
         return 1.0 / (n_replicates * (1.0 - fay_rho) ** 2)
+    elif method == "SDR":
+        return 4.0 / n_replicates
     elif method == "JK1":
         return (n_replicates - 1.0) / n_replicates
     # JKn handled separately (per-stratum factors)
@@ -1458,6 +2277,8 @@ def compute_replicate_vcov(
     from diff_diff.linalg import solve_ols
 
     rep_weights = resolved.replicate_weights
+    # Replicate-variance entry points are only reached on replicate designs.
+    assert rep_weights is not None
     method = resolved.replicate_method
     R = resolved.n_replicates
     k = X.shape[1]
@@ -1535,11 +2356,11 @@ def compute_replicate_vcov(
     outer_sum = diffs.T @ diffs  # (k, k)
 
     # BRR/Fay: use fixed scaling, ignore user-supplied scale/rscales (R convention)
-    if method in ("BRR", "Fay"):
+    if method in ("BRR", "Fay", "SDR"):
         if resolved.replicate_scale is not None or resolved.replicate_rscales is not None:
             warnings.warn(
                 f"Custom replicate_scale/replicate_rscales ignored for {method} "
-                f"(BRR/Fay use fixed scaling).",
+                f"(BRR/Fay/SDR use fixed scaling).",
                 UserWarning,
                 stacklevel=2,
             )
@@ -1601,6 +2422,8 @@ def compute_replicate_if_variance(
     """
     psi = np.asarray(psi, dtype=np.float64).ravel()
     rep_weights = resolved.replicate_weights
+    # Replicate-variance entry points are only reached on replicate designs.
+    assert rep_weights is not None
     method = resolved.replicate_method
     R = resolved.n_replicates
 
@@ -1665,11 +2488,11 @@ def compute_replicate_if_variance(
     ss = float(np.sum(diffs**2))
 
     # BRR/Fay: use fixed scaling, ignore user-supplied scale/rscales (R convention)
-    if method in ("BRR", "Fay"):
+    if method in ("BRR", "Fay", "SDR"):
         if resolved.replicate_scale is not None or resolved.replicate_rscales is not None:
             warnings.warn(
                 f"Custom replicate_scale/replicate_rscales ignored for {method} "
-                f"(BRR/Fay use fixed scaling).",
+                f"(BRR/Fay/SDR use fixed scaling).",
                 UserWarning,
                 stacklevel=2,
             )
@@ -1699,6 +2522,153 @@ def compute_replicate_if_variance(
                 continue
             result += ((n_h_original - 1.0) / n_h_original) * float(np.sum(diffs[mask_h] ** 2))
         return scale * result, n_valid
+    else:
+        raise ValueError(f"Unknown replicate method: {method}")
+
+
+def compute_replicate_refit_variance(
+    refit_fn: Callable[[np.ndarray], np.ndarray],
+    full_sample_estimate: np.ndarray,
+    resolved: "ResolvedSurveyDesign",
+) -> Tuple[np.ndarray, int]:
+    """Compute replicate variance by re-running an arbitrary estimation function.
+
+    For each replicate weight column, calls ``refit_fn(w_r)`` and collects
+    the resulting estimate vector.  Variance is computed from the distribution
+    of replicate estimates using method-specific scaling.
+
+    This generalises :func:`compute_replicate_vcov` (which hard-codes
+    ``solve_ols`` as the refit) for estimators whose estimation procedure
+    is more complex than a single OLS call (e.g. within-transformation,
+    two-stage imputation, stacked regression).
+
+    Parameters
+    ----------
+    refit_fn : callable
+        ``(n,) weight array -> (k,) estimate array``.  Must return the same
+        length *k* on every call.  Should return all-NaN when the estimation
+        fails for that replicate.
+    full_sample_estimate : np.ndarray
+        Estimate vector from the full-sample weights, shape ``(k,)``.
+    resolved : ResolvedSurveyDesign
+        Must have ``uses_replicate_variance == True``.
+
+    Returns
+    -------
+    tuple of (np.ndarray, int)
+        ``(vcov, n_valid)`` where *vcov* has shape ``(k, k)`` and *n_valid*
+        is the number of replicates that produced finite estimates.
+    """
+    full_sample_estimate = np.asarray(full_sample_estimate, dtype=np.float64).ravel()
+    k = len(full_sample_estimate)
+    rep_weights = resolved.replicate_weights
+    # Replicate-variance entry points are only reached on replicate designs.
+    assert rep_weights is not None
+    method = resolved.replicate_method
+    R = resolved.n_replicates
+
+    # Collect replicate estimate vectors
+    est_reps = np.full((R, k), np.nan)
+    for r in range(R):
+        w_r = rep_weights[:, r].copy()
+        if not resolved.combined_weights:
+            w_r = w_r * resolved.weights
+        if np.sum(w_r) == 0:
+            continue
+        try:
+            est_r = refit_fn(w_r)
+            est_r = np.asarray(est_r, dtype=np.float64).ravel()
+            if len(est_r) == k:
+                est_reps[r] = est_r
+        except (np.linalg.LinAlgError, ValueError, RuntimeError):
+            pass  # NaN row for failed replicate
+
+    # Remove replicates with NaN estimates
+    valid = np.all(np.isfinite(est_reps), axis=1)
+    n_invalid = int(R - np.sum(valid))
+    if n_invalid > 0:
+        warnings.warn(
+            f"{n_invalid} of {R} replicate refits failed. "
+            f"Variance computed from {int(np.sum(valid))} valid replicates.",
+            UserWarning,
+            stacklevel=2,
+        )
+    n_valid = int(np.sum(valid))
+    if n_valid < 2:
+        if n_valid == 0:
+            warnings.warn(
+                "All replicate refits failed. Returning NaN variance.",
+                UserWarning,
+                stacklevel=2,
+            )
+        else:
+            warnings.warn(
+                f"Only {n_valid} valid replicate(s) — variance is not estimable "
+                f"with fewer than 2. Returning NaN.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return np.full((k, k), np.nan), n_valid
+
+    est_valid = est_reps[valid]
+    c = full_sample_estimate
+
+    # --- Centering (mse flag) ---
+    if resolved.mse:
+        center = c
+    else:
+        if resolved.replicate_rscales is not None:
+            pos_scale = resolved.replicate_rscales[valid] > 0
+            if np.any(pos_scale):
+                center = np.mean(est_valid[pos_scale], axis=0)
+            else:
+                center = np.mean(est_valid, axis=0)
+        else:
+            center = np.mean(est_valid, axis=0)
+    diffs = est_valid - center[np.newaxis, :]
+
+    outer_sum = diffs.T @ diffs  # (k, k)
+
+    # --- Method-specific scaling ---
+    # BRR/Fay: fixed scaling, ignore user-supplied scale/rscales
+    if method in ("BRR", "Fay", "SDR"):
+        if resolved.replicate_scale is not None or resolved.replicate_rscales is not None:
+            warnings.warn(
+                f"Custom replicate_scale/replicate_rscales ignored for {method} "
+                f"(BRR/Fay/SDR use fixed scaling).",
+                UserWarning,
+                stacklevel=2,
+            )
+        factor = _replicate_variance_factor(method, R, resolved.fay_rho)
+        return factor * outer_sum, n_valid
+
+    # JK1/JKn: apply scale * rscales multiplicatively
+    scale = resolved.replicate_scale if resolved.replicate_scale is not None else 1.0
+
+    if resolved.replicate_rscales is not None:
+        valid_rscales = resolved.replicate_rscales[valid]
+        V = np.zeros((k, k))
+        for i in range(len(diffs)):
+            V += valid_rscales[i] * np.outer(diffs[i], diffs[i])
+        return scale * V, n_valid
+
+    if method == "JK1":
+        factor = _replicate_variance_factor(method, R, resolved.fay_rho)
+        return scale * factor * outer_sum, n_valid
+    elif method == "JKn":
+        rep_strata = resolved.replicate_strata
+        if rep_strata is None:
+            raise ValueError("JKn requires replicate_strata")
+        valid_strata = rep_strata[valid]
+        V = np.zeros((k, k))
+        for h in np.unique(rep_strata):
+            n_h_original = int(np.sum(rep_strata == h))
+            mask_h = valid_strata == h
+            if not np.any(mask_h):
+                continue
+            diffs_h = diffs[mask_h]
+            V += ((n_h_original - 1.0) / n_h_original) * (diffs_h.T @ diffs_h)
+        return scale * V, n_valid
     else:
         raise ValueError(f"Unknown replicate method: {method}")
 

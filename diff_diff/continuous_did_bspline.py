@@ -5,6 +5,8 @@ Provides basis construction, evaluation, and derivative computation for
 the dose-response curve estimation in ContinuousDiD.
 """
 
+import warnings
+
 import numpy as np
 from scipy.interpolate import BSpline
 
@@ -13,7 +15,17 @@ __all__ = [
     "bspline_design_matrix",
     "bspline_derivative_design_matrix",
     "default_dose_grid",
+    "saturated_dose_levels",
+    "saturated_design_matrix",
+    "saturated_derivative_design_matrix",
+    "SATURATED_TOL",
 ]
+
+# Tolerance used consistently for BOTH discrete dose-level construction and
+# level matching in the saturated (discrete-treatment) basis. Using the same
+# value in both places guarantees a dose can never fall between two
+# near-duplicate levels or double-match one.
+SATURATED_TOL = 1e-9
 
 
 def build_bspline_basis(dose, degree=3, num_knots=0):
@@ -140,9 +152,12 @@ def bspline_derivative_design_matrix(x, knots, degree, include_intercept=True):
 
     # Check if knot vector is degenerate (all identical, e.g. single dose)
     if knots[0] == knots[-1]:
-        # All knots identical: derivatives are all zero
+        # All knots identical: derivatives are all zero — this is a
+        # mathematically well-defined degenerate case (single dose value
+        # means no dose variation to differentiate), handled silently.
         pass
     else:
+        failed_basis_indices = []
         for j in range(n_basis):
             c = np.zeros(n_basis)
             c[j] = 1.0
@@ -151,8 +166,29 @@ def bspline_derivative_design_matrix(x, knots, degree, include_intercept=True):
                 deriv_j = spline_j.derivative()
                 dB[:, j] = deriv_j(x_clamped)
             except ValueError:
-                # Degenerate knot vector: derivative is zero
-                pass
+                # Finding #12 (axis C, silent-failures audit): silent pass
+                # on ValueError meant a malformed knot vector (too few
+                # knots for the degree, non-monotonic, etc.) quietly set
+                # whole columns of the derivative design matrix to zero.
+                # Downstream ContinuousDiD inference then used a silently
+                # biased dPsi matrix. Track affected basis indices so we
+                # can surface ONE aggregate warning.
+                failed_basis_indices.append(j)
+
+        if failed_basis_indices:
+            warnings.warn(
+                f"B-spline derivative construction failed for "
+                f"{len(failed_basis_indices)} of {n_basis} basis function(s) "
+                f"(indices {failed_basis_indices}); their derivative columns "
+                f"are zero. This typically indicates a malformed knot vector "
+                f"(too few knots for the chosen degree, non-monotonic, or "
+                f"repeated interior knots). Both ACRT point estimates and "
+                f"analytical/bootstrap inference depend on this derivative "
+                f"matrix, so both may be biased. Consider increasing the "
+                f"number of distinct doses or reducing the B-spline degree.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     if include_intercept:
         # Drop first column (intercept derivative = 0), prepend zeros
@@ -188,3 +224,158 @@ def default_dose_grid(dose, lower_quantile=0.10, upper_quantile=0.99):
         return np.array([])
     probs = np.arange(lower_quantile, upper_quantile + 0.005, 0.01)
     return np.quantile(positive_dose, probs)
+
+
+# ----------------------------------------------------------------------
+# Saturated (discrete-treatment) basis
+#
+# For a multi-valued / discrete dose taking distinct levels d_1 < ... < d_J,
+# the dose-response is estimated by a *saturated* regression (CGBS 2024
+# Eq. 4.1): one indicator per level, so beta_j = mean_{D=d_j}(delta_tilde_Y)
+# = ATT(d_j) (a per-level 2x2 DiD). These three functions mirror the B-spline
+# trio (build_bspline_basis / bspline_design_matrix /
+# bspline_derivative_design_matrix) so ContinuousDiD can swap the basis and
+# reuse the entire linear influence-function / bootstrap / covariate / survey
+# machinery unchanged: att_d = Psi_eval @ beta, acrt_d = dPsi_eval @ beta.
+# ----------------------------------------------------------------------
+
+
+def saturated_dose_levels(dose, tol=SATURATED_TOL):
+    """
+    Distinct positive dose levels for the saturated (discrete) basis.
+
+    Sorted unique positive doses, clustered at ``tol`` (values within ``tol``
+    of an accepted level collapse to it) so level construction uses the same
+    tolerance as matching in :func:`saturated_design_matrix`. Analogous to
+    :func:`build_bspline_basis` returning the knot vector.
+
+    Parameters
+    ----------
+    dose : array-like
+        Dose values from treated units (only positive values are used).
+    tol : float, default=:data:`SATURATED_TOL`
+        Clustering tolerance.
+
+    Returns
+    -------
+    np.ndarray
+        Sorted distinct dose levels, shape ``(J,)``.
+    """
+    dose = np.asarray(dose, dtype=float)
+    positive = np.sort(dose[dose > 0])
+    levels: list = []
+    for v in positive:
+        if not levels or (v - levels[-1]) > tol:
+            levels.append(float(v))
+    return np.array(levels)
+
+
+def _match_levels(x, levels, tol):
+    """Map each ``x_i`` to the index of its dose level; raise if unmatched."""
+    x = np.asarray(x, dtype=float)
+    levels = np.asarray(levels, dtype=float)
+    if len(levels) == 0:
+        raise ValueError("saturated basis requires at least one dose level.")
+    diff = np.abs(x[:, np.newaxis] - levels[np.newaxis, :])
+    idx = np.argmin(diff, axis=1)
+    nearest = diff[np.arange(len(x)), idx]
+    if np.any(nearest > tol):
+        bad = x[nearest > tol]
+        raise ValueError(
+            f"{int(np.sum(nearest > tol))} dose value(s) match no observed dose "
+            f"level within tol={tol} (e.g. {float(bad[0])}). The saturated "
+            "(discrete) basis can only be evaluated at observed dose levels."
+        )
+    return idx
+
+
+def saturated_design_matrix(x, levels, tol=SATURATED_TOL):
+    """
+    Indicator design matrix for the saturated (discrete) basis.
+
+    Column ``j`` is ``1{x_i == levels[j]}`` (match within ``tol``). Serves both
+    the treated design (``x`` = treated doses) and the evaluation matrix
+    (``x`` = dose grid; when the grid equals ``levels`` this is the identity).
+    Fail-closed: an ``x_i`` matching no level raises ``ValueError`` (no silent
+    all-zero row). Analogous to :func:`bspline_design_matrix`.
+
+    Parameters
+    ----------
+    x : array-like
+        Evaluation points, shape ``(n,)``.
+    levels : array-like
+        Distinct dose levels (from :func:`saturated_dose_levels`), shape ``(J,)``.
+    tol : float, default=:data:`SATURATED_TOL`
+        Matching tolerance.
+
+    Returns
+    -------
+    np.ndarray
+        Indicator design matrix, shape ``(n, J)``.
+    """
+    x = np.asarray(x, dtype=float)
+    levels = np.asarray(levels, dtype=float)
+    idx = _match_levels(x, levels, tol)
+    B = np.zeros((len(x), len(levels)))
+    B[np.arange(len(x)), idx] = 1.0
+    return B
+
+
+def saturated_derivative_design_matrix(x, levels, tol=SATURATED_TOL, base=0.0):
+    """
+    Finite-difference derivative rows for the saturated (discrete) basis.
+
+    ACRT for a discrete dose is the paper's backward difference of the level
+    effects (CGBS 2024 §3.2 / §4.1) on the grid ``{base, d_1, ..., d_J}``, where
+    ``base`` is the omitted reference category with ``ATT(base) = 0``:
+    ``ACRT(d_j) = [ATT(d_j) - ATT(d_{j-1})] / (d_j - d_{j-1})``. At the lowest
+    modelled level this references ``base``,
+    ``ACRT(d_1) = [ATT(d_1) - 0] / (d_1 - base) = ATT(d_1) / (d_1 - base)``.
+
+    ``base = 0.0`` (default) is the untreated baseline ``d_0 = 0`` for the D=0
+    control path: ``ACRT(d_1) = ATT(d_1) / d_1`` — so a single positive dose
+    (``J = 1``, e.g. binary ``D in {0, 1}``) gives ``ACRT(d_1) = ATT(d_1) / d_1``
+    and, for ``d_1 = 1``, the documented binary identity ``ACRT = ATT``.
+    ``base = d_L`` is the lowest-dose reference for the Remark 3.1
+    (``control_group="lowest_dose"``) path, where the omitted category is the
+    lowest-dose group and ``ATT(d_L) = 0``: ``ACRT(d_1) = ATT(d_1) / (d_1 - d_L)``.
+
+    This is a linear operator ``L`` on ``beta``, and ``acrt = L @ beta``. Only
+    the lowest level's row references ``base`` (so that row does NOT sum to 0);
+    the ``j >= 2`` rows are ordinary adjacent backward differences (rows sum to
+    0). Returns the ``L`` row for each ``x_i`` at its dose level. Analogous to
+    :func:`bspline_derivative_design_matrix`.
+
+    Parameters
+    ----------
+    x : array-like
+        Evaluation points, shape ``(n,)``.
+    levels : array-like
+        Distinct modelled dose levels (excluding ``base``), shape ``(J,)``.
+    tol : float, default=:data:`SATURATED_TOL`
+        Matching tolerance.
+    base : float, default=0.0
+        The omitted reference dose (``ATT(base) = 0``). ``0.0`` for the D=0
+        control path; the lowest dose ``d_L`` for the lowest-dose-as-control
+        (Remark 3.1) path.
+
+    Returns
+    -------
+    np.ndarray
+        Derivative design matrix, shape ``(n, J)``.
+    """
+    levels = np.asarray(levels, dtype=float)
+    idx = _match_levels(x, levels, tol)
+    J = len(levels)
+    L = np.zeros((J, J))
+    # Row 0 (lowest modelled dose d_1): backward difference to the reference
+    # ``base`` with ATT(base) = 0 -> ACRT(d_1) = ATT(d_1) / (d_1 - base). Rows
+    # j >= 1: ordinary adjacent backward differences between modelled doses.
+    for j in range(J):
+        if j == 0:
+            L[0, 0] = 1.0 / (levels[0] - base)
+        else:
+            h = levels[j] - levels[j - 1]
+            L[j, j - 1] = -1.0 / h
+            L[j, j] = 1.0 / h
+    return L[idx]

@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: sensitivity_plot
+   :no-index:

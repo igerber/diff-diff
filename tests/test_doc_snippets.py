@@ -8,6 +8,7 @@ ImportError for known third-party/optional packages (comparison-page
 snippets and optional-dependency guards like matplotlib).
 """
 
+import os
 import re
 import textwrap
 from pathlib import Path
@@ -32,11 +33,23 @@ RST_FILES = [
     "api/utils.rst",
     "api/prep.rst",
     "api/two_stage.rst",
+    "api/duration_did.rst",
     "api/bacon.rst",
     "api/visualization.rst",
     "api/honest_did.rst",
     "api/pretrends.rst",
     "api/power.rst",
+    "api/changes_in_changes.rst",
+    "api/business_report.rst",
+    "api/diagnostic_report.rst",
+    "api/estimators.rst",
+    "api/lwdid.rst",
+    "api/dml_did.rst",
+    "api/mmm.rst",
+    "api/triple_diff.rst",
+    "api/twfe_weights.rst",
+    "practitioner_decision_tree.rst",
+    "practitioner_getting_started.rst",
     "python_comparison.rst",
     "r_comparison.rst",
 ]
@@ -97,6 +110,7 @@ _SKIP_PATTERNS = [
     r"pip\s+install",
     r"wild_bootstrap_se\(X,",  # low-level array API pseudo-code
     r"wide_to_long\(",  # references undefined wide_data variable
+    r"aggregate_survey\(",  # references undefined microdata variable
 ]
 
 # Third-party packages imported by comparison-page snippets that may not
@@ -111,7 +125,9 @@ def _should_skip(code: str) -> Optional[str]:
         if re.search(pat, code, re.MULTILINE):
             return f"matches skip pattern: {pat}"
     # Skip if no actual Python statements (just comments / blank)
-    lines = [l.strip() for l in code.splitlines() if l.strip() and not l.strip().startswith("#")]
+    lines = [
+        ln.strip() for ln in code.splitlines() if ln.strip() and not ln.strip().startswith("#")
+    ]
     if not lines:
         return "no executable statements"
     return None
@@ -283,11 +299,51 @@ def _build_namespace() -> dict:
             }
         )
 
+    def _mock_load_prop99(**kwargs):
+        states = ["California"] + [f"State{i:02d}" for i in range(2, 11)]
+        years = list(range(1980, 1996))
+        rows = [(s, y) for s in states for y in years]
+        fy = [1989 if r[0] == "California" else 0 for r in rows]
+        return pd.DataFrame(
+            {
+                "state": [r[0] for r in rows],
+                "year": [r[1] for r in rows],
+                "first_year": fy,
+                "lcigsale": rng.normal(4.6, 0.1, len(rows)),
+                "treated": [1 if f and r[1] >= f else 0 for f, r in zip(fy, rows)],
+                "cohort": fy,
+            }
+        )
+
+    def _mock_load_walmart(**kwargs):
+        counties = list(range(1, 21))
+        years = list(range(1985, 1996))
+        rows = [(c, y) for c in counties for y in years]
+        n = len(rows)
+        cohort_of = {c: (0 if c <= 8 else [1988, 1990, 1992][c % 3]) for c in counties}
+        fy = [cohort_of[r[0]] for r in rows]
+        return pd.DataFrame(
+            {
+                "cid": [r[0] for r in rows],
+                "year": [r[1] for r in rows],
+                "first_year": fy,
+                "log_retail_emp": rng.normal(7.5, 0.5, n),
+                "log_wholesale_emp": rng.normal(6.5, 0.5, n),
+                "x1": rng.uniform(0.05, 0.3, n),
+                "x2": rng.uniform(0.5, 0.85, n),
+                "x3": rng.uniform(0.05, 0.4, n),
+                "treated": [1 if f and r[1] >= f else 0 for f, r in zip(fy, rows)],
+                "cohort": fy,
+            }
+        )
+
     _dataset_dispatch = {
         "card_krueger": _mock_load_card_krueger,
         "castle_doctrine": _mock_load_castle_doctrine,
         "divorce_laws": _mock_load_divorce_laws,
         "mpdta": _mock_load_mpdta,
+        "prop99": _mock_load_prop99,
+        "walmart": _mock_load_walmart,
     }
 
     def _mock_load_dataset(name, **kwargs):
@@ -299,8 +355,10 @@ def _build_namespace() -> dict:
         return {
             "card_krueger": "Card & Krueger (1994) minimum wage dataset",
             "castle_doctrine": "Castle Doctrine laws - staggered adoption",
-            "divorce_laws": "Unilateral divorce laws - staggered adoption",
-            "mpdta": "Minimum wage panel data - simulated CS example",
+            "divorce_laws": "Unilateral divorce laws - synthetic fallback only",
+            "mpdta": "County teen-employment panel - Callaway-Sant'Anna example",
+            "prop99": "California Prop 99 smoking panel - single treated unit",
+            "walmart": "Walmart entry county panel - staggered adoption",
         }
 
     # Inject mocks into namespace so `from diff_diff.datasets import ...` works
@@ -311,6 +369,8 @@ def _build_namespace() -> dict:
     mock_datasets_mod.load_castle_doctrine = _mock_load_castle_doctrine
     mock_datasets_mod.load_divorce_laws = _mock_load_divorce_laws
     mock_datasets_mod.load_mpdta = _mock_load_mpdta
+    mock_datasets_mod.load_prop99 = _mock_load_prop99
+    mock_datasets_mod.load_walmart = _mock_load_walmart
     mock_datasets_mod.load_dataset = _mock_load_dataset
     mock_datasets_mod.list_datasets = _mock_list_datasets
     import sys
@@ -323,6 +383,8 @@ def _build_namespace() -> dict:
     ns["load_castle_doctrine"] = _mock_load_castle_doctrine
     ns["load_divorce_laws"] = _mock_load_divorce_laws
     ns["load_mpdta"] = _mock_load_mpdta
+    ns["load_prop99"] = _mock_load_prop99
+    ns["load_walmart"] = _mock_load_walmart
     ns["load_dataset"] = _mock_load_dataset
     ns["list_datasets"] = _mock_list_datasets
 
@@ -336,6 +398,7 @@ def _build_namespace() -> dict:
 def _restore_datasets_module():
     """Restore diff_diff.datasets after each test to prevent mock leaking."""
     import sys as _sys
+
     import diff_diff as _dd
 
     orig_mod = _sys.modules.get("diff_diff.datasets")
@@ -357,15 +420,14 @@ _CONTEXT_DEPENDENT_SNIPPETS = {
     "api_bacon:block2",
     "api_visualization:block2",
     "api_visualization:block3",
-    "api_visualization:block8",
+    "api_visualization:block9",
     "python_comparison:block5",
     "quickstart:block3",
     "quickstart:block9",
-    "r_comparison:block2",
     "r_comparison:block3",
     "r_comparison:block4",
-    "r_comparison:block6",
-    "troubleshooting:block8",
+    "r_comparison:block7",
+    "practitioner_getting_started:block5",
 }
 
 
@@ -373,12 +435,26 @@ _CONTEXT_DEPENDENT_SNIPPETS = {
     "test_id, code, skip_reason",
     [pytest.param(tid, c, s, id=tid) for tid, c, s in _CASES],
 )
-def test_doc_snippet(test_id: str, code: str, skip_reason: Optional[str]):
-    """Execute a documentation code snippet and assert no API/runtime errors."""
+def test_doc_snippet(test_id: str, code: str, skip_reason: Optional[str], tmp_path, monkeypatch):
+    """Execute a documentation code snippet and assert no API/runtime errors.
+
+    Runs in a temporary working directory so ``savefig``-bearing snippets
+    (visualization / honest_did / pretrends pages) never write PNGs into the
+    repository root.
+
+    ``os.environ`` is snapshot/restored around the exec: snippets may
+    legitimately mutate the environment (e.g. the troubleshooting
+    backend-override block sets ``DIFF_DIFF_BACKEND='python'``), and an
+    unreverted mutation leaks process state into every later test in the
+    session (it flipped the backend-arm selection of the dCDH pinned
+    bootstrap baseline under full-suite order).
+    """
     if skip_reason:
         pytest.skip(skip_reason)
 
+    monkeypatch.chdir(tmp_path)
     ns = _build_namespace()
+    env_snapshot = os.environ.copy()
     try:
         exec(compile(code, f"<{test_id}>", "exec"), ns)
     except NameError as exc:
@@ -410,3 +486,93 @@ def test_doc_snippet(test_id: str, code: str, skip_reason: Optional[str]):
             f"Snippet {test_id} raised {type(exc).__name__}: {exc}\n\n"
             f"Code:\n{textwrap.indent(code, '  ')}"
         )
+    finally:
+        # Revert any environment mutation the snippet made (pytest.fail
+        # raises, so this must be a finally, not a trailing statement).
+        os.environ.clear()
+        os.environ.update(env_snapshot)
+
+
+# ---------------------------------------------------------------------------
+# Pinned-output regression: quickstart's printed summary block
+# ---------------------------------------------------------------------------
+_TEXT_BLOCK_RE = re.compile(
+    r"^\.\.\s+code-block::\s+text\s*$\n"
+    r"(?:\s*:\w[^:]*:.*\n)*"
+    r"\n"
+    r"((?:[ \t]+\S.*\n|[ \t]*\n)+)",
+    re.MULTILINE,
+)
+
+
+def test_quickstart_pinned_summary_output():
+    """quickstart.rst's pinned ``summary()`` output matches its own example.
+
+    The snippet harness executes python blocks but ignores
+    ``code-block:: text``, so the documented output could otherwise drift
+    silently while CI stays green. The example is fully seeded, so the
+    printed block is reproducible and can be pinned exactly. Executing the
+    quickstart's own leading blocks (rather than a duplicated setup) also
+    catches the converse drift: editing the example's generator arguments
+    without re-pinning the printed block.
+    """
+    rst_path = DOCS_DIR / "quickstart.rst"
+    blocks = [textwrap.dedent(m.group(1)) for m in _TEXT_BLOCK_RE.finditer(rst_path.read_text())]
+    assert len(blocks) == 1, "expected exactly one text block in quickstart.rst"
+    documented = [ln.rstrip() for ln in blocks[0].strip().splitlines()]
+
+    # Execute the quickstart's own blocks, in order, until the basic
+    # example's ``results`` exists (the imports + seeded generate/fit block).
+    ns: dict = {"__builtins__": __builtins__}
+    for _, code in _extract_snippets(rst_path):
+        exec(compile(code, "<quickstart-pinned>", "exec"), ns)
+        if "results" in ns:
+            break
+    assert "results" in ns, "quickstart basic example no longer defines 'results'"
+
+    actual = [ln.rstrip() for ln in ns["results"].summary().strip().splitlines()]
+    assert actual == documented
+
+
+# ---------------------------------------------------------------------------
+# Targeted regression: documented LWDiD DR examples exercise genuine DR
+# ---------------------------------------------------------------------------
+def test_lwdid_dr_examples_exercise_dr_path():
+    """Every documented LWDiD ``estimation_method="dr"`` snippet runs real DR.
+
+    PR #782 review finding: the API DR example supplied no covariates, so it
+    warned and silently reduced to regression adjustment. The generic snippet
+    harness passes on warnings, so this pins the stronger contract for each
+    dr-containing block in api/lwdid.rst: no "reduces to regression
+    adjustment" warning, and finite ATT/SE from any fitted results object.
+    """
+    import warnings
+
+    rst_path = DOCS_DIR / "api" / "lwdid.rst"
+    dr_blocks = [
+        (idx, code)
+        for idx, code in _extract_snippets(rst_path)
+        if re.search(r"estimation_method=[\"']dr[\"']", code)
+    ]
+    assert dr_blocks, "api/lwdid.rst no longer contains a dr example"
+
+    for idx, code in dr_blocks:
+        ns = _build_namespace()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            exec(compile(code, f"<api_lwdid:dr-block{idx}>", "exec"), ns)
+        reductions = [w for w in caught if "reduces to regression adjustment" in str(w.message)]
+        assert not reductions, (
+            f"api/lwdid.rst dr block{idx} reduced to regression adjustment "
+            f"instead of exercising DR - add covariates to the example"
+        )
+        fitted = [
+            v
+            for v in ns.values()
+            if hasattr(v, "att") and hasattr(v, "se") and np.isscalar(getattr(v, "att"))
+        ]
+        assert fitted, f"api/lwdid.rst dr block{idx} produced no fitted results"
+        for res in fitted:
+            assert np.isfinite(res.att) and np.isfinite(
+                res.se
+            ), f"api/lwdid.rst dr block{idx} produced non-finite inference"

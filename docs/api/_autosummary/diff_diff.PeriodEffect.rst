@@ -4,25 +4,22 @@
 .. currentmodule:: diff_diff
 
 .. autoclass:: PeriodEffect
+   :no-members:
 
-   
-   .. automethod:: __init__
 
-   
    .. rubric:: Methods
 
    .. autosummary::
-   
-      ~PeriodEffect.__init__
-   
-   
 
-   
-   
+      ~PeriodEffect.__init__
+
+
+
+
    .. rubric:: Attributes
 
    .. autosummary::
-   
+
       ~PeriodEffect.is_significant
       ~PeriodEffect.significance_stars
       ~PeriodEffect.period
@@ -31,5 +28,4 @@
       ~PeriodEffect.t_stat
       ~PeriodEffect.p_value
       ~PeriodEffect.conf_int
-   
-   
+

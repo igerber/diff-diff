@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: clear_cache
+   :no-index:

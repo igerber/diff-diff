@@ -72,10 +72,10 @@ class TestStaggeredTripleDiffInit:
         assert est.estimation_method == "ipw"
         assert est.alpha == 0.10
 
-    def test_set_params_updates_bootstrap_weight_type(self):
+    def test_set_params_updates_bootstrap_weights(self):
         est = StaggeredTripleDifference()
         est.set_params(bootstrap_weights="mammen")
-        assert est.bootstrap_weight_type == "mammen"
+        assert est.bootstrap_weights == "mammen"
 
     def test_invalid_estimation_method(self):
         with pytest.raises(ValueError, match="estimation_method"):
@@ -142,6 +142,74 @@ class TestStaggeredTripleDiffBasic:
         summary = res.summary()
         assert "Staggered Triple Difference" in summary
         assert "ATT" in summary
+
+    def test_overall_att_es_result_surface(self, simple_data):
+        """Opt-in Eq. 4.14 overall (overall_att_es) is exposed on the result surface
+        (attribute, summary(), to_dict()) under aggregate='event_study', and is None
+        for the default (no event-study) fit."""
+        res = StaggeredTripleDifference().fit(
+            simple_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+            aggregate="event_study",
+        )
+        es_fields = (
+            "overall_att_es",
+            "overall_se_es",
+            "overall_t_stat_es",
+            "overall_p_value_es",
+            "overall_conf_int_es",
+        )
+        assert res.overall_att_es is not None and np.isfinite(res.overall_att_es)
+        for f in es_fields:
+            assert getattr(res, f) is not None
+        assert "Eq. 4.14" in res.summary()
+        d = res.to_dict()
+        for f in es_fields:
+            assert f in d
+        # Default fit (no event-study aggregation): fields are None and absent from to_dict.
+        res_default = StaggeredTripleDifference().fit(
+            simple_data, "outcome", "unit", "period", "first_treat", "eligibility"
+        )
+        assert res_default.overall_att_es is None
+        assert "overall_att_es" not in res_default.to_dict()
+
+    def test_overall_att_es_aggregate_all_matches_event_study(self, simple_data):
+        """Eq. 4.14 overall (overall_att_es) is populated under aggregate='all' (not only
+        'event_study') and matches the 'event_study' path bit-for-bit on the same data.
+
+        Regression guard for the documented public contract that BOTH surfaces expose
+        overall_att_es: aggregate='all' additionally computes the per-cohort group
+        aggregation, and must neither drop nor perturb the event-study-average overall.
+        """
+        res_all = StaggeredTripleDifference().fit(
+            simple_data, "outcome", "unit", "period", "first_treat", "eligibility", aggregate="all"
+        )
+        res_es = StaggeredTripleDifference().fit(
+            simple_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+            aggregate="event_study",
+        )
+        # Populated (not None / finite) on the 'all' surface.
+        assert res_all.overall_att_es is not None and np.isfinite(res_all.overall_att_es)
+        assert res_all.overall_se_es is not None and np.isfinite(res_all.overall_se_es)
+        # Identical point estimate AND inference vs the event_study path: same data, same
+        # analytical influence-function SE (no bootstrap), so bit-for-bit close.
+        assert res_all.overall_att_es == pytest.approx(res_es.overall_att_es, abs=1e-10)
+        assert res_all.overall_se_es == pytest.approx(res_es.overall_se_es, abs=1e-10)
+        assert res_all.overall_t_stat_es == pytest.approx(res_es.overall_t_stat_es, abs=1e-10)
+        assert res_all.overall_p_value_es == pytest.approx(res_es.overall_p_value_es, abs=1e-10)
+        ci_all, ci_es = res_all.overall_conf_int_es, res_es.overall_conf_int_es
+        assert ci_all is not None and ci_es is not None
+        assert ci_all[0] == pytest.approx(ci_es[0], abs=1e-10)
+        assert ci_all[1] == pytest.approx(ci_es[1], abs=1e-10)
 
     def test_to_dataframe_group_time(self, simple_data):
         est = StaggeredTripleDifference()
@@ -397,12 +465,21 @@ class TestStaggeredTripleDiffEdgeCases:
             est.fit(simple_data, "outcome", "unit", "period", "nonexistent", "eligibility")
 
     def test_inf_first_treat_works(self):
-        """Never-enabled units encoded as inf should work."""
+        """Never-enabled units encoded as inf should be recoded to 0, and the
+        recoding must surface a UserWarning with the affected row count
+        (axis-E silent coercion, mirroring the StaggeredDiD behavior)."""
         data = generate_staggered_ddd_data(n_units=100, seed=33)
         data["first_treat"] = data["first_treat"].astype(float)
-        data.loc[data["first_treat"] == 0, "first_treat"] = np.inf
+        inf_mask = data["first_treat"] == 0
+        n_inf_rows = int(inf_mask.sum())
+        data.loc[inf_mask, "first_treat"] = np.inf
         est = StaggeredTripleDifference()
-        res = est.fit(data, "outcome", "unit", "period", "first_treat", "eligibility")
+
+        with pytest.warns(
+            UserWarning,
+            match=rf"{n_inf_rows} row\(s\) have first_treat=inf; recoding to 0",
+        ):
+            res = est.fit(data, "outcome", "unit", "period", "first_treat", "eligibility")
         assert np.isfinite(res.overall_att)
 
     def test_survey_design_invalid_type_raises(self, simple_data):
@@ -523,3 +600,157 @@ class TestStaggeredTripleDiffRegressions:
         for (g, t), eff in res.group_time_effects.items():
             assert np.isfinite(eff["effect"]), f"Non-finite ATT at (g={g},t={t})"
             assert np.isfinite(eff["se"]), f"Non-finite SE at (g={g},t={t})"
+
+
+# ---------------------------------------------------------------------------
+# Silent-failure audit PR #9: finding #17 — OR influence-function solve
+# fell back to np.linalg.lstsq silently when X'WX was rank deficient. Now
+# tracked at _compute_did_panel() and aggregated into one fit-level warning.
+# ---------------------------------------------------------------------------
+
+
+class TestStaggeredTripleDiffORSolveFallback:
+    def test_collinear_covariates_emit_lstsq_fallback_warning(self):
+        """Perfectly collinear covariates should trigger the aggregate OR
+        rank-guard warning (default rank_deficient_action='warn'; suppressed
+        under 'silent')."""
+        data = generate_staggered_ddd_data(
+            n_units=200,
+            treatment_effect=3.0,
+            add_covariates=True,
+            seed=55,
+        )
+        # x3 ≡ 2·x1 makes covX = [intercept, x1, x2, x3] rank-deficient
+        # per pair, so XpX in _compute_did_panel() is near-singular.
+        data["x3"] = 2.0 * data["x1"]
+        est = StaggeredTripleDifference(estimation_method="dr")  # default "warn"
+        import warnings as _w
+
+        with _w.catch_warnings(record=True) as caught:
+            _w.simplefilter("always")
+            res = est.fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
+                covariates=["x1", "x2", "x3"],
+            )
+        or_warnings = [
+            w for w in caught if "outcome-regression influence-function step" in str(w.message)
+        ]
+        assert len(or_warnings) == 1, (
+            f"Expected exactly one aggregate OR rank-guard warning, " f"got {len(or_warnings)}."
+        )
+        msg = str(or_warnings[0].message)
+        assert "(g, g_c, t) pair(s)" in msg
+        assert "rank-guarded inverse" in msg
+        # Point estimates should still be finite (rank-guard truncation).
+        assert np.isfinite(res.overall_att)
+
+    def test_collinear_covariates_emit_ps_hessian_warning(self):
+        """Collinear propensity-score covariates should trigger the aggregate
+        PS-Hessian rank-guard warning under IPW/DR inference (default
+        rank_deficient_action='warn'; suppressed under 'silent'). Sibling of the
+        OR-side finding; surfaced by PR #334 CI review."""
+        data = generate_staggered_ddd_data(
+            n_units=200,
+            treatment_effect=3.0,
+            add_covariates=True,
+            seed=55,
+        )
+        data["x3"] = 2.0 * data["x1"]
+        est = StaggeredTripleDifference(
+            estimation_method="ipw",  # exercises PS path, skips OR projection
+        )
+        import warnings as _w
+
+        with _w.catch_warnings(record=True) as caught:
+            _w.simplefilter("always")
+            est.fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
+                covariates=["x1", "x2", "x3"],
+            )
+        ps_warnings = [w for w in caught if "propensity-score Hessian" in str(w.message)]
+        assert len(ps_warnings) == 1, (
+            f"Expected exactly one aggregate PS-Hessian rank-guard "
+            f"warning under IPW, got {len(ps_warnings)}: "
+            f"{[str(w.message) for w in ps_warnings]}"
+        )
+        msg = str(ps_warnings[0].message)
+        assert "(g, g_c, t) pair(s)" in msg
+        assert "rank-guarded inverse" in msg
+        assert "IPW/DR" in msg
+
+    def test_well_conditioned_covariates_emit_no_lstsq_warning(self):
+        """Clean, well-conditioned covariates should NOT trigger either
+        OR or PS-Hessian aggregate warning — regression-safety for the
+        happy path."""
+        data = generate_staggered_ddd_data(
+            n_units=300,
+            treatment_effect=3.0,
+            add_covariates=True,
+            seed=42,
+        )
+        est = StaggeredTripleDifference(estimation_method="dr")
+        import warnings as _w
+
+        with _w.catch_warnings(record=True) as caught:
+            _w.simplefilter("always")
+            est.fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
+                covariates=["x1", "x2"],
+            )
+        lstsq_warnings = [w for w in caught if "Rank-deficient X'WX" in str(w.message)]
+        assert lstsq_warnings == [], (
+            f"Unexpected lstsq-fallback warning on clean covariates: "
+            f"{[str(w.message) for w in lstsq_warnings]}"
+        )
+
+    def test_no_covariates_no_warning(self, simple_data):
+        """Without covariates both OR and PS paths are skipped, so no
+        aggregate warning should be emitted."""
+        est = StaggeredTripleDifference(estimation_method="reg")
+        import warnings as _w
+
+        with _w.catch_warnings(record=True) as caught:
+            _w.simplefilter("always")
+            est.fit(simple_data, "outcome", "unit", "period", "first_treat", "eligibility")
+        lstsq_warnings = [w for w in caught if "Rank-deficient X'WX" in str(w.message)]
+        assert lstsq_warnings == []
+
+
+@pytest.fixture(scope="module")
+def alpha_fitted():
+    data = generate_staggered_ddd_data(n_units=300, treatment_effect=3.0, seed=42)
+    return StaggeredTripleDifference().fit(
+        data, "outcome", "unit", "period", "first_treat", "eligibility"
+    )
+
+
+class TestSummaryAlphaContract:
+    """summary(alpha=...) never recomputes stored inference.
+
+    Family-wide guard (results_base._require_fit_alpha) - applies to this
+    results class even though the parent estimator is deprecated: the
+    summary surface is live through 3.x.
+    """
+
+    @pytest.mark.parametrize("bad_alpha", [0.10, 0.0])
+    def test_summary_rejects_non_fit_alpha(self, alpha_fitted, bad_alpha):
+        with pytest.raises(ValueError, match="never recomputes"):
+            alpha_fitted.summary(alpha=bad_alpha)
+
+    def test_summary_accepts_fit_alpha(self, alpha_fitted):
+        assert alpha_fitted.summary(alpha=alpha_fitted.alpha) == alpha_fitted.summary()

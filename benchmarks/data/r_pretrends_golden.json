@@ -1,0 +1,106 @@
+{
+  "meta": {
+    "generated_at": "2026-05-19",
+    "pretrends_version": "0.1.0",
+    "pretrends_commit": "122731d082",
+    "r_version": "R version 4.5.2 (2025-10-31)",
+    "description": "Roth (2022) PreTrendsPower parity goldens for diff-diff compute_pretrends_power / PreTrendsPower (PR-C). Three-tier parity contract, both numeric tiers at atol=1e-4: (1) NIS box probability at fixed gamma values on all 4 fixtures (atol=1e-4; R hardcodes thresholdTstat=1.96 while Python uses scipy.stats.norm.ppf(0.975) = 1.959963984540054, and mvtnorm::pmvnorm vs scipy MVN CDF Genz-Bretz randomized-lattice differences bound the K=4 NIS power gap at ~5e-5); (2) gamma_p MDV (slope at target power 0.5 and 0.8) on regular, irregular, shifted-grid (K=4), and K=1 grids (atol=1e-4; R uniroot tol vs Python brentq xtol gap dominates); (3) gamma-unit MDV invariance: PR-B's skip-L2-norm path produces MDV in Roth's gamma units exactly, matching R's slope_for_power(). See diff-diff/docs/methodology/papers/roth-2022-review.md for the full derivation."
+  },
+  "uniform_3_pre_periods_no_anticipation": {
+    "panel": {
+      "pre_periods": [-3, -2, -1],
+      "post_periods": [1, 2, 3],
+      "all_periods": [-3, -2, -1, 1, 2, 3],
+      "beta_hat": [0.0748350781672762, 0.068292848337178, -0.0771191463064529, -0.0935800609975106, 0.0682614805759886, 0.211856579827921],
+      "Sigma": [
+        [0.04, 0.012, 0.012, 0.012, 0.012, 0.012],
+        [0.012, 0.04, 0.012, 0.012, 0.012, 0.012],
+        [0.012, 0.012, 0.04, 0.012, 0.012, 0.012],
+        [0.012, 0.012, 0.012, 0.04, 0.012, 0.012],
+        [0.012, 0.012, 0.012, 0.012, 0.04, 0.012],
+        [0.012, 0.012, 0.012, 0.012, 0.012, 0.04]
+      ]
+    },
+    "r_power_at_gamma": {
+      "gamma_test_values": [0, 0.2, 0.5, 1],
+      "power_values": [0.136261192117481, 0.905586670498965, 0.999999998817154, 1]
+    },
+    "r_gamma_p": {
+      "target_power": [0.5, 0.8],
+      "gamma_p_values": [0.11085490751343, 0.168538720656777]
+    },
+    "fixture_name": "uniform_3_pre_periods_no_anticipation"
+  },
+  "irregular_pre_periods": {
+    "panel": {
+      "pre_periods": [-5, -3, -1],
+      "post_periods": [1, 2, 3],
+      "all_periods": [-5, -3, -1, 1, 2, 3],
+      "beta_hat": [0.0167238420028552, 0.109902112987245, 0.328388861134961, 0.174851793110386, 0.252739941152015, -0.00593022820809866],
+      "Sigma": [
+        [0.04, 0.012, 0.012, 0.012, 0.012, 0.012],
+        [0.012, 0.04, 0.012, 0.012, 0.012, 0.012],
+        [0.012, 0.012, 0.04, 0.012, 0.012, 0.012],
+        [0.012, 0.012, 0.012, 0.04, 0.012, 0.012],
+        [0.012, 0.012, 0.012, 0.012, 0.04, 0.012],
+        [0.012, 0.012, 0.012, 0.012, 0.012, 0.04]
+      ]
+    },
+    "r_power_at_gamma": {
+      "gamma_test_values": [0, 0.2, 0.5, 1],
+      "power_values": [0.1362253542292, 0.999453378314271, 1, 1]
+    },
+    "r_gamma_p": {
+      "target_power": [0.5, 0.8],
+      "gamma_p_values": [0.0685248863600757, 0.103615302925996]
+    },
+    "fixture_name": "irregular_pre_periods"
+  },
+  "anticipation_shifted": {
+    "panel": {
+      "pre_periods": [-5, -4, -3, -2],
+      "post_periods": [1, 2, 3],
+      "all_periods": [-5, -4, -3, -2, 1, 2, 3],
+      "beta_hat": [-0.238811348142889, -0.127368309020327, -0.120497459632285, -0.162119040596379, 0.118496154007033, -0.000345166145009745, 0.0906365319231415],
+      "Sigma": [
+        [0.04, 0.012, 0.012, 0.012, 0.012, 0.012, 0.012],
+        [0.012, 0.04, 0.012, 0.012, 0.012, 0.012, 0.012],
+        [0.012, 0.012, 0.04, 0.012, 0.012, 0.012, 0.012],
+        [0.012, 0.012, 0.012, 0.04, 0.012, 0.012, 0.012],
+        [0.012, 0.012, 0.012, 0.012, 0.04, 0.012, 0.012],
+        [0.012, 0.012, 0.012, 0.012, 0.012, 0.04, 0.012],
+        [0.012, 0.012, 0.012, 0.012, 0.012, 0.012, 0.04]
+      ]
+    },
+    "r_power_at_gamma": {
+      "gamma_test_values": [0, 0.2, 0.5, 1],
+      "power_values": [0.173946844004659, 0.99990350608629, 1, 1]
+    },
+    "r_gamma_p": {
+      "target_power": [0.5, 0.8],
+      "gamma_p_values": [0.0580280273451627, 0.0917980203438368]
+    },
+    "fixture_name": "anticipation_shifted"
+  },
+  "single_pre_period_closed_form": {
+    "panel": {
+      "pre_periods": [-1],
+      "post_periods": [1],
+      "all_periods": [-1, 1],
+      "beta_hat": [-0.029844176495569, 0.386819661339587],
+      "Sigma": [
+        [0.25, 0],
+        [0, 0.25]
+      ]
+    },
+    "r_power_at_gamma": {
+      "gamma_test_values": [0, 0.2, 0.5, 1],
+      "power_values": [0.0499957902964407, 0.0685174081253657, 0.170065802678576, 0.515990911734522]
+    },
+    "r_gamma_p": {
+      "target_power": [0.5, 0.8],
+      "gamma_p_values": [0.979923226532149, 1.40081048235691]
+    },
+    "fixture_name": "single_pre_period_closed_form"
+  }
+}

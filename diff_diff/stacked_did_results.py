@@ -6,12 +6,20 @@ Hollingsworth (2024) stacked difference-in-differences estimation.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
+from diff_diff._deprecation import deprecated_field_property
+from diff_diff.aggregation import AggregationMixin, AggregationResult
 from diff_diff.results import _format_survey_block, _get_significance_stars
+from diff_diff.results_base import (
+    BaseResults,
+    _coverage_pct,
+    _require_fit_alpha,
+    build_event_study_surface,
+)
 
 __all__ = [
     "StackedDiDResults",
@@ -19,7 +27,7 @@ __all__ = [
 
 
 @dataclass
-class StackedDiDResults:
+class StackedDiDResults(BaseResults, AggregationMixin):
     """
     Results from Stacked DiD estimation (Wing, Freedman & Hollingsworth 2024).
 
@@ -39,6 +47,10 @@ class StackedDiDResults:
     event_study_effects : dict, optional
         Dictionary mapping event time h to effect dict with keys:
         'effect', 'se', 't_stat', 'p_value', 'conf_int', 'n_obs'.
+        Always populated on 3.9+ fits (the pooled regression always
+        includes the event-time interactions and the surface is always
+        extracted - row M-024); None only on pre-3.9 pickles. View it as
+        the unified container via ``aggregate('event_study')``.
     group_effects : dict, optional
         Dictionary mapping cohort g to effect dict.
     stacked_data : pd.DataFrame
@@ -66,10 +78,47 @@ class StackedDiDResults:
         Post-treatment event-time window size.
     weighting : str
         Weighting scheme used.
-    clean_control : str
-        Clean control definition used.
+    control_group : str
+        Control-group (clean-control) definition used. (The deprecated
+        read-only alias ``clean_control`` warns and returns this value;
+        removed in 4.0 - row M-095.)
     alpha : float
         Significance level used.
+    event_study_vcov : np.ndarray, optional
+        Full event-study variance-covariance matrix: the sub-block of the
+        pooled stacked-regression coefficient covariance over the estimated
+        ``D_sa x event-time`` interaction columns, ordered by
+        ``event_study_vcov_index``. The reported per-event-time SEs are
+        exactly ``sqrt(diag())`` of this matrix in every inference mode
+        (analytical hc1/hc2_bm sandwich, survey replicate refit, and survey
+        TSL all produce the coefficient covariance the SEs are read from).
+        The reference period is synthesized, never a regression column, so
+        it is absent from the index. Always populated on 3.9+ fits (the
+        event-study surface is always materialized - row M-024); None
+        only on pre-3.9 pickles.
+    event_study_vcov_index : list of int, optional
+        Event-time labels ordering ``event_study_vcov``'s rows/columns
+        (the estimated event times, reference excluded).
+    event_study_df : dict, optional
+        Per-event-time inference degrees of freedom PROVENANCE: maps each
+        estimated event time to the df actually passed to
+        ``safe_inference`` for its stored p-value/CI (per-event
+        Bell-McCaffrey Satterthwaite df under ``hc2_bm``; the scalar survey
+        df under survey designs; the ``df_convention``-resolved analytical
+        fallback otherwise — finite residual df under the 3.9 default,
+        ``G − 1`` under "cluster"), or NaN when the row used normal theory
+        (``df_convention="normal"``), the df was undefined, or hc2_bm
+        failed closed. Always populated on 3.9+ fits (row M-024); None
+        only on pre-3.9 pickles.
+    df_convention : str, optional
+        The estimator's ``df_convention`` configuration echoed onto the
+        results ("residual" | "cluster" | "normal"; added 3.9).
+    inference_df : float, optional
+        The df the stored overall-ATT p-value/CI's ``safe_inference``
+        actually received: the BM contrast df under ``hc2_bm``, the
+        survey/replicate df on survey fits, else the
+        ``df_convention``-resolved analytical fallback. None when the
+        overall inference used normal theory or failed closed.
     """
 
     overall_att: float
@@ -91,10 +140,158 @@ class StackedDiDResults:
     kappa_pre: int = 1
     kappa_post: int = 1
     weighting: str = "aggregate"
-    clean_control: str = "not_yet_treated"
+    control_group: str = "not_yet_treated"
     alpha: float = 0.05
+    anticipation: int = 0
+    # Analytical variance family configured at fit time (Phase 1b 2/8). When
+    # survey_design= is supplied the survey TSL/replicate variance overrides
+    # the analytical family; this field still records the configured value.
+    vcov_type: str = "hc1"
+    # Cluster identity ("unit" or "unit_subexp") and realized cluster count
+    # at fit time. Used by summary() to render the correct CR1/CR2-BM label
+    # via `_format_vcov_label(cluster_name=, n_clusters=)`. Per CI codex R2
+    # P2: passing cluster_name=None mislabelled clustered StackedDiD fits
+    # as one-way HC1/HC2-BM. StackedDiD is intrinsically clustered.
+    cluster_name: Optional[str] = None
+    n_clusters: Optional[int] = None
     # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
     survey_metadata: Optional[Any] = field(default=None)
+    # --- Covariate balancing (CBWSDID, Ustyuzhanin 2026) ---
+    # balance: "none" (default, plain weighted stacked DID) or "entropy". When
+    # "entropy", `covariates` lists the balanced columns and `balance_diagnostics`
+    # maps each sub-experiment a to {n_treated, n_control, effective_control_mass
+    # (Ñ^C_a), ess, max_imbalance_pre, max_imbalance_post, balance_solver}. When
+    # balancing, `stacked_data` carries `_b_sa` (raw design weights) and the
+    # `_Q_weight` column holds the composed final weights W_sa.
+    balance: str = "none"
+    covariates: Optional[List[str]] = None
+    balance_diagnostics: Optional[Dict[Any, Dict[str, Any]]] = field(default=None)
+    # Unified event-study surface support (spec section 5, row M-092): the
+    # full ES VCV sub-block + ordered horizon index + per-event df actually
+    # used. See the class docstring for semantics.
+    event_study_vcov: Optional[np.ndarray] = field(default=None, repr=False)
+    event_study_vcov_index: Optional[List[int]] = field(default=None, repr=False)
+    event_study_df: Optional[Dict[int, float]] = field(default=None, repr=False)
+    # Appended LAST (generated __init__ positional indexes are public API).
+    df_convention: Optional[str] = None
+    inference_df: Optional[float] = None
+
+    # Deprecated read-only alias for ``control_group`` (row M-095; removed
+    # in 4.0). No annotation, so it stays a descriptor and never becomes a
+    # __dataclass_fields__ entry.
+    clean_control = deprecated_field_property("StackedDiDResults", "clean_control", "control_group")
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        """Migrate pickles created before the ``clean_control`` ->
+        ``control_group`` rename (row M-095): rewrite the key on load so
+        both the new field and the deprecated alias work on old pickles."""
+        if "clean_control" in state and "control_group" not in state:
+            state = dict(state)
+            state["control_group"] = state.pop("clean_control")
+        self.__dict__.update(state)
+
+    # ------------------------------------------------------------------
+    # Container-consumer provenance (rows M-024 / M-093). Class-level
+    # attrs, deliberately NOT dataclass fields: the generated __init__'s
+    # positional indexes are public API, and both values are derivable.
+    # ------------------------------------------------------------------
+    #: Every sub-experiment normalizes against the single omitted
+    #: reference ``e = -1 - anticipation`` - universal-base semantics in
+    #: the CallawaySantAnna vocabulary. Read by ``_provenance_kwargs``
+    #: so honest_did's cannot-verify-universal-base fail-safe stays
+    #: silent on StackedDiD containers.
+    base_period: ClassVar[str] = "universal"
+
+    @property
+    def reference_event_times(self) -> Tuple[int, ...]:
+        """The singleton common reference event time, ``(-1 - anticipation,)``.
+
+        StackedDiD has exactly one omitted reference shared by every
+        sub-experiment, so the container consumers' common-reference
+        guard always sees a single entry (rows M-024 / M-093).
+        """
+        return (-1 - int(self.anticipation),)
+
+    # ------------------------------------------------------------------
+    # Post-fit aggregation (row M-024, on the M-122 contract). Both
+    # levels are pure VIEWS over stored fields - the event-study surface
+    # is always materialized at fit since 3.9, and "simple" relays the
+    # stored overall inference bit-exactly. Nothing is recomputed, so
+    # every inference mode (survey TSL, replicate refit, hc2_bm) relays
+    # faithfully.
+    # ------------------------------------------------------------------
+    # ClassVar: on a dataclass a bare annotation would turn this routing
+    # configuration into an ``__init__`` field.
+    _AGGREGATE_SUPPORTED: ClassVar[Tuple[str, ...]] = ("simple", "event_study")
+    # StackedDiD has no balance_e machinery on any aggregation level
+    # (kappa trimming already balances every retained cohort's window).
+    _AGGREGATE_BALANCE_E_TYPES: ClassVar[Tuple[str, ...]] = ()
+
+    def _aggregate_compute(
+        self, level: str, *, weights: Optional[str], balance_e: Optional[int]
+    ) -> Any:
+        if level == "event_study":
+            # The unified container over ``event_study_effects`` (always
+            # populated on 3.9+ fits; pre-3.9 pickles raise the absent-
+            # surface error with a re-fit hint).
+            return build_event_study_surface(self)
+
+        # level == "simple": one-row view relaying the stored overall
+        # inference. ``n`` is the TREATED-unit count: StackedDiD's treated
+        # and control sets OVERLAP (a later-treated unit is treated in its
+        # own sub-experiment and a clean control in earlier ones), so a
+        # disjoint total does not exist as a stored scalar and summing the
+        # two counts would double-count - deliberately narrower in scope
+        # than CallawaySantAnna's treated+control "units" (REGISTRY
+        # StackedDiD M-024 Note; cross-container ``n`` comparisons are out
+        # of contract for this estimator). ``target`` is "att" per the CS
+        # precedent: ``overall_att`` is the equally-weighted average of
+        # post-treatment event-study coefficients, NOT the per-event-time
+        # trimmed aggregate ATT, so weighting-specific target strings
+        # would misstate the scalar (``describe_target_parameter`` is the
+        # estimand's prose source of truth).
+        ci = self.overall_conf_int if self.overall_conf_int is not None else (np.nan, np.nan)
+        return AggregationResult(
+            level="simple",
+            label=np.array(["overall"], dtype=object),
+            target=np.array(["att"], dtype=object),
+            att=np.array([self.overall_att], dtype=float),
+            se=np.array([self.overall_se], dtype=float),
+            t_stat=np.array([self.overall_t_stat], dtype=float),
+            p_value=np.array([self.overall_p_value], dtype=float),
+            conf_int_lower=np.array([ci[0]], dtype=float),
+            conf_int_upper=np.array([ci[1]], dtype=float),
+            n=np.array([float(self.n_treated_units)], dtype=float),
+            df=np.array(
+                [float(self.inference_df) if self.inference_df is not None else float("nan")],
+                dtype=float,
+            ),
+            alpha=self.alpha,
+            n_kind="units",
+            weight=np.array([1.0], dtype=float),
+            estimator=type(self).__name__.replace("Results", ""),
+        )
+
+    # --- Inference-field aliases (balance/external-adapter compatibility) ---
+    @property
+    def att(self) -> float:
+        return self.overall_att
+
+    @property
+    def se(self) -> float:
+        return self.overall_se
+
+    @property
+    def conf_int(self) -> Tuple[float, float]:
+        return self.overall_conf_int
+
+    @property
+    def p_value(self) -> float:
+        return self.overall_p_value
+
+    @property
+    def t_stat(self) -> float:
+        return self.overall_t_stat
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -106,6 +303,15 @@ class StackedDiDResults:
             f"n_stacked_obs={self.n_stacked_obs})"
         )
 
+    @property
+    def coef_var(self) -> float:
+        """Coefficient of variation: SE / abs(overall ATT). NaN when ATT is 0 or SE non-finite."""
+        if not (np.isfinite(self.overall_se) and self.overall_se >= 0):
+            return np.nan
+        if not np.isfinite(self.overall_att) or self.overall_att == 0:
+            return np.nan
+        return self.overall_se / abs(self.overall_att)
+
     def summary(self, alpha: Optional[float] = None) -> str:
         """
         Generate formatted summary of estimation results.
@@ -113,15 +319,20 @@ class StackedDiDResults:
         Parameters
         ----------
         alpha : float, optional
-            Significance level. Defaults to alpha used in estimation.
+            Accepted for signature uniformity. The stored intervals were
+            computed at fit time; a value different from the stored
+            ``alpha`` raises ValueError rather than silently recomputing
+            or relabeling (bootstrap percentile intervals cannot be
+            reconstructed from the reported SE). Re-fit at the desired
+            alpha instead.
 
         Returns
         -------
         str
             Formatted summary.
         """
-        alpha = alpha or self.alpha
-        conf_level = int((1 - alpha) * 100)
+        alpha = _require_fit_alpha(alpha, self.alpha)
+        conf_level = _coverage_pct(alpha)
 
         lines = [
             "=" * 85,
@@ -137,9 +348,27 @@ class StackedDiDResults:
             f"{'Trimmed cohorts:':<30} {len(self.trimmed_groups):>10}",
             f"{'Event window:':<30} {'[' + str(-self.kappa_pre) + ', ' + str(self.kappa_post) + ']':>10}",
             f"{'Weighting:':<30} {self.weighting:>10}",
-            f"{'Clean control:':<30} {self.clean_control:>10}",
+            f"{'Control group:':<30} {self.control_group:>10}",
             "",
         ]
+
+        # Variance family label (per CI codex R1 P2): surface the analytical
+        # vcov_type when the survey path didn't override. Per R2 P2: pass
+        # cluster_name + n_clusters so the label renders as "CR1 cluster-
+        # robust at unit, G=N" rather than the one-way "HC1 heteroskedasticity-
+        # robust" — StackedDiD is intrinsically clustered.
+        if self.survey_metadata is None and self.vcov_type:
+            from diff_diff.results import _format_vcov_label
+
+            label = _format_vcov_label(
+                self.vcov_type,
+                cluster_name=self.cluster_name,
+                n_clusters=self.n_clusters,
+                n_obs=self.n_stacked_obs,
+            )
+            if label is not None:
+                lines.append(f"{'Variance:':<30} {label:>50}")
+                lines.append("")
 
         # Add survey design info
         if self.survey_metadata is not None:
@@ -176,9 +405,14 @@ class StackedDiDResults:
                 "",
                 f"{conf_level}% Confidence Interval: "
                 f"[{self.overall_conf_int[0]:.4f}, {self.overall_conf_int[1]:.4f}]",
-                "",
             ]
         )
+
+        cv = self.coef_var
+        if np.isfinite(cv):
+            lines.append(f"{'CV (SE/abs(ATT)):':<25} {cv:>10.4f}")
+
+        lines.append("")
 
         # Event study effects
         if self.event_study_effects:
@@ -266,6 +500,50 @@ class StackedDiDResults:
         """Print summary to stdout."""
         print(self.summary(alpha))
 
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Convert headline results to a dictionary.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Canonical inference row plus scalar metadata. Detailed
+            event-study / group tables are available via
+            ``to_dataframe(level=...)``.
+        """
+        result = {
+            "att": self.att,
+            "se": self.se,
+            "t_stat": self.t_stat,
+            "p_value": self.p_value,
+            "conf_int_lower": self.overall_conf_int[0],
+            "conf_int_upper": self.overall_conf_int[1],
+            "n_obs": self.n_obs,
+            "n_stacked_obs": self.n_stacked_obs,
+            "n_sub_experiments": self.n_sub_experiments,
+            "n_treated_units": self.n_treated_units,
+            "n_control_units": self.n_control_units,
+            "kappa_pre": self.kappa_pre,
+            "kappa_post": self.kappa_post,
+            "weighting": self.weighting,
+            "control_group": self.control_group,
+            # Deprecated key mirroring ``control_group`` through the 3.9
+            # shim window; dropped in 4.0 (row M-095, section 5 policy).
+            "clean_control": self.control_group,
+            "anticipation": self.anticipation,
+            "alpha": self.alpha,
+            "vcov_type": self.vcov_type,
+        }
+        if self.cluster_name is not None:
+            result["cluster_name"] = self.cluster_name
+        if self.n_clusters is not None:
+            result["n_clusters"] = self.n_clusters
+        if self.df_convention is not None:
+            result["df_convention"] = self.df_convention
+        if self.inference_df is not None:
+            result["inference_df"] = self.inference_df
+        return result
+
     def to_dataframe(self, level: str = "event_study") -> pd.DataFrame:
         """
         Convert results to DataFrame.
@@ -284,8 +562,12 @@ class StackedDiDResults:
         """
         if level == "event_study":
             if self.event_study_effects is None:
+                # Only reachable on pre-3.9 pickles: 3.9+ fits always
+                # materialize the surface (row M-024).
                 raise ValueError(
-                    "Event study effects not computed. " "Use aggregate='event_study'."
+                    "Event study effects not present on this results object. "
+                    "Re-fit with diff-diff >= 3.9, which always computes the "
+                    "event-study surface."
                 )
             rows = []
             for h, data in sorted(self.event_study_effects.items()):

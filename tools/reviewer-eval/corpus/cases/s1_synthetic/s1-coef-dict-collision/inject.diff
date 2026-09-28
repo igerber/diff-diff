@@ -1,0 +1,28 @@
+diff --git a/diff_diff/estimators.py b/diff_diff/estimators.py
+index 9d73e968..d98eab32 100644
+--- a/diff_diff/estimators.py
++++ b/diff_diff/estimators.py
+@@ -1600,22 +1600,9 @@ class MultiPeriodDiD(DifferenceInDifferences):
+                 X = np.column_stack([X, working_data[cov].values.astype(float)])
+                 var_names.append(cov)
+ 
+-        # Add fixed effects as dummy variables.
+-        #
+-        # MPD's design already absorbs the time dimension via non-reference
+-        # period dummies (the `period_<X>` columns above) and the treatment-
+-        # period interactions. If the caller passes the same column as a
+-        # fixed effect (either explicitly or via the absorb -> fixed_effects
+-        # auto-route for HC2/HC2-BM), the resulting `<time>_<X>` dummies
+-        # would be perfectly redundant with the existing period dummies,
+-        # NaN'd by `solve_ols`'s rank-deficiency handling, AND collide on
+-        # name with the event-study columns in `coef_dict` (silently
+-        # collapsing the dict and breaking the coefficients-vs-vcov
+-        # alignment that downstream consumers rely on). Skip those FEs.
++        # Add fixed effects as dummy variables
+         if fixed_effects:
+             for fe in fixed_effects:
+-                if fe == time:
+-                    continue
+                 dummies = pd.get_dummies(working_data[fe], prefix=fe, drop_first=True)
+                 for col in dummies.columns:
+                     X = np.column_stack([X, dummies[col].values.astype(float)])

@@ -1,0 +1,172 @@
+{
+  "metadata": {
+    "n_seeds": 500,
+    "n_bootstrap": 200,
+    "library_version": "3.2.0",
+    "backend": "rust",
+    "generated_at": "2026-04-24T21:08:20.185764+00:00",
+    "total_elapsed_sec": 2420.61,
+    "methods": [
+      "placebo",
+      "bootstrap",
+      "jackknife"
+    ],
+    "alphas": [
+      0.01,
+      0.05,
+      0.1
+    ]
+  },
+  "dgps": {
+    "balanced": "Balanced / exchangeable: N_co=20, N_tr=3, T_pre=8, T_post=4",
+    "unbalanced": "Unbalanced: N_co=30, N_tr=8, heterogeneous unit-FE variance",
+    "aer63": "Arkhangelsky et al. (2021) AER \u00a76.3: N=100, N1=20, T=120, T1=5, rank=2, \u03c3=2",
+    "stratified_survey": "BRFSS-style: N=40, strata=2, PSU=2/stratum, psu_re_sd=1.5 (PR #352)"
+  },
+  "per_dgp": {
+    "balanced": {
+      "placebo": {
+        "n_successful_fits": 500,
+        "rejection_rate": {
+          "0.01": 0.016,
+          "0.05": 0.06,
+          "0.10": 0.086
+        },
+        "mean_se": 0.21883358887261328,
+        "true_sd_tau_hat": 0.2093529148687405,
+        "se_over_truesd": 1.0452856078446147
+      },
+      "bootstrap": {
+        "n_successful_fits": 500,
+        "rejection_rate": {
+          "0.01": 0.028,
+          "0.05": 0.078,
+          "0.10": 0.116
+        },
+        "mean_se": 0.2195984748876297,
+        "true_sd_tau_hat": 0.2093529148687405,
+        "se_over_truesd": 1.0489391801652868
+      },
+      "jackknife": {
+        "n_successful_fits": 500,
+        "rejection_rate": {
+          "0.01": 0.066,
+          "0.05": 0.112,
+          "0.10": 0.154
+        },
+        "mean_se": 0.225193379965879,
+        "true_sd_tau_hat": 0.2093529148687405,
+        "se_over_truesd": 1.0756639338270981
+      },
+      "_elapsed_sec": 71.24
+    },
+    "unbalanced": {
+      "placebo": {
+        "n_successful_fits": 500,
+        "rejection_rate": {
+          "0.01": 0.006,
+          "0.05": 0.032,
+          "0.10": 0.07
+        },
+        "mean_se": 0.14578822995037113,
+        "true_sd_tau_hat": 0.135562270427217,
+        "se_over_truesd": 1.0754336696407312
+      },
+      "bootstrap": {
+        "n_successful_fits": 500,
+        "rejection_rate": {
+          "0.01": 0.008,
+          "0.05": 0.038,
+          "0.10": 0.08
+        },
+        "mean_se": 0.15070173940119225,
+        "true_sd_tau_hat": 0.135562270427217,
+        "se_over_truesd": 1.1116790750572711
+      },
+      "jackknife": {
+        "n_successful_fits": 500,
+        "rejection_rate": {
+          "0.01": 0.024,
+          "0.05": 0.076,
+          "0.10": 0.12
+        },
+        "mean_se": 0.13429336452914814,
+        "true_sd_tau_hat": 0.135562270427217,
+        "se_over_truesd": 0.990639682456852
+      },
+      "_elapsed_sec": 78.91
+    },
+    "aer63": {
+      "placebo": {
+        "n_successful_fits": 500,
+        "rejection_rate": {
+          "0.01": 0.018,
+          "0.05": 0.058,
+          "0.10": 0.086
+        },
+        "mean_se": 0.2681237752550122,
+        "true_sd_tau_hat": 0.2696262336703088,
+        "se_over_truesd": 0.9944276252542481
+      },
+      "bootstrap": {
+        "n_successful_fits": 500,
+        "rejection_rate": {
+          "0.01": 0.01,
+          "0.05": 0.04,
+          "0.10": 0.078
+        },
+        "mean_se": 0.28265726432861016,
+        "true_sd_tau_hat": 0.2696262336703088,
+        "se_over_truesd": 1.0483299806584672
+      },
+      "jackknife": {
+        "n_successful_fits": 500,
+        "rejection_rate": {
+          "0.01": 0.03,
+          "0.05": 0.08,
+          "0.10": 0.15
+        },
+        "mean_se": 0.24309151423096811,
+        "true_sd_tau_hat": 0.2696262336703088,
+        "se_over_truesd": 0.9015870263136688
+      },
+      "_elapsed_sec": 2237.29
+    },
+    "stratified_survey": {
+      "placebo": {
+        "n_successful_fits": 0,
+        "rejection_rate": {
+          "0.01": null,
+          "0.05": null,
+          "0.10": null
+        },
+        "mean_se": null,
+        "true_sd_tau_hat": null,
+        "se_over_truesd": null
+      },
+      "bootstrap": {
+        "n_successful_fits": 500,
+        "rejection_rate": {
+          "0.01": 0.024,
+          "0.05": 0.058,
+          "0.10": 0.094
+        },
+        "mean_se": 0.5097482138251239,
+        "true_sd_tau_hat": 0.4512243070193919,
+        "se_over_truesd": 1.1297002530566618
+      },
+      "jackknife": {
+        "n_successful_fits": 500,
+        "rejection_rate": {
+          "0.01": 0.358,
+          "0.05": 0.45,
+          "0.10": 0.512
+        },
+        "mean_se": 0.20686834633234263,
+        "true_sd_tau_hat": 0.4512243070193919,
+        "se_over_truesd": 0.4584601119980272
+      },
+      "_elapsed_sec": 18.62
+    }
+  }
+}

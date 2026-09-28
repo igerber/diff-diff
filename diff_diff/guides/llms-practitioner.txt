@@ -1,0 +1,789 @@
+# diff-diff Practitioner Guide
+
+> An 8-step workflow for rigorous Difference-in-Differences analysis, based on
+> Baker et al. (2025) "Difference-in-Differences Designs: A Practitioner's
+> Guide" and adapted for the diff-diff library. Some steps are reorganized or
+> extended relative to the paper:
+>
+> - **Numbering**: diff-diff uses 1-Define, 2-Assumptions, 3-Test PT,
+>   4-Choose estimator, 5-Estimate, 6-Sensitivity, 7-Heterogeneity,
+>   8-Robustness. The paper uses 1-Define, 2-Assumptions, 3-Estimation method,
+>   4-Uncertainty, 5-Estimate, 6-Sensitivity, 7-Heterogeneity, 8-Keep learning.
+> - **Parallel trends testing** is a separate Step 3 (the paper embeds it in
+>   Step 2), to ensure AI agents execute it as a distinct action.
+> - **Sources of uncertainty** (paper's Step 4) are folded into Step 5
+>   (Estimate) with an explicit cluster-count check directive: >= 50 clusters
+>   for asymptotic SEs, otherwise wild bootstrap where the estimator supports
+>   it (DiD with `cluster=`; TWFE auto-clusters) or a bootstrapped
+>   `n_bootstrap` otherwise. The 50-cluster threshold is
+>   a diff-diff convention.
+> - **Step 8** is "Robustness & Reporting" (compare estimators, report with
+>   and without covariates). The paper's Step 8 is "Keep learning." The
+>   mandatory with/without covariate comparison is a diff-diff convention.
+
+## Instructions for AI Agents
+
+You MUST follow all 8 steps below for any DiD analysis. Skipping diagnostic
+steps (2, 3, 6, 7, 8) produces analyses that are incomplete and potentially
+misleading. A DiD analysis is not just calling `.fit()` — it requires testing
+assumptions, running sensitivity analysis, and checking robustness.
+
+After estimation, call `practitioner_next_steps(results)` for context-aware
+guidance on remaining steps.
+
+---
+
+## Step 1: Define Target Parameters
+
+Before writing any code, state explicitly what causal effect you are estimating.
+
+- **ATT** (Average Treatment Effect on the Treated): The average effect of
+  treatment on those who were actually treated.
+- **ATT(g,t)**: Group-time specific effects — the ATT for cohort g at time t.
+  These are the building blocks; aggregate parameters combine them.
+- **ATT_es(e)**: Event-study parameters — average effect at relative time e
+  since treatment.
+
+Key questions to answer:
+- Are you targeting weighted or unweighted averages? They answer different
+  policy questions. Population-weighted estimates give more weight to larger
+  units.
+- Is there treatment effect heterogeneity you should preserve rather than
+  average over?
+- If the data are a survey: are the weights calibrated (raked) at the
+  granularity of your comparison units? Non-response drift that correlates
+  with treatment timing does NOT difference out of a DiD; calibrate upstream
+  with Meta's balance package first — see Tutorial 26:
+  docs/tutorials/26_composition_drift_calibration.ipynb.
+
+```python
+# After estimation, the target parameter is available as:
+# Basic DiD (DiDResults):
+results.att          # ATT
+results.se           # Standard error
+results.conf_int     # Confidence interval
+
+# CallawaySantAnna (with aggregate parameter):
+results.overall_att       # Overall ATT
+results.overall_se        # Standard error
+results.group_effects     # Per-cohort ATTs (deprecated fit-time route only;
+                          # post-fit: results.aggregate('group'))
+results.event_study_effects  # Dynamic effects (deprecated fit-time route only;
+                             # post-fit: results.aggregate('event_study'))
+
+# SunAbraham (no aggregate parameter — effects computed automatically):
+results.overall_att           # Overall ATT
+results.event_study_effects   # Dynamic effects by relative period
+results.cohort_effects        # Per-cohort effects (via to_dataframe(level='cohort'))
+
+# Other staggered (ImputationDiD, TwoStageDiD, etc.):
+results.overall_att       # Overall ATT
+results.overall_se        # Standard error
+
+# Flat-alias compatibility: every staggered class above (canonical
+# `overall_*` / `overall_att_*` / `avg_*` prefixed) also exposes the
+# unprefixed flat names `att` / `se` / `conf_int` / `p_value` /
+# `t_stat` as read-only `@property` aliases over the canonical fields.
+# The canonical prefixed names remain the documented and computed
+# surface; the flat aliases are pure read-throughs for compatibility
+# with adapters that `getattr(res, "se", None)`-style query inference.
+results.att               # alias of overall_att / avg_att (or overall_att for ContinuousDiD ATT side)
+results.se                # alias of overall_se / avg_se (or overall_att_se for ContinuousDiD ATT side)
+```
+
+---
+
+## Step 2: State Identification Assumptions
+
+Explicitly state which assumptions you are invoking and argue why they are
+plausible in your setting.
+
+### Parallel Trends (PT)
+The core assumption. In the absence of treatment, treated and untreated groups
+would have followed the same trend. This is **untestable** for post-treatment
+periods but can be assessed with pre-treatment data.
+
+Variants for staggered designs:
+- **PT-GT-Nev**: Parallel trends between each cohort and never-treated units
+- **PT-GT-NYT**: Parallel trends between each cohort and not-yet-treated units
+  (larger comparison group but requires no anticipation for not-yet-treated units)
+- **PT-GT-all**: Parallel trends across all groups and periods (most restrictive)
+- **Conditional PT**: Parallel trends holds within covariate strata (use with
+  covariates via `estimation_method="dr"`)
+
+### No-Anticipation
+Treatment does not affect outcomes before it is implemented. Violated when
+units adjust behavior in anticipation of future treatment. Set `anticipation=k`
+to allow k periods of anticipation (`k` a non-negative integer; `bool` is
+rejected). EXCEPTION: `LWDiD` has no `anticipation=` parameter (passing it
+raises TypeError) - no-anticipation is maintained at estimation time; for a
+SINGLE treated cohort, diagnose it post hoc with
+`diff_diff.lwdid_sensitivity.sensitivity_no_anticipation` (and
+`robustness_pre_periods`); both reject multi-cohort staggered inputs.
+
+---
+
+## Step 3: Test Parallel Trends
+
+Test the parallel trends assumption empirically. This step is separated from
+Step 2 because it requires code execution, not just stating assumptions.
+
+**For simple 2x2 designs** (single treatment timing):
+```python
+from diff_diff import check_parallel_trends, equivalence_test_trends
+
+# Simple pre-trends test (compares slopes for a binary treatment indicator)
+pt_result = check_parallel_trends(
+    data, outcome='y', time='period', treatment_group='treated',
+    pre_periods=[1, 2, 3]
+)
+print(f"Treated trend: {pt_result['treated_trend']:.4f}")
+print(f"Control trend: {pt_result['control_trend']:.4f}")
+print(f"Difference p-value: {pt_result['p_value']:.4f}")
+
+# Equivalence test (TOST) — tests that trends are meaningfully similar
+equiv = equivalence_test_trends(
+    data, outcome='y', time='period', treatment_group='treated',
+    pre_periods=[1, 2, 3], equivalence_margin=0.5
+)
+```
+
+**For staggered designs** (multiple cohorts adopting at different times):
+The generic `check_parallel_trends()` assumes a single binary treatment with
+universal pre-periods, which is invalid when cohorts adopt at different times
+(some "pre-periods" are post-treatment for early cohorts). Instead, use the
+CS event-study pre-period coefficients as the pre-trends diagnostic:
+```python
+# Fit CS, then inspect the post-fit event-study pre-periods
+cs = CallawaySantAnna(control_group='never_treated', cluster='unit_id')
+results = cs.fit(data, ...)
+
+# Pre-treatment relative-time ATTs should be near zero
+es = results.aggregate('event_study').to_dataframe()
+for _, row in es[es['event_time'] < 0].iterrows():
+    print(f"Pre-period {row['event_time']:.0f}: ATT={row['att']:.4f}, SE={row['se']:.4f}")
+# Significant pre-treatment effects → parallel trends may be violated
+```
+
+CAUTION: Small, statistically insignificant pre-trends do NOT guarantee
+parallel trends holds post-treatment. Use HonestDiD (Step 6) to bound how
+large a violation would need to be to overturn your results.
+
+---
+
+## Step 4: Choose Estimation Method
+
+Use this decision tree to select the appropriate estimator:
+
+```
+Is this a triple-difference (DDD) design? (Two criteria: e.g., policy + eligibility)
+|-- YES, simultaneous (2x2x2):   TripleDifference (DDD)
+|-- YES, staggered timing:       TripleDifference(...).fit(..., first_treat=)
+|                                (StaggeredTripleDifference/SDDD deprecated 3.9)
+|
+Is treatment continuous (doses/intensities)?
+Route by ESTIMAND first, not by whether never-treated units happen
+to be present (HAD remains valid with a small never-treated share;
+see REGISTRY HeterogeneousAdoptionDiD edge cases):
+|-- Target estimand is per-dose ATT(d) / ACRT(d) curves (you want
+|        the dose-response function): ContinuousDiD. Requires
+|        a non-empty untreated comparison group — i.e. some units
+|        with dose == 0 throughout, encoded as either first_treat == 0
+|        or first_treat == inf (ContinuousDiD normalizes inf -> 0).
+|        No never-treated units present -> ContinuousDiD's
+|        identification fails.
+|-- Target estimand is Weighted Average Slope (WAS) at the dose
+|        support boundary (you want a single scalar slope from dose
+|        variation across units): HeterogeneousAdoptionDiD (HAD).
+|        HAD works under universal rollout (every unit treated at
+|        some positive dose) AND under panels that include a small
+|        never-treated share — the never-treated units are retained
+|        as controls and do not break HAD's identification (paper
+|        Appendix B.2; REGISTRY edge cases). Panel-shape contract
+|        is load-bearing on HAD, and fit() selects the mode from
+|        it (M-027): two-period panels run the overall (single-
+|        period WAS) estimator; multi-period panels run the per-
+|        horizon event-study estimator. On
+|        STAGGERED multi-cohort panels HAD's event-study path auto-
+|        filters to the last cohort + never-treated (Appendix B.2)
+|        and the estimand becomes last-cohort-only WAS — use
+|        ChaisemartinDHaultfoeuille if full multi-cohort staggered
+|        support under continuous treatment is required. For the
+|        survey-weighted HAD workflow on a stratified-PSU design
+|        (BRFSS / CPS / NHANES shape), see Tutorial 22:
+|        docs/tutorials/22_had_survey_design.ipynb.
+|
+Is the outcome a binary ABSORBING event (spell ended: job found, churned,
+discharged) observed over time for a treated and a control group?
+|-- YES: Use DurationDiD (Deaner & Ku 2026) -- two groups, common
+|        timing. Identification is a restriction on the UNTREATED
+|        HAZARDS (method='cd' additive gap, method='ph' ratio), not on
+|        outcome levels; whole-individual bootstrap pointwise +
+|        simultaneous bands; fit(..., last_pre_period=) is REQUIRED;
+|        read results.pretest (fixed-anchor specification test) instead
+|        of check_parallel_trends(); HonestDiD does not apply.
+|
+Is treatment adoption staggered (multiple cohorts, different timing)?
+|-- YES: Do NOT use plain TWFE. Use one of:
+|   |-- CallawaySantAnna (CS)  -- most general, doubly robust, recommended default
+|   |-- SunAbraham (SA)        -- interaction-weighted, good for event studies
+|   |-- ImputationDiD (BJS)    -- most efficient under homogeneous effects
+|   |-- TwoStageDiD            -- two-stage with GMM variance
+|   |-- StackedDiD             -- sub-experiment approach
+|   |-- EfficientDiD (EDiD)    -- optimal weighting for tighter SEs
+|   |-- DMLDiD                 -- double/debiased ML (Chang 2020) when
+|   |                             covariate adjustment must be flexible or
+|   |                             high-dimensional: cross-fitted nuisance
+|   |                             learners + orthogonal scores per (g,t)
+|   |                             cell; covariates REQUIRED, aggregation
+|   |                             post-fit, set seed= for reproducible
+|   |                             fold draws; panel=False = declared
+|   |                             RCS; fit(bad_control=) = Caetano
+|   |                             et al. (2026) bad-control lane
+|   |                             repeated cross sections (Case 2,
+|   |                             lambda-corrected variance);
+|   |                             survey_design=/cluster= supported on
+|   |                             both designs (pweight TSL + replicate
+|   |                             weights via IF-reweighting)
+|   \-- WooldridgeDiD (ETWFE)  -- nonlinear outcomes (logit/Poisson) or saturated OLS
+|
+|-- NO, simple 2x2 design:
+|   \-- DifferenceInDifferences (DiD)
+|
+|-- Treatment switches ON and OFF (reversible / non-absorbing)?
+|   \-- ChaisemartinDHaultfoeuille (dCDH / alias `DCDH`)
+|       -- Most general option for non-absorbing treatments (allows dynamic
+|          effects + joiner/leaver views); supports L_max multi-horizon,
+|          dynamic placebos, cost-benefit delta, HonestDiD, and
+|          `survey_design=` (pweight + strata/PSU/FPC via TSL)
+|       -- Also: LPDiD(non_absorbing="first_entry"/"effect_stabilization")
+|          and TROP(non_absorbing=True, no-dynamic-effects) under stronger assumptions
+|
+|-- Few treated units (< 20)?
+|   |-- SyntheticDiD (SDiD)    -- synthetic control + DiD hybrid
+|   \-- LWDiD                  -- exact small-sample inference on the
+|                                 collapsed regression, valid at N1 = 1.
+|                                 Construct it as
+|                                 LWDiD(estimation_method="reg",
+|                                 vcov_type="classical") - the DEFAULT
+|                                 vcov_type="hc1" is asymptotic robust
+|                                 inference, NOT the exact t. Causal
+|                                 only under the LWDiD identifying
+|                                 assumptions (no anticipation +
+|                                 parallel trends - the heterogeneous-
+|                                 linear-trends variant for detrend - +
+|                                 overlap) and exact only under the
+|                                 classical error assumptions; the
+|                                 CANONICAL contract - which exact-t
+|                                 surfaces, covariate designs, RI
+|                                 exchangeability - is the LWDiD
+|                                 section of get_llm_guide("full").
+|
+|-- Suspected factor confounding / interactive fixed effects?
+|   \-- TROP                   -- triply robust with nuclear norm factor adjustment
+|
+\-- Nonlinear outcome (binary, count)?
+    \-- WooldridgeDiD (ETWFE)  -- logit or Poisson QMLE with ASF-based ATT
+```
+
+Always run BaconDecomposition first if using TWFE, to check for negative
+weights from forbidden comparisons:
+
+```python
+from diff_diff import BaconDecomposition
+
+bacon = BaconDecomposition()
+bacon_result = bacon.fit(
+    data, outcome='y', unit='unit_id', time='period', first_treat='first_treat'
+)
+print(bacon_result.summary())
+# If substantial weight falls on "later vs earlier" comparisons,
+# switch to a heterogeneity-robust estimator (CS, SA, BJS, etc.)
+```
+
+---
+
+## Step 5: Estimate
+
+Before fitting, you MUST check the cluster count and choose inference
+accordingly. Do not assume — always print and decide based on the data.
+
+```python
+# ALWAYS check the cluster count before choosing inference:
+cluster_col = 'county_id'  # the level at which treatment is assigned
+n_clusters = data[cluster_col].nunique()
+print(f"Number of clusters: {n_clusters}")
+
+if n_clusters >= 50:
+    print("-> Use cluster-robust SEs (asymptotic approximation is reliable)")
+else:
+    print(f"-> Only {n_clusters} clusters — use wild cluster bootstrap "
+          f"(DiD/TWFE: inference='wild_bootstrap'; CS/SA: a bootstrapped n_bootstrap)")
+```
+
+Now run the estimator chosen in Step 4. Examples for common designs:
+
+### Staggered adoption (recommended: Callaway-Sant'Anna)
+```python
+from diff_diff import CallawaySantAnna
+
+cs = CallawaySantAnna(
+    control_group='never_treated',  # or 'not_yet_treated' — context-dependent choice
+    estimation_method='dr',            # doubly robust (recommended)
+    cluster='county_id',
+    n_bootstrap=999,
+)
+results = cs.fit(
+    data,
+    outcome='lemp',
+    unit='county_id',
+    time='year',
+    first_treat='first_treat',
+    covariates=['lpop'],
+)
+print(results.summary())
+# Aggregations are post-fit views/recomputes - no refit:
+print(results.aggregate('event_study').to_dataframe())
+print(results.aggregate('group').to_dataframe())
+```
+
+### Simple 2x2
+```python
+from diff_diff import DifferenceInDifferences
+
+did = DifferenceInDifferences(cluster='state_id')
+results = did.fit(data, outcome='y', treatment='treated', post='post')
+print(results.summary())
+```
+
+### Event study
+```python
+from diff_diff import TwoWayFixedEffects
+
+# TwoWayFixedEffects event-study mode (MultiPeriodDiD is deprecated in
+# 3.9; spec='pooled' reproduces its design). post_periods= is REQUIRED:
+# the treatment boundary cannot be inferred from a time-invariant
+# ever-treated indicator.
+es = TwoWayFixedEffects(cluster='unit_id')
+results = es.fit(data, outcome='y', unit='unit_id', treatment='treated',
+                 event_study=True, time='period', post_periods=[3, 4, 5])
+print(results.summary())
+```
+
+### Reversible (non-absorbing) treatment with survey design
+Use `ChaisemartinDHaultfoeuille` (dCDH) when treatment switches ON and OFF.
+Pass `survey_design=SurveyDesign(...)` for design-based inference via Taylor
+Series Linearization. Only `weight_type='pweight'` is supported; replicate
+weights are deferred. When combined with `n_bootstrap > 0`, dCDH emits a
+`UserWarning` and falls back to group-level multiplier bootstrap — prefer
+the analytical TSL path for survey-aware inference.
+
+```python
+from diff_diff import ChaisemartinDHaultfoeuille, SurveyDesign
+
+sd = SurveyDesign(weights='pw', strata='stratum', psu='cluster', nest=True)
+results = ChaisemartinDHaultfoeuille().fit(
+    data, outcome='y', unit='unit_id', time='period',
+    treatment='treated',
+    L_max=3,                  # multi-horizon event study
+    survey_design=sd,         # survey-aware analytical SE (TSL)
+)
+print(results.summary())
+```
+
+---
+
+## Step 6: Sensitivity Analysis
+
+This step is CRITICAL and most often skipped. Run at least one of:
+
+### HonestDiD (Rambachan & Roth 2023) - recommended
+Bounds on the treatment effect under violations of parallel trends.
+Works with MultiPeriodDiD (deprecated - the TWFE event-study surface also admits), CallawaySantAnna, and ChaisemartinDHaultfoeuille
+(dCDH) results, plus StackedDiD via the post-fit
+`results.aggregate('event_study')` container (needs `kappa_pre >= 2` so
+estimated pre-periods exist).
+
+- For CS: pass the post-fit container - `compute_honest_did(
+  results.aggregate('event_study'))` - no refit needed (the fit-time
+  `aggregate=` route is deprecated since 3.9). BOOTSTRAPPED fits
+  (`n_bootstrap > 0`) included: the recompute levels REPLAY the
+  fit-time multiplier bootstrap from the kit-retained RNG state
+  (percentile inference; the container carries no joint covariance, so
+  HonestDiD uses its diagonal approximation), while
+  `aggregate('simple')`/`aggregate('total')` relay the stored
+  inference; only pre-replay legacy pickles and cross-weight-backend
+  artifacts fail closed with a refit message.
+- For dCDH: requires `L_max >= 1` (multi-horizon mode). Bounds use placebo
+  estimates `DID^{pl}_l` as pre-period coefficients rather than standard
+  event-study pre-treatment coefficients, and use diagonal variance (no
+  full VCV available for dCDH); a `UserWarning` is emitted at runtime.
+  Default restriction is Relative Magnitudes (DeltaRM) with Mbar=1.0
+  targeting the equal-weight average over post-treatment horizons
+  (`l_vec=None`); R's HonestDiD defaults to the first post / on-impact
+  effect, so pass `compute_honest_did(results, l_vec=...)` for R parity.
+  When `trends_linear=True`, bounds apply to the second-differenced
+  estimand (parallel trends in first differences). Gaps in the horizon
+  grid from `trends_nonparam` support-trimming are handled by filtering
+  to the largest consecutive block with a warning.
+
+```python
+from diff_diff import compute_honest_did
+
+# Relative magnitude restriction: post-treatment violations bounded by
+# M times the max pre-treatment violation
+honest = compute_honest_did(results, method='relative_magnitude', M=1.0)
+print(honest.summary())
+# M=1.0 means: "if post-treatment PT violations are at most as large as
+# the max pre-treatment violation, the ATT is in this range"
+
+# Smoothness restriction: bounds on the rate of change of violations
+honest_sd = compute_honest_did(results, method='smoothness', M=0.5)
+```
+
+### Placebo tests (simple 2x2 designs only)
+`run_all_placebo_tests()` refits a basic 2x2 DiD — it is valid for simple
+designs but NOT for staggered, synthetic control, or other advanced estimators.
+
+**For non-2x2 estimators**, use specification-based falsification appropriate
+to your estimator's API. Examples:
+- **CS/SA**: compare `control_group='never_treated'` vs `'not_yet_treated'`
+- **StackedDiD**: vary `control_group` definition
+- **EfficientDiD**: compare `control_group='never_treated'` vs `'last_cohort'`
+- **ImputationDiD/TwoStageDiD**: leave-one-cohort-out, cross-estimator comparison
+- **SyntheticDiD**: built-in diagnostics on the results object - `results.in_time_placebo()`, `results.get_loo_effects_df()` (requires `variance_method="jackknife"` at fit time), `results.sensitivity_to_zeta_omega()`, and `results.get_weight_concentration()`
+- **TROP**: in-time or in-space placebo (fake treatment date, leave-one-unit-out)
+
+```python
+from diff_diff import run_all_placebo_tests
+
+# For simple 2x2 designs (requires binary time indicator, e.g. post=0/1):
+placebo = run_all_placebo_tests(
+    data, outcome='y', treatment='treated', time='post',
+    unit='unit_id', pre_periods=[0], post_periods=[1],
+    n_permutations=500, seed=42,
+)
+for test_name, result in placebo.items():
+    if isinstance(result, dict) and 'error' in result:
+        print(f"{test_name}: ERROR — {result['error']}")
+    elif hasattr(result, 'p_value'):
+        print(f"{test_name}: p={result.p_value:.4f}")
+```
+
+### Bacon decomposition (for TWFE users)
+If you used TWFE, always run BaconDecomposition to check whether the
+estimate is contaminated by forbidden comparisons (see Step 4).
+
+---
+
+## Step 7: Heterogeneity Analysis
+
+Aggregate treatment effects may mask important variation.
+
+### For CallawaySantAnna, EfficientDiD, ImputationDiD, TwoStageDiD (post-fit `aggregate()`)
+```python
+# Post-fit, no refit needed (fit-time aggregate= is deprecated since 3.9
+# for CS/StackedDiD/EfficientDiD/ImputationDiD/TwoStageDiD; removed in 4.0):
+results = cs.fit(data, ...)
+print(results.overall_att)                              # Overall ATT
+print(results.aggregate('group').to_dataframe())        # Per-cohort ATTs
+print(results.aggregate('event_study').to_dataframe())  # Dynamic effects
+# balance_e moves onto aggregate() too:
+print(results.aggregate('event_study', balance_e=2).to_dataframe())
+# NEW in 3.10 - the estimator-owned TOTAL incremental outcome (exact
+# relay C x overall; single row; panel non-survey fits only):
+print(results.aggregate('total').to_dataframe())
+# BOOTSTRAPPED fits: the CS, DMLDiD, and EfficientDiD recompute levels
+# (event_study/group) REPLAY the fit-time multiplier bootstrap post-fit
+# (percentile inference; no refit needed) — but they still RAISE on
+# ImputationDiD/TwoStageDiD, where aggregate('simple') and, where
+# supported, aggregate('total') relay the stored bootstrap inference and
+# the deprecated fit-time aggregation remains the ES/group route:
+results = imp.fit(data, ..., aggregate='all')  # ImputationDiD/TwoStageDiD only
+```
+
+### For ContinuousDiD (MIXED post-fit `aggregate()`, row M-025)
+```python
+# Dose-response curves + overall ATT/ACRT are ALWAYS computed by fit();
+# 'dose' and 'simple' are views that work on ANY fit (bootstrapped too):
+results = cdid.fit(data, ...)          # no aggregate= kwarg (deprecated)
+print(results.aggregate('dose').to_dataframe())    # ATT(d) + ACRT(d) rows
+print(results.aggregate('simple').to_dataframe())  # att + acrt overall rows
+# The binarized event study RECOMPUTES from the retained kit - analytical
+# fits only (a bootstrapped fit raises; re-fit with n_bootstrap=0 or use
+# the deprecated fit-time aggregate='eventstudy' until 4.0):
+print(results.aggregate('event_study').to_dataframe())
+```
+
+### For SunAbraham (no `aggregate` parameter)
+SA computes event-study and cohort effects automatically during `fit()`:
+```python
+sa = SunAbraham()
+results = sa.fit(data, ...)
+# Event-study effects (dynamic):
+es_df = results.to_dataframe(level='event_study')
+# Cohort-specific effects:
+cohort_df = results.to_dataframe(level='cohort')
+```
+
+### Subgroup analysis
+Re-estimate on meaningful subsamples:
+```python
+# Example: separate estimates for urban vs rural
+urban_results = cs.fit(data[data['urban'] == 1], ...)
+rural_results = cs.fit(data[data['urban'] == 0], ...)
+```
+
+---
+
+## Step 8: Robustness & Reporting
+
+### Compare multiple estimators
+Run at least 2-3 different estimators on the same data:
+```python
+from diff_diff import CallawaySantAnna, SunAbraham, ImputationDiD
+
+cs = CallawaySantAnna(control_group='never_treated', estimation_method='dr')
+sa = SunAbraham()
+bjs = ImputationDiD()
+
+cs_result = cs.fit(data, outcome='y', unit='id', time='t', first_treat='g')
+sa_result = sa.fit(data, outcome='y', unit='id', time='t', first_treat='g')
+bjs_result = bjs.fit(data, outcome='y', unit='id', time='t', first_treat='g')
+
+print(f"CS ATT:  {cs_result.overall_att:.4f} (SE: {cs_result.overall_se:.4f})")
+print(f"SA ATT:  {sa_result.overall_att:.4f} (SE: {sa_result.overall_se:.4f})")
+print(f"BJS ATT: {bjs_result.overall_att:.4f} (SE: {bjs_result.overall_se:.4f})")
+```
+
+### Report with and without covariates — REQUIRED
+
+You MUST report estimates both with and without covariates. This is not
+optional — it shows whether covariate conditioning is driving identification
+or merely improving precision. A large shift between the two specifications
+signals that covariates are substantively important for the parallel trends
+assumption and warrants discussion.
+
+```python
+# REQUIRED: compare with and without covariates
+result_no_cov = cs.fit(data, outcome='y', unit='id', time='t', first_treat='g')
+result_cov = cs.fit(data, outcome='y', unit='id', time='t', first_treat='g',
+                    covariates=['x1', 'x2'])
+
+print(f"Without covariates: ATT={result_no_cov.overall_att:.4f} (SE: {result_no_cov.overall_se:.4f})")
+print(f"With covariates:    ATT={result_cov.overall_att:.4f} (SE: {result_cov.overall_se:.4f})")
+# If estimates differ substantially, covariates matter for identification.
+# If they are similar, the unconditional PT assumption appears sufficient.
+```
+
+### Reporting checklist
+Your analysis report MUST include all of the following:
+- [ ] Target parameter definition (what causal effect, weighted/unweighted)
+- [ ] Identification assumptions stated and justified
+- [ ] Pre-trends test results (with confidence intervals)
+- [ ] Point estimate with standard errors and confidence intervals
+- [ ] Sensitivity analysis results (HonestDiD bounds or placebo tests)
+- [ ] Event study plot (if applicable)
+- [ ] Comparison across at least 2-3 estimators
+- [ ] Estimates with and without covariates (REQUIRED)
+
+### One-call reporting via BusinessReport + DiagnosticReport
+
+The `DiagnosticReport` class orchestrates Steps 3 (parallel trends), 6
+(sensitivity), and 7 (heterogeneity) in a single call and produces
+plain-English output. Pair with `BusinessReport` for a
+stakeholder-ready narrative:
+
+```python
+from diff_diff import BusinessReport, DiagnosticReport
+
+# Optional: run diagnostics explicitly so you can inspect the structure.
+dr = DiagnosticReport(cs_result, data=data, outcome='y', unit='id',
+                      time='t', first_treat='g')
+dr.run_all()
+print(dr.summary())           # overall interpretation paragraph
+dr.to_dict()                  # AI-legible structured schema
+
+# Or let BusinessReport auto-construct a DiagnosticReport and render the
+# full stakeholder narrative in one call. Pass ``data`` + the column
+# names so data-dependent checks (2x2 PT, Goodman-Bacon, EfficientDiD
+# Hausman pretest) actually run — without them the auto path still
+# produces a report but skips those checks with an explicit reason.
+br = BusinessReport(
+    cs_result,
+    outcome_label='Revenue per user',
+    outcome_unit='$',
+    business_question='Did the campaign lift revenue?',
+    treatment_label='the campaign',
+    data=data,
+    outcome='y',
+    unit='id',
+    time='t',
+    first_treat='g',
+)
+print(br.summary())           # short paragraph block
+print(br.full_report())       # structured markdown
+```
+
+`DiagnosticReport` uses power-aware phrasing: when a pre-trends test
+does not reject, the summary reflects whether the test is well-powered
+(via `compute_pretrends_power`), rather than defaulting to "parallel
+trends hold". See `docs/methodology/REPORTING.md` for the full verdict
+and tier rules.
+
+### Runtime guidance
+```python
+from diff_diff import practitioner_next_steps
+
+guidance = practitioner_next_steps(results)
+# Returns context-aware suggestions for what to do next
+```
+
+### Hand off to an MMM (marketing mix model)
+
+When the DiD measured a geo experiment on a marketing channel, export the
+result as MMM calibration input via `diff_diff.mmm` - the route depends on
+the grain the target MMM row represents:
+
+- The MMM row IS the campaign total (e.g. Meridian ROI priors):
+  `results.aggregate('total')` -> `to_meridian_roi_prior(aggregation_result=...,
+  spend=...)` - the total container arrives pre-scaled; `scale` is not accepted.
+- The MMM row's population/period grain differs from the total's span (e.g. a
+  PyMC-Marketing weekly lift row for a national model):
+  `results.aggregate('simple')` or `aggregate('group')` plus an explicit
+  `scale=` -> `to_pymc_marketing_lift_test(aggregation_result=..., scale=...,
+  x=..., delta_x=...)` - every lift-row field must describe the SAME
+  observation (same channel, population, and period span).
+
+Executed end-to-end examples: tutorials 29 (PyMC-Marketing lift test) and
+30 (Meridian ROI prior + calibration mask).
+
+---
+
+## Common Pitfalls
+
+1. **Using TWFE with staggered adoption**: TWFE assigns negative weights to
+   some group-time cells when treatment timing varies. Always use CS, SA, or
+   another heterogeneity-robust estimator for staggered designs.
+
+2. **Equating insignificant pre-trends with valid parallel trends**: Failing
+   to reject a pre-trends test does NOT prove parallel trends holds. Use
+   HonestDiD to bound how large a violation could be.
+
+3. **Including "bad controls"**: A covariate that treatment can affect
+   (Caetano, Callaway, Payne & Sant'Anna 2026) must NEVER enter at period t
+   - that is the "include the bad control" bias. Two valid routes: (a)
+   condition only on its PRE-treatment value under parallel trends given
+   the pre-treatment bad control (Assumption 4/5, MP-8/MP-9) - on the
+   panel lane `CallawaySantAnna` / `DMLDiD` read `covariates` at each
+   cell's base period, so passing the column there does this; (b) the
+   paper's covariate-unconfoundedness approach, which allows treatment to
+   affect the control's path: `DMLDiD(...).fit(..., bad_control="x",
+   bad_control_covariates=[outcome])` (a `fit()` argument, never a
+   constructor argument), then read `results.bad_control_summary()` by
+   period: nonzero PRE-period ATT_X (t < g) indicates a possible MP-5 /
+   MP-8 violation (the identifying assumptions for the bad control's
+   untreated evolution; these rows should be zero), while nonzero
+   POST-period ATT_X (t >= g) is evidence that treatment affects the
+   covariate (Condition 2) - a zero value does not establish the
+   converse. Time-invariant covariates are always safe.
+
+4. **Ignoring sensitivity analysis**: Without HonestDiD or placebo tests,
+   you cannot assess how robust your results are to assumption violations.
+
+5. **Reporting only one estimator**: Different estimators make different
+   assumptions. Agreement across CS, SA, and BJS strengthens conclusions;
+   disagreement reveals specification sensitivity.
+
+---
+
+## Complete Example: Staggered DiD with load_mpdta()
+
+```python
+from diff_diff import (
+    CallawaySantAnna, SunAbraham, ImputationDiD,
+    BaconDecomposition, check_parallel_trends,
+    compute_honest_did, run_all_placebo_tests,
+    load_mpdta, practitioner_next_steps,
+)
+
+# Load data
+data = load_mpdta()
+
+# Step 1: Target — overall ATT for the policy, weighted by cohort size
+
+# Step 2: Assumptions — PT-GT-Nev (never-treated parallel trends),
+#          no anticipation, doubly robust for conditional PT
+
+# Step 3: Test parallel trends
+# For staggered designs, use the CS event-study pre-period coefficients
+# as the pre-trends diagnostic (NOT the generic check_parallel_trends,
+# which assumes a single binary treatment and universal pre-periods).
+# We estimate CS with event_study aggregation first, then inspect pre-periods.
+
+# Step 4: Choose estimator — staggered adoption -> CS (primary), SA (robustness)
+# Diagnose TWFE bias first:
+bacon = BaconDecomposition()
+bacon_result = bacon.fit(data, outcome='lemp', unit='countyreal',
+                         time='year', first_treat='first_treat')
+print(bacon_result.summary())
+
+# Step 5: Estimate (cluster at county level — treatment assignment unit)
+n_clusters = data['countyreal'].nunique()
+print(f"Clusters: {n_clusters} -> {'cluster-robust SEs' if n_clusters >= 50 else 'few clusters — CS below uses cluster-robust SEs; a bootstrapped n_bootstrap is the CS small-G option'}")
+cs = CallawaySantAnna(
+    control_group='never_treated', estimation_method='dr',
+    cluster='countyreal',
+)
+results = cs.fit(data, outcome='lemp', unit='countyreal', time='year',
+                 first_treat='first_treat', covariates=['lpop'])
+print(results.summary())
+
+# Step 3 (continued): Inspect CS event-study pre-period coefficients
+# (post-fit container; pre-treatment ATTs should be near zero and
+# insignificant).
+es_df = results.aggregate('event_study').to_dataframe()
+for _, row in es_df[es_df['event_time'] < 0].iterrows():
+    print(f"  Pre-period {row['event_time']:.0f}: ATT={row['att']:.4f}, "
+          f"SE={row['se']:.4f}")
+
+# Step 6: Sensitivity — HonestDiD bounds
+honest = compute_honest_did(results, method='relative_magnitude', M=1.0)
+print(honest.summary())
+
+# Step 7: Heterogeneity — group and event study, post-fit (no refit)
+print("Group effects:")
+print(results.aggregate('group').to_dataframe())
+print("Event study:")
+print(results.aggregate('event_study').to_dataframe())
+
+# Step 8: Robustness — compare estimators
+sa = SunAbraham(cluster='countyreal')
+sa_result = sa.fit(data, outcome='lemp', unit='countyreal', time='year',
+                   first_treat='first_treat')
+
+bjs = ImputationDiD(cluster='countyreal')
+bjs_result = bjs.fit(data, outcome='lemp', unit='countyreal', time='year',
+                     first_treat='first_treat')
+
+print(f"CS ATT:  {results.overall_att:.4f} (SE: {results.overall_se:.4f})")
+print(f"SA ATT:  {sa_result.overall_att:.4f} (SE: {sa_result.overall_se:.4f})")
+print(f"BJS ATT: {bjs_result.overall_att:.4f} (SE: {bjs_result.overall_se:.4f})")
+
+# Step 8 (continued): REQUIRED with/without covariates comparison
+results_no_cov = cs.fit(data, outcome='lemp', unit='countyreal', time='year',
+                        first_treat='first_treat')
+print(f"Without covariates: ATT={results_no_cov.overall_att:.4f}")
+print(f"With covariates:    ATT={results.overall_att:.4f}")
+
+# Context-aware next steps
+guidance = practitioner_next_steps(results)
+```
+
+---
+
+## References
+
+Baker, A., Callaway, B., Cunningham, S., Goodman-Bacon, A., & Sant'Anna, P.
+H. C. (2025). Difference-in-Differences Designs: A Practitioner's Guide.
+arXiv:2503.13323.

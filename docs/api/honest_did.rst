@@ -27,9 +27,11 @@ HonestDiD
 Main class for computing honest bounds and confidence intervals.
 
 .. autoclass:: diff_diff.HonestDiD
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
+   :inherited-members:
 
    .. rubric:: Methods
 
@@ -44,13 +46,14 @@ Example
 
 .. code-block:: python
 
-   from diff_diff import MultiPeriodDiD, HonestDiD
+   from diff_diff import TwoWayFixedEffects, HonestDiD
 
-   # First fit an event study
-   model = MultiPeriodDiD()
+   # First fit an event study (TwoWayFixedEffects event-study mode;
+   # HonestDiD also accepts the surface directly)
+   model = TwoWayFixedEffects()
    results = model.fit(data, outcome='y', treatment='treated',
-                       time='period', unit='unit_id',
-                       post_periods=[5, 6, 7], reference_period=4)
+                       unit='unit_id', event_study=True, time='period',
+                       post_periods=[5, 6, 7, 8, 9], reference_period=4)
 
    # Compute bounds under relative magnitudes restriction
    honest = HonestDiD(method='relative_magnitude', M=1.0)
@@ -65,6 +68,7 @@ HonestDiDResults
 Results from HonestDiD estimation.
 
 .. autoclass:: diff_diff.HonestDiDResults
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -75,6 +79,7 @@ SensitivityResults
 Results from sensitivity analysis over a grid of M values.
 
 .. autoclass:: diff_diff.SensitivityResults
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -88,6 +93,7 @@ DeltaSD
 Smoothness restriction class.
 
 .. autoclass:: diff_diff.DeltaSD
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -98,6 +104,7 @@ DeltaRM
 Relative magnitudes restriction class.
 
 .. autoclass:: diff_diff.DeltaRM
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -108,6 +115,7 @@ DeltaSDRM
 Combined smoothness and relative magnitudes restriction.
 
 .. autoclass:: diff_diff.DeltaSDRM
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -136,17 +144,17 @@ Complete Example
 
    import numpy as np
    from diff_diff import (
-       MultiPeriodDiD,
+       TwoWayFixedEffects,
        HonestDiD,
        plot_sensitivity,
        plot_honest_event_study,
    )
 
-   # Fit event study
-   model = MultiPeriodDiD()
+   # Fit event study (TwoWayFixedEffects event-study mode)
+   model = TwoWayFixedEffects()
    results = model.fit(data, outcome='y', treatment='treated',
-                       time='period', unit='unit_id',
-                       post_periods=[5, 6, 7], reference_period=4)
+                       unit='unit_id', event_study=True, time='period',
+                       post_periods=[5, 6, 7, 8, 9], reference_period=4)
 
    # Sensitivity analysis under relative magnitudes
    honest_rm = HonestDiD(method='relative_magnitude', M=1.0)

@@ -1,0 +1,45 @@
+{
+  "scenario": "reversible_dcdh",
+  "backend": "python",
+  "has_rust_backend": false,
+  "total_seconds": 0.788816875,
+  "memory": {
+    "available": true,
+    "start_mb": 113.75,
+    "peak_mb": 133.66,
+    "growth_mb": 19.91,
+    "sampler_interval_s": 0.01
+  },
+  "phases": {
+    "1_dcdh_fit_Lmax3_survey_TSL": {
+      "seconds": 0.384559958,
+      "ok": true,
+      "error": null
+    },
+    "2_inspect_placebo_and_summary": {
+      "seconds": 1.3329999999367459e-06,
+      "ok": true,
+      "error": null
+    },
+    "3_honest_did_on_placebo": {
+      "seconds": 0.003932208000000048,
+      "ok": true,
+      "error": null
+    },
+    "4_heterogeneity_refit": {
+      "seconds": 0.400320667,
+      "ok": true,
+      "error": null
+    }
+  },
+  "metadata": {
+    "n_groups": 120,
+    "n_periods": 10,
+    "pattern": "single_switch",
+    "L_max": 3,
+    "n_strata": 8,
+    "n_psu": 24
+  },
+  "diff_diff_version": "3.1.3",
+  "numpy_version": "2.0.2"
+}

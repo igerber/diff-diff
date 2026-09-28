@@ -4,15 +4,13 @@
 .. currentmodule:: diff_diff
 
 .. autoclass:: MultiPeriodDiD
+   :no-members:
 
-   
-   .. automethod:: __init__
 
-   
    .. rubric:: Methods
 
    .. autosummary::
-   
+
       ~MultiPeriodDiD.__init__
       ~MultiPeriodDiD.fit
       ~MultiPeriodDiD.get_params
@@ -20,9 +18,7 @@
       ~MultiPeriodDiD.print_summary
       ~MultiPeriodDiD.set_params
       ~MultiPeriodDiD.summary
-   
-   
 
-   
-   
-   
+
+
+

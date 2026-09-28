@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: aggregate_to_cohorts
+   :no-index:

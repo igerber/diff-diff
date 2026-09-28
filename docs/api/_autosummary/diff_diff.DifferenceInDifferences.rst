@@ -4,15 +4,13 @@
 .. currentmodule:: diff_diff
 
 .. autoclass:: DifferenceInDifferences
+   :no-members:
 
-   
-   .. automethod:: __init__
 
-   
    .. rubric:: Methods
 
    .. autosummary::
-   
+
       ~DifferenceInDifferences.__init__
       ~DifferenceInDifferences.fit
       ~DifferenceInDifferences.get_params
@@ -20,9 +18,7 @@
       ~DifferenceInDifferences.print_summary
       ~DifferenceInDifferences.set_params
       ~DifferenceInDifferences.summary
-   
-   
 
-   
-   
-   
+
+
+

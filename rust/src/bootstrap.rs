@@ -48,7 +48,7 @@ pub fn generate_bootstrap_weights_batch<'py>(
         }
     };
 
-    Ok(weights.to_pyarray_bound(py))
+    Ok(weights.to_pyarray(py))
 }
 
 /// Generate Rademacher weights: ±1 with equal probability.
@@ -67,7 +67,7 @@ fn generate_rademacher_batch(n_bootstrap: usize, n_units: usize, seed: u64) -> A
         .for_each(|(i, mut row)| {
             let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed.wrapping_add(i as u64));
             for elem in row.iter_mut() {
-                *elem = if rng.gen::<bool>() { 1.0 } else { -1.0 };
+                *elem = if rng.random::<bool>() { 1.0 } else { -1.0 };
             }
         });
 
@@ -102,7 +102,7 @@ fn generate_mammen_batch(n_bootstrap: usize, n_units: usize, seed: u64) -> Array
         .for_each(|(i, mut row)| {
             let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed.wrapping_add(i as u64));
             for elem in row.iter_mut() {
-                *elem = if rng.gen::<f64>() < prob_neg {
+                *elem = if rng.random::<f64>() < prob_neg {
                     val_neg
                 } else {
                     val_pos
@@ -142,7 +142,7 @@ fn generate_webb_batch(n_bootstrap: usize, n_units: usize, seed: u64) -> Array2<
             let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed.wrapping_add(i as u64));
             for elem in row.iter_mut() {
                 // Uniform selection: generate integer 0-5, index into weights_table
-                let bucket = rng.gen_range(0..6);
+                let bucket = rng.random_range(0..6);
                 *elem = weights_table[bucket];
             }
         });

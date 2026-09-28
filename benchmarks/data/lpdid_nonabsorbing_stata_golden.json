@@ -1,0 +1,106 @@
+{
+  "meta": {
+    "estimator": "LPDiD non-absorbing SEs - authors' Stata lpdid package, end-to-end",
+    "generator": "benchmarks/stata/generate_lpdid_nonabsorbing_golden.do",
+    "source_panel": "benchmarks/data/lpdid_nonabsorbing_panel.csv",
+    "source_sha256": "71af98c96dec08abc281002b7b88df74033dac7d0ff7707eff9f3ee0c30a3964",
+    "cmd": "lpdid y, unit(unit) time(time) treat(treat) pre_window(3) post_window(4) nograph + nonabsorbing(, firsttreat notyet) [rw] on the full panel; nonabsorbing(3) [rw] on the subsample and (only_event, vw) on the full panel",
+    "mapping": "nonabsorbing(, firsttreat notyet) == first_entry; nonabsorbing(L) == effect_stabilization",
+    "drop_rule": "min(treat)==1 | any(dD==1 & L3.dD==-1)",
+    "point_anchor": "first_entry vw tau0 gated in-.do vs the committed R golden first_entry[0] att (R-anchored); effect_stab_sub vw tau0 vs the library point (library-anchored, informational); the Python test is authoritative for every surface",
+    "se_convention": "package reghdfe vce(cluster unit) CR1; the library's cluster SE matches at ~1e-16 (vw) / ~1e-9 (rw) on identical samples",
+    "convention_notes": "effect_stab full-panel and placebo/pooled-pre rows are DIVERGENCE DOCUMENTATION, not parity: the package admits always-treated units at early t via missing-lag semantics, requires L+1 untreated periods before re-entry (stricter than JAE Eq. 13's levels condition), and builds placebo samples by recursive lagged intersection; see REGISTRY ## LPDiD Deviation 4",
+    "ssc_versions": {
+      "lpdid": "lpdid program, version 1.0.3 [checksum:3687664943 len:48365]",
+      "reghdfe": "version 6.13.1 10Jan2026 [checksum:973401092 len:30978]",
+      "ftools": "version 2.50.0 09jan2026 [checksum:3739654356 len:1428]",
+      "require": "version 1.3.1 19sep2023 [checksum:1262842970 len:34415]",
+      "boottest": "boottest 4.5.3 5 June 2026 [checksum:2334657244 len:63528]",
+      "listreg": "version 1.0.3  26apr2025  Ben Jann [checksum:1074534106 len:23815]",
+      "egenmore": "1.1.1 NJC 19 March 2006 [checksum:2753673312 len:1164]",
+      "egenmore_gclsst": "1.0.0 NJC 11 January 2000 [checksum:885642367 len:916]"
+    },
+    "dropped_units": [24, 25, 27, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40],
+    "stata_edition": "SE",
+    "stata_version": 19.0,
+    "pre_window": 3,
+    "post_window": 4,
+    "stabilization_window": 3,
+    "n_rows_full": 840,
+    "n_rows_sub": 658
+  },
+  "first_entry": {
+    "vw": {
+      "es": {
+        "-3": {"att": -0.11058688194906449, "se": 0.083864694854006674, "N": 300},
+        "-2": {"att": -0.028508009716748425, "se": 0.059950164863315426, "N": 350},
+        "0": {"att": 1.8468153374570833, "se": 0.091536864444450375, "N": 400},
+        "1": {"att": 1.9174189184921464, "se": 0.082514757717069953, "N": 350},
+        "2": {"att": 1.9541562370690497, "se": 0.095995993613636657, "N": 298},
+        "3": {"att": 1.8430002097850104, "se": 0.093215506869608694, "N": 246},
+        "4": {"att": 1.8651045890489937, "se": 0.10344600862300475, "N": 211}
+      },
+      "pooled": {
+        "pre": {"att": -0.083163290352517599, "se": 0.060216134633611737, "N": 300},
+        "post": {"att": 1.8463774549223959, "se": 0.082239499731901228, "N": 211}
+      }
+    },
+    "rw": {
+      "es": {
+        "-3": {"att": -0.10982753532939604, "se": 0.085127249305807715, "N": 180},
+        "-2": {"att": -0.027473431971800764, "se": 0.059909786016452311, "N": 230},
+        "0": {"att": 1.8483385269860748, "se": 0.093169339989145811, "N": 230},
+        "1": {"att": 1.9098467525590781, "se": 0.082755294278197722, "N": 203},
+        "2": {"att": 1.9542651398293733, "se": 0.095993108882509365, "N": 173},
+        "3": {"att": 1.844237043489463, "se": 0.094299729259659446, "N": 123},
+        "4": {"att": 1.8646288450757691, "se": 0.10524070978446542, "N": 118}
+      },
+      "pooled": {
+        "pre": {"att": -0.080380126038013866, "se": 0.061217606891681819, "N": 180},
+        "post": {"att": 1.8500925875939953, "se": 0.082980268093888879, "N": 118}
+      }
+    }
+  },
+  "effect_stab_sub": {
+    "n_rows": 658,
+    "vw": {
+      "es": {
+        "-3": {"att": -0.09724719295046115, "N": 342},
+        "-2": {"att": -0.007899289624071772, "N": 408},
+        "0": {"att": 1.8115854492490506, "se": 0.079386732581726835, "N": 484},
+        "1": {"att": 1.9300421146595237, "se": 0.072501471398279477, "N": 414},
+        "2": {"att": 1.8965697184052384, "se": 0.084395761100608244, "N": 348},
+        "3": {"att": 1.879554866833909, "se": 0.076256728580062952, "N": 279},
+        "4": {"att": 1.893416496899663, "se": 0.093768556793994276, "N": 230}
+      },
+      "pooled": {
+        "pre": {"att": -0.064656623253798173, "N": 342},
+        "post": {"att": 1.8538432413410768, "se": 0.072566538322928476, "N": 230}
+      }
+    },
+    "rw": {
+      "es": {
+        "-3": {"att": -0.09552710717227407, "N": 173},
+        "-2": {"att": -0.0054487064168838913, "N": 220},
+        "0": {"att": 1.813509946055728, "se": 0.081752780459597857, "N": 329},
+        "1": {"att": 1.9275161589672816, "se": 0.073720330196303835, "N": 305},
+        "2": {"att": 1.9026466911687787, "se": 0.085905795413003486, "N": 280},
+        "3": {"att": 1.8767692749265028, "se": 0.078313461669530404, "N": 191},
+        "4": {"att": 1.8899064444115865, "se": 0.096189906878782108, "N": 151}
+      },
+      "pooled": {
+        "pre": {"att": -0.061093488880953395, "N": 173},
+        "post": {"att": 1.8560600200442186, "se": 0.074103122657375023, "N": 151}
+      }
+    }
+  },
+  "effect_stab_full_vw": {
+    "es": {
+      "0": {"att": 1.8496401510611364, "N": 628},
+      "1": {"att": 1.9364029248640582, "N": 544},
+      "2": {"att": 1.9088763162649005, "N": 463},
+      "3": {"att": 1.9438383345066086, "N": 380},
+      "4": {"att": 1.9261821895864399, "N": 320}
+    }
+  }
+}

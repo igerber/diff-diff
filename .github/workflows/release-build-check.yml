@@ -1,0 +1,36 @@
+name: Release build check
+
+# Pre-merge guard for the PyPI release build path. publish.yml only runs on
+# `release: published`, so its manylinux container build (checkout@v7 inside
+# glibc-2.28, openblas, py3.9-3.14) is never exercised by PR CI. This calls the
+# SAME reusable workflow build-only (no PyPI upload) so a PR that would break our
+# ability to mint a release fails here instead of at release time.
+#
+# On PRs it builds only the manylinux leg (the gap rust-test.yml doesn't cover);
+# `workflow_dispatch` runs the full matrix as a manual pre-release rehearsal.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    paths:
+      - 'rust/**'
+      - 'pyproject.toml'
+      - '.github/workflows/build-wheels.yml'
+      - '.github/workflows/publish.yml'
+      - '.github/workflows/release-build-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-build:
+    # Skip unrelated label churn: a non-ready-for-ci label add/remove won't run this job.
+    if: >-
+      github.event_name != 'pull_request'
+      || (contains(github.event.pull_request.labels.*.name, 'ready-for-ci')
+      && (github.event.action != 'labeled' && github.event.action != 'unlabeled'
+      || github.event.label.name == 'ready-for-ci'))
+    uses: ./.github/workflows/build-wheels.yml
+    with:
+      linux_only: ${{ github.event_name == 'pull_request' }}

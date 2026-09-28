@@ -133,16 +133,16 @@ Standard Error Issues
 
    # For panel data, always cluster at unit level
    did = DifferenceInDifferences(cluster='unit_id')
-   results = did.fit(data, outcome='y', treatment='treated', time='post')
+   results = did.fit(data, outcome='y', treatment='treated', post='post')
 
    # Compare SE methods
    did_robust = DifferenceInDifferences()
    did_cluster = DifferenceInDifferences(cluster='unit_id')
    did_wild = DifferenceInDifferences(inference='wild_bootstrap', cluster='unit_id')
 
-   r1 = did_robust.fit(data, outcome='y', treatment='treated', time='post')
-   r2 = did_cluster.fit(data, outcome='y', treatment='treated', time='post')
-   r3 = did_wild.fit(data, outcome='y', treatment='treated', time='post')
+   r1 = did_robust.fit(data, outcome='y', treatment='treated', post='post')
+   r2 = did_cluster.fit(data, outcome='y', treatment='treated', post='post')
+   r3 = did_wild.fit(data, outcome='y', treatment='treated', post='post')
 
    print(f"Robust SE: {r1.se:.4f}")
    print(f"Cluster SE: {r2.se:.4f}")
@@ -158,7 +158,8 @@ Standard Error Issues
 .. code-block:: python
 
    # Reduce number of bootstrap iterations (default is 999)
-   did = DifferenceInDifferences(inference='wild_bootstrap', n_bootstrap=499)
+   did = DifferenceInDifferences(inference='wild_bootstrap', cluster='unit_id',
+                                  n_bootstrap=499)
 
    # Note: Fewer iterations = less precise p-values
    # 499 is minimum recommended for publication
@@ -208,15 +209,17 @@ Staggered Adoption Issues
    # Check cohort sizes
    print(data.groupby('first_treat')['unit_id'].nunique())
 
-   # Use bootstrap for better inference
+   # Use bootstrap for better inference. Post-fit aggregation works on
+   # BOOTSTRAPPED fits too: results.aggregate('event_study') replays the
+   # fit-time multiplier bootstrap from the retained RNG state (percentile
+   # inference - no refit and no deprecated fit-time aggregate= needed).
    cs = CallawaySantAnna(n_bootstrap=999)
    results = cs.fit(data, outcome='y', unit='unit_id',
-                    time='period', first_treat='first_treat',
-                    aggregate='event_study')
+                    time='period', first_treat='first_treat')
 
    # Access aggregated results
-   print(results.overall_att)  # Overall ATT
-   print(results.event_study_effects)  # Event study effects
+   print(results.overall_att)                             # Overall ATT
+   print(results.aggregate('event_study').to_dataframe())  # Event study
 
 Visualization Issues
 --------------------
@@ -230,19 +233,25 @@ Visualization Issues
 
 .. code-block:: python
 
-   from diff_diff import plot_event_study
+   from diff_diff import CallawaySantAnna, plot_event_study
 
-   # Check your results first
-   print(results.period_effects)  # or results.event_study_effects
-
-   # Specify reference period explicitly
-   plot_event_study(results, reference_period=-1)
-
-   # For CallawaySantAnna, fit with aggregate='event_study'
+   # For CallawaySantAnna, aggregate to an event study post-fit, then plot.
+   # base_period="universal" gives the event study explicit reference row(s),
+   # marked in the container - under the default varying base every
+   # pre-treatment point is an estimated effect with no common anchor, so
+   # renormalizing a plot around one would silently shift every point.
+   cs = CallawaySantAnna(base_period='universal')
    results = cs.fit(data, outcome='y', unit='unit_id',
-                    time='period', first_treat='first_treat',
-                    aggregate='event_study')
-   plot_event_study(results)
+                    time='period', first_treat='first_treat')
+   es = results.aggregate('event_study')
+
+   # Inspect the actual reference row(s) - on gapped period grids the
+   # positional base can sit at an event time other than -1
+   print(es.to_dataframe().query("is_reference"))
+
+   # Plot the container - it carries its own reference; no manual
+   # reference_period override is needed (or safe to hard-code)
+   plot_event_study(es)
 
 "Plot doesn't show in Jupyter"
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -285,12 +294,15 @@ Performance Issues
 .. code-block:: python
 
    # TWFE already handles unit + time FE via within-transformation
+   # (post= is the 0/1 post-treatment dummy; the deprecated time= alias
+   # still works through 3.9)
    twfe = TwoWayFixedEffects()
    results = twfe.fit(data, outcome='y', treatment='treated',
-                      unit='unit_id', time='period')
+                      unit='unit_id', post='post')
 
    # Reduce bootstrap iterations for initial exploration
-   did = DifferenceInDifferences(inference='wild_bootstrap', n_bootstrap=99)
+   did = DifferenceInDifferences(inference='wild_bootstrap', cluster='unit_id',
+                                  n_bootstrap=99)
 
    # For CallawaySantAnna, start without bootstrap
    cs = CallawaySantAnna()
@@ -444,7 +456,7 @@ only integer or discrete values.
    # If treatment is truly binary, use standard DiD instead
    from diff_diff import DifferenceInDifferences
    did = DifferenceInDifferences()
-   results = did.fit(data, outcome='y', treatment='treatment', time='post')
+   results = did.fit(data, outcome='y', treatment='treatment', post='post')
 
    # If dose is continuous but stored as int, convert
    data['dose'] = data['dose'].astype(float)
@@ -473,6 +485,218 @@ cannot produce an ATT estimate.
    for g, group in treated.groupby('first_treat'):
        post_obs = group[group['period'] >= g]
        print(f"Cohort {g}: {len(post_obs)} post-treatment observations")
+
+HeterogeneousAdoptionDiD (HAD) Issues
+-------------------------------------
+
+"Resolved estimand is not what I expected (WAS vs WAS_d_lower)"
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Problem:** ``HeterogeneousAdoptionDiD`` resolves ``target_parameter`` to
+``"WAS_d_lower"`` when you expected ``"WAS"`` (or vice versa).
+
+**Cause:** HAD auto-detects the design path from the unit-level
+post-treatment dose ``D_{g,F}`` (the dose at the first treated period
+``F``, one value per unit), NOT from the full panel ``dose`` column. The
+panel column carries structural pre-period zeros (HAD requires
+``D_{g,t} = 0`` for ``t < F``), so ``had_data['dose'].min()`` is always
+zero on a valid HAD panel and tells you nothing about the resolved
+design. ``_detect_design`` then resolves on ``D_{g,F}`` and picks Design
+1' (``continuous_at_zero``, targets WAS) when EITHER
+``D_{g,F}.min() == 0`` exactly OR ``D_{g,F}.min()`` is a small positive
+value below ``0.01 * median(|D_{g,F}|)`` (the small-share-of-treated
+escape clause). Otherwise the estimator routes to Design 1, with a
+further check for mass-point structure (modal fraction at ``D_{g,F}.min()``
+exceeding 2% routes to ``mass_point``; otherwise
+``continuous_near_d_lower``); both Design 1 paths target ``WAS_{d_lower}``.
+
+**Solutions:**
+
+.. code-block:: python
+
+   import numpy as np
+   import pandas as pd
+   from diff_diff import HeterogeneousAdoptionDiD
+
+   # Build a HAD-shape panel: D=0 in pre-periods (t < F), D > 0 only at F+.
+   rng = np.random.default_rng(42)
+   G, F, T = 200, 4, 5
+   doses = rng.beta(0.5, 1.0, size=G)
+   rows = []
+   for g in range(G):
+       for t in range(1, T + 1):
+           y = (rng.normal()
+                + (doses[g] + doses[g] ** 2) * (t >= F)
+                + rng.normal(0, 0.5))
+           d = doses[g] if t >= F else 0.0
+           rows.append({'unit': g, 'period': t, 'y': y, 'dose': d})
+   had_data = pd.DataFrame(rows)
+
+   # Inspect the support the detector actually uses: per-unit dose at the
+   # first treated period F. Pre-period zeros on the panel column are
+   # structural and ignored by `_detect_design()`.
+   d_at_F = had_data.loc[had_data['period'] == F].set_index('unit')['dose']
+   print(d_at_F.describe())
+   d_min = float(d_at_F.min())
+   d_thr = 0.01 * float(np.median(np.abs(d_at_F)))
+   print(f"D_{{g,F}}.min() = {d_min:.6g}; "
+         f"0.01 * median(|D_{{g,F}}|) = {d_thr:.6g}; "
+         f"D_{{g,F}}.min() < threshold => Design 1' (WAS)")
+
+   # Check the resolved estimand after fitting
+   est = HeterogeneousAdoptionDiD()
+   results = est.fit(had_data, outcome='y', unit='unit',
+                     time='period', dose='dose')
+   print(f"Resolved: {results.target_parameter}")
+
+   # If you intend Design 1' but `D_{g,F}.min()` exceeds the threshold,
+   # verify the dose-variable encoding (e.g. log-transformed doses where
+   # 0 was mapped to a small positive value larger than 1% of the median).
+
+"Mass-point design selected"
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Problem:** HAD reports that the ``mass_point`` design was selected
+instead of ``continuous_at_zero`` or ``continuous_near_d_lower``.
+
+**Cause:** ``mass_point`` is a distinct Design 1 estimator path from the
+dCDH 2026 paper (Section 3.2.4), not a fallback from the continuous
+local-linear fits. ``_detect_design()`` resolves to ``mass_point`` when the
+modal fraction at ``d.min()`` exceeds 2%, signalling a heavy point mass at
+the dose-support boundary. On this path both the point estimate and the SE
+differ from the continuous paths: the estimator uses the Wald-IV
+sample-average ratio with binary instrument ``Z_g = 1{D_{g,2} > d_lower}``
+- ``(Ybar_{Z=1} - Ybar_{Z=0}) / (Dbar_{Z=1} - Dbar_{Z=0})`` - and inference
+uses the structural-residual 2SLS sandwich (the local-linear / CCT-2014
+SE path is not used here).
+
+**Solutions:**
+
+.. code-block:: python
+
+   import numpy as np
+   import pandas as pd
+   from diff_diff import HeterogeneousAdoptionDiD
+
+   # Build a HAD panel with a heavy boundary mass at d_lower so the
+   # modal fraction at d.min() exceeds 2% and `_detect_design` resolves
+   # to `mass_point`.
+   rng = np.random.default_rng(42)
+   G, F, T = 200, 4, 5
+   d_lower = 0.5
+   mass_frac = 0.3
+   doses = np.where(
+       rng.uniform(size=G) < mass_frac,
+       d_lower,
+       rng.uniform(d_lower + 0.1, 2.0, size=G),
+   )
+   rows = []
+   for g in range(G):
+       for t in range(1, T + 1):
+           y = (rng.normal()
+                + doses[g] * (t >= F)
+                + rng.normal(0, 0.5))
+           d = doses[g] if t >= F else 0.0
+           rows.append({'unit': g, 'period': t, 'y': y, 'dose': d})
+   had_data = pd.DataFrame(rows)
+
+   est = HeterogeneousAdoptionDiD()
+   results = est.fit(had_data, outcome='y', unit='unit',
+                     time='period', dose='dose')
+
+   # Inspect the resolved design
+   print(f"Design: {results.design}")  # 'mass_point' here
+
+   # The mass-point Wald-IV estimator + structural-residual 2SLS
+   # sandwich is the canonical Section 3.2.4 path for designs with a
+   # heavy boundary point mass; accept the resolution unless you can
+   # re-bin the dose variable so the modal fraction at d.min() drops
+   # below 2% (then the detector picks continuous_near_d_lower).
+
+"NotImplementedError on survey + mass-point + vcov_type='classical'"
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Problem:** Calling ``HeterogeneousAdoptionDiD.fit(..., vcov_type="classical")``
+under ``survey_design=SurveyDesign(...)`` raises ``NotImplementedError`` on the
+mass-point path (both the static and the event-study survey paths; the event-study
+rejection fires regardless of ``cband`` because the Binder-TSL analytical SE
+consumes the HC1-scaled influence function either way).
+
+**Cause:** The per-unit 2SLS influence function returned by the mass-point fit
+is HC1-scaled so that ``compute_survey_if_variance`` and the sup-t bootstrap
+target ``V_HC1`` consistently. Mixing it with a classical analytical SE would
+silently report a ``V_HC1``-targeted variance under a ``classical`` label.
+
+**Solutions:**
+
+.. code-block:: python
+
+   # The constructor default (`vcov_type='classical'`) triggers the guard
+   # on the mass-point survey path - so plain
+   # `HeterogeneousAdoptionDiD()` is NOT a workaround. Use:
+   est = HeterogeneousAdoptionDiD(vcov_type='hc1')
+
+A classical-aligned IF derivation is queued for a follow-up release; until
+then, ``vcov_type='hc1'`` is the
+recommended path for survey + mass-point fits. See :doc:`api/had` for the
+full SE-regime contract.
+
+"Panel-only event-study restriction"
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Problem:** ``HeterogeneousAdoptionDiD.fit()`` on a multi-period
+(event-study mode) staggered panel raises.
+
+**Cause:** The Appendix B.2 event-study extension requires either a
+common-adoption panel (single first-treat period; ``first_treat`` is
+then optional and the period is inferred from the dose invariant) or a
+staggered panel with ``first_treat`` provided so the estimator can
+auto-filter to the last-treatment cohort plus never-treated units (with
+a ``UserWarning``). The fit raises only when the panel is staggered
+**and** ``first_treat`` is missing.
+
+**Solutions:**
+
+.. code-block:: python
+
+   import numpy as np
+   import pandas as pd
+
+   # Build a staggered HAD panel for this example: 120 units, three
+   # cohorts (30 never-treated + 30 treated at period 5 + 60 treated at
+   # period 8). Dose is zero pre-treatment per unit and a constant
+   # positive value post-treatment, so the first_treat / dose-path
+   # consistency validator passes. The 60-unit last cohort gives the
+   # boundary local-linear estimator enough distinct dose values to fit.
+   np.random.seed(42)
+   n_units, n_periods = 120, 10
+   first_treat_per_unit = np.array([0] * 30 + [5] * 30 + [8] * 60)
+   dose_per_unit = np.where(
+       first_treat_per_unit > 0, np.random.uniform(0.5, 2.0, n_units), 0.0
+   )
+   rows = []
+   for u in range(n_units):
+       ft = first_treat_per_unit[u]
+       for t in range(n_periods):
+           d_ut = dose_per_unit[u] if (ft > 0 and t >= ft) else 0.0
+           y_ut = (d_ut > 0) * dose_per_unit[u] * 0.5 + np.random.normal()
+           rows.append((u, t, d_ut, ft, y_ut))
+   data = pd.DataFrame(rows, columns=["unit", "period", "dose", "first_treat", "y"])
+
+   # Primary remedy: pass `first_treat` so the estimator auto-filters
+   # to the last-treatment cohort + never-treated and emits a UserWarning.
+   est = HeterogeneousAdoptionDiD()
+   results = est.fit(data, outcome='y', unit='unit',
+                     time='period', dose='dose',
+                     first_treat='first_treat')
+
+   # Equivalent: subset to the last-treatment cohort + never-treated
+   # before fitting (skips the UserWarning).
+   last_cohort = data['first_treat'].max()
+   subset = data[(data['first_treat'] == last_cohort) |
+                 (data['first_treat'] == 0)]
+   results = est.fit(subset, outcome='y', unit='unit',
+                     time='period', dose='dose')
 
 Imputation / Two-Stage DiD Issues
 ----------------------------------
@@ -583,49 +807,6 @@ inaccurate with missing observations.
    results = bacon.fit(balanced, outcome='y', unit='unit_id',
                        time='period', first_treat='first_treat')
 
-Deprecation Warnings
---------------------
-
-"method='twostep' is deprecated"
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-**Problem:** TROP emits a ``FutureWarning`` that ``method='twostep'`` is
-deprecated.
-
-**Causes:**
-
-1. Code uses the old ``method='twostep'`` parameter name
-
-**Solutions:**
-
-.. code-block:: python
-
-   # Old (deprecated)
-   trop = TROP(method='twostep')
-
-   # New (use 'local' instead)
-   trop = TROP(method='local')
-
-"method='joint' is deprecated"
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-**Problem:** TROP emits a ``FutureWarning`` that ``method='joint'`` is
-deprecated.
-
-**Causes:**
-
-1. Code uses the old ``method='joint'`` parameter name
-
-**Solutions:**
-
-.. code-block:: python
-
-   # Old (deprecated)
-   trop = TROP(method='joint')
-
-   # New (use 'global' instead)
-   trop = TROP(method='global')
-
 Getting Help
 ------------
 
@@ -643,7 +824,7 @@ If you encounter issues not covered here:
 
    data = generate_did_data(n_units=100, n_periods=10, treatment_effect=2.0)
    did = DifferenceInDifferences()
-   results = did.fit(data, outcome='outcome', treatment='treated', time='post')
+   results = did.fit(data, outcome='outcome', treatment='treated', post='post')
    print(f"True effect: 2.0, Estimated: {results.att:.3f}")
 
 For bugs or feature requests, please open an issue on

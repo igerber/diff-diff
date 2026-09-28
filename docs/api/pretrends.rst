@@ -28,9 +28,11 @@ PreTrendsPower
 Main class for pre-trends power analysis.
 
 .. autoclass:: diff_diff.PreTrendsPower
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
+   :inherited-members:
 
    .. rubric:: Methods
 
@@ -45,20 +47,33 @@ Example
 
 .. code-block:: python
 
-   from diff_diff import MultiPeriodDiD, PreTrendsPower
+   from diff_diff import TwoWayFixedEffects, PreTrendsPower
 
-   # First fit an event study
-   model = MultiPeriodDiD()
+   # First fit an event study (TwoWayFixedEffects event-study mode)
+   model = TwoWayFixedEffects()
    results = model.fit(data, outcome='y', treatment='treated',
-                       time='period', unit='unit_id',
-                       post_periods=[5, 6, 7], reference_period=4)
+                       unit='unit_id', event_study=True, time='period',
+                       post_periods=[5, 6, 7, 8, 9], reference_period=4)
 
-   # Compute pre-trends power for linear violations
+   # Compute pre-trends power for linear violations.
+   # Default acceptance region is the Roth (2022) NIS box probability.
    pt = PreTrendsPower(alpha=0.05, power=0.80, violation_type='linear')
    pt_results = pt.fit(results)
 
    print(f"MDV: {pt_results.mdv:.3f}")
    print(f"Power: {pt_results.power:.2%}")
+   print(f"NIS box probability (accept H0): {pt_results.nis_box_probability:.4f}")
+
+   # Select the Wald (noncentral-χ²) acceptance-region form instead of the
+   # default NIS box probability. Wald preserves the pre-PR-B acceptance-
+   # region math byte-identically; numerical-output bit-identity to pre-PR-B
+   # fitted results only holds on regular pre-period grids and on the
+   # legacy `relative_times=None` path. PR-B Step 4's `relative_times`
+   # threading applies to BOTH NIS and Wald, so on irregular grids the
+   # Wald MDV is also in Roth's γ units (see REGISTRY linear-pattern Note).
+   pt_wald = PreTrendsPower(
+       alpha=0.05, power=0.80, violation_type='linear', pretest_form='wald'
+   )
 
 PreTrendsPowerResults
 ---------------------
@@ -66,6 +81,7 @@ PreTrendsPowerResults
 Results from pre-trends power analysis.
 
 .. autoclass:: diff_diff.PreTrendsPowerResults
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -76,6 +92,7 @@ PreTrendsPowerCurve
 Power curve across violation magnitudes.
 
 .. autoclass:: diff_diff.PreTrendsPowerCurve
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -97,6 +114,13 @@ Compute minimum detectable violation.
 
 .. autofunction:: diff_diff.compute_mdv
 
+plot_pretrends_power
+~~~~~~~~~~~~~~~~~~~~
+
+Plot a pre-trends test power curve.
+
+.. autofunction:: diff_diff.plot_pretrends_power
+
 Violation Types
 ---------------
 
@@ -115,7 +139,9 @@ The module supports several types of pre-trends violations:
    ``delta[-1] = M``, all other pre-periods are zero.
 
 **custom**
-   User-specified violation pattern via the ``custom_delta`` parameter.
+   User-specified violation pattern via the ``violation_weights`` parameter.
+   Accepted by both ``PreTrendsPower`` (constructor kwarg) and the convenience
+   helpers ``compute_pretrends_power`` / ``compute_mdv`` (forwarded kwarg).
 
 Complete Example
 ----------------
@@ -124,17 +150,17 @@ Complete Example
 
    import numpy as np
    from diff_diff import (
-       MultiPeriodDiD,
+       TwoWayFixedEffects,
        PreTrendsPower,
        compute_mdv,
        plot_pretrends_power,
    )
 
-   # Fit event study
-   model = MultiPeriodDiD()
+   # Fit event study (TwoWayFixedEffects event-study mode)
+   model = TwoWayFixedEffects()
    results = model.fit(data, outcome='y', treatment='treated',
-                       time='period', unit='unit_id',
-                       post_periods=[5, 6, 7], reference_period=4)
+                       unit='unit_id', event_study=True, time='period',
+                       post_periods=[5, 6, 7, 8, 9], reference_period=4)
 
    # Compute MDV
    mdv = compute_mdv(results, alpha=0.05, target_power=0.80)

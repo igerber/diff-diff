@@ -4,29 +4,26 @@
 .. currentmodule:: diff_diff
 
 .. autoclass:: PlaceboTestResults
+   :no-members:
 
-   
-   .. automethod:: __init__
 
-   
    .. rubric:: Methods
 
    .. autosummary::
-   
+
       ~PlaceboTestResults.__init__
       ~PlaceboTestResults.print_summary
       ~PlaceboTestResults.summary
       ~PlaceboTestResults.to_dataframe
       ~PlaceboTestResults.to_dict
-   
-   
 
-   
-   
+
+
+
    .. rubric:: Attributes
 
    .. autosummary::
-   
+
       ~PlaceboTestResults.alpha
       ~PlaceboTestResults.fake_group
       ~PlaceboTestResults.fake_period
@@ -44,5 +41,4 @@
       ~PlaceboTestResults.conf_int
       ~PlaceboTestResults.n_obs
       ~PlaceboTestResults.is_significant
-   
-   
+

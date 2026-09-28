@@ -1,0 +1,56 @@
+{
+  "scenario": "brfss_panel_medium",
+  "backend": "python",
+  "has_rust_backend": false,
+  "total_seconds": 0.48709708400000007,
+  "memory": {
+    "available": true,
+    "start_mb": 185.42,
+    "peak_mb": 202.75,
+    "growth_mb": 17.33,
+    "sampler_interval_s": 0.01
+  },
+  "phases": {
+    "1_aggregate_survey_microdata_to_panel": {
+      "seconds": 0.372203458,
+      "ok": true,
+      "error": null
+    },
+    "2_cs_fit_with_stage2_survey_design": {
+      "seconds": 0.01215470800000018,
+      "ok": true,
+      "error": null
+    },
+    "3_inspect_pretrends": {
+      "seconds": 2.5000000001274003e-06,
+      "ok": true,
+      "error": null
+    },
+    "4_honest_did_grid": {
+      "seconds": 0.0016202499999999898,
+      "ok": true,
+      "error": null
+    },
+    "5_sun_abraham_robustness": {
+      "seconds": 0.10084249999999995,
+      "ok": true,
+      "error": null
+    },
+    "6_practitioner_next_steps": {
+      "seconds": 0.000269875000000086,
+      "ok": true,
+      "error": null
+    }
+  },
+  "metadata": {
+    "scale": "medium",
+    "n_microdata_rows": 250000,
+    "n_states": 50,
+    "n_years": 10,
+    "n_strata": 15,
+    "n_psu": 600,
+    "n_bootstrap": 199
+  },
+  "diff_diff_version": "3.1.3",
+  "numpy_version": "2.0.2"
+}

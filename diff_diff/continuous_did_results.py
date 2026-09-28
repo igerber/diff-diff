@@ -5,15 +5,38 @@ Provides dataclass containers for dose-response curves, group-time effects,
 and aggregated estimation results.
 """
 
+import dataclasses
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
+from diff_diff.aggregation import AggregationMixin, AggregationResult
+from diff_diff.continuous_did_aggregation import _ContinuousDiDAggregationMixin
 from diff_diff.results import _format_survey_block, _get_significance_stars
+from diff_diff.results_base import (
+    _SUMMARY_ALPHA_MESSAGE,
+    BaseResults,
+    _coverage_pct,
+    _require_fit_alpha,
+    build_event_study_surface,
+)
+from diff_diff.utils import safe_inference
 
 __all__ = ["ContinuousDiDResults", "DoseResponseCurve"]
+
+
+class _ContinuousKitAggregator(_ContinuousDiDAggregationMixin):
+    """Throwaway host for the post-fit event-study recompute (row M-025).
+
+    A fresh instance runs each ``aggregate('event_study')`` call so the
+    recompute can never read or write estimator/results state. Sets
+    exactly the mixin's host-attribute contract: ``alpha``.
+    """
+
+    def __init__(self, alpha: float) -> None:
+        self.alpha = alpha
 
 
 @dataclass
@@ -78,7 +101,7 @@ class DoseResponseCurve:
 
 
 @dataclass
-class ContinuousDiDResults:
+class ContinuousDiDResults(BaseResults, AggregationMixin):
     """
     Results from Continuous Difference-in-Differences estimation.
 
@@ -108,6 +131,11 @@ class ContinuousDiDResults:
         Random seed used for bootstrap.
     rank_deficient_action : str
         How rank deficiency is handled (``"warn"``, ``"error"``, ``"silent"``).
+    event_study_df : float or None
+        Scalar survey df governing the event-study rows' t-inference.
+        ``None`` on non-survey fits, on bootstrapped fits, when no
+        fit-time event-study surface was built, and for the
+        replicate-undefined ``0`` sentinel.
     """
 
     dose_response_att: DoseResponseCurve
@@ -139,9 +167,81 @@ class ContinuousDiDResults:
     bootstrap_weights: str = "rademacher"
     seed: Optional[int] = None
     rank_deficient_action: str = "warn"
+    # Covariate adjustment (conditional parallel trends). ``covariates`` is None
+    # for the unconditional path; ``estimation_method`` is only meaningful when
+    # covariates are used (``"reg"`` or ``"dr"``).
+    covariates: Optional[List[str]] = field(default=None)
+    estimation_method: str = "dr"
+    pscore_trim: float = 0.01
+    epv_threshold: float = 10.0
+    pscore_fallback: str = "error"
+    # "continuous" (B-spline sieve dose-response) or "discrete" (saturated
+    # per-dose-level regression); the ``dose_grid`` holds the distinct dose
+    # levels when discrete.
+    treatment_type: str = "continuous"
+    # Lowest-dose reference d_L for ``control_group="lowest_dose"`` (Remark 3.1);
+    # the estimand is ``ATT(d) - ATT(d_L)`` and ``ATT(d_L) = 0`` by construction.
+    # ``None`` for the never/not-yet-treated (D=0 control) paths.
+    reference_dose: Optional[float] = None
     event_study_effects: Optional[Dict[int, Dict[str, Any]]] = field(default=None)
     # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
     survey_metadata: Optional[Any] = field(default=None)
+    # Post-fit aggregation kit (row M-025), attached by ContinuousDiD.fit().
+    # New fields are appended AFTER this one (positional-__init__
+    # compatibility). Only the 'event_study' recompute reads it;
+    # 'simple'/'dose' are views.
+    _aggregation_kit: Optional[Any] = field(default=None, repr=False, compare=False)
+    # Scalar survey df governing the event-study rows' t-inference. None on
+    # non-survey fits, on bootstrapped fits (percentile inference; the ES
+    # recompute also fails closed there), when no event-study surface was
+    # built, and for the replicate-undefined 0 sentinel. Appended last per
+    # the positional-__init__ convention above.
+    event_study_df: Optional[float] = None
+
+    # Post-fit aggregation routing (M-122 contract). ContinuousDiD's extra
+    # 'dose' level is documented in the ledger row and v4-design section 6;
+    # no level takes balance_e (the estimator has no balance_e machinery).
+    _AGGREGATE_SUPPORTED: ClassVar[Tuple[str, ...]] = ("simple", "event_study", "dose")
+    _AGGREGATE_BALANCE_E_TYPES: ClassVar[Tuple[str, ...]] = ()
+
+    # --- Inference-field aliases (balance/external-adapter compatibility) ---
+    # ATT-side is the headline contract; ACRT remains accessible via overall_acrt_*.
+    @property
+    def att(self) -> float:
+        return self.overall_att
+
+    @property
+    def se(self) -> float:
+        return self.overall_att_se
+
+    @property
+    def conf_int(self) -> Tuple[float, float]:
+        return self.overall_att_conf_int
+
+    @property
+    def p_value(self) -> float:
+        return self.overall_att_p_value
+
+    @property
+    def t_stat(self) -> float:
+        return self.overall_att_t_stat
+
+    # `overall_*` aliases for naming consistency with the rest of the staggered family.
+    @property
+    def overall_se(self) -> float:
+        return self.overall_att_se
+
+    @property
+    def overall_conf_int(self) -> Tuple[float, float]:
+        return self.overall_att_conf_int
+
+    @property
+    def overall_p_value(self) -> float:
+        return self.overall_att_p_value
+
+    @property
+    def overall_t_stat(self) -> float:
+        return self.overall_att_t_stat
 
     def __repr__(self) -> str:
         sig_att = _get_significance_stars(self.overall_att_p_value)
@@ -154,10 +254,28 @@ class ContinuousDiDResults:
             f"n_periods={len(self.time_periods)})"
         )
 
+    @property
+    def coef_var(self) -> float:
+        """Coefficient of variation: SE / abs(overall ATT). NaN when ATT is 0 or SE non-finite."""
+        if not (np.isfinite(self.overall_att_se) and self.overall_att_se >= 0):
+            return np.nan
+        if not np.isfinite(self.overall_att) or self.overall_att == 0:
+            return np.nan
+        return self.overall_att_se / abs(self.overall_att)
+
     def summary(self, alpha: Optional[float] = None) -> str:
-        """Generate formatted summary."""
-        alpha = alpha or self.alpha
-        conf_level = int((1 - alpha) * 100)
+        """Generate formatted summary.
+
+        Parameters
+        ----------
+        alpha : float, optional
+            Accepted for signature uniformity. The stored intervals were
+            computed at fit time; a value different from the stored
+            ``alpha`` raises ValueError rather than silently recomputing
+            or relabeling. Re-fit at the desired alpha instead.
+        """
+        alpha = _require_fit_alpha(alpha, self.alpha, message=_SUMMARY_ALPHA_MESSAGE)
+        conf_level = _coverage_pct(alpha)
         w = 85
 
         lines = [
@@ -172,12 +290,24 @@ class ContinuousDiDResults:
             f"{'Treatment cohorts:':<30} {len(self.groups):>10}",
             f"{'Time periods:':<30} {len(self.time_periods):>10}",
             f"{'Control group:':<30} {self.control_group:>10}",
-            f"{'B-spline degree:':<30} {self.degree:>10}",
-            f"{'Interior knots:':<30} {self.num_knots:>10}",
-            f"{'Base period:':<30} {self.base_period:>10}",
-            f"{'Anticipation:':<30} {self.anticipation:>10}",
-            "",
+            f"{'Treatment type:':<30} {self.treatment_type:>10}",
         ]
+        # Lowest-dose reference (Remark 3.1): show d_L when it is the control.
+        if self.reference_dose is not None:
+            lines.append(f"{'Reference dose (d_L):':<30} {self.reference_dose:>10.4g}")
+        # Basis metadata: B-spline degree/knots (continuous) or the number of
+        # saturated dose levels (discrete).
+        if self.treatment_type == "discrete":
+            lines.append(f"{'Dose levels:':<30} {len(self.dose_grid):>10}")
+        else:
+            lines.append(f"{'B-spline degree:':<30} {self.degree:>10}")
+            lines.append(f"{'Interior knots:':<30} {self.num_knots:>10}")
+        lines.append(f"{'Base period:':<30} {self.base_period:>10}")
+        lines.append(f"{'Anticipation:':<30} {self.anticipation:>10}")
+        if self.covariates:
+            lines.append(f"{'Covariates:':<30} {', '.join(self.covariates):>10}")
+            lines.append(f"{'Estimation method:':<30} {self.estimation_method:>10}")
+        lines.append("")
 
         # Add survey design info
         if self.survey_metadata is not None:
@@ -223,9 +353,14 @@ class ContinuousDiDResults:
                 f"[{self.overall_att_conf_int[0]:.4f}, {self.overall_att_conf_int[1]:.4f}]",
                 f"{conf_level}% CI for ACRT_glob: "
                 f"[{self.overall_acrt_conf_int[0]:.4f}, {self.overall_acrt_conf_int[1]:.4f}]",
-                "",
             ]
         )
+
+        cv = self.coef_var
+        if np.isfinite(cv):
+            lines.append(f"{'CV (SE/abs(ATT)):':<25} {cv:>10.4f}")
+
+        lines.append("")
 
         # Dose-response curve summary (first/mid/last points)
         if len(self.dose_grid) > 0:
@@ -288,6 +423,44 @@ class ContinuousDiDResults:
         """Print summary to stdout."""
         print(self.summary(alpha))
 
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Convert headline results to a dictionary.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Canonical ATT inference row, the ACRT companion estimand, and
+            scalar metadata. Detailed dose-response / event-study tables
+            are available via ``to_dataframe(level=...)``.
+        """
+        return {
+            "att": self.att,
+            "se": self.se,
+            "t_stat": self.t_stat,
+            "p_value": self.p_value,
+            "conf_int_lower": self.overall_att_conf_int[0],
+            "conf_int_upper": self.overall_att_conf_int[1],
+            "acrt": self.overall_acrt,
+            "acrt_se": self.overall_acrt_se,
+            "acrt_t_stat": self.overall_acrt_t_stat,
+            "acrt_p_value": self.overall_acrt_p_value,
+            "acrt_conf_int_lower": self.overall_acrt_conf_int[0],
+            "acrt_conf_int_upper": self.overall_acrt_conf_int[1],
+            "n_obs": self.n_obs,
+            "n_treated_units": self.n_treated_units,
+            "n_control_units": self.n_control_units,
+            "control_group": self.control_group,
+            "treatment_type": self.treatment_type,
+            "estimation_method": self.estimation_method,
+            "degree": self.degree,
+            "num_knots": self.num_knots,
+            "base_period": self.base_period,
+            "anticipation": self.anticipation,
+            "n_bootstrap": self.n_bootstrap,
+            "alpha": self.alpha,
+        }
+
     def to_dataframe(self, level: str = "dose_response") -> pd.DataFrame:
         """
         Convert results to DataFrame.
@@ -329,7 +502,14 @@ class ContinuousDiDResults:
             return pd.DataFrame(rows)
         elif level == "event_study":
             if self.event_study_effects is None:
-                raise ValueError("Event study effects not computed. Use aggregate='eventstudy'.")
+                raise ValueError(
+                    "Event study effects not computed. Call "
+                    "results.aggregate('event_study') for the unified "
+                    "post-fit container (on a bootstrapped fit, re-fit "
+                    "with n_bootstrap=0 or use the deprecated fit-time "
+                    "aggregate='eventstudy'); a result unpickled from an "
+                    "older release must be re-fit with diff-diff >= 3.9."
+                )
             rows = []
             for rel_t, data in sorted(self.event_study_effects.items()):
                 rows.append(
@@ -358,3 +538,192 @@ class ContinuousDiDResults:
     def significance_stars(self) -> str:
         """Significance stars for overall ATT."""
         return _get_significance_stars(self.overall_att_p_value)
+
+    # ------------------------------------------------------------------
+    # Post-fit aggregation (row M-025, on the M-122 contract).
+    # MIXED architecture: 'simple' and 'dose' are pure VIEWS over stored
+    # public fields (the dCDH precedent - nothing recomputed, so they
+    # work on ANY fit including bootstrap fits and legacy pickles,
+    # relaying the stored inference verbatim); 'event_study' is a KIT
+    # RECOMPUTE (the EfficientDiD class) from the pruned per-cell IF
+    # payload, failing closed on bootstrap fits.
+    # ------------------------------------------------------------------
+
+    def _stored_inference_df(self) -> float:
+        """The df the STORED overall inference actually used (NaN = none).
+
+        Bootstrap fits carry percentile p/CI - no df governs them.
+        Otherwise ``dose_response_att.df_survey`` is the stored provenance
+        channel for fit's ``_survey_df`` (the same value every
+        ``safe_inference`` call received); the replicate-undefined
+        0-sentinel and ``None`` both report NaN in the df COLUMN, while
+        the view relays still pass the RAW stored value into their own
+        ``safe_inference`` derivations (``DoseResponseCurve.to_dataframe``
+        parity).
+        """
+        if self.n_bootstrap > 0:
+            return float("nan")
+        df_survey = self.dose_response_att.df_survey
+        if df_survey is not None and np.isfinite(df_survey) and df_survey > 0:
+            return float(df_survey)
+        return float("nan")
+
+    def _aggregate_compute(
+        self, level: str, *, weights: Optional[str], balance_e: Optional[int]
+    ) -> Any:
+        if level == "simple":
+            # 2-row VIEW of the stored overall estimands: ContinuousDiD's
+            # headline parameters are the binarized overall ATT (ATT^{loc}
+            # under PT; equals ATT^{glob} under SPT) AND ACRT^{glob}, so the
+            # target column discriminates two "overall" rows (the
+            # container spec's dual-estimand case). Relays are strictly
+            # bit-exact - on bootstrap fits the stored quintet includes a
+            # FINITE safe_inference t beside the percentile p/CI and it
+            # relays through unchanged; only the df column is NaN there.
+            att_ci = self.overall_att_conf_int
+            acrt_ci = self.overall_acrt_conf_int
+            n_total = float(self.n_treated_units + self.n_control_units)
+            df_val = self._stored_inference_df()
+            return AggregationResult(
+                level="simple",
+                label=np.array(["overall", "overall"], dtype=object),
+                target=np.array(["att", "acrt"], dtype=object),
+                att=np.array([self.overall_att, self.overall_acrt], dtype=float),
+                se=np.array([self.overall_att_se, self.overall_acrt_se], dtype=float),
+                t_stat=np.array([self.overall_att_t_stat, self.overall_acrt_t_stat], dtype=float),
+                p_value=np.array(
+                    [self.overall_att_p_value, self.overall_acrt_p_value],
+                    dtype=float,
+                ),
+                conf_int_lower=np.array([att_ci[0], acrt_ci[0]], dtype=float),
+                conf_int_upper=np.array([att_ci[1], acrt_ci[1]], dtype=float),
+                # Treated and control unit sets are DISJOINT for this
+                # estimator (unlike Imputation/TwoStage), so the CS
+                # disjoint-total convention applies.
+                n=np.array([n_total, n_total], dtype=float),
+                df=np.array([df_val, df_val], dtype=float),
+                alpha=self.alpha,
+                n_kind="units",
+                weight=np.array([1.0, 1.0], dtype=float),
+                estimator="ContinuousDiD",
+            )
+
+        if level == "dose":
+            # 2N-row VIEW of the stored dose-response curves: att block
+            # then acrt block (first-appearance target order). t/p
+            # reproduce each DoseResponseCurve.to_dataframe exactly -
+            # including the bootstrap branch (stored p, NaN t) and the
+            # raw stored df_survey (0-sentinel included) fed to
+            # safe_inference on the analytical branch.
+            blocks = []
+            for curve, target in (
+                (self.dose_response_att, "att"),
+                (self.dose_response_acrt, "acrt"),
+            ):
+                n_grid = len(curve.effects)
+                if curve.n_bootstrap > 0 and curve.p_value is not None:
+                    t_stat = np.full(n_grid, np.nan)
+                    p_value = np.asarray(curve.p_value, dtype=float)
+                else:
+                    t_stat = np.full(n_grid, np.nan)
+                    p_value = np.full(n_grid, np.nan)
+                    for i in range(n_grid):
+                        t_i, p_i, _ = safe_inference(
+                            curve.effects[i], curve.se[i], df=curve.df_survey
+                        )
+                        t_stat[i] = t_i
+                        p_value[i] = p_i
+                blocks.append((curve, target, t_stat, p_value))
+            df_val = self._stored_inference_df()
+            return AggregationResult(
+                level="dose",
+                label=np.concatenate(
+                    [np.asarray(c.dose_grid, dtype=object) for c, _, _, _ in blocks]
+                ),
+                target=np.array(
+                    ["att"] * len(blocks[0][0].effects) + ["acrt"] * len(blocks[1][0].effects),
+                    dtype=object,
+                ),
+                att=np.concatenate([c.effects for c, _, _, _ in blocks]).astype(float),
+                se=np.concatenate([c.se for c, _, _, _ in blocks]).astype(float),
+                t_stat=np.concatenate([t for _, _, t, _ in blocks]),
+                p_value=np.concatenate([p for _, _, _, p in blocks]),
+                conf_int_lower=np.concatenate([c.conf_int_lower for c, _, _, _ in blocks]).astype(
+                    float
+                ),
+                conf_int_upper=np.concatenate([c.conf_int_upper for c, _, _, _ in blocks]).astype(
+                    float
+                ),
+                # Grid evaluation points carry no count and no aggregation
+                # mass - inventing either would be a fabricated number.
+                n=np.full(2 * len(blocks[0][0].effects), np.nan),
+                df=np.full(2 * len(blocks[0][0].effects), df_val),
+                alpha=self.alpha,
+                n_kind=None,
+                weight=None,
+                estimator="ContinuousDiD",
+            )
+
+        # level == "event_study": the kit recompute.
+        kit = self._aggregation_kit
+        if kit is None:
+            raise ValueError(
+                "This ContinuousDiDResults has no aggregation kit - it is "
+                "attached by ContinuousDiD.fit(); a result unpickled from "
+                "an older release will not have one. Re-fit with "
+                "diff-diff >= 3.9 to enable post-fit aggregate()."
+            )
+        bk = kit.bookkeeping
+        if bk["n_bootstrap"] > 0:
+            raise NotImplementedError(
+                "aggregate('event_study') on a bootstrapped ContinuousDiD "
+                "fit is not implemented - the fit-time event study used "
+                "multiplier-bootstrap inference whose per-cell draws are "
+                "not retained, and an analytical recompute would silently "
+                "differ. Until 4.0 the deprecated fit-time "
+                "aggregate='eventstudy' still computes the bootstrap "
+                "surface, or re-fit with n_bootstrap=0 for the analytical "
+                "post-fit route."
+            )
+        host = _ContinuousKitAggregator(alpha=kit.alpha)
+        es = host._aggregate_event_study(
+            bk["gt_summary"],
+            gt_bootstrap_info=None,
+            unit_survey_weights=bk["unit_survey_weights"],
+            unit_cohorts=bk["unit_cohorts"],
+            anticipation=kit.anticipation,
+        )
+        if bk["has_post_cells"]:
+            host._compute_event_study_inference(
+                es,
+                gt_summary=bk["gt_summary"],
+                gt_es_payload=bk["gt_es_payload"],
+                n_units=bk["n_units"],
+                unit_cohorts=bk["unit_cohorts"],
+                unit_survey_weights=bk["unit_survey_weights"],
+                unit_first_panel_row=bk["unit_first_panel_row"],
+                resolved_survey=bk["resolved_survey"],
+                survey_df=bk["survey_df"],
+            )
+        # else: fit-faithful empty-post_gt quirk - the fit-time surface
+        # also leaves ES rows at NaN inference when no post-treatment
+        # cells exist.
+        meta = bk["survey_metadata"]
+        meta = dataclasses.replace(meta) if meta is not None else None
+        # Per-row df provenance: the kit's survey df is the value this
+        # route's safe_inference calls received; 0-sentinel normalized.
+        _es_df = bk["survey_df"]
+        carrier = dataclasses.replace(
+            self,
+            event_study_effects=es,
+            survey_metadata=meta,
+            alpha=kit.alpha,
+            anticipation=kit.anticipation,
+            event_study_df=(float(_es_df) if _es_df is not None and _es_df > 0 else None),
+            # _provenance_kwargs reads base_period off the carrier - it
+            # rides the kit like its siblings alpha/anticipation so
+            # post-fit mutation of the public field cannot reach
+            # recomputed provenance.
+            base_period=bk["base_period"],
+        )
+        return build_event_study_surface(carrier)

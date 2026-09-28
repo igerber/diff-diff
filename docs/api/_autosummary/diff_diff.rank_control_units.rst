@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: rank_control_units
+   :no-index:

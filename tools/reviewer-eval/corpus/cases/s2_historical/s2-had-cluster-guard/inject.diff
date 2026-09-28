@@ -1,0 +1,436 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 0713f9e3..b171f166 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
+ 
+ ## [Unreleased]
+ 
++### Added
++- **`HeterogeneousAdoptionDiD` cluster-robust SE on the continuous paths** (Phase 2a). `cluster=`
++  is now threaded into `bias_corrected_local_linear` on the `continuous_at_zero` /
++  `continuous_near_d_lower` designs, so the CCT-2014 robust variance becomes cluster-robust and the
++  β̂-scale SE is `se_robust / |den|` (previously `cluster=` was ignored on the continuous path with a
++  `UserWarning`). Composes with the `weights=` shortcut (weighted cluster-robust). The `cluster=` +
++  `survey_design=` composition raises `NotImplementedError` (route clustering through
++  `survey_design=SurveyDesign(psu=<cluster_col>)`). Cluster IDs must be unit-constant — a nonexistent
++  column, NaN, or within-unit-varying cluster now raises (mirroring the mass-point path) instead of
++  being silently ignored. Result metadata reports `vcov_type="cr1"` + `cluster_name`. The mass-point
++  path and the event-study (Phase 2b) path are unchanged (Phase 2b still defers cluster with a
++  warning).
++
+ ## [3.6.1] - 2026-07-01
+ 
+ ### Added
+diff --git a/TODO.md b/TODO.md
+index d8b9305a..8f91dfcb 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -37,7 +37,7 @@ The `Origin` column (Actionable tables) and the `PR` column (Deferred tables) bo
+ | `TwoWayFixedEffects(vcov_type in {hc2, hc2_bm})` with replicate-weight designs raises `NotImplementedError` (`twfe.py:~233`). The replicate path re-demeans per replicate, which doesn't compose with the full-dummy HC2/HC2-BM build — a correct impl needs per-replicate full-dummy refit. Workaround: `hc1` for replicate-weight CR1. | `twfe.py::fit` | follow-up | Heavy | Low |
+ | TWFE's HC2/HC2-BM inline full-dummy build (`twfe.py:280-315`) duplicates the dummy-construction logic in `DifferenceInDifferences(fixed_effects=...)` (`estimators.py:478-486`). Extract a shared helper, or delegate TWFE's HC2/HC2-BM path to DiD's `fixed_effects=` branch (with TWFE-specific cluster-default threading), to reduce drift risk on FE naming / survey behavior / result-surface conventions. Substantive refactor — touches both estimators. | `twfe.py::fit`, `estimators.py::DifferenceInDifferences.fit` | follow-up | Heavy | Low |
+ | Decide whether to formally deprecate `CallawaySantAnna.cluster=X` in favor of `survey_design=SurveyDesign(psu=X)` (the bare-cluster path already synthesizes a minimal SurveyDesign). Two equivalent paths = redundant surface. Mirrors the question for ImputationDiD / EfficientDiD / TwoStageDiD. | `staggered.py` | follow-up | Mid | Low |
+-| `HeterogeneousAdoptionDiD` continuous paths: thread `cluster=` through `bias_corrected_local_linear` (the Phase-1c wrapper already supports cluster; Phase 2a ignores it with a `UserWarning`). | `had.py`, `local_linear.py` | Phase 2a | Mid | Low |
++| `HeterogeneousAdoptionDiD` **event-study (Phase 2b)** continuous cluster= threading: Phase 2a static path now threads `cluster=` into `bias_corrected_local_linear` (cluster-robust CCT SE, unweighted + weighted). The per-horizon event-study path still ignores `cluster=` with a `UserWarning` because the `cband` sup-t bootstrap normalizes HC-scale perturbations by the analytical SE and would mix variance families under clustering (mirrors the mass-point `weights= + cluster= + cband=True` `NotImplementedError`). Needs a per-horizon clustered-bootstrap variance-family reconciliation. | `had.py::_fit_event_study` | Phase 2b | Mid | Low |
+ | `SpilloverDiDResults` not registered in `DiagnosticReport`'s `_APPLICABILITY` / `_PT_METHOD` tables, so `DiagnosticReport(spillover_result)` doesn't route to event-study diagnostics. Decide which diagnostics apply (PT, pre-trends power, heterogeneity, design-effect) and add an end-to-end test. | `diagnostic_report.py` | Wave C | Mid | Low |
+ 
+ ### Performance
+diff --git a/diff_diff/had.py b/diff_diff/had.py
+index fd18668d..196e1ff3 100644
+--- a/diff_diff/had.py
++++ b/diff_diff/had.py
+@@ -297,18 +297,22 @@ class HeterogeneousAdoptionDiDResults:
+         ``"analytical_nonparametric"`` (continuous designs) or
+         ``"analytical_2sls"`` (mass-point).
+     vcov_type : str or None
+-        Effective variance-covariance family used. ``None`` on continuous
+-        paths (they use the CCT-2014 robust SE from Phase 1c, not the
+-        library's ``vcov_type`` enum). Mass-point: ``"classical"`` or
+-        ``"hc1"`` when ``cluster`` is not supplied, and ``"cr1"``
+-        whenever ``cluster`` is supplied (cluster-robust CR1 is computed
+-        regardless of the requested ``vcov_type`` because
+-        classical/hc1 + cluster collapses to the same CR1 sandwich).
+-        Downstream consumers reading ``result.to_dict()`` can inspect
+-        this field directly to determine the effective SE family.
++        Effective variance-covariance family used. On continuous paths:
++        ``None`` when unclustered (they use the CCT-2014 robust SE from
++        Phase 1c, not the library's ``vcov_type`` enum) and ``"cr1"`` when
++        ``cluster`` is supplied (the CCT SE becomes cluster-robust; paired
++        with ``inference_method="analytical_nonparametric"`` this identifies
++        the clustered CCT variance, distinct from the mass-point 2SLS CR1
++        sandwich). Mass-point: ``"classical"`` or ``"hc1"`` when ``cluster``
++        is not supplied, and ``"cr1"`` whenever ``cluster`` is supplied
++        (cluster-robust CR1 is computed regardless of the requested
++        ``vcov_type`` because classical/hc1 + cluster collapses to the same
++        CR1 sandwich). Downstream consumers reading ``result.to_dict()`` can
++        inspect this field directly to determine the effective SE family.
+     cluster_name : str or None
+-        Column name of the cluster variable on the mass-point path when
+-        cluster-robust SE is requested. ``None`` otherwise.
++        Column name of the cluster variable when cluster-robust SE is
++        requested — on the mass-point path (2SLS CR1) or the continuous
++        paths (clustered CCT SE, Phase 2a). ``None`` otherwise.
+     survey_metadata : SurveyMetadata or None
+         Repo-standard survey metadata dataclass from
+         :class:`diff_diff.survey.SurveyMetadata`. ``None`` when ``fit()``
+@@ -2608,11 +2612,18 @@ class HeterogeneousAdoptionDiD:
+         the mass-point path consumes these; continuous paths ignore
+         both with a warning.
+     cluster : str or None
+-        Column name for cluster-robust SE on the mass-point path (CR1).
+-        Ignored with a ``UserWarning`` on the continuous paths in Phase
+-        2a (nonparametric cluster support exists on Phase 1c but is
+-        exposed separately via ``bias_corrected_local_linear``; the
+-        estimator-level knob is queued for a follow-up PR).
++        Column name for cluster-robust SE. On the mass-point path this is
++        the 2SLS CR1 sandwich; on the continuous (``continuous_at_zero`` /
++        ``continuous_near_d_lower``) paths (Phase 2a) it threads the cluster
++        IDs into ``bias_corrected_local_linear`` so ``se_robust`` is the
++        cluster-robust CCT-2014 nonparametric SE (``β̂``-scale
++        ``se = se_robust / |den|``). Composes with the ``weights=`` shortcut
++        (weighted cluster-robust). The cluster + ``survey_design=``
++        composition raises ``NotImplementedError`` (the Binder-TSL survey
++        variance would override the cluster-robust SE — route clustering
++        through ``survey_design=SurveyDesign(psu=<cluster_col>)`` instead).
++        Cluster must be constant within unit. Estimator-level cluster
++        threading on the event-study path (Phase 2b) remains a follow-up.
+ 
+     Notes
+     -----
+@@ -3172,11 +3183,11 @@ class HeterogeneousAdoptionDiD:
+         )
+ 
+         # ---- Aggregate to unit-level first differences (no cluster yet) ----
+-        # Defer cluster validation/extraction until after the design is
+-        # resolved: the continuous paths ignore cluster= with a warning,
+-        # so a malformed or irrelevant cluster column must not abort a
+-        # valid continuous fit. Cluster extraction is re-run below only
+-        # when resolved_design == "mass_point".
++        # Cluster validation/extraction is re-run below (after design
++        # resolution) whenever cluster= is set, so this first aggregation
++        # skips the cluster column. Both the mass-point 2SLS sandwich and the
++        # continuous (Phase 2a) bias_corrected_local_linear path consume the
++        # extracted cluster IDs.
+         d_arr, dy_arr, _, _ = _aggregate_first_difference(
+             data,
+             outcome_col,
+@@ -3340,14 +3351,16 @@ class HeterogeneousAdoptionDiD:
+         else:
+             resolved_design = design_arg
+ 
+-        # ---- Extract cluster IDs (mass-point path only) ----
+-        # Continuous paths ignore cluster= with a warning emitted later in
+-        # the dispatch block; the cluster column is not read for them. On
+-        # the mass-point path we now re-run the aggregation with
+-        # cluster_col so validation (missing column / NaN / within-unit
+-        # variance) fires only when cluster is actually going to be used.
++        # ---- Extract cluster IDs (mass-point + continuous paths) ----
++        # Re-run the aggregation with cluster_col so validation (missing
++        # column / NaN / within-unit variance) fires only when cluster is
++        # actually going to be used. The per-unit cluster array is threaded
++        # into the 2SLS sandwich on the mass-point path and into
++        # ``bias_corrected_local_linear`` on the continuous paths (Phase 2a);
++        # the cluster + ``survey_design=`` composition is rejected in the
++        # per-design dispatch below.
+         cluster_arr: Optional[np.ndarray] = None
+-        if resolved_design == "mass_point" and cluster_arg is not None:
++        if cluster_arg is not None:
+             _, _, cluster_arr, _ = _aggregate_first_difference(
+                 data,
+                 outcome_col,
+@@ -3556,21 +3569,24 @@ class HeterogeneousAdoptionDiD:
+                     UserWarning,
+                     stacklevel=2,
+                 )
+-            if cluster_arg is not None:
+-                warnings.warn(
+-                    f"cluster={cluster_arg!r} is ignored on the "
+-                    f"'{resolved_design}' path in Phase 2a. Cluster-"
+-                    f"robust SE on the nonparametric path is exposed "
+-                    f"via diff_diff.bias_corrected_local_linear directly "
+-                    f"but not yet threaded through the estimator-level "
+-                    f"knob.",
+-                    UserWarning,
+-                    stacklevel=2,
++            if cluster_arg is not None and resolved_survey_unit_full is not None:
++                raise NotImplementedError(
++                    f"cluster={cluster_arg!r} + survey_design= on the "
++                    f"'{resolved_design}' path is not yet supported: the "
++                    f"survey path composes Binder-TSL variance via "
++                    f"compute_survey_if_variance and would silently override "
++                    f"the cluster-robust local-linear SE while the result "
++                    f"metadata advertised cluster-robust inference. Pass "
++                    f"cluster= alone (unweighted cluster-robust), weights= + "
++                    f"cluster= (weighted cluster-robust), or "
++                    f"survey_design=SurveyDesign(psu=<cluster_col>) to cluster "
++                    f"through the survey (Binder-TSL) path."
+                 )
+             # Fit on FULL (unfiltered) arrays so the IF aligns with the
+             # full survey design. bias_corrected_local_linear drops
+             # zero-weight rows internally for its validation + selector +
+-            # fit, then zero-pads the IF back to full length. Survey
++            # fit, then zero-pads the IF back to full length, and filters the
++            # cluster IDs by the same positive-weight mask. Survey
+             # composition below runs on the full design, preserving
+             # domain-estimation semantics.
+             att, se, bc_fit, bw_diag = self._fit_continuous(
+@@ -3580,10 +3596,16 @@ class HeterogeneousAdoptionDiD:
+                 d_lower_val,
+                 weights_arr=weights_unit_full,
+                 resolved_survey_unit=resolved_survey_unit_full,
++                cluster_arr=cluster_arr,
+             )
+             inference_method = "analytical_nonparametric"
+-            vcov_label: Optional[str] = None
+-            cluster_label: Optional[str] = None
++            # Cluster-robust (Phase 2a): the CCT nonparametric SE from
++            # bias_corrected_local_linear is cluster-robust when cluster= is
++            # threaded. vcov_type="cr1" + inference_method="analytical_
++            # nonparametric" together identify the clustered CCT variance
++            # (distinct from the mass-point 2SLS CR1 sandwich).
++            vcov_label: Optional[str] = "cr1" if cluster_arg is not None else None
++            cluster_label: Optional[str] = cluster_arg if cluster_arg is not None else None
+         elif resolved_design == "mass_point":
+             # Review R4 P1: narrow the cluster+weighted rejection. Only
+             # survey= + cluster= is a silent-mismatch case (the
+@@ -3843,6 +3865,7 @@ class HeterogeneousAdoptionDiD:
+         weights_arr: Optional[np.ndarray] = None,
+         resolved_survey_unit: Any = None,  # ResolvedSurveyDesign (G,) or None
+         force_return_influence: bool = False,
++        cluster_arr: Optional[np.ndarray] = None,
+     ) -> Tuple[float, float, Optional[BiasCorrectedFit], Optional[BandwidthResult]]:
+         """Fit Phase 1c ``bias_corrected_local_linear`` and form the WAS estimate.
+ 
+@@ -3928,8 +3951,16 @@ class HeterogeneousAdoptionDiD:
+                 # Unconditional IF computation would add a small O(G) cost
+                 # to every fit; gate it on the survey path.
+                 return_influence=(resolved_survey_unit is not None or force_return_influence),
+-                # No cluster / vce threading in Phase 2a (see UserWarning
+-                # in fit()).
++                # Cluster-robust CCT variance (Phase 2a): when ``cluster_arr``
++                # is provided, ``bias_corrected_local_linear`` forwards it to
++                # the bandwidth selector and the ``lprobust`` variance so
++                # ``se_robust`` is the cluster-robust nonparametric SE. It also
++                # filters ``cluster_arr`` by the same positive-weight mask it
++                # uses to drop zero-weight rows, so a full-length array aligns.
++                # ``cluster=`` composes with ``weights=`` (weighted cluster-
++                # robust); the ``survey_design=`` composition is rejected
++                # up-front in ``fit()`` (Binder-TSL would override se_robust).
++                cluster=cluster_arr,
+             )
+         except (ZeroDivisionError, FloatingPointError, np.linalg.LinAlgError):
+             return float("nan"), float("nan"), None, None
+diff --git a/docs/methodology/REGISTRY.md b/docs/methodology/REGISTRY.md
+index c39c1608..344bfee0 100644
+--- a/docs/methodology/REGISTRY.md
++++ b/docs/methodology/REGISTRY.md
+@@ -3199,6 +3199,7 @@ Shipped in `diff_diff/had_pretests.py` as `stute_joint_pretest()` (residuals-in
+ - [x] Phase 2a: Panel validator (`diff_diff.had._validate_had_panel`) verifies `D_{g,1} = 0` for all units, rejects negative post-period doses (`D_{g,2} < 0`) front-door on the original (unshifted) scale, rejects `>2` time periods on the `aggregate="overall"` path (multi-period panels must use `aggregate="event_study"`, Phase 2b), and rejects unbalanced panels and NaN in outcome/dose/unit columns. Both Design 1 paths (`continuous_near_d_lower` and `mass_point`) additionally require `d_lower == float(d.min())` within float tolerance; mismatched overrides raise with a pointer to the unsupported (LATE-like / off-support) estimand.
+ - [x] Phase 2a: NaN-propagation tests covering constant-y, degenerate-mass-point, and single-cluster-CR1 inputs. The guaranteed NaN coupling is on the DOWNSTREAM triple (`t_stat`, `p_value`, `conf_int`) via the `safe_inference()` gate, which returns NaN on all three whenever `se` is non-finite, zero, or negative. `att` and `se` themselves are raw estimator outputs: on constant-y / no-dose-variation / divide-by-zero the fit paths return `(att=nan, se=nan)` so all five fields move to NaN together; on the degenerate single-cluster CR1 configuration on the mass-point path, `_fit_mass_point_2sls` returns `(att=beta_hat, se=nan)` - `att` is finite (Wald-IV is well defined) while `se` is NaN, so the downstream triple is NaN while `att` remains the raw 2SLS coefficient. The `assert_nan_inference` fixture in `tests/conftest.py` checks the downstream triple against this contract without requiring `att` to be NaN.
+     - **Note (mass-point SE):** Standard errors on the mass-point path use the structural-residual 2SLS sandwich `[Z'X]^{-1} · Ω · [Z'X]^{-T}` with `Ω` built from the structural residuals `u = ΔY - α̂ - β̂·D` (not the reduced-form residuals from an OLS-on-indicator shortcut). Supported: `classical`, `hc1`, and CR1 (cluster-robust) when `cluster=` is supplied. `hc2` and `hc2_bm` raise `NotImplementedError` pending a 2SLS-specific leverage derivation (the OLS leverage `x_i' (X'X)^{-1} x_i` is wrong for 2SLS; the correct finite-sample correction depends on `(Z'X)^{-1}` rather than `(X'X)^{-1}`) plus a dedicated R parity anchor. Queued for the follow-up PR.
++    - **Note (continuous cluster-robust SE, Phase 2a):** On the continuous designs (`continuous_at_zero` / `continuous_near_d_lower`), `cluster=` threads the per-unit cluster IDs into `bias_corrected_local_linear`, whose CCT-2014 robust variance then becomes the cluster-robust nonparametric SE; the β̂-scale SE is `se_robust / |den|`. Because the β-scale rescale is a deterministic linear transform, the estimator-level clustered SE equals the direct `bias_corrected_local_linear(cluster=...).se_robust / |den|` to machine precision — this is the in-library validation anchor, and the clustered CCT SE is itself golden-tested against `nprobust` on DGP 4 (see the Phase 1c note above: `atol=1e-14` in first-appearance cluster order). Cluster IDs must be unit-constant (validated up front; a nonexistent column, NaN, or within-unit-varying cluster now raises rather than being silently ignored, mirroring the mass-point path). `cluster=` composes with the `weights=` shortcut (weighted cluster-robust; validated against the direct weighted+clustered local-linear call). The `cluster=` + `survey_design=` composition raises `NotImplementedError`: the Binder (1983) TSL survey variance is composed from the per-unit influence function via `compute_survey_if_variance` and would silently override the cluster-robust SE — route clustering through `survey_design=SurveyDesign(psu=<cluster_col>)` instead. Result metadata reports `vcov_type="cr1"` + `cluster_name=<col>` with `inference_method="analytical_nonparametric"` (distinguishing the clustered CCT variance from the mass-point 2SLS CR1 sandwich). Estimator-level cluster threading on the **Phase 2b event-study** path remains a documented follow-up (the per-horizon `cband` sup-t bootstrap normalizes HC-scale perturbations and would mix variance families under clustering); that path still emits the "cluster ignored" `UserWarning`.
+     - **Note (Design 1 identification):** `continuous_near_d_lower` and `mass_point` fits emit a `UserWarning` surfacing that `WAS_{d̲}` identification requires Assumption 6 (or Assumption 5 for sign identification only) beyond parallel trends, and that neither is testable via pre-trends. `continuous_at_zero` (Design 1', Assumption 3 only) does not emit this warning.
+     - **Note (CI endpoints):** Because the continuous-path `att` is `(mean(ΔY) - τ̂_bc) / den`, the beta-scale CI endpoints reverse relative to the Phase 1c boundary-limit CI: `CI_lower(β̂) = (mean(ΔY) - CI_upper(τ̂_bc)) / den` and `CI_upper(β̂) = (mean(ΔY) - CI_lower(τ̂_bc)) / den`. The `HeterogeneousAdoptionDiD.fit()` implementation computes `att ± z · se` directly via `safe_inference`, which handles the reversal naturally from the transformed point estimate.
+     - **Note (Phase 2a/2b scope, superseded by Phase 4.5):** Phase 2a ships the single-period `aggregate="overall"` path; Phase 2b lifts `aggregate="event_study"` (Appendix B.2 multi-period extension) which returns a `HeterogeneousAdoptionDiDEventStudyResults` with per-event-time WAS estimates and pointwise CIs. The original Phase 2a/2b release raised `NotImplementedError` on `survey=` and `weights=`, but Phase 4.5 (A/B/C0) lifted both gates with the per-design vcov contract documented above (see L2340-L2379, including the mass-point `vcov_type="classical"` deviation and `cband=True` sup-t restriction); the `survey=` path composes Binder (1983) TSL via `compute_survey_if_variance` on both continuous and mass-point IFs.
+diff --git a/tests/test_had.py b/tests/test_had.py
+index e9e187c2..72b391a5 100644
+--- a/tests/test_had.py
++++ b/tests/test_had.py
+@@ -1582,16 +1582,107 @@ class TestClusterHandling:
+         with pytest.raises(ValueError, match="NaN"):
+             est.fit(panel, "outcome", "dose", "period", "unit")
+ 
+-    def test_cluster_warns_on_continuous_path(self):
+-        d, dy = _dgp_continuous_at_zero(200, seed=0)
+-        cluster_unit = np.repeat(np.arange(100), 2)  # length 200 unit-level
+-        panel = _make_panel(d, dy, extra_cols={"state": cluster_unit})
+-        est = HeterogeneousAdoptionDiD(design="continuous_at_zero", cluster="state")
++    @staticmethod
++    def _clustered_continuous(G=200, n_clusters=40, seed=0):
++        """Design 1' DGP with cluster-correlated errors (so CR1 != HC)."""
++        rng = np.random.default_rng(seed)
++        d = np.where(rng.random(G) < 0.15, 0.0, rng.uniform(0.2, 1.5, size=G))
++        d[0] = 0.0
++        cl = np.repeat(np.arange(n_clusters), G // n_clusters)
++        shock = rng.normal(scale=1.0, size=n_clusters)[cl]
++        dy = 1.5 * d + shock + rng.normal(scale=0.3, size=G)
++        return d, dy, cl
++
++    def test_cluster_threaded_on_continuous_path(self):
++        # Phase 2a: cluster= is now threaded into bias_corrected_local_linear
++        # (no longer ignored). The estimator SE equals the direct clustered
++        # local-linear se_robust rescaled by 1/|den|; the point estimate is
++        # unchanged and the clustered SE differs from the unclustered SE.
++        d, dy, cl = self._clustered_continuous()
++        panel = _make_panel(d, dy, extra_cols={"state": cl})
+         with warnings.catch_warnings(record=True) as w:
+             warnings.simplefilter("always")
+-            r = est.fit(panel, "outcome", "dose", "period", "unit")
+-            assert any("cluster" in str(warn.message).lower() for warn in w)
+-        assert np.isfinite(r.att)
++            r_cl = HeterogeneousAdoptionDiD(design="continuous_at_zero", cluster="state").fit(
++                panel, "outcome", "dose", "period", "unit"
++            )
++        # No "cluster ignored" warning any more.
++        assert not any(
++            "cluster" in str(x.message).lower() and "ignore" in str(x.message).lower() for x in w
++        )
++        r_none = HeterogeneousAdoptionDiD(design="continuous_at_zero").fit(
++            panel, "outcome", "dose", "period", "unit"
++        )
++        den = float(d.mean())
++        bc = bias_corrected_local_linear(d=d, y=dy, boundary=0.0, cluster=cl)
++        se_ref = float(bc.se_robust) / abs(den)
++        np.testing.assert_allclose(r_cl.att, r_none.att, atol=1e-12)  # point unchanged
++        np.testing.assert_allclose(r_cl.se, se_ref, rtol=0.0, atol=1e-12)  # exact rescale
++        assert abs(r_cl.se - r_none.se) > 1e-4  # cluster-robust differs from HC
++        assert r_cl.vcov_type == "cr1"
++        assert r_cl.cluster_name == "state"
++
++    def test_cluster_weighted_on_continuous_path(self):
++        # cluster= composes with the weights= shortcut: weighted cluster-robust
++        # SE equals the direct weighted+clustered local-linear se_robust / |den_w|.
++        d, dy, cl = self._clustered_continuous(seed=1)
++        rng = np.random.default_rng(2)
++        w = rng.uniform(0.5, 2.0, size=len(d))
++        panel = _make_panel(d, dy, extra_cols={"state": cl})
++        with warnings.catch_warnings():
++            warnings.simplefilter("ignore")
++            r = HeterogeneousAdoptionDiD(design="continuous_at_zero", cluster="state").fit(
++                panel, "outcome", "dose", "period", "unit", weights=np.repeat(w, 2)
++            )
++        den_w = float(np.average(d, weights=w))
++        bc = bias_corrected_local_linear(d=d, y=dy, boundary=0.0, weights=w, cluster=cl)
++        np.testing.assert_allclose(r.se, float(bc.se_robust) / abs(den_w), rtol=0.0, atol=1e-12)
++        assert r.cluster_name == "state"
++
++    def test_cluster_survey_design_raises_on_continuous(self):
++        # cluster= + survey_design= is rejected: the Binder-TSL survey path
++        # would override the cluster-robust SE (route via psu= instead).
++        from diff_diff.survey import SurveyDesign
++
++        d, dy, cl = self._clustered_continuous(seed=3)
++        rng = np.random.default_rng(4)
++        panel = _make_panel(
++            d, dy, extra_cols={"state": cl, "wt": rng.uniform(0.5, 2.0, size=len(d))}
++        )
++        with pytest.raises(NotImplementedError, match="cluster.*survey_design"):
++            with warnings.catch_warnings():
++                warnings.simplefilter("ignore")
++                HeterogeneousAdoptionDiD(design="continuous_at_zero", cluster="state").fit(
++                    panel,
++                    "outcome",
++                    "dose",
++                    "period",
++                    "unit",
++                    survey_design=SurveyDesign(weights="wt", psu="state"),
++                )
++
++    def test_cluster_threaded_on_continuous_near_d_lower(self):
++        # The other continuous design (continuous_near_d_lower) threads cluster=
++        # through the same _fit_continuous hook: the SE equals the direct
++        # clustered local-linear se_robust on the shifted regressor (d - d_lower)
++        # rescaled by 1/|mean(d - d_lower)|.
++        rng = np.random.default_rng(5)
++        G, n_clusters = 200, 40
++        d = 0.1 + 0.9 * rng.beta(2, 2, G)
++        cl = np.repeat(np.arange(n_clusters), G // n_clusters)
++        shock = rng.normal(scale=1.0, size=n_clusters)[cl]
++        dy = 1.5 * d + shock + rng.normal(scale=0.3, size=G)
++        panel = _make_panel(d, dy, extra_cols={"state": cl})
++        with warnings.catch_warnings():
++            warnings.simplefilter("ignore")
++            r = HeterogeneousAdoptionDiD(design="continuous_near_d_lower", cluster="state").fit(
++                panel, "outcome", "dose", "period", "unit"
++            )
++        d_lower = float(d.min())
++        den = float((d - d_lower).mean())
++        bc = bias_corrected_local_linear(d=d - d_lower, y=dy, boundary=0.0, cluster=cl)
++        np.testing.assert_allclose(r.se, float(bc.se_robust) / abs(den), rtol=0.0, atol=1e-12)
++        assert r.cluster_name == "state"
++        assert r.vcov_type == "cr1"
+ 
+     def test_cluster_name_populated_mass_point(self):
+         d, dy = _dgp_mass_point(200, seed=0)
+@@ -1609,57 +1700,50 @@ class TestClusterHandling:
+         )
+         assert r.cluster_name is None
+ 
+-    def test_missing_cluster_column_on_continuous_only_warns(self):
+-        """Review P1 round 7: irrelevant cluster on continuous path must not
+-        abort the fit. The cluster column doesn't even need to exist.
+-        """
++    def test_missing_cluster_column_on_continuous_raises(self):
++        """Now that cluster= is threaded on the continuous path (Phase 2a), a
++        nonexistent cluster column raises (mirrors the mass-point path) rather
++        than being silently ignored with a warning."""
+         d, dy = _dgp_continuous_at_zero(200, seed=0)
+         panel = _make_panel(d, dy)
+         est = HeterogeneousAdoptionDiD(design="continuous_at_zero", cluster="does_not_exist")
+-        with warnings.catch_warnings(record=True) as w:
+-            warnings.simplefilter("always")
+-            r = est.fit(panel, "outcome", "dose", "period", "unit")
+-            assert any("cluster" in str(warn.message).lower() for warn in w)
+-        assert np.isfinite(r.att)
+-        assert r.cluster_name is None
++        with pytest.raises(ValueError, match="cluster"):
++            est.fit(panel, "outcome", "dose", "period", "unit")
+ 
+-    def test_nan_cluster_on_continuous_only_warns(self):
+-        """NaN cluster IDs on continuous path must not abort the fit."""
++    def test_nan_cluster_on_continuous_raises(self):
++        """NaN cluster IDs on the continuous path now raise (cluster is used)."""
+         d, dy = _dgp_continuous_at_zero(200, seed=0)
+         cluster_unit = np.repeat(np.arange(100).astype(float), 2)
+         cluster_unit[0] = np.nan
+         panel = _make_panel(d, dy, extra_cols={"state": cluster_unit})
+         est = HeterogeneousAdoptionDiD(design="continuous_at_zero", cluster="state")
+-        with warnings.catch_warnings(record=True) as w:
+-            warnings.simplefilter("always")
+-            r = est.fit(panel, "outcome", "dose", "period", "unit")
+-            assert any("cluster" in str(warn.message).lower() for warn in w)
+-        assert np.isfinite(r.att)
++        with pytest.raises(ValueError, match="cluster"):
++            est.fit(panel, "outcome", "dose", "period", "unit")
+ 
+-    def test_within_unit_varying_cluster_on_continuous_only_warns(self):
+-        """Within-unit-varying cluster IDs on continuous path must not abort."""
++    def test_within_unit_varying_cluster_on_continuous_raises(self):
++        """Within-unit-varying cluster IDs on the continuous path now raise."""
+         d, dy = _dgp_continuous_at_zero(200, seed=0)
+         panel = _make_panel(d, dy)
+         # Varies within unit (distinct value per row)
+         panel["state"] = np.arange(len(panel))
+         est = HeterogeneousAdoptionDiD(design="continuous_at_zero", cluster="state")
+-        with warnings.catch_warnings(record=True) as w:
+-            warnings.simplefilter("always")
+-            r = est.fit(panel, "outcome", "dose", "period", "unit")
+-            assert any("cluster" in str(warn.message).lower() for warn in w)
+-        assert np.isfinite(r.att)
++        with pytest.raises(ValueError, match="cluster"):
++            est.fit(panel, "outcome", "dose", "period", "unit")
+ 
+-    def test_auto_design_ignores_irrelevant_cluster_on_continuous(self):
+-        """design='auto' resolving to a continuous path must also ignore cluster."""
++    def test_auto_design_continuous_threads_cluster(self):
++        """design='auto' resolving to a continuous path now threads (and honors)
++        a valid cluster column."""
+         d, dy = _dgp_continuous_at_zero(500, seed=0)
+-        panel = _make_panel(d, dy)
+-        est = HeterogeneousAdoptionDiD(design="auto", cluster="does_not_exist")
+-        with warnings.catch_warnings(record=True) as w:
+-            warnings.simplefilter("always")
++        cluster_unit = np.repeat(np.arange(100), 5)  # 100 clusters, unit-level
++        panel = _make_panel(d, dy, extra_cols={"state": cluster_unit})
++        est = HeterogeneousAdoptionDiD(design="auto", cluster="state")
++        with warnings.catch_warnings():
++            warnings.simplefilter("ignore")
+             r = est.fit(panel, "outcome", "dose", "period", "unit")
+-            assert any("cluster" in str(warn.message).lower() for warn in w)
+         assert r.design == "continuous_at_zero"
+         assert np.isfinite(r.att)
++        assert r.cluster_name == "state"
++        assert r.vcov_type == "cr1"
+ 
+ 
+ # =============================================================================

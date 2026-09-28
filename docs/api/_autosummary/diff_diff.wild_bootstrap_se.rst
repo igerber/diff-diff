@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: wild_bootstrap_se
+   :no-index:

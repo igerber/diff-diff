@@ -1,0 +1,68 @@
+{
+  "meta": {
+    "estimator": "LPDiD (Dube, Girardi, Jorda & Taylor 2025) - complex survey (Phase D2)",
+    "r_version": "R version 4.5.2 (2025-10-31)",
+    "survey_version": "4.5",
+    "fixest_version": "0.13.2",
+    "lpdid_alexcardazzi_version": "0.6.1",
+    "lpdid_alexcardazzi_commit": "ba64563983861be5e616f6020842c1a1cdf17a27",
+    "seed": 20260630,
+    "pre_window": 3,
+    "post_window": 4,
+    "n_strata": 4,
+    "n_psu_total": 14,
+    "record_format": "Each horizon / pooled row is c(estimate, SE, df, n_psu) for the tdiff coefficient.",
+    "se_convention": "survey::svyglm Binder (1983) Taylor-linearization sandwich. df = degf(design): n_PSU - n_strata (strata present, VW/covariate) or n_PSU - 1 (weights-only inject). Each horizon uses a FRESH svydesign over THAT horizon's clean LP-DiD long-difference sample (NOT subset() of a full design) - matching the library's per-sample resolution.",
+    "clean_sample_xcheck": "Clean-sample construction independently validated: the UNWEIGHTED VW event study (same prep/clean_h recipe) matches alexCardazzi::lpdid() to <1e-8. Selection is weight-independent, so this transitively validates the weighted svyglm samples.",
+    "point_gate": "Every svyglm WLS point validated == weighted feols(.. | time, weights, vcov=~unit) on the same sample to <1e-7.",
+    "fpc_note": "fpc is the per-stratum population PSU count (f_h = n_PSU_h / fpc_h); decoupled from the inverse-selection weight."
+  },
+  "survey_vw_es": {
+    "0": [2.624112557921, 0.1849191460497, 10, 14],
+    "1": [2.593986037014, 0.2126289257184, 10, 14],
+    "2": [3.579941778181, 0.1691561916473, 10, 14],
+    "3": [4.008222869028, 0.250331727805, 10, 14],
+    "4": [3.882316481629, 0.1803068275608, 10, 14],
+    "-2": [-0.05518985932683, 0.1164062358211, 10, 14],
+    "-3": [-0.2829634020839, 0.1941367665957, 10, 14]
+  },
+  "survey_vw_nofpc_es": {
+    "0": [2.624112557921, 0.2615151642859, 10, 14],
+    "1": [2.593986037014, 0.3007027105038, 10, 14],
+    "2": [3.579941778181, 0.239222980387, 10, 14],
+    "3": [4.008222869028, 0.3540225245542, 10, 14],
+    "4": [3.882316481629, 0.2549923609249, 10, 14],
+    "-2": [-0.05518985932683, 0.164623277443, 10, 14],
+    "-3": [-0.2829634020839, 0.2745508482749, 10, 14]
+  },
+  "survey_inject_es": {
+    "0": [2.624112557921, 0.2261150339971, 139, 140],
+    "1": [2.593986037014, 0.2465200278538, 139, 140],
+    "2": [3.579941778181, 0.1967625151687, 139, 140],
+    "3": [4.008222869028, 0.2635749111488, 139, 140],
+    "4": [3.882316481629, 0.2716230812718, 139, 140],
+    "-2": [-0.05518985932683, 0.2152559315853, 139, 140],
+    "-3": [-0.2829634020839, 0.2495231661023, 139, 140]
+  },
+  "survey_cov_es": {
+    "0": [2.647898017603, 0.1936410644549, 10, 14],
+    "1": [2.593494237233, 0.2131448643148, 10, 14],
+    "2": [3.577209310476, 0.1711510921869, 10, 14],
+    "3": [4.007497877233, 0.2516503255828, 10, 14],
+    "4": [3.878643429977, 0.1799400438737, 10, 14],
+    "-2": [-0.05792998040707, 0.1173984619161, 10, 14],
+    "-3": [-0.2864951132323, 0.1950637839557, 10, 14]
+  },
+  "survey_vw_pooled": {
+    "post": [3.359136633265, 0.1779718319795, 10, 14],
+    "pre": [-0.1690766307054, 0.1518511686767, 10, 14]
+  },
+  "survey_inject_pooled": {
+    "post": [3.359136633265, 0.1905486610436, 139, 140],
+    "pre": [-0.1690766307054, 0.2138738768941, 139, 140]
+  },
+  "survey_cov_pooled": {
+    "post": [3.370150201558, 0.1834087011598, 10, 14],
+    "pre": [-0.1727322382533, 0.1528219754753, 10, 14]
+  }
+}

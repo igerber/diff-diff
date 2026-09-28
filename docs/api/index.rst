@@ -6,7 +6,8 @@ This section provides complete API documentation for all diff-diff modules.
 Estimators
 ----------
 
-Core estimator classes for DiD analysis:
+Core causal-inference estimator classes - the DiD family plus synthetic control,
+regression discontinuity, and the Goodman-Bacon decomposition diagnostic:
 
 .. autosummary::
    :toctree: _autosummary
@@ -17,15 +18,28 @@ Core estimator classes for DiD analysis:
    diff_diff.MultiPeriodDiD
    diff_diff.SyntheticDiD
    diff_diff.CallawaySantAnna
+   diff_diff.ChaisemartinDHaultfoeuille
    diff_diff.SunAbraham
    diff_diff.ImputationDiD
    diff_diff.StackedDiD
    diff_diff.TripleDifference
    diff_diff.TROP
+   diff_diff.SyntheticControl
    diff_diff.ContinuousDiD
+   diff_diff.HeterogeneousAdoptionDiD
    diff_diff.EfficientDiD
    diff_diff.TwoStageDiD
+   diff_diff.SpilloverDiD
+   diff_diff.WooldridgeDiD
+   diff_diff.LPDiD
+   diff_diff.ChangesInChanges
+   diff_diff.QDiD
+   diff_diff.LWDiD
+   diff_diff.DMLDiD
+   diff_diff.DurationDiD
    diff_diff.BaconDecomposition
+   diff_diff.StaggeredTripleDifference
+   diff_diff.RegressionDiscontinuity
 
 Results Classes
 ---------------
@@ -43,6 +57,8 @@ Result containers returned by estimators:
    diff_diff.CallawaySantAnnaResults
    diff_diff.CSBootstrapResults
    diff_diff.GroupTimeEffect
+   diff_diff.ChaisemartinDHaultfoeuilleResults
+   diff_diff.DCDHBootstrapResults
    diff_diff.SunAbrahamResults
    diff_diff.SABootstrapResults
    diff_diff.ImputationDiDResults
@@ -50,19 +66,53 @@ Result containers returned by estimators:
    diff_diff.TripleDifferenceResults
    diff_diff.StackedDiDResults
    diff_diff.TROPResults
+   diff_diff.SyntheticControlResults
    diff_diff.ContinuousDiDResults
    diff_diff.DoseResponseCurve
+   diff_diff.HeterogeneousAdoptionDiDResults
+   diff_diff.HeterogeneousAdoptionDiDEventStudyResults
    diff_diff.EfficientDiDResults
    diff_diff.EDiDBootstrapResults
    diff_diff.TwoStageDiDResults
    diff_diff.TwoStageBootstrapResults
+   diff_diff.SpilloverDiDResults
    diff_diff.BaconDecompositionResults
+   diff_diff.ATTGTWeightsResult
+   diff_diff.TWFEDecompositionResult
+   diff_diff.wooldridge_results.WooldridgeDiDResults
+   diff_diff.lpdid_results.LPDiDResults
+   diff_diff.changes_in_changes_results.ChangesInChangesResults
+   diff_diff.lwdid_results.LWDiDResults
+   diff_diff.dml_did_results.DMLDiDResults
+   diff_diff.duration_did_results.DurationDiDResults
+   diff_diff.duration_did_results.DurationDiDPretestResults
    diff_diff.Comparison2x2
+   diff_diff.StaggeredTripleDiffResults
+   diff_diff.TWFEWeightsResult
+   diff_diff.RegressionDiscontinuityResults
+   diff_diff.RDPlotResult
+   diff_diff.RDDensityTestResult
+   diff_diff.BaseResults
+   diff_diff.Diagnostic
+   diff_diff.EventStudyResults
+   diff_diff.AggregationResult
+
+Learners
+--------
+
+Nuisance learners for the DML estimators (duck-typed protocol; any object
+with ``fit``/``predict`` or ``fit``/``predict_proba`` also plugs in):
+
+.. autosummary::
+   :toctree: _autosummary
+   :nosignatures:
+
+   diff_diff.SieveLearner
 
 Visualization
 -------------
 
-Plotting functions for results:
+Plotting functions and plot builders:
 
 .. autosummary::
    :toctree: _autosummary
@@ -72,7 +122,9 @@ Plotting functions for results:
    diff_diff.plot_group_effects
    diff_diff.plot_sensitivity
    diff_diff.plot_honest_event_study
+   diff_diff.RDPlot
    diff_diff.plot_bacon
+   diff_diff.plot_twfe_weights
    diff_diff.plot_power_curve
    diff_diff.plot_pretrends_power
 
@@ -92,6 +144,26 @@ Placebo tests and model diagnostics:
    diff_diff.leave_one_out_test
    diff_diff.run_all_placebo_tests
    diff_diff.PlaceboTestResults
+   diff_diff.attgt_weights
+   diff_diff.decompose_twfe_weights
+   diff_diff.RDDensityTest
+
+Panel Profiling
+---------------
+
+Pre-fit description of panel structure for estimator selection. The
+:class:`~diff_diff.PanelProfile` return type and its supporting dataclasses
+are documented in :doc:`profile`.
+
+.. autosummary::
+   :toctree: _autosummary
+   :nosignatures:
+
+   diff_diff.profile_panel
+   diff_diff.PanelProfile
+   diff_diff.OutcomeShape
+   diff_diff.TreatmentDoseShape
+   diff_diff.Alert
 
 Sensitivity Analysis
 --------------------
@@ -123,6 +195,23 @@ Testing the parallel trends assumption:
    diff_diff.check_parallel_trends
    diff_diff.check_parallel_trends_robust
    diff_diff.equivalence_test_trends
+
+HAD Pretest Workflow
+--------------------
+
+Companion pretest battery for ``HeterogeneousAdoptionDiD`` implementing the
+Section 4 QUG / Stute / Yatchew tests from de Chaisemartin, Ciccia,
+D'Haultfœuille & Knau (2026), plus a unified report wrapper:
+
+.. autosummary::
+   :toctree: _autosummary
+   :nosignatures:
+
+   diff_diff.HADPretestReport
+   diff_diff.QUGTestResults
+   diff_diff.StuteTestResults
+   diff_diff.YatchewTestResults
+   diff_diff.StuteJointResult
 
 Bootstrap Inference
 -------------------
@@ -172,6 +261,52 @@ Power analysis for pre-trends tests (Roth 2022):
    diff_diff.compute_pretrends_power
    diff_diff.compute_mdv
 
+Reporting
+---------
+
+Stakeholder-facing report and diagnostic battery wrappers around fitted
+result objects:
+
+.. autosummary::
+   :toctree: _autosummary
+   :nosignatures:
+
+   diff_diff.BusinessReport
+   diff_diff.BusinessContext
+   diff_diff.DiagnosticReport
+   diff_diff.DiagnosticReportResults
+
+MMM Calibration Export
+----------------------
+
+Convert experiment results into Marketing Mix Model calibration inputs
+(PyMC-Marketing lift tests, Google Meridian ROI priors):
+
+.. autosummary::
+   :toctree: _autosummary
+   :nosignatures:
+
+   diff_diff.to_pymc_marketing_lift_test
+   diff_diff.to_meridian_roi_prior
+   diff_diff.meridian_calibration_mask
+   diff_diff.MeridianROIPrior
+
+Boundary Local-Linear Estimators
+--------------------------------
+
+Calonico-Cattaneo-Farrell (2018) MSE-optimal bandwidth selector and
+Calonico-Cattaneo-Titiunik (2014) robust-bias-corrected local-linear fit
+used by ``HeterogeneousAdoptionDiD``'s continuous-dose fit paths
+(``continuous_at_zero`` and ``continuous_near_d_lower``):
+
+.. autosummary::
+   :toctree: _autosummary
+   :nosignatures:
+
+   diff_diff.LocalLinearFit
+   diff_diff.BandwidthResult
+   diff_diff.BiasCorrectedFit
+
 Data Preparation
 ----------------
 
@@ -211,6 +346,8 @@ Built-in datasets for examples and testing:
    diff_diff.load_castle_doctrine
    diff_diff.load_divorce_laws
    diff_diff.load_mpdta
+   diff_diff.load_prop99
+   diff_diff.load_walmart
    diff_diff.load_dataset
    diff_diff.list_datasets
    diff_diff.clear_cache
@@ -226,14 +363,41 @@ Estimators
 
    estimators
    staggered
+   chaisemartin_dhaultfoeuille
    imputation
    stacked_did
    triple_diff
    trop
+   synthetic_control
    continuous_did
+   had
+   regression_discontinuity
    efficient_did
    two_stage
+   spillover
+   wooldridge_etwfe
+   lpdid
+   changes_in_changes
+   lwdid
+   dml_did
+   duration_did
    bacon
+
+Infrastructure
+~~~~~~~~~~~~~~
+
+.. toctree::
+   :maxdepth: 2
+
+   local_linear
+
+Pre-Fit Profiling
+~~~~~~~~~~~~~~~~~
+
+.. toctree::
+   :maxdepth: 2
+
+   profile
 
 Diagnostics & Inference
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -245,6 +409,17 @@ Diagnostics & Inference
    honest_did
    power
    pretrends
+   twfe_weights
+
+Reporting
+~~~~~~~~~
+
+.. toctree::
+   :maxdepth: 2
+
+   business_report
+   diagnostic_report
+   mmm
 
 Results & Visualization
 ~~~~~~~~~~~~~~~~~~~~~~~

@@ -29,11 +29,18 @@ if _requested_backend in ("python", "rust"):
 import numpy as np
 import pandas as pd
 
-# Add parent to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+# Add repo root to path for benchmarks.python.utils. When
+# DIFF_DIFF_BENCH_USE_INSTALLED=1 (isolated-venv refresh runs), APPEND so the
+# venv's installed diff-diff wheel wins over the dev tree; otherwise PREPEND
+# (historical behavior: benchmark the working tree).
+_REPO_ROOT = str(Path(__file__).parent.parent.parent)
+if os.environ.get("DIFF_DIFF_BENCH_USE_INSTALLED") == "1":
+    sys.path.append(_REPO_ROOT)
+else:
+    sys.path.insert(0, _REPO_ROOT)
 
 from diff_diff import DifferenceInDifferences, HAS_RUST_BACKEND
-from benchmarks.python.utils import Timer
+from benchmarks.python.utils import Timer, collect_provenance
 
 
 def parse_args():
@@ -44,12 +51,17 @@ def parse_args():
         "--cluster", default="unit", help="Column to cluster standard errors on"
     )
     parser.add_argument(
-        "--type", default="twfe", choices=["basic", "twfe"],
-        help="Estimator type (basic or twfe, default: twfe)"
+        "--type", default="basic", choices=["basic", "twfe"],
+        help="Accepted for backward compatibility; only 'basic' runs here "
+             "(use benchmark_twfe.py for absorbed-FE TWFE)"
     )
     parser.add_argument(
         "--backend", default="auto", choices=["auto", "python", "rust"],
         help="Backend to use: auto (default), python (pure Python), rust (Rust backend)"
+    )
+    parser.add_argument(
+        "--warmup", action="store_true",
+        help="Run one untimed fit before the timed fit (JIT/cache warm-up)"
     )
     return parser.parse_args()
 
@@ -70,8 +82,21 @@ def main():
     print(f"Loading data from: {args.data}")
     data = pd.read_csv(args.data)
 
+    if args.type == "twfe":
+        raise SystemExit(
+            "--type twfe is not implemented by benchmark_basic.py (it always "
+            "runs the interaction OLS). Use benchmark_twfe.py for the "
+            "absorbed-FE TwoWayFixedEffects estimator."
+        )
+
     # Run benchmark
     print("Running DiD estimation...")
+
+    if args.warmup:
+        print("Warm-up fit (untimed)...")
+        DifferenceInDifferences(robust=True, cluster=args.cluster).fit(
+            data, formula="outcome ~ treated * post"
+        )
 
     # Use DifferenceInDifferences with formula to match R's fixest::feols
     did = DifferenceInDifferences(robust=True, cluster=args.cluster)
@@ -116,7 +141,10 @@ def main():
             "n_units": len(data["unit"].unique()),
             "n_periods": len(data["time"].unique()),
             "n_obs": len(data),
+            "warmup": args.warmup,
         },
+        # Wheel/backend provenance (refresh runs hard-fail on mismatch)
+        "provenance": collect_provenance(),
     }
 
     # Write output

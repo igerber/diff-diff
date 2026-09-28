@@ -19,7 +19,6 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 
 import pytest
 
-
 # =============================================================================
 # R Availability Fixtures (Lazy Loading)
 # =============================================================================
@@ -93,14 +92,99 @@ def require_r(r_available):
 
 
 # =============================================================================
+# R Availability Fixtures: DIDmultiplegtDYN (dCDH)
+# =============================================================================
+#
+# Parallel cache + fixture for the de Chaisemartin-D'Haultfoeuille (dCDH)
+# parity tests, which require the R package `DIDmultiplegtDYN` (CRAN v2.3.3+)
+# rather than `did`. The fixture is independent so missing `DIDmultiplegtDYN`
+# does not affect CallawaySantAnna parity tests, and vice versa.
+
+_r_dcdh_available_cache = None
+
+
+def _check_r_dcdh_available() -> bool:
+    """
+    Check if R and the DIDmultiplegtDYN package are available (cached).
+
+    This is called lazily when the r_dcdh_available fixture is first used,
+    not at module import time, to avoid subprocess latency during test
+    collection.
+
+    Honors the `DIFF_DIFF_R=skip` environment variable, matching the
+    existing `_check_r_available` pattern, so users can force-skip all
+    R-dependent tests in one place.
+
+    Returns
+    -------
+    bool
+        True if R and DIDmultiplegtDYN are available, False otherwise.
+    """
+    global _r_dcdh_available_cache
+    if _r_dcdh_available_cache is None:
+        r_env = os.environ.get("DIFF_DIFF_R", "auto").lower()
+        if r_env == "skip":
+            _r_dcdh_available_cache = False
+        else:
+            try:
+                result = subprocess.run(
+                    [
+                        "Rscript",
+                        "-e",
+                        "library(DIDmultiplegtDYN); library(jsonlite); cat('OK')",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                _r_dcdh_available_cache = result.returncode == 0 and "OK" in result.stdout
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+                _r_dcdh_available_cache = False
+    return _r_dcdh_available_cache
+
+
+@pytest.fixture(scope="session")
+def r_dcdh_available():
+    """
+    Lazy check for R + DIDmultiplegtDYN availability.
+
+    Session-scoped and cached. Independent of `r_available` so a missing
+    `DIDmultiplegtDYN` does not affect tests that depend only on `did`.
+
+    Returns
+    -------
+    bool
+        True if R and DIDmultiplegtDYN are available.
+    """
+    return _check_r_dcdh_available()
+
+
+@pytest.fixture
+def require_r_dcdh(r_dcdh_available):
+    """
+    Skip test if R + DIDmultiplegtDYN is not available.
+
+    Use this fixture in dCDH (de Chaisemartin-D'Haultfoeuille) parity
+    tests that compare Python output to R `did_multiplegt_dyn`:
+
+    ```python
+    def test_dcdh_parity_with_r(require_r_dcdh):
+        # Skipped when R or DIDmultiplegtDYN missing
+        ...
+    ```
+    """
+    if not r_dcdh_available:
+        pytest.skip("R or DIDmultiplegtDYN package not available")
+
+
+# =============================================================================
 # CI Performance: Backend-Aware Parameter Scaling
 # =============================================================================
 
 from diff_diff._backend import HAS_RUST_BACKEND
 
 _PURE_PYTHON_MODE = (
-    os.environ.get("DIFF_DIFF_BACKEND", "auto").lower() == "python"
-    or not HAS_RUST_BACKEND
+    os.environ.get("DIFF_DIFF_BACKEND", "auto").lower() == "python" or not HAS_RUST_BACKEND
 )
 
 
@@ -168,16 +252,18 @@ def assert_nan_inference(inference_dict):
         f"assert_nan_inference called but SE={se} is finite and positive. "
         "This helper is for validating NaN propagation when SE is invalid."
     )
-    assert np.isnan(inference_dict["t_stat"]), (
-        f"t_stat should be NaN when SE={se}, got {inference_dict['t_stat']}"
-    )
-    assert np.isnan(inference_dict["p_value"]), (
-        f"p_value should be NaN when SE={se}, got {inference_dict['p_value']}"
-    )
+    assert np.isnan(
+        inference_dict["t_stat"]
+    ), f"t_stat should be NaN when SE={se}, got {inference_dict['t_stat']}"
+    assert np.isnan(
+        inference_dict["p_value"]
+    ), f"p_value should be NaN when SE={se}, got {inference_dict['p_value']}"
     ci = inference_dict["conf_int"]
-    assert np.isnan(ci[0]), (
-        f"ci_lower should be NaN when SE={se}, got {ci[0]}"
-    )
-    assert np.isnan(ci[1]), (
-        f"ci_upper should be NaN when SE={se}, got {ci[1]}"
-    )
+    assert np.isnan(ci[0]), f"ci_lower should be NaN when SE={se}, got {ci[0]}"
+    assert np.isnan(ci[1]), f"ci_upper should be NaN when SE={se}, got {ci[1]}"
+
+
+@pytest.fixture
+def require_lwdid():
+    """Skip test if lwdid package not installed (optional for equivalence tests)."""
+    pytest.importorskip("lwdid", reason="lwdid package required for equivalence tests")

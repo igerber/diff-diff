@@ -3,12 +3,13 @@ Staggered Adoption
 
 Estimators for staggered DiD designs where treatment is adopted at different times.
 
-This module provides two main estimators for staggered adoption settings:
+This module provides three estimators for staggered adoption settings:
 
 1. **Callaway-Sant'Anna (2021)**: Aggregates group-time 2x2 DiD comparisons
 2. **Sun-Abraham (2021)**: Interaction-weighted regression approach
+3. **Ortiz-Villavicencio & Sant'Anna (2025)**: Staggered triple-difference (DDD) with group-time ATT
 
-Running both provides a useful robustness check—when they agree, results are more credible.
+Running CS and SA together provides a useful robustness check - when they agree, results are more credible.
 
 .. module:: diff_diff.staggered
 
@@ -17,7 +18,23 @@ CallawaySantAnna
 
 Callaway & Sant'Anna (2021) estimator for heterogeneous treatment timing.
 
+**Covariates and bad controls.** On the panel lane a covariate is read at
+each cell's base period (the observed period preceding the cohort's first
+treatment for post-treatment cells), never at :math:`t`. A time-varying
+covariate that treatment can affect (a "bad control", Caetano, Callaway,
+Payne & Sant'Anna 2026) conditioned this way therefore computes the
+paper's Proposition 3 estimand - parallel trends given the PRE-treatment
+bad control (Approach 1) - not the biased "include the bad control"
+contrast; passing the pre-treatment value is the user's responsibility.
+On the repeated-cross-section lane covariates are read on the
+observation's own row, so a time-varying bad control there IS
+:math:`X_t` and Approach 1 does not apply. For the paper's
+covariate-unconfoundedness approach with extra covariates :math:`W`, use
+:class:`~diff_diff.DMLDiD` with ``fit(..., bad_control=,
+bad_control_covariates=)``.
+
 .. autoclass:: diff_diff.CallawaySantAnna
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -37,6 +54,7 @@ CallawaySantAnnaResults
 Results container for Callaway-Sant'Anna estimation.
 
 .. autoclass:: diff_diff.CallawaySantAnnaResults
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -49,12 +67,18 @@ Results container for Callaway-Sant'Anna estimation.
       ~CallawaySantAnnaResults.summary
       ~CallawaySantAnnaResults.to_dataframe
 
+   ``aggregate()`` levels: ``'simple'``, ``'event_study'``, ``'group'``, and
+   ``'total'`` (3.10) - the estimator-owned total incremental outcome
+   (``C x overall`` over the finite-masked complete-case support; panel
+   non-survey fits only, consumed by :mod:`diff_diff.mmm` with no scale).
+
 GroupTimeEffect
 ---------------
 
 Container for individual group-time ATT(g,t) effects.
 
 .. autoclass:: diff_diff.GroupTimeEffect
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -81,6 +105,7 @@ aggregate cohort-specific effects into event study estimates.
 in event studies with heterogeneous treatment effects. *Journal of Econometrics*, 225(2), 175-199.
 
 .. autoclass:: diff_diff.SunAbraham
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -102,6 +127,7 @@ SunAbrahamResults
 Results container for Sun-Abraham estimation.
 
 .. autoclass:: diff_diff.SunAbrahamResults
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -120,6 +146,39 @@ SABootstrapResults
 Bootstrap inference results for Sun-Abraham estimation.
 
 .. autoclass:: diff_diff.SABootstrapResults
+   :no-index:
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+StaggeredTripleDifference
+-------------------------
+
+Ortiz-Villavicencio & Sant'Anna (2025) staggered triple-difference (DDD) estimator
+with group-time ATT identification under heterogeneous treatment timing.
+
+.. deprecated:: 3.9
+   Removed in 4.0 (ledger row M-013). Use
+   :class:`~diff_diff.TripleDifference` with
+   ``fit(..., unit=, time=, first_treat=, partition=)``, which runs the same
+   engine. ``eligibility=`` is named ``partition=`` there, and ``control_group``
+   takes the underscored values ``"not_yet_treated"``/``"never_treated"``. The
+   ``SDDD`` alias is deprecated with the class.
+
+.. autoclass:: diff_diff.StaggeredTripleDifference
+   :no-index:
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :inherited-members:
+
+StaggeredTripleDiffResults
+--------------------------
+
+Results container for ``StaggeredTripleDifference`` estimation.
+
+.. autoclass:: diff_diff.StaggeredTripleDiffResults
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:

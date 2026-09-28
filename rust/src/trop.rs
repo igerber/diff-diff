@@ -14,6 +14,8 @@ use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, ToPyArray};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use crate::linalg::ndarray_to_faer;
+
 /// Minimum chunk size for parallel distance computation.
 /// Reduces scheduling overhead for small matrices.
 const MIN_CHUNK_SIZE: usize = 16;
@@ -44,16 +46,13 @@ pub fn compute_unit_distance_matrix<'py>(
 
     let dist_matrix = compute_unit_distance_matrix_internal(&y_arr, &d_arr);
 
-    Ok(dist_matrix.to_pyarray_bound(py))
+    Ok(dist_matrix.to_pyarray(py))
 }
 
 /// Internal implementation of unit distance matrix computation.
 ///
 /// Parallelizes over unit pairs using rayon.
-fn compute_unit_distance_matrix_internal(
-    y: &ArrayView2<f64>,
-    d: &ArrayView2<f64>,
-) -> Array2<f64> {
+fn compute_unit_distance_matrix_internal(y: &ArrayView2<f64>, d: &ArrayView2<f64>) -> Array2<f64> {
     let n_periods = y.nrows();
     let n_units = y.ncols();
 
@@ -193,29 +192,46 @@ fn univariate_loocv_search(
             let (lambda_time, lambda_unit, lambda_nn) = match param_type {
                 0 => {
                     // Searching λ_time: use grid value directly (no inf expected)
-                    (value,
-                     fixed_unit,
-                     if fixed_nn.is_infinite() { 1e10 } else { fixed_nn })
-                },
+                    (
+                        value,
+                        fixed_unit,
+                        if fixed_nn.is_infinite() {
+                            1e10
+                        } else {
+                            fixed_nn
+                        },
+                    )
+                }
                 1 => {
                     // Searching λ_unit: use grid value directly (no inf expected)
-                    (fixed_time,
-                     value,
-                     if fixed_nn.is_infinite() { 1e10 } else { fixed_nn })
-                },
+                    (
+                        fixed_time,
+                        value,
+                        if fixed_nn.is_infinite() {
+                            1e10
+                        } else {
+                            fixed_nn
+                        },
+                    )
+                }
                 _ => {
                     // Searching λ_nn: convert inf → 1e10 (factor model disabled)
                     let value_converted = if value.is_infinite() { 1e10 } else { value };
-                    (fixed_time,
-                     fixed_unit,
-                     value_converted)
-                },
+                    (fixed_time, fixed_unit, value_converted)
+                }
             };
 
             let (score, _, _) = loocv_score_for_params(
-                y, d, control_mask, time_dist, control_obs,
-                lambda_time, lambda_unit, lambda_nn,
-                max_iter, tol,
+                y,
+                d,
+                control_mask,
+                time_dist,
+                control_obs,
+                lambda_time,
+                lambda_unit,
+                lambda_nn,
+                max_iter,
+                tol,
             );
             (value, score)
         })
@@ -258,22 +274,52 @@ fn cycling_parameter_search(
     for _cycle in 0..max_cycles {
         // Optimize λ_unit (fix λ_time, λ_nn)
         let (new_unit, _) = univariate_loocv_search(
-            y, d, control_mask, time_dist, control_obs,
-            lambda_unit_grid, lambda_time, 0.0, lambda_nn, 1, max_iter, tol,
+            y,
+            d,
+            control_mask,
+            time_dist,
+            control_obs,
+            lambda_unit_grid,
+            lambda_time,
+            0.0,
+            lambda_nn,
+            1,
+            max_iter,
+            tol,
         );
         lambda_unit = new_unit;
 
         // Optimize λ_time (fix λ_unit, λ_nn)
         let (new_time, _) = univariate_loocv_search(
-            y, d, control_mask, time_dist, control_obs,
-            lambda_time_grid, 0.0, lambda_unit, lambda_nn, 0, max_iter, tol,
+            y,
+            d,
+            control_mask,
+            time_dist,
+            control_obs,
+            lambda_time_grid,
+            0.0,
+            lambda_unit,
+            lambda_nn,
+            0,
+            max_iter,
+            tol,
         );
         lambda_time = new_time;
 
         // Optimize λ_nn (fix λ_unit, λ_time)
         let (new_nn, score) = univariate_loocv_search(
-            y, d, control_mask, time_dist, control_obs,
-            lambda_nn_grid, lambda_time, lambda_unit, 0.0, 2, max_iter, tol,
+            y,
+            d,
+            control_mask,
+            time_dist,
+            control_obs,
+            lambda_nn_grid,
+            lambda_time,
+            lambda_unit,
+            0.0,
+            2,
+            max_iter,
+            tol,
         );
         lambda_nn = new_nn;
 
@@ -353,38 +399,75 @@ pub fn loocv_grid_search<'py>(
     }
 
     // Get control observations for LOOCV
-    let control_obs = get_control_observations(
-        &y_arr,
-        &control_mask_arr,
-    );
+    let control_obs = get_control_observations(&y_arr, &control_mask_arr);
 
     let n_attempted = control_obs.len();
 
     // Stage 1: Univariate searches for initial values (paper footnote 2)
     // λ_time search: fix λ_unit=0, λ_nn=∞ (disabled)
     let (lambda_time_init, _) = univariate_loocv_search(
-        &y_arr, &d_arr, &control_mask_arr, &time_dist_arr, &control_obs,
-        &lambda_time_vec, 0.0, 0.0, f64::INFINITY, 0, max_iter, tol,
+        &y_arr,
+        &d_arr,
+        &control_mask_arr,
+        &time_dist_arr,
+        &control_obs,
+        &lambda_time_vec,
+        0.0,
+        0.0,
+        f64::INFINITY,
+        0,
+        max_iter,
+        tol,
     );
 
     // λ_nn search: fix λ_time=0 (uniform time weights), λ_unit=0
     let (lambda_nn_init, _) = univariate_loocv_search(
-        &y_arr, &d_arr, &control_mask_arr, &time_dist_arr, &control_obs,
-        &lambda_nn_vec, 0.0, 0.0, 0.0, 2, max_iter, tol,
+        &y_arr,
+        &d_arr,
+        &control_mask_arr,
+        &time_dist_arr,
+        &control_obs,
+        &lambda_nn_vec,
+        0.0,
+        0.0,
+        0.0,
+        2,
+        max_iter,
+        tol,
     );
 
     // λ_unit search: fix λ_nn=∞, λ_time=0
     let (lambda_unit_init, _) = univariate_loocv_search(
-        &y_arr, &d_arr, &control_mask_arr, &time_dist_arr, &control_obs,
-        &lambda_unit_vec, 0.0, 0.0, f64::INFINITY, 1, max_iter, tol,
+        &y_arr,
+        &d_arr,
+        &control_mask_arr,
+        &time_dist_arr,
+        &control_obs,
+        &lambda_unit_vec,
+        0.0,
+        0.0,
+        f64::INFINITY,
+        1,
+        max_iter,
+        tol,
     );
 
     // Stage 2: Cycling refinement
     let (best_time, best_unit, best_nn) = cycling_parameter_search(
-        &y_arr, &d_arr, &control_mask_arr, &time_dist_arr, &control_obs,
-        &lambda_time_vec, &lambda_unit_vec, &lambda_nn_vec,
-        lambda_time_init, lambda_unit_init, lambda_nn_init,
-        max_iter, tol, 10,
+        &y_arr,
+        &d_arr,
+        &control_mask_arr,
+        &time_dist_arr,
+        &control_obs,
+        &lambda_time_vec,
+        &lambda_unit_vec,
+        &lambda_nn_vec,
+        lambda_time_init,
+        lambda_unit_init,
+        lambda_nn_init,
+        max_iter,
+        tol,
+        10,
     );
 
     // Convert λ_nn=∞ → 1e10 for final score computation (factor model disabled)
@@ -394,13 +477,28 @@ pub fn loocv_grid_search<'py>(
 
     // Compute final score with converted values
     let (best_score, n_valid, first_failed) = loocv_score_for_params(
-        &y_arr, &d_arr, &control_mask_arr, &time_dist_arr, &control_obs,
-        best_time_eff, best_unit_eff, best_nn_eff,
-        max_iter, tol,
+        &y_arr,
+        &d_arr,
+        &control_mask_arr,
+        &time_dist_arr,
+        &control_obs,
+        best_time_eff,
+        best_unit_eff,
+        best_nn_eff,
+        max_iter,
+        tol,
     );
 
     // Return ORIGINAL grid values (for user visibility) but score computed with converted
-    Ok((best_time, best_unit, best_nn, best_score, n_valid, n_attempted, first_failed))
+    Ok((
+        best_time,
+        best_unit,
+        best_nn,
+        best_score,
+        n_valid,
+        n_attempted,
+        first_failed,
+    ))
 }
 
 /// Get all valid control observations for LOOCV.
@@ -524,9 +622,7 @@ fn compute_unit_distance_for_obs(
             continue;
         }
         // Both units must be control at this period and have valid values
-        if d[[t, i]] == 0.0 && d[[t, j]] == 0.0
-            && y[[t, i]].is_finite() && y[[t, j]].is_finite()
-        {
+        if d[[t, i]] == 0.0 && d[[t, j]] == 0.0 && y[[t, i]].is_finite() && y[[t, j]].is_finite() {
             let diff = y[[t, i]] - y[[t, j]];
             sum_sq += diff * diff;
             n_valid += 1;
@@ -546,9 +642,11 @@ fn compute_unit_distance_for_obs(
 /// Unit weights: ω_j = exp(-λ_unit × dist(j, i))
 ///
 /// Paper alignment notes:
-/// - ALL units get weights (not just those untreated at target period)
+/// - ALL units with `j != target_unit` get distance-based weights
+///   (same-cohort donors contribute via their pre-treatment rows)
 /// - The (1 - D_js) masking in the loss naturally excludes treated cells
-/// - Weights are normalized to sum to 1 (probability weights)
+///   via the control mask applied inside `estimate_model`
+/// - Weights are unnormalized raw exponentials per REGISTRY Eq. 2/3
 /// - Distance excludes target period t per Equation 3
 #[allow(clippy::too_many_arguments)]
 fn compute_weight_matrix(
@@ -563,19 +661,15 @@ fn compute_weight_matrix(
     time_dist: &ArrayView2<i64>,
 ) -> Array2<f64> {
     // Time weights for this target period: θ_s = exp(-λ_time × |t - s|)
-    let mut time_weights: Array1<f64> = Array1::from_shape_fn(n_periods, |s| {
+    // Unnormalized per REGISTRY Eq. 2/3.
+    let time_weights: Array1<f64> = Array1::from_shape_fn(n_periods, |s| {
         let dist = time_dist[[target_period, s]] as f64;
         (-lambda_time * dist).exp()
     });
 
-    // Normalize time weights to sum to 1
-    let time_sum: f64 = time_weights.sum();
-    if time_sum > 0.0 {
-        time_weights /= time_sum;
-    }
-
     // Unit weights: ω_j = exp(-λ_unit × dist(j, i))
-    // Paper alignment: compute for ALL units, let control masking handle exclusion
+    // Paper alignment: compute for ALL units, let control masking handle exclusion.
+    // Unnormalized per REGISTRY Eq. 2/3.
     let mut unit_weights = Array1::<f64>::zeros(n_units);
 
     if lambda_unit == 0.0 {
@@ -598,14 +692,7 @@ fn compute_weight_matrix(
     // Target unit gets weight 1 (will be masked out in estimation anyway)
     unit_weights[target_unit] = 1.0;
 
-    // Normalize unit weights to sum to 1
-    let unit_sum: f64 = unit_weights.sum();
-    if unit_sum > 0.0 {
-        unit_weights /= unit_sum;
-    }
-
-    // Outer product: W[t, i] = time_weights[t] * unit_weights[i]
-    // Result is normalized since both components sum to 1
+    // Outer product: W[t, i] = θ_s × ω_j (raw exponentials, unnormalized)
     let mut weight_matrix = Array2::<f64>::zeros((n_periods, n_units));
     for t in 0..n_periods {
         for i in 0..n_units {
@@ -639,9 +726,8 @@ fn estimate_model(
     exclude_obs: Option<(usize, usize)>,
 ) -> Option<(Array1<f64>, Array1<f64>, Array2<f64>)> {
     // Create estimation mask
-    let mut est_mask = Array2::<bool>::from_shape_fn((n_periods, n_units), |(t, i)| {
-        control_mask[[t, i]] != 0
-    });
+    let mut est_mask =
+        Array2::<bool>::from_shape_fn((n_periods, n_units), |(t, i)| control_mask[[t, i]] != 0);
 
     if let Some((t_ex, i_ex)) = exclude_obs {
         est_mask[[t_ex, i_ex]] = false;
@@ -663,7 +749,11 @@ fn estimate_model(
 
     // Lipschitz constant of ∇f is L_f = 2·max(W), so prox threshold = λ/(2·max(W))
     let w_max = w_masked.iter().cloned().fold(0.0_f64, f64::max);
-    let prox_threshold = if w_max > 0.0 { lambda_nn / (2.0 * w_max) } else { lambda_nn / 2.0 };
+    let prox_threshold = if w_max > 0.0 {
+        lambda_nn / (2.0 * w_max)
+    } else {
+        lambda_nn / 2.0
+    };
 
     // Weight sums per unit and time
     let weight_sum_per_unit: Array1<f64> = w_masked.sum_axis(Axis(0));
@@ -737,12 +827,20 @@ fn estimate_model(
 
         // For W=0 cells, use current L instead of R (prevent absorbing treatment)
         let r_masked = Array2::from_shape_fn((n_periods, n_units), |(t, i)| {
-            if w_masked[[t, i]] > 0.0 { r_target[[t, i]] } else { l[[t, i]] }
+            if w_masked[[t, i]] > 0.0 {
+                r_target[[t, i]]
+            } else {
+                l[[t, i]]
+            }
         });
 
         // Normalize weights: W_norm = W / W_max (max becomes 1)
         let w_norm = Array2::from_shape_fn((n_periods, n_units), |(t, i)| {
-            if w_max > 0.0 { w_masked[[t, i]] / w_max } else { w_masked[[t, i]] }
+            if w_max > 0.0 {
+                w_masked[[t, i]] / w_max
+            } else {
+                w_masked[[t, i]]
+            }
         });
 
         // FISTA inner loop for L update
@@ -764,7 +862,8 @@ fn estimate_model(
             let mut gradient_step = Array2::<f64>::zeros((n_periods, n_units));
             for t in 0..n_periods {
                 for i in 0..n_units {
-                    gradient_step[[t, i]] = l_momentum[[t, i]] + w_norm[[t, i]] * (r_masked[[t, i]] - l_momentum[[t, i]]);
+                    gradient_step[[t, i]] = l_momentum[[t, i]]
+                        + w_norm[[t, i]] * (r_masked[[t, i]] - l_momentum[[t, i]]);
                 }
             }
 
@@ -817,9 +916,9 @@ fn soft_threshold_svd(m: &Array2<f64>, threshold: f64) -> Option<Array2<f64>> {
     };
 
     let u_faer = svd.U();
-    let s_diag = svd.S();  // Returns diagonal view
-    let s_col = s_diag.column_vector();  // Get as column vector
-    let v_faer = svd.V();  // This is V, not V^T
+    let s_diag = svd.S(); // Returns diagonal view
+    let s_col = s_diag.column_vector(); // Get as column vector
+    let v_faer = svd.V(); // This is V, not V^T
 
     let s_len = s_col.nrows();
 
@@ -895,7 +994,7 @@ fn max_abs_diff_2d(a: &Array2<f64>, b: &Array2<f64>) -> f64 {
         .fold(0.0_f64, f64::max)
 }
 
-/// Compute bootstrap variance estimation for TROP in parallel.
+/// Compute bootstrap variance estimation for TROP in parallel (local method).
 ///
 /// Performs unit-level block bootstrap, parallelizing across bootstrap iterations.
 ///
@@ -903,9 +1002,6 @@ fn max_abs_diff_2d(a: &Array2<f64>, b: &Array2<f64>) -> f64 {
 /// * `y` - Outcome matrix (n_periods x n_units)
 /// * `d` - Treatment indicator matrix (n_periods x n_units)
 /// * `control_mask` - Boolean mask for control observations
-/// * `control_unit_idx` - Array of control unit indices
-/// * `treated_obs` - List of (t, i) treated observations
-/// * `unit_dist_matrix` - Pre-computed unit distance matrix
 /// * `time_dist_matrix` - Pre-computed time distance matrix
 /// * `lambda_time` - Selected time decay parameter
 /// * `lambda_unit` - Selected unit distance parameter
@@ -913,16 +1009,28 @@ fn max_abs_diff_2d(a: &Array2<f64>, b: &Array2<f64>) -> f64 {
 /// * `n_bootstrap` - Number of bootstrap iterations
 /// * `max_iter` - Maximum iterations for model estimation
 /// * `tol` - Convergence tolerance
-/// * `seed` - Random seed
+/// * `control_indices` - Pre-generated stratified bootstrap indices for the
+///   control pool, shape `(n_bootstrap, n_control_units)`, dtype `i64`.
+///   Values must be in `[0, n_control_units)`.
+/// * `treated_indices` - Pre-generated stratified bootstrap indices for the
+///   treated pool, shape `(n_bootstrap, n_treated_units)`, dtype `i64`.
+///   Values must be in `[0, n_treated_units)`.
 /// * `survey_weights` - Optional unit-level survey weights (length n_units).
 ///   When provided, ATT is computed as a weighted mean of per-observation
 ///   treatment effects using unit weights. Model fitting, LOOCV, and distance
 ///   computation are unchanged.
 ///
+/// The index arrays carry the RNG contract: they are produced on the Python
+/// side by `diff_diff.bootstrap_utils.stratified_bootstrap_indices` with a
+/// numpy `default_rng(seed)`, so Rust and Python consumers see identical
+/// sampling under the same seed. Invalid index values (negative or out of
+/// range) raise a `PyValueError` rather than silently producing malformed
+/// bootstrap samples.
+///
 /// # Returns
 /// (bootstrap_estimates, standard_error)
 #[pyfunction]
-#[pyo3(signature = (y, d, control_mask, time_dist_matrix, lambda_time, lambda_unit, lambda_nn, n_bootstrap, max_iter, tol, seed, survey_weights=None))]
+#[pyo3(signature = (y, d, control_mask, time_dist_matrix, lambda_time, lambda_unit, lambda_nn, n_bootstrap, max_iter, tol, control_indices, treated_indices, survey_weights=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn bootstrap_trop_variance<'py>(
     py: Python<'py>,
@@ -936,13 +1044,16 @@ pub fn bootstrap_trop_variance<'py>(
     n_bootstrap: usize,
     max_iter: usize,
     tol: f64,
-    seed: u64,
+    control_indices: PyReadonlyArray2<'py, i64>,
+    treated_indices: PyReadonlyArray2<'py, i64>,
     survey_weights: Option<PyReadonlyArray1<'py, f64>>,
 ) -> PyResult<(Bound<'py, PyArray1<f64>>, f64)> {
     let y_arr = y.as_array().to_owned();
     let d_arr = d.as_array().to_owned();
     let control_mask_arr = control_mask.as_array().to_owned();
     let time_dist_arr = time_dist_matrix.as_array().to_owned();
+    let ctrl_idx_arr = control_indices.as_array().to_owned();
+    let trt_idx_arr = treated_indices.as_array().to_owned();
     let sw_arr: Option<Array1<f64>> = survey_weights.map(|sw| sw.as_array().to_owned());
 
     let n_units = y_arr.ncols();
@@ -963,27 +1074,66 @@ pub fn bootstrap_trop_variance<'py>(
     let n_treated_units = original_treated_units.len();
     let n_control_units = original_control_units.len();
 
+    // Validate index-array shapes match the stratified pool sizes
+    if ctrl_idx_arr.shape() != [n_bootstrap, n_control_units] {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "control_indices shape {:?} does not match (n_bootstrap={}, n_control_units={})",
+            ctrl_idx_arr.shape(),
+            n_bootstrap,
+            n_control_units,
+        )));
+    }
+    if trt_idx_arr.shape() != [n_bootstrap, n_treated_units] {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "treated_indices shape {:?} does not match (n_bootstrap={}, n_treated_units={})",
+            trt_idx_arr.shape(),
+            n_bootstrap,
+            n_treated_units,
+        )));
+    }
+
+    // Validate index values are in range. Fail fast with a clean PyValueError
+    // rather than panicking inside the parallel loop on a negative cast or an
+    // out-of-pool Vec index.
+    if n_control_units > 0 {
+        let n_ctrl = n_control_units as i64;
+        for v in ctrl_idx_arr.iter() {
+            if *v < 0 || *v >= n_ctrl {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "control_indices contains out-of-range value {} (valid: [0, {}))",
+                    v, n_control_units,
+                )));
+            }
+        }
+    }
+    if n_treated_units > 0 {
+        let n_trt = n_treated_units as i64;
+        for v in trt_idx_arr.iter() {
+            if *v < 0 || *v >= n_trt {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "treated_indices contains out-of-range value {} (valid: [0, {}))",
+                    v, n_treated_units,
+                )));
+            }
+        }
+    }
+
     // Run bootstrap iterations in parallel
+    // RNG-canonical contract: control_indices and treated_indices are pre-generated
+    // by numpy.random.default_rng(seed) on the Python side via
+    // diff_diff.bootstrap_utils.stratified_bootstrap_indices, so SE is identical
+    // across backends under the same seed (silent-failures finding #23).
     let bootstrap_estimates: Vec<f64> = (0..n_bootstrap)
         .into_par_iter()
         .filter_map(|b| {
-            use rand::prelude::*;
-            use rand_xoshiro::Xoshiro256PlusPlus;
-
-            let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed.wrapping_add(b as u64));
-
-            // Issue D fix: Stratified sampling - sample control and treated units separately
+            // Stratified sampling: consume pre-generated indices for replicate b
             let mut sampled_units: Vec<usize> = Vec::with_capacity(n_units);
-
-            // Sample control units with replacement
-            for _ in 0..n_control_units {
-                let idx = rng.gen_range(0..n_control_units);
+            for j in 0..n_control_units {
+                let idx = ctrl_idx_arr[[b, j]] as usize;
                 sampled_units.push(original_control_units[idx]);
             }
-
-            // Sample treated units with replacement
-            for _ in 0..n_treated_units {
-                let idx = rng.gen_range(0..n_treated_units);
+            for j in 0..n_treated_units {
+                let idx = trt_idx_arr[[b, j]] as usize;
                 sampled_units.push(original_treated_units[idx]);
             }
 
@@ -1098,7 +1248,7 @@ pub fn bootstrap_trop_variance<'py>(
     };
 
     let estimates_arr = Array1::from_vec(bootstrap_estimates);
-    Ok((estimates_arr.to_pyarray_bound(py), se))
+    Ok((estimates_arr.to_pyarray(py), se))
 }
 
 // ============================================================================
@@ -1233,111 +1383,164 @@ fn solve_joint_no_lowrank(
     y: &ArrayView2<f64>,
     delta: &ArrayView2<f64>,
 ) -> Option<(f64, Array1<f64>, Array1<f64>)> {
+    // SVD-based minimum-norm weighted least-squares fit — mirrors Python's
+    // `_solve_global_no_lowrank` at `diff_diff/trop_global.py:340-412`
+    // step-for-step so Rust and Python paths produce the same canonical
+    // solution on rank-deficient Y (silent-failures finding #23).
+    //
+    // Model: Y_it = μ + α_i + β_t + ε_it, with α_0 = β_0 = 0 for
+    // identification. Weights: δ_it. Flatten row-major with
+    // idx = t * n_units + i (matches Python's Y.flatten() C-order).
     let n_periods = y.nrows();
     let n_units = y.ncols();
+    let n_obs = n_periods * n_units;
+    let n_params = 1 + (n_units - 1) + (n_periods - 1);
 
-    // We solve using normal equations with the design matrix structure
-    // Rather than build full X matrix, use block structure for efficiency
-    //
-    // The model: Y_it = μ + α_i + β_t + ε_it
-    // With identification: α_0 = β_0 = 0
-
-    // Compute weighted sums needed for normal equations
+    // Flatten y + weights with NaN masking — matches trop_global.py:354-360.
+    let mut y_flat = Array1::<f64>::zeros(n_obs);
+    let mut w_flat = Array1::<f64>::zeros(n_obs);
     let mut sum_w = 0.0;
-    let mut sum_wy = 0.0;
-
-    // Per-unit and per-period weighted sums
-    let mut sum_w_by_unit = Array1::<f64>::zeros(n_units);
-    let mut sum_wy_by_unit = Array1::<f64>::zeros(n_units);
-    let mut sum_w_by_period = Array1::<f64>::zeros(n_periods);
-    let mut sum_wy_by_period = Array1::<f64>::zeros(n_periods);
-
     for t in 0..n_periods {
         for i in 0..n_units {
-            // NaN outcomes get zero weight (not imputed to 0.0 with active weight)
-            let w = if y[[t, i]].is_finite() { delta[[t, i]] } else { 0.0 };
-            let y_ti = if y[[t, i]].is_finite() { y[[t, i]] } else { 0.0 };
-
+            let idx = t * n_units + i;
+            let y_ti = y[[t, i]];
+            let w_ti = delta[[t, i]];
+            let valid = y_ti.is_finite() && w_ti.is_finite();
+            let w = if valid { w_ti.max(0.0) } else { 0.0 };
+            y_flat[idx] = if valid { y_ti } else { 0.0 };
+            w_flat[idx] = w;
             sum_w += w;
-            sum_wy += w * y_ti;
-
-            sum_w_by_unit[i] += w;
-            sum_wy_by_unit[i] += w * y_ti;
-            sum_w_by_period[t] += w;
-            sum_wy_by_period[t] += w * y_ti;
         }
     }
 
+    // All-zero weights short-circuit — matches trop_global.py:366.
     if sum_w < 1e-10 {
         return None;
     }
 
-    // Use iterative approach: alternate between (alpha, beta) and mu
-    // until convergence (simpler than full normal equations)
-    let mut mu = sum_wy / sum_w;
-    let mut alpha = Array1::<f64>::zeros(n_units);
-    let mut beta = Array1::<f64>::zeros(n_periods);
-
-    for _ in 0..50 {
-        let mu_old = mu;
-        let alpha_old = alpha.clone();
-        let beta_old = beta.clone();
-
-        // Update alpha (fixing beta, mu)
-        for i in 1..n_units {  // α_0 = 0 for identification
-            if sum_w_by_unit[i] > 1e-10 {
-                let mut num = 0.0;
-                for t in 0..n_periods {
-                    // NaN outcomes get zero weight
-                    let w = if y[[t, i]].is_finite() { delta[[t, i]] } else { 0.0 };
-                    let y_ti = if y[[t, i]].is_finite() { y[[t, i]] } else { 0.0 };
-                    num += w * (y_ti - mu - beta[t]);
-                }
-                alpha[i] = num / sum_w_by_unit[i];
+    // Build design matrix X = [intercept | unit_dummies[1..] | time_dummies[1..]]
+    // — matches trop_global.py:374-385. Explicit nested loops so the
+    // index correspondence with Python is unambiguous.
+    let mut x = Array2::<f64>::zeros((n_obs, n_params));
+    for t in 0..n_periods {
+        for i in 0..n_units {
+            let idx = t * n_units + i;
+            x[[idx, 0]] = 1.0; // intercept
+            if i >= 1 {
+                x[[idx, i]] = 1.0; // unit dummy (unit 0 dropped)
             }
-        }
-
-        // Update beta (fixing alpha, mu)
-        for t in 1..n_periods {  // β_0 = 0 for identification
-            if sum_w_by_period[t] > 1e-10 {
-                let mut num = 0.0;
-                for i in 0..n_units {
-                    // NaN outcomes get zero weight
-                    let w = if y[[t, i]].is_finite() { delta[[t, i]] } else { 0.0 };
-                    let y_ti = if y[[t, i]].is_finite() { y[[t, i]] } else { 0.0 };
-                    num += w * (y_ti - mu - alpha[i]);
-                }
-                beta[t] = num / sum_w_by_period[t];
+            if t >= 1 {
+                x[[idx, (n_units - 1) + t]] = 1.0; // time dummy (period 0 dropped)
             }
-        }
-
-        // Update mu (fixing alpha, beta)
-        let mut num_mu = 0.0;
-        for t in 0..n_periods {
-            for i in 0..n_units {
-                // NaN outcomes get zero weight
-                let w = if y[[t, i]].is_finite() { delta[[t, i]] } else { 0.0 };
-                let y_ti = if y[[t, i]].is_finite() { y[[t, i]] } else { 0.0 };
-                num_mu += w * (y_ti - alpha[i] - beta[t]);
-            }
-        }
-        mu = num_mu / sum_w;
-
-        // Check convergence across ALL parameters (not just mu)
-        let mu_diff = (mu - mu_old).abs();
-        let alpha_diff = alpha.iter().zip(alpha_old.iter())
-            .map(|(a, b)| (a - b).abs())
-            .fold(0.0_f64, f64::max);
-        let beta_diff = beta.iter().zip(beta_old.iter())
-            .map(|(a, b)| (a - b).abs())
-            .fold(0.0_f64, f64::max);
-        let max_diff = mu_diff.max(alpha_diff).max(beta_diff);
-        if max_diff < 1e-8 {
-            break;
         }
     }
 
+    // Apply sqrt-weights: X_w = X * sqrt(w)[:, None], y_w = y * sqrt(w).
+    // Matches trop_global.py:387-389.
+    let sqrt_w: Array1<f64> = w_flat.mapv(|w| w.sqrt());
+    for r in 0..n_obs {
+        let s = sqrt_w[r];
+        for c in 0..n_params {
+            x[[r, c]] *= s;
+        }
+        y_flat[r] *= s;
+    }
+
+    // Solve via SVD with numpy-compatible rcond truncation.
+    let coeffs = solve_wls_svd(&x.view(), &y_flat.view())?;
+
+    // Unpack: mu = coeffs[0], alpha[1..] = coeffs[1..n_units],
+    // beta[1..] = coeffs[n_units..]. Matches trop_global.py:406-410.
+    let mu = coeffs[0];
+    let mut alpha = Array1::<f64>::zeros(n_units);
+    for i in 1..n_units {
+        alpha[i] = coeffs[i];
+    }
+    let mut beta = Array1::<f64>::zeros(n_periods);
+    for t in 1..n_periods {
+        beta[t] = coeffs[(n_units - 1) + t];
+    }
+
     Some((mu, alpha, beta))
+}
+
+/// Minimum-norm least-squares solution via faer thin SVD with rcond truncation.
+///
+/// Mirrors `np.linalg.lstsq(A, b, rcond=None)` from numpy: singular values
+/// below `rcond * max(S)` with `rcond = eps * max(n_rows, n_cols)` are
+/// treated as zero. On rank-deficient A this returns the unique
+/// minimum-norm least-squares solution.
+///
+/// This helper intentionally does NOT reuse `rust/src/linalg.rs::solve_ols`
+/// because `solve_ols` hard-codes `rcond = 1e-7` (R's `lm()` default) which
+/// would truncate singular values that numpy's default keeps. TROP's
+/// canonical Python path is numpy-compatible; Rust must match.
+///
+/// Returns `None` only when the SVD itself fails (rare on finite inputs);
+/// the caller (LOOCV / FISTA / bootstrap) interprets `None` as an
+/// unsuccessful fit.
+fn solve_wls_svd(a: &ArrayView2<f64>, b: &ArrayView1<f64>) -> Option<Array1<f64>> {
+    let n_rows = a.nrows();
+    let n_cols = a.ncols();
+    let a_owned = a.to_owned();
+    let b_owned = b.to_owned();
+
+    // Convert ndarray -> faer for SVD.
+    let a_faer = ndarray_to_faer(&a_owned);
+
+    let svd = a_faer.thin_svd().ok()?;
+
+    let u_faer = svd.U();
+    let s_diag = svd.S();
+    let s_col = s_diag.column_vector();
+    let v_faer = svd.V();
+
+    // Extract U (n_rows x min(n,k)) back to ndarray.
+    let u_rows = u_faer.nrows();
+    let u_cols = u_faer.ncols();
+    let mut u = Array2::<f64>::zeros((u_rows, u_cols));
+    for i in 0..u_rows {
+        for j in 0..u_cols {
+            u[[i, j]] = u_faer[(i, j)];
+        }
+    }
+
+    // Extract singular values.
+    let s_len = s_col.nrows();
+    let mut s = Array1::<f64>::zeros(s_len);
+    for i in 0..s_len {
+        s[i] = s_col[i];
+    }
+
+    // Extract V (k x min(n,k)) back to ndarray. faer's V is not V^T.
+    let v_rows = v_faer.nrows();
+    let v_cols = v_faer.ncols();
+    let mut v = Array2::<f64>::zeros((v_rows, v_cols));
+    for i in 0..v_rows {
+        for j in 0..v_cols {
+            v[[i, j]] = v_faer[(i, j)];
+        }
+    }
+
+    // numpy rcond = eps * max(n_rows, n_cols); truncate s[i] <= rcond * max(s).
+    let rcond = f64::EPSILON * (n_rows.max(n_cols) as f64);
+    let s_max = s.iter().cloned().fold(0.0_f64, f64::max);
+    let threshold = s_max * rcond;
+
+    // Compute β = V * S^{-1}_truncated * U^T * y.
+    let uty = u.t().dot(&b_owned); // (min(n,k),)
+    let mut s_inv_uty = Array1::<f64>::zeros(s_len);
+    for i in 0..s_len {
+        if s[i] > threshold {
+            s_inv_uty[i] = uty[i] / s[i];
+        }
+        // else: leave 0 — this is the pseudo-inverse / minimum-norm step
+        // that also covers Python's `except LinAlgError: pinv(...)` fallback
+        // tier, since faer thin_svd is numerically robust on finite inputs.
+    }
+    let coeffs = v.dot(&s_inv_uty);
+
+    Some(coeffs)
 }
 
 /// Solve global TWFE + low-rank via alternating minimization (no tau).
@@ -1360,14 +1563,26 @@ fn solve_joint_with_lowrank(
 
     // Precompute normalized weights and threshold (constant across iterations)
     let delta_max = delta.iter().cloned().fold(0.0_f64, f64::max);
-    let threshold = if delta_max > 0.0 { lambda_nn / (2.0 * delta_max) } else { lambda_nn / 2.0 };
+    let threshold = if delta_max > 0.0 {
+        lambda_nn / (2.0 * delta_max)
+    } else {
+        lambda_nn / 2.0
+    };
 
     // Precompute delta_norm (masked for NaN outcomes)
     let mut delta_norm = Array2::<f64>::zeros((n_periods, n_units));
     for t in 0..n_periods {
         for i in 0..n_units {
-            let d_ti = if y[[t, i]].is_finite() { delta[[t, i]] } else { 0.0 };
-            delta_norm[[t, i]] = if delta_max > 0.0 { d_ti / delta_max } else { d_ti };
+            let d_ti = if y[[t, i]].is_finite() {
+                delta[[t, i]]
+            } else {
+                0.0
+            };
+            delta_norm[[t, i]] = if delta_max > 0.0 {
+                d_ti / delta_max
+            } else {
+                d_ti
+            };
         }
     }
 
@@ -1379,7 +1594,7 @@ fn solve_joint_with_lowrank(
 
         // Step 1: Fix L, solve for (mu, alpha, beta)
         let y_adj = Array2::from_shape_fn((n_periods, n_units), |(t, i)| {
-            y[[t, i]] - l[[t, i]]  // NaN - finite = NaN (preserves NaN info)
+            y[[t, i]] - l[[t, i]] // NaN - finite = NaN (preserves NaN info)
         });
         let (mu, alpha, beta) = solve_joint_no_lowrank(&y_adj.view(), delta)?;
 
@@ -1411,7 +1626,8 @@ fn solve_joint_with_lowrank(
             let mut gradient_step = Array2::<f64>::zeros((n_periods, n_units));
             for t in 0..n_periods {
                 for i in 0..n_units {
-                    let l_mom = l_inner[[t, i]] + momentum * (l_inner[[t, i]] - l_inner_prev[[t, i]]);
+                    let l_mom =
+                        l_inner[[t, i]] + momentum * (l_inner[[t, i]] - l_inner_prev[[t, i]]);
                     gradient_step[[t, i]] = l_mom + delta_norm[[t, i]] * (r_masked[[t, i]] - l_mom);
                 }
             }
@@ -1439,9 +1655,7 @@ fn solve_joint_with_lowrank(
     }
 
     // Final solve with converged L
-    let y_adj = Array2::from_shape_fn((n_periods, n_units), |(t, i)| {
-        y[[t, i]] - l[[t, i]]
-    });
+    let y_adj = Array2::from_shape_fn((n_periods, n_units), |(t, i)| y[[t, i]] - l[[t, i]]);
     let (mu, alpha, beta) = solve_joint_no_lowrank(&y_adj.view(), delta)?;
 
     Some((mu, alpha, beta, l))
@@ -1488,11 +1702,10 @@ fn loocv_score_joint(
                 delta_ex[[t_ex, i_ex]] = 0.0;
 
                 let result = if lambda_nn >= 1e10 {
-                    solve_joint_no_lowrank(y, &delta_ex.view())
-                        .map(|(mu, alpha, beta)| {
-                            let l = Array2::<f64>::zeros((n_periods, n_units));
-                            (mu, alpha, beta, l)
-                        })
+                    solve_joint_no_lowrank(y, &delta_ex.view()).map(|(mu, alpha, beta)| {
+                        let l = Array2::<f64>::zeros((n_periods, n_units));
+                        (mu, alpha, beta, l)
+                    })
                 } else {
                     solve_joint_with_lowrank(y, &delta_ex.view(), lambda_nn, max_iter, tol)
                 };
@@ -1500,7 +1713,8 @@ fn loocv_score_joint(
                 match result {
                     Some((mu, alpha, beta, l)) => {
                         if y[[t_ex, i_ex]].is_finite() {
-                            let tau_loocv = y[[t_ex, i_ex]] - mu - alpha[i_ex] - beta[t_ex] - l[[t_ex, i_ex]];
+                            let tau_loocv =
+                                y[[t_ex, i_ex]] - mu - alpha[i_ex] - beta[t_ex] - l[[t_ex, i_ex]];
                             (sum + tau_loocv * tau_loocv, valid + 1, first_fail)
                         } else {
                             (sum, valid, first_fail)
@@ -1652,7 +1866,15 @@ pub fn loocv_grid_search_global<'py>(
 
     let (best_lt, best_lu, best_ln, best_score, n_valid, first_failed) = best_result;
 
-    Ok((best_lt, best_lu, best_ln, best_score, n_valid, n_attempted, first_failed))
+    Ok((
+        best_lt,
+        best_lu,
+        best_ln,
+        best_score,
+        n_valid,
+        n_attempted,
+        first_failed,
+    ))
 }
 
 /// Compute bootstrap variance estimation for TROP global method in parallel.
@@ -1669,16 +1891,28 @@ pub fn loocv_grid_search_global<'py>(
 /// * `n_bootstrap` - Number of bootstrap iterations
 /// * `max_iter` - Maximum iterations for model estimation
 /// * `tol` - Convergence tolerance
-/// * `seed` - Random seed
+/// * `control_indices` - Pre-generated stratified bootstrap indices for the
+///   control pool, shape `(n_bootstrap, n_control_units)`, dtype `i64`.
+///   Values must be in `[0, n_control_units)`.
+/// * `treated_indices` - Pre-generated stratified bootstrap indices for the
+///   treated pool, shape `(n_bootstrap, n_treated_units)`, dtype `i64`.
+///   Values must be in `[0, n_treated_units)`.
 /// * `survey_weights` - Optional unit-level survey weights (length n_units).
 ///   When provided, ATT is computed as a weighted mean of per-observation
 ///   treatment effects using unit weights. Model fitting, LOOCV, and distance
 ///   computation are unchanged.
 ///
+/// The index arrays carry the RNG contract: they are produced on the Python
+/// side by `diff_diff.bootstrap_utils.stratified_bootstrap_indices` with a
+/// numpy `default_rng(seed)`, so Rust and Python consumers see identical
+/// sampling under the same seed. Invalid index values (negative or out of
+/// range) raise a `PyValueError` rather than silently producing malformed
+/// bootstrap samples.
+///
 /// # Returns
 /// (bootstrap_estimates, standard_error)
 #[pyfunction]
-#[pyo3(signature = (y, d, lambda_time, lambda_unit, lambda_nn, n_bootstrap, max_iter, tol, seed, survey_weights=None))]
+#[pyo3(signature = (y, d, lambda_time, lambda_unit, lambda_nn, n_bootstrap, max_iter, tol, control_indices, treated_indices, survey_weights=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn bootstrap_trop_variance_global<'py>(
     py: Python<'py>,
@@ -1690,11 +1924,14 @@ pub fn bootstrap_trop_variance_global<'py>(
     n_bootstrap: usize,
     max_iter: usize,
     tol: f64,
-    seed: u64,
+    control_indices: PyReadonlyArray2<'py, i64>,
+    treated_indices: PyReadonlyArray2<'py, i64>,
     survey_weights: Option<PyReadonlyArray1<'py, f64>>,
 ) -> PyResult<(Bound<'py, PyArray1<f64>>, f64)> {
     let y_arr = y.as_array().to_owned();
     let d_arr = d.as_array().to_owned();
+    let ctrl_idx_arr = control_indices.as_array().to_owned();
+    let trt_idx_arr = treated_indices.as_array().to_owned();
     let sw_arr: Option<Array1<f64>> = survey_weights.map(|sw| sw.as_array().to_owned());
 
     let n_units = y_arr.ncols();
@@ -1714,6 +1951,50 @@ pub fn bootstrap_trop_variance_global<'py>(
     let n_treated_units = original_treated_units.len();
     let n_control_units = original_control_units.len();
 
+    // Validate index-array shapes match the stratified pool sizes
+    if ctrl_idx_arr.shape() != [n_bootstrap, n_control_units] {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "control_indices shape {:?} does not match (n_bootstrap={}, n_control_units={})",
+            ctrl_idx_arr.shape(),
+            n_bootstrap,
+            n_control_units,
+        )));
+    }
+    if trt_idx_arr.shape() != [n_bootstrap, n_treated_units] {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "treated_indices shape {:?} does not match (n_bootstrap={}, n_treated_units={})",
+            trt_idx_arr.shape(),
+            n_bootstrap,
+            n_treated_units,
+        )));
+    }
+
+    // Validate index values are in range. Fail fast with a clean PyValueError
+    // rather than panicking inside the parallel loop on a negative cast or an
+    // out-of-pool Vec index.
+    if n_control_units > 0 {
+        let n_ctrl = n_control_units as i64;
+        for v in ctrl_idx_arr.iter() {
+            if *v < 0 || *v >= n_ctrl {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "control_indices contains out-of-range value {} (valid: [0, {}))",
+                    v, n_control_units,
+                )));
+            }
+        }
+    }
+    if n_treated_units > 0 {
+        let n_trt = n_treated_units as i64;
+        for v in trt_idx_arr.iter() {
+            if *v < 0 || *v >= n_trt {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "treated_indices contains out-of-range value {} (valid: [0, {}))",
+                    v, n_treated_units,
+                )));
+            }
+        }
+    }
+
     // Determine treated periods from D matrix
     let mut first_treat_period = n_periods;
     for t in 0..n_periods {
@@ -1727,34 +2008,29 @@ pub fn bootstrap_trop_variance_global<'py>(
     let treated_periods = n_periods.saturating_sub(first_treat_period);
 
     // Convert λ_nn=∞ → 1e10 (factor model disabled)
-    let ln_eff = if lambda_nn.is_infinite() { 1e10 } else { lambda_nn };
+    let ln_eff = if lambda_nn.is_infinite() {
+        1e10
+    } else {
+        lambda_nn
+    };
 
     // Run bootstrap iterations in parallel
+    // RNG-canonical contract: control_indices and treated_indices are pre-generated
+    // by numpy.random.default_rng(seed) on the Python side via
+    // diff_diff.bootstrap_utils.stratified_bootstrap_indices, so SE is identical
+    // across backends under the same seed (silent-failures finding #23).
     let bootstrap_estimates: Vec<f64> = (0..n_bootstrap)
         .into_par_iter()
         .filter_map(|b| {
-            use rand::prelude::*;
-            use rand_xoshiro::Xoshiro256PlusPlus;
-
-            let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed.wrapping_add(b as u64));
-
-            // Stratified sampling - sample control and treated units separately
+            // Stratified sampling: consume pre-generated indices for replicate b
             let mut sampled_units: Vec<usize> = Vec::with_capacity(n_units);
-
-            // Sample control units with replacement
-            for _ in 0..n_control_units {
-                if n_control_units > 0 {
-                    let idx = rng.gen_range(0..n_control_units);
-                    sampled_units.push(original_control_units[idx]);
-                }
+            for j in 0..n_control_units {
+                let idx = ctrl_idx_arr[[b, j]] as usize;
+                sampled_units.push(original_control_units[idx]);
             }
-
-            // Sample treated units with replacement
-            for _ in 0..n_treated_units {
-                if n_treated_units > 0 {
-                    let idx = rng.gen_range(0..n_treated_units);
-                    sampled_units.push(original_treated_units[idx]);
-                }
+            for j in 0..n_treated_units {
+                let idx = trt_idx_arr[[b, j]] as usize;
+                sampled_units.push(original_treated_units[idx]);
             }
 
             // Create bootstrap matrices by selecting columns
@@ -1778,19 +2054,12 @@ pub fn bootstrap_trop_variance_global<'py>(
             );
 
             let result = if ln_eff >= 1e10 {
-                solve_joint_no_lowrank(&y_boot.view(), &delta.view())
-                    .map(|(mu, alpha, beta)| {
-                        let l = Array2::<f64>::zeros((n_periods, n_units));
-                        (mu, alpha, beta, l)
-                    })
+                solve_joint_no_lowrank(&y_boot.view(), &delta.view()).map(|(mu, alpha, beta)| {
+                    let l = Array2::<f64>::zeros((n_periods, n_units));
+                    (mu, alpha, beta, l)
+                })
             } else {
-                solve_joint_with_lowrank(
-                    &y_boot.view(),
-                    &delta.view(),
-                    ln_eff,
-                    max_iter,
-                    tol,
-                )
+                solve_joint_with_lowrank(&y_boot.view(), &delta.view(), ln_eff, max_iter, tol)
             };
 
             // Post-hoc tau extraction: ATT = mean(Y - mu - alpha - beta - L) over treated
@@ -1838,7 +2107,7 @@ pub fn bootstrap_trop_variance_global<'py>(
     };
 
     let estimates_arr = Array1::from_vec(bootstrap_estimates);
-    Ok((estimates_arr.to_pyarray_bound(py), se))
+    Ok((estimates_arr.to_pyarray(py), se))
 }
 
 #[cfg(test)]
@@ -1853,7 +2122,8 @@ mod tests {
         let valid_j = array![true, true, true, true];
         let valid_i = array![true, true, true, true];
 
-        let dist = compute_pair_distance(&y_j.view(), &y_i.view(), &valid_j.view(), &valid_i.view());
+        let dist =
+            compute_pair_distance(&y_j.view(), &y_i.view(), &valid_j.view(), &valid_i.view());
 
         // RMSE of constant difference 0.5 should be 0.5
         assert!((dist - 0.5).abs() < 1e-10);
@@ -1867,7 +2137,8 @@ mod tests {
         let valid_i = array![true, false, true, false];
 
         // Only period 0 overlaps
-        let dist = compute_pair_distance(&y_j.view(), &y_i.view(), &valid_j.view(), &valid_i.view());
+        let dist =
+            compute_pair_distance(&y_j.view(), &y_i.view(), &valid_j.view(), &valid_i.view());
 
         // RMSE of single difference 0.5 should be 0.5
         assert!((dist - 0.5).abs() < 1e-10);
@@ -1880,7 +2151,8 @@ mod tests {
         let valid_j = array![true, true, false, false];
         let valid_i = array![false, false, true, true];
 
-        let dist = compute_pair_distance(&y_j.view(), &y_i.view(), &valid_j.view(), &valid_i.view());
+        let dist =
+            compute_pair_distance(&y_j.view(), &y_i.view(), &valid_j.view(), &valid_i.view());
 
         assert!(dist.is_infinite());
     }

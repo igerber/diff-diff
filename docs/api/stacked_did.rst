@@ -23,14 +23,13 @@ which addresses bias in naive stacked DiD regressions by:
 Difference-in-Differences. *NBER Working Paper* 32054.
 `<http://www.nber.org/papers/w32054>`_
 
-.. module:: diff_diff.stacked_did
-
 StackedDiD
 ----------
 
 Main estimator class for Stacked Difference-in-Differences.
 
 .. autoclass:: diff_diff.StackedDiD
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -49,7 +48,8 @@ StackedDiDResults
 
 Results container for Stacked DiD estimation.
 
-.. autoclass:: diff_diff.stacked_did.StackedDiDResults
+.. autoclass:: diff_diff.StackedDiDResults
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -58,6 +58,7 @@ Results container for Stacked DiD estimation.
 
    .. autosummary::
 
+      ~StackedDiDResults.aggregate
       ~StackedDiDResults.summary
       ~StackedDiDResults.print_summary
       ~StackedDiDResults.to_dataframe
@@ -79,9 +80,13 @@ Basic usage::
 
     est = StackedDiD(kappa_pre=2, kappa_post=2)
     results = est.fit(data, outcome='outcome', unit='unit',
-                      time='period', first_treat='first_treat',
-                      aggregate='event_study')
+                      time='period', first_treat='first_treat')
     results.print_summary()
+
+    # The event-study surface is always computed (3.9, row M-024);
+    # view it post-fit as the unified container:
+    es = results.aggregate('event_study')
+    simple = results.aggregate('simple')
 
 Accessing the stacked dataset::
 
@@ -125,5 +130,5 @@ Comparison with Other Staggered Estimators
      - Full stacked dataset accessible
      - Group-time effects accessible
    * - Covariates
-     - Not yet supported
+     - Entropy balancing via ``balance="entropy"`` + ``fit(covariates=...)`` (CBWSDID, Ustyuzhanin 2026); requires ``weighting="aggregate"`` + balanced windows, no ``survey_design``
      - Supported (OR, IPW, DR)

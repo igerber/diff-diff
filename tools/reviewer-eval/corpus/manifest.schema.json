@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://diff-diff/tools/reviewer-eval/manifest.schema.json",
+  "title": "Codex-review eval case",
+  "description": "One evaluation case: a materializable diff state plus its ground truth. Validated by tests/test_evals_adapters.py.",
+  "type": "object",
+  "required": ["id", "stratum", "fixture"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "stratum": {
+      "enum": ["s1_synthetic", "s2_historical", "s3_negative", "s4_missed"]
+    },
+    "title": {"type": "string"},
+    "weight": {"type": "number", "exclusiveMinimum": 0},
+    "expect_no_blockers": {"type": "boolean"},
+    "allow_severities": {
+      "type": "array",
+      "items": {"enum": ["P0", "P1", "P2", "P3"]}
+    },
+    "expected_files": {
+      "description": "Exact post-diff path contract; verify() requires the diff to touch precisely these files. REQUIRED for expect_no_blockers (negative-control) cases.",
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "notes": {"type": "string"},
+    "fixture": {
+      "type": "object",
+      "required": ["kind", "base_sha"],
+      "properties": {
+        "kind": {"enum": ["git_range", "stored_patch", "git_revert"]},
+        "base_sha": {"type": "string", "minLength": 7},
+        "head_sha": {"type": "string"},
+        "patch": {"type": "string"},
+        "revert_commit": {"type": "string"},
+        "commit_message": {"type": "string"},
+        "pr_context": {
+          "type": "object",
+          "properties": {
+            "title": {"type": "string"},
+            "body": {"type": "string"},
+            "source": {"type": "string"},
+            "pr_number": {"type": "integer"}
+          }
+        },
+        "rerun": {
+          "description": "Re-review state. When previous_review is present, the case is built as a CI re-review (prior output injected as <previous-ai-review-output>).",
+          "type": "object",
+          "properties": {
+            "previous_review": {"type": "string"}
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "git_range"}}},
+          "then": {"required": ["head_sha"]}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "stored_patch"}}},
+          "then": {"required": ["patch"]}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "git_revert"}}},
+          "then": {"required": ["revert_commit"]}
+        }
+      ]
+    },
+    "ground_truth": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "file", "line_window", "bug_class", "expected_severity"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string"},
+          "file": {"type": "string"},
+          "line_window": {
+            "type": "array",
+            "items": {"type": "integer", "minimum": 0},
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "anchor_symbol": {"type": "string"},
+          "bug_class": {"type": "string"},
+          "expected_severity": {"enum": ["P0", "P1", "P2", "P3"]},
+          "must_catch": {"type": "boolean"},
+          "class_keywords": {"type": "array", "items": {"type": "string"}},
+          "rationale": {"type": "string"},
+          "provenance": {"type": "object"}
+        }
+      }
+    },
+    "known_fp_topics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "topic": {"type": "string"},
+          "file": {"type": "string"},
+          "would_be_severity_if_flagged": {"enum": ["P0", "P1", "P2", "P3"]}
+        }
+      }
+    }
+  }
+}

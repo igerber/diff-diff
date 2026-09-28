@@ -4,15 +4,13 @@
 .. currentmodule:: diff_diff
 
 .. autoclass:: TwoWayFixedEffects
+   :no-members:
 
-   
-   .. automethod:: __init__
 
-   
    .. rubric:: Methods
 
    .. autosummary::
-   
+
       ~TwoWayFixedEffects.__init__
       ~TwoWayFixedEffects.decompose
       ~TwoWayFixedEffects.fit
@@ -21,9 +19,7 @@
       ~TwoWayFixedEffects.print_summary
       ~TwoWayFixedEffects.set_params
       ~TwoWayFixedEffects.summary
-   
-   
 
-   
-   
-   
+
+
+

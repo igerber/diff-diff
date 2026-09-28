@@ -1,11 +1,12 @@
 """
-Aggregation methods mixin for Callaway-Sant'Anna estimator.
+Aggregation methods mixin for CallawaySantAnna and the other staggered payload producers.
 
 This module provides the mixin class containing methods for aggregating
 group-time average treatment effects into summary measures.
 """
 
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, overload
 
 import numpy as np
 import pandas as pd
@@ -16,13 +17,86 @@ from diff_diff.utils import safe_inference_batch
 PrecomputedData = Dict[str, Any]
 
 
+@dataclass
+class EventStudyAggregation:
+    """Everything one event-study aggregation produces.
+
+    ``_aggregate_event_study`` previously returned only ``effects`` and stashed
+    the other four values on ``self`` as side channels. Returning them makes
+    the aggregator PURE, which is what lets it run post-fit from a retained kit
+    without mutating the results object it was called from (spec section 6).
+
+    Attributes
+    ----------
+    effects : dict
+        Per-event-time effect records, keyed by event time.
+    overall : dict or None
+        Eq. (4.14) overall ATT (``att`` / ``se`` / ``effective_df``) - the
+        unweighted mean of post-treatment ES(e). Consumed by
+        ``StaggeredTripleDifference`` as ``overall_att_es``; CallawaySantAnna
+        leaves it unread. ``None`` when no post-treatment horizon qualifies.
+    df_used : float or None
+        The ONE df every ES row's inference actually used, recorded iff it
+        governs a t-reference (finite and > 0). Provenance for
+        ``CallawaySantAnnaResults.event_study_df``.
+    vcov : np.ndarray or None
+        Full event-study covariance, when computable.
+    vcov_index : list or None
+        Event times aligned 1:1 with ``vcov``'s columns.
+    """
+
+    effects: Dict[Any, Dict[str, Any]] = field(default_factory=dict)
+    overall: Optional[Dict[str, Any]] = None
+    df_used: Optional[float] = None
+    vcov: Optional[np.ndarray] = None
+    vcov_index: Optional[List[Any]] = None
+    #: Distinct base EVENT TIMES of the cohorts RETAINED by this
+    #: aggregation (derived from the materialized universal-base
+    #: is_reference cells; None when there are none, e.g. varying base).
+    #: Surface-faithful, unlike the fit-level fit-wide tuple: balance_e
+    #: can drop the cohort responsible for a second base, and the
+    #: container's common-reference guard must reflect the cohorts that
+    #: actually entered the reported estimand.
+    reference_event_times: Optional[Tuple[Any, ...]] = None
+
+
+def fixed_cohort_agg_weights(
+    precomputed: Optional["PrecomputedData"],
+) -> Optional[Dict[Any, float]]:
+    """Fixed per-cohort aggregation masses (R's ``pg = n_g / N`` numerator) for
+    the treated cohorts ``g > 0``, or ``None`` when the caller should fall back
+    to per-cell weights (``agg_weight`` / ``n_treated``).
+
+    Priority: unit-level ``agg_cohort_masses`` (RC-on-panel and true RC, exposed
+    by ``_precompute_structures_rc``) → per-observation survey cohort mass
+    (survey designs) → ``None`` (panel non-survey). Preferring
+    ``agg_cohort_masses`` over the raw ``survey_weights`` sum is what makes an
+    unbalanced panel routed as RC (``allow_unbalanced_panel=True``, which
+    synthesizes ``SurveyDesign(psu=unit)``) weight every aggregation — simple,
+    event-study, group, AND the multiplier bootstrap — by fixed UNIT cohort
+    mass rather than observation count. Single source of truth so the analytical
+    and bootstrap paths cannot diverge.
+    """
+    if precomputed is None:
+        return None
+    agg_masses = precomputed.get("agg_cohort_masses")
+    if agg_masses is not None:
+        return {g: m for g, m in agg_masses.items() if g > 0}
+    sw = precomputed.get("survey_weights")
+    if sw is not None:
+        unit_cohorts = precomputed["unit_cohorts"]
+        return {g: float(np.sum(sw[unit_cohorts == g])) for g in np.unique(unit_cohorts) if g > 0}
+    return None
+
+
 class CallawaySantAnnaAggregationMixin:
     """
-    Mixin class providing aggregation methods for CallawaySantAnna estimator.
+    Mixin class providing aggregation methods for the staggered family.
 
     This class is not intended to be used standalone. It provides methods
-    that are used by the main CallawaySantAnna class to aggregate group-time
-    effects into summary measures.
+    used by CallawaySantAnna and the other staggered payload producers
+    (the DDD engine hosts, DMLDiD, and the kit aggregators) to aggregate
+    group-time effects into summary measures.
     """
 
     # Type hints for attributes accessed from the main class
@@ -38,10 +112,10 @@ class CallawaySantAnnaAggregationMixin:
         self,
         group_time_effects: Dict,
         influence_func_info: Dict,
-        df: pd.DataFrame,
-        unit: str,
+        df: Optional[pd.DataFrame],
+        unit: Optional[str],
         precomputed: Optional["PrecomputedData"] = None,
-    ) -> Tuple[float, float]:
+    ) -> Tuple[float, float, Optional[int]]:
         """
         Compute simple weighted average of ATT(g,t).
 
@@ -57,28 +131,22 @@ class CallawaySantAnnaAggregationMixin:
         in the overall ATT. Pre-treatment effects are computed for parallel
         trends assessment but are not aggregated into the overall ATT.
         """
-        effects = []
+        effects_list: List[Any] = []
         weights_list = []
         gt_pairs = []
-        groups_for_gt = []
+        groups_list: List[Any] = []
 
-        # For survey: compute fixed per-cohort weight sums from the full
-        # unit-level sample (matching R's did::aggte pg = n_g / N).
-        survey_cohort_weights = None
-        if precomputed is not None and precomputed.get("survey_weights") is not None:
-            sw = precomputed["survey_weights"]
-            unit_cohorts = precomputed["unit_cohorts"]
-            survey_cohort_weights = {}
-            for g in np.unique(unit_cohorts):
-                if g > 0:  # exclude never-treated (0)
-                    survey_cohort_weights[g] = float(np.sum(sw[unit_cohorts == g]))
+        # Fixed per-cohort aggregation weights (R's did::aggte pg = n_g / N),
+        # preferring the unit-level RC mass so allow_unbalanced_panel weights the
+        # overall ATT by fixed UNIT cohort mass, not observation count.
+        survey_cohort_weights = fixed_cohort_agg_weights(precomputed)
 
         for (g, t), data in group_time_effects.items():
             # Only include post-treatment effects (t >= g - anticipation)
             # Pre-treatment effects are for parallel trends, not overall ATT
             if t < g - self.anticipation:
                 continue
-            effects.append(data["effect"])
+            effects_list.append(data["effect"])
             # Use fixed cohort-level survey weight sum for aggregation.
             # For RCS, data["agg_weight"] holds the fixed cohort mass;
             # for panel, fallback to data["n_treated"].
@@ -87,10 +155,10 @@ class CallawaySantAnnaAggregationMixin:
             else:
                 weights_list.append(data.get("agg_weight", data["n_treated"]))
             gt_pairs.append((g, t))
-            groups_for_gt.append(g)
+            groups_list.append(g)
 
         # Guard against empty post-treatment set
-        if len(effects) == 0:
+        if len(effects_list) == 0:
             import warnings
 
             warnings.warn(
@@ -101,22 +169,15 @@ class CallawaySantAnnaAggregationMixin:
             )
             return np.nan, np.nan, None
 
-        effects = np.array(effects)
+        effects = np.array(effects_list)
         weights = np.array(weights_list, dtype=float)
-        groups_for_gt = np.array(groups_for_gt)
+        groups_for_gt = np.array(groups_list)
 
-        # Exclude NaN effects from aggregation (R's aggte() convention)
+        # Exclude NaN effects from aggregation (R's aggte() convention).
+        # No warning here — fit() emits a consolidated skip warning covering
+        # all estimation paths (vectorized, covariate, general, RC).
         finite_mask = np.isfinite(effects)
-        n_nan = int(np.sum(~finite_mask))
-        if n_nan > 0:
-            import warnings
-
-            warnings.warn(
-                f"{n_nan} group-time effect(s) are NaN and excluded from overall ATT "
-                "aggregation. Inspect group_time_effects for details.",
-                UserWarning,
-                stacklevel=2,
-            )
+        if not np.all(finite_mask):
             effects = effects[finite_mask]
             weights = weights[finite_mask]
             gt_pairs = [gt for gt, m in zip(gt_pairs, finite_mask) if m]
@@ -153,71 +214,200 @@ class CallawaySantAnnaAggregationMixin:
 
         return overall_att, overall_se, effective_df
 
-    def _compute_aggregated_se(
+    @staticmethod
+    def _get_agg_cache(precomputed: "PrecomputedData") -> Dict[str, Any]:
+        """
+        Per-fit cohort tables for the combined-IF fast path, lazily memoized
+        on the precomputed dict.
+
+        The cache is validated by ARRAY IDENTITY, not dict residency:
+        StaggeredTripleDifference aggregates through a shallow copy of
+        precomputed with a replaced (eligibility-zeroed) ``unit_cohorts``,
+        so a cache keyed to the dict could serve stale tables across the
+        copy. ``cohorts_ref``/``sw_ref`` pin the exact arrays the tables
+        were built from; any mismatch rebuilds into a FRESH dict (never
+        mutated in place - the shallow copy shares the cache reference).
+        """
+        unit_cohorts = precomputed["unit_cohorts"]
+        survey_w = precomputed.get("survey_weights")
+        cache = precomputed.get("_agg_cache")
+        if (
+            cache is not None
+            and cache["cohorts_ref"] is unit_cohorts
+            and cache["sw_ref"] is survey_w
+        ):
+            return cache
+
+        cohort_values, cohort_codes = np.unique(unit_cohorts, return_inverse=True)
+        agg_masses = precomputed.get("agg_cohort_masses")
+        if agg_masses is not None:
+            # RC path: pg basis is per-UNIT cohort mass (R's pg = n_g / N over
+            # units), exposed by _precompute_structures_rc. `cohort_codes` stays
+            # per-observation (the WIF scatter is per-obs, divided by
+            # obs_per_unit downstream). No-op for a true RC (per-unit ==
+            # per-obs); the fix for an unbalanced panel routed as RC.
+            cohort_masses = np.array(
+                [float(agg_masses.get(float(cv), 0.0)) for cv in cohort_values],
+                dtype=np.float64,
+            )
+            total_weight = float(precomputed.get("agg_total_weight", float(np.sum(cohort_masses))))
+        elif survey_w is not None:
+            # Survey-weighted cohort masses. np.bincount accumulation order
+            # differs from the historical per-group mask-sums at the ~1 ULP
+            # level (documented drift budget; REGISTRY CallawaySantAnna SE
+            # notes).
+            cohort_masses = np.bincount(
+                cohort_codes, weights=survey_w, minlength=len(cohort_values)
+            )
+            total_weight = float(np.sum(survey_w))
+        else:
+            cohort_masses = np.bincount(cohort_codes, minlength=len(cohort_values)).astype(
+                np.float64
+            )
+            total_weight = float(len(unit_cohorts))
+
+        cache = {
+            "cohorts_ref": unit_cohorts,
+            "sw_ref": survey_w,
+            "cohort_values": cohort_values,
+            "cohort_codes": cohort_codes,
+            "cohort_masses": cohort_masses,
+            "total_weight": total_weight,
+            # Per-obs unit multiplicity for the WIF over-count correction (all
+            # 1.0 on panel / true RC → the division below is a no-op there).
+            "obs_per_unit": precomputed.get("obs_per_unit"),
+        }
+        precomputed["_agg_cache"] = cache
+        return cache
+
+    def _combined_if_fast(
         self,
         gt_pairs: List[Tuple[Any, Any]],
         weights: np.ndarray,
+        effects: np.ndarray,
+        groups_for_gt: np.ndarray,
         influence_func_info: Dict,
-        n_units: Optional[int] = None,
-    ) -> float:
+        precomputed: "PrecomputedData",
+        n_units: int,
+    ) -> Optional[Tuple[np.ndarray, None]]:
         """
-        Compute standard error using influence function aggregation.
+        O(n_units) combined-IF assembly over per-fit cohort tables.
 
-        This properly accounts for covariances across (g,t) pairs by
-        aggregating unit-level influence functions:
+        Replaces the general path's per-group full-DataFrame scans, per-unit
+        Python loops, and dense (n_units x n_gt) WIF matrices with cohort-
+        indexed lookups. The WIF uses the closed form (algebraically
+        identical to the dense ``wif_matrix @ effects``, floating-point
+        accumulation order differs - not bit-for-bit):
 
-            ψ_i(overall) = Σ_{(g,t)} w_(g,t) × ψ_i(g,t)
-            Var(overall) = (1/n) Σ_i [ψ_i]²
+            wif_i = w_i * (E(c_i)/S - K(c_i) * d / S**2)
 
-        This matches R's `did` package analytical SE formula.
+        where c_i is unit i's cohort, E(c) sums ``effects`` over keeper
+        (g,t) pairs with g == c, K(c) counts them, S = sum of keeper pg,
+        d = pg_keepers @ effects, and w_i is the survey weight (1 when
+        unweighted). Units whose cohort is not among the keepers get
+        exactly 0 (the old dense form realizes the same value through
+        cancelling terms).
 
-        Parameters
-        ----------
-        n_units : int, optional
-            Size of the canonical index space (len(precomputed['all_units'])).
-            When provided, influence function indices (treated_idx, control_idx)
-            index directly into this space, eliminating dict lookups.
+        Returns None when the cohort lookup cannot be resolved exactly
+        (non-numeric cohort dtypes, or a keeper group missing from the
+        cohort table) - the caller then falls back to the general path.
         """
-        if not influence_func_info:
-            return 0.0
+        cache = self._get_agg_cache(precomputed)
+        cohort_values = cache["cohort_values"]
+        cohort_codes = cache["cohort_codes"]
+        cohort_masses = cache["cohort_masses"]
+        total_weight = cache["total_weight"]
+        survey_w = cache["sw_ref"]
 
-        if n_units is None:
-            # Fallback: infer size from influence function info
-            max_idx = 0
-            for g, t in gt_pairs:
-                if (g, t) in influence_func_info:
-                    info = influence_func_info[(g, t)]
-                    if len(info["treated_idx"]) > 0:
-                        max_idx = max(max_idx, info["treated_idx"].max())
-                    if len(info["control_idx"]) > 0:
-                        max_idx = max(max_idx, info["control_idx"].max())
-            n_units = max_idx + 1
+        groups_arr = np.asarray(groups_for_gt)
+        if not (
+            np.issubdtype(groups_arr.dtype, np.number)
+            and np.issubdtype(cohort_values.dtype, np.number)
+        ):
+            return None
 
-        if n_units == 0:
-            return 0.0
+        # Unique keeper groups + exact positions in the cohort table.
+        unique_groups = np.unique(groups_arr)
+        pos = np.searchsorted(cohort_values, unique_groups)
+        if np.any(pos >= len(cohort_values)) or np.any(
+            cohort_values[np.minimum(pos, len(cohort_values) - 1)] != unique_groups
+        ):
+            return None  # keeper group absent from cohort table
 
-        # Aggregate influence functions across (g,t) pairs
-        psi_overall = np.zeros(n_units)
+        # pg per keeper (same values as the general path's group_sizes /
+        # total_weight; survey masses differ only in accumulation order).
+        pg_by_group = cohort_masses[pos] / total_weight
+        kpos = np.searchsorted(unique_groups, groups_arr)
+        pg_keepers = pg_by_group[kpos]
+        sum_pg_keepers = np.sum(pg_keepers)
 
+        # Guard against zero weights (no keepers = no variance). Must stay
+        # BEFORE the psi_standard scatter - the general path returns zeros
+        # without ever accumulating the standard IF.
+        if sum_pg_keepers == 0:
+            return np.zeros(n_units), None
+
+        # Standard aggregated influence (without wif). Index arrays are
+        # unique within each cell by construction at every producer
+        # (np.where on disjoint masks), so fancy += is exact.
+        psi_standard = np.zeros(n_units)
         for j, (g, t) in enumerate(gt_pairs):
             if (g, t) not in influence_func_info:
                 continue
-
             info = influence_func_info[(g, t)]
             w = weights[j]
-
-            # Vectorized influence function aggregation using index arrays
             treated_idx = info["treated_idx"]
             if len(treated_idx) > 0:
-                np.add.at(psi_overall, treated_idx, w * info["treated_inf"])
-
+                psi_standard[treated_idx] += w * info["treated_inf"]
             control_idx = info["control_idx"]
             if len(control_idx) > 0:
-                np.add.at(psi_overall, control_idx, w * info["control_inf"])
+                psi_standard[control_idx] += w * info["control_inf"]
 
-        # Compute variance: Var(θ̄) = (1/n) Σᵢ ψᵢ²
-        variance = np.sum(psi_overall**2)
-        return np.sqrt(variance)
+        # Closed-form WIF over per-cohort tables.
+        n_ug = len(unique_groups)
+        E_keepers = np.bincount(kpos, weights=effects, minlength=n_ug)
+        K_keepers = np.bincount(kpos, minlength=n_ug).astype(np.float64)
+        E_full = np.zeros(len(cohort_values))
+        K_full = np.zeros(len(cohort_values))
+        E_full[pos] = E_keepers
+        K_full[pos] = K_keepers
+
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            d = pg_keepers @ effects
+            wif_contrib = E_full[cohort_codes] / sum_pg_keepers - K_full[cohort_codes] * (
+                d / sum_pg_keepers**2
+            )
+            if survey_w is not None:
+                wif_contrib = wif_contrib * survey_w
+
+        # Check for non-finite values from edge cases (same fail-closed
+        # contract as the general path: warn + all-NaN vector, before the
+        # 1/total_weight scaling).
+        if not np.all(np.isfinite(wif_contrib)):
+            import warnings
+
+            n_nonfinite = np.sum(~np.isfinite(wif_contrib))
+            warnings.warn(
+                f"Non-finite values ({n_nonfinite}/{len(wif_contrib)}) in weight influence "
+                "function computation. This may occur with very small samples or extreme "
+                "weights. Returning NaN for SE to signal invalid inference.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return np.full(n_units, np.nan), None
+
+        # Scale by 1/total_weight to match R's getSE formula. On a panel routed
+        # as RC, additionally divide by obs_per_unit: the WIF is a per-UNIT
+        # quantity but wif_contrib is per-observation, so the unit-clustered sum
+        # would otherwise over-count each unit's WIF by its observation count.
+        # obs_per_unit is 1.0 for panel / true RC (a no-op there).
+        obs_per_unit = cache.get("obs_per_unit")
+        if obs_per_unit is not None:
+            psi_wif = wif_contrib / (obs_per_unit * total_weight)
+        else:
+            psi_wif = wif_contrib / total_weight
+
+        return psi_standard + psi_wif, None
 
     def _compute_combined_influence_function(
         self,
@@ -226,8 +416,8 @@ class CallawaySantAnnaAggregationMixin:
         effects: np.ndarray,
         groups_for_gt: np.ndarray,
         influence_func_info: Dict,
-        df: pd.DataFrame,
-        unit: str,
+        df: Optional[pd.DataFrame],
+        unit: Optional[str],
         precomputed: Optional["PrecomputedData"] = None,
         global_unit_to_idx: Optional[Dict[Any, int]] = None,
         n_global_units: Optional[int] = None,
@@ -255,6 +445,39 @@ class CallawaySantAnnaAggregationMixin:
         # Detect RCS mode via explicit flag. In RCS, obs indices ARE array positions.
         _is_rcs = precomputed is not None and not precomputed.get("is_panel", True)
 
+        # Fast-path dispatch: all in-package callers thread the SAME
+        # precomputed structures they index psi by, so the cohort tables can
+        # be looked up in O(n_units) instead of re-scanning the DataFrame per
+        # group and looping units in Python. Order matters: the RCS check
+        # must precede the panel identity check (for RCS both
+        # global_unit_to_idx and precomputed["unit_to_idx"] are None, so the
+        # identity guard alone would spuriously pass). Anything not exactly
+        # matched (direct callers with foreign index maps, size mismatches,
+        # non-numeric cohorts) falls through to the general path below
+        # (same mathematical contract; its IF scatter uses the fancy-+=
+        # form, bit-identical to np.add.at on the producers' duplicate-free
+        # index arrays).
+        if precomputed is not None and n_global_units is not None:
+            _fast_ok = False
+            if _is_rcs:
+                _fast_ok = n_global_units == len(precomputed["unit_cohorts"])
+            elif global_unit_to_idx is not None and global_unit_to_idx is precomputed.get(
+                "unit_to_idx"
+            ):
+                _fast_ok = n_global_units == len(precomputed["unit_cohorts"])
+            if _fast_ok:
+                fast = self._combined_if_fast(
+                    gt_pairs,
+                    weights,
+                    effects,
+                    groups_for_gt,
+                    influence_func_info,
+                    precomputed,
+                    n_global_units,
+                )
+                if fast is not None:
+                    return fast
+
         # Build unit index mapping (local or global)
         if _is_rcs and n_global_units is not None:
             # RCS: direct indexing — obs indices are the array positions
@@ -264,12 +487,30 @@ class CallawaySantAnnaAggregationMixin:
             n_units = n_global_units
             all_units = None  # caller already has the unit list
         else:
+            # Local-units fallback for direct callers without precomputed /
+            # global unit ids. It needs per-cell unit-LABEL arrays, which
+            # in-package fits stopped materializing (v3.8 per-cell
+            # allocation shave — labels are always all_units[idx], and every
+            # in-package caller threads global_unit_to_idx + n_global_units,
+            # so this branch is unreachable from a fit). Direct callers must
+            # either thread the global ids or supply label arrays.
             all_units_set: Set[Any] = set()
             for g, t in gt_pairs:
                 if (g, t) in influence_func_info:
                     info = influence_func_info[(g, t)]
-                    all_units_set.update(info["treated_units"])
-                    all_units_set.update(info["control_units"])
+                    t_units = info.get("treated_units")
+                    c_units = info.get("control_units")
+                    if t_units is None or c_units is None:
+                        raise ValueError(
+                            "Combined-IF assembly without precomputed/global unit "
+                            "ids requires per-cell 'treated_units'/'control_units' "
+                            "label arrays in influence_func_info; in-package fits "
+                            "no longer materialize them. Pass global_unit_to_idx "
+                            "and n_global_units (as all in-package callers do), "
+                            "or add the label arrays to your influence_func_info."
+                        )
+                    all_units_set.update(t_units)
+                    all_units_set.update(c_units)
 
             if not all_units_set:
                 return np.zeros(0), []
@@ -290,6 +531,8 @@ class CallawaySantAnnaAggregationMixin:
         # With survey weights: pg[g] = sum(sw_g) / sum(sw_all)
         group_sizes = {}
         if survey_w is not None:
+            # Survey weights come from precomputed, so it is present here.
+            assert precomputed is not None
             # Survey-weighted group sizes
             precomputed_cohorts = precomputed["unit_cohorts"]
             for g in unique_groups:
@@ -297,12 +540,32 @@ class CallawaySantAnnaAggregationMixin:
                 group_sizes[g] = float(np.sum(survey_w[mask_g]))
             total_weight = float(np.sum(survey_w))
         elif _is_rcs:
+            # The RCS path always builds precomputed (obs-level bookkeeping).
+            assert precomputed is not None
             # RCS without survey: count observations per cohort
             precomputed_cohorts = precomputed["unit_cohorts"]
             for g in unique_groups:
                 group_sizes[g] = int(np.sum(precomputed_cohorts == g))
             total_weight = float(n_units)
+        elif precomputed is not None:
+            # Panel without survey. ``unit_cohorts`` is the per-unit cohort array
+            # (``df.groupby(unit)[first_treat].first().values``), so counting its
+            # matches is IDENTICAL to the frame lookup below - and it lets
+            # post-fit aggregation run from the retained kit with no frame.
+            precomputed_cohorts = precomputed["unit_cohorts"]
+            for g in unique_groups:
+                group_sizes[g] = int(np.sum(precomputed_cohorts == g))
+            total_weight = float(n_units)
         else:
+            # No precomputed bookkeeping (direct internal callers only): fall
+            # back to the fit-time frame. Reaching here without one is the
+            # fail-closed case - post-fit callers always carry the kit, so a
+            # None frame here means neither source is available.
+            if df is None or unit is None:
+                raise ValueError(
+                    "Cohort sizes need either precomputed bookkeeping or the fit-time "
+                    "frame; neither was supplied."
+                )
             for g in unique_groups:
                 treated_in_g = df[df["first_treat"] == g][unit].nunique()
                 group_sizes[g] = treated_in_g
@@ -329,19 +592,24 @@ class CallawaySantAnnaAggregationMixin:
             info = influence_func_info[(g, t)]
             w = weights[j]
 
-            # Vectorized influence function aggregation using precomputed index arrays
+            # Vectorized IF aggregation using precomputed index arrays. Index
+            # arrays are unique within each cell by construction at every
+            # producer (np.where on disjoint masks), so fancy += is exact —
+            # same scatter contract as _combined_if_fast.
             treated_idx = info["treated_idx"]
             if len(treated_idx) > 0:
-                np.add.at(psi_standard, treated_idx, w * info["treated_inf"])
+                psi_standard[treated_idx] += w * info["treated_inf"]
 
             control_idx = info["control_idx"]
             if len(control_idx) > 0:
-                np.add.at(psi_standard, control_idx, w * info["control_inf"])
+                psi_standard[control_idx] += w * info["control_inf"]
 
         # Build unit-group array: normalize iterator to (idx, uid) pairs
         unit_groups_array = np.full(n_units, -1, dtype=np.float64)
 
         if _is_rcs:
+            # The RCS path always builds precomputed (obs-level bookkeeping).
+            assert precomputed is not None
             # RCS: direct vectorized assignment — obs indices are positions
             precomputed_cohorts = precomputed["unit_cohorts"]
             for g in unique_groups:
@@ -359,16 +627,37 @@ class CallawaySantAnnaAggregationMixin:
                         if cohort in unique_groups_set:
                             unit_groups_array[idx] = cohort
             else:
+                if df is None or unit is None:
+                    raise ValueError(
+                        "Per-unit cohorts need either precomputed bookkeeping or the "
+                        "fit-time frame; neither was supplied."
+                    )
                 for idx, uid in idx_uid_pairs:
                     unit_first_treat = df[df[unit] == uid]["first_treat"].iloc[0]
                     if unit_first_treat in unique_groups_set:
                         unit_groups_array[idx] = unit_first_treat
         else:
             idx_uid_pairs = list(enumerate(all_units))
-            for idx, uid in idx_uid_pairs:
-                unit_first_treat = df[df[unit] == uid]["first_treat"].iloc[0]
-                if unit_first_treat in unique_groups_set:
-                    unit_groups_array[idx] = unit_first_treat
+            if precomputed is not None and precomputed.get("unit_to_idx") is not None:
+                # Same per-unit cohort lookup as the branch above, from the kit
+                # rather than the frame - keeps post-fit aggregation frame-free.
+                precomputed_cohorts = precomputed["unit_cohorts"]
+                precomputed_unit_to_idx = precomputed["unit_to_idx"]
+                for idx, uid in idx_uid_pairs:
+                    if uid in precomputed_unit_to_idx:
+                        cohort = precomputed_cohorts[precomputed_unit_to_idx[uid]]
+                        if cohort in unique_groups_set:
+                            unit_groups_array[idx] = cohort
+            else:
+                if df is None or unit is None:
+                    raise ValueError(
+                        "Per-unit cohorts need either precomputed bookkeeping or the "
+                        "fit-time frame; neither was supplied."
+                    )
+                for idx, uid in idx_uid_pairs:
+                    unit_first_treat = df[df[unit] == uid]["first_treat"].iloc[0]
+                    if unit_first_treat in unique_groups_set:
+                        unit_groups_array[idx] = unit_first_treat
 
         # Vectorized WIF computation
         groups_for_gt_array = np.array(groups_for_gt)
@@ -439,6 +728,7 @@ class CallawaySantAnnaAggregationMixin:
 
         return psi_total, all_units
 
+    @overload
     def _compute_aggregated_se_with_wif(
         self,
         gt_pairs: List[Tuple[Any, Any]],
@@ -446,11 +736,39 @@ class CallawaySantAnnaAggregationMixin:
         effects: np.ndarray,
         groups_for_gt: np.ndarray,
         influence_func_info: Dict,
-        df: pd.DataFrame,
-        unit: str,
+        df: Optional[pd.DataFrame],
+        unit: Optional[str],
+        precomputed: Optional["PrecomputedData"] = None,
+        return_psi: Literal[False] = False,
+    ) -> Tuple[float, Optional[int]]: ...
+
+    @overload
+    def _compute_aggregated_se_with_wif(
+        self,
+        gt_pairs: List[Tuple[Any, Any]],
+        weights: np.ndarray,
+        effects: np.ndarray,
+        groups_for_gt: np.ndarray,
+        influence_func_info: Dict,
+        df: Optional[pd.DataFrame],
+        unit: Optional[str],
+        precomputed: Optional["PrecomputedData"] = None,
+        *,
+        return_psi: Literal[True],
+    ) -> Tuple[float, np.ndarray, Optional[int]]: ...
+
+    def _compute_aggregated_se_with_wif(
+        self,
+        gt_pairs: List[Tuple[Any, Any]],
+        weights: np.ndarray,
+        effects: np.ndarray,
+        groups_for_gt: np.ndarray,
+        influence_func_info: Dict,
+        df: Optional[pd.DataFrame],
+        unit: Optional[str],
         precomputed: Optional["PrecomputedData"] = None,
         return_psi: bool = False,
-    ) -> "Union[float, Tuple[float, np.ndarray]]":
+    ) -> "Union[Tuple[float, Optional[int]], Tuple[float, np.ndarray, Optional[int]]]":
         """
         Compute SE with weight influence function (wif) adjustment.
 
@@ -465,6 +783,15 @@ class CallawaySantAnnaAggregationMixin:
         Formula (matching R's did::aggte):
             agg_inf_i = Σ_k w_k × inf_i_k + wif_i × ATT_k
             se = sqrt(mean(agg_inf^2) / n)
+
+        Returns
+        -------
+        ``(se, effective_df)`` when ``return_psi=False``; ``(se, psi_total,
+        effective_df)`` when ``return_psi=True``. This 2-tuple / 3-tuple arity is
+        held on EVERY branch — including the empty-IF (``se=0.0``) and non-finite-IF
+        (``se=NaN``) early returns — so callers that unpack two or three values fail
+        soft instead of raising on degenerate influence functions. ``effective_df``
+        is non-None only for replicate designs that dropped replicates.
         """
         # Extract global unit info for correct pg = n_g / N_total scaling.
         # Without this, the local path builds the unit set from only units in
@@ -493,15 +820,37 @@ class CallawaySantAnnaAggregationMixin:
             n_global_units=n_global_units,
         )
 
+        # Consistent return arity across ALL branches: return_psi=True -> 3-tuple
+        # (se, psi, effective_df); return_psi=False -> 2-tuple (se, effective_df).
+        # The empty / non-finite-IF branches must match so callers that unpack three
+        # values (``_aggregate_event_study``) or two (``_aggregate_simple``) fail soft
+        # (NaN SE) instead of raising on degenerate IF/WIF edge cases.
         if len(psi_total) == 0:
-            return (0.0, psi_total) if return_psi else 0.0
+            return (0.0, psi_total, None) if return_psi else (0.0, None)
 
         # Check for NaN propagation from non-finite WIF
         if not np.all(np.isfinite(psi_total)):
-            return (np.nan, psi_total) if return_psi else np.nan
+            return (np.nan, psi_total, None) if return_psi else (np.nan, None)
 
-        # Use design-based variance when full survey design is available
-        # Use unit-level resolved survey (panel IF is indexed by unit, not obs)
+        se, effective_df = self._se_from_psi(psi_total, precomputed)
+        if return_psi:
+            return (se, psi_total, effective_df)
+        return (se, effective_df)
+
+    def _se_from_psi(
+        self,
+        psi_total: np.ndarray,
+        precomputed: Optional["PrecomputedData"] = None,
+    ) -> "Tuple[float, Optional[int]]":
+        """Standard error (and per-statistic effective df) from a combined IF vector.
+
+        Routes a finite, non-empty influence-function vector through the same
+        variance estimator the per-event-time and simple-aggregation SE paths use:
+        replicate-weight variance, full survey-design variance, or the simple
+        ``sqrt(sum(psi^2))``. Callers must guard emptiness/finiteness first.
+        Returns ``(se, effective_df)``; ``effective_df`` is non-None only for
+        replicate designs that dropped replicates.
+        """
         resolved_survey = (
             precomputed.get("resolved_survey_unit") if precomputed is not None else None
         )
@@ -521,9 +870,7 @@ class CallawaySantAnnaAggregationMixin:
                 se = np.nan
             else:
                 se = np.sqrt(max(variance, 0.0))
-            if return_psi:
-                return (se, psi_total, effective_df)
-            return (se, effective_df)
+            return se, effective_df
 
         if resolved_survey is not None and (
             resolved_survey.strata is not None
@@ -537,15 +884,10 @@ class CallawaySantAnnaAggregationMixin:
                 se = np.nan
             else:
                 se = np.sqrt(max(variance, 0.0))
-            if return_psi:
-                return (se, psi_total, None)
-            return (se, None)
+            return se, None
 
         variance = np.sum(psi_total**2)
-        se = np.sqrt(variance)
-        if return_psi:
-            return (se, psi_total, None)
-        return (se, None)
+        return np.sqrt(variance), None
 
     def _aggregate_event_study(
         self,
@@ -557,7 +899,7 @@ class CallawaySantAnnaAggregationMixin:
         df: Optional[pd.DataFrame] = None,
         unit: Optional[str] = None,
         precomputed: Optional["PrecomputedData"] = None,
-    ) -> Dict[int, Dict[str, Any]]:
+    ) -> EventStudyAggregation:
         """
         Aggregate effects by relative time (event study).
 
@@ -570,15 +912,10 @@ class CallawaySantAnnaAggregationMixin:
         # Organize effects by relative time, keeping track of (g,t) pairs
         effects_by_e: Dict[int, List[Tuple[Tuple[Any, Any], float, float]]] = {}
 
-        # Fixed per-cohort survey weights for aggregation
-        survey_cohort_weights = None
-        if precomputed is not None and precomputed.get("survey_weights") is not None:
-            sw = precomputed["survey_weights"]
-            unit_cohorts = precomputed["unit_cohorts"]
-            survey_cohort_weights = {}
-            for g in np.unique(unit_cohorts):
-                if g > 0:
-                    survey_cohort_weights[g] = float(np.sum(sw[unit_cohorts == g]))
+        # Fixed per-cohort aggregation weights (shared with _aggregate_simple and
+        # the bootstrap): unit-level RC mass preferred so allow_unbalanced_panel
+        # weights each multi-cell horizon by fixed UNIT cohort mass, not obs count.
+        survey_cohort_weights = fixed_cohort_agg_weights(precomputed)
 
         for (g, t), data in group_time_effects.items():
             e = t - g  # Relative time
@@ -628,12 +965,42 @@ class CallawaySantAnnaAggregationMixin:
                     )
             effects_by_e = balanced_effects
 
+        # Common-reference provenance for THIS aggregation's surface: the
+        # distinct base event times of the RETAINED cohorts, read off the
+        # materialized universal-base is_reference cells (varying-base
+        # fits have none -> None). Surface-faithful by construction:
+        # balance_e can drop the cohort responsible for a second base, in
+        # which case the fit-level fit-wide tuple would over-restrict the
+        # balanced container.
+        _retained_cohorts = {g for cells in effects_by_e.values() for (g, _t), _eff, _w in cells}
+        _ref_es = {
+            t - g
+            for (g, t), data in group_time_effects.items()
+            if data.get("is_reference") and g in _retained_cohorts
+        }
+        es_reference_event_times: Optional[Tuple[Any, ...]] = (
+            tuple(sorted(_ref_es)) if _ref_es else None
+        )
+
+        # Universal base period: each cohort's positional base is materialized in
+        # `group_time_effects` / `influence_func_info` (with a zero effect and a
+        # zero influence function) by `fit()` before aggregation, so it is already
+        # grouped into `effects_by_e` above and weighted into the dynamic horizon
+        # exactly like R `did::aggte(type="dynamic")` (a reference cell dilutes the
+        # real cells at an overlapping negative horizon). We only flag which cells
+        # are references so a reference-only horizon reports NaN (not a spurious
+        # se=0) and does not count toward `n_groups`.
+        reference_cells: Set[Tuple[Any, Any]] = {
+            (g, t) for (g, t), data in group_time_effects.items() if data.get("is_reference")
+        }
+
         # Compute aggregated effects and SEs for all relative periods
         sorted_periods = sorted(effects_by_e.items())
         agg_effects_list = []
         agg_ses_list = []
         agg_n_groups = []
         agg_effective_dfs = []  # Per-horizon effective df (replicate designs)
+        agg_periods = []  # Relative times that yielded an estimable aggregate row
         _psi_vectors = []  # Per-event-time combined IF vectors for VCV
         _psi_event_times = []  # Event times that contributed a psi column
         for e, effect_list in sorted_periods:
@@ -648,17 +1015,45 @@ class CallawaySantAnnaAggregationMixin:
                 ns = ns[finite_mask]
                 gt_pairs = [gt for gt, m in zip(gt_pairs, finite_mask) if m]
                 if len(effs) == 0:
-                    agg_effects_list.append(np.nan)
-                    agg_ses_list.append(np.nan)
-                    agg_n_groups.append(0)
-                    agg_effective_dfs.append(None)
+                    # Every cell in this relative-time bucket is non-estimable
+                    # (materialized NaN). Omit the bucket entirely so the
+                    # event-study surface matches the prior omit behavior and R
+                    # did::aggte() (a relative time with no estimable cell yields
+                    # no row), and stays consistent with _aggregate_by_group,
+                    # which already drops all-NaN groups.
                     continue
+
+            # Reference-only horizon (universal base): every cell is a zero
+            # reference (att=0, no influence function), so there is no estimated
+            # effect. Report att=0, se=NaN — matching R `did` (base rows carry
+            # `se = NA`) — instead of a spurious se=0 from the all-zero IF.
+            if reference_cells and all(gt in reference_cells for gt in gt_pairs):
+                agg_effects_list.append(0.0)
+                agg_ses_list.append(np.nan)
+                agg_n_groups.append(0)
+                agg_effective_dfs.append(None)
+                agg_periods.append(e)
+                # No influence-function column for a reference-only horizon (it
+                # carries no estimated effect); leaving it out of _psi_event_times
+                # keeps the VCV index aligned with the VCV columns (valid_psi).
+                continue
 
             weights = ns / np.sum(ns)
             agg_effect = np.sum(weights * effs)
 
-            # Compute SE with WIF adjustment (matching R's did::aggte)
+            # Compute SE with WIF adjustment (matching R's did::aggte). Zero-IF
+            # reference cells contribute nothing to the variance but their cohort
+            # weight dilutes the real cells, matching R's dynamic aggregation.
             groups_for_gt = np.array([g for (g, t) in gt_pairs])
+            # The wif-SE path needs EITHER the fit-time frame or the precomputed
+            # bookkeeping. Post-fit re-aggregation supplies only the latter (the
+            # frame is deliberately not retained), and every frame dereference
+            # inside now prefers `precomputed`.
+            if precomputed is None and (df is None or unit is None):
+                raise ValueError(
+                    "Event-study aggregation needs either the fit-time frame "
+                    "(df + unit) or precomputed bookkeeping; got neither."
+                )
             agg_se, psi_e, eff_df = self._compute_aggregated_se_with_wif(
                 gt_pairs,
                 weights,
@@ -673,14 +1068,24 @@ class CallawaySantAnnaAggregationMixin:
 
             agg_effects_list.append(agg_effect)
             agg_ses_list.append(agg_se)
-            agg_n_groups.append(len(effect_list))
+            # Count only finite-contributing NON-reference cells so materialized
+            # NaN cells and zero references don't inflate n_groups — matches the
+            # all-NaN early-return which already reports 0.
+            agg_n_groups.append(sum(1 for gt in gt_pairs if gt not in reference_cells))
             agg_effective_dfs.append(eff_df)
+            agg_periods.append(e)
             _psi_vectors.append(psi_e)
             _psi_event_times.append(e)
 
+        # The Eq. (4.14) overall starts unset. It used to be reset on ``self``
+        # before any early return so a reused estimator never read a stale value
+        # from a prior fit; returning it removes that hazard by construction.
+        es_overall: Optional[Dict[str, Any]] = None
+        es_df_used: Optional[float] = None
+
         # Batch inference for all relative periods
         if not agg_effects_list:
-            return {}
+            return EventStudyAggregation()
         # Use per-horizon effective df if any replicate aggregation overrode it;
         # otherwise fall back to the original df from the survey design.
         df_survey_val = precomputed.get("df_survey") if precomputed is not None else None
@@ -698,6 +1103,14 @@ class CallawaySantAnnaAggregationMixin:
         non_none_dfs = [d for d in agg_effective_dfs if d is not None]
         if non_none_dfs:
             df_survey_val = min(non_none_dfs)
+        # Stash the ONE df every ES row's inference is about to use (the
+        # conservative min under dropped replicates) as provenance for
+        # CallawaySantAnnaResults.event_study_df. Recorded iff it will
+        # govern a t-reference (finite, > 0; the df=0 replicate sentinel
+        # yields NaN inference, not a t-law). Returned on the aggregation
+        # object alongside the VCV rather than stashed on ``self``.
+        if df_survey_val is not None and np.isfinite(df_survey_val) and df_survey_val > 0:
+            es_df_used = float(df_survey_val)
         t_stats, p_values, ci_lowers, ci_uppers = safe_inference_batch(
             np.array(agg_effects_list),
             np.array(agg_ses_list),
@@ -705,8 +1118,8 @@ class CallawaySantAnnaAggregationMixin:
             df=df_survey_val,
         )
 
-        event_study_effects = {}
-        for idx, (e, _) in enumerate(sorted_periods):
+        event_study_effects: Dict[Any, Dict[str, Any]] = {}
+        for idx, e in enumerate(agg_periods):
             event_study_effects[e] = {
                 "effect": agg_effects_list[idx],
                 "se": agg_ses_list[idx],
@@ -716,23 +1129,19 @@ class CallawaySantAnnaAggregationMixin:
                 "n_groups": agg_n_groups[idx],
             }
 
-        # Add reference period for universal base period mode (matches R did package)
-        if getattr(self, "base_period", "varying") == "universal":
-            ref_period = -1 - self.anticipation
-            if event_study_effects and ref_period not in event_study_effects:
-                event_study_effects[ref_period] = {
-                    "effect": 0.0,
-                    "se": np.nan,
-                    "t_stat": np.nan,
-                    "p_value": np.nan,
-                    "conf_int": (np.nan, np.nan),
-                    "n_groups": 0,
-                }
+        # (Universal-mode zero reference rows are now materialized per cohort at
+        # their positional base event time e = base - g during the aggregation
+        # above — matching R `did::aggte(type="dynamic")` — rather than as a
+        # single fixed e = -1-anticipation display row.)
 
         # Compute full event-study VCV from per-event-time IF vectors (Phase 7d)
         # This enables HonestDiD to use the full covariance structure
         event_study_vcov = None
-        valid_psi = [p for p in _psi_vectors if len(p) > 0]
+        # Pair event times with their IF vectors and keep only non-empty psi, so
+        # the stored VCV index (below) always aligns 1:1 with the VCV columns.
+        _valid_pairs = [(et, p) for et, p in zip(_psi_event_times, _psi_vectors) if len(p) > 0]
+        valid_psi = [p for _, p in _valid_pairs]
+        valid_event_times = [et for et, _ in _valid_pairs]
         if valid_psi:
             try:
                 Psi = np.column_stack(valid_psi)  # (n_units, n_event_times)
@@ -770,13 +1179,57 @@ class CallawaySantAnnaAggregationMixin:
                 pass  # Fall back to diagonal (None)
 
         # Store the event-time index that matches VCV columns (for subsetting
-        # in HonestDiD when some event times are filtered out)
-        self._event_study_vcov_index = _psi_event_times if event_study_vcov is not None else None
+        # in HonestDiD when some event times are filtered out). Uses the
+        # non-empty-psi event times so the index aligns 1:1 with the VCV columns
+        # (reference-only and empty-IF horizons never get a column).
+        event_study_vcov_index = valid_event_times if event_study_vcov is not None else None
 
-        # Attach VCV to self for CallawaySantAnna to pick up
-        self._event_study_vcov = event_study_vcov
+        # Eq. (4.14) overall ATT: the unweighted mean of the post-treatment
+        # event-study effects ES(e). Stashed on self (mirroring _event_study_vcov)
+        # so the StaggeredTripleDifference estimator can expose it as overall_att_es;
+        # CallawaySantAnna leaves it unread. Post-treatment is the library predicate
+        # e >= -anticipation (matching _aggregate_simple and the default overall_att),
+        # NOT a hardcoded e >= 0.
+        #
+        # The POINT ESTIMATE averages EVERY finite post-treatment ES(e) effect (read
+        # from event_study_effects by event-time key), so it is always the true Eq.
+        # 4.14 average -- it must NOT be silently restricted to horizons with a finite
+        # influence function. The SE is the influence function of that mean (the
+        # average of the per-event-time combined IFs, via the same survey-aware
+        # variance routine as the per-e effects). If any contributing horizon lacks a
+        # finite, well-formed combined IF (a finite ES(e) can have a non-finite
+        # WIF/IF, which the per-e path already surfaces as a NaN SE), the combined IF
+        # for the mean is undefined: the SE is NaN while the point estimate is
+        # retained, and the consumer (fit) warns and NaN-propagates the inference.
+        post_e = [
+            e
+            for e in event_study_effects
+            if e >= -self.anticipation and np.isfinite(event_study_effects[e]["effect"])
+        ]
+        if post_e:
+            att_es = float(np.mean([event_study_effects[e]["effect"] for e in post_e]))
+            psi_by_e = {e: psi for e, psi in zip(_psi_event_times, _psi_vectors)}
+            psis = [psi_by_e.get(e) for e in post_e]
+            se_es: float = np.nan
+            eff_df_es: Optional[int] = None
+            if all(p is not None and len(p) > 0 and np.all(np.isfinite(p)) for p in psis):
+                if len({len(p) for p in psis}) == 1:
+                    psi_es = np.column_stack(psis).mean(axis=1)
+                    se_es, eff_df_es = self._se_from_psi(psi_es, precomputed)
+            es_overall = {
+                "att": att_es,
+                "se": float(se_es),
+                "effective_df": eff_df_es,
+            }
 
-        return event_study_effects
+        return EventStudyAggregation(
+            effects=event_study_effects,
+            overall=es_overall,
+            df_used=es_df_used,
+            vcov=event_study_vcov,
+            vcov_index=event_study_vcov_index,
+            reference_event_times=es_reference_event_times,
+        )
 
     def _aggregate_by_group(
         self,
@@ -828,7 +1281,9 @@ class CallawaySantAnnaAggregationMixin:
             agg_se, eff_df = self._compute_aggregated_se_with_wif(
                 gt_pairs, weights, effs, groups_for_gt, influence_func_info, df, unit, precomputed
             )
-            group_data_list.append((g, agg_effect, agg_se, len(g_effects), eff_df))
+            # Count only finite-contributing cells (gt_pairs is finite-filtered
+            # above) so materialized NaN cells don't inflate n_periods.
+            group_data_list.append((g, agg_effect, agg_se, len(gt_pairs), eff_df))
 
         if not group_data_list:
             return {}
@@ -857,6 +1312,17 @@ class CallawaySantAnnaAggregationMixin:
             df=df_survey_val,
         )
 
+        # Provenance: the ONE df every group row's inference just used (the
+        # conservative min under dropped replicates). Recorded per row iff it
+        # will govern a t-reference - finite and > 0; the df=0 replicate
+        # sentinel yields NaN inference, not a t-law. Carried on the effect
+        # dicts so a post-fit ``aggregate("group")`` reports the df that
+        # actually produced the stored p-value/CI rather than re-deriving it
+        # from whichever df field happens to be populated on the results.
+        group_df_used: Optional[float] = None
+        if df_survey_val is not None and np.isfinite(df_survey_val) and df_survey_val > 0:
+            group_df_used = float(df_survey_val)
+
         group_effects = {}
         for idx, (g, agg_effect, agg_se, n_periods, _eff_df) in enumerate(group_data_list):
             group_effects[g] = {
@@ -866,6 +1332,7 @@ class CallawaySantAnnaAggregationMixin:
                 "p_value": float(p_values[idx]),
                 "conf_int": (float(ci_lowers[idx]), float(ci_uppers[idx])),
                 "n_periods": n_periods,
+                "df_used": group_df_used,
             }
 
         return group_effects

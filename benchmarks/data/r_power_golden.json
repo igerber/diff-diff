@@ -1,0 +1,224 @@
+{
+  "meta": {
+    "generated_at": "2026-05-31",
+    "r_version": "R version 4.5.2 (2025-10-31)",
+    "description": "Bloom (1995) + Burlig, Preonas & Woerman (2020) parity goldens for diff-diff PowerAnalysis (analytical path). Normal-based (qnorm) MDE multiplier (D1, NOT pwr.t.test); panel variance = Burlig Eq. 2 equicorrelated case sigma^2 (1/n_T+1/n_C)(1/m+1/r)(1-rho) (D4); the 2x2 path is the m=r=1 case 2 sigma^2 (1/n_T+1/n_C)(1-rho), = Bloom at rho=0. atol=1e-9 on variance/se/mde/power; exact on required_n. Stata pcpanel cross-check intentionally omitted (no Stata); the equicorrelated DiD variance is validated empirically by the Monte-Carlo test in tests/test_methodology_power.py."
+  },
+  "bloom_table1_one_sided_p05": [
+    {
+      "power": 0.9,
+      "multiplier": 2.92640519249607,
+      "bloom_stated": 2.93
+    },
+    {
+      "power": 0.8,
+      "multiplier": 2.48647486052439,
+      "bloom_stated": 2.49
+    },
+    {
+      "power": 0.7,
+      "multiplier": 2.16925413965951,
+      "bloom_stated": 2.17
+    }
+  ],
+  "fixtures": [
+    {
+      "name": "basic_2x2_two_sided",
+      "alpha": 0.05,
+      "power": 0.8,
+      "alternative": "two-sided",
+      "n_treated": 50,
+      "n_control": 50,
+      "sigma": 1,
+      "n_pre": 1,
+      "n_post": 1,
+      "rho": 0,
+      "effect_size": 0.5,
+      "treat_frac": 0.5,
+      "expected": {
+        "design": "basic_did",
+        "variance": 0.08,
+        "se": 0.282842712474619,
+        "mde": 0.792407962319869,
+        "power": 0.423890541254426,
+        "required_n": 252
+      }
+    },
+    {
+      "name": "basic_2x2_rho04",
+      "alpha": 0.05,
+      "power": 0.8,
+      "alternative": "two-sided",
+      "n_treated": 50,
+      "n_control": 50,
+      "sigma": 1,
+      "n_pre": 1,
+      "n_post": 1,
+      "rho": 0.4,
+      "effect_size": 0.5,
+      "treat_frac": 0.5,
+      "expected": {
+        "design": "basic_did",
+        "variance": 0.048,
+        "se": 0.219089023002066,
+        "mde": 0.613796568293401,
+        "power": 0.626365529695951,
+        "required_n": 151
+      }
+    },
+    {
+      "name": "basic_2x2_unbalanced",
+      "alpha": 0.05,
+      "power": 0.8,
+      "alternative": "two-sided",
+      "n_treated": 30,
+      "n_control": 90,
+      "sigma": 2,
+      "n_pre": 1,
+      "n_post": 1,
+      "rho": 0,
+      "effect_size": 0.8,
+      "treat_frac": 0.25,
+      "expected": {
+        "design": "basic_did",
+        "variance": 0.355555555555556,
+        "se": 0.596284793999944,
+        "mde": 1.67054266465578,
+        "power": 0.268661823663677,
+        "required_n": 524
+      }
+    },
+    {
+      "name": "basic_2x2_one_sided_p90",
+      "alpha": 0.05,
+      "power": 0.9,
+      "alternative": "greater",
+      "n_treated": 40,
+      "n_control": 40,
+      "sigma": 1.5,
+      "n_pre": 1,
+      "n_post": 1,
+      "rho": 0,
+      "effect_size": 0.6,
+      "treat_frac": 0.5,
+      "expected": {
+        "design": "basic_did",
+        "variance": 0.225,
+        "se": 0.474341649025257,
+        "mde": 1.38811586472466,
+        "power": 0.35199402581685,
+        "required_n": 429
+      }
+    },
+    {
+      "name": "panel_rho0",
+      "alpha": 0.05,
+      "power": 0.8,
+      "alternative": "two-sided",
+      "n_treated": 50,
+      "n_control": 50,
+      "sigma": 1,
+      "n_pre": 3,
+      "n_post": 3,
+      "rho": 0,
+      "effect_size": 0.3,
+      "treat_frac": 0.5,
+      "expected": {
+        "design": "panel",
+        "variance": 0.0266666666666667,
+        "se": 0.163299316185545,
+        "mde": 0.457496950353379,
+        "power": 0.451187460344997,
+        "required_n": 233
+      }
+    },
+    {
+      "name": "panel_rho03",
+      "alpha": 0.05,
+      "power": 0.8,
+      "alternative": "two-sided",
+      "n_treated": 50,
+      "n_control": 50,
+      "sigma": 1,
+      "n_pre": 3,
+      "n_post": 3,
+      "rho": 0.3,
+      "effect_size": 0.3,
+      "treat_frac": 0.5,
+      "expected": {
+        "design": "panel",
+        "variance": 0.0186666666666667,
+        "se": 0.136626010212795,
+        "mde": 0.382769410621917,
+        "power": 0.593226615523771,
+        "required_n": 163
+      }
+    },
+    {
+      "name": "panel_rho05_asymmetric",
+      "alpha": 0.05,
+      "power": 0.8,
+      "alternative": "two-sided",
+      "n_treated": 60,
+      "n_control": 40,
+      "sigma": 1.2,
+      "n_pre": 2,
+      "n_post": 5,
+      "rho": 0.5,
+      "effect_size": 0.4,
+      "treat_frac": 0.6,
+      "expected": {
+        "design": "panel",
+        "variance": 0.021,
+        "se": 0.144913767461894,
+        "mde": 0.405988268822303,
+        "power": 0.788232170346087,
+        "required_n": 104
+      }
+    },
+    {
+      "name": "panel_one_sided_p90",
+      "alpha": 0.1,
+      "power": 0.9,
+      "alternative": "greater",
+      "n_treated": 80,
+      "n_control": 80,
+      "sigma": 2,
+      "n_pre": 4,
+      "n_post": 4,
+      "rho": 0.2,
+      "effect_size": 0.5,
+      "treat_frac": 0.5,
+      "expected": {
+        "design": "panel",
+        "variance": 0.04,
+        "se": 0.2,
+        "mde": 0.51262062621784,
+        "power": 0.888473195519659,
+        "required_n": 169
+      }
+    },
+    {
+      "name": "panel_negative_rho",
+      "alpha": 0.05,
+      "power": 0.8,
+      "alternative": "two-sided",
+      "n_treated": 50,
+      "n_control": 50,
+      "sigma": 1,
+      "n_pre": 3,
+      "n_post": 3,
+      "rho": -0.1,
+      "effect_size": 0.3,
+      "treat_frac": 0.5,
+      "expected": {
+        "design": "panel",
+        "variance": 0.0293333333333333,
+        "se": 0.171269767715535,
+        "mde": 0.479826849541485,
+        "power": 0.417584201764294,
+        "required_n": 256
+      }
+    }
+  ]
+}

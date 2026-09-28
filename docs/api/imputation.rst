@@ -36,6 +36,7 @@ ImputationDiD
 Main estimator class for imputation DiD estimation.
 
 .. autoclass:: diff_diff.ImputationDiD
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -55,6 +56,7 @@ ImputationDiDResults
 Results container for imputation DiD estimation.
 
 .. autoclass:: diff_diff.ImputationDiDResults
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -63,6 +65,7 @@ Results container for imputation DiD estimation.
 
    .. autosummary::
 
+      ~ImputationDiDResults.aggregate
       ~ImputationDiDResults.summary
       ~ImputationDiDResults.print_summary
       ~ImputationDiDResults.to_dataframe
@@ -74,6 +77,7 @@ ImputationBootstrapResults
 Bootstrap inference results.
 
 .. autoclass:: diff_diff.ImputationBootstrapResults
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:
@@ -102,9 +106,10 @@ Event study with visualization::
 
     est = ImputationDiD()
     results = est.fit(data, outcome='outcome', unit='unit',
-                      time='period', first_treat='first_treat',
-                      aggregate='event_study')
-    plot_event_study(results)
+                      time='period', first_treat='first_treat')
+    es = results.aggregate('event_study')   # post-fit (M-021)
+    total = results.aggregate('total')      # estimator-owned total (3.10)
+    plot_event_study(es)
 
 Pre-trend test::
 

@@ -15,6 +15,7 @@ from diff_diff import (
 from diff_diff.linalg import LinearRegression, compute_robust_vcov, solve_ols
 from diff_diff.survey import (
     ResolvedSurveyDesign,
+    _compute_stratified_psu_meat,
     compute_survey_metadata,
     compute_survey_vcov,
 )
@@ -234,8 +235,8 @@ class TestAnalyticalVerification:
         did = DifferenceInDifferences()
         sd1 = SurveyDesign(weights="w1", weight_type="pweight")
         sd2 = SurveyDesign(weights="w2", weight_type="pweight")
-        r1 = did.fit(df, outcome="outcome", treatment="treated", time="post", survey_design=sd1)
-        r2 = did.fit(df, outcome="outcome", treatment="treated", time="post", survey_design=sd2)
+        r1 = did.fit(df, outcome="outcome", treatment="treated", post="post", survey_design=sd1)
+        r2 = did.fit(df, outcome="outcome", treatment="treated", post="post", survey_design=sd2)
 
         np.testing.assert_allclose(r1.att, r2.att, atol=1e-10)
         np.testing.assert_allclose(r1.se, r2.se, atol=1e-10)
@@ -517,7 +518,6 @@ class TestConsistencyInvariance:
         # TSL with implicit per-observation PSUs:
         # meat = sum_i (s_i - s_bar)(s_i - s_bar)' * n/(n-1)
         # where s_i = w_i * X_i * e_i
-        k = X.shape[1]
         XtWX = X.T @ (X * weights[:, np.newaxis])
         XtWX_inv = np.linalg.inv(XtWX)
         scores = X * (weights * resid)[:, np.newaxis]
@@ -593,7 +593,7 @@ class TestIntegration:
             survey_2x2_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             survey_design=sd,
         )
 
@@ -628,7 +628,7 @@ class TestIntegration:
                 survey_2x2_data,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 survey_design=sd,
             )
             psu_warnings = [
@@ -649,7 +649,7 @@ class TestIntegration:
             survey_2x2_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             absorb=["stratum"],
             survey_design=sd,
         )
@@ -659,7 +659,7 @@ class TestIntegration:
             survey_2x2_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             absorb=["stratum"],
         )
 
@@ -682,7 +682,7 @@ class TestIntegration:
             survey_2x2_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             survey_design=sd,
         )
         summary_text = result.summary()
@@ -707,7 +707,7 @@ class TestIntegration:
             survey_2x2_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             survey_design=sd,
         )
         d = result.to_dict()
@@ -735,7 +735,7 @@ class TestIntegration:
                 survey_2x2_data,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 survey_design=sd,
             )
 
@@ -859,7 +859,7 @@ class TestIntegration:
                 survey_2x2_data,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 survey_design={"weights": "weight"},  # dict instead of SurveyDesign
             )
 
@@ -903,7 +903,7 @@ class TestIntegration:
             twfe_panel_data,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
             survey_design=sd,
         )
@@ -1133,7 +1133,7 @@ class TestMonteCarlo:
                     df,
                     outcome="outcome",
                     treatment="treated",
-                    time="post",
+                    post="post",
                     survey_design=sd,
                 )
                 if result.conf_int[0] <= true_att <= result.conf_int[1]:
@@ -1443,7 +1443,6 @@ class TestWeightedRankDeficiency:
         model = LinearRegression(
             weights=pw,
             weight_type="pweight",
-            robust=True,
             include_intercept=False,
             rank_deficient_action="warn",
         )
@@ -1491,7 +1490,6 @@ class TestWeightedRankDeficiency:
 
         # Oracle: TSL with implicit per-observation PSUs
         # scores = w_i * X_i * e_i, meat = n/(n-1) * (scores - mean)' (scores - mean)
-        k = X_base.shape[1]
         XtWX = X_base.T @ (X_base * freq[:, np.newaxis])
         XtWX_inv = np.linalg.inv(XtWX)
         scores = X_base * (freq * resid_fw)[:, np.newaxis]
@@ -1791,7 +1789,6 @@ class TestRound5Fixes:
         model_explicit = LinearRegression(
             weights=weights_norm,
             weight_type="pweight",
-            robust=True,
             survey_design=resolved,
         )
         X = np.column_stack([np.ones(n), x1])
@@ -1799,13 +1796,16 @@ class TestRound5Fixes:
 
         # Auto-derive path: no explicit weights
         model_auto = LinearRegression(
-            robust=True,
             survey_design=resolved,
         )
         model_auto.fit(X, y)
 
-        # Weights should be populated after fit
-        assert model_auto.weights is not None
+        # Configured state (`self.weights`) stays at user's None — fit
+        # does NOT mutate configuration. The fit-time effective weights
+        # (derived from the survey design) are stored on the fitted
+        # attribute `_fit_weights_`.
+        assert model_auto.weights is None
+        assert model_auto._fit_weights_ is not None
 
         # Coefficients should match
         np.testing.assert_allclose(
@@ -2142,6 +2142,175 @@ class TestRound7Fixes:
         assert coef is not None
 
 
+class TestZeroWeightPsuConventionWaiver:
+    """Lock the waived decision on the survey TSL finite-sample correction.
+
+    ``_compute_stratified_psu_meat`` intentionally keeps genuine-subpopulation
+    zero-weight PSUs in its per-stratum correction
+    ``(1 - f_h)*n_PSU_h/(n_PSU_h - 1)`` and PSU-mean centering — the full-design
+    domain estimator of Lumley (2004 §3.4) / R ``survey::svyrecvar(subset())``.
+    A former TODO proposed "count only positive-weight PSUs" to force the survey
+    SE to be invariant to zero-weight rows; that was **waived** (DEFERRED.md
+    § "Decision record — won't-fix / waived"; REGISTRY § "Subpopulation Analysis") because it would
+    break the documented R parity. These tests trip if that change is ever made:
+    the proposed fix would collapse the subpopulation SE onto the naive-subset SE.
+    """
+
+    @staticmethod
+    def _panel():
+        rng = np.random.default_rng(20260630)
+        rows = []
+        uid = 0
+        for h in range(3):  # strata
+            for p in range(4):  # PSUs per stratum (>=2 so a drop leaves the path live)
+                psu_id = f"s{h}_p{p}"
+                for _ in range(2):  # units per PSU
+                    treated = int(rng.random() < 0.5)
+                    for t in (0, 1):  # periods
+                        y = 2.0 * treated * t + 0.5 * h + 0.3 * p + rng.normal()
+                        rows.append(
+                            dict(
+                                unit=uid,
+                                stratum=h,
+                                psu=psu_id,
+                                treated=treated,
+                                post=t,
+                                outcome=y,
+                                w=rng.uniform(0.5, 2.0),
+                            )
+                        )
+                    uid += 1
+        return pd.DataFrame(rows)
+
+    def _fit(self, df):
+        sd = SurveyDesign(weights="w", strata="stratum", psu="psu")
+        res = DifferenceInDifferences().fit(
+            df, outcome="outcome", treatment="treated", post="post", survey_design=sd
+        )
+        return res.att, res.se
+
+    def test_inert_padding_reusing_existing_psu_is_bit_invariant(self):
+        """Zero-weight rows under an EXISTING PSU label are inert: ATT and SE
+        bit-identical. (Their weighted score is 0, so the PSU-score sum and the
+        PSU count are both unchanged.)"""
+        base = self._panel()
+        att0, se0 = self._fit(base)
+
+        pad = []
+        for _ in range(8):
+            for t in (0, 1):
+                pad.append(
+                    dict(
+                        unit=8000,
+                        stratum=0,
+                        psu="s0_p1",  # reuse an existing PSU
+                        treated=0,
+                        post=t,
+                        outcome=99.0,  # arbitrary; weight 0 makes it inert
+                        w=0.0,
+                    )
+                )
+        padded = pd.concat([base, pd.DataFrame(pad)], ignore_index=True)
+        att1, se1 = self._fit(padded)
+
+        np.testing.assert_allclose(att1, att0, atol=1e-12)
+        np.testing.assert_allclose(se1, se0, atol=1e-12)
+
+    def test_subpopulation_zeroing_keeps_full_psu_structure(self):
+        """Genuine subpopulation (zero a full PSU's weights) is NOT a naive
+        physical subset. The WLS fit is identical (zero-weight rows drop out of
+        X'WX), so the ATT is exactly invariant; but the TSL SE intentionally
+        differs from the dropped-rows SE because the zeroed PSU still counts in
+        the finite-sample correction (Lumley full-design convention).
+
+        The proposed "count only positive-weight PSUs" change would make the
+        zeroed SE equal the dropped SE; this assertion guards against it.
+        """
+        base = self._panel()
+        victim = "s0_p0"
+
+        zeroed = base.copy()
+        zeroed.loc[zeroed["psu"] == victim, "w"] = 0.0
+        att_zero, se_zero = self._fit(zeroed)
+
+        dropped = base[base["psu"] != victim].copy()
+        att_drop, se_drop = self._fit(dropped)
+
+        # ATT is exactly invariant: zero-weight rows contribute nothing to the
+        # weighted normal equations, so the point estimate matches the subset.
+        np.testing.assert_allclose(att_zero, att_drop, atol=1e-10)
+
+        # SE is deliberately NOT invariant: the zeroed PSU stays in n_PSU_h and
+        # the centering (the Lumley domain gap, ~5e-3 rel here). A positive-
+        # weight-only correction would drive this to ~0.
+        rel_gap = abs(se_zero - se_drop) / se_drop
+        assert rel_gap > 1e-3, (
+            f"survey SE became invariant to subpopulation zeroing "
+            f"(rel_gap={rel_gap:.2e}); the full-design Lumley convention "
+            f"(DEFERRED.md § Decision record — won't-fix / waived) appears to have been reverted."
+        )
+
+    def test_stratified_meat_counts_zero_score_psu_in_full_design(self):
+        """Direct unit test on ``_compute_stratified_psu_meat``: an all-zero-score
+        PSU (a fully zeroed subpopulation PSU) stays in ``n_PSU_h``, the stratum
+        PSU-mean, and the centering. Asserts the **exact** full-design meat and
+        that it is NOT the positive-weight-only meat (which would drop the zero
+        PSU). This guards against partial edits the SE-level test could miss —
+        e.g. changing only the finite-sample denominator while still centering
+        over the zero PSU.
+        """
+        # Two strata; stratum 0 has an all-zero PSU (psu 2 = two zeroed rows).
+        scores = np.array(
+            [
+                [1.5, -0.5],  # stratum 0, psu 0
+                [0.5, 2.0],  # stratum 0, psu 1
+                [0.0, 0.0],  # stratum 0, psu 2 (all-zero subpop PSU), row 1
+                [0.0, 0.0],  # stratum 0, psu 2, row 2
+                [-1.0, 0.7],  # stratum 1, psu 3
+                [0.3, -1.2],  # stratum 1, psu 4
+            ]
+        )
+        strata = np.array([0, 0, 0, 0, 1, 1])
+        psu = np.array([0, 1, 2, 2, 3, 4])
+        # PSU 2's rows carry zero weight as well as zero score, so the fixture
+        # models a *true* fully zero-weight subpopulation PSU. The current meat
+        # ignores `weights` (it operates on scores), so this does not change the
+        # expected value — but it hardens the lock against a future denominator-
+        # only edit that reads `resolved.weights` to drop positive-weight PSUs.
+        resolved = ResolvedSurveyDesign(
+            weights=np.array([1.0, 1.0, 0.0, 0.0, 1.0, 1.0]),
+            weight_type="pweight",
+            strata=strata,
+            psu=psu,
+            fpc=None,
+            n_strata=2,
+            n_psu=5,
+            lonely_psu="remove",
+        )
+
+        meat, variance_computed, _ = _compute_stratified_psu_meat(scores, resolved)
+        assert variance_computed
+
+        def _stratum_meat(psu_scores):
+            # Full-design per-stratum meat with fpc=None: (n_h/(n_h-1)) * S'S.
+            n_h = psu_scores.shape[0]
+            centered = psu_scores - psu_scores.mean(axis=0, keepdims=True)
+            return (n_h / (n_h - 1)) * (centered.T @ centered)
+
+        # Full-design reference INCLUDES the all-zero PSU in stratum 0 (n_h=3).
+        s0_full = np.array([[1.5, -0.5], [0.5, 2.0], [0.0, 0.0]])
+        s1 = np.array([[-1.0, 0.7], [0.3, -1.2]])
+        expected_full = _stratum_meat(s0_full) + _stratum_meat(s1)
+        np.testing.assert_allclose(meat, expected_full, atol=1e-12)
+
+        # The positive-weight-only meat would DROP the zero PSU from stratum 0
+        # (n_h=2, mean over the two nonzero PSUs) — exactly the change the waived
+        # TODO proposed. The full-design meat must NOT equal it.
+        s0_pos = np.array([[1.5, -0.5], [0.5, 2.0]])
+        positive_only = _stratum_meat(s0_pos) + _stratum_meat(s1)
+        assert not np.allclose(meat, positive_only, atol=1e-8)
+
+
 class TestRound8Fixes:
     """Tests for round-8 review fixes (PR #218)."""
 
@@ -2281,7 +2450,7 @@ class TestRound9Fixes:
                 df,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 absorb=["region"],
                 survey_design=sd,
             )
@@ -2292,7 +2461,7 @@ class TestRound9Fixes:
             df,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             fixed_effects=["region"],
             survey_design=sd,
         )
@@ -2498,7 +2667,7 @@ class TestRound10Fixes:
                 df,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 survey_design=sd,
             )
         # SE should be 0 (all certainty strata), inference should be NaN
@@ -2516,7 +2685,6 @@ class TestRound10Fixes:
         psu = np.tile(np.arange(5), 12)  # 5 PSUs per stratum
 
         X = np.column_stack([np.ones(n), np.random.randn(n)])
-        y = np.random.randn(n)
         residuals = np.random.randn(n)
         weights = np.ones(n)
 
@@ -2544,7 +2712,6 @@ class TestRound10Fixes:
         psu = np.repeat(np.arange(6), 5)  # 6 PSUs
 
         X = np.column_stack([np.ones(n), np.random.randn(n)])
-        y = np.random.randn(n)
         residuals = np.random.randn(n)
         weights = np.ones(n)
 
@@ -2592,7 +2759,7 @@ class TestRound10Fixes:
                 df,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 absorb=["region"],
             )
 
@@ -2625,7 +2792,7 @@ class TestRound11Fixes:
             lonely_psu="remove",
         )
 
-        lr = LinearRegression(survey_design=resolved, robust=True)
+        lr = LinearRegression(survey_design=resolved)
 
         # First fit: 2 clusters → survey_df = 2 - 1 = 1
         cluster_1 = np.array([0] * 10 + [1] * 10)
@@ -2640,8 +2807,16 @@ class TestRound11Fixes:
         # Original survey_design must be immutable
         assert lr.survey_design.psu is None
 
-    def test_multi_absorb_survey_rejected_did(self):
-        """DiD with multi-absorb + survey weights raises ValueError."""
+    def test_multi_absorb_survey_now_supported_did(self):
+        """DiD with multi-absorb + survey weights is now supported (iterative MAP).
+
+        Previously rejected. The absorb path uses the method of alternating
+        projections, the exact weighted FWL projection for N>1 dimensions, so the
+        ATT matches the equivalent ``fixed_effects=[a, b]`` full-dummy fit. (This
+        panel is balanced in a×b + uniform weights, so it verifies the lifted guard
+        and weighted equivalence; the unbalanced strong discriminator vs single-pass
+        lives in test_methodology_did.py::TestMultiAbsorbIterativeDemean.)
+        """
         np.random.seed(42)
         n = 40
         df = pd.DataFrame(
@@ -2655,19 +2830,29 @@ class TestRound11Fixes:
             }
         )
         sd = SurveyDesign(weights="w", weight_type="pweight")
-        did = DifferenceInDifferences()
-        with pytest.raises(ValueError, match="Multiple absorbed fixed effects"):
-            did.fit(
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res_abs = DifferenceInDifferences().fit(
                 df,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 absorb=["a", "b"],
                 survey_design=sd,
             )
+            res_fe = DifferenceInDifferences().fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                post="post",
+                fixed_effects=["a", "b"],
+                survey_design=sd,
+            )
+        assert np.isfinite(res_abs.att)
+        assert abs(res_abs.att - res_fe.att) < 1e-8
 
-    def test_multi_absorb_survey_rejected_multiperiod(self):
-        """MultiPeriodDiD with multi-absorb + survey weights raises ValueError."""
+    def test_multi_absorb_survey_now_supported_multiperiod(self):
+        """MultiPeriodDiD with multi-absorb + survey weights is now supported."""
         np.random.seed(42)
         n = 60
         df = pd.DataFrame(
@@ -2681,9 +2866,9 @@ class TestRound11Fixes:
             }
         )
         sd = SurveyDesign(weights="w", weight_type="pweight")
-        mpd = MultiPeriodDiD()
-        with pytest.raises(ValueError, match="Multiple absorbed fixed effects"):
-            mpd.fit(
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res_abs = MultiPeriodDiD().fit(
                 df,
                 outcome="outcome",
                 treatment="treated",
@@ -2692,6 +2877,25 @@ class TestRound11Fixes:
                 absorb=["a", "b"],
                 survey_design=sd,
             )
+            res_fe = MultiPeriodDiD().fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                time="time",
+                post_periods=[2],
+                fixed_effects=["a", "b"],
+                survey_design=sd,
+            )
+        a_eff = {p: pe.effect for p, pe in res_abs.period_effects.items()}
+        f_eff = {p: pe.effect for p, pe in res_fe.period_effects.items()}
+        compared = [
+            (a_eff[p], f_eff[p])
+            for p in a_eff
+            if p in f_eff and np.isfinite(a_eff[p]) and np.isfinite(f_eff[p])
+        ]
+        assert compared, "no finite period effects to compare"
+        for ae, fe in compared:
+            assert abs(ae - fe) < 1e-8
 
     def test_single_absorb_survey_allowed(self):
         """Single-absorb with survey weights should still work (regression guard)."""
@@ -2714,7 +2918,7 @@ class TestRound11Fixes:
                 df,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 absorb=["region"],
                 survey_design=sd,
             )
@@ -2899,8 +3103,10 @@ class TestRound15Fixes:
 class TestRound16Fixes:
     """Tests for PR #218 review round 16: cluster-as-PSU nesting and FPC."""
 
-    def test_injected_cluster_nested_in_strata(self):
-        """Injected cluster IDs with repeated labels across strata get unique codes."""
+    def test_injected_cluster_nested_in_strata_under_nest_true(self):
+        """Under nest=True, injected cluster IDs with repeated labels across
+        strata get nested via (stratum, cluster) so they receive unique codes.
+        """
         from diff_diff.survey import _inject_cluster_as_psu
 
         # 2 strata, cluster "1" appears in both → should produce 4 unique PSUs
@@ -2914,6 +3120,7 @@ class TestRound16Fixes:
             n_strata=2,
             n_psu=0,
             lonely_psu="remove",
+            nest=True,
         )
         cluster_ids = np.array([1, 1, 2, 2, 1, 1, 2, 2])  # labels repeat across strata
         result = _inject_cluster_as_psu(resolved, cluster_ids)
@@ -2921,6 +3128,78 @@ class TestRound16Fixes:
         assert result.n_psu == 4
         # df_survey = n_psu - n_strata = 4 - 2 = 2
         assert result.df_survey == 2
+
+    def test_injected_cluster_overlap_raises_under_nest_false(self):
+        """Under nest=False, the explicit-PSU contract is that cluster
+        labels must be globally unique. The implicit injection mirrors
+        that contract: cross-stratum label overlap raises ValueError
+        (matches `SurveyDesign.resolve()` L305-L316).
+        """
+        from diff_diff.survey import _inject_cluster_as_psu
+
+        strata = np.array([0, 0, 0, 0, 1, 1, 1, 1])
+        resolved = ResolvedSurveyDesign(
+            weights=np.ones(8),
+            weight_type="pweight",
+            strata=strata,
+            psu=None,
+            fpc=None,
+            n_strata=2,
+            n_psu=0,
+            lonely_psu="remove",
+            nest=False,
+        )
+        cluster_ids = np.array([1, 1, 2, 2, 1, 1, 2, 2])  # labels repeat across strata
+        with pytest.raises(ValueError, match="repeat across strata"):
+            _inject_cluster_as_psu(resolved, cluster_ids)
+
+    def test_subset_to_units_propagates_nest_flag(self):
+        """`ResolvedSurveyDesign.subset_to_units()` must preserve `nest`
+        on the unit-level copy so the cluster-as-PSU injection contract
+        continues to apply when downstream estimators (ContinuousDiD,
+        EfficientDiD) collapse a panel survey design to unit level.
+        Without propagation, a `nest=True` design would silently revert
+        to `nest=False` after subsetting.
+        """
+        from diff_diff.survey import ResolvedSurveyDesign
+
+        n_obs = 6  # 3 units × 2 periods, panel-level
+        # row_idx picks one row per unit (the panel's per-unit anchor)
+        row_idx = np.array([0, 2, 4])
+        unit_weights = np.ones(3)
+        unit_strata = np.array([0, 0, 1])
+        unit_psu = np.array([0, 1, 2])
+        resolved_nest_true = ResolvedSurveyDesign(
+            weights=np.ones(n_obs),
+            weight_type="pweight",
+            strata=np.array([0, 0, 0, 0, 1, 1]),
+            psu=np.array([0, 0, 1, 1, 2, 2]),
+            fpc=None,
+            n_strata=2,
+            n_psu=3,
+            lonely_psu="remove",
+            nest=True,
+        )
+        subset = resolved_nest_true.subset_to_units(
+            row_idx, unit_weights, unit_strata, unit_psu, None, n_strata=2, n_psu=3
+        )
+        assert subset.nest is True, f"subset_to_units must preserve nest=True; got {subset.nest}"
+        # Default-case parity: nest=False propagates too
+        resolved_nest_false = ResolvedSurveyDesign(
+            weights=np.ones(n_obs),
+            weight_type="pweight",
+            strata=None,
+            psu=None,
+            fpc=None,
+            n_strata=0,
+            n_psu=0,
+            lonely_psu="remove",
+            nest=False,
+        )
+        subset2 = resolved_nest_false.subset_to_units(
+            row_idx, unit_weights, None, None, None, n_strata=0, n_psu=0
+        )
+        assert subset2.nest is False
 
     def test_fpc_with_strata_no_psu_accepted(self):
         """FPC + strata (no PSU) resolves — FPC validated later against effective PSUs."""
@@ -3085,7 +3364,7 @@ class TestRound18Fixes:
                 df,
                 outcome="outcome",
                 treatment="treated",
-                time="post",
+                post="post",
                 survey_design=sd,
             )
         assert np.isfinite(result.att)
@@ -3239,7 +3518,7 @@ class TestRound23Fixes:
             df,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
             survey_design=SurveyDesign(weights="weight"),
         )
@@ -3257,7 +3536,7 @@ class TestRound23Fixes:
             df,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
             survey_design=SurveyDesign(weights="weight", strata="stratum"),
         )
@@ -3273,7 +3552,7 @@ class TestRound23Fixes:
             df,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
             survey_design=SurveyDesign(weights="weight"),
         )
@@ -3288,9 +3567,214 @@ class TestRound23Fixes:
             df,
             outcome="outcome",
             treatment="treated",
-            time="post",
+            post="post",
             unit="unit",
         )
         assert result is not None
         assert np.isfinite(result.se)
         assert result.se > 0
+
+
+class TestSilentWarningAudit:
+    """Tests for UserWarning emissions added by the silent warning audit."""
+
+    def test_item7_weight_normalization_warning(self):
+        """Item 7: Warn when pweight/aweight are normalized."""
+        n = 100
+        raw_weights = np.random.default_rng(42).uniform(1.0, 10.0, n)
+        assert not np.isclose(np.sum(raw_weights), n)
+
+        df = pd.DataFrame({"x": np.arange(n), "w": raw_weights})
+        sd = SurveyDesign(weights="w", weight_type="pweight")
+        with pytest.warns(UserWarning, match="pweight weights normalized"):
+            sd.resolve(df)
+
+    def test_item7_no_warning_when_already_normalized(self):
+        """Item 7 negative: No warning when weights already sum to n."""
+        n = 100
+        raw_weights = np.ones(n)  # sum = n, mean = 1
+        assert np.isclose(np.sum(raw_weights), n)
+
+        df = pd.DataFrame({"x": np.arange(n), "w": raw_weights})
+        sd = SurveyDesign(weights="w", weight_type="pweight")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            sd.resolve(df)
+        norm_warnings = [x for x in w if "normalized" in str(x.message)]
+        assert len(norm_warnings) == 0
+
+    def test_item7_aweight_normalization_warning(self):
+        """Item 7: aweight also triggers normalization warning."""
+        n = 50
+        raw_weights = np.random.default_rng(42).uniform(1.0, 5.0, n)
+        df = pd.DataFrame({"x": np.arange(n), "w": raw_weights})
+        sd = SurveyDesign(weights="w", weight_type="aweight")
+        with pytest.warns(UserWarning, match="aweight weights normalized"):
+            sd.resolve(df)
+
+
+# ---------------------------------------------------------------------------
+# Silent-failure audit PR #9: finding #19 — compute_survey_vcov called
+# np.linalg.solve(XtWX, ...) with no precondition check. A near-singular
+# X'WX (zero-weight strata dominating, near-collinear X) solves without
+# raising but returns numerically unstable variance. Now warns when
+# cond(X'WX) exceeds 1/sqrt(eps).
+# ---------------------------------------------------------------------------
+
+
+class TestSurveyVcovIllConditionedWarning:
+    def test_ill_conditioned_X_warns(self):
+        """Near-collinear design matrix triggers the cond-number warning."""
+        n = 60
+        rng = np.random.default_rng(11)
+        x1 = rng.normal(0, 1, n)
+        # x2 = x1 + tiny noise → near-collinear after weighting
+        x2 = x1 + rng.normal(0, 1e-9, n)
+        X = np.column_stack([np.ones(n), x1, x2])
+        y = 1.0 + 0.5 * x1 + rng.normal(0, 0.3, n)
+        weights = np.ones(n)
+
+        # Use WLS solve to get residuals — but we need residuals that give
+        # a non-zero meat so the function reaches the vcov solve.
+        coef = np.linalg.lstsq(X, y, rcond=None)[0]
+        resid = y - X @ coef
+
+        resolved = ResolvedSurveyDesign(
+            weights=weights,
+            weight_type="pweight",
+            strata=None,
+            psu=np.arange(n),
+            fpc=None,
+            n_strata=0,
+            n_psu=n,
+            lonely_psu="remove",
+        )
+        with pytest.warns(UserWarning, match="X'WX is ill-conditioned"):
+            vcov = compute_survey_vcov(X, resid, resolved)
+        # Warning does not suppress output — the caller still gets a matrix.
+        assert vcov.shape == (3, 3)
+
+    def test_well_conditioned_X_no_warning(self):
+        """Clean design matrix should NOT trigger the warning — happy path."""
+        n = 80
+        rng = np.random.default_rng(22)
+        X = np.column_stack([np.ones(n), rng.normal(0, 1, n), rng.normal(0, 1, n)])
+        y = 1.0 + 0.5 * X[:, 1] - 0.3 * X[:, 2] + rng.normal(0, 0.3, n)
+        weights = np.ones(n)
+
+        coef, resid, _ = solve_ols(X, y, weights=weights, weight_type="pweight")
+        resolved = ResolvedSurveyDesign(
+            weights=weights,
+            weight_type="pweight",
+            strata=None,
+            psu=np.arange(n),
+            fpc=None,
+            n_strata=0,
+            n_psu=n,
+            lonely_psu="remove",
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            vcov = compute_survey_vcov(X, resid, resolved)
+        ill_cond_warnings = [w for w in caught if "X'WX is ill-conditioned" in str(w.message)]
+        assert ill_cond_warnings == [], (
+            f"Unexpected cond-number warning on clean data: "
+            f"{[str(w.message) for w in ill_cond_warnings]}"
+        )
+        assert vcov.shape == (3, 3)
+        assert np.all(np.isfinite(vcov))
+
+
+class TestUnitCollapseHelpers:
+    """Shared panel-to-unit survey-collapse helpers (#226 consolidation).
+
+    ``build_unit_first_row_index`` and
+    ``ResolvedSurveyDesign.subset_to_units_by_row_idx`` replace the row_idx->unit
+    collapse hand-rolled in ContinuousDiD / EfficientDiD. These tests lock the
+    wrappers to bit-identity against the OLD inline preamble (the oracle).
+    """
+
+    def test_build_unit_first_row_index_unsorted_panel(self):
+        from diff_diff.survey import build_unit_first_row_index
+
+        # Unsorted 3-unit x 3-period panel (unit column neither grouped nor sorted).
+        unit_values = np.array([2, 0, 1, 2, 0, 1, 2, 0, 1])
+        unit_order = [0, 1, 2]  # sorted(unique)
+        idx = build_unit_first_row_index(unit_values, unit_order)
+        # First occurrence: unit 0 -> pos 1, unit 1 -> pos 2, unit 2 -> pos 0.
+        np.testing.assert_array_equal(idx, np.array([1, 2, 0]))
+        assert idx.dtype == np.dtype(int)
+
+    @staticmethod
+    def _oracle_collapse(resolved, row_idx, unit_weights):
+        # Frozen copy of the OLD inline preamble + subset_to_units call that the
+        # new subset_to_units_by_row_idx wrapper replaces. This is the oracle.
+        unit_strata = resolved.strata[row_idx] if resolved.strata is not None else None
+        unit_psu = resolved.psu[row_idx] if resolved.psu is not None else None
+        unit_fpc = resolved.fpc[row_idx] if resolved.fpc is not None else None
+        n_strata_u = len(np.unique(unit_strata)) if unit_strata is not None else 0
+        n_psu_u = len(np.unique(unit_psu)) if unit_psu is not None else 0
+        return resolved.subset_to_units(
+            row_idx, unit_weights, unit_strata, unit_psu, unit_fpc, n_strata_u, n_psu_u
+        )
+
+    @staticmethod
+    def _panel_design(with_replicates=False):
+        n_obs = 6  # 3 units x 2 periods, panel-level
+        kwargs = dict(
+            weights=np.array([1.0, 1.0, 2.0, 2.0, 3.0, 3.0]),
+            weight_type="pweight",
+            strata=np.array([0, 0, 0, 0, 1, 1]),
+            psu=np.array([0, 0, 1, 1, 2, 2]),
+            fpc=np.array([10.0, 10.0, 10.0, 10.0, 20.0, 20.0]),
+            n_strata=2,
+            n_psu=3,
+            lonely_psu="remove",
+        )
+        if with_replicates:
+            kwargs["replicate_weights"] = np.arange(n_obs * 4, dtype=float).reshape(n_obs, 4)
+            kwargs["replicate_method"] = "bootstrap"
+            kwargs["n_replicates"] = 4
+        return ResolvedSurveyDesign(**kwargs)
+
+    @staticmethod
+    def _assert_designs_equal(a, b):
+        np.testing.assert_array_equal(a.weights, b.weights)
+        np.testing.assert_array_equal(a.strata, b.strata)
+        np.testing.assert_array_equal(a.psu, b.psu)
+        np.testing.assert_array_equal(a.fpc, b.fpc)
+        assert a.n_strata == b.n_strata
+        assert a.n_psu == b.n_psu
+        if a.replicate_weights is None:
+            assert b.replicate_weights is None
+        else:
+            np.testing.assert_array_equal(a.replicate_weights, b.replicate_weights)
+
+    def test_subset_by_row_idx_matches_oracle_explicit_weights(self):
+        resolved = self._panel_design()
+        row_idx = np.array([0, 2, 4])
+        unit_weights = resolved.weights[row_idx]
+        got = resolved.subset_to_units_by_row_idx(row_idx, unit_weights=unit_weights)
+        want = self._oracle_collapse(resolved, row_idx, unit_weights)
+        self._assert_designs_equal(got, want)
+        # n_strata/n_psu recounted from the collapsed arrays (3 units -> 2 strata, 3 PSU).
+        assert got.n_strata == 2 and got.n_psu == 3
+
+    def test_subset_by_row_idx_default_weights_path(self):
+        # unit_weights=None must default to self.weights[row_idx] (review LOW #3).
+        resolved = self._panel_design()
+        row_idx = np.array([0, 2, 4])
+        got = resolved.subset_to_units_by_row_idx(row_idx)
+        want = self._oracle_collapse(resolved, row_idx, resolved.weights[row_idx])
+        self._assert_designs_equal(got, want)
+        np.testing.assert_array_equal(got.weights, resolved.weights[row_idx])
+
+    def test_subset_by_row_idx_preserves_replicate_rows(self):
+        # Replicate-weight design: the (row_idx, :) R-column subset must survive
+        # the wrapper unchanged (review LOW #3).
+        resolved = self._panel_design(with_replicates=True)
+        row_idx = np.array([0, 2, 4])
+        got = resolved.subset_to_units_by_row_idx(row_idx)
+        want = self._oracle_collapse(resolved, row_idx, resolved.weights[row_idx])
+        self._assert_designs_equal(got, want)
+        np.testing.assert_array_equal(got.replicate_weights, resolved.replicate_weights[row_idx, :])

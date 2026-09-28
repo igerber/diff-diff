@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: placebo_timing_test
+   :no-index:

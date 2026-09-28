@@ -9,10 +9,14 @@ These tests verify that:
 Tests are skipped if the Rust backend is not available.
 """
 
+import warnings
+
 import numpy as np
+import pandas as pd
 import pytest
 
 from diff_diff import HAS_RUST_BACKEND
+from diff_diff._backend import _rust_demean_map as _demean_map_symbol
 
 
 @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
@@ -100,43 +104,93 @@ class TestRustBackend:
         weights2 = generate_bootstrap_weights_batch(100, 50, "rademacher", 43)
         assert not np.array_equal(weights1, weights2)
 
+    def test_bootstrap_weights_bit_identity_snapshot(self):
+        """Pin fixed-seed bootstrap weight output byte-for-byte.
+
+        Regression guard against silent RNG output drift across
+        `rand` / `rand_xoshiro` crate upgrades. Distributional moment
+        tests would not catch a byte shift that preserves the
+        distribution (e.g. `rand 0.9`'s `random_range` algorithm
+        change relative to `rand 0.8`'s `gen_range`).
+
+        If this test fails after a Rust dependency bump, the byte stream
+        has shifted. Decide deliberately whether to accept the new
+        baseline (regenerate these values) or pin to a compatible
+        crate version.
+        """
+        from diff_diff._rust_backend import generate_bootstrap_weights_batch
+
+        # Captured under rand 0.10 + rand_xoshiro 0.8 with seed=42.
+        # Rademacher and Mammen bytes match rand 0.8 + rand_xoshiro 0.6;
+        # Webb bytes shifted in the rand 0.9 random_range algorithm change.
+        expected = {
+            "rademacher": np.array(
+                [
+                    [1.0, -1.0, 1.0, 1.0],
+                    [-1.0, 1.0, 1.0, 1.0],
+                ]
+            ),
+            "mammen": np.array(
+                [
+                    [
+                        1.618033988749895,
+                        -0.6180339887498949,
+                        1.618033988749895,
+                        -0.6180339887498949,
+                    ],
+                    [
+                        -0.6180339887498949,
+                        -0.6180339887498949,
+                        1.618033988749895,
+                        1.618033988749895,
+                    ],
+                ]
+            ),
+            "webb": np.array(
+                [
+                    [1.0, -1.0, 1.224744871391589, 1.0],
+                    [-1.0, 0.7071067811865476, 1.224744871391589, 1.224744871391589],
+                ]
+            ),
+        }
+        for weight_type, expected_arr in expected.items():
+            actual = generate_bootstrap_weights_batch(2, 4, weight_type, 42)
+            # Strict bit-identity: the snapshot values are either exact
+            # (Rademacher = +/-1.0) or computed once via correctly-rounded
+            # IEEE 754 sqrt in Rust (Mammen, Webb), so cross-platform
+            # bit-equality holds on conformant hardware.
+            np.testing.assert_array_equal(
+                actual,
+                expected_arr,
+                err_msg=f"{weight_type} bootstrap weights drifted from pinned baseline",
+            )
+
     # =========================================================================
     # Synthetic Weight Tests
     # =========================================================================
 
-    def test_synthetic_weights_sum_to_one(self):
-        """Test synthetic weights sum to 1."""
-        from diff_diff._rust_backend import compute_synthetic_weights
+    # Tests for `compute_synthetic_weights` direct Rust binding removed in
+    # the silent-failures audit post-cleanup (finding #22). The helper was
+    # deleted from the Python layer and the Rust symbol was subsequently
+    # removed from `rust/src/weights.rs` + unregistered in `rust/src/lib.rs`.
 
-        np.random.seed(42)
-        Y_control = np.random.randn(10, 5)
-        Y_treated = np.random.randn(10)
+    def test_compute_synthetic_weights_is_removed(self):
+        """Regression guard against accidental re-export of the deleted
+        `compute_synthetic_weights` PyO3 binding (silent-failures finding
+        #22). If this test fails, someone reintroduced the binding — audit
+        the reason before adding it back."""
+        import diff_diff._rust_backend as rb
 
-        weights = compute_synthetic_weights(Y_control, Y_treated, 0.0, 1000, 1e-8)
-        assert abs(weights.sum() - 1.0) < 1e-6, f"Weights should sum to 1, got {weights.sum()}"
+        with pytest.raises(ImportError):
+            from diff_diff._rust_backend import (  # noqa: F401
+                compute_synthetic_weights,
+            )
 
-    def test_synthetic_weights_non_negative(self):
-        """Test synthetic weights are non-negative."""
-        from diff_diff._rust_backend import compute_synthetic_weights
-
-        np.random.seed(42)
-        Y_control = np.random.randn(10, 5)
-        Y_treated = np.random.randn(10)
-
-        weights = compute_synthetic_weights(Y_control, Y_treated, 0.0, 1000, 1e-8)
-        assert np.all(weights >= -1e-10), "Weights should be non-negative"
-
-    def test_synthetic_weights_shape(self):
-        """Test synthetic weights have correct shape."""
-        from diff_diff._rust_backend import compute_synthetic_weights
-
-        np.random.seed(42)
-        n_control = 8
-        Y_control = np.random.randn(10, n_control)
-        Y_treated = np.random.randn(10)
-
-        weights = compute_synthetic_weights(Y_control, Y_treated, 0.0, 1000, 1e-8)
-        assert weights.shape == (n_control,)
+        assert not hasattr(rb, "compute_synthetic_weights"), (
+            "compute_synthetic_weights was removed from the Rust backend "
+            "in the post-audit cleanup for finding #22; its presence here "
+            "indicates accidental re-export."
+        )
 
     # =========================================================================
     # Simplex Projection Tests
@@ -284,7 +338,6 @@ class TestRustBackend:
         3. Results match NumPy implementation
         """
         from diff_diff._rust_backend import solve_ols
-        from scipy.linalg import lstsq
 
         np.random.seed(42)
         n = 100
@@ -306,8 +359,10 @@ class TestRustBackend:
         # Verify residuals are correct given coefficients
         expected_residuals = y - X @ coeffs
         np.testing.assert_array_almost_equal(
-            residuals, expected_residuals, decimal=8,
-            err_msg="Residuals should match y - X @ coeffs"
+            residuals,
+            expected_residuals,
+            decimal=8,
+            err_msg="Residuals should match y - X @ coeffs",
         )
 
     def test_high_condition_number_matrix(self):
@@ -391,8 +446,10 @@ class TestRustBackend:
         # Residuals should be correct given coefficients
         expected_residuals = y - X @ coeffs
         np.testing.assert_array_almost_equal(
-            residuals, expected_residuals, decimal=8,
-            err_msg="Residuals should match y - X @ coeffs"
+            residuals,
+            expected_residuals,
+            decimal=8,
+            err_msg="Residuals should match y - X @ coeffs",
         )
 
     def test_multiperiod_did_like_design_matrix(self):
@@ -451,9 +508,9 @@ class TestRustBackend:
         assert np.all(np.abs(coeffs) < 1e6), f"Coefficients are unreasonably large: {coeffs}"
 
         # Treatment effect (last coefficient) should be close to true effect
-        assert abs(coeffs[-1] - true_effect) < 2.0, (
-            f"Treatment effect {coeffs[-1]} is too far from true effect {true_effect}"
-        )
+        assert (
+            abs(coeffs[-1] - true_effect) < 2.0
+        ), f"Treatment effect {coeffs[-1]} is too far from true effect {true_effect}"
 
 
 @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
@@ -467,6 +524,7 @@ class TestRustVsNumpy:
     def test_solve_ols_coefficients_match(self):
         """Test Rust and NumPy OLS coefficients match."""
         from diff_diff._rust_backend import solve_ols as rust_fn
+
         from diff_diff.linalg import _solve_ols_numpy as numpy_fn
 
         np.random.seed(42)
@@ -478,17 +536,56 @@ class TestRustVsNumpy:
         numpy_coeffs, numpy_resid, numpy_vcov = numpy_fn(X, y, cluster_ids=None)
 
         np.testing.assert_array_almost_equal(
-            rust_coeffs, numpy_coeffs, decimal=8,
-            err_msg="OLS coefficients should match"
+            rust_coeffs, numpy_coeffs, decimal=8, err_msg="OLS coefficients should match"
         )
         np.testing.assert_array_almost_equal(
-            rust_resid, numpy_resid, decimal=8,
-            err_msg="OLS residuals should match"
+            rust_resid, numpy_resid, decimal=8, err_msg="OLS residuals should match"
+        )
+
+    def test_solve_ols_underdetermined_match(self):
+        """n < k through the RAW rust backend's slimmed marshalling: the
+        thin-SVD U/V shapes flip (U is n x n, V is k x n), exercising the
+        uty and drop paths on the underdetermined branch. This is a
+        direct-kernel test - the PUBLIC solve_ols rejects n < k outright -
+        asserting the engines' shared residual/exact-fit contract."""
+        from diff_diff._rust_backend import solve_ols as rust_fn
+
+        from diff_diff.linalg import _solve_ols_numpy as numpy_fn
+
+        np.random.seed(7)
+        n, k = 6, 9
+        X = np.random.randn(n, k)
+        y = np.random.randn(n)
+
+        import warnings as _w
+
+        rust_coeffs, rust_resid, _ = rust_fn(X, y, None, True)
+        with _w.catch_warnings():
+            _w.simplefilter("ignore")  # numpy path warns on the rank drop
+            _, numpy_resid, _ = numpy_fn(X, y, cluster_ids=None)
+
+        # Coefficient CONVENTIONS legitimately differ here (rust kernel:
+        # truncated-SVD minimum-norm over all k; numpy path: column-drop with
+        # NaN); the public solve_ols never routes n < k to either engine (it
+        # rejects such designs up front), so like
+        # test_rank_deficient_ols_residuals_match this asserts the engines'
+        # shared contract: an exact fit with matching residuals.
+        assert np.all(np.isfinite(rust_coeffs))
+        np.testing.assert_array_almost_equal(
+            rust_resid, np.zeros(n), decimal=10, err_msg="rust residuals ~0"
+        )
+        np.testing.assert_array_almost_equal(
+            rust_resid, numpy_resid, decimal=8, err_msg="residuals should match"
+        )
+        # the rust min-norm solution reproduces y exactly (fitted = X @ beta)
+        np.testing.assert_array_almost_equal(
+            X @ rust_coeffs, y, decimal=10, err_msg="exact fit expected"
         )
 
     def test_solve_ols_with_clusters_match(self):
         """Test Rust and NumPy OLS with cluster SEs match."""
         from diff_diff._rust_backend import solve_ols as rust_fn
+
         from diff_diff.linalg import _solve_ols_numpy as numpy_fn
 
         np.random.seed(42)
@@ -502,13 +599,11 @@ class TestRustVsNumpy:
         numpy_coeffs, _, numpy_vcov = numpy_fn(X, y, cluster_ids=cluster_ids)
 
         np.testing.assert_array_almost_equal(
-            rust_coeffs, numpy_coeffs, decimal=8,
-            err_msg="Clustered OLS coefficients should match"
+            rust_coeffs, numpy_coeffs, decimal=8, err_msg="Clustered OLS coefficients should match"
         )
         # VCoV may differ slightly due to implementation details
         np.testing.assert_array_almost_equal(
-            rust_vcov, numpy_vcov, decimal=5,
-            err_msg="Clustered OLS VCoV should match"
+            rust_vcov, numpy_vcov, decimal=5, err_msg="Clustered OLS VCoV should match"
         )
 
     def test_rank_deficient_ols_residuals_match(self):
@@ -523,7 +618,9 @@ class TestRustVsNumpy:
         But both produce the same fitted values and residuals.
         """
         import warnings
+
         from diff_diff._rust_backend import solve_ols as rust_fn
+
         from diff_diff.linalg import _solve_ols_numpy as numpy_fn
 
         np.random.seed(42)
@@ -557,8 +654,10 @@ class TestRustVsNumpy:
         # Residuals should be very close (this is the key equivalence check)
         # Both approaches should produce the same fitted values and residuals
         np.testing.assert_array_almost_equal(
-            rust_resid, numpy_resid, decimal=5,
-            err_msg="Residuals should match despite different coefficient representations"
+            rust_resid,
+            numpy_resid,
+            decimal=5,
+            err_msg="Residuals should match despite different coefficient representations",
         )
 
     def test_multiperiod_did_design_residuals_equivalence(self):
@@ -568,7 +667,9 @@ class TestRustVsNumpy:
         The design matrix in this test is typically full-rank.
         """
         import warnings
+
         from diff_diff._rust_backend import solve_ols as rust_fn
+
         from diff_diff.linalg import _solve_ols_numpy as numpy_fn
 
         np.random.seed(42)
@@ -608,25 +709,27 @@ class TestRustVsNumpy:
         # Rust should produce finite treatment effect
         rust_effect = rust_coeffs[-1]
         assert np.isfinite(rust_effect), "Rust treatment effect should be finite"
-        assert abs(rust_effect - true_effect) < 2.0, (
-            f"Rust treatment effect {rust_effect} too far from true {true_effect}"
-        )
+        assert (
+            abs(rust_effect - true_effect) < 2.0
+        ), f"Rust treatment effect {rust_effect} too far from true {true_effect}"
 
         # NumPy treatment effect should be close (may be finite or NaN depending on rank)
         numpy_effect = numpy_coeffs[-1]
         if np.isfinite(numpy_effect):
-            assert abs(numpy_effect - true_effect) < 2.0, (
-                f"NumPy treatment effect {numpy_effect} too far from true {true_effect}"
-            )
+            assert (
+                abs(numpy_effect - true_effect) < 2.0
+            ), f"NumPy treatment effect {numpy_effect} too far from true {true_effect}"
             # Effects should be close to each other
-            assert abs(rust_effect - numpy_effect) < 0.5, (
-                f"Rust ({rust_effect}) and NumPy ({numpy_effect}) effects should match"
-            )
+            assert (
+                abs(rust_effect - numpy_effect) < 0.5
+            ), f"Rust ({rust_effect}) and NumPy ({numpy_effect}) effects should match"
 
         # Residuals should be very close (key equivalence check)
         np.testing.assert_array_almost_equal(
-            rust_resid, numpy_resid, decimal=5,
-            err_msg="Residuals should match for MultiPeriodDiD-like design"
+            rust_resid,
+            numpy_resid,
+            decimal=5,
+            err_msg="Residuals should match for MultiPeriodDiD-like design",
         )
 
     # =========================================================================
@@ -636,6 +739,7 @@ class TestRustVsNumpy:
     def test_robust_vcov_hc1_match(self):
         """Test Rust and NumPy HC1 robust VCoV match."""
         from diff_diff._rust_backend import compute_robust_vcov as rust_fn
+
         from diff_diff.linalg import _compute_robust_vcov_numpy as numpy_fn
 
         np.random.seed(42)
@@ -647,13 +751,13 @@ class TestRustVsNumpy:
         numpy_vcov = numpy_fn(X, residuals, None)
 
         np.testing.assert_array_almost_equal(
-            rust_vcov, numpy_vcov, decimal=8,
-            err_msg="HC1 robust VCoV should match"
+            rust_vcov, numpy_vcov, decimal=8, err_msg="HC1 robust VCoV should match"
         )
 
     def test_robust_vcov_clustered_match(self):
         """Test Rust and NumPy cluster-robust VCoV match."""
         from diff_diff._rust_backend import compute_robust_vcov as rust_fn
+
         from diff_diff.linalg import _compute_robust_vcov_numpy as numpy_fn
 
         np.random.seed(42)
@@ -667,8 +771,7 @@ class TestRustVsNumpy:
         numpy_vcov = numpy_fn(X, residuals, cluster_ids)
 
         np.testing.assert_array_almost_equal(
-            rust_vcov, numpy_vcov, decimal=6,
-            err_msg="Cluster-robust VCoV should match"
+            rust_vcov, numpy_vcov, decimal=6, err_msg="Cluster-robust VCoV should match"
         )
 
     # =========================================================================
@@ -704,10 +807,10 @@ class TestRustVsNumpy:
         mean = weights.mean()
         assert abs(mean) < 0.02, f"Mammen mean should be ~0, got {mean}"
 
-        second_moment = (weights ** 2).mean()
+        second_moment = (weights**2).mean()
         assert abs(second_moment - 1.0) < 0.02, f"Mammen E[w^2] should be ~1, got {second_moment}"
 
-        third_moment = (weights ** 3).mean()
+        third_moment = (weights**3).mean()
         assert abs(third_moment - 1.0) < 0.1, f"Mammen E[w^3] should be ~1, got {third_moment}"
 
     def test_bootstrap_weights_webb_properties(self):
@@ -729,56 +832,15 @@ class TestRustVsNumpy:
     # Synthetic Weights Equivalence
     # =========================================================================
 
-    def test_synthetic_weights_match(self):
-        """Test Rust and NumPy synthetic weights produce similar results."""
-        from diff_diff._rust_backend import compute_synthetic_weights as rust_fn
-        from diff_diff.utils import _compute_synthetic_weights_numpy as numpy_fn
-
-        np.random.seed(42)
-        Y_control = np.random.randn(10, 5)
-        Y_treated = np.random.randn(10)
-
-        rust_weights = rust_fn(Y_control, Y_treated, 0.0, 1000, 1e-8)
-        numpy_weights = numpy_fn(Y_control, Y_treated, 0.0)
-
-        # Both should be valid simplex weights
-        assert abs(rust_weights.sum() - 1.0) < 1e-6, "Rust weights should sum to 1"
-        assert abs(numpy_weights.sum() - 1.0) < 1e-6, "NumPy weights should sum to 1"
-        assert np.all(rust_weights >= -1e-6), "Rust weights should be non-negative"
-        assert np.all(numpy_weights >= -1e-6), "NumPy weights should be non-negative"
-
-        # Reconstruction error should be similar
-        rust_error = np.linalg.norm(Y_treated - Y_control @ rust_weights)
-        numpy_error = np.linalg.norm(Y_treated - Y_control @ numpy_weights)
-        assert abs(rust_error - numpy_error) < 0.5, \
-            f"Reconstruction errors should be similar: rust={rust_error:.4f}, numpy={numpy_error:.4f}"
-
-    def test_synthetic_weights_with_regularization(self):
-        """Test Rust synthetic weights with L2 regularization."""
-        from diff_diff._rust_backend import compute_synthetic_weights as rust_fn
-        from diff_diff.utils import _compute_synthetic_weights_numpy as numpy_fn
-
-        np.random.seed(42)
-        Y_control = np.random.randn(15, 8)
-        Y_treated = np.random.randn(15)
-        lambda_reg = 0.1
-
-        rust_weights = rust_fn(Y_control, Y_treated, lambda_reg, 1000, 1e-8)
-        numpy_weights = numpy_fn(Y_control, Y_treated, lambda_reg)
-
-        # Both should be valid simplex weights
-        assert abs(rust_weights.sum() - 1.0) < 1e-6
-        assert abs(numpy_weights.sum() - 1.0) < 1e-6
-
-        # With regularization, weights should be more spread out (higher entropy)
-        rust_entropy = -np.sum(rust_weights * np.log(rust_weights + 1e-10))
-        numpy_entropy = -np.sum(numpy_weights * np.log(numpy_weights + 1e-10))
-        assert rust_entropy > 0.5, "Regularized weights should have positive entropy"
-        assert numpy_entropy > 0.5, "Regularized weights should have positive entropy"
+    # Rust/NumPy synthetic_weights parity tests removed in the silent-failures
+    # audit post-cleanup (finding #22). Helper deleted; parity is now a
+    # non-question since both paths route through the shared `_sc_weight_fw`
+    # dispatcher in `utils.py`.
 
     def test_simplex_projection_match(self):
         """Test Rust and NumPy simplex projection match exactly."""
         from diff_diff._rust_backend import project_simplex as rust_fn
+
         from diff_diff.utils import _project_simplex as numpy_fn
 
         # Test various input vectors
@@ -795,8 +857,10 @@ class TestRustVsNumpy:
             numpy_proj = numpy_fn(v)
 
             np.testing.assert_array_almost_equal(
-                rust_proj, numpy_proj, decimal=10,
-                err_msg=f"Simplex projection mismatch for input {v}"
+                rust_proj,
+                numpy_proj,
+                decimal=10,
+                err_msg=f"Simplex projection mismatch for input {v}",
             )
 
     def test_nan_vcov_fallback_to_python(self):
@@ -813,6 +877,7 @@ class TestRustVsNumpy:
         3. R-style handling is applied: NaN coefficients for dropped columns
         """
         import warnings
+
         from diff_diff.linalg import solve_ols
 
         # Create an ill-conditioned matrix that might cause QR/SVD disagreement.
@@ -836,17 +901,16 @@ class TestRustVsNumpy:
 
         # Check if fallback warning was emitted
         fallback_warning_emitted = any(
-            "Re-running with Python backend" in str(warning.message)
-            for warning in w
+            "Re-running with Python backend" in str(warning.message) for warning in w
         )
 
         # Key invariants that must hold regardless of which backend is used:
         # 1. Coefficients must be finite (either via Rust SVD or Python R-style)
         finite_coeffs = coeffs[np.isfinite(coeffs)]
-        assert len(finite_coeffs) >= 3, \
-            "At least 3 coefficients should be finite (identifiable)"
-        assert np.all(np.abs(finite_coeffs) < 1e10), \
-            f"Finite coefficients should be reasonable, got {finite_coeffs}"
+        assert len(finite_coeffs) >= 3, "At least 3 coefficients should be finite (identifiable)"
+        assert np.all(
+            np.abs(finite_coeffs) < 1e10
+        ), f"Finite coefficients should be reasonable, got {finite_coeffs}"
 
         # 2. If vcov has any finite values, they should correspond to finite coefficients
         if vcov is not None:
@@ -855,8 +919,9 @@ class TestRustVsNumpy:
                 if finite_coef_mask[i]:
                     # This coefficient's variance should be finite
                     var_i = vcov[i, i]
-                    assert np.isfinite(var_i) or np.isnan(var_i), \
-                        f"Variance for finite coef {i} should be finite or NaN (dropped)"
+                    assert np.isfinite(var_i) or np.isnan(
+                        var_i
+                    ), f"Variance for finite coef {i} should be finite or NaN (dropped)"
 
         # 3. Residuals must always be finite
         assert np.all(np.isfinite(residuals)), "Residuals should be finite"
@@ -867,20 +932,22 @@ class TestRustVsNumpy:
             nan_vcov_diag_indices = set(np.where(np.isnan(np.diag(vcov)))[0])
 
             # NaN in vcov diagonal should correspond exactly to NaN coefficients
-            assert nan_vcov_diag_indices == nan_coef_indices, \
-                f"NaN vcov diagonal {nan_vcov_diag_indices} should match " \
+            assert nan_vcov_diag_indices == nan_coef_indices, (
+                f"NaN vcov diagonal {nan_vcov_diag_indices} should match "
                 f"NaN coefficients {nan_coef_indices}"
+            )
 
         # 5. If fallback warning was emitted, R-style handling MUST have occurred
         # This verifies that the fallback actually applies R-style NaN handling
         # (not minimum-norm solution which would have all finite coefficients)
         if fallback_warning_emitted:
-            assert np.any(np.isnan(coeffs)), \
-                "Fallback warning emitted but no NaN coefficients - " \
+            assert np.any(np.isnan(coeffs)), (
+                "Fallback warning emitted but no NaN coefficients - "
                 "R-style handling was not applied"
-            assert vcov is not None and np.any(np.isnan(vcov)), \
-                "Fallback warning emitted but vcov has no NaN - " \
-                "R-style handling was not applied"
+            )
+            assert vcov is not None and np.any(np.isnan(vcov)), (
+                "Fallback warning emitted but vcov has no NaN - " "R-style handling was not applied"
+            )
 
 
 @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
@@ -928,6 +995,7 @@ class TestTROPRustBackend:
     def test_unit_distance_matrix_matches_numpy(self):
         """Test Rust distance matrix matches NumPy implementation."""
         from diff_diff._rust_backend import compute_unit_distance_matrix
+
         from diff_diff.trop import TROP
 
         np.random.seed(42)
@@ -943,8 +1011,7 @@ class TestTROPRustBackend:
         numpy_dist = trop._compute_all_unit_distances(Y, D, n_units, n_periods)
 
         np.testing.assert_array_almost_equal(
-            rust_dist, numpy_dist, decimal=10,
-            err_msg="Distance matrices should match"
+            rust_dist, numpy_dist, decimal=10, err_msg="Distance matrices should match"
         )
 
     def test_unit_distance_excludes_treated(self):
@@ -987,9 +1054,15 @@ class TestTROPRustBackend:
         lambda_nn = np.array([0.0, 0.1], dtype=np.float64)
 
         best_lt, best_lu, best_ln, score, n_valid, n_attempted, first_failed = loocv_grid_search(
-            Y, D, control_mask, time_dist,
-            lambda_time, lambda_unit, lambda_nn,
-            100, 1e-6,
+            Y,
+            D,
+            control_mask,
+            time_dist,
+            lambda_time,
+            lambda_unit,
+            lambda_nn,
+            100,
+            1e-6,
         )
 
         # Check returned parameters are from the grid
@@ -1003,6 +1076,14 @@ class TestTROPRustBackend:
         assert n_valid <= n_attempted
         # Check first_failed is None or a valid (unit, time) tuple
         assert first_failed is None or (isinstance(first_failed, tuple) and len(first_failed) == 2)
+
+    @staticmethod
+    def _stratified_indices(n_control, n_treated, n_bootstrap, seed):
+        """Build stratified bootstrap index arrays via the shared helper."""
+        from diff_diff.bootstrap_utils import stratified_bootstrap_indices
+
+        rng = np.random.default_rng(seed)
+        return stratified_bootstrap_indices(rng, n_control, n_treated, n_bootstrap)
 
     def test_bootstrap_variance_shape(self):
         """Test bootstrap returns correct shapes."""
@@ -1022,10 +1103,23 @@ class TestTROPRustBackend:
         ).astype(np.int64)
 
         n_bootstrap = 20
+        # Stratified pools: 1 treated unit (index 0), 5 control units
+        ctrl_idx, trt_idx = self._stratified_indices(
+            n_control=5, n_treated=1, n_bootstrap=n_bootstrap, seed=42
+        )
         estimates, se = bootstrap_trop_variance(
-            Y, D, control_mask, time_dist,
-            1.0, 1.0, 0.1,  # lambda values
-            n_bootstrap, 100, 1e-6, 42
+            Y,
+            D,
+            control_mask,
+            time_dist,
+            1.0,
+            1.0,
+            0.1,  # lambda values
+            n_bootstrap,
+            100,
+            1e-6,
+            ctrl_idx,
+            trt_idx,
         )
 
         # Should return array of bootstrap estimates and SE
@@ -1049,18 +1143,112 @@ class TestTROPRustBackend:
             np.arange(n_periods)[:, np.newaxis] - np.arange(n_periods)[np.newaxis, :]
         ).astype(np.int64)
 
-        # Run twice with same seed
+        # Run twice with same seed (helper is deterministic given the same seed)
+        ctrl_idx_a, trt_idx_a = self._stratified_indices(
+            n_control=5, n_treated=1, n_bootstrap=20, seed=42
+        )
+        ctrl_idx_b, trt_idx_b = self._stratified_indices(
+            n_control=5, n_treated=1, n_bootstrap=20, seed=42
+        )
         est1, se1 = bootstrap_trop_variance(
-            Y, D, control_mask, time_dist,
-            1.0, 1.0, 0.1, 20, 100, 1e-6, 42
+            Y,
+            D,
+            control_mask,
+            time_dist,
+            1.0,
+            1.0,
+            0.1,
+            20,
+            100,
+            1e-6,
+            ctrl_idx_a,
+            trt_idx_a,
         )
         est2, se2 = bootstrap_trop_variance(
-            Y, D, control_mask, time_dist,
-            1.0, 1.0, 0.1, 20, 100, 1e-6, 42
+            Y,
+            D,
+            control_mask,
+            time_dist,
+            1.0,
+            1.0,
+            0.1,
+            20,
+            100,
+            1e-6,
+            ctrl_idx_b,
+            trt_idx_b,
         )
 
         np.testing.assert_array_almost_equal(est1, est2)
         assert abs(se1 - se2) < 1e-10
+
+    def test_bootstrap_rejects_negative_index(self):
+        """Rust local bootstrap must raise PyValueError on a negative index."""
+        from diff_diff._rust_backend import bootstrap_trop_variance
+
+        np.random.seed(42)
+        n_periods, n_units = 8, 6
+        Y = np.random.randn(n_periods, n_units)
+        D = np.zeros((n_periods, n_units))
+        D[6:, 0] = 1.0
+        control_mask = (D == 0).astype(np.uint8)
+        time_dist = np.abs(
+            np.arange(n_periods)[:, np.newaxis] - np.arange(n_periods)[np.newaxis, :]
+        ).astype(np.int64)
+
+        ctrl_idx, trt_idx = self._stratified_indices(
+            n_control=5, n_treated=1, n_bootstrap=5, seed=0
+        )
+        ctrl_idx[2, 3] = -1  # negative
+        with pytest.raises(ValueError, match="control_indices.*out-of-range"):
+            bootstrap_trop_variance(
+                Y,
+                D,
+                control_mask,
+                time_dist,
+                1.0,
+                1.0,
+                0.1,
+                5,
+                100,
+                1e-6,
+                ctrl_idx,
+                trt_idx,
+            )
+
+    def test_bootstrap_rejects_out_of_range_index(self):
+        """Rust local bootstrap must raise PyValueError on an index >= pool size."""
+        from diff_diff._rust_backend import bootstrap_trop_variance
+
+        np.random.seed(42)
+        n_periods, n_units = 8, 6
+        Y = np.random.randn(n_periods, n_units)
+        D = np.zeros((n_periods, n_units))
+        D[6:, 0] = 1.0
+        control_mask = (D == 0).astype(np.uint8)
+        time_dist = np.abs(
+            np.arange(n_periods)[:, np.newaxis] - np.arange(n_periods)[np.newaxis, :]
+        ).astype(np.int64)
+
+        ctrl_idx, trt_idx = self._stratified_indices(
+            n_control=5, n_treated=1, n_bootstrap=5, seed=0
+        )
+        trt_idx[1, 0] = 99  # >> n_treated=1
+        with pytest.raises(ValueError, match="treated_indices.*out-of-range"):
+            bootstrap_trop_variance(
+                Y,
+                D,
+                control_mask,
+                time_dist,
+                1.0,
+                1.0,
+                0.1,
+                5,
+                100,
+                1e-6,
+                ctrl_idx,
+                trt_idx,
+            )
 
 
 @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
@@ -1070,6 +1258,7 @@ class TestTROPRustVsNumpy:
     def test_distance_matrix_matches_numpy(self):
         """Test Rust distance matrix matches NumPy implementation exactly."""
         from diff_diff._rust_backend import compute_unit_distance_matrix
+
         from diff_diff.trop import TROP
 
         np.random.seed(42)
@@ -1088,13 +1277,13 @@ class TestTROPRustVsNumpy:
         numpy_dist = trop._compute_all_unit_distances(Y, D, n_units, n_periods)
 
         np.testing.assert_array_almost_equal(
-            rust_dist, numpy_dist, decimal=10,
-            err_msg="Distance matrices should match exactly"
+            rust_dist, numpy_dist, decimal=10, err_msg="Distance matrices should match exactly"
         )
 
     def test_trop_produces_valid_results(self):
         """Test TROP with Rust backend produces valid estimation results."""
         import pandas as pd
+
         from diff_diff import TROP
 
         np.random.seed(42)
@@ -1108,13 +1297,14 @@ class TestTROPRustVsNumpy:
         for i in range(n_units):
             for t in range(n_periods):
                 is_treated = (i == 0) and (t >= 6)
-                y = 1.0 + 0.5 * i + 0.3 * t + (true_effect if is_treated else 0) + np.random.randn() * 0.5
-                data.append({
-                    'unit': i,
-                    'time': t,
-                    'outcome': y,
-                    'treated': 1 if is_treated else 0
-                })
+                y = (
+                    1.0
+                    + 0.5 * i
+                    + 0.3 * t
+                    + (true_effect if is_treated else 0)
+                    + np.random.randn() * 0.5
+                )
+                data.append({"unit": i, "time": t, "outcome": y, "treated": 1 if is_treated else 0})
 
         df = pd.DataFrame(data)
 
@@ -1124,9 +1314,9 @@ class TestTROPRustVsNumpy:
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
             n_bootstrap=20,
-            seed=42
+            seed=42,
         )
-        results = trop.fit(df, 'outcome', 'treated', 'unit', 'time')
+        results = trop.fit(df, "outcome", "treated", "unit", "time")
 
         # Check results are valid
         assert np.isfinite(results.att), "ATT should be finite"
@@ -1140,8 +1330,9 @@ class TestTROPRustVsNumpy:
         # - LOOCV-selected tuning parameters may not be optimal for small samples
         # This is a validity test, not a precision test - we're checking the
         # estimation produces sensible results, not exact recovery.
-        assert abs(results.att - true_effect) < 2.0, \
-            f"ATT {results.att:.2f} should be close to true effect {true_effect}"
+        assert (
+            abs(results.att - true_effect) < 2.0
+        ), f"ATT {results.att:.2f} should be close to true effect {true_effect}"
 
         # Tuning parameters should be from the grid
         assert results.lambda_time in [0.0, 1.0]
@@ -1174,9 +1365,14 @@ class TestTROPGlobalRustBackend:
         lambda_nn_grid = np.array([0.0, 0.1])
 
         result = loocv_grid_search_global(
-            Y, D, control_mask,
-            lambda_time_grid, lambda_unit_grid, lambda_nn_grid,
-            100, 1e-6,
+            Y,
+            D,
+            control_mask,
+            lambda_time_grid,
+            lambda_unit_grid,
+            lambda_nn_grid,
+            100,
+            1e-6,
         )
 
         best_lt, best_lu, best_ln, best_score, n_valid, n_attempted, _ = result
@@ -1211,18 +1407,36 @@ class TestTROPGlobalRustBackend:
         lambda_nn_grid = np.array([0.0, 0.1])
 
         result1 = loocv_grid_search_global(
-            Y, D, control_mask,
-            lambda_time_grid, lambda_unit_grid, lambda_nn_grid,
-            50, 1e-6,
+            Y,
+            D,
+            control_mask,
+            lambda_time_grid,
+            lambda_unit_grid,
+            lambda_nn_grid,
+            50,
+            1e-6,
         )
         result2 = loocv_grid_search_global(
-            Y, D, control_mask,
-            lambda_time_grid, lambda_unit_grid, lambda_nn_grid,
-            50, 1e-6,
+            Y,
+            D,
+            control_mask,
+            lambda_time_grid,
+            lambda_unit_grid,
+            lambda_nn_grid,
+            50,
+            1e-6,
         )
 
         # Without subsampling, results should be deterministic
         assert result1[:4] == result2[:4]
+
+    @staticmethod
+    def _global_stratified_indices(n_control, n_treated, n_bootstrap, seed):
+        """Build stratified bootstrap index arrays via the shared helper."""
+        from diff_diff.bootstrap_utils import stratified_bootstrap_indices
+
+        rng = np.random.default_rng(seed)
+        return stratified_bootstrap_indices(rng, n_control, n_treated, n_bootstrap)
 
     def test_bootstrap_trop_variance_global_shape(self):
         """Test bootstrap_trop_variance_global returns valid output."""
@@ -1237,8 +1451,21 @@ class TestTROPGlobalRustBackend:
         D = np.zeros((n_periods, n_units))
         D[-n_post:, :n_treated] = 1.0
 
+        # Stratified pools: 4 treated units, 11 control units
+        ctrl_idx, trt_idx = self._global_stratified_indices(
+            n_control=n_units - n_treated, n_treated=n_treated, n_bootstrap=50, seed=42
+        )
         estimates, se = bootstrap_trop_variance_global(
-            Y, D, 0.5, 0.5, 0.1, 50, 50, 1e-6, 42
+            Y,
+            D,
+            0.5,
+            0.5,
+            0.1,
+            50,
+            50,
+            1e-6,
+            ctrl_idx,
+            trt_idx,
         )
 
         assert isinstance(estimates, np.ndarray)
@@ -1259,15 +1486,97 @@ class TestTROPGlobalRustBackend:
         D = np.zeros((n_periods, n_units))
         D[-n_post:, :n_treated] = 1.0
 
+        ctrl_a, trt_a = self._global_stratified_indices(
+            n_control=n_units - n_treated, n_treated=n_treated, n_bootstrap=50, seed=42
+        )
+        ctrl_b, trt_b = self._global_stratified_indices(
+            n_control=n_units - n_treated, n_treated=n_treated, n_bootstrap=50, seed=42
+        )
         est1, se1 = bootstrap_trop_variance_global(
-            Y, D, 0.5, 0.5, 0.1, 50, 50, 1e-6, 42
+            Y,
+            D,
+            0.5,
+            0.5,
+            0.1,
+            50,
+            50,
+            1e-6,
+            ctrl_a,
+            trt_a,
         )
         est2, se2 = bootstrap_trop_variance_global(
-            Y, D, 0.5, 0.5, 0.1, 50, 50, 1e-6, 42
+            Y,
+            D,
+            0.5,
+            0.5,
+            0.1,
+            50,
+            50,
+            1e-6,
+            ctrl_b,
+            trt_b,
         )
 
         np.testing.assert_array_almost_equal(est1, est2)
         np.testing.assert_almost_equal(se1, se2)
+
+    def test_bootstrap_global_rejects_negative_index(self):
+        """Rust global bootstrap must raise PyValueError on a negative index."""
+        from diff_diff._rust_backend import bootstrap_trop_variance_global
+
+        np.random.seed(42)
+        n_periods, n_units = 8, 15
+        n_treated = 4
+        Y = np.random.randn(n_periods, n_units)
+        D = np.zeros((n_periods, n_units))
+        D[-2:, :n_treated] = 1.0
+
+        ctrl_idx, trt_idx = self._global_stratified_indices(
+            n_control=n_units - n_treated, n_treated=n_treated, n_bootstrap=10, seed=0
+        )
+        ctrl_idx[3, 2] = -5  # negative
+        with pytest.raises(ValueError, match="control_indices.*out-of-range"):
+            bootstrap_trop_variance_global(
+                Y,
+                D,
+                0.5,
+                0.5,
+                0.1,
+                10,
+                50,
+                1e-6,
+                ctrl_idx,
+                trt_idx,
+            )
+
+    def test_bootstrap_global_rejects_out_of_range_index(self):
+        """Rust global bootstrap must raise PyValueError on an index >= pool size."""
+        from diff_diff._rust_backend import bootstrap_trop_variance_global
+
+        np.random.seed(42)
+        n_periods, n_units = 8, 15
+        n_treated = 4
+        Y = np.random.randn(n_periods, n_units)
+        D = np.zeros((n_periods, n_units))
+        D[-2:, :n_treated] = 1.0
+
+        ctrl_idx, trt_idx = self._global_stratified_indices(
+            n_control=n_units - n_treated, n_treated=n_treated, n_bootstrap=10, seed=0
+        )
+        trt_idx[5, 1] = 99  # >> n_treated=4
+        with pytest.raises(ValueError, match="treated_indices.*out-of-range"):
+            bootstrap_trop_variance_global(
+                Y,
+                D,
+                0.5,
+                0.5,
+                0.1,
+                10,
+                50,
+                1e-6,
+                ctrl_idx,
+                trt_idx,
+            )
 
 
 @pytest.mark.slow
@@ -1278,6 +1587,7 @@ class TestTROPGlobalRustVsNumpy:
     def test_trop_global_produces_valid_results(self):
         """Test TROP global with Rust backend produces valid results."""
         import pandas as pd
+
         from diff_diff import TROP
 
         np.random.seed(42)
@@ -1295,12 +1605,14 @@ class TestTROPGlobalRustVsNumpy:
                 treatment_indicator = 1 if (is_treated and post) else 0
                 if treatment_indicator:
                     y += true_effect
-                data.append({
-                    'unit': i,
-                    'time': t,
-                    'outcome': y,
-                    'treated': treatment_indicator,
-                })
+                data.append(
+                    {
+                        "unit": i,
+                        "time": t,
+                        "outcome": y,
+                        "treated": treatment_indicator,
+                    }
+                )
 
         df = pd.DataFrame(data)
 
@@ -1310,9 +1622,9 @@ class TestTROPGlobalRustVsNumpy:
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
             n_bootstrap=30,
-            seed=42
+            seed=42,
         )
-        results = trop.fit(df, 'outcome', 'treated', 'unit', 'time')
+        results = trop.fit(df, "outcome", "treated", "unit", "time")
 
         # Check results are valid
         assert np.isfinite(results.att), "ATT should be finite"
@@ -1330,6 +1642,7 @@ class TestTROPGlobalRustVsNumpy:
     def test_trop_global_and_local_agree_in_direction(self):
         """Test global and local methods agree on treatment effect direction."""
         import pandas as pd
+
         from diff_diff import TROP
 
         np.random.seed(42)
@@ -1347,12 +1660,14 @@ class TestTROPGlobalRustVsNumpy:
                 treatment_indicator = 1 if (is_treated and post) else 0
                 if treatment_indicator:
                     y += true_effect
-                data.append({
-                    'unit': i,
-                    'time': t,
-                    'outcome': y,
-                    'treated': treatment_indicator,
-                })
+                data.append(
+                    {
+                        "unit": i,
+                        "time": t,
+                        "outcome": y,
+                        "treated": treatment_indicator,
+                    }
+                )
 
         df = pd.DataFrame(data)
 
@@ -1363,9 +1678,9 @@ class TestTROPGlobalRustVsNumpy:
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
             n_bootstrap=20,
-            seed=42
+            seed=42,
         )
-        results_global = trop_global.fit(df, 'outcome', 'treated', 'unit', 'time')
+        results_global = trop_global.fit(df, "outcome", "treated", "unit", "time")
 
         # Fit with local method
         trop_local = TROP(
@@ -1374,9 +1689,9 @@ class TestTROPGlobalRustVsNumpy:
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
             n_bootstrap=20,
-            seed=42
+            seed=42,
         )
-        results_local = trop_local.fit(df, 'outcome', 'treated', 'unit', 'time')
+        results_local = trop_local.fit(df, "outcome", "treated", "unit", "time")
 
         # Both should have same sign (both positive for true_effect=2.0)
         assert np.sign(results_global.att) == np.sign(results_local.att)
@@ -1384,6 +1699,7 @@ class TestTROPGlobalRustVsNumpy:
     def test_trop_global_handles_nan_outcomes(self):
         """Test TROP global method handles NaN outcome values gracefully."""
         import pandas as pd
+
         from diff_diff import TROP
 
         np.random.seed(42)
@@ -1401,12 +1717,14 @@ class TestTROPGlobalRustVsNumpy:
                 treatment_indicator = 1 if (is_treated and post) else 0
                 if treatment_indicator:
                     y += true_effect
-                data.append({
-                    'unit': i,
-                    'time': t,
-                    'outcome': y,
-                    'treated': treatment_indicator,
-                })
+                data.append(
+                    {
+                        "unit": i,
+                        "time": t,
+                        "outcome": y,
+                        "treated": treatment_indicator,
+                    }
+                )
 
         df = pd.DataFrame(data)
 
@@ -1414,10 +1732,10 @@ class TestTROPGlobalRustVsNumpy:
         # Set 5% of control pre-treatment observations to NaN
         nan_indices = []
         for idx, row in df.iterrows():
-            if row['treated'] == 0 and row['time'] < (n_periods - n_post):
+            if row["treated"] == 0 and row["time"] < (n_periods - n_post):
                 if np.random.rand() < 0.05:
                     nan_indices.append(idx)
-        df.loc[nan_indices, 'outcome'] = np.nan
+        df.loc[nan_indices, "outcome"] = np.nan
 
         n_nan = len(nan_indices)
         assert n_nan > 0, "Should have introduced some NaN values"
@@ -1428,9 +1746,9 @@ class TestTROPGlobalRustVsNumpy:
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
             n_bootstrap=20,
-            seed=42
+            seed=42,
         )
-        results = trop.fit(df, 'outcome', 'treated', 'unit', 'time')
+        results = trop.fit(df, "outcome", "treated", "unit", "time")
 
         # Results should be finite (NaN observations are excluded)
         assert np.isfinite(results.att), f"ATT {results.att} should be finite with NaN data"
@@ -1452,6 +1770,7 @@ class TestTROPGlobalRustVsNumpy:
         instead of dist=inf -> delta_unit=exp(-inf)=0.0 (zero weight).
         """
         import pandas as pd
+
         from diff_diff import TROP
 
         np.random.seed(42)
@@ -1469,24 +1788,30 @@ class TestTROPGlobalRustVsNumpy:
                 treatment_indicator = 1 if (is_treated and post) else 0
                 if treatment_indicator:
                     y += true_effect
-                data.append({
-                    'unit': i,
-                    'time': t,
-                    'outcome': y,
-                    'treated': treatment_indicator,
-                })
+                data.append(
+                    {
+                        "unit": i,
+                        "time": t,
+                        "outcome": y,
+                        "treated": treatment_indicator,
+                    }
+                )
 
         df = pd.DataFrame(data)
 
         # Set ALL pre-period outcomes to NaN for one control unit (unit n_treated)
         # This unit has no valid pre-period data and should get zero weight
         control_unit_with_no_pre = n_treated  # First control unit
-        pre_mask = (df['unit'] == control_unit_with_no_pre) & (df['time'] < (n_periods - n_post))
-        df.loc[pre_mask, 'outcome'] = np.nan
+        pre_mask = (df["unit"] == control_unit_with_no_pre) & (df["time"] < (n_periods - n_post))
+        df.loc[pre_mask, "outcome"] = np.nan
 
         # Verify we set NaN correctly
-        unit_pre_data = df[(df['unit'] == control_unit_with_no_pre) & (df['time'] < (n_periods - n_post))]
-        assert unit_pre_data['outcome'].isna().all(), "Control unit should have all NaN in pre-period"
+        unit_pre_data = df[
+            (df["unit"] == control_unit_with_no_pre) & (df["time"] < (n_periods - n_post))
+        ]
+        assert (
+            unit_pre_data["outcome"].isna().all()
+        ), "Control unit should have all NaN in pre-period"
 
         # Fit with global method - should handle gracefully
         trop = TROP(
@@ -1495,9 +1820,9 @@ class TestTROPGlobalRustVsNumpy:
             lambda_unit_grid=[0.5, 1.0],
             lambda_nn_grid=[0.0],
             n_bootstrap=20,
-            seed=42
+            seed=42,
         )
-        results = trop.fit(df, 'outcome', 'treated', 'unit', 'time')
+        results = trop.fit(df, "outcome", "treated", "unit", "time")
 
         # Results should be finite - the unit with no valid pre-period data
         # should get zero weight and not break estimation
@@ -1506,8 +1831,9 @@ class TestTROPGlobalRustVsNumpy:
 
         # ATT should be in reasonable range of true effect
         # The no-valid-pre unit getting zero weight shouldn't corrupt the estimate
-        assert abs(results.att - true_effect) < 1.5, \
-            f"ATT {results.att:.2f} should be close to true effect {true_effect}"
+        assert (
+            abs(results.att - true_effect) < 1.5
+        ), f"ATT {results.att:.2f} should be close to true effect {true_effect}"
 
     def test_trop_global_nan_exclusion_rust_python_parity(self):
         """Test Rust and Python backends produce matching results with NaN data.
@@ -1519,8 +1845,8 @@ class TestTROPGlobalRustVsNumpy:
 
         This tests the fix for PR #113 Round 3 feedback (P2-1).
         """
-        import os
         import pandas as pd
+
         from diff_diff import TROP
 
         np.random.seed(42)
@@ -1538,23 +1864,25 @@ class TestTROPGlobalRustVsNumpy:
                 treatment_indicator = 1 if (is_treated and post) else 0
                 if treatment_indicator:
                     y += true_effect
-                data.append({
-                    'unit': i,
-                    'time': t,
-                    'outcome': y,
-                    'treated': treatment_indicator,
-                })
+                data.append(
+                    {
+                        "unit": i,
+                        "time": t,
+                        "outcome": y,
+                        "treated": treatment_indicator,
+                    }
+                )
 
         df = pd.DataFrame(data)
 
         # Introduce scattered NaN values (5% of control pre-period observations)
         np.random.seed(123)  # Different seed for NaN placement
         for idx, row in df.iterrows():
-            if row['treated'] == 0 and row['time'] < (n_periods - n_post):
+            if row["treated"] == 0 and row["time"] < (n_periods - n_post):
                 if np.random.rand() < 0.05:
-                    df.loc[idx, 'outcome'] = np.nan
+                    df.loc[idx, "outcome"] = np.nan
 
-        n_nan = df['outcome'].isna().sum()
+        n_nan = df["outcome"].isna().sum()
         assert n_nan > 0, "Should have some NaN values"
 
         # Common TROP parameters
@@ -1564,25 +1892,28 @@ class TestTROPGlobalRustVsNumpy:
             lambda_unit_grid=[0.5, 1.0],
             lambda_nn_grid=[0.0],
             n_bootstrap=20,
-            seed=42
+            seed=42,
         )
 
         # Run with Rust backend (current default when available)
         trop_rust = TROP(**trop_params)
-        results_rust = trop_rust.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+        results_rust = trop_rust.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         # Run with Python-only backend using mock.patch to avoid module reload issues
         # (Module reload breaks isinstance() checks in other tests due to class identity)
-        from unittest.mock import patch
         import sys
-        trop_global_module = sys.modules['diff_diff.trop_global']
+        from unittest.mock import patch
 
-        with patch.object(trop_global_module, 'HAS_RUST_BACKEND', False), \
-             patch.object(trop_global_module, '_rust_loocv_grid_search_global', None), \
-             patch.object(trop_global_module, '_rust_bootstrap_trop_variance_global', None):
+        trop_global_module = sys.modules["diff_diff.trop_global"]
+
+        with (
+            patch.object(trop_global_module, "HAS_RUST_BACKEND", False),
+            patch.object(trop_global_module, "_rust_loocv_grid_search_global", None),
+            patch.object(trop_global_module, "_rust_bootstrap_trop_variance_global", None),
+        ):
 
             trop_python = TROP(**trop_params)
-            results_python = trop_python.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+            results_python = trop_python.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         # Both should produce finite results
         assert np.isfinite(results_rust.att), f"Rust ATT {results_rust.att} should be finite"
@@ -1591,9 +1922,10 @@ class TestTROPGlobalRustVsNumpy:
         # ATT estimates should be close (within reasonable tolerance)
         # Allow some difference due to LOOCV randomness and numerical differences
         att_diff = abs(results_rust.att - results_python.att)
-        assert att_diff < 0.5, \
-            f"Rust ATT ({results_rust.att:.3f}) and Python ATT ({results_python.att:.3f}) " \
+        assert att_diff < 0.5, (
+            f"Rust ATT ({results_rust.att:.3f}) and Python ATT ({results_python.att:.3f}) "
             f"differ by {att_diff:.3f}, should be < 0.5"
+        )
 
         # Both should recover true effect direction
         assert results_rust.att > 0, f"Rust ATT {results_rust.att} should be positive"
@@ -1608,8 +1940,8 @@ class TestTROPGlobalRustVsNumpy:
 
         This tests the fix for PR #113 Round 5 feedback (P2).
         """
-        import os
         import pandas as pd
+
         from diff_diff import TROP
 
         np.random.seed(42)
@@ -1627,12 +1959,14 @@ class TestTROPGlobalRustVsNumpy:
                 treatment_indicator = 1 if (is_treated and post) else 0
                 if treatment_indicator:
                     y += true_effect
-                data.append({
-                    'unit': i,
-                    'time': t,
-                    'outcome': y,
-                    'treated': treatment_indicator,
-                })
+                data.append(
+                    {
+                        "unit": i,
+                        "time": t,
+                        "outcome": y,
+                        "treated": treatment_indicator,
+                    }
+                )
 
         df = pd.DataFrame(data)
 
@@ -1640,11 +1974,11 @@ class TestTROPGlobalRustVsNumpy:
         # This makes average_treated[3] = NaN
         target_period = 3
         treated_units = list(range(n_treated))
-        mask = df['unit'].isin(treated_units) & (df['time'] == target_period)
-        df.loc[mask, 'outcome'] = np.nan
+        mask = df["unit"].isin(treated_units) & (df["time"] == target_period)
+        df.loc[mask, "outcome"] = np.nan
 
         # Verify we set NaN correctly
-        n_nan = df.loc[mask, 'outcome'].isna().sum()
+        n_nan = df.loc[mask, "outcome"].isna().sum()
         assert n_nan == n_treated, f"Should have {n_treated} NaN, got {n_nan}"
 
         # Common TROP parameters
@@ -1654,25 +1988,28 @@ class TestTROPGlobalRustVsNumpy:
             lambda_unit_grid=[1.0],
             lambda_nn_grid=[0.0],
             n_bootstrap=20,
-            seed=42
+            seed=42,
         )
 
         # Run with Rust backend (current default when available)
         trop_rust = TROP(**trop_params)
-        results_rust = trop_rust.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+        results_rust = trop_rust.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         # Run with Python-only backend using mock.patch to avoid module reload issues
         # (Module reload breaks isinstance() checks in other tests due to class identity)
-        from unittest.mock import patch
         import sys
-        trop_global_module = sys.modules['diff_diff.trop_global']
+        from unittest.mock import patch
 
-        with patch.object(trop_global_module, 'HAS_RUST_BACKEND', False), \
-             patch.object(trop_global_module, '_rust_loocv_grid_search_global', None), \
-             patch.object(trop_global_module, '_rust_bootstrap_trop_variance_global', None):
+        trop_global_module = sys.modules["diff_diff.trop_global"]
+
+        with (
+            patch.object(trop_global_module, "HAS_RUST_BACKEND", False),
+            patch.object(trop_global_module, "_rust_loocv_grid_search_global", None),
+            patch.object(trop_global_module, "_rust_bootstrap_trop_variance_global", None),
+        ):
 
             trop_python = TROP(**trop_params)
-            results_python = trop_python.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+            results_python = trop_python.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         # Both should produce finite results
         assert np.isfinite(results_rust.att), f"Rust ATT {results_rust.att} should be finite"
@@ -1680,9 +2017,10 @@ class TestTROPGlobalRustVsNumpy:
 
         # ATT estimates should be close (within reasonable tolerance)
         att_diff = abs(results_rust.att - results_python.att)
-        assert att_diff < 0.5, \
-            f"Rust ATT ({results_rust.att:.3f}) and Python ATT ({results_python.att:.3f}) " \
+        assert att_diff < 0.5, (
+            f"Rust ATT ({results_rust.att:.3f}) and Python ATT ({results_python.att:.3f}) "
             f"differ by {att_diff:.3f}, should be < 0.5"
+        )
 
     def test_trop_global_solver_parity_no_lowrank(self):
         """Test Rust/Python solver parity for no-lowrank path (lambda_nn >= 1e10).
@@ -1690,10 +2028,12 @@ class TestTROPGlobalRustVsNumpy:
         Both backends should produce matching (mu, alpha, beta) at atol=1e-6.
         This validates the convergence criterion fix (checking all params, not just mu).
         """
-        import pandas as pd
-        from diff_diff import TROP
-        from unittest.mock import patch
         import sys
+        from unittest.mock import patch
+
+        import pandas as pd
+
+        from diff_diff import TROP
 
         np.random.seed(42)
         n_units, n_periods = 15, 8
@@ -1709,10 +2049,14 @@ class TestTROPGlobalRustVsNumpy:
                 treatment_indicator = 1 if (is_treated and post) else 0
                 if treatment_indicator:
                     y += 2.0
-                data.append({
-                    'unit': i, 'time': t,
-                    'outcome': y, 'treated': treatment_indicator,
-                })
+                data.append(
+                    {
+                        "unit": i,
+                        "time": t,
+                        "outcome": y,
+                        "treated": treatment_indicator,
+                    }
+                )
         df = pd.DataFrame(data)
 
         # Fixed lambda with lambda_nn=inf (no low-rank)
@@ -1727,32 +2071,37 @@ class TestTROPGlobalRustVsNumpy:
 
         # Rust backend
         trop_rust = TROP(**trop_params)
-        results_rust = trop_rust.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+        results_rust = trop_rust.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         # Python-only backend
-        trop_global_module = sys.modules['diff_diff.trop_global']
-        with patch.object(trop_global_module, 'HAS_RUST_BACKEND', False), \
-             patch.object(trop_global_module, '_rust_loocv_grid_search_global', None), \
-             patch.object(trop_global_module, '_rust_bootstrap_trop_variance_global', None):
+        trop_global_module = sys.modules["diff_diff.trop_global"]
+        with (
+            patch.object(trop_global_module, "HAS_RUST_BACKEND", False),
+            patch.object(trop_global_module, "_rust_loocv_grid_search_global", None),
+            patch.object(trop_global_module, "_rust_bootstrap_trop_variance_global", None),
+        ):
             trop_python = TROP(**trop_params)
-            results_python = trop_python.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+            results_python = trop_python.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         # ATT should match closely
-        assert abs(results_rust.att - results_python.att) < 1e-6, \
-            f"No-lowrank ATT mismatch: Rust={results_rust.att:.8f}, Python={results_python.att:.8f}"
+        assert (
+            abs(results_rust.att - results_python.att) < 1e-6
+        ), f"No-lowrank ATT mismatch: Rust={results_rust.att:.8f}, Python={results_python.att:.8f}"
 
         # Unit and time effects should match
         for key in results_rust.unit_effects:
             r_val = results_rust.unit_effects[key]
             p_val = results_python.unit_effects[key]
-            assert abs(r_val - p_val) < 1e-6, \
-                f"Unit effect mismatch for {key}: Rust={r_val:.8f}, Python={p_val:.8f}"
+            assert (
+                abs(r_val - p_val) < 1e-6
+            ), f"Unit effect mismatch for {key}: Rust={r_val:.8f}, Python={p_val:.8f}"
 
         for key in results_rust.time_effects:
             r_val = results_rust.time_effects[key]
             p_val = results_python.time_effects[key]
-            assert abs(r_val - p_val) < 1e-6, \
-                f"Time effect mismatch for {key}: Rust={r_val:.8f}, Python={p_val:.8f}"
+            assert (
+                abs(r_val - p_val) < 1e-6
+            ), f"Time effect mismatch for {key}: Rust={r_val:.8f}, Python={p_val:.8f}"
 
     def test_trop_global_solver_parity_with_lowrank(self):
         """Test Rust/Python solver parity for with-lowrank path (finite lambda_nn).
@@ -1761,10 +2110,12 @@ class TestTROPGlobalRustVsNumpy:
         The with-lowrank solver calls no-lowrank as its inner step, so the
         convergence fix cascades here too.
         """
-        import pandas as pd
-        from diff_diff import TROP
-        from unittest.mock import patch
         import sys
+        from unittest.mock import patch
+
+        import pandas as pd
+
+        from diff_diff import TROP
 
         np.random.seed(42)
         n_units, n_periods = 15, 8
@@ -1780,10 +2131,14 @@ class TestTROPGlobalRustVsNumpy:
                 treatment_indicator = 1 if (is_treated and post) else 0
                 if treatment_indicator:
                     y += 2.0
-                data.append({
-                    'unit': i, 'time': t,
-                    'outcome': y, 'treated': treatment_indicator,
-                })
+                data.append(
+                    {
+                        "unit": i,
+                        "time": t,
+                        "outcome": y,
+                        "treated": treatment_indicator,
+                    }
+                )
         df = pd.DataFrame(data)
 
         # Fixed lambda with finite lambda_nn (low-rank enabled)
@@ -1798,26 +2153,30 @@ class TestTROPGlobalRustVsNumpy:
 
         # Rust backend
         trop_rust = TROP(**trop_params)
-        results_rust = trop_rust.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+        results_rust = trop_rust.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         # Python-only backend
-        trop_global_module = sys.modules['diff_diff.trop_global']
-        with patch.object(trop_global_module, 'HAS_RUST_BACKEND', False), \
-             patch.object(trop_global_module, '_rust_loocv_grid_search_global', None), \
-             patch.object(trop_global_module, '_rust_bootstrap_trop_variance_global', None):
+        trop_global_module = sys.modules["diff_diff.trop_global"]
+        with (
+            patch.object(trop_global_module, "HAS_RUST_BACKEND", False),
+            patch.object(trop_global_module, "_rust_loocv_grid_search_global", None),
+            patch.object(trop_global_module, "_rust_bootstrap_trop_variance_global", None),
+        ):
             trop_python = TROP(**trop_params)
-            results_python = trop_python.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+            results_python = trop_python.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         # ATT should match closely
-        assert abs(results_rust.att - results_python.att) < 1e-6, \
-            f"With-lowrank ATT mismatch: Rust={results_rust.att:.8f}, Python={results_python.att:.8f}"
+        assert (
+            abs(results_rust.att - results_python.att) < 1e-6
+        ), f"With-lowrank ATT mismatch: Rust={results_rust.att:.8f}, Python={results_python.att:.8f}"
 
         # Unit and time effects should match
         for key in results_rust.unit_effects:
             r_val = results_rust.unit_effects[key]
             p_val = results_python.unit_effects[key]
-            assert abs(r_val - p_val) < 1e-6, \
-                f"Unit effect mismatch for {key}: Rust={r_val:.8f}, Python={p_val:.8f}"
+            assert (
+                abs(r_val - p_val) < 1e-6
+            ), f"Unit effect mismatch for {key}: Rust={r_val:.8f}, Python={p_val:.8f}"
 
 
 @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
@@ -1827,14 +2186,16 @@ class TestSDIDRustBackend:
     def test_noise_level_matches_numpy(self):
         """Test Rust noise level matches NumPy implementation."""
         from diff_diff._rust_backend import compute_noise_level as rust_fn
+
         from diff_diff.utils import _compute_noise_level_numpy as numpy_fn
 
         np.random.seed(42)
         Y_pre = np.random.randn(10, 5)
         rust_nl = rust_fn(Y_pre)
         numpy_nl = numpy_fn(Y_pre)
-        assert abs(rust_nl - numpy_nl) < 1e-10, \
-            f"Noise levels differ: rust={rust_nl}, numpy={numpy_nl}"
+        assert (
+            abs(rust_nl - numpy_nl) < 1e-10
+        ), f"Noise levels differ: rust={rust_nl}, numpy={numpy_nl}"
 
     def test_noise_level_single_period(self):
         """Test noise level returns 0 for single pre-period."""
@@ -1857,6 +2218,7 @@ class TestSDIDRustBackend:
     def test_sc_weight_fw_matches_numpy(self):
         """Test Rust Frank-Wolfe matches Python implementation."""
         from diff_diff._rust_backend import sc_weight_fw as rust_fn
+
         from diff_diff.utils import _sc_weight_fw_numpy as numpy_fn
 
         np.random.seed(42)
@@ -1864,13 +2226,13 @@ class TestSDIDRustBackend:
         rust_w = rust_fn(Y, 0.5, True, None, 1e-3, 1000)
         numpy_w = numpy_fn(Y, 0.5, True, None, 1e-3, 1000)
         np.testing.assert_array_almost_equal(
-            rust_w, numpy_w, decimal=6,
-            err_msg="Frank-Wolfe weights should match"
+            rust_w, numpy_w, decimal=6, err_msg="Frank-Wolfe weights should match"
         )
 
     def test_sc_weight_fw_with_init_weights(self):
         """Test Frank-Wolfe with initial weights."""
         from diff_diff._rust_backend import sc_weight_fw as rust_fn
+
         from diff_diff.utils import _sc_weight_fw_numpy as numpy_fn
 
         np.random.seed(42)
@@ -1879,8 +2241,7 @@ class TestSDIDRustBackend:
         rust_w = rust_fn(Y, 0.2, True, init_w, 1e-3, 500)
         numpy_w = numpy_fn(Y, 0.2, True, init_w, 1e-3, 500)
         np.testing.assert_array_almost_equal(
-            rust_w, numpy_w, decimal=6,
-            err_msg="Frank-Wolfe with init weights should match"
+            rust_w, numpy_w, decimal=6, err_msg="Frank-Wolfe with init weights should match"
         )
 
     def test_time_weights_on_simplex(self):
@@ -1898,6 +2259,7 @@ class TestSDIDRustBackend:
     def test_time_weights_match_numpy(self):
         """Test Rust and NumPy time weights match (2-pass with sparsification)."""
         from diff_diff._rust_backend import compute_time_weights as rust_fn
+
         from diff_diff.utils import _sc_weight_fw_numpy, _sparsify
 
         np.random.seed(42)
@@ -1909,21 +2271,17 @@ class TestSDIDRustBackend:
         max_iter = 1000
 
         # Rust implementation (2-pass with sparsification)
-        rust_w = rust_fn(Y_pre, Y_post, 0.01, True, min_decrease,
-                         max_iter_pre, max_iter)
+        rust_w = rust_fn(Y_pre, Y_post, 0.01, True, min_decrease, max_iter_pre, max_iter)
 
         # Python implementation (manual 2-pass matching Rust)
         post_means = np.mean(Y_post, axis=0)
         Y_time = np.column_stack([Y_pre.T, post_means])
-        lam = _sc_weight_fw_numpy(Y_time, 0.01, True, None,
-                                  min_decrease, max_iter_pre)
+        lam = _sc_weight_fw_numpy(Y_time, 0.01, True, None, min_decrease, max_iter_pre)
         lam = _sparsify(lam)
-        numpy_w = _sc_weight_fw_numpy(Y_time, 0.01, True, lam,
-                                      min_decrease, max_iter)
+        numpy_w = _sc_weight_fw_numpy(Y_time, 0.01, True, lam, min_decrease, max_iter)
 
         np.testing.assert_array_almost_equal(
-            rust_w, numpy_w, decimal=6,
-            err_msg="Time weights should match"
+            rust_w, numpy_w, decimal=6, err_msg="Time weights should match"
         )
 
     def test_time_weights_single_preperiod(self):
@@ -1951,6 +2309,7 @@ class TestSDIDRustBackend:
     def test_unit_weights_match_numpy(self):
         """Test Rust and NumPy unit weights match."""
         from diff_diff._rust_backend import compute_sdid_unit_weights as rust_fn
+
         from diff_diff.utils import _sc_weight_fw_numpy, _sparsify
 
         np.random.seed(42)
@@ -1967,8 +2326,7 @@ class TestSDIDRustBackend:
         numpy_w = _sc_weight_fw_numpy(Y_unit, 0.5, True, omega, 1e-3, 1000)
 
         np.testing.assert_array_almost_equal(
-            rust_w, numpy_w, decimal=6,
-            err_msg="Unit weights should match"
+            rust_w, numpy_w, decimal=6, err_msg="Unit weights should match"
         )
 
     def test_unit_weights_single_control(self):
@@ -1989,6 +2347,7 @@ class TestSDIDRustBackend:
         that the Gram precomputation optimization produces identical weights.
         """
         from diff_diff._rust_backend import sc_weight_fw as rust_fn
+
         from diff_diff.utils import _sc_weight_fw_numpy as numpy_fn
 
         np.random.seed(42)
@@ -2001,8 +2360,7 @@ class TestSDIDRustBackend:
 
         # Weights must match to high precision
         np.testing.assert_array_almost_equal(
-            rust_w, numpy_w, decimal=6,
-            err_msg="Gram path weights should match Python"
+            rust_w, numpy_w, decimal=6, err_msg="Gram path weights should match Python"
         )
         assert abs(rust_w.sum() - 1.0) < 1e-6
         assert np.all(rust_w >= -1e-6)
@@ -2014,6 +2372,7 @@ class TestSDIDRustBackend:
         then verifies the Rust result matches pure Python exactly.
         """
         from diff_diff._rust_backend import sc_weight_fw as rust_fn
+
         from diff_diff.utils import _sc_weight_fw_numpy as numpy_fn
 
         np.random.seed(42)
@@ -2025,8 +2384,7 @@ class TestSDIDRustBackend:
         numpy_w = numpy_fn(Y, 0.5, True, None, 1e-5, 10000)
 
         np.testing.assert_array_almost_equal(
-            rust_w, numpy_w, decimal=6,
-            err_msg="Standard path weights should match Python"
+            rust_w, numpy_w, decimal=6, err_msg="Standard path weights should match Python"
         )
         assert abs(rust_w.sum() - 1.0) < 1e-6
         assert np.all(rust_w >= -1e-6)
@@ -2038,6 +2396,7 @@ class TestSDIDRustBackend:
         (no column centering applied).
         """
         from diff_diff._rust_backend import sc_weight_fw as rust_fn
+
         from diff_diff.utils import _sc_weight_fw_numpy as numpy_fn
 
         np.random.seed(42)
@@ -2047,8 +2406,10 @@ class TestSDIDRustBackend:
         rust_w_gram = rust_fn(Y_gram, 0.2, False, None, 1e-5, 10000)
         numpy_w_gram = numpy_fn(Y_gram, 0.2, False, None, 1e-5, 10000)
         np.testing.assert_array_almost_equal(
-            rust_w_gram, numpy_w_gram, decimal=6,
-            err_msg="Gram path intercept=false weights should match Python"
+            rust_w_gram,
+            numpy_w_gram,
+            decimal=6,
+            err_msg="Gram path intercept=false weights should match Python",
         )
 
         # Standard path: T0 >= N
@@ -2056,15 +2417,19 @@ class TestSDIDRustBackend:
         rust_w_std = rust_fn(Y_std, 0.2, False, None, 1e-5, 10000)
         numpy_w_std = numpy_fn(Y_std, 0.2, False, None, 1e-5, 10000)
         np.testing.assert_array_almost_equal(
-            rust_w_std, numpy_w_std, decimal=6,
-            err_msg="Standard path intercept=false weights should match Python"
+            rust_w_std,
+            numpy_w_std,
+            decimal=6,
+            err_msg="Standard path intercept=false weights should match Python",
         )
 
     def test_full_sdid_rust_vs_python(self):
         """Test full SDID estimation produces same results with Rust and Python."""
-        import pandas as pd
-        from unittest.mock import patch
         import sys
+        from unittest.mock import patch
+
+        import pandas as pd
+
         from diff_diff import SyntheticDiD
 
         np.random.seed(42)
@@ -2078,28 +2443,511 @@ class TestSDIDRustBackend:
                 y = 1.0 + 0.5 * i + 0.3 * t + np.random.randn() * 0.3
                 if is_treated and post:
                     y += true_effect
-                data.append({
-                    'unit': i, 'time': t, 'outcome': y,
-                    'treated': 1 if is_treated else 0,
-                    'post': 1 if post else 0,
-                })
+                data.append(
+                    {
+                        "unit": i,
+                        "time": t,
+                        "outcome": y,
+                        "treated": 1 if is_treated else 0,
+                        "post": 1 if post else 0,
+                    }
+                )
         df = pd.DataFrame(data)
         post_periods = list(range(n_pre, n_pre + n_post))
 
         # Run with Rust backend
         sdid_rust = SyntheticDiD(variance_method="placebo", seed=42)
-        results_rust = sdid_rust.fit(df, 'outcome', 'treated', 'unit', 'time', post_periods)
+        results_rust = sdid_rust.fit(df, "outcome", "treated", "unit", "time", post_periods)
 
         # Run with Python backend
-        utils_mod = sys.modules['diff_diff.utils']
-        with patch.object(utils_mod, 'HAS_RUST_BACKEND', False):
+        utils_mod = sys.modules["diff_diff.utils"]
+        with patch.object(utils_mod, "HAS_RUST_BACKEND", False):
             sdid_py = SyntheticDiD(variance_method="placebo", seed=42)
-            results_py = sdid_py.fit(df.copy(), 'outcome', 'treated', 'unit', 'time', post_periods)
+            results_py = sdid_py.fit(df.copy(), "outcome", "treated", "unit", "time", post_periods)
 
         # ATT should be very close
         np.testing.assert_almost_equal(
-            results_rust.att, results_py.att, decimal=4,
-            err_msg="Rust and Python ATT should match"
+            results_rust.att, results_py.att, decimal=4, err_msg="Rust and Python ATT should match"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Silent-failure audit axis-G coverage (findings #21, #22, #23).
+# The motivating incident (CS covariate scaling, early 2026) was a silent
+# Rust-vs-Python divergence on rank-deficient / mixed-scale designs that
+# sailed through the existing happy-path parity tests. These three classes
+# extend backend-parity coverage to the edge cases the Phase-2 audit flagged.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
+class TestSolveOLSSkipRankCheckParity:
+    """Finding #21: `solve_ols(..., skip_rank_check=True)` parity.
+
+    Both backends skip the pivoted-QR rank check and trust the caller's
+    full-rank assertion. Rust uses SVD; Python uses scipy.linalg.lstsq
+    with ``cond=1e-7``. Parity is expected in well-conditioned cases, but
+    near-singular and mixed-scale inputs could divergence on singular-
+    value truncation ordering between LAPACK backends.
+
+    Rust dispatch is gated by ``vcov_type='hc1'`` and ``weights is None``
+    (linalg.py:621-634), so tests scope to that intersection — the only
+    path where Rust runs under ``skip_rank_check=True``.
+
+    Assertions target fitted values (X @ beta), not beta directly: for
+    rank-deficient designs, kept-column beta values depend on pivot order
+    while fitted values are backend-invariant.
+    """
+
+    def _run_both_backends(self, X, y):
+        """Call solve_ols with skip_rank_check=True under Rust and under
+        forced-Python, return (coef_rust, coef_py)."""
+        import sys
+        from unittest.mock import patch
+
+        from diff_diff.linalg import solve_ols
+
+        coef_rust, resid_rust, _ = solve_ols(
+            X, y, skip_rank_check=True, vcov_type="hc1", return_vcov=False
+        )
+
+        linalg_module = sys.modules["diff_diff.linalg"]
+        with (
+            patch.object(linalg_module, "HAS_RUST_BACKEND", False),
+            patch.object(linalg_module, "_rust_solve_ols", None),
+        ):
+            coef_py, resid_py, _ = solve_ols(
+                X, y, skip_rank_check=True, vcov_type="hc1", return_vcov=False
+            )
+        return coef_rust, coef_py
+
+    def test_mixed_scale_full_rank(self):
+        """Full-rank X with column-norm ratio > 1e6. Both SVD backends
+        should truncate the same singular values."""
+        rng = np.random.default_rng(11)
+        n = 80
+        X = np.column_stack(
+            [
+                rng.normal(0, 1, n),  # unit scale
+                rng.normal(0, 1e6, n),  # 1e6 scale
+                rng.normal(0, 1, n),  # unit scale
+            ]
+        )
+        y = 1.0 + 0.5 * X[:, 0] + 1e-7 * X[:, 1] + 0.3 * X[:, 2] + rng.normal(0, 0.1, n)
+
+        coef_rust, coef_py = self._run_both_backends(X, y)
+
+        fitted_rust = X @ coef_rust
+        fitted_py = X @ coef_py
+        np.testing.assert_allclose(
+            fitted_rust,
+            fitted_py,
+            rtol=1e-6,
+            atol=1e-8,
+            err_msg="Rust vs Python fitted-value divergence on mixed-scale X",
+        )
+
+    def test_near_singular_full_rank(self):
+        """Near-collinear full-rank X (cond(X'X) > 1e10). Backends use
+        the same SVD threshold (cond=1e-7), so should agree on truncation."""
+        rng = np.random.default_rng(22)
+        n = 80
+        x1 = rng.normal(0, 1, n)
+        x2 = x1 + rng.normal(0, 1e-6, n)  # nearly parallel to x1
+        x3 = rng.normal(0, 1, n)
+        X = np.column_stack([x1, x2, x3])
+        y = 1.0 + 0.5 * x1 - 0.3 * x3 + rng.normal(0, 0.1, n)
+
+        coef_rust, coef_py = self._run_both_backends(X, y)
+
+        fitted_rust = X @ coef_rust
+        fitted_py = X @ coef_py
+        np.testing.assert_allclose(
+            fitted_rust,
+            fitted_py,
+            rtol=1e-6,
+            atol=1e-8,
+            err_msg="Rust vs Python fitted-value divergence on near-singular X",
+        )
+
+    def test_rank_deficient_collinear(self):
+        """Perfectly collinear columns. ``skip_rank_check=True`` bypasses
+        the QR detector; both backends must still produce matching fitted
+        values via minimum-norm SVD solve, even if individual coefficients
+        differ on dropped columns."""
+        rng = np.random.default_rng(33)
+        n = 80
+        x1 = rng.normal(0, 1, n)
+        X = np.column_stack([x1, 2.0 * x1, rng.normal(0, 1, n)])  # x2 ≡ 2*x1
+        y = 1.0 + 0.5 * x1 + 0.3 * X[:, 2] + rng.normal(0, 0.1, n)
+
+        coef_rust, coef_py = self._run_both_backends(X, y)
+
+        fitted_rust = X @ coef_rust
+        fitted_py = X @ coef_py
+        # Fitted values are the backend-invariant object under rank deficiency.
+        np.testing.assert_allclose(
+            fitted_rust,
+            fitted_py,
+            rtol=1e-6,
+            atol=1e-8,
+            err_msg="Rust vs Python fitted-value divergence on rank-deficient X",
+        )
+
+
+# TestSyntheticWeightsBackendParity removed in the silent-failures audit
+# post-cleanup (finding #22). The wrapper it tested was deleted; the FW
+# computation is inlined in `rank_control_units` (prep.py:990) and covered
+# there by tests/test_prep.py::TestRankControlUnits.
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
+class TestTROPRustEdgeCaseParity:
+    """Finding #23: TROP Rust grid-search + bootstrap parity on edge cases.
+
+    Existing parity tests (this file, ~line 1687 / 1757) compare ATT and
+    effect dictionaries on well-conditioned random data at ``atol=1e-6``.
+    Gap: rank-deficient Y on the grid-search path, seed reproducibility
+    on the bootstrap path.
+
+    Sizing kept minimal (n_units=6, n_periods=5–6) per the
+    `feedback_trop_heavy_tests` memory.
+    """
+
+    @staticmethod
+    def _make_correlated_panel(n_units=6, n_periods=5, n_treated=2):
+        """Panel with two control units nearly parallel to each other,
+        making the pre-period Y matrix near rank-deficient."""
+        import pandas as pd
+
+        rng = np.random.default_rng(13)
+        data = []
+        shared_path = rng.normal(0, 1, n_periods)
+        for i in range(n_units):
+            is_treated = i < n_treated
+            if i in (n_treated, n_treated + 1):
+                # Two control units share a near-identical trajectory
+                base = shared_path + 1e-10 * rng.normal(0, 1, n_periods)
+            else:
+                base = rng.normal(0, 1, n_periods)
+            for t in range(n_periods):
+                y = 5.0 + i * 0.3 + base[t]
+                treated = 1 if (is_treated and t >= n_periods - 2) else 0
+                if treated:
+                    y += 1.5
+                data.append({"unit": i, "time": t, "outcome": y, "treated": treated})
+        return pd.DataFrame(data)
+
+    def test_grid_search_rank_deficient_Y(self):
+        """Grid-search ATT parity on rank-deficient Y.
+
+        Silent-failures audit Finding #23 (grid-search half) regression
+        guard. Previously a ~6% ATT divergence on two near-parallel
+        control units because the Rust inner solver used iterative block
+        coordinate descent while the Python fallback used SVD-based
+        minimum-norm least squares. Fixed by porting the Rust inner
+        solver to an SVD-based WLS path (numpy-compatible
+        rcond = eps*max(n,k)) that mirrors Python's
+        `np.linalg.lstsq(rcond=None)` step-for-step. This test asserts
+        the backends now agree at atol=1e-6 on rank-deficient Y.
+        """
+        import sys
+        from unittest.mock import patch
+
+        from diff_diff import TROP
+
+        df = self._make_correlated_panel()
+        # n_bootstrap>=2 is required by TROP.__init__; we set the minimum.
+        # Bootstrap SE is NOT asserted here (see separate test below +
+        # xfail baseline for the RNG-algorithm mismatch between backends).
+        trop_params = dict(
+            method="global",
+            lambda_time_grid=[0.1, 1.0, 10.0],
+            lambda_unit_grid=[0.1, 1.0, 10.0],
+            lambda_nn_grid=[np.inf],
+            n_bootstrap=2,
+            seed=42,
+        )
+
+        trop_rust = TROP(**trop_params)
+        res_rust = trop_rust.fit(df.copy(), "outcome", "treated", "unit", "time")
+
+        trop_global_module = sys.modules["diff_diff.trop_global"]
+        with (
+            patch.object(trop_global_module, "HAS_RUST_BACKEND", False),
+            patch.object(trop_global_module, "_rust_loocv_grid_search_global", None),
+            patch.object(trop_global_module, "_rust_bootstrap_trop_variance_global", None),
+        ):
+            trop_py = TROP(**trop_params)
+            res_py = trop_py.fit(df.copy(), "outcome", "treated", "unit", "time")
+
+        # Primary assertion: the ATT point estimate at the chosen λ matches.
+        # This catches both (a) same λ chosen and (b) tied λ producing same fit.
+        np.testing.assert_allclose(
+            res_rust.att,
+            res_py.att,
+            atol=1e-6,
+            err_msg="Grid-search ATT divergence on rank-deficient Y: "
+            f"Rust={res_rust.att:.8f}, Python={res_py.att:.8f}",
+        )
+
+    @pytest.mark.parametrize("seed", [0, 42, 12345])
+    def test_bootstrap_seed_reproducibility(self, seed):
+        """Bootstrap SE parity under a fixed seed (global method).
+
+        Silent-failures audit Finding #23 (bootstrap half) regression guard.
+        Previously a ~28% SE divergence on tiny panels because Rust seeded
+        ``rand_xoshiro::Xoshiro256PlusPlus`` per replicate while Python
+        consumed ``numpy.random.default_rng`` (PCG64). Fixed by pre-generating
+        stratified bootstrap indices via numpy on the Python side and passing
+        them to Rust through the PyO3 surface (Python-canonical RNG); both
+        backends now consume bit-identical index streams under the same seed.
+        """
+        import sys
+        from unittest.mock import patch
+
+        from diff_diff import TROP
+
+        df = self._make_correlated_panel(n_units=6, n_periods=6, n_treated=2)
+        trop_params = dict(
+            method="global",
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[np.inf],
+            n_bootstrap=10,
+            seed=seed,
+        )
+
+        trop_rust = TROP(**trop_params)
+        res_rust = trop_rust.fit(df.copy(), "outcome", "treated", "unit", "time")
+
+        trop_global_module = sys.modules["diff_diff.trop_global"]
+        with (
+            patch.object(trop_global_module, "HAS_RUST_BACKEND", False),
+            patch.object(trop_global_module, "_rust_loocv_grid_search_global", None),
+            patch.object(trop_global_module, "_rust_bootstrap_trop_variance_global", None),
+        ):
+            trop_py = TROP(**trop_params)
+            res_py = trop_py.fit(df.copy(), "outcome", "treated", "unit", "time")
+
+        np.testing.assert_allclose(
+            res_rust.se,
+            res_py.se,
+            atol=1e-14,
+            rtol=1e-14,
+            err_msg=f"Bootstrap SE divergence under seed={seed}: "
+            f"Rust={res_rust.se:.16f}, Python={res_py.se:.16f}",
+        )
+
+    @pytest.mark.parametrize(
+        "seed,lambda_nn",
+        [
+            (0, np.inf),
+            (42, np.inf),
+            (12345, np.inf),
+            (42, 0.1),
+        ],
+    )
+    def test_bootstrap_seed_reproducibility_local(self, seed, lambda_nn):
+        """Backend-invariant bootstrap SE parity for the local method.
+
+        Post-methodology-alignment regression guard covering both the
+        ``lambda_nn=inf`` regime (no-lowrank path, closed by the Python
+        ``_precomputed`` cache-fallthrough removal) and the finite
+        ``lambda_nn`` regime (with-lowrank FISTA path, closed by the Rust
+        weight-matrix normalization removal). With the RNG fix from
+        PR #354 plus both methodology fixes landed here, local-method
+        Rust and Python bootstraps consume bit-identical stratified
+        indices AND bit-identical raw-exponential weights. Main-fit ATT
+        is bit-identical (see ``test_local_method_main_fit_parity``),
+        but per-replicate bootstrap fits route through Rust's
+        ``estimate_model`` vs numpy's ``lstsq``, which use different
+        matrix factorization paths and accumulate different BLAS
+        roundoff. Empirically the residual gap is ~1e-7 relative;
+        asserted at ``atol=1e-5`` which is ~100x the observed gap and
+        comfortable across CI runner variance.
+
+        Follow-up to tighten to ``atol=1e-14``: unify Rust
+        ``estimate_model`` to use ``solve_wls_svd`` (the same SVD path
+        used by global-method since PR #348). Tracked in ``DEFERRED.md``.
+        """
+        import sys
+        from unittest.mock import patch
+
+        from diff_diff import TROP
+
+        df = self._make_correlated_panel(n_units=6, n_periods=6, n_treated=2)
+        trop_params = dict(
+            method="local",
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[lambda_nn],
+            n_bootstrap=10,
+            seed=seed,
+        )
+
+        trop_rust = TROP(**trop_params)
+        res_rust = trop_rust.fit(df.copy(), "outcome", "treated", "unit", "time")
+
+        trop_local_module = sys.modules["diff_diff.trop_local"]
+        with (
+            patch.object(trop_local_module, "HAS_RUST_BACKEND", False),
+            patch.object(trop_local_module, "_rust_bootstrap_trop_variance", None),
+        ):
+            trop_py = TROP(**trop_params)
+            res_py = trop_py.fit(df.copy(), "outcome", "treated", "unit", "time")
+
+        np.testing.assert_allclose(
+            res_rust.se,
+            res_py.se,
+            atol=1e-5,
+            rtol=1e-5,
+            err_msg=f"Local-method bootstrap SE divergence under "
+            f"seed={seed}, lambda_nn={lambda_nn}: "
+            f"Rust={res_rust.se:.16f}, Python={res_py.se:.16f}",
+        )
+
+    @pytest.mark.parametrize(
+        "lambda_nn,tol",
+        [
+            (np.inf, 1e-14),
+            (0.1, 1e-10),
+        ],
+    )
+    def test_local_method_main_fit_parity(self, lambda_nn, tol):
+        """Backend-invariant ATT parity for the local-method main fit.
+
+        Companion to the bootstrap seed-parity test above. Exercises both
+        regimes: ``lambda_nn=inf`` (no-lowrank, bit-identical minimum-norm
+        WLS argmin under aligned raw-exponential weights) and a finite
+        ``lambda_nn`` (with-lowrank, FISTA inner loop; tolerance relaxed
+        to ``1e-10`` because FISTA iteration ordering and BLAS reduction
+        ordering introduce sub-1e-10 noise across Rust faer and numpy BLAS
+        paths).
+
+        Regression guard for the normalization fix and cache-fallthrough
+        fix landed in this PR. Before the fix, Rust ATT diverged from
+        Python ATT by O(10%) at finite ``lambda_nn`` and O(0) at
+        ``lambda_nn=inf``; after the fix both regimes match to tolerance.
+
+        Uses multi-candidate lambda grids so LOOCV selection exercises
+        Rust's `compute_weight_matrix` (the surface the normalization fix
+        changed). Patches both the LOOCV dispatch in ``diff_diff.trop``
+        and the bootstrap dispatch in ``diff_diff.trop_local`` on the
+        Python side so the comparison is Rust-LOOCV-and-fit vs
+        Python-LOOCV-and-fit end-to-end.
+        """
+        import sys
+        from unittest.mock import patch
+
+        from diff_diff import TROP
+
+        df = self._make_correlated_panel(n_units=6, n_periods=6, n_treated=2)
+        # Multi-candidate grids so LOOCV selection isn't trivial; the Rust
+        # weight-normalization fix changes per-lambda LOOCV scores and thus
+        # potentially the selected lambda.
+        trop_params = dict(
+            method="local",
+            lambda_time_grid=[0.1, 1.0, 10.0],
+            lambda_unit_grid=[0.1, 1.0, 10.0],
+            lambda_nn_grid=[lambda_nn],
+            n_bootstrap=2,  # minimum allowed; we assert ATT, not SE
+            seed=42,
+        )
+
+        trop_rust = TROP(**trop_params)
+        res_rust = trop_rust.fit(df.copy(), "outcome", "treated", "unit", "time")
+
+        trop_module = sys.modules["diff_diff.trop"]
+        trop_local_module = sys.modules["diff_diff.trop_local"]
+        with (
+            patch.object(trop_module, "HAS_RUST_BACKEND", False),
+            patch.object(trop_module, "_rust_loocv_grid_search", None),
+            patch.object(trop_local_module, "HAS_RUST_BACKEND", False),
+            patch.object(trop_local_module, "_rust_bootstrap_trop_variance", None),
+        ):
+            trop_py = TROP(**trop_params)
+            res_py = trop_py.fit(df.copy(), "outcome", "treated", "unit", "time")
+
+        np.testing.assert_allclose(
+            res_rust.att,
+            res_py.att,
+            atol=tol,
+            rtol=tol,
+            err_msg=f"Local-method ATT divergence at lambda_nn={lambda_nn}: "
+            f"Rust={res_rust.att:.16f}, Python={res_py.att:.16f}",
+        )
+
+    @pytest.mark.parametrize("lambda_nn,tol", [(np.inf, 1e-14), (0.1, 1e-10)])
+    def test_local_method_same_cohort_donor_parity(self, lambda_nn, tol):
+        """Backend-invariant ATT when multiple units share the same treatment cohort.
+
+        Isolates the ``D[t, j] == 1`` target-period case the prior ``_compute_
+        observation_weights`` gate silently dropped: three treated units all
+        starting at ``t=3``. Under the paper's Eq. 2/3, ``ω_j`` is
+        distance-based for all ``j ≠ i`` (same-cohort donors included); their
+        pre-treatment rows contribute via ``θ_s · ω_j`` and post-treatment
+        cells are zeroed by the control mask ``(1 - W_{js})``. Python now
+        matches this convention (gate removed). This regression asserts that
+        the main-fit ATT is bit-identical across backends on a fixture where
+        the gate would previously have excluded donors' pre-treatment
+        information.
+        """
+        import sys
+        from unittest.mock import patch
+
+        import pandas as pd
+
+        from diff_diff import TROP
+
+        # 3 treated units + 3 controls, all treated units share cohort at t=3.
+        # Pre-treatment trajectories are distinct so same-cohort donors carry
+        # non-trivial information; without the fix Python and Rust would have
+        # different effective donor pools at each treated-observation target.
+        rng = np.random.default_rng(7)
+        rows = []
+        for i in range(6):
+            is_treated = i < 3
+            base = rng.normal(0, 1, 8)
+            for t in range(8):
+                y = 3.0 + i * 0.2 + 0.5 * t + base[t]
+                treated = 1 if (is_treated and t >= 5) else 0
+                if treated:
+                    y += 1.5
+                rows.append({"unit": i, "time": t, "outcome": y, "treated": treated})
+        df = pd.DataFrame(rows)
+
+        trop_params = dict(
+            method="local",
+            lambda_time_grid=[0.1, 1.0, 10.0],
+            lambda_unit_grid=[0.1, 1.0, 10.0],
+            lambda_nn_grid=[lambda_nn],
+            n_bootstrap=2,
+            seed=42,
+        )
+
+        trop_rust = TROP(**trop_params)
+        res_rust = trop_rust.fit(df.copy(), "outcome", "treated", "unit", "time")
+
+        trop_module = sys.modules["diff_diff.trop"]
+        trop_local_module = sys.modules["diff_diff.trop_local"]
+        with (
+            patch.object(trop_module, "HAS_RUST_BACKEND", False),
+            patch.object(trop_module, "_rust_loocv_grid_search", None),
+            patch.object(trop_local_module, "HAS_RUST_BACKEND", False),
+            patch.object(trop_local_module, "_rust_bootstrap_trop_variance", None),
+        ):
+            trop_py = TROP(**trop_params)
+            res_py = trop_py.fit(df.copy(), "outcome", "treated", "unit", "time")
+
+        np.testing.assert_allclose(
+            res_rust.att,
+            res_py.att,
+            atol=tol,
+            rtol=tol,
+            err_msg=f"Same-cohort donor ATT divergence at lambda_nn={lambda_nn}: "
+            f"Rust={res_rust.att:.16f}, Python={res_py.att:.16f}",
         )
 
 
@@ -2124,7 +2972,7 @@ class TestFallbackWhenNoRust:
 
     def test_linalg_works_without_rust(self):
         """linalg functions should work with NumPy fallback."""
-        from diff_diff.linalg import compute_robust_vcov, solve_ols
+        from diff_diff.linalg import solve_ols
 
         np.random.seed(42)
         n, k = 50, 3
@@ -2135,3 +2983,1695 @@ class TestFallbackWhenNoRust:
         assert coeffs.shape == (k,)
         assert residuals.shape == (n,)
         assert vcov.shape == (k, k)
+
+
+@pytest.mark.skipif(
+    not HAS_RUST_BACKEND or _demean_map_symbol is None,
+    reason="Rust backend or demean_map kernel not available",
+)
+class TestDemeanMapKernel:
+    """Rust demean_map vs the canonical numpy engine (_demean_map_numpy).
+
+    Contract: identical sweep order, row-order scatter-add accumulation, and
+    max|x - x_old| < tol convergence per column (incl. NaN poisoning). The
+    assertion order is iteration-count EQUALITY first (deterministic under
+    the pinned op-order contract), then allclose on outputs.
+    """
+
+    @staticmethod
+    def _fixture(kind, seed=0, k=3):
+        rng = np.random.default_rng(seed)
+        if kind == "balanced":
+            n_units, n_periods = 40, 8
+            unit = np.repeat(np.arange(n_units), n_periods)
+            period = np.tile(np.arange(n_periods), n_units)
+        elif kind == "unbalanced":
+            n_units, n_periods = 60, 12
+            unit = np.repeat(np.arange(n_units), n_periods)
+            period = np.tile(np.arange(n_periods), n_units)
+            keep = rng.random(unit.size) > 0.35
+            unit, period = unit[keep], period[keep]
+        elif kind == "contiguous":  # slow-convergence regime (>100 iterations)
+            n_units, n_periods, span = 120, 40, 6
+            unit = np.repeat(np.arange(n_units), n_periods)
+            period = np.tile(np.arange(n_periods), n_units)
+            entry = rng.integers(0, n_periods - span, n_units)
+            keep = (period >= entry[unit]) & (period < entry[unit] + span)
+            unit, period = unit[keep], period[keep]
+        else:
+            raise ValueError(kind)
+        n = unit.size
+        x_cols = [rng.normal(size=n) for _ in range(k)]
+        codes_list = [
+            pd.factorize(unit, sort=False)[0].astype(np.intp),
+            pd.factorize(period, sort=False)[0].astype(np.intp),
+        ]
+        n_groups = [len(np.unique(unit)), len(np.unique(period))]
+        w = rng.uniform(0.5, 2.0, n)
+        return x_cols, codes_list, n_groups, w
+
+    @staticmethod
+    def _run_both(x_cols, codes_list, n_groups, weights, tol=1e-10, max_iter=10_000):
+        from diff_diff.utils import _demean_map_numpy, _demean_map_rust
+
+        rust = _demean_map_rust(x_cols, codes_list, n_groups, weights, tol, max_iter)
+        assert rust is not None, "rust kernel unexpectedly fell back"
+        numpy_res = _demean_map_numpy(x_cols, codes_list, n_groups, weights, tol, max_iter)
+        return rust, numpy_res
+
+    @pytest.mark.parametrize("kind", ["balanced", "unbalanced", "contiguous"])
+    @pytest.mark.parametrize("weighted", [False, True])
+    def test_equivalence_two_way(self, kind, weighted):
+        x_cols, codes_list, n_groups, w = self._fixture(kind)
+        (r_cols, r_iters), (p_cols, p_iters) = self._run_both(
+            x_cols, codes_list, n_groups, w if weighted else None
+        )
+        assert r_iters == p_iters  # deterministic under the pinned op order
+        if kind == "contiguous":
+            assert all(it > 100 or it < 0 for it in p_iters) or max(p_iters) > 100
+        for rc, pc in zip(r_cols, p_cols):
+            np.testing.assert_allclose(rc, pc, rtol=0, atol=1e-12)
+
+    def test_equivalence_three_way(self):
+        rng = np.random.default_rng(3)
+        x_cols, codes_list, n_groups, w = self._fixture("unbalanced", seed=3)
+        n = x_cols[0].size
+        firm = rng.integers(0, 7, n)
+        codes_list = codes_list + [pd.factorize(firm, sort=False)[0].astype(np.intp)]
+        n_groups = n_groups + [len(np.unique(firm))]
+        (r_cols, r_iters), (p_cols, p_iters) = self._run_both(x_cols, codes_list, n_groups, w)
+        assert r_iters == p_iters
+        for rc, pc in zip(r_cols, p_cols):
+            np.testing.assert_allclose(rc, pc, rtol=0, atol=1e-12)
+
+    def test_zero_total_weight_group_rows_inert_parity(self):
+        x_cols, codes_list, n_groups, w = self._fixture("unbalanced", seed=4)
+        w = w.copy()
+        zero_rows = codes_list[0] == 0
+        w[zero_rows] = 0.0
+        (r_cols, r_iters), (p_cols, p_iters) = self._run_both(x_cols, codes_list, n_groups, w)
+        assert r_iters == p_iters
+        for rc, pc in zip(r_cols, p_cols):
+            np.testing.assert_allclose(rc, pc, rtol=0, atol=1e-12)
+            assert np.isfinite(rc).all()
+
+    def test_nan_in_variable_never_converges_both(self):
+        x_cols, codes_list, n_groups, _ = self._fixture("unbalanced", seed=5, k=1)
+        x_cols[0][3] = np.nan
+        (_, r_iters), (_, p_iters) = self._run_both(
+            x_cols, codes_list, n_groups, None, tol=1e-8, max_iter=25
+        )
+        assert r_iters == [-1]
+        assert p_iters == [-1]
+
+    @pytest.mark.parametrize("k", [1, 64])
+    def test_column_counts(self, k):
+        x_cols, codes_list, n_groups, _ = self._fixture("unbalanced", seed=6, k=k)
+        (r_cols, r_iters), (p_cols, p_iters) = self._run_both(x_cols, codes_list, n_groups, None)
+        assert len(r_cols) == k and r_iters == p_iters
+        for rc, pc in zip(r_cols, p_cols):
+            np.testing.assert_allclose(rc, pc, rtol=0, atol=1e-12)
+
+    def test_nonconvergence_flag_parity_at_max_iter_1(self):
+        x_cols, codes_list, n_groups, _ = self._fixture("unbalanced", seed=7)
+        (_, r_iters), (_, p_iters) = self._run_both(
+            x_cols, codes_list, n_groups, None, tol=1e-15, max_iter=1
+        )
+        assert r_iters == p_iters == [-1] * len(x_cols)
+
+    def test_forced_fallback_runs_numpy_engine(self, monkeypatch):
+        """Wrapper returning None must route demean_by_groups to the numpy
+        engine and still produce a correct result."""
+        import diff_diff.utils as utils_mod
+        from diff_diff.utils import demean_by_groups
+
+        rng = np.random.default_rng(8)
+        df = pd.DataFrame(
+            {
+                "unit": np.repeat(np.arange(20), 5),
+                "period": np.tile(np.arange(5), 20),
+                "y": rng.normal(size=100),
+            }
+        )
+        calls = {"numpy": 0}
+        orig_numpy = utils_mod._demean_map_numpy
+
+        def counting_numpy(*a, **kw):
+            calls["numpy"] += 1
+            return orig_numpy(*a, **kw)
+
+        monkeypatch.setattr(utils_mod, "_demean_map_rust", lambda *a, **kw: None)
+        monkeypatch.setattr(utils_mod, "_demean_map_numpy", counting_numpy)
+        out, _ = demean_by_groups(df, ["y"], ["unit", "period"], suffix="_dm")
+        assert calls["numpy"] == 1
+        assert np.abs(out["y_dm"].values.mean()) < 1e-12
+
+    def test_nonconvergence_warning_parity_under_rust(self):
+        """Same 'did not converge' warning, same variable names, via the
+        rust dispatch path."""
+        from diff_diff.utils import demean_by_groups
+
+        rng = np.random.default_rng(9)
+        df = pd.DataFrame(
+            {
+                "unit": np.repeat(np.arange(30), 6),
+                "period": np.tile(np.arange(6), 30),
+            }
+        )
+        df = df[rng.random(len(df)) > 0.3].reset_index(drop=True)
+        df["y"] = rng.normal(size=len(df))
+        with pytest.warns(UserWarning, match=r"\['y'\].*did not converge"):
+            demean_by_groups(df, ["y"], ["unit", "period"], suffix="_dm", max_iter=1, tol=1e-15)
+
+    def test_estimator_level_att_parity(self, monkeypatch):
+        """SunAbraham + DiD(absorb=) ATT/SE identical across engines,
+        including the FE-spanned-covariate snap decision."""
+        import warnings as _w
+
+        import diff_diff.utils as utils_mod
+        from diff_diff import DifferenceInDifferences, SunAbraham
+
+        rng = np.random.default_rng(10)
+        n_units, n_periods = 90, 10
+        unit = np.repeat(np.arange(n_units), n_periods)
+        time_ = np.tile(np.arange(n_periods), n_units)
+        keep = rng.random(unit.size) > 0.25
+        unit, time_ = unit[keep], time_[keep]
+        first = np.where(np.arange(n_units) % 3 == 0, 0, 5)[unit]
+        treated = (unit < n_units // 2).astype(int)
+        post = (time_ >= n_periods // 2).astype(int)
+        y = 0.3 * treated * post + rng.normal(size=unit.size)
+        df = pd.DataFrame(
+            {
+                "y": y,
+                "unit": unit,
+                "time": time_,
+                "first_treat": first,
+                "treated": treated,
+                "post": post,
+            }
+        )
+        # FE-spanned covariate: snap decisions must match across engines
+        a = rng.normal(size=n_units)
+        b = rng.normal(size=n_periods)
+        df["xspan"] = a[unit] + b[time_]
+
+        def fits():
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")
+                sa = SunAbraham().fit(
+                    df, outcome="y", unit="unit", time="time", first_treat="first_treat"
+                )
+                did = DifferenceInDifferences().fit(
+                    df,
+                    outcome="y",
+                    treatment="treated",
+                    post="post",
+                    absorb=["unit", "time"],
+                    covariates=["xspan"],
+                )
+            return sa, did
+
+        sa_r, did_r = fits()
+        monkeypatch.setattr(utils_mod, "_rust_demean_map", None)
+        sa_p, did_p = fits()
+        assert sa_r.att == pytest.approx(sa_p.att, abs=1e-10)
+        assert sa_r.se == pytest.approx(sa_p.se, rel=1e-8)
+        assert did_r.att == pytest.approx(did_p.att, abs=1e-10)
+        assert did_r.se == pytest.approx(did_p.se, rel=1e-8)
+        # snap decision parity: spanned covariate NaN under BOTH engines
+        assert np.isnan(did_r.coefficients["xspan"])
+        assert np.isnan(did_p.coefficients["xspan"])
+
+    def test_stale_symbol_none_falls_back_to_numpy(self, monkeypatch):
+        """A mixed-version extension missing demean_map (symbol None) must
+        route the PUBLIC entry point to the numpy engine, not raise."""
+        import diff_diff.utils as utils_mod
+        from diff_diff.utils import demean_by_groups
+
+        rng = np.random.default_rng(11)
+        df = pd.DataFrame(
+            {
+                "unit": np.repeat(np.arange(15), 4),
+                "period": np.tile(np.arange(4), 15),
+                "y": rng.normal(size=60),
+            }
+        )
+        monkeypatch.setattr(utils_mod, "_rust_demean_map", None)
+        out, _ = demean_by_groups(df, ["y"], ["unit", "period"], suffix="_dm")
+        assert np.abs(out["y_dm"].values.mean()) < 1e-12
+        # the wrapper itself honors its documented None contract too
+        assert (
+            utils_mod._demean_map_rust(
+                [df["y"].values], [np.zeros(60, dtype=np.intp)], [1], None, 1e-10, 10
+            )
+            is None
+        )
+
+    @staticmethod
+    def _counting_kernel(monkeypatch):
+        """Wrap the kernel symbol to count invocations (proves the chunked
+        path actually ran, per-chunk)."""
+        import diff_diff.utils as utils_mod
+
+        calls = {"kernel": 0}
+        orig = utils_mod._rust_demean_map
+
+        def counting(*a, **kw):
+            calls["kernel"] += 1
+            return orig(*a, **kw)
+
+        monkeypatch.setattr(utils_mod, "_rust_demean_map", counting)
+        return calls
+
+    @pytest.mark.parametrize("weighted", [False, True])
+    def test_chunked_dispatch_exactly_equals_single_call(self, monkeypatch, weighted):
+        """Chunking is exact partitioning: per-column outputs are IDENTICAL
+        (assert_array_equal - same code path, no cross-backend caveat) and
+        iteration counts equal, vs both single-chunk rust and the numpy
+        engine."""
+        import diff_diff.utils as utils_mod
+        from diff_diff.utils import _demean_map_numpy, _demean_map_rust
+
+        monkeypatch.delenv("DIFF_DIFF_DEMEAN_CHUNK_COLS", raising=False)
+        x_cols, codes_list, n_groups, w = self._fixture("unbalanced", seed=13, k=8)
+        weights = w if weighted else None
+
+        monkeypatch.setattr(utils_mod, "_DEMEAN_MAP_CHUNK_COLS", 1000)
+        single = _demean_map_rust(x_cols, codes_list, n_groups, weights, 1e-10, 10_000)
+        assert single is not None
+
+        calls = self._counting_kernel(monkeypatch)
+        monkeypatch.setattr(utils_mod, "_DEMEAN_MAP_CHUNK_COLS", 3)
+        chunked = _demean_map_rust(x_cols, codes_list, n_groups, weights, 1e-10, 10_000)
+        assert chunked is not None
+        assert calls["kernel"] == 3  # ceil(8 / 3)
+
+        assert chunked[1] == single[1]
+        for c_col, s_col in zip(chunked[0], single[0]):
+            np.testing.assert_array_equal(c_col, s_col)
+
+        numpy_res = _demean_map_numpy(x_cols, codes_list, n_groups, weights, 1e-10, 10_000)
+        assert chunked[1] == numpy_res[1]
+        for c_col, p_col in zip(chunked[0], numpy_res[0]):
+            np.testing.assert_allclose(c_col, p_col, rtol=0, atol=1e-12)
+
+    @pytest.mark.parametrize("k", [1, 4, 5])  # below / at / above the chunk boundary
+    def test_chunk_boundaries(self, monkeypatch, k):
+        """k <= chunk is a single kernel call; k = chunk+1 exercises the
+        two-chunk boundary (balanced partition: 5 -> 2+3). All cases match
+        the numpy engine."""
+        import math
+
+        import diff_diff.utils as utils_mod
+        from diff_diff.utils import _demean_map_numpy, _demean_map_rust
+
+        monkeypatch.delenv("DIFF_DIFF_DEMEAN_CHUNK_COLS", raising=False)
+        monkeypatch.setattr(utils_mod, "_DEMEAN_MAP_CHUNK_COLS", 4)
+        x_cols, codes_list, n_groups, _ = self._fixture("balanced", seed=14, k=k)
+        calls = self._counting_kernel(monkeypatch)
+        rust = _demean_map_rust(x_cols, codes_list, n_groups, None, 1e-10, 10_000)
+        assert rust is not None
+        assert calls["kernel"] == math.ceil(k / 4)
+        numpy_res = _demean_map_numpy(x_cols, codes_list, n_groups, None, 1e-10, 10_000)
+        assert rust[1] == numpy_res[1]
+        for r_col, p_col in zip(rust[0], numpy_res[0]):
+            np.testing.assert_allclose(r_col, p_col, rtol=0, atol=1e-12)
+
+    def test_nonconverged_variable_in_second_chunk_still_named(self, monkeypatch):
+        """The non-convergence warning names a variable whose column lands in
+        the SECOND chunk (iters aggregation preserves variable order)."""
+        import diff_diff.utils as utils_mod
+        from diff_diff.utils import demean_by_groups
+
+        monkeypatch.delenv("DIFF_DIFF_DEMEAN_CHUNK_COLS", raising=False)
+        monkeypatch.setattr(utils_mod, "_DEMEAN_MAP_CHUNK_COLS", 2)
+        rng = np.random.default_rng(15)
+        df = pd.DataFrame(
+            {
+                "unit": np.repeat(np.arange(30), 6),
+                "period": np.tile(np.arange(6), 30),
+            }
+        )
+        df = df[rng.random(len(df)) > 0.3].reset_index(drop=True)
+        for name in ["x1", "x2", "y"]:  # 'y' is column 3 -> chunk 2 of 2
+            df[name] = rng.normal(size=len(df))
+        calls = self._counting_kernel(monkeypatch)
+        with pytest.warns(UserWarning, match=r"\['x1', 'x2', 'y'\].*did not converge"):
+            demean_by_groups(
+                df, ["x1", "x2", "y"], ["unit", "period"], suffix="_dm", max_iter=1, tol=1e-15
+            )
+        assert calls["kernel"] == 2  # ceil(3 / 2): multi-chunk path exercised
+
+    def test_estimator_level_chunked_att_parity(self, monkeypatch):
+        """DiD(absorb=) ATT/SE with chunk=2 identical to the default chunk."""
+        import diff_diff.utils as utils_mod
+        from diff_diff import DifferenceInDifferences
+
+        monkeypatch.delenv("DIFF_DIFF_DEMEAN_CHUNK_COLS", raising=False)
+        rng = np.random.default_rng(16)
+        n_units, n_periods = 60, 8
+        df = pd.DataFrame(
+            {
+                "unit": np.repeat(np.arange(n_units), n_periods),
+                "period": np.tile(np.arange(n_periods), n_units),
+            }
+        )
+        df["treated"] = (df["unit"] < 30).astype(int)
+        df["post"] = (df["period"] >= 4).astype(int)
+        df["x1"] = rng.normal(size=len(df))
+        df["x2"] = rng.normal(size=len(df))
+        df["y"] = (
+            1.5 * df["treated"] * df["post"]
+            + 0.5 * df["x1"]
+            - 0.3 * df["x2"]
+            + rng.normal(0, 0.5, len(df))
+        )
+
+        def fit():
+            return DifferenceInDifferences().fit(
+                df,
+                outcome="y",
+                treatment="treated",
+                post="post",
+                absorb=["unit", "period"],
+                covariates=["x1", "x2"],
+            )
+
+        r_default = fit()
+        monkeypatch.setattr(utils_mod, "_DEMEAN_MAP_CHUNK_COLS", 2)
+        r_chunked = fit()
+        np.testing.assert_allclose(r_chunked.att, r_default.att, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(r_chunked.se, r_default.se, rtol=0, atol=1e-12)
+
+    def test_default_is_single_dispatch(self, monkeypatch):
+        """With the env unset and the default constant (None), a k=8 dispatch
+        makes exactly ONE kernel call - chunking is opt-in."""
+        from diff_diff.utils import _demean_map_rust
+
+        monkeypatch.delenv("DIFF_DIFF_DEMEAN_CHUNK_COLS", raising=False)
+        x_cols, codes_list, n_groups, _ = self._fixture("balanced", seed=17, k=8)
+        calls = self._counting_kernel(monkeypatch)
+        result = _demean_map_rust(x_cols, codes_list, n_groups, None, 1e-10, 10_000)
+        assert result is not None
+        assert calls["kernel"] == 1
+
+
+class TestDemeanChunkResolver:
+    """Pure-Python env-override logic - runs regardless of the Rust build."""
+
+    def test_default_when_unset_is_none(self, monkeypatch):
+        """Chunking is OPT-IN: env unset -> None -> single dispatch."""
+        import diff_diff.utils as utils_mod
+
+        monkeypatch.delenv("DIFF_DIFF_DEMEAN_CHUNK_COLS", raising=False)
+        assert utils_mod._DEMEAN_MAP_CHUNK_COLS is None
+        assert utils_mod._resolve_demean_chunk_cols() is None
+
+    def test_valid_override_honored(self, monkeypatch):
+        import diff_diff.utils as utils_mod
+
+        monkeypatch.setenv("DIFF_DIFF_DEMEAN_CHUNK_COLS", "7")
+        assert utils_mod._resolve_demean_chunk_cols() == 7
+
+    @pytest.mark.parametrize("bad", ["abc", "0", "-4", "", "3.5"])
+    def test_invalid_values_fall_back_to_default(self, monkeypatch, bad):
+        import diff_diff.utils as utils_mod
+
+        monkeypatch.setenv("DIFF_DIFF_DEMEAN_CHUNK_COLS", bad)
+        assert utils_mod._resolve_demean_chunk_cols() is utils_mod._DEMEAN_MAP_CHUNK_COLS
+
+
+from diff_diff._backend import (  # noqa: E402
+    _rust_batched_ridge_chol_solve as _batched_chol_symbol,
+)
+
+
+@pytest.mark.skipif(
+    not HAS_RUST_BACKEND or _batched_chol_symbol is None,
+    reason="Rust backend or batched-Cholesky kernel not available",
+)
+class TestBatchedRidgeCholSolve:
+    """Rust `batched_ridge_chol_solve_ones` vs the numpy LU reference.
+
+    Contract: solves (A_i + ridge_i * I) x = 1 per matrix via hand-rolled
+    Cholesky; non-SPD rows fall back to faer LU; an exactly-singular row is
+    NaN-poisoned (so the Python dispatch recomputes it via the legacy
+    chain). Cholesky-vs-LU parity is cond*eps-bounded, NOT bit-identical:
+    ~1e-12 on well-conditioned stacks, ~1e-5 budget on the cond~1e6-1e8
+    ridged near-singular stacks production feeds it (measured ~4e-7 max on
+    real Omega* batches). Per-row op order is fixed, so results are
+    bit-deterministic across batch splits and thread counts.
+    """
+
+    @staticmethod
+    def _numpy_reference(a_stack, ridge):
+        m, h, _ = a_stack.shape
+        a_ridged = a_stack + ridge[:, None, None] * np.eye(h)[None]
+        return np.linalg.solve(a_ridged, np.ones((m, h, 1)))[..., 0]
+
+    @staticmethod
+    def _spd_stack(m, h, seed, eps=1.0):
+        rng = np.random.default_rng(seed)
+        b = rng.standard_normal((m, h, h))
+        return b @ b.transpose(0, 2, 1) + eps * np.eye(h)
+
+    @pytest.mark.parametrize("h", [2, 3, 30, 60])
+    @pytest.mark.parametrize("m", [1, 200])
+    def test_well_conditioned_parity(self, h, m):
+        a = self._spd_stack(m, h, seed=h * 1000 + m)
+        ridge = 1e-6 * np.trace(a, axis1=1, axis2=2) / h
+        got = _batched_chol_symbol(a, ridge)
+        want = self._numpy_reference(a, ridge)
+        # atol covers near-zero solution entries: Cholesky-vs-LU error scales
+        # with the solution norm (cond*eps*||x||), not per-entry.
+        np.testing.assert_allclose(got, want, rtol=1e-12, atol=1e-13)
+
+    def test_ill_conditioned_parity_cond_bounded(self):
+        """Production regime: numerically singular PSD + trace-scaled ridge
+        (floors relative eigenvalues at ~1e-8 -> cond ~1e8). Cholesky and LU
+        then differ at the cond*eps level; budget 1e-5 (~30x the measured
+        max on real Omega* stacks)."""
+        rng = np.random.default_rng(9)
+        m, h = 50, 20
+        q, _ = np.linalg.qr(rng.standard_normal((h, h)))
+        eigs = np.logspace(0, -12, h)  # exact-null tail beyond fp precision
+        a1 = (q * eigs) @ q.T
+        a = np.repeat(a1[None], m, axis=0) + 0.0
+        # jitter each matrix a little to vary the batch (stay PSD)
+        jit = rng.standard_normal((m, h, h)) * 1e-9
+        a = a + jit @ jit.transpose(0, 2, 1)
+        ridge = 1e-6 * np.trace(a, axis1=1, axis2=2) / h
+        got = _batched_chol_symbol(a, ridge)
+        want = self._numpy_reference(a, ridge)
+        assert np.isfinite(got).all()
+        np.testing.assert_allclose(got, want, rtol=1e-5, atol=1e-8)
+
+    def test_nan_row_non_finite(self):
+        a = self._spd_stack(3, 4, seed=1)
+        a[1] = np.nan
+        ridge = np.full(3, 1e-6)
+        got = _batched_chol_symbol(a, ridge)
+        assert not np.isfinite(got[1]).all()
+        np.testing.assert_allclose(got[[0, 2]], self._numpy_reference(a, ridge)[[0, 2]], rtol=1e-12)
+
+    def test_exact_singular_zero_ridge_nan_poisoned(self):
+        """diag(1, -2, 0) with zero ridge: Cholesky fails (negative pivot),
+        faer LU sees an exactly-zero U pivot -> whole row NaN (mirrors
+        LAPACK's exact-singularity signal; a finite-garbage row would
+        silently skip the dispatch's legacy pinv recompute)."""
+        a = np.zeros((1, 3, 3))
+        a[0, 0, 0] = 1.0
+        a[0, 1, 1] = -2.0
+        got = _batched_chol_symbol(a, np.zeros(1))
+        assert np.isnan(got).all()
+
+    def test_indefinite_full_rank_lu_fallback(self):
+        """diag(1, -1) with zero ridge: not SPD but invertible - the LU
+        fallback returns the exact solution [1, -1]."""
+        a = np.zeros((1, 2, 2))
+        a[0, 0, 0] = 1.0
+        a[0, 1, 1] = -1.0
+        got = _batched_chol_symbol(a, np.zeros(1))
+        np.testing.assert_array_equal(got[0], [1.0, -1.0])
+
+    def test_batch_split_bit_identity(self):
+        """Full-stack result == concatenated sub-batch results, bitwise.
+        Locks the per-row-fixed-op-order determinism the EfficientDiD
+        tile-invariance twins depend on."""
+        a = self._spd_stack(31, 12, seed=5)
+        ridge = 1e-6 * np.trace(a, axis1=1, axis2=2) / 12
+        full = _batched_chol_symbol(a, ridge)
+        parts = np.vstack(
+            [
+                _batched_chol_symbol(a[:7], ridge[:7]),
+                _batched_chol_symbol(a[7:20], ridge[7:20]),
+                _batched_chol_symbol(a[20:], ridge[20:]),
+            ]
+        )
+        np.testing.assert_array_equal(full, parts)
+
+    def test_degenerate_shapes(self):
+        """m=0 and H=0 are no-ops with the right shape; H=1 is the scalar
+        1/(a+ridge) via the 1x1 factorization (within 1 ulp)."""
+        out_m0 = _batched_chol_symbol(np.zeros((0, 4, 4)), np.zeros(0))
+        assert out_m0.shape == (0, 4)
+        out_h0 = _batched_chol_symbol(np.zeros((3, 0, 0)), np.zeros(3))
+        assert out_h0.shape == (3, 0)
+        out_h1 = _batched_chol_symbol(np.full((1, 1, 1), 4.0), np.zeros(1))
+        np.testing.assert_allclose(out_h1, [[0.25]], rtol=1e-14)
+
+    def test_strided_input_defensive(self):
+        """Non-contiguous views produce identical results to a contiguous
+        copy (defensive: the live dispatch path's fancy-indexed stacks are
+        always C-contiguous)."""
+        a = self._spd_stack(20, 5, seed=8)
+        ridge = np.full(20, 1e-6)
+        strided = a[::2]
+        assert not strided.flags["C_CONTIGUOUS"]
+        got = _batched_chol_symbol(strided, ridge[::2])
+        want = _batched_chol_symbol(np.ascontiguousarray(strided), np.ascontiguousarray(ridge[::2]))
+        np.testing.assert_array_equal(got, want)
+
+    def test_shape_validation_errors(self):
+        with pytest.raises(ValueError, match="square"):
+            _batched_chol_symbol(np.zeros((2, 3, 4)), np.zeros(2))
+        with pytest.raises(ValueError, match="ridge length"):
+            _batched_chol_symbol(np.zeros((2, 3, 3)), np.zeros(5))
+
+
+class TestHC2BackendCompatibility:
+    """Older successful HC2 kernels must not bypass the leverage-one policy."""
+
+    @pytest.mark.parametrize("backend_mode", ["auto", "rust"])
+    @pytest.mark.parametrize("return_dof", [False, True])
+    @pytest.mark.parametrize("leverage_one", [False, True])
+    def test_legacy_symbol_uses_numpy(self, monkeypatch, backend_mode, return_dof, leverage_one):
+        import runpy
+
+        import diff_diff._backend as backend
+        import diff_diff.linalg as la
+
+        native = pytest.importorskip("diff_diff._rust_backend")
+        X = np.column_stack([np.ones(4), [0.0, 0.0, 0.0 if leverage_one else 1.0, 1.0]])
+        residuals = np.array([-1.0, 0.0, 1.0, 0.0])
+        calls = []
+
+        def legacy_hc2(X, residuals):
+            # Supplied base kernel: unit leverage returns successfully because
+            # its denominator floor turns 0/0 into a finite contribution.
+            calls.append(True)
+            bread_inv = np.linalg.inv(X.T @ X)
+            h = np.sum((X @ bread_inv) * X, axis=1)
+            factor = residuals**2 / np.maximum(1.0 - h, 1e-10)
+            return bread_inv @ (X.T @ (X * factor[:, None])) @ bread_inv
+
+        if leverage_one:
+            np.testing.assert_allclose(
+                legacy_hc2(X, residuals), np.array([[1.0, -1.0], [-1.0, 1.0]]) / 3
+            )
+            calls.clear()
+        monkeypatch.setattr(native, "compute_robust_vcov_hc2", legacy_hc2)
+        monkeypatch.delattr(native, "compute_robust_vcov_hc2_v2", raising=False)
+        monkeypatch.setenv("DIFF_DIFF_BACKEND", backend_mode)
+        # Execute import selection in an isolated namespace, avoiding reloads
+        # that change class identities in other modules/tests.
+        selected = runpy.run_path(backend.__file__)
+        monkeypatch.setattr(la, "HAS_RUST_BACKEND", selected["HAS_RUST_BACKEND"])
+        monkeypatch.setattr(
+            la, "_rust_compute_robust_vcov_hc2", selected["_rust_compute_robust_vcov_hc2"]
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = la.compute_robust_vcov(X, residuals, vcov_type="hc2", return_dof=return_dof)
+        vcov = result[0] if return_dof else result
+        assert vcov.shape == (2, 2)
+        if leverage_one:
+            assert np.isnan(vcov).all()
+            assert len(caught) == 1 and "HC2 variance is undefined" in str(caught[0].message)
+            if return_dof:
+                assert result[1].shape == (2,) and np.isnan(result[1]).all()
+        else:
+            assert not caught
+            np.testing.assert_allclose(vcov, [[0.5, -0.5], [-0.5, 1.0]], atol=1e-14)
+            if return_dof:
+                np.testing.assert_array_equal(result[1], [2.0, 2.0])
+        assert not calls, "legacy HC2 must never be used, even if its symbol exists"
+        assert selected["_rust_compute_robust_vcov_hc2"] is None
+        assert selected["HAS_RUST_BACKEND"]
+        assert selected["_rust_solve_ols"] is native.solve_ols
+        assert selected["_rust_compute_robust_vcov"] is native.compute_robust_vcov
+
+
+@pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
+class TestRustHC2Vcov:
+    """Rust HC2 (leverage-corrected) vcov parity with the NumPy hc2 branch.
+
+    The kernel mirrors `_compute_robust_vcov_numpy`'s unweighted `hc2` path
+    exactly (hat diagonals off the same bread, `u^2 / (1 - h)` meat,
+    NO n/(n-k) factor). At leverage ~1 the native sentinel becomes a
+    Python warning and all-NaN covariance."""
+
+    @staticmethod
+    def _design(n=400, k=5, seed=0):
+        rng = np.random.default_rng(seed)
+        X = np.column_stack([np.ones(n), rng.normal(size=(n, k - 1))])
+        beta = rng.normal(size=k)
+        e = rng.normal(size=n) * (1.0 + 0.5 * np.abs(X[:, 1]))  # heteroskedastic
+        y = X @ beta + e
+        resid = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        return X, resid
+
+    def test_hc2_matches_numpy(self):
+        from diff_diff.linalg import _compute_robust_vcov_numpy, compute_robust_vcov
+
+        for seed in (0, 1, 2):
+            X, resid = self._design(seed=seed)
+            v_rust = compute_robust_vcov(X, resid, vcov_type="hc2")
+            v_py = _compute_robust_vcov_numpy(X, resid, None, vcov_type="hc2")
+            np.testing.assert_allclose(v_rust, v_py, rtol=1e-12, atol=1e-15)
+
+    def test_hc2_kernel_direct(self):
+        from diff_diff._rust_backend import compute_robust_vcov_hc2
+
+        X, resid = self._design()
+        v = compute_robust_vcov_hc2(np.ascontiguousarray(X), np.ascontiguousarray(resid))
+        assert v.shape == (X.shape[1], X.shape[1])
+        np.testing.assert_allclose(v, v.T, rtol=0, atol=1e-12)
+        assert np.all(np.diag(v) > 0)
+
+    def test_exact_unit_leverage_fails_closed_in_both_backends(self):
+        """A one-observation dummy produces NaN covariance in both backends."""
+        from diff_diff.linalg import _compute_robust_vcov_numpy, compute_robust_vcov
+
+        n = 60
+        rng = np.random.default_rng(3)
+        d = np.zeros(n)
+        d[0] = 1.0
+        X = np.column_stack([np.ones(n), d, rng.normal(size=n)])
+        y = X @ np.array([1.0, 2.0, 0.5]) + rng.normal(size=n)
+        resid = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+
+        for compute in (compute_robust_vcov, _compute_robust_vcov_numpy):
+            with pytest.warns(UserWarning, match="HC2 variance is undefined") as caught:
+                v = compute(X, resid, vcov_type="hc2")
+            assert len(caught) == 1
+            assert v.shape == (3, 3) and np.isnan(v).all()
+
+    def test_legacy_sentinel_fails_closed_with_warning(self, monkeypatch):
+        """A legacy over-one sentinel must never return mislabeled HC1."""
+        import diff_diff.linalg as la
+
+        X, resid = self._design()
+
+        def _sentinel(*a, **k):
+            raise ValueError(
+                "Hat-matrix diagonal exceeds 1 (max=1.000010); the design is near-singular."
+            )
+
+        monkeypatch.setattr(la, "_rust_compute_robust_vcov_hc2", _sentinel)
+        with pytest.warns(UserWarning, match="HC2 variance is undefined") as caught:
+            v = la.compute_robust_vcov(X, resid, vcov_type="hc2")
+        assert len(caught) == 1 and np.isnan(v).all()
+        assert "Falling back to HC1" not in str(caught[0].message)
+
+    @pytest.mark.parametrize("symbol", ["compute_robust_vcov_hc2", "compute_robust_vcov_hc2_v2"])
+    @pytest.mark.parametrize("delta", [0.0, 5e-9, 2e-8])
+    def test_native_threshold_sentinel_and_public_parity(self, delta, symbol):
+        import diff_diff._rust_backend as rust_backend
+
+        from diff_diff.linalg import _compute_robust_vcov_numpy, compute_robust_vcov
+
+        compute_robust_vcov_hc2 = getattr(rust_backend, symbol)
+        X = np.sqrt(np.array([[1 - delta], [delta]]))
+        resid = np.array([0.1, -0.2])
+        if delta < 1e-8:
+            with pytest.raises(ValueError, match="HC2 variance is undefined: 1 observation"):
+                compute_robust_vcov_hc2(X, resid)
+            for compute in (compute_robust_vcov, _compute_robust_vcov_numpy):
+                with pytest.warns(UserWarning, match="HC2 variance is undefined") as caught:
+                    v = compute(X, resid, vcov_type="hc2")
+                assert len(caught) == 1 and np.isnan(v).all()
+        else:
+            native = compute_robust_vcov_hc2(X, resid)
+            numpy = _compute_robust_vcov_numpy(X, resid, vcov_type="hc2")
+            assert np.isfinite(native).all()
+            np.testing.assert_allclose(native, numpy, rtol=1e-8)
+
+    def test_public_dispatch_uses_versioned_kernel(self, monkeypatch):
+        import diff_diff._rust_backend as native
+
+        import diff_diff.linalg as la
+
+        assert la._rust_compute_robust_vcov_hc2 is native.compute_robust_vcov_hc2_v2
+        calls = []
+
+        def tracked(X, residuals):
+            calls.append(True)
+            return native.compute_robust_vcov_hc2_v2(X, residuals)
+
+        monkeypatch.setattr(la, "_rust_compute_robust_vcov_hc2", tracked)
+        X, residuals = self._design()
+        vcov = la.compute_robust_vcov(X, residuals, vcov_type="hc2")
+        assert calls == [True] and np.isfinite(vcov).all()
+
+    @pytest.mark.parametrize("fallback", ["missing", "unstable"])
+    def test_leverage_one_fails_closed_on_numpy_fallback(self, monkeypatch, fallback):
+        import diff_diff.linalg as la
+
+        X = np.column_stack([np.ones(4), [0.0, 0.0, 0.0, 1.0]])
+        resid = np.array([-1.0, 0.0, 1.0, 0.0])
+
+        def unstable(*args, **kwargs):
+            raise ValueError("Matrix inversion numerically unstable (residual check failed)")
+
+        monkeypatch.setattr(
+            la, "_rust_compute_robust_vcov_hc2", None if fallback == "missing" else unstable
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            v = la.compute_robust_vcov(X, resid, vcov_type="hc2")
+        assert np.isnan(v).all()
+        assert sum("HC2 variance is undefined" in str(w.message) for w in caught) == 1
+        assert len(caught) == (1 if fallback == "missing" else 2)
+
+    def test_dispatch_declined_for_dof_and_weights(self):
+        """return_dof / weights / cluster requests stay on the NumPy path
+        (values equal by construction; this locks that the kernel's absence
+        of those features cannot change results)."""
+        from diff_diff.linalg import compute_robust_vcov
+
+        X, resid = self._design()
+        v, dof = compute_robust_vcov(X, resid, vcov_type="hc2", return_dof=True)
+        assert dof.shape == (X.shape[1],)
+        assert np.all(dof == X.shape[0] - X.shape[1])
+        w = np.ones(X.shape[0])
+        v_w = compute_robust_vcov(X, resid, weights=w, weight_type="pweight", vcov_type="hc2")
+        np.testing.assert_allclose(v_w, v, rtol=1e-10, atol=1e-14)
+
+    def test_kernel_rejects_length_mismatch(self):
+        """Malformed inputs must fail loudly, not silently truncate."""
+        from diff_diff._rust_backend import compute_robust_vcov_hc2
+
+        X, resid = self._design()
+        too_long = np.concatenate([resid, [1.0, 2.0]])
+        with pytest.raises(ValueError, match="must match design rows"):
+            compute_robust_vcov_hc2(np.ascontiguousarray(X), np.ascontiguousarray(too_long))
+
+    def test_numerical_instability_falls_back_to_numpy_hc2(self, monkeypatch):
+        """The HC1 dispatch's numerically-unstable fallback is mirrored: the
+        dispatcher warns and returns the NumPy HC2 result (not a hard error,
+        and not HC1)."""
+        import diff_diff.linalg as la
+
+        X, resid = self._design()
+
+        def _unstable(*a, **k):
+            raise ValueError("Matrix inversion numerically unstable (residual check failed)")
+
+        monkeypatch.setattr(la, "_rust_compute_robust_vcov_hc2", _unstable)
+        with pytest.warns(UserWarning, match="numerical instability"):
+            v = la.compute_robust_vcov(X, resid, vcov_type="hc2")
+        v_py = la._compute_robust_vcov_numpy(X, resid, None, vcov_type="hc2")
+        np.testing.assert_allclose(v, v_py, rtol=1e-12, atol=1e-15)
+
+
+class TestClusterVcovDeterminism:
+    """Clustered vcov is bit-identical across repeated identical calls.
+
+    The cluster-score aggregation previously built rows in HashMap iteration
+    order (SipHash-randomized per call): mathematically identical, but the
+    GEMM accumulation order changed run-to-run, wobbling the vcov at ~1e-14
+    (3 distinct values observed in 8 identical calls) while the Python
+    backend was bit-stable. Rows now accumulate in first-appearance order
+    (ascending for the factorized ids the dispatcher passes)."""
+
+    def test_solve_ols_cluster_vcov_bit_identical_across_calls(self):
+        from diff_diff.linalg import solve_ols
+
+        rng = np.random.default_rng(0)
+        X = rng.normal(size=(400, 3))
+        y = rng.normal(size=400)
+        cl = np.repeat(np.arange(10), 40)
+        baseline = solve_ols(X, y, cluster_ids=cl, return_vcov=True)[2]
+        for _ in range(20):
+            v = solve_ols(X, y, cluster_ids=cl, return_vcov=True)[2]
+            np.testing.assert_array_equal(v, baseline)
+
+    def test_compute_robust_vcov_cluster_bit_identical_across_calls(self):
+        from diff_diff.linalg import compute_robust_vcov
+
+        rng = np.random.default_rng(1)
+        X = rng.normal(size=(300, 4))
+        resid = rng.normal(size=300)
+        # Non-contiguous, unsorted ids exercise the first-appearance remap.
+        cl = np.repeat(np.array([7, 3, 11, 5, 42, 3, 7, 11, 5, 42]), 30)
+        baseline = compute_robust_vcov(X, resid, cluster_ids=cl)
+        for _ in range(20):
+            np.testing.assert_array_equal(compute_robust_vcov(X, resid, cluster_ids=cl), baseline)
+
+    def test_raw_kernel_noncontiguous_ids_bit_identical(self):
+        """Review P3: the public wrapper factorizes cluster ids before Rust,
+        so the test above never hands the RAW kernel non-contiguous labels.
+        Exercise _rust_backend.compute_robust_vcov directly with unsorted,
+        non-contiguous int64 ids (the first-appearance remap path)."""
+        from diff_diff._rust_backend import compute_robust_vcov as raw_vcov
+
+        rng = np.random.default_rng(5)
+        X = np.ascontiguousarray(rng.normal(size=(240, 3)))
+        resid = np.ascontiguousarray(rng.normal(size=240))
+        cl = np.ascontiguousarray(
+            np.repeat(np.array([907, 3, -11, 42, 7, 3000, -1, 12], dtype=np.int64), 30)
+        )
+        baseline = raw_vcov(X, resid, cl)
+        for _ in range(20):
+            np.testing.assert_array_equal(raw_vcov(X, resid, cl), baseline)
+
+
+@pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
+class TestSolveOLSCholKernel:
+    """Direct tests of the opt-in Rust solve_ols_chol pyfunction.
+
+    Parity vs the numpy Cholesky twin is TOL-BOUNDED at the established
+    cross-backend bars (coef/resid decimal=8, hc1 vcov decimal=8, clustered
+    decimal=6) on unit-scale fixtures: both sides run the same certified
+    algorithm, but Gram/matvec accumulation orders differ (faer vs BLAS).
+    Never byte-identity across the twins.
+    """
+
+    @staticmethod
+    def _design(seed=42, n=800, k=6):
+        rng = np.random.default_rng(seed)
+        X = np.column_stack([np.ones(n), rng.standard_normal((n, k - 1))])
+        y = X @ rng.standard_normal(k) + rng.standard_normal(n)
+        return X, y
+
+    def test_parity_vs_numpy_twin_hc1(self):
+        from diff_diff._rust_backend import solve_ols_chol
+
+        from diff_diff.linalg import (
+            _compute_robust_vcov_numpy,
+            _solve_ols_chol_numpy,
+        )
+
+        X, y = self._design()
+        out = solve_ols_chol(X, y)
+        assert out is not None, "well-conditioned design must certify"
+        coef_r, resid_r, vcov_r = out
+
+        twin = _solve_ols_chol_numpy(X, y)
+        assert twin is not None
+        coef_p, gram = twin
+        resid_p = y - X @ coef_p
+        vcov_p = _compute_robust_vcov_numpy(X, resid_p, None, _bread_matrix=gram)
+
+        np.testing.assert_array_almost_equal(coef_r, coef_p, decimal=8)
+        np.testing.assert_array_almost_equal(resid_r, resid_p, decimal=8)
+        np.testing.assert_array_almost_equal(vcov_r, vcov_p, decimal=8)
+
+    def test_parity_vs_numpy_twin_clustered(self):
+        from diff_diff._rust_backend import solve_ols_chol
+
+        from diff_diff.linalg import (
+            _compute_robust_vcov_numpy,
+            _solve_ols_chol_numpy,
+        )
+
+        X, y = self._design(seed=7)
+        rng = np.random.default_rng(7)
+        cl = rng.integers(0, 25, X.shape[0]).astype(np.int64)
+
+        out = solve_ols_chol(X, y, cluster_ids=cl)
+        assert out is not None
+        coef_r, resid_r, vcov_r = out
+
+        twin = _solve_ols_chol_numpy(X, y)
+        assert twin is not None
+        coef_p, gram = twin
+        resid_p = y - X @ coef_p
+        vcov_p = _compute_robust_vcov_numpy(X, resid_p, cl, _bread_matrix=gram)
+
+        np.testing.assert_array_almost_equal(coef_r, coef_p, decimal=8)
+        np.testing.assert_array_almost_equal(vcov_r, vcov_p, decimal=6)
+
+    def test_returns_none_on_near_singular_and_nan(self):
+        from diff_diff._rust_backend import solve_ols_chol
+
+        rng = np.random.default_rng(11)
+        n = 400
+        x1 = rng.standard_normal(n)
+        X = np.column_stack([np.ones(n), x1, x1 + 1e-8 * rng.standard_normal(n)])
+        y = rng.standard_normal(n)
+        assert solve_ols_chol(X, y) is None
+
+        Xn, yn = self._design(seed=13, n=100, k=3)
+        Xn = Xn.copy()
+        Xn[5, 1] = np.nan
+        assert solve_ols_chol(Xn, yn) is None
+
+    def test_returns_none_underdetermined(self):
+        from diff_diff._rust_backend import solve_ols_chol
+
+        rng = np.random.default_rng(17)
+        X = rng.standard_normal((3, 5))
+        y = rng.standard_normal(3)
+        assert solve_ols_chol(X, y) is None
+
+    def test_return_vcov_false_shape(self):
+        from diff_diff._rust_backend import solve_ols_chol
+
+        X, y = self._design(seed=19)
+        out = solve_ols_chol(X, y, return_vcov=False)
+        assert out is not None
+        coef, resid, vcov = out
+        assert vcov is None
+        assert len(coef) == X.shape[1] and len(resid) == X.shape[0]
+
+    def test_too_few_clusters_raises_same_message(self):
+        from diff_diff._rust_backend import solve_ols_chol
+
+        X, y = self._design(seed=23, n=60, k=3)
+        with pytest.raises(ValueError, match="Need at least 2 clusters"):
+            solve_ols_chol(X, y, cluster_ids=np.zeros(60, dtype=np.int64))
+
+    def test_repeated_call_bit_determinism(self):
+        """Same determinism lock as the SVD path's clustered vcov: 20
+        repeated calls must be bit-identical (first-appearance cluster
+        order; sequential/faer accumulation)."""
+        from diff_diff._rust_backend import solve_ols_chol
+
+        X, y = self._design(seed=29)
+        rng = np.random.default_rng(29)
+        cl = rng.integers(0, 12, X.shape[0]).astype(np.int64)
+        base = solve_ols_chol(X, y, cluster_ids=cl)
+        assert base is not None
+        for _ in range(20):
+            rep = solve_ols_chol(X, y, cluster_ids=cl)
+            np.testing.assert_array_equal(rep[0], base[0])
+            np.testing.assert_array_equal(rep[1], base[1])
+            np.testing.assert_array_equal(rep[2], base[2])
+
+
+@pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
+class TestSolveOLSFastpathDispatch:
+    """Dispatch-level locks for DIFF_DIFF_SOLVE_OLS_FASTPATH on the Rust
+    backend: default path unchanged (SVD kernel runs, chol never), opt-in
+    routes to the chol kernel, stale-symbol degradation to the numpy twin,
+    Rust-decline fallthrough verbatim, and estimator-level opt-in parity.
+
+    Estimator-level parity is TOL-BOUNDED (ATT abs 1e-8 / SE rel 1e-6), NOT
+    the demean-chunk suite's rtol=0/atol=1e-12: that suite's exactness is
+    by-construction (identical partitioned arithmetic), while this knob
+    swaps the solve algorithm; the certified error budget is ~eps*cond(G_eq)
+    <= 2e-10 relative in the equilibrated basis, leaving >= 2 orders of
+    headroom at these gates.
+    """
+
+    @staticmethod
+    def _spies(monkeypatch):
+        import diff_diff.linalg as lmod
+
+        calls = {"svd": 0, "chol": 0}
+        real_svd = lmod._solve_ols_rust
+        real_chol = lmod._solve_ols_chol_rust
+
+        def svd_spy(*a, **kw):
+            calls["svd"] += 1
+            return real_svd(*a, **kw)
+
+        def chol_spy(*a, **kw):
+            calls["chol"] += 1
+            return real_chol(*a, **kw)
+
+        monkeypatch.setattr(lmod, "_solve_ols_rust", svd_spy)
+        monkeypatch.setattr(lmod, "_solve_ols_chol_rust", chol_spy)
+        return calls
+
+    @staticmethod
+    def _staggered_panel(n_units=120, n_periods=8, seed=3):
+        rng = np.random.default_rng(seed)
+        unit = np.repeat(np.arange(n_units), n_periods)
+        time = np.tile(np.arange(n_periods), n_units)
+        first_treat = np.repeat(rng.choice([0, 3, 5], n_units), n_periods)
+        treated = (first_treat > 0) & (time >= first_treat)
+        y = (
+            np.repeat(rng.normal(0, 1, n_units), n_periods)
+            + 0.1 * time
+            + 1.5 * treated
+            + rng.normal(0, 0.5, n_units * n_periods)
+        )
+        return pd.DataFrame({"unit": unit, "time": time, "first_treat": first_treat, "y": y})
+
+    def test_default_dispatch_unchanged(self, monkeypatch):
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", raising=False)
+        calls = self._spies(monkeypatch)
+        from diff_diff import SunAbraham
+
+        SunAbraham().fit(
+            self._staggered_panel(),
+            outcome="y",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+        assert calls["chol"] == 0, "chol wrapper must never run with the knob off"
+        assert calls["svd"] >= 1, "the legacy SVD kernel must have run"
+
+    def test_opt_in_dispatches_chol(self, monkeypatch):
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", "1")
+        calls = self._spies(monkeypatch)
+        from diff_diff import SunAbraham
+
+        SunAbraham().fit(
+            self._staggered_panel(),
+            outcome="y",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+        assert calls["chol"] >= 1, "knob on must route through the chol wrapper"
+        assert calls["svd"] == 0, "certified fits must not fall through to SVD"
+
+    def test_stale_symbol_falls_back_to_legacy_svd(self, monkeypatch):
+        """A stale extension missing only solve_ols_chol keeps the legacy
+        Rust SVD kernel for Rust-eligible fits (the knob has no Rust
+        acceleration there); the numpy twin serves only the numpy lane."""
+        import diff_diff.linalg as lmod
+
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", "1")
+        monkeypatch.setattr(lmod, "_rust_solve_ols_chol", None)
+
+        rng = np.random.default_rng(31)
+        X = np.column_stack([np.ones(300), rng.standard_normal((300, 3))])
+        y = X @ rng.standard_normal(4) + rng.standard_normal(300)
+        diag = {}
+        coef, _, _ = lmod.solve_ols(X, y, diagnostics_out=diag)
+        # Rust chol unavailable -> the (unweighted, hc1, full-rank) fit
+        # dispatches to the legacy Rust SVD kernel, NOT the numpy twin;
+        # the knob simply has nothing to accelerate on this route.
+        assert diag["solve_ols_fastpath"] == "fallback_declined"
+        assert np.all(np.isfinite(coef))
+
+    def test_rust_decline_falls_through_verbatim(self, monkeypatch):
+        """Near-singular fixture: chol kernel declines in-kernel; output
+        must equal the knob-off SVD result exactly (NaN-aware)."""
+        rng = np.random.default_rng(37)
+        n = 500
+        x1 = rng.standard_normal(n)
+        X = np.column_stack([np.ones(n), x1, x1 + 1e-8 * rng.standard_normal(n)])
+        y = X @ np.array([1.0, 2.0, 3.0]) + rng.standard_normal(n)
+
+        import diff_diff.linalg as lmod
+
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", "1")
+        diag = {}
+        c_on, r_on, v_on = lmod.solve_ols(X, y, skip_rank_check=True, diagnostics_out=diag)
+        assert diag["solve_ols_fastpath"] == "fallback_declined"
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH")
+        c_off, r_off, v_off = lmod.solve_ols(X, y, skip_rank_check=True)
+        np.testing.assert_array_equal(c_on, c_off)
+        np.testing.assert_array_equal(r_on, r_off)
+        # This fixture is SVD-truncated on the skip route -> NaN vcov on
+        # BOTH runs (pre-existing behavior); equal_nan makes that exact.
+        assert np.array_equal(v_on, v_off, equal_nan=True)
+
+    def test_estimator_level_opt_in_parity_sun_abraham(self, monkeypatch):
+        from diff_diff import SunAbraham
+
+        df = self._staggered_panel(n_units=200, n_periods=10, seed=41)
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", raising=False)
+        res_off = SunAbraham().fit(
+            df, outcome="y", unit="unit", time="time", first_treat="first_treat"
+        )
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", "1")
+        res_on = SunAbraham().fit(
+            df, outcome="y", unit="unit", time="time", first_treat="first_treat"
+        )
+        assert res_on.att == pytest.approx(res_off.att, abs=1e-8)
+        assert res_on.se == pytest.approx(res_off.se, rel=1e-6)
+
+    def test_estimator_level_opt_in_parity_did_absorb_cluster(self, monkeypatch):
+        from diff_diff import DifferenceInDifferences
+
+        rng = np.random.default_rng(43)
+        n_units, n_periods = 150, 6
+        unit = np.repeat(np.arange(n_units), n_periods)
+        time = np.tile(np.arange(n_periods), n_units)
+        treated = (unit < n_units // 2).astype(int)
+        post = (time >= n_periods // 2).astype(int)
+        y = (
+            np.repeat(rng.normal(0, 1, n_units), n_periods)
+            + 0.2 * time
+            + 2.0 * treated * post
+            + rng.normal(0, 0.5, n_units * n_periods)
+        )
+        df = pd.DataFrame({"unit": unit, "time": time, "treated": treated, "post": post, "y": y})
+
+        def fit():
+            return DifferenceInDifferences(cluster="unit").fit(
+                df,
+                outcome="y",
+                treatment="treated",
+                post="post",
+                absorb=["unit", "time"],
+            )
+
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", raising=False)
+        res_off = fit()
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", "1")
+        res_on = fit()
+        assert res_on.att == pytest.approx(res_off.att, abs=1e-8)
+        assert res_on.se == pytest.approx(res_off.se, rel=1e-6)
+
+    def test_cross_backend_fitted_parity_rust_vs_twin(self, monkeypatch):
+        from unittest.mock import patch
+
+        import diff_diff.linalg as lmod
+
+        rng = np.random.default_rng(47)
+        X = np.column_stack([np.ones(600), rng.standard_normal((600, 5))])
+        y = X @ rng.standard_normal(6) + rng.standard_normal(600)
+
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", "1")
+        d_rust = {}
+        c_rust, _, v_rust = lmod.solve_ols(X, y, diagnostics_out=d_rust)
+        assert d_rust["solve_ols_fastpath"] == "chol_rust"
+
+        d_twin = {}
+        with (
+            patch.object(lmod, "HAS_RUST_BACKEND", False),
+            patch.object(lmod, "_rust_solve_ols", None),
+            patch.object(lmod, "_rust_solve_ols_chol", None),
+        ):
+            c_twin, _, v_twin = lmod.solve_ols(X, y, diagnostics_out=d_twin)
+        assert d_twin["solve_ols_fastpath"] == "chol_numpy"
+
+        np.testing.assert_allclose(X @ c_rust, X @ c_twin, rtol=1e-6, atol=1e-8)
+        np.testing.assert_array_almost_equal(v_rust, v_twin, decimal=6)
+
+
+@pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
+class TestSolveOLSCholSaturatedContract:
+    """Saturated n == k designs must honor the documented
+    non-finite-inference contract on EVERY path: all-NaN vcov, never Inf
+    (the numpy saturated guard is the canonical behavior; the legacy Rust
+    SVD kernel's former silent-Inf leak was fixed alongside the opt-in
+    Cholesky path)."""
+
+    @staticmethod
+    def _saturated_design(seed=61, k=6):
+        rng = np.random.default_rng(seed)
+        X = np.column_stack([np.ones(k), rng.standard_normal((k, k - 1))])
+        y = rng.standard_normal(k)
+        return X, y
+
+    def test_direct_kernel_saturated_nan_vcov(self):
+        from diff_diff._rust_backend import solve_ols_chol
+
+        X, y = self._saturated_design()
+        two_clusters = (np.arange(X.shape[0]) % 2).astype(np.int64)
+        out = solve_ols_chol(X, y, cluster_ids=two_clusters)
+        assert out is not None, "saturated full-rank design must certify"
+        coef, resid, vcov = out
+        assert np.all(np.isfinite(coef))
+        assert np.all(np.isnan(vcov)), "saturated vcov must be all-NaN, never Inf"
+
+        out_hc1 = solve_ols_chol(X, y)
+        assert np.all(np.isnan(out_hc1[2]))
+
+    def test_dispatch_saturated_nan_vcov(self, monkeypatch):
+        import diff_diff.linalg as lmod
+
+        X, y = self._saturated_design(seed=67)
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", "1")
+        diag = {}
+        coef, resid, vcov = lmod.solve_ols(X, y, diagnostics_out=diag)
+        assert diag["solve_ols_fastpath"] == "chol_rust"
+        assert np.all(np.isfinite(coef))
+        assert np.all(np.isnan(vcov))
+
+        # The numpy twin lane honors the same contract via the shared
+        # saturated guard in _compute_robust_vcov_numpy.
+        from unittest.mock import patch
+
+        diag2 = {}
+        with (
+            patch.object(lmod, "HAS_RUST_BACKEND", False),
+            patch.object(lmod, "_rust_solve_ols", None),
+            patch.object(lmod, "_rust_solve_ols_chol", None),
+        ):
+            _, _, v_twin = lmod.solve_ols(X, y, diagnostics_out=diag2)
+        assert diag2["solve_ols_fastpath"] == "chol_numpy"
+        assert np.all(np.isnan(v_twin))
+
+    def test_saturated_one_cluster_still_raises(self, monkeypatch):
+        from diff_diff._rust_backend import solve_ols_chol
+
+        X, y = self._saturated_design(seed=71)
+        with pytest.raises(ValueError, match="Need at least 2 clusters"):
+            solve_ols_chol(X, y, cluster_ids=np.zeros(X.shape[0], dtype=np.int64))
+
+
+@pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
+class TestSolveOLSSaturatedDefaultPath:
+    """Default (knob-off) saturated n == k contract: the legacy Rust SVD
+    vcov path formerly leaked all-Inf vcov silently (its (n-k) adjustment
+    divides by zero and the dispatcher's fallback check keyed on NaN only).
+    It now returns the canonical all-NaN contract, and the dispatcher
+    rejects ANY non-finite Rust vcov."""
+
+    @staticmethod
+    def _saturated_design(seed=73, k=5):
+        rng = np.random.default_rng(seed)
+        X = np.column_stack([np.ones(k), rng.standard_normal((k, k - 1))])
+        y = rng.standard_normal(k)
+        return X, y
+
+    def test_raw_svd_kernel_saturated_nan_vcov(self):
+        from diff_diff._rust_backend import solve_ols as rust_svd
+
+        X, y = self._saturated_design()
+        coef, resid, vcov = rust_svd(X, y, None, True)
+        assert np.all(np.isfinite(np.asarray(coef)))
+        assert np.all(np.isnan(np.asarray(vcov))), "saturated vcov must be all-NaN, never Inf"
+
+        two_clusters = (np.arange(X.shape[0]) % 2).astype(np.int64)
+        _, _, vcov_cl = rust_svd(X, y, two_clusters, True)
+        assert np.all(np.isnan(np.asarray(vcov_cl)))
+
+    def test_public_solve_ols_saturated_nan_vcov(self, monkeypatch):
+        import diff_diff.linalg as lmod
+
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", raising=False)
+        X, y = self._saturated_design(seed=79)
+        with pytest.warns(UserWarning, match="non-finite"):
+            coef, resid, vcov = lmod.solve_ols(X, y)
+        assert np.all(np.isfinite(coef))
+        assert np.all(np.isnan(vcov))
+
+        two_clusters = (np.arange(X.shape[0]) % 2).astype(np.int64)
+        with pytest.warns(UserWarning, match="non-finite"):
+            _, _, vcov_cl = lmod.solve_ols(X, y, cluster_ids=two_clusters)
+        assert np.all(np.isnan(vcov_cl))
+
+    def test_saturated_one_cluster_precedence(self):
+        from diff_diff._rust_backend import solve_ols as rust_svd
+
+        X, y = self._saturated_design(seed=83)
+        with pytest.raises(ValueError, match="Need at least 2 clusters"):
+            rust_svd(X, y, np.zeros(X.shape[0], dtype=np.int64), True)
+
+    def test_dispatcher_rejects_inf_vcov(self, monkeypatch):
+        """Any non-finite Rust vcov (not just NaN) must trigger the Python
+        re-run, which applies the canonical numpy contracts."""
+        import diff_diff.linalg as lmod
+
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", raising=False)
+        rng = np.random.default_rng(89)
+        X = np.column_stack([np.ones(50), rng.standard_normal((50, 2))])
+        y = X @ np.array([1.0, 2.0, 3.0]) + rng.standard_normal(50)
+
+        def inf_vcov_rust(Xa, ya, *, cluster_ids=None, return_vcov=True, return_fitted=False):
+            coef = np.linalg.lstsq(Xa, ya, rcond=None)[0]
+            resid = ya - Xa @ coef
+            vcov = np.full((Xa.shape[1], Xa.shape[1]), np.inf)
+            if return_fitted:
+                return coef, resid, Xa @ coef, vcov
+            return coef, resid, vcov
+
+        monkeypatch.setattr(lmod, "_solve_ols_rust", inf_vcov_rust)
+        with pytest.warns(UserWarning, match="non-finite"):
+            coef, resid, vcov = lmod.solve_ols(X, y)
+        assert np.all(np.isfinite(vcov)), "numpy re-run must replace the Inf vcov"
+
+    def test_dispatcher_rejects_inf_vcov_skip_rank_check(self, monkeypatch):
+        """The Inf-rejection guard applies on the skip_rank_check route too
+        (same silent-corruption class as the rank-checked route)."""
+        import diff_diff.linalg as lmod
+
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", raising=False)
+        rng = np.random.default_rng(97)
+        X = np.column_stack([np.ones(50), rng.standard_normal((50, 2))])
+        y = X @ np.array([1.0, 2.0, 3.0]) + rng.standard_normal(50)
+
+        def inf_vcov_rust(Xa, ya, *, cluster_ids=None, return_vcov=True, return_fitted=False):
+            coef = np.linalg.lstsq(Xa, ya, rcond=None)[0]
+            resid = ya - Xa @ coef
+            vcov = np.full((Xa.shape[1], Xa.shape[1]), np.inf)
+            if return_fitted:
+                return coef, resid, Xa @ coef, vcov
+            return coef, resid, vcov
+
+        monkeypatch.setattr(lmod, "_solve_ols_rust", inf_vcov_rust)
+        with pytest.warns(UserWarning, match="non-finite"):
+            coef, resid, vcov = lmod.solve_ols(X, y, skip_rank_check=True)
+        assert np.all(np.isfinite(vcov)), "numpy re-run must replace the Inf vcov"
+
+    def test_skip_rank_check_nan_sentinel_passes_through(self, monkeypatch):
+        """On the skip route an all-NaN vcov remains the DOCUMENTED sentinel
+        for what the caller asserted away (rank deficiency / saturation) and
+        must pass through unchanged: rerouting it to a numpy path that
+        assumes full rank could raise on a singular bread where users
+        previously received the safe NaN answer."""
+        import warnings as _warnings
+
+        import diff_diff.linalg as lmod
+
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", raising=False)
+        rng = np.random.default_rng(101)
+        x1 = rng.standard_normal(60)
+        # Exactly collinear: the rust SVD kernel truncates (rank < k) and
+        # returns its all-NaN vcov sentinel.
+        X = np.column_stack([np.ones(60), x1, 2.0 * x1])
+        y = x1 + rng.standard_normal(60)
+
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("error")  # no warning may fire
+            coef, resid, vcov = lmod.solve_ols(X, y, skip_rank_check=True)
+        assert np.all(np.isnan(vcov)), "NaN sentinel must pass through on the skip route"
+
+
+@pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
+class TestLWDiDBackendParity:
+    """LWDiD Rust-vs-Python backend equivalence at the estimator level.
+
+    LWDiD reaches Rust only through ``diff_diff.linalg.solve_ols`` (and its
+    internal vcov dispatch), and only on the ``weights=None`` +
+    ``vcov_type='hc1'`` gates - so the parity surface is ``reg``/``hc1``
+    fits (plain and clustered CR1), the staggered per-cell fits, the
+    post-fit RI/WCB replay modules, and the dr weighted-design
+    ``solve_ols`` call (ipw has NO Rust-eligible OLS stage - its
+    propensity + direct-weighting path is pure Python). ``classical``/``hc2``/``hc3`` fits never touch Rust
+    (solve_ols's non-hc1 paths call ``_compute_robust_vcov_numpy``
+    directly), and ``solve_logit`` (the ipw/dr/psm propensity step) is pure
+    Python - no Rust symbol exists for it.
+    """
+
+    @staticmethod
+    def _rust_disabled():
+        """ExitStack disabling every linalg-level Rust symbol (never
+        importlib.reload - it breaks isinstance identity for other tests)."""
+        import sys
+        from contextlib import ExitStack
+        from unittest.mock import patch
+
+        linalg_module = sys.modules["diff_diff.linalg"]
+        stack = ExitStack()
+        stack.enter_context(patch.object(linalg_module, "HAS_RUST_BACKEND", False))
+        for symbol in (
+            "_rust_solve_ols",
+            "_rust_solve_ols_chol",
+            "_rust_compute_robust_vcov",
+            "_rust_compute_robust_vcov_hc2",
+        ):
+            stack.enter_context(patch.object(linalg_module, symbol, None))
+        return stack
+
+    @staticmethod
+    def _rust_call_spy():
+        """ExitStack wrapping the Rust-eligible solver symbols with counting
+        delegates, so each test can PROVE its nominal Rust fit actually
+        dispatched to Rust (a dispatch regression would otherwise turn the
+        parity assertions into a Python-vs-Python tautology). Returns
+        (stack, counts) - enter the stack, run the fit, then assert
+        sum(counts.values()) > 0."""
+        import sys
+        from contextlib import ExitStack
+        from functools import partial
+        from unittest.mock import patch
+
+        linalg_module = sys.modules["diff_diff.linalg"]
+        # Measured (probe, review round 12): LWDiD's Rust-eligible routes
+        # reach ONLY _rust_solve_ols / _rust_solve_ols_chol - the Rust
+        # solve_ols kernel returns coefficients AND the hc1/CR1 vcov from
+        # the same call, and _rust_compute_robust_vcov(_hc2) is reachable
+        # only via the public compute_robust_vcov, which LWDiD never
+        # calls. Counting the solver therefore IS the variance-dispatch
+        # proof on these routes; adding the vcov symbols would assert on
+        # calls that can never occur.
+        counts = {"_rust_solve_ols": 0, "_rust_solve_ols_chol": 0}
+        stack = ExitStack()
+
+        def _counting(symbol_name, real_fn, *args, **kwargs):
+            result = real_fn(*args, **kwargs)
+            if TestLWDiDBackendParity._spy_accepts(result):
+                counts[symbol_name] += 1
+            return result
+
+        for symbol in counts:
+            real = getattr(linalg_module, symbol)
+            if real is None:
+                continue
+            stack.enter_context(
+                patch.object(linalg_module, symbol, partial(_counting, symbol, real))
+            )
+        return stack, counts
+
+    @staticmethod
+    def _spy_accepts(result):
+        """Whether a raw kernel result counts as an ACCEPTED Rust dispatch.
+
+        The dispatcher discards a Rust result whose vcov (or any member)
+        is non-finite and re-runs NumPy (linalg.py
+        `_nonfinite_vcov_needs_python_rerun`), and a declining Cholesky
+        kernel returns None outright - counting either would re-open the
+        Python-vs-Python tautology the spy exists to close. The test
+        fixtures are full-rank, so an accepted result is: non-None, with
+        at least one non-None member, and EVERY non-None array fully
+        finite. (Full provenance would need solve_ols to expose its
+        backend - out of scope here.)"""
+        if result is None:
+            return False
+        members = result if isinstance(result, tuple) else (result,)
+        present = [m for m in members if m is not None]
+        if not present:
+            return False
+        try:
+            return all(bool(np.all(np.isfinite(np.asarray(m)))) for m in present)
+        except (TypeError, ValueError):
+            return False
+
+    def test_spy_acceptance_rejects_declined_and_nonfinite_results(self):
+        """Regression (CI review): a declining Cholesky kernel returns
+        None, and `all([])` is vacuously True - neither a None result,
+        an all-None tuple, nor a tuple carrying a non-finite array may
+        count as an accepted Rust dispatch."""
+        accepts = self._spy_accepts
+        assert not accepts(None)
+        assert not accepts((None,))
+        assert not accepts((None, None))
+        finite = np.ones(3)
+        assert accepts(finite)
+        assert accepts((finite, finite, None))
+        nonfinite = np.array([1.0, np.nan])
+        assert not accepts((finite, nonfinite))
+        assert not accepts((finite, np.array([np.inf])))
+
+    @staticmethod
+    def _assert_headline_parity(res_rust, res_py):
+        assert res_rust.att == pytest.approx(res_py.att, abs=1e-10)
+        assert res_rust.se == pytest.approx(res_py.se, rel=1e-8)
+        np.testing.assert_allclose(
+            res_rust.t_stat, res_py.t_stat, rtol=1e-8, atol=1e-12, equal_nan=True
+        )
+        np.testing.assert_allclose(
+            res_rust.p_value, res_py.p_value, rtol=1e-8, atol=1e-12, equal_nan=True
+        )
+        np.testing.assert_allclose(res_rust.conf_int, res_py.conf_int, rtol=1e-8, atol=1e-12)
+        assert res_rust.df_inference == res_py.df_inference
+        assert res_rust.inference_basis == res_py.inference_basis
+        if res_rust.params is not None and res_py.params is not None:
+            np.testing.assert_allclose(res_rust.params, res_py.params, rtol=1e-8, atol=1e-12)
+        if res_rust.vcov is not None and res_py.vcov is not None:
+            np.testing.assert_allclose(res_rust.vcov, res_py.vcov, rtol=1e-8, atol=1e-12)
+
+    def test_common_timing_reg_hc1_parity(self):
+        """Common-timing reg/hc1 - the canonical Rust-eligible fit."""
+        from diff_diff import LWDiD
+        from tests.test_lwdid import _make_common_timing_panel
+
+        df = _make_common_timing_panel(seed=7)
+
+        def fit():
+            return LWDiD(rolling="demean", vcov_type="hc1").fit(
+                df, outcome="y", unit="unit", time="time", treatment="treat"
+            )
+
+        spy, rust_calls = self._rust_call_spy()
+        with spy:
+            res_rust = fit()
+        assert sum(rust_calls.values()) > 0, (
+            "the nominal Rust fit never dispatched to a Rust solver - "
+            "the parity comparison would be a Python-vs-Python tautology"
+        )
+        with self._rust_disabled():
+            res_py = fit()
+        self._assert_headline_parity(res_rust, res_py)
+
+    def test_common_timing_reg_cluster_cr1_parity(self):
+        """Clustered CR1 (cluster= + hc1) exercises the Rust cluster vcov path."""
+        from diff_diff import LWDiD
+        from tests.test_lwdid import _make_common_timing_panel
+
+        df = _make_common_timing_panel(seed=11)
+        df["grp"] = df["unit"] % 6  # unit-constant cluster column
+
+        def fit():
+            return LWDiD(rolling="demean", vcov_type="hc1", cluster="grp").fit(
+                df, outcome="y", unit="unit", time="time", treatment="treat"
+            )
+
+        spy, rust_calls = self._rust_call_spy()
+        with spy:
+            res_rust = fit()
+        assert sum(rust_calls.values()) > 0, (
+            "the nominal Rust fit never dispatched to a Rust solver - "
+            "the parity comparison would be a Python-vs-Python tautology"
+        )
+        with self._rust_disabled():
+            res_py = fit()
+        self._assert_headline_parity(res_rust, res_py)
+        assert res_rust.n_clusters == res_py.n_clusters
+
+    def test_post_fit_ri_and_wcb_parity(self):
+        """Post-fit randomization_test / wild_cluster_bootstrap replay parity.
+
+        Both preconditions are load-bearing: wild_cluster_bootstrap raises
+        on an unclustered fit, and covariate-less RI takes a pure-numpy
+        fast path that exercises no solve_ols at all - the unit-constant
+        covariate forces the Rust-eligible controls path. The p-values are
+        discrete exceedance counts (a boundary draw can flip under ~1-ULP
+        backend divergence), so they get an absolute 2/replicates
+        tolerance, never exact comparison.
+        """
+        import warnings as _w
+
+        from diff_diff import LWDiD
+        from tests.test_lwdid import _make_common_timing_panel
+
+        n_reps = 499
+        n_boot = 199
+        df = _make_common_timing_panel(seed=13)
+        rng = np.random.default_rng(3)
+        x_by_unit = rng.normal(size=df["unit"].nunique())
+        df["x"] = x_by_unit[df["unit"].to_numpy()]  # unit-constant covariate
+        df["grp"] = df["unit"] % 6
+
+        def fit_only():
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")
+                return LWDiD(rolling="demean", vcov_type="hc1", cluster="grp").fit(
+                    df,
+                    outcome="y",
+                    unit="unit",
+                    time="time",
+                    treatment="treat",
+                    covariates=["x"],
+                )
+
+        # Each Rust-live stage carries its own dispatch proof, so the fit,
+        # the RI replay, and the WCB replay are independently verified to
+        # reach a Rust solver.
+        spy, rust_calls = self._rust_call_spy()
+        with spy:
+            res_rust = fit_only()
+        assert sum(rust_calls.values()) > 0, "fit never dispatched to Rust"
+        spy_ri, ri_calls = self._rust_call_spy()
+        with spy_ri, _w.catch_warnings():
+            _w.simplefilter("ignore")
+            ri_rust = res_rust.randomization_test(n_reps=n_reps, seed=42)
+        assert sum(ri_calls.values()) > 0, "RI replay never dispatched to Rust"
+        spy_wcb, wcb_calls = self._rust_call_spy()
+        with spy_wcb, _w.catch_warnings():
+            _w.simplefilter("ignore")
+            wcb_rust = res_rust.wild_cluster_bootstrap(n_bootstrap=n_boot, seed=42)
+        assert sum(wcb_calls.values()) > 0, "WCB replay never dispatched to Rust"
+        with self._rust_disabled():
+            res_py = fit_only()
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")
+                ri_py = res_py.randomization_test(n_reps=n_reps, seed=42)
+                wcb_py = res_py.wild_cluster_bootstrap(n_bootstrap=n_boot, seed=42)
+        self._assert_headline_parity(res_rust, res_py)
+        assert ri_rust.pvalue == pytest.approx(ri_py.pvalue, abs=2.0 / n_reps)
+        # Discrete tolerance from the EFFECTIVE replicate count (with few
+        # clusters WCB full-enumerates 2^G draws, so the result's
+        # n_bootstrap can be far below the requested count).
+        assert wcb_rust.n_bootstrap == wcb_py.n_bootstrap
+        wcb_tol = 2.0 / wcb_rust.n_bootstrap
+        assert wcb_rust.p_value == pytest.approx(wcb_py.p_value, abs=wcb_tol)
+        assert wcb_rust.att == pytest.approx(wcb_py.att, abs=1e-10)
+        assert wcb_rust.se == pytest.approx(wcb_py.se, rel=1e-8)
+        assert wcb_rust.t_stat_original == pytest.approx(wcb_py.t_stat_original, rel=1e-8)
+        # Test-inversion CI endpoints are grid/count statistics - allow the
+        # same discrete slack as the p-value, scaled by the se magnitude.
+        assert wcb_rust.ci_lower == pytest.approx(
+            wcb_py.ci_lower, abs=wcb_tol * max(abs(wcb_rust.se), 1e-12) + 1e-10
+        )
+        assert wcb_rust.ci_upper == pytest.approx(
+            wcb_py.ci_upper, abs=wcb_tol * max(abs(wcb_rust.se), 1e-12) + 1e-10
+        )
+        assert wcb_rust.n_clusters == wcb_py.n_clusters
+
+    def test_staggered_reg_hc1_event_study_parity(self):
+        """Staggered reg/hc1: per-cell fits, headline, and event-study arrays."""
+        import warnings as _w
+
+        from diff_diff import LWDiD
+        from tests.test_lwdid import _make_staggered_panel
+
+        df = _make_staggered_panel(seed=17)
+
+        def fit():
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")
+                res = LWDiD(rolling="demean", vcov_type="hc1").fit(
+                    df,
+                    outcome="y",
+                    unit="unit",
+                    time="time",
+                    treatment="treat",
+                    first_treat="cohort",
+                )
+                es = res.aggregate("event_study")
+            return res, es
+
+        spy, rust_calls = self._rust_call_spy()
+        with spy:
+            res_rust, es_rust = fit()
+        assert (
+            sum(rust_calls.values()) > 0
+        ), "the nominal Rust staggered fit never dispatched to a Rust solver"
+        with self._rust_disabled():
+            res_py, es_py = fit()
+        assert res_rust.att == pytest.approx(res_py.att, abs=1e-10)
+        assert res_rust.se == pytest.approx(res_py.se, rel=1e-8)
+        np.testing.assert_array_equal(es_rust.event_time, es_py.event_time)
+        # Reference rows carry NaN inference under BOTH engines (equal_nan).
+        for field in ("att", "se", "t_stat", "p_value", "conf_int_lower", "conf_int_upper"):
+            np.testing.assert_allclose(
+                getattr(es_rust, field),
+                getattr(es_py, field),
+                rtol=1e-8,
+                atol=1e-12,
+                equal_nan=True,
+                err_msg=f"event-study {field} diverges across backends",
+            )
+
+    def test_common_timing_dr_parity(self):
+        """Doubly robust (ipw/dr family): the propensity step (solve_logit)
+        is pure Python - no Rust symbol exists - so Rust is reached only
+        via the downstream weighted-design solve_ols call (weights folded
+        into the matrices, weights=None at the solve_ols boundary)."""
+        import warnings as _w
+
+        from diff_diff import LWDiD
+        from tests.test_lwdid import _make_common_timing_panel
+
+        df = _make_common_timing_panel(seed=19)
+        rng = np.random.default_rng(5)
+        x_by_unit = rng.normal(size=df["unit"].nunique())
+        df["x"] = x_by_unit[df["unit"].to_numpy()]  # unit-constant covariate
+
+        def fit():
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")
+                return LWDiD(rolling="demean", estimation_method="dr").fit(
+                    df,
+                    outcome="y",
+                    unit="unit",
+                    time="time",
+                    treatment="treat",
+                    covariates=["x"],
+                )
+
+        spy, rust_calls = self._rust_call_spy()
+        with spy:
+            res_rust = fit()
+        assert sum(rust_calls.values()) > 0, (
+            "the nominal Rust fit never dispatched to a Rust solver - "
+            "the parity comparison would be a Python-vs-Python tautology"
+        )
+        with self._rust_disabled():
+            res_py = fit()
+        self._assert_headline_parity(res_rust, res_py)

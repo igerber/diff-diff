@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: generate_continuous_did_data
+   :no-index:

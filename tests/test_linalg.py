@@ -1,15 +1,22 @@
 """Tests for the unified linear algebra backend."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
 
+from diff_diff import HAS_RUST_BACKEND
 from diff_diff.linalg import (
     InferenceResult,
     LinearRegression,
+    _rank_guarded_inv,
     compute_r_squared,
     compute_robust_vcov,
+    solve_logit,
     solve_ols,
+    solve_poisson,
+    solve_ridge,
 )
 
 
@@ -257,7 +264,7 @@ class TestSolveOLS:
         assert np.all(np.isfinite(vcov_kept)), "VCoV for kept coefficients should be finite"
 
         # Residuals should be finite (computed using only identified coefficients)
-        assert np.all(np.isfinite(resid)), f"Residuals contain non-finite values"
+        assert np.all(np.isfinite(resid)), "Residuals contain non-finite values"
 
     def test_rank_deficient_error_mode(self):
         """Test that rank_deficient_action='error' raises ValueError."""
@@ -313,8 +320,8 @@ class TestSolveOLS:
         When skip_rank_check=True, the function should skip QR decomposition
         and go directly to SVD solving, even in Python backend.
         """
-        import warnings
         import os
+        import warnings
 
         np.random.seed(42)
         n = 100
@@ -402,7 +409,7 @@ class TestSolveOLS:
 
         # If no rank deficiency, all coefficients should be finite
         if len(rank_warnings) == 0:
-            assert np.all(np.isfinite(coef)), f"Full-rank matrix: coefficients should be finite"
+            assert np.all(np.isfinite(coef)), "Full-rank matrix: coefficients should be finite"
             assert np.all(np.abs(coef) < 1e6), f"Coefficients are unreasonably large: {coef}"
             # The treatment effect coefficient (last one) should be close to true effect
             assert (
@@ -411,7 +418,7 @@ class TestSolveOLS:
         else:
             # If rank-deficient, check that identified coefficients are valid
             finite_coef = coef[~np.isnan(coef)]
-            assert np.all(np.isfinite(finite_coef)), f"Identified coefficients should be finite"
+            assert np.all(np.isfinite(finite_coef)), "Identified coefficients should be finite"
             # If treatment effect is identified, check it
             if not np.isnan(coef[-1]):
                 assert (
@@ -483,7 +490,6 @@ class TestComputeRobustVcov:
         np.random.seed(42)
         n = 200
         X = np.column_stack([np.ones(n), np.random.randn(n)])
-        beta = np.array([1.0, 2.0])
         residuals = np.random.randn(n)
         return X, residuals
 
@@ -529,10 +535,46 @@ class TestComputeRobustVcov:
 
         np.testing.assert_array_almost_equal(vcov, vcov.T)
 
+    def test_cluster_count_check_precedes_saturated_guard(self):
+        """A 1-cluster cluster-robust request raises 'need >= 2 clusters' even on
+        a saturated design — the cluster-count validation must precede the
+        saturated (no residual DOF) NaN guard, not be masked by it."""
+        # 1 cluster AND saturated (n == k): must still raise, not return NaN.
+        with pytest.raises(ValueError, match="at least 2 clusters"):
+            compute_robust_vcov(np.eye(2), np.zeros(2), np.zeros(2))
+
+    def test_saturated_multi_cluster_returns_nan(self):
+        """A saturated design (no residual DOF) with >= 2 clusters returns a NaN
+        vcov rather than raising ZeroDivisionError from the CR1 adjustment."""
+        # 2 clusters, n == k == 4 (saturated 2x2 with one obs per cluster-period).
+        X = np.column_stack([np.ones(4), [0, 0, 1, 1], [0.0, 1.0, 0.0, 1.0], [0, 0, 0, 1.0]])
+        vcov = compute_robust_vcov(X, np.zeros(4), np.array([0, 0, 1, 1]))
+        assert np.all(np.isnan(vcov))
+
+    def test_cluster_count_check_normalizes_series_cluster_ids(self):
+        """The early cluster-count validation must normalize `cluster_ids` to an
+        array before the zero-weight groupby, so a non-default-index pandas
+        Series grouper is not index-aligned against Series(weights) and
+        miscounted (which would wrongly raise 'need >= 2 clusters' on a valid
+        multi-cluster fit)."""
+        rng = np.random.default_rng(0)
+        n = 18
+        cl_arr = np.repeat([0, 1, 2], 6)
+        cl = pd.Series(cl_arr, index=np.arange(500, 500 + n))  # non-default index
+        X = np.column_stack([np.ones(n), (cl_arr < 1).astype(float), np.tile([0.0, 1.0], 9)])
+        y = X @ np.array([1.0, 0.5, 0.3]) + rng.normal(scale=0.4, size=n)
+        residuals = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        weights = np.ones(n)
+        weights[0] = 0.0  # one zero-weight obs; cluster 0 still has positive-weight obs
+        # All 3 clusters retain positive weight -> must not raise; vcov finite.
+        vcov = compute_robust_vcov(X, residuals, cl, weights=weights, weight_type="aweight")
+        assert vcov.shape == (3, 3)
+        assert np.all(np.isfinite(vcov))
+
     def test_numerical_instability_fallback_warns(self, ols_data):
         """Test that numerical instability in Rust backend triggers warning and fallback."""
-        from unittest.mock import patch
         import warnings
+        from unittest.mock import patch
 
         from diff_diff import HAS_RUST_BACKEND
 
@@ -1020,7 +1062,7 @@ class TestLinearRegression:
     def test_robust_standard_errors(self, simple_data):
         """Test that robust=True computes HC1 standard errors."""
         X, y, _ = simple_data
-        reg_robust = LinearRegression(robust=True).fit(X, y)
+        reg_robust = LinearRegression().fit(X, y)
         reg_classical = LinearRegression(robust=False).fit(X, y)
 
         # SEs should differ
@@ -1033,7 +1075,7 @@ class TestLinearRegression:
         """Test cluster-robust standard errors."""
         X, y, cluster_ids, _ = clustered_data
 
-        reg_hc1 = LinearRegression(robust=True).fit(X, y)
+        reg_hc1 = LinearRegression().fit(X, y)
         reg_cluster = LinearRegression(cluster_ids=cluster_ids).fit(X, y)
 
         # Cluster SE should typically be larger with correlated errors
@@ -1057,7 +1099,15 @@ class TestLinearRegression:
         np.testing.assert_allclose(reg1.get_se(1), reg2.get_se(1), rtol=1e-10)
 
     def test_df_adjustment(self, simple_data):
-        """Test degrees of freedom adjustment parameter."""
+        """Test degrees of freedom adjustment parameter.
+
+        ``df_adjustment`` accounts for parameters not present in ``X`` (e.g.
+        absorbed fixed effects). It reduces the reported ``df_`` AND, for the
+        non-clustered classical / hc1 variance families, rescales the finite-
+        sample variance to the full parameter count ``n - k - df_adjustment``
+        (fixest full-K convention), so the SE's ``k`` agrees with the reported
+        t-``df`` instead of ignoring the absorbed parameters.
+        """
         X, y, _ = simple_data
         reg = LinearRegression().fit(X, y)
         reg_adj = LinearRegression().fit(X, y, df_adjustment=10)
@@ -1069,9 +1119,12 @@ class TestLinearRegression:
         result = reg.get_inference(1)
         result_adj = reg_adj.get_inference(1)
 
-        # Same coefficient and SE
+        # Coefficient unchanged; SE is rescaled to the full parameter count,
+        # larger by sqrt((n-k) / (n-k-df_adjustment)) = sqrt(reg.df_ / reg_adj.df_).
         assert result.coefficient == result_adj.coefficient
-        assert result.se == result_adj.se
+        expected_se = result.se * np.sqrt(reg.df_ / reg_adj.df_)
+        np.testing.assert_allclose(result_adj.se, expected_se, rtol=1e-12)
+        assert result_adj.se > result.se
 
         # Different df affects p-value and CI (though often slightly)
         assert result.df != result_adj.df
@@ -1096,7 +1149,7 @@ class TestLinearRegression:
         )
 
         # Use LinearRegression
-        reg = LinearRegression(robust=True).fit(X, y)
+        reg = LinearRegression().fit(X, y)
 
         # Should match
         np.testing.assert_allclose(reg.coefficients_, coef, rtol=1e-10)
@@ -1139,6 +1192,7 @@ class TestLinearRegression:
     def test_rank_deficient_inference_uses_correct_df(self):
         """Test that p-values and CIs use the correct df for rank-deficient matrices."""
         import warnings
+
         from scipy import stats
 
         np.random.seed(42)
@@ -1407,6 +1461,397 @@ class TestNumericalStability:
             inf = reg.get_inference(i)
             assert np.isfinite(inf.coefficient)
 
+    def test_solve_ols_scale_invariance_fitted_values(self):
+        """Rank detection + solve are invariant to per-column scaling.
+
+        A large-scale column previously inflated the rank threshold (anchored to
+        the largest pivot/singular value) and false-dropped well-scaled columns to
+        NaN, or truncated the small-scale direction in the lstsq solve. After
+        column equilibration, solve_ols(X) and solve_ols(X @ diag(s)) give the same
+        fitted values/residuals, coefficients scale inversely, and t-stats (vcov is
+        scale-equivariant) are invariant.
+        """
+        rng = np.random.default_rng(0)
+        n = 200
+        X = np.column_stack([np.ones(n), rng.standard_normal(n), rng.standard_normal(n)])
+        y = 1.0 + 2.0 * X[:, 1] - 0.5 * X[:, 2] + rng.standard_normal(n) * 0.1
+        s = np.array([1.0, 1e8, 1e-4])  # pathological per-column scaling
+
+        coef_raw, resid_raw, vcov_raw = solve_ols(X, y)
+        coef_scaled, resid_scaled, vcov_scaled = solve_ols(X * s, y)
+
+        # full-rank design stays full-rank under any scaling (the headline bug)
+        assert np.all(np.isfinite(coef_scaled))
+        # fitted values / residuals invariant
+        np.testing.assert_allclose(resid_raw, resid_scaled, atol=1e-8)
+        np.testing.assert_allclose(X @ coef_raw, (X * s) @ coef_scaled, atol=1e-8)
+        # coefficients scale inversely with the column scaling
+        np.testing.assert_allclose(coef_scaled, coef_raw / s, rtol=1e-6)
+        # t-stats invariant (vcov is scale-equivariant: SE_j scales like 1/s_j)
+        t_raw = coef_raw / np.sqrt(np.diag(vcov_raw))
+        t_scaled = coef_scaled / np.sqrt(np.diag(vcov_scaled))
+        np.testing.assert_allclose(t_raw, t_scaled, rtol=1e-5)
+
+    def test_did_finite_att_with_large_scale_covariate(self):
+        """End-to-end: a full-rank DiD with a 1e8-scale covariate returns a finite
+        ATT equal to the O(1)-rescaled run (no scale-induced NaN)."""
+        from diff_diff import DifferenceInDifferences, generate_did_data
+
+        df = generate_did_data(
+            n_units=400, n_periods=2, treatment_period=1, treatment_effect=2.5, seed=42
+        ).copy()
+        rng = np.random.default_rng(0)
+        # outcome-relevant, treatment-imbalanced covariate on a huge scale
+        cov = (rng.standard_normal(len(df)) + 2.0 * df["treated"].to_numpy()) * 1e8
+        df["cov"] = cov
+        df["outcome"] = df["outcome"].astype(float) + 3e-8 * df["cov"]
+
+        res = DifferenceInDifferences().fit(
+            df, outcome="outcome", treatment="treated", post="post", covariates=["cov"]
+        )
+        assert np.isfinite(
+            res.att
+        ), "ATT is NaN for a full-rank design with a large-scale covariate"
+
+        # same data with the covariate rescaled to O(1) gives the same ATT
+        df_small = df.copy()
+        df_small["cov"] = df["cov"] / 1e8
+        df_small["outcome"] = df["outcome"]  # outcome already includes the effect
+        res_small = DifferenceInDifferences().fit(
+            df_small,
+            outcome="outcome",
+            treatment="treated",
+            post="post",
+            covariates=["cov"],
+        )
+        np.testing.assert_allclose(res.att, res_small.att, rtol=1e-6)
+
+    def test_solve_ols_rank_zero_returns_nan_not_indexerror(self):
+        """A design that collapses to rank 0 returns all-NaN coefficients with a
+        warning, not a cryptic IndexError (empty float index array)."""
+
+        n = 50
+        X = np.zeros((n, 3))  # rank 0
+        y = np.random.default_rng(2).standard_normal(n)
+        with pytest.warns(UserWarning, match="[Rr]ank-deficient"):
+            coef, resid, vcov = solve_ols(X, y)
+        assert coef.shape == (3,)
+        assert np.all(np.isnan(coef))  # nothing identifiable
+        np.testing.assert_allclose(resid, y)  # fitted = 0
+        assert vcov.shape == (3, 3) and np.all(np.isnan(vcov))
+
+    def test_rank_detection_zero_column_matrix_returns_empty_contract(self):
+        """An ``(n, 0)`` design has rank 0, no dropped columns, and no pivot."""
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        X = np.empty((5, 0))
+
+        rank, dropped, pivot = _detect_rank_deficiency(X)
+
+        assert rank == 0
+        assert dropped.dtype == int
+        assert pivot.dtype == int
+        assert dropped.shape == (0,)
+        assert pivot.shape == (0,)
+
+    def test_rank_detection_scale_repair_preserves_raw_drop_selection(self):
+        """The scale-invariance repair must NOT change which column is dropped in a
+        genuinely collinear, well-scaled design: the dropped column equals the raw
+        pivoted-QR choice (the repair only raises the rank when a large-scale column
+        false-inflated the threshold)."""
+        from scipy.linalg import qr
+
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        rng = np.random.default_rng(3)
+        X = rng.standard_normal((100, 3))
+        X = np.column_stack([X, X[:, 0] + X[:, 1]])  # rank 3 of 4, well-scaled
+        rank, dropped, _ = _detect_rank_deficiency(X)
+
+        # reference: the raw pivoted-QR drop selection
+        _Q, R, piv = qr(X, mode="economic", pivoting=True)
+        rd = np.abs(np.diag(R))
+        raw_rank = int(np.sum(rd > 1e-7 * rd[0]))
+        raw_dropped = np.sort(piv[raw_rank:])
+
+        assert rank == 3
+        np.testing.assert_array_equal(dropped, raw_dropped)
+
+    def test_rank_detection_mixed_scale_and_collinearity_keeps_identified_subset(self):
+        """Mixed case: a design that is genuinely rank-deficient AND contains a
+        huge-scale independent column. The rank COUNT must be scale-corrected (3,
+        not under-counted by the huge column), the RETAINED columns must be full
+        rank (an identified subset — the property that actually matters), the
+        huge independent column must NOT be dropped, and downstream inference on
+        the kept coefficients must be valid (finite, non-negative vcov diagonal)."""
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        rng = np.random.default_rng(0)
+        n = 200
+        x0 = rng.standard_normal(n)
+        x1 = rng.standard_normal(n)
+        z = rng.standard_normal(n)
+        X = np.column_stack([x0, x1, x0 + x1, 1e8 * z])  # rank 3; col 3 huge+indep
+        rank, dropped, _ = _detect_rank_deficiency(X)
+        kept = np.array([i for i in range(4) if i not in set(dropped.tolist())], dtype=int)
+
+        assert rank == 3  # scale-corrected count, not under-counted by the huge col
+        assert len(dropped) == 1
+        assert 3 not in dropped  # the huge INDEPENDENT column is never dropped
+        # the RETAINED design is full rank (an identified subset) — equilibrate
+        # before matrix_rank so the check is itself scale-invariant
+        kept_eq = X[:, kept] / np.sqrt((X[:, kept] ** 2).sum(axis=0))
+        assert np.linalg.matrix_rank(kept_eq) == len(kept)
+        # downstream inference on the kept coefficients is valid
+        y = x0 + 2 * x1 + 0.5 * (1e-8 * (1e8 * z)) + rng.standard_normal(n) * 0.1
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            coef, _resid, vcov = solve_ols(X, y)
+        assert np.all(np.isfinite(coef[kept]))  # kept coefficients identified
+        assert np.isnan(coef[dropped[0]])  # the redundant column is NaN
+        vd = np.diag(vcov)[kept]
+        assert np.all(np.isfinite(vd)) and np.all(vd >= 0)  # valid kept-coef VCV
+
+    def test_rank_detection_qr_mode_r_matches_economic(self):
+        """Lock for the mode="r" refactor: rank detection reads only the R
+        diagonal and the pivot, and both are bit-identical between
+        mode="r" and mode="economic" (same dgeqp3 factorization; mode only
+        controls whether the unused Q is formed). Pivot values are locked by
+        same-session cross-mode equality, NOT hard-coded (dgeqp3 tie-breaks
+        are BLAS-dependent); only rank/dropped are asserted as values."""
+        from scipy.linalg import qr
+
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        rng = np.random.default_rng(7)
+        base = rng.standard_normal((80, 3))
+        fixtures = {
+            # genuinely collinear, well-scaled: rank 3 of 4
+            "collinear": (np.column_stack([base, base[:, 0] - base[:, 2]]), 3),
+            # scale artifact: full rank but one huge column
+            "scale": (np.column_stack([base, 1e9 * rng.standard_normal(80)]), 4),
+        }
+        for name, (X, expected_rank) in fixtures.items():
+            rank, dropped, pivot = _detect_rank_deficiency(X)
+            assert rank == expected_rank, name
+            assert len(dropped) == X.shape[1] - expected_rank, name
+            # cross-mode equivalence: identical R diagonal and pivot
+            r_only = qr(X, mode="r", pivoting=True)
+            _q, r_eco, piv_eco = qr(X, mode="economic", pivoting=True)
+            np.testing.assert_array_equal(
+                np.abs(np.diag(r_only[0])), np.abs(np.diag(r_eco)), err_msg=name
+            )
+            np.testing.assert_array_equal(r_only[1], piv_eco, err_msg=name)
+
+    def test_equilibrated_lstsq_f_order_overwrite_matches_reference(self):
+        """Lock for the F-order + overwrite_a change: the in-place gelsd
+        consume must return bit-identical coefficients to a plain
+        non-overwriting C-order call (same values reach dgelsd either way),
+        and must not mutate the caller's X."""
+        from scipy.linalg import lstsq as scipy_lstsq
+
+        from diff_diff.linalg import _equilibrated_lstsq
+
+        rng = np.random.default_rng(11)
+        X = rng.standard_normal((300, 6))
+        X[:, 3] *= 1e7  # scale disparity exercises the equilibration
+        y = X[:, :3].sum(axis=1) + rng.standard_normal(300)
+        x_before = X.copy()
+
+        coef = _equilibrated_lstsq(X, y)
+
+        np.testing.assert_array_equal(X, x_before)  # caller's X untouched
+        # like-for-like reference: SAME norm accumulation (einsum) and lstsq
+        # options as _equilibrated_lstsq, differing ONLY in the C-order
+        # non-overwriting call - the exact contract the F-order change claims
+        # to preserve.
+        norms = np.sqrt(np.einsum("ij,ij->j", X, X))
+        ref = (
+            scipy_lstsq(X / norms, y, lapack_driver="gelsd", check_finite=False, cond=1e-07)[0]
+            / norms
+        )
+        np.testing.assert_array_equal(coef, ref)
+
+
+class TestRankDetectionStage0Certification:
+    """Stage-0 Gram/eigvalsh full-rank certification in _detect_rank_deficiency.
+
+    Contract: certification is a pure fast path - it either certifies full
+    rank (returning (k, empty, arange)) on designs the two-stage QR would
+    ALSO call full rank, or declines and falls through to the existing QR
+    path verbatim. The cert threshold 1e-10 on equilibrated-Gram eigenvalues
+    (~ cond(X_eq) < 1e5) is two orders stricter than the QR full-rank
+    boundary (rcond=1e-7 on R-diagonals), so decisions on deficient designs
+    never change.
+    """
+
+    @staticmethod
+    def _qr_call_counter(monkeypatch):
+        import diff_diff.linalg as lmod
+
+        calls = {"n": 0}
+        orig = lmod.qr
+
+        def counting(*args, **kwargs):
+            calls["n"] += 1
+            return orig(*args, **kwargs)
+
+        monkeypatch.setattr(lmod, "qr", counting)
+        return calls
+
+    def test_certified_full_rank_runs_zero_qr(self, monkeypatch):
+        """Well-conditioned full-rank design - including a 1e8-scale
+        independent column (equilibration makes it benign) - certifies with
+        ZERO pivoted-QR calls (the perf lock) and the trivial-pivot
+        contract."""
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        rng = np.random.default_rng(42)
+        X = rng.standard_normal((500, 6))
+        X[:, 3] *= 1e8
+        calls = self._qr_call_counter(monkeypatch)
+        rank, dropped, pivot = _detect_rank_deficiency(X)
+        assert calls["n"] == 0
+        assert rank == 6
+        assert dropped.shape == (0,) and np.issubdtype(dropped.dtype, np.integer)
+        np.testing.assert_array_equal(pivot, np.arange(6))
+        assert np.issubdtype(pivot.dtype, np.integer)
+
+    def test_declined_collinear_matches_legacy_qr_selection(self, monkeypatch):
+        """A genuinely collinear design declines certification (singular
+        equilibrated Gram) and the (rank, dropped, pivot) triple is the raw
+        pivoted-QR answer, exactly as before stage-0 existed."""
+        from scipy.linalg import qr as scipy_qr
+
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        rng = np.random.default_rng(7)
+        X = rng.standard_normal((120, 4))
+        X[:, 3] = X[:, 0] + X[:, 1]
+        calls = self._qr_call_counter(monkeypatch)
+        rank, dropped, pivot = _detect_rank_deficiency(X)
+        assert calls["n"] >= 1  # fell through to the QR path
+        assert rank == 3
+        # reference: the raw pivoted-QR drop selection (existing contract)
+        r_ref, piv_ref = scipy_qr(X, mode="r", pivoting=True)
+        np.testing.assert_array_equal(dropped, np.sort(piv_ref[3:]))
+        np.testing.assert_array_equal(pivot, piv_ref)
+
+    def test_declined_n_less_than_k_structural(self, monkeypatch):
+        """n < k skips certification structurally (always deficient; the
+        sole pivot consumer in staggered.py lives behind this shape)."""
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        rng = np.random.default_rng(3)
+        X = rng.standard_normal((3, 5))
+        calls = self._qr_call_counter(monkeypatch)
+        rank, dropped, _pivot = _detect_rank_deficiency(X)
+        assert calls["n"] >= 1
+        assert rank == 3 and len(dropped) == 2
+
+    def test_declined_zero_column(self):
+        """A zero column zeroes its Gram diagonal - certification declines
+        and the QR path drops it as before."""
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        rng = np.random.default_rng(5)
+        X = rng.standard_normal((60, 3))
+        X[:, 1] = 0.0
+        rank, dropped, _ = _detect_rank_deficiency(X)
+        assert rank == 2 and 1 in dropped
+
+    def test_nan_still_raises_value_error(self):
+        """Non-finite entries decline certification (they poison diag(G))
+        and scipy's qr raises ValueError exactly as before."""
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        rng = np.random.default_rng(9)
+        X = rng.standard_normal((50, 3))
+        X[0, 0] = np.nan
+        with pytest.raises(ValueError):
+            _detect_rank_deficiency(X)
+
+    def test_boundary_declines_cert_but_qr_full_rank(self, monkeypatch):
+        """cond(X_eq) ~ 1e6 sits BETWEEN the cert threshold (1e5) and the QR
+        full-rank boundary (~1e7): certification declines, stage-1 QR still
+        returns full rank - locks cert-strictly-stricter-than-QR ordering."""
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        rng = np.random.default_rng(11)
+        X = rng.standard_normal((200, 3))
+        # near-dependence BETWEEN columns (a small column NORM would be
+        # repaired by equilibration and correctly certified): sv ratio of the
+        # equilibrated design ~2e-6 -> Gram eig ratio ~4e-12 < 1e-10 declines
+        # cert, while the QR R-diagonal ratio ~2e-6 > 1e-7 stays full rank.
+        X[:, 2] = X[:, 0] + 3e-6 * rng.standard_normal(200)
+        calls = self._qr_call_counter(monkeypatch)
+        rank, dropped, _ = _detect_rank_deficiency(X)
+        assert calls["n"] >= 1  # cert declined
+        assert rank == 3 and len(dropped) == 0
+
+    def test_looser_rcond_skips_certification(self, monkeypatch):
+        """A caller-supplied rcond looser than 1e-7 disables stage-0 (the
+        stricter-than-QR guarantee only holds for rcond <= 1e-7); the QR
+        path answers with the caller's threshold as before."""
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        rng = np.random.default_rng(13)
+        X = rng.standard_normal((100, 3))
+        calls = self._qr_call_counter(monkeypatch)
+        rank, dropped, _ = _detect_rank_deficiency(X, rcond=1e-4)
+        assert calls["n"] >= 1
+        assert rank == 3 and len(dropped) == 0
+
+    def test_kahan_characterization_cert_never_wrong(self):
+        """Kahan-type matrices are the theoretical gap between pivoted-QR
+        R-diagonals and singular values (the R-diagonal can undershoot
+        sigma_min by up to 2^(k-1) - reachable pathology, not bounded to
+        large k). Characterization, not a behavior pin: WHENEVER stage-0
+        certifies, the SVD-based numerical rank agrees it is full rank at
+        the QR threshold - i.e. certification can disagree with legacy QR
+        only by being MORE correct (repairing a QR false-drop), never by
+        certifying a genuinely deficient design."""
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        for k, theta in ((8, 0.6), (20, 0.35), (30, 0.28)):
+            s, c = np.sin(theta), np.cos(theta)
+            K = np.zeros((k, k))
+            for i in range(k):
+                K[i, i] = s**i
+                K[i, i + 1 :] = -c * s**i
+            rank, dropped, _ = _detect_rank_deficiency(K)
+            if len(dropped) == 0 and rank == k:
+                sv = np.linalg.svd(K / np.sqrt(np.einsum("ij,ij->j", K, K)), compute_uv=False)
+                assert sv[-1] > 1e-7 * sv[0], (
+                    f"cert claimed full rank on a genuinely deficient Kahan "
+                    f"matrix (k={k}, theta={theta})"
+                )
+
+    @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
+    def test_certified_design_still_dispatches_solve_ols_to_rust(self, monkeypatch):
+        """Composition lock: the stage-0-certified full-rank answer feeds the
+        solve_ols routing boolean, which must still dispatch to the Rust
+        solver (unweighted hc1 path)."""
+        import diff_diff.linalg as lmod
+        from diff_diff.linalg import solve_ols
+
+        calls = {"n": 0}
+        orig = lmod._solve_ols_rust
+
+        def counting(*args, **kwargs):
+            calls["n"] += 1
+            return orig(*args, **kwargs)
+
+        monkeypatch.setattr(lmod, "_solve_ols_rust", counting)
+        rng = np.random.default_rng(17)
+        X = rng.standard_normal((300, 5))
+        y = X @ np.arange(1.0, 6.0) + rng.standard_normal(300)
+        coeffs, _, _ = solve_ols(X, y)
+        assert calls["n"] == 1
+        assert np.all(np.isfinite(coeffs))
+
 
 class TestEstimatorIntegration:
     """Integration tests verifying estimators produce correct results."""
@@ -1430,8 +1875,8 @@ class TestEstimatorIntegration:
         data["outcome"] = np.random.randn(n) + 2.0 * data["treated"] * data["post"]
 
         # Fit estimator
-        did = DifferenceInDifferences(robust=True)
-        result = did.fit(data, outcome="outcome", treatment="treated", time="post")
+        did = DifferenceInDifferences()
+        result = did.fit(data, outcome="outcome", treatment="treated", post="post")
 
         # Coefficient should be close to true effect (within sampling variation)
         assert abs(result.att - 2.0) < 1.0
@@ -1470,7 +1915,7 @@ class TestEstimatorIntegration:
         )
 
         twfe = TwoWayFixedEffects()
-        result = twfe.fit(data, outcome="y", treatment="treated", time="post", unit="unit")
+        result = twfe.fit(data, outcome="y", treatment="treated", post="post", unit="unit")
 
         # Should produce valid results
         assert result.se > 0
@@ -1650,14 +2095,210 @@ class TestSolveLogit:
             solve_logit(X, y, rank_deficient_action="error")
 
 
+def _legacy_irls_reference(X, y, weights=None, max_iter=25, tol=1e-8):
+    """Test-local reimplementation of the pre-fast-path IRLS inner loop:
+    per-iteration tall-matrix `np.linalg.lstsq(Xw, zw, rcond=None)` with the
+    identical working weights/response/convergence semantics. Shared by the
+    fast-path parity and convergence-semantics tests below. Assumes a
+    full-rank design (no rank/EPV handling - callers use clean fixtures).
+    Returns (beta_with_intercept, converged)."""
+    n = X.shape[0]
+    Xi = np.column_stack([np.ones(n), X])
+    beta = np.zeros(Xi.shape[1])
+    for _ in range(max_iter):
+        eta = np.clip(Xi @ beta, -500, 500)
+        mu = np.clip(1.0 / (1.0 + np.exp(-eta)), 1e-10, 1 - 1e-10)
+        w_irls = mu * (1.0 - mu)
+        z = eta + (y - mu) / w_irls
+        w_total = weights * w_irls if weights is not None else w_irls
+        sqrt_w = np.sqrt(w_total)
+        beta_new, _, _, _ = np.linalg.lstsq(Xi * sqrt_w[:, None], z * sqrt_w, rcond=None)
+        if np.max(np.abs(beta_new - beta)) < tol:
+            return beta_new, True
+        beta = beta_new
+    return beta, False
+
+
+class TestIRLSCholeskyFastPath:
+    """solve_logit's equilibrated normal-equations Cholesky inner solve.
+
+    Parity vs the legacy per-iteration lstsq is TOL-BOUNDED (atol 1e-8),
+    not bit-level: both solvers converge to the same MLE, but the iteration
+    at which the max|delta-beta| < tol check first crosses can legally shift
+    by one, moving the final beta by up to tol. Observed parity on
+    well-conditioned fits is ~1e-10..1e-12 (iteration counts match; the
+    quadratically-decaying final step dominates the difference).
+    """
+
+    @staticmethod
+    def _make_logit(n, k, seed, scale_col=None, weights_kind=None, sep=0.0):
+        rng = np.random.default_rng(seed)
+        X = rng.standard_normal((n, k))
+        if scale_col is not None:
+            X[:, scale_col % k] *= 1e4
+        beta = rng.standard_normal(k) * 0.5
+        eta = X @ beta + sep * X[:, 0]
+        p = 1.0 / (1.0 + np.exp(-np.clip(eta, -30, 30)))
+        y = (rng.random(n) < p).astype(float)
+        w = None
+        if weights_kind == "positive":
+            w = np.exp(rng.normal(0, 0.5, n))
+        elif weights_kind == "zeros":
+            w = np.exp(rng.normal(0, 0.5, n))
+            w[rng.random(n) < 0.1] = 0.0
+        elif weights_kind == "tiny":
+            w = np.exp(rng.normal(0, 0.5, n))
+            w[rng.random(n) < 0.1] = 1e-12
+        return X, y, w
+
+    def test_property_parity_vs_legacy_lstsq(self):
+        """~20 random GLM datasets (varied n/k, scale disparity, positive /
+        exact-zero / tiny-positive weights, mild separation pressure): the
+        fast-path beta matches the legacy per-iteration lstsq reimplementation
+        at atol 1e-8 (tol-bounded; see class docstring for why not tighter),
+        with zero Cholesky fallbacks on these well-conditioned fits."""
+        cases = []
+        for i in range(20):
+            cases.append(
+                dict(
+                    n=200 + 137 * i,
+                    k=2 + (i % 9),
+                    seed=100 + i,
+                    scale_col=i % 3 if i % 4 == 0 else None,
+                    weights_kind=[None, "positive", "zeros", "tiny"][i % 4],
+                    sep=0.8 if i % 5 == 0 else 0.0,
+                )
+            )
+        worst = 0.0
+        for case in cases:
+            X, y, w = self._make_logit(**case)
+            diag = {}
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                beta, probs = solve_logit(X, y, weights=w, diagnostics_out=diag)
+                ref, _ = _legacy_irls_reference(X, y, weights=w)
+            delta = float(np.nanmax(np.abs(beta - ref)))
+            worst = max(worst, delta)
+            assert delta < 1e-8, (case, delta)
+            # saturated fits legally produce probs of exactly 0.0/1.0 in
+            # float (eta clipped at +-500; exp underflows) - same as legacy
+            assert np.all((probs >= 0) & (probs <= 1))
+            assert diag["irls_chol_fallback_iters"] == 0, (case, diag)
+        # typical parity is far below the gate; record it in the assert
+        assert worst < 1e-8
+
+    def test_forced_fallback_bit_identical_to_legacy(self, monkeypatch):
+        """With cho_factor monkeypatched to ALWAYS raise, every iteration
+        takes the guarded fallback, which must be byte-identical to the
+        legacy computation (the fallback reconstructs the exact pre-fast-path
+        lstsq line on the raw basis)."""
+        import diff_diff.linalg as lmod
+
+        def always_raise(*args, **kwargs):
+            raise np.linalg.LinAlgError("forced")
+
+        X, y, _ = self._make_logit(400, 5, seed=7)
+        diag = {}
+        monkeypatch.setattr(lmod, "cho_factor", always_raise)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            beta_fb, probs_fb = solve_logit(X, y, diagnostics_out=diag)
+        monkeypatch.undo()
+        ref, _ = _legacy_irls_reference(X, y)
+        assert diag["irls_chol_fallback_iters"] > 0
+        np.testing.assert_array_equal(beta_fb, ref)
+
+    def test_natural_guard_trip_warning_equivalence(self, monkeypatch):
+        """A separation-pressure dataset trips the dpocon guard naturally in
+        late IRLS iterations (working weights collapse, G ill-conditioned).
+        The fit is tol-bounded vs legacy - NOT byte-identical, because early
+        well-conditioned iterations take the Cholesky path - so the lock is
+        warning-set EQUIVALENCE plus a positive fallback count."""
+        import diff_diff.linalg as lmod
+
+        rng = np.random.default_rng(31)
+        n = 600
+        # Quasi-separation on a DUMMY subgroup: y == 1 on every dummy row,
+        # so the dummy coefficient diverges and the working weights collapse
+        # on exactly that column's support (G's dummy diagonal shrinks ~
+        # mu*(1-mu) -> 1e-10 RELATIVE to the healthy columns - a uniform
+        # collapse across all rows would rescale G without changing its
+        # conditioning and never trip the guard).
+        dummy = np.zeros(n)
+        dummy[:60] = 1.0
+        x1 = rng.standard_normal(n)
+        X = np.column_stack([dummy, x1])
+        y = (rng.random(n) < 1.0 / (1.0 + np.exp(-x1))).astype(float)
+        y[:60] = 1.0
+
+        diag = {}
+        with warnings.catch_warnings(record=True) as caught_new:
+            warnings.simplefilter("always")
+            solve_logit(X, y, diagnostics_out=diag)
+        assert (
+            diag["irls_chol_fallback_iters"] > 0
+        ), "fixture no longer trips the dpocon guard - regenerate it"
+
+        def always_raise(*args, **kwargs):
+            raise np.linalg.LinAlgError("forced")
+
+        monkeypatch.setattr(lmod, "cho_factor", always_raise)
+        with warnings.catch_warnings(record=True) as caught_legacy:
+            warnings.simplefilter("always")
+            solve_logit(X, y)
+        monkeypatch.undo()
+
+        def warning_set(records):
+            return {(r.category.__name__, str(r.message)[:40]) for r in records}
+
+        assert warning_set(caught_new) == warning_set(caught_legacy)
+
+    def test_convergence_iteration_semantics_preserved(self, monkeypatch):
+        """The fast path must not change WHEN the IRLS loop converges on a
+        well-conditioned fit: find the minimal converging max_iter N under
+        the legacy solver (via the always-raise monkeypatch), then assert
+        the fast path converges (no warning) at N and warns at N-1. Parity
+        at ~1e-12 makes an iteration-count shift essentially impossible on
+        this fixture; if a platform ever shifts it by one, relax with an
+        in-test justification comment."""
+        import diff_diff.linalg as lmod
+
+        X, y, _ = self._make_logit(500, 4, seed=19)
+
+        def always_raise(*args, **kwargs):
+            raise np.linalg.LinAlgError("forced")
+
+        def converges(max_iter, force_legacy):
+            if force_legacy:
+                monkeypatch.setattr(lmod, "cho_factor", always_raise)
+            try:
+                with warnings.catch_warnings(record=True) as rec:
+                    warnings.simplefilter("always")
+                    solve_logit(X, y, max_iter=max_iter, check_separation=False)
+                return not any("did not converge" in str(r.message) for r in rec)
+            finally:
+                if force_legacy:
+                    monkeypatch.undo()
+
+        n_min = None
+        for m in range(1, 26):
+            if converges(m, force_legacy=True):
+                n_min = m
+                break
+        assert n_min is not None and n_min >= 2, n_min
+
+        assert converges(n_min, force_legacy=False)
+        assert not converges(n_min - 1, force_legacy=False)
+
+
 class TestCheckPropensityDiagnostics:
     """Tests for propensity score diagnostic warnings."""
 
     def test_no_warning_normal_scores(self):
         """No warning when all scores are within bounds."""
-        from diff_diff.linalg import _check_propensity_diagnostics
-
         import warnings
+
+        from diff_diff.linalg import _check_propensity_diagnostics
 
         pscore = np.array([0.3, 0.5, 0.7, 0.4, 0.6])
         with warnings.catch_warnings(record=True) as w:
@@ -1673,6 +2314,163 @@ class TestCheckPropensityDiagnostics:
         pscore = np.array([0.001, 0.5, 0.999, 0.3, 0.7])
         with pytest.warns(UserWarning, match="outside"):
             _check_propensity_diagnostics(pscore, trim_bound=0.01)
+
+
+class TestEPVDiagnostics:
+    """Tests for Events Per Variable (EPV) check in solve_logit."""
+
+    def test_epv_warning_below_threshold(self):
+        """Warning emitted when EPV < threshold."""
+        from diff_diff.linalg import solve_logit
+
+        rng = np.random.default_rng(42)
+        # 40 events (minority class), 8 predictor variables → EPV = 5.0
+        n = 200
+        X = rng.standard_normal((n, 8))
+        y = np.concatenate([np.ones(40), np.zeros(n - 40)])
+        with pytest.warns(UserWarning, match="Low Events Per Variable"):
+            solve_logit(X, y, epv_threshold=10)
+
+    def test_epv_no_warning_above_threshold(self):
+        """No EPV warning when EPV >= threshold."""
+        from diff_diff.linalg import solve_logit
+
+        rng = np.random.default_rng(42)
+        # 100 events, 2 predictor variables → EPV = 50
+        n = 200
+        X = rng.standard_normal((n, 2))
+        y = np.concatenate([np.ones(100), np.zeros(100)])
+        import warnings
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            solve_logit(X, y, epv_threshold=10)
+        epv_warns = [x for x in w if "Events Per Variable" in str(x.message)]
+        assert len(epv_warns) == 0
+
+    def test_epv_error_in_strict_mode(self):
+        """ValueError raised when rank_deficient_action='error' and EPV low."""
+        from diff_diff.linalg import solve_logit
+
+        rng = np.random.default_rng(42)
+        n = 200
+        X = rng.standard_normal((n, 8))
+        y = np.concatenate([np.ones(30), np.zeros(n - 30)])
+        with pytest.raises(ValueError, match="Low Events Per Variable"):
+            solve_logit(X, y, rank_deficient_action="error", epv_threshold=10)
+
+    def test_epv_threshold_configurable(self):
+        """Custom threshold changes warning behavior."""
+        from diff_diff.linalg import solve_logit
+
+        rng = np.random.default_rng(42)
+        n = 200
+        X = rng.standard_normal((n, 2))
+        # 15 events, 2 predictor variables → EPV = 7.5
+        y = np.concatenate([np.ones(15), np.zeros(n - 15)])
+
+        # Default threshold 10 → should warn (EPV=7.5 < 10)
+        with pytest.warns(UserWarning, match="Low Events Per Variable"):
+            solve_logit(X, y, epv_threshold=10)
+
+        # Threshold 3 → should not warn (EPV=7.5 >= 3)
+        import warnings
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            solve_logit(X, y, epv_threshold=3)
+        epv_warns = [x for x in w if "Events Per Variable" in str(x.message)]
+        assert len(epv_warns) == 0
+
+    def test_epv_context_label_in_warning(self):
+        """Context label appears in warning message."""
+        from diff_diff.linalg import solve_logit
+
+        rng = np.random.default_rng(42)
+        n = 200
+        X = rng.standard_normal((n, 8))
+        y = np.concatenate([np.ones(30), np.zeros(n - 30)])
+        with pytest.warns(UserWarning, match="cohort g=2004"):
+            solve_logit(X, y, epv_threshold=10, context_label="cohort g=2004")
+
+    def test_epv_diagnostics_out_populated(self):
+        """diagnostics_out dict receives correct keys and values."""
+        from diff_diff.linalg import solve_logit
+
+        rng = np.random.default_rng(42)
+        n = 200
+        X = rng.standard_normal((n, 4))
+        y = np.concatenate([np.ones(20), np.zeros(n - 20)])
+        diag = {}
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            solve_logit(X, y, diagnostics_out=diag)
+
+        assert "epv" in diag
+        assert "n_events" in diag
+        assert "k" in diag
+        assert "is_low" in diag
+        assert diag["n_events"] == 20  # minority class
+        assert diag["k"] == 4  # 4 predictor variables (excluding intercept)
+        assert abs(diag["epv"] - 5.0) < 0.01  # 20 events / 4 predictors
+        assert diag["is_low"] is True
+
+    def test_epv_uses_post_drop_k(self):
+        """EPV uses k after rank-deficient column drop."""
+        from diff_diff.linalg import solve_logit
+
+        rng = np.random.default_rng(42)
+        n = 200
+        X = rng.standard_normal((n, 3))
+        # Make column 2 a duplicate of column 1 → will be dropped
+        X[:, 2] = X[:, 1]
+        y = np.concatenate([np.ones(30), np.zeros(n - 30)])
+        diag = {}
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            solve_logit(X, y, diagnostics_out=diag, rank_deficient_action="silent")
+
+        # Should be 3 params (2 kept covariates + intercept), not 4
+        assert diag["k"] == 2  # 2 kept predictor variables (excluding intercept)
+        assert diag["n_events"] == 30
+        assert abs(diag["epv"] - 15.0) < 0.01  # 30 events / 2 predictors
+
+    def test_epv_uses_positive_weight_sample(self):
+        """EPV computed on positive-weight sample, not padded rows."""
+        from diff_diff.linalg import solve_logit
+
+        rng = np.random.default_rng(42)
+        # 10 real events + 190 real controls = 200 real rows
+        n_real = 200
+        X_real = rng.standard_normal((n_real, 4))
+        y_real = np.concatenate([np.ones(10), np.zeros(n_real - 10)])
+        w_real = np.ones(n_real)
+
+        # Pad with 500 zero-weight rows (should not inflate EPV)
+        n_pad = 500
+        X_pad = rng.standard_normal((n_pad, 4))
+        y_pad = np.concatenate([np.ones(250), np.zeros(250)])
+        w_pad = np.zeros(n_pad)
+
+        X = np.vstack([X_real, X_pad])
+        y_all = np.concatenate([y_real, y_pad])
+        w = np.concatenate([w_real, w_pad])
+
+        diag = {}
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            solve_logit(X, y_all, weights=w, diagnostics_out=diag)
+
+        # EPV should reflect the 10-event effective sample, not 260
+        assert diag["n_events"] == 10  # min(10, 190) from real sample
+        assert diag["epv"] == 10 / 4  # 10 events / 4 predictors = 2.5
+        assert diag["is_low"] is True
 
 
 class TestNoDotRuntimeWarnings:
@@ -1699,3 +2497,1410 @@ class TestNoDotRuntimeWarnings:
             f"{[str(x.message) for x in runtime_warnings]}"
         )
         assert np.allclose(coefficients, beta_true, atol=0.1)
+
+
+class TestSolvePoisson:
+    def test_basic_convergence(self):
+        """solve_poisson converges on simple count data."""
+        rng = np.random.default_rng(42)
+        n = 200
+        X = np.column_stack([np.ones(n), rng.standard_normal((n, 2))])
+        true_beta = np.array([0.5, 0.3, -0.2])
+        mu = np.exp(X @ true_beta)
+        y = rng.poisson(mu).astype(float)
+        beta, W = solve_poisson(X, y)
+        assert beta.shape == (3,)
+        assert W.shape == (n,)
+        assert np.allclose(beta, true_beta, atol=0.15)
+
+    def test_returns_weights(self):
+        """solve_poisson returns final mu weights for vcov computation."""
+        rng = np.random.default_rng(0)
+        n = 100
+        X = np.column_stack([np.ones(n), rng.standard_normal(n)])
+        y = rng.poisson(2.0, size=n).astype(float)
+        beta, W = solve_poisson(X, y)
+        assert (W > 0).all()
+
+    def test_non_negative_output(self):
+        """Fitted mu = exp(Xb) should be strictly positive."""
+        rng = np.random.default_rng(1)
+        n = 50
+        X = np.column_stack([np.ones(n), rng.standard_normal(n)])
+        y = rng.poisson(1.0, size=n).astype(float)
+        beta, W = solve_poisson(X, y)
+        mu_hat = np.exp(X @ beta)
+        assert (mu_hat > 0).all()
+
+    def test_no_intercept_prepended(self):
+        """solve_poisson does NOT add intercept (caller's responsibility)."""
+        rng = np.random.default_rng(2)
+        n = 80
+        X = np.column_stack([np.ones(n), rng.standard_normal(n)])
+        y = rng.poisson(1.5, size=n).astype(float)
+        beta, _ = solve_poisson(X, y)
+        assert len(beta) == 2  # not 3
+
+    def test_rank_zero_design_raises_valueerror(self):
+        """A rank-0 design (all-zero, every column dropped) raises a clear
+        ValueError instead of a cryptic IndexError on an empty integer index
+        array. solve_poisson does not prepend an intercept, so rank 0 is
+        reachable (unlike solve_logit)."""
+        import warnings
+
+        rng = np.random.default_rng(0)
+        n = 60
+        y = rng.poisson(2.0, size=n).astype(float)
+        X = np.zeros((n, 2))  # rank 0
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match="rank 0"):
+                solve_poisson(X, y)
+
+    def test_rank_zero_positive_weight_subset_raises_valueerror(self):
+        """The effective (positive-weight) sample collapsing to rank 0 also raises
+        a clear ValueError (the eff_kept branch)."""
+        import warnings
+
+        rng = np.random.default_rng(1)
+        n = 60
+        y = rng.poisson(2.0, size=n).astype(float)
+        # Full design is full rank (variation lives in the zero-weight rows), but
+        # the positive-weight subsample is all-zero -> rank 0 on that subset.
+        X = np.zeros((n, 2))
+        X[n // 2 :, :] = rng.standard_normal((n - n // 2, 2))
+        weights = np.ones(n)
+        weights[n // 2 :] = 0.0  # only the all-zero rows carry positive weight
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match="rank 0"):
+                solve_poisson(X, y, weights=weights)
+
+
+class TestRankGuardedInv:
+    """Contract tests for _rank_guarded_inv (rank-guarded generalized inverse).
+
+    Used by the influence-function SE path of CallawaySantAnna /
+    TripleDifference / StaggeredTripleDifference. A near-singular covariate Gram
+    matrix must yield a finite generalized inverse on the identified subspace
+    (NaN only on true rank-0), and well-conditioned matrices must be unchanged.
+    """
+
+    @staticmethod
+    def _gram(X):
+        return X.T @ X
+
+    def test_well_conditioned_matches_solve_exactly(self):
+        # Fast path must be bit-identical to np.linalg.solve(A, I) so that
+        # well-conditioned R-parity goldens are numerically unchanged.
+        rng = np.random.RandomState(0)
+        X = rng.standard_normal((60, 4))
+        A = self._gram(X)
+        ginv, n_dropped, rank = _rank_guarded_inv(A)
+        assert n_dropped == 0
+        assert rank == 4
+        np.testing.assert_array_equal(ginv, np.linalg.solve(A, np.eye(4)))
+
+    def test_scale_invariance_no_false_drop(self):
+        # One column on a vastly larger scale makes A's raw condition ~1e16, so
+        # a bare pinv(A, rcond=1e-10) would truncate a genuine direction. The
+        # symmetric equilibration must keep full rank.
+        rng = np.random.RandomState(1)
+        X = rng.standard_normal((80, 3))
+        X[:, 0] *= 1e8
+        A = self._gram(X)
+        _, n_dropped, rank = _rank_guarded_inv(A)
+        assert n_dropped == 0
+        assert rank == 3
+
+    def test_constant_column_truncates_one_finite(self):
+        # X = [intercept, constant covariate, x2]: the constant covariate is
+        # collinear with the intercept -> exactly one redundant direction.
+        rng = np.random.RandomState(2)
+        n = 100
+        X = np.column_stack([np.ones(n), np.full(n, 5.0), rng.standard_normal(n)])
+        A = self._gram(X)
+        ginv, n_dropped, rank = _rank_guarded_inv(A)
+        assert n_dropped == 1
+        assert rank == 2
+        assert np.all(np.isfinite(ginv))
+        # Garbage-inverse guard: the prior np.linalg.solve would have entries
+        # ~1e13+; the guarded inverse must be modest.
+        assert np.max(np.abs(ginv)) < 1e3
+
+    def test_rank_zero_returns_all_nan(self):
+        A = np.zeros((3, 3))
+        ginv, n_dropped, rank = _rank_guarded_inv(A)
+        assert rank == 0
+        assert n_dropped == 3
+        assert np.all(np.isnan(ginv))
+
+    def test_tracker_appended_once_on_truncation_only(self):
+        rng = np.random.RandomState(3)
+        n = 50
+        # Deficient: constant column collinear with intercept.
+        A_def = self._gram(np.column_stack([np.ones(n), np.full(n, 2.0), rng.standard_normal(n)]))
+        tracker = []
+        _rank_guarded_inv(A_def, tracker=tracker)
+        assert len(tracker) == 1  # exactly one condition-number sample
+
+        # Well-conditioned: no append.
+        A_ok = self._gram(rng.standard_normal((n, 3)))
+        tracker2 = []
+        _rank_guarded_inv(A_ok, tracker=tracker2)
+        assert tracker2 == []
+
+    def test_generalized_inverse_identity(self):
+        # A G A == A holds for any generalized inverse (the property that makes
+        # the IF bilinear form invariant to the choice of inverse).
+        rng = np.random.RandomState(4)
+        n = 100
+        X = np.column_stack([np.ones(n), np.full(n, 3.0), rng.standard_normal(n)])
+        A = self._gram(X)
+        ginv, n_dropped, _ = _rank_guarded_inv(A)
+        assert n_dropped == 1
+        np.testing.assert_allclose(A @ ginv @ A, A, rtol=1e-8, atol=1e-6)
+
+    def test_boundary_kept_vs_truncated_gram_condition(self):
+        # Threshold is rcond=1e-10 on the equilibrated Gram. cond ~1e8 stays
+        # full rank; cond ~1e12 truncates the small direction. (Numbers are the
+        # equilibrated Gram condition, not X's.)
+        rng = np.random.RandomState(5)
+        Q, _ = np.linalg.qr(rng.standard_normal((2, 2)))
+        kept = Q @ np.diag([1.0, 1e-8]) @ Q.T
+        kept = 0.5 * (kept + kept.T)
+        _, n_dropped_kept, rank_kept = _rank_guarded_inv(kept)
+        assert n_dropped_kept == 0
+        assert rank_kept == 2
+
+        truncated = Q @ np.diag([1.0, 1e-12]) @ Q.T
+        truncated = 0.5 * (truncated + truncated.T)
+        _, n_dropped_tr, rank_tr = _rank_guarded_inv(truncated)
+        assert n_dropped_tr == 1
+        assert rank_tr == 1
+
+    def test_empty_matrix(self):
+        ginv, n_dropped, rank = _rank_guarded_inv(np.zeros((0, 0)))
+        assert ginv.shape == (0, 0)
+        assert n_dropped == 0
+        assert rank == 0
+
+    def test_return_dropped_mask(self):
+        # return_dropped=True exposes a length-k boolean mask of the truncated
+        # (unidentified) coordinates so per-coefficient callers can NaN them
+        # (a zero-filled dropped coordinate would otherwise report se=0).
+        rng = np.random.RandomState(7)
+        n = 100
+        x = rng.standard_normal(n)
+        X = np.column_stack([np.ones(n), x, x])  # cols 1 and 2 exactly collinear
+        A = self._gram(X)
+
+        # Default call is unchanged (backward-compatible 3-tuple).
+        assert len(_rank_guarded_inv(A)) == 3
+
+        ginv, n_dropped, rank, dropped = _rank_guarded_inv(A, return_dropped=True)
+        assert n_dropped == 1 and rank == 2
+        assert dropped.dtype == bool and dropped.shape == (3,)
+        assert dropped.sum() == 1
+        # The dropped coordinate is exactly the zero-filled row/col of the inverse.
+        assert np.all(ginv[dropped] == 0.0)
+        assert bool(dropped[0]) is False  # intercept stays identified
+
+        # Full rank -> no dropped coordinates.
+        A_ok = self._gram(rng.standard_normal((n, 3)))
+        _, nd_ok, _, dropped_ok = _rank_guarded_inv(A_ok, return_dropped=True)
+        assert nd_ok == 0 and not dropped_ok.any()
+
+        # Rank 0 -> every coordinate dropped.
+        _, nd0, _, dropped0 = _rank_guarded_inv(np.zeros((3, 3)), return_dropped=True)
+        assert nd0 == 3 and dropped0.all()
+
+
+class TestOneWayBMScoresDOF:
+    """The one-way (non-clustered) unweighted Bell-McCaffrey DOF denominator
+    a'(M∘M)a is evaluated via the Schur-product expansion
+    sum a_i^2(1-2h_ii) + tr((B S_a)^2), S_a = X'diag(a)X — never
+    materializing the dense n×n residual-maker (frozen here as the oracle).
+    Exact algebra; parity ~1e-12."""
+
+    @staticmethod
+    def _oracle_dense_dof(X, bread, h_diag, contrasts):
+        """Frozen pre-change dense evaluation (O(n²) M∘M quadratic form)."""
+        n = X.shape[0]
+        bread_inv_c = np.linalg.solve(bread, contrasts)
+        q = X @ bread_inv_c
+        H = X @ np.linalg.solve(bread, X.T)
+        M = np.eye(n) - H
+        M_sq = M * M
+        one_minus_h = np.maximum(1.0 - h_diag, 1e-10)
+        m = contrasts.shape[1]
+        dof = np.empty(m)
+        for j in range(m):
+            qj_sq = q[:, j] * q[:, j]
+            num = qj_sq.sum() ** 2
+            a_j = qj_sq / one_minus_h
+            den = float(a_j @ M_sq @ a_j)
+            dof[j] = num / den if den > 0 else np.nan
+        return dof
+
+    @pytest.mark.parametrize(
+        "kw",
+        [
+            dict(n=300, k=5, seed=3),
+            dict(n=200, k=8, seed=5, high_leverage=True),
+            dict(n=400, k=40, seed=7),
+        ],
+        ids=["basic", "high-leverage", "k40"],
+    )
+    def test_matches_frozen_dense_oracle(self, kw):
+        from diff_diff.linalg import _compute_bm_dof_from_contrasts
+
+        rng = np.random.default_rng(kw["seed"])
+        n, k = kw["n"], kw["k"]
+        X = np.column_stack([np.ones(n), rng.normal(size=(n, k - 1))])
+        if kw.get("high_leverage"):
+            X[0, 1] = 30.0
+        bread = X.T @ X
+        h_diag = np.einsum("ij,ij->i", X @ np.linalg.inv(bread), X)
+        contrasts = np.column_stack([np.eye(k), np.full(k, 1.0 / k)])  # + compound
+        dof = _compute_bm_dof_from_contrasts(X, bread, h_diag, contrasts)
+        oracle = self._oracle_dense_dof(X, bread, h_diag, contrasts)
+        fin = ~np.isnan(oracle)
+        assert fin.all(), "oracle produced NaN on a well-conditioned design"
+        np.testing.assert_allclose(dof[fin], oracle[fin], rtol=1e-10)
+
+    def test_leverage_one_guard_nans_all_contrasts_silently(self):
+        """A single-observation dummy suppresses all unweighted contrast DOFs.
+
+        The covariance guard owns the warning; this helper stays silent
+        when computing further contrasts from the same failed design.
+        """
+        from diff_diff.linalg import _compute_bm_dof_from_contrasts
+
+        rng = np.random.default_rng(9)
+        n, k = 120, 4
+        X = np.column_stack([np.ones(n), rng.normal(size=(n, k - 2)), np.zeros(n)])
+        X[0, 3] = 1.0  # single-observation dummy -> h_00 = 1
+        bread = X.T @ X
+        h_diag = np.einsum("ij,ij->i", X @ np.linalg.pinv(bread), X)
+        assert h_diag.max() > 1 - 1e-12
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            dof = _compute_bm_dof_from_contrasts(X, bread, h_diag, np.eye(k))
+        assert dof.shape == (4,) and np.isnan(dof).all()
+        assert not caught
+
+
+class TestCR2BMLowRankAdjustment:
+    """The low-rank factored A_g apply reproduces the dense per-cluster
+    eigendecomposition path (frozen here as the oracle) at ~1e-14: vcov,
+    per-coefficient DOF, and the NaN-guard pattern. The identity: unweighted
+    G_g = I - U_g U_g' (U_g = X_g M_U^{1/2}, rank <= k), so
+    A_g = I + (U_g Q) diag(gamma) (U_g Q)' from the k x k eigenproblem of
+    U_g'U_g — O(n_g k^2) per cluster instead of the O(n_g^3) dense eigh
+    (~85% of CR2-BM runtime at n=100k pre-change)."""
+
+    @staticmethod
+    def _oracle_dense_cr2(X, residuals, cluster_ids, bread_matrix):
+        """Frozen pre-change dense evaluation: per-cluster G_g = I - H_gg,
+        A_g via _cr2_adjustment_matrix (dense eigh), meat from dense A_g @ u,
+        A_g_Xbi from dense A_g — fed to the production scores-based DOF."""
+        from diff_diff.linalg import _cr2_adjustment_matrix, _cr2_bm_dof_inner
+
+        n, k = X.shape
+        unique = np.unique(cluster_ids)
+        cluster_idx = {g: np.where(cluster_ids == g)[0] for g in unique}
+        bread_inv = np.linalg.solve(bread_matrix, np.eye(k))
+        scores = np.zeros((len(unique), k))
+        A_g_Xbi = {}
+        for gi, g in enumerate(unique):
+            idx = cluster_idx[g]
+            X_g = X[idx]
+            H = X_g @ bread_inv @ X_g.T
+            A_g = _cr2_adjustment_matrix(np.eye(len(idx)) - H)
+            scores[gi] = X_g.T @ (A_g @ residuals[idx])
+            A_g_Xbi[g] = A_g @ X_g @ bread_inv
+        vcov = bread_inv @ (scores.T @ scores) @ bread_inv
+        dof = _cr2_bm_dof_inner(X, A_g_Xbi, cluster_idx, bread_inv, np.eye(k))
+        return vcov, dof
+
+    @staticmethod
+    def _design(n, G, k, singular_cluster=False, singletons=False, seed=7):
+        rng = np.random.default_rng(seed)
+        if singletons:
+            cl = np.arange(n) % G
+        else:
+            base = np.repeat(np.arange(G), n // G)
+            cl = np.concatenate([base, np.full(n - base.size, G - 1)])
+        X = np.column_stack([np.ones(n), rng.normal(size=(n, k - 1))])
+        if singular_cluster:
+            # absorbed cluster-0 FE: cluster 0 carries within-cluster
+            # leverage 1 -> G_g eigenvalue 0 -> Moore-Penrose zeroing branch
+            X[:, 1] = (cl == 0).astype(float)
+        y = X @ rng.normal(size=k) + rng.normal(size=n)
+        resid = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        return X, resid, cl, X.T @ X
+
+    @pytest.mark.parametrize(
+        "kw",
+        [
+            dict(n=2000, G=20, k=10),
+            dict(n=1777, G=13, k=8),
+            dict(n=4000, G=25, k=40),
+            dict(n=2000, G=20, k=10, singular_cluster=True),
+            dict(n=300, G=300, k=5, singletons=True),
+            dict(n=600, G=300, k=12),
+        ],
+        ids=[
+            "balanced",
+            "unbalanced",
+            "k40",
+            "leverage1-absorbed-FE",
+            "singletons",
+            "tiny-clusters-k-gt-ng",
+        ],
+    )
+    def test_matches_frozen_dense_oracle(self, kw):
+        from diff_diff.linalg import _compute_cr2_bm
+
+        X, resid, cl, bread = self._design(**kw)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            vcov, dof = _compute_cr2_bm(X, resid, cl, bread)
+            vcov_o, dof_o = self._oracle_dense_cr2(X, resid, cl, bread)
+        # scale-aware atol: cross-evaluation ~1-ULP drift reads as large
+        # RELATIVE error on near-zero off-diagonals under other BLAS kernels
+        # (see test_gamma_stable_near_zero_leverage's tolerance note).
+        np.testing.assert_allclose(vcov, vcov_o, rtol=1e-12, atol=1e-13 * np.max(np.abs(vcov_o)))
+        assert np.array_equal(np.isnan(dof), np.isnan(dof_o)), "NaN-guard pattern diverged"
+        fin = ~np.isnan(dof_o)
+        if fin.any():
+            np.testing.assert_allclose(dof[fin], dof_o[fin], rtol=1e-10)
+
+    def test_gamma_stable_near_zero_leverage(self):
+        """A near-zero-leverage cluster (tiny lam) exercises the expm1/log1p
+        evaluation of gamma; naive (1/sqrt(1-lam)-1)/lam is catastrophically
+        cancellative there. The oracle comparison pins the stable branch.
+
+        Tolerance note: rtol 1e-11, not 1e-12 — the low-rank and dense
+        evaluations reduce in different GEMM orders, and on this fixture's
+        huge 5000-row cluster the ~1-ULP absolute drift (measured 1.3e-17)
+        lands on small-magnitude off-diagonals where it reads as ~1.3e-12
+        RELATIVE on OpenBLAS/linux-arm CI (exact-equal on Accelerate) — the
+        documented cross-evaluation BLAS-reassociation caveat."""
+        from diff_diff.linalg import _compute_cr2_bm
+
+        rng = np.random.default_rng(11)
+        # one huge cluster + many tiny ones -> tiny per-cluster leverage
+        cl = np.concatenate([np.zeros(5000, dtype=int), 1 + np.arange(200) % 40])
+        n = cl.size
+        X = np.column_stack([np.ones(n), rng.normal(size=(n, 3))])
+        y = X @ rng.normal(size=4) + rng.normal(size=n)
+        resid = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        bread = X.T @ X
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            vcov, dof = _compute_cr2_bm(X, resid, cl, bread)
+            vcov_o, dof_o = self._oracle_dense_cr2(X, resid, cl, bread)
+        np.testing.assert_allclose(vcov, vcov_o, rtol=1e-11)
+        fin = ~np.isnan(dof_o)
+        np.testing.assert_allclose(dof[fin], dof_o[fin], rtol=1e-10)
+
+
+class TestCR2BMScoresBasedDOF:
+    """Frozen-oracle parity for the scores-based Satterthwaite DOF evaluation
+    (algebraic identity; PT2018 §3.1 Satterthwaite DOF):
+    B = diag(||omega_g||^2) - P' M_U P must agree with
+    the previous explicit-residual-maker cluster-pair contraction to float64
+    accumulation tolerance, without materializing the n x n M."""
+
+    @staticmethod
+    def _oracle_pairloop_dof(X, cluster_ids, bread_matrix, contrasts):
+        """The PREVIOUS implementation, frozen: dense M = I - H + explicit
+        cluster-pair loop (no NaN guards — raw trace ratio)."""
+        from diff_diff.linalg import _cr2_adjustment_matrix
+
+        n, k = X.shape
+        bread_inv = np.linalg.solve(bread_matrix, np.eye(k))
+        unique = list(np.unique(cluster_ids))
+        idx = {g: np.where(cluster_ids == g)[0] for g in unique}
+        S_W = bread_matrix
+        MUWTWUM = bread_inv @ S_W @ bread_inv
+        A = {}
+        for g in unique:
+            X_g = X[idx[g]]
+            H_gg = X_g @ bread_inv @ X_g.T
+            G_g = np.eye(len(idx[g])) - H_gg - H_gg.T + X_g @ MUWTWUM @ X_g.T
+            A[g] = _cr2_adjustment_matrix(G_g)
+        M = np.eye(n) - X @ bread_inv @ X.T
+        m = contrasts.shape[1]
+        out = np.empty(m)
+        for j in range(m):
+            c = contrasts[:, j]
+            q = X @ bread_inv @ c
+            tr_B = float(np.sum(q * q))
+            omega = {g: A[g] @ X[idx[g]] @ bread_inv @ c for g in unique}
+            tr_B2 = 0.0
+            for g in unique:
+                for h in unique:
+                    val = float(omega[g] @ M[np.ix_(idx[g], idx[h])] @ omega[h])
+                    tr_B2 += val * val
+            out[j] = (tr_B * tr_B) / tr_B2 if tr_B2 > 0 else np.nan
+        return out
+
+    def test_scores_based_matches_pairloop_oracle(self):
+        from diff_diff.linalg import _compute_cr2_bm
+
+        rng = np.random.default_rng(11)
+        n, k, G = 240, 4, 12
+        X = np.column_stack([np.ones(n), rng.normal(size=(n, k - 1))])
+        cl = np.repeat(np.arange(G), n // G)
+        beta = rng.normal(size=k)
+        y = X @ beta + rng.normal(size=n) * (1 + 0.3 * np.abs(X[:, 1]))
+        resid = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        bread = X.T @ X
+
+        vcov, dof = _compute_cr2_bm(X, resid, cl, bread)
+        oracle = self._oracle_pairloop_dof(X, cl, bread, np.eye(k))
+        np.testing.assert_allclose(dof, oracle, rtol=1e-10)
+        assert np.all(np.isfinite(dof)) and np.all(dof > 0) and np.all(dof <= G)
+
+    def test_compound_contrast_matches_oracle(self):
+        from diff_diff.linalg import _compute_cr2_bm_contrast_dof
+
+        rng = np.random.default_rng(13)
+        n, k, G = 180, 5, 9
+        X = np.column_stack([np.ones(n), rng.normal(size=(n, k - 1))])
+        cl = np.repeat(np.arange(G), n // G)
+        bread = X.T @ X
+        # Compound averaging contrast (post-period-average style) + a unit vector.
+        c1 = np.zeros(k)
+        c1[2:] = 1.0 / (k - 2)
+        c2 = np.zeros(k)
+        c2[1] = 1.0
+        contrasts = np.column_stack([c1, c2])
+        dof = _compute_cr2_bm_contrast_dof(X, cl, bread, contrasts)
+        oracle = self._oracle_pairloop_dof(X, cl, bread, contrasts)
+        np.testing.assert_allclose(dof, oracle, rtol=1e-10)
+
+    def test_unbalanced_clusters_match_oracle(self):
+        from diff_diff.linalg import _compute_cr2_bm
+
+        rng = np.random.default_rng(17)
+        sizes = [5, 40, 12, 3, 25, 60, 8, 18]
+        cl = np.concatenate([np.full(sz, g) for g, sz in enumerate(sizes)])
+        n = len(cl)
+        k = 3
+        X = np.column_stack([np.ones(n), rng.normal(size=(n, k - 1))])
+        y = X @ rng.normal(size=k) + rng.normal(size=n)
+        resid = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        bread = X.T @ X
+        _, dof = _compute_cr2_bm(X, resid, cl, bread)
+        oracle = self._oracle_pairloop_dof(X, cl, bread, np.eye(k))
+        np.testing.assert_allclose(dof, oracle, rtol=1e-10)
+
+    def test_contrast_chunking_invariant(self, monkeypatch):
+        """CI-review P2: the per-cluster product buffer is contrast-chunked
+        (bounded by _CR2_BM_CONTRAST_CHUNK_BYTES) instead of O(G*k*m).
+        Forcing one-contrast chunks reproduces the single-chunk DOF to
+        ~1 ULP: each contrast's B is computed independently, but the
+        per-cluster GEMM runs over a width-c slice and BLAS kernels may
+        accumulate a column differently at width 1 vs width m (observed
+        exact on Accelerate, 1-ULP drift on OpenBLAS/arm + Windows CI —
+        the documented chunking-reassociation caveat). The same tiny cap
+        also forces the (G, G) pairwise matrix into multiple row blocks
+        (row_chunk = cap // (G*8) = 6 < G = 10 here), so this run covers
+        both chunk axes against the unchunked single-pass result."""
+        import diff_diff.linalg as la
+
+        rng = np.random.default_rng(23)
+        n, k, G = 200, 6, 10
+        X = np.column_stack([np.ones(n), rng.normal(size=(n, k - 1))])
+        cl = np.repeat(np.arange(G), n // G)
+        y = X @ rng.normal(size=k) + rng.normal(size=n)
+        resid = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        bread = X.T @ X
+
+        _, dof_one = la._compute_cr2_bm(X, resid, cl, bread)
+        monkeypatch.setattr(la, "_CR2_BM_CONTRAST_CHUNK_BYTES", G * k * 8)  # 1 contrast/chunk
+        _, dof_many = la._compute_cr2_bm(X, resid, cl, bread)
+        np.testing.assert_allclose(dof_many, dof_one, rtol=1e-13)
+
+
+class TestSolveOLSFastpathResolver:
+    """DIFF_DIFF_SOLVE_OLS_FASTPATH env resolver conventions.
+
+    Mirrors TestDemeanChunkResolver: unset -> module default (OFF), positive
+    integer enables, invalid values fall back silently to the module default.
+    """
+
+    def test_default_when_unset_is_off(self, monkeypatch):
+        import diff_diff.linalg as lmod
+
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", raising=False)
+        assert lmod._SOLVE_OLS_FASTPATH is False
+        assert lmod._resolve_solve_ols_fastpath() is False
+
+    @pytest.mark.parametrize("val", ["1", "2", "10"])
+    def test_valid_override_honored(self, monkeypatch, val):
+        import diff_diff.linalg as lmod
+
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", val)
+        assert lmod._resolve_solve_ols_fastpath() is True
+
+    @pytest.mark.parametrize("bad", ["abc", "0", "-4", "", "3.5"])
+    def test_invalid_values_fall_back_to_default(self, monkeypatch, bad):
+        import diff_diff.linalg as lmod
+
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", bad)
+        assert lmod._resolve_solve_ols_fastpath() is False
+
+    def test_module_default_is_monkeypatch_seam(self, monkeypatch):
+        import diff_diff.linalg as lmod
+
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", raising=False)
+        monkeypatch.setattr(lmod, "_SOLVE_OLS_FASTPATH", True)
+        assert lmod._resolve_solve_ols_fastpath() is True
+
+
+class TestSolveOLSCholFastPath:
+    """Opt-in normal-equations Cholesky fast path (numpy twin).
+
+    Parity posture is TOL-BOUNDED, not bit-level: the fast path swaps the
+    solve algorithm (certified Cholesky on the equilibrated Gram vs gelsd
+    SVD), so outputs differ at the numerical-error level. The dpocon guard
+    rcond > _SOLVE_OLS_CHOL_RCOND_GUARD (1e-6) bounds cond(G_eq) < 1e6 and
+    hence the Cholesky forward error at ~eps*cond ~ 2e-10 relative in the
+    equilibrated basis (same budget as _IRLS_CHOL_RCOND_GUARD); the gelsd
+    reference carries its own ~eps*cond(X_eq) error. Parity fixtures use
+    unit-scale y and designs a decade or more inside the guard, so the
+    fitted rtol=1e-6/atol=1e-8 and SE rtol=1e-6 gates have >= 2 orders of
+    headroom. SEs are compared RELATIVELY via sqrt(diag(vcov)) — never
+    absolute-decimal — because coefficient scales vary across fixtures.
+
+    Byte-identity IS asserted wherever the gelsd path actually ran (forced
+    or natural certification decline, knob off, rank-deficient designs):
+    a decline falls through the verbatim legacy lines.
+    """
+
+    @staticmethod
+    def _force_python(monkeypatch):
+        import diff_diff.linalg as lmod
+
+        monkeypatch.setattr(lmod, "HAS_RUST_BACKEND", False)
+        monkeypatch.setattr(lmod, "_rust_solve_ols", None)
+
+    @staticmethod
+    def _make_design(seed, n=400, k=5, scale_col=False, add_cluster=False):
+        rng = np.random.default_rng(seed)
+        X = np.column_stack([np.ones(n), rng.standard_normal((n, k - 1))])
+        if scale_col:
+            X[:, k - 1] *= 1e8  # equilibration absorbs raw scale
+        beta = rng.standard_normal(k) / np.maximum(1.0, np.abs(X).max(axis=0) / 10.0)
+        y = X @ beta + rng.standard_normal(n)
+        cluster_ids = rng.integers(0, 25, n) if add_cluster else None
+        return X, y, cluster_ids
+
+    def _run_pair(self, monkeypatch, X, y, diag=None, **kwargs):
+        """Run solve_ols knob-on then knob-off (both forced-python)."""
+        self._force_python(monkeypatch)
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", "1")
+        res_on = solve_ols(X, y, diagnostics_out=diag, **kwargs)
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH")
+        res_off = solve_ols(X, y, **kwargs)
+        return res_on, res_off
+
+    def test_property_parity_vs_default(self, monkeypatch):
+        cases = []
+        for seed in range(10):
+            cases.append(dict(seed=seed, n=200 + 40 * seed, k=3 + seed % 5))
+        for seed in range(10, 15):
+            cases.append(dict(seed=seed, n=500, k=6, scale_col=True))
+        for seed in range(15, 20):
+            cases.append(dict(seed=seed, n=600, k=4, add_cluster=True))
+
+        for case in cases:
+            add_cluster = case.pop("add_cluster", False)
+            X, y, cl = self._make_design(**case, add_cluster=add_cluster)
+            diag = {}
+            (c_on, r_on, v_on), (c_off, r_off, v_off) = self._run_pair(
+                monkeypatch, X, y, diag=diag, cluster_ids=cl
+            )
+            assert diag["solve_ols_fastpath"] == "chol_numpy", case
+            np.testing.assert_allclose(c_on, c_off, rtol=0, atol=1e-8, err_msg=str(case))
+            np.testing.assert_allclose(X @ c_on, X @ c_off, rtol=1e-6, atol=1e-8, err_msg=str(case))
+            np.testing.assert_allclose(
+                np.sqrt(np.diag(v_on)), np.sqrt(np.diag(v_off)), rtol=1e-6, err_msg=str(case)
+            )
+
+    def test_return_fitted_and_no_vcov_shapes(self, monkeypatch):
+        X, y, _ = self._make_design(31)
+        on4, off4 = self._run_pair(monkeypatch, X, y, return_fitted=True, return_vcov=False)
+        assert len(on4) == 4 and len(off4) == 4
+        assert on4[3] is None and off4[3] is None
+        np.testing.assert_allclose(on4[2], off4[2], rtol=1e-6, atol=1e-8)
+
+    def test_forced_fallback_byte_identical(self, monkeypatch):
+        import diff_diff.linalg as lmod
+
+        X, y, _ = self._make_design(7)
+
+        def _always_raise(*args, **kwargs):
+            raise np.linalg.LinAlgError("forced")
+
+        self._force_python(monkeypatch)
+        monkeypatch.setattr(lmod, "cho_factor", _always_raise)
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", "1")
+        diag = {}
+        c_on, r_on, v_on = solve_ols(X, y, diagnostics_out=diag)
+        assert diag["solve_ols_fastpath"] == "fallback_declined"
+        # cho_factor stays patched for the off run: the gelsd path never
+        # calls it, which is itself part of the byte-identity claim.
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH")
+        c_off, r_off, v_off = solve_ols(X, y)
+        np.testing.assert_array_equal(c_on, c_off)
+        np.testing.assert_array_equal(r_on, r_off)
+        np.testing.assert_array_equal(v_on, v_off)
+
+    def test_natural_guard_trip_between_fixture(self, monkeypatch):
+        """Design that PASSES stage-0 rank cert (1e-10) but FAILS the solve
+        guard (1e-6): the twin must decline and fall through verbatim."""
+        import diff_diff.linalg as lmod
+
+        rng = np.random.default_rng(11)
+        n = 500
+        x0 = rng.standard_normal(n)
+        X = np.column_stack([np.ones(n), x0, x0 + 1e-4 * rng.standard_normal(n)])
+        y = X @ np.array([1.0, 2.0, 3.0]) + rng.standard_normal(n)
+
+        # Fixture self-check (regenerate if either bound drifts): eig ratio of
+        # the equilibrated Gram must sit BETWEEN the two thresholds with a
+        # decade of margin on each side.
+        gram = X.T @ X
+        scales = np.sqrt(np.diag(gram))
+        gram_eq = gram / scales[:, None] / scales[None, :]
+        eigvals = np.linalg.eigvalsh(gram_eq)
+        ratio = eigvals[0] / eigvals[-1]
+        assert 1e-9 < ratio < 1e-7, (
+            f"BETWEEN fixture drifted (eig ratio {ratio:.2e}); regenerate so it "
+            "sits between the 1e-10 stage-0 cert and the 1e-6 solve guard"
+        )
+
+        # Certified full rank by stage 0 (no QR, no warning)...
+        rank, dropped, _ = lmod._detect_rank_deficiency(X)
+        assert rank == X.shape[1] and dropped.size == 0
+
+        diag = {}
+        (c_on, r_on, v_on), (c_off, r_off, v_off) = self._run_pair(monkeypatch, X, y, diag=diag)
+        # ...but the solve guard declines and the gelsd line runs verbatim.
+        assert diag["solve_ols_fastpath"] == "fallback_declined"
+        np.testing.assert_array_equal(c_on, c_off)
+        np.testing.assert_array_equal(r_on, r_off)
+        np.testing.assert_array_equal(v_on, v_off)
+
+    def test_default_path_byte_identity_and_no_twin(self, monkeypatch):
+        import diff_diff.linalg as lmod
+
+        X, y, _ = self._make_design(13)
+        self._force_python(monkeypatch)
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", raising=False)
+
+        calls = {"twin": 0, "gelsd": 0}
+        real_twin = lmod._solve_ols_chol_numpy
+        real_lstsq = lmod._equilibrated_lstsq
+
+        def _twin(*a, **kw):
+            calls["twin"] += 1
+            return real_twin(*a, **kw)
+
+        def _lstsq(*a, **kw):
+            calls["gelsd"] += 1
+            return real_lstsq(*a, **kw)
+
+        monkeypatch.setattr(lmod, "_solve_ols_chol_numpy", _twin)
+        monkeypatch.setattr(lmod, "_equilibrated_lstsq", _lstsq)
+
+        diag = {}
+        c1, r1, v1 = solve_ols(X, y, diagnostics_out=diag)
+        assert calls == {"twin": 0, "gelsd": 1}
+        assert diag["solve_ols_fastpath"] == "off"
+
+        # env set to an invalid value (0) is also OFF and byte-identical
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", "0")
+        c2, r2, v2 = solve_ols(X, y)
+        assert calls == {"twin": 0, "gelsd": 2}
+        np.testing.assert_array_equal(c1, c2)
+        np.testing.assert_array_equal(r1, r2)
+        np.testing.assert_array_equal(v1, v2)
+
+    def test_cert_out_is_pure_out_param(self):
+        import diff_diff.linalg as lmod
+
+        X, _, _ = self._make_design(17)
+        r1 = lmod._detect_rank_deficiency(X)
+        cert = {}
+        r2 = lmod._detect_rank_deficiency(X, _cert_out=cert)
+        assert r1[0] == r2[0]
+        np.testing.assert_array_equal(r1[1], r2[1])
+        np.testing.assert_array_equal(r1[2], r2[2])
+        assert cert.get("certified") is True
+        np.testing.assert_array_equal(cert["gram"], X.T @ X)
+
+    def test_twin_reuse_equals_self_build(self):
+        import diff_diff.linalg as lmod
+
+        X, y, _ = self._make_design(19)
+        cert = {}
+        lmod._detect_rank_deficiency(X, _cert_out=cert)
+        reused = lmod._solve_ols_chol_numpy(X, y, cert_info=cert)
+        built = lmod._solve_ols_chol_numpy(X, y, cert_info=None)
+        assert reused is not None and built is not None
+        np.testing.assert_array_equal(reused[0], built[0])
+        np.testing.assert_array_equal(reused[1], built[1])
+
+    def test_twin_declines_on_uncertified_artifacts(self):
+        import diff_diff.linalg as lmod
+
+        rng = np.random.default_rng(23)
+        n = 300
+        x0 = rng.standard_normal(n)
+        X = np.column_stack([np.ones(n), x0, 2.0 * x0])  # exactly collinear
+        y = rng.standard_normal(n)
+        cert = {}
+        lmod._detect_rank_deficiency(X, _cert_out=cert)
+        assert "gram_eq" in cert and cert.get("certified") is not True
+        assert lmod._solve_ols_chol_numpy(X, y, cert_info=cert) is None
+
+    def test_skip_rank_check_self_cert_declines_near_singular(self, monkeypatch):
+        """skip_rank_check has no stage-0 cert; the twin must SELF-certify.
+        cho_factor succeeding is not a certificate: this fixture has
+        cond(G_eq) ~ 1e12 where Cholesky succeeds with a garbage solution."""
+        rng = np.random.default_rng(29)
+        n = 400
+        x1 = rng.standard_normal(n)
+        X = np.column_stack([np.ones(n), x1, x1 + 1e-6 * rng.standard_normal(n)])
+        y = X @ np.array([1.0, 2.0, 3.0]) + rng.standard_normal(n)
+
+        diag = {}
+        (c_on, r_on, v_on), (c_off, r_off, v_off) = self._run_pair(
+            monkeypatch, X, y, diag=diag, skip_rank_check=True
+        )
+        assert diag["solve_ols_fastpath"] == "fallback_declined"
+        np.testing.assert_array_equal(c_on, c_off)
+        np.testing.assert_array_equal(r_on, r_off)
+        np.testing.assert_array_equal(v_on, v_off)
+
+    def test_skip_rank_check_well_conditioned_takes_twin(self, monkeypatch):
+        X, y, _ = self._make_design(37)
+        diag = {}
+        (c_on, _, _), (c_off, _, _) = self._run_pair(
+            monkeypatch, X, y, diag=diag, skip_rank_check=True
+        )
+        assert diag["solve_ols_fastpath"] == "chol_numpy"
+        np.testing.assert_allclose(c_on, c_off, rtol=0, atol=1e-8)
+
+    @pytest.mark.parametrize("zero_weights", [False, True])
+    def test_wls_parity(self, monkeypatch, zero_weights):
+        rng = np.random.default_rng(41)
+        X, y, _ = self._make_design(41, n=500)
+        w = rng.uniform(0.5, 2.0, 500)
+        if zero_weights:
+            w[::17] = 0.0
+        diag = {}
+        (c_on, _, v_on), (c_off, _, v_off) = self._run_pair(monkeypatch, X, y, diag=diag, weights=w)
+        assert diag["solve_ols_fastpath"] == "chol_numpy"
+        np.testing.assert_allclose(c_on, c_off, rtol=0, atol=1e-8)
+        np.testing.assert_allclose(np.sqrt(np.diag(v_on)), np.sqrt(np.diag(v_off)), rtol=1e-6)
+
+    def test_rank_deficient_interplay(self, monkeypatch):
+        """Fast path is structurally skipped on rank-deficient designs:
+        warning, NaN pattern, and outputs are byte-identical to knob-off."""
+        rng = np.random.default_rng(43)
+        n = 300
+        x0 = rng.standard_normal(n)
+        X = np.column_stack([np.ones(n), x0, 2.0 * x0, rng.standard_normal(n)])
+        y = rng.standard_normal(n)
+
+        self._force_python(monkeypatch)
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", "1")
+        with pytest.warns(UserWarning, match="Rank-deficient"):
+            c_on, r_on, v_on = solve_ols(X, y)
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH")
+        with pytest.warns(UserWarning, match="Rank-deficient"):
+            c_off, r_off, v_off = solve_ols(X, y)
+        np.testing.assert_array_equal(np.isnan(c_on), np.isnan(c_off))
+        np.testing.assert_array_equal(c_on, c_off)
+        np.testing.assert_array_equal(v_on, v_off)
+
+    @pytest.mark.parametrize("vcov_type", ["classical", "hc2"])
+    def test_non_hc1_vcov_spot_checks(self, monkeypatch, vcov_type):
+        """The twin changes beta for ALL vcov types reaching the full-rank
+        branch; spot-check the parity claim beyond the hc1 gate."""
+        X, y, _ = self._make_design(47)
+        diag = {}
+        (c_on, _, v_on), (c_off, _, v_off) = self._run_pair(
+            monkeypatch, X, y, diag=diag, vcov_type=vcov_type
+        )
+        assert diag["solve_ols_fastpath"] == "chol_numpy"
+        np.testing.assert_allclose(c_on, c_off, rtol=0, atol=1e-8)
+        np.testing.assert_allclose(np.sqrt(np.diag(v_on)), np.sqrt(np.diag(v_off)), rtol=1e-6)
+
+    def test_conley_vcov_spot_check(self, monkeypatch):
+        rng = np.random.default_rng(53)
+        n = 120
+        X = np.column_stack([np.ones(n), rng.standard_normal((n, 2))])
+        y = X @ np.array([1.0, 0.5, -0.5]) + rng.standard_normal(n)
+        coords = rng.uniform(0.0, 10.0, (n, 2))
+        kwargs = dict(
+            vcov_type="conley",
+            conley_coords=coords,
+            conley_cutoff_km=2.0,
+            conley_metric="euclidean",
+        )
+        diag = {}
+        (c_on, _, v_on), (c_off, _, v_off) = self._run_pair(monkeypatch, X, y, diag=diag, **kwargs)
+        assert diag["solve_ols_fastpath"] == "chol_numpy"
+        np.testing.assert_allclose(c_on, c_off, rtol=0, atol=1e-8)
+        np.testing.assert_allclose(np.sqrt(np.diag(v_on)), np.sqrt(np.diag(v_off)), rtol=1e-6)
+
+
+class TestClusterKAdjustmentSeam:
+    """The K_reference seam (variance-conventions.md D1/D2): front-door
+    validation on EVERY route, fail-closed saturation on all three sides,
+    weighted-lane forwarding, and the Rust-lane scalar rescale."""
+
+    @pytest.fixture
+    def clustered_data(self):
+        rng = np.random.default_rng(3)
+        n = 120
+        X = np.column_stack([np.ones(n), rng.normal(size=(n, 2))])
+        y = X @ np.array([1.0, 0.5, -0.2]) + rng.normal(size=n)
+        cl = np.repeat(np.arange(12), 10)
+        return X, y, cl
+
+    # ---- front-door contracts (Verification 1b) --------------------------
+
+    def test_front_door_raises_without_cluster(self, clustered_data):
+        from diff_diff.linalg import InvalidClusterKAdjustment
+
+        X, y, _ = clustered_data
+        for rv in (True, False):
+            with pytest.raises(InvalidClusterKAdjustment, match="cluster_ids is None"):
+                solve_ols(X, y, return_vcov=rv, cluster_k_adjustment=2)
+
+    def test_front_door_raises_on_non_hc1_family(self, clustered_data):
+        from diff_diff.linalg import InvalidClusterKAdjustment
+
+        X, y, cl = clustered_data
+        for rv in (True, False):
+            with pytest.raises(InvalidClusterKAdjustment, match="hc2_bm"):
+                solve_ols(
+                    X, y, cluster_ids=cl, vcov_type="hc2_bm", return_vcov=rv, cluster_k_adjustment=2
+                )
+
+    def test_front_door_requires_int(self, clustered_data):
+        from diff_diff.linalg import InvalidClusterKAdjustment
+
+        X, y, cl = clustered_data
+        with pytest.raises(InvalidClusterKAdjustment, match="must be an int"):
+            solve_ols(X, y, cluster_ids=cl, cluster_k_adjustment=2.5)  # type: ignore[arg-type]
+        with pytest.raises(InvalidClusterKAdjustment, match="must be an int"):
+            solve_ols(X, y, cluster_ids=cl, cluster_k_adjustment=True)  # type: ignore[arg-type]
+        # Non-int ZEROS must fail too: `0.0 == 0` and `False == 0`, so a zero
+        # fast path ahead of the type check would silently accept them.
+        with pytest.raises(InvalidClusterKAdjustment, match="must be an int"):
+            solve_ols(X, y, cluster_ids=cl, cluster_k_adjustment=0.0)  # type: ignore[arg-type]
+        with pytest.raises(InvalidClusterKAdjustment, match="must be an int"):
+            solve_ols(X, y, cluster_ids=cl, cluster_k_adjustment=False)  # type: ignore[arg-type]
+
+    def test_compute_robust_vcov_mirrors_the_contract(self, clustered_data):
+        from diff_diff.linalg import InvalidClusterKAdjustment
+
+        X, y, cl = clustered_data
+        residuals = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        with pytest.raises(InvalidClusterKAdjustment):
+            compute_robust_vcov(X, residuals, cluster_k_adjustment=2)
+        with pytest.raises(InvalidClusterKAdjustment):
+            compute_robust_vcov(X, residuals, cl, vcov_type="hc2_bm", cluster_k_adjustment=2)
+
+    def test_linear_regression_fit_raises_symmetrically(self, clustered_data):
+        from diff_diff.linalg import InvalidClusterKAdjustment
+
+        X, y, _ = clustered_data
+        with pytest.raises(InvalidClusterKAdjustment):
+            LinearRegression(vcov_type="classical", include_intercept=False).fit(
+                X, y, cluster_k_adjustment=2
+            )
+
+    def test_type_contract_is_not_route_dependent(self, clustered_data):
+        """Non-int adjustments are rejected on the SHORT-CIRCUITED routes too:
+        a classical fit (truthiness gate, never reaches solve_ols's front
+        door with the kwarg) and a wild_bootstrap_se call whose degenerate
+        early-returns fire before the clustered solve (both would previously
+        swallow `0.0` / `False` silently)."""
+        from diff_diff.linalg import InvalidClusterKAdjustment
+        from diff_diff.utils import wild_bootstrap_se
+
+        X, y, cl = clustered_data
+        for bad in (0.0, False):
+            with pytest.raises(InvalidClusterKAdjustment, match="must be an int"):
+                LinearRegression(vcov_type="classical", include_intercept=False).fit(
+                    X, y, cluster_k_adjustment=bad  # type: ignore[arg-type]
+                )
+        # a saturated design (n == k) hits the degenerate return before the
+        # clustered solve; the entry type check must fire first
+        n_sat = X.shape[1]
+        with pytest.raises(InvalidClusterKAdjustment, match="must be an int"):
+            wild_bootstrap_se(
+                X[:n_sat],
+                y[:n_sat],
+                np.zeros(n_sat),
+                cl[:n_sat],
+                0,
+                cluster_k_adjustment=1.5,  # type: ignore[arg-type]
+            )
+
+    def test_valid_path_coefficient_only(self, clustered_data):
+        """return_vcov=False + nonzero adjustment succeeds (None passthrough)."""
+        X, y, cl = clustered_data
+        coef, resid, vcov = solve_ols(
+            X, y, cluster_ids=cl, return_vcov=False, cluster_k_adjustment=3
+        )
+        assert vcov is None
+        assert np.all(np.isfinite(coef))
+
+    def test_kwarg_is_keyword_only_and_positional_slots_are_unchanged(self, clustered_data):
+        """Signature contract: cluster_k_adjustment is KEYWORD-ONLY on both
+        public carriers and no pre-existing positional slot moved — a legacy
+        positional call can never bind another argument to it.
+        compute_robust_vcov accepts positionals through return_dof exactly as
+        before; solve_ols takes only (X, y) positionally."""
+        import inspect
+
+        from diff_diff.linalg import compute_robust_vcov
+
+        for fn in (solve_ols, compute_robust_vcov):
+            param = inspect.signature(fn).parameters["cluster_k_adjustment"]
+            assert param.kind is inspect.Parameter.KEYWORD_ONLY
+            assert param.default == 0
+        positional = [
+            n
+            for n, p in inspect.signature(compute_robust_vcov).parameters.items()
+            if p.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+        ]
+        assert positional == [
+            "X",
+            "residuals",
+            "cluster_ids",
+            "weights",
+            "weight_type",
+            "vcov_type",
+            "return_dof",
+        ]
+        # and a legacy full-positional call still binds correctly
+        X, y, cl = clustered_data
+        residuals = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        legacy = compute_robust_vcov(X, residuals, cl, None, "pweight", "hc1", False)
+        kw = compute_robust_vcov(X, residuals, cluster_ids=cl, vcov_type="hc1")
+        np.testing.assert_array_equal(legacy, kw)
+
+    # ---- the factor itself ----------------------------------------------
+
+    def test_adjustment_is_the_exact_scalar_factor(self, clustered_data):
+        """vcov(adj) == vcov(0) * (n-k)/(n-k-adj) on every lane, both signs."""
+        X, y, cl = clustered_data
+        n, k = X.shape
+        _, _, v0 = solve_ols(X, y, cluster_ids=cl)
+        for adj in (5, -1):
+            _, _, v = solve_ols(X, y, cluster_ids=cl, cluster_k_adjustment=adj)
+            expect = (n - k) / (n - k - adj)
+            np.testing.assert_allclose(v / v0, expect, rtol=0, atol=1e-12)
+
+    def test_zero_adjustment_bit_identical(self, clustered_data):
+        X, y, cl = clustered_data
+        _, _, v0 = solve_ols(X, y, cluster_ids=cl)
+        _, _, v1 = solve_ols(X, y, cluster_ids=cl, cluster_k_adjustment=0)
+        assert np.array_equal(v0, v1)
+
+    def test_tail_dof_vec_stays_on_visible_k(self, clustered_data):
+        """The adjustment never moves the reported dof (tail df is PR C)."""
+        X, y, cl = clustered_data
+        residuals = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        from diff_diff.linalg import _compute_robust_vcov_numpy
+
+        _, dof0 = _compute_robust_vcov_numpy(X, residuals, cl, return_dof=True)
+        _, dof5 = _compute_robust_vcov_numpy(
+            X, residuals, cl, return_dof=True, cluster_k_adjustment=5
+        )
+        np.testing.assert_array_equal(dof0, dof5)
+
+    # ---- fail-closed saturation, all three sides -------------------------
+
+    def test_fail_closed_visible_saturation_survives_negative_adjustment(self):
+        """n == k_visible -> all-NaN on BOTH backends even when the corrected
+        denominator would be positive (residuals are identically zero; the
+        adjudicated saturation semantics)."""
+        rng = np.random.default_rng(11)
+        n = 6
+        X = np.column_stack([np.eye(3)[np.arange(n) % 3], rng.normal(size=(n, 3))])
+        assert X.shape == (6, 6)
+        y = rng.normal(size=n)
+        cl = np.repeat([0, 1], 3)
+        coef, resid, vcov = solve_ols(
+            X, y, cluster_ids=cl, cluster_k_adjustment=-2, rank_deficient_action="silent"
+        )
+        assert vcov is not None and np.isnan(vcov).all()
+
+    def test_fail_closed_k_inf_sides(self, clustered_data):
+        from diff_diff.linalg import _compute_robust_vcov_numpy
+
+        X, y, cl = clustered_data
+        n, k = X.shape
+        residuals = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        # n - k_inf <= 0
+        v_hi = _compute_robust_vcov_numpy(X, residuals, cl, cluster_k_adjustment=n)
+        assert np.isnan(v_hi).all()
+        # k_inf <= 0
+        v_lo = _compute_robust_vcov_numpy(X, residuals, cl, cluster_k_adjustment=-k)
+        assert np.isnan(v_lo).all()
+
+    def test_fail_closed_k_inf_exact_boundary(self, clustered_data):
+        """Both k_inf guard sides pinned at their EXACT boundary, with the
+        one-step recovery on each: n - k_inf == 0 is NaN while == 1 is
+        finite, and k_inf == 0 is NaN while == 1 is finite. The deep-past-
+        boundary cases above cannot distinguish an off-by-one guard."""
+        from diff_diff.linalg import _compute_robust_vcov_numpy
+
+        X, y, cl = clustered_data
+        n, k = X.shape
+        residuals = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        # saturation side: k_inf == n -> NaN; k_inf == n - 1 -> finite
+        assert np.isnan(
+            _compute_robust_vcov_numpy(X, residuals, cl, cluster_k_adjustment=n - k)
+        ).all()
+        assert np.isfinite(
+            _compute_robust_vcov_numpy(X, residuals, cl, cluster_k_adjustment=n - k - 1)
+        ).all()
+        # deflation side: k_inf == 0 -> NaN; k_inf == 1 -> finite
+        assert np.isnan(_compute_robust_vcov_numpy(X, residuals, cl, cluster_k_adjustment=-k)).all()
+        assert np.isfinite(
+            _compute_robust_vcov_numpy(X, residuals, cl, cluster_k_adjustment=-(k - 1))
+        ).all()
+
+    # ---- weighted external-vcov forwarding sites -------------------------
+
+    def test_weighted_full_rank_forwarding(self, clustered_data):
+        """The weighted external-vcov lane bypasses _solve_ols_numpy; the
+        adjustment must reach its direct kernel call (full-rank site)."""
+        X, y, cl = clustered_data
+        n, k = X.shape
+        w = np.ones(n)
+        w[:10] = 2.0
+        _, _, v0 = solve_ols(X, y, cluster_ids=cl, weights=w)
+        _, _, v5 = solve_ols(X, y, cluster_ids=cl, weights=w, cluster_k_adjustment=5)
+        expect = (n - k) / (n - k - 5)
+        np.testing.assert_allclose(v5 / v0, expect, rtol=0, atol=1e-12)
+
+    def test_weighted_rank_deficient_forwarding(self, clustered_data):
+        """The reduced-design weighted site (collinear column dropped)."""
+        X, y, cl = clustered_data
+        n = X.shape[0]
+        X_bad = np.column_stack([X, X[:, 1] + X[:, 2]])  # collinear 4th col
+        w = np.ones(n)
+        w[:10] = 2.0
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            _, _, v0 = solve_ols(
+                X_bad, y, cluster_ids=cl, weights=w, rank_deficient_action="silent"
+            )
+            _, _, v5 = solve_ols(
+                X_bad,
+                y,
+                cluster_ids=cl,
+                weights=w,
+                rank_deficient_action="silent",
+                cluster_k_adjustment=5,
+            )
+        kept = ~np.isnan(np.diag(v0))
+        k_red = int(kept.sum())
+        expect = (n - k_red) / (n - k_red - 5)
+        np.testing.assert_allclose(
+            v5[np.ix_(kept, kept)] / v0[np.ix_(kept, kept)], expect, rtol=0, atol=1e-12
+        )
+
+    # ---- Rust lanes ------------------------------------------------------
+
+    def test_rust_instability_fallback_forwards_adjustment(self, clustered_data):
+        """The documented Rust-instability numpy re-run must carry the
+        adjustment (the :2199-class forwarding site)."""
+        from unittest.mock import patch
+
+        if not HAS_RUST_BACKEND:
+            pytest.skip("Rust backend not available")
+        X, y, cl = clustered_data
+        n, k = X.shape
+        residuals = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        v0 = compute_robust_vcov(X, residuals, cl)
+
+        def mock_rust_vcov(*args, **kwargs):
+            raise ValueError("Matrix inversion numerically unstable")
+
+        with patch("diff_diff.linalg._rust_compute_robust_vcov", mock_rust_vcov):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                v5 = compute_robust_vcov(X, residuals, cl, cluster_k_adjustment=5)
+        expect = (n - k) / (n - k - 5)
+        np.testing.assert_allclose(v5 / v0, expect, rtol=0, atol=1e-10)
+
+    def test_rust_and_numpy_agree_on_adjusted_vcov(self, clustered_data, monkeypatch):
+        """Cross-backend parity for the corrected clustered vcov (the scalar
+        rescale on the Rust lane vs the in-kernel factor on numpy)."""
+        if not HAS_RUST_BACKEND:
+            pytest.skip("Rust backend not available")
+        import diff_diff.linalg as lmod
+
+        X, y, cl = clustered_data
+        _, _, v_rust = solve_ols(X, y, cluster_ids=cl, cluster_k_adjustment=5)
+        monkeypatch.setattr(lmod, "HAS_RUST_BACKEND", False)
+        _, _, v_py = solve_ols(X, y, cluster_ids=cl, cluster_k_adjustment=5)
+        np.testing.assert_allclose(v_rust, v_py, rtol=1e-12)
+
+
+class TestSolveRidge:
+    """solve_ridge: glmnet-style standardized penalty, sum loss, unpenalized
+    intercept added by the solver (intercept-first coefficient layout)."""
+
+    def _xy(self, n=60, p=3, seed=0):
+        rng = np.random.default_rng(seed)
+        X = rng.standard_normal((n, p))
+        beta = np.array([1.5, -2.0, 0.5][:p])
+        y = 0.7 + X @ beta + rng.normal(scale=0.3, size=n)
+        return X, y
+
+    def test_small_alpha_limit_matches_solve_ols(self):
+        X, y = self._xy()
+        ridge = solve_ridge(X, y, alpha=1e-10)
+        Xi = np.column_stack([np.ones(len(y)), X])
+        ols_coefs, _, _ = solve_ols(Xi, y, return_vcov=False)
+        np.testing.assert_allclose(ridge, ols_coefs, atol=1e-6, rtol=0)
+
+    @pytest.mark.parametrize("bad_alpha", [0.0, -1.0, np.inf, np.nan])
+    def test_nonpositive_alpha_raises_naming_solve_ols(self, bad_alpha):
+        X, y = self._xy()
+        with pytest.raises(ValueError, match="solve_ols"):
+            solve_ridge(X, y, alpha=bad_alpha)
+
+    def test_closed_form_small_case(self):
+        # Hand-computed: coefficients solve (Zw'Zw + a I) b_std = Zw' yw in
+        # weighted-standardized coordinates, mapped back to original scale.
+        X, y = self._xy(n=12, p=2, seed=3)
+        a = 2.5
+        coefs = solve_ridge(X, y, alpha=a)
+        xm = X.mean(axis=0)
+        ym = y.mean()
+        xs = np.sqrt(((X - xm) ** 2).mean(axis=0))
+        Z = (X - xm) / xs
+        b_std = np.linalg.solve(Z.T @ Z + a * np.eye(2), Z.T @ (y - ym))
+        b = b_std / xs
+        b0 = ym - xm @ b
+        np.testing.assert_allclose(coefs, np.concatenate([[b0], b]), atol=1e-10, rtol=0)
+
+    def test_intercept_not_penalized(self):
+        X, y = self._xy()
+        base = solve_ridge(X, y, alpha=5.0)
+        shifted = solve_ridge(X, y + 100.0, alpha=5.0)
+        np.testing.assert_allclose(shifted[0], base[0] + 100.0, atol=1e-8)
+        np.testing.assert_allclose(shifted[1:], base[1:], atol=1e-10)
+
+    def test_scale_equivariant_predictions(self):
+        # Standardized penalty => rescaling a column rescales its coefficient
+        # inversely, leaving predictions unchanged.
+        X, y = self._xy()
+        X2 = X.copy()
+        X2[:, 0] *= 10.0
+        c1, f1 = solve_ridge(X, y, alpha=3.0, return_fitted=True)
+        c2, f2 = solve_ridge(X2, y, alpha=3.0, return_fitted=True)
+        np.testing.assert_allclose(f1, f2, atol=1e-10)
+        np.testing.assert_allclose(c2[1], c1[1] / 10.0, atol=1e-12)
+
+    def test_zero_variance_column_rank_action_matrix(self):
+        X, y = self._xy()
+        Xz = np.column_stack([X, np.full(len(y), 7.0)])
+        with pytest.warns(RuntimeWarning, match="zero-variance"):
+            coefs = solve_ridge(Xz, y, alpha=1.0)
+        assert np.isnan(coefs[-1]) and np.isfinite(coefs[:-1]).all()
+        with pytest.raises(ValueError, match="zero-variance"):
+            solve_ridge(Xz, y, alpha=1.0, rank_deficient_action="error")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            coefs_silent = solve_ridge(Xz, y, alpha=1.0, rank_deficient_action="silent")
+        assert np.isnan(coefs_silent[-1])
+        with pytest.raises(ValueError, match="rank_deficient_action"):
+            solve_ridge(Xz, y, alpha=1.0, rank_deficient_action="bogus")
+
+    def test_collinear_nonconstant_columns_retained_finite(self):
+        X, y = self._xy(p=2)
+        Xc = np.column_stack([X, X[:, 0] + X[:, 1]])  # exact collinearity
+        coefs = solve_ridge(Xc, y, alpha=1.0)
+        assert np.isfinite(coefs).all()
+
+    def test_p_geq_n_supported(self):
+        rng = np.random.default_rng(5)
+        n, p = 20, 35
+        X = rng.standard_normal((n, p))
+        y = X[:, 0] - X[:, 1] + rng.normal(scale=0.1, size=n)
+        coefs, fitted = solve_ridge(X, y, alpha=1.0, return_fitted=True)
+        assert np.isfinite(coefs).all() and np.isfinite(fitted).all()
+        assert np.corrcoef(fitted, y)[0, 1] > 0.5
+
+    def test_empty_and_single_row_raise(self):
+        with pytest.raises(ValueError, match="at least 2"):
+            solve_ridge(np.empty((0, 2)), np.empty(0), alpha=1.0)
+        with pytest.raises(ValueError, match="at least 2"):
+            solve_ridge(np.ones((1, 2)), np.ones(1), alpha=1.0)
+
+    def _brute_force_loo(self, X, y, w, alphas):
+        # Frozen preprocessing: standardize ONCE on the full sample, then for
+        # each grid point and each positive-weight row, refit the penalized
+        # system without that row (in transformed coordinates, intercept as an
+        # explicit unpenalized ones column) and predict the held-out row.
+        n = len(y)
+        w_sum = w.sum()
+        xm = (w @ X) / w_sum
+        ym = (w @ y) / w_sum
+        xs = np.sqrt((w @ ((X - xm) ** 2)) / w_sum)
+        Z = (X - xm) / xs
+        sw = np.sqrt(w)
+        A = np.column_stack([np.ones(n), Z]) * sw[:, np.newaxis]
+        b = (y - ym) * sw
+        P = np.eye(A.shape[1])
+        P[0, 0] = 0.0
+        pos = np.flatnonzero(w > 0)
+        mses = []
+        for a in alphas:
+            errs = []
+            for i in pos:
+                mask = np.ones(n, dtype=bool)
+                mask[i] = False
+                coef = np.linalg.solve(A[mask].T @ A[mask] + a * P, A[mask].T @ b[mask])
+                errs.append(b[i] - A[i] @ coef)
+            mses.append(np.mean(np.array(errs) ** 2))
+        return np.array(mses)
+
+    def test_loocv_p_geq_n(self):
+        # The default RidgeLearner path (alpha='loocv') in the high-dimensional
+        # setting: selection works, predictions finite, and the losses match
+        # the brute-force frozen-preprocessing reconstruction.
+        rng = np.random.default_rng(17)
+        n, p = 12, 20
+        X = rng.standard_normal((n, p))
+        y = X[:, 0] - X[:, 1] + rng.normal(scale=0.1, size=n)
+        alphas = np.array([0.5, 5.0, 50.0])
+        diag = {}
+        coefs = solve_ridge(X, y, alpha="loocv", alphas=alphas, diagnostics_out=diag)
+        assert np.isfinite(coefs).all()
+        assert diag["alpha"] in alphas
+        brute = self._brute_force_loo(X, y, np.ones(n), alphas)
+        np.testing.assert_allclose(diag["loo_mse"], brute, atol=1e-9, rtol=0)
+
+    def test_loocv_matches_brute_force_unweighted(self):
+        X, y = self._xy(n=25, p=2, seed=7)
+        alphas = np.array([0.1, 1.0, 10.0])
+        diag = {}
+        solve_ridge(X, y, alpha="loocv", alphas=alphas, diagnostics_out=diag)
+        brute = self._brute_force_loo(X, y, np.ones(len(y)), alphas)
+        np.testing.assert_allclose(diag["loo_mse"], brute, atol=1e-10, rtol=0)
+        assert diag["alpha"] == alphas[int(np.argmin(brute))]
+
+    def test_loocv_matches_brute_force_weighted(self):
+        X, y = self._xy(n=25, p=2, seed=8)
+        rng = np.random.default_rng(9)
+        w = rng.uniform(0.5, 2.0, size=len(y))
+        w[:3] = 0.0  # zero-weight rows are excluded from LOO
+        alphas = np.array([0.5, 5.0])
+        diag = {}
+        solve_ridge(X, y, alpha="loocv", alphas=alphas, weights=w, diagnostics_out=diag)
+        brute = self._brute_force_loo(X, y, w, alphas)
+        np.testing.assert_allclose(diag["loo_mse"], brute, atol=1e-10, rtol=0)
+
+    def test_overflowing_finite_inputs_fail_closed(self):
+        # Finite but huge inputs overflow the weighted standardization; the
+        # fit must raise a targeted error, never return a silent zero model.
+        y = np.full(6, 1e308)
+        X = np.arange(12.0).reshape(6, 2)
+        with pytest.raises(ValueError, match="overflowed|non-finite coefficients"):
+            solve_ridge(X, y * 1e0, alpha=1.0, weights=np.full(6, 1e10))
+
+    def test_loocv_intercept_only_none_sentinel(self):
+        # All-constant design: no penalty is selectable; documented None
+        # sentinel for both diagnostics entries, intercept-only coefficients.
+        y = np.array([1.0, 2.0, 3.0, 4.0])
+        Xc = np.full((4, 2), 5.0)
+        diag = {}
+        with pytest.warns(RuntimeWarning, match="zero-variance"):
+            coefs = solve_ridge(Xc, y, alpha="loocv", diagnostics_out=diag)
+        assert diag["alpha"] is None and diag["loo_mse"] is None
+        np.testing.assert_allclose(coefs[0], y.mean())
+        assert np.isnan(coefs[1:]).all()
+
+    def test_loocv_diagnostics_out_populated(self):
+        X, y = self._xy()
+        diag = {}
+        solve_ridge(X, y, alpha="loocv", diagnostics_out=diag)
+        assert diag["alpha"] > 0 and len(diag["loo_mse"]) == 41
+
+    def test_integer_weights_equal_row_replication(self):
+        X, y = self._xy(n=15, p=2, seed=11)
+        w = np.array([1.0, 2.0, 3.0] * 5)
+        rep_idx = np.repeat(np.arange(15), w.astype(int))
+        weighted = solve_ridge(X, y, alpha=2.0, weights=w)
+        replicated = solve_ridge(X[rep_idx], y[rep_idx], alpha=2.0)
+        np.testing.assert_allclose(weighted, replicated, atol=1e-10, rtol=0)
+
+    def test_return_fitted(self):
+        X, y = self._xy()
+        coefs, fitted = solve_ridge(X, y, alpha=1.0, return_fitted=True)
+        np.testing.assert_allclose(fitted, coefs[0] + X @ coefs[1:], atol=1e-12)
+
+    def test_check_finite_false_skips_validation(self):
+        X, y = self._xy()
+        Xn = X.copy()
+        Xn[0, 0] = np.nan
+        with pytest.raises(ValueError, match="NaN or Inf"):
+            solve_ridge(Xn, y, alpha=1.0)
+        # check_finite=False skips OUR up-front validation; the NaN then trips
+        # a downstream guard (standardization-overflow ValueError or LAPACK
+        # LinAlgError) or produces NaN output — any is acceptable, as long as
+        # the skipped up-front message is not the one raised (precedent:
+        # TestSolveOLS.test_check_finite_false_skips_validation).
+        try:
+            out = solve_ridge(Xn, y, alpha=1.0, check_finite=False)
+            assert np.isnan(out).any()
+        except np.linalg.LinAlgError:
+            pass
+        except ValueError as e:
+            assert "X contains NaN" not in str(e)
+
+    def test_shape_and_weight_validation(self):
+        X, y = self._xy()
+        with pytest.raises(ValueError, match="y must be 1-dimensional"):
+            solve_ridge(X, y[:-1], alpha=1.0)
+        with pytest.raises(ValueError, match="1-dimensional"):
+            solve_ridge(X, y, alpha=1.0, weights=np.ones((len(y), 1)))
+        with pytest.raises(ValueError, match="NaN or Inf"):
+            solve_ridge(X, y, alpha=1.0, weights=np.full(len(y), np.inf))
+        with pytest.raises(ValueError, match="non-negative"):
+            solve_ridge(X, y, alpha=1.0, weights=-np.ones(len(y)))
+        with pytest.raises(ValueError, match="sum to zero"):
+            solve_ridge(X, y, alpha=1.0, weights=np.zeros(len(y)))
+
+    def test_loocv_grid_and_floor_validation(self):
+        X, y = self._xy()
+        with pytest.raises(ValueError, match="non-empty"):
+            solve_ridge(X, y, alpha="loocv", alphas=np.array([]))
+        with pytest.raises(ValueError, match="strictly positive"):
+            solve_ridge(X, y, alpha="loocv", alphas=np.array([0.0, 1.0]))
+        w = np.zeros(len(y))
+        w[:2] = 1.0
+        with pytest.raises(ValueError, match="at least 3 positive-weight"):
+            solve_ridge(X, y, alpha="loocv", weights=w)

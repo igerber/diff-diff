@@ -4,25 +4,53 @@ Efficient Difference-in-Differences estimator.
 Implements the ATT estimator from Chen, Sant'Anna & Xie (2025).
 Without covariates, achieves the semiparametric efficiency bound via
 closed-form within-group covariances.  With covariates, uses a doubly
-robust path with OLS outcome regression, sieve propensity ratios, and
-kernel-smoothed conditional Omega*(X) (see class docstring for caveats).
+robust path with sieve outcome regressions, sieve propensity ratios, and
+kernel-smoothed conditional Omega*(X) (see class docstring for details).
 
 Under PT-All the model is overidentified and EDiD exploits this for
 tighter inference; under PT-Post it reduces to the standard
 single-baseline estimator (Callaway-Sant'Anna).
+
+The variance machinery is purely influence-function-based: per-unit EIF
+values aggregate via ``sqrt(mean(EIF**2)/n)`` (unclustered, HC1-style),
+Liang-Zeger CR1 on cluster-aggregated EIF (under ``cluster=``), or
+Taylor Series Linearization on the combined IF (under ``survey_design=``).
+Because the per-unit EIF aggregation has no equivalent single design
+matrix, analytical-sandwich families ``{classical, hc2, hc2_bm}`` cannot
+be defined and the ``vcov_type`` input contract is permanently narrow to
+``{"hc1"}`` — see ``docs/methodology/REGISTRY.md`` "IF-based variance
+estimators vs analytical-sandwich estimators" for the structural rationale.
 """
 
 import warnings
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
+from diff_diff._base import BaseEstimator
+from diff_diff._deprecation import NOT_SUPPLIED
+from diff_diff.aggregation import AggregationKit, BootstrapReplaySpec
+from diff_diff.bootstrap_utils import (
+    apply_bootstrap_event_study_overrides,
+    apply_bootstrap_group_overrides,
+)
+from diff_diff.efficient_did_aggregation import (
+    _cluster_aggregate,
+    _compute_se_from_eif,
+    _EfficientAggregationMixin,
+)
 from diff_diff.efficient_did_bootstrap import (
     EDiDBootstrapResults,
     EfficientDiDBootstrapMixin,
 )
+
+if TYPE_CHECKING:
+    from diff_diff.survey import ResolvedSurveyDesign
 from diff_diff.efficient_did_covariates import (
+    OMEGA_RIDGE_DEFAULT,
+    _silverman_bandwidth,
+    compute_conditional_cells_tiled,
     compute_eif_cov,
     compute_generated_outcomes_cov,
     compute_omega_star_conditional,
@@ -33,13 +61,14 @@ from diff_diff.efficient_did_covariates import (
 )
 from diff_diff.efficient_did_results import EfficientDiDResults, HausmanPretestResult
 from diff_diff.efficient_did_weights import (
+    _omega_star_nocov_gram,
     compute_efficient_weights,
     compute_eif_nocov,
     compute_generated_outcomes_nocov,
     compute_omega_star_nocov,
     enumerate_valid_triples,
 )
-from diff_diff.utils import safe_inference
+from diff_diff.utils import safe_inference, validate_anticipation, validate_n_bootstrap
 
 # Re-export for convenience
 __all__ = ["EfficientDiD", "EfficientDiDResults", "EDiDBootstrapResults"]
@@ -76,60 +105,154 @@ def _validate_and_build_cluster_mapping(
     return indices, n_clusters
 
 
-def _cluster_aggregate(
-    eif_mat: np.ndarray,
-    cluster_indices: np.ndarray,
-    n_clusters: int,
-) -> np.ndarray:
-    """Sum EIF values within clusters and center.
+def _build_edid_aggregation_kit(
+    eif_by_gt: Dict[Tuple[Any, Any], np.ndarray],
+    group_time_effects: Dict[Tuple[Any, Any], Dict[str, Any]],
+    treatment_groups: List[Any],
+    time_periods: List[Any],
+    pt_assumption: str,
+    n_units_total: int,
+    n_units: int,
+    cohort_fractions: Dict[float, float],
+    unit_cohorts: np.ndarray,
+    cluster_indices: Optional[np.ndarray],
+    n_clusters: Optional[int],
+    unit_level_weights: Optional[np.ndarray],
+    resolved_survey_unit: Optional["ResolvedSurveyDesign"],
+    df_survey: Optional[float],
+    alpha: float,
+    anticipation: int,
+    bootstrap_results: Optional[EDiDBootstrapResults] = None,
+) -> Optional[AggregationKit]:
+    """Bundle the retained EIF payload + bookkeeping for post-fit aggregate().
+
+    Reference bundling only — zero array copies, zero extra computation, so
+    plain-fit timing is unchanged; the dominant memory payload is the
+    per-(g,t) EIF dict, O(n_units x n_gt) (full enumeration in the
+    ``docs/methodology/REGISTRY.md`` EfficientDiD M-023 Note).
+
+    ``df_survey`` MUST be the post-overall snapshot captured in ``fit()``
+    immediately after the overall inference and before the ES/group gates —
+    NOT a read of ``estimator._survey_df`` at kit-build time, which on a
+    deprecated ``fit(aggregate="group"/"all")`` replicate fit is the
+    post-group value (``_compute_survey_eif_se`` can set it to ``None`` on
+    a degenerate replicate design).  The snapshot is the exact value every
+    fit-time aggregation seeded from, so post-fit recompute replays it.
+    """
+    if not eif_by_gt:
+        # Unreachable after fit()'s empty-effects raise; kept for the CS
+        # guard shape (a kit with nothing to re-aggregate is not attached).
+        return None
+    # STATE-ONLY replay carrier (the CS contract): the spec retains the RNG
+    # snapshot + generation-branch identity the run recorded, BY VALUE, so
+    # post-fit aggregate() can replay the fit-time multiplier bootstrap
+    # through the same engine. Its rebuild() factory is unused here — the
+    # engine re-derives the generation branch from the kit bookkeeping.
+    # None on analytical fits, where the recompute levels stay analytical.
+    replay_spec = None
+    if bootstrap_results is not None and bootstrap_results._replay_bitgen_state is not None:
+        replay_spec = BootstrapReplaySpec(
+            bitgen_state=bootstrap_results._replay_bitgen_state,
+            n_bootstrap=bootstrap_results.n_bootstrap,
+            n_units=int(n_units),
+            weight_type=bootstrap_results.weight_type,
+            backend=bootstrap_results._replay_backend,
+        )
+    return AggregationKit(
+        bookkeeping={
+            # PRIVATE SNAPSHOTS of the aggregation inputs (CI review P0):
+            # aggregate() must never read the MUTABLE public result fields -
+            # a user edit of results.group_time_effects/groups would
+            # otherwise mix altered point estimates with the retained
+            # fit-time EIF variance, yielding plausible-but-invalid
+            # inference. Row values are scalars/tuples, so per-row dict
+            # copies suffice. alpha/anticipation are already kit fields.
+            "group_time_effects": {gt: dict(row) for gt, row in group_time_effects.items()},
+            "treatment_groups": list(treatment_groups),
+            "time_periods": list(time_periods),
+            "pt_assumption": pt_assumption,
+            "n_units_total": n_units_total,
+            "n_units": n_units,
+            "cohort_fractions": cohort_fractions,
+            "unit_cohorts": unit_cohorts,
+            "cluster_indices": cluster_indices,
+            "n_clusters": n_clusters,
+            "unit_level_weights": unit_level_weights,
+            "resolved_survey_unit": resolved_survey_unit,
+            "df_survey": df_survey,
+        },
+        influence=eif_by_gt,
+        alpha=alpha,
+        anticipation=anticipation,
+        cband=False,
+        bootstrap=replay_spec,
+    )
+
+
+def _hausman_quadratic_form(
+    delta: np.ndarray,
+    cov_post: np.ndarray,
+    cov_all: np.ndarray,
+) -> Tuple[float, int, float, int, bool]:
+    """Hausman statistic from the event-study delta and the two ES covariances.
+
+    Implements the Theorem A.1 test statistic of Chen, Sant'Anna & Xie (2025,
+    arXiv:2506.17729v1).  The variance-difference matrix is
+
+        V = aCov(ES_post) - aCov(ES_all) = cov_post - cov_all
+
+    (restricted minus efficient, PSD under H0 because the efficient estimator has
+    the smaller variance), and the statistic is ``H = delta' V^+ delta`` with
+    ``delta = ES_post - ES_all``.  ``V`` is inverted by Moore-Penrose pseudoinverse
+    and the number of strictly positive eigenvalues is used as the chi-square
+    degrees of freedom -- a finite-sample safeguard for a non-PSD ``V`` that equals
+    ``|E|`` (the number of post-treatment horizons) when ``V`` is well-conditioned.
 
     Parameters
     ----------
-    eif_mat : ndarray, shape (n_units,) or (n_units, k)
-        EIF values — 1-D for a single estimand, 2-D for multiple.
-    cluster_indices : ndarray, shape (n_units,)
-        Integer cluster assignment per unit.
-    n_clusters : int
-        Number of unique clusters.
+    delta : ndarray, shape (|E|,)
+        Event-study difference ``ES_post - ES_all`` (restricted minus efficient).
+    cov_post, cov_all : ndarray, shape (|E|, |E|)
+        Estimator-scale covariances of the restricted (PT-Post) and efficient
+        (PT-All) event-study vectors.
 
     Returns
     -------
-    ndarray, shape (n_clusters,) or (n_clusters, k)
-        Centered cluster-level sums.
+    H : float
+        The Hausman statistic (``max(delta' V^+ delta, 0)``); NaN if ``V`` is
+        non-finite or has no positive eigenvalues.
+    effective_rank : int
+        Number of positive eigenvalues of ``V`` (the chi-square degrees of freedom).
+    p_value : float
+        Upper-tail ``chi2(effective_rank)`` p-value; NaN when ``H`` is NaN.
+    n_negative : int
+        Number of substantially negative eigenvalues of ``V`` (efficiency-reversal
+        diagnostic).
+    finite_ok : bool
+        False when ``V`` contains non-finite entries.
     """
-    if eif_mat.ndim == 1:
-        sums = np.bincount(cluster_indices, weights=eif_mat, minlength=n_clusters).astype(float)
-    else:
-        sums = np.column_stack(
-            [
-                np.bincount(cluster_indices, weights=eif_mat[:, j], minlength=n_clusters)
-                for j in range(eif_mat.shape[1])
-            ]
-        ).astype(float)
-    return sums - sums.mean(axis=0)
+    from scipy.stats import chi2
+
+    V = cov_post - cov_all
+    if not np.all(np.isfinite(V)):
+        return np.nan, 0, np.nan, 0, False
+
+    eigvals = np.linalg.eigvalsh(V)
+    max_eigval = float(np.max(np.abs(eigvals))) if len(eigvals) > 0 else 0.0
+    tol = max(1e-10 * max_eigval, 1e-15)
+
+    n_negative = int(np.sum(eigvals < -tol))
+    effective_rank = int(np.sum(eigvals > tol))
+    if effective_rank == 0:
+        return np.nan, 0, np.nan, n_negative, True
+
+    V_pinv = np.linalg.pinv(V, rcond=tol / max_eigval if max_eigval > 0 else 1e-10)
+    H = max(float(delta @ V_pinv @ delta), 0.0)
+    p_value = float(chi2.sf(H, df=effective_rank))
+    return H, effective_rank, p_value, n_negative, True
 
 
-def _compute_se_from_eif(
-    eif: np.ndarray,
-    n_units: int,
-    cluster_indices: Optional[np.ndarray] = None,
-    n_clusters: Optional[int] = None,
-) -> float:
-    """SE from EIF values, optionally with cluster-robust correction.
-
-    Without clusters: ``sqrt(mean(EIF^2) / n)``.
-    With clusters: Liang-Zeger sandwich — aggregate EIF within clusters,
-    center, and apply G/(G-1) small-sample correction.
-    """
-    if cluster_indices is not None and n_clusters is not None:
-        centered = _cluster_aggregate(eif, cluster_indices, n_clusters)
-        correction = n_clusters / (n_clusters - 1) if n_clusters > 1 else 1.0
-        var = correction * np.sum(centered**2) / (n_units**2)
-        return float(np.sqrt(max(var, 0.0)))
-    return float(np.sqrt(np.mean(eif**2) / n_units))
-
-
-class EfficientDiD(EfficientDiDBootstrapMixin):
+class EfficientDiD(EfficientDiDBootstrapMixin, _EfficientAggregationMixin, BaseEstimator):
     """Efficient DiD estimator (Chen, Sant'Anna & Xie 2025).
 
     Without covariates, achieves the semiparametric efficiency bound for
@@ -137,13 +260,15 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
     means and covariances.
 
     With covariates, uses a doubly robust path: sieve-based propensity
-    score ratios (Eq 4.1-4.2), OLS outcome regression, sieve-estimated
-    inverse propensities (algorithm step 4), and kernel-smoothed
-    conditional Omega*(X) with per-unit efficient weights (Eq 3.12).
-    The DR property ensures consistency if either the OLS outcome model
-    or the sieve propensity ratio is correctly specified.  The OLS
-    working model for outcome regressions does not generically guarantee
-    the semiparametric efficiency bound (see REGISTRY.md).
+    score ratios (Eq 4.1-4.2), sieve outcome regressions (polynomial
+    basis, AIC/BIC order selection), sieve-estimated inverse propensities
+    (algorithm step 4), and kernel-smoothed conditional Omega*(X) with
+    per-unit efficient weights (Eq 3.12).  The DR property ensures
+    consistency if either the outcome regression or the sieve propensity
+    ratio is correctly specified; because all nuisances are sieves /
+    kernel smoothers (the paper's flexible-nuisance specification), the
+    covariate path attains the semiparametric efficiency bound under the
+    paper's regularity conditions (see REGISTRY.md).
 
     Parameters
     ----------
@@ -158,13 +283,25 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         use the Liang-Zeger clustered sandwich estimator on EIF values.
         With ``n_bootstrap > 0``, bootstrap weights are generated at the
         cluster level (all units in a cluster share the same weight).
+    vcov_type : str, default ``"hc1"``
+        Variance-estimator family. Permanently narrow to ``{"hc1"}`` per
+        the Chen-Sant'Anna-Xie (2025) IF-based variance — analytical-sandwich
+        families ``{classical, hc2, hc2_bm}`` and ``conley`` are rejected
+        at ``__init__`` / ``set_params``. See REGISTRY.md for the
+        methodology rationale (no single design matrix on which hat-matrix
+        leverage or Bell-McCaffrey Satterthwaite DOF can be defined).
+        Use ``cluster=<col>`` for Liang-Zeger CR1 on cluster-aggregated EIF;
+        use ``survey_design=`` for Taylor Series Linearization on the
+        combined IF.
     control_group : str, default ``"never_treated"``
         Which units serve as the comparison group:
         ``"never_treated"`` requires a never-treated cohort (raises if
         none exist); ``"last_cohort"`` reclassifies the latest treatment
-        cohort as pseudo-never-treated and drops post-treatment periods
-        for that cohort.  Distinct from CallawaySantAnna's
-        ``"not_yet_treated"`` — see REGISTRY.md for details.
+        cohort as pseudo-never-treated and drops periods at
+        ``t >= last_g - anticipation`` so the pseudo-control's
+        pre-treatment window excludes anticipation-contaminated periods.
+        Distinct from CallawaySantAnna's ``"not_yet_treated"`` — see
+        REGISTRY.md for details.
     n_bootstrap : int, default 0
         Number of multiplier bootstrap iterations (0 = analytical only).
     bootstrap_weights : str, default ``"rademacher"``
@@ -173,25 +310,52 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         Random seed for reproducibility.
     anticipation : int, default 0
         Number of anticipation periods (shifts the effective treatment
-        boundary forward by this amount).
+        boundary forward by this amount). Must be a non-negative
+        integer; ``bool`` is rejected. When combined with
+        ``control_group="last_cohort"``, also trims the pseudo-control
+        period set at ``t >= last_g - anticipation`` (see REGISTRY.md).
     sieve_k_max : int or None
-        Maximum polynomial degree for sieve ratio estimation. None = auto
-        (``min(floor(n_gp^{1/5}), 5)``). Only used with covariates.
+        Maximum polynomial degree for the covariate-path sieves — the
+        propensity-ratio, inverse-propensity, AND outcome-regression fits all
+        use it. None = auto (``floor(n_pos^{1/5})`` over each group's
+        positive-weight support ``n_pos`` — the raw group size when unweighted —
+        a growing sieve with no fixed ceiling, bounded by ``n_basis < n_pos``;
+        zero-weight survey rows do not affect order selection). Only
+        used with covariates. ``sieve_k_max=1`` forces every covariate-path
+        sieve (outcome regression and both propensity sieves) to degree 1: it
+        recovers the pre-sieve linear-OLS *outcome regression* but also
+        degree-1-constrains the propensity sieves, so it does not reproduce the
+        exact pre-sieve estimator.
     sieve_criterion : str, default ``"bic"``
-        Information criterion for sieve degree selection: ``"aic"`` or ``"bic"``.
+        Information criterion (``"aic"`` or ``"bic"``) for the order selection
+        of all covariate-path sieves (propensity ratio, inverse propensity, and
+        outcome regression).
     ratio_clip : float, default 20.0
         Clip sieve propensity ratios to ``[1/ratio_clip, ratio_clip]``.
     kernel_bandwidth : float or None
         Bandwidth for Gaussian kernel in conditional Omega* estimation.
         None = Silverman's rule-of-thumb (automatic).
+    omega_ridge : float, default ``OMEGA_RIDGE_DEFAULT`` (1e-6)
+        Relative ridge for the Omega* inversion behind the efficient
+        weights: solves ``(Omega* + omega_ridge * max(trace/H, 0) * I) x = 1``
+        instead of inverting the numerically singular Omega* that PT-All's
+        telescoping overidentified moments produce. Stabilizes per-cell
+        ATT(g,t) against floating-point-level input/BLAS changes (1-ulp
+        stability ~1e-9 vs ~1e-4 for the legacy pseudoinverse) without
+        changing overall-ATT bias/RMSE/coverage (see REGISTRY.md).
+        ``omega_ridge=0`` restores the exact legacy inv/pinv code path
+        bit-for-bit - including its per-cell condition-number warnings and
+        the slow O(n^2 H^2) conditional-Omega* loops, so expect the legacy
+        runtime as well.
 
     Examples
     --------
     >>> from diff_diff import EfficientDiD
     >>> edid = EfficientDiD(pt_assumption="all")
     >>> results = edid.fit(data, outcome="y", unit="id", time="t",
-    ...                    first_treat="first_treat", aggregate="all")
+    ...                    first_treat="first_treat")
     >>> results.print_summary()
+    >>> results.aggregate("event_study").summary()  # post-fit aggregation
     """
 
     def __init__(
@@ -199,6 +363,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         pt_assumption: str = "all",
         alpha: float = 0.05,
         cluster: Optional[str] = None,
+        vcov_type: str = "hc1",
         control_group: str = "never_treated",
         n_bootstrap: int = 0,
         bootstrap_weights: str = "rademacher",
@@ -208,11 +373,14 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         sieve_criterion: str = "bic",
         ratio_clip: float = 20.0,
         kernel_bandwidth: Optional[float] = None,
+        omega_ridge: float = OMEGA_RIDGE_DEFAULT,
     ):
         self.pt_assumption = pt_assumption
         self.alpha = alpha
         self.cluster = cluster
+        self.vcov_type = vcov_type
         self.control_group = control_group
+        validate_n_bootstrap(n_bootstrap)
         self.n_bootstrap = n_bootstrap
         self.bootstrap_weights = bootstrap_weights
         self.seed = seed
@@ -221,13 +389,19 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         self.sieve_criterion = sieve_criterion
         self.ratio_clip = ratio_clip
         self.kernel_bandwidth = kernel_bandwidth
+        self.omega_ridge = omega_ridge
         self.is_fitted_ = False
         self.results_: Optional[EfficientDiDResults] = None
-        self._unit_resolved_survey = None
+        self._unit_resolved_survey: Optional["ResolvedSurveyDesign"] = None
         self._validate_params()
 
     def _validate_params(self) -> None:
-        """Validate constrained parameters."""
+        """Validate constrained parameters.
+
+        Also validates ``anticipation`` and re-assigns it as a normalized
+        Python ``int`` — idempotent on an already-normalized value, so the
+        fit-time re-run never changes fitted config.
+        """
         if self.pt_assumption not in ("all", "post"):
             raise ValueError(f"pt_assumption must be 'all' or 'post', got '{self.pt_assumption}'")
         if self.control_group not in ("never_treated", "last_cohort"):
@@ -235,6 +409,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 f"control_group must be 'never_treated' or 'last_cohort', "
                 f"got '{self.control_group}'"
             )
+        self.anticipation = validate_anticipation(self.anticipation)
         valid_weights = ("rademacher", "mammen", "webb")
         if self.bootstrap_weights not in valid_weights:
             raise ValueError(
@@ -259,35 +434,59 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                     f"sieve_k_max must be a positive integer (or None for auto), "
                     f"got {self.sieve_k_max}"
                 )
+        if not (np.isfinite(self.omega_ridge) and self.omega_ridge >= 0):
+            raise ValueError(
+                f"omega_ridge must be finite and >= 0 (0 = legacy inv/pinv path), "
+                f"got {self.omega_ridge}"
+            )
+        self._validate_vcov_type(self.vcov_type)
+
+    @staticmethod
+    def _validate_vcov_type(vcov_type: str) -> None:
+        """Validate ``vcov_type`` against EfficientDiD's narrow IF-based contract.
+
+        Permanently accepts ``{"hc1"}`` only — EfficientDiD uses
+        influence-function-based variance per Chen-Sant'Anna-Xie (2025) achieving
+        the semiparametric efficiency bound. The per-unit EIF aggregation has no
+        equivalent single design matrix, so analytical-sandwich families
+        (``classical``, ``hc2``, ``hc2_bm``) cannot be defined; ``conley`` is
+        deferred (see DEFERRED.md). Mirrors the narrow-contract pattern in
+        :class:`ImputationDiD`, :class:`CallawaySantAnna`, and
+        :class:`TripleDifference`.
+        """
+        _accepted_vcov = {"hc1"}
+        _if_incompatible_vcov = {"classical", "hc2", "hc2_bm"}
+        _deferred_vcov = {"conley"}
+
+        if vcov_type in _if_incompatible_vcov:
+            raise ValueError(
+                f"EfficientDiD(vcov_type={vcov_type!r}) is rejected: "
+                f"EfficientDiD uses influence-function-based variance per Chen, "
+                f"Sant'Anna, and Xie (2025) achieving the semiparametric efficiency "
+                f"bound for ATT(g,t). The per-unit EIF aggregation has no equivalent "
+                f"single design matrix on which hat matrix leverage or Bell-McCaffrey "
+                f"Satterthwaite DOF can be defined, so analytical-sandwich families "
+                f"{{classical, hc2, hc2_bm}} are not paper-prescribed. Use "
+                f"vcov_type='hc1' (the default) with cluster=<col> for the "
+                f"Liang-Zeger clustered EIF sandwich estimator."
+            )
+        if vcov_type in _deferred_vcov:
+            raise ValueError(
+                f"EfficientDiD(vcov_type={vcov_type!r}) is not yet supported: "
+                f"spatial-HAC composition with EIF aggregation has no reference "
+                f"implementation today. See DEFERRED.md for the deferred follow-up row. "
+                f"Use vcov_type='hc1' (the default) with cluster=<col> for "
+                f"cluster-robust inference."
+            )
+        if vcov_type not in _accepted_vcov:
+            raise ValueError(
+                f"EfficientDiD(vcov_type={vcov_type!r}) is invalid. "
+                f"Accepted: {sorted(_accepted_vcov)}."
+            )
 
     # -- sklearn compatibility ------------------------------------------------
 
-    def get_params(self) -> Dict[str, Any]:
-        """Get estimator parameters (sklearn-compatible)."""
-        return {
-            "pt_assumption": self.pt_assumption,
-            "anticipation": self.anticipation,
-            "alpha": self.alpha,
-            "cluster": self.cluster,
-            "control_group": self.control_group,
-            "n_bootstrap": self.n_bootstrap,
-            "bootstrap_weights": self.bootstrap_weights,
-            "seed": self.seed,
-            "sieve_k_max": self.sieve_k_max,
-            "sieve_criterion": self.sieve_criterion,
-            "ratio_clip": self.ratio_clip,
-            "kernel_bandwidth": self.kernel_bandwidth,
-        }
-
-    def set_params(self, **params: Any) -> "EfficientDiD":
-        """Set estimator parameters (sklearn-compatible)."""
-        for key, value in params.items():
-            if hasattr(self, key):
-                setattr(self, key, value)
-            else:
-                raise ValueError(f"Unknown parameter: {key}")
-        self._validate_params()
-        return self
+    # get_params/set_params come from BaseEstimator.
 
     # -- Main estimation ------------------------------------------------------
 
@@ -299,8 +498,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         time: str,
         first_treat: str,
         covariates: Optional[List[str]] = None,
-        aggregate: Optional[str] = None,
-        balance_e: Optional[int] = None,
+        aggregate: Any = NOT_SUPPLIED,
+        balance_e: Any = NOT_SUPPLIED,
         survey_design: Optional[Any] = None,
         store_eif: bool = False,
     ) -> EfficientDiDResults:
@@ -324,19 +523,45 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             When provided, uses the doubly robust path (outcome regression
             + propensity score ratios).
         aggregate : str, optional
-            ``None``, ``"simple"``, ``"event_study"``, ``"group"``, or
-            ``"all"``.
+            DEPRECATED (3.9, removed in 4.0, row M-023): supplying any
+            value (``None`` included) emits a FutureWarning; the
+            deprecated path still computes and stores the requested
+            surfaces exactly as before (``None``, ``"simple"``,
+            ``"event_study"``, ``"group"``, or ``"all"``; unknown strings
+            act like ``None``, unchanged).  Aggregate as a post-fit step
+            instead: ``results.aggregate('event_study')`` /
+            ``.aggregate('group')`` / ``.aggregate('simple')`` /
+            ``.aggregate('total')``.  On
+            bootstrapped fits (``n_bootstrap > 0``) the post-fit
+            RECOMPUTE levels (``'event_study'``/``'group'``) REPLAY the
+            fit-time multiplier bootstrap from the kit-retained RNG
+            state (percentile inference, allclose to a fit-time
+            aggregation; no refit needed), while ``aggregate('simple')``
+            and, where supported, ``aggregate('total')`` relay the
+            stored bootstrap inference (the per-level policy converged
+            with row M-027).
         balance_e : int, optional
-            Balance event study at this relative period.
+            DEPRECATED (3.9, removed in 4.0, row M-120): moves onto
+            post-fit ``aggregate()`` —
+            ``results.aggregate('event_study', balance_e=2)``.  EDiD's
+            balance rule is the ANCHOR-HORIZON rule (keep cohorts with a
+            finite effect at the anchor horizon), the same rule shape
+            CallawaySantAnna uses — with one keying-granularity
+            difference: EDiD anchors on the ``int(t - g)`` bucket while
+            CS keys raw ``t - g`` (identical on integer-period panels;
+            see the REGISTRY truncation Note).
         survey_design : SurveyDesign, optional
             Survey design specification for design-based inference.
             Applies survey weights to all means, covariances, and cohort
             fractions, and uses Taylor Series Linearization for SE
             estimation.  Cannot be combined with ``cluster``.
         store_eif : bool, default False
-            Store per-(g,t) EIF vectors in the results object.  Used
-            internally by :meth:`hausman_pretest`; not needed for
-            normal usage.
+            Expose per-(g,t) EIF vectors on the PUBLIC
+            ``influence_functions`` results field.  Used internally by
+            :meth:`hausman_pretest`.  Since 3.9 (row M-023) the private
+            aggregation kit ALWAYS retains the per-(g,t) EIF dict to power
+            post-fit ``results.aggregate()`` — ``store_eif`` governs only
+            the public field, no longer the retention itself.
 
         Returns
         -------
@@ -347,9 +572,36 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         ValueError
             Missing columns, unbalanced panel, non-absorbing treatment,
             or PT-Post without a never-treated group.
-        NotImplementedError
-            If ``covariates`` and ``survey_design`` are both set.
         """
+        # M-023/M-120 deprecation shim (CS-style joint warning): a plain
+        # fit() never warns; supplying EITHER param with ANY value (None
+        # included) warns once, then the legacy routing below runs
+        # unchanged - the deprecated path returns exactly the numbers it
+        # always did (no new value validation; unknown strings still act
+        # like None). The post-fit successor validates its own vocabulary.
+        _deprecated_passed = [
+            n
+            for n, v in (("aggregate", aggregate), ("balance_e", balance_e))
+            if v is not NOT_SUPPLIED
+        ]
+        if _deprecated_passed:
+            _args = " / ".join(f"{n}=" for n in _deprecated_passed)
+            warnings.warn(
+                f"EfficientDiD.fit({_args}) is deprecated and will be "
+                "removed in 4.0. Fit once, then aggregate as a post-fit "
+                "step: results = EfficientDiD().fit(...); "
+                "results.aggregate('event_study') / .aggregate('group') / "
+                ".aggregate('simple') / .aggregate('total'). balance_e moves onto aggregate() "
+                "alongside it: results.aggregate('event_study', "
+                "balance_e=2).",
+                FutureWarning,
+                stacklevel=2,
+            )
+        if aggregate is NOT_SUPPLIED:
+            aggregate = None
+        if balance_e is NOT_SUPPLIED:
+            balance_e = None
+
         self._validate_params()
 
         if self.cluster is not None and survey_design is not None:
@@ -359,7 +611,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             )
 
         # Resolve survey design if provided
-        from diff_diff.survey import _resolve_survey_for_fit
+        from diff_diff.survey import _resolve_survey_for_fit, build_unit_first_row_index
 
         resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
             _resolve_survey_for_fit(survey_design, data, "analytical")
@@ -374,22 +626,15 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         # Store survey df for safe_inference calls (t-distribution with survey df)
         self._survey_df = survey_metadata.df_survey if survey_metadata is not None else None
         # Guard: replicate design with undefined df → NaN inference
-        if (self._survey_df is None and resolved_survey is not None
-                and hasattr(resolved_survey, 'uses_replicate_variance')
-                and resolved_survey.uses_replicate_variance):
+        if (
+            self._survey_df is None
+            and resolved_survey is not None
+            and hasattr(resolved_survey, "uses_replicate_variance")
+            and resolved_survey.uses_replicate_variance
+        ):
             self._survey_df = 0
 
         # Bootstrap + survey supported via PSU-level multiplier bootstrap.
-
-        # Guard covariates + survey (DR path does not yet thread survey weights)
-        if covariates is not None and len(covariates) > 0 and resolved_survey is not None:
-            raise NotImplementedError(
-                "Survey weights with covariates are not yet supported for "
-                "EfficientDiD. The doubly robust covariate path does not "
-                "thread survey weights through nuisance estimation. "
-                "Use covariates=None with survey_design, or drop survey_design "
-                "when using covariates."
-            )
 
         # Normalize empty covariates list to None (use nocov path)
         if covariates is not None and len(covariates) == 0:
@@ -500,36 +745,19 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         # order.  The previous approach (groupby cumcount == 0) yielded
         # first-appearance order which can differ from sorted order when the
         # input DataFrame is not pre-sorted by unit.
-        first_pos: Dict[Any, int] = {}
-        for i, u in enumerate(df[unit].values):
-            if u not in first_pos:
-                first_pos[u] = i
-        self._unit_first_panel_row = np.array([first_pos[u] for u in all_units])
+        self._unit_first_panel_row = build_unit_first_row_index(df[unit].values, all_units)
 
         # Build unit-level ResolvedSurveyDesign once (avoids repeated
         # construction in _compute_survey_eif_se and ensures consistent
         # unit-level df for safe_inference t-distribution).
         if resolved_survey is not None:
-            from diff_diff.survey import ResolvedSurveyDesign
-
-            row_idx = self._unit_first_panel_row
-            unit_weights_s = resolved_survey.weights[row_idx]
-            unit_strata = (
-                resolved_survey.strata[row_idx] if resolved_survey.strata is not None else None
-            )
-            unit_psu = resolved_survey.psu[row_idx] if resolved_survey.psu is not None else None
-            unit_fpc = resolved_survey.fpc[row_idx] if resolved_survey.fpc is not None else None
-            n_strata_u = len(np.unique(unit_strata)) if unit_strata is not None else 0
-            n_psu_u = len(np.unique(unit_psu)) if unit_psu is not None else 0
-            self._unit_resolved_survey = resolved_survey.subset_to_units(
-                row_idx, unit_weights_s, unit_strata, unit_psu, unit_fpc,
-                n_strata_u, n_psu_u,
+            self._unit_resolved_survey = resolved_survey.subset_to_units_by_row_idx(
+                self._unit_first_panel_row
             )
             # Use unit-level df (not panel-level) for t-distribution
             self._survey_df = self._unit_resolved_survey.df_survey
             # Re-apply replicate guard: undefined df → NaN inference
-            if (self._survey_df is None
-                    and self._unit_resolved_survey.uses_replicate_variance):
+            if self._survey_df is None and self._unit_resolved_survey.uses_replicate_variance:
                 self._survey_df = 0
         else:
             self._unit_resolved_survey = None
@@ -582,7 +810,9 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         if resolved_survey is not None:
             # Use the resolved survey's weights (already normalized per weight_type)
             # subset to unit level via _unit_first_panel_row (aligned to all_units)
+            assert self._unit_resolved_survey is not None
             unit_level_weights = self._unit_resolved_survey.weights
+        self._unit_level_weights = unit_level_weights
 
         cohort_fractions: Dict[float, float] = {}
         if unit_level_weights is not None:
@@ -617,11 +847,25 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                     stacklevel=2,
                 )
 
+        # Guard: never-treated with zero survey weight → no valid comparisons
+        # Applies to both covariates (DR nuisance) and nocov (weighted means) paths
+        if cohort_fractions.get(np.inf, 0.0) <= 0 and unit_level_weights is not None:
+            raise ValueError(
+                "Never-treated group has zero survey weight. EfficientDiD "
+                "requires a never-treated control group with positive "
+                "survey weight for estimation."
+            )
+
         # ----- Covariate preparation (if provided) -----
         covariate_matrix: Optional[np.ndarray] = None
         m_hat_cache: Dict[Tuple, np.ndarray] = {}
         r_hat_cache: Dict[Tuple[float, float], np.ndarray] = {}
         s_hat_cache: Dict[float, np.ndarray] = {}  # inverse propensities per group
+        # Per-fit cache of the polynomial sieve basis, keyed (id(X), degree). The three
+        # sieve nuisance helpers all build the basis from the same fit-level
+        # `covariate_matrix`, so this shares each distinct degree's basis across them
+        # instead of rebuilding it per helper. Lives only for this fit() call.
+        sieve_basis_cache: Dict[Tuple[int, int], np.ndarray] = {}
 
         if use_covariates:
             assert covariates is not None  # for type narrowing
@@ -666,6 +910,36 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         eif_by_gt: Dict[Tuple[Any, Any], np.ndarray] = {}
         stored_weights: Dict[Tuple[Any, Any], np.ndarray] = {}
         stored_cond: Dict[Tuple[Any, Any], float] = {}
+        # Ridge path: ill-conditioned cells consolidate into ONE fit-level
+        # warning (legacy omega_ridge=0 keeps the per-cell pinv warnings).
+        _ill_conditioned_cells: List[Tuple[Any, Any, float]] = []
+        # Ridge-path covariate cells are deferred to a fused unit-tiled pass 2
+        # (compute_conditional_cells_tiled) after the sieve caches are fully
+        # populated; each deferred cell holds an order-preserving placeholder
+        # in group_time_effects until finalization.
+        _cond_cell_specs: List[Dict[str, Any]] = []
+
+        def _finalize_cell(g: Any, att_gt: float, eif_vals: np.ndarray) -> Dict[str, Any]:
+            """Per-cell SE + inference record, shared by the inline and
+            deferred (pass-2) paths.
+
+            Analytical SE = sqrt(mean(EIF^2) / n)  [paper p.21]; with survey:
+            TSL variance via compute_survey_vcov.
+            """
+            if self._unit_resolved_survey is not None:
+                se_gt = self._compute_survey_eif_se(eif_vals)
+            else:
+                se_gt = _compute_se_from_eif(eif_vals, n_units, unit_cluster_indices, n_clusters)
+            t_stat, p_val, ci = safe_inference(att_gt, se_gt, alpha=self.alpha, df=self._survey_df)
+            return {
+                "effect": att_gt,
+                "se": se_gt,
+                "t_stat": t_stat,
+                "p_value": p_val,
+                "conf_int": ci,
+                "n_treated": n_treated_per_g[g],
+                "n_control": n_control_count,
+            }
 
         for g in treatment_groups:
             # Under PT-Post, use per-group baseline Y_{g-1-anticipation}
@@ -685,6 +959,15 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 effective_p1_col = period_to_col[effective_base]
             else:
                 effective_p1_col = period_1_col
+
+            # Guard: skip cohorts with zero survey weight (all units zero-weighted)
+            if cohort_fractions[g] <= 0:
+                warnings.warn(
+                    f"Cohort {g} has zero survey weight; skipping.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                continue
 
             # Estimate all (g, t) cells including pre-treatment. Under PT-Post,
             # pre-treatment cells serve as placebo/pre-trend diagnostics, matching
@@ -706,6 +989,34 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                     pt_assumption=self.pt_assumption,
                     anticipation=self.anticipation,
                 )
+
+                # Filter out comparison pairs with zero survey weight
+                if unit_level_weights is not None and pairs:
+                    pairs = [
+                        (gp, tpre)
+                        for gp, tpre in pairs
+                        if np.sum(
+                            unit_level_weights[
+                                never_treated_mask if np.isinf(gp) else cohort_masks[gp]
+                            ]
+                        )
+                        > 0
+                    ]
+
+                # Ridge path: drop the degenerate same-cohort self-pair
+                # (g' = g, t_pre = t), which arises only for PRE-treatment
+                # cells (t < g). Its generated outcome telescopes to 0 = 0
+                # identically (zero-information moment; the exact-null
+                # direction of Omega*). The legacy pseudoinverse truncates
+                # that direction, spreading weight over noisy moments; a
+                # ridge would instead load ~all weight on the zero-variance
+                # moment, collapsing pre-treatment placebos to a
+                # deterministic 0 and silently disabling the pre-trend
+                # diagnostic. Dropping the pair restores data-driven
+                # placebos. NOT applied at omega_ridge=0 (bit-identical
+                # legacy behavior).
+                if self.omega_ridge > 0 and pairs:
+                    pairs = [(gp, tpre) for gp, tpre in pairs if not (gp == g and tpre == t)]
 
                 if not pairs:
                     warnings.warn(
@@ -742,6 +1053,10 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                                 never_treated_mask,
                                 t_col_val,
                                 tpre_col_val,
+                                k_max=self.sieve_k_max,
+                                criterion=self.sieve_criterion,
+                                unit_weights=unit_level_weights,
+                                basis_cache=sieve_basis_cache,
                             )
                         # m_{g', tpre, 1}(X)
                         key_gp_tpre = (gp, tpre_col_val, effective_p1_col)
@@ -755,6 +1070,10 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                                 gp_mask_for_reg,
                                 tpre_col_val,
                                 effective_p1_col,
+                                k_max=self.sieve_k_max,
+                                criterion=self.sieve_criterion,
+                                unit_weights=unit_level_weights,
+                                basis_cache=sieve_basis_cache,
                             )
                         # r_{g, inf}(X) and r_{g, g'}(X) via sieve (Eq 4.1-4.2)
                         for comp in {np.inf, gp}:
@@ -770,8 +1089,45 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                                     k_max=self.sieve_k_max,
                                     criterion=self.sieve_criterion,
                                     ratio_clip=self.ratio_clip,
+                                    unit_weights=unit_level_weights,
+                                    basis_cache=sieve_basis_cache,
                                 )
 
+                    # Inverse propensity estimation (algorithm step 4)
+                    # s_hat_{g'}(X) = 1/p_{g'}(X) for Eq 3.12 scaling.
+                    # Populated BEFORE the ridge-path deferral so pass 2 sees
+                    # complete caches (order swap vs the legacy sequence is
+                    # inert: gen_out does not consume s_hat and vice versa).
+                    for group_id in {g, np.inf} | {gp for gp, _ in pairs}:
+                        if group_id not in s_hat_cache:
+                            group_mask_s = (
+                                never_treated_mask if np.isinf(group_id) else cohort_masks[group_id]
+                            )
+                            s_hat_cache[group_id] = estimate_inverse_propensity_sieve(
+                                covariate_matrix,
+                                group_mask_s,
+                                k_max=self.sieve_k_max,
+                                criterion=self.sieve_criterion,
+                                unit_weights=unit_level_weights,
+                                basis_cache=sieve_basis_cache,
+                            )
+
+                    if self.omega_ridge > 0:
+                        # Fused tiled GEMM path: defer omega/weights/EIF to
+                        # pass 2; placeholder preserves results ordering.
+                        _cond_cell_specs.append(
+                            {
+                                "g": g,
+                                "t": t,
+                                "pairs": pairs,
+                                "t_col": t_col_val,
+                                "y1_col": effective_p1_col,
+                            }
+                        )
+                        group_time_effects[(g, t)] = None
+                        continue
+
+                    # ----- Legacy (omega_ridge=0) covariate path -----
                     # Per-unit DR generated outcomes: shape (n_units, H)
                     gen_out = compute_generated_outcomes_cov(
                         target_g=g,
@@ -789,20 +1145,6 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
 
                     y_hat = np.mean(gen_out, axis=0)  # shape (H,)
 
-                    # Inverse propensity estimation (algorithm step 4)
-                    # s_hat_{g'}(X) = 1/p_{g'}(X) for Eq 3.12 scaling
-                    for group_id in {g, np.inf} | {gp for gp, _ in pairs}:
-                        if group_id not in s_hat_cache:
-                            group_mask_s = (
-                                never_treated_mask if np.isinf(group_id) else cohort_masks[group_id]
-                            )
-                            s_hat_cache[group_id] = estimate_inverse_propensity_sieve(
-                                covariate_matrix,
-                                group_mask_s,
-                                k_max=self.sieve_k_max,
-                                criterion=self.sieve_criterion,
-                            )
-
                     # Conditional Omega*(X) with per-unit propensities (Eq 3.12)
                     omega_cond = compute_omega_star_conditional(
                         target_g=g,
@@ -817,14 +1159,19 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                         covariate_matrix=covariate_matrix,
                         s_hat_cache=s_hat_cache,
                         bandwidth=self.kernel_bandwidth,
+                        unit_weights=unit_level_weights,
                     )
 
                     # Per-unit weights: (n_units, H)
-                    per_unit_w = compute_per_unit_weights(omega_cond)
+                    per_unit_w = compute_per_unit_weights(omega_cond, omega_ridge=self.omega_ridge)
 
-                    # ATT = mean_i( w(X_i) @ gen_out[i] )
+                    # ATT = (survey-)weighted mean of per-unit DR scores
                     if per_unit_w.shape[1] > 0:
-                        att_gt = float(np.mean(np.sum(per_unit_w * gen_out, axis=1)))
+                        per_unit_scores = np.sum(per_unit_w * gen_out, axis=1)
+                        if unit_level_weights is not None:
+                            att_gt = float(np.average(per_unit_scores, weights=unit_level_weights))
+                        else:
+                            att_gt = float(np.mean(per_unit_scores))
                     else:
                         att_gt = np.nan
 
@@ -833,8 +1180,14 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                     eif_vals = compute_eif_cov(per_unit_w, gen_out, att_gt, n_units)
                     eif_by_gt[(g, t)] = eif_vals
                 else:
-                    # No-covariates path (closed-form)
-                    omega = compute_omega_star_nocov(
+                    # No-covariates path (closed-form). Ridge path uses the
+                    # Gram/GEMM twin of the O(H^2) _sample_cov loop
+                    # (reassociation-level agreement); omega_ridge=0 keeps
+                    # the legacy loop verbatim.
+                    _omega_fn = (
+                        _omega_star_nocov_gram if self.omega_ridge > 0 else compute_omega_star_nocov
+                    )
+                    omega = _omega_fn(
                         target_g=g,
                         target_t=t,
                         valid_pairs=pairs,
@@ -847,10 +1200,14 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                         unit_weights=unit_level_weights,
                     )
 
-                    weights, _, cond_num = compute_efficient_weights(omega)
+                    weights, _, cond_num = compute_efficient_weights(
+                        omega, omega_ridge=self.omega_ridge
+                    )
                     stored_weights[(g, t)] = weights
                     if omega.size > 0:
                         stored_cond[(g, t)] = cond_num
+                        if self.omega_ridge > 0 and cond_num > 1e12:
+                            _ill_conditioned_cells.append((g, t, cond_num))
 
                     y_hat = compute_generated_outcomes_nocov(
                         target_g=g,
@@ -882,28 +1239,53 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                     )
                     eif_by_gt[(g, t)] = eif_vals
 
-                # Analytical SE = sqrt(mean(EIF^2) / n)  [paper p.21]
-                # With survey: use TSL variance via compute_survey_vcov
-                if self._unit_resolved_survey is not None:
-                    se_gt = self._compute_survey_eif_se(eif_vals)
-                else:
-                    se_gt = _compute_se_from_eif(
-                        eif_vals, n_units, unit_cluster_indices, n_clusters
-                    )
+                group_time_effects[(g, t)] = _finalize_cell(g, att_gt, eif_vals)
 
-                t_stat, p_val, ci = safe_inference(
-                    att_gt, se_gt, alpha=self.alpha, df=self._survey_df
-                )
+        # ----- Pass 2: fused tiled conditional path (ridge, covariates) -----
+        if _cond_cell_specs:
+            assert covariate_matrix is not None
+            bandwidth = (
+                self.kernel_bandwidth
+                if self.kernel_bandwidth is not None
+                else _silverman_bandwidth(covariate_matrix, unit_level_weights)
+            )
+            cell_estimates = compute_conditional_cells_tiled(
+                _cond_cell_specs,
+                outcome_wide=outcome_wide,
+                covariate_matrix=covariate_matrix,
+                cohort_masks=cohort_masks,
+                never_treated_mask=never_treated_mask,
+                period_to_col=period_to_col,
+                cohort_fractions=cohort_fractions,
+                m_hat_cache=m_hat_cache,
+                r_hat_cache=r_hat_cache,
+                s_hat_cache=s_hat_cache,
+                bandwidth=bandwidth,
+                omega_ridge=self.omega_ridge,
+                unit_weights=unit_level_weights,
+            )
+            for spec in _cond_cell_specs:
+                g = spec["g"]
+                t = spec["t"]
+                att_gt, eif_vals = cell_estimates[(g, t)]
+                eif_by_gt[(g, t)] = eif_vals
+                group_time_effects[(g, t)] = _finalize_cell(g, att_gt, eif_vals)
 
-                group_time_effects[(g, t)] = {
-                    "effect": att_gt,
-                    "se": se_gt,
-                    "t_stat": t_stat,
-                    "p_value": p_val,
-                    "conf_int": ci,
-                    "n_treated": int(np.sum(cohort_masks[g])),
-                    "n_control": int(np.sum(never_treated_mask)),
-                }
+        # Fit-level consolidation of ill-conditioned Omega* cells (ridge path).
+        # Legacy (omega_ridge=0) warns per cell inside compute_efficient_weights.
+        if _ill_conditioned_cells:
+            _max_g, _max_t, _max_cond = max(_ill_conditioned_cells, key=lambda r: r[2])
+            warnings.warn(
+                f"Omega* was ill-conditioned (cond > 1e12) in "
+                f"{len(_ill_conditioned_cells)} of {len(stored_cond)} (g, t) cells "
+                f"(max cond {_max_cond:.2e} at (g={_max_g}, t={_max_t})); the "
+                f"omega_ridge={self.omega_ridge:g} regularization handled these "
+                f"cells (expected under PT-All, whose overidentified moment set "
+                f"contains telescoping near-duplicate moments). Set omega_ridge=0 "
+                f"to restore the legacy pseudoinverse path.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         if not group_time_effects:
             raise ValueError(
@@ -924,6 +1306,15 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         overall_t, overall_p, overall_ci = safe_inference(
             overall_att, overall_se, alpha=self.alpha, df=self._survey_df
         )
+        # M-023 kit snapshot: the post-overall ``_survey_df`` is the exact
+        # value fit-time ES/group aggregation seeds from (the gates below run
+        # next), and post-fit aggregate() must replay from the same seed.
+        # Captured HERE, not at fit end: ``_aggregate_by_group`` can mutate
+        # ``self._survey_df`` through ``_compute_survey_eif_se`` on degenerate
+        # replicate designs, so a fit-end read on a deprecated
+        # ``fit(aggregate="group"/"all")`` would seed recompute from the
+        # post-group value and break post-fit/fit-time inertness.
+        _survey_df_post_overall = self._survey_df
 
         event_study_effects = None
         group_effects = None
@@ -979,6 +1370,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 cluster_indices=unit_cluster_indices,
                 n_clusters=n_clusters,
                 resolved_survey=self._unit_resolved_survey,
+                unit_level_weights=self._unit_level_weights,
             )
             # Update estimates with bootstrap inference
             overall_se = bootstrap_results.overall_att_se
@@ -995,43 +1387,42 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                     se = float(group_time_effects[gt]["se"])
                     group_time_effects[gt]["t_stat"] = safe_inference(eff, se, alpha=self.alpha)[0]
 
-            es_cis = bootstrap_results.event_study_cis
-            es_pvs = bootstrap_results.event_study_p_values
-            if (
-                event_study_effects is not None
-                and bootstrap_results.event_study_ses is not None
-                and es_cis is not None
-                and es_pvs is not None
-            ):
-                for e in event_study_effects:
-                    if e in bootstrap_results.event_study_ses:
-                        event_study_effects[e]["se"] = bootstrap_results.event_study_ses[e]
-                        event_study_effects[e]["conf_int"] = es_cis[e]
-                        event_study_effects[e]["p_value"] = es_pvs[e]
-                        eff = float(event_study_effects[e]["effect"])
-                        se = float(event_study_effects[e]["se"])
-                        event_study_effects[e]["t_stat"] = safe_inference(
-                            eff, se, alpha=self.alpha
-                        )[0]
-
-            g_cis = bootstrap_results.group_effect_cis
-            g_pvs = bootstrap_results.group_effect_p_values
-            if (
-                group_effects is not None
-                and bootstrap_results.group_effect_ses is not None
-                and g_cis is not None
-                and g_pvs is not None
-            ):
-                for g in group_effects:
-                    if g in bootstrap_results.group_effect_ses:
-                        group_effects[g]["se"] = bootstrap_results.group_effect_ses[g]
-                        group_effects[g]["conf_int"] = g_cis[g]
-                        group_effects[g]["p_value"] = g_pvs[g]
-                        eff = float(group_effects[g]["effect"])
-                        se = float(group_effects[g]["se"])
-                        group_effects[g]["t_stat"] = safe_inference(eff, se, alpha=self.alpha)[0]
+            # ES/group percentile overrides via the shared appliers (the same
+            # implementations the post-fit aggregate() replay runs — one
+            # code path, no fit-vs-replay drift). The appliers carry the
+            # availability guards and the group df_used clearing internally.
+            apply_bootstrap_event_study_overrides(
+                event_study_effects, bootstrap_results, self.alpha
+            )
+            apply_bootstrap_group_overrides(group_effects, bootstrap_results, self.alpha)
 
         # ----- Build results -----
+        # Raw (pre-normalization) unit weights for the metadata recompute:
+        # compute_survey_metadata expects the ORIGINAL scale (resolve()
+        # rescales pweights to mean 1, so the resolved unit weights would
+        # misreport sum_weights/weight_range; scale-invariant fields are
+        # unaffected either way).
+        raw_unit_w_meta: Optional[np.ndarray] = None
+        if self._unit_resolved_survey is not None:
+            assert survey_design is not None
+            # `is not None`, not truthiness: resolve() treats any non-None
+            # string — an empty-string column name included — as a column.
+            raw_obs_w_meta = (
+                data[survey_design.weights].values.astype(np.float64)
+                if survey_design.weights is not None
+                else np.ones(len(data), dtype=np.float64)
+            )
+            raw_unit_w_meta = raw_obs_w_meta[self._unit_first_panel_row]
+        # Per-row ES df provenance (M-092 completion): the post-overall
+        # survey-df snapshot is the df the ES rows' safe_inference used.
+        # None when no ES surface was built, under bootstrap (percentile
+        # inference used no df — the shipped producer convention), and for
+        # the replicate-undefined 0 sentinel (representable only via
+        # survey_metadata.df_survey).
+        _es_df_final: Optional[float] = None
+        if event_study_effects is not None and bootstrap_results is None:
+            if _survey_df_post_overall is not None and _survey_df_post_overall > 0:
+                _es_df_final = float(_survey_df_post_overall)
         self.results_ = EfficientDiDResults(
             group_time_effects=group_time_effects,
             overall_att=overall_att,
@@ -1051,366 +1442,101 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             bootstrap_weights=self.bootstrap_weights,
             seed=self.seed,
             event_study_effects=event_study_effects,
+            event_study_df=_es_df_final,
             group_effects=group_effects,
             efficient_weights=stored_weights if stored_weights else None,
             omega_condition_numbers=stored_cond if stored_cond else None,
             control_group=self.control_group,
-            influence_functions=eif_by_gt if store_eif else None,
+            # 2-branch cluster_name/n_clusters resolution: suppress under any
+            # survey design (analytical TSL or replicate); populate under bare
+            # ``cluster=``; default to None under unclustered, non-survey fits.
+            # The default per-unit EIF SE ``sqrt(mean(EIF^2)/n)`` is HC1-style
+            # (not auto-cluster-at-unit), so no third unit-default branch.
+            cluster_name=(
+                None
+                if resolved_survey is not None
+                else (self.cluster if self.cluster is not None else None)
+            ),
+            n_clusters=(
+                None
+                if resolved_survey is not None
+                else (n_clusters if self.cluster is not None else None)
+            ),
+            vcov_type=self.vcov_type,
+            # Independent COPY, never the kit's arrays: the aggregation kit
+            # below retains eif_by_gt by reference as the canonical payload
+            # for post-fit aggregate(), so an aliased public diagnostic
+            # would let a user mutation silently corrupt recomputed
+            # SEs/p-values/CIs (M-023 review pin).
+            influence_functions=(
+                {gt: arr.copy() for gt, arr in eif_by_gt.items()} if store_eif else None
+            ),
             bootstrap_results=bootstrap_results,
             estimation_path="dr" if use_covariates else "nocov",
             sieve_k_max=self.sieve_k_max,
             sieve_criterion=self.sieve_criterion,
             ratio_clip=self.ratio_clip,
             kernel_bandwidth=self.kernel_bandwidth,
+            omega_ridge=self.omega_ridge,
             survey_metadata=(
-                self._recompute_unit_survey_metadata(survey_metadata)
+                self._recompute_unit_survey_metadata(survey_metadata, raw_unit_w_meta)
                 if survey_metadata is not None
                 else None
             ),
         )
+        # Attach the post-fit aggregation kit (M-023). Built HERE because
+        # the EIF dict and the unit-level bookkeeping are fit() locals that
+        # do not otherwise survive the call; ``results.aggregate()``
+        # recomputes from this retained payload without an estimator ref.
+        self.results_._aggregation_kit = _build_edid_aggregation_kit(
+            eif_by_gt=eif_by_gt,
+            group_time_effects=group_time_effects,
+            treatment_groups=treatment_groups,
+            time_periods=time_periods,
+            pt_assumption=self.pt_assumption,
+            n_units_total=n_treated_units + n_control_units,
+            n_units=n_units,
+            cohort_fractions=cohort_fractions,
+            unit_cohorts=unit_cohorts,
+            cluster_indices=unit_cluster_indices,
+            n_clusters=n_clusters,
+            unit_level_weights=self._unit_level_weights,
+            resolved_survey_unit=self._unit_resolved_survey,
+            df_survey=_survey_df_post_overall,
+            alpha=self.alpha,
+            anticipation=self.anticipation,
+            bootstrap_results=bootstrap_results,
+        )
         self.is_fitted_ = True
         return self.results_
 
-    def _recompute_unit_survey_metadata(self, panel_metadata):
-        """Recompute survey metadata from unit-level design if available."""
+    def _recompute_unit_survey_metadata(self, panel_metadata, raw_unit_weights=None):
+        """Recompute survey metadata from unit-level design if available.
+
+        ``raw_unit_weights`` carries the ORIGINAL-scale (pre-normalization)
+        unit weights and MUST be passed whenever ``_unit_resolved_survey``
+        is set — never fall back to ``_unit_resolved_survey.weights``, which
+        resolve() rescaled to mean 1 and would misreport sum_weights/
+        weight_range (scale-invariant fields are unaffected either way).
+        """
         if self._unit_resolved_survey is not None:
             from diff_diff.survey import compute_survey_metadata
 
+            assert raw_unit_weights is not None
             meta = compute_survey_metadata(
                 self._unit_resolved_survey,
-                self._unit_resolved_survey.weights,
+                raw_unit_weights,
             )
             # Propagate effective replicate df if available
             # (but not the df=0 sentinel — keep metadata as None for undefined df)
-            if (self._survey_df is not None and self._survey_df != 0
-                    and meta.df_survey != self._survey_df):
+            if (
+                self._survey_df is not None
+                and self._survey_df != 0
+                and meta.df_survey != self._survey_df
+            ):
                 meta.df_survey = self._survey_df
             return meta
         return panel_metadata
-
-    # -- Survey SE helpers ----------------------------------------------------
-
-    def _compute_survey_eif_se(self, eif_vals: np.ndarray) -> float:
-        """Compute SE from EIF scores using Taylor Series Linearization.
-
-        Uses the pre-built unit-level ``_unit_resolved_survey`` constructed
-        once in ``fit()``, ensuring consistent unit-level arrays and
-        avoiding repeated subsetting of panel-level survey data.
-        """
-        if self._unit_resolved_survey.uses_replicate_variance:
-            from diff_diff.survey import compute_replicate_if_variance
-
-            # Score-scale IFs to match TSL bread: psi = w * eif / sum(w)
-            w = self._unit_resolved_survey.weights
-            psi_scaled = w * eif_vals / w.sum()
-            variance, n_valid = compute_replicate_if_variance(psi_scaled, self._unit_resolved_survey)
-            # Update survey df to reflect effective replicate count
-            if n_valid < self._unit_resolved_survey.n_replicates:
-                self._survey_df = n_valid - 1 if n_valid > 1 else None
-            return float(np.sqrt(max(variance, 0.0))) if np.isfinite(variance) else np.nan
-
-        from diff_diff.survey import compute_survey_vcov
-
-        X_ones = np.ones((len(eif_vals), 1))
-        vcov = compute_survey_vcov(X_ones, eif_vals, self._unit_resolved_survey)
-        return float(np.sqrt(np.abs(vcov[0, 0])))
-
-    def _eif_se(
-        self,
-        eif_vals: np.ndarray,
-        n_units: int,
-        cluster_indices: Optional[np.ndarray] = None,
-        n_clusters: Optional[int] = None,
-    ) -> float:
-        """Compute SE from aggregated EIF scores.
-
-        Dispatches to survey TSL when ``_unit_resolved_survey`` is set
-        (during fit), otherwise uses cluster-robust or standard formula.
-        """
-        if self._unit_resolved_survey is not None:
-            return self._compute_survey_eif_se(eif_vals)
-        return _compute_se_from_eif(eif_vals, n_units, cluster_indices, n_clusters)
-
-    # -- Aggregation helpers --------------------------------------------------
-
-    def _compute_wif_contribution(
-        self,
-        keepers: List[Tuple],
-        effects: np.ndarray,
-        unit_cohorts: np.ndarray,
-        cohort_fractions: Dict[float, float],
-        n_units: int,
-    ) -> np.ndarray:
-        """Compute weight influence function correction (O(1) scale, matching EIF).
-
-        This accounts for uncertainty in cohort-size aggregation weights.
-        Matches R's ``did`` package WIF formula (staggered_aggregation.py:282-309),
-        adapted to EDiD's EIF scale.
-
-        Parameters
-        ----------
-        keepers : list of (g, t) tuples
-            Post-treatment group-time pairs included in aggregation.
-        effects : ndarray, shape (n_keepers,)
-            ATT estimates for each keeper.
-        unit_cohorts : ndarray, shape (n_units,)
-            Cohort assignment for each unit (0 = never-treated).
-        cohort_fractions : dict
-            ``{cohort: n_cohort / n}`` for each cohort.
-        n_units : int
-            Total number of units.
-
-        Returns
-        -------
-        ndarray, shape (n_units,)
-            WIF contribution at O(1) scale, additive with ``agg_eif``.
-        """
-        groups_for_keepers = np.array([g for (g, t) in keepers])
-        pg_keepers = np.array([cohort_fractions.get(g, 0.0) for g, t in keepers])
-        sum_pg = pg_keepers.sum()
-        if sum_pg == 0:
-            return np.zeros(n_units)
-
-        indicator = (unit_cohorts[:, None] == groups_for_keepers[None, :]).astype(float)
-        indicator_sum = np.sum(indicator - pg_keepers, axis=1)
-
-        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-            if1 = (indicator - pg_keepers) / sum_pg
-            if2 = np.outer(indicator_sum, pg_keepers) / sum_pg**2
-            wif_matrix = if1 - if2
-            wif_contrib = wif_matrix @ effects
-        return wif_contrib  # O(1) scale, same as agg_eif
-
-    def _aggregate_overall(
-        self,
-        group_time_effects: Dict[Tuple[Any, Any], Dict[str, Any]],
-        eif_by_gt: Dict[Tuple[Any, Any], np.ndarray],
-        n_units: int,
-        cohort_fractions: Dict[float, float],
-        unit_cohorts: np.ndarray,
-        cluster_indices: Optional[np.ndarray] = None,
-        n_clusters: Optional[int] = None,
-    ) -> Tuple[float, float]:
-        """Compute overall ATT with WIF-adjusted SE.
-
-        Parameters
-        ----------
-        group_time_effects : dict
-            Group-time ATT estimates.
-        eif_by_gt : dict
-            Per-unit EIF values for each (g, t).
-        n_units : int
-            Total number of units.
-        cohort_fractions : dict
-            Cohort size fractions.
-        unit_cohorts : ndarray, shape (n_units,)
-            Cohort assignment for each unit.
-        """
-        # Filter to post-treatment effects
-        keepers = [
-            (g, t)
-            for (g, t) in group_time_effects
-            if t >= g - self.anticipation and np.isfinite(group_time_effects[(g, t)]["effect"])
-        ]
-        if not keepers:
-            return np.nan, np.nan
-
-        # Cohort-size weights
-        pg = np.array([cohort_fractions.get(g, 0.0) for (g, _) in keepers])
-        total_pg = pg.sum()
-        if total_pg == 0:
-            return np.nan, np.nan
-        w = pg / total_pg
-
-        effects = np.array([group_time_effects[gt]["effect"] for gt in keepers])
-        overall_att = float(np.sum(w * effects))
-
-        # Aggregate EIF
-        agg_eif = np.zeros(n_units)
-        for k, gt in enumerate(keepers):
-            agg_eif += w[k] * eif_by_gt[gt]
-
-        # WIF correction: accounts for uncertainty in cohort-size weights
-        wif = self._compute_wif_contribution(
-            keepers, effects, unit_cohorts, cohort_fractions, n_units
-        )
-        agg_eif_total = agg_eif + wif  # both O(1) scale
-
-        # SE = sqrt(mean(EIF^2) / n) — standard IF-based SE
-        # (dispatches to survey TSL or cluster-robust when active)
-        se = self._eif_se(agg_eif_total, n_units, cluster_indices, n_clusters)
-
-        return overall_att, se
-
-    def _aggregate_event_study(
-        self,
-        group_time_effects: Dict[Tuple[Any, Any], Dict[str, Any]],
-        eif_by_gt: Dict[Tuple[Any, Any], np.ndarray],
-        n_units: int,
-        cohort_fractions: Dict[float, float],
-        treatment_groups: List[Any],
-        time_periods: List[Any],
-        balance_e: Optional[int] = None,
-        unit_cohorts: Optional[np.ndarray] = None,
-        cluster_indices: Optional[np.ndarray] = None,
-        n_clusters: Optional[int] = None,
-    ) -> Dict[int, Dict[str, Any]]:
-        """Aggregate ATT(g,t) by relative time e = t - g.
-
-        Parameters
-        ----------
-        group_time_effects : dict
-            Group-time ATT estimates.
-        eif_by_gt : dict
-            Per-unit EIF values for each (g, t).
-        n_units : int
-            Total number of units.
-        cohort_fractions : dict
-            Cohort size fractions.
-        treatment_groups : list
-            Treatment cohort identifiers.
-        time_periods : list
-            All time periods.
-        balance_e : int, optional
-            Balance event study at this relative period.
-        unit_cohorts : ndarray, optional
-            Cohort assignment for each unit (for WIF correction).
-        """
-        # Organize by relative time
-        effects_by_e: Dict[int, List[Tuple[Tuple[Any, Any], float, float]]] = {}
-        for (g, t), data in group_time_effects.items():
-            if not np.isfinite(data["effect"]):
-                continue
-            e = int(t - g)
-            if e not in effects_by_e:
-                effects_by_e[e] = []
-            effects_by_e[e].append(((g, t), data["effect"], cohort_fractions.get(g, 0.0)))
-
-        # Balance if requested
-        if balance_e is not None:
-            groups_at_e = {gt[0] for gt, _, _ in effects_by_e.get(balance_e, [])}
-            balanced: Dict[int, List[Tuple[Tuple[Any, Any], float, float]]] = {}
-            for (g, t), data in group_time_effects.items():
-                if not np.isfinite(data["effect"]):
-                    continue
-                if g in groups_at_e:
-                    e = int(t - g)
-                    if e not in balanced:
-                        balanced[e] = []
-                    balanced[e].append(((g, t), data["effect"], cohort_fractions.get(g, 0.0)))
-            effects_by_e = balanced
-
-        if balance_e is not None and not effects_by_e:
-            warnings.warn(
-                f"balance_e={balance_e}: no cohort has a finite effect at the "
-                "anchor horizon. Event study will be empty.",
-                UserWarning,
-                stacklevel=2,
-            )
-
-        result: Dict[int, Dict[str, Any]] = {}
-        for e, elist in sorted(effects_by_e.items()):
-            gt_pairs = [x[0] for x in elist]
-            effs = np.array([x[1] for x in elist])
-            pgs = np.array([x[2] for x in elist])
-            total_pg = pgs.sum()
-            w = pgs / total_pg if total_pg > 0 else np.ones(len(pgs)) / len(pgs)
-
-            agg_eff = float(np.sum(w * effs))
-
-            # Aggregate EIF
-            agg_eif = np.zeros(n_units)
-            for k, gt in enumerate(gt_pairs):
-                agg_eif += w[k] * eif_by_gt[gt]
-
-            # WIF correction for event-study aggregation
-            if unit_cohorts is not None:
-                es_keepers = [(g, t) for (g, t) in gt_pairs]
-                es_effects = effs
-                wif = self._compute_wif_contribution(
-                    es_keepers, es_effects, unit_cohorts, cohort_fractions, n_units
-                )
-                agg_eif = agg_eif + wif
-
-            agg_se = self._eif_se(agg_eif, n_units, cluster_indices, n_clusters)
-
-            t_stat, p_val, ci = safe_inference(
-                agg_eff, agg_se, alpha=self.alpha, df=self._survey_df
-            )
-            result[e] = {
-                "effect": agg_eff,
-                "se": agg_se,
-                "t_stat": t_stat,
-                "p_value": p_val,
-                "conf_int": ci,
-                "n_groups": len(elist),
-            }
-
-        return result
-
-    def _aggregate_by_group(
-        self,
-        group_time_effects: Dict[Tuple[Any, Any], Dict[str, Any]],
-        eif_by_gt: Dict[Tuple[Any, Any], np.ndarray],
-        n_units: int,
-        cohort_fractions: Dict[float, float],
-        treatment_groups: List[Any],
-        unit_cohorts: Optional[np.ndarray] = None,
-        cluster_indices: Optional[np.ndarray] = None,
-        n_clusters: Optional[int] = None,
-    ) -> Dict[Any, Dict[str, Any]]:
-        """Aggregate ATT(g,t) by treatment cohort.
-
-        Parameters
-        ----------
-        group_time_effects : dict
-            Group-time ATT estimates.
-        eif_by_gt : dict
-            Per-unit EIF values for each (g, t).
-        n_units : int
-            Total number of units.
-        cohort_fractions : dict
-            Cohort size fractions.
-        treatment_groups : list
-            Treatment cohort identifiers.
-        unit_cohorts : ndarray, optional
-            Cohort assignment for each unit (unused — group aggregation
-            uses equal weights, not cohort-size weights).
-        """
-        result: Dict[Any, Dict[str, Any]] = {}
-        for g in treatment_groups:
-            g_gts = [
-                (gg, t)
-                for (gg, t) in group_time_effects
-                if gg == g
-                and t >= g - self.anticipation
-                and np.isfinite(group_time_effects[(gg, t)]["effect"])
-            ]
-            if not g_gts:
-                continue
-
-            effs = np.array([group_time_effects[gt]["effect"] for gt in g_gts])
-            w = np.ones(len(effs)) / len(effs)
-            agg_eff = float(np.sum(w * effs))
-
-            agg_eif = np.zeros(n_units)
-            for k, gt in enumerate(g_gts):
-                agg_eif += w[k] * eif_by_gt[gt]
-            agg_se = self._eif_se(agg_eif, n_units, cluster_indices, n_clusters)
-
-            t_stat, p_val, ci = safe_inference(
-                agg_eff, agg_se, alpha=self.alpha, df=self._survey_df
-            )
-            result[g] = {
-                "effect": agg_eff,
-                "se": agg_se,
-                "t_stat": t_stat,
-                "p_value": p_val,
-                "conf_int": ci,
-                "n_periods": len(g_gts),
-            }
-
-        return result
 
     def summary(self) -> str:
         """Get summary of estimation results."""
@@ -1454,19 +1580,25 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         cluster : str, optional
             Cluster column for cluster-robust covariance.
         anticipation : int
-            Anticipation periods.
+            Anticipation periods. Must be a non-negative integer; ``bool``
+            is rejected.
         control_group : str
             ``"never_treated"`` or ``"last_cohort"``.
         alpha : float
             Significance level for the test.
         **nuisance_kwargs
-            Passed to both fits (e.g. ``sieve_k_max``, ``ratio_clip``).
+            Passed to both fits (e.g. ``sieve_k_max``, ``ratio_clip``,
+            ``omega_ridge``).
 
         Returns
         -------
         HausmanPretestResult
         """
-        from scipy.stats import chi2
+        # The classmethod uses `anticipation` in its OWN event-time
+        # arithmetic (`e < -ant` below), not just forwarding to the two
+        # constructed estimators — validate and normalize it here so an
+        # unsigned numpy scalar cannot wrap the comparison.
+        anticipation = validate_anticipation(anticipation)
 
         # Fit under both assumptions (analytical SEs only, no bootstrap)
         common_kwargs = dict(
@@ -1483,7 +1615,6 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             time=time,
             first_treat=first_treat,
             covariates=covariates,
-            aggregate=None,
         )
 
         edid_all = cls(pt_assumption="all", alpha=alpha, **common_kwargs)
@@ -1533,8 +1664,12 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         ) -> Dict[int, Tuple[float, np.ndarray]]:
             """Aggregate (g,t) effects to post-treatment ES(e) with WIF-corrected EIF."""
             by_e: Dict[int, List[Tuple[Tuple, float, float, np.ndarray]]] = {}
+            _has_fractional = False
             for (g, t), d in gt_effects.items():
-                e = int(t - g)
+                raw_e = t - g
+                e = int(raw_e)
+                if raw_e != e:
+                    _has_fractional = True
                 if e < -ant:
                     continue
                 if not np.isfinite(d["effect"]):
@@ -1548,6 +1683,15 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 if e not in by_e:
                     by_e[e] = []
                 by_e[e].append(((g, t), d["effect"], pg, eif_vec))
+
+            if _has_fractional:
+                warnings.warn(
+                    "Fractional relative times detected: Hausman pre-test "
+                    "horizons are bucketed by int(t - g) (truncation toward "
+                    "zero). See the EfficientDiD REGISTRY truncation Note.",
+                    UserWarning,
+                    stacklevel=3,
+                )
 
             result: Dict[int, Tuple[float, np.ndarray]] = {}
             for e, items in by_e.items():
@@ -1630,22 +1774,16 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 cov_all = (eif_all_mat.T @ eif_all_mat) / (n_units**2)
                 cov_post = (eif_post_mat.T @ eif_post_mat) / (n_units**2)
 
-        V = cov_post - cov_all
-
-        if not np.all(np.isfinite(V)):
+        H, effective_rank, p_value, n_negative, finite_ok = _hausman_quadratic_form(
+            delta, cov_post, cov_all
+        )
+        if not finite_ok:
             warnings.warn(
                 "Hausman covariance matrix contains non-finite values. " "The test is unreliable.",
                 UserWarning,
                 stacklevel=2,
             )
             return _nan_result()
-
-        # Eigendecompose V — check for non-PSD
-        eigvals = np.linalg.eigvalsh(V)
-        max_eigval = np.max(np.abs(eigvals)) if len(eigvals) > 0 else 0.0
-        tol = max(1e-10 * max_eigval, 1e-15)
-
-        n_negative = int(np.sum(eigvals < -tol))
         if n_negative > 0:
             warnings.warn(
                 f"Hausman variance-difference matrix V has {n_negative} "
@@ -1654,16 +1792,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 UserWarning,
                 stacklevel=2,
             )
-
-        effective_rank = int(np.sum(eigvals > tol))
         if effective_rank == 0:
             return _nan_result()
-
-        V_pinv = np.linalg.pinv(V, rcond=tol / max_eigval if max_eigval > 0 else 1e-10)
-        H = float(delta @ V_pinv @ delta)
-        H = max(H, 0.0)
-
-        p_value = float(chi2.sf(H, df=effective_rank))
         reject = p_value < alpha
 
         es_details = pd.DataFrame(

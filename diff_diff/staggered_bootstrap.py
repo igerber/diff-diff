@@ -1,5 +1,5 @@
 """
-Bootstrap inference for Callaway-Sant'Anna estimator.
+Bootstrap inference for CallawaySantAnna and the other staggered payload producers.
 
 This module provides the bootstrap results container and the mixin class
 with bootstrap inference methods. Weight generation and statistical helpers
@@ -8,10 +8,18 @@ are in :mod:`diff_diff.bootstrap_utils`.
 
 import warnings
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 
+from diff_diff.bootstrap_chunking import (
+    ReplayableWeightStream,
+    compute_block_size,
+    effective_weight_backend,
+    iter_survey_multiplier_weight_blocks,
+    iter_weight_blocks,
+    tiled_if_matmul,
+)
 from diff_diff.bootstrap_utils import (
     compute_bootstrap_pvalue as _compute_bootstrap_pvalue_func,
 )
@@ -23,12 +31,6 @@ from diff_diff.bootstrap_utils import (
 )
 from diff_diff.bootstrap_utils import (
     compute_percentile_ci as _compute_percentile_ci_func,
-)
-from diff_diff.bootstrap_utils import (
-    generate_bootstrap_weights_batch as _generate_bootstrap_weights_batch,
-)
-from diff_diff.bootstrap_utils import (
-    generate_survey_multiplier_weights_batch as _generate_survey_multiplier_weights_batch,
 )
 
 if TYPE_CHECKING:
@@ -81,6 +83,12 @@ class CSBootstrapResults:
         Bootstrap p-values for group effects.
     bootstrap_distribution : Optional[np.ndarray]
         Full bootstrap distribution of overall ATT (if requested).
+    overall_att_es_se : Optional[float]
+        Bootstrap standard error for the paper Eq. 4.14 overall (event-study average).
+    overall_att_es_ci : Optional[Tuple[float, float]]
+        Bootstrap confidence interval for the Eq. 4.14 overall.
+    overall_att_es_p_value : Optional[float]
+        Bootstrap p-value for the Eq. 4.14 overall.
     """
 
     n_bootstrap: int
@@ -100,6 +108,23 @@ class CSBootstrapResults:
     group_effect_p_values: Optional[Dict[Any, float]] = None
     bootstrap_distribution: Optional[np.ndarray] = field(default=None, repr=False)
     cband_crit_value: Optional[float] = None
+    # Paper Eq. (4.14) overall (event-study average) bootstrap inference.
+    overall_att_es_se: Optional[float] = None
+    overall_att_es_ci: Optional[Tuple[float, float]] = None
+    overall_att_es_p_value: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        # Post-fit replay bookkeeping, attached as PLAIN attributes (never
+        # dataclass fields) so the exported class's __init__ signature,
+        # dataclasses.fields() and asdict() stay unchanged — the same
+        # private-carrier pattern the results objects use for retained
+        # state. `_replay_bitgen_state` is the RNG snapshot taken at
+        # weight-stream construction; `_replay_backend` is the
+        # generation-branch identity ("rust"/"numpy", or "portable" for
+        # provably backend-independent branches). Both are populated by
+        # _run_multiplier_bootstrap on every run and pickle via __dict__.
+        self._replay_bitgen_state: Optional[Dict[str, Any]] = None
+        self._replay_backend: Optional[str] = None
 
 
 # =============================================================================
@@ -109,16 +134,27 @@ class CSBootstrapResults:
 
 class CallawaySantAnnaBootstrapMixin:
     """
-    Mixin class providing bootstrap inference methods for CallawaySantAnna.
+    Mixin class providing bootstrap inference for the staggered family.
 
     This class is not intended to be used standalone. It provides methods
-    that are used by the main CallawaySantAnna class for multiplier bootstrap
-    inference.
+    used by CallawaySantAnna and the other staggered payload producers
+    (the DDD engine hosts, DMLDiD, and the kit aggregators) for multiplier
+    bootstrap inference.
     """
 
     # Type hints for attributes accessed from the main class
+    # Host-supplied estimator name for user-facing bootstrap warnings. Declared
+    # here because mypy type-checks the mixin independently of its hosts, so
+    # `self._BOOTSTRAP_LABEL` would otherwise be [attr-defined]. A PLAIN
+    # annotation (not ClassVar): estimator hosts assign it as class-level
+    # constant data (valid for an instance-variable declaration), while the
+    # kit-replay host (`staggered_results._KitBootstrapAggregator`) sets it
+    # per-instance from the kit's recorded label — a ClassVar here would make
+    # that instance assignment a "cannot assign to class variable via
+    # instance" [misc] error.
+    _BOOTSTRAP_LABEL: str
     n_bootstrap: int
-    bootstrap_weight_type: str
+    bootstrap_weights: str
     alpha: float
     seed: Optional[int]
     anticipation: int
@@ -132,8 +168,12 @@ class CallawaySantAnnaBootstrapMixin:
             effects: np.ndarray,
             groups_for_gt: np.ndarray,
             influence_func_info: Dict,
-            df: "pd.DataFrame",
-            unit: str,
+            # Optional to match the aggregation mixin, whose implementation this
+            # stub shadows: post-fit aggregation runs from the retained kit with
+            # no frame. A narrower stub here makes the two base classes
+            # incompatible wherever both are mixed in.
+            df: Optional["pd.DataFrame"],
+            unit: Optional[str],
             precomputed: Optional["PrecomputedData"] = None,
             global_unit_to_idx: Optional[Dict[Any, int]] = None,
             n_global_units: Optional[int] = None,
@@ -151,9 +191,20 @@ class CallawaySantAnnaBootstrapMixin:
         unit: Optional[str] = None,
         precomputed: Any = None,
         cband: bool = True,
+        *,
+        _replay_bitgen_state: Optional[Dict[str, Any]] = None,
     ) -> CSBootstrapResults:
         """
         Run multiplier bootstrap for inference on all parameters.
+
+        ``_replay_bitgen_state`` (keyword-only, package-internal): a
+        bit-generator state captured by a previous run. When given, the RNG
+        is restored to it instead of seeding from ``self.seed``, so the
+        multiplier-weight stream replays bit-identically — the post-fit
+        ``aggregate()`` replay path. Valid only under the SAME weight
+        backend that captured it (see
+        :func:`diff_diff.bootstrap_chunking.effective_weight_backend`);
+        the caller enforces the backend guard.
 
         This implements the multiplier bootstrap procedure from Callaway & Sant'Anna (2021).
         The key idea is to perturb the influence function contributions with random
@@ -179,17 +230,26 @@ class CallawaySantAnnaBootstrapMixin:
         CSBootstrapResults
             Bootstrap inference results.
         """
-        # Warn about low bootstrap iterations
+        # Warn about low bootstrap iterations. This site is USER-attributed, and
+        # the DDD engine reaches it through one or two extra frames depending on
+        # which surface was called, so it consults the offset the engine mirrors
+        # onto the instance for the duration of a fit. CallawaySantAnna never
+        # sets the attribute, so its attribution is bit-identical to 3.x.
         if self.n_bootstrap < 50:
             warnings.warn(
                 f"n_bootstrap={self.n_bootstrap} is low. Consider n_bootstrap >= 199 "
                 "for reliable inference. Percentile confidence intervals and p-values "
                 "may be unreliable with few iterations.",
                 UserWarning,
-                stacklevel=3,
+                stacklevel=3 + getattr(self, "_warn_frame_offset", 0),
             )
 
         rng = np.random.default_rng(self.seed)
+        if _replay_bitgen_state is not None:
+            # Post-fit replay: restore the exact state the fit-time run
+            # captured at weight-stream construction. Nothing below consumes
+            # the rng before that point, so the stream is bit-identical.
+            rng.bit_generator.state = _replay_bitgen_state
 
         # Use global unit set for correct pg = n_g / N_total scaling.
         # Without this, pg is overestimated in unbalanced panels where some
@@ -199,11 +259,27 @@ class CallawaySantAnnaBootstrapMixin:
             n_units = precomputed.get("canonical_size", len(all_units))
             unit_to_idx = precomputed["unit_to_idx"]  # None for RCS
         else:
-            # Fallback: collect units from influence functions
+            # Fallback: collect units from influence functions. Needs the
+            # per-cell unit-LABEL arrays, which in-package fits stopped
+            # materializing (v3.8 per-cell allocation shave) — every
+            # in-package caller threads `precomputed`, so this branch is
+            # unreachable from a fit. Direct callers must thread
+            # `precomputed` or supply label arrays.
             all_units_set = set()
             for (g, t), info in influence_func_info.items():
-                all_units_set.update(info["treated_units"])
-                all_units_set.update(info["control_units"])
+                t_units = info.get("treated_units")
+                c_units = info.get("control_units")
+                if t_units is None or c_units is None:
+                    raise ValueError(
+                        "Multiplier bootstrap without `precomputed` requires "
+                        "per-cell 'treated_units'/'control_units' label arrays "
+                        "in influence_func_info; in-package fits no longer "
+                        "materialize them. Thread `precomputed` (as all "
+                        "in-package callers do), or add the label arrays to "
+                        "your influence_func_info."
+                    )
+                all_units_set.update(t_units)
+                all_units_set.update(c_units)
             all_units = sorted(all_units_set)
             # Use global N from dataframe when available
             n_units = (
@@ -227,26 +303,22 @@ class CallawaySantAnnaBootstrapMixin:
         # analytical _aggregate_simple() path in staggered_aggregation.py.
         # Do NOT use per-cell survey_weight_sum (which varies by cell on
         # unbalanced panels).
-        survey_w = precomputed.get("survey_weights") if precomputed is not None else None
-        if survey_w is not None:
-            unit_cohorts = precomputed["unit_cohorts"]
-            # Precompute fixed cohort masses (same formula as _aggregate_simple)
-            _cohort_mass_cache: dict = {}
-            for gt in gt_pairs:
-                g = gt[0]
-                if g not in _cohort_mass_cache:
-                    _cohort_mass_cache[g] = float(np.sum(survey_w[unit_cohorts == g]))
-            all_n_treated = np.array([_cohort_mass_cache[gt[0]] for gt in gt_pairs], dtype=float)
-        else:
-            # Use agg_weight if available (RCS: fixed cohort mass);
-            # fall back to n_treated for panel data
-            all_n_treated = np.array(
-                [
-                    group_time_effects[gt].get("agg_weight", group_time_effects[gt]["n_treated"])
-                    for gt in gt_pairs
-                ],
-                dtype=float,
-            )
+        # Fixed per-cohort aggregation masses — the SAME single source of truth
+        # the analytical _aggregate_simple() / _aggregate_event_study() use, so
+        # the bootstrap weights an unbalanced-panel (allow_unbalanced_panel) RC
+        # aggregation by fixed UNIT cohort mass, not observation count. Returns
+        # None for panel non-survey (→ per-cell agg_weight/n_treated fallback).
+        from diff_diff.staggered_aggregation import fixed_cohort_agg_weights
+
+        _fixed_masses = fixed_cohort_agg_weights(precomputed)
+
+        def _agg_mass(gt):
+            g = gt[0]
+            if _fixed_masses is not None and g in _fixed_masses:
+                return _fixed_masses[g]
+            return group_time_effects[gt].get("agg_weight", group_time_effects[gt]["n_treated"])
+
+        all_n_treated = np.array([_agg_mass(gt) for gt in gt_pairs], dtype=float)
         post_n_treated = all_n_treated[post_treatment_mask]
 
         # Filter out NaN ATT(g,t) cells from overall aggregation (matches analytical path)
@@ -326,11 +398,53 @@ class CallawaySantAnnaBootstrapMixin:
             or resolved_survey_unit.fpc is not None
         )
 
+        # When the bootstrap routes through PSU-multiplier weights, the
+        # bootstrap variance is unidentified if there are fewer than 2
+        # PSUs (single-cluster designs collapse all multiplier draws to
+        # constants → ≈0 variance from BLAS roundoff, NOT NaN). Without
+        # this guard, downstream safe_inference would silently produce
+        # tight CIs and near-zero p-values for a variance that's actually
+        # undefined. Capture the flag here and NaN-out all bootstrap
+        # inference surfaces before return (per feedback_no_silent_failures).
+        _bootstrap_cluster_variance_unidentified = False
+
         if _use_survey_bootstrap:
-            # PSU-level multiplier weights
-            psu_weights, psu_ids = _generate_survey_multiplier_weights_batch(
-                self.n_bootstrap, resolved_survey_unit, self.bootstrap_weight_type, rng
-            )
+            # The flag definition above guarantees this (mypy can't track it).
+            assert resolved_survey_unit is not None
+            # PSU-level multiplier weights, generated AND expanded one draw-block
+            # at a time so the (n_bootstrap, n_units) matrix is never built in
+            # full. This is the dominant allocation at large n_units, including
+            # the default unit-level bootstrap (cluster=None, equivalently
+            # cluster="unit": each unit its own PSU, n_psu == n_units).
+            # Unstratified designs tile the generation; stratified designs (few
+            # PSUs) fall back to full generation + sliced blocks.
+            _block_size = compute_block_size(n_units, self.n_bootstrap)
+            # Resolve psu_ids WITHOUT calling the generator: the stratified
+            # branch of iter_survey_multiplier_weight_blocks draws from the rng
+            # eagerly at call time, and the replayable stream below must
+            # snapshot the rng state before any draw. This duplicates the
+            # rng-free resolution both generator branches use (np.unique /
+            # np.arange), so the column order of the generated PSU matrix
+            # matches unit_to_psu_col.
+            if resolved_survey_unit.psu is not None:
+                psu_ids = np.unique(resolved_survey_unit.psu)
+            else:
+                psu_ids = np.arange(len(resolved_survey_unit.weights))
+            if len(psu_ids) < 2:
+                import warnings as _warnings
+
+                _warnings.warn(
+                    f"{self._BOOTSTRAP_LABEL} bootstrap with survey/cluster design "
+                    f"has only {len(psu_ids)} PSU(s); bootstrap variance is "
+                    "unidentified. All bootstrap inference fields "
+                    "(overall_se, group_time_ses, event_study_ses, "
+                    "group_effect_ses, and their CIs / p-values) will be "
+                    "NaN. Use n_bootstrap=0 (analytical IF variance) or "
+                    "a design with at least 2 PSUs.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                _bootstrap_cluster_variance_unidentified = True
             # Build unit → PSU column map
             if resolved_survey_unit.psu is not None:
                 unit_psu = resolved_survey_unit.psu
@@ -342,44 +456,78 @@ class CallawaySantAnnaBootstrapMixin:
                 # Each unit is its own PSU — identity mapping
                 unit_to_psu_col = np.arange(n_units)
 
-            # Expand PSU weights to unit level for per-(g,t) perturbation
-            # Shape: (n_bootstrap, n_units)
-            all_bootstrap_weights = psu_weights[:, unit_to_psu_col]
-        else:
-            # Standard unit-level weights (no survey or weights-only)
-            all_bootstrap_weights = _generate_bootstrap_weights_batch(
-                self.n_bootstrap, n_units, self.bootstrap_weight_type, rng
+            # When each unit is its own PSU (e.g. cluster="unit"), the PSU block
+            # is already unit-aligned, so the fancy-index expansion is an
+            # identity permutation whose only effect is a needless full-block
+            # copy (doubling live block memory). Detect that once and skip it.
+            _psu_is_identity = len(psu_ids) == n_units and bool(
+                np.array_equal(unit_to_psu_col, np.arange(n_units))
             )
 
-        # Vectorized bootstrap ATT(g,t) computation
-        # Compute all bootstrap ATTs for all (g,t) pairs using matrix operations
-        bootstrap_atts_gt = np.zeros((self.n_bootstrap, n_gt))
+            # Factory recreating the PSU generation + unit-level expansion per
+            # pass; the full (n_bootstrap, n_units) expansion is never
+            # materialized at once.
+            def _make_weight_iter(
+                rng_: np.random.Generator,
+            ) -> Iterator[Tuple[int, np.ndarray]]:
+                _, _psu_blocks = iter_survey_multiplier_weight_blocks(
+                    self.n_bootstrap,
+                    resolved_survey_unit,
+                    self.bootstrap_weights,
+                    rng_,
+                    block_size=_block_size,
+                )
 
-        for j in range(n_gt):
-            treated_idx = gt_treated_indices[j]
-            control_idx = gt_control_indices[j]
-            treated_inf = gt_treated_inf[j]
-            control_inf = gt_control_inf[j]
+                def _expanded() -> Iterator[Tuple[int, np.ndarray]]:
+                    for _cs, _psu_block in _psu_blocks:
+                        if _psu_is_identity:
+                            yield _cs, _psu_block
+                        else:
+                            yield _cs, _psu_block[:, unit_to_psu_col]
 
-            # Extract weights for this (g,t)'s units across all bootstrap iterations
-            # Shape: (n_bootstrap, n_treated) and (n_bootstrap, n_control)
-            treated_weights = all_bootstrap_weights[:, treated_idx]
-            control_weights = all_bootstrap_weights[:, control_idx]
+                return _expanded()
 
-            # Vectorized perturbation: matrix-vector multiply
-            # Shape: (n_bootstrap,)
-            # Suppress RuntimeWarnings for edge cases (small samples, extreme weights)
-            with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                perturbations = treated_weights @ treated_inf + control_weights @ control_inf
-
-            # Let non-finite values propagate - they will be handled at statistics computation
-            bootstrap_atts_gt[:, j] = original_atts[j] + perturbations
-
-        # Vectorized overall ATT using combined IF (includes WIF)
-        # Shape: (n_bootstrap,)
-        if skip_overall_aggregation:
-            bootstrap_overall = np.full(self.n_bootstrap, np.nan)
         else:
+            # Standard unit-level weights (no survey or weights-only), generated
+            # one row-block at a time directly at unit width.
+            def _make_weight_iter(
+                rng_: np.random.Generator,
+            ) -> Iterator[Tuple[int, np.ndarray]]:
+                return iter_weight_blocks(self.n_bootstrap, n_units, self.bootstrap_weights, rng_)
+
+        # Snapshot the rng state HERE — the value that fully determines the
+        # weight stream (nothing above consumed the rng; the survey psu
+        # resolution deliberately avoids it). Retained on the returned
+        # container for the post-fit aggregate() replay. `_replay_backend`
+        # records the generation-branch identity: "portable" for branches
+        # whose draws are provably identical under either weight backend —
+        # the stratified / single-PSU survey generator draws through the
+        # NumPy generator unconditionally, and the unstratified census-FPC
+        # case (fpc[0] <= n_psu, mirroring iter_survey_multiplier_weight_
+        # blocks' fpc_zero) replaces every block with zeros — else the
+        # current effective backend, because Rust and NumPy produce
+        # DIFFERENT draws from the same bit-generator state.
+        replay_bitgen_state = dict(rng.bit_generator.state)
+        _backend_independent = False
+        if _use_survey_bootstrap:
+            assert resolved_survey_unit is not None
+            _fpc = getattr(resolved_survey_unit, "fpc", None)
+            _n_psu = len(psu_ids)  # bound above in the survey branch
+            _backend_independent = (
+                resolved_survey_unit.strata is not None
+                or _n_psu < 2
+                or (_fpc is not None and _n_psu / _fpc[0] >= 1.0)
+            )
+        replay_backend = "portable" if _backend_independent else effective_weight_backend()
+
+        # Re-iterable stream: each column tile of the fused perturbation GEMM
+        # below makes its own full pass over the bit-identical weight stream.
+        weight_stream = ReplayableWeightStream(_make_weight_iter, rng)
+
+        # Pre-compute the overall combined IF once (reused across every block).
+        # None exactly when the overall aggregation is skipped.
+        overall_combined_if: Optional[np.ndarray] = None
+        if not skip_overall_aggregation:
             # Use combined IF (standard IF + WIF) for proper bootstrap
             post_gt_pairs = [gt_pairs[i] for i in post_treatment_indices]
             post_groups = np.array([gt_pairs[i][0] for i in post_treatment_indices])
@@ -396,38 +544,93 @@ class CallawaySantAnnaBootstrapMixin:
                 global_unit_to_idx=unit_to_idx,
                 n_global_units=n_units,
             )
-            with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                bootstrap_overall = original_overall + all_bootstrap_weights @ overall_combined_if
 
-        # Vectorized event study aggregation using combined IFs
-        # Non-finite values handled at statistics computation stage
         rel_periods: List[int] = []
-        bootstrap_event_study: Optional[Dict[int, np.ndarray]] = None
         if event_study_info is not None:
             rel_periods = sorted(event_study_info.keys())
-            bootstrap_event_study = {}
-            for e in rel_periods:
-                agg_info = event_study_info[e]
-                # Use combined IF (standard IF + WIF) for proper bootstrap
-                with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                    bootstrap_event_study[e] = (
-                        agg_info["effect"] + all_bootstrap_weights @ agg_info["combined_if"]
-                    )
 
-        # Vectorized group aggregation
-        # Non-finite values handled at statistics computation stage
         group_list: List[Any] = []
-        bootstrap_group: Optional[Dict[Any, np.ndarray]] = None
         if group_agg_info is not None:
             group_list = sorted(group_agg_info.keys())
-            bootstrap_group = {}
-            for g in group_list:
-                agg_info = group_agg_info[g]
-                gt_indices = agg_info["gt_indices"]
-                weights = agg_info["weights"]
-                # Suppress RuntimeWarnings for edge cases
-                with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                    bootstrap_group[g] = bootstrap_atts_gt[:, gt_indices] @ weights
+
+        # Fused perturbation columns: [per-cell IFs | overall combined IF |
+        # per-event-time combined IFs]. One column-tiled GEMM over the
+        # replayable weight stream replaces the former per-cell
+        # ``W[:, idx] @ inf`` slicing loop, which was memory-bandwidth-bound
+        # (two fancy-index copies of the weight block per cell). The weight
+        # stream is bit-identical to the per-block path; the BLAS reductions
+        # may reassociate, so statistics match to within ~1 ULP (far below
+        # bootstrap Monte-Carlo error), not bit-for-bit. Treated/control index
+        # arrays are disjoint per cell, satisfying the kernel's
+        # assignment-scatter contract.
+        columns: List[Any] = [
+            [
+                (gt_treated_indices[j], gt_treated_inf[j]),
+                (gt_control_indices[j], gt_control_inf[j]),
+            ]
+            for j in range(n_gt)
+        ]
+        overall_col = -1
+        if overall_combined_if is not None:
+            overall_col = len(columns)
+            columns.append([(None, overall_combined_if)])
+        es_col0 = len(columns)
+        # rel_periods is non-empty only when event-study info was built.
+        assert event_study_info is not None or not rel_periods
+        for e in rel_periods:
+            assert event_study_info is not None
+            columns.append([(None, event_study_info[e]["combined_if"])])
+
+        perturbations = tiled_if_matmul(weight_stream, self.n_bootstrap, n_units, columns)
+
+        # Reconstruct the bootstrap draws (small, n_bootstrap-sized arrays).
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            bootstrap_atts_gt = original_atts[None, :] + perturbations[:, :n_gt]
+            if skip_overall_aggregation:
+                bootstrap_overall = np.full(self.n_bootstrap, np.nan)
+            else:
+                bootstrap_overall = original_overall + perturbations[:, overall_col]
+
+            bootstrap_event_study: Optional[Dict[int, np.ndarray]] = None
+            if event_study_info is not None:
+                bootstrap_event_study = {
+                    e: event_study_info[e]["effect"] + perturbations[:, es_col0 + k]
+                    for k, e in enumerate(rel_periods)
+                }
+
+            # Group aggregation: fixed-weight re-aggregation of the completed
+            # perturbed cell draws (matches at reassociation level).
+            # Degenerate weight streams (census-FPC zeroes every block) leave
+            # every replicate row of the cell draws IDENTICAL; this per-row
+            # matvec can then reduce different row positions in different
+            # BLAS orders — identical rows in, ~1-ULP-different rows out —
+            # leaking a roundoff SE past the zero/constant guards. When rows
+            # are identical, compute each reduction ONCE and broadcast so
+            # the group distribution is exactly constant on every platform
+            # (the fused-GEMM cell/overall/ES columns are exact and need no
+            # such handling).
+            bootstrap_group: Optional[Dict[Any, np.ndarray]] = None
+            if group_agg_info is not None:
+                _gt_rows_identical = self.n_bootstrap > 1 and bool(
+                    np.all(bootstrap_atts_gt == bootstrap_atts_gt[0:1])
+                )
+                if _gt_rows_identical:
+                    bootstrap_group = {
+                        g: np.full(
+                            self.n_bootstrap,
+                            float(
+                                bootstrap_atts_gt[0, group_agg_info[g]["gt_indices"]]
+                                @ group_agg_info[g]["weights"]
+                            ),
+                        )
+                        for g in group_list
+                    }
+                else:
+                    bootstrap_group = {
+                        g: bootstrap_atts_gt[:, group_agg_info[g]["gt_indices"]]
+                        @ group_agg_info[g]["weights"]
+                        for g in group_list
+                    }
 
         # Batch compute bootstrap statistics for ATT(g,t)
         batch_ses, batch_ci_lo, batch_ci_hi, batch_pv = _compute_effect_bootstrap_stats_batch_func(
@@ -460,8 +663,18 @@ class CallawaySantAnnaBootstrapMixin:
         event_study_ses = None
         event_study_cis = None
         event_study_p_values = None
+        # Paper Eq. (4.14) overall (event-study average) bootstrap inference; stays
+        # NaN unless event-study draws exist. Mirrors the analytical overall_att_es.
+        overall_att_es_se = np.nan
+        overall_att_es_ci = (np.nan, np.nan)
+        overall_att_es_p_value = np.nan
 
-        if bootstrap_event_study is not None and event_study_info is not None:
+        # ``rel_periods`` can be empty when balance_e (or an empty event study) leaves
+        # no relative periods; guard the column_stack so the bootstrap mirrors the
+        # analytical empty/NaN surface instead of raising "need at least one array to
+        # concatenate". event_study_ses stays None and the Eq. 4.14 overall bootstrap
+        # stays NaN (the analytical fit path emits the requested-but-undefined warning).
+        if bootstrap_event_study is not None and event_study_info is not None and rel_periods:
             es_effects = np.array([event_study_info[e]["effect"] for e in rel_periods])
             es_boot_matrix = np.column_stack([bootstrap_event_study[e] for e in rel_periods])
             es_ses, es_ci_lo, es_ci_hi, es_pv = _compute_effect_bootstrap_stats_batch_func(
@@ -475,12 +688,46 @@ class CallawaySantAnnaBootstrapMixin:
             }
             event_study_p_values = {e: float(es_pv[i]) for i, e in enumerate(rel_periods)}
 
+            # Eq. (4.14) overall = unweighted mean of post-treatment ES(e) (e >=
+            # -anticipation, matching post_treatment_mask above). The per-draw mean
+            # over those event times is the bootstrap distribution of the overall.
+            es_post = [
+                e
+                for e in rel_periods
+                if e >= -self.anticipation
+                and e in event_study_info
+                and np.isfinite(event_study_info[e]["effect"])
+            ]
+            if es_post:
+                original_es_overall = float(
+                    np.mean([event_study_info[e]["effect"] for e in es_post])
+                )
+                boot_es_overall = np.column_stack([bootstrap_event_study[e] for e in es_post]).mean(
+                    axis=1
+                )
+                (
+                    overall_att_es_se,
+                    overall_att_es_ci,
+                    overall_att_es_p_value,
+                ) = _compute_effect_bootstrap_stats_func(
+                    original_es_overall,
+                    boot_es_overall,
+                    alpha=self.alpha,
+                    context="overall ATT (event-study average)",
+                )
+
         # Batch compute bootstrap statistics for group effects
         group_effect_ses = None
         group_effect_cis = None
         group_effect_p_values = None
 
-        if bootstrap_group is not None and group_agg_info is not None:
+        # ``group_list`` can be EMPTY when no cohort has a post-treatment cell
+        # (e.g. every treated cohort's onset lies beyond the observed panel):
+        # np.column_stack([]) would raise "need at least one array to
+        # concatenate", so guard it exactly as the event-study block guards
+        # empty ``rel_periods`` above — the group stats stay None and the
+        # aggregation returns its supported zero-row result.
+        if bootstrap_group is not None and group_agg_info is not None and group_list:
             grp_effects = np.array([group_agg_info[g]["effect"] for g in group_list])
             grp_boot_matrix = np.column_stack([bootstrap_group[g] for g in group_list])
             grp_ses, grp_ci_lo, grp_ci_hi, grp_pv = _compute_effect_bootstrap_stats_batch_func(
@@ -532,9 +779,35 @@ class CallawaySantAnnaBootstrapMixin:
                 elif n_valid > 0:
                     cband_crit_value = float(np.quantile(sup_t_dist[finite_mask], 1 - self.alpha))
 
-        return CSBootstrapResults(
+        # NaN-out all bootstrap inference surfaces when clustered
+        # bootstrap variance is unidentified (G<2 PSUs). See guard
+        # added at the top of the bootstrap weight generation.
+        if _bootstrap_cluster_variance_unidentified:
+            overall_se = np.nan
+            overall_ci = (np.nan, np.nan)
+            overall_p_value = np.nan
+            overall_att_es_se = np.nan
+            overall_att_es_ci = (np.nan, np.nan)
+            overall_att_es_p_value = np.nan
+            gt_ses = {gt: np.nan for gt in gt_ses} if gt_ses else gt_ses
+            gt_cis = {gt: (np.nan, np.nan) for gt in gt_cis} if gt_cis else gt_cis
+            gt_p_values = {gt: np.nan for gt in gt_p_values} if gt_p_values else gt_p_values
+            if event_study_ses:
+                # ses/cis/p_values are populated together upstream.
+                assert event_study_cis is not None and event_study_p_values is not None
+                event_study_ses = {k: np.nan for k in event_study_ses}
+                event_study_cis = {k: (np.nan, np.nan) for k in event_study_cis}
+                event_study_p_values = {k: np.nan for k in event_study_p_values}
+            if group_effect_ses:
+                assert group_effect_cis is not None and group_effect_p_values is not None
+                group_effect_ses = {k: np.nan for k in group_effect_ses}
+                group_effect_cis = {k: (np.nan, np.nan) for k in group_effect_cis}
+                group_effect_p_values = {k: np.nan for k in group_effect_p_values}
+            cband_crit_value = None
+
+        result = CSBootstrapResults(
             n_bootstrap=self.n_bootstrap,
-            weight_type=self.bootstrap_weight_type,
+            weight_type=self.bootstrap_weights,
             alpha=self.alpha,
             overall_att_se=overall_se,
             overall_att_ci=overall_ci,
@@ -550,7 +823,13 @@ class CallawaySantAnnaBootstrapMixin:
             group_effect_p_values=group_effect_p_values,
             bootstrap_distribution=bootstrap_overall,
             cband_crit_value=cband_crit_value,
+            overall_att_es_se=overall_att_es_se,
+            overall_att_es_ci=overall_att_es_ci,
+            overall_att_es_p_value=overall_att_es_p_value,
         )
+        result._replay_bitgen_state = replay_bitgen_state
+        result._replay_backend = replay_backend
+        return result
 
     def _prepare_event_study_aggregation(
         self,
@@ -568,17 +847,17 @@ class CallawaySantAnnaBootstrapMixin:
         # Use fixed cohort survey masses (not per-cell survey_weight_sum) when
         # survey weights are present, matching the analytical
         # _aggregate_event_study() path.
-        survey_w = precomputed.get("survey_weights") if precomputed is not None else None
-        _cohort_mass: Optional[dict] = None
-        if survey_w is not None:
-            unit_cohorts = precomputed["unit_cohorts"]
-            _cohort_mass = {}
+        # Shared fixed-cohort masses (same source of truth as the analytical
+        # event-study path): unit-level RC mass preferred so the bootstrap
+        # event-study weights an unbalanced-panel (allow_unbalanced_panel)
+        # aggregation by fixed UNIT cohort mass, not observation count.
+        from diff_diff.staggered_aggregation import fixed_cohort_agg_weights
+
+        _fixed_masses = fixed_cohort_agg_weights(precomputed)
 
         def _agg_weight(g: Any, t: Any) -> float:
-            if _cohort_mass is not None:
-                if g not in _cohort_mass:
-                    _cohort_mass[g] = float(np.sum(survey_w[unit_cohorts == g]))
-                return _cohort_mass[g]
+            if _fixed_masses is not None and g in _fixed_masses:
+                return _fixed_masses[g]
             # Use agg_weight if available (RCS: fixed cohort mass)
             return group_time_effects[(g, t)].get(
                 "agg_weight", group_time_effects[(g, t)]["n_treated"]
@@ -646,8 +925,13 @@ class CallawaySantAnnaBootstrapMixin:
                 "effect": agg_effect,
             }
 
-            # Compute combined IF for this event time if args available
-            if influence_func_info is not None and df is not None and unit is not None:
+            # Compute combined IF for this event time if args available.
+            # `precomputed` alone suffices for the in-package fast path
+            # (kit-backed post-fit replay threads df=None/unit=None); the
+            # df/unit pair remains for direct callers without precomputed.
+            if influence_func_info is not None and (
+                precomputed is not None or (df is not None and unit is not None)
+            ):
                 gt_pairs_for_e = [gt_pairs[i] for i in indices]
                 groups_for_gt = np.array([gt_pairs[i][0] for i in indices])
                 combined_if, _ = self._compute_combined_influence_function(
@@ -750,3 +1034,27 @@ class CallawaySantAnnaBootstrapMixin:
         return _compute_effect_bootstrap_stats_func(
             original_effect, boot_dist, alpha=self.alpha, context=context
         )
+
+
+# The shared percentile-override appliers (apply_bootstrap_event_study_
+# overrides / apply_bootstrap_group_overrides) live in
+# diff_diff.bootstrap_utils, consumed by both the CallawaySantAnna and
+# EfficientDiD fit paths and their post-fit replays. Only the CS-specific
+# sup-t band applier remains here.
+def apply_cband_conf_ints(
+    event_study_effects: Optional[Dict[int, Dict[str, Any]]],
+    cband_crit_value: Optional[float],
+) -> None:
+    """Attach simultaneous-band CIs per event time from the sup-t critical value.
+
+    Mutates ``event_study_effects`` in place; no-op when the critical value
+    or the surface is absent.
+    """
+    if cband_crit_value is not None and event_study_effects is not None:
+        for _e, eff_data in event_study_effects.items():
+            se_val = eff_data["se"]
+            if np.isfinite(se_val) and se_val > 0:
+                eff_data["cband_conf_int"] = (
+                    eff_data["effect"] - cband_crit_value * se_val,
+                    eff_data["effect"] + cband_crit_value * se_val,
+                )

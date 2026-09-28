@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: permutation_test
+   :no-index:

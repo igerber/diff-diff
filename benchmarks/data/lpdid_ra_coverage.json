@@ -1,0 +1,76 @@
+{
+  "study": "LPDiD RA influence-function SE coverage",
+  "nominal": 0.95,
+  "tau": {
+    "0": 1.0,
+    "1": 1.5,
+    "2": 2.0,
+    "3": 2.5
+  },
+  "note": "RA IF variance is asymptotic (teffects convention, no finite-sample factor); empirical coverage of the true effect holds near nominal across G for both the event-study horizons and the headline pooled-row RA CI - the t(G-1) reference keeps it well-calibrated even at modest G. Underwrites REGISTRY ## LPDiD Deviation 2.",
+  "sweep": [
+    {
+      "n_units": 30,
+      "reps": 500,
+      "per_horizon": {
+        "0": 0.954,
+        "1": 0.952,
+        "2": 0.94,
+        "3": 0.968
+      },
+      "mean_event_coverage": 0.9535,
+      "pooled_att_coverage": 0.968,
+      "n_valid": {
+        "0": 500,
+        "1": 500,
+        "2": 500,
+        "3": 500
+      },
+      "n_pooled_valid": 500,
+      "n_fit_errors": 0,
+      "min_valid_share": 1.0
+    },
+    {
+      "n_units": 100,
+      "reps": 500,
+      "per_horizon": {
+        "0": 0.942,
+        "1": 0.932,
+        "2": 0.944,
+        "3": 0.942
+      },
+      "mean_event_coverage": 0.94,
+      "pooled_att_coverage": 0.946,
+      "n_valid": {
+        "0": 500,
+        "1": 500,
+        "2": 500,
+        "3": 500
+      },
+      "n_pooled_valid": 500,
+      "n_fit_errors": 0,
+      "min_valid_share": 1.0
+    },
+    {
+      "n_units": 300,
+      "reps": 500,
+      "per_horizon": {
+        "0": 0.95,
+        "1": 0.948,
+        "2": 0.946,
+        "3": 0.936
+      },
+      "mean_event_coverage": 0.945,
+      "pooled_att_coverage": 0.958,
+      "n_valid": {
+        "0": 500,
+        "1": 500,
+        "2": 500,
+        "3": 500
+      },
+      "n_pooled_valid": 500,
+      "n_fit_errors": 0,
+      "min_valid_share": 1.0
+    }
+  ]
+}

@@ -32,6 +32,7 @@ htmlcov/
 # Environments
 .env
 .venv
+.venv-doubleml/
 env/
 venv/
 ENV/
@@ -55,6 +56,7 @@ Thumbs.db
 
 # Benchmarks - generated data and results (can be regenerated)
 benchmarks/data/synthetic/*.csv
+benchmarks/data/real/raw/
 benchmarks/results/
 
 # Rust build artifacts
@@ -71,6 +73,10 @@ target/
 .claude/settings.local.json
 .claude/reviews/
 .claude/paper-review/
+.claude/scheduled_tasks.lock
+
+# Playwright MCP browser-session artifacts
+.playwright-mcp/
 
 # MCP configuration (may contain tokens)
 .mcp.json
@@ -78,6 +84,7 @@ target/
 # Local scripts (not part of package)
 scripts/
 !.claude/scripts/
+!.github/scripts/
 
 # Launch directories (local only)
 launch/
@@ -87,10 +94,47 @@ launch-video/
 trop_avg_ref/
 
 # Academic papers (local only, not for distribution)
-papers/
+# Anchored to repo root so that `docs/methodology/papers/` (tracked review markdown)
+# is not silently ignored.
+/papers/
+/paper/
 
 # Local analysis notebooks (not committed)
 analysis/
 
 # Replication data (local only, not for distribution)
 replication_data/
+_scratch/
+
+# Per-initiative briefing notes (local only, not for distribution)
+BRIEFING.md
+briefings/
+
+# Local-only: preprint / under-review manuscript artifacts (not part of the library)
+survey-did-paper-arxiv-v2/
+
+# Reviewer-eval harness — local run artifacts, detached worktrees, comparison bundles
+tools/reviewer-eval/runs/
+
+# Plan-review-eval harness — run artifacts local-only, and the REAL plan corpus is
+# never committed (the user's plans); only corpus/fixture/ (fabricated) is tracked
+tools/plan-review-eval/runs/
+tools/plan-review-eval/corpus/cases/
+
+
+# Benchmark refresh (2026-07) - venvs and raw per-rep artifacts are local-only;
+# consolidated results JSON and the version-story report ARE committed.
+benchmarks/refresh_2026_07/venvs/
+benchmarks/refresh_2026_07/results/raw/
+benchmarks/refresh_2026_07/results/refresh_results_smoke.json
+
+# Stata batch mode writes <basename>.log to the cwd (repo root) - never committed;
+# the golden JSON each generator produces IS committed (benchmarks/data/*.json).
+# Root-anchored to the generators' own logs so it doesn't hide logs elsewhere.
+/generate_*_golden.log
+
+# Node install tree for the docs search-excerpt smoke test. jsdom is pinned
+# by .github/scripts/package.json + package-lock.json (both COMMITTED - do
+# not ignore manifests repo-wide); `npm ci --prefix .github/scripts` puts
+# node_modules next to them.
+node_modules/

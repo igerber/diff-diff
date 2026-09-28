@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: list_datasets
+   :no-index:

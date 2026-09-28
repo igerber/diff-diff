@@ -1,0 +1,14 @@
+{
+  "meta": {
+    "package": "cbwsdid",
+    "R_version": "R version 4.5.2 (2025-10-31)",
+    "panel": "benchmarks/data/cbwsdid_balance_panel.csv",
+    "estimator": "cbwsdid(design='absorbing', refinement.method='weightit', method='ebal', covs.formula=~x)",
+    "kappa": [-2, 2]
+  },
+  "dynamic": {
+    "event_time": [-2, 0, 1, 2],
+    "estimate": [0.008614905402558678, 1.998507474812239, 2.000435324046538, 1.977837212056277],
+    "std_error": [0.05870423491347857, 0.05704878175034945, 0.1113623933607992, 0.1700804801053713]
+  }
+}

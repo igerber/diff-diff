@@ -1,0 +1,1688 @@
+# Documentation Dependency Map
+# Maps source files to documentation that may need updating when the source changes.
+# Consumed by /docs-impact skill and referenced in CLAUDE.md.
+#
+# Relationship types:
+#   methodology    - REGISTRY.md section (update if algorithm/edge-case behavior changes)
+#   tutorial       - Jupyter notebook demonstrating the feature
+#   api_reference  - Sphinx RST auto-generated from docstrings (update if signature/docstring changes)
+#   user_guide     - README.md, llms*.txt, choosing_estimator.rst sections
+#   roadmap        - survey-roadmap.md (ROADMAP.md is surfaced globally by /docs-impact)
+#   performance    - benchmarks.rst, performance-plan.md
+#   internal       - CLAUDE.md, CONTRIBUTING.md (developer-facing)
+#
+# Drift risk levels:
+#   high   - historically drifts or has dense cross-references
+#   medium - moderate cross-references, changes occasionally
+#   low    - stable relationship, rarely needs updating
+
+# ──────────────────────────────────────────────────────────────────────
+# Groups: multi-file modules that share documentation dependencies.
+# Members resolve to the first entry (the primary module) for doc lookup.
+# ────────────���─────────────────────────────────────────────────────────
+groups:
+  twfe_weights:
+    - diff_diff/twfe_weights.py
+    - diff_diff/twfe_weights_results.py
+  staggered:
+    - diff_diff/staggered.py
+    - diff_diff/staggered_aggregation.py
+    - diff_diff/staggered_bootstrap.py
+    - diff_diff/staggered_results.py
+  staggered_triple_diff:
+    - diff_diff/staggered_triple_diff.py
+    - diff_diff/staggered_triple_diff_results.py
+    # The estimation engine relocated here in phase 3(b) (row M-013) and is
+    # shared with TripleDifference's staggered mode. Private (leading
+    # underscore), so tests/test_doc_deps_integrity.py exempts it from needing
+    # its own `sources:` key - but it is mapped as a GROUP MEMBER anyway,
+    # because /docs-check and /docs-impact have no private carve-out and,
+    # more importantly, the whole staggered methodology would otherwise live
+    # in a module with no path to REGISTRY.md.
+    - diff_diff/_staggered_triple_diff_engine.py
+  trop:
+    - diff_diff/trop.py
+    - diff_diff/trop_global.py
+    - diff_diff/trop_local.py
+    - diff_diff/trop_results.py
+  imputation:
+    - diff_diff/imputation.py
+    - diff_diff/imputation_bootstrap.py
+    - diff_diff/imputation_results.py
+    - diff_diff/imputation_aggregation.py
+  two_stage:
+    - diff_diff/two_stage.py
+    - diff_diff/two_stage_bootstrap.py
+    - diff_diff/two_stage_results.py
+    - diff_diff/two_stage_aggregation.py
+  efficient_did:
+    - diff_diff/efficient_did.py
+    - diff_diff/efficient_did_aggregation.py
+    - diff_diff/efficient_did_bootstrap.py
+    - diff_diff/efficient_did_covariates.py
+    - diff_diff/efficient_did_results.py
+    - diff_diff/efficient_did_weights.py
+  chaisemartin_dhaultfoeuille:
+    - diff_diff/chaisemartin_dhaultfoeuille.py
+    - diff_diff/chaisemartin_dhaultfoeuille_bootstrap.py
+    - diff_diff/chaisemartin_dhaultfoeuille_results.py
+  continuous_did:
+    - diff_diff/continuous_did.py
+    - diff_diff/continuous_did_aggregation.py
+    - diff_diff/continuous_did_bspline.py
+    - diff_diff/continuous_did_results.py
+  stacked_did:
+    - diff_diff/stacked_did.py
+    - diff_diff/stacked_did_results.py
+  wooldridge:
+    - diff_diff/wooldridge.py
+    - diff_diff/wooldridge_results.py
+  lpdid:
+    - diff_diff/lpdid.py
+    - diff_diff/lpdid_results.py
+  changes_in_changes:
+    - diff_diff/changes_in_changes.py
+    - diff_diff/changes_in_changes_results.py
+  dml_did:
+    - diff_diff/dml_did.py
+    - diff_diff/dml_did_results.py
+  duration_did:
+    - diff_diff/duration_did.py
+    - diff_diff/duration_did_results.py
+  lwdid:
+    - diff_diff/lwdid.py
+    - diff_diff/lwdid_results.py
+    - diff_diff/lwdid_wild_bootstrap.py
+    - diff_diff/lwdid_randomization.py
+    - diff_diff/lwdid_sensitivity.py
+    - diff_diff/lwdid_visualization.py
+    - diff_diff/lwdid_staggered.py
+  visualization:
+    - diff_diff/visualization/__init__.py
+    - diff_diff/visualization/_common.py
+    - diff_diff/visualization/_continuous.py
+    - diff_diff/visualization/_diagnostic.py
+    - diff_diff/visualization/_event_study.py
+    - diff_diff/visualization/_power.py
+    - diff_diff/visualization/_staggered.py
+    - diff_diff/visualization/_synthetic.py
+
+# ──────────────────────────────────────────────────────────────────────
+# Source-to-docs mappings
+# ────────���─────────────────────────��───────────────────────────────────
+sources:
+
+  # ── Base estimators ──────��───────────────────────────────────────────
+
+  diff_diff/estimators.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/variance-conventions.md
+        type: methodology
+        note: "Clustered-variance conventions inventory (CR1 k + tail-df map, D/L classification); table generated by tests/test_variance_conventions.py"
+      - path: docs/methodology/REGISTRY.md
+        section: "DifferenceInDifferences, TwoWayFixedEffects, MultiPeriodDiD"
+        type: methodology
+      - path: docs/api/estimators.rst
+        type: api_reference
+      - path: docs/tutorials/01_basic_did.ipynb
+        type: tutorial
+      - path: docs/tutorials/04_parallel_trends.ipynb
+        type: tutorial
+      - path: docs/tutorials/09_real_world_examples.ipynb
+        type: tutorial
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "DifferenceInDifferences"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/benchmarks.rst
+        type: performance
+      - path: docs/practitioner_getting_started.rst
+        type: user_guide
+      - path: docs/practitioner_decision_tree.rst
+        type: user_guide
+      - path: docs/troubleshooting.rst
+        type: user_guide
+        note: "Wild-bootstrap examples and inference guidance (cluster= prerequisite, n_bootstrap floor) track the DiD selector contract (M-096)"
+      - path: diff_diff/guides/llms-practitioner.txt
+        type: user_guide
+        note: "Step-5 inference decision rule and small-G advice strings track the DiD/TWFE wild-bootstrap contract (M-096)"
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  diff_diff/twfe.py:
+    drift_risk: low
+    docs:
+      - path: docs/methodology/variance-conventions.md
+        type: methodology
+        note: "Clustered-variance conventions inventory (CR1 k + tail-df map, D/L classification); table generated by tests/test_variance_conventions.py"
+      - path: docs/methodology/REGISTRY.md
+        section: "TwoWayFixedEffects"
+        type: methodology
+      - path: docs/api/estimators.rst
+        type: api_reference
+      - path: docs/quickstart.rst
+        type: user_guide
+        note: "TWFE static example (post= dummy) + the Event Study Design section (event_study=True); both track the fit signature (rows M-010/M-082)"
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+        note: "Decision-tree question 5, Quick Reference + SE tables, and the Multi-Period Event Study section all teach the event-study mode (rows M-010/M-082)"
+      - path: docs/troubleshooting.rst
+        type: user_guide
+        note: "Static TWFE example uses post= (row M-082)"
+      - path: diff_diff/guides/llms.txt
+        type: user_guide
+        note: "TWFE catalog line documents event_study=True (row M-010)"
+      - path: diff_diff/guides/llms-full.txt
+        type: user_guide
+        note: "TWFE block documents the full fit signature incl. event-study params; the Conley section's panel examples use post=/event_study (rows M-010/M-082)"
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  # ── CallawaySantAnna (staggered group) ─────��────────────────────────
+
+  diff_diff/staggered.py:
+    drift_risk: high
+    docs:
+      - path: docs/methodology/variance-conventions.md
+        type: methodology
+        note: "Clustered-variance conventions inventory (CR1 k + tail-df map, D/L classification); table generated by tests/test_variance_conventions.py"
+      - path: docs/methodology/REGISTRY.md
+        section: "CallawaySantAnna"
+        type: methodology
+      - path: docs/api/staggered.rst
+        type: api_reference
+      - path: docs/tutorials/02_staggered_did.ipynb
+        type: tutorial
+      - path: docs/tutorials/16_survey_did.ipynb
+        type: tutorial
+        note: "CallawaySantAnna survey examples"
+      - path: docs/tutorials/33_bad_controls.ipynb
+        type: tutorial
+        note: "Approach 1 (pre-treatment bad control read at the cell's base period) with and without W"
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "CallawaySantAnna"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/benchmarks.rst
+        type: performance
+      - path: docs/survey-roadmap.md
+        type: roadmap
+        note: "Phase 4/6/7 CS survey sections"
+      - path: docs/practitioner_getting_started.rst
+        section: "What If Your Campaign Rolled Out in Waves?"
+        type: user_guide
+      - path: docs/practitioner_decision_tree.rst
+        section: "Staggered Rollout"
+        type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  # ── StaggeredTripleDifference (staggered_triple_diff group) ─────────
+
+  diff_diff/staggered_triple_diff.py:
+    drift_risk: low
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "StaggeredTripleDifference"
+        type: methodology
+      - path: docs/api/staggered.rst
+        type: api_reference
+      - path: docs/tutorials/16_survey_did.ipynb
+        type: tutorial
+        note: "StaggeredTripleDifference appears in survey-DiD examples"
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "StaggeredTripleDifference"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      # Hand-edit-only surfaces before phase 3(b): neither was mapped, so
+      # /docs-impact could not surface them when this estimator changed.
+      - path: docs/survey-roadmap.md
+        type: user_guide
+      - path: docs/methodology/papers/ortiz-villavicencio-santanna-2025-review.md
+        type: methodology
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  # ── SunAbraham ──────────────────────────────────────────────────────
+
+  diff_diff/sun_abraham.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/variance-conventions.md
+        type: methodology
+        note: "Clustered-variance conventions inventory (CR1 k + tail-df map, D/L classification); table generated by tests/test_variance_conventions.py"
+      - path: docs/methodology/REGISTRY.md
+        section: "SunAbraham"
+        type: methodology
+      - path: docs/api/staggered.rst
+        type: api_reference
+      - path: docs/tutorials/02_staggered_did.ipynb
+        type: tutorial
+        note: "SunAbraham comparison section"
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "SunAbraham"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/benchmarks.rst
+        type: performance
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  # ── ImputationDiD (imputation group) ───��────────────────────────────
+
+  diff_diff/imputation.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/variance-conventions.md
+        type: methodology
+        note: "Clustered-variance conventions inventory (CR1 k + tail-df map, D/L classification); table generated by tests/test_variance_conventions.py"
+      - path: docs/methodology/REGISTRY.md
+        section: "ImputationDiD"
+        type: methodology
+      - path: docs/methodology/papers/borusyak-jaravel-spiess-2024-review.md
+        type: methodology
+      - path: benchmarks/stata/README.md
+        type: methodology
+      - path: docs/benchmarks.rst
+        type: performance
+      - path: docs/api/imputation.rst
+        type: api_reference
+      - path: docs/tutorials/11_imputation_did.ipynb
+        type: tutorial
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "ImputationDiD"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  # ── TwoStageDiD (two_stage group) ────────────���─────────────────────
+
+  diff_diff/two_stage.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/variance-conventions.md
+        type: methodology
+        note: "Clustered-variance conventions inventory (CR1 k + tail-df map, D/L classification); table generated by tests/test_variance_conventions.py"
+      - path: docs/methodology/REGISTRY.md
+        section: "TwoStageDiD"
+        type: methodology
+      - path: docs/methodology/papers/gardner-2022-review.md
+        type: methodology
+      - path: docs/api/two_stage.rst
+        type: api_reference
+      - path: docs/tutorials/12_two_stage_did.ipynb
+        type: tutorial
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "TwoStageDiD"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  # ── SpilloverDiD (spillover group) ──────────────────────────────────
+
+  diff_diff/spillover.py:
+    drift_risk: high
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "SpilloverDiD"
+        type: methodology
+      - path: docs/api/spillover.rst
+        type: api_reference
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "SpilloverDiD"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+
+  # ── EfficientDiD (efficient_did group) ──────────────────────────────
+
+  diff_diff/efficient_did.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "EfficientDiD"
+        type: methodology
+      - path: docs/methodology/papers/chen-santanna-xie-2025-review.md
+        type: methodology
+      - path: docs/api/efficient_did.rst
+        type: api_reference
+      - path: docs/tutorials/15_efficient_did.ipynb
+        type: tutorial
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "EfficientDiD"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/benchmarks.rst
+        type: performance
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  # ── ChaisemartinDHaultfoeuille (chaisemartin_dhaultfoeuille group) ──
+
+  diff_diff/chaisemartin_dhaultfoeuille.py:
+    drift_risk: high
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "ChaisemartinDHaultfoeuille"
+        type: methodology
+        note: "Single source of truth for dCDH methodology, equations, deviations from R, and edge cases"
+      - path: docs/api/chaisemartin_dhaultfoeuille.rst
+        type: api_reference
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "ChaisemartinDHaultfoeuille"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/practitioner_decision_tree.rst
+        section: "Reversible Treatment"
+        type: user_guide
+      - path: docs/tutorials/19_dcdh_marketing_pulse.ipynb
+        type: tutorial
+      - path: ROADMAP.md
+        section: "de Chaisemartin-D'Haultfœuille (dCDH) Estimator"
+        type: roadmap
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  # ── ContinuousDiD (continuous_did group) ────────────────────��───────
+
+  diff_diff/continuous_did.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "ContinuousDiD"
+        type: methodology
+      - path: docs/methodology/continuous-did.md
+        type: methodology
+        note: "Detailed ContinuousDiD implementation docs"
+      - path: docs/api/continuous_did.rst
+        type: api_reference
+      - path: docs/tutorials/14_continuous_did.ipynb
+        type: tutorial
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "ContinuousDiD"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/practitioner_decision_tree.rst
+        section: "Varying Spending Levels"
+        type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  # ── HeterogeneousAdoptionDiD (HAD) ──────────────────────────────────
+
+  diff_diff/rdd.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "RegressionDiscontinuity"
+        type: methodology
+      - path: docs/api/regression_discontinuity.rst
+        type: api_reference
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "RegressionDiscontinuity"
+        type: user_guide
+      - path: diff_diff/guides/llms-autonomous.txt
+        section: "Estimator-support matrix + out-of-scope list"
+        type: user_guide
+        note: "Sharp, fuzzy, AND covariate-adjusted RD are IN scope; the out-of-scope bullet routes only kink designs / cluster-robust RD elsewhere. Keep both in sync with the estimator's v1 seams."
+      - path: docs/choosing_estimator.rst
+        section: "SE methodology + Survey Design Support tables"
+        type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
+      - path: docs/tutorials/28_rdd_scholarship_illusion.ipynb
+        type: tutorial
+  diff_diff/rdplot.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "RDPlot"
+        type: methodology
+        note: "rdplot() parity pin (same CRAN 4.0.0 tarball as the estimator port), the deviation labels (fractional/pair scale ceiling, covs message), and the replicated left-edge slot-reflection quirk live here; any change must re-run the golden suite (tests/test_rdplot.py) against benchmarks/data/rdplot_golden.json."
+      - path: docs/api/regression_discontinuity.rst
+        type: api_reference
+      - path: README.md
+        section: "Diagnostics & Sensitivity (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Diagnostics and Sensitivity Analysis"
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "RDPlot"
+        type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
+      - path: docs/tutorials/28_rdd_scholarship_illusion.ipynb
+        type: tutorial
+  diff_diff/rddensity.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "RDDensityTest"
+        type: methodology
+        note: "rddensity 3.0 parity pin (CRAN tarball sha256) + the Note/Deviation labels live here; software-level R behaviors (rank EDF, windowed jackknife, selector gates) are documented in docs/methodology/rddensity-source-notes.md - any port change must re-run the golden suite (tests/test_rddensity.py) against benchmarks/data/rddensity_golden.json."
+      - path: docs/methodology/rddensity-source-notes.md
+        type: methodology
+      - path: docs/api/regression_discontinuity.rst
+        type: api_reference
+      - path: README.md
+        section: "Diagnostics & Sensitivity (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Diagnostics and Sensitivity Analysis"
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "RDDensityTest"
+        type: user_guide
+      - path: diff_diff/guides/llms-autonomous.txt
+        section: "RD in-scope routing paragraph"
+        type: user_guide
+  diff_diff/_rdrobust_port.py:
+    drift_risk: high
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "RegressionDiscontinuity"
+        type: methodology
+        note: "Parity pin (CRAN 4.0.0 tarball sha256), deviation labels, and float-tolerance rationale live in the registry section; any port change must re-run both golden suites (tests/test_rdrobust_port.py, tests/test_rdd_parity.py) and re-verify against the installed 4.0.0 namespace, NOT the GitHub 4.1.0-dev tree."
+  diff_diff/had.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "HeterogeneousAdoptionDiD"
+        type: methodology
+      - path: docs/api/had.rst
+        type: api_reference
+      - path: docs/tutorials/20_had_brand_campaign.ipynb
+        type: tutorial
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: docs/practitioner_decision_tree.rst
+        section: "Universal Rollout (No Untreated Markets)"
+        type: user_guide
+        note: "Tip cross-link to T20 in the no-untreated section"
+      - path: diff_diff/guides/llms-full.txt
+        section: "HeterogeneousAdoptionDiD"
+        type: user_guide
+      - path: docs/tutorials/21_had_pretest_workflow.ipynb
+        type: tutorial
+        note: "Drift-locks `HAD(design=\"auto\")` resolution to `continuous_at_zero` on T21's panel via `tests/test_t21_had_pretest_workflow_drift.py::test_had_design_auto_lands_on_continuous_at_zero`; changes to `_detect_design()` heuristic should re-validate T21"
+      - path: docs/tutorials/22_had_survey_design.ipynb
+        type: tutorial
+        note: "Survey-aware HAD walkthrough; drift-locked at `tests/test_t22_had_survey_design_drift.py`. Drift-locks `HAD(design=\"auto\")` resolution to `continuous_near_d_lower` on T22's panel and the `survey_design=` path's SE/CI behavior."
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  diff_diff/had_pretests.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "HeterogeneousAdoptionDiD"
+        type: methodology
+      - path: docs/api/had.rst
+        section: "HAD Pretests"
+        type: api_reference
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "HAD Pretests"
+        type: user_guide
+      - path: docs/tutorials/21_had_pretest_workflow.ipynb
+        type: tutorial
+        note: "Composite pre-test workflow walkthrough; drift-locked at tests/test_t21_had_pretest_workflow_drift.py"
+      - path: docs/tutorials/22_had_survey_design.ipynb
+        type: tutorial
+        note: "Survey-aware pretest workflow walkthrough (overall + event-study under SurveyDesign(strata=...)); drift-locks `_QUG_DEFERRED_SUFFIX`, the event-study summary QUG-skip note, and joint pretrends/homogeneity horizon labels under stratified-clustered Stute bootstrap (PR #432). Drift-locked at tests/test_t22_had_survey_design_drift.py"
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  diff_diff/local_linear.py:
+    drift_risk: low
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "HeterogeneousAdoptionDiD"
+        type: methodology
+      - path: docs/api/had.rst
+        type: api_reference
+      - path: docs/api/local_linear.rst
+        type: api_reference
+
+  diff_diff/agent_workflow.py:
+    drift_risk: low
+    docs:
+      - path: diff_diff/guides/llms-autonomous.txt
+        section: "agent_workflow recommended starting call"
+        type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  diff_diff/profile.py:
+    drift_risk: low
+    docs:
+      - path: docs/api/profile.rst
+        type: api_reference
+      - path: diff_diff/guides/llms-autonomous.txt
+        section: "PanelProfile field reference"
+        type: user_guide
+
+  # ── SyntheticDiD ───────────��───────────────────────────────────────
+
+  diff_diff/synthetic_did.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "SyntheticDiD"
+        type: methodology
+      - path: docs/api/estimators.rst
+        type: api_reference
+      - path: docs/tutorials/03_synthetic_did.ipynb
+        type: tutorial
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "SyntheticDiD"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: docs/practitioner_decision_tree.rst
+        section: "Few Test Markets"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/benchmarks.rst
+        type: performance
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  # ── TripleDifference ───────────────────────────────────────────────
+
+  diff_diff/triple_diff.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "TripleDifference"
+        type: methodology
+      - path: docs/api/triple_diff.rst
+        type: api_reference
+      - path: docs/tutorials/08_triple_diff.ipynb
+        type: tutorial
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "TripleDifference"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  # ── StackedDiD (stacked_did group) ─────────────────────────────────
+
+  diff_diff/balancing.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "StackedDiD (Covariate balancing / CBWSDID)"
+        type: methodology
+      - path: docs/references.rst
+        type: user_guide
+
+  diff_diff/stacked_did.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/variance-conventions.md
+        type: methodology
+        note: "Clustered-variance conventions inventory (CR1 k + tail-df map, D/L classification); table generated by tests/test_variance_conventions.py"
+      - path: docs/methodology/REGISTRY.md
+        section: "StackedDiD"
+        type: methodology
+      - path: docs/api/stacked_did.rst
+        type: api_reference
+      - path: docs/tutorials/13_stacked_did.ipynb
+        type: tutorial
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "StackedDiD"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  # ── WooldridgeDiD (wooldridge group) ────────────────────────────────
+
+  diff_diff/wooldridge.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/variance-conventions.md
+        type: methodology
+        note: "Clustered-variance conventions inventory (CR1 k + tail-df map, D/L classification); table generated by tests/test_variance_conventions.py"
+      - path: docs/methodology/REGISTRY.md
+        section: "WooldridgeDiD"
+        type: methodology
+      - path: docs/api/wooldridge_etwfe.rst
+        type: api_reference
+      - path: docs/tutorials/16_wooldridge_etwfe.ipynb
+        type: tutorial
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "WooldridgeDiD"
+        type: user_guide
+      - path: diff_diff/guides/llms-autonomous.txt
+        section: "§4.4 No never-treated group"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  # ── LPDiD (lpdid group) ────────────────────────────────────────────
+
+  diff_diff/lpdid.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/variance-conventions.md
+        type: methodology
+        note: "Clustered-variance conventions inventory (CR1 k + tail-df map, D/L classification); table generated by tests/test_variance_conventions.py"
+      - path: docs/methodology/REGISTRY.md
+        section: "LPDiD"
+        type: methodology
+      - path: docs/methodology/papers/dube-2025-review.md
+        type: methodology
+      - path: benchmarks/stata/README.md
+        type: methodology
+      - path: docs/benchmarks.rst
+        type: performance
+      - path: docs/api/lpdid.rst
+        type: api_reference
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "LPDiD"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/survey-roadmap.md
+        type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  # ── DurationDiD (duration_did group) ────────────────────────────────
+
+  diff_diff/duration_did.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "DurationDiD"
+        type: methodology
+      - path: docs/methodology/papers/deaner-ku-2026-review.md
+        type: methodology
+        note: "Source review; ship-time status and requirements checklist"
+      - path: docs/methodology/variance-conventions.md
+        section: "duration_did inventory row + L3 bullet"
+        type: methodology
+      - path: docs/api/duration_did.rst
+        type: api_reference
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "DurationDiD"
+        type: user_guide
+      - path: diff_diff/guides/llms-practitioner.txt
+        section: "Step 4 decision tree"
+        type: user_guide
+      - path: diff_diff/guides/llms-autonomous.txt
+        section: "Estimator-support matrix"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/practitioner_decision_tree.rst
+        type: user_guide
+      - path: docs/survey-roadmap.md
+        section: "Current Limitations"
+        type: user_guide
+      - path: docs/index.rst
+        section: "Supported Estimators (one-line catalog row)"
+        type: user_guide
+
+  diff_diff/duration_did_results.py:
+    drift_risk: low
+    docs:
+      - path: docs/api/duration_did.rst
+        type: api_reference
+      - path: docs/methodology/REGISTRY.md
+        section: "DurationDiD"
+        type: methodology
+      - path: docs/methodology/REPORTING.md
+        section: "Module (DurationDiDResults rejected by type)"
+        type: methodology
+
+  # ── ChangesInChanges + QDiD (changes_in_changes group) ────────────
+
+  diff_diff/changes_in_changes.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "ChangesInChanges (CiC)"
+        type: methodology
+      - path: docs/methodology/papers/athey-imbens-2006-review.md
+        type: methodology
+      - path: docs/methodology/papers/melly-santangelo-2015-review.md
+        section: "covariate branch (qte xformla simplified form)"
+        type: methodology
+      - path: docs/api/changes_in_changes.rst
+        type: api_reference
+      - path: docs/tutorials/27_cic_distributional_effects.ipynb
+        type: tutorial
+        note: "committed outputs quote seed-locked numbers; companion drift test test_t27_cic_distributional_effects_drift.py re-derives them"
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "ChangesInChanges"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/r_comparison.rst
+        type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  # ── LWDiD (lwdid group) ───────────────────────────────────────────
+
+  diff_diff/lwdid_wild_bootstrap.py:
+    drift_risk: medium
+    docs:
+      - path: docs/api/lwdid.rst
+        type: api_reference
+      - path: docs/tutorials/31_lwdid.ipynb
+        type: tutorial
+
+  diff_diff/lwdid_randomization.py:
+    drift_risk: medium
+    docs:
+      - path: docs/api/lwdid.rst
+        type: api_reference
+      - path: docs/tutorials/31_lwdid.ipynb
+        type: tutorial
+
+  diff_diff/lwdid_sensitivity.py:
+    drift_risk: medium
+    docs:
+      - path: docs/api/lwdid.rst
+        type: api_reference
+
+  diff_diff/lwdid_visualization.py:
+    drift_risk: low
+    docs:
+      - path: docs/api/lwdid.rst
+        type: api_reference
+      - path: docs/tutorials/31_lwdid.ipynb
+        type: tutorial
+
+  diff_diff/lwdid_staggered.py:
+    drift_risk: medium
+    docs:
+      - path: docs/api/lwdid.rst
+        type: api_reference
+      - path: docs/methodology/REGISTRY.md
+        section: "LWDiD"
+        type: methodology
+      - path: docs/tutorials/31_lwdid.ipynb
+        type: tutorial
+
+  diff_diff/lwdid.py:
+    drift_risk: medium
+    docs:
+      - path: docs/api/lwdid.rst
+        type: api_reference
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "LWDiD"
+        type: user_guide
+      - path: diff_diff/guides/llms-practitioner.txt
+        section: "Step 4 decision tree (few treated units branch)"
+        type: user_guide
+      - path: diff_diff/guides/llms-autonomous.txt
+        section: "Estimator-support matrix + §4.3/§4.8"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/practitioner_decision_tree.rst
+        type: user_guide
+      - path: docs/survey-roadmap.md
+        section: "Current Limitations"
+        type: user_guide
+      - path: docs/methodology/REGISTRY.md
+        section: "LWDiD"
+        type: methodology
+      - path: docs/tutorials/31_lwdid.ipynb
+        type: tutorial
+
+  # ── DMLDiD (dml_did group) ─────────────────────────────────────────
+
+  diff_diff/dml_did.py:
+    drift_risk: medium
+    docs:
+      - path: docs/api/dml_did.rst
+        type: api_reference
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "DMLDiD"
+        type: user_guide
+      - path: diff_diff/guides/llms-practitioner.txt
+        section: "Step 4 decision tree (high-dimensional covariates branch)"
+        type: user_guide
+      - path: diff_diff/guides/llms-autonomous.txt
+        section: "Estimator-support matrix"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/practitioner_decision_tree.rst
+        type: user_guide
+      - path: docs/survey-roadmap.md
+        section: "Current Limitations"
+        type: user_guide
+      - path: docs/methodology/REGISTRY.md
+        section: "DMLDiD (incl. the 'Bad-control extension (CCPS 2026)' block) + CallawaySantAnna Approach-1 Note"
+        type: methodology
+      - path: docs/methodology/papers/caetano-2026-review.md
+        section: "Requirements checklist annotations + Implementation Notes '(library: ...)' parentheticals"
+        type: methodology
+        note: "Bad-control lane: fit(bad_control=, bad_control_covariates=), nested nu/omega stages, ATT_X diagnostic; R badcontrols black-box goldens (benchmarks/R/generate_badcontrols_golden.R, tests/test_dml_did_bad_controls_parity.py)."
+      - path: docs/api/staggered.rst
+        section: "CallawaySantAnna 'Covariates and bad controls' paragraph (Approach 1)"
+        type: api_reference
+      - path: docs/methodology/survey-theory.md
+        section: "IF-based TSL roster / variance-dispatch table / PSU-multiplier-bootstrap roster"
+        type: methodology
+      - path: docs/methodology/variance-conventions.md
+        section: "dml_did / dml_did_rcs / dml_did_bad_control inventory rows (CI-pinned to tests/test_variance_conventions.py)"
+        type: methodology
+      - path: docs/index.rst
+        section: "Supported Estimators (one-line catalog row)"
+        type: user_guide
+      - path: docs/tutorials/32_dml_did.ipynb
+        type: tutorial
+      - path: docs/tutorials/33_bad_controls.ipynb
+        type: tutorial
+
+  diff_diff/dml_did_results.py:
+    drift_risk: low
+    docs:
+      - path: docs/api/dml_did.rst
+        type: api_reference
+      - path: docs/methodology/REGISTRY.md
+        section: "DMLDiD"
+        type: methodology
+        note: "DMLDiDResults subclasses CallawaySantAnnaResults (kit-based post-fit aggregate(), bootstrap replay); adds learner/fold/cross-fit provenance, the seed/n_bootstrap/bootstrap_weights/cband inference-provenance fields, and the bad-control surface (bad_control / bad_control_covariates / bad_control_diagnostics fields, bad_control_summary(), the att_x / se_x to_dataframe join, summary() header lines)."
+      - path: docs/methodology/REPORTING.md
+        section: "DMLDiD bad-control identification / citation Note"
+        type: methodology
+      - path: docs/tutorials/32_dml_did.ipynb
+        type: tutorial
+      - path: docs/tutorials/33_bad_controls.ipynb
+        type: tutorial
+
+  # ── TROP (trop group) ──────────────────────────────────────────────
+
+  diff_diff/trop.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "TROP"
+        type: methodology
+      - path: docs/api/trop.rst
+        type: api_reference
+      - path: docs/tutorials/10_trop.ipynb
+        type: tutorial
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "TROP"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/performance-plan.md
+        type: performance
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  # ── SyntheticControl ────────────────────────────────────────────────
+
+  diff_diff/synthetic_control.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "SyntheticControl"
+        type: methodology
+      - path: docs/methodology/papers/firpo-possebom-2018-review.md
+        type: methodology
+      - path: docs/methodology/papers/chernozhukov-wuthrich-zhu-2021-review.md
+        type: methodology
+      - path: docs/api/synthetic_control.rst
+        type: api_reference
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "SyntheticControl"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: docs/tutorials/25_synthetic_control_policy.ipynb
+        type: tutorial
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  diff_diff/synthetic_control_results.py:
+    drift_risk: low
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "SyntheticControl"
+        type: methodology
+      - path: docs/methodology/papers/firpo-possebom-2018-review.md
+        type: methodology
+      - path: docs/methodology/papers/chernozhukov-wuthrich-zhu-2021-review.md
+        type: methodology
+      - path: docs/api/synthetic_control.rst
+        type: api_reference
+      - path: diff_diff/guides/llms-full.txt
+        section: "SyntheticControlResults"
+        type: user_guide
+      - path: docs/tutorials/25_synthetic_control_policy.ipynb
+        type: tutorial
+
+  diff_diff/conformal.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "SyntheticControl"
+        type: methodology
+      - path: docs/methodology/papers/chernozhukov-wuthrich-zhu-2021-review.md
+        type: methodology
+      - path: docs/api/synthetic_control.rst
+        type: api_reference
+      - path: docs/tutorials/25_synthetic_control_policy.ipynb
+        type: tutorial
+
+  # ── HonestDiD ───────��──────────────────────────────────────────────
+
+  diff_diff/honest_did.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "HonestDiD"
+        type: methodology
+      - path: docs/api/honest_did.rst
+        type: api_reference
+      - path: docs/tutorials/05_honest_did.ipynb
+        type: tutorial
+      - path: README.md
+        section: "Diagnostics & Sensitivity (one-line entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "HonestDiD"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Diagnostics and Sensitivity Analysis"
+        type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
+      - path: docs/r_comparison.rst
+        type: user_guide
+
+  # ── TWFE Weight Diagnostics ───���─────────────────────────────────────────
+
+  diff_diff/twfe_weights.py:
+    drift_risk: low
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "TWFE Weight Diagnostics"
+        type: methodology
+      - path: docs/api/twfe_weights.rst
+        type: api_reference
+      - path: README.md
+        section: "Diagnostics & Sensitivity (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Diagnostics and Sensitivity Analysis"
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "TWFE Weight Diagnostics"
+        type: user_guide
+  diff_diff/twfe_weights_results.py:
+    drift_risk: low
+    docs:
+      - path: docs/api/twfe_weights.rst
+        type: api_reference
+      - path: docs/methodology/REGISTRY.md
+        section: "TWFE Weight Diagnostics"
+        type: methodology
+
+  # ── BaconDecomposition ───���─────────────────────────────────────────
+
+  diff_diff/bacon.py:
+    drift_risk: low
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "BaconDecomposition"
+        type: methodology
+      - path: docs/api/bacon.rst
+        type: api_reference
+      - path: docs/tutorials/02_staggered_did.ipynb
+        type: tutorial
+        note: "Bacon decomposition diagnostics for staggered DiD"
+      - path: docs/tutorials/31_lwdid.ipynb
+        type: tutorial
+        note: "TWFE failure-mode demonstration"
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "BaconDecomposition"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  # ── Diagnostics & analysis ───────���─────────────────────────────────
+
+  diff_diff/diagnostics.py:
+    drift_risk: low
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "PlaceboTests"
+        type: methodology
+      - path: docs/methodology/papers/bertrand-duflo-mullainathan-2004-review.md
+        type: methodology
+        note: "BDM (2004) placebo-law / randomization-inference grounding for PlaceboTests"
+      - path: docs/api/diagnostics.rst
+        type: api_reference
+      - path: docs/tutorials/04_parallel_trends.ipynb
+        type: tutorial
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  diff_diff/pretrends.py:
+    drift_risk: low
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "Pre-trends"
+        type: methodology
+      - path: docs/api/pretrends.rst
+        type: api_reference
+      - path: docs/tutorials/04_parallel_trends.ipynb
+        type: tutorial
+      - path: docs/tutorials/07_pretrends_power.ipynb
+        type: tutorial
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  diff_diff/business_report.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REPORTING.md
+        type: methodology
+        note: "Phrasing rules, pre-trends verdict thresholds, unit-translation policy, schema stability."
+      - path: docs/api/business_report.rst
+        type: api_reference
+      - path: README.md
+        section: "For Data Scientists (one-line mention)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "BusinessReport"
+        type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  diff_diff/diagnostic_report.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REPORTING.md
+        type: methodology
+        note: "Applicability matrix, opt-in placebo rationale, native-diagnostic routing, no-traffic-lights decision."
+      - path: docs/api/diagnostic_report.rst
+        type: api_reference
+      - path: README.md
+        section: "For Data Scientists (one-line mention)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "DiagnosticReport"
+        type: user_guide
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  diff_diff/mmm.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "MMM Calibration Export (interop)"
+        type: methodology
+        note: "Lift-test scaling semantics, spend-weighted pooling, lognormal closed form (pinned to Meridian 1.7.0; execution-validated on 1.8.0), sign/positivity policies."
+      - path: docs/api/mmm.rst
+        type: api_reference
+      - path: README.md
+        section: "Diagnostics & Sensitivity (one-line mention)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Diagnostics and Sensitivity Analysis"
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "MMM Calibration Export"
+        type: user_guide
+      - path: diff_diff/guides/llms-practitioner.txt
+        section: "Step 8 MMM hand-off"
+        type: user_guide
+      - path: docs/tutorials/29_mmm_calibration_pymc.ipynb
+        type: tutorial
+        note: "pymc-marketing interop: executed lift-test calibration; drift guard tests/test_t29_mmm_calibration_pymc_drift.py"
+      - path: docs/tutorials/30_mmm_calibration_meridian.ipynb
+        type: tutorial
+        note: "meridian interop: executed ROI-prior calibration + to_code snippet; drift guard tests/test_t30_mmm_calibration_meridian_drift.py"
+
+  diff_diff/power.py:
+    drift_risk: low
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "Power Analysis"
+        type: methodology
+      - path: docs/api/power.rst
+        type: api_reference
+      - path: docs/tutorials/06_power_analysis.ipynb
+        type: tutorial
+      - path: docs/tutorials/07_pretrends_power.ipynb
+        type: tutorial
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  # ── Survey support ─────────────────────────────────────────────────
+
+  diff_diff/survey.py:
+    drift_risk: high
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "Survey"
+        type: methodology
+      - path: docs/methodology/survey-theory.md
+        type: methodology
+        note: "Design-based variance theory for modern DiD"
+      - path: docs/survey-roadmap.md
+        type: roadmap
+      - path: docs/tutorials/16_survey_did.ipynb
+        type: tutorial
+      - path: docs/tutorials/26_composition_drift_calibration.ipynb
+        type: tutorial
+        note: "balance interop: calibration handoff + composition-drift failure mode"
+      - path: README.md
+        section: "Survey Support"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "Survey"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Survey Support"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        section: "Survey Design Support"
+        type: user_guide
+      - path: docs/practitioner_decision_tree.rst
+        section: "Survey Data"
+        type: user_guide
+      - path: docs/practitioner_getting_started.rst
+        section: "What If You Have Survey Data?"
+        type: user_guide
+
+  # ── Infrastructure ─────────────────────────────────────────────────
+
+  diff_diff/linalg.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/variance-conventions.md
+        type: methodology
+        note: "Clustered-variance conventions inventory (CR1 k + tail-df map, D/L classification); table generated by tests/test_variance_conventions.py"
+      - path: docs/tutorials/33_bad_controls.ipynb
+        type: tutorial
+        note: "LinearRegression within-regression benchmark with cluster_k_adjustment (absorbed-FE CR1 convention)"
+      - path: docs/methodology/REGISTRY.md
+        section: "Variance Estimation, Cluster-Robust SE"
+        type: methodology
+      - path: docs/methodology/REGISTRY.md
+        section: "Cross-fitting, DR-score, and ridge infrastructure (DML)"
+        type: methodology
+        note: "solve_ridge conventions: glmnet-style standardized penalty + un-normalized (sum) loss, unpenalized intercept, alpha > 0 domain, zero-variance NaN contract, frozen-preprocessing closed-form LOOCV"
+      - path: docs/performance-plan.md
+        type: performance
+        note: "Opt-in DIFF_DIFF_SOLVE_OLS_FASTPATH normal-equations Cholesky fast path (certified twin + stage-0 Gram reuse)"
+      - path: docs/benchmarks.rst
+        type: performance
+      - path: docs/api/utils.rst
+        type: api_reference
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  diff_diff/conley.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "ConleySpatialHAC"
+        type: methodology
+      - path: benchmarks/R/README.md
+        type: methodology
+
+  diff_diff/utils.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/variance-conventions.md
+        type: methodology
+        note: "Clustered-variance conventions inventory (CR1 k + tail-df map, D/L classification); table generated by tests/test_variance_conventions.py"
+      - path: docs/tutorials/33_bad_controls.ipynb
+        type: tutorial
+        note: "within_transform used for the TWFE benchmark"
+      - path: docs/methodology/REGISTRY.md
+        section: "Inference, safe_inference NaN gating"
+        type: methodology
+      - path: docs/methodology/REGISTRY.md
+        section: "Wild cluster bootstrap (WCR)"
+        type: methodology
+        note: "wild_bootstrap_se: WCR null-imposition, enumeration, test-inversion CI, fwildclusterboot parity"
+      - path: docs/methodology/REGISTRY.md
+        section: "Absorbed Fixed Effects with Survey Weights"
+        type: methodology
+        note: "demean_by_groups / within_transform: MAP convergence contract (max_iter/tol), bincount accumulation numerics, NaN-group-key guard, snap_absorbed_regressors FE-spanned snap + exact LSMR span confirmation, rust demean_map dispatch (chunked, DIFF_DIFF_DEMEAN_CHUNK_COLS)"
+      - path: docs/practitioner_getting_started.rst
+        section: "Step 4: Check Whether the Result Is Trustworthy"
+        type: user_guide
+      - path: CLAUDE.md
+        section: "safe_inference pattern"
+        type: internal
+      - path: docs/api/utils.rst
+        type: api_reference
+
+  diff_diff/results.py:
+    drift_risk: medium
+    docs:
+      - path: docs/api/results.rst
+        type: api_reference
+      - path: diff_diff/guides/llms-full.txt
+        section: "Results API"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: docs/methodology/REGISTRY.md
+        section: "SyntheticDiD"
+        type: methodology
+        note: "SyntheticDiDResults hosts validation diagnostics (LOO, weight concentration, in-time placebo, zeta sensitivity)"
+      - path: docs/migration-4.0.md
+        type: user_guide
+      - path: docs/r_comparison.rst
+        type: user_guide
+
+  diff_diff/aggregation.py:
+    drift_risk: low
+    docs:
+      - path: docs/api/results.rst
+        type: api_reference
+      - path: docs/v4-design.md
+        section: "6. Aggregation contract"
+        type: design_spec
+        note: "AggregationResult / AggregationKit / AggregationMixin - the post-fit results.aggregate(type=) surface (4.0 program Phase 2; ledger rows M-020..M-027, M-122)"
+      - path: docs/migration-4.0.md
+        type: user_guide
+      - path: docs/r_comparison.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-practitioner.txt
+        section: "Step 8 MMM hand-off (aggregate routes)"
+        type: user_guide
+      - path: docs/tutorials/29_mmm_calibration_pymc.ipynb
+        type: tutorial
+        note: "aggregate('simple')+scale lift-row route taught end-to-end"
+      - path: docs/tutorials/30_mmm_calibration_meridian.ipynb
+        type: tutorial
+        note: "aggregate('total') container route taught end-to-end"
+
+  diff_diff/results_base.py:
+    drift_risk: low
+    docs:
+      - path: docs/api/results.rst
+        type: api_reference
+      - path: docs/v4-design.md
+        section: "5. Results contract"
+        type: design_spec
+        note: "BaseResults / Diagnostic marker / EventStudyResults contract (4.0 program Phase 2; ledger rows M-091/M-092/M-093)"
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  diff_diff/bootstrap_utils.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "Bootstrap, Survey Bootstrap"
+        type: methodology
+      - path: docs/survey-roadmap.md
+        type: roadmap
+        note: "Phase 6 bootstrap+survey interaction"
+
+  diff_diff/bootstrap_chunking.py:
+    drift_risk: low
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "Bootstrap, Survey Bootstrap"
+        type: methodology
+        note: "Memory-bounded multiplier-bootstrap machinery: draw-block chunking of weight generation/consumption (shared by CallawaySantAnna, DMLDiD via the CS bootstrap mixin, EfficientDiD, and HAD), plus the fused column-tiled scatter-GEMM perturbation kernel (tiled_if_matmul + ReplayableWeightStream, v3.7 Phase 2 — used by CallawaySantAnna and EfficientDiD; HAD consumes whole-matrix GEMMs directly and does not use the tiled kernel). Implementation detail — numerically equivalent (~1 ULP, BLAS reassociation) to the per-column GEMV path; weight stream bit-identical, replayable per column tile."
+
+  diff_diff/_crossfit.py:
+    drift_risk: low
+    docs:
+      - path: docs/tutorials/33_bad_controls.ipynb
+        type: tutorial
+      - path: docs/methodology/REGISTRY.md
+        section: "Cross-fitting, DR-score, and ridge infrastructure (DML)"
+        type: methodology
+        note: "Unit/cluster-level replayable K-fold assignment (assign_folds/FoldAssignment: state captured by value pre-draw, BootstrapReplaySpec discipline; global fold cursor across sorted strata) + out-of-fold nuisance prediction (cross_fit_predict: fit on complement & fit_mask, predict every unit; DegenerateFoldError contract; loss-only log-loss clip, oof predictions unclipped) + the per-fold generator iter_fold_fits / FoldFit (eager validation; fitted per-fold deep copies; _predict_subset is the caller's job) that cross_fit_predict and the DMLDiD bad-control nested stages consume; lazy per-fold clone failures propagate as sanitised TypeError, never template reuse or DegenerateFoldError skips."
+
+  diff_diff/_learners.py:
+    drift_risk: low
+    docs:
+      - path: docs/api/dml_did.rst
+        type: api_reference
+        note: "SieveLearner is publicly exported (DMLDiD nuisance configuration); documented on the DMLDiD API page + the docs/api/index.rst Learners autosummary block."
+      - path: docs/methodology/REGISTRY.md
+        section: "Cross-fitting, DR-score, and ridge infrastructure (DML)"
+        type: methodology
+        note: "Duck-typed learner protocol (RegressorLearner/ClassifierLearner Protocols, validate_learner, _validate_predictions) + native learners (LinearLearner/RidgeLearner/LogitLearner/SieveLearner) wrapping linalg solvers. Contracts documented in REGISTRY: raw-X-no-intercept input, independent top-level deepcopy before cross-fitting, identified-columns prediction under rank deficiency."
+      - path: docs/tutorials/32_dml_did.ipynb
+        type: tutorial
+      - path: docs/tutorials/33_bad_controls.ipynb
+        type: tutorial
+
+  diff_diff/_dr_scores.py:
+    drift_risk: low
+    docs:
+      - path: docs/tutorials/33_bad_controls.ipynb
+        type: tutorial
+      - path: docs/methodology/REGISTRY.md
+        section: "Cross-fitting, DR-score, and ridge infrastructure (DML)"
+        type: methodology
+        note: "Shared DR panel scores: drdid_panel_inf_func (Sant'Anna-Zhao locally efficient IF, relocated verbatim from ContinuousDiD._dr_cell_inf_func, oracle-pinned in tests/test_dr_scores.py), the Chang (2020) Case 1 orthogonal score pair (chang_panel_score / chang_panel_score_augmented), the Case 2 RCS family (chang_rcs_score / chang_rcs_lambda_slope / chang_rcs_score_augmented, lambda-corrected Theorem 2 variance), and the Caetano et al. (2026) bad-control family (ccps_panel_score / ccps_panel_score_augmented, Eq. 10-11; reduces to chang_panel_score with nu=m, omega=ps/(1-ps)) consumed by the DMLDiD estimator (panel=True/False; bad-control lane). The families are NOT interchangeable (Chang/CCPS normalize by the unconditional treated share; SZ is self-normalized)."
+      - path: docs/methodology/papers/caetano-2026-review.md
+        type: methodology
+        note: "The paper review's Relation section and requirements checklist name ccps_panel_score / ccps_panel_score_augmented as the Eq. 10 score location; keep the cross-reference and the checklist annotations current if functions move."
+      - path: docs/methodology/papers/chang-2020-review.md
+        type: methodology
+        note: "The paper review's 'Relation to Existing diff-diff Estimators' section names drdid_panel_inf_func as the DRDID-parity score location; keep the cross-reference current if functions move."
+
+  diff_diff/prep.py:
+    drift_risk: low
+    docs:
+      - path: docs/api/prep.rst
+        type: api_reference
+      - path: docs/tutorials/26_composition_drift_calibration.ipynb
+        type: tutorial
+        note: "aggregate_survey is the seam balance.interop.diff_diff wraps"
+      - path: docs/practitioner_getting_started.rst
+        type: user_guide
+      - path: docs/practitioner_decision_tree.rst
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/survey-roadmap.md
+        type: roadmap
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  diff_diff/prep_dgp.py:
+    drift_risk: low
+    docs:
+      - path: docs/api/prep.rst
+        type: api_reference
+      - path: docs/practitioner_getting_started.rst
+        type: user_guide
+      - path: docs/practitioner_decision_tree.rst
+        type: user_guide
+      - path: docs/tutorials/25_synthetic_control_policy.ipynb
+        type: tutorial
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  diff_diff/datasets.py:
+    drift_risk: low
+    docs:
+      - path: docs/api/datasets.rst
+        type: api_reference
+      - path: docs/tutorials/09_real_world_examples.ipynb
+        type: tutorial
+      - path: docs/tutorials/31_lwdid.ipynb
+        type: tutorial
+        note: "Prop 99 / Walmart replication (provenance-asserted)"
+      - path: docs/methodology/REGISTRY.md
+        section: "Castle Doctrine treatment coding"
+        type: methodology
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  diff_diff/practitioner.py:
+    drift_risk: low
+    docs:
+      - path: docs/tutorials/33_bad_controls.ipynb
+        type: tutorial
+      - path: diff_diff/guides/llms-practitioner.txt
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "Practitioner Workflow"
+        type: user_guide
+        note: "HAD handlers (_handle_had / _handle_had_event_study) emit did_had_pretest_workflow + bandwidth_diagnostics references; symmetric Step-4 routing in _handle_continuous; _handle_cic branches on ChangesInChangesResults.method/covariates and restates the CiC/QDiD fit-time diagnostics (interior range, envelope, footnote-21, bootstrap health)"
+      - path: docs/migration-4.0.md
+        type: user_guide
+
+  # ── Visualization (visualization group) ────────────────────────────
+
+  diff_diff/visualization/__init__.py:
+    drift_risk: low
+    docs:
+      - path: docs/api/visualization.rst
+        type: api_reference
+
+  # ── Minimal entries (infrastructure files) ─────────────────────────
+
+  diff_diff/__init__.py:
+    drift_risk: low
+    docs:
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+        note: "Public API surface"
+
+  diff_diff/_backend.py:
+    drift_risk: low
+    docs:
+      - path: docs/performance-plan.md
+        type: performance
+        note: "Rust backend detection; independently-imported solve_ols_chol symbol (stale-extension degradation)"

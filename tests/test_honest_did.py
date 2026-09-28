@@ -20,7 +20,7 @@ from diff_diff.honest_did import (
     SensitivityResults,
     _compute_flci,
     _construct_A_sd,
-    _construct_constraints_rm,
+    _construct_constraints_rm_component,
     _construct_constraints_sd,
     _extract_event_study_params,
     compute_honest_did,
@@ -206,35 +206,42 @@ class TestConstraintConstruction:
     """Tests for constraint matrix construction."""
 
     def test_construct_A_sd_basic(self):
-        """Test smoothness constraint matrix construction."""
-        A = _construct_A_sd(5)
-        assert A.shape == (3, 5)
+        """Test smoothness constraint matrix with delta_0=0 boundary."""
+        # 3 pre + 2 post: should have T+Tbar-1 = 4 rows
+        A = _construct_A_sd(3, 2)
+        assert A.shape == (4, 5)
 
-        # Check second difference structure: [1, -2, 1, 0, 0] etc.
-        expected_first_row = [1, -2, 1, 0, 0]
-        np.testing.assert_array_equal(A[0], expected_first_row)
+        # First row: pure pre second difference [1, -2, 1, 0, 0]
+        np.testing.assert_array_equal(A[0], [1, -2, 1, 0, 0])
+        # Boundary at t=-1: [0, 1, -2, 0, 0] (uses delta_0=0)
+        np.testing.assert_array_equal(A[1], [0, 1, -2, 0, 0])
+        # Bridge at t=0: [0, 0, 1, 1, 0] (delta_{-1} + delta_1)
+        np.testing.assert_array_equal(A[2], [0, 0, 1, 1, 0])
+        # Boundary at t=1: [0, 0, 0, -2, 1] (uses delta_0=0)
+        np.testing.assert_array_equal(A[3], [0, 0, 0, -2, 1])
 
     def test_construct_A_sd_small(self):
-        """Test that small n_periods returns empty matrix."""
-        A = _construct_A_sd(2)
-        assert A.shape == (0, 2)
+        """Test that 1+1 returns bridge row only."""
+        A = _construct_A_sd(1, 1)
+        assert A.shape == (1, 2)
+        np.testing.assert_array_equal(A[0], [1, 1])
 
     def test_construct_constraints_sd(self):
         """Test smoothness constraints."""
         A_ineq, b_ineq = _construct_constraints_sd(num_pre_periods=3, num_post_periods=4, M=0.5)
 
-        # Should have 2 * (7 - 2) = 10 constraints
-        assert A_ineq.shape[0] == 10
+        # Should have 2 * (T+Tbar-1) = 2 * 6 = 12 constraints
+        assert A_ineq.shape[0] == 12
         assert A_ineq.shape[1] == 7
         assert np.all(b_ineq == 0.5)
 
-    def test_construct_constraints_rm(self):
-        """Test relative magnitudes constraints."""
-        A_ineq, b_ineq = _construct_constraints_rm(
-            num_pre_periods=3, num_post_periods=4, Mbar=1.5, max_pre_violation=0.2
+    def test_construct_constraints_rm_component(self):
+        """Test relative magnitudes first-difference constraints."""
+        A_ineq, b_ineq = _construct_constraints_rm_component(
+            num_pre_periods=3, num_post_periods=4, Mbar=1.5, max_pre_first_diff=0.2
         )
 
-        # Should have 2 * 4 = 8 constraints (upper and lower for each post period)
+        # Should have 2 * 4 = 8 constraints (pos/neg for each post first-diff)
         assert A_ineq.shape[0] == 8
         assert A_ineq.shape[1] == 7
         assert np.all(b_ineq == 1.5 * 0.2)
@@ -292,7 +299,7 @@ class TestParameterExtraction:
 
     def test_extract_from_multiperiod(self, mock_multiperiod_results):
         """Test extraction from MultiPeriodDiDResults."""
-        (beta_hat, sigma, num_pre, num_post, pre_periods, post_periods, _df) = (
+        beta_hat, sigma, num_pre, num_post, pre_periods, post_periods, _df = (
             _extract_event_study_params(mock_multiperiod_results)
         )
 
@@ -308,10 +315,92 @@ class TestParameterExtraction:
             pe = mock_multiperiod_results.period_effects[period]
             assert sigma[i, i] == pytest.approx(pe.se**2, abs=1e-10)
 
+    def test_zero_se_period_dropped_from_multiperiod(self, mock_multiperiod_results):
+        """se == 0 rows drop on the MPD branch (undefined inference).
+
+        safe_inference treats se <= 0 as undefined inference; admitting
+        such a row would enter Sigma with zero variance and launder NaN
+        source inference into finite sensitivity bounds. Mirrors the CS,
+        dCDH and container branches and pretrends.
+        """
+        import dataclasses
+
+        pe0 = mock_multiperiod_results.period_effects[0]
+        mock_multiperiod_results.period_effects[0] = dataclasses.replace(pe0, se=0.0)
+        beta_hat, sigma, num_pre, num_post, pre_periods, post_periods, _df = (
+            _extract_event_study_params(mock_multiperiod_results)
+        )
+        assert num_pre == 2 and num_post == 4
+        assert len(beta_hat) == 6
+        assert sigma.shape == (6, 6)
+        # First retained row is period 1 (period 0 dropped): its variance
+        # leads the sub-VCV diagonal.
+        assert sigma[0, 0] == pytest.approx(0.35**2, abs=1e-12)
+        # Label/index contract: the returned lists are the ESTIMATED
+        # horizons beta_hat/sigma were built from - the dropped zero-SE
+        # period and the reference are absent, and lengths match the
+        # counts.
+        assert pre_periods == [1, 2]
+        assert post_periods == [4, 5, 6, 7]
+        assert len(pre_periods) == num_pre and len(post_periods) == num_post
+        # End to end: the metadata a user sees relays the same lists.
+        h = compute_honest_did(mock_multiperiod_results, M=0.5)
+        assert h.pre_periods_used == [1, 2]
+        assert h.post_periods_used == [4, 5, 6, 7]
+
+    @pytest.mark.parametrize(
+        "bad_period",
+        [1, 2, 4, 5],
+        ids=["interior-pre", "ref-adjacent-pre", "first-post", "interior-post"],
+    )
+    def test_zero_se_breaking_grid_geometry_fails_closed(
+        self, mock_multiperiod_results, bad_period
+    ):
+        """Interior / reference-adjacent zero-SE drops fail closed.
+
+        The RR constraint builders index retained coefficients
+        positionally, so dropping an interior or reference-adjacent
+        horizon would silently treat non-adjacent periods as consecutive
+        and return wrong bounds. Only leading-pre / trailing-post drops
+        keep valid geometry (previous test).
+        """
+        import dataclasses
+
+        pe = mock_multiperiod_results.period_effects[bad_period]
+        mock_multiperiod_results.period_effects[bad_period] = dataclasses.replace(pe, se=0.0)
+        with pytest.raises(ValueError, match="consecutive estimated horizons"):
+            _extract_event_study_params(mock_multiperiod_results)
+
+    def test_all_pre_periods_zero_se_fails_closed(self, mock_multiperiod_results):
+        """Pin: an all-invalid pre block is rejected with a clear message
+        (never a zero-dimensional restriction build)."""
+        import dataclasses
+
+        for p in (0, 1, 2):
+            pe = mock_multiperiod_results.period_effects[p]
+            mock_multiperiod_results.period_effects[p] = dataclasses.replace(pe, se=0.0)
+        with pytest.raises(ValueError, match="No pre-period effects"):
+            _extract_event_study_params(mock_multiperiod_results)
+
+    def test_zero_se_trailing_post_dropped_ok(self, mock_multiperiod_results):
+        """A trailing post-period drop keeps valid positional geometry."""
+        import dataclasses
+
+        pe = mock_multiperiod_results.period_effects[7]
+        mock_multiperiod_results.period_effects[7] = dataclasses.replace(pe, se=0.0)
+        beta_hat, sigma, num_pre, num_post, pre_p, post_p, _df = _extract_event_study_params(
+            mock_multiperiod_results
+        )
+        assert num_pre == 3 and num_post == 3
+        assert pre_p == [0, 1, 2] and post_p == [4, 5, 6]
+        assert len(beta_hat) == 6 and sigma.shape == (6, 6)
+
     def test_extract_unsupported_type_raises(self):
-        """Test that unsupported types raise TypeError."""
-        with pytest.raises(TypeError, match="Unsupported results type"):
+        """Test that unsupported types raise TypeError, naming the container route."""
+        with pytest.raises(TypeError, match="Unsupported results type") as exc_info:
             _extract_event_study_params("not a results object")
+        # The expected-types list names the post-fit container route too.
+        assert "EventStudyResults" in str(exc_info.value)
 
 
 # =============================================================================
@@ -381,6 +470,19 @@ class TestHonestDiD:
         assert isinstance(results, HonestDiDResults)
         assert results.M == 1.0
         assert results.method == "relative_magnitude"
+
+    def test_fit_negative_M_override_raises(self, mock_multiperiod_results):
+        """A negative M passed to fit() (bypassing constructor validation) must
+        raise, not be silently treated as +|M| by the FLCI cv abs()."""
+        honest = HonestDiD(method="smoothness", M=0.0)
+        with pytest.raises(ValueError, match="non-negative"):
+            honest.fit(mock_multiperiod_results, M=-0.1)
+
+    def test_sensitivity_analysis_negative_M_grid_raises(self, mock_multiperiod_results):
+        """A negative value in M_grid must raise (bypasses constructor validation)."""
+        honest = HonestDiD(method="smoothness")
+        with pytest.raises(ValueError, match="non-negative"):
+            honest.sensitivity_analysis(mock_multiperiod_results, M_grid=[0.0, -0.1])
 
     def test_fit_smoothness(self, mock_multiperiod_results):
         """Test fit with smoothness method."""
@@ -667,7 +769,7 @@ class TestIntegration:
             reference_period=3,
         )
 
-        (beta_hat, sigma, num_pre, num_post, pre_periods, post_periods, _df) = (
+        beta_hat, sigma, num_pre, num_post, pre_periods, post_periods, _df = (
             _extract_event_study_params(results)
         )
 
@@ -1154,6 +1256,12 @@ class TestSurveyVariance:
         assert h_result.df_survey is not None
         assert h_result.df_survey > 0
         assert h_result.survey_metadata is not None
+        # Single-source oracle: the CS branch resolves via the shared helper
+        # (aggregation.resolve_inference_df) - value-equal, float-typed.
+        from diff_diff.aggregation import resolve_inference_df
+
+        assert h_result.df_survey == resolve_inference_df(cs_result)
+        assert isinstance(h_result.df_survey, float)
 
     def test_event_study_vcov_computed(self):
         """CallawaySantAnna event_study_vcov is computed and used by HonestDiD."""
@@ -1210,7 +1318,9 @@ class TestSurveyVariance:
             aggregate="event_study",
         )
 
-        honest = HonestDiD(method="smoothness", M=0.0)
+        # Use RM method (naive FLCI) which honors df via _get_critical_value.
+        # The optimal FLCI (smoothness) uses folded normal which doesn't use df.
+        honest = HonestDiD(method="relative_magnitude", M=1.0)
         h_result = honest.fit(cs_result)
 
         # With df=2, t critical value (~4.3) >> z critical value (1.96)
@@ -1218,6 +1328,7 @@ class TestSurveyVariance:
         ci_width = h_result.ci_ub - h_result.ci_lb
         # Lower bound: normal-based CI width
         normal_width = 2 * 1.96 * h_result.original_se
+        assert np.isfinite(ci_width), "CI should be finite with M=1.0"
         assert ci_width > normal_width
 
     def test_no_survey_gives_none_df(self):
@@ -1323,3 +1434,216 @@ class TestVisualizationNoMatplotlib:
 
         assert hasattr(sensitivity, "plot")
         assert callable(sensitivity.plot)
+
+
+# =============================================================================
+# dCDH Integration Tests
+# =============================================================================
+
+
+class TestDCDHIntegration:
+    """HonestDiD integration with ChaisemartinDHaultfoeuille results."""
+
+    @staticmethod
+    def _fit_dcdh(n_groups=40, n_periods=6, seed=42, L_max=2):
+        import warnings
+
+        from diff_diff import ChaisemartinDHaultfoeuille
+        from diff_diff.prep import generate_reversible_did_data
+
+        df = generate_reversible_did_data(n_groups=n_groups, n_periods=n_periods, seed=seed)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return ChaisemartinDHaultfoeuille(seed=1).fit(
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=L_max,
+            )
+
+    def test_dcdh_integration(self):
+        """compute_honest_did works on dCDH results (mirrors CS pattern)."""
+        results = self._fit_dcdh()
+        bounds = compute_honest_did(results, method="relative_magnitude", M=1.0)
+        assert isinstance(bounds, HonestDiDResults)
+        assert np.isfinite(bounds.ci_lb)
+        assert np.isfinite(bounds.ci_ub)
+        assert bounds.method == "relative_magnitude"
+
+    def test_dcdh_extraction(self):
+        """_extract_event_study_params returns correct shapes for dCDH."""
+        results = self._fit_dcdh()
+        beta_hat, sigma, n_pre, n_post, pre_t, post_t, df_s = _extract_event_study_params(results)
+        assert n_pre >= 1
+        assert n_post >= 1
+        assert beta_hat.shape == (n_pre + n_post,)
+        assert sigma.shape == (n_pre + n_post, n_pre + n_post)
+        assert all(t < 0 for t in pre_t)
+        assert all(t > 0 for t in post_t)
+        assert df_s is None  # non-survey fixture → df_survey is None
+        # Single-source oracle: the dCDH branch resolves via the shared
+        # helper (both None on this non-survey fixture).
+        from diff_diff.aggregation import resolve_inference_df
+
+        assert df_s == resolve_inference_df(results)
+
+    def test_dcdh_survey_df_matches_shared_resolver(self):
+        """Survey dCDH fit: the extracted df equals the shared resolver's
+        value (float-typed), pinning the MPD/CS/dCDH single-source
+        consolidation on a branch with a FINITE df."""
+        import warnings
+
+        from diff_diff import ChaisemartinDHaultfoeuille, SurveyDesign
+        from diff_diff.aggregation import resolve_inference_df
+        from diff_diff.prep import generate_reversible_did_data
+
+        data = generate_reversible_did_data(n_groups=40, n_periods=6, seed=42)
+        units = data["group"].unique()
+        wmap = {u: 1.0 + 0.3 * (i % 3) for i, u in enumerate(units)}
+        pmap = {u: i // 5 for i, u in enumerate(units)}
+        data = data.assign(weight=data["group"].map(wmap), psu=data["group"].map(pmap))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = ChaisemartinDHaultfoeuille(n_bootstrap=49, seed=7).fit(
+                data,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=2,
+                survey_design=SurveyDesign(weights="weight", psu="psu"),
+            )
+        *_, df_s = _extract_event_study_params(res)
+        expected = resolve_inference_df(res)
+        assert df_s == expected
+        if df_s is not None:
+            assert isinstance(df_s, float)
+
+    def test_dcdh_no_placebos_raises(self):
+        """dCDH results without placebos raise ValueError."""
+        import warnings
+
+        from diff_diff import ChaisemartinDHaultfoeuille
+        from diff_diff.prep import generate_reversible_did_data
+
+        df = generate_reversible_did_data(n_groups=20, n_periods=4, seed=1)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r = ChaisemartinDHaultfoeuille(seed=1, placebo=False).fit(
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+            )
+        with pytest.raises(ValueError, match="placebo_event_study"):
+            compute_honest_did(r)
+
+    def test_dcdh_emits_placebo_warning(self):
+        """compute_honest_did on dCDH emits warning about placebo-based pre-periods."""
+        import warnings
+
+        results = self._fit_dcdh()
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            compute_honest_did(results)
+        placebo_warnings = [
+            x
+            for x in w
+            if "placebo" in str(x.message).lower() and "pre-period" in str(x.message).lower()
+        ]
+        assert (
+            len(placebo_warnings) >= 1
+        ), "Expected a UserWarning about placebo-based pre-period inputs"
+
+    def test_dcdh_empty_consecutive_block_raises(self):
+        """ValueError when all placebos have NaN SE (no valid pre-periods)."""
+        import warnings
+
+        # Fit real results, then corrupt placebo SEs to NaN
+        results = self._fit_dcdh()
+        for h in results.placebo_event_study:
+            results.placebo_event_study[h]["se"] = float("nan")
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match="No placebo horizons with finite SEs"):
+                compute_honest_did(results)
+
+    def test_dcdh_standalone_surfaces_target_metadata(self):
+        """Standalone HonestDiDResults summary/to_dict include target metadata."""
+        results = self._fit_dcdh()
+        bounds = compute_honest_did(results, l_vec=np.array([1.0, 0.0]))
+        # summary() includes target and period metadata
+        text = bounds.summary()
+        assert "on-impact" in text.lower()
+        assert "Post horizons used:" in text
+        assert "Pre horizons used:" in text
+        # to_dict() includes the fields
+        d = bounds.to_dict()
+        assert "target_label" in d
+        assert "pre_periods_used" in d
+        assert "post_periods_used" in d
+        assert d["post_periods_used"] == [1, 2]
+
+    def test_dcdh_interior_gap_triggers_trimming_warning(self):
+        """Non-consecutive horizons after SE filtering emit trimming warning."""
+        import warnings
+
+        # L_max=3 gives horizons [-3,-2,-1,1,2,3]. Corrupt h=-2 to create
+        # interior gap [-3, -1], which triggers consecutive-block trimming
+        # that drops -3 and keeps only [-1].
+        results = self._fit_dcdh(n_periods=8, L_max=3)
+        results.placebo_event_study[-2]["se"] = float("nan")
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            bounds = compute_honest_did(results)
+        trim_warns = [x for x in w if "dropping non-consecutive" in str(x.message).lower()]
+        assert len(trim_warns) >= 1, "Expected a warning about dropping non-consecutive horizons"
+        # Retained pre should be [-1] only (h=-3 dropped due to gap at -2)
+        assert bounds.pre_periods_used == [-1]
+
+    def test_dcdh_zero_se_treated_like_nan(self):
+        """se == 0 placebo rows drop exactly like NaN-SE rows (undefined
+        inference; a zero row would enter Sigma with zero variance)."""
+        import warnings
+
+        results = self._fit_dcdh(n_periods=8, L_max=3)
+        results.placebo_event_study[-2]["se"] = 0.0
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            bounds = compute_honest_did(results)
+        trim_warns = [x for x in w if "dropping non-consecutive" in str(x.message).lower()]
+        assert len(trim_warns) >= 1
+        # Same outcome as the NaN-SE interior-gap test: only [-1] retained.
+        assert bounds.pre_periods_used == [-1]
+
+    def test_dcdh_missing_boundary_minus1_raises(self):
+        """ValueError when horizon -1 has NaN SE (boundary required)."""
+        import warnings
+
+        results = self._fit_dcdh()
+        # Corrupt only horizon -1 SE; leave -2 intact
+        results.placebo_event_study[-1]["se"] = float("nan")
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match="requires horizon -1"):
+                compute_honest_did(results)
+
+    def test_dcdh_missing_boundary_plus1_raises(self):
+        """ValueError when horizon +1 has NaN SE (boundary required)."""
+        import warnings
+
+        results = self._fit_dcdh()
+        # Corrupt only horizon +1 SE
+        results.event_study_effects[1]["se"] = float("nan")
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match="requires horizon 1"):
+                compute_honest_did(results)

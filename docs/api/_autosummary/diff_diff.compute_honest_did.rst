@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: compute_honest_did
+   :no-index:

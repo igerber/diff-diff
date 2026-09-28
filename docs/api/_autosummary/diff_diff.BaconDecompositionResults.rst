@@ -4,32 +4,32 @@
 .. currentmodule:: diff_diff
 
 .. autoclass:: BaconDecompositionResults
+   :no-members:
 
-   
-   .. automethod:: __init__
 
-   
    .. rubric:: Methods
 
    .. autosummary::
-   
+
       ~BaconDecompositionResults.__init__
       ~BaconDecompositionResults.effect_by_type
       ~BaconDecompositionResults.print_summary
       ~BaconDecompositionResults.summary
       ~BaconDecompositionResults.to_dataframe
+      ~BaconDecompositionResults.to_dict
       ~BaconDecompositionResults.weight_by_type
-   
-   
 
-   
-   
+
+
+
    .. rubric:: Attributes
 
    .. autosummary::
-   
+
       ~BaconDecompositionResults.decomposition_error
+      ~BaconDecompositionResults.n_always_treated_remapped
       ~BaconDecompositionResults.n_obs
+      ~BaconDecompositionResults.survey_metadata
       ~BaconDecompositionResults.twfe_estimate
       ~BaconDecompositionResults.comparisons
       ~BaconDecompositionResults.total_weight_treated_vs_never
@@ -41,5 +41,4 @@
       ~BaconDecompositionResults.n_timing_groups
       ~BaconDecompositionResults.n_never_treated
       ~BaconDecompositionResults.timing_groups
-   
-   
+

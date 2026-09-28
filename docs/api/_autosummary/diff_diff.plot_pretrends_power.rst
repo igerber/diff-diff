@@ -4,3 +4,4 @@
 .. currentmodule:: diff_diff
 
 .. autofunction:: plot_pretrends_power
+   :no-index:

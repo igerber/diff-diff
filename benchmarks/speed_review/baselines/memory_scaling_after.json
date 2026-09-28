@@ -1,0 +1,75 @@
+{
+  "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "backend_requested": "python",
+  "backend_resolved": [
+    "python"
+  ],
+  "results": [
+    {
+      "label": "CS bootstrap (cluster=unit, 999)",
+      "estimator": "cs",
+      "n_units": 500000,
+      "n_bootstrap": 999,
+      "peak_rss_mb": 2156.3,
+      "runs": [
+        2156.4,
+        2156.1
+      ]
+    },
+    {
+      "label": "CS bootstrap (cluster=unit, 999)",
+      "estimator": "cs",
+      "n_units": 1000000,
+      "n_bootstrap": 999,
+      "peak_rss_mb": 3030.5,
+      "runs": [
+        3031.8,
+        3029.2
+      ]
+    },
+    {
+      "label": "EfficientDiD bootstrap (999)",
+      "estimator": "effdid",
+      "n_units": 500000,
+      "n_bootstrap": 999,
+      "peak_rss_mb": 1614.0,
+      "runs": [
+        1608.7,
+        1619.3
+      ]
+    },
+    {
+      "label": "HAD event-study cband (999)",
+      "estimator": "had",
+      "n_units": 500000,
+      "n_bootstrap": 999,
+      "peak_rss_mb": 1224.4,
+      "runs": [
+        1215.5,
+        1233.2
+      ]
+    },
+    {
+      "label": "TWFE hc1 within-transform (6 cov)",
+      "estimator": "twfe",
+      "n_units": 500000,
+      "ncov": 6,
+      "peak_rss_mb": 931.7,
+      "runs": [
+        931.0,
+        932.5
+      ]
+    },
+    {
+      "label": "TWFE hc1 within-transform (6 cov)",
+      "estimator": "twfe",
+      "n_units": 1000000,
+      "ncov": 6,
+      "peak_rss_mb": 1547.0,
+      "runs": [
+        1547.0,
+        1547.1
+      ]
+    }
+  ]
+}

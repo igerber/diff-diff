@@ -1,5 +1,6 @@
 """Staggered DiD visualization functions (group effects, staircase, heatmap)."""
 
+import warnings
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
 import numpy as np
@@ -12,7 +13,7 @@ if TYPE_CHECKING:
 
 
 def plot_group_effects(
-    results: "CallawaySantAnnaResults",
+    results: "CallawaySantAnnaResults",  # or any group_time_effects producer (e.g. DMLDiDResults)
     *,
     groups: Optional[List[Any]] = None,
     figsize: Tuple[float, float] = (10, 6),
@@ -29,7 +30,7 @@ def plot_group_effects(
 
     Parameters
     ----------
-    results : CallawaySantAnnaResults
+    results : CallawaySantAnnaResults or DMLDiDResults
         Results from CallawaySantAnna estimator.
     groups : list, optional
         List of groups (cohorts) to plot. If None, plots all groups.
@@ -58,7 +59,9 @@ def plot_group_effects(
     from scipy import stats as scipy_stats
 
     if not hasattr(results, "group_time_effects"):
-        raise TypeError("results must be a CallawaySantAnnaResults object")
+        raise TypeError(
+            "results must be a CallawaySantAnnaResults (or subclass, e.g. " "DMLDiDResults) object"
+        )
 
     # Get groups to plot
     if groups is None:
@@ -66,16 +69,82 @@ def plot_group_effects(
 
     critical_value = scipy_stats.norm.ppf(1 - alpha / 2)
 
-    # Build data per group
+    # Build data per group, resolving each point's CI bounds ONCE: at the
+    # FIT alpha the stored per-cell conf_int is authoritative (bootstrap
+    # fits store asymmetric percentile CIs; survey fits t-based CIs — a
+    # symmetric z*SE reconstruction would silently misstate both; on
+    # analytical normal-theory fits the stored CI equals effect ± z*SE, so
+    # nothing changes there). A different requested alpha, or a
+    # missing/non-finite stored CI, falls back to effect ± z*SE.
+    use_stored_ci = getattr(results, "alpha", None) == alpha
+    _nonnormal_family = (
+        getattr(results, "bootstrap_results", None) is not None
+        or getattr(results, "survey_metadata", None) is not None
+        or getattr(results, "df_inference", None) is not None
+    )
+    if not use_stored_ci and _nonnormal_family:
+        warnings.warn(
+            f"plot_group_effects: alpha={alpha} differs from the fit's "
+            f"alpha={getattr(results, 'alpha', None)} on a fit whose stored "
+            "intervals are NOT plain normal-theory (bootstrap percentile "
+            "and/or survey t-based); the plotted intervals are normal-theory "
+            "effect +/- z*SE reconstructions at the requested level. Re-plot "
+            "at the fit alpha for the stored intervals.",
+            UserWarning,
+            stacklevel=2,
+        )
+    clipped_cells = []
     group_data = {}
     for group in groups:
-        group_effects = [
-            (t, data) for (g, t), data in results.group_time_effects.items() if g == group
-        ]
+        group_effects = []
+        for (g, t), data in results.group_time_effects.items():
+            if g != group:
+                continue
+            eff = data["effect"]
+            se = data["se"]
+            ci = data.get("conf_int")
+            if use_stored_ci and ci is not None:
+                # The stored CI is authoritative at the fit alpha, its NaNs
+                # INCLUDED: safe_inference NaNs the whole inference tuple
+                # (e.g. a zero-SE cell), and reconstructing effect +/- z*SE
+                # there would present a defined (zero-width) interval for
+                # undefined inference — the prohibited partial-NaN pattern.
+                lo, hi = float(ci[0]), float(ci[1])
+            elif np.isfinite(eff) and np.isfinite(se) and se > 0:
+                lo = eff - critical_value * se
+                hi = eff + critical_value * se
+            else:
+                # Undefined inference stays undefined at ANY requested
+                # alpha: a zero/non-finite SE has all-NaN stored inference
+                # (safe_inference), and eff +/- z*0 would draw a finite
+                # zero-width interval for it — the same prohibited
+                # partial-NaN pattern the stored-CI branch guards against.
+                lo = hi = float("nan")
+            # Error bars are deviations from the effect and must be
+            # non-negative; a heavily skewed percentile CI can exclude the
+            # point estimate — clip LOUDLY rather than crash or misdraw.
+            lo_dev = eff - lo
+            hi_dev = hi - eff
+            if np.isfinite(lo_dev) and lo_dev < 0:
+                lo_dev = 0.0
+                clipped_cells.append((g, t))
+            if np.isfinite(hi_dev) and hi_dev < 0:
+                hi_dev = 0.0
+                clipped_cells.append((g, t))
+            group_effects.append((t, {**data, "_yerr_lo": lo_dev, "_yerr_hi": hi_dev}))
         group_effects.sort(key=lambda x: x[0])
         if not group_effects:
             continue
         group_data[group] = group_effects
+    if clipped_cells:
+        warnings.warn(
+            "plot_group_effects: the stored interval excludes the point "
+            f"estimate for cell(s) {sorted(set(clipped_cells))}; the error "
+            "bar is truncated at the estimate on that side (consult "
+            "results.group_time_effects for the exact interval).",
+            UserWarning,
+            stacklevel=2,
+        )
 
     if backend == "plotly":
         return _render_group_effects_plotly(
@@ -123,11 +192,10 @@ def _render_group_effects_mpl(
         group_effects = group_data[group]
         times = [t for t, _ in group_effects]
         effects = [data["effect"] for _, data in group_effects]
-        ses = [data["se"] for _, data in group_effects]
 
         yerr = [
-            [e - (e - critical_value * s) for e, s in zip(effects, ses)],
-            [(e + critical_value * s) - e for e, s in zip(effects, ses)],
+            [data["_yerr_lo"] for _, data in group_effects],
+            [data["_yerr_hi"] for _, data in group_effects],
         ]
 
         ax.errorbar(
@@ -175,10 +243,9 @@ def _render_group_effects_plotly(
         group_effects = group_data[group]
         times = [t for t, _ in group_effects]
         effects = [data["effect"] for _, data in group_effects]
-        ses = [data["se"] for _, data in group_effects]
 
-        ci_lo = [e - critical_value * s for e, s in zip(effects, ses)]
-        ci_hi = [e + critical_value * s for e, s in zip(effects, ses)]
+        ci_lo = [data["effect"] - data["_yerr_lo"] for _, data in group_effects]
+        ci_hi = [data["effect"] + data["_yerr_hi"] for _, data in group_effects]
 
         fig.add_trace(
             go.Scatter(
@@ -226,7 +293,7 @@ def plot_staircase(
 
     Parameters
     ----------
-    results : CallawaySantAnnaResults, optional
+    results : CallawaySantAnnaResults or DMLDiDResults, optional
         Results from CallawaySantAnna estimator. Extracts groups and cohort
         sizes from ``group_time_effects``.
     data : pd.DataFrame, optional
@@ -293,7 +360,10 @@ def _extract_staircase_data(results, data, unit, time, first_treat):
 
     if results is not None:
         if not hasattr(results, "group_time_effects") or not hasattr(results, "groups"):
-            raise TypeError("results must be a CallawaySantAnnaResults object")
+            raise TypeError(
+                "results must be a CallawaySantAnnaResults (or subclass, e.g. "
+                "DMLDiDResults) object"
+            )
 
         groups = sorted(results.groups)
         cohort_counts = []
@@ -466,6 +536,7 @@ def _render_staircase_plotly(*, cohort_counts, title, color, show_counts, show):
 def plot_group_time_heatmap(
     results: Optional[
         Union["CallawaySantAnnaResults", "EfficientDiDResults", "ContinuousDiDResults"]
+        # DMLDiDResults enters via CallawaySantAnnaResults subclassing
     ] = None,
     *,
     data: Optional[pd.DataFrame] = None,
@@ -489,7 +560,7 @@ def plot_group_time_heatmap(
 
     Parameters
     ----------
-    results : CallawaySantAnnaResults, EfficientDiDResults, or ContinuousDiDResults, optional
+    results : CallawaySantAnnaResults (incl. DMLDiDResults), EfficientDiDResults, or ContinuousDiDResults, optional
         Results object with ``group_time_effects`` dict.
     data : pd.DataFrame, optional
         DataFrame with columns ``group``, ``time``, ``effect``

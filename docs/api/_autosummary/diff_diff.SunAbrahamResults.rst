@@ -4,34 +4,50 @@
 .. currentmodule:: diff_diff
 
 .. autoclass:: SunAbrahamResults
+   :no-members:
 
-   
-   .. automethod:: __init__
 
-   
    .. rubric:: Methods
 
    .. autosummary::
-   
+
       ~SunAbrahamResults.__init__
       ~SunAbrahamResults.print_summary
       ~SunAbrahamResults.summary
       ~SunAbrahamResults.to_dataframe
-   
-   
+      ~SunAbrahamResults.to_dict
 
-   
-   
+
+
+
    .. rubric:: Attributes
 
    .. autosummary::
-   
+
       ~SunAbrahamResults.alpha
+      ~SunAbrahamResults.anticipation
+      ~SunAbrahamResults.att
       ~SunAbrahamResults.bootstrap_results
+      ~SunAbrahamResults.cluster_name
+      ~SunAbrahamResults.coef_var
       ~SunAbrahamResults.cohort_effects
+      ~SunAbrahamResults.conf_int
+      ~SunAbrahamResults.conley_lag_cutoff
       ~SunAbrahamResults.control_group
+      ~SunAbrahamResults.df_convention
+      ~SunAbrahamResults.event_study_df
+      ~SunAbrahamResults.event_study_vcov
+      ~SunAbrahamResults.event_study_vcov_index
+      ~SunAbrahamResults.inference_df
       ~SunAbrahamResults.is_significant
+      ~SunAbrahamResults.p_value
+      ~SunAbrahamResults.reference_observed
+      ~SunAbrahamResults.reference_period
+      ~SunAbrahamResults.se
       ~SunAbrahamResults.significance_stars
+      ~SunAbrahamResults.survey_metadata
+      ~SunAbrahamResults.t_stat
+      ~SunAbrahamResults.vcov_type
       ~SunAbrahamResults.event_study_effects
       ~SunAbrahamResults.overall_att
       ~SunAbrahamResults.overall_se
@@ -44,5 +60,4 @@
       ~SunAbrahamResults.n_obs
       ~SunAbrahamResults.n_treated_units
       ~SunAbrahamResults.n_control_units
-   
-   
+
