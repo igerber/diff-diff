@@ -128,6 +128,55 @@ The corresponding Python test is `tests/test_did_ovb_r_parity.py`; it compares
 the short ATT, scale components, bounds, RV, and XRV. This is a clean-room
 parity harness and does not import the GPL-3 `dml.sensemakr` source.
 
+The paper's minimum-wage application uses a separate external data file from
+the authors' `CS_RR` repository. After exporting `data/min_wage_CS.rds` to CSV
+in R, run the learner-level application check with:
+
+```bash
+Rscript -e 'write.csv(readRDS("data/min_wage_CS.rds"), "min_wage_CS.csv", row.names=FALSE)'
+python benchmarks/python/benchmark_did_ovb_minwage.py min_wage_CS.csv
+```
+
+This runner uses sklearn random forests as an explicit approximation to the
+paper's tuned `ranger` specification. Its output is a diagnostic, not a paper
+replication claim; exact application parity requires matching `ranger`, its
+cross-validation choices, fold assignments, and multiplier-bootstrap settings.
+
+The Appendix E.1 simulation DGP has a shared R/Python fixture runner:
+
+```bash
+Rscript benchmarks/R/generate_did_ovb_simulation.R \
+  benchmarks/data/did_ovb_simulation.csv \
+  benchmarks/data/did_ovb_simulation_r.json
+PYTHONPATH=. python benchmarks/python/benchmark_did_ovb_simulation.py \
+  benchmarks/data/did_ovb_simulation.csv \
+  --r-json benchmarks/data/did_ovb_simulation_r.json
+```
+
+This is the first single-draw cross-language check. The full 5,000-repetition
+coverage and sensitivity-statistics Monte Carlo tables remain a separate task.
+
+The compact Monte Carlo diagnostics are available as:
+
+```bash
+Rscript benchmarks/R/run_did_ovb_simulation_mc.R /tmp/ovb_mc_r.json 500 20
+PYTHONPATH=. python benchmarks/python/run_did_ovb_simulation_mc.py \
+  --n 500 --reps 20 --output /tmp/ovb_mc_python.json
+```
+
+Both runners report the mean short ATT, Monte Carlo standard deviation, mean
+estimated standard error, bias relative to the true short ATT, and 95% CI
+coverage. The paper-scale 5,000-repetition tables and sensitivity-statistic
+coverage surfaces are not silently substituted by this compact diagnostic.
+
+For the Appendix E.2 misspecification design, pass `--misspecified` to Python
+and `1` as the seventh R argument. Both then fit the nuisance models using
+`X*=exp(X/2)` while generating outcomes from the original `X`.
+
+The Python-only forest diagnostic is
+`benchmarks/python/run_did_ovb_simulation_forest.py`. It is not an R parity
+test because the current R environment does not have `ranger` installed.
+
 | diff-diff | Reference Package | Reference | Status |
 |-----------|-----------|-----------|--------|
 | `CallawaySantAnna` | `did::att_gt` | Callaway & Sant'Anna (2021) | ✓ Integrated |
