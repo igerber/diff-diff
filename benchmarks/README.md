@@ -110,6 +110,24 @@ benchmarks/
 
 ## Estimator Comparisons
 
+## DiD OVB sensitivity parity
+
+`R/generate_did_ovb_parity.R` is an independent R oracle for the canonical
+two-period omitted-variable-bias sensitivity implementation. It uses the
+2006--2007 treated/never-treated slice of `data/real/mpdta.csv`, fixed folds,
+and the paper's displayed plug-in and influence-function formulas. Regenerate
+the JSON fixture with:
+
+```bash
+Rscript benchmarks/R/generate_did_ovb_parity.R \
+  benchmarks/data/did_ovb_r_results.json \
+  benchmarks/data/real/mpdta.csv
+```
+
+The corresponding Python test is `tests/test_did_ovb_r_parity.py`; it compares
+the short ATT, scale components, bounds, RV, and XRV. This is a clean-room
+parity harness and does not import the GPL-3 `dml.sensemakr` source.
+
 | diff-diff | Reference Package | Reference | Status |
 |-----------|-----------|-----------|--------|
 | `CallawaySantAnna` | `did::att_gt` | Callaway & Sant'Anna (2021) | ✓ Integrated |
