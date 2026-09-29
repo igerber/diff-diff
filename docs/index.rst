@@ -187,6 +187,8 @@ Supported Estimators
      - Lee & Wooldridge (2025, 2026) rolling-transformation DiD; ``rolling='detrend'`` handles heterogeneous linear trends
    * - :class:`~diff_diff.DMLDiD`
      - Chang (2020) double/debiased ML DiD; staggered ATT(g,t) with cross-fitted nuisance learners (panel or declared repeated cross sections; survey/cluster support); Caetano et al. (2026) bad-control score via ``fit(bad_control=)`` (bad-control lane: panel only, ``cluster=`` only)
+   * - :class:`~diff_diff.DIDOVBSensitivity`
+     - Wang et al. (2026) two-period DiD omitted-variable-bias sensitivity analysis with cross-fitted nuisances, restricted bounds, RV, and XRV
    * - :class:`~diff_diff.DurationDiD`
      - Deaner & Ku (2026) causal duration DiD for binary absorbing outcomes; untreated-hazard restriction (common dynamics or proportional hazards), whole-individual bootstrap bands
    * - :class:`~diff_diff.QDiD`

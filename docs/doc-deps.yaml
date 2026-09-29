@@ -1085,6 +1085,27 @@ sources:
       - path: docs/tutorials/33_bad_controls.ipynb
         type: tutorial
 
+  # ── DiD OVB sensitivity (did_ovb group) ────────────────────────────
+
+  diff_diff/did_ovb.py:
+    drift_risk: medium
+    docs:
+      - path: docs/api/did_ovb.rst
+        type: api_reference
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: docs/tutorials/34_did_ovb.ipynb
+        type: tutorial
+      - path: benchmarks/README.md
+        section: "DiD OVB sensitivity parity"
+        type: testing
+
   # ── TROP (trop group) ──────────────────────────────────────────────
 
   diff_diff/trop.py:
