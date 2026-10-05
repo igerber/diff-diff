@@ -1861,6 +1861,8 @@ def _sharp_null_pvalue(
     f_post: np.ndarray,
     pre_denoms: Dict[Any, float],
     treated_id: Any,
+    *,
+    treated_weights: Optional[Dict[Any, float]] = None,
 ) -> Tuple[float, float, int]:
     """Permutation p-value for a common-effect sharp null (Firpo & Possebom Eq 13, φ=0, v=1).
 
@@ -1870,13 +1872,20 @@ def _sharp_null_pvalue(
     to its gap path; ``pre_denoms`` maps each unit (treated + those donors) to its floored
     pre-denominator. Ties counted via ``>=`` so the p-value is conservative, matching
     ``in_space_placebo``. Returns ``(p, rmspe_f_treated, n_ref)``.
+
+    ``treated_weights`` maps each placebo ``j`` to the weight ``w_j1`` its synthetic control
+    puts on the real treated unit, which is in every placebo's donor pool. Under the null the
+    treated unit's untreated outcome is ``Y_1 − f`` (Firpo & Possebom fn 10: the effect is known),
+    so placebo ``j``'s post gap moves by ``+w_j1·f`` and its residual is ``g_j − (1 − w_j1)·f``.
+    ``None`` means ``w_j1 = 0`` for every placebo.
     """
     f_post = np.asarray(f_post, dtype=float)
     r1 = _rmspe_f_ratio(treated_gap, post_periods, f_post, pre_denoms[treated_id])
     n_ref = 0
     n_ge = 0
     for j, g in placebo_gaps.items():
-        rj = _rmspe_f_ratio(g, post_periods, f_post, pre_denoms[j])
+        k = 1.0 if treated_weights is None else 1.0 - treated_weights[j]
+        rj = _rmspe_f_ratio(g, post_periods, k * f_post, pre_denoms[j])
         n_ref += 1
         if rj >= r1:
             n_ge += 1
@@ -1895,6 +1904,7 @@ def _invert_sharp_null(
     *,
     bounds: Optional[Tuple[float, float]] = None,
     n_grid: int = 200,
+    treated_weights: Optional[Dict[Any, float]] = None,
 ) -> Dict[str, Any]:
     """Invert the sharp-null RMSPE^f test over a one-parameter effect family.
 
@@ -1910,6 +1920,8 @@ def _invert_sharp_null(
     ``p > gamma`` is the set -- correctly handling accepted tails, disjoint components, and the
     empty / unbounded cases. With explicit ``bounds`` a fixed ``linspace(*bounds, n_grid)``
     grid is scanned instead (grid-limited membership). Each ``p`` is a pure O(J) re-ranking.
+    ``treated_weights`` is as in :func:`_sharp_null_pvalue`: placebo ``j``'s residual is
+    ``g_j − (1 − w_j1)·param·s_t``.
 
     Result dict: ``{lower, upper, contiguous, status, n_ref, point_estimate, grid}`` where
     ``status`` is ``"ran"`` / ``"empty"`` / ``"unbounded"``, ``point_estimate`` is the treated
@@ -1920,8 +1932,9 @@ def _invert_sharp_null(
     if family not in ("constant", "linear"):
         raise ValueError(f"family must be 'constant' or 'linear', got {family!r}")
     n_post = len(post_periods)
-    # Family shape s_t and per-unit moments of A_u(param) = mean_t((g_ut - param*s_t)**2)
-    # = S2*param**2 - 2*P_u*param + Q_u  (s_t = 1 constant / (t - T0) linear; S2 = mean(s**2)).
+    # Family shape s_t and per-unit moments of A_u(param) = mean_t((g_ut - k_u*param*s_t)**2)
+    # = k_u**2*S2*param**2 - 2*k_u*P_u*param + Q_u  (s_t = 1 constant / (t - T0) linear;
+    # S2 = mean(s**2); k_u = 1 for the treated unit, 1 - w_j1 for placebo j).
     s = (
         np.ones(n_post, dtype=float)
         if family == "constant"
@@ -1929,12 +1942,18 @@ def _invert_sharp_null(
     )
     S2 = float(np.mean(s**2)) if n_post else 0.0
 
-    def moments(gap_path: Dict[Any, float], unit: Any) -> Tuple[float, float, float]:
+    def moments(
+        gap_path: Dict[Any, float], unit: Any, k: float = 1.0
+    ) -> Tuple[float, float, float, float]:
+        # (k*P_u, Q_u, D_u, k**2*S2): the k-scaled moments of A_u.
         g = np.array([gap_path[p] for p in post_periods], dtype=float)
-        return float(np.mean(g * s)), float(np.mean(g**2)), pre_denoms[unit]
+        return k * float(np.mean(g * s)), float(np.mean(g**2)), pre_denoms[unit], k * k * S2
 
-    P1, Q1, D1 = moments(treated_gap, treated_id)
-    placebo_mom = [moments(gp, j) for j, gp in placebo_gaps.items()]
+    P1, Q1, D1, _ = moments(treated_gap, treated_id)
+    placebo_mom = [
+        moments(gp, j, 1.0 if treated_weights is None else 1.0 - treated_weights[j])
+        for j, gp in placebo_gaps.items()
+    ]
     n_ref = len(placebo_mom)
     # The treated unit's own RMSPE-minimizing param: reported as the point estimate ONLY
     # (it is NOT assumed to maximize p -- see the exact-inversion comment below).
@@ -1946,7 +1965,9 @@ def _invert_sharp_null(
         # _sharp_null_pvalue / test_sharp_null (the squared form just avoids the sqrt).
         r1 = ((S2 * param - 2.0 * P1) * param + Q1) / D1
         n_ge = sum(
-            1 for (Pj, Qj, Dj) in placebo_mom if ((S2 * param - 2.0 * Pj) * param + Qj) / Dj >= r1
+            1
+            for (Pj, Qj, Dj, S2j) in placebo_mom
+            if ((S2j * param - 2.0 * Pj) * param + Qj) / Dj >= r1
         )
         return (1 + n_ge) / (n_ref + 1)
 
@@ -2023,8 +2044,8 @@ def _invert_sharp_null(
     # 1[g_j(param) >= 0] == 1[RMSPE^param_j >= RMSPE^param_1], and breakpoints (where an
     # indicator flips) are the real roots of each g_j.
     coeffs = [
-        (S2 * (D1 - Dj), -2.0 * (Pj * D1 - P1 * Dj), Qj * D1 - Q1 * Dj)
-        for (Pj, Qj, Dj) in placebo_mom
+        (S2j * D1 - S2 * Dj, -2.0 * (Pj * D1 - P1 * Dj), Qj * D1 - Q1 * Dj)
+        for (Pj, Qj, Dj, S2j) in placebo_mom
     ]
     raw_breaks: List[float] = []
     for a, b, c in coeffs:
@@ -2146,17 +2167,18 @@ def _placebo_fit_unit(
     unit: Any,
     donor_pool: List[Any],
     n_starts: int,
-) -> Tuple[Optional[Tuple[Dict[Any, float], float]], str]:
+) -> Tuple[Optional[Tuple[Dict[Any, float], float, Dict[Any, float]]], str]:
     """Refit a synthetic control for one (pseudo-)treated ``unit`` vs ``donor_pool``.
 
     Reuses the exact predictor build / standardization / weight solve / gap-path
     path as ``fit()`` — none of those helpers reads estimator (``self``) state, so
-    the refit is driven entirely by the snapshot. The real treated unit is never in
-    ``donor_pool`` (the caller passes the other ``J−1`` donors).
+    the refit is driven entirely by the snapshot. ``donor_pool`` may contain the real
+    treated unit: the in-space placebo passes every unit except ``unit`` (ADH 2010 §3.4).
 
     Returns ``(result, status)`` where ``status`` is one of:
 
-    - ``"ran"`` — ``result`` is ``(gap_path, rmspe_ratio)`` (a valid optimum).
+    - ``"ran"`` — ``result`` is ``(gap_path, rmspe_ratio, weights)`` (a valid optimum);
+      ``weights`` maps each ``donor_pool`` unit to its donor weight.
     - ``"infeasible"`` — ``result`` is ``None``; the refit is STRUCTURALLY
       unidentified (non-finite cells, or — under ``v_method="cv"`` — a re-aggregated
       window with no cross-donor variation for this pseudo-treated pool). Remedied by
@@ -2266,7 +2288,8 @@ def _placebo_fit_unit(
     pre_gaps = np.array([gap_path[p] for p in snap.pre_periods], dtype=float)
     post_gaps = np.array([gap_path[p] for p in snap.post_periods], dtype=float)
     scale = float(np.max(np.abs(Z1))) if Z1.size else 0.0
-    return (gap_path, _rmspe_ratio(pre_gaps, post_gaps, scale)), "ran"
+    weights = {d: float(w_d) for d, w_d in zip(donor_pool, w)}
+    return (gap_path, _rmspe_ratio(pre_gaps, post_gaps, scale), weights), "ran"
 
 
 # =============================================================================

@@ -150,7 +150,7 @@ A re-analysis of ETA terrorism on Basque Country GDP per capita (Abadie & Gardea
 
 ### Computational Considerations
 - The benchmark test (Eq. 5) is `O(J)` synthetic-control refits (the permutation reference set). The sensitivity analysis (Eqs. 8–9) is a **closed-form re-weighting** of the *already-computed* `RMSPE_j` plus a one-dimensional root-find for `φ̲`/`φ̄` — no refits.
-- **Test-inversion CI = a grid search × the permutation test.** For each grid value `c` (or `c̃`): subtract `f(t)` from the relevant post-period outcomes, recompute `RMSPE^f` for all `J+1` units (Eq. 12), and evaluate Eq. 13. Because the donor synthetic controls and the pre-period denominators are unchanged across the grid (only the post-period gap shifts by `f(t)`), the per-grid-value cost is dominated by re-ranking, not refitting. Cost scales with grid resolution × `J`.
+- **Test-inversion CI = a grid search × the permutation test.** For each grid value `c` (or `c̃`): subtract `f(t)` from the relevant post-period outcomes, recompute `RMSPE^f` for all `J+1` units (Eq. 12), and evaluate Eq. 13. Because the donor weights and the pre-period denominators are unchanged across the grid (only the post-period residuals move: the treated unit's by `−f(t)`, placebo `j`'s by `−(1 − w_j1)·f(t)`, where `w_j1` is its weight on the treated unit, which stays in the placebo pools, fn. 10), the per-grid-value cost is dominated by re-ranking, not refitting. Cost scales with grid resolution × `J`.
 - The general `ℝ^T` confidence set (Eq. 14) is computationally infeasible — an implementation must restrict to the constant / linear (or a small parametric) family and choose a finite grid.
 
 ### Tuning Parameters

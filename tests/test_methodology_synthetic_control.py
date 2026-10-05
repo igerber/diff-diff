@@ -933,18 +933,94 @@ def test_in_space_placebo_strong_effect_ranks_treated_first():
     assert set(pdf.loc[~pdf["is_treated"], "unit"]) == {"d0", "d1", "d2", "d3"}
 
 
-def test_in_space_placebo_excludes_real_treated_from_donor_pools():
-    # The real treated unit is never in the donor universe, so it cannot serve as
-    # a donor for any placebo (ADH 2010 contamination guard; SCtools convention).
+def test_in_space_placebo_puts_real_treated_in_every_donor_pool(monkeypatch):
+    # ADH 2010 §3.4 (journal p. 501): each placebo run reassigns the intervention to a
+    # control unit, "shifting California to the donor pool", so every placebo is fit
+    # against all the other units, the real treated unit included.
+    import importlib
+
+    sc = importlib.import_module("diff_diff.synthetic_control")
     res = _fit_for_placebo(n_donors=4)
     snap = res._fit_snapshot
     assert snap.treated_id == "treated" and "treated" not in snap.donor_ids
+    real_fit_unit = sc._placebo_fit_unit
+    pools = {}
+
+    def recording_fit_unit(snap_arg, unit, donor_pool, n_starts):
+        pools[unit] = list(donor_pool)
+        return real_fit_unit(snap_arg, unit, donor_pool, n_starts)
+
+    monkeypatch.setattr(sc, "_placebo_fit_unit", recording_fit_unit)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         res.in_space_placebo()
     # Each donor became a placebo exactly once; the treated unit is not a placebo.
     assert "treated" not in res._placebo_gaps
     assert set(res._placebo_gaps) == set(snap.donor_ids)
+    units = ["d0", "d1", "d2", "d3", "treated"]
+    assert pools == {j: [u for u in units if u != j] for j in snap.donor_ids}
+    # Each placebo's weight on the treated unit is kept for the sharp-null re-ranking.
+    assert set(res._placebo_treated_weights) == set(snap.donor_ids)
+
+
+def _factor_panel(seed=0, n_units=10, n_pre=24, n_post=6):
+    """No-effect panel: three AR(1) factors, U(0, 1) loadings, AR(1) noise, unit levels."""
+    rng = np.random.default_rng(seed)
+    periods = n_pre + n_post
+    factors = np.empty((periods, 3))
+    errors = np.empty((n_units, periods))
+    factors[0] = rng.normal(size=3) / np.sqrt(0.75)
+    errors[:, 0] = rng.normal(size=n_units) / np.sqrt(0.75)
+    for t in range(1, periods):
+        factors[t] = 0.5 * factors[t - 1] + rng.normal(size=3)
+        errors[:, t] = 0.5 * errors[:, t - 1] + rng.normal(size=n_units)
+    loadings = rng.uniform(0.0, 1.0, (n_units, 3))
+    return loadings @ factors.T + 0.5 * errors + rng.normal(size=(n_units, 1))
+
+
+def test_in_space_placebo_is_exact_permutation():
+    # Under the null of no effect, moving the treatment label from unit to unit must only
+    # permute the J+1 RMSPE ratios. With the treated unit in every placebo's donor pool,
+    # each placebo refit is the fit that treats that unit, so the J+1 assignments give
+    # p = 1/(J+1), 2/(J+1), ..., 1 once each (no ties on this panel).
+    n_units, n_pre = 10, 24
+    y = _factor_panel(n_units=n_units, n_pre=n_pre)
+    n_periods = y.shape[1]
+    fits = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # poor-pre-fit notices on some units
+        for treated in range(n_units):
+            d = np.zeros(y.shape, dtype=int)
+            d[treated, n_pre:] = 1
+            df = pd.DataFrame(
+                {
+                    "unit": np.repeat(np.arange(n_units), n_periods),
+                    "time": np.tile(np.arange(n_periods), n_units),
+                    "y": y.ravel(),
+                    "d": d.ravel(),
+                }
+            )
+            res = SyntheticControl(
+                v_method="custom",
+                custom_v=np.ones(n_pre),
+                standardize="none",
+                inner_min_decrease=1e-3,
+            ).fit(df, "y", "d", "unit", "time", pre_period_outcomes="all")
+            res.in_space_placebo()
+            fits.append(res)
+    assert all(r.n_failed == 0 and r.n_placebos == n_units - 1 for r in fits)
+    p = np.array([r.placebo_p_value for r in fits])
+    ratios = np.array([r.rmspe_ratio for r in fits])
+    np.testing.assert_allclose(np.sort(p), np.arange(1, n_units + 1) / n_units)
+    np.testing.assert_allclose(p, [np.mean(ratios >= ratios[u]) for u in range(n_units)])
+    for r in fits:
+        pdf = r.get_placebo_df()
+        placebos = pdf[~pdf["is_treated"]]
+        np.testing.assert_allclose(
+            placebos["rmspe_ratio"].to_numpy(dtype=float),
+            ratios[placebos["unit"].to_numpy(dtype=int)],
+            rtol=1e-12,
+        )
 
 
 def test_in_space_placebo_p_in_valid_discrete_set():
@@ -1922,7 +1998,7 @@ def test_leave_one_out_uniform_shift_surfaced_by_delta_not_range(monkeypatch):
     def uniform_shift(snap_arg, unit, pool, n_starts):
         gp = {p: 0.0 for p in snap.pre_periods}
         gp.update({p: baseline + shift for p in snap.post_periods})
-        return (gp, 1.0), "ran"
+        return (gp, 1.0, {}), "ran"
 
     monkeypatch.setattr(sc, "_placebo_fit_unit", uniform_shift)
     with warnings.catch_warnings():
@@ -3111,9 +3187,10 @@ def test_cv_in_time_placebo_flat_window_is_infeasible_not_failed():
 
 def test_cv_in_space_placebo_excludes_donor_flat_refits():
     # In-space placebo path (solve-level sentinel): the FULL donor set is distinguishable so
-    # the headline fit is well-posed, but dropping donor d0 (pseudo-treating it) leaves the
-    # remaining donors {d1,d2,d3} identical in the validation window -> that placebo's pool
-    # is donor-indistinguishable and must be EXCLUDED (not enter with arbitrary "converged"
+    # the headline fit is well-posed, but pseudo-treating donor d0 leaves its pool
+    # {d1,d2,d3,treated} identical in the validation window (the real treated unit is in
+    # every placebo's pool and equals d1..d3 there) -> that placebo's pool is
+    # donor-indistinguishable and must be EXCLUDED (not enter with arbitrary "converged"
     # weights). Placebos for d1/d2/d3 keep d0 in the pool, so they remain identified.
     rng = np.random.default_rng(3)
     years = list(range(2000, 2008))
@@ -3128,12 +3205,12 @@ def test_cv_in_space_placebo_excludes_donor_flat_refits():
                 y = 10.0 + rng.normal(0, 0.2)
             rows.append({"unit": f"d{j}", "year": yr, "y": y, "treated": 0})
     for yr in years:
-        y = 12.0 if yr in (2003, 2004, 2005) else (5.5 + rng.normal(0, 0.2) if yr <= 2005 else 13.0)
+        y = 10.0 if yr in (2003, 2004, 2005) else (5.5 + rng.normal(0, 0.2) if yr <= 2005 else 13.0)
         rows.append({"unit": "treated", "year": yr, "y": y, "treated": int(yr >= 2006)})
     df = pd.DataFrame(rows)
     res = _fit_cv(df, seed=0)
     assert np.isfinite(res.att)  # headline well-posed: the full donor set is distinguishable
-    # The d0 placebo (pool {d1,d2,d3} identical in val) is dropped as STRUCTURALLY
+    # The d0 placebo (pool {d1,d2,d3,treated} identical in val) is dropped as STRUCTURALLY
     # infeasible (cv donor-indistinguishability), NOT a solver "failed": the threading
     # from _outer_solve_V_cv's structural sentinel through _placebo_fit_unit routes it to
     # n_infeasible. The others keep d0 in the pool, so they remain identified and enter.
@@ -3281,6 +3358,32 @@ def test_sharp_null_pvalue_matches_independent_oracle():
         for u, gp in _ORACLE_PLACEBOS.items():
             resid = np.array([gp[q] for q in _ORACLE_POST]) - f
             rj.append(float(np.sqrt(np.mean(resid**2) / pre_denoms[u])))
+        p_o = (1 + sum(1 for r in rj if r >= r1_o)) / (len(rj) + 1)
+        assert n_ref == 4
+        assert r1 == pytest.approx(r1_o)
+        assert p == pytest.approx(p_o), (c, p, p_o)
+
+
+# Weight each oracle placebo puts on the treated unit (in every placebo's donor pool).
+_ORACLE_TREATED_WEIGHTS = {"a": 0.5, "b": 0.0, "c": 0.25, "d": 1.0}
+
+
+def test_sharp_null_pvalue_imputes_treated_in_placebo_pools():
+    # Under H_0^f the treated unit's untreated outcome is Y_1 - f, so placebo j's synthetic
+    # control moves by -w_j1 * f: its post gap moves by +w_j1 * f before Eq 12 subtracts f.
+    pre_denoms = _oracle_pre_denoms()
+    w1 = _ORACLE_TREATED_WEIGHTS
+    for c in (0.0, 1.0, 1.65, 2.0, 2.5, 3.5, -1.0):
+        f = _constant_f_post(c, len(_ORACLE_POST))
+        p, r1, n_ref = _sharp_null_pvalue(
+            _ORACLE_TREATED, _ORACLE_PLACEBOS, _ORACLE_POST, f, pre_denoms, 0, treated_weights=w1
+        )
+        resid_t = np.array([_ORACLE_TREATED[q] for q in _ORACLE_POST]) - f
+        r1_o = float(np.sqrt(np.mean(resid_t**2) / pre_denoms[0]))
+        rj = []
+        for u, gp in _ORACLE_PLACEBOS.items():
+            null_gap = np.array([gp[q] for q in _ORACLE_POST]) + w1[u] * f
+            rj.append(float(np.sqrt(np.mean((null_gap - f) ** 2) / pre_denoms[u])))
         p_o = (1 + sum(1 for r in rj if r >= r1_o)) / (len(rj) + 1)
         assert n_ref == 4
         assert r1 == pytest.approx(r1_o)
@@ -3479,6 +3582,31 @@ def test_invert_monotone_in_gamma():
     assert w_lo >= w_hi - 1e-9
 
 
+def test_invert_with_treated_weights_matches_direct_pvalues():
+    # Placebo j's residual is g_j - (1 - w_j1) * c, so its breakpoint quadratic carries the
+    # (1 - w_j1)**2 * S2 curvature. The grid p-values must equal _sharp_null_pvalue's, and the
+    # exact set's endpoints must be where that p-value crosses gamma.
+    pre_denoms = _oracle_pre_denoms()
+    w1 = _ORACLE_TREATED_WEIGHTS
+    gamma = 0.45
+    args = (_ORACLE_TREATED, _ORACLE_PLACEBOS, _ORACLE_POST, pre_denoms, 0, "constant", gamma)
+
+    def p_direct(c):
+        f = _constant_f_post(c, len(_ORACLE_POST))
+        return _sharp_null_pvalue(
+            _ORACLE_TREATED, _ORACLE_PLACEBOS, _ORACLE_POST, f, pre_denoms, 0, treated_weights=w1
+        )[0]
+
+    grid = _invert_sharp_null(*args, bounds=(-6.0, 10.0), n_grid=321, treated_weights=w1)["grid"]
+    for c, p, _ in grid:
+        assert p == pytest.approx(p_direct(c)), c
+    exact = _invert_sharp_null(*args, treated_weights=w1)
+    assert exact["status"] == "ran" and exact["contiguous"]
+    lo, hi = exact["lower"], exact["upper"]
+    assert p_direct(lo - 1e-6) <= gamma < p_direct(lo + 1e-6)
+    assert p_direct(hi + 1e-6) <= gamma < p_direct(hi - 1e-6)
+
+
 # --- end-to-end (real fit): custom V skips the outer search for speed/determinism ---
 
 
@@ -3537,6 +3665,44 @@ def test_test_sharp_null_zero_equals_placebo_p_value_end_to_end():
     assert s0["p_value"] == pytest.approx(res.placebo_p_value)
     assert s0["rmspe_f_treated"] == pytest.approx(res.rmspe_ratio)
     assert s0["n_placebos"] == res.n_placebos
+
+
+def test_test_sharp_null_matches_refits_on_null_imputed_panel():
+    # Brute force for H_0: alpha_1t = c. Replace the treated unit's post outcomes by its
+    # untreated outcomes Y_1t - c, refit every placebo from scratch on that panel, and rank
+    # Eq 12's statistic. The weights depend on pre-period data only, so each refit's post gap
+    # is the stored placebo gap plus w_j1 * c: test_sharp_null needs no refits.
+    res, years, T0 = _fit_with_placebos()
+    df, _, _ = _make_panel(n_donors=6, T=10, T0=T0, effect=3.0, seed=0)
+    post = years[T0:]
+    assert max(res._placebo_treated_weights.values()) > 0.1  # the shift is exercised
+    for c in (1.5, 3.75):  # at 3.75 the p-value differs if the w_j1 * c shift is dropped
+        f = _constant_f_post(c, len(post))
+        null_df = df.copy()
+        null_df.loc[(null_df["unit"] == "treated") & (null_df["year"] >= post[0]), "y"] -= c
+        r1 = _rmspe_f_ratio(res.gap_path, post, f, res._placebo_pre_denoms["treated"])
+        n_ge = 0
+        for j, stored in res._placebo_gaps.items():
+            treated_j = ((null_df["unit"] == j) & (null_df["year"] >= post[0])).astype(int)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                refit = SyntheticControl(v_method="custom", custom_v=np.ones(T0), seed=0).fit(
+                    null_df.assign(treated=treated_j),
+                    "y",
+                    "treated",
+                    "unit",
+                    "year",
+                    post_periods=post,
+                    treated_unit=j,
+                )
+            w_j1 = res._placebo_treated_weights[j]
+            for t in post:
+                assert refit.gap_path[t] == pytest.approx(stored[t] + w_j1 * c, abs=1e-9)
+            n_ge += _rmspe_f_ratio(refit.gap_path, post, f, res._placebo_pre_denoms[j]) >= r1
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            s = res.test_sharp_null(c)
+        assert s["p_value"] == pytest.approx((1 + n_ge) / (res.n_placebos + 1))
 
 
 def test_confidence_set_constant_contains_att_and_excludes_zero():
