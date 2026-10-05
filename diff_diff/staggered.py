@@ -2949,13 +2949,14 @@ class CallawaySantAnna(
 
         # Store results
         # Retrieve event-study VCV from aggregation mixin (Phase 7d).
-        # Clear it when bootstrap overwrites event-study SEs to prevent
-        # HonestDiD from mixing analytical VCV with bootstrap SEs.
+        # When bootstrap overwrites the event-study SEs, the VCV is the
+        # covariance of the same bootstrap draws (diagonal = bootstrap SE**2),
+        # so HonestDiD never mixes the analytical VCV with bootstrap SEs.
         event_study_vcov = es_aggregation.vcov if es_aggregation is not None else None
         event_study_vcov_index = es_aggregation.vcov_index if es_aggregation is not None else None
-        if bootstrap_results is not None and event_study_vcov is not None:
-            event_study_vcov = None
-            event_study_vcov_index = None
+        if bootstrap_results is not None:
+            event_study_vcov = bootstrap_results.event_study_vcov
+            event_study_vcov_index = bootstrap_results.event_study_vcov_index
         # Same clearing rule for the ES df provenance: bootstrap replaces the
         # stored ES se/p/CI with percentile values that never used the
         # analytical df, so surfacing it would be false provenance.

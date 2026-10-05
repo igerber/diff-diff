@@ -42,10 +42,13 @@ producers DO recompute variance from their retained kits, exactly as
 their own post-fit `aggregate()` does. Bootstrapped CS fits derive
 successfully too: `aggregate('event_study')` replays the fit-time
 multiplier bootstrap (percentile inference; the derived container
-carries `vcov=None`, so parallel_trends rides the Bonferroni fallback
-and pretrends_power/sensitivity the diagonal-covariance fallback, and
-the replay's re-emitted fit-time warnings are recorded and
-republished per section). Kit-less/legacy-pickle fits,
+carries the covariance of the bootstrap draws as `vcov`, whose
+diagonal is the bootstrap SEs squared, so parallel_trends takes the
+joint-Wald path and pretrends_power/sensitivity the full covariance -
+the Bonferroni and diagonal fallbacks remain for fits where no
+bootstrap covariance is stored, e.g. `n_bootstrap` at or below the
+number of event times - and the replay's re-emitted fit-time warnings
+are recorded and republished per section). Kit-less/legacy-pickle fits,
 backend-mismatched CS bootstrap replays, and the other estimators'
 bootstrap gates still fail closed: the derivation exception is caught
 and surfaced as an explicit per-check skip reason, never substituted
@@ -428,8 +431,9 @@ a library setting.
 - **Note:** Pre-period covariance routing for staggered-estimator power.
   As of the PR-B PreTrendsPower implementation audit (Roth 2022),
   `compute_pretrends_power()` consumes the full `event_study_vcov`
-  sub-block when it is available — non-bootstrap CS fits
-  (`staggered_results.py` populates the matrix), non-bootstrap SA
+  sub-block when it is available — CS fits (`staggered_results.py`
+  populates the matrix; on bootstrap fits it is the covariance of the
+  event-study bootstrap draws), non-bootstrap SA
   fits (`sun_abraham.py` builds it via `W @ vcov_cohort @ W.T`), and
   admitted CS-/DMLDiD-/Stacked-sourced `aggregate('event_study')` containers
   carrying `vcov` (row M-024; StackedDiD persists its ES VCV in every
@@ -442,9 +446,11 @@ a library setting.
 
   - **New fits** (post-PR-B, `PreTrendsPowerResults.covariance_source`
     is populated): `DiagnosticReport` reads the persisted label
-    directly. Non-bootstrap CS / SA fits report
-    `"full_pre_period_vcov"` and are NOT downgraded; bootstrap /
-    replicate-weight paths report `"diag_fallback"` and also pass
+    directly. CS and non-bootstrap SA fits report
+    `"full_pre_period_vcov"` and are NOT downgraded; paths without a
+    stored covariance (replicate-weight CS / SA, bootstrap SA, bootstrap
+    CS with `n_bootstrap` at or below the number of event times) report
+    `"diag_fallback"` and also pass
     through unchanged (no "available but unused" concern — the
     estimator did its best with what was available).
   - **Legacy serialized results** (pre-PR-B, no
@@ -462,9 +468,10 @@ a library setting.
     `"diag_fallback"` (a genuine fallback, not the "available but
     unused" case, so no downgrade applies).
 
-  Remaining `"diag_fallback"` cases on new fits — bootstrap /
-  replicate-weight CS / SA, bootstrap / replicate-weight TwoStageDiD,
-  plus ImputationDiD / EfficientDiD — pass through unchanged because
+  Remaining `"diag_fallback"` cases on new fits — replicate-weight CS,
+  bootstrap CS with `n_bootstrap` at or below the number of event
+  times, bootstrap / replicate-weight SA, bootstrap / replicate-weight
+  TwoStageDiD, plus ImputationDiD / EfficientDiD — pass through unchanged because
   nothing better is available on those result types in those modes.
   StackedDiD and TwoStageDiD now persist `event_study_vcov` (4.0
   program row M-092): StackedDiD in EVERY inference mode (its

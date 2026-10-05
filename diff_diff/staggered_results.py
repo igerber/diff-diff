@@ -479,10 +479,10 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
             precomputed,
         )
         if boot_replay is not None:
-            # Mirror fit's clearing rules exactly: percentile se/CI/p + t
-            # override, sup-t cband rows, vcov/vcov_index/df cleared (the
-            # percentile inference never used them - false provenance
-            # otherwise).
+            # Mirror fit's rules exactly: percentile se/CI/p + t override,
+            # sup-t cband rows, vcov/vcov_index from the same bootstrap draws
+            # (below), df cleared (the percentile inference never used it -
+            # false provenance otherwise).
             apply_bootstrap_event_study_overrides(es.effects, boot_replay, kit.alpha)
             apply_cband_conf_ints(es.effects, boot_replay.cband_crit_value)
         # `build_event_study_surface` reads the surface off a RESULTS object.
@@ -491,8 +491,10 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
         carrier = replace(
             self,
             event_study_effects=es.effects,
-            event_study_vcov=None if boot_replay is not None else es.vcov,
-            event_study_vcov_index=None if boot_replay is not None else es.vcov_index,
+            event_study_vcov=boot_replay.event_study_vcov if boot_replay is not None else es.vcov,
+            event_study_vcov_index=(
+                boot_replay.event_study_vcov_index if boot_replay is not None else es.vcov_index
+            ),
             event_study_df=None if boot_replay is not None else es.df_used,
             cband_crit_value=(
                 boot_replay.cband_crit_value if boot_replay is not None else self.cband_crit_value

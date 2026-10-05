@@ -185,12 +185,14 @@ def _extract_event_study_vcov_subblock(
 
     This is the canonical Σ_22 routing path for ``compute_pretrends_power``
     when the event-study result type exposes a full event-study covariance
-    matrix (CallawaySantAnnaResults non-bootstrap fits at
-    ``staggered_results.py:126-128`` and SunAbrahamResults non-bootstrap
-    fits via the W-matrix construction added in PR-B Step 3). Bootstrap
-    fits and replicate-weight survey fits clear ``event_study_vcov`` so
-    the analytical VCV is not mixed with bootstrap / replicate SE
-    overrides — those cases naturally fall through to the diag fallback.
+    matrix (CallawaySantAnnaResults fits at ``staggered_results.py:126-128``
+    and SunAbrahamResults non-bootstrap fits via the W-matrix construction
+    added in PR-B Step 3). A bootstrapped CallawaySantAnna fit carries the
+    covariance of its event-study bootstrap draws, whose diagonal is the
+    bootstrap SEs squared. Bootstrap SunAbraham fits and replicate-weight
+    survey fits clear ``event_study_vcov`` so the analytical VCV is not
+    mixed with bootstrap / replicate SE overrides — those cases naturally
+    fall through to the diag fallback.
 
     Parameters
     ----------
@@ -216,7 +218,9 @@ def _extract_event_study_vcov_subblock(
         ``"full_pre_period_vcov"`` when the full event-study sub-block
         was used (no off-diagonal information was discarded), or
         ``"diag_fallback"`` when ``event_study_vcov`` was missing /
-        cleared (bootstrap / replicate-weight CS or SA paths).
+        cleared (replicate-weight CS or SA paths, bootstrap SA paths, and
+        bootstrap CS fits with ``n_bootstrap`` at or below the number of
+        event times).
     """
     es_vcov = getattr(results, "event_study_vcov", None)
     es_vcov_index = getattr(results, "event_study_vcov_index", None)
@@ -1310,9 +1314,9 @@ class PreTrendsPower(BaseEstimator):
                 ses = np.array([pre_effects[t]["se"] for t in pre_periods])
 
                 # Route through full event_study_vcov when available
-                # (non-bootstrap CS fits at staggered_results.py:126-128).
-                # Bootstrap CS fits clear event_study_vcov at
-                # staggered.py:2032-2036, falling through to diag.
+                # (CS fits at staggered_results.py:126-128; bootstrap CS
+                # fits carry the covariance of their bootstrap draws).
+                # Replicate-weight CS fits clear it, falling through to diag.
                 vcov, covariance_source = _extract_event_study_vcov_subblock(
                     results, pre_periods, ses
                 )

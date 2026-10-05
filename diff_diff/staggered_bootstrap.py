@@ -89,6 +89,16 @@ class CSBootstrapResults:
         Bootstrap confidence interval for the Eq. 4.14 overall.
     overall_att_es_p_value : Optional[float]
         Bootstrap p-value for the Eq. 4.14 overall.
+    event_study_vcov : Optional[np.ndarray]
+        Covariance (``ddof=1``) of the event-study bootstrap draws, ordered as
+        ``event_study_vcov_index``. Its diagonal is ``event_study_ses`` squared:
+        both come from the same draws. None without event-study draws, when a
+        covered horizon has a non-finite draw, when the bootstrap variance is
+        unidentified (fewer than 2 PSUs), or when ``n_bootstrap`` does not
+        exceed the number of covered horizons (the matrix would be singular).
+    event_study_vcov_index : Optional[List[int]]
+        Event times of ``event_study_vcov``'s rows and columns: the horizons
+        with a finite bootstrap SE.
     """
 
     n_bootstrap: int
@@ -112,6 +122,9 @@ class CSBootstrapResults:
     overall_att_es_se: Optional[float] = None
     overall_att_es_ci: Optional[Tuple[float, float]] = None
     overall_att_es_p_value: Optional[float] = None
+    # Covariance of the event-study draws (see the class docstring).
+    event_study_vcov: Optional[np.ndarray] = field(default=None, repr=False)
+    event_study_vcov_index: Optional[List[int]] = None
 
     def __post_init__(self) -> None:
         # Post-fit replay bookkeeping, attached as PLAIN attributes (never
@@ -663,6 +676,8 @@ class CallawaySantAnnaBootstrapMixin:
         event_study_ses = None
         event_study_cis = None
         event_study_p_values = None
+        event_study_vcov = None
+        event_study_vcov_index = None
         # Paper Eq. (4.14) overall (event-study average) bootstrap inference; stays
         # NaN unless event-study draws exist. Mirrors the analytical overall_att_es.
         overall_att_es_se = np.nan
@@ -687,6 +702,19 @@ class CallawaySantAnnaBootstrapMixin:
                 e: (float(es_ci_lo[i]), float(es_ci_hi[i])) for i, e in enumerate(rel_periods)
             }
             event_study_p_values = {e: float(es_pv[i]) for i, e in enumerate(rel_periods)}
+            # Covariance of the same draws, so its diagonal is es_ses**2.
+            # Horizons without a bootstrap SE (e.g. a universal base period's
+            # reference, whose draws are all zero) stay out, as they stay out
+            # of the analytical covariance. B draws give rank <= B - 1, so
+            # with n_bootstrap at or below the number of covered horizons the
+            # matrix would be singular: it is not stored.
+            kept = np.isfinite(es_ses)
+            n_kept = int(kept.sum())
+            if 0 < n_kept < self.n_bootstrap and np.isfinite(es_boot_matrix[:, kept]).all():
+                event_study_vcov = np.atleast_2d(
+                    np.cov(es_boot_matrix[:, kept], rowvar=False, ddof=1)
+                )
+                event_study_vcov_index = [e for e, keep in zip(rel_periods, kept) if keep]
 
             # Eq. (4.14) overall = unweighted mean of post-treatment ES(e) (e >=
             # -anticipation, matching post_treatment_mask above). The per-draw mean
@@ -792,6 +820,8 @@ class CallawaySantAnnaBootstrapMixin:
             gt_ses = {gt: np.nan for gt in gt_ses} if gt_ses else gt_ses
             gt_cis = {gt: (np.nan, np.nan) for gt in gt_cis} if gt_cis else gt_cis
             gt_p_values = {gt: np.nan for gt in gt_p_values} if gt_p_values else gt_p_values
+            event_study_vcov = None
+            event_study_vcov_index = None
             if event_study_ses:
                 # ses/cis/p_values are populated together upstream.
                 assert event_study_cis is not None and event_study_p_values is not None
@@ -826,6 +856,8 @@ class CallawaySantAnnaBootstrapMixin:
             overall_att_es_se=overall_att_es_se,
             overall_att_es_ci=overall_att_es_ci,
             overall_att_es_p_value=overall_att_es_p_value,
+            event_study_vcov=event_study_vcov,
+            event_study_vcov_index=event_study_vcov_index,
         )
         result._replay_bitgen_state = replay_bitgen_state
         result._replay_backend = replay_backend

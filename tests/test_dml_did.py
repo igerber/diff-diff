@@ -797,6 +797,18 @@ class TestAggregationBootstrap:
         cband_cols = [c for c in df_es.columns if "cband" in c]
         assert cband_cols, f"no sup-t band columns on the replay output: {list(df_es.columns)}"
 
+    def test_event_study_replay_carries_bootstrap_covariance(self, data):
+        """The replayed container's vcov is the covariance of the bootstrap
+        draws (inherited CS engine): its diagonal is the replayed se**2."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            boot = DMLDiD(seed=0, n_bootstrap=99).fit(data, **FIT_KW, **COV)
+            es = boot.aggregate("event_study")
+        assert es.vcov is not None
+        rows = [list(es.event_time).index(e) for e in es.vcov_index]
+        se = np.asarray(es.se, dtype=float)[rows]
+        np.testing.assert_allclose(np.diag(es.vcov), se**2, rtol=1e-12, atol=0.0)
+
     def test_sieve_outcome_learner_smoke(self, data):
         res = DMLDiD(outcome_learner="sieve", seed=0).fit(data, **FIT_KW, **COV)
         assert np.isfinite(res.att)

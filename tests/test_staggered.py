@@ -2652,6 +2652,71 @@ class TestCallawaySantAnnaBootstrap:
         with pytest.warns(UserWarning, match="n_bootstrap=30 is low"):
             cs.fit(data, outcome="outcome", unit="unit", time="time", first_treat="first_treat")
 
+    @pytest.mark.parametrize(
+        "base_period, anticipation", [("varying", 0), ("universal", 0), ("universal", 1)]
+    )
+    def test_bootstrap_event_study_vcov_is_draw_covariance(self, base_period, anticipation):
+        """With n_bootstrap > 0 the event-study VCV is the covariance of the
+        bootstrap draws: finite, symmetric, positive definite, ordered as its
+        index, with the bootstrap SEs squared on its diagonal and non-zero
+        cross-horizon covariance. Reference-only horizons (all-zero draws)
+        stay out of it, as they stay out of the analytical VCV."""
+        data = generate_staggered_data(n_units=60, n_periods=6, n_cohorts=2, seed=3)
+        results = CallawaySantAnna(
+            n_bootstrap=50, seed=7, base_period=base_period, anticipation=anticipation
+        ).fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="event_study",
+        )
+
+        effects = results.event_study_effects
+        vcov = results.event_study_vcov
+        index = results.event_study_vcov_index
+        assert index == [
+            e
+            for e in sorted(effects)
+            if effects[e].get("n_groups", 1) > 0 and np.isfinite(effects[e]["se"])
+        ]
+        assert vcov.shape == (len(index), len(index)) and np.isfinite(vcov).all()
+        np.testing.assert_allclose(vcov, vcov.T, rtol=1e-14, atol=0.0)
+        ses = np.array([effects[e]["se"] for e in index])
+        np.testing.assert_allclose(np.diag(vcov), ses**2, rtol=1e-12, atol=0.0)
+        assert np.linalg.eigvalsh(vcov).min() > 0
+        off_diagonal = vcov[~np.eye(len(index), dtype=bool)]
+        assert np.abs(off_diagonal).max() > 0.1 * ses.min() ** 2
+        reference = [e for e, d in effects.items() if d.get("n_groups", 1) == 0]
+        assert bool(reference) == (base_period == "universal")
+        assert not set(reference) & set(index)
+
+    def test_bootstrap_event_study_vcov_needs_more_draws_than_horizons(self):
+        """The covariance of B draws has rank at most B - 1. With n_bootstrap
+        at or below the number of horizons it would be singular by
+        construction, so it is not stored."""
+        data = generate_staggered_data(n_units=60, n_periods=6, n_cohorts=2, seed=3)
+
+        def fit(n_bootstrap):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                return CallawaySantAnna(n_bootstrap=n_bootstrap, seed=7).fit(
+                    data,
+                    outcome="outcome",
+                    unit="unit",
+                    time="time",
+                    first_treat="first_treat",
+                    aggregate="event_study",
+                )
+
+        n_horizons = len(fit(50).event_study_vcov_index)
+        at_limit = fit(n_horizons)
+        assert at_limit.event_study_vcov is None and at_limit.event_study_vcov_index is None
+        assert all(np.isfinite(d["se"]) for d in at_limit.event_study_effects.values())
+        above_limit = fit(n_horizons + 1)
+        assert above_limit.event_study_vcov.shape == (n_horizons, n_horizons)
+
 
 # =============================================================================
 # Edge Case Tests: Single Cohort

@@ -397,8 +397,11 @@ def _assert_es_replay_parity(es, ref, n_bootstrap=50):
             np.testing.assert_allclose(
                 [es.cband_lower[i], es.cband_upper[i]], list(cb), rtol=1e-13, atol=1e-13
             )
-    # Percentile provenance: no joint covariance, no analytical df.
-    assert es.vcov is None
+    # Percentile provenance: no analytical df, and the joint covariance is
+    # the fit-time one of the same bootstrap draws (never the analytical one).
+    assert ref.event_study_vcov is not None
+    assert list(es.vcov_index) == list(ref.event_study_vcov_index)
+    np.testing.assert_allclose(es.vcov, ref.event_study_vcov, rtol=1e-13, atol=1e-13)
     assert np.all(np.isnan(np.asarray(es.df, dtype=float)))
     if ref.cband_crit_value is not None:
         np.testing.assert_allclose(es.cband_crit_value, ref.cband_crit_value, rtol=1e-13)
@@ -657,13 +660,16 @@ class TestBootstrapReplayDesigns:
         nonref = ~np.asarray(es.is_reference, dtype=bool)
         assert np.all(~np.isfinite(np.asarray(es.se, dtype=float)[nonref]))
         assert es.cband_crit_value is None
+        # Unidentified bootstrap variance: no covariance either.
+        assert es.vcov is None and es.vcov_index is None
 
 
 class TestBootstrapReplayConsumers:
     """The newly-reachable public path: a bootstrapped-CS derived container
-    (vcov=None) flowing into the event-study consumers."""
+    (vcov = covariance of the bootstrap draws) flowing into the event-study
+    consumers."""
 
-    def test_pretrends_power_rides_diag_fallback(self, panel):
+    def test_pretrends_power_uses_bootstrap_covariance(self, panel):
         from diff_diff import compute_pretrends_power
 
         plain = _boot_fit(panel)
@@ -671,20 +677,20 @@ class TestBootstrapReplayConsumers:
             warnings.simplefilter("ignore")
             es = plain.aggregate("event_study")
             power = compute_pretrends_power(es)
-        # Silent by design on the pretrends side: the diagonal fallback is
-        # the container contract for vcov=None surfaces.
-        assert power is not None
+        assert power.covariance_source == "full_pre_period_vcov"
 
-    def test_honest_did_warns_then_uses_diagonal(self, panel):
+    def test_honest_did_uses_bootstrap_covariance(self, panel):
         from diff_diff import compute_honest_did
 
         plain = _boot_fit(panel)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             es = plain.aggregate("event_study")
-        with pytest.warns(UserWarning, match="no full covariance"):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
             honest = compute_honest_did(es, method="relative_magnitude", M=1.0)
-        assert honest is not None
+        assert not [w for w in caught if "no full covariance" in str(w.message)]
+        assert np.isfinite(honest.original_se) and honest.original_se > 0
 
 
 # --------------------------------------------------------------------------- #

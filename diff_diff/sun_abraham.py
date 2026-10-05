@@ -1510,10 +1510,9 @@ class SunAbraham(BaseEstimator):
             }
 
         # Clear analytical event_study_vcov when bootstrap or replicate-weight
-        # survey overrides the analytical SEs. Mirrors the CS pattern at
-        # staggered.py:2032-2036 — prevents mixing analytical VCV with
-        # bootstrap/replicate SEs downstream in PreTrendsPower (which would
-        # silently produce mis-scaled MDV/power output).
+        # survey overrides the analytical SEs — prevents mixing analytical
+        # VCV with bootstrap/replicate SEs downstream in PreTrendsPower
+        # (which would silently produce mis-scaled MDV/power output).
         if bootstrap_results is not None or _uses_replicate_sa:
             es_vcov = None
             es_vcov_index = None
