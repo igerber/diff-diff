@@ -1108,8 +1108,11 @@ Aggregations:
   fallback) when `n_bootstrap` does not exceed the number of covered horizons (the covariance
   of B draws has rank at most B - 1, so it would be singular by construction), when a covered
   horizon has a non-finite draw, or when the bootstrap variance is unidentified (fewer than 2
-  PSUs). Before this change the bootstrap path cleared the matrix and HonestDiD fell back to
-  `diag(se**2)`, whose Delta^SD intervals under-covered (issue #836).
+  PSUs). Both matrices are built from the PSU-level influence-function sums, so neither has
+  rank above the number of PSUs: with fewer PSUs than covered horizons the stored matrix is
+  singular, like the analytical one, and HonestDiD's container route rejects both alike
+  (`allow_singular=False`). Before this change the bootstrap path cleared the matrix and
+  HonestDiD fell back to `diag(se**2)`, whose Delta^SD intervals under-covered (issue #836).
 
 *Bootstrap weight distributions:*
 

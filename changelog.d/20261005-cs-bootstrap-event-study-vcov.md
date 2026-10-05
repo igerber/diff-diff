@@ -21,3 +21,12 @@
   and the `DiagnosticReport` parallel-trends check runs the joint Wald test
   on the event-study covariance (`method="joint_wald_event_study"`, or its
   `_survey` variant) instead of the Bonferroni fallback.
+- **HonestDiD on a bootstrapped CallawaySantAnna event-study container with
+  few clusters now raises, as it does on analytical fits** (#836): when the
+  clusters (PSUs) are too few for the event-study horizons, the bootstrap
+  covariance is singular, like the analytical one. HonestDiD on
+  `results.aggregate("event_study")` then raises the singular-covariance
+  `ValueError` that analytical fits already raise on that route, instead of
+  falling back to `diag(se**2)` with a warning, and the `DiagnosticReport`
+  sensitivity check reports that error. HonestDiD on the results object
+  itself uses the matrix, as it does for analytical fits.
