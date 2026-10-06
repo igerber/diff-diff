@@ -294,7 +294,7 @@ class SyntheticControlResults(BaseResults):
         self._fit_snapshot: Optional[_SyntheticControlFitSnapshot] = None
         self._placebo_gaps: Optional[Dict[Any, Dict[Any, float]]] = None
         self._placebo_df: Optional[pd.DataFrame] = None
-        # Whether the treated unit's own inner Frank-Wolfe weight solve converged.
+        # Whether the treated unit's own fit converged (inner weight solve and outer V search).
         # in_space_placebo() fails closed when this is False: a truncated treated
         # fit makes the ranked statistic (rmspe_ratio) not a valid SCM optimum.
         self._fit_converged: bool = True
@@ -662,12 +662,10 @@ class SyntheticControlResults(BaseResults):
             if status == "treated_fit_nonconverged":
                 reason = [
                     "In-space placebo was skipped: the treated unit's own SCM fit "
-                    "did not converge at fit time (inner Frank-Wolfe weight solve",
-                    "and/or outer V search), so its RMSPE ratio is not a valid "
-                    "optimum to rank against placebos. placebo_p_value is undefined",
-                    "— re-fit with a larger inner_max_iter / looser "
-                    "inner_min_decrease and/or a larger optimizer_options['maxiter']",
-                    "/ more n_starts.",
+                    "did not converge at fit time (outer V search), so its RMSPE",
+                    "ratio is not a valid optimum to rank against placebos. "
+                    "placebo_p_value is undefined",
+                    "— re-fit with a larger optimizer_options['maxiter'] / more n_starts.",
                 ]
             elif status == "too_few_donors":
                 reason = [
@@ -898,10 +896,10 @@ class SyntheticControlResults(BaseResults):
 
         A placebo is **excluded** from the reference set for one of two reasons,
         counted separately. A **solver non-convergence** (counted in ``n_failed``,
-        ``status="failed"``) is EITHER an inner Frank-Wolfe weight solve that did not
-        converge (a truncated ``W`` is unusable) OR an outer ``V`` search that did not
-        converge (an under-optimized ``V`` fits the pre-period worse, shrinking its
-        RMSPE ratio and biasing the permutation p-value anti-conservatively). A
+        ``status="failed"``) is an outer ``V`` search that did not converge (an
+        under-optimized ``V`` fits the pre-period worse, shrinking its RMSPE ratio and
+        biasing the permutation p-value anti-conservatively); the inner weight solve is
+        exact and always converges. A
         **structural cv infeasibility** (counted in ``n_infeasible``,
         ``status="infeasible"``; ``v_method="cv"`` only) is a pseudo-treated donor
         pool that is indistinguishable in a re-aggregated CV window, so the weights are
@@ -1004,19 +1002,17 @@ class SyntheticControlResults(BaseResults):
         ]
 
         # Fail closed when the treated unit's OWN fit did not converge at fit time
-        # (inner Frank-Wolfe weight solve OR outer V search): ranking a statistic
+        # (inner weight solve OR outer V search): ranking a statistic
         # from a truncated / under-optimized treated fit would not be a valid ADH
         # 2010 §2.4 permutation (placebos already fail-closed on non-convergence, so
-        # the treated unit must too). ``_fit_converged`` folds both failure modes, so
-        # the remediation names the knobs for each.
+        # the treated unit must too). ``_fit_converged`` folds both failure modes; the
+        # inner weight solve is exact, so the remediation names the outer search's knobs.
         if not self._fit_converged:
             warnings.warn(
                 "In-space placebo skipped: the treated unit's own SCM fit did not "
-                "converge at fit time (inner Frank-Wolfe weight solve and/or outer V "
-                "search), so its RMSPE ratio is not a valid optimum to rank against "
-                "placebos. placebo_p_value is NaN — re-fit with a larger "
-                "inner_max_iter / looser inner_min_decrease (inner) and/or a larger "
-                "optimizer_options['maxiter'] / more n_starts (outer V search).",
+                "converge at fit time (outer V search), so its RMSPE ratio is not a "
+                "valid optimum to rank against placebos. placebo_p_value is NaN — "
+                "re-fit with a larger optimizer_options['maxiter'] / more n_starts.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -1284,11 +1280,9 @@ class SyntheticControlResults(BaseResults):
         if not self._fit_converged:
             warnings.warn(
                 "Leave-one-out skipped: the treated unit's own SCM fit did not "
-                "converge at fit time (inner Frank-Wolfe weight solve and/or outer V "
-                "search), so the baseline ATT is not a valid optimum to compare "
-                "leave-one-out refits against. Re-fit with a larger inner_max_iter / "
-                "looser inner_min_decrease (inner) and/or a larger "
-                "optimizer_options['maxiter'] / more n_starts (outer V search).",
+                "converge at fit time (outer V search), so the baseline ATT is not a "
+                "valid optimum to compare leave-one-out refits against. Re-fit with a "
+                "larger optimizer_options['maxiter'] / more n_starts.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -1573,10 +1567,8 @@ class SyntheticControlResults(BaseResults):
         if not self._fit_converged:
             warnings.warn(
                 "In-time placebo skipped: the treated unit's own SCM fit did not "
-                "converge at fit time (inner Frank-Wolfe weight solve and/or outer V "
-                "search). Re-fit with a larger inner_max_iter / looser "
-                "inner_min_decrease (inner) and/or a larger optimizer_options['maxiter'] "
-                "/ more n_starts (outer V search).",
+                "converge at fit time (outer V search). Re-fit with a larger "
+                "optimizer_options['maxiter'] / more n_starts.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -1886,7 +1878,8 @@ class SyntheticControlResults(BaseResults):
             warnings.warn(
                 "regression_weights() skipped: the treated unit's own SCM fit did not "
                 "converge at fit time, so the synthetic control it is compared against is "
-                "not a valid optimum. Re-fit with a larger inner_max_iter / more n_starts.",
+                "not a valid optimum. Re-fit with a larger optimizer_options['maxiter'] / more "
+                "n_starts.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -2065,7 +2058,8 @@ class SyntheticControlResults(BaseResults):
             warnings.warn(
                 "sparse_synthetic_control() skipped: the treated unit's own SCM fit did not "
                 "converge at fit time, so the baseline ATT is not a valid optimum to compare "
-                "sparse refits against. Re-fit with a larger inner_max_iter / more n_starts.",
+                "sparse refits against. Re-fit with a larger optimizer_options['maxiter'] / more "
+                "n_starts.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -2152,8 +2146,7 @@ class SyntheticControlResults(BaseResults):
                 warnings.warn(
                     f"sparse_synthetic_control: all C({J},{size})="
                     f"{res['n_subsets_evaluated']} size-{size} subsets failed to converge; "
-                    "row reported with status='all_subsets_failed' and NaN metrics. Re-fit "
-                    "with a larger inner_max_iter / looser inner_min_decrease.",
+                    "row reported with status='all_subsets_failed' and NaN metrics.",
                     UserWarning,
                     stacklevel=2,
                 )
@@ -2905,9 +2898,7 @@ class SyntheticControlResults(BaseResults):
         )
         if not res["converged"]:
             warnings.warn(
-                "conformal proxy did not fully converge (Frank-Wolfe simplex solve hit "
-                "the iteration cap); the p-value uses a near-optimal proxy. Re-fit with a "
-                "larger inner_max_iter or a looser inner_min_decrease for a tighter solve.",
+                "conformal proxy did not fully converge; the p-value uses a near-optimal proxy.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -3139,7 +3130,7 @@ class SyntheticControlResults(BaseResults):
         (``= not (converged and p_value <= alpha)`` — a non-converged grid point is
         indeterminate and stays in the set, so ``in_set`` can be ``True`` even when the
         displayed ``p_value`` is not ``> alpha``), and ``converged`` (the proxy
-        Frank-Wolfe convergence flag for that grid point). For pointwise CIs the table is
+        solve's convergence flag for that grid point). For pointwise CIs the table is
         the concatenation across post periods (with a ``period`` column). A
         granularity-``unbounded`` interval (``alpha < 1/|Π|``) short-circuits and returns
         an EMPTY grid. Survives pickling. Raises if no conformal inversion has been run.

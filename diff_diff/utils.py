@@ -1882,8 +1882,8 @@ def equivalence_test_trends(
 
 # compute_synthetic_weights and _compute_synthetic_weights_numpy removed in the
 # silent-failures audit post-cleanup (finding #22). The one caller
-# (`diff_diff.prep.rank_control_units`) inlines a single-pass, uncentered
-# Frank-Wolfe via the shared `_sc_weight_fw` dispatcher — a ranking heuristic,
+# (`diff_diff.prep.rank_control_units`) solves the uncentered problem exactly
+# via `_sc_weight_nnls` — a ranking heuristic,
 # NOT the canonical SDID/R `synthdid::sc.weight.fw` two-pass procedure
 # (intercept=True, 100-iter -> sparsify -> 10000-iter). Canonical SDID unit
 # weights go through `compute_sdid_unit_weights` (see `_sc_weight_fw_numpy`
@@ -2288,6 +2288,106 @@ def _sc_weight_fw_numpy(
     warn_if_not_converged(converged, "Frank-Wolfe SC weight solver", max_iter, min_decrease)
 
     return lam
+
+
+def _sc_weight_nnls(Y: np.ndarray, zeta: float = 0.0) -> np.ndarray:
+    """Solve the uncentered (``intercept=False``) SC weight problem exactly.
+
+    The problem is :func:`_sc_weight_fw`'s with ``intercept=False``::
+
+        min_{w on simplex}  zeta^2 * ||w||^2 + (1/N) * ||A @ w - b||^2
+
+    with ``A = Y[:, :-1]`` (donor columns) and ``b = Y[:, -1]`` (the target). On the
+    simplex ``A @ w - b = (A - b 1') @ w``, so with ``Z = [A - b 1'; sqrt(N) zeta I]``
+    the objective is ``||Z @ w||^2 / N``, and one non-negative least squares solves it::
+
+        u = argmin_{u >= 0} || [Z / s; 1'] @ u - [0; 1] ||,    w = u / sum(u).
+
+    For ``u = c w`` the NNLS objective is ``c^2 a + (c - 1)^2`` with
+    ``a = ||Z @ w||^2 / s^2``; its least value over ``c``, ``a / (1 + a)``, increases
+    with ``a``, so ``w`` is the simplex optimum for any scale ``s > 0`` (``s``, the RMS
+    of ``A - b 1'``, keeps the two blocks comparable). Lawson-Hanson's active set
+    (:func:`_nnls_lawson_hanson`) terminates finitely, so there is no iteration budget
+    to exhaust; it raises rather than return a truncated solve. Where the optimum is
+    not unique (``zeta = 0`` with ``b`` inside the donors' convex hull), the solve
+    returns a vertex of the optimal face, the same one under every SciPy version.
+
+    Parameters
+    ----------
+    Y : np.ndarray
+        Matrix of shape (N, J+1). Last column is the target.
+    zeta : float, default 0.0
+        Regularization strength, as in :func:`_sc_weight_fw`.
+
+    Returns
+    -------
+    np.ndarray
+        Weights of shape (J,) on the simplex.
+    """
+    Y = np.asarray(Y, dtype=np.float64)
+    n, J = Y.shape[0], Y.shape[1] - 1
+    Z = Y[:, :J] - Y[:, J:]
+    scale = float(np.sqrt(np.mean(Z**2))) or 1.0
+    if zeta > 0:
+        Z = np.vstack([Z, np.sqrt(n) * zeta * np.eye(J)])
+    M = np.vstack([Z / scale, np.ones(J)])
+    target = np.zeros(M.shape[0])
+    target[-1] = 1.0
+    u = _nnls_lawson_hanson(M, target, max_iter=50 * J)
+    return u / u.sum()
+
+
+def _nnls_lawson_hanson(M: np.ndarray, d: np.ndarray, max_iter: int) -> np.ndarray:
+    """Solve ``min ||M @ u - d||`` subject to ``u >= 0`` by Lawson-Hanson's active set.
+
+    Lawson and Hanson (1974, ch. 23), with their guard against an entering column that
+    rounding leaves without positive weight. Implemented here rather than calling
+    ``scipy.optimize.nnls``: where the optimum is not unique, the vertex an active set
+    returns depends on its pivoting, and SciPy's implementation has changed across
+    releases, so synthetic control weights at a tie, and every placebo refit at one,
+    moved with the SciPy version. Each least-squares step is one ``np.linalg.lstsq`` on
+    the passive columns. Raises ``RuntimeError`` after ``max_iter`` steps rather than
+    return a truncated solve.
+    """
+    m, n = M.shape
+    tol = 10.0 * max(m, n) * np.finfo(np.float64).eps * float(np.abs(M).sum(axis=0).max())
+    u = np.zeros(n)
+    passive = np.zeros(n, dtype=bool)
+    grad = M.T @ d
+    n_iter = 0
+    while True:
+        entering = ~passive & (grad > tol)
+        if not entering.any():
+            return u
+        t = int(np.argmax(np.where(entering, grad, -np.inf)))
+        passive[t] = True
+        z = np.zeros(n)
+        z[passive] = np.linalg.lstsq(M[:, passive], d, rcond=None)[0]
+        if z[t] <= 0.0:
+            # Rounding left the entering column no weight: skip it until u moves.
+            passive[t] = False
+            grad[t] = 0.0
+            continue
+        while True:
+            n_iter += 1
+            if n_iter > max_iter:
+                raise RuntimeError(
+                    f"Non-negative least squares did not finish in {max_iter} steps."
+                )
+            if (z[passive] > 0.0).all():
+                break
+            # Move toward z until the first passive coefficient reaches zero; drop it.
+            leaving = passive & (z <= 0.0)
+            ratio = u[leaving] / (u[leaving] - z[leaving])
+            q = np.flatnonzero(leaving)[np.argmin(ratio)]
+            u = u + ratio.min() * (z - u)
+            u[q] = 0.0
+            passive &= u > 0.0
+            u[~passive] = 0.0
+            z = np.zeros(n)
+            z[passive] = np.linalg.lstsq(M[:, passive], d, rcond=None)[0]
+        u = z
+        grad = M.T @ (d - M @ u)
 
 
 def _sparsify(v: np.ndarray) -> np.ndarray:

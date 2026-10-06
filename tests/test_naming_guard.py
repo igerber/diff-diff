@@ -1100,7 +1100,6 @@ CONSUMER_ALLOWLIST = {
         for f in (
             "diff_diff/conformal.py",
             "diff_diff/prep.py",
-            "diff_diff/synthetic_control.py",
             "diff_diff/utils.py",
         )
     },

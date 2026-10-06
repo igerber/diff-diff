@@ -645,8 +645,8 @@ SyntheticControl(
     custom_v=None,                          # diagonal V (len = #predictors); required iff v_method="custom"; forbidden otherwise
     optimizer_options: dict | None = None,  # merged into scipy.optimize.minimize (outer V search; nested/cv)
     n_starts: int = 4,                      # multistart count for the outer V search (nested/cv)
-    inner_max_iter: int = 10000,            # Frank-Wolfe inner-solve cap
-    inner_min_decrease: float = 1e-5,       # inner-solve convergence scale (scale-aware)
+    inner_max_iter: int = 10000,            # accepted, unused: the inner solve is exact (NNLS)
+    inner_min_decrease: float = 1e-5,       # accepted, unused: the inner solve is exact (NNLS)
     standardize: str = "std",               # "std" (per-row SD, ddof=1) or "none" (deviation from R)
     alpha: float = 0.05,
     seed: int | None = None,                # seeds the multistart Dirichlet draws

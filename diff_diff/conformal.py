@@ -26,17 +26,16 @@ based on all the data"); optional RAW covariate-matching rows stack into the
 same objective when ``covariates=`` is supplied (the paper's note after eq 6),
 with outcome-only residuals. This is DISTINCT from the headline ADH V-matrix weights — CWZ's
 exactness theory (Lemma 1, Appendix D exchangeability) requires a time-symmetric
-proxy, which the ADH pre-period V-fit is not. Reuses the Frank-Wolfe simplex
-solver :func:`diff_diff.utils._sc_weight_fw`.
+proxy, which the ADH pre-period V-fit is not. The proxy is solved exactly, by one
+non-negative least squares (:func:`diff_diff.utils._sc_weight_nnls`).
 """
 
 import math
-import warnings
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from diff_diff.utils import _sc_weight_fw
+from diff_diff.utils import _sc_weight_nnls
 
 __all__: List[str] = []
 
@@ -62,14 +61,14 @@ def _cwz_proxy_fit(
 
     Minimises ``Σ_t (y1_t − Σ_j w_j Y0_{tj})²`` s.t. ``w ≥ 0, Σ w = 1`` (no
     intercept, no V-matrix). ``y1`` is the (already null-imputed) treated outcome
-    vector ``(T,)``; ``Y0`` the donor outcomes ``(T, J)``. Reuses
-    :func:`_sc_weight_fw` packed ``(T, J+1)`` (donor columns first, target last),
-    ``zeta=0, intercept=False`` — the solver projects onto the unit simplex, so the
-    ``w ≥ 0, Σ w = 1`` constraint is delivered with no extra normalization.
+    vector ``(T,)``; ``Y0`` the donor outcomes ``(T, J)``. Solved exactly by
+    :func:`_sc_weight_nnls` on the packed ``(T, J+1)`` (donor columns first, target
+    last), ``zeta=0`` — one non-negative least squares whose solution lies on the unit
+    simplex, so the ``w ≥ 0, Σ w = 1`` constraint is delivered with no extra
+    normalization.
 
-    ``min_decrease`` is the ALREADY-SCALED absolute convergence tolerance; the
-    caller must pass a θ0-invariant scale (e.g. the pre-window outcome norm) so CI
-    membership does not drift with the grid value via the tolerance.
+    The solve has no iteration budget, so it always converges: ``max_iter``,
+    ``min_decrease`` and ``init_weights`` do not apply to it.
 
     **Covariates (CWZ §2.3.2, after eq 6):** "it is straightforward to
     incorporate (transformations of) covariates X_jt into the estimation
@@ -103,19 +102,8 @@ def _cwz_proxy_fit(
         w = np.array([1.0], dtype=float)
         return w, y1 - Y0 @ w, True
     packed = np.column_stack([Y0_fit, y1_fit])  # (T+R, J+1); last column is the target
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message=r".*did not converge.*", category=UserWarning)
-        w, converged = _sc_weight_fw(
-            packed,
-            zeta=0.0,
-            intercept=False,
-            init_weights=init_weights,
-            min_decrease=float(min_decrease),
-            max_iter=int(max_iter),
-            return_convergence=True,
-        )
-    w = np.asarray(w, dtype=float)
-    return w, y1[:n_out] - Y0[:n_out] @ w, bool(converged)
+    w = _sc_weight_nnls(packed)
+    return w, y1[:n_out] - Y0[:n_out] @ w, True
 
 
 # =============================================================================

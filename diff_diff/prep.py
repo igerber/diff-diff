@@ -9,7 +9,6 @@ Data generation functions (generate_*) are defined in prep_dgp.py and
 re-exported here for backward compatibility.
 """
 
-import warnings
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -40,7 +39,7 @@ from diff_diff.survey import (
     compute_replicate_if_variance,
     compute_survey_if_variance,
 )
-from diff_diff.utils import _compute_noise_level, _sc_weight_fw
+from diff_diff.utils import _sc_weight_nnls
 
 # Constants for rank_control_units
 _SIMILARITY_THRESHOLD_SD = 0.5  # Controls within this many SDs are "similar"
@@ -842,8 +841,8 @@ def rank_control_units(
         - quality_score: Combined quality score (0-1, higher is better)
         - outcome_trend_score: Pre-treatment outcome trend similarity
         - covariate_score: Covariate match score (NaN if no covariates)
-        - synthetic_weight: Informational heuristic weight from a single-pass
-          uncentered Frank-Wolfe solve; does NOT factor into ``quality_score``
+        - synthetic_weight: Informational heuristic weight from an exact
+          uncentered simplex least-squares solve; does NOT factor into ``quality_score``
           (ranking) and is NOT the canonical SDID unit weight. For canonical
           SDID weights use ``SyntheticDiD.fit()``.
         - pre_trend_rmse: RMSE of pre-treatment outcome vs treated mean
@@ -1005,23 +1004,24 @@ def rank_control_units(
     # below from `outcome_trend_score` (RMSE-based) + `covariate_score`; the
     # `synthetic_weight` column does NOT factor into the ranking decision.
     #
-    # Solver choice. We use a single-pass uncentered Frank-Wolfe via the
-    # shared `_sc_weight_fw` dispatcher to solve:
+    # Solver choice. We solve, exactly, the uncentered simplex least squares
     #
     #     min_w  ||Y_treated_mean - Y_control @ w||^2 + lambda_reg * ||w||^2
     #         s.t. w >= 0, sum(w) = 1
     #
-    # Mapped to the FW objective `zeta^2 ||w||^2 + (1/N) ||Aw - b||^2` via
-    # `zeta = sqrt(lambda_reg / N)`. intercept=False because this QP does
-    # no column-centering, max_iter=1000 to bound ranking-loop cost,
-    # min_weight=1e-6 post-processing for interpretability.
+    # by one non-negative least squares (`_sc_weight_nnls`), whose objective
+    # `zeta^2 ||w||^2 + (1/N) ||Aw - b||^2` is the one above with
+    # `zeta = sqrt(lambda_reg / N)`: no column-centering, then min_weight=1e-6
+    # post-processing for interpretability. A missing pre-period outcome
+    # (unbalanced panel) leaves the problem undefined, and the column is
+    # uniform there.
     #
     # NOTE — this is INTENTIONALLY NOT the canonical SDID / R
     # `synthdid::sc.weight.fw` two-pass unit-weight procedure (that uses
     # intercept=TRUE, 100-iter -> sparsify -> 10000-iter). SDID estimation
     # still uses that canonical path in `_sc_weight_fw_numpy` at
     # `utils.py:_sc_weight_fw_numpy` via `compute_sdid_unit_weights`; this
-    # ranking heuristic uses a simpler single-pass call to the same solver
+    # ranking heuristic solves the simpler uncentered problem once, exactly,
     # for a cheap diagnostic score.
     #
     # Replaces the former `compute_synthetic_weights` wrapper whose Rust
@@ -1039,24 +1039,11 @@ def rank_control_units(
         synthetic_weights = np.array([1.0])
     else:
         _zeta = float(np.sqrt(lambda_reg / _n_pre)) if lambda_reg > 0 else 0.0
-        # Scale stopping threshold by noise level so convergence stays
-        # meaningful at any data magnitude.
-        _sigma = _compute_noise_level(_Y_control)
-        _min_decrease = 1e-5 * max(_sigma, 1e-12)
-        _Y_fw = np.column_stack([_Y_control, _Y_treated_mean])
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message=r".*did not converge.*",
-                category=UserWarning,
-            )
-            synthetic_weights = _sc_weight_fw(
-                _Y_fw,
-                zeta=_zeta,
-                intercept=False,
-                min_decrease=_min_decrease,
-                max_iter=1000,
-            )
+        _Y_packed = np.column_stack([_Y_control, _Y_treated_mean])
+        if np.isfinite(_Y_packed).all():
+            synthetic_weights = _sc_weight_nnls(_Y_packed, zeta=_zeta)
+        else:
+            synthetic_weights = np.ones(_n_control) / _n_control
         # Set small weights to zero for interpretability, then renormalize.
         synthetic_weights = np.asarray(synthetic_weights, dtype=np.float64)
         _min_weight = 1e-6

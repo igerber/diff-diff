@@ -45,7 +45,7 @@ from diff_diff.synthetic_control_results import (
     SyntheticControlResults,
     _SyntheticControlFitSnapshot,
 )
-from diff_diff.utils import _sc_weight_fw, safe_inference, warn_if_not_converged
+from diff_diff.utils import _sc_weight_nnls, safe_inference, warn_if_not_converged
 
 __all__ = ["SyntheticControl", "synthetic_control"]
 
@@ -112,15 +112,12 @@ class SyntheticControl(BaseEstimator):
     n_starts : int, default 4
         Number of starting points for the multistart outer V search.
     inner_max_iter : int, default 10000
-        Max iterations for the inner Frank-Wolfe simplex solve.
+        Accepted and validated, but no longer used. The inner simplex solves (the
+        donor weights at every V, and the conformal proxy) are exact: one
+        non-negative least squares each, with no iteration budget to set.
     inner_min_decrease : float, default 1e-5
-        Inner-solve convergence scale (matches the SDID/Frank-Wolfe precedent in
-        ``prep.py``). The Frank-Wolfe stop threshold is
-        ``(inner_min_decrease * max(||b||, 1e-12))**2`` where ``b`` is the
-        V^½-scaled treated predictor vector — scale-aware so convergence is
-        meaningful at any data magnitude. 1e-5 reproduces R ``Synth``'s donor
-        weights to ~1e-4 on the Basque benchmark while still signalling
-        convergence; tighter values (e.g. 1e-6) can exhaust ``inner_max_iter``.
+        Accepted and validated, but no longer used, for the same reason: an exact
+        solve has no stopping tolerance.
     standardize : {"std", "none"}, default "std"
         Predictor standardization. ``"std"`` divides each predictor row by its
         standard deviation across donors+treated (ddof=1), matching R ``Synth``.
@@ -584,7 +581,7 @@ class SyntheticControl(BaseEstimator):
         # Inner-solve non-convergence warning — fires on nested / custom / k==1 paths.
         warn_if_not_converged(
             converged,
-            "Synthetic control inner weight solver (Frank-Wolfe)",
+            "Synthetic control inner weight solver",
             self.inner_max_iter,
             stacklevel=2,
         )
@@ -701,7 +698,7 @@ class SyntheticControl(BaseEstimator):
             fit_v=np.array(v, dtype=float, copy=True),
         )
         # Persist whether the treated unit's own fit reached a valid optimum — both
-        # the inner Frank-Wolfe weight solve AND (on the nested path) the outer V
+        # the inner weight solve AND (on the nested path) the outer V
         # search. in_space_placebo() fails closed otherwise: ranking a statistic from
         # a truncated / under-optimized treated fit would not be a valid ADH 2010
         # §2.4 permutation (and an under-optimized V is anti-conservative).
@@ -1151,7 +1148,10 @@ def _inner_solve_W(
 ) -> Tuple[np.ndarray, bool]:
     """Solve W*(V) = argmin_W (X1-X0 W)' diag(V) (X1-X0 W) on the unit simplex.
 
-    Folds V^½ into the predictors and delegates to the Frank-Wolfe simplex solver.
+    Folds V^½ into the predictors and solves the simplex least squares exactly, by one
+    non-negative least squares (``utils._sc_weight_nnls``). The solve has no iteration
+    budget to exhaust, so it always converges; ``inner_max_iter`` and
+    ``inner_min_decrease`` do not apply to it.
     Returns the RAW simplex weights (no sparsification) so the outer objective is
     not perturbed; reporting-level cleanup happens in ``fit``.
     """
@@ -1162,18 +1162,7 @@ def _inner_solve_W(
     A = vh[:, None] * X0s  # (k, J)
     b = vh * X1s  # (k,)
     packed = np.column_stack([A, b])  # (k, J+1); last column is the target
-    min_decrease = inner_min_decrease * max(float(np.linalg.norm(b)), 1e-12)
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message=r".*did not converge.*", category=UserWarning)
-        w, converged = _sc_weight_fw(
-            packed,
-            zeta=0.0,
-            intercept=False,
-            min_decrease=min_decrease,
-            max_iter=inner_max_iter,
-            return_convergence=True,
-        )
-    return np.asarray(w, dtype=float), bool(converged)
+    return _sc_weight_nnls(packed), True
 
 
 def _v_starts(
@@ -1192,7 +1181,7 @@ def _v_starts(
     """Build a list of DISTINCT starting ``theta`` vectors for the outer V search.
 
     Returns ``(candidates, n_inner_solves, n_inner_nonconverged)`` — the latter two
-    count the inner Frank-Wolfe solves run by the univariate-fit heuristic so the
+    count the inner weight solves run by the univariate-fit heuristic so the
     caller can surface aggregate intermediate non-convergence.
 
     Heuristic starts: uniform V; inverse-row-variance V (computed from the
@@ -1300,7 +1289,7 @@ def _outer_solve_V(
         w, converged = _inner_solve_W(X1s, X0s, v, inner_max_iter, inner_min_decrease)
         return v, w, converged, float(np.mean((Z1 - Z0 @ w) ** 2)), True
 
-    # Track inner Frank-Wolfe non-convergence across ALL intermediate evaluations so
+    # Track inner weight-solve non-convergence across ALL intermediate evaluations so
     # the outer search cannot silently rank truncated W*(V) solves (codex). `_inner_solve_W`
     # suppresses its own per-call warning during the search; we aggregate here.
     _st = {"total": 0, "nonconv": 0}
@@ -1387,18 +1376,17 @@ def _outer_solve_V(
             stacklevel=3,
         )
 
-    # Aggregate intermediate inner Frank-Wolfe non-convergence across the whole nested
+    # Aggregate intermediate inner weight-solve non-convergence across the whole nested
     # search (univariate starts + every objective evaluation). Non-converged objective
     # evaluations were excluded from V ranking (returned as +inf); warn on ANY such
     # occurrence — unlike a bootstrap summary, an argmin search is sensitive to even one
     # truncated solve, so no rate threshold is appropriate here.
     if _st["nonconv"] > 0:
         warnings.warn(
-            f"Inner Frank-Wolfe did not converge on {_st['nonconv']} of {_st['total']} "
-            f"weight solves during nested V selection (inner_max_iter={inner_max_iter}); "
-            "those evaluations were excluded from V ranking, but the search space was "
-            "effectively restricted, so the selected V / donor weights / ATT may be "
-            "sub-optimal. Increase inner_max_iter or relax inner_min_decrease.",
+            f"The inner weight solve did not converge on {_st['nonconv']} of "
+            f"{_st['total']} weight solves during nested V selection; those evaluations "
+            "were excluded from V ranking, but the search space was effectively "
+            "restricted, so the selected V / donor weights / ATT may be sub-optimal.",
             UserWarning,
             stacklevel=3,
         )
@@ -1561,7 +1549,7 @@ def _outer_solve_V_cv(
     under-optimized) and ``None`` otherwise. The caller (``_placebo_fit_unit``) uses it
     to report a dropped placebo as ``status="infeasible"`` (remedied by adjusting the
     predictors / ``v_cv_t0`` / donor pool) vs ``status="failed"`` (a solver
-    non-convergence, remedied by ``inner_max_iter`` / ``n_starts``) — mirroring the
+    non-convergence, remedied by ``n_starts`` / ``optimizer_options``) — mirroring the
     split ``in_time_placebo`` already emits.
     """
     k = len(specs)
@@ -1728,10 +1716,10 @@ def _outer_solve_V_cv(
         )
     if _st["nonconv"] > 0:
         warnings.warn(
-            f"Inner Frank-Wolfe did not converge on {_st['nonconv']} of {_st['total']} "
-            f"weight solves during CV V selection (inner_max_iter={inner_max_iter}); those "
-            "evaluations were excluded from V ranking, so the selected V / donor weights / "
-            "ATT may be sub-optimal. Increase inner_max_iter or relax inner_min_decrease.",
+            f"The inner weight solve did not converge on {_st['nonconv']} of "
+            f"{_st['total']} weight solves during CV V selection; those evaluations were "
+            "excluded from V ranking, so the selected V / donor weights / ATT may be "
+            "sub-optimal.",
             UserWarning,
             stacklevel=3,
         )
@@ -1739,9 +1727,9 @@ def _outer_solve_V_cv(
     assert best_x is not None  # set in the NM loop above; narrows past the Powell branch
     v_star = _softmax(best_x)
     # mspe_v = step-3 selection criterion at V* (validation MSPE of the TRAINING-window fit).
-    # It is Eq. 9's criterion only if the training solve converged; if it truncates (e.g.
-    # inner_max_iter too small), fail closed — nan criterion + outer non-converged — so the
-    # fit and downstream placebo/LOO diagnostics do not run off an invalid CV criterion.
+    # It is Eq. 9's criterion only if the training solve converged; if it did not, fail
+    # closed — nan criterion + outer non-converged — so the fit and downstream
+    # placebo/LOO diagnostics do not run off an invalid CV criterion.
     w_tr, conv_tr = _inner_solve_W(X1s_tr, X0s_tr, v_star, inner_max_iter, inner_min_decrease)
     if conv_tr:
         mspe_v = float(np.mean((Z1_va - Z0_va @ w_tr) ** 2))
@@ -2194,8 +2182,8 @@ def _placebo_fit_unit(
       window with no cross-donor variation for this pseudo-treated pool). Remedied by
       adjusting the predictors / ``v_cv_t0`` / donor pool, NOT the optimizer budget.
     - ``"failed"`` — ``result`` is ``None``; the refit reached no valid optimum (a
-      non-converged inner weight solve or outer V search). Remedied by a larger
-      ``inner_max_iter`` / ``n_starts``.
+      non-converged inner weight solve or outer V search). Remedied by more
+      ``n_starts`` / a larger ``optimizer_options['maxiter']``.
 
     The caller excludes both non-``"ran"`` outcomes from the permutation reference set
     but counts them separately (``n_failed`` vs ``n_infeasible``), mirroring the split
