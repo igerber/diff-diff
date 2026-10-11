@@ -50,7 +50,7 @@ jobs:
       - name: Build wheels
         run: |
           expected=0
-          for pyver in 39 310 311 312 313 314; do
+          for pyver in 39 310 311 312 313 314 315; do
             pybin="/opt/python/cp${pyver}-cp${pyver}/bin/python"
             if [ ! -f "$pybin" ]; then
               echo "ERROR: Expected Python interpreter not found: $pybin"
@@ -80,7 +80,7 @@ jobs:
     runs-on: macos-14
     strategy:
       matrix:
-        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13', '3.14']
+        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13', '3.14', '3.15']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -113,7 +113,7 @@ jobs:
     runs-on: windows-latest
     strategy:
       matrix:
-        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13', '3.14']
+        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13', '3.14', '3.15']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 

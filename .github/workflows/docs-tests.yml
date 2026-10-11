@@ -92,10 +92,10 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          # 3.14 to mirror Pure Python Fallback (the only existing job
+          # 3.15 to mirror Pure Python Fallback (the only existing job
           # that actually ran these tests). notebooks.yml uses 3.11 for
           # nbmake compat, not relevant here.
-          python-version: '3.14'
+          python-version: '3.15'
 
       - name: Install dependencies
         # Keep in sync with pyproject.toml [project.dependencies] and [project.optional-dependencies.dev]
@@ -248,7 +248,7 @@ jobs:
 
       - name: Run changelog-fragment check on the floor Python
         # The compiler promises 3.9 compatibility but its behavioral tests
-        # run in the 3.14 doc-snippets job; this stdlib-only invocation is
+        # run in the 3.15 doc-snippets job; this stdlib-only invocation is
         # the floor's continuous syntax + behavior smoke for the script.
         run: python .claude/scripts/changelog_compile.py check
 
