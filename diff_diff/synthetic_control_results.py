@@ -880,9 +880,13 @@ class SyntheticControlResults(BaseResults):
         intervention to a control state, "shifting California to the donor pool").
         All ``J+1`` statistics then come from one construction that does not depend
         on which unit is treated, so under the null of no effect (and random
-        assignment) the permutation p-value is exact. (``SCtools::generate.placebos``
-        instead drops the treated unit from every placebo's pool; that reference set
-        changes with the treated unit, so its p-value is not exact.) The ranking set
+        assignment) the permutation p-value is exact whenever every placebo refit
+        enters the reference set (a failed or infeasible refit is excluded and
+        shrinks the effective denominator; see ``n_failed`` / ``n_infeasible``).
+        (``SCtools::generate.placebos`` instead drops the treated unit from every
+        placebo's pool - the reading Firpo & Possebom's fn 10 attributes to ADH -
+        and that reference set changes with the treated unit, so its p-value is
+        not exact.) The ranking set
         is the ``J+1`` units ``{treated} ∪ {J placebos}``. The post/pre RMSPE ratio
         normalizes by pre-treatment fit, which obviates the pre-fit-cutoff
         filtering of ADH Figures 5-7 (journal p. 502), so no pre-fit filter is

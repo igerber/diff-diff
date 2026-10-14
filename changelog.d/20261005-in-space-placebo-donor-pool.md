@@ -5,7 +5,9 @@
   p. 501) do ("shifting California to the donor pool"). It used to drop the
   treated unit from every placebo's donor pool (the `SCtools::generate.placebos`
   construction); that reference set changes with the treated unit, so the
-  permutation p-value was not exact. Every placebo that puts weight on the
+  permutation p-value was not exact. (The new p-value is exact when every
+  placebo refit enters the reference set; failed or infeasible refits are still
+  excluded and reported via `n_failed` / `n_infeasible`.) Every placebo that puts weight on the
   treated unit now gets a different RMSPE ratio, so `placebo_p_value` and the
   placebo rows of `get_placebo_df()` change on every such fit, by whole ranks;
   the fit itself (`att`, weights, the treated unit's `rmspe_ratio`) does not
