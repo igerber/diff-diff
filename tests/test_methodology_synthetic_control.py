@@ -1511,6 +1511,38 @@ def test_in_space_placebo_rejects_invalid_n_starts():
     assert res._placebo_status is None and res._placebo_df is None
 
 
+def test_in_space_placebo_rejects_n_starts_mismatch_under_v_search():
+    # Exactness needs every one of the J+1 statistics to come from the same procedure.
+    # The treated unit's ratio was produced at fit time with the fit's n_starts, and under
+    # a nested / cv V search more starts can land on a different V optimum, so a placebo
+    # budget that differs from the fit's is rejected (the remedy is one re-fit).
+    res = _fit_for_placebo(n_donors=4)  # nested V, n_starts=1 via _FAST
+    with pytest.raises(ValueError, match="differs from the fit's n_starts=1"):
+        res.in_space_placebo(n_starts=2)
+    assert res._placebo_status is None and res._placebo_df is None
+    # The lazy reference build behind test_sharp_null / confidence_set goes through the
+    # same gate.
+    with pytest.raises(ValueError, match="differs from the fit's n_starts=1"):
+        res.test_sharp_null(0.0, n_starts=2)
+    # The fit's own value is accepted, as is the default.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res.in_space_placebo(n_starts=1)
+    assert res._placebo_status == "ran"
+
+
+def test_in_space_placebo_n_starts_override_inert_without_v_search():
+    # custom V runs no outer search, so n_starts is inert and a differing override must
+    # neither raise nor change the result.
+    res_a, _, _ = _fit_with_placebos(run_placebo=True)
+    res_b, _, _ = _fit_with_placebos(run_placebo=False)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res_b.in_space_placebo(n_starts=7)
+    assert res_b.placebo_p_value == res_a.placebo_p_value
+    pd.testing.assert_frame_equal(res_b.get_placebo_df(), res_a.get_placebo_df())
+
+
 def test_rmspe_ratio_is_root_scale():
     # The reported statistic is the ROOT-scale ratio RMSPE_post/RMSPE_pre =
     # sqrt(MSPE_post/MSPE_pre), NOT the MSPE ratio. Hand-worked: pre-MSPE = 4,
@@ -3844,7 +3876,7 @@ def test_in_space_placebo_rerun_invalidates_confidence_set():
     assert native["confidence_set"]["status"] == "ran"
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res.in_space_placebo(n_starts=2)  # rebuild the reference set
+        res.in_space_placebo()  # explicit rebuild of the reference set
     assert res.effect_confidence_set is None
     with pytest.raises(ValueError, match="No confidence set"):
         res.get_confidence_set_df()

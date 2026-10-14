@@ -911,7 +911,7 @@ class SyntheticControlResults(BaseResults):
         **inherits the original fit's
         ``optimizer_options`` / ``n_starts``**, so valid inference requires settings
         adequate for the outer ``V`` search to converge: production defaults do;
-        with cheap settings, raise ``n_starts`` here or re-fit with a larger
+        with cheap settings, re-fit with a larger ``n_starts`` or
         ``optimizer_options['maxiter']`` (otherwise placebos are dropped as failed).
         The treated unit's own fit is held to the same standard — if its inner OR
         outer search did not converge, the whole run fails closed (see below).
@@ -919,10 +919,14 @@ class SyntheticControlResults(BaseResults):
         Parameters
         ----------
         n_starts : int, optional
-            Override the multistart count for each placebo's outer V search (nested/cv).
-            Default None inherits the original fit's ``n_starts``. The placebo
-            loop is the cost driver (one outer V search per donor); lower it for a
-            faster, coarser scan.
+            Multistart count for each placebo's outer V search. Default None inherits
+            the original fit's ``n_starts``. Under ``v_method="nested"`` / ``"cv"`` a
+            value different from the fit's is **rejected** (``ValueError``): the
+            treated unit's ratio was produced with the fit's ``n_starts``, and the
+            permutation is exact only when every one of the ``J+1`` statistics comes
+            from the same procedure. To change the budget, re-fit with the new
+            ``n_starts``. Under ``"custom"`` / ``"inverse_variance"`` there is no V
+            search and the value is inert.
 
         Returns
         -------
@@ -963,6 +967,23 @@ class SyntheticControlResults(BaseResults):
             if not isinstance(n_starts, (int, np.integer)) or n_starts < 1:
                 raise ValueError(f"n_starts override must be a positive integer, got {n_starts!r}")
             n_starts_eff = int(n_starts)
+            # The permutation is exact only if every one of the J+1 statistics is the
+            # output of the SAME procedure. Under a nested / cv V search the multistart
+            # count is part of that procedure (more starts can land on a different V
+            # optimum even when every fit converges), and the treated unit's ratio was
+            # produced at fit time with snap.n_starts - so a different placebo budget
+            # would rank a treated statistic against references computed by another
+            # rule. Reject it; the remedy is one re-fit with the larger n_starts.
+            # custom / inverse_variance run no V search, so n_starts is inert there.
+            if snap.v_method in ("nested", "cv") and n_starts_eff != snap.n_starts:
+                raise ValueError(
+                    f"in_space_placebo(n_starts={n_starts_eff}) differs from the fit's "
+                    f"n_starts={snap.n_starts} under v_method={snap.v_method!r}. Every "
+                    "placebo must be fit by the same procedure as the treated unit for "
+                    "the permutation p-value to be exact, so the override is rejected. "
+                    f"Re-fit with SyntheticControl(n_starts={n_starts_eff}) and call "
+                    "in_space_placebo() without an override."
+                )
 
         treated_pre = _mspe(self.gap_path, snap.pre_periods)
         treated_post = _mspe(self.gap_path, snap.post_periods)
@@ -1122,8 +1143,8 @@ class SyntheticControlResults(BaseResults):
             warnings.warn(
                 f"{n_failed} of {n_donors} in-space placebos failed to reach a valid "
                 "optimum (a non-converged inner weight solve or outer V search) and were "
-                "excluded with status='failed'; raise n_starts or loosen the optimizer "
-                f"tolerances. placebo_p_value uses the remaining {n_placebos}.",
+                "excluded with status='failed'; re-fit with a larger n_starts or loosen the "
+                f"optimizer tolerances. placebo_p_value uses the remaining {n_placebos}.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -2258,8 +2279,8 @@ class SyntheticControlResults(BaseResults):
             warnings.warn(
                 "n_starts is ignored: the in-space placebo reference set was already "
                 "computed and is reused (every sharp null / grid value re-ranks the same "
-                "placebo gaps). Re-run in_space_placebo(n_starts=...) explicitly to rebuild "
-                "it with a different multistart count.",
+                "placebo gaps). Re-fit with a different n_starts to rebuild it with another "
+                "multistart count (the placebos must use the fit's own n_starts).",
                 UserWarning,
                 stacklevel=3,
             )

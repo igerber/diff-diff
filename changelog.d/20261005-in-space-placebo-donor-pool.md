@@ -28,3 +28,14 @@
   so `donor_weights` / `get_weights_df()` rows follow that order and an exact
   weight tie between donors resolves the same way in the treated fit and in
   every placebo.
+
+### Behavioral Changes
+- **`SyntheticControlResults.in_space_placebo(n_starts=...)` rejects a multistart
+  count that differs from the fit's under `v_method="nested"` / `"cv"`** (also
+  reached through the lazy reference build in `test_sharp_null()` /
+  `confidence_set()`). The treated unit's RMSPE ratio was produced at fit time
+  with the fit's `n_starts`, and more starts can select a different `V` optimum
+  even when every fit converges, so a different placebo budget would rank one
+  statistic against references computed by another procedure and void the
+  exactness of the permutation. Re-fit with the larger `n_starts` instead. The
+  override stays inert under `custom` / `inverse_variance` (no `V` search).
