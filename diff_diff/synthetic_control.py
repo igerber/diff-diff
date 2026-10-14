@@ -291,7 +291,10 @@ class SyntheticControl(BaseEstimator):
             to all pre-period outcomes.
         donor_pool : list, optional
             Explicit donor unit identifiers (must be never-treated). Defaults to
-            all never-treated units.
+            all never-treated units. The list's order is not used: donors are
+            processed in the panel's sorted unit order (the order the in-space
+            placebo refits also use), so the fit does not depend on how the list
+            was written.
         survey_design : optional
             Not yet supported — raises ``NotImplementedError`` if provided.
 
@@ -369,6 +372,13 @@ class SyntheticControl(BaseEstimator):
             for v in needed_vars
         }
         Y = pivots[outcome]
+        # Canonicalize the donor order to the pivot's sorted unit order, so an explicit
+        # ``donor_pool`` list fits the same way whichever order the caller wrote it in,
+        # and the treated fit uses the SAME assignment-independent ordering as every
+        # in-space placebo refit (whose pool is "all other units" in pivot order). The
+        # Frank-Wolfe weight solve breaks exact gradient ties by position, so without
+        # this the rank could depend on list presentation rather than on assignment.
+        donor_ids = [u for u in Y.columns if u != treated_id]
         Z1 = Y.loc[pre_periods, treated_id].to_numpy(dtype=float)
         Z0 = Y.loc[pre_periods, donor_ids].to_numpy(dtype=float)  # (n_pre, J)
 

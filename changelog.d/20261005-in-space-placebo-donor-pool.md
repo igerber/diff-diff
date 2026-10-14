@@ -23,3 +23,8 @@
   change too. With exactly 2 donors each placebo is now fit against 2 units
   (a real weight solve and `V` search instead of a forced `w = [1]`); fewer
   than 2 donors still gives a NaN p-value.
+  `fit()` now processes an explicit `donor_pool` in the panel's sorted unit
+  order (the order the placebo refits use) rather than the caller's list order,
+  so `donor_weights` / `get_weights_df()` rows follow that order and an exact
+  weight tie between donors resolves the same way in the treated fit and in
+  every placebo.

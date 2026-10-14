@@ -281,6 +281,44 @@ def test_donor_pool_restricts_donors():
     assert set(res.get_weights_df()["unit"]) <= {"d0", "d1"}
 
 
+def test_explicit_donor_pool_order_does_not_change_fit_or_placebo_rank():
+    # Two donors (d0, d1) are identical in the pre-period and differ post, and the treated
+    # unit's pre path equals theirs, so the simplex weight solve faces an exact gradient
+    # tie that Frank-Wolfe breaks by position. fit() canonicalizes an explicit donor_pool
+    # to the pivot's sorted order (the order every in-space placebo refit uses), so the
+    # weights, the ATT and the placebo rank cannot depend on how the list was written.
+    years = list(range(2000, 2010))
+    T0 = 7
+    pre = 10.0 + 0.5 * np.arange(T0)
+    rows = []
+    for name, post in (("d0", [14.0, 14.5, 15.0]), ("d1", [11.0, 11.0, 11.0])):
+        for yr, y in zip(years, list(pre) + post):
+            rows.append({"unit": name, "year": yr, "y": y, "treated": 0})
+    for yr, y in zip(years, list(5.0 + 0.2 * np.arange(T0)) + [6.0, 6.1, 6.2]):
+        rows.append({"unit": "d2", "year": yr, "y": y, "treated": 0})
+    for yr, y in zip(years, list(pre) + [16.0, 16.5, 17.0]):
+        rows.append({"unit": "treated", "year": yr, "y": y, "treated": int(yr >= years[T0])})
+    df = pd.DataFrame(rows)
+    fits = []
+    for pool in (["d0", "d1", "d2"], ["d1", "d0", "d2"], ["d2", "d1", "d0"]):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = SyntheticControl(v_method="custom", custom_v=np.ones(T0), seed=0).fit(
+                df, "y", "treated", "unit", "year", donor_pool=pool
+            )
+            res.in_space_placebo()
+        fits.append(res)
+    base = fits[0]
+    assert list(base._fit_snapshot.donor_ids) == ["d0", "d1", "d2"]
+    for other in fits[1:]:
+        assert list(other._fit_snapshot.donor_ids) == ["d0", "d1", "d2"]
+        assert other.att == base.att
+        assert other.donor_weights == base.donor_weights
+        assert other.rmspe_ratio == base.rmspe_ratio
+        assert other.placebo_p_value == base.placebo_p_value
+        pd.testing.assert_frame_equal(other.get_placebo_df(), base.get_placebo_df())
+
+
 def test_contaminated_donor_pool_rejected():
     df, years, T0 = _make_panel()
     # The treated unit itself must never appear in the donor pool.
