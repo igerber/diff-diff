@@ -1457,9 +1457,23 @@ def _extract_event_study_params(
                         sigma = vcov
                     else:
                         sigma = np.diag(np.array(ses) ** 2)
+                    # Same integrity contract as the container route
+                    # (_extract_container_params): finite, symmetric,
+                    # diagonal == se**2, and allow_singular=False because
+                    # Rambachan-Roth inference assumes covariance eigenvalues
+                    # bounded away from zero. A few-PSU fit (fewer clusters
+                    # than horizons) stores a singular matrix on both the
+                    # analytical and the bootstrap path, so it fails loud
+                    # here exactly as results.aggregate('event_study') does.
+                    sigma = _validate_vcov_subblock(
+                        sigma, np.asarray(ses, dtype=float), "HonestDiD", allow_singular=False
+                    )
                 else:
-                    # No full VCV available. Check if this is a bootstrap fit
-                    # (VCV was cleared to prevent mixing analytical/bootstrap).
+                    # No full VCV available. A bootstrap fit carries the
+                    # covariance of its event-study draws instead of the
+                    # analytical VCV, except when n_bootstrap does not exceed
+                    # the number of event times (singular by construction) or
+                    # a draw is non-finite.
                     if (
                         hasattr(results, "bootstrap_results")
                         and results.bootstrap_results is not None
@@ -1468,9 +1482,11 @@ def _extract_event_study_params(
 
                         warnings.warn(
                             "HonestDiD on bootstrap-fitted CallawaySantAnna results "
-                            "uses a diagonal covariance matrix (cross-event-time "
-                            "covariance is not available from bootstrap). For full "
-                            "covariance structure, use analytical SEs (n_bootstrap=0).",
+                            "uses a diagonal covariance matrix (no covariance of the "
+                            "event-study bootstrap draws is available: n_bootstrap "
+                            "does not exceed the number of event times, or a draw is "
+                            "non-finite). For full covariance structure, increase "
+                            "n_bootstrap or use analytical SEs (n_bootstrap=0).",
                             UserWarning,
                             stacklevel=4,
                         )

@@ -2206,8 +2206,10 @@ class DiagnosticReport:
           New PR-B fits set ``covariance_source`` directly and bypass
           this fallback entirely.
         - ``"diag_fallback"`` — event-study result types with
-          ``event_study_vcov is None`` (bootstrap or replicate-weight
-          CS / SA / TwoStageDiD fits, plus ImputationDiD / EfficientDiD /
+          ``event_study_vcov is None`` (replicate-weight CS fits,
+          bootstrap CS fits with ``n_bootstrap`` at or below the number
+          of event times, bootstrap or replicate-weight SA / TwoStageDiD
+          fits, plus ImputationDiD / EfficientDiD /
           etc. which don't yet expose ``event_study_vcov``; StackedDiD
           persists its VCV in every inference mode and, since 3.9
           (row M-024), always materializes the event-study surface, so

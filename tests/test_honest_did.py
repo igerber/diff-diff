@@ -1303,9 +1303,13 @@ class TestSurveyVariance:
         idx = data["unit"].map(unit_map).values
 
         data["weight"] = (1.0 + 0.3 * (np.arange(n_units) % 3))[idx]
-        # 2 strata, 4 PSUs total -> df = 4 - 2 = 2 (very low df)
+        # 2 strata x 5 nested PSUs -> df = 10 - 2 = 8 (low df). The
+        # stratified survey event-study VCV has rank <= df, and HonestDiD
+        # validates the native-route matrix with allow_singular=False, so
+        # df must be >= the 6 estimated horizons for a non-singular block
+        # (4 PSUs / df = 2 would be singular and raise).
         data["stratum"] = (np.arange(n_units) // 50)[idx]
-        data["psu"] = (np.arange(n_units) // 25)[idx]
+        data["psu"] = ((np.arange(n_units) // 50) * 5 + (np.arange(n_units) % 5))[idx]
 
         sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
         cs_result = CallawaySantAnna(base_period="universal").fit(
@@ -1323,7 +1327,7 @@ class TestSurveyVariance:
         honest = HonestDiD(method="relative_magnitude", M=1.0)
         h_result = honest.fit(cs_result)
 
-        # With df=2, t critical value (~4.3) >> z critical value (1.96)
+        # With df=8, t critical value (~2.31) > z critical value (1.96)
         # So CI width should be wider than 2*1.96*SE
         ci_width = h_result.ci_ub - h_result.ci_lb
         # Lower bound: normal-based CI width
@@ -1388,8 +1392,11 @@ class TestSurveyVariance:
         # event_study_vcov should be None (diagonal fallback for replicate designs)
         assert cs_result.event_study_vcov is None
 
-    def test_bootstrap_fit_clears_analytical_vcov(self):
-        """Bootstrap CS results should NOT carry analytical event_study_vcov."""
+    def test_bootstrap_fit_carries_bootstrap_vcov(self):
+        """Bootstrap CS results carry the covariance of the bootstrap draws
+        (never the analytical event_study_vcov): its diagonal is the
+        bootstrap SEs squared, and HonestDiD uses it without the diagonal
+        fallback."""
         from diff_diff import CallawaySantAnna, generate_staggered_data
 
         data = generate_staggered_data(n_units=100, n_periods=5, seed=42)
@@ -1402,11 +1409,12 @@ class TestSurveyVariance:
             aggregate="event_study",
         )
 
-        # event_study_vcov should be None when bootstrap is used
-        # (prevents HonestDiD from mixing analytical VCV with bootstrap SEs)
-        assert cs_result.event_study_vcov is None
+        vcov = cs_result.event_study_vcov
+        index = cs_result.event_study_vcov_index
+        assert vcov is not None and vcov.shape == (len(index), len(index))
+        ses = np.array([cs_result.event_study_effects[e]["se"] for e in index])
+        np.testing.assert_allclose(np.diag(vcov), ses**2, rtol=1e-12, atol=0.0)
 
-        # HonestDiD should warn about diagonal fallback but still work
         honest = HonestDiD(method="relative_magnitude", M=1.0)
         import warnings as _w
 
@@ -1414,9 +1422,98 @@ class TestSurveyVariance:
             _w.simplefilter("always")
             h_result = honest.fit(cs_result)
         diag_warnings = [w for w in caught if "diagonal covariance" in str(w.message)]
-        assert len(diag_warnings) >= 1
+        assert not diag_warnings
         assert np.isfinite(h_result.original_se)
         assert h_result.original_se > 0
+
+    def test_bootstrap_vcov_same_on_native_and_container_routes(self):
+        """On a bootstrapped fit HonestDiD reads the bootstrap covariance on
+        both input routes: the native results object and the replayed
+        aggregate('event_study') container give the same sigma and bounds."""
+        import warnings as _w
+
+        from diff_diff import CallawaySantAnna, generate_staggered_data
+
+        data = generate_staggered_data(n_units=100, n_periods=5, seed=42)
+        with _w.catch_warnings():
+            _w.simplefilter("ignore")
+            cs_result = CallawaySantAnna(n_bootstrap=49, seed=42, base_period="universal").fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                aggregate="event_study",
+            )
+            es = cs_result.aggregate("event_study")
+            native = _extract_event_study_params(cs_result)
+            container = _extract_event_study_params(es)
+            h_native = HonestDiD(method="smoothness", M=0.0).fit(cs_result)
+            h_container = HonestDiD(method="smoothness", M=0.0).fit(es)
+
+        np.testing.assert_array_equal(native[1], cs_result.event_study_vcov)
+        np.testing.assert_array_equal(container[0], native[0])
+        np.testing.assert_allclose(container[1], native[1], rtol=1e-12, atol=0.0)
+        np.testing.assert_allclose(h_container.original_se, h_native.original_se, rtol=1e-12)
+        np.testing.assert_allclose(
+            [h_container.ci_lb, h_container.ci_ub], [h_native.ci_lb, h_native.ci_ub], rtol=1e-9
+        )
+
+    def test_bootstrap_fit_without_vcov_falls_back_to_diagonal(self):
+        """With n_bootstrap at or below the number of event times no
+        bootstrap covariance is stored (it would be singular), and HonestDiD
+        keeps the diagonal fallback with its warning on both routes."""
+        import warnings as _w
+
+        from diff_diff import CallawaySantAnna, generate_staggered_data
+
+        data = generate_staggered_data(n_units=100, n_periods=5, seed=42)
+
+        def fit(n_bootstrap):
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")
+                return CallawaySantAnna(
+                    n_bootstrap=n_bootstrap, seed=42, base_period="universal"
+                ).fit(data, "outcome", "unit", "period", "first_treat", aggregate="event_study")
+
+        cs_result = fit(len(fit(49).event_study_vcov_index))
+        with _w.catch_warnings():
+            _w.simplefilter("ignore")
+            es = cs_result.aggregate("event_study")
+        assert cs_result.event_study_vcov is None and es.vcov is None
+        with pytest.warns(UserWarning, match="diagonal covariance"):
+            HonestDiD(method="relative_magnitude", M=1.0).fit(cs_result)
+        with pytest.warns(UserWarning, match="no full covariance"):
+            HonestDiD(method="relative_magnitude", M=1.0).fit(es)
+
+    @pytest.mark.parametrize("n_bootstrap", [0, 199])
+    def test_singular_vcov_few_psus_raises_on_both_routes(self, n_bootstrap):
+        """Fewer clusters (PSUs) than event-study horizons: the stored
+        event-study covariance (analytical or bootstrap) is singular, and
+        HonestDiD raises the same singular-covariance ValueError on the
+        native results route and on the aggregate('event_study') container
+        route instead of returning bounds from a rank-deficient matrix."""
+        import warnings as _w
+
+        from diff_diff import CallawaySantAnna, generate_staggered_data
+
+        data = generate_staggered_data(n_units=80, n_periods=10, cohort_periods=[4, 6, 8], seed=5)
+        data["psu"] = data["unit"] % 7  # 7 PSUs << 13 horizons
+        with _w.catch_warnings():
+            _w.simplefilter("ignore")
+            cs_result = CallawaySantAnna(
+                n_bootstrap=n_bootstrap, seed=1, base_period="universal", cluster="psu"
+            ).fit(data, "outcome", "unit", "period", "first_treat", aggregate="event_study")
+            es = cs_result.aggregate("event_study")
+        vcov = cs_result.event_study_vcov
+        assert vcov is not None and vcov.shape[0] > 7
+        # Precondition: both PSU-built matrices are genuinely rank-deficient.
+        assert np.linalg.matrix_rank(vcov) < vcov.shape[0]
+        assert np.linalg.matrix_rank(es.vcov) < es.vcov.shape[0]
+        with pytest.raises(ValueError, match="singular"):
+            HonestDiD(method="relative_magnitude", M=1.0).fit(cs_result)
+        with pytest.raises(ValueError, match="singular"):
+            HonestDiD(method="relative_magnitude", M=1.0).fit(es)
 
 
 # =============================================================================

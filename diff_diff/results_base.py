@@ -281,7 +281,9 @@ class EventStudyResults(BaseResults):
         ordered by ``vcov_index``. None when the producer records no matrix
         or when the stored SEs are no longer its diagonal (bootstrap and
         replicate-weight overrides clear it rather than ship an
-        inconsistent matrix).
+        inconsistent matrix). A bootstrapped CallawaySantAnna (or DMLDiD)
+        surface instead carries the covariance of its event-study bootstrap
+        draws, whose diagonal is the stored bootstrap SEs squared.
     vcov_index : np.ndarray or None
         ``event_time`` labels labelling ``vcov``'s rows/columns (explicit
         ordering for HonestDiD / PreTrendsPower consumption).

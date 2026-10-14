@@ -3604,12 +3604,10 @@ class TestDerivedEventStudySurface:
     def test_bootstrap_plain_cs_derives_and_runs(self, cs_bootstrap_plain_fit):
         """Bootstrapped plain CS fits now DERIVE the event-study surface via
         the post-fit percentile-bootstrap replay (previously an explicit
-        skip). Expected oracle, confirmed empirically: the derived container
-        carries vcov=None (fit's bootstrap clearing rule), so
-        parallel_trends runs via the Bonferroni per-period fallback and
-        pretrends_power/sensitivity ride the diagonal-covariance fallback
-        (`_extract_container_vcov_subblock` returns
-        (np.diag(ses**2), "diag_fallback") when surface.vcov is None)."""
+        skip). The derived container carries the covariance of the
+        bootstrap draws as vcov (diagonal = bootstrap se**2), so
+        parallel_trends runs the joint Wald test on it and pretrends_power
+        reads its pre-period sub-block."""
         cs, _ = cs_bootstrap_plain_fit
         rep = DiagnosticReport(cs).run_all()
         schema = rep.schema
@@ -3619,7 +3617,8 @@ class TestDerivedEventStudySurface:
             assert sec.get("status") == "ran"
             assert sec.get("pre_period_source") == "aggregate_event_study"
             assert "deprecated" not in str(sec)
-        assert schema["parallel_trends"]["method"] == "bonferroni"
+        assert schema["parallel_trends"]["method"] == "joint_wald_event_study"
+        assert schema["pretrends_power"]["covariance_source"] == "full_pre_period_vcov"
 
     def test_bootstrap_plain_cs_republishes_replay_warnings(self):
         """The replay re-emits the fit-time bootstrap warnings; the derived
