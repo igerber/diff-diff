@@ -1531,6 +1531,30 @@ def test_in_space_placebo_rejects_n_starts_mismatch_under_v_search():
     assert res._placebo_status == "ran"
 
 
+def test_rejected_n_starts_override_keeps_cached_confidence_set():
+    # A rejected override rebuilds nothing, so a confidence set computed against the
+    # current reference set is still valid and must survive the ValueError (the cache
+    # is cleared only once every argument check has passed and the rebuild is certain).
+    res = _fit_for_placebo(n_donors=4)  # nested V, n_starts=1 via _FAST
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res.confidence_set(family="constant", gamma=0.25)
+    before = res.effect_confidence_set
+    before_df = res.get_confidence_set_df()
+    assert before is not None
+    with pytest.raises(ValueError, match="differs from the fit's n_starts=1"):
+        res.in_space_placebo(n_starts=2)
+    with pytest.raises(ValueError, match="n_starts override must be a positive integer"):
+        res.in_space_placebo(n_starts=0)
+    assert res.effect_confidence_set is before
+    pd.testing.assert_frame_equal(res.get_confidence_set_df(), before_df)
+    # An accepted call still invalidates it (the reference set IS rebuilt).
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res.in_space_placebo()
+    assert res.effect_confidence_set is None
+
+
 def test_in_space_placebo_n_starts_override_inert_without_v_search():
     # custom V runs no outer search, so n_starts is inert and a differing override must
     # neither raise nor change the result.

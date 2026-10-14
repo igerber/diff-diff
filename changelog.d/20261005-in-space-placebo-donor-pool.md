@@ -5,9 +5,10 @@
   p. 501) do ("shifting California to the donor pool"). It used to drop the
   treated unit from every placebo's donor pool (the `SCtools::generate.placebos`
   construction); that reference set changes with the treated unit, so the
-  permutation p-value was not exact. (The new p-value is exact when every
-  placebo refit enters the reference set; failed or infeasible refits are still
-  excluded and reported via `n_failed` / `n_infeasible`.) Every placebo that puts weight on the
+  permutation p-value was not exact. (The new p-value is exact under the null
+  of no effect and random assignment, when every placebo refit enters the
+  reference set; failed or infeasible refits are still excluded and reported via
+  `n_failed` / `n_infeasible`.) Every placebo that puts weight on the
   treated unit now gets a different RMSPE ratio, so `placebo_p_value` and the
   placebo rows of `get_placebo_df()` change on every such fit, by whole ranks;
   the fit itself (`att`, weights, the treated unit's `rmspe_ratio`) does not
@@ -21,13 +22,13 @@
   use the treated unit's null-imputed outcome `Y_1 - f` inside each placebo's
   synthetic control (Firpo & Possebom 2018, fn 10), so their p-values and sets
   change too. With exactly 2 donors each placebo is now fit against 2 units
-  (a real weight solve and `V` search instead of a forced `w = [1]`); fewer
-  than 2 donors still gives a NaN p-value.
+  (a real weight solve, and under `v_method="nested"` / `"cv"` a `V` search,
+  instead of a forced `w = [1]`); fewer than 2 donors still gives a NaN p-value.
   `fit()` now processes an explicit `donor_pool` in the panel's sorted unit
   order (the order the placebo refits use) rather than the caller's list order,
-  so `donor_weights` / `get_weights_df()` rows follow that order and an exact
-  weight tie between donors resolves the same way in the treated fit and in
-  every placebo.
+  so `donor_weights` keys follow that order (`get_weights_df()` stays sorted by
+  weight descending) and an exact weight tie between donors resolves the same
+  way in the treated fit and in every placebo.
 
 ### Behavioral Changes
 - **`SyntheticControlResults.in_space_placebo(n_starts=...)` rejects a multistart
