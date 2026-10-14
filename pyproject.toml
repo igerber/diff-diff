@@ -65,9 +65,9 @@ dev = [
     # Lint CI workflow (.github/workflows/lint.yml) — update both together.
     # NOTE: black/mypy require Python >= 3.10 (dev tooling only; the library
     # floor stays 3.9).
-    "black==26.5.1",
-    "ruff==0.16.7",
-    "mypy==2.3.1",
+    "black==26.10.1",
+    "ruff==0.17.0",
+    "mypy==2.4.0",
     "maturin>=1.4,<2.0",
     "matplotlib>=3.5",
     "nbmake>=1.5",
