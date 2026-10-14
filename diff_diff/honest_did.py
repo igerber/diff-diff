@@ -1457,6 +1457,17 @@ def _extract_event_study_params(
                         sigma = vcov
                     else:
                         sigma = np.diag(np.array(ses) ** 2)
+                    # Same integrity contract as the container route
+                    # (_extract_container_params): finite, symmetric,
+                    # diagonal == se**2, and allow_singular=False because
+                    # Rambachan-Roth inference assumes covariance eigenvalues
+                    # bounded away from zero. A few-PSU fit (fewer clusters
+                    # than horizons) stores a singular matrix on both the
+                    # analytical and the bootstrap path, so it fails loud
+                    # here exactly as results.aggregate('event_study') does.
+                    sigma = _validate_vcov_subblock(
+                        sigma, np.asarray(ses, dtype=float), "HonestDiD", allow_singular=False
+                    )
                 else:
                     # No full VCV available. A bootstrap fit carries the
                     # covariance of its event-study draws instead of the

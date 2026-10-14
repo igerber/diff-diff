@@ -409,8 +409,9 @@ estimated pre-periods exist).
   `aggregate=` route is deprecated since 3.9). BOOTSTRAPPED fits
   (`n_bootstrap > 0`) included: the recompute levels REPLAY the
   fit-time multiplier bootstrap from the kit-retained RNG state
-  (percentile inference; the container carries no joint covariance, so
-  HonestDiD uses its diagonal approximation), while
+  (percentile inference; the container's vcov is the covariance of the
+  bootstrap draws, so HonestDiD reads a full covariance whose diagonal is
+  the bootstrap se**2), while
   `aggregate('simple')`/`aggregate('total')` relay the stored
   inference; only pre-replay legacy pickles and cross-weight-backend
   artifacts fail closed with a refit message.

@@ -21,12 +21,15 @@
   and the `DiagnosticReport` parallel-trends check runs the joint Wald test
   on the event-study covariance (`method="joint_wald_event_study"`, or its
   `_survey` variant) instead of the Bonferroni fallback.
-- **HonestDiD on a bootstrapped CallawaySantAnna event-study container with
-  few clusters now raises, as it does on analytical fits** (#836): when the
-  clusters (PSUs) are too few for the event-study horizons, the bootstrap
-  covariance is singular, like the analytical one. HonestDiD on
-  `results.aggregate("event_study")` then raises the singular-covariance
-  `ValueError` that analytical fits already raise on that route, instead of
-  falling back to `diag(se**2)` with a warning, and the `DiagnosticReport`
-  sensitivity check reports that error. HonestDiD on the results object
-  itself uses the matrix, as it does for analytical fits.
+- **HonestDiD on a CallawaySantAnna fit with few clusters now raises on
+  both input routes** (#836): when the clusters (PSUs) are too few for the
+  event-study horizons, the stored event-study covariance is singular
+  (analytical and bootstrap alike). HonestDiD on
+  `results.aggregate("event_study")` raised the singular-covariance
+  `ValueError` on analytical fits already and now does so on bootstrapped
+  fits too, instead of falling back to `diag(se**2)` with a warning, and the
+  `DiagnosticReport` sensitivity check reports that error. HonestDiD on the
+  native `CallawaySantAnnaResults` object now runs the same
+  `_validate_vcov_subblock(..., allow_singular=False)` check before using
+  `event_study_vcov` (previously it used the stored matrix unvalidated and
+  returned finite bounds on a singular covariance), so the two routes agree.
