@@ -1785,3 +1785,29 @@ rows:
     test_ref: tests/test_wooldridge.py
     code_refs: [diff_diff/wooldridge.py, diff_diff/wooldridge_results.py, docs/methodology/REGISTRY.md, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-autonomous.txt]
     notes: "Additive comparison-support policy: unsupported_period_action='drop' preserves [M-125] filtering and warnings; 'error' raises ValueError naming unsupported periods and their observation count before deleting periods or constructing the interaction matrix. The positive-weight, anticipation-aware support predicate is unchanged across all three methods and both control-group settings, independently of rank_deficient_action. Only existing pre-filter configuration, cohort and survey-design checks retain precedence; later covariate, nonlinear-outcome and explicit-cluster validation is not preflighted. Valid surveys needing period removal still raise NotImplementedError under 'drop', while 'error' raises the policy ValueError. Unidentified-cohort exclusion and completeness/finite-ATT guards remain active. Constructor and fit-time validation reject invalid values; BaseEstimator supplies transactional set_params. Results echo the fit-time policy in to_dict/summary and preserve it through aggregation and pickle restoration (legacy default 'drop'). introduced_in 4.0 follows the post-cut [M-144] convention; no default flip, deprecation, or removal."
+  - id: M-148
+    kind: param
+    group: obligation-sc-inner-budget
+    old: "diff_diff:SyntheticControl[inner_max_iter]"
+    new: null
+    deprecated_in: "4.0"
+    removed_in: "5.0"
+    status: shimmed
+    phase: 5
+    warning: DeprecationWarning
+    test_ref: tests/test_methodology_synthetic_control.py
+    code_refs: [diff_diff/synthetic_control.py, docs/methodology/REGISTRY.md]
+    notes: "Inert since the exact NNLS inner solve (#838 / #842): the donor-weight problem is solved by Lawson-Hanson's active set, which has no iteration budget. Warn-and-discard shim (stored as None, the [M-001] shape); deprecated_in 4.0 because 4.0 is the locked ladder's next release (tests/test_naming_guard.py _NEXT_RELEASE), so the shim ships there and the removal lands at 5.0."
+  - id: M-149
+    kind: param
+    group: obligation-sc-inner-budget
+    old: "diff_diff:SyntheticControl[inner_min_decrease]"
+    new: null
+    deprecated_in: "4.0"
+    removed_in: "5.0"
+    status: shimmed
+    phase: 5
+    warning: DeprecationWarning
+    test_ref: tests/test_methodology_synthetic_control.py
+    code_refs: [diff_diff/synthetic_control.py, docs/methodology/REGISTRY.md]
+    notes: "Inert since the exact NNLS inner solve (#838 / #842): an exact solve has no stopping tolerance. Same warn-and-discard shim and ladder reasoning as [M-148]."

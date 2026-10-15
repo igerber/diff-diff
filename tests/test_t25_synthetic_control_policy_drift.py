@@ -62,7 +62,6 @@ def fit():
         res = SyntheticControl(
             v_method="nested",
             n_starts=1,
-            inner_min_decrease=1e-3,
             optimizer_options={"maxiter": 50},
             seed=SEED,
         ).fit(
@@ -239,6 +238,5 @@ def test_notebook_kwargs_match():
         "seed=0",
         'predictors=["x1", "x2", "x3"]',
         "placebo_periods=[20, 35, 50]",
-        "inner_min_decrease=1e-3",
     ):
         assert needle in src, f"notebook §1/§2 missing locked kwarg: {needle!r}"

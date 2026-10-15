@@ -75,12 +75,13 @@ PREDICTORS = [
 # ---------------------------------------------------------------------------
 # Behavior tests only need a VALID, cleanly-converged fit, not data-driven V quality.
 # A single start + a small outer cap gives a clean ~0.1s fit without changing what these
-# tests assert. The inner weight solve is exact (one NNLS), so ``inner_min_decrease`` here
-# and in the calls below no longer affects it. Pure-Python coverage of the
+# tests assert. The inner weight solve is exact (one NNLS), with no budget or tolerance
+# to set (``inner_max_iter`` / ``inner_min_decrease`` are deprecated no-ops). Pure-Python
+# coverage of the
 # production-default nested path (n_starts=4 with the _v_starts heuristic candidates) is
 # kept by the dedicated non-slow ``test_nested_production_defaults_smoke``; the @slow
 # Tier-2 Basque test additionally covers the defaults in the Rust matrix.
-_FAST = dict(n_starts=1, optimizer_options={"maxiter": 50}, inner_min_decrease=1e-3)
+_FAST = dict(n_starts=1, optimizer_options={"maxiter": 50})
 # Churn tests deliberately force inner non-convergence (``_truncate_inner_solves``); KEEP
 # that and only cap the outer optimizer so it does not iterate to maxiter on the flat
 # penalty landscape.
@@ -114,8 +115,8 @@ def _truncate_inner_solves(monkeypatch):
     sc = importlib.import_module("diff_diff.synthetic_control")
     real_solve = sc._inner_solve_W
 
-    def truncated(X1s, X0s, v, max_iter, min_decrease):
-        w, _ = real_solve(X1s, X0s, v, max_iter, min_decrease)
+    def truncated(X1s, X0s, v):
+        w, _ = real_solve(X1s, X0s, v)
         return w, False
 
     monkeypatch.setattr(sc, "_inner_solve_W", truncated)
@@ -433,7 +434,6 @@ def test_outer_v_nonconvergence_warning():
             seed=0,
             n_starts=1,
             optimizer_options={"maxiter": 1},
-            inner_min_decrease=1e-3,
         )
 
 
@@ -463,8 +463,8 @@ def test_single_inner_nonconvergence_excluded_from_v_ranking(monkeypatch):
     real_solve = sc._inner_solve_W
     state = {"failed": False}
 
-    def patched(X1s, X0s, v, max_iter, min_decrease):
-        w, conv = real_solve(X1s, X0s, v, max_iter, min_decrease)
+    def patched(X1s, X0s, v):
+        w, conv = real_solve(X1s, X0s, v)
         if not state["failed"] and float(np.max(v)) < 0.9:  # a spread V => an objective eval
             state["failed"] = True
             return w, False
@@ -494,7 +494,6 @@ def test_n_starts_one_runs():
         seed=0,
         n_starts=1,
         optimizer_options={"maxiter": 50},
-        inner_min_decrease=1e-3,
     )
     assert np.isfinite(res.att)
     assert abs(sum(res.donor_weights.values()) - 1.0) < 1e-6
@@ -763,7 +762,8 @@ def test_nnls_lawson_hanson_matches_scipy_where_the_optimum_is_unique(seed):
     rng = np.random.default_rng(seed)
     M = rng.normal(size=(40, 15))
     d = rng.normal(size=40)
-    u = _nnls_lawson_hanson(M, d, max_iter=750)
+    u, converged = _nnls_lawson_hanson(M, d, max_iter=750)
+    assert converged
     np.testing.assert_allclose(u, nnls(M, d)[0], rtol=0.0, atol=1e-12)
 
 
@@ -777,7 +777,8 @@ def test_nnls_lawson_hanson_meets_kkt(seed, shape):
     M = rng.normal(size=shape)
     M[:, 1] = M[:, 0]
     d = rng.normal(size=shape[0])
-    u = _nnls_lawson_hanson(M, d, max_iter=50 * shape[1])
+    u, converged = _nnls_lawson_hanson(M, d, max_iter=50 * shape[1])
+    assert converged
     assert u.min() >= 0.0
     assert _nnls_kkt_violation(M, d, u) < 1e-12
 
@@ -796,19 +797,88 @@ def test_nnls_lawson_hanson_skips_a_column_rounding_lets_in():
         ]
     )
     d = np.array([1.4469020753048079, 0.14587299540150675])
-    u = _nnls_lawson_hanson(M, d, max_iter=150)
+    u, converged = _nnls_lawson_hanson(M, d, max_iter=150)
+    assert converged
     np.testing.assert_allclose(u, np.r_[np.linalg.solve(M[:, :2], d), 0.0], rtol=1e-12, atol=0.0)
 
 
-def test_nnls_lawson_hanson_raises_rather_than_truncate():
-    from diff_diff.utils import _nnls_lawson_hanson
+def test_nnls_lawson_hanson_flags_a_budget_exhausted_solve():
+    # The step guard is never reached in practice; if it were, the solve must return
+    # its current FEASIBLE iterate flagged converged=False (the fail-closed paths handle
+    # it), never raise out of a fit or present a truncated solve as the optimum.
+    from diff_diff.utils import _nnls_lawson_hanson, _sc_weight_nnls
 
     rng = np.random.default_rng(0)
     M = rng.normal(size=(20, 10))
     d = rng.normal(size=20)
-    assert np.count_nonzero(_nnls_lawson_hanson(M, d, max_iter=500)) >= 2
-    with pytest.raises(RuntimeError, match="did not finish in 1 steps"):
-        _nnls_lawson_hanson(M, d, max_iter=1)
+    u, converged = _nnls_lawson_hanson(M, d, max_iter=500)
+    assert converged and np.count_nonzero(u) >= 2
+    u1, converged1 = _nnls_lawson_hanson(M, d, max_iter=1)
+    assert not converged1
+    assert u1.min() >= 0.0 and np.linalg.norm(M @ u1 - d) <= np.linalg.norm(d)
+    # The simplex wrapper threads the flag through and stays on the simplex either way.
+    Y = np.column_stack([rng.normal(size=(6, 4)), rng.normal(size=6)])
+    w, ok = _sc_weight_nnls(Y, return_convergence=True)
+    assert ok and w.min() >= 0.0 and w.sum() == pytest.approx(1.0, abs=1e-14)
+    np.testing.assert_array_equal(_sc_weight_nnls(Y), w)
+
+
+def test_inner_solve_propagates_a_budget_exhausted_flag(monkeypatch):
+    # A flagged inner solve must surface as a non-converged fit (warning + fail-closed
+    # diagnostics) and as an indeterminate conformal proxy, not be reported as converged.
+    import importlib
+
+    from diff_diff.conformal import _cwz_proxy_fit
+    from diff_diff.synthetic_control import _inner_solve_W
+
+    sc = importlib.import_module("diff_diff.synthetic_control")
+    cf = importlib.import_module("diff_diff.conformal")
+
+    def exhausted(Y, zeta=0.0, return_convergence=False):
+        J = Y.shape[1] - 1
+        w = np.full(J, 1.0 / J)
+        return (w, False) if return_convergence else w
+
+    monkeypatch.setattr(sc, "_sc_weight_nnls", exhausted)
+    monkeypatch.setattr(cf, "_sc_weight_nnls", exhausted)
+    w, converged = _inner_solve_W(np.ones(3), np.ones((3, 2)), np.ones(3))
+    assert not converged and w.sum() == pytest.approx(1.0)
+    _, _, conv = _cwz_proxy_fit(np.ones(5), np.ones((5, 3)))
+    assert not conv
+    df, _, _ = _make_panel(n_donors=4, effect=3.0)
+    with pytest.warns(UserWarning, match="exhausted its step guard"):
+        res = _synth_fit(df, "y", "treated", "unit", "year", seed=0, **_FAST)
+    assert res._fit_converged is False
+    with pytest.warns(UserWarning, match="did not converge at fit time"):
+        res.in_space_placebo()
+    assert np.isnan(res.placebo_p_value)
+
+
+def test_inner_budget_params_are_deprecated_no_ops():
+    # inner_max_iter / inner_min_decrease (ledger M-148 / M-149): DeprecationWarning when
+    # passed, discarded to None (get_params / set_params see None), and the fit is the
+    # same as the default's. A default construction never warns.
+    df, _, _ = _make_panel(n_donors=4)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        base = SyntheticControl(seed=0, **_FAST)
+    assert base.get_params()["inner_max_iter"] is None
+    assert base.get_params()["inner_min_decrease"] is None
+    with pytest.warns(DeprecationWarning, match="inner_max_iter is deprecated and has no effect"):
+        est = SyntheticControl(seed=0, inner_max_iter=5, **_FAST)
+    with pytest.warns(
+        DeprecationWarning, match="inner_min_decrease is deprecated and has no effect"
+    ):
+        SyntheticControl(seed=0, inner_min_decrease=1e-3, **_FAST)
+    assert est.inner_max_iter is None and est.get_params()["inner_max_iter"] is None
+    with pytest.warns(DeprecationWarning, match="inner_min_decrease is deprecated"):
+        est.set_params(inner_min_decrease=1e-2)
+    assert est.get_params() == base.get_params()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        a = base.fit(df, "y", "treated", "unit", "year")
+        b = est.fit(df, "y", "treated", "unit", "year")
+    assert a.att == b.att and a.donor_weights == b.donor_weights
 
 
 def test_inner_solve_is_exact_where_a_budgeted_solve_stopped():
@@ -818,7 +888,7 @@ def test_inner_solve_is_exact_where_a_budgeted_solve_stopped():
 
     y = _factor_panel_outcomes(0)
     X1, X0 = y[0, :20], y[1:, :20].T
-    w, converged = _inner_solve_W(X1, X0, np.full(20, 1 / 20), 10000, 1e-5)
+    w, converged = _inner_solve_W(X1, X0, np.full(20, 1 / 20))
     assert converged
     assert _simplex_ls_kkt_violation(np.column_stack([X0, X1]), w) < 1e-10
 
@@ -1241,7 +1311,6 @@ def test_in_space_placebo_is_exact_permutation():
                 v_method="custom",
                 custom_v=np.ones(n_pre),
                 standardize="none",
-                inner_min_decrease=1e-3,
             ).fit(df, "y", "d", "unit", "time", pre_period_outcomes="all")
             res.in_space_placebo()
             fits.append(res)
@@ -1394,7 +1463,6 @@ def test_in_space_placebo_custom_v_path():
             "year",
             v_method="custom",
             custom_v=np.ones(k),
-            inner_min_decrease=1e-3,
         )
         pdf = res.in_space_placebo()
     assert res.n_placebos == 4 and np.isfinite(res.placebo_p_value)
@@ -1455,7 +1523,6 @@ def test_in_space_placebo_perfect_treated_fit_finite_ratio():
             "year",
             v_method="custom",
             custom_v=np.ones(T0),
-            inner_min_decrease=1e-3,
         )
     assert res.pre_rmspe == pytest.approx(0.0, abs=1e-9)
     assert np.isfinite(res.rmspe_ratio) and res.rmspe_ratio > 0
@@ -1479,7 +1546,6 @@ def test_in_space_placebo_immune_to_post_fit_mutation():
             v_method="custom",
             custom_v=cv,
             optimizer_options=opts,
-            inner_min_decrease=1e-3,
         )
         p1 = res.in_space_placebo().copy()
         pval1 = res.placebo_p_value
@@ -1545,7 +1611,6 @@ def test_in_space_placebo_fails_closed_on_underoptimized_outer_v():
             seed=0,
             n_starts=1,
             optimizer_options={"maxiter": 1},  # outer V search cannot converge
-            inner_min_decrease=1e-3,  # inner still converges -> isolates the outer path
         )
     assert res._fit_converged is False  # outer V non-convergence -> invalid fit
     with pytest.warns(UserWarning, match="did not converge at fit time"):
@@ -1581,9 +1646,7 @@ def test_outer_v_convergence_tracks_selected_incumbent(monkeypatch):
     df, _, _ = _make_panel(n_donors=4)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = _synth_fit(
-            df, "y", "treated", "unit", "year", seed=0, n_starts=2, inner_min_decrease=1e-3
-        )
+        res = _synth_fit(df, "y", "treated", "unit", "year", seed=0, n_starts=2)
     # The winning incumbent came from a success=False run -> selected V is not a
     # validated optimum, so the fit must not be marked converged.
     assert res._fit_converged is False
@@ -1620,9 +1683,7 @@ def test_outer_v_powell_success_at_worse_point_does_not_validate(monkeypatch):
     df, _, _ = _make_panel(n_donors=4)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = _synth_fit(
-            df, "y", "treated", "unit", "year", seed=0, n_starts=1, inner_min_decrease=1e-3
-        )
+        res = _synth_fit(df, "y", "treated", "unit", "year", seed=0, n_starts=1)
     # Powell's success at a worse point must NOT flip the selected incumbent to converged.
     assert res._fit_converged is False
     with pytest.warns(UserWarning, match="did not converge at fit time"):
@@ -1681,7 +1742,6 @@ def test_summary_treated_fit_failure_names_specific_reason():
             seed=0,
             n_starts=1,
             optimizer_options={"maxiter": 1},  # outer V cannot converge -> fail closed
-            inner_min_decrease=1e-3,
         )
         assert res._fit_converged is False
         with pytest.warns(UserWarning, match="did not converge at fit time"):
@@ -2053,7 +2113,6 @@ def test_truncate_snapshot_custom_v_lockstep():
             "year",
             v_method="custom",
             custom_v=np.arange(1.0, 7.0),  # distinct entries to verify the subset
-            inner_min_decrease=1e-3,
         )
     snap = res._fit_snapshot
     mod, _ = _truncate_snapshot_in_time(snap, 2003)
@@ -2077,7 +2136,6 @@ def test_truncate_snapshot_straddling_window_partial_keep():
             "year",
             special_predictors=[("y", [2002, 2003, 2004], "mean")],
             pre_period_outcomes=[2000, 2001],
-            inner_min_decrease=1e-3,
         )
     snap = res._fit_snapshot
     mod, _ = _truncate_snapshot_in_time(snap, 2003)
@@ -2110,7 +2168,6 @@ def test_truncate_snapshot_infeasible_all_specs_dropped():
             "year",
             special_predictors=[("y", [2004, 2005], "mean")],
             pre_period_outcomes=[2004, 2005],
-            inner_min_decrease=1e-3,
         )
     snap = res._fit_snapshot
     # t_f=2003 leaves >=2 pre-fake periods, but every spec lives in [2004, 2005]
@@ -2267,7 +2324,6 @@ def test_in_time_placebo_custom_v_zero_mass_is_infeasible_not_failed():
             "year",
             v_method="custom",
             custom_v=v,
-            inner_min_decrease=1e-3,
         )
         itp = res.in_time_placebo([2003])  # keeps lags 2000/2001/2002 -> all zero weight
     row = itp[itp["placebo_period"] == 2003]
@@ -2317,7 +2373,6 @@ def test_in_time_placebo_windowed_covariate_dropped_and_warns():
             "year",
             special_predictors=[("y", [2004, 2005], "mean")],
             pre_period_outcomes=[2000, 2001, 2002, 2003],
-            inner_min_decrease=1e-3,
         )
     with pytest.warns(UserWarning, match="dropped"):
         itp = res.in_time_placebo([2003])
@@ -2338,7 +2393,6 @@ def test_in_time_placebo_all_specs_dropped_infeasible():
             "year",
             special_predictors=[("y", [2004, 2005], "mean")],
             pre_period_outcomes=[2004, 2005],
-            inner_min_decrease=1e-3,
         )
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -2360,7 +2414,6 @@ def test_in_time_placebo_custom_v_runs_without_shape_error():
             "year",
             v_method="custom",
             custom_v=np.ones(6),
-            inner_min_decrease=1e-3,
         )
         itp = res.in_time_placebo()
     assert (itp["status"] == "ran").any()
@@ -2383,7 +2436,6 @@ def test_in_time_placebo_accepts_2d_custom_v():
             "year",
             v_method="custom",
             custom_v=v1d,
-            inner_min_decrease=1e-3,
         )
         res2 = _synth_fit(
             df,
@@ -2393,7 +2445,6 @@ def test_in_time_placebo_accepts_2d_custom_v():
             "year",
             v_method="custom",
             custom_v=v2d,
-            inner_min_decrease=1e-3,
         )
         itp1 = res1.in_time_placebo([2003])
         itp2 = res2.in_time_placebo([2003])  # would IndexError before the ravel fix
@@ -2495,7 +2546,6 @@ def test_leave_one_out_matches_fresh_reduced_pool_fit():
             "year",
             v_method="custom",
             custom_v=v,
-            inner_min_decrease=1e-3,
         )
         loo = res.leave_one_out()
     donor_ids = list(res._fit_snapshot.donor_ids)
@@ -2510,7 +2560,6 @@ def test_leave_one_out_matches_fresh_reduced_pool_fit():
             "year",
             v_method="custom",
             custom_v=v,
-            inner_min_decrease=1e-3,
             donor_pool=[x for x in donor_ids if x != d],
         )
     loo_att = loo.loc[loo["dropped_unit"] == d, "att"].iloc[0]
@@ -2530,7 +2579,6 @@ def test_in_time_placebo_matches_fresh_backdated_fit():
             "year",
             v_method="custom",
             custom_v=v,
-            inner_min_decrease=1e-3,
         )
         itp = res.in_time_placebo([2003])
     placebo_att = itp.loc[itp["placebo_period"] == 2003, "placebo_att"].iloc[0]
@@ -2548,7 +2596,6 @@ def test_in_time_placebo_matches_fresh_backdated_fit():
             "year",
             v_method="custom",
             custom_v=v[:3],
-            inner_min_decrease=1e-3,
         )
     assert placebo_att == pytest.approx(fresh.att, abs=1e-7)
 
@@ -3251,7 +3298,6 @@ def test_cv_reaggregation_matches_custom_v_per_window_steps():
             v_method="custom",
             special_predictors=val_reagg,
             custom_v=v_star,
-            inner_min_decrease=1e-3,
         )
         tr = _synth_fit(
             df,
@@ -3262,7 +3308,6 @@ def test_cv_reaggregation_matches_custom_v_per_window_steps():
             v_method="custom",
             special_predictors=train_reagg,
             custom_v=v_star,
-            inner_min_decrease=1e-3,
         )
     # Step 4: reported weights == V* refit on the VALIDATION-window re-aggregated predictors.
     for d in snap.donor_ids:
@@ -3344,7 +3389,6 @@ def test_cv_in_time_placebo_matches_fresh_backdated_fit():
             seed=0,
             n_starts=1,
             optimizer_options={"maxiter": 50},
-            inner_min_decrease=1e-3,
         )
     assert placebo_att == pytest.approx(fresh.att, abs=1e-7)
 
@@ -3539,7 +3583,6 @@ def test_cv_fails_closed_when_training_solve_truncates(specs, monkeypatch):
             special_predictors=specs,
             seed=0,
             n_starts=1,
-            inner_min_decrease=1e-3,
         )
     assert np.isnan(res.mspe_v)
     assert res._fit_converged is False
@@ -3588,7 +3631,6 @@ def test_leave_one_out_cv_branch_and_fresh_reduced_pool_parity(monkeypatch):
             seed=0,
             n_starts=1,
             optimizer_options={"maxiter": 50},
-            inner_min_decrease=1e-3,
         )
     assert loo_att == pytest.approx(fresh.att, abs=1e-7)
 
@@ -4176,9 +4218,7 @@ def test_confidence_set_coverage_simulation():
         df, years, T0 = _make_panel(n_donors=9, T=10, T0=6, effect=c_true, seed=1000 + s)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            res = SyntheticControl(
-                v_method="custom", custom_v=np.ones(T0), seed=s, inner_min_decrease=1e-3
-            ).fit(
+            res = SyntheticControl(v_method="custom", custom_v=np.ones(T0), seed=s).fit(
                 df, "y", "treated", "unit", "year", post_periods=years[T0:], treated_unit="treated"
             )
             res.in_space_placebo()
@@ -4302,8 +4342,8 @@ def test_cwz_proxy_fit_matches_scipy_simplex_ls():
     T, J = 30, 4
     Y0 = rng.normal(size=(T, J))
     y1 = Y0 @ np.array([0.5, 0.3, 0.2, 0.0]) + rng.normal(scale=0.05, size=T)
-    # The proxy is solved exactly (one NNLS): a one-iteration budget does not truncate it.
-    w, resid, conv = _cwz_proxy_fit(y1, Y0, max_iter=1, min_decrease=1.0)
+    # The proxy is solved exactly (one NNLS).
+    w, resid, conv = _cwz_proxy_fit(y1, Y0)
     assert conv
     # simplex constraint delivered by the solver (w >= 0, sum w = 1) — no extra normalization
     assert w.min() >= -1e-9
@@ -4335,7 +4375,7 @@ def test_cwz_proxy_fit_matches_scipy_simplex_ls():
 def test_cwz_proxy_fit_single_donor_is_degenerate():
     y1 = np.array([1.0, 2.0, 3.0, 4.0])
     Y0 = np.array([[0.5], [1.0], [1.5], [2.0]])
-    w, resid, conv = _cwz_proxy_fit(y1, Y0, max_iter=100, min_decrease=1e-6)
+    w, resid, conv = _cwz_proxy_fit(y1, Y0)
     assert conv
     assert np.array_equal(w, np.array([1.0]))
     assert np.allclose(resid, y1 - Y0[:, 0])
@@ -4843,8 +4883,6 @@ def test_sparse_self_consistency_and_holds_v_fixed():
             snap.fit_X1s,
             snap.fit_X0s[:, list(cols)],
             snap.fit_v,
-            snap.inner_max_iter,
-            snap.inner_min_decrease,
         )
         if not conv:
             continue
@@ -4999,8 +5037,6 @@ def test_cv_tail_diagnostics_use_validation_window_capture():
             snap.fit_X1s,
             snap.fit_X0s[:, list(cols)],
             snap.fit_v,
-            snap.inner_max_iter,
-            snap.inner_min_decrease,
         )
         if not conv:
             continue
@@ -5277,10 +5313,8 @@ class TestConformalCovariates:
         # covariate says the target matches donor 2 instead
         X0 = rng.normal(size=(T, J))
         x1 = X0[:, 2] + rng.normal(0, 0.01, T)
-        w_plain, resid_plain, _ = _cwz_proxy_fit(y1, Y0, max_iter=2000, min_decrease=1e-10)
-        w_cov, resid_cov, _ = _cwz_proxy_fit(
-            y1, Y0, max_iter=2000, min_decrease=1e-10, x1_rows=x1 * 10, X0_rows=X0 * 10
-        )
+        w_plain, resid_plain, _ = _cwz_proxy_fit(y1, Y0)
+        w_cov, resid_cov, _ = _cwz_proxy_fit(y1, Y0, x1_rows=x1 * 10, X0_rows=X0 * 10)
         assert np.max(np.abs(w_cov - w_plain)) > 0.05
         assert w_cov[2] > w_plain[2]
         # residuals are OUTCOME rows only (length T, not T + covariate rows)

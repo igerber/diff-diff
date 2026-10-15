@@ -8,15 +8,18 @@
   placebos whose refit hit the budget were dropped from the reference set; and
   the nested search ranked `V` only among the solves that met their stopping
   rule. The problem reduces exactly to one non-negative least squares, solved
-  by Lawson-Hanson's active set, which terminates finitely, so the solve now
-  reaches the optimum and none of those paths fires for it. On the issue's
+  by Lawson-Hanson's active set, which terminates in finitely many steps, so
+  the solve now reaches the optimum and none of those paths fires for it (a
+  solve that exhausted the active set's step guard, not reached in practice,
+  would return a feasible iterate flagged non-converged and take the same
+  fail-closed paths as before). On the issue's
   three designs, 40 panels each, the placebo test had failed closed or lost
   placebos on 40, 40 and 33 panels; it now keeps every placebo on all 120, and
   the treated pre-RMSPE equals the exact optimum to rounding.
   - The same solve replaces Frank-Wolfe in the conformal proxy
     (`conformal_test()`, `conformal_average_effect()` and
-    `conformal_confidence_intervals()`: `proxy_converged` is always true and
-    `n_grid_nonconverged` is 0) and in the informational `synthetic_weight`
+    `conformal_confidence_intervals()`: `proxy_converged` is true and
+    `n_grid_nonconverged` is 0 in practice) and in the informational `synthetic_weight`
     column of `rank_control_units()`, which stopped at 1000 iterations; that
     column's values move, the ranking does not. A panel with a missing
     pre-period outcome keeps its uniform `synthetic_weight` column.
@@ -42,6 +45,10 @@
   intervals are narrower on simulated panels and still cover above nominal.
   Over 50 panels (300 period intervals at nominal 90%), coverage goes from
   0.970 to 0.953 and the median width from 0.515 to 0.450.
-- **`inner_max_iter` and `inner_min_decrease` no longer act** (#838): both are
-  accepted and validated, but the inner solves have no iteration budget or
-  stopping tolerance.
+
+### Deprecated
+- **`SyntheticControl(inner_max_iter=, inner_min_decrease=)`** (#838, ledger
+  M-148 / M-149): both now default to `None` and emit a `DeprecationWarning` when
+  passed; the value is discarded (`get_params()` reports `None`). The inner
+  weight solves have no iteration budget or stopping tolerance to set. Drop the
+  arguments; they are removed in 5.0.

@@ -45,7 +45,7 @@ from diff_diff.synthetic_control_results import (
     SyntheticControlResults,
     _SyntheticControlFitSnapshot,
 )
-from diff_diff.utils import _sc_weight_nnls, safe_inference, warn_if_not_converged
+from diff_diff.utils import _sc_weight_nnls, safe_inference
 
 __all__ = ["SyntheticControl", "synthetic_control"]
 
@@ -111,13 +111,14 @@ class SyntheticControl(BaseEstimator):
         outer V search (e.g. ``maxiter``, ``xatol``, ``fatol``).
     n_starts : int, default 4
         Number of starting points for the multistart outer V search.
-    inner_max_iter : int, default 10000
-        Accepted and validated, but no longer used. The inner simplex solves (the
-        donor weights at every V, and the conformal proxy) are exact: one
-        non-negative least squares each, with no iteration budget to set.
-    inner_min_decrease : float, default 1e-5
-        Accepted and validated, but no longer used, for the same reason: an exact
-        solve has no stopping tolerance.
+    inner_max_iter : int, optional
+        **Deprecated, no effect** (``DeprecationWarning`` when passed; removed in
+        v5.0). The inner simplex solves (the donor weights at every V, and the
+        conformal proxy) are exact: one non-negative least squares each, with no
+        iteration budget to set.
+    inner_min_decrease : float, optional
+        **Deprecated, no effect** (``DeprecationWarning`` when passed; removed in
+        v5.0), for the same reason: an exact solve has no stopping tolerance.
     standardize : {"std", "none"}, default "std"
         Predictor standardization. ``"std"`` divides each predictor row by its
         standard deviation across donors+treated (ddof=1), matching R ``Synth``.
@@ -143,8 +144,8 @@ class SyntheticControl(BaseEstimator):
         custom_v: Optional[Any] = None,
         optimizer_options: Optional[Dict[str, Any]] = None,
         n_starts: int = 4,
-        inner_max_iter: int = 10000,
-        inner_min_decrease: float = 1e-5,
+        inner_max_iter: Optional[int] = None,
+        inner_min_decrease: Optional[float] = None,
         standardize: str = "std",
         alpha: float = 0.05,
         seed: Optional[int] = None,
@@ -154,8 +155,25 @@ class SyntheticControl(BaseEstimator):
         self.custom_v = custom_v
         self.optimizer_options = optimizer_options
         self.n_starts = n_starts
-        self.inner_max_iter = inner_max_iter
-        self.inner_min_decrease = inner_min_decrease
+        # Deprecated warn-and-discard (ledger M-148 / M-149): the inner weight solve is
+        # exact (one NNLS), so neither parameter has any effect. Stored normalized to
+        # None so a set_params probe re-init warns exactly once for the call that
+        # passes them and never again on unrelated set_params / clone calls.
+        for _name, _val in (
+            ("inner_max_iter", inner_max_iter),
+            ("inner_min_decrease", inner_min_decrease),
+        ):
+            if _val is not None:
+                warnings.warn(
+                    f"{_name} is deprecated and has no effect: the synthetic control "
+                    "donor weights are solved exactly (one non-negative least squares), "
+                    "so there is no inner iteration budget or tolerance to set. It will "
+                    "be removed in v5.0.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+        self.inner_max_iter = None
+        self.inner_min_decrease = None
         self.standardize = standardize
         self.alpha = alpha
         self.seed = seed
@@ -202,14 +220,6 @@ class SyntheticControl(BaseEstimator):
                 raise ValueError("custom_v must have a positive sum.")
         if not isinstance(self.n_starts, (int, np.integer)) or self.n_starts < 1:
             raise ValueError(f"n_starts must be a positive integer, got {self.n_starts!r}")
-        if not isinstance(self.inner_max_iter, (int, np.integer)) or self.inner_max_iter < 1:
-            raise ValueError(
-                f"inner_max_iter must be a positive integer, got {self.inner_max_iter!r}"
-            )
-        if not (np.isfinite(self.inner_min_decrease) and self.inner_min_decrease > 0):
-            raise ValueError(
-                f"inner_min_decrease must be a positive float, got {self.inner_min_decrease!r}"
-            )
         if not (0 < self.alpha < 1):
             raise ValueError(f"alpha must be in (0, 1), got {self.alpha!r}")
         # v_cv_t0 is meaningful ONLY for v_method="cv" — fail closed (never silently
@@ -480,7 +490,7 @@ class SyntheticControl(BaseEstimator):
             resolved_v_cv_t0 = t0
         if self.v_method == "custom":
             v = self._prepare_custom_v(k)
-            w, converged = _inner_solve_W(X1s, X0s, v, self.inner_max_iter, self.inner_min_decrease)
+            w, converged = _inner_solve_W(X1s, X0s, v)
         elif J == 1:
             # Degenerate: a single donor forces w = [1.0], so the predictor-importance V is
             # UNIDENTIFIED — every V yields the same synthetic — for EVERY v_method, cv and
@@ -508,7 +518,7 @@ class SyntheticControl(BaseEstimator):
             # Σ_h diff_h²/Var_h² — hence the standardize pre-scaling is intentionally
             # bypassed on this branch (equivalent to uniform V on standardized predictors).
             v = _inverse_variance_v(X1, X0)
-            w, converged = _inner_solve_W(X1, X0, v, self.inner_max_iter, self.inner_min_decrease)
+            w, converged = _inner_solve_W(X1, X0, v)
         elif self.v_method == "cv":
             # Out-of-sample CV V-selection (ADH 2015; Abadie 2021 t0=T0/2). The split and
             # the predictor precondition were resolved/validated up front (above), so
@@ -529,8 +539,6 @@ class SyntheticControl(BaseEstimator):
                 self.n_starts,
                 self.seed,
                 self.optimizer_options,
-                self.inner_max_iter,
-                self.inner_min_decrease,
                 self.standardize,
             )
         else:
@@ -544,8 +552,6 @@ class SyntheticControl(BaseEstimator):
                 self.n_starts,
                 self.seed,
                 self.optimizer_options,
-                self.inner_max_iter,
-                self.inner_min_decrease,
             )
 
         # --- gap path, fit diagnostics, ATT ---
@@ -578,13 +584,17 @@ class SyntheticControl(BaseEstimator):
                 stacklevel=2,
             )
 
-        # Inner-solve non-convergence warning — fires on nested / custom / k==1 paths.
-        warn_if_not_converged(
-            converged,
-            "Synthetic control inner weight solver",
-            self.inner_max_iter,
-            stacklevel=2,
-        )
+        # Inner-solve non-convergence warning — fires on nested / custom / k==1 paths. The
+        # exact solve reaches this only if the active set exhausted its step guard.
+        if not converged:
+            warnings.warn(
+                "Synthetic control inner weight solver did not converge (the active set "
+                "exhausted its step guard). The reported weights are a feasible iterate, "
+                "not the optimum, and the diagnostics that need a converged fit will be "
+                "skipped.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # No analytical SE: all inference fields NaN.
         t_stat, p_value, conf_int = safe_inference(att, np.nan, self.alpha)
@@ -688,8 +698,6 @@ class SyntheticControl(BaseEstimator):
             optimizer_options=(
                 None if self.optimizer_options is None else dict(self.optimizer_options)
             ),
-            inner_max_iter=self.inner_max_iter,
-            inner_min_decrease=self.inner_min_decrease,
             v_cv_t0=self.v_cv_t0,
             # The V-fixed (X1s, X0s, V) triple captured just above (copied so post-fit
             # mutation cannot change the diagnostics' output).
@@ -738,8 +746,8 @@ def synthetic_control(
 
     Constructor-only keyword arguments (``v_method`` — ``"nested"`` / ``"custom"`` /
     ``"cv"`` / ``"inverse_variance"`` — ``custom_v``, ``v_cv_t0``, ``n_starts``,
-    ``standardize``, ``alpha``, ``seed``, ``optimizer_options``,
-    ``inner_max_iter``, ``inner_min_decrease``) and ``fit`` keyword arguments
+    ``standardize``, ``alpha``, ``seed``, ``optimizer_options``) and ``fit``
+    keyword arguments
     (``post_periods``, ``treated_unit``, ``predictors``, ``special_predictors``,
     ...) may both be passed via ``**kwargs``.
 
@@ -1143,15 +1151,14 @@ def _inner_solve_W(
     X1s: np.ndarray,
     X0s: np.ndarray,
     v: np.ndarray,
-    inner_max_iter: int,
-    inner_min_decrease: float,
 ) -> Tuple[np.ndarray, bool]:
     """Solve W*(V) = argmin_W (X1-X0 W)' diag(V) (X1-X0 W) on the unit simplex.
 
     Folds V^½ into the predictors and solves the simplex least squares exactly, by one
-    non-negative least squares (``utils._sc_weight_nnls``). The solve has no iteration
-    budget to exhaust, so it always converges; ``inner_max_iter`` and
-    ``inner_min_decrease`` do not apply to it.
+    non-negative least squares (``utils._sc_weight_nnls``). The active set terminates in
+    finitely many steps, so the solve converges; ``converged`` is False only if it
+    exhausted its step guard, and the fail-closed paths then treat the fit as
+    non-converged.
     Returns the RAW simplex weights (no sparsification) so the outer objective is
     not perturbed; reporting-level cleanup happens in ``fit``.
     """
@@ -1162,7 +1169,8 @@ def _inner_solve_W(
     A = vh[:, None] * X0s  # (k, J)
     b = vh * X1s  # (k,)
     packed = np.column_stack([A, b])  # (k, J+1); last column is the target
-    return _sc_weight_nnls(packed), True
+    w, converged = _sc_weight_nnls(packed, return_convergence=True)
+    return np.asarray(w, dtype=float), bool(converged)
 
 
 def _v_starts(
@@ -1175,8 +1183,6 @@ def _v_starts(
     Z0: np.ndarray,
     n_starts: int,
     rng: np.random.Generator,
-    inner_max_iter: int,
-    inner_min_decrease: float,
 ) -> Tuple[List[np.ndarray], int, int]:
     """Build a list of DISTINCT starting ``theta`` vectors for the outer V search.
 
@@ -1239,7 +1245,7 @@ def _v_starts(
         for i in range(k):
             e = np.zeros(k)
             e[i] = 1.0
-            w_i, conv_i = _inner_solve_W(X1s, X0s, e, inner_max_iter, inner_min_decrease)
+            w_i, conv_i = _inner_solve_W(X1s, X0s, e)
             inner_total += 1
             if not conv_i:
                 # Don't trust a truncated solve: inf -> 0 inverse-MSPE weight, so this
@@ -1272,8 +1278,6 @@ def _outer_solve_V(
     n_starts: int,
     seed: Optional[int],
     optimizer_options: Optional[Dict[str, Any]],
-    inner_max_iter: int,
-    inner_min_decrease: float,
 ) -> Tuple[np.ndarray, np.ndarray, bool, float, bool]:
     """Data-driven V selection: minimize pre-period outcome MSPE of W*(V).
 
@@ -1286,7 +1290,7 @@ def _outer_solve_V(
         # Single predictor: V is fixed (no outer search), so outer convergence is
         # trivially satisfied.
         v = np.array([1.0])
-        w, converged = _inner_solve_W(X1s, X0s, v, inner_max_iter, inner_min_decrease)
+        w, converged = _inner_solve_W(X1s, X0s, v)
         return v, w, converged, float(np.mean((Z1 - Z0 @ w) ** 2)), True
 
     # Track inner weight-solve non-convergence across ALL intermediate evaluations so
@@ -1303,7 +1307,7 @@ def _outer_solve_V(
 
     def objective(theta: np.ndarray) -> float:
         v = _softmax(theta)
-        w, conv = _inner_solve_W(X1s, X0s, v, inner_max_iter, inner_min_decrease)
+        w, conv = _inner_solve_W(X1s, X0s, v)
         _st["total"] += 1
         if not conv:
             # A truncated W*(V) is unusable for V ranking: in an argmin search even a
@@ -1326,9 +1330,7 @@ def _outer_solve_V(
         powell_options["ftol"] = powell_options.pop("fatol")
 
     rng = np.random.default_rng(seed)
-    starts, start_total, start_nonconv = _v_starts(
-        k, X1, X0, X1s, X0s, Z1, Z0, n_starts, rng, inner_max_iter, inner_min_decrease
-    )
+    starts, start_total, start_nonconv = _v_starts(k, X1, X0, X1s, X0s, Z1, Z0, n_starts, rng)
     _st["total"] += start_total
     _st["nonconv"] += start_nonconv
 
@@ -1392,7 +1394,7 @@ def _outer_solve_V(
         )
 
     v_star = _softmax(best_x)
-    w_star, converged = _inner_solve_W(X1s, X0s, v_star, inner_max_iter, inner_min_decrease)
+    w_star, converged = _inner_solve_W(X1s, X0s, v_star)
     mspe = float(np.mean((Z1 - Z0 @ w_star) ** 2))
     return v_star, w_star, converged, mspe, outer_converged
 
@@ -1507,8 +1509,6 @@ def _outer_solve_V_cv(
     n_starts: int,
     seed: Optional[int],
     optimizer_options: Optional[Dict[str, Any]],
-    inner_max_iter: int,
-    inner_min_decrease: float,
     standardize: str,
 ) -> Tuple[np.ndarray, np.ndarray, bool, float, bool, Optional[str]]:
     """Out-of-sample cross-validation V selection (ADH 2015 §; Abadie 2021 Eq. 9).
@@ -1589,8 +1589,8 @@ def _outer_solve_V_cv(
     if k == 1:
         # Single predictor: V is fixed; re-aggregated in each window (guarded non-empty).
         v = np.array([1.0])
-        w_tr, conv_tr = _inner_solve_W(X1s_tr, X0s_tr, v, inner_max_iter, inner_min_decrease)
-        w_star, converged = _inner_solve_W(X1s_va, X0s_va, v, inner_max_iter, inner_min_decrease)
+        w_tr, conv_tr = _inner_solve_W(X1s_tr, X0s_tr, v)
+        w_star, converged = _inner_solve_W(X1s_va, X0s_va, v)
         # mspe_v is Eq. 9's validation MSPE of the TRAINING-window fit, so it is only valid
         # when that solve converged; if it truncates, fail closed (nan criterion + outer
         # non-converged) so downstream placebo/LOO diagnostics do not run off an invalid CV
@@ -1609,7 +1609,7 @@ def _outer_solve_V_cv(
     def objective(theta: np.ndarray) -> float:
         v = _softmax(theta)
         # Step 2: fit the training weights on the TRAINING-window re-aggregated predictors.
-        w, conv = _inner_solve_W(X1s_tr, X0s_tr, v, inner_max_iter, inner_min_decrease)
+        w, conv = _inner_solve_W(X1s_tr, X0s_tr, v)
         _st["total"] += 1
         if not conv:
             _st["nonconv"] += 1
@@ -1675,8 +1675,6 @@ def _outer_solve_V_cv(
         Z0_va,
         n_starts,
         rng,
-        inner_max_iter,
-        inner_min_decrease,
     )
     _st["total"] += start_total
     _st["nonconv"] += start_nonconv
@@ -1730,14 +1728,14 @@ def _outer_solve_V_cv(
     # It is Eq. 9's criterion only if the training solve converged; if it did not, fail
     # closed — nan criterion + outer non-converged — so the fit and downstream
     # placebo/LOO diagnostics do not run off an invalid CV criterion.
-    w_tr, conv_tr = _inner_solve_W(X1s_tr, X0s_tr, v_star, inner_max_iter, inner_min_decrease)
+    w_tr, conv_tr = _inner_solve_W(X1s_tr, X0s_tr, v_star)
     if conv_tr:
         mspe_v = float(np.mean((Z1_va - Z0_va @ w_tr) ** 2))
     else:
         mspe_v = float("nan")
         outer_converged = False
     # Step 4 reported weights: refit V* on the VALIDATION-window re-aggregated predictors.
-    w_star, converged = _inner_solve_W(X1s_va, X0s_va, v_star, inner_max_iter, inner_min_decrease)
+    w_star, converged = _inner_solve_W(X1s_va, X0s_va, v_star)
     # A non-converged outer search / truncated step-4 refit is a SOLVER failure (the
     # windows spanned + varied, else we returned "infeasible" above) -> infeasible=None.
     return v_star, w_star, converged, mspe_v, outer_converged, None
@@ -2223,7 +2221,7 @@ def _placebo_fit_unit(
             # construction. Just trace-normalize (matches _prepare_custom_v).
             v = np.asarray(snap.custom_v, dtype=float).ravel()
             v = v / v.sum()
-            w, converged = _inner_solve_W(X1s, X0s, v, snap.inner_max_iter, snap.inner_min_decrease)
+            w, converged = _inner_solve_W(X1s, X0s, v)
         elif len(donor_pool) == 1:
             # Degenerate: a single donor forces w = [1.0]; V is irrelevant.
             w, converged = np.array([1.0]), True
@@ -2233,7 +2231,7 @@ def _placebo_fit_unit(
             # standardize pre-scaling is bypassed to avoid the 1/Var² double-rescale —
             # see fit()). outer_converged stays True.
             v = _inverse_variance_v(X1, X0)
-            w, converged = _inner_solve_W(X1, X0, v, snap.inner_max_iter, snap.inner_min_decrease)
+            w, converged = _inner_solve_W(X1, X0, v)
         elif snap.v_method == "cv":
             # Reproduce the FULL per-window re-aggregation CV procedure for this
             # pseudo-treated unit so placebos use the SAME estimator as the treated fit.
@@ -2257,8 +2255,6 @@ def _placebo_fit_unit(
                 n_starts,
                 snap.seed,
                 snap.optimizer_options,
-                snap.inner_max_iter,
-                snap.inner_min_decrease,
                 snap.standardize,
             )
         else:
@@ -2272,8 +2268,6 @@ def _placebo_fit_unit(
                 n_starts,
                 snap.seed,
                 snap.optimizer_options,
-                snap.inner_max_iter,
-                snap.inner_min_decrease,
             )
     # Exclude a placebo whose fit is not a valid optimum — a truncated inner W OR an
     # under-optimized outer V search. An under-optimized placebo V fits the pre-period
@@ -2490,9 +2484,7 @@ def _sparse_search_size(snap: "_SyntheticControlFitSnapshot", size: int) -> Dict
         for cols in itertools.combinations(range(len(donor_ids)), size):
             n_eval += 1
             cols_arr = list(cols)
-            w_sub, conv = _inner_solve_W(
-                X1s, X0s[:, cols_arr], v, snap.inner_max_iter, snap.inner_min_decrease
-            )
+            w_sub, conv = _inner_solve_W(X1s, X0s[:, cols_arr], v)
             if not conv:
                 n_failed += 1
                 continue

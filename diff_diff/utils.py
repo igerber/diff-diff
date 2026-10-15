@@ -2290,7 +2290,9 @@ def _sc_weight_fw_numpy(
     return lam
 
 
-def _sc_weight_nnls(Y: np.ndarray, zeta: float = 0.0) -> np.ndarray:
+def _sc_weight_nnls(
+    Y: np.ndarray, zeta: float = 0.0, return_convergence: bool = False
+) -> Union[np.ndarray, Tuple[np.ndarray, bool]]:
     """Solve the uncentered (``intercept=False``) SC weight problem exactly.
 
     The problem is :func:`_sc_weight_fw`'s with ``intercept=False``::
@@ -2307,10 +2309,13 @@ def _sc_weight_nnls(Y: np.ndarray, zeta: float = 0.0) -> np.ndarray:
     ``a = ||Z @ w||^2 / s^2``; its least value over ``c``, ``a / (1 + a)``, increases
     with ``a``, so ``w`` is the simplex optimum for any scale ``s > 0`` (``s``, the RMS
     of ``A - b 1'``, keeps the two blocks comparable). Lawson-Hanson's active set
-    (:func:`_nnls_lawson_hanson`) terminates finitely, so there is no iteration budget
-    to exhaust; it raises rather than return a truncated solve. Where the optimum is
-    not unique (``zeta = 0`` with ``b`` inside the donors' convex hull), the solve
-    returns a vertex of the optimal face, the same one under every SciPy version.
+    (:func:`_nnls_lawson_hanson`) terminates in finitely many steps, so there is no
+    iteration budget to tune; a solve that nonetheless exhausts the step guard (50
+    steps per donor, never reached in practice) returns its current feasible iterate
+    flagged ``converged=False`` so the caller's fail-closed path can handle it. Where
+    the optimum is not unique (``zeta = 0`` with ``b`` inside the donors' convex
+    hull), the solve returns a vertex of the optimal face, the same one under every
+    SciPy version.
 
     Parameters
     ----------
@@ -2318,11 +2323,14 @@ def _sc_weight_nnls(Y: np.ndarray, zeta: float = 0.0) -> np.ndarray:
         Matrix of shape (N, J+1). Last column is the target.
     zeta : float, default 0.0
         Regularization strength, as in :func:`_sc_weight_fw`.
+    return_convergence : bool, default False
+        If True, return ``(weights, converged)``.
 
     Returns
     -------
-    np.ndarray
-        Weights of shape (J,) on the simplex.
+    np.ndarray or (np.ndarray, bool)
+        Weights of shape (J,) on the simplex, plus the convergence flag when
+        ``return_convergence`` is True.
     """
     Y = np.asarray(Y, dtype=np.float64)
     n, J = Y.shape[0], Y.shape[1] - 1
@@ -2333,11 +2341,13 @@ def _sc_weight_nnls(Y: np.ndarray, zeta: float = 0.0) -> np.ndarray:
     M = np.vstack([Z / scale, np.ones(J)])
     target = np.zeros(M.shape[0])
     target[-1] = 1.0
-    u = _nnls_lawson_hanson(M, target, max_iter=50 * J)
-    return u / u.sum()
+    u, converged = _nnls_lawson_hanson(M, target, max_iter=50 * J)
+    total = float(u.sum())
+    w = u / total if total > 0.0 else np.full(J, 1.0 / J)
+    return (w, converged) if return_convergence else w
 
 
-def _nnls_lawson_hanson(M: np.ndarray, d: np.ndarray, max_iter: int) -> np.ndarray:
+def _nnls_lawson_hanson(M: np.ndarray, d: np.ndarray, max_iter: int) -> Tuple[np.ndarray, bool]:
     """Solve ``min ||M @ u - d||`` subject to ``u >= 0`` by Lawson-Hanson's active set.
 
     Lawson and Hanson (1974, ch. 23), with their guard against an entering column that
@@ -2346,8 +2356,10 @@ def _nnls_lawson_hanson(M: np.ndarray, d: np.ndarray, max_iter: int) -> np.ndarr
     returns depends on its pivoting, and SciPy's implementation has changed across
     releases, so synthetic control weights at a tie, and every placebo refit at one,
     moved with the SciPy version. Each least-squares step is one ``np.linalg.lstsq`` on
-    the passive columns. Raises ``RuntimeError`` after ``max_iter`` steps rather than
-    return a truncated solve.
+    the passive columns. Returns ``(u, converged)``: the active set terminates in
+    finitely many steps, so ``converged`` is True in practice; after ``max_iter``
+    inner steps (a guard, not a tuning knob) it returns the current feasible iterate
+    with ``converged=False`` instead of a truncated solve presented as the optimum.
     """
     m, n = M.shape
     tol = 10.0 * max(m, n) * np.finfo(np.float64).eps * float(np.abs(M).sum(axis=0).max())
@@ -2358,7 +2370,7 @@ def _nnls_lawson_hanson(M: np.ndarray, d: np.ndarray, max_iter: int) -> np.ndarr
     while True:
         entering = ~passive & (grad > tol)
         if not entering.any():
-            return u
+            return u, True
         t = int(np.argmax(np.where(entering, grad, -np.inf)))
         passive[t] = True
         z = np.zeros(n)
@@ -2371,9 +2383,7 @@ def _nnls_lawson_hanson(M: np.ndarray, d: np.ndarray, max_iter: int) -> np.ndarr
         while True:
             n_iter += 1
             if n_iter > max_iter:
-                raise RuntimeError(
-                    f"Non-negative least squares did not finish in {max_iter} steps."
-                )
+                return u, False
             if (z[passive] > 0.0).all():
                 break
             # Move toward z until the first passive coefficient reaches zero; drop it.

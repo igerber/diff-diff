@@ -51,9 +51,6 @@ def _cwz_proxy_fit(
     y1: np.ndarray,
     Y0: np.ndarray,
     *,
-    max_iter: int,
-    min_decrease: float,
-    init_weights: Optional[np.ndarray] = None,
     x1_rows: Optional[np.ndarray] = None,
     X0_rows: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, bool]:
@@ -67,8 +64,9 @@ def _cwz_proxy_fit(
     simplex, so the ``w ≥ 0, Σ w = 1`` constraint is delivered with no extra
     normalization.
 
-    The solve has no iteration budget, so it always converges: ``max_iter``,
-    ``min_decrease`` and ``init_weights`` do not apply to it.
+    The solve has no iteration budget to tune; ``converged`` is False only if the
+    active set exhausted its step guard (not reached in practice), in which case the
+    caller treats the grid point as indeterminate.
 
     **Covariates (CWZ §2.3.2, after eq 6):** "it is straightforward to
     incorporate (transformations of) covariates X_jt into the estimation
@@ -102,8 +100,9 @@ def _cwz_proxy_fit(
         w = np.array([1.0], dtype=float)
         return w, y1 - Y0 @ w, True
     packed = np.column_stack([Y0_fit, y1_fit])  # (T+R, J+1); last column is the target
-    w = _sc_weight_nnls(packed)
-    return w, y1[:n_out] - Y0[:n_out] @ w, True
+    w, converged = _sc_weight_nnls(packed, return_convergence=True)
+    w = np.asarray(w, dtype=float)
+    return w, y1[:n_out] - Y0[:n_out] @ w, bool(converged)
 
 
 # =============================================================================
@@ -234,9 +233,6 @@ def _single_null_pvalue(
     perms: np.ndarray,
     q: Any,
     *,
-    max_iter: int,
-    min_decrease: float,
-    init_weights: Optional[np.ndarray] = None,
     alternative: str = "two-sided",
     x1_rows: Optional[np.ndarray] = None,
     X0_rows: Optional[np.ndarray] = None,
@@ -253,9 +249,6 @@ def _single_null_pvalue(
     w, resid, conv = _cwz_proxy_fit(
         y1n,
         Y0,
-        max_iter=max_iter,
-        min_decrease=min_decrease,
-        init_weights=init_weights,
         x1_rows=x1_rows,
         X0_rows=X0_rows,
     )
@@ -334,8 +327,6 @@ def _invert_single_post(
     alpha: float,
     perms: np.ndarray,
     *,
-    max_iter: int,
-    min_decrease: float,
     grid: Optional[np.ndarray] = None,
     n_grid: int = 100,
     alternative: str = "two-sided",
@@ -379,8 +370,6 @@ def _invert_single_post(
     w_pre, resid_pre, _ = _cwz_proxy_fit(
         y1_obs[pre_sel],
         Y0[pre_sel],
-        max_iter=max_iter,
-        min_decrease=min_decrease,
         x1_rows=x1_rows,
         X0_rows=X0_rows,
     )
@@ -408,20 +397,15 @@ def _invert_single_post(
 
     pvals = np.empty(grid.shape[0], dtype=float)
     converged = np.empty(grid.shape[0], dtype=bool)
-    w_prev = w_pre
     for i, theta in enumerate(grid):
         y1n = y1_obs.copy()
         y1n[post_idx] = y1n[post_idx] - float(theta)
         w, resid, conv = _cwz_proxy_fit(
             y1n,
             Y0,
-            max_iter=max_iter,
-            min_decrease=min_decrease,
-            init_weights=w_prev,
             x1_rows=x1_rows,
             X0_rows=X0_rows,
         )
-        w_prev = w
         p, _, _ = _cwz_pvalue(resid, post_mask, perms, 1, alternative=alternative)
         pvals[i] = p
         converged[i] = conv

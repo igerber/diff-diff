@@ -63,8 +63,6 @@ class _SyntheticControlFitSnapshot:
     n_starts: int
     seed: Optional[int]
     optimizer_options: Optional[Dict[str, Any]]
-    inner_max_iter: int
-    inner_min_decrease: float
     # Training/validation split index for v_method="cv" (positional into pre_periods);
     # None → len(pre_periods)//2 default. Carried so in-space/LOO/in-time placebo refits
     # reproduce the same CV split as the treated fit.
@@ -2631,15 +2629,14 @@ class SyntheticControlResults(BaseResults):
             return 2
         raise ValueError(f"q must be 1, 2, or inf, got {q!r}")
 
-    def _conformal_panel(self) -> Tuple[np.ndarray, np.ndarray, int, int, float, List[Any]]:
+    def _conformal_panel(self) -> Tuple[np.ndarray, np.ndarray, int, int, List[Any]]:
         """Extract the calendar-ordered (treated, donor) outcome panel for the CWZ layer.
 
-        Returns ``(y1, Y0, n_pre, n_post, pre_scale, donors)`` where ``y1`` ``(T,)`` /
+        Returns ``(y1, Y0, n_pre, n_post, donors)`` where ``y1`` ``(T,)`` /
         ``Y0`` ``(T, J)`` are in strict calendar order (sorted pre-period prefix +
         sorted post-period suffix — :attr:`pre_periods` / :attr:`post_periods` are
         built that way in ``fit()``), so the moving-block cyclic shift respects time
-        adjacency. ``pre_scale`` is the θ0-invariant pre-window outcome norm used to
-        scale the proxy's convergence tolerance. Fails closed if the snapshot is
+        adjacency. Fails closed if the snapshot is
         unavailable (unpickled result), the panel has non-finite cells, or there are
         no donors / too few periods; warns on a single donor (degenerate proxy).
         """
@@ -2677,8 +2674,7 @@ class SyntheticControlResults(BaseResults):
                 UserWarning,
                 stacklevel=3,
             )
-        pre_scale = max(float(np.linalg.norm(y1[:n_pre])), 1e-12)
-        return y1, Y0, n_pre, n_post, pre_scale, donors
+        return y1, Y0, n_pre, n_post, donors
 
     @staticmethod
     def _coerce_alternative(alternative: str, q: Any = 1) -> str:
@@ -2862,7 +2858,7 @@ class SyntheticControlResults(BaseResults):
             raise ValueError(f"scheme must be 'moving_block' or 'iid', got {scheme!r}")
         if not isinstance(n_iid, (int, np.integer)) or n_iid < 1:
             raise ValueError(f"n_iid must be a positive integer, got {n_iid!r}")
-        y1, Y0, n_pre, n_post, pre_scale, _ = self._conformal_panel()
+        y1, Y0, n_pre, n_post, _ = self._conformal_panel()
         snap0 = self._fit_snapshot
         assert snap0 is not None
         cal = list(snap0.pre_periods) + list(snap0.post_periods)
@@ -2890,8 +2886,6 @@ class SyntheticControlResults(BaseResults):
             f_post,
             perms,
             q,
-            max_iter=snap.inner_max_iter,
-            min_decrease=snap.inner_min_decrease * pre_scale,
             alternative=alternative,
             x1_rows=x1_rows,
             X0_rows=X0_rows,
@@ -3012,7 +3006,7 @@ class SyntheticControlResults(BaseResults):
             raise ValueError(f"n_grid must be an integer >= 2, got {n_grid!r}")
         alternative = self._coerce_alternative(alternative)
         grid = _validate_conformal_bounds(bounds, int(n_grid))
-        y1, Y0, n_pre, n_post, _, _ = self._conformal_panel()
+        y1, Y0, n_pre, n_post, _ = self._conformal_panel()
         if n_pre < n_post:
             raise ValueError(
                 f"conformal_average_effect requires T0 >= T* to form at least one full "
@@ -3073,15 +3067,12 @@ class SyntheticControlResults(BaseResults):
                 UserWarning,
                 stacklevel=2,
             )
-        block_scale = max(float(np.linalg.norm(y1b[: n_blocks - 1])), 1e-12)
         res = _invert_single_post(
             y1b,
             Y0b,
             n_blocks - 1,
             float(alpha),
             perms,
-            max_iter=snap.inner_max_iter,
-            min_decrease=snap.inner_min_decrease * block_scale,
             grid=grid,
             n_grid=int(n_grid),
             alternative=alternative,
@@ -3226,7 +3217,7 @@ class SyntheticControlResults(BaseResults):
             raise ValueError(f"n_grid must be an integer >= 2, got {n_grid!r}")
         alternative = self._coerce_alternative(alternative)
         grid_template = _validate_conformal_bounds(bounds, int(n_grid))
-        y1, Y0, n_pre, n_post, pre_scale, _ = self._conformal_panel()
+        y1, Y0, n_pre, n_post, _ = self._conformal_panel()
         if n_pre <= 1:
             warnings.warn(
                 "CWZ conformal validity is driven by a large pre-period (T0); each pointwise "
@@ -3250,7 +3241,6 @@ class SyntheticControlResults(BaseResults):
                 UserWarning,
                 stacklevel=2,
             )
-        md = snap.inner_min_decrease * pre_scale  # pre window is theta0-invariant
         ci_rows: List[Dict[str, Any]] = []
         grid_rows: List[Dict[str, Any]] = []
         statuses: List[str] = []
@@ -3270,8 +3260,6 @@ class SyntheticControlResults(BaseResults):
                 m - 1,
                 float(alpha),
                 perms,
-                max_iter=snap.inner_max_iter,
-                min_decrease=md,
                 grid=grid_template,
                 n_grid=int(n_grid),
                 alternative=alternative,

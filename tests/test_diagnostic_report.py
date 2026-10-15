@@ -169,7 +169,6 @@ def scm_fit():
             seed=0,
             n_starts=1,
             optimizer_options={"maxiter": 50},
-            inner_min_decrease=1e-3,
         ).fit(df, "y", "treated", "unit", "year")
     return res, df
 
@@ -2280,9 +2279,7 @@ class TestSCMNative:
         df = pd.DataFrame(rows)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            res = SyntheticControl(seed=0, n_starts=1, inner_min_decrease=1e-3).fit(
-                df, "y", "treated", "unit", "year"
-            )
+            res = SyntheticControl(seed=0, n_starts=1).fit(df, "y", "treated", "unit", "year")
             res.in_space_placebo()  # only 1 donor -> infeasible
             native = DiagnosticReport(res).to_dict()["estimator_native_diagnostics"]
         block = native["in_space_placebo"]

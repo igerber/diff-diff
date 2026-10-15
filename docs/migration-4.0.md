@@ -27,6 +27,7 @@ updated, CI fails.
 | merge-mpd | `MultiPeriodDiD` is absorbed by `TwoWayFixedEffects(event_study=True)` | 5 | §2 |
 | merge-qdid | `QDiD` is absorbed by `ChangesInChanges(method="qdid")` | 2 | §2 |
 | obligation-sdid-params | Two SyntheticDiD constructor params (inert since 3.0.0) are removed | 3 | §7b |
+| obligation-sc-inner-budget | Two SyntheticControl constructor params (inert since the exact NNLS inner solve) warn at 4.0 and are removed at 5.0 | 2 | §7b |
 | obligation-warning-retirements | A transition `FutureWarning` stops being emitted | 1 | §7b |
 | policy-auto-cluster | TwoWayFixedEffects auto-clusters on `unit` unless you pass `cluster=` | 1 | §6 |
 | renames-cohort | `cohort=` becomes `first_treat=` | 1 | §3 |
@@ -221,7 +222,9 @@ each one with its target.
 ## Remaining 4.0 changes
 
 Smaller items that do not fit the families above — two inert `SyntheticDiD` constructor
-parameters, the `covariates=` constructor-to-`fit()` move, a retired transition warning, the
+parameters, two `SyntheticControl` inner-solve parameters that became inert when the donor
+weights moved to an exact non-negative least squares ([M-148], [M-149]: `DeprecationWarning`
+at 4.0, removed at 5.0), the `covariates=` constructor-to-`fit()` move, a retired transition warning, the
 Bacon roster re-homing, and the family-wide `anticipation` validation below. The appendix lists
 the ledger-derived removals/flips; [M-144], [M-145], and [M-146] are behavior tightenings,
 and [M-147] is an additive policy. These have no removal/deprecation fields and appear here only.
@@ -385,6 +388,8 @@ does not mean no action is required, so read the `Fix` cell.
 | M-083 | merge-mpd | `diff_diff:TwoWayFixedEffects.fit[time]` | — | In static mode (`event_study=False`), `time=` raises - pass `post=` for the 0/1 post dummy. `time=` now means the calendar column only. |
 | M-015 | merge-qdid | `diff_diff:QDiD` | `diff_diff:ChangesInChanges[method]` | See the merges section for the worked before/after. |
 | M-143 | merge-qdid | `diff_diff:ChangesInChangesResults.estimator` | `diff_diff:ChangesInChangesResults.method` | See the merges section for the worked before/after. |
+| M-148 | obligation-sc-inner-budget | `diff_diff:SyntheticControl[inner_max_iter]` | — | Drop it. The donor weights are solved exactly (one non-negative least squares) since #842, so there is no inner iteration budget; passing it warns `DeprecationWarning` at 4.0 and is a `TypeError` at 5.0. The former Frank-Wolfe budget is NOT a knob to carry over to `optimizer_options=` (that is the outer `V` search). |
+| M-149 | obligation-sc-inner-budget | `diff_diff:SyntheticControl[inner_min_decrease]` | — | Drop it. An exact inner solve has no stopping tolerance; passing it warns `DeprecationWarning` at 4.0 and is a `TypeError` at 5.0. Do NOT translate it into `optimizer_options={"xatol": ...}` - that tolerance governs the outer `V` search, a different quantity. |
 | M-001 | obligation-sdid-params | `diff_diff:SyntheticDiD[lambda_reg]` | — | Drop it. It has been IGNORED since 3.0.0, so 3.x already auto-computes regularization - do NOT copy its value into `zeta_omega=`, which activates an override that was inert and changes weights, ATT and inference. Set `zeta_omega=` only as a deliberate new choice. |
 | M-002 | obligation-sdid-params | `diff_diff:SyntheticDiD[zeta]` | — | Drop it. It has been IGNORED since 3.0.0, so 3.x already auto-computes regularization - do NOT copy its value into `zeta_lambda=`, which activates an override that was inert and changes weights, ATT and inference. Set `zeta_lambda=` only as a deliberate new choice. |
 | M-003 | obligation-sdid-params | `diff_diff:SyntheticDiDResults.placebo_effects` | `diff_diff:SyntheticDiDResults.variance_effects` | Read `variance_effects` instead of `placebo_effects`. |
