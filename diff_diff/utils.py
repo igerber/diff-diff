@@ -2392,13 +2392,21 @@ def _nnls_lawson_hanson(
 
     def _passive_lstsq(mask: np.ndarray) -> np.ndarray:
         Mp = M[:, mask]
-        if ridge > 0.0:
-            p = Mp.shape[1]
-            Mp = np.vstack([Mp, ridge * np.eye(p)])
-            dp = np.concatenate([d, np.zeros(p)])
-        else:
-            dp = d
-        return np.linalg.lstsq(Mp, dp, rcond=None)[0]
+        if ridge <= 0.0:
+            return np.linalg.lstsq(Mp, d, rcond=None)[0]
+        p = Mp.shape[1]
+        if ridge >= float(np.linalg.norm(Mp)):
+            # Ridge-dominated: the solution is O(1/ridge^2) and an SVD of the stacked
+            # [Mp; ridge I] loses it (its information sits in O(1/ridge) entries of U,
+            # computed to O(eps) absolute). The ridge makes the Gram matrix well
+            # conditioned (cond <= 1 + ||Mp||^2 / ridge^2 <= 2), so the regularized
+            # normal equations are exact to a few eps there.
+            G = Mp.T @ Mp
+            G[np.diag_indices(p)] += ridge**2
+            return np.linalg.solve(G, Mp.T @ d)
+        return np.linalg.lstsq(
+            np.vstack([Mp, ridge * np.eye(p)]), np.concatenate([d, np.zeros(p)]), rcond=None
+        )[0]
 
     u = np.zeros(n)
     passive = np.zeros(n, dtype=bool)

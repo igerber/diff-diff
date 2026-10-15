@@ -422,9 +422,9 @@ def test_outer_v_nonconvergence_warning():
     # Outer V-search non-convergence must not be silent (optimizer capped at 1 iter).
     df, _, _ = _make_panel()
     with pytest.warns(UserWarning, match="Outer V-search"):
-        # maxiter=1 forces the OUTER non-convergence; n_starts=1 + a loose inner tolerance
-        # keep the (still-real) inner solves cheap. Loosening inner_min_decrease does not
-        # affect whether the outer optimizer hits its 1-iteration cap.
+        # maxiter=1 forces the OUTER non-convergence (n_starts=1 keeps it to one start);
+        # the inner solves are exact NNLS solves, so nothing inner can hit a budget and
+        # the warning isolates the outer optimizer's 1-iteration cap.
         _synth_fit(
             df,
             "y",
@@ -868,6 +868,35 @@ def test_nnls_lawson_hanson_ridge_equals_the_stacked_identity():
     u1, c1 = _nnls_lawson_hanson(M, d, max_iter=400, ridge=0.7)
     u2, c2 = _nnls_lawson_hanson(
         np.vstack([M, 0.7 * np.eye(8)]), np.concatenate([d, np.zeros(8)]), max_iter=400
+    )
+    assert c1 and c2
+    np.testing.assert_allclose(u1, u2, rtol=0.0, atol=1e-12)
+
+
+def test_nnls_ridge_dominated_solve_is_exact():
+    # When the ridge dwarfs the fitting block the optimum is (near-)uniform and the
+    # coefficients are O(1/ridge^2); an SVD of the stacked system lost ~1e-3 of them
+    # (reported [0.4986, 0.5014] as converged). Analytic optimum here: [0.5, 0.5] up to
+    # O(1e-28) corrections.
+    from diff_diff.utils import _nnls_lawson_hanson, _sc_weight_nnls
+
+    w, converged = _sc_weight_nnls(
+        np.array([[0.0, 2e-14, 1.8e-14]]), zeta=1.0, return_convergence=True
+    )
+    assert converged
+    np.testing.assert_allclose(w, [0.5, 0.5], rtol=0.0, atol=1e-12)
+    w, converged = _sc_weight_nnls(np.array([[0.0, 2.0, 1.8]]), zeta=1e14, return_convergence=True)
+    assert converged
+    np.testing.assert_allclose(w, [0.5, 0.5], rtol=0.0, atol=1e-12)
+    # At the branch point (ridge comparable to the block) the normal-equation and
+    # stacked-lstsq solves agree.
+    rng = np.random.default_rng(3)
+    M = rng.normal(size=(10, 6))
+    d = rng.normal(size=10)
+    r = float(np.linalg.norm(M)) * 1.5
+    u1, c1 = _nnls_lawson_hanson(M, d, max_iter=300, ridge=r)
+    u2, c2 = _nnls_lawson_hanson(
+        np.vstack([M, r * np.eye(6)]), np.concatenate([d, np.zeros(6)]), max_iter=300
     )
     assert c1 and c2
     np.testing.assert_allclose(u1, u2, rtol=0.0, atol=1e-12)
