@@ -902,6 +902,52 @@ def test_nnls_ridge_dominated_solve_is_exact():
     np.testing.assert_allclose(u1, u2, rtol=0.0, atol=1e-12)
 
 
+def test_sc_weight_nnls_resolves_heterogeneous_donor_scales():
+    # One donor 1e16 times the others' scale. A single global conditioning scale pushed
+    # the small donors below the active set's tolerance and returned w = (0, 1, 0)
+    # (residual -0.5) as converged. Per-donor column scaling makes every column visible
+    # to its own tolerance: the solve returns an exact fit (the target is on a face of
+    # the hull, so WHICH exact-fit vertex is a convention; the residual is what matters).
+    from diff_diff.conformal import _cwz_proxy_fit
+    from diff_diff.utils import _sc_weight_nnls
+
+    A = np.array([[1e16, 1.0, 2.0]])
+    b = np.array([1.5])
+    for factor in (1.0, 1e-200, 1e200):
+        w, converged = _sc_weight_nnls(np.column_stack([A, b]) * factor, return_convergence=True)
+        assert converged
+        assert w.min() >= 0.0 and w.sum() == pytest.approx(1.0, abs=1e-14)
+        assert np.abs(A @ w - b).max() <= 1e-12  # exact fit, not the 0.5 residual
+    w, resid, conv = _cwz_proxy_fit(np.array([1.5, 1.5]), np.array([[1e16, 1.0, 2.0]] * 2))
+    assert conv
+    np.testing.assert_allclose(resid, 0.0, atol=1e-12)
+
+
+def test_fit_resolves_an_exact_hull_with_heterogeneous_donor_scales():
+    # End to end with standardize="none" (raw magnitudes reach the inner solve): the
+    # treated pre-path is the midpoint of two O(1) donors and a third donor sits at
+    # 1e12. The fit must reproduce the treated pre-path exactly (zero pre-RMSPE, zero
+    # ATT on a no-effect panel) and report a converged fit.
+    years = list(range(2000, 2010))
+    rng = np.random.default_rng(12)
+    d0 = rng.normal(size=10)
+    d1 = rng.normal(size=10)
+    rows = []
+    paths = {"t": (d0 + d1) / 2, "d0": d0, "d1": d1, "big": 1e12 * (1 + rng.normal(size=10))}
+    for u, path in paths.items():
+        for yr, val in zip(years, path):
+            rows.append({"unit": u, "year": yr, "y": val, "treated": int(u == "t" and yr >= 2006)})
+    df = pd.DataFrame(rows)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = SyntheticControl(
+            v_method="custom", custom_v=np.ones(6), standardize="none", seed=0
+        ).fit(df, "y", "treated", "unit", "year", pre_period_outcomes="all")
+    assert res._fit_converged
+    assert res.pre_rmspe == pytest.approx(0.0, abs=1e-9)
+    assert res.att == pytest.approx(0.0, abs=1e-9)
+
+
 def test_fit_preserves_exact_match_weights_at_a_large_finite_scale():
     # End to end: an exact-match panel at a 1e150 outcome scale with standardize="none"
     # (so the raw magnitude reaches the inner solve) keeps the exact-match donor weight,
