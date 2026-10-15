@@ -2966,8 +2966,8 @@ class DiagnosticReport:
                     ),
                     "too_few_donors": (
                         "in_space_placebo() was run but fewer than 2 donors are "
-                        "available (each placebo is fit against the other donors); "
-                        "placebo_p_value is NaN."
+                        "available (with one, the treated unit and the donor are each "
+                        "other's synthetic control); placebo_p_value is NaN."
                     ),
                     "all_placebos_failed": (
                         "in_space_placebo() was run but every donor refit failed to "

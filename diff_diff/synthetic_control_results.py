@@ -316,6 +316,11 @@ class SyntheticControlResults(BaseResults):
         # anchor). Each value uses that unit's OWN pre-outcome scale; the pre window is
         # f-free so the denominator is grid-invariant. Small dict → survives pickling.
         self._placebo_pre_denoms: Optional[Dict[Any, float]] = None
+        # Each converged placebo's weight w_j1 on the real treated unit (which is in every
+        # placebo's donor pool), captured by in_space_placebo() so the sharp-null re-ranking
+        # can use the treated unit's untreated outcome Y_1 - f inside each placebo's
+        # synthetic control. Small dict → survives pickling.
+        self._placebo_treated_weights: Optional[Dict[Any, float]] = None
 
         # --- ADH 2015 §4 robustness diagnostics (opt-in, populated by ---
         # --- leave_one_out() / in_time_placebo()). Same panel-vs-scalar split as ---
@@ -666,8 +671,8 @@ class SyntheticControlResults(BaseResults):
                 ]
             elif status == "too_few_donors":
                 reason = [
-                    "In-space placebo inference requires at least 2 donors (each "
-                    "placebo is fit against the other donors); too few were",
+                    "In-space placebo inference requires at least 2 donors (with one, the "
+                    "treated unit and the donor are each other's synthetic control); too few were",
                     "available. placebo_p_value is undefined. Inspect " "get_placebo_df().",
                 ]
             elif status == "all_placebos_infeasible":
@@ -863,18 +868,26 @@ class SyntheticControlResults(BaseResults):
         Section 2.4).
 
         Reassigns the treatment to each donor in turn, re-estimates a synthetic
-        control for that pseudo-treated donor against the OTHER donors, and ranks
+        control for that pseudo-treated donor against ALL the other units, and ranks
         the real treated unit's post/pre RMSPE ratio among all units. Populates
         ``placebo_p_value``, ``n_placebos``, ``n_failed`` and ``n_infeasible`` on
         this object (``rmspe_ratio`` — the treated unit's own ratio — is set at fit
         time) and returns the placebo distribution via :meth:`get_placebo_df`.
 
-        The real treated unit is **excluded from every placebo's donor pool**: its
-        post-period outcome is treatment-contaminated, so allowing a placebo to
-        load weight on it would bias the placebo gap. The ranking set is therefore
-        the ``J+1`` units ``{treated} ∪ {J placebos}``, with each placebo fit
-        against the other ``J-1`` donors (this matches the standard
-        ``SCtools::generate.placebos`` construction). The post/pre RMSPE ratio
+        The real treated unit is **in every placebo's donor pool**: each placebo is
+        fit against the other ``J`` units, as the treated unit is fit against its
+        ``J`` donors (ADH 2010 §3.4, journal p. 501: each placebo run reassigns the
+        intervention to a control state, "shifting California to the donor pool").
+        All ``J+1`` statistics then come from one construction that does not depend
+        on which unit is treated, so under the null of no effect (and random
+        assignment) the permutation p-value is exact whenever every placebo refit
+        enters the reference set (a failed or infeasible refit is excluded and
+        shrinks the effective denominator; see ``n_failed`` / ``n_infeasible``).
+        (``SCtools::generate.placebos`` instead drops the treated unit from every
+        placebo's pool - the reading Firpo & Possebom's fn 10 attributes to ADH -
+        and that reference set changes with the treated unit, so its p-value is
+        not exact.) The ranking set
+        is the ``J+1`` units ``{treated} ∪ {J placebos}``. The post/pre RMSPE ratio
         normalizes by pre-treatment fit, which obviates the pre-fit-cutoff
         filtering of ADH Figures 5-7 (journal p. 502), so no pre-fit filter is
         offered — every converged placebo enters the rank.
@@ -898,7 +911,7 @@ class SyntheticControlResults(BaseResults):
         **inherits the original fit's
         ``optimizer_options`` / ``n_starts``**, so valid inference requires settings
         adequate for the outer ``V`` search to converge: production defaults do;
-        with cheap settings, raise ``n_starts`` here or re-fit with a larger
+        with cheap settings, re-fit with a larger ``n_starts`` or
         ``optimizer_options['maxiter']`` (otherwise placebos are dropped as failed).
         The treated unit's own fit is held to the same standard — if its inner OR
         outer search did not converge, the whole run fails closed (see below).
@@ -906,10 +919,14 @@ class SyntheticControlResults(BaseResults):
         Parameters
         ----------
         n_starts : int, optional
-            Override the multistart count for each placebo's outer V search (nested/cv).
-            Default None inherits the original fit's ``n_starts``. The placebo
-            loop is the cost driver (one outer V search per donor); lower it for a
-            faster, coarser scan.
+            Multistart count for each placebo's outer V search. Default None inherits
+            the original fit's ``n_starts``. Under ``v_method="nested"`` / ``"cv"`` a
+            value different from the fit's is **rejected** (``ValueError``): the
+            treated unit's ratio was produced with the fit's ``n_starts``, and the
+            permutation is exact only when every one of the ``J+1`` statistics comes
+            from the same procedure. To change the budget, re-fit with the new
+            ``n_starts``. Under ``"custom"`` / ``"inverse_variance"`` there is no V
+            search and the value is inert.
 
         Returns
         -------
@@ -932,13 +949,6 @@ class SyntheticControlResults(BaseResults):
         from diff_diff.synthetic_control import _floored_pre_mspe, _mspe, _placebo_fit_unit
 
         snap = self._fit_snapshot
-        # A rebuilt placebo reference set invalidates any previously computed confidence set
-        # (test_sharp_null / confidence_set re-rank against THIS reference set), so drop the
-        # cached confidence-set outputs up front — a stale set must never be reported after an
-        # explicit in_space_placebo() re-run (e.g. with a different n_starts). The snapshot
-        # check above has already passed, so the reference IS about to be rebuilt on every exit.
-        self.effect_confidence_set = None
-        self._confidence_set_df = None
         donors = list(snap.donor_ids)
         n_donors = len(donors)
         if n_starts is None:
@@ -950,6 +960,33 @@ class SyntheticControlResults(BaseResults):
             if not isinstance(n_starts, (int, np.integer)) or n_starts < 1:
                 raise ValueError(f"n_starts override must be a positive integer, got {n_starts!r}")
             n_starts_eff = int(n_starts)
+            # The permutation is exact only if every one of the J+1 statistics is the
+            # output of the SAME procedure. Under a nested / cv V search the multistart
+            # count is part of that procedure (more starts can land on a different V
+            # optimum even when every fit converges), and the treated unit's ratio was
+            # produced at fit time with snap.n_starts - so a different placebo budget
+            # would rank a treated statistic against references computed by another
+            # rule. Reject it; the remedy is one re-fit with the larger n_starts.
+            # custom / inverse_variance run no V search, so n_starts is inert there.
+            if snap.v_method in ("nested", "cv") and n_starts_eff != snap.n_starts:
+                raise ValueError(
+                    f"in_space_placebo(n_starts={n_starts_eff}) differs from the fit's "
+                    f"n_starts={snap.n_starts} under v_method={snap.v_method!r}. Every "
+                    "placebo must be fit by the same procedure as the treated unit for "
+                    "the permutation p-value to be exact, so the override is rejected. "
+                    f"Re-fit with SyntheticControl(n_starts={n_starts_eff}) and call "
+                    "in_space_placebo() without an override."
+                )
+
+        # Every argument check has passed, so the reference set IS about to be rebuilt on
+        # every exit below. A rebuilt reference set invalidates any previously computed
+        # confidence set (test_sharp_null / confidence_set re-rank against THIS reference
+        # set), so drop the cached confidence-set outputs here - a stale set must never be
+        # reported after an explicit in_space_placebo() re-run. The clear sits AFTER the
+        # validation so a rejected override (ValueError above) leaves a valid cached set
+        # untouched: nothing was rebuilt, so nothing is stale.
+        self.effect_confidence_set = None
+        self._confidence_set_df = None
 
         treated_pre = _mspe(self.gap_path, snap.pre_periods)
         treated_post = _mspe(self.gap_path, snap.post_periods)
@@ -989,15 +1026,16 @@ class SyntheticControlResults(BaseResults):
             self.n_infeasible = 0
             self._placebo_gaps = {}
             self._placebo_pre_denoms = {}
+            self._placebo_treated_weights = {}
             self._placebo_status = "treated_fit_nonconverged"
             self._placebo_df = pd.DataFrame(rows, columns=self._PLACEBO_COLS)
             return self._placebo_df.copy()
 
         if n_donors < 2:
             warnings.warn(
-                "In-space placebo inference requires at least 2 donors (each "
-                f"placebo is fit against the other donors); only {n_donors} "
-                "available. placebo_p_value is NaN.",
+                "In-space placebo inference requires at least 2 donors (with one, the "
+                "treated unit and the donor are each other's synthetic control); only "
+                f"{n_donors} available. placebo_p_value is NaN.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -1007,27 +1045,32 @@ class SyntheticControlResults(BaseResults):
             self.n_infeasible = 0
             self._placebo_gaps = {}
             self._placebo_pre_denoms = {}
+            self._placebo_treated_weights = {}
             self._placebo_status = "too_few_donors"
             self._placebo_df = pd.DataFrame(rows, columns=self._PLACEBO_COLS)
             return self._placebo_df.copy()
 
         if n_donors == 2:
             warnings.warn(
-                "In-space placebo with 2 donors: each placebo is fit against a "
-                "single donor (degenerate weight w=[1]) with no V search, so the "
-                "permutation p-value is coarse (only 2 placebos enter the "
-                "reference set; the smallest attainable p-value is 1/3).",
+                "In-space placebo with 2 donors: only 2 placebos enter the "
+                "reference set, so the permutation p-value is coarse (the "
+                "smallest attainable p-value is 1/3).",
                 UserWarning,
                 stacklevel=2,
             )
 
         placebo_gaps: Dict[Any, Dict[Any, float]] = {}
+        treated_weights: Dict[Any, float] = {}
         ranked_ratios: List[float] = []
         n_failed = 0
         n_infeasible = 0
 
+        # Every unit but the placebo, the real treated unit included, in the pivot's sorted
+        # order: a unit's refit sees the same pool in the same order whichever unit is
+        # treated, as a fresh default-pool fit() treating it would.
+        units = list(snap.pivots[snap.outcome].columns)
         for j in donors:
-            pool = [d for d in donors if d != j]
+            pool = [u for u in units if u != j]
             fitted, fit_status = _placebo_fit_unit(snap, j, pool, n_starts_eff)
             if fitted is None:
                 # Excluded from BOTH the numerator and the denominator (never rank a
@@ -1051,8 +1094,9 @@ class SyntheticControlResults(BaseResults):
                     }
                 )
                 continue
-            gap_path_j, ratio_j = fitted
+            gap_path_j, ratio_j, weights_j = fitted
             placebo_gaps[j] = gap_path_j
+            treated_weights[j] = weights_j[snap.treated_id]
             pre_j = _mspe(gap_path_j, snap.pre_periods)
             post_j = _mspe(gap_path_j, snap.post_periods)
             ranked_ratios.append(ratio_j)
@@ -1102,8 +1146,8 @@ class SyntheticControlResults(BaseResults):
             warnings.warn(
                 f"{n_failed} of {n_donors} in-space placebos failed to reach a valid "
                 "optimum (a non-converged inner weight solve or outer V search) and were "
-                "excluded with status='failed'; raise n_starts or loosen the optimizer "
-                f"tolerances. placebo_p_value uses the remaining {n_placebos}.",
+                "excluded with status='failed'; re-fit with a larger n_starts or loosen the "
+                f"optimizer tolerances. placebo_p_value uses the remaining {n_placebos}.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -1127,6 +1171,7 @@ class SyntheticControlResults(BaseResults):
         self.n_failed = int(n_failed)
         self.n_infeasible = int(n_infeasible)
         self._placebo_gaps = placebo_gaps
+        self._placebo_treated_weights = treated_weights
         # Classify a no-reference-set run by cause (mirrors in_time_placebo): a pure
         # solver failure ("all_placebos_failed", actionable via n_starts / tolerances) and
         # pure structural infeasibility ("all_placebos_infeasible", actionable via
@@ -1306,7 +1351,7 @@ class SyntheticControlResults(BaseResults):
                     }
                 )
                 continue
-            gap_path_d, ratio_d = fitted
+            gap_path_d, ratio_d, _ = fitted
             loo_gaps[d] = gap_path_d
             att_d = float(np.mean([gap_path_d[p] for p in snap.post_periods]))
             atts.append(att_d)
@@ -1647,7 +1692,7 @@ class SyntheticControlResults(BaseResults):
                     }
                 )
                 continue
-            gap_path, ratio = fitted
+            gap_path, ratio, _ = fitted
             in_time_gaps[t_f] = gap_path
             placebo_att = float(np.mean([gap_path[p] for p in snap_mod.post_periods]))
             rows.append(
@@ -2237,8 +2282,8 @@ class SyntheticControlResults(BaseResults):
             warnings.warn(
                 "n_starts is ignored: the in-space placebo reference set was already "
                 "computed and is reused (every sharp null / grid value re-ranks the same "
-                "placebo gaps). Re-run in_space_placebo(n_starts=...) explicitly to rebuild "
-                "it with a different multistart count.",
+                "placebo gaps). Re-fit with a different n_starts to rebuild it with another "
+                "multistart count (the placebos must use the fit's own n_starts).",
                 UserWarning,
                 stacklevel=3,
             )
@@ -2249,8 +2294,8 @@ class SyntheticControlResults(BaseResults):
                     "RMSPE ratio is not a valid optimum to rank against placebos"
                 ),
                 "too_few_donors": (
-                    "fewer than 2 donors are available (each placebo is fit against the "
-                    "other donors)"
+                    "fewer than 2 donors are available (with one, the treated unit and "
+                    "the donor are each other's synthetic control)"
                 ),
                 "all_placebos_failed": (
                     "every donor refit failed to converge, so no placebo entered the "
@@ -2312,9 +2357,12 @@ class SyntheticControlResults(BaseResults):
         """Test a sharp null hypothesis on the treatment-effect path (Firpo & Possebom 2018, §4.1).
 
         Tests ``H_0^f: α_{1,t} = f(t)`` for every post period (Eq 11) by subtracting the
-        hypothesized effect path ``f(t)`` from the post-period gaps of EVERY unit and
-        re-ranking the treated unit's modified RMSPE ratio against the placebo distribution
-        (Eqs 12–13 at ``φ = 0``, ``v = (1,…,1)`` — the equal-weights benchmark). The
+        hypothesized effect path ``f(t)`` from the treated unit's post-period gaps and
+        ``(1 − w_j1)·f(t)`` from each placebo ``j``'s, then re-ranking the treated unit's
+        modified RMSPE ratio against the placebo distribution (Eqs 12–13 at ``φ = 0``,
+        ``v = (1,…,1)`` — the equal-weights benchmark). ``w_j1`` is the weight placebo
+        ``j``'s synthetic control puts on the treated unit, whose untreated outcome under
+        the null is ``Y_1t − f(t)`` (Firpo & Possebom fn 10). The
         synthetic controls are NOT refit: this reuses the gap paths and per-unit
         denominators :meth:`in_space_placebo` already computed (run lazily here if needed).
         At ``effect = 0`` the p-value is identically the benchmark ``placebo_p_value``
@@ -2356,7 +2404,11 @@ class SyntheticControlResults(BaseResults):
         self._require_placebo_reference(n_starts)
         post_periods = list(self.post_periods)
         f_post = self._coerce_effect_path(effect, len(post_periods))
-        assert self._placebo_gaps is not None and self._placebo_pre_denoms is not None
+        assert (
+            self._placebo_gaps is not None
+            and self._placebo_pre_denoms is not None
+            and self._placebo_treated_weights is not None
+        )
         p, r1, n_ref = _sharp_null_pvalue(
             self.gap_path,
             self._placebo_gaps,
@@ -2364,6 +2416,7 @@ class SyntheticControlResults(BaseResults):
             f_post,
             self._placebo_pre_denoms,
             self.treated_unit,
+            treated_weights=self._placebo_treated_weights,
         )
         return pd.Series(
             {
@@ -2470,7 +2523,11 @@ class SyntheticControlResults(BaseResults):
             if float(bounds[1]) <= float(bounds[0]):
                 raise ValueError(f"bounds must satisfy hi > lo, got {bounds!r}")
         self._require_placebo_reference(n_starts)
-        assert self._placebo_gaps is not None and self._placebo_pre_denoms is not None
+        assert (
+            self._placebo_gaps is not None
+            and self._placebo_pre_denoms is not None
+            and self._placebo_treated_weights is not None
+        )
         res = _invert_sharp_null(
             self.gap_path,
             self._placebo_gaps,
@@ -2481,6 +2538,7 @@ class SyntheticControlResults(BaseResults):
             float(gamma),
             bounds=(None if bounds is None else (float(bounds[0]), float(bounds[1]))),
             n_grid=int(n_grid),
+            treated_weights=self._placebo_treated_weights,
         )
         status = res["status"]
         if status == "unbounded":
