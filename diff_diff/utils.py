@@ -2334,21 +2334,47 @@ def _sc_weight_nnls(
     """
     Y = np.asarray(Y, dtype=np.float64)
     n, J = Y.shape[0], Y.shape[1] - 1
+    uniform = np.full(J, 1.0 / J)
     Z = Y[:, :J] - Y[:, J:]
-    scale = float(np.sqrt(np.mean(Z**2))) or 1.0
-    if zeta > 0:
-        Z = np.vstack([Z, np.sqrt(n) * zeta * np.eye(J)])
-    M = np.vstack([Z / scale, np.ones(J)])
+    # Scale-free conditioning: normalize by the largest |entry| FIRST so the RMS is
+    # computed on O(1) numbers. sqrt(mean(Z**2)) on the raw block overflows to inf (or
+    # underflows to 0) for finite inputs beyond ~1e154 (below ~1e-154), which would
+    # erase the fitting block and let the active set return an arbitrary vertex as
+    # "converged". A non-finite Z (finite inputs whose difference overflows) fails
+    # closed: uniform weights flagged converged=False, never a silent optimum.
+    amax = float(np.max(np.abs(Z))) if Z.size else 0.0
+    if not np.isfinite(amax):
+        return (uniform, False) if return_convergence else uniform
+    if amax > 0.0:
+        rms_n = float(np.sqrt(np.mean((Z / amax) ** 2)))  # in [1/sqrt(size), 1]
+        Zn = Z / amax / rms_n
+        scale = amax * rms_n
+    else:
+        Zn = Z  # every donor equals the target: the fitting block is identically zero
+        scale = 1.0
+    # zeta > 0 stacks sqrt(N) zeta I under Z; divided by the same scale it becomes a
+    # ridge the active set applies per passive set (never a dense J x J identity).
+    ridge = float(np.sqrt(n) * zeta / scale) if zeta > 0 else 0.0
+    M = np.vstack([Zn, np.ones(J)])
     target = np.zeros(M.shape[0])
     target[-1] = 1.0
-    u, converged = _nnls_lawson_hanson(M, target, max_iter=50 * J)
+    u, converged = _nnls_lawson_hanson(M, target, max_iter=50 * J, ridge=ridge)
     total = float(u.sum())
-    w = u / total if total > 0.0 else np.full(J, 1.0 / J)
+    w = u / total if total > 0.0 else uniform
+    if not np.isfinite(w).all():
+        w, converged = uniform, False
     return (w, converged) if return_convergence else w
 
 
-def _nnls_lawson_hanson(M: np.ndarray, d: np.ndarray, max_iter: int) -> Tuple[np.ndarray, bool]:
-    """Solve ``min ||M @ u - d||`` subject to ``u >= 0`` by Lawson-Hanson's active set.
+def _nnls_lawson_hanson(
+    M: np.ndarray, d: np.ndarray, max_iter: int, ridge: float = 0.0
+) -> Tuple[np.ndarray, bool]:
+    """Solve ``min ||M @ u - d||^2 + ridge^2 ||u||^2`` s.t. ``u >= 0`` (Lawson-Hanson).
+
+    ``ridge > 0`` is the Tikhonov problem of stacking ``ridge * I`` under ``M`` with
+    zeros under ``d``; it is applied inside each passive-set least squares (an identity
+    sized to the passive set) and in the gradient (``- ridge^2 u``), never as a dense
+    ``n x n`` block.
 
     Lawson and Hanson (1974, ch. 23), with their guard against an entering column that
     rounding leaves without positive weight. Implemented here rather than calling
@@ -2362,7 +2388,18 @@ def _nnls_lawson_hanson(M: np.ndarray, d: np.ndarray, max_iter: int) -> Tuple[np
     with ``converged=False`` instead of a truncated solve presented as the optimum.
     """
     m, n = M.shape
-    tol = 10.0 * max(m, n) * np.finfo(np.float64).eps * float(np.abs(M).sum(axis=0).max())
+    tol = 10.0 * max(m, n) * np.finfo(np.float64).eps * float(np.abs(M).sum(axis=0).max() + ridge)
+
+    def _passive_lstsq(mask: np.ndarray) -> np.ndarray:
+        Mp = M[:, mask]
+        if ridge > 0.0:
+            p = Mp.shape[1]
+            Mp = np.vstack([Mp, ridge * np.eye(p)])
+            dp = np.concatenate([d, np.zeros(p)])
+        else:
+            dp = d
+        return np.linalg.lstsq(Mp, dp, rcond=None)[0]
+
     u = np.zeros(n)
     passive = np.zeros(n, dtype=bool)
     grad = M.T @ d
@@ -2374,7 +2411,7 @@ def _nnls_lawson_hanson(M: np.ndarray, d: np.ndarray, max_iter: int) -> Tuple[np
         t = int(np.argmax(np.where(entering, grad, -np.inf)))
         passive[t] = True
         z = np.zeros(n)
-        z[passive] = np.linalg.lstsq(M[:, passive], d, rcond=None)[0]
+        z[passive] = _passive_lstsq(passive)
         if z[t] <= 0.0:
             # Rounding left the entering column no weight: skip it until u moves.
             passive[t] = False
@@ -2395,9 +2432,9 @@ def _nnls_lawson_hanson(M: np.ndarray, d: np.ndarray, max_iter: int) -> Tuple[np
             passive &= u > 0.0
             u[~passive] = 0.0
             z = np.zeros(n)
-            z[passive] = np.linalg.lstsq(M[:, passive], d, rcond=None)[0]
+            z[passive] = _passive_lstsq(passive)
         u = z
-        grad = M.T @ (d - M @ u)
+        grad = M.T @ (d - M @ u) - ridge**2 * u
 
 
 def _sparsify(v: np.ndarray) -> np.ndarray:

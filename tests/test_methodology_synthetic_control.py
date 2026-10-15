@@ -823,6 +823,80 @@ def test_nnls_lawson_hanson_flags_a_budget_exhausted_solve():
     np.testing.assert_array_equal(_sc_weight_nnls(Y), w)
 
 
+@pytest.mark.parametrize("factor", [1e-300, 1e-200, 1e-100, 1.0, 1e100, 1e200, 1e300])
+def test_sc_weight_nnls_is_scale_invariant_at_extreme_finite_magnitudes(factor):
+    # The conditioning scale is computed from the max-normalized Z, so a finite panel of
+    # any magnitude gives the same weights, meets KKT and reports converged. (A raw
+    # sqrt(mean(Z**2)) overflowed / underflowed beyond ~1e154 and erased the fitting
+    # block, returning an arbitrary vertex as converged.)
+    from diff_diff.utils import _sc_weight_nnls
+
+    Y = np.array([[0.0, 1.0, 0.9], [1.0, 0.0, 0.1]])
+    w, converged = _sc_weight_nnls(Y * factor, return_convergence=True)
+    assert converged
+    np.testing.assert_allclose(w, [0.1, 0.9], rtol=0.0, atol=1e-12)
+    rng = np.random.default_rng(5)
+    Y = np.column_stack([rng.normal(size=(8, 5)), rng.normal(size=8)])
+    w1, c1 = _sc_weight_nnls(Y, return_convergence=True)
+    w2, c2 = _sc_weight_nnls(Y * factor, return_convergence=True)
+    assert c1 and c2
+    np.testing.assert_allclose(w2, w1, rtol=0.0, atol=1e-12)
+    assert _simplex_ls_kkt_violation(Y, w2) < 1e-10
+
+
+def test_sc_weight_nnls_fails_closed_on_a_non_finite_difference():
+    # Finite inputs whose donor-minus-treated difference overflows cannot be solved; the
+    # solve must report converged=False with a feasible (uniform) vector, never a vertex.
+    from diff_diff.utils import _sc_weight_nnls
+
+    Y = np.array([[1e308, 0.0, -1e308]])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        w, converged = _sc_weight_nnls(Y, return_convergence=True)
+    assert not converged
+    np.testing.assert_allclose(w, [0.5, 0.5])
+
+
+def test_nnls_lawson_hanson_ridge_equals_the_stacked_identity():
+    # zeta > 0 is applied per passive set inside the active set; it must equal the
+    # textbook stacking of ridge * I under M (and never allocate a dense J x J block).
+    from diff_diff.utils import _nnls_lawson_hanson
+
+    rng = np.random.default_rng(1)
+    M = rng.normal(size=(12, 8))
+    d = rng.normal(size=12)
+    u1, c1 = _nnls_lawson_hanson(M, d, max_iter=400, ridge=0.7)
+    u2, c2 = _nnls_lawson_hanson(
+        np.vstack([M, 0.7 * np.eye(8)]), np.concatenate([d, np.zeros(8)]), max_iter=400
+    )
+    assert c1 and c2
+    np.testing.assert_allclose(u1, u2, rtol=0.0, atol=1e-12)
+
+
+def test_fit_preserves_exact_match_weights_at_a_large_finite_scale():
+    # End to end: an exact-match panel at a 1e150 outcome scale with standardize="none"
+    # (so the raw magnitude reaches the inner solve) keeps the exact-match donor weight,
+    # a zero ATT and a converged fit.
+    years = list(range(2000, 2010))
+    rng = np.random.default_rng(11)
+    base = rng.normal(size=10)
+    rows = []
+    for u, path in (("t", base), ("d0", base), ("d1", base + rng.normal(size=10))):
+        for yr, val in zip(years, path):
+            rows.append(
+                {"unit": u, "year": yr, "y": val * 1e150, "treated": int(u == "t" and yr >= 2006)}
+            )
+    df = pd.DataFrame(rows)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = SyntheticControl(
+            v_method="custom", custom_v=np.ones(6), standardize="none", seed=0
+        ).fit(df, "y", "treated", "unit", "year", pre_period_outcomes="all")
+    assert res._fit_converged
+    assert res.donor_weights.get("d0", 0.0) == pytest.approx(1.0)
+    assert res.att == pytest.approx(0.0, abs=1e-6 * 1e150)
+
+
 def test_inner_solve_propagates_a_budget_exhausted_flag(monkeypatch):
     # A flagged inner solve must surface as a non-converged fit (warning + fail-closed
     # diagnostics) and as an indeterminate conformal proxy, not be reported as converged.

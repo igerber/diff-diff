@@ -338,9 +338,8 @@ def _invert_single_post(
     The series ``y1_obs`` ``(m,)`` / ``Y0`` ``(m, J)`` has exactly one post slot at
     ``post_idx`` (a per-period CI sub-series ``(pre ∪ {t})`` or a block-collapsed
     average series). For each candidate effect ``θ`` the post outcome is imputed
-    (``y1[post_idx] − θ``), the proxy refit (warm-started across the grid — FW is
-    convex so warm-starting only affects speed, not the optimum), and the
-    permutation p-value recomputed. With one post slot ``S_q`` reduces to
+    (``y1[post_idx] − θ``), the proxy refit exactly (one NNLS per grid point; no
+    warm start is needed or used), and the permutation p-value recomputed. With one post slot ``S_q`` reduces to
     ``|û_post|`` for every ``q``, so ``q`` is inert here (fixed to 1); under
     ``alternative="greater"``/``"less"`` the single-slot statistic is the SIGNED
     ``û_post`` (resp. ``−û_post``), and the inversion yields a ONE-SIDED

@@ -660,10 +660,11 @@ class SyntheticControlResults(BaseResults):
             if status == "treated_fit_nonconverged":
                 reason = [
                     "In-space placebo was skipped: the treated unit's own SCM fit "
-                    "did not converge at fit time (outer V search), so its RMSPE",
-                    "ratio is not a valid optimum to rank against placebos. "
-                    "placebo_p_value is undefined",
-                    "— re-fit with a larger optimizer_options['maxiter'] / more n_starts.",
+                    "did not converge at fit time (the outer V search, or the inner",
+                    "weight solve's step guard), so its RMSPE ratio is not a valid "
+                    "optimum to rank against placebos. placebo_p_value is undefined",
+                    "— for an outer V search, re-fit with a larger "
+                    "optimizer_options['maxiter'] / more n_starts.",
                 ]
             elif status == "too_few_donors":
                 reason = [
@@ -896,8 +897,9 @@ class SyntheticControlResults(BaseResults):
         counted separately. A **solver non-convergence** (counted in ``n_failed``,
         ``status="failed"``) is an outer ``V`` search that did not converge (an
         under-optimized ``V`` fits the pre-period worse, shrinking its RMSPE ratio and
-        biasing the permutation p-value anti-conservatively); the inner weight solve is
-        exact and always converges. A
+        biasing the permutation p-value anti-conservatively) or an inner weight solve
+        that exhausted its step guard (the exact active-set solve terminates in
+        finitely many steps, so this is not reached in practice). A
         **structural cv infeasibility** (counted in ``n_infeasible``,
         ``status="infeasible"``; ``v_method="cv"`` only) is a pseudo-treated donor
         pool that is indistinguishable in a re-aggregated CV window, so the weights are
@@ -1003,14 +1005,15 @@ class SyntheticControlResults(BaseResults):
         # (inner weight solve OR outer V search): ranking a statistic
         # from a truncated / under-optimized treated fit would not be a valid ADH
         # 2010 §2.4 permutation (placebos already fail-closed on non-convergence, so
-        # the treated unit must too). ``_fit_converged`` folds both failure modes; the
-        # inner weight solve is exact, so the remediation names the outer search's knobs.
+        # the treated unit must too). ``_fit_converged`` folds both failure modes; only
+        # the outer search has knobs, so the remediation is scoped to it.
         if not self._fit_converged:
             warnings.warn(
                 "In-space placebo skipped: the treated unit's own SCM fit did not "
-                "converge at fit time (outer V search), so its RMSPE ratio is not a "
-                "valid optimum to rank against placebos. placebo_p_value is NaN — "
-                "re-fit with a larger optimizer_options['maxiter'] / more n_starts.",
+                "converge at fit time (the outer V search, or the inner weight solve's "
+                "step guard), so its RMSPE ratio is not a valid optimum to rank against "
+                "placebos. placebo_p_value is NaN — for an outer V search, re-fit with a "
+                "larger optimizer_options['maxiter'] / more n_starts.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -1278,8 +1281,9 @@ class SyntheticControlResults(BaseResults):
         if not self._fit_converged:
             warnings.warn(
                 "Leave-one-out skipped: the treated unit's own SCM fit did not "
-                "converge at fit time (outer V search), so the baseline ATT is not a "
-                "valid optimum to compare leave-one-out refits against. Re-fit with a "
+                "converge at fit time (the outer V search, or the inner weight solve's "
+                "step guard), so the baseline ATT is not a valid optimum to compare "
+                "leave-one-out refits against. For an outer V search, re-fit with a "
                 "larger optimizer_options['maxiter'] / more n_starts.",
                 UserWarning,
                 stacklevel=2,
@@ -1565,7 +1569,8 @@ class SyntheticControlResults(BaseResults):
         if not self._fit_converged:
             warnings.warn(
                 "In-time placebo skipped: the treated unit's own SCM fit did not "
-                "converge at fit time (outer V search). Re-fit with a larger "
+                "converge at fit time (the outer V search, or the inner weight solve's "
+                "step guard). For an outer V search, re-fit with a larger "
                 "optimizer_options['maxiter'] / more n_starts.",
                 UserWarning,
                 stacklevel=2,
