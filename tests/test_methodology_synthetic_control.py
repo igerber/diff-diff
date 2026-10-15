@@ -904,6 +904,23 @@ def test_fit_fails_closed_on_subnormal_outcomes():
     assert res._fit_converged is False
 
 
+def test_sc_weight_nnls_opposing_large_donors_beside_a_small_one():
+    # Two nearly opposing 1e8 donors beside an O(1) one, with a 1e-8 wrinkle: the
+    # candidate optima differ in objective by ~1e-17, below the rounding of the 1e8
+    # entries (ulp 1.5e-8), so any float64 solver can only pick among them by rounding.
+    # The returned point must be a converged simplex vector whose objective is no worse
+    # than the alternative vertex (0, 1e-8, 1 - 1e-8) evaluated in the same arithmetic.
+    from diff_diff.utils import _sc_weight_nnls
+
+    Y = np.array([[-1e8, 1e8, -1.0, 0.0], [0.0, 1e-8, 0.0, 0.0]])
+    Z = Y[:, :3] - Y[:, 3:]
+    w, converged = _sc_weight_nnls(Y, return_convergence=True)
+    assert converged and w.min() >= 0.0 and w.sum() == pytest.approx(1.0, abs=1e-14)
+    alt = np.array([0.0, 1e-8, 1.0 - 1e-8])
+    assert float(np.sum((Z @ w) ** 2)) <= float(np.sum((Z @ alt) ** 2))
+    assert np.abs(Z @ w).max() <= np.spacing(1e8)  # residual within one ulp of the data
+
+
 def test_nnls_lawson_hanson_ridge_equals_the_stacked_identity():
     # zeta > 0 is applied per passive set inside the active set; it must equal the
     # textbook stacking of ridge * I under M (and never allocate a dense J x J block).
