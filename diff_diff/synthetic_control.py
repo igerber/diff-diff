@@ -373,7 +373,7 @@ class SyntheticControl(BaseEstimator):
         # ``donor_pool`` list fits the same way whichever order the caller wrote it in,
         # and the treated fit uses the SAME assignment-independent ordering as every
         # in-space placebo refit (whose pool is "all other units" in pivot order). The
-        # Frank-Wolfe weight solve breaks exact gradient ties by position, so without
+        # active-set weight solve breaks exact gradient ties by position, so without
         # this the rank could depend on list presentation rather than on assignment.
         donor_ids = [u for u in Y.columns if u != treated_id]
         Z1 = Y.loc[pre_periods, treated_id].to_numpy(dtype=float)

@@ -296,7 +296,7 @@ def test_donor_pool_restricts_donors():
 def test_explicit_donor_pool_order_does_not_change_fit_or_placebo_rank():
     # Two donors (d0, d1) are identical in the pre-period and differ post, and the treated
     # unit's pre path equals theirs, so the simplex weight solve faces an exact gradient
-    # tie that Frank-Wolfe breaks by position. fit() canonicalizes an explicit donor_pool
+    # tie that the active set breaks by position (the first tied column enters). fit() canonicalizes an explicit donor_pool
     # to the pivot's sorted order (the order every in-space placebo refit uses), so the
     # weights, the ATT and the placebo rank cannot depend on how the list was written.
     years = list(range(2000, 2010))

@@ -1133,8 +1133,8 @@ class SyntheticControlResults(BaseResults):
                 "infeasible under v_method='cv' (the pseudo-treated donor pool is "
                 "indistinguishable in a re-aggregated CV window, so the weights are "
                 "unidentified) and were excluded with status='infeasible'; remedy by "
-                "adjusting the predictors, v_cv_t0, or the donor pool (NOT inner_max_iter "
-                f"/ n_starts). placebo_p_value uses the remaining {n_placebos}.",
+                "adjusting the predictors, v_cv_t0, or the donor pool (NOT n_starts). "
+                f"placebo_p_value uses the remaining {n_placebos}.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -1379,7 +1379,7 @@ class SyntheticControlResults(BaseResults):
                 "infeasible under v_method='cv' (the reduced donor pool is indistinguishable "
                 "in a re-aggregated CV window) and were excluded with status='infeasible'; "
                 "remedy by adjusting the predictors, v_cv_t0, or the donor pool (NOT "
-                "inner_max_iter / n_starts); the ATT range uses the remaining refits.",
+                "n_starts); the ATT range uses the remaining refits.",
                 UserWarning,
                 stacklevel=2,
             )
