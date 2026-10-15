@@ -2314,7 +2314,10 @@ def _sc_weight_nnls(
     (``s``, the RMS of ``B``, keeps the two blocks comparable). The per-donor scaling is
     what makes the solve robust to heterogeneous donor magnitudes: a donor 1e16 times
     the others' scale cannot push them below the active set's tolerance, and finite
-    inputs of any magnitude give the same weights. Lawson-Hanson's active set
+    inputs anywhere in the normal float64 range (column norms and their reciprocals
+    between about 1e-300 and 1e300) give the same weights; subnormal or near-overflow
+    data, whose column norms or reciprocals leave that range, fails closed (uniform
+    weights flagged ``converged=False``). Lawson-Hanson's active set
     (:func:`_nnls_lawson_hanson`) terminates in finitely many steps, so there is no
     iteration budget to tune; a solve that nonetheless exhausts the step guard (50
     steps per donor, never reached in practice) returns its current feasible iterate
@@ -2363,18 +2366,34 @@ def _sc_weight_nnls(
         w = np.zeros(J)
         w[int(np.argmax(col == 0.0))] = 1.0
         return _out(w, True)
-    D = 1.0 / col
-    B = Z * D  # unit-norm (fitting part <= 1) columns, no overflow or underflow
-    s = float(np.sqrt(np.mean(B**2))) if B.size else 1.0
-    if not s > 0.0:
-        s = 1.0  # every fitting entry is zero (ridge-only problem)
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        D = 1.0 / col
+        B = Z * D  # unit-norm (fitting part <= 1) columns
+        s = float(np.sqrt(np.mean(B**2))) if B.size else 1.0
+        if not s > 0.0:
+            s = 1.0  # every fitting entry is zero (ridge-only problem)
+        ridge = r * D / s  # [B / s; ridge I] is [Z; sqrt(N) zeta I] D / s
+        c_row = D / float(D.max())
+    # Subnormal or near-overflow data: a column norm or its reciprocal left the float64
+    # range (col = inf, D = inf or D = 0), so the conditioned problem is not the stated
+    # one. Fail closed rather than solve a different problem and call it converged.
+    if not (
+        np.isfinite(col).all()
+        and (col > 0.0).all()
+        and np.isfinite(D).all()
+        and (D > 0.0).all()
+        and np.isfinite(B).all()
+        and np.isfinite(s)
+        and np.isfinite(ridge).all()
+        and np.isfinite(c_row).all()
+    ):
+        return _out(uniform, False)
     # The constraint row c = D 1 may be scaled by any positive constant (it rescales u,
     # and w = D u / (c' u) is normalized back), so scale it to a unit maximum: that keeps
     # the two blocks comparable whatever the data's magnitude.
-    M = np.vstack([B / s, D / float(D.max())])
+    M = np.vstack([B / s, c_row])
     target = np.zeros(M.shape[0])
     target[-1] = 1.0
-    ridge = r * D / s  # [B / s; ridge I] is [Z; sqrt(N) zeta I] D / s
     # Pivot on the gradient in the ORIGINAL (un-equilibrated) units, grad_j * ||Z_j||: the
     # equilibration conditions the tolerance test and the passive-set solves, but which
     # optimal vertex an exact-fit tie returns is a convention, and this one keeps the
@@ -2422,6 +2441,10 @@ def _nnls_lawson_hanson(
     m, n = M.shape
     rv = np.broadcast_to(np.asarray(ridge, dtype=np.float64), (n,))
     ps = np.ones(n) if pivot_scale is None else np.asarray(pivot_scale, dtype=np.float64)
+    if not (np.isfinite(M).all() and np.isfinite(d).all() and np.isfinite(rv).all()):
+        # NaN comparisons are False, so a non-finite problem would otherwise return the
+        # zero iterate as "converged". Fail closed.
+        return np.zeros(n), False
     tol = 10.0 * max(m, n) * np.finfo(np.float64).eps * (np.abs(M).sum(axis=0) + rv)
 
     def _passive_lstsq(mask: np.ndarray) -> np.ndarray:

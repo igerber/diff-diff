@@ -857,6 +857,53 @@ def test_sc_weight_nnls_fails_closed_on_a_non_finite_difference():
     np.testing.assert_allclose(w, [0.5, 0.5])
 
 
+@pytest.mark.parametrize(
+    "Y",
+    [
+        np.array([[0.0, 1.0, 0.9], [1.0, 0.0, 0.1]]) * 1e-320,  # subnormal: 1/||Z_j|| overflows
+        np.array(
+            [[1.7e308, 1.0, 0.0], [1.7e308, 2.0, 0.0]]
+        ),  # ||Z_0|| = 1.7e308 * sqrt(2) overflows
+    ],
+)
+def test_sc_weight_nnls_fails_closed_outside_the_float64_range(Y):
+    # Column norms or their reciprocals leave the float64 range: the conditioned problem
+    # is not the stated one, so the solve must report converged=False with feasible
+    # (uniform) weights, never wrong weights marked converged. The end-to-end fit then
+    # takes the fail-closed path (warning + diagnostics skipped).
+    from diff_diff.utils import _nnls_lawson_hanson, _sc_weight_nnls
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        w, converged = _sc_weight_nnls(Y, return_convergence=True)
+    assert not converged
+    np.testing.assert_allclose(w, [0.5, 0.5])
+    # The active set itself fails closed on a non-finite problem (NaN comparisons are
+    # False and would otherwise return the zero iterate as converged).
+    u, ok = _nnls_lawson_hanson(np.array([[np.nan, 1.0], [1.0, 1.0]]), np.array([0.0, 1.0]), 10)
+    assert not ok and (u == 0).all()
+
+
+def test_fit_fails_closed_on_subnormal_outcomes():
+    years = list(range(2000, 2010))
+    rng = np.random.default_rng(11)
+    base = rng.normal(size=10)
+    rows = []
+    for u, path in (("t", base), ("d0", base + 0.3), ("d1", base - 0.3)):
+        for yr, val in zip(years, path):
+            rows.append(
+                {"unit": u, "year": yr, "y": val * 1e-320, "treated": int(u == "t" and yr >= 2006)}
+            )
+    df = pd.DataFrame(rows)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        with pytest.warns(UserWarning, match="exhausted its step guard|did not converge"):
+            res = SyntheticControl(
+                v_method="custom", custom_v=np.ones(6), standardize="none", seed=0
+            ).fit(df, "y", "treated", "unit", "year", pre_period_outcomes="all")
+    assert res._fit_converged is False
+
+
 def test_nnls_lawson_hanson_ridge_equals_the_stacked_identity():
     # zeta > 0 is applied per passive set inside the active set; it must equal the
     # textbook stacking of ridge * I under M (and never allocate a dense J x J block).
