@@ -906,19 +906,22 @@ def test_fit_fails_closed_on_subnormal_outcomes():
 
 def test_sc_weight_nnls_opposing_large_donors_beside_a_small_one():
     # Two nearly opposing 1e8 donors beside an O(1) one, with a 1e-8 wrinkle: the
-    # candidate optima differ in objective by ~1e-17, below the rounding of the 1e8
-    # entries (ulp 1.5e-8), so any float64 solver can only pick among them by rounding.
-    # The returned point must be a converged simplex vector whose objective is no worse
-    # than the alternative vertex (0, 1e-8, 1 - 1e-8) evaluated in the same arithmetic.
+    # candidate optima (the 0.5/0.5 split and the vertex (0, 1e-8, 1 - 1e-8)) differ in
+    # objective by ~1e-17, below the rounding of the 1e8 entries (ulp 1.5e-8), so any
+    # float64 solver can only pick among them by rounding, and which one it lands on
+    # varies with the BLAS (OpenBLAS on x86 and Accelerate on arm disagree). The test
+    # therefore pins the floor, not the ordering: a converged simplex vector whose
+    # residual is within the rounding of the 1e8 entries, i.e. an exact fit up to the
+    # ulp of the data rather than a solver that reports failure or a strictly worse point.
     from diff_diff.utils import _sc_weight_nnls
 
     Y = np.array([[-1e8, 1e8, -1.0, 0.0], [0.0, 1e-8, 0.0, 0.0]])
     Z = Y[:, :3] - Y[:, 3:]
     w, converged = _sc_weight_nnls(Y, return_convergence=True)
     assert converged and w.min() >= 0.0 and w.sum() == pytest.approx(1.0, abs=1e-14)
-    alt = np.array([0.0, 1e-8, 1.0 - 1e-8])
-    assert float(np.sum((Z @ w) ** 2)) <= float(np.sum((Z @ alt) ** 2))
-    assert np.abs(Z @ w).max() <= np.spacing(1e8)  # residual within one ulp of the data
+    # 1e8 * (w1 - w0) carries up to two ulps of 0.5 scaled by 1e8, i.e. ~2.2e-8.
+    assert np.abs(Z @ w).max() <= 2.0 * np.spacing(1e8)
+    assert float(np.sum((Z @ w) ** 2)) <= Z.shape[0] * (2.0 * np.spacing(1e8)) ** 2
 
 
 def test_nnls_lawson_hanson_ridge_equals_the_stacked_identity():
