@@ -153,6 +153,10 @@ deliberate-single note.
 > session; treat this as the accepted, pre-existing codex surface, not a
 > plan-review-specific gate.
 
+Run this Bash call with `run_in_background: true` and act on its completion
+notification by following the exit-code bullets below; the Bash tool caps
+foreground calls at 600 s, below the codex ceiling.
+
 ```bash
 python3 ".claude/skills/plan-review/codex_review.py" \
   --prompt-file "<work_dir>/reviewer_prompt.txt" \

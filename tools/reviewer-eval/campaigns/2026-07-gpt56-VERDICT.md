@@ -1,5 +1,10 @@
 # GPT-5.6 Reviewer Evaluation - Verdict (2026-07-18)
 
+Pre-registered rule: `2026-07-gpt56-DECISION_RULE.md` (archived from `DECISION_RULE.md`
+2026-10; the released CHANGELOG entries for the 2026-07 campaign, `CHANGELOG.md:2513`
+and `:2613`, name the old path and are historical text left as is; `:2368` names the
+plan-review-eval harness's own `DECISION_RULE.md`, a different file).
+
 Campaign: 66/66 runs ok, 11 cases, arms A=gpt-5.5@xhigh k2 (control), B=gpt-5.6-sol@xhigh
 k2, C=gpt-5.6-terra@xhigh k1, D=gpt-5.6-sol@max k1. Blinded grading: 3 independent
 graders on comparison.blinded.md (labels M1-M4; graders never saw blinding.json);

@@ -146,6 +146,23 @@ def test_skill_md_present_with_frontmatter():
     assert re.search(r"^description:\s*\S", fm, re.M)
 
 
+def test_codex_step_tells_caller_to_run_in_background():
+    """The codex call runs 20-40 min; the Bash tool kills foreground calls at
+    600 s. Step 4's prose (outside the blockquote and the fence) must say so."""
+    text = (_SKILL / "SKILL.md").read_text()
+    start = text.index("### 4.")
+    end = text.index("### 5.", start)
+    section = text[start:end]
+    sentence = (
+        "Run this Bash call with `run_in_background: true` and act on its completion "
+        "notification by following the exit-code bullets below; the Bash tool caps "
+        "foreground calls at 600 s, below the codex ceiling."
+    )
+    assert " ".join(sentence.split()) in " ".join(section.split())
+    # Outside the fence: the sentence precedes the ```bash block.
+    assert section.index("Run this Bash call") < section.index("```bash")
+
+
 def test_reviewer_invocations_are_pinned():
     """Identical templates + a wrong model/effort/timeout would pass the
     byte-match silently. The codex pins live at the real `call_codex` site

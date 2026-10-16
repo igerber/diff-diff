@@ -38,6 +38,11 @@ on:
       - '.github/workflows/ai_pr_review.yml'
       - '.github/codex/prompts/pr_review.md'
       - '.claude/scripts/openai_review.py'
+      # Production model-pin lockstep surfaces read by tests/test_openai_review.py
+      # (a skill-only, command-doc-only or CLAUDE.md-only pin edit must run it).
+      - '.claude/skills/plan-review/**'
+      - '.claude/commands/ai-review-local.md'
+      - 'CLAUDE.md'
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, labeled, unlabeled]
@@ -68,6 +73,11 @@ on:
       - '.github/workflows/ai_pr_review.yml'
       - '.github/codex/prompts/pr_review.md'
       - '.claude/scripts/openai_review.py'
+      # Production model-pin lockstep surfaces read by tests/test_openai_review.py
+      # (a skill-only, command-doc-only or CLAUDE.md-only pin edit must run it).
+      - '.claude/skills/plan-review/**'
+      - '.claude/commands/ai-review-local.md'
+      - 'CLAUDE.md'
 
 permissions:
   contents: read
@@ -198,6 +208,16 @@ jobs:
         run: |
           python -c "import diff_diff; print('Location:', diff_diff.__file__)"
           python -c "from diff_diff import HAS_RUST_BACKEND; print('HAS_RUST_BACKEND:', HAS_RUST_BACKEND); assert HAS_RUST_BACKEND, 'Rust backend not available'"
+
+      - name: Run eval-harness suites in the checkout (py3.9 floor)
+        # The matrix copies tests/ to /tmp and runs there, so the harness suites
+        # (which need tools/, .claude/scripts, .github/workflows and .git) skip
+        # on every leg; this is the floor's only import+run of those modules.
+        # -rs prints skip reasons so a silent skip is visible in the log.
+        if: matrix.python-version == '3.9'
+        env:
+          PYTHONPATH: .
+        run: pytest tests/test_openai_review.py tests/test_evals_runtime.py tests/test_evals_engine.py tests/test_evals_adapters.py tests/test_reviewer_verdict.py tests/test_reviewer_audit.py tests/test_plan_review_eval.py tests/test_plan_review_skill.py -q -rs
 
       - name: Copy tests to isolated location (Unix)
         if: runner.os != 'Windows'

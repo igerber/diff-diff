@@ -92,8 +92,22 @@ def run_matrix(
     progress: Optional[Callable[[str], None]] = None,
     treatment_fields: tuple = ("model",),
     k_overrides: Optional[dict] = None,
+    on_dispatch: Optional[Callable[[], None]] = None,
+    on_plan: Optional[Callable[[list[str]], None]] = None,
 ) -> list[RunResult]:
     """Execute the full matrix, resuming completed runs, returning all results.
+
+    ``on_dispatch`` (if given) is called ONCE, immediately before the first
+    pending review is submitted to the pool - i.e. before the first reviewer
+    call can start. Everything before it (CLI pin check, confound check,
+    experiment/case tags, resume verification) is planning; a failure there has
+    made no reviewer call. Not called when every job resumed from cache.
+
+    ``on_plan`` (if given) is called ONCE with the run key of EVERY job of this
+    matrix (cached and pending alike), before resume loading - so a caller
+    interrupted mid-matrix (where this function never returns) can read the
+    store for exactly those keys and learn which cells it holds on disk,
+    including an artifact persisted an instant before the interrupt.
 
     ``treatment_fields`` declares which Config fields are the experimental
     treatment (default: model only — the classic A/B); everything else in
@@ -236,6 +250,13 @@ def run_matrix(
             log(f"WARNING: prompt re-verify failed for {case.id}: {exc}; will rerun")
             return False
 
+    if on_plan is not None:
+        on_plan(
+            [
+                run_key(case.id, config.id, r, config_tags[config.id], case_tags[case.id])
+                for case, config, r in jobs
+            ]
+        )
     # Resume: load any already-completed runs, keyed on the experiment identity,
     # AND verified to match the prompt the reviewer would build now.
     for case, config, r in jobs:
@@ -286,19 +307,24 @@ def run_matrix(
                 case_snapshot=snap,
                 infra_error=f"{type(exc).__name__}: {exc}",
             )
+        # Persist IN THE WORKER, before the result is handed back: a coordinator
+        # interrupted while consuming futures still leaves every finished review
+        # on disk (the pool waits for running workers), so an aborted attempt's
+        # journal - rebuilt from the store - never omits a completed cell.
+        # Successes and infra-errors alike (infra-errors are surfaced but excluded
+        # from the bundle; persisting avoids re-run churn while staying visibly
+        # non-ok).
+        store.save(key, rr)
         return rr
 
     if pending:
+        if on_dispatch is not None:
+            on_dispatch()
         with ThreadPoolExecutor(max_workers=max(1, max_parallel)) as pool:
             futures = {pool.submit(_execute, job): job for job in pending}
             for fut in as_completed(futures):
                 case, config, r = futures[fut]
-                rr = fut.result()
-                key = run_key(case.id, config.id, r, config_tags[config.id], case_tags[case.id])
-                # Persist successes and infra-errors alike (infra-errors are
-                # surfaced but excluded from the bundle; persisting avoids
-                # re-run churn while still being visibly non-ok).
-                store.save(key, rr)
+                rr = fut.result()  # already persisted by the worker
                 results.append(rr)
                 status = INFRA_ERROR if not rr.ok else f"{rr.latency_s:.0f}s"
                 log(f"done: {case.id} {config.id} r{r} [{status}]")

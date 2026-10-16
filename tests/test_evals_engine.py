@@ -225,6 +225,20 @@ def test_sanitize_model_refs_scrubs_names_tiers_and_versions():
     assert " 5.5 " not in f" {out} "
 
 
+def test_sanitize_model_refs_scrubs_gpt6_family_and_unicode_dashes():
+    from eval_core.compare import sanitize_model_refs
+
+    text = (
+        "GPT-6 Astra beats gpt-6-astra and gpt-6-astra-mini; Astra said so. "
+        "GPT\u20116 and GPT\u20136 too. Version 6.2 of the library is fine."
+    )
+    out = sanitize_model_refs(text, ["gpt-6-astra", "gpt-5.6-sol"])
+    low = out.lower()
+    assert "gpt" not in low and "astra" not in low
+    assert "6.2" in out, "no bare 6.x numeric pattern (only the 5.x one is grandfathered)"
+    assert "[model-redacted]" in out
+
+
 def test_sanitize_preserves_claude_paths_and_prose():
     """Claude redaction is MODEL-shaped only: repository paths (`.claude/...`,
     `CLAUDE.md`) and generic prose ("the Claude workflow") must survive intact

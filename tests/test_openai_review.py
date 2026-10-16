@@ -1663,10 +1663,22 @@ class TestIsReasoningModel:
         assert review_mod._resolve_timeout(None, "gpt-5.6-sol") == review_mod.REASONING_TIMEOUT
 
     def test_gpt56_pricing_entries_present(self, review_mod):
-        """The three GPT-5.6 tiers priced per the 2026-07 OpenAI table (per 1M)."""
-        assert review_mod.PRICING["gpt-5.6-sol"] == (5.00, 30.00)
-        assert review_mod.PRICING["gpt-5.6-terra"] == (2.50, 15.00)
-        assert review_mod.PRICING["gpt-5.6-luna"] == (1.00, 6.00)
+        """The three GPT-5.6 tiers priced per the official table, re-verified
+        2026-10-15 (standard tier, <=272K-input requests, per 1M tokens)."""
+        assert review_mod.PRICING["gpt-5.6-sol"] == (4.00, 20.00)
+        assert review_mod.PRICING["gpt-5.6-terra"] == (2.00, 12.00)
+        assert review_mod.PRICING["gpt-5.6-luna"] == (0.20, 1.20)
+
+    def test_gpt6_pricing_entries_present(self, review_mod):
+        """The gpt-6 rows (2026-10-15) and estimate_cost resolving the candidate."""
+        assert review_mod.PRICING["gpt-6-astra"] == (10.00, 50.00)
+        assert review_mod.PRICING["gpt-6-sol"] == (2.00, 10.00)
+        assert review_mod.PRICING["gpt-6-luna"] == (0.10, 0.50)
+        assert review_mod.estimate_cost(1_000_000, 0, "gpt-6-astra").startswith("$10.00")
+
+    def test_gpt6_family_is_reasoning(self, review_mod):
+        assert review_mod._is_reasoning_model("gpt-6-astra") is True
+        assert review_mod._resolve_timeout(None, "gpt-6-astra") == review_mod.REASONING_TIMEOUT
 
     def test_default_model_is_gpt56_sol(self, review_mod):
         """DEFAULT_MODEL is the production reviewer pin (kept in lockstep with the
@@ -2150,6 +2162,12 @@ class TestRustTestWorkflowPathFilter:
         ".github/workflows/ai_pr_review.yml",
         ".github/codex/prompts/pr_review.md",
         ".claude/scripts/openai_review.py",
+        # Production model-pin lockstep surfaces (TestWorkflowCodexActionContract
+        # reads them): a skill-only, command-doc-only or CLAUDE.md-only edit
+        # must still run the test job.
+        ".claude/skills/plan-review/**",
+        ".claude/commands/ai-review-local.md",
+        "CLAUDE.md",
     )
 
     @pytest.fixture(scope="class")
@@ -2696,6 +2714,78 @@ class TestWorkflowCodexActionContract:
         )
         assert consumer.group(1) == ".github/codex/prompts/pr_review_compiled.md"
 
+    # --- CLI / model / effort lockstep across every production surface ---
+
+    @staticmethod
+    def _repo_root():
+        assert _SCRIPT_PATH is not None
+        return _SCRIPT_PATH.parent.parent.parent
+
+    def _configs(self):
+        import json as _json
+
+        path = self._repo_root() / "tools" / "reviewer-eval" / "config" / "configs.json"
+        if not path.exists():
+            pytest.skip("reviewer-eval harness not present")
+        return _json.loads(path.read_text())
+
+    def test_codex_version_pin_matches_harness_cli_version(self, workflow_text):
+        """The campaign CLI == the CI CLI: the Run Codex step's `codex-version`
+        must equal the version suffix of EVERY arm's `cli_version`."""
+        block = self._require_block(workflow_text, self.RUN_CODEX_STEP)
+        m = re.search(r"^\s*codex-version:\s*(\d+\.\d+\.\d+)\s*$", block, re.MULTILINE)
+        assert m, "the Run Codex step must pin `codex-version: X.Y.Z`"
+        for arm in self._configs()["arms"]:
+            assert arm["cli_version"] == f"codex-cli {m.group(1)}", (
+                f"arm {arm['id']} cli_version {arm['cli_version']!r} != workflow "
+                f"codex-version {m.group(1)} (bump both together, with a harness smoke)"
+            )
+
+    def test_model_and_effort_pins_in_lockstep(self, workflow_text, review_mod):
+        """Workflow `model` == DEFAULT_MODEL == plan-review CODEX_MODEL == the
+        configs.json control arm's model == every `gpt-N...` token in CLAUDE.md
+        and SKILL.md outside attribution lines; workflow `effort` == the control
+        arm's effort. In a swap PR the control flips with the pins; this test
+        is what forces the flip."""
+        block = self._require_block(workflow_text, self.RUN_CODEX_STEP)
+        model = re.search(r"^\s*model:\s*(\S+)\s*$", block, re.MULTILINE)
+        effort = re.search(r"^\s*effort:\s*(\S+)\s*$", block, re.MULTILINE)
+        assert model and effort, "the Run Codex step must set `model:` and `effort:`"
+        assert model.group(1) == review_mod.DEFAULT_MODEL
+        root = self._repo_root()
+        skill_py = root / ".claude" / "skills" / "plan-review" / "codex_review.py"
+        if not skill_py.exists():
+            pytest.skip("plan-review skill not present")
+        import importlib.util as _ilu
+
+        spec = _ilu.spec_from_file_location("plan_review_codex_review", skill_py)
+        mod = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert mod.CODEX_MODEL == review_mod.DEFAULT_MODEL
+        controls = [a for a in self._configs()["arms"] if a.get("role") == "control"]
+        assert len(controls) == 1
+        assert controls[0]["model"] == review_mod.DEFAULT_MODEL
+        assert controls[0]["effort"] == effort.group(1)
+        exempt = ("measured", "run with", "historical", "previous", "pre-2026-10")
+        for rel in ("CLAUDE.md", ".claude/skills/plan-review/SKILL.md"):
+            text = (root / rel).read_text()
+            for line in text.splitlines():
+                if any(w in line for w in exempt):
+                    continue
+                for tok in re.findall(r"gpt-\d[\w.-]*", line):
+                    assert (
+                        tok.rstrip(".,;:") == review_mod.DEFAULT_MODEL
+                    ), f"{rel}: prose pin {tok!r} != DEFAULT_MODEL on a non-attribution line: {line!r}"
+
+    def test_attribution_exemption_words_are_exactly_the_registered_set(self):
+        """'Campaign 1' is deliberately NOT an exemption word (CLAUDE.md carries
+        the LIVE pin on a 'Campaign 1' line); 'run with' is."""
+        exempt = ("measured", "run with", "historical", "previous", "pre-2026-10")
+        checked = "codex `gpt-5.6-sol`, then merge/verify; Campaign 1 was exploratory"
+        skipped = "Campaign 1, run with gpt-5.6-sol"
+        assert not any(w in checked for w in exempt)
+        assert any(w in skipped for w in exempt)
+
     # --- final-message output wiring (post-comment ref must match Codex id) ---
 
     def test_final_message_output_wired_to_codex_step(self, workflow_text):
@@ -2983,6 +3073,181 @@ class TestCallCodex:
         review_mod.call_codex("p", "gpt-5.6-sol", "/r", effort="max")
         assert "model_reasoning_effort=max" in fake_subprocess["cmd"]
 
+    # --- session-event parser (reviewer-eval audit input) ---
+
+    @staticmethod
+    def _session(review_mod, fake_subprocess, stderr_text):
+        fake_subprocess["stderr_text"] = stderr_text
+        _, usage = review_mod.call_codex("p", "gpt-5.6-sol", "/r")
+        return usage
+
+    def test_session_commands_two_blocks_plus_noise(self, review_mod, fake_subprocess):
+        stderr = (
+            "user\nReview this\ncodex\nI will look.\nexec\n"
+            "/bin/zsh -lc 'ls -1 | head -3' in /tmp/wt\n succeeded in 0ms:\na.py\nb.py\n\n"
+            "codex\nNext.\nexec\n"
+            "/bin/zsh -lc \"sed -n '1,80p' x.py\" in /tmp/x\n succeeded in 3ms:\nline1\nline2\n"
+            "codex\nDone\ntokens used\n1,234\n"
+        )
+        u = self._session(review_mod, fake_subprocess, stderr)
+        assert u["session_commands"] == [
+            "/bin/zsh -lc 'ls -1 | head -3' in /tmp/wt",
+            "/bin/zsh -lc \"sed -n '1,80p' x.py\" in /tmp/x",
+        ]
+        assert u["session_commands_start_lines"] == 2
+        assert u["session_commands_exec_lines"] == 2
+        assert u["session_other_events"] == 0
+        assert u["session_commands_truncated"] is False
+
+    def test_session_commands_empty_when_no_exec(self, review_mod, fake_subprocess):
+        u = self._session(review_mod, fake_subprocess, "user\nhi\ncodex\nok\ntokens used\n12\n")
+        assert u["session_commands"] == [] and u["session_commands_start_lines"] == 0
+        assert u["session_commands_exec_lines"] == 0
+
+    def test_session_commands_multiline_and_status_terminators(self, review_mod, fake_subprocess):
+        heredoc = "/bin/zsh -lc \"python - <<'EOF'\nprint(1)\nx = \"a' in /x\"\ny = 'b\\\" in /x'\nEOF\" in /tmp/x"
+        stderr = (
+            f"exec\n{heredoc}\n exited 1 in 12ms:\nTraceback\n"
+            "exec\n/bin/zsh -lc 'false' in /tmp/x\n failed in 5ms:\n\n"
+            "exec\n/bin/zsh -lc 'sleep 9' in /tmp/x\n timed out in 1000ms:\n"
+        )
+        u = self._session(review_mod, fake_subprocess, stderr)
+        assert u["session_commands"][0] == heredoc, "quote-ending body lines must not end the entry"
+        assert u["session_commands"][1] == "/bin/zsh -lc 'false' in /tmp/x"
+        assert u["session_commands"][2] == "/bin/zsh -lc 'sleep 9' in /tmp/x"
+        assert "Traceback" not in "".join(u["session_commands"])
+        assert u["session_commands_exec_lines"] == 3 == u["session_commands_start_lines"]
+
+    def test_session_commands_unterminated_closed_by_next_start(self, review_mod, fake_subprocess):
+        stderr = "exec\n/bin/zsh -lc 'a' in /x\noutput1\noutput2\nexec\n/bin/sh -lc 'b' in /x\n succeeded in 1ms:\n"
+        u = self._session(review_mod, fake_subprocess, stderr)
+        assert u["session_commands"] == [
+            "/bin/zsh -lc 'a' in /x\noutput1\noutput2",
+            "/bin/sh -lc 'b' in /x",
+        ]
+        assert not u["session_commands"][0].endswith("[truncated]")
+
+    def test_session_commands_cap_and_eos(self, review_mod, fake_subprocess):
+        body = "\n".join(f"l{i}" for i in range(300))
+        u = self._session(review_mod, fake_subprocess, f"exec\n/bin/zsh -lc 'a' in /x\n{body}\n")
+        assert u["session_commands"][0].endswith("[truncated]")
+        assert "l250" not in u["session_commands"][0] and "l150" in u["session_commands"][0]
+        # A terminated 150-line heredoc is kept whole, no marker.
+        heredoc = (
+            "/bin/zsh -lc 'cat <<EOF\n" + "\n".join(f"h{i}" for i in range(148)) + "\nEOF' in /x"
+        )
+        u = self._session(
+            review_mod, fake_subprocess, f"exec\n{heredoc}\n succeeded in 0ms:\nout\n"
+        )
+        assert u["session_commands"] == [heredoc]
+        # End of stream after 5 lines: kept as-is, no marker.
+        u = self._session(review_mod, fake_subprocess, "exec\n/bin/zsh -lc 'a' in /x\n1\n2\n3\n4\n")
+        assert u["session_commands"] == ["/bin/zsh -lc 'a' in /x\n1\n2\n3\n4"]
+
+    def test_session_exec_without_shell_path_counts_exec_not_start(
+        self, review_mod, fake_subprocess
+    ):
+        u = self._session(review_mod, fake_subprocess, "exec\nls -1 in /x\n succeeded in 0ms:\n")
+        assert u["session_commands"] == [] and u["session_commands_start_lines"] == 0
+        assert u["session_commands_exec_lines"] == 1
+        # An output line that is exactly `exec` pushes exec_lines up (conservative).
+        u = self._session(
+            review_mod, fake_subprocess, "exec\n/bin/zsh -lc 'a' in /x\n succeeded in 0ms:\nexec\n"
+        )
+        assert u["session_commands_exec_lines"] == 2 and u["session_commands_start_lines"] == 1
+
+    def test_session_other_events_counting(self, review_mod, fake_subprocess):
+        # Ordinary command output never counts.
+        u = self._session(
+            review_mod,
+            fake_subprocess,
+            "user\ntests\nexec\n/bin/zsh -lc 'ls' in /x\n succeeded in 0ms:\ndocs\ntests\n\nimport os\n",
+        )
+        assert u["session_other_events"] == 0
+        u = self._session(
+            review_mod,
+            fake_subprocess,
+            "web_search\nq\nweb search: foo\nmcp: codex/list_mcp_resources started\ntool_call x\n",
+        )
+        assert u["session_other_events"] == 4
+
+    @pytest.mark.parametrize(
+        "name, expected_other",
+        [("codex_stderr_0_162_1.txt", 0), ("codex_stderr_0_162_1_websearch.txt", 2)],
+    )
+    def test_session_parser_against_sanitized_0_162_1_fixtures(
+        self, review_mod, fake_subprocess, name, expected_other
+    ):
+        """The sanitized live transcripts keep every header/start/status line, so
+        entries == start_lines == exec_lines and the other-event count are real."""
+        assert _SCRIPT_PATH is not None
+        fx = _SCRIPT_PATH.parent.parent.parent / "tests" / "fixtures" / name
+        if not fx.exists():
+            pytest.skip("fixture missing")
+        u = self._session(review_mod, fake_subprocess, fx.read_text())
+        n = len(u["session_commands"])
+        assert n > 0 and n == u["session_commands_start_lines"] == u["session_commands_exec_lines"]
+        assert u["session_other_events"] == expected_other
+        assert not any(c.endswith("[truncated]") for c in u["session_commands"])
+
+    def test_session_truncated_flag_when_stderr_drain_still_alive(
+        self, review_mod, fake_subprocess, monkeypatch
+    ):
+        import io as _io
+        import threading as _threading
+        import types as _types
+
+        class AliveStderrThread(_threading.Thread):
+            def __init__(self, *a, **k):
+                super().__init__(*a, **k)
+                # Thread drops _args after run(); keep our own copy for is_alive().
+                self._probe_args = tuple(k.get("args", ()))
+
+            def is_alive(self):
+                return any(isinstance(a, _io.StringIO) for a in self._probe_args)
+
+        monkeypatch.setattr(
+            review_mod, "threading", _types.SimpleNamespace(Thread=AliveStderrThread)
+        )
+        u = self._session(
+            review_mod, fake_subprocess, "exec\n/bin/zsh -lc 'ls' in /x\n succeeded in 0ms:\n"
+        )
+        assert u["session_commands_truncated"] is True
+        assert u["session_commands"] == ["/bin/zsh -lc 'ls' in /x"]
+
+    def test_summary_line_printed_even_on_timeout(self, review_mod, monkeypatch, capsys):
+        import io as _io
+        import subprocess as _sp
+
+        class HangingPopen:
+            def __init__(self, cmd, **kwargs):
+                self.returncode = None
+                self.stdin = _io.StringIO()
+                self.stdout = _io.StringIO("")
+                self.stderr = _io.StringIO("exec\n/bin/zsh -lc 'sleep 99' in /x\n")
+                self._killed = False
+
+            def wait(self, timeout=None):
+                if timeout is not None and not self._killed:
+                    raise _sp.TimeoutExpired(cmd="codex", timeout=timeout)
+                self.returncode = -9
+                return self.returncode
+
+            def terminate(self):
+                pass
+
+            def kill(self):
+                self._killed = True
+
+        monkeypatch.setattr(review_mod.subprocess, "Popen", HangingPopen)
+        with pytest.raises(RuntimeError, match="timed out after"):
+            review_mod.call_codex("p", "gpt-6-astra", "/r", timeout_s=1)
+        err = capsys.readouterr().err
+        assert (
+            "session_commands: entries=1 start_lines=1 exec_lines=1 other_events=0 truncated=False"
+            in err
+        )
+
     def test_timeout_kills_process_and_raises(self, review_mod, monkeypatch):
         """timeout_s must kill the codex process and raise a RuntimeError (the
         eval harness turns it into a resumable INFRA_ERROR) — never propagate a
@@ -3147,6 +3412,103 @@ class TestCallCodex:
         # codex's stderr instead.
         with pytest.raises(RuntimeError, match="codex exec failed"):
             review_mod.call_codex("p", "gpt-5.4", "/r")
+
+
+class TestMainTimeoutForwarding:
+    """`main()`-level: `--timeout` reaches `call_codex` as `timeout_s` on the codex
+    backend (0 and omitted -> None; negatives rejected by argparse for both
+    backends). New scaffolding: no other test drives main() via sys.argv."""
+
+    @staticmethod
+    def _run_main(monkeypatch, tmp_path, review_mod, extra_argv):
+        import sys as _sys
+
+        inputs = {
+            "--review-criteria": tmp_path / "criteria.md",
+            "--registry": tmp_path / "REGISTRY.md",
+            "--diff": tmp_path / "diff.patch",
+            "--changed-files": tmp_path / "files.txt",
+        }
+        inputs["--review-criteria"].write_text("# criteria\n")
+        inputs["--registry"].write_text("# registry\n")
+        inputs["--diff"].write_text(
+            "diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-a\n+b\n"
+        )
+        inputs["--changed-files"].write_text("M\tx.py\n")
+        out = tmp_path / "out" / "review.md"
+        argv = ["openai_review.py"]
+        for flag, path in inputs.items():
+            argv += [flag, str(path)]
+        argv += ["--output", str(out), "--repo-root", str(tmp_path)] + list(extra_argv)
+        recorded = {}
+
+        def _fake_call_codex(prompt, model, repo_root, effort="xhigh", timeout_s=None):
+            recorded["timeout_s"] = timeout_s
+            recorded["model"] = model
+            return "## ok", {"backend": "codex"}
+
+        monkeypatch.setattr(review_mod, "call_codex", _fake_call_codex)
+        monkeypatch.setattr(review_mod, "_detect_backend", lambda requested: "codex")
+        monkeypatch.setattr(review_mod, "_scan_sensitive_files", lambda root: [])
+        monkeypatch.setattr(review_mod, "_print_sensitive_notice", lambda *a, **k: None)
+        monkeypatch.setattr(_sys, "argv", argv)
+        rc = review_mod.main()
+        return rc, recorded
+
+    def test_timeout_forwarded_to_codex(self, monkeypatch, tmp_path, review_mod):
+        rc, rec = self._run_main(
+            monkeypatch, tmp_path, review_mod, ["--backend", "codex", "--timeout", "7200"]
+        )
+        assert rc in (0, None) and rec["timeout_s"] == 7200
+
+    def test_omitted_and_zero_mean_no_timeout(self, monkeypatch, tmp_path, review_mod):
+        _, rec = self._run_main(monkeypatch, tmp_path, review_mod, ["--backend", "codex"])
+        assert rec["timeout_s"] is None
+        _, rec = self._run_main(
+            monkeypatch, tmp_path, review_mod, ["--backend", "codex", "--timeout", "0"]
+        )
+        assert rec["timeout_s"] is None
+
+    @pytest.mark.parametrize("backend", ["codex", "api"])
+    def test_negative_timeout_rejected_before_any_call(
+        self, monkeypatch, tmp_path, review_mod, backend
+    ):
+        with pytest.raises(SystemExit) as exc:
+            self._run_main(
+                monkeypatch, tmp_path, review_mod, ["--backend", backend, "--timeout", "-5"]
+            )
+        assert exc.value.code == 2  # argparse usage error
+
+    def test_call_openai_zero_timeout_opens_with_none(self, monkeypatch, review_mod):
+        import io as _io
+        import json as _json
+
+        seen = {}
+
+        class _Resp(_io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def _fake_urlopen(req, timeout="unset"):
+            seen["timeout"] = timeout
+            body = _json.dumps(
+                {
+                    "output": [
+                        {"type": "message", "content": [{"type": "output_text", "text": "ok"}]}
+                    ],
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                }
+            )
+            return _Resp(body.encode())
+
+        monkeypatch.setattr(review_mod.urllib.request, "urlopen", _fake_urlopen)
+        review_mod.call_openai("p", "gpt-4.1", "sk-test", timeout=0)
+        assert seen["timeout"] is None
+        review_mod.call_openai("p", "gpt-4.1", "sk-test", timeout=30)
+        assert seen["timeout"] == 30
 
 
 class TestCodexBackendDocConsistency:
