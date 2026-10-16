@@ -978,13 +978,6 @@ def rank_control_units(
     # -------------------------------------------------------------------------
     pre_data = data[data[time_column].isin(pre_periods)]
     pivot = pre_data.pivot(index=time_column, columns=unit_column, values=outcome_column)
-    # A missing cell (NaN, an unbalanced panel) is a documented condition below; an
-    # infinite outcome is invalid data and must not be routed down the same fallback.
-    if np.isinf(pivot.to_numpy(dtype=float)).any():
-        raise ValueError(
-            f"Outcome column '{outcome_column}' contains infinite values in the pre-treatment "
-            "periods; rank_control_units requires finite outcomes (NaN marks a missing cell)."
-        )
 
     # Filter to pre_periods that exist in data
     valid_pre_periods = [p for p in pre_periods if p in pivot.index]
@@ -1003,6 +996,17 @@ def rank_control_units(
     treated_list = [u for u in treated_set if u in pivot.columns]
     if len(treated_list) == 0:
         raise ValueError("Treated units not found in pre-treatment data.")
+    # A missing cell (NaN, an unbalanced panel) is a documented condition below; an
+    # infinite outcome is invalid data and must not be routed down the same fallback.
+    # Checked on the units that enter the ranking only (treated + non-excluded controls):
+    # an excluded unit cannot affect any output.
+    if np.isinf(
+        pivot.loc[valid_pre_periods, treated_list + control_candidates].to_numpy(dtype=float)
+    ).any():
+        raise ValueError(
+            f"Outcome column '{outcome_column}' contains infinite values in the pre-treatment "
+            "periods; rank_control_units requires finite outcomes (NaN marks a missing cell)."
+        )
     Y_treated_mean = pivot.loc[valid_pre_periods, treated_list].mean(axis=1).values.astype(float)
 
     # -------------------------------------------------------------------------

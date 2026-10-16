@@ -974,6 +974,27 @@ class TestRankControlUnits:
                 treatment_column="treated",
             )
 
+    def test_infinite_outcome_in_an_excluded_unit_does_not_block_ranking(self):
+        """The infinity check covers only the units that enter the ranking: an excluded
+        control with an infinite pre-period outcome neither raises nor appears."""
+        from diff_diff.prep import rank_control_units
+
+        data = generate_did_data(n_units=12, n_periods=8, seed=5)
+        first = data["period"].min()
+        excluded = data.loc[data["treated"] == 0, "unit"].iloc[0]
+        data.loc[(data["unit"] == excluded) & (data["period"] == first), "outcome"] = np.inf
+        result = rank_control_units(
+            data,
+            unit_column="unit",
+            time_column="period",
+            outcome_column="outcome",
+            treatment_column="treated",
+            exclude_units=[excluded],
+        )
+        assert excluded not in set(result["unit"])
+        assert np.isfinite(result["quality_score"]).all()
+        assert np.isfinite(result["synthetic_weight"]).all()
+
     def test_synthetic_weight_uniform_on_unbalanced_panel(self):
         """A missing pre-period outcome leaves the weight problem undefined:
         the informational column is uniform there, and the ranking still runs."""
@@ -1258,7 +1279,6 @@ class TestGenerateSyntheticControlData:
         )
         res = SyntheticControl(
             n_starts=1,
-            inner_min_decrease=1e-3,
             optimizer_options={"maxiter": 50},
             seed=0,
         ).fit(
@@ -1296,7 +1316,6 @@ class TestGenerateSyntheticControlData:
         # the exact convex combination, so the simplex fit is (near-)exact.
         res = SyntheticControl(
             n_starts=1,
-            inner_min_decrease=1e-4,
             optimizer_options={"maxiter": 50},
             seed=0,
         ).fit(data, outcome="outcome", treatment="treatment", unit="unit", time="period")
