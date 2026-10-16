@@ -841,8 +841,10 @@ def rank_control_units(
         - quality_score: Combined quality score (0-1, higher is better)
         - outcome_trend_score: Pre-treatment outcome trend similarity
         - covariate_score: Covariate match score (NaN if no covariates)
-        - synthetic_weight: Informational heuristic weight from an exact
-          uncentered simplex least-squares solve; does NOT factor into ``quality_score``
+        - synthetic_weight: Informational heuristic weight: the exact uncentered
+          simplex least-squares solve, then thresholded (weights below 1e-6 set
+          to zero) and renormalized for readability, so the column is not the
+          optimum to the last digit. Does NOT factor into ``quality_score``
           (ranking) and is NOT the canonical SDID unit weight. For canonical
           SDID weights use ``SyntheticDiD.fit()``.
         - pre_trend_rmse: RMSE of pre-treatment outcome vs treated mean
@@ -1011,8 +1013,10 @@ def rank_control_units(
     #
     # by one non-negative least squares (`_sc_weight_nnls`), whose objective
     # `zeta^2 ||w||^2 + (1/N) ||Aw - b||^2` is the one above with
-    # `zeta = sqrt(lambda_reg / N)`: no column-centering, then min_weight=1e-6
-    # post-processing for interpretability. A missing pre-period outcome
+    # `zeta = sqrt(lambda_reg / N)`: no column-centering. The reported column is
+    # then thresholded (weights < 1e-6 -> 0) and renormalized for readability, so
+    # it is the exact optimum up to that cleanup, not to the last digit (a donor
+    # whose optimal weight is below 1e-6 is dropped). A missing pre-period outcome
     # (unbalanced panel) leaves the problem undefined, and the column is
     # uniform there.
     #

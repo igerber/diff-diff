@@ -881,11 +881,12 @@ class TestRankControlUnits:
             merged["synthetic_weight_python"].to_numpy(),
         )
 
-    def test_synthetic_weight_is_the_exact_simplex_optimum(self):
-        """`synthetic_weight` solves its simplex least squares exactly: an
-        independent tight SLSQP solve from several starts reaches no lower
-        objective. (A Frank-Wolfe solve capped at 1000 iterations stopped
-        0.1-1.5% above it on most panels.)"""
+    def test_synthetic_weight_is_the_thresholded_exact_simplex_optimum(self):
+        """`synthetic_weight` is the exact simplex least-squares solve, then
+        thresholded at 1e-6 and renormalized: on this panel no optimal weight
+        falls below the threshold, so an independent tight SLSQP solve from
+        several starts reaches no lower objective. (A Frank-Wolfe solve capped
+        at 1000 iterations stopped 0.1-1.5% above it on most panels.)"""
         from scipy.optimize import minimize
 
         from diff_diff.prep import rank_control_units
