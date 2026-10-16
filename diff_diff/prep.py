@@ -978,6 +978,13 @@ def rank_control_units(
     # -------------------------------------------------------------------------
     pre_data = data[data[time_column].isin(pre_periods)]
     pivot = pre_data.pivot(index=time_column, columns=unit_column, values=outcome_column)
+    # A missing cell (NaN, an unbalanced panel) is a documented condition below; an
+    # infinite outcome is invalid data and must not be routed down the same fallback.
+    if np.isinf(pivot.to_numpy(dtype=float)).any():
+        raise ValueError(
+            f"Outcome column '{outcome_column}' contains infinite values in the pre-treatment "
+            "periods; rank_control_units requires finite outcomes (NaN marks a missing cell)."
+        )
 
     # Filter to pre_periods that exist in data
     valid_pre_periods = [p for p in pre_periods if p in pivot.index]
@@ -1052,6 +1059,8 @@ def rank_control_units(
                 _Y_packed, zeta=_zeta, return_convergence=True
             )
         else:
+            # Only NaN can reach here (infinities were rejected above): the documented
+            # uniform column for an unbalanced panel.
             synthetic_weights = np.ones(_n_control) / _n_control
         synthetic_weights = np.asarray(synthetic_weights, dtype=np.float64)
         if not _converged:

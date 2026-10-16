@@ -955,6 +955,25 @@ class TestRankControlUnits:
         assert result["synthetic_weight"].isna().all()
         assert np.isfinite(result["quality_score"]).all()
 
+    @pytest.mark.parametrize("which", ["treated", "control"])
+    def test_infinite_pre_period_outcome_is_rejected(self, which):
+        """An infinite outcome is invalid data, not a missing cell: it must raise, never
+        reach the unbalanced-panel uniform fallback for synthetic_weight."""
+        from diff_diff.prep import rank_control_units
+
+        data = generate_did_data(n_units=12, n_periods=8, seed=5)
+        first = data["period"].min()
+        unit = data.loc[data["treated"] == (1 if which == "treated" else 0), "unit"].iloc[0]
+        data.loc[(data["unit"] == unit) & (data["period"] == first), "outcome"] = np.inf
+        with pytest.raises(ValueError, match="infinite values"):
+            rank_control_units(
+                data,
+                unit_column="unit",
+                time_column="period",
+                outcome_column="outcome",
+                treatment_column="treated",
+            )
+
     def test_synthetic_weight_uniform_on_unbalanced_panel(self):
         """A missing pre-period outcome leaves the weight problem undefined:
         the informational column is uniform there, and the ranking still runs."""
