@@ -22,7 +22,9 @@
     `n_grid_nonconverged` is 0 in practice) and in the informational `synthetic_weight`
     column of `rank_control_units()`, which stopped at 1000 iterations; that
     column's values move, the ranking does not. A panel with a missing
-    pre-period outcome keeps its uniform `synthetic_weight` column.
+    pre-period outcome keeps its uniform `synthetic_weight` column; a solve that
+    does not converge (not reached in practice) leaves the column NaN with a
+    `UserWarning` instead of presenting a fallback as the solution.
 
 ### Behavioral Changes
 - **`SyntheticControl` results move by the former solver's gap** (#838): the

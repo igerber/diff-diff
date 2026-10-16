@@ -930,6 +930,31 @@ class TestRankControlUnits:
         )
         assert obj(w) <= best * (1.0 + 1e-9)
 
+    def test_synthetic_weight_nan_with_warning_when_the_solve_fails_closed(self, monkeypatch):
+        """A non-converged simplex solve (not reached in practice) must not be
+        presented as an exact solution: the column is NaN, a UserWarning says so,
+        and the ranking columns are untouched."""
+        import diff_diff.prep as prep_mod
+        from diff_diff.prep import rank_control_units
+
+        def exhausted(Y, zeta=0.0, return_convergence=False):
+            J = Y.shape[1] - 1
+            w = np.full(J, 1.0 / J)
+            return (w, False) if return_convergence else w
+
+        monkeypatch.setattr(prep_mod, "_sc_weight_nnls", exhausted)
+        data = generate_did_data(n_units=12, n_periods=8, seed=3)
+        with pytest.warns(UserWarning, match="synthetic_weight solve did not converge"):
+            result = rank_control_units(
+                data,
+                unit_column="unit",
+                time_column="period",
+                outcome_column="outcome",
+                treatment_column="treated",
+            )
+        assert result["synthetic_weight"].isna().all()
+        assert np.isfinite(result["quality_score"]).all()
+
     def test_synthetic_weight_uniform_on_unbalanced_panel(self):
         """A missing pre-period outcome leaves the weight problem undefined:
         the informational column is uniform there, and the ranking still runs."""

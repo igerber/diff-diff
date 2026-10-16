@@ -9,6 +9,7 @@ Data generation functions (generate_*) are defined in prep_dgp.py and
 re-exported here for backward compatibility.
 """
 
+import warnings
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -844,7 +845,8 @@ def rank_control_units(
         - synthetic_weight: Informational heuristic weight: the exact uncentered
           simplex least-squares solve, then thresholded (weights below 1e-6 set
           to zero) and renormalized for readability, so the column is not the
-          optimum to the last digit. Does NOT factor into ``quality_score``
+          optimum to the last digit; NaN (with a ``UserWarning``) if the solve
+          does not converge. Does NOT factor into ``quality_score``
           (ranking) and is NOT the canonical SDID unit weight. For canonical
           SDID weights use ``SyntheticDiD.fit()``.
         - pre_trend_rmse: RMSE of pre-treatment outcome vs treated mean
@@ -1044,19 +1046,36 @@ def rank_control_units(
     else:
         _zeta = float(np.sqrt(lambda_reg / _n_pre)) if lambda_reg > 0 else 0.0
         _Y_packed = np.column_stack([_Y_control, _Y_treated_mean])
+        _converged = True
         if np.isfinite(_Y_packed).all():
-            synthetic_weights = _sc_weight_nnls(_Y_packed, zeta=_zeta)
+            synthetic_weights, _converged = _sc_weight_nnls(
+                _Y_packed, zeta=_zeta, return_convergence=True
+            )
         else:
             synthetic_weights = np.ones(_n_control) / _n_control
-        # Set small weights to zero for interpretability, then renormalize.
         synthetic_weights = np.asarray(synthetic_weights, dtype=np.float64)
-        _min_weight = 1e-6
-        synthetic_weights[synthetic_weights < _min_weight] = 0.0
-        _total = float(np.sum(synthetic_weights))
-        if _total > 0:
-            synthetic_weights = synthetic_weights / _total
+        if not _converged:
+            # The solve fails closed (a non-finite intermediate or an exhausted step
+            # guard, neither reached in practice): never present its uniform fallback
+            # as the exact solution. The column is NaN and the caller is told; the
+            # ranking (quality_score) does not use it.
+            warnings.warn(
+                "rank_control_units: the synthetic_weight solve did not converge, so the "
+                "informational synthetic_weight column is NaN. quality_score and the "
+                "ranking are unaffected.",
+                UserWarning,
+                stacklevel=2,
+            )
+            synthetic_weights = np.full(_n_control, np.nan)
         else:
-            synthetic_weights = np.ones(_n_control) / _n_control
+            # Set small weights to zero for interpretability, then renormalize.
+            _min_weight = 1e-6
+            synthetic_weights[synthetic_weights < _min_weight] = 0.0
+            _total = float(np.sum(synthetic_weights))
+            if _total > 0:
+                synthetic_weights = synthetic_weights / _total
+            else:
+                synthetic_weights = np.ones(_n_control) / _n_control
 
     # RMSE for each control vs treated mean (use nanmean to handle missing data)
     rmse_scores = []
