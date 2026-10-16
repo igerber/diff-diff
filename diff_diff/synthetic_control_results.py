@@ -898,8 +898,9 @@ class SyntheticControlResults(BaseResults):
         ``status="failed"``) is an outer ``V`` search that did not converge (an
         under-optimized ``V`` fits the pre-period worse, shrinking its RMSPE ratio and
         biasing the permutation p-value anti-conservatively) or an inner weight solve
-        that exhausted its step guard (the exact active-set solve terminates in
-        finitely many steps, so this is not reached in practice). A
+        that exhausted its step guard or hit a non-finite intermediate (the exact
+        active-set solve terminates in finitely many steps, so neither is reached in
+        practice). A
         **structural cv infeasibility** (counted in ``n_infeasible``,
         ``status="infeasible"``; ``v_method="cv"`` only) is a pseudo-treated donor
         pool that is indistinguishable in a re-aggregated CV window, so the weights are

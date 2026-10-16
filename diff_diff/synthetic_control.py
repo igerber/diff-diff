@@ -585,13 +585,15 @@ class SyntheticControl(BaseEstimator):
             )
 
         # Inner-solve non-convergence warning — fires on nested / custom / k==1 paths. The
-        # exact solve reaches this only if the active set exhausted its step guard.
+        # exact solve reaches this only if the active set exhausted its step guard or the
+        # conditioned problem left the float64 range (a non-finite intermediate).
         if not converged:
             warnings.warn(
-                "Synthetic control inner weight solver did not converge (the active set "
-                "exhausted its step guard). The reported weights are a feasible iterate, "
-                "not the optimum, and the diagnostics that need a converged fit will be "
-                "skipped.",
+                "Synthetic control inner weight solver did not converge: the active set "
+                "exhausted its step guard, or the predictor data left the float64 range "
+                "(a column norm or its reciprocal overflowed, or a non-finite intermediate). "
+                "The reported weights are a feasible fallback, not the optimum, and the "
+                "diagnostics that need a converged fit will be skipped.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -1157,7 +1159,8 @@ def _inner_solve_W(
     Folds V^½ into the predictors and solves the simplex least squares exactly, by one
     non-negative least squares (``utils._sc_weight_nnls``). The active set terminates in
     finitely many steps, so the solve converges; ``converged`` is False only if it
-    exhausted its step guard, and the fail-closed paths then treat the fit as
+    exhausted its step guard or the conditioned problem left the float64 range (a
+    non-finite intermediate), and the fail-closed paths then treat the fit as
     non-converged.
     Returns the RAW simplex weights (no sparsification) so the outer objective is
     not perturbed; reporting-level cleanup happens in ``fit``.

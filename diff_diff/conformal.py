@@ -65,7 +65,8 @@ def _cwz_proxy_fit(
     normalization.
 
     The solve has no iteration budget to tune; ``converged`` is False only if the
-    active set exhausted its step guard (not reached in practice), in which case the
+    active set exhausted its step guard or the data left the float64 range (neither
+    reached in practice), in which case the
     caller treats the grid point as indeterminate.
 
     **Covariates (CWZ §2.3.2, after eq 6):** "it is straightforward to
