@@ -1882,8 +1882,8 @@ def equivalence_test_trends(
 
 # compute_synthetic_weights and _compute_synthetic_weights_numpy removed in the
 # silent-failures audit post-cleanup (finding #22). The one caller
-# (`diff_diff.prep.rank_control_units`) inlines a single-pass, uncentered
-# Frank-Wolfe via the shared `_sc_weight_fw` dispatcher — a ranking heuristic,
+# (`diff_diff.prep.rank_control_units`) solves the uncentered problem exactly
+# via `_sc_weight_nnls` — a ranking heuristic,
 # NOT the canonical SDID/R `synthdid::sc.weight.fw` two-pass procedure
 # (intercept=True, 100-iter -> sparsify -> 10000-iter). Canonical SDID unit
 # weights go through `compute_sdid_unit_weights` (see `_sc_weight_fw_numpy`
@@ -2288,6 +2288,219 @@ def _sc_weight_fw_numpy(
     warn_if_not_converged(converged, "Frank-Wolfe SC weight solver", max_iter, min_decrease)
 
     return lam
+
+
+def _sc_weight_nnls(
+    Y: np.ndarray, zeta: float = 0.0, return_convergence: bool = False
+) -> Union[np.ndarray, Tuple[np.ndarray, bool]]:
+    """Solve the uncentered (``intercept=False``) SC weight problem exactly.
+
+    The problem is :func:`_sc_weight_fw`'s with ``intercept=False``::
+
+        min_{w on simplex}  zeta^2 * ||w||^2 + (1/N) * ||A @ w - b||^2
+
+    with ``A = Y[:, :-1]`` (donor columns) and ``b = Y[:, -1]`` (the target). On the
+    simplex ``A @ w - b = (A - b 1') @ w``, so with ``Z = [A - b 1'; sqrt(N) zeta I]``
+    the objective is ``||Z @ w||^2 / N``. Each donor column of ``Z`` is first scaled to
+    unit norm, ``B = Z D`` with ``D = diag(1 / ||Z_j||)`` and ``w = D v``, so the simplex
+    constraint becomes ``c' v = 1`` with ``c = D 1``, and one non-negative least squares
+    solves it::
+
+        u = argmin_{u >= 0} || [B / s; c' / max(c)] @ u - [0; 1] ||,    w = D u / (c' u).
+
+    For ``u = kappa v`` with ``c' v = 1`` the NNLS objective is ``kappa^2 a + (kappa - 1)^2``
+    with ``a = ||B @ v||^2 / s^2``; its least value over ``kappa``, ``a / (1 + a)``,
+    increases with ``a``, so ``v`` is the constrained optimum for any scale ``s > 0``
+    (``s``, the RMS of ``B``, keeps the two blocks comparable). The per-donor scaling is
+    what makes the solve robust to heterogeneous donor magnitudes: a donor 1e16 times
+    the others' scale cannot push them below the active set's tolerance, and finite
+    inputs anywhere in the normal float64 range (column norms and their reciprocals
+    between about 1e-300 and 1e300) give the same weights; subnormal or near-overflow
+    data, whose column norms or reciprocals leave that range, fails closed (uniform
+    weights flagged ``converged=False``). Lawson-Hanson's active set
+    (:func:`_nnls_lawson_hanson`) terminates in finitely many steps, so there is no
+    iteration budget to tune; a solve that nonetheless exhausts the step guard (50
+    steps per donor, never reached in practice) returns its current feasible iterate
+    flagged ``converged=False`` so the caller's fail-closed path can handle it. A
+    non-finite ``Z`` (finite inputs whose difference overflows) fails closed the same
+    way. Where the optimum is not unique (``zeta = 0`` with ``b`` inside the donors'
+    convex hull), the solve returns a vertex of the optimal face, the same one under
+    every SciPy version; a donor identical to the target gets weight 1 (the first such
+    donor by position).
+
+    Parameters
+    ----------
+    Y : np.ndarray
+        Matrix of shape (N, J+1). Last column is the target.
+    zeta : float, default 0.0
+        Regularization strength, as in :func:`_sc_weight_fw`.
+    return_convergence : bool, default False
+        If True, return ``(weights, converged)``.
+
+    Returns
+    -------
+    np.ndarray or (np.ndarray, bool)
+        Weights of shape (J,) on the simplex, plus the convergence flag when
+        ``return_convergence`` is True.
+    """
+    Y = np.asarray(Y, dtype=np.float64)
+    n, J = Y.shape[0], Y.shape[1] - 1
+    uniform = np.full(J, 1.0 / J)
+
+    def _out(w: np.ndarray, ok: bool) -> Union[np.ndarray, Tuple[np.ndarray, bool]]:
+        return (w, ok) if return_convergence else w
+
+    Z = Y[:, :J] - Y[:, J:]
+    if not np.isfinite(Z).all():
+        return _out(uniform, False)
+    # Overflow-safe column norms (max-normalize each column before squaring).
+    amax = np.max(np.abs(Z), axis=0) if n else np.zeros(J)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        col = amax * np.sqrt(np.sum((Z / np.where(amax > 0, amax, 1.0)) ** 2, axis=0))
+    col = np.where(amax > 0, col, 0.0)
+    r = float(np.sqrt(n) * zeta) if zeta > 0 else 0.0
+    if r > 0:
+        col = np.hypot(col, r)
+    elif (col == 0.0).any():
+        # A donor identical to the target: the exact optimum has zero loss on it alone.
+        w = np.zeros(J)
+        w[int(np.argmax(col == 0.0))] = 1.0
+        return _out(w, True)
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        D = 1.0 / col
+        B = Z * D  # unit-norm (fitting part <= 1) columns
+        s = float(np.sqrt(np.mean(B**2))) if B.size else 1.0
+        if not s > 0.0:
+            s = 1.0  # every fitting entry is zero (ridge-only problem)
+        ridge = r * D / s  # [B / s; ridge I] is [Z; sqrt(N) zeta I] D / s
+        c_row = D / float(D.max())
+    # Subnormal or near-overflow data: a column norm or its reciprocal left the float64
+    # range (col = inf, D = inf or D = 0), so the conditioned problem is not the stated
+    # one. Fail closed rather than solve a different problem and call it converged.
+    if not (
+        np.isfinite(col).all()
+        and (col > 0.0).all()
+        and np.isfinite(D).all()
+        and (D > 0.0).all()
+        and np.isfinite(B).all()
+        and np.isfinite(s)
+        and np.isfinite(ridge).all()
+        and np.isfinite(c_row).all()
+    ):
+        return _out(uniform, False)
+    # The constraint row c = D 1 may be scaled by any positive constant (it rescales u,
+    # and w = D u / (c' u) is normalized back), so scale it to a unit maximum: that keeps
+    # the two blocks comparable whatever the data's magnitude.
+    M = np.vstack([B / s, c_row])
+    target = np.zeros(M.shape[0])
+    target[-1] = 1.0
+    # Pivot on the gradient in the ORIGINAL (un-equilibrated) units, grad_j * ||Z_j||: the
+    # equilibration conditions the tolerance test and the passive-set solves, but which
+    # optimal vertex an exact-fit tie returns is a convention, and this one keeps the
+    # vertex the un-scaled reduction returned (the entering order is formulation-free).
+    u, converged = _nnls_lawson_hanson(M, target, max_iter=50 * J, ridge=ridge, pivot_scale=col)
+    v = D * u
+    total = float(v.sum())
+    w = v / total if total > 0.0 else uniform
+    if not np.isfinite(w).all():
+        w, converged = uniform, False
+    return _out(w, converged)
+
+
+def _nnls_lawson_hanson(
+    M: np.ndarray,
+    d: np.ndarray,
+    max_iter: int,
+    ridge: Union[float, np.ndarray] = 0.0,
+    pivot_scale: Optional[np.ndarray] = None,
+) -> Tuple[np.ndarray, bool]:
+    """Solve ``min ||M @ u - d||^2 + ||diag(ridge) u||^2`` s.t. ``u >= 0`` (Lawson-Hanson).
+
+    ``ridge`` (a scalar or one value per column) is the Tikhonov problem of stacking
+    ``diag(ridge)`` under ``M`` with zeros under ``d``; it is applied inside each
+    passive-set least squares (sized to the passive set) and in the gradient
+    (``- ridge^2 u``), never as a dense ``n x n`` block. ``pivot_scale`` (one positive
+    value per column, default 1) multiplies the gradient ONLY in the choice of the
+    entering column; the entering TEST stays on the gradient itself (per-column
+    tolerance), so it changes which optimal vertex a tie returns, not optimality.
+
+    Lawson and Hanson (1974, ch. 23), with their guard against an entering column that
+    rounding leaves without positive weight. Implemented here rather than calling
+    ``scipy.optimize.nnls``: where the optimum is not unique, the vertex an active set
+    returns depends on its pivoting, and SciPy's implementation has changed across
+    releases, so synthetic control weights at a tie, and every placebo refit at one,
+    moved with the SciPy version. Each least-squares step is one ``np.linalg.lstsq`` on
+    the passive columns (the ridge-regularized normal equations where the ridge
+    dominates, see below). The entering tolerance is per column, so columns of different
+    scale are each tested against their own rounding level. Returns ``(u, converged)``:
+    the active set terminates in finitely many steps, so ``converged`` is True in
+    practice; after ``max_iter`` inner steps (a guard, not a tuning knob) it returns the
+    current feasible iterate with ``converged=False`` instead of a truncated solve
+    presented as the optimum.
+    """
+    m, n = M.shape
+    rv = np.broadcast_to(np.asarray(ridge, dtype=np.float64), (n,))
+    ps = np.ones(n) if pivot_scale is None else np.asarray(pivot_scale, dtype=np.float64)
+    if not (np.isfinite(M).all() and np.isfinite(d).all() and np.isfinite(rv).all()):
+        # NaN comparisons are False, so a non-finite problem would otherwise return the
+        # zero iterate as "converged". Fail closed.
+        return np.zeros(n), False
+    tol = 10.0 * max(m, n) * np.finfo(np.float64).eps * (np.abs(M).sum(axis=0) + rv)
+
+    def _passive_lstsq(mask: np.ndarray) -> np.ndarray:
+        Mp = M[:, mask]
+        rp = rv[mask]
+        if not (rp > 0.0).any():
+            return np.linalg.lstsq(Mp, d, rcond=None)[0]
+        p = Mp.shape[1]
+        if (rp >= np.sqrt(np.sum(Mp**2, axis=0))).all():
+            # Ridge-dominated: the solution is O(1/ridge^2) and an SVD of the stacked
+            # [Mp; diag(rp)] loses it (its information sits in O(1/ridge) entries of U,
+            # computed to O(eps) absolute). The ridge makes the Gram matrix well
+            # conditioned there, so the regularized normal equations are exact to a
+            # few eps.
+            G = Mp.T @ Mp
+            G[np.diag_indices(p)] += rp**2
+            return np.linalg.solve(G, Mp.T @ d)
+        return np.linalg.lstsq(
+            np.vstack([Mp, np.diag(rp)]), np.concatenate([d, np.zeros(p)]), rcond=None
+        )[0]
+
+    u = np.zeros(n)
+    passive = np.zeros(n, dtype=bool)
+    grad = M.T @ d
+    n_iter = 0
+    while True:
+        entering = ~passive & (grad > tol)
+        if not entering.any():
+            return u, True
+        t = int(np.argmax(np.where(entering, grad * ps, -np.inf)))
+        passive[t] = True
+        z = np.zeros(n)
+        z[passive] = _passive_lstsq(passive)
+        if z[t] <= 0.0:
+            # Rounding left the entering column no weight: skip it until u moves.
+            passive[t] = False
+            grad[t] = 0.0
+            continue
+        while True:
+            n_iter += 1
+            if n_iter > max_iter:
+                return u, False
+            if (z[passive] > 0.0).all():
+                break
+            # Move toward z until the first passive coefficient reaches zero; drop it.
+            leaving = passive & (z <= 0.0)
+            ratio = u[leaving] / (u[leaving] - z[leaving])
+            q = np.flatnonzero(leaving)[np.argmin(ratio)]
+            u = u + ratio.min() * (z - u)
+            u[q] = 0.0
+            passive &= u > 0.0
+            u[~passive] = 0.0
+            z = np.zeros(n)
+            z[passive] = _passive_lstsq(passive)
+        u = z
+        grad = M.T @ (d - M @ u) - rv**2 * u
 
 
 def _sparsify(v: np.ndarray) -> np.ndarray:

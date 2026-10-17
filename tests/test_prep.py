@@ -771,7 +771,7 @@ class TestRankControlUnits:
         remain a valid non-degenerate simplex vector even at extreme Y
         scale (Y ~ 1e9). The previous `compute_synthetic_weights` wrapper
         had two bugs here: Rust PGD collapsed to a single vertex, Python
-        PGD stalled at uniform. The inlined Frank-Wolfe solver in
+        PGD stalled at uniform. The exact simplex least-squares solve in
         ``rank_control_units`` handles both cases correctly."""
         from diff_diff.prep import rank_control_units
 
@@ -847,10 +847,10 @@ class TestRankControlUnits:
 
     def test_synthetic_weight_column_backend_parity(self):
         """Full-pipeline Rust/Python parity for `rank_control_units`. Forces
-        the Python FW path via `HAS_RUST_BACKEND=False` and verifies the
-        resulting `synthetic_weight` column agrees with the default (Rust
-        when available) path to a loose tolerance. Backend divergence on
-        this caller path was the trigger for deleting the old wrapper."""
+        the Python path via `HAS_RUST_BACKEND=False`: the exact solve has no
+        Rust kernel, so the `synthetic_weight` column is bit-identical to the
+        default path. Backend divergence on this caller path was the trigger
+        for deleting the old wrapper."""
         from unittest.mock import patch
 
         from diff_diff import utils as utils_mod
@@ -876,13 +876,143 @@ class TestRankControlUnits:
             on="unit",
             suffixes=("_default", "_python"),
         )
-        # FW stopping threshold is scale-dependent, so use a loose tolerance.
-        np.testing.assert_allclose(
+        np.testing.assert_array_equal(
             merged["synthetic_weight_default"].to_numpy(),
             merged["synthetic_weight_python"].to_numpy(),
-            atol=1e-4,
-            rtol=1e-4,
         )
+
+    def test_synthetic_weight_is_the_thresholded_exact_simplex_optimum(self):
+        """`synthetic_weight` is the exact simplex least-squares solve, then
+        thresholded at 1e-6 and renormalized: on this panel no optimal weight
+        falls below the threshold, so an independent tight SLSQP solve from
+        several starts reaches no lower objective. (A Frank-Wolfe solve capped
+        at 1000 iterations stopped 0.1-1.5% above it on most panels.)"""
+        from scipy.optimize import minimize
+
+        from diff_diff.prep import rank_control_units
+
+        data = generate_did_data(n_units=30, n_periods=12, seed=7)
+        pre = sorted(data.loc[data["post"] == 0, "period"].unique())
+        result = rank_control_units(
+            data,
+            unit_column="unit",
+            time_column="period",
+            outcome_column="outcome",
+            treatment_column="treated",
+            pre_periods=pre,
+        )
+        wide = data[data["period"].isin(pre)].pivot(
+            index="period", columns="unit", values="outcome"
+        )
+        treated = data.loc[data["treated"] == 1, "unit"].unique()
+        controls = result["unit"].to_numpy()
+        Y0 = wide[controls].to_numpy()
+        y1 = wide[treated].mean(axis=1).to_numpy()
+        w = result["synthetic_weight"].to_numpy()
+
+        def obj(v):
+            r = y1 - Y0 @ v
+            return float(r @ r)
+
+        rng = np.random.default_rng(0)
+        best = min(
+            (
+                minimize(
+                    obj,
+                    rng.dirichlet(np.ones(len(controls))),
+                    method="SLSQP",
+                    bounds=[(0.0, 1.0)] * len(controls),
+                    constraints=[{"type": "eq", "fun": lambda v: v.sum() - 1.0}],
+                    options={"ftol": 1e-15, "maxiter": 1000},
+                ).fun
+                for _ in range(4)
+            )
+        )
+        assert obj(w) <= best * (1.0 + 1e-9)
+
+    def test_synthetic_weight_nan_with_warning_when_the_solve_fails_closed(self, monkeypatch):
+        """A non-converged simplex solve (not reached in practice) must not be
+        presented as an exact solution: the column is NaN, a UserWarning says so,
+        and the ranking columns are untouched."""
+        import diff_diff.prep as prep_mod
+        from diff_diff.prep import rank_control_units
+
+        def exhausted(Y, zeta=0.0, return_convergence=False):
+            J = Y.shape[1] - 1
+            w = np.full(J, 1.0 / J)
+            return (w, False) if return_convergence else w
+
+        monkeypatch.setattr(prep_mod, "_sc_weight_nnls", exhausted)
+        data = generate_did_data(n_units=12, n_periods=8, seed=3)
+        with pytest.warns(UserWarning, match="synthetic_weight solve did not converge"):
+            result = rank_control_units(
+                data,
+                unit_column="unit",
+                time_column="period",
+                outcome_column="outcome",
+                treatment_column="treated",
+            )
+        assert result["synthetic_weight"].isna().all()
+        assert np.isfinite(result["quality_score"]).all()
+
+    @pytest.mark.parametrize("which", ["treated", "control"])
+    def test_infinite_pre_period_outcome_is_rejected(self, which):
+        """An infinite outcome is invalid data, not a missing cell: it must raise, never
+        reach the unbalanced-panel uniform fallback for synthetic_weight."""
+        from diff_diff.prep import rank_control_units
+
+        data = generate_did_data(n_units=12, n_periods=8, seed=5)
+        first = data["period"].min()
+        unit = data.loc[data["treated"] == (1 if which == "treated" else 0), "unit"].iloc[0]
+        data.loc[(data["unit"] == unit) & (data["period"] == first), "outcome"] = np.inf
+        with pytest.raises(ValueError, match="infinite values"):
+            rank_control_units(
+                data,
+                unit_column="unit",
+                time_column="period",
+                outcome_column="outcome",
+                treatment_column="treated",
+            )
+
+    def test_infinite_outcome_in_an_excluded_unit_does_not_block_ranking(self):
+        """The infinity check covers only the units that enter the ranking: an excluded
+        control with an infinite pre-period outcome neither raises nor appears."""
+        from diff_diff.prep import rank_control_units
+
+        data = generate_did_data(n_units=12, n_periods=8, seed=5)
+        first = data["period"].min()
+        excluded = data.loc[data["treated"] == 0, "unit"].iloc[0]
+        data.loc[(data["unit"] == excluded) & (data["period"] == first), "outcome"] = np.inf
+        result = rank_control_units(
+            data,
+            unit_column="unit",
+            time_column="period",
+            outcome_column="outcome",
+            treatment_column="treated",
+            exclude_units=[excluded],
+        )
+        assert excluded not in set(result["unit"])
+        assert np.isfinite(result["quality_score"]).all()
+        assert np.isfinite(result["synthetic_weight"]).all()
+
+    def test_synthetic_weight_uniform_on_unbalanced_panel(self):
+        """A missing pre-period outcome leaves the weight problem undefined:
+        the informational column is uniform there, and the ranking still runs."""
+        from diff_diff.prep import rank_control_units
+
+        data = generate_did_data(n_units=12, n_periods=8, seed=42)
+        control = data.loc[data["treated"] == 0, "unit"].iloc[0]
+        first = data["period"].min()
+        unbalanced = data[~((data["unit"] == control) & (data["period"] == first))]
+        result = rank_control_units(
+            unbalanced,
+            unit_column="unit",
+            time_column="period",
+            outcome_column="outcome",
+            treatment_column="treated",
+        )
+        w = result["synthetic_weight"].to_numpy()
+        np.testing.assert_allclose(w, np.full(len(w), 1.0 / len(w)), rtol=0.0, atol=1e-15)
 
 
 class TestGenerateStaggeredData:
@@ -1149,7 +1279,6 @@ class TestGenerateSyntheticControlData:
         )
         res = SyntheticControl(
             n_starts=1,
-            inner_min_decrease=1e-3,
             optimizer_options={"maxiter": 50},
             seed=0,
         ).fit(
@@ -1187,7 +1316,6 @@ class TestGenerateSyntheticControlData:
         # the exact convex combination, so the simplex fit is (near-)exact.
         res = SyntheticControl(
             n_starts=1,
-            inner_min_decrease=1e-4,
             optimizer_options={"maxiter": 50},
             seed=0,
         ).fit(data, outcome="outcome", treatment="treatment", unit="unit", time="period")

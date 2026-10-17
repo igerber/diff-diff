@@ -135,7 +135,6 @@ def scm_fit():
         seed=0,
         n_starts=1,
         optimizer_options={"maxiter": 50},
-        inner_min_decrease=1e-3,
     ).fit(df, "y", "treated", "unit", "year")
     return res, df
 

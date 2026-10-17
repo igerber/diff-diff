@@ -26,17 +26,16 @@ based on all the data"); optional RAW covariate-matching rows stack into the
 same objective when ``covariates=`` is supplied (the paper's note after eq 6),
 with outcome-only residuals. This is DISTINCT from the headline ADH V-matrix weights — CWZ's
 exactness theory (Lemma 1, Appendix D exchangeability) requires a time-symmetric
-proxy, which the ADH pre-period V-fit is not. Reuses the Frank-Wolfe simplex
-solver :func:`diff_diff.utils._sc_weight_fw`.
+proxy, which the ADH pre-period V-fit is not. The proxy is solved exactly, by one
+non-negative least squares (:func:`diff_diff.utils._sc_weight_nnls`).
 """
 
 import math
-import warnings
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from diff_diff.utils import _sc_weight_fw
+from diff_diff.utils import _sc_weight_nnls
 
 __all__: List[str] = []
 
@@ -52,9 +51,6 @@ def _cwz_proxy_fit(
     y1: np.ndarray,
     Y0: np.ndarray,
     *,
-    max_iter: int,
-    min_decrease: float,
-    init_weights: Optional[np.ndarray] = None,
     x1_rows: Optional[np.ndarray] = None,
     X0_rows: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, bool]:
@@ -62,14 +58,16 @@ def _cwz_proxy_fit(
 
     Minimises ``Σ_t (y1_t − Σ_j w_j Y0_{tj})²`` s.t. ``w ≥ 0, Σ w = 1`` (no
     intercept, no V-matrix). ``y1`` is the (already null-imputed) treated outcome
-    vector ``(T,)``; ``Y0`` the donor outcomes ``(T, J)``. Reuses
-    :func:`_sc_weight_fw` packed ``(T, J+1)`` (donor columns first, target last),
-    ``zeta=0, intercept=False`` — the solver projects onto the unit simplex, so the
-    ``w ≥ 0, Σ w = 1`` constraint is delivered with no extra normalization.
+    vector ``(T,)``; ``Y0`` the donor outcomes ``(T, J)``. Solved exactly by
+    :func:`_sc_weight_nnls` on the packed ``(T, J+1)`` (donor columns first, target
+    last), ``zeta=0`` — one non-negative least squares whose solution lies on the unit
+    simplex, so the ``w ≥ 0, Σ w = 1`` constraint is delivered with no extra
+    normalization.
 
-    ``min_decrease`` is the ALREADY-SCALED absolute convergence tolerance; the
-    caller must pass a θ0-invariant scale (e.g. the pre-window outcome norm) so CI
-    membership does not drift with the grid value via the tolerance.
+    The solve has no iteration budget to tune; ``converged`` is False only if the
+    active set exhausted its step guard or the data left the float64 range (neither
+    reached in practice), in which case the
+    caller treats the grid point as indeterminate.
 
     **Covariates (CWZ §2.3.2, after eq 6):** "it is straightforward to
     incorporate (transformations of) covariates X_jt into the estimation
@@ -103,17 +101,7 @@ def _cwz_proxy_fit(
         w = np.array([1.0], dtype=float)
         return w, y1 - Y0 @ w, True
     packed = np.column_stack([Y0_fit, y1_fit])  # (T+R, J+1); last column is the target
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message=r".*did not converge.*", category=UserWarning)
-        w, converged = _sc_weight_fw(
-            packed,
-            zeta=0.0,
-            intercept=False,
-            init_weights=init_weights,
-            min_decrease=float(min_decrease),
-            max_iter=int(max_iter),
-            return_convergence=True,
-        )
+    w, converged = _sc_weight_nnls(packed, return_convergence=True)
     w = np.asarray(w, dtype=float)
     return w, y1[:n_out] - Y0[:n_out] @ w, bool(converged)
 
@@ -246,9 +234,6 @@ def _single_null_pvalue(
     perms: np.ndarray,
     q: Any,
     *,
-    max_iter: int,
-    min_decrease: float,
-    init_weights: Optional[np.ndarray] = None,
     alternative: str = "two-sided",
     x1_rows: Optional[np.ndarray] = None,
     X0_rows: Optional[np.ndarray] = None,
@@ -265,9 +250,6 @@ def _single_null_pvalue(
     w, resid, conv = _cwz_proxy_fit(
         y1n,
         Y0,
-        max_iter=max_iter,
-        min_decrease=min_decrease,
-        init_weights=init_weights,
         x1_rows=x1_rows,
         X0_rows=X0_rows,
     )
@@ -346,8 +328,6 @@ def _invert_single_post(
     alpha: float,
     perms: np.ndarray,
     *,
-    max_iter: int,
-    min_decrease: float,
     grid: Optional[np.ndarray] = None,
     n_grid: int = 100,
     alternative: str = "two-sided",
@@ -359,9 +339,8 @@ def _invert_single_post(
     The series ``y1_obs`` ``(m,)`` / ``Y0`` ``(m, J)`` has exactly one post slot at
     ``post_idx`` (a per-period CI sub-series ``(pre ∪ {t})`` or a block-collapsed
     average series). For each candidate effect ``θ`` the post outcome is imputed
-    (``y1[post_idx] − θ``), the proxy refit (warm-started across the grid — FW is
-    convex so warm-starting only affects speed, not the optimum), and the
-    permutation p-value recomputed. With one post slot ``S_q`` reduces to
+    (``y1[post_idx] − θ``), the proxy refit exactly (one NNLS per grid point; no
+    warm start is needed or used), and the permutation p-value recomputed. With one post slot ``S_q`` reduces to
     ``|û_post|`` for every ``q``, so ``q`` is inert here (fixed to 1); under
     ``alternative="greater"``/``"less"`` the single-slot statistic is the SIGNED
     ``û_post`` (resp. ``−û_post``), and the inversion yields a ONE-SIDED
@@ -391,8 +370,6 @@ def _invert_single_post(
     w_pre, resid_pre, _ = _cwz_proxy_fit(
         y1_obs[pre_sel],
         Y0[pre_sel],
-        max_iter=max_iter,
-        min_decrease=min_decrease,
         x1_rows=x1_rows,
         X0_rows=X0_rows,
     )
@@ -420,20 +397,15 @@ def _invert_single_post(
 
     pvals = np.empty(grid.shape[0], dtype=float)
     converged = np.empty(grid.shape[0], dtype=bool)
-    w_prev = w_pre
     for i, theta in enumerate(grid):
         y1n = y1_obs.copy()
         y1n[post_idx] = y1n[post_idx] - float(theta)
         w, resid, conv = _cwz_proxy_fit(
             y1n,
             Y0,
-            max_iter=max_iter,
-            min_decrease=min_decrease,
-            init_weights=w_prev,
             x1_rows=x1_rows,
             X0_rows=X0_rows,
         )
-        w_prev = w
         p, _, _ = _cwz_pvalue(resid, post_mask, perms, 1, alternative=alternative)
         pvals[i] = p
         converged[i] = conv

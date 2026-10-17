@@ -139,6 +139,10 @@ _PATTERN_TOKENS = {
     # test_predicate_binds_to_ledger_tokens requires every live param/field
     # rename token to satisfy _pattern_hit, so adding the row arms Duty A.
     "estimator",
+    # M-148 / M-149 (SyntheticControl inner_max_iter / inner_min_decrease, inert
+    # since the exact NNLS inner solve; warn-and-discard shims at 4.0).
+    "inner_max_iter",
+    "inner_min_decrease",
 }
 
 # Tokens that are LEGAL canonical vocabulary on other surfaces (rule 1 `time`,
@@ -1100,7 +1104,6 @@ CONSUMER_ALLOWLIST = {
         for f in (
             "diff_diff/conformal.py",
             "diff_diff/prep.py",
-            "diff_diff/synthetic_control.py",
             "diff_diff/utils.py",
         )
     },

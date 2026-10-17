@@ -62,7 +62,6 @@ def fit():
         res = SyntheticControl(
             v_method="nested",
             n_starts=1,
-            inner_min_decrease=1e-3,
             optimizer_options={"maxiter": 50},
             seed=SEED,
         ).fit(
@@ -115,7 +114,7 @@ def test_true_effect_ramp(fit):
 
 
 def test_att_and_pre_rmspe(fit):
-    """§2 quoted: ATT ≈ 6.8 (true mean 7.0), pre-period RMSPE ≈ 0.99.
+    """§2 quoted: ATT ≈ 6.7 (true mean 7.0), pre-period RMSPE ≈ 0.93.
 
     Bands (not exact pins) absorb cross-platform BLAS variation in the nested V-search."""
     res = fit["res"]
@@ -124,12 +123,12 @@ def test_att_and_pre_rmspe(fit):
 
 
 def test_top_donor_weights(fit):
-    """§2 quoted: synthetic ≈ 0.51·unit 2 + 0.26·unit 3 + … (sparse; unit 2 dominant)."""
+    """§2 quoted: synthetic ≈ 0.50·unit 2 + 0.41·unit 3 + … (sparse; unit 2 dominant)."""
     w = fit["res"].donor_weights
     top_unit = max(w, key=w.get)
     assert top_unit == 2, f"top-weighted donor is {top_unit}, expected 2"
     assert 0.42 <= w[2] <= 0.58, f"weight[2]={w[2]:.3f} outside [0.42, 0.58]"
-    assert 0.20 <= w[3] <= 0.32, f"weight[3]={w[3]:.3f} outside [0.20, 0.32]"
+    assert 0.33 <= w[3] <= 0.49, f"weight[3]={w[3]:.3f} outside [0.33, 0.49]"
 
 
 def test_predictor_balance(fit):
@@ -169,7 +168,7 @@ def test_constant_confidence_set_wide_and_positive(fit):
 
 
 def test_leave_one_out_robust(fit):
-    """§4 quoted: dropping any one donor moves the ATT by at most ≈ 0.76."""
+    """§4 quoted: dropping any one donor moves the ATT by at most ≈ 0.50."""
     moved = fit["loo"][fit["loo"]["status"] == "loo"]
     max_delta = moved["delta_att"].abs().max()
     assert max_delta < 1.2, f"max |delta_att|={max_delta:.3f} not < 1.2"
@@ -198,13 +197,13 @@ def test_pointwise_band_brackets_truth(fit):
 
 
 def test_average_effect_ci(fit):
-    """§5 quoted: average-effect 90% CI ≈ [6.5, 7.5], bounded, bracketing 7.0; 13 blocks."""
+    """§5 quoted: average-effect 90% CI ≈ [6.5, 7.8], bounded, bracketing 7.0; 13 blocks."""
     ae = fit["ae"]
     assert ae["status"] == "ran"
     assert ae["n_blocks"] == (N_PRE + N_POST) // N_POST == 13
     assert ae["lower"] <= 7.0 <= ae["upper"], "avg-effect CI must bracket the true mean 7.0"
     assert 6.0 <= ae["lower"] <= 6.8, f"avg lower={ae['lower']:.2f} outside [6.0, 6.8]"
-    assert 7.2 <= ae["upper"] <= 7.9, f"avg upper={ae['upper']:.2f} outside [7.2, 7.9]"
+    assert 7.4 <= ae["upper"] <= 8.2, f"avg upper={ae['upper']:.2f} outside [7.4, 8.2]"
 
 
 def test_notebook_kwargs_match():
@@ -239,6 +238,5 @@ def test_notebook_kwargs_match():
         "seed=0",
         'predictors=["x1", "x2", "x3"]',
         "placebo_periods=[20, 35, 50]",
-        "inner_min_decrease=1e-3",
     ):
         assert needle in src, f"notebook §1/§2 missing locked kwarg: {needle!r}"

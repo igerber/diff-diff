@@ -40,7 +40,7 @@ from diff_diff.survey import (
     compute_replicate_if_variance,
     compute_survey_if_variance,
 )
-from diff_diff.utils import _compute_noise_level, _sc_weight_fw
+from diff_diff.utils import _sc_weight_nnls
 
 # Constants for rank_control_units
 _SIMILARITY_THRESHOLD_SD = 0.5  # Controls within this many SDs are "similar"
@@ -842,8 +842,11 @@ def rank_control_units(
         - quality_score: Combined quality score (0-1, higher is better)
         - outcome_trend_score: Pre-treatment outcome trend similarity
         - covariate_score: Covariate match score (NaN if no covariates)
-        - synthetic_weight: Informational heuristic weight from a single-pass
-          uncentered Frank-Wolfe solve; does NOT factor into ``quality_score``
+        - synthetic_weight: Informational heuristic weight: the exact uncentered
+          simplex least-squares solve, then thresholded (weights below 1e-6 set
+          to zero) and renormalized for readability, so the column is not the
+          optimum to the last digit; NaN (with a ``UserWarning``) if the solve
+          does not converge. Does NOT factor into ``quality_score``
           (ranking) and is NOT the canonical SDID unit weight. For canonical
           SDID weights use ``SyntheticDiD.fit()``.
         - pre_trend_rmse: RMSE of pre-treatment outcome vs treated mean
@@ -993,6 +996,17 @@ def rank_control_units(
     treated_list = [u for u in treated_set if u in pivot.columns]
     if len(treated_list) == 0:
         raise ValueError("Treated units not found in pre-treatment data.")
+    # A missing cell (NaN, an unbalanced panel) is a documented condition below; an
+    # infinite outcome is invalid data and must not be routed down the same fallback.
+    # Checked on the units that enter the ranking only (treated + non-excluded controls):
+    # an excluded unit cannot affect any output.
+    if np.isinf(
+        pivot.loc[valid_pre_periods, treated_list + control_candidates].to_numpy(dtype=float)
+    ).any():
+        raise ValueError(
+            f"Outcome column '{outcome_column}' contains infinite values in the pre-treatment "
+            "periods; rank_control_units requires finite outcomes (NaN marks a missing cell)."
+        )
     Y_treated_mean = pivot.loc[valid_pre_periods, treated_list].mean(axis=1).values.astype(float)
 
     # -------------------------------------------------------------------------
@@ -1005,23 +1019,26 @@ def rank_control_units(
     # below from `outcome_trend_score` (RMSE-based) + `covariate_score`; the
     # `synthetic_weight` column does NOT factor into the ranking decision.
     #
-    # Solver choice. We use a single-pass uncentered Frank-Wolfe via the
-    # shared `_sc_weight_fw` dispatcher to solve:
+    # Solver choice. We solve, exactly, the uncentered simplex least squares
     #
     #     min_w  ||Y_treated_mean - Y_control @ w||^2 + lambda_reg * ||w||^2
     #         s.t. w >= 0, sum(w) = 1
     #
-    # Mapped to the FW objective `zeta^2 ||w||^2 + (1/N) ||Aw - b||^2` via
-    # `zeta = sqrt(lambda_reg / N)`. intercept=False because this QP does
-    # no column-centering, max_iter=1000 to bound ranking-loop cost,
-    # min_weight=1e-6 post-processing for interpretability.
+    # by one non-negative least squares (`_sc_weight_nnls`), whose objective
+    # `zeta^2 ||w||^2 + (1/N) ||Aw - b||^2` is the one above with
+    # `zeta = sqrt(lambda_reg / N)`: no column-centering. The reported column is
+    # then thresholded (weights < 1e-6 -> 0) and renormalized for readability, so
+    # it is the exact optimum up to that cleanup, not to the last digit (a donor
+    # whose optimal weight is below 1e-6 is dropped). A missing pre-period outcome
+    # (unbalanced panel) leaves the problem undefined, and the column is
+    # uniform there.
     #
     # NOTE — this is INTENTIONALLY NOT the canonical SDID / R
     # `synthdid::sc.weight.fw` two-pass unit-weight procedure (that uses
     # intercept=TRUE, 100-iter -> sparsify -> 10000-iter). SDID estimation
     # still uses that canonical path in `_sc_weight_fw_numpy` at
     # `utils.py:_sc_weight_fw_numpy` via `compute_sdid_unit_weights`; this
-    # ranking heuristic uses a simpler single-pass call to the same solver
+    # ranking heuristic solves the simpler uncentered problem once, exactly,
     # for a cheap diagnostic score.
     #
     # Replaces the former `compute_synthetic_weights` wrapper whose Rust
@@ -1039,33 +1056,39 @@ def rank_control_units(
         synthetic_weights = np.array([1.0])
     else:
         _zeta = float(np.sqrt(lambda_reg / _n_pre)) if lambda_reg > 0 else 0.0
-        # Scale stopping threshold by noise level so convergence stays
-        # meaningful at any data magnitude.
-        _sigma = _compute_noise_level(_Y_control)
-        _min_decrease = 1e-5 * max(_sigma, 1e-12)
-        _Y_fw = np.column_stack([_Y_control, _Y_treated_mean])
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message=r".*did not converge.*",
-                category=UserWarning,
+        _Y_packed = np.column_stack([_Y_control, _Y_treated_mean])
+        _converged = True
+        if np.isfinite(_Y_packed).all():
+            synthetic_weights, _converged = _sc_weight_nnls(
+                _Y_packed, zeta=_zeta, return_convergence=True
             )
-            synthetic_weights = _sc_weight_fw(
-                _Y_fw,
-                zeta=_zeta,
-                intercept=False,
-                min_decrease=_min_decrease,
-                max_iter=1000,
-            )
-        # Set small weights to zero for interpretability, then renormalize.
-        synthetic_weights = np.asarray(synthetic_weights, dtype=np.float64)
-        _min_weight = 1e-6
-        synthetic_weights[synthetic_weights < _min_weight] = 0.0
-        _total = float(np.sum(synthetic_weights))
-        if _total > 0:
-            synthetic_weights = synthetic_weights / _total
         else:
+            # Only NaN can reach here (infinities were rejected above): the documented
+            # uniform column for an unbalanced panel.
             synthetic_weights = np.ones(_n_control) / _n_control
+        synthetic_weights = np.asarray(synthetic_weights, dtype=np.float64)
+        if not _converged:
+            # The solve fails closed (a non-finite intermediate or an exhausted step
+            # guard, neither reached in practice): never present its uniform fallback
+            # as the exact solution. The column is NaN and the caller is told; the
+            # ranking (quality_score) does not use it.
+            warnings.warn(
+                "rank_control_units: the synthetic_weight solve did not converge, so the "
+                "informational synthetic_weight column is NaN. quality_score and the "
+                "ranking are unaffected.",
+                UserWarning,
+                stacklevel=2,
+            )
+            synthetic_weights = np.full(_n_control, np.nan)
+        else:
+            # Set small weights to zero for interpretability, then renormalize.
+            _min_weight = 1e-6
+            synthetic_weights[synthetic_weights < _min_weight] = 0.0
+            _total = float(np.sum(synthetic_weights))
+            if _total > 0:
+                synthetic_weights = synthetic_weights / _total
+            else:
+                synthetic_weights = np.ones(_n_control) / _n_control
 
     # RMSE for each control vs treated mean (use nanmean to handle missing data)
     rmse_scores = []
