@@ -2,7 +2,7 @@ name: Release build check
 
 # Pre-merge guard for the PyPI release build path. publish.yml only runs on
 # `release: published`, so its manylinux container build (checkout@v7 inside
-# glibc-2.28, openblas, py3.9-3.14) is never exercised by PR CI. This calls the
+# glibc-2.28, openblas, py3.9-3.15) is never exercised by PR CI. This calls the
 # SAME reusable workflow build-only (no PyPI upload) so a PR that would break our
 # ability to mint a release fails here instead of at release time.
 #

@@ -25,7 +25,7 @@ openblas = ["ndarray/blas"]
 alloc-profile = []
 
 [dependencies]
-# PyO3 0.29 supports Python 3.9-3.14
+# PyO3 0.29 supports Python 3.9-3.15
 pyo3 = "0.29"
 numpy = "0.29"
 ndarray = { version = "0.17", features = ["rayon"] }
