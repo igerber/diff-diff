@@ -25,9 +25,9 @@ Pipeline:
 Usage:
   python tools/reviewer-eval/run_eval.py verify-corpus
   python tools/reviewer-eval/run_eval.py smoke   # smokes the role=control arm
-  python tools/reviewer-eval/run_eval.py run --subdir gpt6 --configs B,E --k 2
-  python tools/reviewer-eval/run_eval.py compare --subdir gpt6 --blinded
-  python tools/reviewer-eval/run_eval.py audit --subdir gpt6 -o <scratch>/hits.json
+  python tools/reviewer-eval/run_eval.py run --subdir gpt61sol --configs B,F --k 2
+  python tools/reviewer-eval/run_eval.py compare --subdir gpt61sol --blinded
+  python tools/reviewer-eval/run_eval.py audit --subdir gpt61sol -o <scratch>/hits.json
   python tools/reviewer-eval/run_eval.py verdict --subdir gpt6 --grades <reconciled.json> \\
       --control B --candidate E [--audit-hits <scratch>/hits.json] [--expect-head <sha>]
 """
@@ -340,7 +340,11 @@ def _candidate_exposure_violations(
     import reviewer_verdict
 
     selected = {c.id for c in configs}
-    cands = selected & _registered_candidates()
+    # The role=control arm is production: it is measured by definition, so a
+    # former candidate promoted by a swap (2026-10: F) stays smokeable and may
+    # run outside its registered contrast; every OTHER registered candidate is
+    # confined to its campaign shape.
+    cands = (selected & _registered_candidates()) - {_control_id()}
     if not cands:
         return []
     if command == "smoke":
@@ -1745,7 +1749,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ps.set_defaults(func=cmd_smoke)
 
     pr = sub.add_parser("run", help="full comparison matrix; saves raw reviews")
-    pr.add_argument("--configs", default="B,E")
+    pr.add_argument("--configs", default="B,F")
     pr.add_argument("--strata", nargs="*", default=None)
     pr.add_argument("--subdir", default="full")
     pr.add_argument(

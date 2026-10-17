@@ -1654,7 +1654,7 @@ class TestIncludeFilesConfinement:
 
 class TestIsReasoningModel:
     def test_gpt56_family_is_reasoning(self, review_mod):
-        """The production default (gpt-5.6-sol) and its siblings must classify as
+        """The gpt-5.6 family (previous production gpt-5.6-sol and siblings) must classify as
         reasoning models - this drives the 900s timeout and token limits."""
         for m in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"):
             assert review_mod._is_reasoning_model(m) is True
@@ -1673,6 +1673,10 @@ class TestIsReasoningModel:
         """The gpt-6 rows (2026-10-15) and estimate_cost resolving the candidate."""
         assert review_mod.PRICING["gpt-6-astra"] == (10.00, 50.00)
         assert review_mod.PRICING["gpt-6-sol"] == (2.00, 10.00)
+        assert review_mod.PRICING["gpt-6.1-sol"] == (
+            2.00,
+            10.00,
+        )  # production since 2026-10-17 (campaign 2)
         assert review_mod.PRICING["gpt-6-luna"] == (0.10, 0.50)
         assert review_mod.estimate_cost(1_000_000, 0, "gpt-6-astra").startswith("$10.00")
 
@@ -1680,10 +1684,11 @@ class TestIsReasoningModel:
         assert review_mod._is_reasoning_model("gpt-6-astra") is True
         assert review_mod._resolve_timeout(None, "gpt-6-astra") == review_mod.REASONING_TIMEOUT
 
-    def test_default_model_is_gpt56_sol(self, review_mod):
+    def test_default_model_is_production_pin(self, review_mod):
         """DEFAULT_MODEL is the production reviewer pin (kept in lockstep with the
-        CI workflow's model: input; the eval harness validated this pairing)."""
-        assert review_mod.DEFAULT_MODEL == "gpt-5.6-sol"
+        CI workflow's model: input; the 2026-10 reviewer-eval campaign 2 selected
+        gpt-6.1-sol, PARITY accepted as GO)."""
+        assert review_mod.DEFAULT_MODEL == "gpt-6.1-sol"
 
     def test_o3_is_reasoning(self, review_mod):
         assert review_mod._is_reasoning_model("o3") is True

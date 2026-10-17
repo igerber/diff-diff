@@ -1,0 +1,443 @@
+{
+ "pass1": {
+  "pass": 1,
+  "rulings": [
+   {
+    "case": "s2-acrt-single-dose",
+    "bug_id": "s2-acrt-single-dose:b1",
+    "arm": "M1",
+    "repeat": 0,
+    "verdict": "partial",
+    "evidence": "**Location:** `diff_diff/continuous_did_bspline.py:L264-L270`, `diff_diff/continuous_did_bspline.py:L279-L289`. **Impact:** `SATURATED_TOL = 1e-9` merges genuinely distinct dose levels according to their units. [...] This changes the estimand rather than providing an equivalent numerical implementation.",
+    "leak": "none",
+    "leak_evidence": "",
+    "reason": "The review never mentions the single-positive-dose / all-zero derivative-matrix case that makes ACRT = 0 (the ground-truth defect at `saturated_derivative_design_matrix` L319-365); its only touch on the derivative convention is a P3 that ACCEPTS the lowest-dose forward difference as documented. However its P0 on `SATURATED_TOL` is in the right file (continuous_did_bspline.py, adjacent helper lines) and is framed as an estimand change, matching the `estimand_math` class. Right file / right class, wrong defect = partial per the rubric."
+   },
+   {
+    "case": "s2-acrt-single-dose",
+    "bug_id": "s2-acrt-single-dose:b1",
+    "arm": "M1",
+    "repeat": 1,
+    "verdict": "missed",
+    "evidence": "The saturated point estimates and per-level analytical SEs match the stated methodology. [...] **P3 \u2014 Documented boundary convention accepted.** **Location:** `docs/methodology/REGISTRY.md:L992`. **Impact:** Forward differencing at the lowest dose changes interpretation relative to the paper's convention, but is explicitly documented.",
+    "leak": "none",
+    "leak_evidence": "",
+    "reason": "Neither P0 is in continuous_did_bspline.py and both are variance/inference-class defects (overall-ACRT delta-method omission at continuous_did.py L1561-1566; degenerate-cell bootstrap significance), not the `estimand_math` point-estimate defect. The review affirmatively states the saturated point estimates match the methodology, and its only contact with the derivative convention is an informational P3 located at REGISTRY.md that accepts the lowest-dose convention with 'None required' - it names no defect of the ground-truth class or location, and never mentions the J=1 all-zero operator or ACRT = 0."
+   },
+   {
+    "case": "s2-cic-practitioner-screen",
+    "bug_id": "s2-cic-practitioner-screen:b1",
+    "arm": "M1",
+    "repeat": 0,
+    "verdict": "partial",
+    "evidence": "**P1 \u2014 Mean parallel trends is not necessary for CiC.** Location: `diff_diff/practitioner.py:L1535-L1541`, `L1552-L1554`. **Impact:** The guidance can reject a valid CiC design. [...] **Concrete fix:** Remove the \"necessary-but-insufficient\" requirement and the claim that mean-trend rejection undermines CiC time invariance.",
+    "leak": "none",
+    "leak_evidence": "",
+    "reason": "Ground truth: the QDiD guidance mis-frames the mean-PT check as a necessary-but-insufficient screen while claiming QDiD does not identify off mean PT, whereas under QDiD's additive quantile model a mean-trend break IS direct evidence against the model (the check is UNDER-stated). This review attacks the same screen at the same location but on the opposite axis and for the other estimator: it argues the check is OVER-stated for CiC (not necessary under Athey-Imbens 3.1-3.4) and never mentions QDiD or the additive model. Right file/symbol, different defect = partial."
+   },
+   {
+    "case": "s2-cic-practitioner-screen",
+    "bug_id": "s2-cic-practitioner-screen:b1",
+    "arm": "M1",
+    "repeat": 1,
+    "verdict": "partial",
+    "evidence": "**P1 \u2014 Parallel mean trends are not necessary for CiC.** Location: `diff_diff/practitioner.py:L1534-L1539`, `L1551-L1554`. **Impact:** The guidance can lead users to reject valid CiC designs. [...] **Concrete fix:** Remove the necessity claim from both CiC prose and snippet comments. Describe mean trends as a descriptive comparison",
+    "leak": "none",
+    "leak_evidence": "",
+    "reason": "Same shape as repeat 0: the finding is the CiC-direction 'not necessary' argument with a scaling-model counterexample, located in the ground-truth line range, but it does not identify the QDiD framing defect (additive model => mean break is direct evidence) and proposes downgrading the check to 'descriptive', which is the opposite of the ground truth's correction. Same location, different defect = partial."
+   },
+   {
+    "case": "s2-cic-practitioner-screen",
+    "bug_id": "s2-cic-practitioner-screen:b1",
+    "arm": "M2",
+    "repeat": 0,
+    "verdict": "partial",
+    "evidence": "### P1 \u2014 Mean parallel trends is not a necessary CiC screen - **Location:** `diff_diff/practitioner.py:L1528-L1558` [...] **Concrete fix:** Remove `check_parallel_trends()` and \"necessary\" language from the CiC branch. Keep it only as a QDiD necessary-but-insufficient screen, or label it explicitly as a descriptive, non-diagnostic comparison.",
+    "leak": "none",
+    "leak_evidence": "",
+    "reason": "The review names the screen at the ground-truth location but on the CiC 'not necessary' direction, and its fix explicitly endorses retaining the QDiD 'necessary-but-insufficient screen' framing - i.e., the exact framing the ground truth identifies as wrong (under QDiD's additive model a mean break is direct evidence against the model). Its separate P1 notes the QDiD additive model is omitted from the assumptions prompt (L1391-1426, L1512-1541) but never connects that to the mean-trend screen's evidential value. Same location, different (and partly contradictory) defect = partial."
+   },
+   {
+    "case": "s2-cic-practitioner-screen",
+    "bug_id": "s2-cic-practitioner-screen:b1",
+    "arm": "M2",
+    "repeat": 1,
+    "verdict": "partial",
+    "evidence": "### P1 \u2014 Mean parallel trends is not a necessary CiC diagnostic **Location:** `diff_diff/practitioner.py:L1528-L1558` [...] **Concrete fix:** For CiC, remove the \"necessary-but-insufficient\" mean-trend screen. [...] If the mean screen remains for QDiD, pass an explicit pre-period list or a pre-treatment-only frame.",
+    "leak": "none",
+    "leak_evidence": "",
+    "reason": "Again the CiC-direction argument at the right location; the only QDiD-specific remark about the screen is a snippet-hygiene aside ('if the mean screen remains for QDiD, pass an explicit pre-period list'), which treats the QDiD framing as acceptable. The second P1 (QDiD equation (22) additive separability omitted from Steps 2/3 at L1399-1407, L1512-1525) is an incomplete-assumptions-list defect, not the mis-framed evidential status of the mean-trend check. Same location, different defect = partial."
+   },
+   {
+    "case": "s4-wcr-saturated-guard-order",
+    "bug_id": "s4-wcr-saturated-guard-order:b1",
+    "arm": "M2",
+    "repeat": 0,
+    "verdict": "partial",
+    "evidence": "The same risk exists after `absorb=` preprocessing at `diff_diff/estimators.py:L458-L475` before the call at `diff_diff/estimators.py:L683-L687`.",
+    "leak": "none",
+    "leak_evidence": "",
+    "reason": "Ground truth b1 is a `rank_deficient_crash`: the wrapper `_run_wild_bootstrap_inference` (estimators.py L780-845) computes the storage vcov via compute_robust_vcov on the ORIGINAL full-dummy design and can raise where the WCR helper (which drops deficient columns) would succeed. The review's P0 is a different class entirely - FE/FWL projection omitted from bootstrap refits, primarily located in twfe.py L380-399 and utils.py L825-879 - and says nothing about rank deficiency, dummy designs, crashes, or the storage-vcov computation. Its only tie to the ground truth is citing the right file at the absorb-preprocessing block and the call site into the wrapper (L683-687), not the wrapper's own lines; under the rubric's literal 'right file ... wrong defect' prong this is the weakest form of partial (file-only adjacency, wrong class, wrong symbol) and counts as missed for every gate."
+   }
+  ]
+ },
+ "pass2": {
+  "pass": 2,
+  "leak_rulings": [
+   {
+    "case": "s1-coef-dict-collision",
+    "arm": "M1",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s1-coef-dict-collision",
+    "arm": "M1",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s1-coef-dict-collision",
+    "arm": "M2",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s1-coef-dict-collision",
+    "arm": "M2",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s1-cs-dr-plugin-se",
+    "arm": "M1",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s1-cs-dr-plugin-se",
+    "arm": "M1",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": "Cites REGISTRY.md L545-L580 as 'states that the previous DR plug-in was removed' - a repository doc, not an answer-key artifact."
+   },
+   {
+    "case": "s1-cs-dr-plugin-se",
+    "arm": "M2",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": "Cites REGISTRY.md and CHANGELOG.md:L788-L794 for the former O(1/n) deviation - repository files, legitimate."
+   },
+   {
+    "case": "s1-cs-dr-plugin-se",
+    "arm": "M2",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-acrt-single-dose",
+    "arm": "M1",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-acrt-single-dose",
+    "arm": "M1",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-acrt-single-dose",
+    "arm": "M2",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-acrt-single-dose",
+    "arm": "M2",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": "'as the project's methodology also states' (ACRT=ATT for binary) refers to repo docs; no verbatim >=12-word rationale sentence, no git/corpus reference."
+   },
+   {
+    "case": "s2-cic-practitioner-screen",
+    "arm": "M1",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-cic-practitioner-screen",
+    "arm": "M1",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": "'This checkout lacks changelog.d/README.md' is a statement about its own worktree, not a leak."
+   },
+   {
+    "case": "s2-cic-practitioner-screen",
+    "arm": "M2",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-cic-practitioner-screen",
+    "arm": "M2",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": "Uses the phrase 'necessary-but-insufficient' which is the diff's own wording; not a 12-word verbatim rationale sentence."
+   },
+   {
+    "case": "s2-had-cluster-guard",
+    "arm": "M1",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-had-cluster-guard",
+    "arm": "M1",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-had-cluster-guard",
+    "arm": "M2",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": "'count distinct cluster IDs on the effective positive-weight support' echoes the case-notes phrase 'positive-weight support' but is short, natural wording and derived from its own reproduction; no confirming reference."
+   },
+   {
+    "case": "s2-had-cluster-guard",
+    "arm": "M2",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-nan-dof-fail-closed",
+    "arm": "M1",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-nan-dof-fail-closed",
+    "arm": "M1",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-nan-dof-fail-closed",
+    "arm": "M2",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-nan-dof-fail-closed",
+    "arm": "M2",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s3-changelog-prose",
+    "arm": "M1",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s3-changelog-prose",
+    "arm": "M1",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s3-changelog-prose",
+    "arm": "M2",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s3-changelog-prose",
+    "arm": "M2",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": "Only fenced block is a pytest tally ('2 passed in 0.12s'); no markers."
+   },
+   {
+    "case": "s3-wcr-pfloor-comment",
+    "arm": "M1",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s3-wcr-pfloor-comment",
+    "arm": "M1",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s3-wcr-pfloor-comment",
+    "arm": "M2",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s3-wcr-pfloor-comment",
+    "arm": "M2",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s4-cs-unbalanced-nan-outcome",
+    "arm": "M1",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": "External R source URLs only (did/DRDID on GitHub); no git commands or corpus references."
+   },
+   {
+    "case": "s4-cs-unbalanced-nan-outcome",
+    "arm": "M1",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s4-cs-unbalanced-nan-outcome",
+    "arm": "M2",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s4-cs-unbalanced-nan-outcome",
+    "arm": "M2",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s4-lpdid-survey-unreduced-design",
+    "arm": "M1",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s4-lpdid-survey-unreduced-design",
+    "arm": "M1",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s4-lpdid-survey-unreduced-design",
+    "arm": "M2",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s4-lpdid-survey-unreduced-design",
+    "arm": "M2",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": "Closest overlap in bundle: 'The new path discards those residuals and recomputes `response - design @ coef`' vs rationale 'discards the solver's residuals, recomputes response - design @ coef' - under 12 words and anchored on a code fragment from the diff; not confirming. Review does not mention the case-notes' latent AttributeError/TypeError P2."
+   },
+   {
+    "case": "s4-wcr-saturated-guard-order",
+    "arm": "M1",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": "Fenced python block is a self-authored reproduction (numpy/wild_bootstrap_se); '[Newly identified]' and 'previous review's regression cases' refer to prior PR review comments provided as re-review context, not to other refs or the answer key."
+   },
+   {
+    "case": "s4-wcr-saturated-guard-order",
+    "arm": "M1",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s4-wcr-saturated-guard-order",
+    "arm": "M2",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": "'The previous review findings ... appear resolved' refers to re-review context (prior AI review comments), not a leak source."
+   },
+   {
+    "case": "s4-wcr-saturated-guard-order",
+    "arm": "M2",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   }
+  ],
+  "grade_corrections": [],
+  "s3_corrections": []
+ }
+}

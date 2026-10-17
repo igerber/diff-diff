@@ -1,0 +1,122 @@
+{
+  "audit_vacuous": null,
+  "campaign_reads": {
+    "cost_estimate_usd": {
+      "B": {
+        "input_price_per_1m": 4.0,
+        "model": "gpt-5.6-sol",
+        "note": "+/-50% initial-prompt estimate; output/reasoning/tool tokens not recorded",
+        "prompt_tokens_est": 314868,
+        "usd": 1.259472
+      },
+      "E": {
+        "input_price_per_1m": 10.0,
+        "model": "gpt-6-astra",
+        "note": "+/-50% initial-prompt estimate; output/reasoning/tool tokens not recorded",
+        "prompt_tokens_est": 314868,
+        "usd": 3.14868
+      }
+    },
+    "latency": {
+      "B": {
+        "max": 432.1229913751595,
+        "mean": 208.54861653045836,
+        "n": 22,
+        "p95": 343.49848304130137
+      },
+      "E": {
+        "max": 391.8861740832217,
+        "mean": 214.21633708151057,
+        "n": 22,
+        "p95": 330.6435491661541
+      }
+    },
+    "latency_flag_candidate_p95_over_2x_control": false,
+    "vendor_lifecycle": "operator_supplied"
+  },
+  "candidate": "E",
+  "catch_status": {
+    "s1-coef-dict-collision|s1-coef-dict-collision:b1|B": "reliable",
+    "s1-coef-dict-collision|s1-coef-dict-collision:b1|E": "reliable",
+    "s1-cs-dr-plugin-se|s1-cs-dr-plugin-se:b1|B": "reliable",
+    "s1-cs-dr-plugin-se|s1-cs-dr-plugin-se:b1|E": "reliable",
+    "s2-acrt-single-dose|s2-acrt-single-dose:b1|B": "unstable",
+    "s2-acrt-single-dose|s2-acrt-single-dose:b1|E": "missed",
+    "s2-cic-practitioner-screen|s2-cic-practitioner-screen:b1|B": "missed",
+    "s2-cic-practitioner-screen|s2-cic-practitioner-screen:b1|E": "missed",
+    "s2-had-cluster-guard|s2-had-cluster-guard:b1|B": "reliable",
+    "s2-had-cluster-guard|s2-had-cluster-guard:b1|E": "reliable",
+    "s2-nan-dof-fail-closed|s2-nan-dof-fail-closed:b1|B": "missed",
+    "s2-nan-dof-fail-closed|s2-nan-dof-fail-closed:b1|E": "reliable",
+    "s4-cs-unbalanced-nan-outcome|s4-cs-unbalanced-nan-outcome:b1|B": "reliable",
+    "s4-cs-unbalanced-nan-outcome|s4-cs-unbalanced-nan-outcome:b1|E": "missed",
+    "s4-lpdid-survey-unreduced-design|s4-lpdid-survey-unreduced-design:b1|B": "unstable",
+    "s4-lpdid-survey-unreduced-design|s4-lpdid-survey-unreduced-design:b1|E": "reliable",
+    "s4-wcr-saturated-guard-order|s4-wcr-saturated-guard-order:b1|B": "missed",
+    "s4-wcr-saturated-guard-order|s4-wcr-saturated-guard-order:b1|E": "missed",
+    "s4-wcr-saturated-guard-order|s4-wcr-saturated-guard-order:b2|B": "missed",
+    "s4-wcr-saturated-guard-order|s4-wcr-saturated-guard-order:b2|E": "missed"
+  },
+  "contested": [],
+  "contested_gates": [],
+  "control": "B",
+  "definitive": false,
+  "downgrades": [],
+  "evidence_gaps": [],
+  "exposure": {
+    "first_subdir": "gpt6",
+    "frozen_head": "225a4afb73106614c37d34b21100eafcdf34be43",
+    "head_changed": false,
+    "ledger_entries": 1,
+    "mechanical": true,
+    "reason": "first dispatch of the contrast (frozen revision)",
+    "subdirs": [
+      "gpt6"
+    ],
+    "surface_diff_stat": "",
+    "this_subdir": "gpt6",
+    "timeout_only": false
+  },
+  "fp_candidate": 0,
+  "fp_control": 0,
+  "fp_findings": {
+    "B": [],
+    "E": []
+  },
+  "gate_cells": null,
+  "improvements": [
+    {
+      "bug_id": "s2-nan-dof-fail-closed:b1",
+      "case": "s2-nan-dof-fail-closed"
+    }
+  ],
+  "informational": {
+    "B": {
+      "hallucinations": 22,
+      "leaks": 0,
+      "unconfirmed_flags": 0
+    },
+    "E": {
+      "hallucinations": 22,
+      "leaks": 0,
+      "unconfirmed_flags": 0
+    }
+  },
+  "judgment_flags": [
+    {
+      "bug": "s2-acrt-single-dose|s2-acrt-single-dose:b1",
+      "kind": "b_unstable_e_missed"
+    }
+  ],
+  "label": "NO-GO (PROVISIONAL, no session-log audit)",
+  "regressions": [
+    {
+      "bug_id": "s4-cs-unbalanced-nan-outcome:b1",
+      "case": "s4-cs-unbalanced-nan-outcome"
+    }
+  ],
+  "verdict": "NO-GO",
+  "voided_cells": []
+}
+
+VERDICT: NO-GO (PROVISIONAL, no session-log audit)

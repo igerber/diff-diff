@@ -2,7 +2,7 @@
 
 Called by SKILL.md with an already-rendered reviewer prompt. Detects codex,
 invokes `openai_review.call_codex` with the campaign-graded model/effort
-pins (gpt-5.6-sol @ xhigh, arm C as-run) under a read-only sandbox, writes the codex
+pins (gpt-6.1-sol @ xhigh; the production code-review pin) under a read-only sandbox, writes the codex
 review. Before invoking, it runs openai_review's own sensitive-file scan +
 stderr notice (the codex `--cd` read surface is the whole repo — the same
 notice the `/ai-review-local` codex path prints). Exit codes let SKILL.md fall
@@ -21,15 +21,24 @@ import os
 import shutil
 import sys
 
-# Campaign-graded codex pins (Campaign 1: arm C, as-run — the campaign was
-# exploratory / non-gating). Do not change without re-validation —
-# tests/test_plan_review_skill.py asserts these.
-CODEX_MODEL = "gpt-5.6-sol"
+# Codex pins follow the PRODUCTION code-review model (lockstep-tested against the
+# CI workflow and openai_review.DEFAULT_MODEL). gpt-5.6-sol was the engine
+# Campaign 1 graded (arm C, as-run; exploratory / non-gating); gpt-6.1-sol was
+# carried over by the 2026-10 code-review campaign 2
+# (tools/reviewer-eval/campaigns/2026-10-gpt61sol-VERDICT.md), NOT re-run through
+# plan-review-eval. To re-validate: first re-pin
+# tools/plan-review-eval/config/configs.json cli_version (the composite
+# "<claude-code version> | codex-cli <version>" string on all five arms) to the
+# live Claude Code + codex CLI pair, add a gpt-6.1-sol arm, run that harness
+# against the sol baseline (TODO.md row). tests/test_plan_review_skill.py asserts
+# these pins.
+CODEX_MODEL = "gpt-6.1-sol"
 CODEX_EFFORT = "xhigh"
-# The timeout is NOT the campaign value (the campaign ran unattended at
-# CODEX_TIMEOUT_S=3600). It is an interactive-gate ceiling: high enough to clear
-# real plan-review runtimes with room to spare, low enough to bound the
-# interactive wait. A timeout is treated as codex being unavailable (exit 3 →
+# The timeout equals the code-review harness's CALL_TIMEOUT_S
+# (tools/reviewer-eval/adapters/codex_reviewer.py; tests/test_plan_review_skill.py
+# pins the equality). It is still an interactive-gate ceiling, not a campaign
+# setting: high enough to clear real plan-review runtimes with room to spare,
+# low enough to bound the interactive wait. A timeout is treated as codex being unavailable (exit 3 →
 # LOUD single-Claude fallback), so err generous.
 #
 # Raised 1200 → 2400 on 2026-08-08. The old value was calibrated to the campaign's
@@ -45,7 +54,13 @@ CODEX_EFFORT = "xhigh"
 # Changing this does NOT require engine re-validation: the "do not change without
 # re-validation" note above binds CODEX_MODEL and CODEX_EFFORT (what Campaign 1
 # graded). The ceiling is an operational knob and is graded by nothing.
-CODEX_TIMEOUT_S = 2400.0
+#
+# Raised 2400 -> 3600 on 2026-10-17 with the gpt-6.1-sol swap, to equal the
+# code-review harness ceiling (the 2026-10 campaigns measured 6.1-sol at
+# ~180 s mean / 277 s p95 per code review, faster than 5.6-sol, but plan review
+# is the slower surface and the two pins are kept in lockstep); still a hard
+# cap, exit 3 = loud single-Claude fallback.
+CODEX_TIMEOUT_S = 3600.0
 
 
 def _load_openai_review(repo_root: str):

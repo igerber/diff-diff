@@ -530,7 +530,7 @@ jobs:
           # configs.json pin + a harness smoke (the lockstep test enforces equality).
           codex-version: 0.162.1
           # Recommended by OpenAI for review quality/consistency:
-          model: gpt-5.6-sol
+          model: gpt-6.1-sol
           effort: xhigh
 
       - name: Post PR comment (new on every event except initial open)

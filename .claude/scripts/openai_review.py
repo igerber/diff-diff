@@ -878,6 +878,7 @@ PRICING = {
     "gpt-5.6-luna": (0.20, 1.20),
     "gpt-6-astra": (10.00, 50.00),
     "gpt-6-sol": (2.00, 10.00),
+    "gpt-6.1-sol": (2.00, 10.00),
     "gpt-6-luna": (0.10, 0.50),
     "gpt-4.1": (2.00, 8.00),
     "gpt-4.1-mini": (0.40, 1.60),
@@ -1142,7 +1143,7 @@ def compile_prompt(
 # ---------------------------------------------------------------------------
 
 ENDPOINT = "https://api.openai.com/v1/responses"
-DEFAULT_MODEL = "gpt-5.6-sol"
+DEFAULT_MODEL = "gpt-6.1-sol"
 DEFAULT_TIMEOUT = 300  # seconds
 REASONING_TIMEOUT = 900  # seconds
 DEFAULT_MAX_TOKENS = 16384
@@ -1347,7 +1348,7 @@ def _build_codex_cmd(
 ) -> "list[str]":
     """Construct the argv for `codex exec`.
 
-    Pinned to match the CI Codex action's invocation (gpt-5.6-sol + xhigh effort +
+    Pinned to match the CI Codex action's invocation (gpt-6.1-sol + xhigh effort +
     read-only sandbox) so local reviews give CI-equivalent quality. ``effort``
     defaults to the production/CI value (xhigh) so this argv stays byte-identical
     for production callers; the reviewer-eval harness passes other levels

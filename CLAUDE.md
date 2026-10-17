@@ -250,9 +250,11 @@ Before calling `ExitPlanMode`, ALWAYS offer all three review options via
 `AskUserQuestion`, with the `(Recommended)` tag chosen ADAPTIVELY from the
 plan's complexity and risk (not a fixed default) — set exactly one:
 - **Dual review** — the campaign-selected engine (two blind reviewers, Claude @
-  Opus + codex `gpt-5.6-sol`, then merge/verify; Campaign 1 was exploratory /
-  NON-GATING but showed dual catching 7/9 must-catch plan defects vs 1/9
-  single). Recommend for SUBSTANTIVE / high-risk plans:
+  Opus + codex `gpt-6.1-sol`, then merge/verify; Campaign 1, run with gpt-5.6-sol,
+  was exploratory / NON-GATING but showed dual catching 7/9 must-catch plan
+  defects vs 1/9 single; gpt-6.1-sol is carried over from the 2026-10 code-review
+  campaign and not re-validated by plan-review-eval). Recommend for SUBSTANTIVE /
+  high-risk plans:
   estimator, methodology, variance/inference, or `docs/methodology/REGISTRY.md`
   changes; multi-file, architectural, or public-API changes.
 - **Single review** (Opus only, no codex) — recommend for LOCALIZED, mechanical
@@ -264,7 +266,7 @@ plan's complexity and risk (not a fixed default) — set exactly one:
 (`.claude/skills/plan-review/`) in the chosen mode. Its Review phase snapshots
 the plan via the tested helper (confirm the printed `plan_path` — the ingress
 file is shared per-worktree), runs the reviewers (dual = Opus reviewer + codex
-`gpt-5.6-sol` + merge/verify; single = the Opus reviewer alone), writes the
+`gpt-6.1-sol` + merge/verify; single = the Opus reviewer alone), writes the
 review to the helper-derived `review_path`, and runs `plan_snapshot.py persist`
 (which re-verifies the live plan against the recorded snapshot — exit 3 = plan
 changed mid-review, not persisted, re-review — stamps `plan:`/`plan_sha256:`

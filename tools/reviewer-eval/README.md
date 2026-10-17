@@ -7,14 +7,20 @@ raw review, and emits a side-by-side bundle you (or an LLM) read into a
 caught / missed / false-positive table — optionally **blinded** (arm identities
 stripped) so graders can't favor a model.
 
-**Status:** harness supports N-arm matrices (current config: a 5-arm file; the
-2026-10 campaign is `--configs B,E --k 2`, control gpt-5.6-sol vs candidate
-gpt-6-astra, outcome: pending), per-arm repeat counts, blinded grading sealed to
-the run artifacts, a post-unblinding session-log audit and a mechanical verdict
-CLI. Local-only — not wired to CI. The go/no-go rule is pre-registered in
-`DECISION_RULE.md`; the grader-facing rubric is `GRADING_RUBRIC.md` (graders
-never see the rule or any campaign history). ChatGPT-account `codex login`
-rejects `gpt-6-sol`, so a cheaper-tier probe arm is parked (DEFERRED.md).
+**Status:** harness supports N-arm matrices (current config: a 6-arm file).
+2026-10 campaign 1 was `--configs B,E --k 2`, control gpt-5.6-sol vs candidate
+gpt-6-astra: mechanical NO-GO (one regression; rule archived as
+`campaigns/2026-10-gpt6-DECISION_RULE.md`). Campaign 2 is `--configs B,F --k 2`,
+the same control vs candidate gpt-6.1-sol: mechanical PARITY, accepted as GO by
+the user, so gpt-6.1-sol @ xhigh is production (CI + local + plan-review) and arm
+F carries role=control (`campaigns/2026-10-gpt61sol-VERDICT.md`). Per-arm repeat
+counts, blinded grading sealed to the run artifacts, a post-unblinding
+session-log audit and a mechanical verdict CLI. Local-only — not wired to CI.
+The go/no-go rule is pre-registered in `DECISION_RULE.md`; the grader-facing
+rubric is `GRADING_RUBRIC.md` (graders never see the rule or any campaign
+history). On codex-cli 0.162.1 the ChatGPT-account `codex login` accepts the
+gpt-6 Sol tier (the 0.153.4 rejection that parked a cheaper-tier arm no longer
+holds), which is what makes campaign 2 possible.
 
 ## Why this exists
 
@@ -49,26 +55,29 @@ was its first consumer) — generic glue with no diff-diff coupling.
 python tools/reviewer-eval/run_eval.py verify-corpus
 
 # 2. Smoke test (1 case, first real codex call) for the CONTROL only. Bare
-#    `smoke` exercises the role=control arm (derived from configs.json). The
+#    `smoke` exercises the role=control arm (derived from configs.json; after
+#    the 2026-10 swap that is F = gpt-6.1-sol, production). A registered
 #    candidate's first corpus run is the campaign itself (pre-registration by
-#    construction); `smoke` REFUSES a registered candidate arm, and `run`
-#    accepts one only as the exact registered campaign shape below. A review
-#    runs 2-15 min.
+#    construction); `smoke` REFUSES a registered candidate arm other than the
+#    control, and `run` accepts one only as the exact registered campaign shape
+#    below; the next campaign registers its own (control, candidate) pair in
+#    its own PR-1. A review runs 2-15 min.
 python tools/reviewer-eval/run_eval.py smoke
 
-# 3. Full matrix — k=2 repeats on control vs candidate (one run = one experiment)
-python tools/reviewer-eval/run_eval.py run --subdir gpt6 --configs B,E --k 2
+# 3. Full matrix — k=2 repeats on control vs candidate (one run = one experiment;
+#    the 2026-10 campaign-2 shape, now complete - a new campaign uses its own subdir)
+python tools/reviewer-eval/run_eval.py run --subdir gpt61sol --configs B,F --k 2
 
 # 4. Emit the side-by-side bundle to grade (+ the identity-stripped, sealed one)
-python tools/reviewer-eval/run_eval.py compare --subdir gpt6 --blinded
+python tools/reviewer-eval/run_eval.py compare --subdir gpt61sol --blinded
 
 # 5. After unblinding: the session-log audit (outputs go OUTSIDE the repo or
 #    under the gitignored runs/ — a root-level file dirties the tree and trips
 #    the identity guard) and the mechanical verdict (PROVISIONAL without
 #    --audit-hits, DEFINITIVE with it)
-python tools/reviewer-eval/run_eval.py audit --subdir gpt6 -o /tmp/<scratch>/hits.json
-python tools/reviewer-eval/run_eval.py verdict --subdir gpt6 --grades <reconciled.json> \
-    --control B --candidate E [--audit-hits /tmp/<scratch>/hits.json] [--expect-head <sha>]
+python tools/reviewer-eval/run_eval.py audit --subdir gpt61sol -o /tmp/<scratch>/hits.json
+python tools/reviewer-eval/run_eval.py verdict --subdir gpt61sol --grades <reconciled.json> \
+    --control B --candidate F [--audit-hits /tmp/<scratch>/hits.json] [--expect-head <sha>]
 ```
 
 Run artifacts and the bundles land under `runs/` (gitignored). `--blinded` also

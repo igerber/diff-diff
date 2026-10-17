@@ -1,14 +1,17 @@
 ---
 name: plan-review
-description: Review a Claude Code plan file with the campaign-selected dual engine (Opus reviewer + codex-sol, merge/verify), or revise a plan from its review. Produces the .review.md the ExitPlanMode content-hash gate requires.
+description: Review a Claude Code plan file with the dual engine (Opus reviewer + codex gpt-6.1-sol, merge/verify; the Opus+Sol pair was Campaign-1 selected, run with gpt-5.6-sol, and 6.1-sol is carried over from the 2026-10 code-review campaign), or revise a plan from its review. Produces the .review.md the ExitPlanMode content-hash gate requires.
 ---
 
 # Plan Review (dual engine)
 
 Owns the plan-review → revise cycle. The review ENGINE is **dual** — two blind
-reviewers (Claude @ Opus 4.8 + codex `gpt-5.6-sol`) then a merge/verify pass —
-the configuration Campaign 1 selected: its exploratory run had dual reliably
-catch **7/9** must-catch plan defects vs **1/9** for any single reviewer. That
+reviewers (Claude @ Opus 4.8 + codex `gpt-6.1-sol`) then a merge/verify pass —
+the configuration Campaign 1 selected (measured with gpt-5.6-sol; the codex pin
+now tracks the production code-review model, carried over from the 2026-10
+code-review campaign 2 and not re-validated by plan-review-eval): its
+exploratory run had dual reliably catch **7/9** must-catch plan defects vs
+**1/9** for any single reviewer (measured with gpt-5.6-sol). That
 campaign was **NON-GATING** (contaminated negatives + a criteria regression);
 the sensitivity signal is what selects dual, and a clean re-validation is
 tracked — see `tools/plan-review-eval/verdicts/campaign-1.md`. The content-hash
@@ -27,8 +30,9 @@ Bundled in this skill dir (`.claude/skills/plan-review/`):
 - `render.py` — strict `__TOKEN__` renderer. **Always render prompts with it;
   never free-text-substitute the templates** (that is a different, unmeasured
   engine).
-- `codex_review.py` — the codex (reviewer 2) half, with the campaign
-  model/effort pins and loud-fallback exit codes.
+- `codex_review.py` — the codex (reviewer 2) half, with the production-tracked
+  model/effort pins (see its header comment for validation status) and
+  loud-fallback exit codes.
 
 ## Modes
 
@@ -137,7 +141,7 @@ read-only intent — whose prompt is the exact contents of
 and returns the findings list + summary table. Write its output to
 `<work_dir>/review_a.md`.
 
-### 4. Reviewer 2 — codex-sol (blind) — DUAL mode only
+### 4. Reviewer 2 — codex gpt-6.1-sol (blind) — DUAL mode only
 
 **Single mode**: skip steps 4-5 and take the **Single-reviewer mode
 (deliberate)** path below — the review body is reviewer 1's output with the
@@ -167,7 +171,7 @@ python3 ".claude/skills/plan-review/codex_review.py" \
 - **Exit 0** → codex review is in `<work_dir>/review_b.md`; go to step 5.
 - **Non-zero (2 = codex absent, 3 = timeout/error)** → codex is unavailable;
   take the **Loud fallback** below and skip steps 5-6. A hung codex cannot
-  wedge the gate — `codex_review.py` caps at 2400s and exits 3.
+  wedge the gate — `codex_review.py` caps at 3600s and exits 3.
 
 ### 5. Merge + verify — Claude @ Opus
 
@@ -200,7 +204,7 @@ verbatim, then the contents of `<work_dir>/review_a.md`:
 
 ```
 > ⚠ **codex unavailable — SINGLE-Claude fallback.** This is the un-validated
-> weak arm (Campaign 1: caught 1/9 hard plan defects vs 7/9 for the dual
+> weak arm (Campaign 1, measured with gpt-5.6-sol: caught 1/9 hard plan defects vs 7/9 for the dual
 > engine). Run `codex login` and re-review for full coverage.
 ```
 
@@ -216,7 +220,7 @@ failure), then the contents of `<work_dir>/review_a.md`:
 
 ```
 > Single-Opus review (deliberate one-reviewer choice, not the dual engine).
-> The dual engine caught 7/9 hard plan defects vs 1/9 single in Campaign 1 —
+> The dual engine caught 7/9 hard plan defects vs 1/9 single in Campaign 1 (measured with gpt-5.6-sol) —
 > re-review in dual mode if this plan turns out higher-risk than expected.
 ```
 

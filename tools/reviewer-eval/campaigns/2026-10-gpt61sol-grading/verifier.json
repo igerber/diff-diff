@@ -1,0 +1,410 @@
+{
+ "pass1": {
+  "pass": 1,
+  "rulings": [
+   {
+    "case": "s2-cic-practitioner-screen",
+    "bug_id": "s2-cic-practitioner-screen:b1",
+    "arm": "M1",
+    "repeat": 0,
+    "verdict": "partial",
+    "evidence": "### P1 \u2014 Mean parallel trends is not necessary for CiC ... **Impact:** The guidance says a mean-trend break undermines CiC\u2019s time-invariance assumption. The Registry\u2019s model allows different group distributions of U and arbitrary strictly increasing time transformations; these can produce different mean trends while satisfying identification. ... **Concrete fix:** Remove the necessity claim and \u201cundermines\u201d interpretation for CiC. Present mean comparisons as descriptive and use the distributional placebo for model-relevant guidance.",
+    "leak": "none",
+    "leak_evidence": "",
+    "reason": "The ground truth is that the shipped QDiD text understates the mean-trend screen's evidential value (under QDiD's additive model a mean-trend break IS direct evidence against the model) while claiming QDiD does not identify off mean parallel trends. This review attacks the same screen at the same location (L1534-L1539 within `_handle_cic`) but in the opposite direction: it argues mean PT is NOT necessary for CiC and should be demoted to descriptive. It never mentions QDiD's additive model, the 'does not identify off mean PT' claim, or that the text understates the check, so it is a different defect at the same location."
+   },
+   {
+    "case": "s2-cic-practitioner-screen",
+    "bug_id": "s2-cic-practitioner-screen:b1",
+    "arm": "M1",
+    "repeat": 1,
+    "verdict": "partial",
+    "evidence": "**P1 \u2014 Remove the necessary mean-parallel-trends requirement for CiC.** Location: `diff_diff/practitioner.py:L1534-L1539`, `L1552-L1558`. **Impact:** CiC permits different untreated mean trends across groups. ... **Concrete fix:** Remove the necessary-condition claim and shared snippet comment for CiC. Recommend the distributional placebo already supplied, or describe mean trends as descriptive only.",
+    "leak": "none",
+    "leak_evidence": "",
+    "reason": "Same screen, same location, but again only the 'not necessary for CiC' direction; the review wants the necessity claim removed rather than strengthened for QDiD. Its separate P1 'Include QDiD\u2019s additive-separability assumption' (L1401-L1407, L1514-L1525) notes the assumption text omits `Y\u1d3a=h\u1d33(U,G)+h\u1d40(U,T)` but never links the additive model to the mean-trend screen or says the shipped QDiD text mis-states the evidential value of a mean-trend break. The ground-truth mis-framing of the identification argument is not named."
+   },
+   {
+    "case": "s2-cic-practitioner-screen",
+    "bug_id": "s2-cic-practitioner-screen:b1",
+    "arm": "M2",
+    "repeat": 0,
+    "verdict": "partial",
+    "evidence": "### P1 \u2014 Mean parallel trends is not a necessary CiC screen **Location:** `diff_diff/practitioner.py:L1528-L1558` **Impact:** The new handler says a pre-period mean-trend break undermines CiC time invariance and labels `check_parallel_trends()` a \u201cnecessary\u201d screen. ... **Concrete fix:** Remove the mean-parallel-trends recommendation from the CiC branch and rely on the distributional two-pre-period placebo. If retained for QDiD, explain why QDiD\u2019s stronger additive model implies it and pass an explicit pre-period list.",
+    "leak": "none",
+    "leak_evidence": "",
+    "reason": "Right location and right screen, but the finding is that the screen is wrongly applied to CiC. The only QDiD remark is a conditional aside in the fix ('If retained for QDiD, explain why QDiD\u2019s stronger additive model implies it'), which treats the QDiD screen as acceptable to retain; it does not say the shipped QDiD text claims QDiD does not identify off mean parallel trends, nor that the 'necessary-but-insufficient' framing understates a mean-trend break as direct evidence against the additive model. Per the verifier criterion, a 'would justify' remark is not the ground-truth defect."
+   },
+   {
+    "case": "s2-cic-practitioner-screen",
+    "bug_id": "s2-cic-practitioner-screen:b1",
+    "arm": "M2",
+    "repeat": 1,
+    "verdict": "partial",
+    "evidence": "### P1 \u2014 Mean parallel trends is not a necessary CiC screen - **Location:** `diff_diff/practitioner.py:L1528-L1558` - **Impact:** The CiC branch calls a mean-trend comparison \u201cnecessary\u201d and says a mean-trend break undermines time invariance. ... - **Concrete fix:** Remove the generic mean-parallel-trends recommendation from the CiC branch, or label it purely descriptive and explicitly state that failure does not violate CiC. Use the distributional two-pre-period placebo already provided as the relevant screen. QDiD may retain a mean screen because its additive model implies common mean changes.",
+    "leak": "none",
+    "leak_evidence": "",
+    "reason": "Same pattern: the P1 is the CiC-direction objection at the right location, and the closing sentence 'QDiD may retain a mean screen because its additive model implies common mean changes' endorses rather than criticises the shipped QDiD screen. Its separate P1 'QDiD\u2019s identifying model is incomplete' concerns omitted additive-separability/monotonicity in the assumption text, not the evidential value of a mean-trend break, and the snippet P1 is about `pre_periods=`. No finding states that the shipped QDiD text mis-states or understates what a mean-trend break implies, which is the ground-truth defect."
+   }
+  ]
+ },
+ "pass2": {
+  "pass": 2,
+  "leak_rulings": [
+   {
+    "case": "s1-coef-dict-collision",
+    "arm": "M1",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s1-coef-dict-collision",
+    "arm": "M1",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s1-coef-dict-collision",
+    "arm": "M2",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": "Cites CHANGELOG.md:L11 and REGISTRY.md:L2551-L2554 as repository docs describing the skip; in-repo files, not refs or the answer key."
+   },
+   {
+    "case": "s1-coef-dict-collision",
+    "arm": "M2",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": "Only a pytest command (`pytest -q -s -p no:cacheprovider tests/...`); no git command, no commit-message citation."
+   },
+   {
+    "case": "s1-cs-dr-plugin-se",
+    "arm": "M1",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s1-cs-dr-plugin-se",
+    "arm": "M1",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s1-cs-dr-plugin-se",
+    "arm": "M2",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": "REGISTRY.md:L545-L580 cited as recording that the ddof=1 plug-in was removed; in-repo documentation, not a leak source."
+   },
+   {
+    "case": "s1-cs-dr-plugin-se",
+    "arm": "M2",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-acrt-single-dose",
+    "arm": "M1",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-acrt-single-dose",
+    "arm": "M1",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-acrt-single-dose",
+    "arm": "M2",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-acrt-single-dose",
+    "arm": "M2",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": "Absolute paths under tools/reviewer-eval/runs/.worktrees/<leaf>/ are the reviewer's own worktree (exempt); the 'D in {0,1}, ACRT = ATT' statement is sourced from docs/methodology/continuous-did.md:L186-L205, an in-repo file."
+   },
+   {
+    "case": "s2-cic-practitioner-screen",
+    "arm": "M1",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-cic-practitioner-screen",
+    "arm": "M1",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-cic-practitioner-screen",
+    "arm": "M2",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": "Prose mentions `git diff --check` passing; a working-tree whitespace check naming no ref, range or main/master - not a confirmation."
+   },
+   {
+    "case": "s2-cic-practitioner-screen",
+    "arm": "M2",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-had-cluster-guard",
+    "arm": "M1",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-had-cluster-guard",
+    "arm": "M1",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-had-cluster-guard",
+    "arm": "M2",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-had-cluster-guard",
+    "arm": "M2",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-nan-dof-fail-closed",
+    "arm": "M1",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-nan-dof-fail-closed",
+    "arm": "M1",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-nan-dof-fail-closed",
+    "arm": "M2",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s2-nan-dof-fail-closed",
+    "arm": "M2",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s3-changelog-prose",
+    "arm": "M1",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": "Mentions 'The previous attribution concern is resolved' - a re-review framing, not a source citation; no git command or commit-message reference."
+   },
+   {
+    "case": "s3-changelog-prose",
+    "arm": "M1",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": "Same 'prior attribution concern is resolved' framing; no confirming evidence."
+   },
+   {
+    "case": "s3-changelog-prose",
+    "arm": "M2",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s3-changelog-prose",
+    "arm": "M2",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s3-wcr-pfloor-comment",
+    "arm": "M1",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s3-wcr-pfloor-comment",
+    "arm": "M1",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s3-wcr-pfloor-comment",
+    "arm": "M2",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s3-wcr-pfloor-comment",
+    "arm": "M2",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s4-cs-unbalanced-nan-outcome",
+    "arm": "M1",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s4-cs-unbalanced-nan-outcome",
+    "arm": "M1",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": "Heading 'Balance detection counts missing outcomes as observed' paraphrases the rationale but is well under 12 words and not verbatim."
+   },
+   {
+    "case": "s4-cs-unbalanced-nan-outcome",
+    "arm": "M2",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s4-cs-unbalanced-nan-outcome",
+    "arm": "M2",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s4-lpdid-survey-unreduced-design",
+    "arm": "M1",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": "Quotes the code fragment `response - design @ coef`, which the rationale also quotes; code fragments from the diff never count, and the surrounding prose is not a verbatim rationale sentence."
+   },
+   {
+    "case": "s4-lpdid-survey-unreduced-design",
+    "arm": "M1",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s4-lpdid-survey-unreduced-design",
+    "arm": "M2",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s4-lpdid-survey-unreduced-design",
+    "arm": "M2",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": "Only a pytest command (`pytest -s -p no:cacheprovider tests/test_lpdid.py -q`); no git command."
+   },
+   {
+    "case": "s4-wcr-saturated-guard-order",
+    "arm": "M1",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s4-wcr-saturated-guard-order",
+    "arm": "M1",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": "Fenced python reproduction block contains only numpy/diff_diff calls; no marker-list entries."
+   },
+   {
+    "case": "s4-wcr-saturated-guard-order",
+    "arm": "M2",
+    "repeat": 0,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   },
+   {
+    "case": "s4-wcr-saturated-guard-order",
+    "arm": "M2",
+    "repeat": 1,
+    "leak": "none",
+    "leak_evidence": "",
+    "note": ""
+   }
+  ],
+  "grade_corrections": [],
+  "s3_corrections": []
+ }
+}

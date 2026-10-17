@@ -1,0 +1,1409 @@
+{
+ "artifacts_sha": "37939d7ab22888d9c0d73ef9c97380e1df48b05f7b1df633b542a1fcc162ac61",
+ "branch": "codex-sol61",
+ "coverage": {
+  "covered": 4,
+  "no_commands": 0,
+  "total": 44,
+  "unaudited": 40
+ },
+ "hits": [
+  {
+   "arm": "B",
+   "case": "s1-coef-dict-collision",
+   "line_sha256": "4581c043835af761f02f10ddacc67cd338cd7d9cc050ab41ad1d76eca63b8099",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s1-coef-dict-collision",
+   "line_sha256": "43875f510f7d4d2355ea7a1bbd06ce3a393d3cb5e31bb377b6bbad40b0d023c2",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s1-coef-dict-collision",
+   "line_sha256": "6db06274942ca668070ccee3f005da1d2cc2f9cb908e4b2faeee02266b28aee1",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s1-coef-dict-collision",
+   "line_sha256": "bc5e0932da413124af878ef15d712049afc6aedf5ca58d90111baabe01f28b9c",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s1-coef-dict-collision",
+   "line_sha256": "de9ffa6055e0a2383967d3cbf194e3677e100d3b8cd2a94e1e19af29c83dafb9",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s1-coef-dict-collision",
+   "line_sha256": "4a23000128509bdf1a9dff7da14e195599c24a286e88f211089636ff81dcb463",
+   "markers": [
+    "worktrees/",
+    "tools/reviewer-eval/",
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s1-coef-dict-collision",
+   "line_sha256": "c01dd2b41980c065e0a777d9d15a8e4e0e3ff0b3d64fcbcb1a9bc36cda03d565",
+   "markers": [
+    "worktrees/",
+    "tools/reviewer-eval/",
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s1-coef-dict-collision",
+   "line_sha256": "c00612992135e362b61ef9aa2c8840ca720851d362b5ca14ad59480746c78254",
+   "markers": [
+    "../"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s1-cs-dr-plugin-se",
+   "line_sha256": "be903554134a616a4f51158f58b4e3a6fa7c63ee7f792338eee51d14d562c019",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s1-cs-dr-plugin-se",
+   "line_sha256": "e7d59ebeae9764faf8602a13d1f56dcd3d82b82bd26e3e21c6aa7836f5a4e8ad",
+   "markers": [
+    "HEAD~"
+   ],
+   "orientation_only": true,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s1-cs-dr-plugin-se",
+   "line_sha256": "bff3b5f05108e0e3bead6fdc57235ca733327489684a089019e7608712b2737b",
+   "markers": [
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s1-cs-dr-plugin-se",
+   "line_sha256": "e1973c0cba163fa32110a25fe567930fcdfe33c7032958599913efd0311d7898",
+   "markers": [
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s1-cs-dr-plugin-se",
+   "line_sha256": "642d39c1c8e8172f91e155f4ecaf711603bfadc4c61543df8cb6bfec3ac22c9d",
+   "markers": [
+    "worktrees/",
+    "tools/reviewer-eval/",
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s1-cs-dr-plugin-se",
+   "line_sha256": "436ee100fd57903cf9e6eb66780804d032df8908bf0c33dbd78e5d69de1078b6",
+   "markers": [
+    "BARE_SHOW_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s2-acrt-single-dose",
+   "line_sha256": "6bc9c7174b8708e37833c5fa3c06a6badf2620f825274205ddbbf27b6a29b4b9",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s2-acrt-single-dose",
+   "line_sha256": "8c003bd8814eed70d32562a28c791afbcfafcd9c8c284e05718b2a3f04ea0356",
+   "markers": [
+    "rev-parse",
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s2-acrt-single-dose",
+   "line_sha256": "972096a15295e925f2e3cf87eee726b50fabd9ef05a627c24781c89d1daa86f9",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s2-acrt-single-dose",
+   "line_sha256": "679da91f949a511dbee6113010bc53b87533af6163b5fef3d71638f2803a5231",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s2-acrt-single-dose",
+   "line_sha256": "1f0d006bf9e7caf5e7a47f03a5c6d89ee49e952bc50921c4f77293f757612b65",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s2-acrt-single-dose",
+   "line_sha256": "0fc03c2824d3dde62aefd151f0485e213a06e59d17821d84502a586763519ec5",
+   "markers": [
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s2-acrt-single-dose",
+   "line_sha256": "814f0f33cb379d7ac38340497f36e9195ce02d3f2de9d7ac57219278648acdea",
+   "markers": [
+    "worktrees/",
+    "tools/reviewer-eval/",
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s2-acrt-single-dose",
+   "line_sha256": "031a2d49b3a82bc591181eee88488e1237d89f86b070e9914026376088a978cb",
+   "markers": [
+    "GIT_DIR_RE"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s2-acrt-single-dose",
+   "line_sha256": "b945e48385ff5ea9cf694e0f3f275a664d5d6ffeb4a7a83d6a0524836cd320ed",
+   "markers": [
+    "worktrees/",
+    "tools/reviewer-eval/",
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s2-acrt-single-dose",
+   "line_sha256": "489459885bf6c841d581dbfda5e833865b8b402a358a4f68438b494087efba4d",
+   "markers": [
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s2-cic-practitioner-screen",
+   "line_sha256": "aee739303916771552df815506d15b8966cc3848ba41156b5a18e9fa1c8d3f11",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s2-cic-practitioner-screen",
+   "line_sha256": "7db0895e590ea7ecf2f5f4e4a960e883e47b14a532948b64fdc341d0aad21d62",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s2-cic-practitioner-screen",
+   "line_sha256": "9eb4e535ccab0a3db7afd4b81945d6618e017f48173ee821d15d2993d7cea36d",
+   "markers": [
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s2-cic-practitioner-screen",
+   "line_sha256": "79ef89a6f757830872163acb657afe333343b38d5f7bcb2a0f52ad5b28d6cd59",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s2-cic-practitioner-screen",
+   "line_sha256": "489459885bf6c841d581dbfda5e833865b8b402a358a4f68438b494087efba4d",
+   "markers": [
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s2-cic-practitioner-screen",
+   "line_sha256": "06c4414f2ba3ca58ffdd8b68e6594dc712a6de0c1a18d696fa36f05562a084fc",
+   "markers": [
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s2-cic-practitioner-screen",
+   "line_sha256": "489459885bf6c841d581dbfda5e833865b8b402a358a4f68438b494087efba4d",
+   "markers": [
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s2-had-cluster-guard",
+   "line_sha256": "cc391d5c7315c5ee5895e7c4648ed7cab84686a0a577616f1a2896b1e043adf3",
+   "markers": [
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s2-had-cluster-guard",
+   "line_sha256": "60cce41f7825e3a471ff0276a7d6ce8c8d23d7452936dbda837dcc6fcddc638a",
+   "markers": [
+    "-rn"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s2-had-cluster-guard",
+   "line_sha256": "27eeeb0397a46f1e0fc0f7cfd2e27fa5cb71b030d47d401629460ab83f82c659",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s2-had-cluster-guard",
+   "line_sha256": "dd849ca4a37bf4802b2e980a5f5a1ecec1bde2809fa5e2c9ae4462b5537eebaa",
+   "markers": [
+    "git show HEAD",
+    "BARE_SHOW_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s2-had-cluster-guard",
+   "line_sha256": "2073d2e30017c6c0d3f45fac4c79b047ee85b22f738dadabe82b8da10e27f140",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s2-had-cluster-guard",
+   "line_sha256": "eefc1eb47dddd5e0c76f397a720c93e6cbabb0eb8cb191e267fffff59ca138a6",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s2-had-cluster-guard",
+   "line_sha256": "f8c2aaaaa9ad31c0c8496a39705bcec59fad5c1acdc87d8ca1280aec8d62d185",
+   "markers": [
+    "HEAD~",
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s2-had-cluster-guard",
+   "line_sha256": "fd9812cb38239143c14da974259380a76a5dcca7f30f7472aea3c5c728a76327",
+   "markers": [
+    "worktrees/",
+    "tools/reviewer-eval/",
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s2-had-cluster-guard",
+   "line_sha256": "3a48f5782a5b99f840d78e9108b5779b3f7e4da65719a8da0e0ee11b0b7e2c6e",
+   "markers": [
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s2-nan-dof-fail-closed",
+   "line_sha256": "3b298a3e9116ee16ca656adb3788f5b1c622968e55b0bbac384611c8780a06c2",
+   "markers": [
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s2-nan-dof-fail-closed",
+   "line_sha256": "27b09e81480add37b82ec1e90fc091c3aa7d6531d14120dcb66356471ff905a0",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s2-nan-dof-fail-closed",
+   "line_sha256": "3c365ebde7a7b9516774687d8c1f6db23e08fb4ef22403fd9b096d6e2e010e40",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s2-nan-dof-fail-closed",
+   "line_sha256": "236a4cdb8f444afad1d920dc575956f38890768ce1dccfd95db2764b1b3c5f0f",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s2-nan-dof-fail-closed",
+   "line_sha256": "ffef8182975bcf1a8bf68c942c8ad74e6a0bf2d8955cbbc75ef83ee14766277a",
+   "markers": [
+    "worktrees/",
+    "tools/reviewer-eval/",
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s2-nan-dof-fail-closed",
+   "line_sha256": "d165c839fb89e0cccb1f133424487a1765beca86386f68a46c6876408d0eef20",
+   "markers": [
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s2-nan-dof-fail-closed",
+   "line_sha256": "60b823fc440ff4b309641567a2e51c65208cf2cbe0aca5ac87644632851e1926",
+   "markers": [
+    "GIT_DIR_RE"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s2-nan-dof-fail-closed",
+   "line_sha256": "932e76e69ddf9c66793543e58bf8f76ff4d571a48908b481b48a7bc2a146fed4",
+   "markers": [
+    "../",
+    "DOTDOT_RE"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s2-nan-dof-fail-closed",
+   "line_sha256": "489459885bf6c841d581dbfda5e833865b8b402a358a4f68438b494087efba4d",
+   "markers": [
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s2-nan-dof-fail-closed",
+   "line_sha256": "78b7d8375dacaa30cbd6915edd3f3d7ba7217c66d9c5969f31b557cc53dde711",
+   "markers": [
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s2-nan-dof-fail-closed",
+   "line_sha256": "831c08aa7dbe60925e452201bba20cc6d9ddcfe1baf738f2b7f8fe91cf183172",
+   "markers": [
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s2-nan-dof-fail-closed",
+   "line_sha256": "5d5ce7c4dd128ba5551eea81c15d63739a52d7b0c08a6b2f1d8df314a8f37667",
+   "markers": [
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s2-nan-dof-fail-closed",
+   "line_sha256": "f3d859fc65dc144719341882dd788a5a09f6372461936fa15a961f67ea360f41",
+   "markers": [
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s2-nan-dof-fail-closed",
+   "line_sha256": "3330e7f41e67f7334081aabf48c0e2527f04cad55ba2348b5bd8edf5f33e270a",
+   "markers": [
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s2-nan-dof-fail-closed",
+   "line_sha256": "406fc2aa4c793871d253d1f186bdb7949666edd60ddd2794bae18f4c50fea2b8",
+   "markers": [
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s2-nan-dof-fail-closed",
+   "line_sha256": "20fc9ee9abd090f617c98093c06224ff938b2337f4bd9ee2b65732cf21bf7878",
+   "markers": [
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s3-changelog-prose",
+   "line_sha256": "11fb0d28296fdc35b9992eb7c7e9a64a7be354b37b48a97e2b4387b7a6f8d428",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s3-changelog-prose",
+   "line_sha256": "9d9267900b68e4d3277b6fe63564bd20d8fd0b4054e91af0fce84553b8b8ab6b",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s3-changelog-prose",
+   "line_sha256": "489459885bf6c841d581dbfda5e833865b8b402a358a4f68438b494087efba4d",
+   "markers": [
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s3-changelog-prose",
+   "line_sha256": "67acd7e054b4d1a326b500669d0dca3bbb33d566fb88422eb062bb2eb911283e",
+   "markers": [
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s3-changelog-prose",
+   "line_sha256": "7c15957270550fa7831ee2a625e1e165c4e3f37208647d5f63caf02af96ff544",
+   "markers": [
+    "../"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s3-wcr-pfloor-comment",
+   "line_sha256": "919e32e4f394efcfec8bb0fc00a5a96b41d8ae767ae8445762aeb7214b474251",
+   "markers": [
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s3-wcr-pfloor-comment",
+   "line_sha256": "b238f1c5111829ad160b0528335ac56f63694fc4600a10bf235d6169e6d705bf",
+   "markers": [
+    "tools/reviewer-eval/",
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s3-wcr-pfloor-comment",
+   "line_sha256": "b80ef6d46b17aedd3f66b286ffcb7a7ff32eb8f85c8c28ba11cd2932813b76d7",
+   "markers": [
+    "--format",
+    "BARE_SHOW_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s3-wcr-pfloor-comment",
+   "line_sha256": "e8880b032890ee3cb48ab4fce5bcbea666d62cdb0ec285070bf9aa44001388be",
+   "markers": [
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s3-wcr-pfloor-comment",
+   "line_sha256": "d7ac19a1fdc5ba5440fe3d3dc19c1f8cb26a258287a27706a50c093a3cffb870",
+   "markers": [
+    "tools/reviewer-eval/",
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s3-wcr-pfloor-comment",
+   "line_sha256": "09c36ea49b6375dc55c36b4f9a1f5574d636e2c75d7340946439f65098b73268",
+   "markers": [
+    "--format",
+    "BARE_SHOW_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s4-cs-unbalanced-nan-outcome",
+   "line_sha256": "9356a1d8a8d8d5d98bbffc08bbd9261253ba9bb944871c4a590fdcf6673e8139",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s4-cs-unbalanced-nan-outcome",
+   "line_sha256": "1382c9aedc38269dd3adb840c0535836d775d252b85ca0e181e9f45bd6ae46fe",
+   "markers": [
+    "rev-parse",
+    "GIT_LOG_RE",
+    "REF_LIST_RE"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s4-cs-unbalanced-nan-outcome",
+   "line_sha256": "ad506db11fe1e5f12d1870c4e03120cf424bbb7dcdf7a59727f20616835b6ebe",
+   "markers": [
+    "GIT_LOG_RE",
+    "REF_LIST_RE",
+    "DOTDOT_RE",
+    "GIT_DIR_RE"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s4-cs-unbalanced-nan-outcome",
+   "line_sha256": "47e685f03a4c622c078fb93098ef698a64424e0d653f537c30689f514889313b",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s4-cs-unbalanced-nan-outcome",
+   "line_sha256": "bc3c8e0736af923ddb6352a221a14b2aa2799e978a4023dd1e3677bc8479c7d5",
+   "markers": [
+    "BARE_SHOW_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s4-cs-unbalanced-nan-outcome",
+   "line_sha256": "dedf87ab4d5a344a6fa81f1744b6ed4020c4a357edb7c33f26260c69007346f6",
+   "markers": [
+    "--format",
+    "BARE_SHOW_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s4-cs-unbalanced-nan-outcome",
+   "line_sha256": "e32548de94b9b6a582b9f14a59eded3f913db7668802f7044f6b50d3e89ea872",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s4-cs-unbalanced-nan-outcome",
+   "line_sha256": "e3230c6c5073a314519f85a367485585743dc722a2fdc4838d48eb388d027ef0",
+   "markers": [
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s4-cs-unbalanced-nan-outcome",
+   "line_sha256": "ff969993a2523cfc41df3f56bc748392aff5654c077c7719d129654681b76ec8",
+   "markers": [
+    "../",
+    "DOTDOT_RE",
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s4-cs-unbalanced-nan-outcome",
+   "line_sha256": "2c5e45dbe5528cfed07b9461e75b4d25f7f66a5b841b28072ab99c1e343ba8b3",
+   "markers": [
+    "worktrees/",
+    "tools/reviewer-eval/",
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "line_sha256": "decca74bfa41b6dbec7c7b4781d28d6f236093a4b8dc0635abcd619947717c40",
+   "markers": [
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "line_sha256": "f70a9944f4ebac984d6a738d3e3faacd74f8f32e5e3147c54bbb1a26f6e69f92",
+   "markers": [
+    "DOTDOT_RE"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "line_sha256": "eee6b44b32b3942f6bf00eb8c4423d17fe2b257ebeaf810c4eece5bff8a1b1ee",
+   "markers": [
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "line_sha256": "ab52c6965fadbafbcdb1fefaa11ccc759bc27c1985111b2c89dd90fef1512a0c",
+   "markers": [
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "line_sha256": "1ef1848a5acc3f0a8f88dd9e5393583ad58bc56be70f617475404898547de547",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "line_sha256": "1cfbaf51506a24141cf75c07426866b69a1a1ccba434ff8df8d02201a3723ed5",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "line_sha256": "939df9e90b1fd0dd614277f53754beb6d922ab69239419ae287dae2016de94e5",
+   "markers": [
+    "worktrees/",
+    "tools/reviewer-eval/",
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "line_sha256": "8296c2098c4f67cdca611e08631d9f617ec67f2012947fcae85284c48372ccf5",
+   "markers": [
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "line_sha256": "630081281dfe68e8a7e95a0819d8bd67473640a54ab06f6eff2a6d453d915cbc",
+   "markers": [
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "line_sha256": "a02a3ba8575d7c5708b82cc3ab08951b6d99f0383fa02aa37243e863624ae25f",
+   "markers": [
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "line_sha256": "88817ac4c3c77e9a120eac10af812d333f7360e92f7c36fce22a01b70b7ac27d",
+   "markers": [
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "line_sha256": "745bca92a6317990f12ae0015cc860a2b2b9c87c75d3a40ffe2b1393db87b923",
+   "markers": [
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "line_sha256": "d4d2bbcb3803d2a8c2a6276d64a163c606a68bc29ab06f0e819191353348c44d",
+   "markers": [
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "line_sha256": "cb2317bf324a28dea4a564e79faaa41d77b2880c4988bcbb81cab3fc0ea1cd61",
+   "markers": [
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "line_sha256": "4004212ff6037092e741aefd6fff244d1c2f7a039094b40e107d1fb9dfac8243",
+   "markers": [
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "line_sha256": "a7ae48ab626e6e00d4af7c6a0b93e29b15c275668ab485ba45c6122fd384c85d",
+   "markers": [
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "line_sha256": "3dbf3eb4cd1f6af99c22b6fa308fb5ae904f843a77aa11364439916f22c80f08",
+   "markers": [
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "line_sha256": "fcfb17f721dcdd6c4b18ce747c256999d5eb0968fbb70f4e70b548a255fa9199",
+   "markers": [
+    "tools/reviewer-eval/",
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "line_sha256": "0f9e5909143e71137044eceb40e7357df8ee54c3a079fbc75e998b827838f601",
+   "markers": [
+    "worktrees/",
+    "tools/reviewer-eval/",
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "line_sha256": "50ca1d66942948ce263512134d0270fd7d9c3bc5fc7a96ffeb8d0bb9547586b5",
+   "markers": [
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s4-wcr-saturated-guard-order",
+   "line_sha256": "828938b08e41b742df3b8e77ff9997545b92f9efac9f68e820aedd32fa4ed9a0",
+   "markers": [
+    "GIT_LOG_RE",
+    "REF_LIST_RE"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s4-wcr-saturated-guard-order",
+   "line_sha256": "c0e20dbf5eaa1a2470f432f84ce58675f5c061550d1f0b971ea372b1360ba9e1",
+   "markers": [
+    "BARE_SHOW_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s4-wcr-saturated-guard-order",
+   "line_sha256": "fc39ef06b93c4b9b0ccf89af188624e1f6c91e0241d7963b23d39198694fdfdf",
+   "markers": [
+    "BARE_SHOW_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s4-wcr-saturated-guard-order",
+   "line_sha256": "6875d112abc5b8f51f2f1a2d1a760eee4efd2b9e4f28ba5a5793666de5bcc48a",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s4-wcr-saturated-guard-order",
+   "line_sha256": "d2d1b6837d19466e1b9d7d9c866a7c44f063cdb89937e528177494c5c96f6cc4",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s4-wcr-saturated-guard-order",
+   "line_sha256": "8d3e46f8aa00286df8f09154b483fbe787d3843dda5747d2d5082fdf70dc2c95",
+   "markers": [
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s4-wcr-saturated-guard-order",
+   "line_sha256": "ec0989feac111d3cdf0c2ba9f71bb1b88da47c829393a22ad79fac517b0aeb5e",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s4-wcr-saturated-guard-order",
+   "line_sha256": "69e4fe69d2f7e3c4e19b23e1138010bc2139799c50685e2ebe93db174d9960e9",
+   "markers": [
+    "BARE_SHOW_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s4-wcr-saturated-guard-order",
+   "line_sha256": "2c0e11e47247527c3ee4c480f29c859f20841d21c29206bc6036a14c30194423",
+   "markers": [
+    "-maxdepth"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s4-wcr-saturated-guard-order",
+   "line_sha256": "7f7681bc1e69ab9124a7cec506d4370888d7d18a8949f4ab61403030f6a17951",
+   "markers": [
+    "BARE_SHOW_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s4-wcr-saturated-guard-order",
+   "line_sha256": "68d6b2ab40dfb15eb1af46862d8474310305c111f2d7af35053dae4ac8341738",
+   "markers": [
+    " -r "
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s4-wcr-saturated-guard-order",
+   "line_sha256": "5a19f132dcb84775c298072b9b10764020c4aef4c5bc58809b13bd528ec524fa",
+   "markers": [
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s4-wcr-saturated-guard-order",
+   "line_sha256": "cb36dd1d24ac5cd3b87e68a0e8fe23334027825e2f54fed3c04a7be3d902a59d",
+   "markers": [
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s4-wcr-saturated-guard-order",
+   "line_sha256": "952bd1f3229402a503da3603fb81f2ab7480ebebfc83d698f478961e83ddb08f",
+   "markers": [
+    "tools/reviewer-eval/",
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s4-wcr-saturated-guard-order",
+   "line_sha256": "1d5c7d2db199056204a4647e18f36a19ffc32d7807afab758b9eb8565e3715cc",
+   "markers": [
+    "../",
+    "GIT_LOG_RE",
+    "DOTDOT_RE"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s4-wcr-saturated-guard-order",
+   "line_sha256": "24a684162da36bf1d24db913393f84e9cd06568fb760f550e8524bee3a59a40d",
+   "markers": [
+    "repo_root"
+   ],
+   "orientation_only": false,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s4-wcr-saturated-guard-order",
+   "line_sha256": "475644924650e7798cd0cb94d6957bc66f5a649fe3995c9e4f639091412b3c18",
+   "markers": [
+    "--format",
+    "GIT_LOG_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s4-wcr-saturated-guard-order",
+   "line_sha256": "eb6966faec145ae9e4ddf3a9bfc45ee10af3d729d7b6bb706479dab3f8069959",
+   "markers": [
+    "BARE_SHOW_RE"
+   ],
+   "orientation_only": true,
+   "repeat": 1
+  }
+ ],
+ "no_commands": [],
+ "run_ids_sha": "b02ea16a5f05b574c52d51c9e3a98c410aa66655617212ed2cf9aa7b76cf08c7",
+ "unaudited": [
+  {
+   "arm": "B",
+   "case": "s1-coef-dict-collision",
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s1-coef-dict-collision",
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s1-coef-dict-collision",
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s1-coef-dict-collision",
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s1-cs-dr-plugin-se",
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s1-cs-dr-plugin-se",
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s1-cs-dr-plugin-se",
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s1-cs-dr-plugin-se",
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s2-acrt-single-dose",
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s2-acrt-single-dose",
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s2-acrt-single-dose",
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s2-acrt-single-dose",
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s2-cic-practitioner-screen",
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s2-cic-practitioner-screen",
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s2-cic-practitioner-screen",
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s2-cic-practitioner-screen",
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s2-had-cluster-guard",
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s2-had-cluster-guard",
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s2-had-cluster-guard",
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s2-had-cluster-guard",
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s2-nan-dof-fail-closed",
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s2-nan-dof-fail-closed",
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s2-nan-dof-fail-closed",
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s2-nan-dof-fail-closed",
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s3-changelog-prose",
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s3-changelog-prose",
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s3-changelog-prose",
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s3-wcr-pfloor-comment",
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s4-cs-unbalanced-nan-outcome",
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s4-cs-unbalanced-nan-outcome",
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s4-cs-unbalanced-nan-outcome",
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s4-cs-unbalanced-nan-outcome",
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s4-lpdid-survey-unreduced-design",
+   "repeat": 1
+  },
+  {
+   "arm": "B",
+   "case": "s4-wcr-saturated-guard-order",
+   "repeat": 0
+  },
+  {
+   "arm": "B",
+   "case": "s4-wcr-saturated-guard-order",
+   "repeat": 1
+  },
+  {
+   "arm": "F",
+   "case": "s4-wcr-saturated-guard-order",
+   "repeat": 0
+  },
+  {
+   "arm": "F",
+   "case": "s4-wcr-saturated-guard-order",
+   "repeat": 1
+  }
+ ],
+ "vacuous": false
+}

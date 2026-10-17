@@ -573,6 +573,8 @@ def test_verdict_cli_happy_path_and_audit(tmp_path, monkeypatch, capsys):
     "control, candidate, msg",
     [
         ("E", "B", "registered contrast"),
+        ("F", "B", "registered contrast"),  # campaign-2 contrast inverted
+        ("E", "F", "registered contrast"),  # two candidates, no control
         ("B", "B", "must differ"),
         ("A", "B", "registered contrast"),
     ],
