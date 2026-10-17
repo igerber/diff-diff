@@ -1,0 +1,17 @@
+<OTHER REDACTED>
+user
+<PROMPT REDACTED>
+codex
+<TEXT REDACTED>
+web search: 
+web search: https://example.com
+codex
+<TEXT REDACTED>
+exec
+/bin/zsh -lc 'echo ok' in <PATH>
+ succeeded in 0ms:
+<OUTPUT REDACTED>
+codex
+<TEXT REDACTED>
+tokens used
+<OTHER REDACTED>

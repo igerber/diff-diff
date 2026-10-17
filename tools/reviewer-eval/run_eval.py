@@ -13,20 +13,32 @@ Pipeline:
   compare         Emit one side-by-side bundle (ground truth + every arm's raw
                   reviews) for an LLM (or you) to read into a caught/missed/
                   false-positive table. --blinded adds an identity-stripped
-                  bundle for blind grading.
+                  bundle for blind grading, sealed to the run artifacts
+                  (bundle_id, run_ids_sha, artifacts_sha, rubric/prompt sha).
+  audit           Post-unblinding session-log audit (reviewer_audit.py):
+                  marker hits per (case, arm, repeat) with coverage classes;
+                  informational, never a gate.
+  verdict         Apply the pre-registered gates (reviewer_verdict.py) to a
+                  reconciled grades JSON, after binding it to the sealed
+                  artifacts; PROVISIONAL without --audit-hits, DEFINITIVE with.
 
 Usage:
   python tools/reviewer-eval/run_eval.py verify-corpus
   python tools/reviewer-eval/run_eval.py smoke   # smokes the role=control arm
-  python tools/reviewer-eval/run_eval.py run --configs A,B,C,D --k 2 --k-per C=1,D=1
-  python tools/reviewer-eval/run_eval.py compare --subdir full --blinded
+  python tools/reviewer-eval/run_eval.py run --subdir gpt6 --configs B,E --k 2
+  python tools/reviewer-eval/run_eval.py compare --subdir gpt6 --blinded
+  python tools/reviewer-eval/run_eval.py audit --subdir gpt6 -o <scratch>/hits.json
+  python tools/reviewer-eval/run_eval.py verdict --subdir gpt6 --grades <reconciled.json> \\
+      --control B --candidate E [--audit-hits <scratch>/hits.json] [--expect-head <sha>]
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import sys
+from typing import Optional
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = os.path.dirname(HERE)
@@ -37,6 +49,10 @@ if HERE not in sys.path:
 if TOOLS not in sys.path:
     sys.path.insert(0, TOOLS)
 
+import reviewer_audit  # noqa: E402
+from adapters import codex_reviewer as _codex_reviewer_mod  # noqa: E402
+from adapters import worktree  # noqa: E402
+from adapters.codex_reviewer import isolated_codex_home  # noqa: E402  (module-level: tests stub it)
 from adapters.corpus_loader import CorpusLoader  # noqa: E402
 from adapters.openai_review_loader import find_repo_root  # noqa: E402
 from eval_core.store import RunStore, read_json, write_json  # noqa: E402
@@ -70,6 +86,661 @@ def _safe_subdir(subdir: str) -> bool:
     base = os.path.realpath(RUNS_DIR)
     full = os.path.realpath(os.path.join(RUNS_DIR, subdir or ""))
     return full.startswith(base + os.sep)
+
+
+# Ignored paths a registered surface legitimately carries: harness output dirs
+# (the three ignore rules under tools/), bytecode FILES (never a whole
+# __pycache__ dir - CorpusLoader treats any stratum subdir holding a case.json as
+# a case) and Finder metadata.
+_IGNORED_OK_PREFIXES = (
+    "tools/reviewer-eval/runs/",
+    "tools/plan-review-eval/runs/",
+    "tools/plan-review-eval/corpus/cases/",
+)
+_IGNORED_OK_RE = __import__("re").compile(r"(__pycache__/[^/]*\.py[cod]$|(^|/)\.DS_Store$)")
+_REGISTERED_SURFACES = ("tools", ".claude/scripts", ".github/codex")
+
+
+def _git_out(repo_root: str, args: list) -> str:
+    import subprocess
+
+    cp = subprocess.run(["git", *args], cwd=repo_root, capture_output=True, text=True, check=False)
+    if cp.returncode != 0:
+        raise SystemExit(f"git {' '.join(args)} failed in {repo_root}: {cp.stderr.strip()}")
+    return cp.stdout
+
+
+def _hidden_inputs(repo_root: str) -> list:
+    out = _git_out(
+        repo_root,
+        ["ls-files", "--others", "--ignored", "--exclude-standard", *_REGISTERED_SURFACES],
+    )
+    bad = []
+    for line in out.splitlines():
+        path = line.strip()
+        if not path or path.startswith(_IGNORED_OK_PREFIXES) or _IGNORED_OK_RE.search(path):
+            continue
+        bad.append(path)
+    return sorted(bad)
+
+
+def _assert_no_hidden_inputs(repo_root: str) -> None:
+    """Refuse when an IGNORED (or .git/info/exclude-hidden) file sits under a
+    registered surface: the corpus loader enumerates cases by listdir, so an
+    ignored extra case dir would run; an ignored tools/json.py would shadow the
+    stdlib. Remedy is in the message; nothing is removed automatically."""
+    bad = _hidden_inputs(repo_root)
+    if bad:
+        raise SystemExit(
+            "IGNORED FILE(S) UNDER A REGISTERED SURFACE (tree identity cannot pin them):\n  "
+            + "\n  ".join(bad)
+            + "\nStop, show these paths to the user, remove or move them (never "
+            "automatically), then re-run this stage."
+        )
+
+
+def _assert_tree_identity(repo_root: str, manifest: dict, stage: str = "") -> None:
+    """Engine identity = tree identity: the working tree must be clean (tracked
+    and untracked), carry no hidden inputs, and sit at the manifest's recorded
+    HEAD and tree sha (a same-tree amend or force-push is refused too). Called
+    at stage ENTRY and again at stage EXIT (a fresh read)."""
+    where = f"{stage}: " if stage else ""
+    status = _git_out(repo_root, ["status", "--porcelain", "--untracked-files=all"]).strip()
+    if status:
+        raise SystemExit(
+            f"{where}working tree is not clean; compare/audit/verdict run only on the exact "
+            f"committed tree the campaign recorded. `git status --porcelain`:\n{status}"
+        )
+    _assert_no_hidden_inputs(repo_root)
+    live_tree = _git_out(repo_root, ["rev-parse", "HEAD^{tree}"]).strip()
+    live_head = _git_out(repo_root, ["rev-parse", "HEAD"]).strip()
+    if live_tree != manifest.get("repo_tree_sha"):
+        raise SystemExit(
+            f"{where}live tree {live_tree} != manifest repo_tree_sha "
+            f"{manifest.get('repo_tree_sha')}; restore the recorded tree (or re-run the campaign)."
+        )
+    if live_head != manifest.get("repo_head_sha"):
+        raise SystemExit(
+            f"{where}live HEAD {live_head} != manifest repo_head_sha "
+            f"{manifest.get('repo_head_sha')} (same tree, different commit is refused too)."
+        )
+
+
+def _manifest_provenance(repo_root: str) -> dict:
+    """The seven-key provenance contract at manifest-write time (one call)."""
+    return worktree.git_provenance(repo_root)
+
+
+def _provenance_aggregates(results, manifest_prov: dict) -> dict:
+    """Aggregates over the OK results' ``usage`` (read with .get, so legacy
+    prompt_sha-only artifacts yield []/n/False):
+
+    * ``run_head_shas`` sorted unique non-empty; ``run_head_missing`` count of
+      missing/"" head shas;
+    * ``run_dirty_any``: True if any repo_dirty is True; else None if any run has
+      a head sha and repo_dirty None; else False;
+    * ``run_marker_mismatch``: runs whose repo_branch / repo_common_dir differs
+      from the manifest's own value or is empty/None;
+    * ``run_not_isolated``: runs whose codex_home_isolated is not True OR whose
+      repo_ref_names / repo_worktree_paths is None.
+    """
+    heads = set()
+    missing = 0
+    dirty_any = False
+    dirty_none = False
+    marker_mismatch = 0
+    not_isolated = 0
+    for r in results:
+        if not getattr(r, "ok", True):
+            continue
+        u = getattr(r, "usage", None) or {}
+        head = u.get("repo_head_sha")
+        if head:
+            heads.add(head)
+        else:
+            missing += 1
+        if u.get("repo_dirty") is True:
+            dirty_any = True
+        elif head and u.get("repo_dirty") is None:
+            dirty_none = True
+        if (
+            not u.get("repo_branch")
+            or not u.get("repo_common_dir")
+            or u.get("repo_branch") != manifest_prov.get("repo_branch")
+            or u.get("repo_common_dir") != manifest_prov.get("repo_common_dir")
+        ):
+            marker_mismatch += 1
+        if (
+            u.get("codex_home_isolated") is not True
+            or u.get("repo_ref_names") is None
+            or u.get("repo_worktree_paths") is None
+        ):
+            not_isolated += 1
+    return {
+        "run_head_shas": sorted(heads),
+        "run_head_missing": missing,
+        "run_dirty_any": True if dirty_any else (None if dirty_none else False),
+        "run_marker_mismatch": marker_mismatch,
+        "run_not_isolated": not_isolated,
+    }
+
+
+def _provenance_failures(prov: dict) -> list:
+    """Names of provenance fields in their documented FAILURE form (fail-soft
+    ``""``/``None``): non-empty shas, branch and common dir; ``repo_dirty`` a
+    bool; ``repo_ref_names`` and ``repo_worktree_paths`` LISTS (never None)."""
+    bad = []
+    for key in ("repo_head_sha", "repo_tree_sha", "repo_branch", "repo_common_dir"):
+        if not prov.get(key):
+            bad.append(key)
+    if not isinstance(prov.get("repo_dirty"), bool):
+        bad.append("repo_dirty")
+    for key in ("repo_ref_names", "repo_worktree_paths"):
+        if not isinstance(prov.get(key), list):
+            bad.append(key)
+    return bad
+
+
+_PROVENANCE_KEYS = (
+    "repo_head_sha",
+    "repo_tree_sha",
+    "repo_dirty",
+    "repo_branch",
+    "repo_common_dir",
+    "repo_worktree_paths",
+    "repo_ref_names",
+)
+_AGGREGATE_KEYS = (
+    "run_head_shas",
+    "run_head_missing",
+    "run_dirty_any",
+    "run_marker_mismatch",
+    "run_not_isolated",
+)
+_MANIFEST_MARKER_KEYS = (
+    "repo_branch",
+    "repo_common_dir",
+    "repo_worktree_paths",
+    "repo_ref_names",
+    "codex_home_path",
+)
+_BUNDLE_ID_TOKEN = "__BUNDLE_ID__"
+
+
+def _render_blinded_bundle(runs, run_ids_sha: str) -> "tuple[dict, str]":
+    """DETERMINISTIC blinded bundle from the sealed runs: (mapping, bundle text
+    with the Bundle-ID TOKEN still in place). ``compare --blinded`` writes it;
+    ``verdict`` regenerates it from the same sealed artifacts and compares, so
+    the grader-visible evidence is bound to the artifacts, not only to itself."""
+    from eval_core.compare import (
+        apply_blinding,
+        build_bundle,
+        derive_blind_mapping,
+        render_default_header,
+        sanitize_model_refs,
+    )
+
+    config_ids = sorted({r.config_id for r in runs})
+    model_names = sorted({r.model for r in runs if r.model})
+    mapping = derive_blind_mapping(config_ids, run_ids_sha)
+    blind_runs = apply_blinding(runs, mapping, model_names)
+    # The default "How to grade" header with the BLIND labels as columns (so the
+    # pr_review.md pointer survives), plus the Bundle ID line graders copy.
+    has_repeats = any(r.repeat_idx > 0 for r in blind_runs)
+    header_b = render_default_header(sorted(mapping.values()), has_repeats) + (
+        f"\nBundle ID: `{_BUNDLE_ID_TOKEN}` - copy this verbatim into your grading "
+        f"table as `bundle_id` (the verdict stage rejects a table whose bundle_id "
+        f"does not match this bundle).\n"
+    )
+    # Belt-and-suspenders: sanitize the WHOLE rendered bundle once more, so a
+    # model name that leaked through any renderer path is still scrubbed. The id
+    # is the hash of the SANITIZED bytes with the token still in place.
+    with_token = sanitize_model_refs(
+        build_bundle(blind_runs, redact_meta=True, header_text=header_b), model_names
+    )
+    return mapping, with_token
+
+
+def _bundle_id_of(bundle_text_with_token: str) -> str:
+    """Identity of one blinded bundle = sha256 of the exact grader-visible bytes
+    with the id slot tokenized (then substituted). First 16 hex."""
+    import hashlib
+
+    return hashlib.sha256(bundle_text_with_token.encode("utf-8")).hexdigest()[:16]
+
+
+def _run_ids_sha(run_ids) -> str:
+    import hashlib
+
+    return hashlib.sha256("|".join(sorted(run_ids)).encode("utf-8")).hexdigest()
+
+
+def _file_sha256(path: str) -> str:
+    import hashlib
+
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
+
+
+def _registered_candidates() -> set:
+    """Candidate ids of the pre-registered contrasts (reviewer_verdict)."""
+    import reviewer_verdict
+
+    return {cand for _ctrl, cand in reviewer_verdict.REGISTERED_CONTRASTS}
+
+
+def _candidate_exposure_violations(
+    configs, k: int, k_overrides: dict, strata, command: str
+) -> list:
+    """Pre-registration BY CONSTRUCTION, enforced in code: a registered
+    candidate arm may run on the corpus ONLY as the exact registered campaign -
+    its registered contrast {control, candidate}, k == 2, no --k-per, no
+    --strata filtering - and never under `smoke`. Anything else would expose
+    the candidate's corpus output before the decisive run."""
+    import reviewer_verdict
+
+    selected = {c.id for c in configs}
+    cands = selected & _registered_candidates()
+    if not cands:
+        return []
+    if command == "smoke":
+        return [f"candidate arm(s) {sorted(cands)} may not be smoked (first corpus run = campaign)"]
+    problems = []
+    for ctrl, cand in reviewer_verdict.REGISTERED_CONTRASTS:
+        if cand in cands and selected != {ctrl, cand}:
+            problems.append(
+                f"candidate {cand} runs only as --configs {ctrl},{cand} (got {sorted(selected)})"
+            )
+    if k != 2:
+        problems.append(f"the registered campaign is --k 2 (got --k {k})")
+    if k_overrides:
+        problems.append(f"no --k-per in the registered campaign (got {k_overrides})")
+    if strata:
+        problems.append(f"no --strata filtering in the registered campaign (got {strata})")
+    return problems
+
+
+def _attempts_path(subdir: str) -> str:
+    """Append-only per-attempt record, a SIBLING of runs/<subdir>/ (never parsed
+    as a RunResult). Each `run` attempt appends a START record before dispatch
+    and an END record (per-cell infra errors, first 120 chars) after the matrix
+    returns; an attempt that raised before dispatch has no END record and does
+    not count toward the cap."""
+    return os.path.join(RUNS_DIR, f"{subdir}-attempts.jsonl")
+
+
+MAX_RERUNS = 3  # DECISION_RULE.md: at most 3 reruns after the first attempt
+
+
+def _read_jsonl_strict(path: str, required: "dict[str, tuple]") -> list:
+    """Append-only integrity logs FAIL CLOSED: a malformed line (a truncated or
+    corrupt append) or a record missing a required field refuses with the file
+    and line number, never a silent skip - a skipped record would undercount the
+    rerun cap or erase the first candidate-exposure record."""
+    import json as _json
+
+    if not os.path.exists(path):
+        return []
+    out = []
+    with open(path, encoding="utf-8") as fh:
+        for lineno, raw in enumerate(fh, start=1):
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                rec = _json.loads(line)
+            except ValueError as exc:
+                raise SystemExit(f"{path}:{lineno}: malformed record ({exc}); the log fails closed")
+            if not isinstance(rec, dict):
+                raise SystemExit(f"{path}:{lineno}: record is not an object; the log fails closed")
+            kind = rec.get("kind")
+            for field in required.get(kind, required.get("*", ())):
+                if field not in rec:
+                    raise SystemExit(
+                        f"{path}:{lineno}: {kind!r} record missing {field!r}; the log fails closed"
+                    )
+            if kind not in required and "*" not in required:
+                raise SystemExit(
+                    f"{path}:{lineno}: unknown record kind {kind!r}; the log fails closed"
+                )
+            out.append(rec)
+    return out
+
+
+_ATTEMPT_SCHEMA = {"start": ("at", "head", "configs", "k"), "end": ("started_at", "failures")}
+_LEDGER_SCHEMA = {"dispatch": ("contrast", "head", "tree", "subdir", "at")}
+
+
+def _read_attempts(subdir: str) -> list:
+    return _read_jsonl_strict(_attempts_path(subdir), _ATTEMPT_SCHEMA)
+
+
+def _lock_path(subdir: str) -> str:
+    return os.path.join(RUNS_DIR, f"{subdir}.lock")
+
+
+@contextlib.contextmanager
+def _subdir_lock(subdir: str):
+    """Exclusive cross-process ownership of one run subdir for the whole of a
+    `run` attempt (stop-condition check through manifest write). Two attempts
+    into the same subdir compute identical run ids and would interleave their
+    artifacts into one store that the last writer then seals; the second
+    process is refused instead. `flock` is released by the kernel when the
+    holder exits, so a crashed attempt leaves no stale lock. Yields True when
+    held, False when another process holds it."""
+    import fcntl
+
+    os.makedirs(RUNS_DIR, exist_ok=True)
+    with open(_lock_path(subdir), "a", encoding="utf-8") as fh:
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def _append_attempt(subdir: str, record: dict) -> None:
+    import json as _json
+
+    os.makedirs(RUNS_DIR, exist_ok=True)
+    with open(_attempts_path(subdir), "a", encoding="utf-8") as fh:
+        fh.write(_json.dumps(record, sort_keys=True) + "\n")
+
+
+def _ok_cells(results, store_root: str) -> list:
+    """Identity + artifact hash of every OK cell of an attempt (cached and fresh
+    alike), recorded in the END record so a later attempt can prove it RESUMED
+    them rather than re-sampling: a previously successful cell may never be
+    re-dispatched (DECISION_RULE.md: reruns reuse OK artifacts)."""
+    import hashlib as _hashlib
+
+    out = []
+    for r in results:
+        if not getattr(r, "ok", False) or not getattr(r, "run_id", ""):
+            continue
+        path = os.path.join(store_root, f"{r.run_id}.json")
+        try:
+            with open(path, "rb") as fh:
+                digest = _hashlib.sha256(fh.read()).hexdigest()
+        except OSError:
+            digest = None
+        out.append(
+            {
+                "case": r.case_id,
+                "arm": r.config_id,
+                "repeat": int(r.repeat_idx),
+                "run_id": r.run_id,
+                "sha256": digest,
+            }
+        )
+    return sorted(out, key=lambda c: (c["case"], c["arm"], c["repeat"]))
+
+
+def _resume_integrity_violations(subdir: str, store_root: str) -> list:
+    """Before a new attempt: every OK cell ANY previous END record lists (the
+    cumulative set, aborted attempts included - an aborted END records the
+    cells persisted before the abort) must still be present as the same
+    artifact bytes. A missing or changed one means the rerun would RE-DISPATCH
+    a previously successful cell (selective re-sampling), which fails closed."""
+    import hashlib as _hashlib
+
+    cumulative: dict = {}
+    for rec in _read_attempts(subdir):
+        if rec.get("kind") != "end":
+            continue
+        for cell in rec.get("ok_cells") or []:
+            cumulative[cell["run_id"]] = cell  # the latest record of a cell wins
+    problems = []
+    for cell in cumulative.values():
+        path = os.path.join(store_root, f"{cell['run_id']}.json")
+        if not os.path.isfile(path):
+            problems.append(
+                f"OK cell {cell['case']}/{cell['arm']}/r{cell['repeat']} artifact missing ({cell['run_id']})"
+            )
+            continue
+        with open(path, "rb") as fh:
+            digest = _hashlib.sha256(fh.read()).hexdigest()
+        if cell.get("sha256") and digest != cell["sha256"]:
+            problems.append(
+                f"OK cell {cell['case']}/{cell['arm']}/r{cell['repeat']} artifact changed since the last attempt"
+            )
+    return problems
+
+
+def _stop_condition_violations(subdir: str) -> list:
+    """The pre-registered stop conditions, checked BEFORE a new attempt runs:
+    (1) at most MAX_RERUNS reruns after the first attempt (= 4 dispatched
+    attempts in all); (2) a (case, arm, repeat) whose END records show a
+    timeout in the last two consecutive dispatched attempts stops the campaign
+    (surfaced, never silently excluded)."""
+    ends = [a for a in _read_attempts(subdir) if a.get("kind") == "end"]
+    problems = []
+    if len(ends) >= 1 + MAX_RERUNS:
+        problems.append(
+            f"{len(ends)} dispatched attempts already recorded for runs/{subdir} "
+            f"(1 attempt + {MAX_RERUNS} reruns is the cap); stop and surface to the user"
+        )
+    if len(ends) >= 2:
+        last, prev = ends[-1], ends[-2]
+
+        def _timeouts(rec):
+            return {
+                (f["case"], f["arm"], f["repeat"])
+                for f in rec.get("failures", [])
+                if "timed out" in (f.get("infra_error") or "")
+            }
+
+        both = _timeouts(last) & _timeouts(prev)
+        if both:
+            problems.append(
+                f"cell(s) {sorted(both)} timed out in 2 consecutive attempts; stop and surface "
+                f"(never silently excluded, never graded partial)"
+            )
+    return problems
+
+
+# The pre-registered surfaces: everything the campaign executes or is judged by.
+REGISTERED_SURFACES = (
+    "tools/reviewer-eval",
+    "tools/eval_core",
+    ".claude/scripts/openai_review.py",
+    ".github/codex/prompts/pr_review.md",
+    "tools/notebook_md_extract.py",
+)
+_TIMEOUT_LINE_RE = __import__("re").compile(r"^[-+]\s*CALL_TIMEOUT_S\s*=\s*[\d.]+\s*$")
+
+
+def _ledger_path() -> str:
+    """Append-only CAMPAIGN ledger (campaign-global, not per subdir): one record
+    per dispatch of a registered contrast, with the HEAD/tree it ran on and the
+    subdir. The FIRST record for a contrast is its frozen candidate-exposure
+    revision; `verdict` judges every later run against it."""
+    return os.path.join(RUNS_DIR, "campaign-ledger.jsonl")
+
+
+def _append_ledger(record: dict) -> None:
+    import json as _json
+
+    os.makedirs(RUNS_DIR, exist_ok=True)
+    with open(_ledger_path(), "a", encoding="utf-8") as fh:
+        fh.write(_json.dumps(record, sort_keys=True) + "\n")
+
+
+def _read_ledger() -> list:
+    return _read_jsonl_strict(_ledger_path(), _LEDGER_SCHEMA)
+
+
+def _registered_surface_diff(repo_root: str, frozen_head: str, head: str) -> "tuple[str, bool]":
+    """(``git diff --stat`` over REGISTERED_SURFACES between the two commits,
+    whether the FULL content diff is exactly the single CALL_TIMEOUT_S line in
+    adapters/codex_reviewer.py - the ONE pre-registered exception)."""
+    stat = _git_out(
+        repo_root, ["diff", "--stat", frozen_head, head, "--", *REGISTERED_SURFACES]
+    ).strip()
+    if not stat:
+        return "", False
+    full = _git_out(repo_root, ["diff", frozen_head, head, "--", *REGISTERED_SURFACES])
+    files = {ln[6:] for ln in full.splitlines() if ln.startswith("+++ b/")}
+    changed = [
+        ln
+        for ln in full.splitlines()
+        if (ln.startswith("+") or ln.startswith("-"))
+        and not ln.startswith("+++")
+        and not ln.startswith("---")
+    ]
+    timeout_only = False
+    if (
+        files == {"tools/reviewer-eval/adapters/codex_reviewer.py"}
+        and len(changed) == 2
+        and all(_TIMEOUT_LINE_RE.match(ln) for ln in changed)
+    ):
+        removed = [float(ln.split("=", 1)[1]) for ln in changed if ln.startswith("-")]
+        added = [float(ln.split("=", 1)[1]) for ln in changed if ln.startswith("+")]
+        # The rule permits RAISING the ceiling only (a lower cap changes censoring).
+        timeout_only = len(removed) == 1 and len(added) == 1 and added[0] > removed[0]
+    return stat, timeout_only
+
+
+def _frozen_ref_name(contrast: "tuple[str, str]") -> str:
+    """Local git ref (never pushed; outside refs/heads and refs/tags) that
+    anchors the contrast's FIRST candidate exposure to a commit. It lives in
+    the repository, not under the disposable runs/ dir, so deleting the ledger
+    cannot reset the pre-registration boundary."""
+    return f"refs/campaign/{contrast[0]}-{contrast[1]}/frozen"
+
+
+def _read_frozen_ref(repo_root: str, contrast: "tuple[str, str]") -> "Optional[str]":
+    import subprocess
+
+    cp = subprocess.run(
+        ["git", "rev-parse", "--verify", "-q", _frozen_ref_name(contrast)],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if cp.returncode != 0:
+        return None
+    return cp.stdout.strip() or None
+
+
+def _anchor_frozen_ref(repo_root: str, contrast: "tuple[str, str]", head: str) -> "Optional[str]":
+    """Create the frozen ref at ``head`` if absent; return the ref's sha."""
+    existing = _read_frozen_ref(repo_root, contrast)
+    if existing:
+        return existing
+    _git_out(repo_root, ["update-ref", _frozen_ref_name(contrast), head])
+    return head
+
+
+def _exposure_status(
+    manifest: dict, subdir: str, contrast: "tuple[str, str]", repo_root: str
+) -> dict:
+    """Judge this campaign against the contrast's FIRST dispatch in the ledger.
+
+    Mechanical (pre-registration intact) iff this subdir IS the first dispatch,
+    OR the HEAD moved (a voided campaign re-run into a fresh subdir) and the
+    registered surfaces are untouched or changed ONLY by the CALL_TIMEOUT_S
+    line. A second subdir on the SAME head is a re-exposure of the candidate;
+    any other registered-surface change is "re-registered after candidate
+    exposure": the verdict is still computed but never a mechanical GO.
+    """
+    entries = [e for e in _read_ledger() if list(e.get("contrast") or []) == list(contrast)]
+    if not entries:
+        return {
+            "ledger_entries": 0,
+            "mechanical": False,
+            "protocol_error": "no campaign-ledger dispatch record for this contrast",
+            "reason": "no campaign-ledger dispatch record for this contrast",
+        }
+    first = entries[0]
+    anchor = _read_frozen_ref(repo_root, contrast)
+    # Integrity of the frozen anchor itself: these are PROTOCOL ERRORS (verdict
+    # refuses at (f)), not the documented non-mechanical re-exposure cases.
+    protocol_error = None
+    if not anchor:
+        protocol_error = f"frozen ref {_frozen_ref_name(contrast)} is absent"
+    elif first.get("head") != anchor:
+        protocol_error = (
+            f"ledger first head {first.get('head')} != frozen ref {anchor} "
+            f"(ledger rewritten or reset)"
+        )
+    elif first.get("ledger_reset"):
+        protocol_error = "ledger was reset after the frozen ref existed (exposure history lost)"
+    if protocol_error:
+        return {
+            "ledger_entries": len(entries),
+            "mechanical": False,
+            "protocol_error": protocol_error,
+            "reason": protocol_error,
+        }
+    head = manifest.get("repo_head_sha")
+    status = {
+        "ledger_entries": len(entries),
+        "frozen_head": first.get("head"),
+        "first_subdir": first.get("subdir"),
+        "subdirs": sorted({e.get("subdir") for e in entries}),
+        "this_subdir": subdir,
+        "head_changed": head != first.get("head"),
+        "surface_diff_stat": "",
+        "timeout_only": False,
+    }
+    if subdir == first.get("subdir") and not status["head_changed"]:
+        status.update(mechanical=True, reason="first dispatch of the contrast (frozen revision)")
+        return status
+    if not status["head_changed"]:
+        status.update(mechanical=False, reason="re-exposure: a second subdir on the frozen HEAD")
+        return status
+    if subdir == first.get("subdir"):
+        status.update(
+            mechanical=False,
+            reason="HEAD changed but the first subdir was reused (a voided campaign re-runs into a FRESH subdir)",
+        )
+        return status
+    stat, timeout_only = _registered_surface_diff(repo_root, first.get("head") or "", head or "")
+    status["surface_diff_stat"] = stat
+    status["timeout_only"] = timeout_only
+    if not stat:
+        status.update(mechanical=True, reason="re-run on a new HEAD; registered surfaces untouched")
+    elif timeout_only:
+        status.update(
+            mechanical=True,
+            reason="re-run on a new HEAD; the single CALL_TIMEOUT_S exception applies",
+        )
+    else:
+        status.update(
+            mechanical=False,
+            reason="re-registered after candidate exposure: registered surfaces changed since the frozen HEAD",
+        )
+    return status
+
+
+def _load_manifest_runs(subdir: str, stage: str):
+    """(manifest, OK runs scoped to the manifest's run_ids) or SystemExit."""
+    manifest_path = _manifest_path(subdir)
+    try:
+        manifest = read_json(manifest_path)
+    except (OSError, ValueError):
+        raise SystemExit(f"{stage}: no readable manifest at {manifest_path}; run `run` first.")
+    if not isinstance(manifest, dict) or manifest.get("failed") or not manifest.get("run_ids"):
+        raise SystemExit(
+            f"{stage}: the last `run` into runs/{subdir} failed/incomplete (or has no "
+            f"run_ids); no valid experiment. Fix the failing case(s) and re-run `run`."
+        )
+    store = RunStore(os.path.join(RUNS_DIR, subdir))
+    wanted = set(manifest["run_ids"])
+    runs = [r for r in store.load_all() if r.run_id in wanted]
+    missing = wanted - {r.run_id for r in runs}
+    if missing:
+        raise SystemExit(
+            f"{stage}: manifest lists {len(wanted)} run(s) but {len(missing)} artifact(s) "
+            f"are missing/unreadable under runs/{subdir}: {sorted(missing)[:6]}"
+        )
+    return manifest, runs
 
 
 def _verify_cases(loader, cases) -> int:
@@ -293,10 +964,12 @@ def cmd_smoke(args: argparse.Namespace) -> int:
     if configs is None:
         print(_bad_configs_msg(configs_arg), file=sys.stderr)
         return 1
+    exposure = _candidate_exposure_violations(configs, args.k, {}, args.strata, "smoke")
+    if exposure:
+        print("refusing (pre-registration): " + "; ".join(exposure), file=sys.stderr)
+        return 1
     if _verify_cases(loader, cases):
         return 1
-    reviewer = _build_reviewer(repo_root)
-    print(f"codex CLI version: {reviewer.cli_version()}")
     store = RunStore(os.path.join(RUNS_DIR, "smoke"))
     # smoke is a LIVE plumbing/auth/connectivity check (the README's "first real codex
     # call"), so it must actually exercise codex every time — clear any cached smoke
@@ -304,16 +977,21 @@ def cmd_smoke(args: argparse.Namespace) -> int:
     for name in os.listdir(store.root):
         if name.endswith(".json"):
             os.remove(os.path.join(store.root, name))
-    results = run_matrix(
-        cases,
-        configs,
-        reviewer,
-        store,
-        k=args.k,
-        max_parallel=args.max_parallel,
-        progress=lambda m: print(f"  {m}"),
-        treatment_fields=_treatment_fields(),
-    )
+    # Every harness codex call runs under an isolated CODEX_HOME that mirrors CI's
+    # codex-action home (auth + sandbox/approval only; no MCP, hooks, memories).
+    with isolated_codex_home():
+        reviewer = _build_reviewer(repo_root)
+        print(f"codex CLI version: {reviewer.cli_version()}")
+        results = run_matrix(
+            cases,
+            configs,
+            reviewer,
+            store,
+            k=args.k,
+            max_parallel=args.max_parallel,
+            progress=lambda m: print(f"  {m}"),
+            treatment_fields=_treatment_fields(),
+        )
     ok = sum(1 for r in results if r.ok)
     print(f"\nsmoke: {ok}/{len(results)} runs ok")
     for r in results:
@@ -323,11 +1001,57 @@ def cmd_smoke(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    from eval_core.runner import run_matrix
-
     if not _safe_subdir(args.subdir):
         print(
             f"invalid --subdir {args.subdir!r}: must stay within the runs directory",
+            file=sys.stderr,
+        )
+        return 1
+    # One attempt per subdir at a time, held through the manifest write: a
+    # concurrent `run` into the same subdir would write the same run ids into
+    # the same store (an artifact set mixed from two invocations that the last
+    # one seals and verdicts).
+    with _subdir_lock(args.subdir) as held:
+        if not held:
+            print(
+                f"refusing (concurrent run): another `run` holds {_lock_path(args.subdir)}; "
+                "one attempt per subdir at a time - wait for it or use a different --subdir",
+                file=sys.stderr,
+            )
+            return 1
+        return _cmd_run_locked(args)
+
+
+def _cmd_run_locked(args: argparse.Namespace) -> int:
+    from eval_core.runner import run_matrix
+
+    # Pre-registered stop conditions FIRST, before anything on disk is touched: a
+    # refused fifth attempt must leave the fourth attempt's successful manifest
+    # (and its sealed artifacts) intact for compare/audit/verdict.
+    stops = _stop_condition_violations(args.subdir)
+    if stops:
+        print("refusing (stop condition): " + "; ".join(stops), file=sys.stderr)
+        return 1
+    resample = _resume_integrity_violations(args.subdir, os.path.join(RUNS_DIR, args.subdir))
+    if resample:
+        print(
+            "refusing (resume integrity): a rerun must reuse every previously OK artifact; "
+            + "; ".join(resample),
+            file=sys.stderr,
+        )
+        return 1
+    repo_root = find_repo_root()
+    # Provenance PREFLIGHT, also before the manifest is touched and before any
+    # codex call: a dirty tree or an incomplete git sample would spend the
+    # candidate's first corpus exposure on a campaign the post-run gate rejects
+    # (and resume would keep reusing the repo_dirty=True artifacts).
+    preflight = _manifest_provenance(repo_root)
+    bad_prov = _provenance_failures(preflight)
+    if bad_prov or preflight.get("repo_dirty") is not False:
+        why = f"incomplete git provenance: {bad_prov}" if bad_prov else "working tree is dirty"
+        print(
+            f"refusing (provenance preflight): {why}; a campaign runs only on a clean, "
+            f"fully sampled tree (`git status --porcelain --untracked-files=all` must be empty).",
             file=sys.stderr,
         )
         return 1
@@ -336,7 +1060,6 @@ def cmd_run(args: argparse.Namespace) -> int:
     # load error) can't leave the previous run's manifest live for compare. A fresh
     # subdir stays manifest-less here; compare fails closed on a missing manifest.
     _invalidate_manifest_if_exists(args.subdir)
-    repo_root = find_repo_root()
     loader = CorpusLoader(CORPUS_DIR, repo_root)
     cases = loader.load_cases(args.strata)
     if not cases:
@@ -354,6 +1077,10 @@ def cmd_run(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
+    exposure = _candidate_exposure_violations(configs, args.k, k_overrides, args.strata, "run")
+    if exposure:
+        print("refusing (pre-registration): " + "; ".join(exposure), file=sys.stderr)
+        return 1
     # Past input validation, this is a real run attempt: write the failure marker
     # now and overwrite it with run_ids ONLY on success. Every failure from here on
     # (an invalid case, reviewer/runner error, an interrupt, or an infra failure)
@@ -365,23 +1092,128 @@ def cmd_run(args: argparse.Namespace) -> int:
     write_json(_manifest_path(args.subdir), {"failed": True, "error": "run did not complete"})
     if _verify_cases(loader, cases):
         return 1
-    reviewer = _build_reviewer(repo_root)
+    # An ignored/excluded extra case dir under corpus/cases/ would be enumerated
+    # by CorpusLoader; refuse BEFORE any codex call (shared with the tree-identity
+    # guard the post-run stages apply).
+    _assert_no_hidden_inputs(repo_root)
     store = RunStore(os.path.join(RUNS_DIR, args.subdir))
     # If run_matrix raises (ConfoundMismatch, CLIVersionMismatch, an interrupt, ...)
     # the up-front failure marker stays in place and the exception propagates.
-    results = run_matrix(
-        cases,
-        configs,
-        reviewer,
-        store,
-        k=args.k,
-        max_parallel=args.max_parallel,
-        progress=lambda m: print(f"  {m}"),
-        treatment_fields=_treatment_fields(),
-        k_overrides=k_overrides,
+    # The reviewer, the matrix AND the manifest write run under ONE isolated
+    # CODEX_HOME (CI-faithful; its path is a manifest field and an audit marker).
+    import datetime as _dt
+
+    attempt_start = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _append_attempt(
+        args.subdir,
+        {
+            "kind": "start",
+            "at": attempt_start,
+            "head": preflight.get("repo_head_sha", ""),  # the validated preflight sample
+            "configs": [c.id for c in configs],
+            "k": args.k,
+        },
     )
-    ok = sum(1 for r in results if r.ok)
-    infra = [r for r in results if not r.ok]
+    dispatched = {"v": False}
+    planned: list = []  # the run keys of THIS attempt's matrix (from the runner's plan)
+    selected_ids = {c.id for c in configs}
+    import reviewer_verdict as _rv
+
+    registered = [c for c in _rv.REGISTERED_CONTRASTS if set(c) == selected_ids]
+
+    def _on_dispatch() -> None:
+        dispatched["v"] = True
+        if registered:
+            # Campaign-global exposure record: the FIRST entry for a contrast is
+            # its frozen revision; verdict judges every later run against it. The
+            # frozen ref (in .git, not under runs/) anchors that revision; a ledger
+            # with no entries while the ref already exists was reset -> recorded.
+            contrast = registered[0]
+            prior = [e for e in _read_ledger() if list(e.get("contrast") or []) == list(contrast)]
+            existing_ref = _read_frozen_ref(repo_root, contrast)
+            _anchor_frozen_ref(repo_root, contrast, preflight.get("repo_head_sha", ""))
+            _append_ledger(
+                {
+                    "kind": "dispatch",
+                    "contrast": list(contrast),
+                    "head": preflight.get("repo_head_sha", ""),
+                    "tree": preflight.get("repo_tree_sha", ""),
+                    "subdir": args.subdir,
+                    "at": attempt_start,
+                    "ledger_reset": bool(existing_ref and not prior),
+                }
+            )
+
+    with isolated_codex_home():
+        reviewer = _build_reviewer(repo_root)
+        try:
+            results = run_matrix(
+                cases,
+                configs,
+                reviewer,
+                store,
+                k=args.k,
+                max_parallel=max(1, args.max_parallel),
+                progress=lambda m: print(f"  {m}"),
+                treatment_fields=_treatment_fields(),
+                k_overrides=k_overrides,
+                on_dispatch=_on_dispatch,
+                on_plan=planned.extend,
+            )
+        except BaseException as exc:  # noqa: BLE001 - classify by dispatch, not by type
+            if not dispatched["v"]:
+                # Raised during PLANNING (CLI pin, confounds, experiment/case tags,
+                # resume verification): no codex call was made, so no END record
+                # and the attempt does not count toward the cap (DECISION_RULE.md).
+                raise
+            # Codex calls may have started: record the attempt as ABORTED so it
+            # counts toward the rerun cap, WITH every OK cell this attempt holds
+            # ON DISK for its planned keys (cached or persisted an instant before
+            # the abort - the store, not an in-memory callback, is the truth), so
+            # the resume-integrity check protects them like a completed attempt's.
+            held = [a for a in (store.load(k) for k in planned) if a is not None and a.ok]
+            _append_attempt(
+                args.subdir,
+                {
+                    "kind": "end",
+                    "started_at": attempt_start,
+                    "aborted": type(exc).__name__,
+                    "ok": None,
+                    "total": None,
+                    "ok_cells": _ok_cells(held, store.root),
+                    "failures": [],
+                },
+            )
+            raise
+        codex_home_path = _codex_reviewer_mod.ACTIVE_ISOLATED_HOME
+        ok = sum(1 for r in results if r.ok)
+        infra = [r for r in results if not r.ok]
+        if not infra:
+            provenance = _manifest_provenance(repo_root)
+    # Append the END record (the per-attempt failure record of the stop
+    # conditions) BEFORE anything can overwrite the artifacts - but ONLY for a
+    # dispatched attempt: a fully cached resume made no codex call and must not
+    # consume the rerun cap.
+    if dispatched["v"]:
+        _append_attempt(
+            args.subdir,
+            {
+                "kind": "end",
+                "started_at": attempt_start,
+                "ok": ok,
+                "total": len(results),
+                "ok_cells": _ok_cells(results, store.root),
+                "failures": [
+                    {
+                        "case": r.case_id,
+                        "arm": r.config_id,
+                        "repeat": r.repeat_idx,
+                        "infra_error": (r.infra_error or "")[:120],
+                    }
+                    for r in infra
+                ],
+            },
+        )
     if infra:
         # Fail closed: an INFRA_ERROR (a notebook case, or a codex/worktree failure)
         # means the experiment is incomplete. Replace the up-front marker with a
@@ -408,18 +1240,39 @@ def cmd_run(args: argparse.Namespace) -> int:
     # rubric provenance (base_prompt_sha) so compare can refuse if pr_review.md drifts
     # between run and compare (the grader is pointed at the live rubric).
     run_ids = [r.run_id for r in results if r.run_id]
-    write_json(
-        _manifest_path(args.subdir),
-        {
-            "run_ids": run_ids,
-            "configs": [c.id for c in configs],
-            "base_prompt_sha": getattr(reviewer, "base_prompt_sha", ""),
-            # Provenance for humans reading the manifest (compare derives repeats
-            # from the artifacts themselves).
-            "k": args.k,
-            "k_per": k_overrides,
-        },
-    )
+    incomplete = _provenance_failures(provenance)
+    if incomplete:
+        # A write-time git failure would blank the computed audit markers; fail
+        # closed (failure marker, exit 2) so the operator re-invokes the attempt
+        # block - resume reuses every OK artifact, no codex call is repeated.
+        write_json(
+            _manifest_path(args.subdir),
+            {"failed": True, "error": f"incomplete write-time provenance: {incomplete}"},
+        )
+        print(
+            f"\n{ok}/{len(results)} runs ok but the write-time git provenance is incomplete "
+            f"({', '.join(incomplete)}); manifest marked failed - re-run `run` (resume reuses "
+            f"the OK artifacts).",
+            file=sys.stderr,
+        )
+        return 2
+    # Seal the artifacts AT RUN TIME: compare --blinded / audit / verdict refuse if
+    # the live artifacts no longer hash to this value.
+    sealed = reviewer_audit.artifacts_sha(store.root, run_ids)
+    manifest = {
+        "run_ids": run_ids,
+        "configs": [c.id for c in configs],
+        "base_prompt_sha": getattr(reviewer, "base_prompt_sha", ""),
+        # Provenance for humans reading the manifest (compare derives repeats
+        # from the artifacts themselves).
+        "k": args.k,
+        "k_per": k_overrides,
+        "artifacts_sha": sealed,
+        "codex_home_path": codex_home_path,
+    }
+    manifest.update({k: provenance.get(k) for k in _PROVENANCE_KEYS})
+    manifest.update(_provenance_aggregates(results, provenance))
+    write_json(_manifest_path(args.subdir), manifest)
     print(f"\n{ok}/{len(results)} runs ok. Next: compare --subdir {args.subdir}")
     return 0
 
@@ -541,6 +1394,23 @@ def cmd_compare(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
+    if blinded:
+        # Engine identity = tree identity, then the run-time seal (both AFTER the
+        # --allow-mixed / missing-manifest refusals above).
+        repo_root_live = find_repo_root()
+        _assert_tree_identity(repo_root_live, manifest, "compare --blinded (stage entry)")
+        sealed = manifest.get("artifacts_sha") if isinstance(manifest, dict) else None
+        if sealed:
+            live_sha = reviewer_audit.artifacts_sha(
+                os.path.join(RUNS_DIR, args.subdir), sorted(wanted or ())
+            )
+            if live_sha != sealed:
+                print(
+                    f"run artifacts changed since `run` sealed them: live artifacts_sha "
+                    f"{live_sha} != manifest {sealed}; refusing to build a blinded bundle.",
+                    file=sys.stderr,
+                )
+                return 1
     bundle = build_bundle(runs)
     out_dir = os.path.join(RUNS_DIR, args.subdir)
     os.makedirs(out_dir, exist_ok=True)
@@ -551,19 +1421,17 @@ def cmd_compare(args: argparse.Namespace) -> int:
     n_cases = len({r.case_id for r in runs})
     print(f"wrote {out_path} ({ok}/{len(runs)} runs ok across {n_cases} cases)")
     if blinded:
-        from eval_core.compare import apply_blinding, derive_blind_mapping, sanitize_model_refs
 
-        config_ids = sorted({r.config_id for r in runs})
-        model_names = sorted({r.model for r in runs if r.model})
-        salt = hashlib.sha256("|".join(sorted(wanted or ())).encode("utf-8")).hexdigest()
-        mapping = derive_blind_mapping(config_ids, salt)
-        blind_runs = apply_blinding(runs, mapping, model_names)
-        # Belt-and-suspenders: sanitize the WHOLE rendered bundle once more, so a
-        # model name that leaked through any renderer path is still scrubbed.
-        blind_bundle = sanitize_model_refs(build_bundle(blind_runs, redact_meta=True), model_names)
+        run_ids_sha = _run_ids_sha(wanted or ())
+        mapping, with_token = _render_blinded_bundle(runs, run_ids_sha)
+        bundle_id = _bundle_id_of(with_token)
+        blind_bundle = with_token.replace(_BUNDLE_ID_TOKEN, bundle_id)
         blind_path = os.path.join(out_dir, "comparison.blinded.md")
         with open(blind_path, "w", encoding="utf-8") as fh:
             fh.write(blind_bundle)
+        repo_root_live = find_repo_root()
+        rubric_path = os.path.join(HERE, "GRADING_RUBRIC.md")
+        prompt_path = os.path.join(repo_root_live, ".github", "codex", "prompts", "pr_review.md")
         # The seal: graders must never read this file (or config/configs.json).
         # Unblind the finished grading table by joining on these labels.
         write_json(
@@ -573,9 +1441,19 @@ def cmd_compare(args: argparse.Namespace) -> int:
                 "models": {r.config_id: r.model for r in runs},
                 "efforts": {r.config_id: getattr(r, "effort", "") for r in runs},
                 "salt_source": "sha256 of the sorted manifest run_ids",
+                "bundle_id": bundle_id,
+                "run_ids_sha": run_ids_sha,
+                "artifacts_sha": (
+                    manifest.get("artifacts_sha") if isinstance(manifest, dict) else None
+                ),
+                "rubric_sha256": _file_sha256(rubric_path) if os.path.exists(rubric_path) else None,
+                "prompt_sha256": _file_sha256(prompt_path) if os.path.exists(prompt_path) else None,
             },
         )
-        print(f"wrote {blind_path} (blind labels: {', '.join(sorted(mapping.values()))})")
+        print(
+            f"wrote {blind_path} (blind labels: {', '.join(sorted(mapping.values()))}; bundle_id {bundle_id})"
+        )
+        _assert_tree_identity(repo_root_live, manifest, "compare --blinded (stage exit)")
         print(
             "  BLINDING: give graders ONLY comparison.blinded.md; they must not read "
             "blinding.json or config/configs.json. Unblind finished tables via blinding.json."
@@ -587,7 +1465,264 @@ def cmd_compare(args: argparse.Namespace) -> int:
     return 0
 
 
-def main() -> int:
+def cmd_audit(args: argparse.Namespace) -> int:
+    """Post-unblinding session-log audit -> hits.json (informational)."""
+    if not _safe_subdir(args.subdir):
+        print(
+            f"invalid --subdir {args.subdir!r}: must stay within the runs directory",
+            file=sys.stderr,
+        )
+        return 1
+    manifest, runs = _load_manifest_runs(args.subdir, "audit")
+    repo_root = find_repo_root()
+    _assert_tree_identity(repo_root, manifest, "audit (stage entry)")
+    markers = {k: manifest.get(k) for k in _MANIFEST_MARKER_KEYS}
+    try:
+        result = reviewer_audit.audit(
+            runs,
+            os.path.join(RUNS_DIR, args.subdir),
+            repo_root,
+            markers,
+            _run_ids_sha(manifest["run_ids"]),
+            manifest.get("artifacts_sha") or "",
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        print(f"audit refused: {exc}", file=sys.stderr)
+        return 1
+    write_json(args.output, result)
+    cov = result["coverage"]
+    print(
+        f"wrote {args.output}: {len(result['hits'])} hit(s); coverage covered={cov['covered']} "
+        f"no_commands={cov['no_commands']} unaudited={cov['unaudited']} total={cov['total']}"
+        + ("; AUDIT VACUOUS" if result["vacuous"] else "")
+    )
+    _assert_tree_identity(repo_root, manifest, "audit (stage exit)")
+    return 0
+
+
+def cmd_verdict(args: argparse.Namespace) -> int:
+    """Pinned check order: (a) arguments, (b) manifest, (c) blinding.json binding,
+    (d) grades + bundle_id + validation, (e) --audit-hits binding, (f) protocol
+    guards, (g) tree identity, (h) the gates."""
+    import json as _json
+
+    import reviewer_verdict
+    from eval_core.compare import derive_blind_mapping
+    from eval_core.models import to_jsonable
+
+    # (a)
+    if not _safe_subdir(args.subdir):
+        print(f"invalid --subdir {args.subdir!r}", file=sys.stderr)
+        return 1
+    if args.control == args.candidate:
+        raise SystemExit("verdict: --control and --candidate must differ")
+    if (args.control, args.candidate) not in reviewer_verdict.REGISTERED_CONTRASTS:
+        raise SystemExit(
+            f"verdict: ({args.control}, {args.candidate}) is not the registered contrast "
+            f"{reviewer_verdict.REGISTERED_CONTRASTS}; a future campaign registers its own "
+            f"pair in its own PR-1."
+        )
+    # (b)
+    manifest, runs = _load_manifest_runs(args.subdir, "verdict")
+    repo_root = find_repo_root()
+    subdir_path = os.path.join(RUNS_DIR, args.subdir)
+    run_ids_sha = _run_ids_sha(manifest["run_ids"])
+    # (c)
+    blinding_path = os.path.join(subdir_path, "blinding.json")
+    try:
+        blinding = read_json(blinding_path)
+    except (OSError, ValueError):
+        raise SystemExit(f"verdict (c): no readable blinding.json at {blinding_path}")
+    assert isinstance(blinding, dict)
+    expected_mapping = derive_blind_mapping(sorted({r.config_id for r in runs}), run_ids_sha)
+    if blinding.get("mapping") != expected_mapping:
+        raise SystemExit(
+            "verdict (c): blinding.json mapping != deterministic mapping from the manifest"
+        )
+    if blinding.get("run_ids_sha") != run_ids_sha:
+        raise SystemExit("verdict (c): blinding.json run_ids_sha != manifest run_ids")
+    live_artifacts = reviewer_audit.artifacts_sha(subdir_path, manifest["run_ids"])
+    if manifest.get("artifacts_sha") != live_artifacts:
+        raise SystemExit(
+            f"verdict (c): manifest artifacts_sha {manifest.get('artifacts_sha')} != live {live_artifacts}"
+        )
+    if blinding.get("artifacts_sha") != live_artifacts:
+        raise SystemExit(
+            f"verdict (c): blinding.json artifacts_sha {blinding.get('artifacts_sha')} != live {live_artifacts}"
+        )
+    bundle_path = os.path.join(subdir_path, "comparison.blinded.md")
+    try:
+        with open(bundle_path, encoding="utf-8") as fh:
+            bundle_text = fh.read()
+    except OSError:
+        raise SystemExit(f"verdict (c): blinded bundle missing at {bundle_path}")
+    expected_bundle = blinding.get("bundle_id") or ""
+    # The grader-visible bundle is bound to the SEALED ARTIFACTS, not only to
+    # itself: regenerate it deterministically from the manifest runs and require
+    # the file to be exactly that rendering (a coordinated edit of bundle +
+    # blinding.json + grades that stays self-consistent is still refused).
+    _mapping_regen, regen_with_token = _render_blinded_bundle(runs, run_ids_sha)
+    if _bundle_id_of(regen_with_token) != expected_bundle:
+        raise SystemExit(
+            "verdict (c): blinding.json bundle_id != the bundle regenerated from the sealed artifacts"
+        )
+    if bundle_text != regen_with_token.replace(_BUNDLE_ID_TOKEN, expected_bundle):
+        raise SystemExit(
+            "verdict (c): comparison.blinded.md differs from the bundle regenerated from the sealed artifacts"
+        )
+    if (
+        not expected_bundle
+        or _bundle_id_of(bundle_text.replace(expected_bundle, _BUNDLE_ID_TOKEN)) != expected_bundle
+    ):
+        raise SystemExit(
+            "verdict (c): comparison.blinded.md does not hash to its recorded bundle_id"
+        )
+    rubric_path = os.path.join(HERE, "GRADING_RUBRIC.md")
+    prompt_path = os.path.join(repo_root, ".github", "codex", "prompts", "pr_review.md")
+    if blinding.get("rubric_sha256") != _file_sha256(rubric_path):
+        raise SystemExit("verdict (c): blinding.json rubric_sha256 != live GRADING_RUBRIC.md")
+    if blinding.get("prompt_sha256") != _file_sha256(prompt_path):
+        raise SystemExit("verdict (c): blinding.json prompt_sha256 != live pr_review.md")
+    # (d)
+    grades = read_json(args.grades)
+    assert isinstance(grades, dict)
+    if grades.get("bundle_id") != expected_bundle:
+        raise SystemExit(
+            f"verdict (d): grades bundle_id {grades.get('bundle_id')!r} != blinded bundle {expected_bundle!r}"
+        )
+    grades = reviewer_verdict.unblind(grades, blinding["mapping"])
+    runs_jsonable = [to_jsonable(r) for r in runs]
+    try:
+        reviewer_verdict.validate_grades(grades, runs_jsonable)
+    except ValueError as exc:
+        raise SystemExit(f"verdict (d): {exc}")
+    # (e)
+    audit_hits = None
+    if args.audit_hits:
+        audit_hits = read_json(args.audit_hits)
+        assert isinstance(audit_hits, dict)
+        if audit_hits.get("run_ids_sha") != run_ids_sha:
+            raise SystemExit("verdict (e): hits.json run_ids_sha != manifest")
+        if audit_hits.get("artifacts_sha") != live_artifacts:
+            raise SystemExit("verdict (e): hits.json artifacts_sha != live artifacts")
+        if audit_hits.get("branch") != manifest.get("repo_branch"):
+            raise SystemExit("verdict (e): hits.json branch != manifest repo_branch")
+        markers = {k: manifest.get(k) for k in _MANIFEST_MARKER_KEYS}
+        recomputed = reviewer_audit.audit(
+            runs, subdir_path, repo_root, markers, run_ids_sha, live_artifacts
+        )
+        for key in ("hits", "unaudited", "no_commands", "coverage", "vacuous"):
+            if _json.dumps(audit_hits.get(key), sort_keys=True) != _json.dumps(
+                recomputed.get(key), sort_keys=True
+            ):
+                raise SystemExit(
+                    f"verdict (e): hits.json {key!r} differs from the recomputed audit:\n"
+                    f"  file:       {_json.dumps(audit_hits.get(key), sort_keys=True)[:400]}\n"
+                    f"  recomputed: {_json.dumps(recomputed.get(key), sort_keys=True)[:400]}"
+                )
+    # (f)
+    violations = []
+    configs = set(manifest.get("configs") or [])
+    if configs != {args.control, args.candidate}:
+        violations.append(
+            f"manifest configs {sorted(configs)} != {{{args.control}, {args.candidate}}}"
+        )
+    loader = CorpusLoader(CORPUS_DIR, repo_root)
+    corpus = loader.load_cases(None)
+    corpus_ids = {c.id for c in corpus}
+    run_cases = {r.case_id for r in runs}
+    if run_cases != corpus_ids:
+        violations.append(
+            f"OK runs cover {len(run_cases)} case(s) but the committed corpus has {len(corpus_ids)} "
+            f"(no --strata filtering allowed): missing {sorted(corpus_ids - run_cases)[:6]}, "
+            f"extra {sorted(run_cases - corpus_ids)[:6]}"
+        )
+    n_s4 = sum(1 for c in corpus if c.stratum == "s4_missed")
+    if len(corpus_ids) < 8 or n_s4 < 2:
+        violations.append(
+            f"corpus below the floor: {len(corpus_ids)} cases, {n_s4} s4_missed (need >= 8 / >= 2)"
+        )
+    expected_grid = {
+        (c, a, r) for c in corpus_ids for a in (args.control, args.candidate) for r in (0, 1)
+    }
+    realized = [(r.case_id, r.config_id, int(r.repeat_idx)) for r in runs]
+    if len(realized) != len(set(realized)):
+        violations.append("duplicate (case, arm, repeat) among the manifest's OK runs")
+    if set(realized) != expected_grid:
+        violations.append(
+            f"realized grid != cases x {{control, candidate}} x {{0, 1}}: missing "
+            f"{sorted(expected_grid - set(realized))[:6]}, extra {sorted(set(realized) - expected_grid)[:6]}"
+        )
+    prov = {k: manifest.get(k) for k in _PROVENANCE_KEYS}
+    recomputed_agg = _provenance_aggregates(runs, prov)
+    stored_agg = {k: manifest.get(k) for k in _AGGREGATE_KEYS}
+    if stored_agg != recomputed_agg:
+        violations.append(
+            f"manifest aggregates {stored_agg} != recomputed from the sealed artifacts {recomputed_agg}"
+        )
+    if recomputed_agg["run_head_missing"] != 0:
+        violations.append(f"run_head_missing = {recomputed_agg['run_head_missing']}")
+    if recomputed_agg["run_dirty_any"] is not False:
+        violations.append(f"run_dirty_any = {recomputed_agg['run_dirty_any']!r}")
+    if recomputed_agg["run_head_shas"] != [manifest.get("repo_head_sha")]:
+        violations.append(
+            f"run_head_shas {recomputed_agg['run_head_shas']} != [{manifest.get('repo_head_sha')}]"
+        )
+    if recomputed_agg["run_marker_mismatch"] != 0 or recomputed_agg["run_not_isolated"] != 0:
+        violations.append(
+            f"run_marker_mismatch={recomputed_agg['run_marker_mismatch']} "
+            f"run_not_isolated={recomputed_agg['run_not_isolated']} (both must be 0)"
+        )
+    if manifest.get("repo_dirty") is not False:
+        violations.append(f"manifest repo_dirty = {manifest.get('repo_dirty')!r}")
+    bad_prov = _provenance_failures(prov)
+    if bad_prov:
+        violations.append(f"manifest write-time provenance incomplete: {bad_prov}")
+    if args.expect_head and manifest.get("repo_head_sha") != args.expect_head:
+        violations.append(
+            f"repo_head_sha {manifest.get('repo_head_sha')} != --expect-head {args.expect_head}"
+        )
+    exposure = _exposure_status(manifest, args.subdir, (args.control, args.candidate), repo_root)
+    if exposure.get("protocol_error"):
+        violations.append(f"frozen-provenance integrity: {exposure['protocol_error']}")
+    if violations:
+        raise SystemExit(
+            "verdict (f): protocol guard refused a definitive verdict:\n  - "
+            + "\n  - ".join(violations)
+        )
+    # (g)
+    _assert_tree_identity(repo_root, manifest, "verdict (stage entry)")
+    # (h)
+    result = reviewer_verdict.gates(grades, runs_jsonable, args.control, args.candidate, audit_hits)
+    # Pre-registered informational reads (latency, 2x-p95 flag, input cost) from
+    # the sealed artifacts; prices from the production script's PRICING table.
+    from adapters.openai_review_loader import load_openai_review
+
+    pricing = getattr(load_openai_review(repo_root), "PRICING", {})
+    input_prices = {m: p[0] for m, p in pricing.items()}
+    result["campaign_reads"] = reviewer_verdict.campaign_reads(
+        runs_jsonable, args.control, args.candidate, input_prices
+    )
+    result["exposure"] = exposure
+    if not exposure["mechanical"]:
+        # Pre-registration did not survive: computed and reported, never a
+        # mechanical GO - the final call is the user's, recorded in the verdict.
+        result["definitive"] = False
+        result["label"] = (
+            f"{result['verdict']} (RE-REGISTERED after candidate exposure - "
+            f"non-mechanical, user decision: {exposure['reason']})"
+        )
+    print(_json.dumps(result, indent=2, sort_keys=True))
+    print(f"\nVERDICT: {result['label']}")
+    if result["contested_gates"]:
+        print(
+            f"CONTESTED (verifier-confirmed leaks): {result['contested_gates']} - the final call is the user's"
+        )
+    _assert_tree_identity(repo_root, manifest, "verdict (stage exit)")
+    return 0
+
+
+def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Codex reviewer A/B comparison harness")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -610,10 +1745,15 @@ def main() -> int:
     ps.set_defaults(func=cmd_smoke)
 
     pr = sub.add_parser("run", help="full comparison matrix; saves raw reviews")
-    pr.add_argument("--configs", default="A,B")
+    pr.add_argument("--configs", default="B,E")
     pr.add_argument("--strata", nargs="*", default=None)
     pr.add_argument("--subdir", default="full")
-    pr.add_argument("--k", type=int, default=1, help="repeats per (case, config)")
+    pr.add_argument(
+        "--k",
+        type=int,
+        default=2,
+        help="repeats per (case, config); the default B,E contrast is registered at k=2",
+    )
     pr.add_argument(
         "--k-per",
         default="",
@@ -637,7 +1777,31 @@ def main() -> int:
     )
     pc.set_defaults(func=cmd_compare)
 
-    args = p.parse_args()
+    pa = sub.add_parser("audit", help="post-unblinding session-log audit -> hits.json")
+    pa.add_argument("--subdir", default="full")
+    pa.add_argument(
+        "-o",
+        "--output",
+        required=True,
+        help="where to write hits.json (outside the repo or under runs/)",
+    )
+    pa.set_defaults(func=cmd_audit)
+
+    pvd = sub.add_parser(
+        "verdict", help="apply the pre-registered gates to a reconciled grades JSON"
+    )
+    pvd.add_argument("--subdir", default="full")
+    pvd.add_argument("--grades", required=True)
+    pvd.add_argument("--control", required=True)
+    pvd.add_argument("--candidate", required=True)
+    pvd.add_argument("--audit-hits", default=None)
+    pvd.add_argument("--expect-head", default=None)
+    pvd.set_defaults(func=cmd_verdict)
+    return p
+
+
+def main() -> int:
+    args = _build_parser().parse_args()
     return args.func(args)
 
 

@@ -252,4 +252,82 @@ def cleanup(worktree_dir: str, repo_root: str, worktrees_root: str | None = None
         shutil.rmtree(real, ignore_errors=True)
 
 
-__all__ = ["materialize", "cleanup", "Materialized", "MaterializeError"]
+def git_provenance(repo_root: str) -> dict:
+    """The ONE provenance contract (seven keys), sampled per review by
+    ``CodexReviewer.review`` and at manifest write by ``run_eval``.
+
+    * ``repo_head_sha``   - ``git rev-parse HEAD`` (fail-soft ``""``)
+    * ``repo_tree_sha``   - ``git rev-parse HEAD^{tree}`` (fail-soft ``""``)
+    * ``repo_dirty``      - True iff ``git --no-optional-locks status --porcelain
+      --untracked-files=all`` prints anything (the explicit flag overrides a
+      ``status.showUntrackedFiles=no`` config that would hide an unregistered
+      corpus dir); ``None`` if git failed.
+    * ``repo_branch``     - ``git rev-parse --abbrev-ref HEAD`` (``""`` on failure)
+    * ``repo_common_dir`` - ``git rev-parse --git-common-dir`` normalised as
+      ``normpath(join(repo_root, out))`` (git prints a RELATIVE ``.git`` in a
+      primary checkout and an absolute path in a linked worktree; never
+      ``abspath``, which would resolve against the process cwd). ``""`` on failure.
+    * ``repo_worktree_paths`` - sorted ``worktree <path>`` lines of ``git worktree
+      list --porcelain`` minus ``repo_root`` itself and anything under
+      ``<repo_root>/tools/reviewer-eval/runs/.worktrees/`` (both sides realpath-
+      normalised before the comparison); ``None`` (never ``[]``) on failure.
+    * ``repo_ref_names``  - sorted ``git for-each-ref --format=%(refname:short)``
+      over EVERY namespace minus ``HEAD``; ``None`` on failure.
+    """
+    out: dict = {
+        "repo_head_sha": "",
+        "repo_tree_sha": "",
+        "repo_dirty": None,
+        "repo_branch": "",
+        "repo_common_dir": "",
+        "repo_worktree_paths": None,
+        "repo_ref_names": None,
+    }
+    try:
+        cp = _git(repo_root, ["rev-parse", "HEAD"], check=False)
+        if cp.returncode == 0:
+            out["repo_head_sha"] = cp.stdout.strip()
+        cp = _git(repo_root, ["rev-parse", "HEAD^{tree}"], check=False)
+        if cp.returncode == 0:
+            out["repo_tree_sha"] = cp.stdout.strip()
+        cp = _git(
+            repo_root,
+            ["--no-optional-locks", "status", "--porcelain", "--untracked-files=all"],
+            check=False,
+        )
+        if cp.returncode == 0:
+            out["repo_dirty"] = bool(cp.stdout.strip())
+        cp = _git(repo_root, ["rev-parse", "--abbrev-ref", "HEAD"], check=False)
+        if cp.returncode == 0:
+            out["repo_branch"] = cp.stdout.strip()
+        cp = _git(repo_root, ["rev-parse", "--git-common-dir"], check=False)
+        if cp.returncode == 0 and cp.stdout.strip():
+            out["repo_common_dir"] = os.path.normpath(os.path.join(repo_root, cp.stdout.strip()))
+        cp = _git(repo_root, ["worktree", "list", "--porcelain"], check=False)
+        if cp.returncode == 0:
+            root_real = os.path.realpath(repo_root)
+            own_wts = os.path.realpath(
+                os.path.join(repo_root, "tools", "reviewer-eval", "runs", ".worktrees")
+            )
+            paths = []
+            for line in cp.stdout.splitlines():
+                if not line.startswith("worktree "):
+                    continue
+                path = line[len("worktree ") :].strip()
+                real = os.path.realpath(path)
+                if real == root_real:
+                    continue
+                if real == own_wts or real.startswith(own_wts + os.sep):
+                    continue
+                paths.append(path)
+            out["repo_worktree_paths"] = sorted(set(paths))
+        cp = _git(repo_root, ["for-each-ref", "--format=%(refname:short)"], check=False)
+        if cp.returncode == 0:
+            names = {n.strip() for n in cp.stdout.splitlines() if n.strip() and n.strip() != "HEAD"}
+            out["repo_ref_names"] = sorted(names)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return out
+
+
+__all__ = ["materialize", "cleanup", "git_provenance", "Materialized", "MaterializeError"]

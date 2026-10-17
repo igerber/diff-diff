@@ -111,7 +111,9 @@ class Case:
     fixture: dict[str, Any] = field(default_factory=dict)
     ground_truth: list[GroundTruthBug] = field(default_factory=list)
     # Negative-control / precision controls:
-    expect_no_blockers: bool = False  # True ⇒ any P0/P1 is a false positive
+    expect_no_blockers: bool = (
+        False  # True ⇒ any finding above `allow_severities` is a false positive
+    )
     allow_severities: list[str] = field(default_factory=lambda: ["P2", "P3"])
     known_fp_topics: list[dict[str, Any]] = field(default_factory=list)
     # Exact post-diff path contract. When set, verify() requires the diff to touch

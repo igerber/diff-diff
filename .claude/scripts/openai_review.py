@@ -862,17 +862,23 @@ def apply_token_budget(
 # Cost estimation
 # ---------------------------------------------------------------------------
 
-# Pricing per 1M tokens: (input, output) in USD.
-# Source: https://platform.openai.com/docs/pricing
-# MAINTENANCE: Update when OpenAI changes pricing.
+# Pricing per 1M tokens: (input, output) in USD, standard tier, <=272K-input
+# requests only (requests above 272K input bill at a higher tier, ~2x, which
+# estimate_cost does not model).
+# Source: https://developers.openai.com/api/docs/pricing
+# MAINTENANCE: Update when OpenAI changes pricing. The gpt-5.6-* and gpt-6-*
+# rows were verified 2026-10-15; older rows are unchanged since their last check.
 PRICING = {
     "gpt-5.4": (2.50, 15.00),
     "gpt-5.4-pro": (30.00, 180.00),
     "gpt-5.5": (5.00, 30.00),
     "gpt-5.5-pro": (30.00, 180.00),
-    "gpt-5.6-sol": (5.00, 30.00),
-    "gpt-5.6-terra": (2.50, 15.00),
-    "gpt-5.6-luna": (1.00, 6.00),
+    "gpt-5.6-sol": (4.00, 20.00),
+    "gpt-5.6-terra": (2.00, 12.00),
+    "gpt-5.6-luna": (0.20, 1.20),
+    "gpt-6-astra": (10.00, 50.00),
+    "gpt-6-sol": (2.00, 10.00),
+    "gpt-6-luna": (0.10, 0.50),
     "gpt-4.1": (2.00, 8.00),
     "gpt-4.1-mini": (0.40, 1.60),
     "o3": (2.00, 8.00),
@@ -1145,13 +1151,16 @@ REASONING_MAX_TOKENS = 32768
 
 def _is_reasoning_model(model: str) -> bool:
     """Return True for models that use internal chain-of-thought reasoning."""
-    return model.startswith(("o1", "o3", "o4", "gpt-5.4", "gpt-5.5", "gpt-5.6")) or "-pro" in model
+    return (
+        model.startswith(("o1", "o3", "o4", "gpt-5.4", "gpt-5.5", "gpt-5.6", "gpt-6"))
+        or "-pro" in model
+    )
 
 
 def _resolve_timeout(timeout: "int | None", model: str) -> int:
     """Auto-resolve omitted --timeout based on model class.
 
-    Reasoning models (o1/o3/o4/gpt-5.4/gpt-5.5/gpt-5.6*/*-pro) get REASONING_TIMEOUT (900s).
+    Reasoning models (o1/o3/o4/gpt-5.4/gpt-5.5/gpt-5.6*/gpt-6*/*-pro) get REASONING_TIMEOUT (900s).
     Non-reasoning models get DEFAULT_TIMEOUT (300s).
     Explicit values are passed through unchanged.
     """
@@ -1324,10 +1333,12 @@ def _detect_backend(requested: str) -> str:
     return "api"
 
 
-# Reasoning-effort values the codex backend accepts, verified live against
-# codex-cli 0.144.5 / the Responses API effort enum on 2026-07-18. `ultra` is
-# deliberately excluded: it is not accepted on this API path (the enum tops out
-# at `max`) and is out of scope for the reviewer either way.
+# Reasoning-effort values the codex backend accepts. `xhigh` verified live on
+# codex-cli 0.162.1 (2026-10); minimal/low/medium/high/max are carried over from
+# the codex-cli 0.144.5 / Responses API verification of 2026-07-18 and were not
+# re-verified. `ultra` was observed accepted only on codex-cli 0.153.4 via a
+# ChatGPT login, is not verified on 0.162.1 nor on the API path, and is
+# intentionally excluded.
 _CODEX_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh", "max"})
 
 
@@ -1369,6 +1380,43 @@ def _build_codex_cmd(
     ]
 
 
+# Non-shell tool-event headers codex exec prints on stderr in human mode. A
+# stderr line that is EXACTLY one of these (after rstrip) or matches
+# OTHER_EVENT_PREFIX_RE counts toward usage["session_other_events"]; a run with a
+# non-zero count used a channel the shell log cannot show, so the reviewer-eval
+# session-log audit classifies it `unaudited`. Learned on codex-cli 0.162.1
+# (2026-10): web search prints `web search: <query>` (a PREFIX line, not a bare
+# word), hence the regex; the bare-word names are the pre-registered initial set.
+# Lives HERE (not in the harness adapter) because this script is stdlib-only and
+# is loaded BY the adapter; the adapter folds this set into its backend-contract
+# hash so a change here busts the resume cache like any call_codex edit.
+OTHER_EVENT_HEADERS = frozenset(
+    {
+        "web_search",
+        "web search",
+        "spawn_agent",
+        "mcp",
+        "mcp_tool_call",
+        "apply_patch",
+        "view_image",
+        "browser",
+        "computer_use",
+        "tool",
+    }
+)
+OTHER_EVENT_PREFIX_RE = re.compile(
+    r"^(web search|web_search|mcp|mcp_tool_call|tool|spawn_agent|browser|computer_use)[ :_]"
+)
+
+
+def _non_negative_int(value: str) -> int:
+    """argparse type for --timeout: an int >= 0 (0 = no timeout on both backends)."""
+    n = int(value)
+    if n < 0:
+        raise argparse.ArgumentTypeError(f"--timeout must be >= 0, got {n}")
+    return n
+
+
 def call_codex(
     prompt: str,
     model: str,
@@ -1393,10 +1441,74 @@ def call_codex(
     reporting on non-zero exit. Codex's stdout (when not using --json) is
     typically empty for `exec`; we forward it to user stderr just in case.
 
-    Raises RuntimeError on non-zero exit or empty output. Cleans up the
-    tempfile in `finally`, including on KeyboardInterrupt (which propagates
+    The captured stderr is ALSO parsed, on every exit path (normal, non-zero
+    exit, timeout) before any RuntimeError is raised, into the session-event
+    summary the reviewer-eval harness persists: ``session_commands`` (the shell
+    command lines codex executed, one entry per ``exec`` block: the
+    ``<shell> -lc '...' in <cwd>`` start line through the line before codex's
+    status line ``succeeded/failed/exited N/timed out in Nms:``; an entry with
+    no status line is closed by the next start line, by a 200-line cap with
+    ``[truncated]`` appended, or by end of stream as-is), the start-line and
+    ``exec``-line counts, the non-shell event count (OTHER_EVENT_HEADERS /
+    OTHER_EVENT_PREFIX_RE) and whether the stderr drain was still alive after
+    the join (``session_commands_truncated``). One stderr line
+    ``session_commands: entries=.. start_lines=.. exec_lines=.. other_events=..
+    truncated=..`` is printed so a caller can check the parser against the live
+    format without an artifact. The parser is INLINE (a nested function) so it
+    is part of the ``call_codex`` source the harness fingerprints.
+
+    Raises RuntimeError on non-zero exit, timeout, or empty output. Cleans up
+    the tempfile in `finally`, including on KeyboardInterrupt (which propagates
     after best-effort termination).
     """
+    _START_RE = re.compile(r"^\S*/(zsh|bash|sh) -lc ")
+    _STATUS_RE = re.compile(
+        r"^ (succeeded|failed|exited \d+|timed out)\b.* in \d+(\.\d+)?(ms|s):?\s*$"
+    )
+    _ENTRY_CAP = 200
+
+    def _parse_session(text: str) -> dict:
+        entries: "list[str]" = []
+        start_lines = 0
+        exec_lines = 0
+        other_events = 0
+        current: "list[str] | None" = None
+        for raw in text.splitlines():
+            line = raw.rstrip()
+            if line == "exec":
+                exec_lines += 1
+            if line in OTHER_EVENT_HEADERS or OTHER_EVENT_PREFIX_RE.match(line):
+                other_events += 1
+            if _START_RE.match(raw):
+                start_lines += 1
+                if current is not None:
+                    # Unterminated: closed by the next start line. The `exec`
+                    # header that introduced THIS block is not the previous
+                    # entry's output, so drop it from the closed entry's tail.
+                    if len(current) > 1 and current[-1].rstrip() == "exec":
+                        current.pop()
+                    entries.append("\n".join(current))
+                current = [raw]
+                continue
+            if current is None:
+                continue
+            if _STATUS_RE.match(raw):
+                entries.append("\n".join(current))
+                current = None
+                continue
+            current.append(raw)
+            if len(current) >= _ENTRY_CAP:
+                entries.append("\n".join(current) + "\n[truncated]")
+                current = None
+        if current is not None:
+            entries.append("\n".join(current))  # end of stream: kept as-is
+        return {
+            "session_commands": entries,
+            "session_commands_start_lines": start_lines,
+            "session_commands_exec_lines": exec_lines,
+            "session_other_events": other_events,
+        }
+
     fd, tmp_path = tempfile.mkstemp(suffix=".md", prefix="codex-review-")
     os.close(fd)
     try:
@@ -1448,16 +1560,13 @@ def call_codex(
         stdin_thread = threading.Thread(target=_feed_stdin, daemon=True)
         stdin_thread.start()
 
+        timed_out = False
         try:
             proc.wait(timeout=timeout_s)
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
-            stdin_thread.join(timeout=2)
-            raise RuntimeError(
-                f"codex exec timed out after {timeout_s}s (model={model}, "
-                f"effort={effort}):\n{stderr_buf.getvalue()}"
-            )
+            timed_out = True
         except KeyboardInterrupt:
             proc.terminate()
             try:
@@ -1469,6 +1578,26 @@ def call_codex(
         stderr_thread.join(timeout=2)
         stdin_thread.join(timeout=2)
 
+        # Parse + summarize on EVERY exit path, before any raise below.
+        session = _parse_session(stderr_buf.getvalue())
+        session["session_commands_truncated"] = bool(stderr_thread.is_alive())
+        print(
+            "session_commands: entries={} start_lines={} exec_lines={} other_events={} "
+            "truncated={}".format(
+                len(session["session_commands"]),
+                session["session_commands_start_lines"],
+                session["session_commands_exec_lines"],
+                session["session_other_events"],
+                session["session_commands_truncated"],
+            ),
+            file=sys.stderr,
+        )
+        if timed_out:
+            raise RuntimeError(
+                f"codex exec timed out after {timeout_s}s (model={model}, "
+                f"effort={effort}):\n{stderr_buf.getvalue()}"
+            )
+
         if proc.returncode != 0:
             raise RuntimeError(
                 f"codex exec failed (exit {proc.returncode}):\n" f"{stderr_buf.getvalue()}"
@@ -1479,11 +1608,13 @@ def call_codex(
             )
         with open(tmp_path) as f:
             content = f.read()
-        return content, {
+        usage: dict = {
             "backend": "codex",
             "input_tokens": None,
             "output_tokens": None,
         }
+        usage.update(session)
+        return content, usage
     finally:
         try:
             os.unlink(tmp_path)
@@ -1555,7 +1686,8 @@ def call_openai(
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        # 0 is the documented "no timeout" value; urlopen(timeout=0) is NOT that.
+        with urllib.request.urlopen(req, timeout=(None if timeout == 0 else timeout)) as resp:
             result = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         body = ""
@@ -1744,13 +1876,15 @@ def main() -> None:
     )
     parser.add_argument(
         "--timeout",
-        type=int,
+        type=_non_negative_int,
         default=None,
         help=(
-            f"HTTP request timeout in seconds (api backend only). If omitted, "
-            f"defaults to {REASONING_TIMEOUT} for reasoning models (gpt-5.4/gpt-5.5/gpt-5.6*, "
-            f"*-pro, o1/o3/o4) and {DEFAULT_TIMEOUT} otherwise. Ignored under "
-            f"--backend codex (codex manages its own time budget)."
+            f"Timeout in seconds; applies to both backends. On the api backend an "
+            f"HTTP request timeout: if omitted, defaults to {REASONING_TIMEOUT} for "
+            f"reasoning models (gpt-5.4/gpt-5.5/gpt-5.6*/gpt-6*, *-pro, o1/o3/o4) and "
+            f"{DEFAULT_TIMEOUT} otherwise. On the codex backend a hard wall-clock cap "
+            f"on the codex process (uncapped when omitted). 0 means no timeout on "
+            f"either backend; negative values are rejected."
         ),
     )
     parser.add_argument(
@@ -2100,10 +2234,13 @@ def main() -> None:
         # See the SENSITIVE_FILE_PATTERNS comment block for the rationale on
         # why this is a notice and not an enforcement gate.
         _print_sensitive_notice(codex_repo_root, _scan_sensitive_files(codex_repo_root))
+        # 0 means "no timeout" on both backends: proc.wait(timeout=0) would
+        # kill codex at once, so 0 (and an omitted flag) map to None here.
         review_content, usage = call_codex(
             prompt=prompt,
             model=args.model,
             repo_root=codex_repo_root,
+            timeout_s=(None if not args.timeout else args.timeout),
         )
     else:
         review_content, usage = call_openai(prompt, args.model, api_key, timeout=args.timeout)

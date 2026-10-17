@@ -26,6 +26,13 @@ _STRATUM_ORDER = {
 }
 
 
+def render_default_header(config_ids: list[str], has_repeats: bool) -> str:
+    """Public alias of the default grading header (``_render_header``), so a
+    harness building a BLINDED bundle can render the standard "How to grade"
+    section with the blind labels as columns and append its own binding line."""
+    return _render_header(config_ids, has_repeats)
+
+
 def _render_header(config_ids: list[str], has_repeats: bool) -> str:
     """Grading header + table, sized to the configs (and repeats) actually present.
 
@@ -174,13 +181,19 @@ def _render_review(rr: RunResult, redact_meta: bool = False) -> str:
 # --------------------------------------------------------------------------- #
 
 # Family patterns scrubbed from blinded text in ADDITION to the configured model
-# names: any gpt-5.x-style token, the GPT-5.6 tier names as standalone words, and
-# bare major.minor version shorthand ("5.5", "5.6"). Over-redaction is safe (a
-# stray [model-redacted] doesn't change whether a defect was named at a location);
-# under-redaction breaks the blind.
+# names: any gpt-5.x / gpt-6.x-style token (the separator class includes the
+# Unicode hyphens/dashes codex output can contain: U+2010..U+2014, so "GPT‑6"
+# with a non-breaking hyphen and "GPT–6" with an en dash are scrubbed too), the
+# GPT-5.6 tier names and "astra" as standalone words, and bare major.minor
+# version shorthand for the 5.x family ("5.5", "5.6"). There is deliberately NO
+# bare "6.x" numeric pattern (the 5.x one is grandfathered; a bare "6.2" is too
+# common in ordinary text). Over-redaction is safe (a stray [model-redacted]
+# doesn't change whether a defect was named at a location); under-redaction
+# breaks the blind.
 _MODEL_FAMILY_PATTERNS = (
-    r"gpt[\s._-]?5(?:\.\d+)?(?:-[a-z0-9]+)*",
-    r"\b(?:sol|terra|luna)\b",
+    r"gpt[\s._\-\u2010\u2011\u2012\u2013\u2014]?5(?:\.\d+)?(?:-[a-z0-9]+)*",
+    r"gpt[\s._\-\u2010\u2011\u2012\u2013\u2014]?6(?:\.\d+)?(?:-[a-z0-9]+)*",
+    r"\b(?:sol|terra|luna|astra)\b",
     r"\b5\.[0-9]\b",
     # Claude-family MODEL tokens only: "claude" followed by a version/family
     # tail ("claude-fable-5", "Claude 3.5", "claude_sonnet"). A bare "claude"
@@ -340,4 +353,10 @@ def build_bundle(
     return "\n".join(parts).rstrip() + "\n"
 
 
-__all__ = ["build_bundle", "derive_blind_mapping", "sanitize_model_refs", "apply_blinding"]
+__all__ = [
+    "build_bundle",
+    "derive_blind_mapping",
+    "sanitize_model_refs",
+    "apply_blinding",
+    "render_default_header",
+]

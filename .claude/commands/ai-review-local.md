@@ -16,7 +16,7 @@ Two backends are supported:
 
 | Backend | Latency | Cost | Quality |
 |---|---|---|---|
-| `api` (`gpt-5.6-sol`) | 30-60s | ~$0.10-1.00/run, metered via `OPENAI_API_KEY` | Single-shot — won't grep, can't load files on its own initiative |
+| `api` (`gpt-5.6-sol`) | 30-60s | metered at the `PRICING` rates in `openai_review.py` via `OPENAI_API_KEY`; `--backend api --dry-run` prints the estimate for your diff | Single-shot — won't grep, can't load files on its own initiative |
 | `codex` (any auth) | 3-15 min | depends on your `codex login` mode (subscription vs API key) — see codex docs | Agentic — matches CI Codex reviewer, can grep / load files / multi-turn |
 
 Choose with `--backend {auto,codex,api}` (default `auto`):
@@ -67,13 +67,14 @@ Notes:
 - `--force-fresh`: Skip delta-diff mode, run a full fresh review even if previous state exists
 - `--full-registry`: Include the entire REGISTRY.md instead of selective sections
 - `--model <name>`: Override the model (default: `gpt-5.6-sol`). Applies to both backends.
-- `--timeout <seconds>`: HTTP request timeout. If omitted, defaults to 900 for reasoning models (gpt-5.4/gpt-5.5/gpt-5.6*, *-pro, o1/o3/o4) and 300 otherwise. *Api backend only.*
+- `--timeout <seconds>`: applies to both backends: on the api backend an HTTP request timeout (900 s default for reasoning models: gpt-5.4/gpt-5.5/gpt-5.6*/gpt-6*, *-pro, o1/o3/o4; 300 otherwise), on the codex backend a hard wall-clock cap on the codex process (uncapped when omitted). `0` means no timeout on either backend.
 - `--dry-run`: Print the compiled prompt without invoking the chosen backend
   (no API call, no codex subprocess)
 
 **Reasoning models** (`gpt-5.4-pro`, `o3`, `o4-mini`, etc.) on the api backend:
 Reviews may take 10-15 minutes. For deep reviews with reasoning models, combine
-`--token-budget` with `--model`:
+`--token-budget` with `--model` (the cost estimate models the <=272K-input
+pricing tier only; a 500K budget can bill at the higher tier):
 ```
 /ai-review-local --backend api --model gpt-5.4-pro --token-budget 500000 --context deep
 ```
@@ -417,8 +418,8 @@ would be silently ignored.
 Note: `--force-fresh` is a skill-only flag — it controls whether delta diffs are
 generated in Step 4 and is NOT passed to the script.
 
-**Reasoning model handling:** If the model starts with `gpt-5.4`/`gpt-5.5`/`gpt-5.6`, contains `-pro`, or starts with
-`o1`/`o3`/`o4` (e.g., `gpt-5.6-sol`, `gpt-5.4-pro`, `o3`, `o4-mini`):
+**Reasoning model handling:** If the model starts with `gpt-5.4`/`gpt-5.5`/`gpt-5.6`/`gpt-6`, contains `-pro`, or starts with
+`o1`/`o3`/`o4` (e.g., `gpt-5.6-sol`, `gpt-6-astra`, `gpt-5.4-pro`, `o3`, `o4-mini`):
 - The script auto-resolves `--timeout` to 900s for reasoning models when omitted, so
   no extra flag is required unless overriding
 - Run the Bash command with `run_in_background: true` (bypasses the 600s Bash tool timeout cap)
@@ -535,7 +536,7 @@ runs `--force-fresh` or when a rebase invalidates the tracked commit.
 # Force the agentic codex backend (matches CI quality)
 /ai-review-local --backend codex
 
-# Force the fast api backend (single-shot, $0.05-0.50/run)
+# Force the fast api backend (single-shot; metered at the `PRICING` rates in openai_review.py — `--backend api --dry-run` prints the estimate for your diff)
 /ai-review-local --backend api
 
 # Api backend, minimal context (diff only)
@@ -556,7 +557,7 @@ runs `--force-fresh` or when a rebase invalidates the tracked commit.
 # Different model with full registry
 /ai-review-local --backend api --model gpt-4.1 --full-registry
 
-# Deep api review with reasoning model (10-15 min)
+# Deep api review with reasoning model (10-15 min; the estimate is the <=272K-input tier only)
 /ai-review-local --backend api --model gpt-5.4-pro --token-budget 500000 --context deep
 ```
 

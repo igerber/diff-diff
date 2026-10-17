@@ -523,6 +523,12 @@ jobs:
           prompt-file: .github/codex/prompts/pr_review_compiled.md
           sandbox: read-only
           safety-strategy: drop-sudo
+          # Pinned so the campaign CLI == the CI CLI (tools/reviewer-eval
+          # config/configs.json `cli_version`). The action installs BOTH
+          # @openai/codex and @openai/codex-responses-api-proxy at this version,
+          # so bump only to a version that exists for both, together with the
+          # configs.json pin + a harness smoke (the lockstep test enforces equality).
+          codex-version: 0.162.1
           # Recommended by OpenAI for review quality/consistency:
           model: gpt-5.6-sol
           effort: xhigh
