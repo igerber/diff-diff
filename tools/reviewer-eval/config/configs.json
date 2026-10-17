@@ -1,5 +1,5 @@
 {
-  "_comment": "Reviewer arms. The 2026-07 gpt-5.5 -> gpt-5.6 evaluation ran with A as control; after the GO verdict (66-run blinded 4-arm campaign, campaigns/2026-07-gpt56-VERDICT.md) gpt-5.6-sol @ xhigh became production, so B carries role=control and A is retained as the previous-production arm for future back-comparisons. The 2026-10 campaign (campaigns/2026-10-gpt6-VERDICT.md, DECISION_RULE.md) compares B (control) against E (gpt-6-astra @ xhigh, the candidate); E's FIRST corpus run is the campaign itself (pre-registration by construction). treatment_fields declares which Config fields are the experimental treatment; every other confound (sandbox / action_version / cli_version, plus effort when not declared) is pinned and asserted identical across arms, and every selected multi-arm subset must decompose into single-field contrasts (see eval_core.runner). cli_version re-pinned to codex-cli 0.162.1 on 2026-10-16 (one CLI serves all arms and the runner asserts the live `codex --version` matches): B @ xhigh verified by harness smoke on 0.162.1; E = gpt-6-astra @ xhigh accepted by a `codex exec` probe on 0.162.1 (the exact argv `_build_codex_cmd` emits, under an isolated CODEX_HOME); A, C and D are historical 2026-07 arms NOT re-verified on 0.162.1 (D's `max` included; an unsupported effort fails closed as INFRA_ERROR). Astra off-corpus latency probe (2026-10-16, codex-cli 0.162.1, isolated CODEX_HOME, production openai_review.py on merged PR #841, 554 changed lines, effort xhigh): real = 324.57 s wall-clock, 14 shell commands, 26 web-search events; below the 1800 s threshold, so CALL_TIMEOUT_S stays 3600. Contrast check: B -> E differ in `model` only.",
+  "_comment": "Reviewer arms. The 2026-07 gpt-5.5 -> gpt-5.6 evaluation ran with A as control; after the GO verdict (66-run blinded 4-arm campaign, campaigns/2026-07-gpt56-VERDICT.md) gpt-5.6-sol @ xhigh became production, so B carries role=control and A is retained as the previous-production arm for future back-comparisons. The 2026-10 campaign (campaigns/2026-10-gpt6-VERDICT.md, DECISION_RULE.md) compares B (control) against E (gpt-6-astra @ xhigh, the candidate); E's FIRST corpus run is the campaign itself (pre-registration by construction). treatment_fields declares which Config fields are the experimental treatment; every other confound (sandbox / action_version / cli_version, plus effort when not declared) is pinned and asserted identical across arms, and every selected multi-arm subset must decompose into single-field contrasts (see eval_core.runner). cli_version re-pinned to codex-cli 0.162.1 on 2026-10-16 (one CLI serves all arms and the runner asserts the live `codex --version` matches): B @ xhigh verified by harness smoke on 0.162.1; E = gpt-6-astra @ xhigh accepted by a `codex exec` probe on 0.162.1 (the exact argv `_build_codex_cmd` emits, under an isolated CODEX_HOME); A, C and D are historical 2026-07 arms NOT re-verified on 0.162.1 (D's `max` included; an unsupported effort fails closed as INFRA_ERROR). Astra off-corpus latency probe (2026-10-16, codex-cli 0.162.1, isolated CODEX_HOME, production openai_review.py on merged PR #841, 554 changed lines, effort xhigh): real = 324.57 s wall-clock, 14 shell commands, 26 web-search events; below the 1800 s threshold, so CALL_TIMEOUT_S stays 3600. Contrast check: B -> E differ in `model` only. Campaign 2 (2026-10-17, DECISION_RULE.md; campaign 1's rule archived as campaigns/2026-10-gpt6-DECISION_RULE.md, mechanical NO-GO on one regression) compares B (control, re-sampled) against F (gpt-6.1-sol @ xhigh): F accepted by the same `codex exec` probe shape on 0.162.1 under the ChatGPT-account login (gpt-6-sol is accepted too on 0.162.1; the 0.153.4 rejection no longer holds), F's FIRST corpus run is campaign 2. Contrast check: B -> F differ in `model` only. gpt-6.1-sol off-corpus latency probe (2026-10-17, codex-cli 0.162.1, isolated CODEX_HOME, production openai_review.py on merged PR #841, same diff as the astra probe, effort xhigh): real = 260.77 s wall-clock, 15 shell commands (15/15 parsed), 28 web-search events; below the 1800 s threshold, so CALL_TIMEOUT_S stays 3600. OUTCOMES (2026-10-17): campaign 1 (B vs E, runs/gpt6, frozen 225a4afb, tag campaign-gpt6) = mechanical DEFINITIVE NO-GO on one regression (s4-cs-unbalanced-nan-outcome), user accepted; campaign 2 (B vs F, runs/gpt61sol, frozen e1674c0e, tag campaign-gpt61sol) = mechanical DEFINITIVE PARITY, user accepted as GO; gpt-6.1-sol @ xhigh became production (CI + local + plan-review), so F carries role=control and B is retained as the previous-production arm. See campaigns/2026-10-gpt6-VERDICT.md and campaigns/2026-10-gpt61sol-VERDICT.md. The candidate-exposure gate exempts the role=control arm (production is measured by definition), so bare `smoke` keeps working after a swap.",
   "treatment_fields": [
     "model",
     "effort"
@@ -16,13 +16,12 @@
     },
     {
       "id": "B",
-      "role": "control",
       "model": "gpt-5.6-sol",
       "effort": "xhigh",
       "sandbox": "read-only",
       "action_version": "v1",
       "cli_version": "codex-cli 0.162.1",
-      "label": "control / current production"
+      "label": "previous production (pre-2026-10 swap); control of the 2026-10 campaigns"
     },
     {
       "id": "C",
@@ -49,7 +48,17 @@
       "sandbox": "read-only",
       "action_version": "v1",
       "cli_version": "codex-cli 0.162.1",
-      "label": "candidate: GPT-6 frontier (2026-10 campaign)"
+      "label": "candidate of 2026-10 campaign 1 (gpt-6-astra): mechanical NO-GO, accepted"
+    },
+    {
+      "id": "F",
+      "model": "gpt-6.1-sol",
+      "effort": "xhigh",
+      "sandbox": "read-only",
+      "action_version": "v1",
+      "cli_version": "codex-cli 0.162.1",
+      "label": "control / current production (2026-10 campaign 2: PARITY, accepted as GO)",
+      "role": "control"
     }
   ]
 }

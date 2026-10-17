@@ -123,7 +123,6 @@ For survey-specific limitations (`NotImplementedError` paths), see the
 | `HeterogeneousAdoptionDiD` `covariates=` (Theorem 6 multivariate-covariate extension) not implemented — `fit(covariates=...)` raises `NotImplementedError` via the shipped future-work trap (locked by the `test_had.py` / `test_methodology_had.py` L73 tests); the deferred work is the Theorem 6 extension itself. | `had.py` | Phase 2a | Low |
 | MultiPeriodDiD wild bootstrap not supported (falls back to analytical, n_bootstrap-independent) — user-facing edge-case limitation; the 4.0 removal replaces the fallback with a raise (v4-design §4.1), and the merged TWFE event-study mode already RAISES since 3.9 (Phase 3(a)) — this row now governs only the deprecated class itself. | `estimators.py` (MultiPeriodDiD.fit wild-fallback block) | — | Low |
 | `predict()` raises `NotImplementedError` — rarely needed; user-facing limitation. | `estimators.py:890-911` | — | Low |
-| `gpt-6-sol` cost-fallback probe for the Codex reviewer: a ChatGPT-account `codex login` rejects `gpt-6-sol` (400, "not supported when using Codex with a ChatGPT account"), so the local harness cannot run a cheaper-tier arm; needs an API-key codex login (metered) before an arm can be added. | `tools/reviewer-eval/config/configs.json` | #849 | Low |
 
 ## Version-gated (v4)
 

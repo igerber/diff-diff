@@ -168,9 +168,16 @@ def test_reviewer_invocations_are_pinned():
     byte-match silently. The codex pins live at the real `call_codex` site
     (`codex_review.py`); the Claude subagent model pin lives in SKILL.md."""
     codex = (_SKILL / "codex_review.py").read_text()
-    assert 'CODEX_MODEL = "gpt-5.6-sol"' in codex
+    assert 'CODEX_MODEL = "gpt-6.1-sol"' in codex
     assert 'CODEX_EFFORT = "xhigh"' in codex
-    assert "CODEX_TIMEOUT_S = 2400" in codex
+    # The ceiling EQUALS the code-review harness's CALL_TIMEOUT_S (read with a
+    # regex: codex_reviewer.py imports eval_core/adapters, which this file's
+    # sys.path does not provide), so a probe-driven raise cannot leave the two
+    # out of step.
+    harness = (_REPO / "tools" / "reviewer-eval" / "adapters" / "codex_reviewer.py").read_text()
+    call_cap = re.search(r"^\s*CALL_TIMEOUT_S\s*=\s*([\d.]+)", harness, re.M)
+    assert call_cap, "CALL_TIMEOUT_S not found in codex_reviewer.py"
+    assert f"CODEX_TIMEOUT_S = {float(call_cap.group(1)):.1f}" in codex
     # and codex_review.py actually passes them to call_codex
     assert "model=CODEX_MODEL" in codex and "effort=CODEX_EFFORT" in codex
     assert "timeout_s=CODEX_TIMEOUT_S" in codex
@@ -348,9 +355,9 @@ def test_codex_review_forwards_pins_and_prints_sensitive_notice(tmp_path, monkey
     assert len(fake.codex_calls) == 1
     call = fake.codex_calls[0]
     assert call["prompt"] == "RENDERED PROMPT"
-    assert call["model"] == cr.CODEX_MODEL == "gpt-5.6-sol"
+    assert call["model"] == cr.CODEX_MODEL == "gpt-6.1-sol"
     assert call["effort"] == cr.CODEX_EFFORT == "xhigh"
-    assert call["timeout_s"] == cr.CODEX_TIMEOUT_S == 2400.0
+    assert call["timeout_s"] == cr.CODEX_TIMEOUT_S == 3600.0
 
 
 def test_codex_review_absent_returns_2_and_writes_nothing(tmp_path, monkeypatch):

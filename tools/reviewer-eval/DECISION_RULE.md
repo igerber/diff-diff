@@ -1,11 +1,25 @@
-# Pre-Registered Decision Rule: gpt-5.6-sol -> gpt-6-astra Reviewer Evaluation
+# Pre-Registered Decision Rule: gpt-5.6-sol -> gpt-6.1-sol Reviewer Evaluation (campaign 2)
 
-Date: 2026-10-16. Pre-registered in PR #849 (frozen at that PR's labeled, CI-green HEAD). The
+Date: 2026-10-17. Pre-registered in PR #PR1B (frozen at that PR's labeled, CI-green HEAD). The
 candidate arm is NEVER run on the corpus before the campaign: its first corpus
 run is the campaign itself, so pre-registration holds by construction. The
 verdict is computed MECHANICALLY by `run_eval.py verdict` (`reviewer_verdict.py`)
 from the reconciled grading table; this file may not be edited after the
 campaign starts (the campaign's frozen PR-1 HEAD pins it).
+
+**Relation to campaign 1 (gpt-6-astra, `campaigns/2026-10-gpt6-DECISION_RULE.md`):**
+campaign 1 is complete (44/44 runs on `225a4afb`, local tag `campaign-gpt6`,
+mechanical DEFINITIVE NO-GO on one regression, accepted by the user on
+2026-10-17; its verdict file lands in PR-2 together with this campaign's).
+This rule is the SAME rule with arm F = gpt-6.1-sol in the candidate seat:
+the gates, definitions, precedence, grading protocol, audit, ledger and stop
+conditions below are unchanged in substance, only the candidate letter and
+model differ. F is judged against a FRESH control sample (B is re-run in the
+new subdir; the campaign-1 B artifacts are never mixed in). Astra's numbers
+are shown next to F's in the verdict file DESCRIPTIVELY only (same corpus,
+same control model, different control sample); no gate compares E and F.
+`REGISTERED_CONTRASTS` keeps `(B, E)` so the campaign-1 ledger records stay
+interpretable; `(B, F)` is the contrast this campaign registers.
 
 This file is NOT grader-facing. Graders receive `GRADING_RUBRIC.md` only.
 
@@ -14,7 +28,7 @@ This file is NOT grader-facing. Graders receive `GRADING_RUBRIC.md` only.
 | Arm | Model | Effort | Repeats | Role |
 |-----|-------|--------|---------|------|
 | B | gpt-5.6-sol | xhigh | k=2 | control (current production) |
-| E | gpt-6-astra | xhigh | k=2 | candidate |
+| F | gpt-6.1-sol | xhigh | k=2 | candidate |
 
 No probe arms. CLI pinned to codex-cli 0.162.1 on every arm (the runner refuses a
 live `codex --version` mismatch); CI pins the same version. Every harness codex
@@ -42,22 +56,22 @@ per-cell field (`leak: none | confirmed` in the reconciled table; graders write
   `known_topic_id` exemption branch is NOT ported. The bundle's "do NOT flag"
   wording for known topics stays (reviewer advice, not grader instruction).
 
-## Gates (E vs B; symmetric on catches)
+## Gates (F vs B; symmetric on catches)
 
 1. **Regression NO-GO** = ANY ground-truth bug (`must_catch` true OR false)
-   that B reliably catches and E has status MISSED (the status definitions
+   that B reliably catches and F has status MISSED (the status definitions
    under "Voided repeats" are the executable wording). `must_catch` stays in
-   the case files as a reporting label only. B UNSTABLE / E MISSED is a
+   the case files as a reporting label only. B UNSTABLE / F MISSED is a
    judgment FLAG reported next to the mechanical outcome; it never changes the
    label by itself.
-2. **FP NO-GO** = E's S3 FP total > B's. Small-sample note (2 S3 cases x k=2,
+2. **FP NO-GO** = F's S3 FP total > B's. Small-sample note (2 S3 cases x k=2,
    B expected at 0): the verdict prints every FP's text next to this gate so
    the user can rule a control invalid, as happened in 2026-07; the mechanical
    verdict stands unless the user overrides it in writing in the verdict.
 3. **GO** = zero regressions, the FP gate passes, FEWER THAN 2
-   reliable-to-unstable downgrades (bugs B catches 2/2 and E catches 1/2), and
-   >= 1 strict improvement: E reliably catches ANY bug on which B has status
-   MISSED (the two s4-wcr bugs DO count), OR E has strictly fewer S3 FPs than B
+   reliable-to-unstable downgrades (bugs B catches 2/2 and F catches 1/2), and
+   >= 1 strict improvement: F reliably catches ANY bug on which B has status
+   MISSED (the two s4-wcr bugs DO count), OR F has strictly fewer S3 FPs than B
    (only reachable if B posts >= 1 FP).
 4. **PARITY** = zero regressions and the FP gate passes, and EITHER no strict
    improvement OR >= 2 reliable-to-unstable downgrades -> the user decides,
@@ -78,8 +92,8 @@ per-bug status is computed from its remaining (non-void, OK) repeats:
 - MISSED = caught in no remaining repeat (>= 1 remaining);
 - UNGRADEABLE = no remaining repeat.
 
-Gates use these statuses (regression = B RELIABLE and E MISSED; downgrade = B
-RELIABLE and E UNSTABLE; improvement = E RELIABLE and B MISSED; UNGRADEABLE
+Gates use these statuses (regression = B RELIABLE and F MISSED; downgrade = B
+RELIABLE and F UNSTABLE; improvement = F RELIABLE and B MISSED; UNGRADEABLE
 never satisfies a gate, it only contests). A void or ungradeable cell ALWAYS
 contests: its case is reported "contested by leak" on whichever gates the case
 feeds (gates 1/3/downgrades for a bug case, gate 2 for an S3 case). Audit hits
@@ -111,7 +125,7 @@ campaigns are handled by the stop conditions below.
 2x-p95 flag, the input-cost estimate from `openai_review.PRICING`); the
 vendor-lifecycle read is prose the verdict file carries.
 
-- Per-arm latency (flag if E p95 > 2x B).
+- Per-arm latency (flag if F p95 > 2x B).
 - Hallucination / unverified external-tool-claim count per arm (counted once
   per (case, arm, repeat)).
 - Leakage count per arm (distinct confirmed cells) and unconfirmed-flag count.

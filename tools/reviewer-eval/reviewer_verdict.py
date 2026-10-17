@@ -41,7 +41,7 @@ UNDETERMINED = "UNDETERMINED"
 
 # The ONE pre-registered gating contrast (control, candidate). A PR-2 swap does
 # not change it; a future campaign registers its own pair in its own PR-1.
-REGISTERED_CONTRASTS = (("B", "E"),)
+REGISTERED_CONTRASTS = (("B", "E"), ("B", "F"))
 
 _VERDICT_VOCAB = ("caught", "partial", "missed")
 _SEVERITY_VOCAB = ("P0", "P1", "P2", "P3")

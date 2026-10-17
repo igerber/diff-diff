@@ -2303,16 +2303,28 @@ def test_live_configs_resolve_control_and_candidate():
     assert b.model != e.model and b.effort == e.effort == "xhigh"
     assert b.sandbox == e.sandbox and b.action_version == e.action_version
     assert b.cli_version == e.cli_version == "codex-cli 0.162.1"
-    assert run_eval._control_id() == "B"
+    assert run_eval._control_id() == "F"  # production since the 2026-10 campaign-2 swap
     assert run_eval._treatment_fields() == ("model", "effort")
-    # Bare `run` is the registered campaign shape end to end: the COMPLETE default
-    # argument combination passes the candidate-exposure gate (configs B,E at k=2,
-    # no --k-per, no --strata), so `python run_eval.py run` is not configured to refuse.
+    # Campaign 2 (2026-10-17): arm F = gpt-6.1-sol differs from B in model only,
+    # same effort/sandbox/action/CLI pins; (B, F) is a registered contrast too.
+    cfgs_f = run_eval._resolve_configs("B,F")
+    assert cfgs_f is not None and [c.id for c in cfgs_f] == ["B", "F"]
+    b2, f = cfgs_f
+    assert f.model == "gpt-6.1-sol" and f.model != b2.model != e.model
+    assert f.effort == "xhigh" and f.sandbox == b2.sandbox
+    assert f.action_version == b2.action_version and f.cli_version == b2.cli_version
+    import reviewer_verdict
+
+    assert reviewer_verdict.REGISTERED_CONTRASTS == (("B", "E"), ("B", "F"))
+    # Bare `run` is the ACTIVE registered campaign shape end to end: the COMPLETE
+    # default argument combination passes the candidate-exposure gate (configs B,F
+    # at k=2, no --k-per, no --strata), so `python run_eval.py run` is not
+    # configured to refuse.
     ns = run_eval._build_parser().parse_args(["run"])
-    assert ns.configs == "B,E" and ns.k == 2 and ns.k_per == "" and ns.strata is None
+    assert ns.configs == "B,F" and ns.k == 2 and ns.k_per == "" and ns.strata is None
     assert (
         run_eval._candidate_exposure_violations(
-            cfgs, ns.k, run_eval._parse_k_per(ns.k_per, cfgs), ns.strata, "run"
+            cfgs_f, ns.k, run_eval._parse_k_per(ns.k_per, cfgs_f), ns.strata, "run"
         )
         == []
     )
@@ -2882,6 +2894,10 @@ def _gate_setup(tmp_path, monkeypatch):
         dict(configs="B,E", strata=["s1_synthetic"], subdir="x", k=2, max_parallel=1),
         dict(configs="B,E", strata=None, subdir="x", k=2, k_per="E=1", max_parallel=1),
         dict(configs="A,B,E", strata=None, subdir="x", k=2, max_parallel=1),
+        # E with campaign 2's F (F is production/control after the swap and exempt
+        # from the gate; E is still a confined candidate)
+        dict(configs="E,F", strata=None, subdir="x", k=2, max_parallel=1),
+        dict(configs="B,E,F", strata=None, subdir="x", k=2, max_parallel=1),
     ],
 )
 def test_run_refuses_candidate_exposure_outside_registered_campaign(
@@ -2899,10 +2915,31 @@ def test_smoke_refuses_candidate_arm(tmp_path, monkeypatch, capsys):
     assert "may not be smoked" in capsys.readouterr().err
 
 
+def test_control_arm_is_exempt_from_the_exposure_gate():
+    """After the 2026-10 swap F is production (role=control): it is measured by
+    definition, so bare `smoke` (which resolves the control) and any `run` shape
+    that includes F pass the gate; E stays confined to its registered shape."""
+    run_eval = _run_eval()
+    assert run_eval._control_id() == "F"
+    f_only = run_eval._resolve_configs("F")
+    assert run_eval._candidate_exposure_violations(f_only, 1, {}, ["s1_synthetic"], "smoke") == []
+    assert (
+        run_eval._candidate_exposure_violations(
+            run_eval._resolve_configs("B,F"), 1, {}, None, "run"
+        )
+        == []
+    )
+    bad = run_eval._candidate_exposure_violations(
+        run_eval._resolve_configs("E,F"), 2, {}, None, "run"
+    )
+    assert bad and "candidate E runs only as --configs B,E" in bad[0]
+
+
 def test_registered_campaign_shape_passes_the_gate():
     run_eval = _run_eval()
-    cfgs = run_eval._resolve_configs("B,E")
-    assert run_eval._candidate_exposure_violations(cfgs, 2, {}, None, "run") == []
+    for contrast in ("B,E", "B,F"):
+        cfgs = run_eval._resolve_configs(contrast)
+        assert run_eval._candidate_exposure_violations(cfgs, 2, {}, None, "run") == []
     assert (
         run_eval._candidate_exposure_violations(
             run_eval._resolve_configs("A,B"), 1, {}, ["s1_synthetic"], "run"

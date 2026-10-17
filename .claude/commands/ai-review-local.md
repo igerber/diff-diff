@@ -16,7 +16,7 @@ Two backends are supported:
 
 | Backend | Latency | Cost | Quality |
 |---|---|---|---|
-| `api` (`gpt-5.6-sol`) | 30-60s | metered at the `PRICING` rates in `openai_review.py` via `OPENAI_API_KEY`; `--backend api --dry-run` prints the estimate for your diff | Single-shot — won't grep, can't load files on its own initiative |
+| `api` (`gpt-6.1-sol`) | 30-60s (measured on gpt-5.6-sol; untested on gpt-6.1-sol, the codex backend is the validated path) | metered at the `PRICING` rates in `openai_review.py` via `OPENAI_API_KEY`; `--backend api --dry-run` prints the estimate for your diff | Single-shot — won't grep, can't load files on its own initiative |
 | `codex` (any auth) | 3-15 min | depends on your `codex login` mode (subscription vs API key) — see codex docs | Agentic — matches CI Codex reviewer, can grep / load files / multi-turn |
 
 Choose with `--backend {auto,codex,api}` (default `auto`):
@@ -66,7 +66,7 @@ Notes:
   *Api backend only.*
 - `--force-fresh`: Skip delta-diff mode, run a full fresh review even if previous state exists
 - `--full-registry`: Include the entire REGISTRY.md instead of selective sections
-- `--model <name>`: Override the model (default: `gpt-5.6-sol`). Applies to both backends.
+- `--model <name>`: Override the model (default: `gpt-6.1-sol`). Applies to both backends.
 - `--timeout <seconds>`: applies to both backends: on the api backend an HTTP request timeout (900 s default for reasoning models: gpt-5.4/gpt-5.5/gpt-5.6*/gpt-6*, *-pro, o1/o3/o4; 300 otherwise), on the codex backend a hard wall-clock cap on the codex process (uncapped when omitted). `0` means no timeout on either backend.
 - `--dry-run`: Print the compiled prompt without invoking the chosen backend
   (no API call, no codex subprocess)
@@ -108,7 +108,7 @@ Step 5 invokes the chosen backend:
 
 Parse `$ARGUMENTS` for the optional flags listed above. All flags are optional —
 the default behavior (auto-detect backend, standard context for api or
-agentic loading for codex, selective registry, gpt-5.6-sol)
+agentic loading for codex, selective registry, gpt-6.1-sol)
 requires no arguments.
 
 ### Step 2: Validate Prerequisites
@@ -419,7 +419,7 @@ Note: `--force-fresh` is a skill-only flag — it controls whether delta diffs a
 generated in Step 4 and is NOT passed to the script.
 
 **Reasoning model handling:** If the model starts with `gpt-5.4`/`gpt-5.5`/`gpt-5.6`/`gpt-6`, contains `-pro`, or starts with
-`o1`/`o3`/`o4` (e.g., `gpt-5.6-sol`, `gpt-6-astra`, `gpt-5.4-pro`, `o3`, `o4-mini`):
+`o1`/`o3`/`o4` (e.g., `gpt-6.1-sol`, `gpt-6-astra`, `gpt-5.4-pro`, `o3`, `o4-mini`):
 - The script auto-resolves `--timeout` to 900s for reasoning models when omitted, so
   no extra flag is required unless overriding
 - Run the Bash command with `run_in_background: true` (bypasses the 600s Bash tool timeout cap)
