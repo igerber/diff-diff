@@ -9,6 +9,180 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- entries live in changelog.d/*.md; compiled at release by .claude/scripts/changelog_compile.py -->
 
+## [3.13.0] - 2026-10-17
+
+### Added
+- **TWFE weight diagnostics** (port of Brantly Callaway's `twfeweights` R
+  package, MIT): what a two-way fixed effects regression *implicitly* weights
+  on staggered-adoption data.
+  - `attgt_weights(results, type="twfe"|"overall"|"simple")` reports the
+    weight a TWFE regression, ATT^O, or ATT^simple places on each ATT(g,t),
+    plus post-period negative-weight counts. Returns `ATTGTWeightsResult`
+    (`.level` records the type).
+    The CS estimands honour the fit's `anticipation` window in raw time units
+    (an explicit `anticipation=` on the frame path); `"twfe"` keeps `t >= g`,
+    but a cohort with no estimable post cell under the window is dropped for
+    every type.
+  - `decompose_twfe_weights(data, ..., method="fwl")` re-derives the estimate
+    from its ATT(g,t) building blocks and returns `TWFEDecompositionResult`
+    with `pre_period_contribution` - the sample contribution of the
+    pre-treatment cells, which can reflect parallel-trends violations or
+    sampling variation - and, with `balance_covariates=`, implicit-weight
+    covariate balance. `plot_twfe_weights()` renders either view (matplotlib
+    or plotly).
+  - Validation: rejects NaN / `-inf` cohort labels, covariate-adjusted fits
+    under `type="twfe"`, unbalanced panels, fitted results that dropped any
+    unit by their per-cell complete-case rules or that carry no completeness
+    record (fitted by <= 3.12.0), non-finite outcomes / covariates,
+    duplicated or non-finite ATT(g,t) cells, an incomplete group-time grid,
+    invalid sampling weights, an explicit `weights=` on a fitted result (the
+    fit's own survey weights are used), and a zero-mass treated cohort; a
+    `pd.Series` of frame-path weights is aligned by unit label. Gaps the estimator itself could not fill
+    (`skip_reason` missing_period / zero_treated_control / zero_weight_mass)
+    are handled as `aggregate()` does instead of raising: a cohort with no
+    estimable post cell under the window is dropped, and the CS estimands
+    average over each surviving cohort's available post cells (`aggte`).
+
+### Deprecated
+- **`SyntheticControl(inner_max_iter=, inner_min_decrease=)`** (#838, ledger
+  M-148 / M-149): both now default to `None` and emit a `DeprecationWarning` when
+  passed; the value is discarded (`get_params()` reports `None`). The inner
+  weight solves have no iteration budget or stopping tolerance to set. Drop the
+  arguments; they are removed in 5.0.
+
+### Fixed
+- **Preserve omitted-parameter sentinels when copying**: shallow and deep
+  copies of the shared deprecation sentinel retain its identity, keeping
+  StackedDiD parameter dictionaries equal after scikit-learn cloning.
+  Deprecated-parameter warnings and alias resolution are unchanged.
+- **Bootstrapped CallawaySantAnna fits now carry an event-study covariance**
+  (#836): with `n_bootstrap > 0`, `event_study_vcov` (fit time) and the `vcov`
+  of `aggregate("event_study")` (post-fit replay, CallawaySantAnna and DMLDiD)
+  are the covariance (`ddof=1`) of the event-study bootstrap draws, indexed by
+  the horizons with a finite bootstrap SE. Its diagonal is the bootstrap SEs
+  squared, because both come from the same draws. Previously the bootstrap
+  path cleared the covariance and HonestDiD fell back to `diag(se**2)` with a
+  warning, which made its Delta^SD intervals under-cover in staggered designs
+  with serially correlated errors. HonestDiD bounds on bootstrapped CS fits
+  therefore change, and the diagonal-fallback warnings no longer fire. The
+  matrix is still not stored, and the diagonal fallback still applies, when
+  `n_bootstrap` does not exceed the number of event-study horizons (the
+  covariance would be singular), when a draw is non-finite, or with fewer
+  than two PSUs.
+- **`SyntheticControl` in-space placebo is now an exact permutation test**:
+  `in_space_placebo()` now fits each placebo against all the other units, the
+  real treated unit included, as Abadie, Diamond & Hainmueller (2010, §3.4,
+  p. 501) do ("shifting California to the donor pool"). It used to drop the
+  treated unit from every placebo's donor pool (the `SCtools::generate.placebos`
+  construction); that reference set changes with the treated unit, so the
+  permutation p-value was not exact. (The new p-value is exact under the null
+  of no effect and random assignment, when every placebo refit enters the
+  reference set; failed or infeasible refits are still excluded and reported via
+  `n_failed` / `n_infeasible`.) Every placebo that puts weight on the
+  treated unit now gets a different RMSPE ratio, so `placebo_p_value` and the
+  placebo rows of `get_placebo_df()` change on every such fit, by whole ranks;
+  the fit itself (`att`, weights, the treated unit's `rmspe_ratio`) does not
+  change. On the 10-unit no-effect panel of issue #837, 5 of the 10
+  assignments move by one rank (3 up, 2 down) and the 10 p-values become
+  exactly 0.1, 0.2, ..., 1.0; before, 2 assignments gave `p = 0.1`. Over 300
+  simulated 10-unit no-effect panels, with each unit treated in turn, the old
+  construction gave `p <= 0.1` for 11.7% of the assignments (Monte Carlo SE 0.25
+  points); the new one gives exactly 10% on every panel.
+  `test_sharp_null()` and `confidence_set()` re-rank the new placebo gaps and
+  use the treated unit's null-imputed outcome `Y_1 - f` inside each placebo's
+  synthetic control (Firpo & Possebom 2018, fn 10), so their p-values and sets
+  change too. With exactly 2 donors each placebo is now fit against 2 units
+  (a real weight solve, and under `v_method="nested"` / `"cv"` a `V` search,
+  instead of a forced `w = [1]`); fewer than 2 donors still gives a NaN p-value.
+  `fit()` now processes an explicit `donor_pool` in the panel's sorted unit
+  order (the order the placebo refits use) rather than the caller's list order,
+  so `donor_weights` keys follow that order (`get_weights_df()` stays sorted by
+  weight descending) and an exact weight tie between donors resolves the same
+  way in the treated fit and in every placebo.
+- **`SyntheticControl` donor weights are the exact simplex least-squares
+  solution** (#838): the inner weight solve, run at every `V` the nested
+  search tries and in every placebo refit, was Frank-Wolfe with an iteration
+  budget (`inner_max_iter=10000`) that ordinary factor-model panels often
+  exhausted. The treated fit then warned "did not converge" and the
+  diagnostics that need a converged fit were skipped (`placebo_p_value` NaN);
+  placebos whose refit hit the budget were dropped from the reference set; and
+  the nested search ranked `V` only among the solves that met their stopping
+  rule. The problem reduces exactly to one non-negative least squares, solved
+  by Lawson-Hanson's active set, which terminates in finitely many steps, so
+  the solve now reaches the optimum and none of those paths fires for it (a
+  solve that exhausted the active set's step guard, not reached in practice,
+  would return a feasible iterate flagged non-converged and take the same
+  fail-closed paths as before). On the issue's
+  three designs, 40 panels each, the placebo test had failed closed or lost
+  placebos on 40, 40 and 33 panels; it now keeps every placebo on all 120, and
+  the treated pre-RMSPE equals the exact optimum to rounding.
+  - The same solve replaces Frank-Wolfe in the conformal proxy
+    (`conformal_test()`, `conformal_average_effect()` and
+    `conformal_confidence_intervals()`: `proxy_converged` is true and
+    `n_grid_nonconverged` is 0 in practice) and in the informational `synthetic_weight`
+    column of `rank_control_units()`, which stopped at 1000 iterations; that
+    column's values move, the ranking does not. A panel with a missing
+    pre-period outcome keeps its uniform `synthetic_weight` column; a solve that
+    does not converge (not reached in practice) leaves the column NaN with a
+    `UserWarning` instead of presenting a fallback as the solution.
+
+### Behavioral Changes
+- **Cross-fit learner isolation now fails closed**: DMLDiD replaces the prior
+  warning-and-reuse fallback. A one-copy preflight raises `TypeError` before
+  any group-time cell is fitted when a custom learner template's `deepcopy`
+  fails or returns the original object; a per-fold clone failure later in the
+  fit propagates as the same sanitized `TypeError` (never a NaN-cell skip).
+  Implement `__deepcopy__` to return an independent instance; custom
+  implementations remain responsible for nested mutable state. A failed
+  re-fit now also clears any previous fitted result.
+- **Pre-trend diagnostics on bootstrapped CallawaySantAnna fits read the
+  bootstrap covariance** (#836): `compute_pretrends_power` now reports
+  `covariance_source="full_pre_period_vcov"` instead of `"diag_fallback"`,
+  and the `DiagnosticReport` parallel-trends check runs the joint Wald test
+  on the event-study covariance (`method="joint_wald_event_study"`, or its
+  `_survey` variant) instead of the Bonferroni fallback.
+- **HonestDiD on a CallawaySantAnna fit with few clusters now raises on
+  both input routes** (#836): when the clusters (PSUs) are too few for the
+  event-study horizons, the stored event-study covariance is singular
+  (analytical and bootstrap alike). HonestDiD on
+  `results.aggregate("event_study")` raised the singular-covariance
+  `ValueError` on analytical fits already and now does so on bootstrapped
+  fits too, instead of falling back to `diag(se**2)` with a warning, and the
+  `DiagnosticReport` sensitivity check reports that error. HonestDiD on the
+  native `CallawaySantAnnaResults` object now runs the same
+  `_validate_vcov_subblock(..., allow_singular=False)` check before using
+  `event_study_vcov` (previously it used the stored matrix unvalidated and
+  returned finite bounds on a singular covariance), so the two routes agree.
+- **`SyntheticControlResults.in_space_placebo(n_starts=...)` rejects a multistart
+  count that differs from the fit's under `v_method="nested"` / `"cv"`** (also
+  reached through the lazy reference build in `test_sharp_null()` /
+  `confidence_set()`). The treated unit's RMSPE ratio was produced at fit time
+  with the fit's `n_starts`, and more starts can select a different `V` optimum
+  even when every fit converges, so a different placebo budget would rank one
+  statistic against references computed by another procedure and void the
+  exactness of the permutation. Re-fit with the larger `n_starts` instead. The
+  override stays inert under `custom` / `inverse_variance` (no `V` search).
+- **`SyntheticControl` results move by the former solver's gap** (#838): the
+  donor weights, `att`, `pre_rmspe`, and the placebo, leave-one-out, in-time,
+  sparse and conformal results. On generic panels the change is small: the
+  issue's treated pre-RMSPE was a median 1e-4 above the optimum, relative.
+  Where the treated unit's predictors lie inside the donors' convex hull,
+  every `V` fits them exactly, so the predictors identify neither the weights
+  nor `V`. The solve then returns a vertex of the optimal face; Frank-Wolfe
+  stopped wherever its budget left it, and R `Synth`'s interior-point solver
+  tends to a point inside the face. The vertex is the same under every SciPy
+  version: the active set is diff-diff's own, because `scipy.optimize.nnls`
+  returns a different vertex at a tie from one release to another (five
+  different sets of T25's placebo ratios over SciPy 1.11 to 1.18). The T25
+  tutorial panel is such a case: its weights go from five donors plus 0.0043
+  on each of the other 15 to four donors, `att` from 6.79 to 6.69 and
+  `pre_rmspe` from 0.987 to 0.934. On the Basque panel at R's `V`, the weights
+  match R `Synth` to 4.5e-6 (9.6e-5 before).
+- **Conformal p-values and intervals move** (#838): with the exact proxy the
+  intervals are narrower on simulated panels and still cover above nominal.
+  Over 50 panels (300 period intervals at nominal 90%), coverage goes from
+  0.970 to 0.953 and the median width from 0.515 to 0.450.
+
 ## [3.12.0] - 2026-09-08
 
 ### Added
@@ -5830,6 +6004,7 @@ for the full feature history leading to this release.
 [2.1.2]: https://github.com/igerber/diff-diff/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/igerber/diff-diff/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/igerber/diff-diff/compare/v2.0.3...v2.1.0
+[3.13.0]: https://github.com/igerber/diff-diff/compare/v3.12.0...v3.13.0
 [3.12.0]: https://github.com/igerber/diff-diff/compare/v3.11.1...v3.12.0
 [3.11.1]: https://github.com/igerber/diff-diff/compare/v3.11.0...v3.11.1
 [3.11.0]: https://github.com/igerber/diff-diff/compare/v3.10.0...v3.11.0

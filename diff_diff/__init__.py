@@ -382,7 +382,7 @@ def __getattr__(name: str) -> _Any:
     raise AttributeError(f"module 'diff_diff' has no attribute {name!r}")
 
 
-__version__ = "3.12.0"
+__version__ = "3.13.0"
 __all__ = [
     # Estimators
     "DifferenceInDifferences",
