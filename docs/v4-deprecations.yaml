@@ -1783,8 +1783,8 @@ rows:
     status: done
     phase: 5
     test_ref: tests/test_staggered.py
-    code_refs: [diff_diff/results_base.py, diff_diff/staggered_results.py, diff_diff/staggered_triple_diff_results.py, diff_diff/chaisemartin_dhaultfoeuille_results.py, diff_diff/imputation_results.py, diff_diff/efficient_did_results.py, diff_diff/two_stage_results.py, diff_diff/stacked_did_results.py, diff_diff/sun_abraham.py, diff_diff/results.py, diff_diff/triple_diff.py, diff_diff/trop_results.py, diff_diff/continuous_did_results.py, diff_diff/synthetic_control_results.py, docs/methodology/REGISTRY.md]
-    notes: "Staggered-family summary(alpha=)/print_summary(alpha=) tightening via the shared results_base._require_fit_alpha guard (the DMLDiDResults/EventStudyResults precedent): eight results classes (CallawaySantAnnaResults, StaggeredTripleDiffResults, ChaisemartinDHaultfoeuilleResults, ImputationDiDResults, EfficientDiDResults, TwoStageDiDResults, StackedDiDResults, SunAbrahamResults) previously did alpha = alpha or self.alpha and relabeled the confidence-interval header at the REQUESTED alpha while always printing the FIT-TIME stored intervals - silent coverage mislabeling on any non-fit alpha (bootstrap percentile intervals cannot be reconstructed from the SE at all). Behavior delta: accepted-and-mislabeled -> loud ValueError; alpha=0.0, previously swallowed by the falsy `or` idiom, now raises too. StaggeredTripleDiffResults is INCLUDED although its parent estimator is removed at 4.0 ([M-013]/[M-014]) - the mislabel is a live 3.x rendering bug, distinct from the estimator's frozen construction shape. Resolved - the guard is applied family-wide: the non-staggered summaries (DiDResults incl. SpilloverDiDResults by inheritance, MultiPeriodDiDResults, SyntheticDiDResults, TripleDifferenceResults, TROPResults, ContinuousDiDResults, SyntheticControlResults - the last previously a dead no-op alpha, now an honest raise) adopted it via the same helper (an optional message= override carries class-accurate wording where the staggered default's bootstrap-percentile rationale would be false; the staggered default message is byte-unchanged). Sibling behavioral evidence lives in tests/test_estimators.py, tests/test_triple_diff.py, tests/test_trop.py, tests/test_continuous_did.py, tests/test_methodology_synthetic_control.py, and tests/test_spillover.py (test_ref stays the staggered anchor: the schema's test_ref is a single path and this row remains the one logical contract). introduced_in 4.0 per the [M-144] rationale; status done is terminal."
+    code_refs: [diff_diff/results_base.py, diff_diff/staggered_results.py, diff_diff/staggered_triple_diff_results.py, diff_diff/chaisemartin_dhaultfoeuille_results.py, diff_diff/imputation_results.py, diff_diff/efficient_did_results.py, diff_diff/two_stage_results.py, diff_diff/stacked_did_results.py, diff_diff/sun_abraham.py, diff_diff/results.py, diff_diff/triple_diff.py, diff_diff/trop_results.py, diff_diff/continuous_did_results.py, diff_diff/synthetic_control_results.py, docs/methodology/REGISTRY.md, diff_diff/lwdid_results.py]
+    notes: "LWDiD joined the guard at the 4.0-cut PR 1 (2026-10-18): LWDiDResults.summary()/print_summary() previously took no alpha at all - they now take alpha=None under the same _require_fit_alpha contract. Staggered-family summary(alpha=)/print_summary(alpha=) tightening via the shared results_base._require_fit_alpha guard (the DMLDiDResults/EventStudyResults precedent): eight results classes (CallawaySantAnnaResults, StaggeredTripleDiffResults, ChaisemartinDHaultfoeuilleResults, ImputationDiDResults, EfficientDiDResults, TwoStageDiDResults, StackedDiDResults, SunAbrahamResults) previously did alpha = alpha or self.alpha and relabeled the confidence-interval header at the REQUESTED alpha while always printing the FIT-TIME stored intervals - silent coverage mislabeling on any non-fit alpha (bootstrap percentile intervals cannot be reconstructed from the SE at all). Behavior delta: accepted-and-mislabeled -> loud ValueError; alpha=0.0, previously swallowed by the falsy `or` idiom, now raises too. StaggeredTripleDiffResults is INCLUDED although its parent estimator is removed at 4.0 ([M-013]/[M-014]) - the mislabel is a live 3.x rendering bug, distinct from the estimator's frozen construction shape. Resolved - the guard is applied family-wide: the non-staggered summaries (DiDResults incl. SpilloverDiDResults by inheritance, MultiPeriodDiDResults, SyntheticDiDResults, TripleDifferenceResults, TROPResults, ContinuousDiDResults, SyntheticControlResults - the last previously a dead no-op alpha, now an honest raise) adopted it via the same helper (an optional message= override carries class-accurate wording where the staggered default's bootstrap-percentile rationale would be false; the staggered default message is byte-unchanged). Sibling behavioral evidence lives in tests/test_estimators.py, tests/test_triple_diff.py, tests/test_trop.py, tests/test_continuous_did.py, tests/test_methodology_synthetic_control.py, and tests/test_spillover.py (test_ref stays the staggered anchor: the schema's test_ref is a single path and this row remains the one logical contract). introduced_in 4.0 per the [M-144] rationale; status done is terminal."
   - id: M-147
     kind: behavior
     group: etwfe-reference-period
@@ -1839,3 +1839,45 @@ rows:
     test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/wooldridge_results.py]
     notes: "Locator-completeness amendment at the 4.0-cut framing: WooldridgeDiDResults.to_dataframe(level='event') has warned since 3.9 (the [M-044] rename PR), but only [M-086]'s notes recorded it - the matrix had no locator for this third surface of the 'event' -> 'event_study' value unification (aggregate(type=) is [M-086]; summary(aggregation=) is [M-087]). Twin of [M-136] (LPDiD's to_dataframe level value). test_ref: test_to_dataframe_level_rename in tests/test_v4_rename_semantic.py."
+  # ---- PR 1: new-estimator conformance (2026-10-18) ---------------------
+  - id: M-151
+    kind: field
+    group: lwdid-results-contract
+    old: "diff_diff:LWDiDResults.pvalue"
+    new: "diff_diff:LWDiDResults.p_value"
+    introduced_in: null
+    deprecated_in: "4.0"
+    removed_in: "5.0"
+    status: shimmed
+    phase: 5
+    warning: FutureWarning
+    test_ref: tests/test_lwdid.py
+    code_refs: [diff_diff/lwdid_results.py, diff_diff/_deprecation.py, docs/methodology/REGISTRY.md]
+    notes: "Born 3.10 as an undocumented duplicate of the canonical quintet name p_value (the alias-diet class, spec section 3.2: one name per concept) - no reader anywhere in the repo (every .pvalue hit is RandomizationResult / SpecificationResult / the lwdid-py package, independent surfaces). Deprecated AT 4.0 rather than removed, because the name shipped in released minors 3.10-3.13; removed 5.0. Shim = deprecated_field_property(..., removed_in='5.0') so the warning and the generated docstring name 5.0 (the helper gained the removed_in keyword in this PR). Row added in the same PR as the shim (the [M-148]/[M-149] precedent). ENFORCEMENT NOTE: 'pvalue' joins test_naming_guard's _PATTERN_TOKENS and _AMBIGUOUS_TOKENS (the two kwarg-lane hits are the independent same-named fields on RandomizationResult / SpecificationResult, allowlisted)."
+  - id: M-152
+    kind: field
+    group: lwdid-results-contract
+    old: "diff_diff:LWDiDResults.ci"
+    new: "diff_diff:LWDiDResults.conf_int"
+    introduced_in: null
+    deprecated_in: "4.0"
+    removed_in: "5.0"
+    status: shimmed
+    phase: 5
+    warning: FutureWarning
+    test_ref: tests/test_lwdid.py
+    code_refs: [diff_diff/lwdid_results.py, diff_diff/_deprecation.py, docs/methodology/REGISTRY.md]
+    notes: "Twin of [M-151] for the conf_int alias; same window, same shim. ENFORCEMENT NOTE: 'ci' is library-wide local vocabulary (`ci = ...` assignments in ~21 source modules) and RDPlot's own confidence-level parameter, so it joins _AMBIGUOUS_TOKENS (precise lanes only) with a SURFACE_ALLOWLIST entry for RDPlot.__init__[ci] and CONSUMER_ALLOWLIST entries for rdplot.py and the CCFT-2017 paper review; REGISTRY.md's rdplot `ci` backtick is covered by this row's code_refs."
+  - id: M-153
+    kind: behavior
+    group: lwdid-results-contract
+    old: "diff_diff:LWDiDResults.to_dataframe[level]"
+    new: null
+    introduced_in: "4.0"
+    deprecated_in: null
+    removed_in: null
+    status: done
+    phase: 5
+    test_ref: tests/test_lwdid.py
+    code_refs: [diff_diff/lwdid_results.py, docs/methodology/REGISTRY.md, docs/api/lwdid.rst]
+    notes: "LWDiDResults.to_dataframe() reshaped onto the uniform results contract at the 4.0 cut (spec section 5: to_dataframe's selector is level= everywhere): level in {'simple', 'event_study', 'group'} (the class's aggregate() vocabulary), each returning aggregate(level).to_dataframe() - the shared AGGREGATION_SCHEMA / EVENT_STUDY_SCHEMA - plus the three LWDiD config columns rolling / estimation_method / vcov_type; default 'simple'; to_csv() relays the same level. The 3.10-3.13 frame had no selector and a bespoke shape: a term (common timing) / cohort (staggered) column -> now label; a trailing 'Overall' row on staggered fits -> now level='simple'; n_treated -> the schema's n; n_obs and n_control -> no longer in the frame (to_dict() keeps both); ci_lower/ci_upper -> conf_int_lower/conf_int_upper. A 3.10-born frame reshaped at the major, so no deprecation window - the [M-144]..[M-147] post-cut behavior shape (introduced_in 4.0, done). Documented in the migration guide's prose (not the ledger-derived appendix)."

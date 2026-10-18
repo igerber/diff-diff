@@ -23,7 +23,7 @@ from typing import Any, ClassVar, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 
-from diff_diff.aggregation import AggregationMixin
+from diff_diff.aggregation import AggregationMixin, AggregationResult
 from diff_diff.results import _get_significance_stars
 from diff_diff.results_base import (
     BaseResults,
@@ -359,7 +359,7 @@ class DurationDiDResults(BaseResults, AggregationMixin):
     n_draws_invalid_counterfactual: int
     pretest: DurationDiDPretestResults
 
-    _AGGREGATE_SUPPORTED: ClassVar[Tuple[str, ...]] = ("event_study",)
+    _AGGREGATE_SUPPORTED: ClassVar[Tuple[str, ...]] = ("simple", "event_study")
     _AGGREGATE_BALANCE_E_TYPES: ClassVar[Tuple[str, ...]] = ()
 
     # ------------------------------------------------------------------ #
@@ -545,6 +545,35 @@ class DurationDiDResults(BaseResults, AggregationMixin):
         weights: Optional[str],
         balance_e: Optional[int],
     ) -> Any:
+        """Build the ``"simple"`` relay or the ``"event_study"`` container.
+
+        ``"simple"`` relays the stored headline quintet verbatim (spec section
+        6: a relay never recomputes). DurationDiD's inference is
+        bootstrap-only - ``se`` is the centred-bootstrap SD and the interval
+        the symmetric ``point +/- crit * se`` (REGISTRY: no percentile
+        intervals), ``t_stat`` the stored analytical z, all NaN when
+        ``inference_status != "ok"`` - so no finite df governs it and the
+        ``df`` column is NaN. ``"event_study"`` builds the unified container.
+        """
+        if level == "simple":
+            ci_lo, ci_hi = self.conf_int
+            return AggregationResult(
+                level="simple",
+                label=np.array(["overall"], dtype=object),
+                target=np.array(["att"], dtype=object),
+                att=np.array([self.att], dtype=float),
+                se=np.array([self.se], dtype=float),
+                t_stat=np.array([self.t_stat], dtype=float),
+                p_value=np.array([self.p_value], dtype=float),
+                conf_int_lower=np.array([ci_lo], dtype=float),
+                conf_int_upper=np.array([ci_hi], dtype=float),
+                n=np.array([float(self.n_units)], dtype=float),
+                df=None,
+                alpha=self.alpha,
+                n_kind="units",
+                weight=np.array([1.0], dtype=float),
+                estimator="DurationDiD",
+            )
         if level != "event_study":  # pragma: no cover - mixin validates first
             raise ValueError(f"Unsupported aggregation method: {level!r}")
         n_post = len(self.post_periods)

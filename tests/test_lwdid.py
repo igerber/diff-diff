@@ -4636,3 +4636,139 @@ class TestReviewRoundCI7Guards:
         # unit-average value (3.5). The two surfaces answer different,
         # separately documented estimands on unbalanced panels.
         np.testing.assert_allclose(res.att, 3.5, atol=1e-10)
+
+
+class TestV4ResultsContract:
+    """4.0 results-contract conformance (ledger rows M-146, M-151, M-152, M-153)."""
+
+    @staticmethod
+    def _common_df(seed=23, n=40, T=6):
+        rng = np.random.default_rng(seed)
+        rows = []
+        for u in range(n):
+            treated_unit = int(u < n // 2)
+            alpha = rng.normal()
+            for t in range(1, T + 1):
+                d = int(treated_unit and t >= 4)
+                rows.append(dict(unit=u, time=t, treat=d, y=alpha + rng.normal() + 0.8 * d))
+        return pd.DataFrame(rows)
+
+    @staticmethod
+    def _staggered_df(seed=29, n=30, T=6):
+        rng = np.random.default_rng(seed)
+        rows = []
+        for u in range(n):
+            g = 3 if u < 10 else (4 if u < 20 else 0)
+            alpha = rng.normal()
+            for t in range(1, T + 1):
+                d = int(g > 0 and t >= g)
+                rows.append(dict(unit=u, time=t, first=g, treat=d, y=alpha + rng.normal() + d))
+        return pd.DataFrame(rows)
+
+    @pytest.fixture(scope="class")
+    def common(self):
+        df = self._common_df()
+        return LWDiD().fit(df, outcome="y", unit="unit", time="time", treatment="treat")
+
+    @pytest.fixture(scope="class")
+    def staggered(self):
+        df = self._staggered_df()
+        return LWDiD().fit(
+            df, outcome="y", unit="unit", time="time", treatment="treat", first_treat="first"
+        )
+
+    # -- M-146: summary(alpha=) joins the family-wide guard -------------------
+    def test_summary_alpha_matching_fit_is_identity(self, common):
+        assert common.summary(alpha=common.alpha) == common.summary()
+
+    @pytest.mark.parametrize("bad_alpha", [0.10, 0.0])
+    def test_summary_alpha_mismatch_raises(self, common, bad_alpha):
+        with pytest.raises(ValueError, match="never recomputes"):
+            common.summary(alpha=bad_alpha)
+        with pytest.raises(ValueError, match="never recomputes"):
+            common.print_summary(alpha=bad_alpha)
+
+    # -- M-153: to_dataframe(level=) is aggregate-backed ----------------------
+    def test_to_dataframe_default_is_simple_relay_plus_config_columns(self, common):
+        from diff_diff.aggregation import AGGREGATION_SCHEMA
+
+        frame = common.to_dataframe()
+        pd.testing.assert_frame_equal(frame, common.to_dataframe(level="simple"))
+        expected = common.aggregate("simple").to_dataframe()
+        assert len(frame) == 1
+        assert list(frame.columns) == list(AGGREGATION_SCHEMA) + [
+            "rolling",
+            "estimation_method",
+            "vcov_type",
+        ]
+        pd.testing.assert_frame_equal(frame[list(AGGREGATION_SCHEMA)], expected)
+        assert frame.loc[0, "att"] == common.att
+        assert frame.loc[0, "conf_int_lower"] == common.conf_int[0]
+        assert frame.loc[0, "conf_int_upper"] == common.conf_int[1]
+        assert frame.loc[0, "n"] == common.n_treated
+        for old in ("ci_lower", "ci_upper", "term", "cohort", "n_obs", "n_control", "n_treated"):
+            assert old not in frame.columns
+        assert frame.loc[0, "rolling"] == common.rolling
+        assert frame.loc[0, "vcov_type"] == common.vcov_type
+
+    def test_to_dataframe_group_level(self, staggered, common):
+        frame = staggered.to_dataframe(level="group")
+        assert len(frame) == len(staggered.cohort_effects)
+        assert set(frame["label"]) == set(staggered.cohort_effects)
+        assert "Overall" not in set(frame["label"])
+        assert (frame["level"] == "group").all()
+        with pytest.raises(ValueError):
+            common.to_dataframe(level="group")
+
+    def test_to_dataframe_event_study_level(self, staggered):
+        from diff_diff.results_base import EVENT_STUDY_SCHEMA
+
+        frame = staggered.to_dataframe(level="event_study")
+        for col in EVENT_STUDY_SCHEMA:
+            assert col in frame.columns
+        for col in ("rolling", "estimation_method", "vcov_type"):
+            assert col in frame.columns and frame[col].nunique() == 1
+        assert frame["is_reference"].any()
+
+    def test_to_dataframe_unknown_level_raises(self, common):
+        with pytest.raises(ValueError, match="Unknown level"):
+            common.to_dataframe(level="cohort")
+
+    def test_to_csv_relays_level(self, staggered, tmp_path):
+        path = tmp_path / "cohorts.csv"
+        staggered.to_csv(str(path), level="group")
+        back = pd.read_csv(path)
+        assert len(back) == len(staggered.cohort_effects)
+        assert "conf_int_lower" in back.columns and "ci_lower" not in back.columns
+        staggered.to_csv(str(tmp_path / "headline.csv"))
+        assert len(pd.read_csv(tmp_path / "headline.csv")) == 1
+
+    def test_to_dataframe_relays_nan_inference_jointly(self):
+        df = self._common_df(seed=31)
+        df["x"] = (df["unit"] % 4).astype(float)  # unit-constant covariate for the PSM
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = LWDiD(estimation_method="psm").fit(
+                df, outcome="y", unit="unit", time="time", treatment="treat", covariates=["x"]
+            )
+        assert np.isnan(res.se)  # psm: inference unavailable, att retained
+        frame = res.to_dataframe()
+        assert np.isfinite(frame.loc[0, "att"])
+        for col in ("se", "t_stat", "p_value", "conf_int_lower", "conf_int_upper", "df"):
+            assert np.isnan(frame.loc[0, col]), col
+
+    # -- M-151 / M-152: pvalue / ci alias shims -------------------------------
+    @pytest.mark.parametrize("old, new", [("pvalue", "p_value"), ("ci", "conf_int")])
+    def test_alias_properties_warn_and_relay(self, common, old, new):
+        from diff_diff.lwdid_results import LWDiDResults
+
+        assert old not in LWDiDResults.__dataclass_fields__
+        assert new in LWDiDResults.__dataclass_fields__
+        with pytest.warns(
+            FutureWarning, match=rf"LWDiDResults\.{old} is deprecated.*removed in 5\.0"
+        ):
+            value = getattr(common, old)
+        assert value == getattr(common, new)
+        with pytest.raises(AttributeError):
+            setattr(common, old, value)
+        assert "removed in 5.0" in getattr(LWDiDResults, old).__doc__

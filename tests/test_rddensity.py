@@ -1046,6 +1046,65 @@ class TestAPIContracts:
         res_all = _fit_quiet(RDDensityTest(report_all=True), rng.normal(size=900))
         assert "Conventional" in res_all.summary()
 
+    def test_to_dict_json_round_trip(self, fitted):
+        d = fitted.to_dict()
+        json.dumps(d)  # NaN-free here; stdlib emits NaN as NaN when present
+        assert d["t_stat"] == fitted.t_stat and d["p_value"] == fitted.p_value
+        assert d["n"] == fitted.n and isinstance(d["n"], int)
+        assert d["h_left"] == fitted.h_left and isinstance(d["h_left"], float)
+        assert d["f_left_conventional"] is None  # report_all=False
+        assert list(d["bandwidths"]) == ["left", "right", "diff", "sum"]
+        assert set(d["bandwidths"]["left"]) == {"bw", "variance", "bias_sq"}
+        assert d["bandwidths"]["diff"]["bw"] == fitted.bandwidths.loc["diff", "bw"]
+        for key in ("att", "se", "conf_int"):
+            assert key not in d
+        frame = fitted.to_dataframe()
+        assert d["f_diff"] == frame.loc["diff", "estimate"]
+
+        rng = np.random.default_rng(97)
+        manual = _fit_quiet(RDDensityTest(h=0.7), rng.normal(size=900)).to_dict()
+        assert "bandwidths" not in manual
+        res_all = _fit_quiet(RDDensityTest(report_all=True), rng.normal(size=900))
+        d_all = res_all.to_dict()
+        assert d_all["report_all"] is True
+        assert d_all["f_left_conventional"] == res_all.f_left_conventional
+        assert isinstance(d_all["t_stat_conventional"], float)
+
+    def test_to_dict_degraded_inference_round_trips_nan(self):
+        from unittest import mock
+
+        import diff_diff.rddensity as mod
+
+        rng = np.random.default_rng(101)
+        x = rng.normal(size=800)
+        real_fv = mod._rddensity_fv
+
+        def wrecked(*args, **kwargs):
+            out = real_fv(*args, **kwargs)
+            out[:, 1] = np.nan
+            return out
+
+        with mock.patch.object(mod, "_rddensity_fv", wrecked):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                res = RDDensityTest(h=0.8, report_all=True).fit(pd.DataFrame({"x": x}), running="x")
+        d = res.to_dict()
+        json.dumps(d)
+        assert np.isfinite(d["f_diff"]) and np.isfinite(d["f_diff_conventional"])
+        for key in (
+            "se_left",
+            "se_right",
+            "se_diff",
+            "t_stat",
+            "p_value",
+            "se_left_conventional",
+            "se_right_conventional",
+            "se_diff_conventional",
+            "t_stat_conventional",
+            "p_value_conventional",
+        ):
+            assert isinstance(d[key], float) and np.isnan(d[key]), key
+
     def test_summary_q_equals_p_labels_conventional(self):
         # R labels the headline "Robust" even when q == p (the conventional
         # test) and with all=TRUE prints the identical statistic twice; the

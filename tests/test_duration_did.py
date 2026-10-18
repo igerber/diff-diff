@@ -1070,7 +1070,27 @@ class TestResultsAPI:
         with pytest.raises(ValueError, match="weights"):
             fitted.aggregate("event_study", weights="cell")
         with pytest.raises(ValueError, match="Unsupported aggregation type"):
-            fitted.aggregate("simple")
+            fitted.aggregate("group")
+
+    def test_simple_aggregate_relays_stored_inference(self, fitted):
+        agg = fitted.aggregate("simple")
+        assert agg.level == "simple" and list(agg.label) == ["overall"]
+        assert list(agg.target) == ["att"] and agg.estimator == "DurationDiD"
+        assert agg.att[0] == fitted.att and agg.se[0] == fitted.se
+        assert agg.t_stat[0] == fitted.t_stat and agg.p_value[0] == fitted.p_value
+        assert (agg.conf_int_lower[0], agg.conf_int_upper[0]) == tuple(fitted.conf_int)
+        assert agg.n[0] == fitted.n_units and agg.n_kind == "units"
+        assert np.isnan(agg.df[0])  # bootstrap-only inference: no finite df governs it
+        assert agg.alpha == fitted.alpha
+        frame = agg.to_dataframe()
+        assert len(frame) == 1 and frame.loc[0, "att"] == fitted.att
+
+    def test_simple_aggregate_without_inference(self):
+        r = fit_quiet(DurationDiD(n_bootstrap=0), micro_panel(), last_pre_period=3)
+        agg = r.aggregate("simple")
+        assert np.isfinite(agg.att[0])
+        for name in ("se", "t_stat", "p_value", "conf_int_lower", "conf_int_upper", "df"):
+            assert np.isnan(getattr(agg, name)[0]), name
 
     def test_event_study_without_inference(self):
         r = fit_quiet(DurationDiD(n_bootstrap=0), micro_panel(), last_pre_period=3)
