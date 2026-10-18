@@ -25,6 +25,17 @@ updates:
       - "dependencies"
       - "rust"
     groups:
+      # pyo3 and rust-numpy are lockstep (numpy 0.N requires pyo3 ^0.N), so
+      # a lone bump of either cannot compile. Listed first so they land in
+      # this group rather than rust-minor-patch.
+      pyo3-stack:
+        patterns:
+          - "pyo3"
+          - "numpy"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
       rust-minor-patch:
         update-types:
           - "minor"
