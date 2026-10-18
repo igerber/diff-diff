@@ -468,7 +468,7 @@ Example Usage
    # axis); this equals the eq. 7.10 unit-average estimand on balanced
    # never-treated designs and deviates on unbalanced panels (see the
    # methodology registry's within-cohort aggregation Note).
-   df_cohorts = results_stag.to_dataframe()
+   df_cohorts = results_stag.to_dataframe(level="group")
    print(df_cohorts)
 
 **Robustness check — demean vs detrend (informal pre-test for trend

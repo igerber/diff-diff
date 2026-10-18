@@ -151,24 +151,31 @@ def require_arg(qualname: str, name: str, value: Any) -> None:
         raise TypeError(f"{qualname}() missing required argument: '{name}'")
 
 
-def deprecated_field_property(cls_name: str, old: str, new: str) -> property:
+def deprecated_field_property(
+    cls_name: str, old: str, new: str, *, removed_in: str = "4.0"
+) -> property:
     """Build the read-only warning alias for a renamed results field.
 
     Assigned WITHOUT an annotation in the dataclass body, so it stays a
     plain descriptor (never a ``__dataclass_fields__`` entry). Wording
     follows the ``SyntheticDiDResults`` renamed-field alias precedent
     (M-003, ``diff_diff/results.py``), with the FutureWarning category the
-    ledger declares for the M-094/M-095/M-114 rows.
+    ledger declares for the M-094/M-095/M-114 rows. ``removed_in`` names the
+    release the ledger row schedules the removal for (``"4.0"`` for the 3.9
+    rename sweep; ``"5.0"`` for aliases deprecated AT 4.0, e.g. the LWDiD
+    ``pvalue``/``ci`` rows M-151/M-152) so the warning and the generated
+    docstring never contradict the row.
     """
 
     def _get(self: Any) -> Any:
         warnings.warn(
-            f"{cls_name}.{old} is deprecated; use {new} instead. " "Will be removed in 4.0.",
+            f"{cls_name}.{old} is deprecated; use {new} instead. "
+            f"Will be removed in {removed_in}.",
             FutureWarning,
             stacklevel=2,
         )
         return getattr(self, new)
 
     _get.__name__ = old
-    _get.__doc__ = f"Deprecated alias for :attr:`{new}` (removed in 4.0)."
+    _get.__doc__ = f"Deprecated alias for :attr:`{new}` (removed in {removed_in})."
     return property(_get)

@@ -2776,6 +2776,15 @@ Exact reviewed artifacts (PDF SHA-256) and live-verified SSRN metadata are pinne
 
 Full maintainer paper reviews (equation-level detail, replication targets): `docs/methodology/papers/lee-wooldridge-2025-review.md`, `docs/methodology/papers/lee-wooldridge-2026-review.md`.
 
+- **Note:** 4.0 results-contract conformance (the cut's PR 1, 2026-10-18). `summary()` /
+  `print_summary()` take `alpha=None` under the family-wide M-146 guard (a value other than
+  the fit-time alpha raises; previously the methods took no alpha). `to_dataframe(level=)`
+  is aggregate-backed on the shared aggregation / event-study schemas (`level` in `simple`
+  (default), `group`, `event_study`) plus the `rolling`/`estimation_method`/`vcov_type`
+  columns - the 3.10 bespoke frame (`term`/`cohort` column, trailing `Overall` row,
+  `n_treated`/`n_control`/`n_obs`, `ci_lower`/`ci_upper`) is gone (ledger row M-153);
+  `to_csv(level=)` follows. The 3.10-born alias properties `pvalue`/`ci` (duplicates of
+  `p_value`/`conf_int`) emit a FutureWarning from 4.0 and are removed at 5.0 (M-151/M-152).
 - **Note:** Registry entry authored with the paper reviews ahead of the implementation (PR #588, third-party contribution under maintainer revision; MERGED 2026-08-20). The checklist boxes were finalized with the merge; the implementation-specific Notes in this section (control pools, RI convention, overall conventions, Sec 4.3 rejection, API conformance) are the maintainer finalization of that pass.
 - **Note:** Maintainer validation suite: `tests/test_methodology_lwdid.py` was the ACCEPTANCE BAR for PR #588's final round (passed unmodified; #588 merged 2026-08-20): it is written against the agreed post-rename API. The earlier xfail scaffolding is retired. Goldens: `benchmarks/data/lwdid_walmart_eventstudy_golden.json` (printed Tables A4/A5; point halves consumed, printed SE halves superseded), `benchmarks/data/real/castle_lw_subset.csv`, and `benchmarks/data/lwdid_stata_golden.json` (full-precision authors'-package parity, `benchmarks/stata/generate_lwdid_golden.do`; schema checked ungated by `tests/test_lwdid_stata_golden_schema.py`).
 - **Note:** Pre-release API-conformance decisions (locked 2026-08-15/16; no deprecation-ledger rows are owed because LWDiD never shipped on main): `estimation_method=` with house-CS values `reg`/`ipw`/`dr` plus the LWDiD-only `psm`; `vcov_type=` (name locked; accepted sets finalized in the maintainer fix wave: `reg` accepts `{classical, hc1, hc2, hc3}` — `hc3` retained as the paper-mandated extra via a shared linalg extension; `ipw`/`dr` accept `hc1` only, because the influence-function variance is always used on those paths and any other value would be silently inert; `psm` accepts `hc1` as its only configuration value while its inference is UNAVAILABLE (NaN; the Abadie-Imbens matching variance is a DEFERRED item); `cluster=` composes only with `hc1` (CR1) and is rejected for `psm`; the `"cluster"` mode value retired in favor of clustering-by-`cluster=`, `hc0`/`hc4`/`conley` not offered); `seed=` with default `None`; `pscore_trim=`; `cluster=` on the constructor; the `LW` alias, module-level `lwdid()` wrapper, `lwdid_trend_diagnostics` module, and `overall_att`/`period_effects`/`period_specific` surfaces retired (per-period effects live on the unified post-fit event-study surface).
@@ -5640,6 +5649,10 @@ equal bandwidths, forbids `bwselect="each"`, and couples the plugin
 variance through the density-weighted combined Gram with the Psi reflection
 matrix per SA Lemma 13).
 
+- **Note:** `RDDensityTestResult.to_dict()` (4.0 cut PR 1) serializes every stored scalar
+  with native casts (NaN inference passes through), the `*_conventional` block as `None`
+  unless `report_all=True`, and the bandwidth-selection table nested under `bandwidths`
+  only when it was estimated (a manual `h` leaves the key absent).
 - **Note (rank-based EDF, matches R):** the regressand is R's
   `Y = (0:(N-1))/(N-1)` on the sorted full sample, NOT the CJM 2020 paper's
   `(1/n) * sum 1[x_i <= x]` display (they differ by up to `1/N` pointwise).
@@ -6036,6 +6049,10 @@ equivalently `p <= alpha`.
 
 **Implementation choices / deviations (Notes):**
 
+- **Note:** `aggregate("simple")` (4.0 cut PR 1) relays the stored headline quintet verbatim
+  with `n = n_units` and a NaN `df` column: inference is bootstrap-only (centred-bootstrap
+  SD and symmetric `point +/- crit*se` intervals, no percentile intervals; `t_stat` is the
+  analytical z), so no finite df governs it. Nothing is recomputed.
 - **Note:** PH coefficient is the mean of usable ratios `sum alpha[t] D1[t]/D2[t]`
   (Theorem 1 direction, matching the authors' MATLAB/Stata code), not the paper's
   printed Equation 3.5 (which returns the reciprocal under exact PH) nor the

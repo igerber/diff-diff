@@ -146,6 +146,10 @@ _PATTERN_TOKENS = {
     # since the exact NNLS inner solve; warn-and-discard shims at 4.0).
     "inner_max_iter",
     "inner_min_decrease",
+    # M-151 / M-152 (LWDiDResults.pvalue -> .p_value, .ci -> .conf_int; 3.10-born
+    # alias properties deprecated at 4.0, removed 5.0).
+    "pvalue",
+    "ci",
 }
 
 # Tokens that are LEGAL canonical vocabulary on other surfaces (rule 1 `time`,
@@ -172,6 +176,13 @@ _AMBIGUOUS_TOKENS = {
     # only kwarg-lane hits left in changes_in_changes.py are the construction
     # site (now method=) and validate_covariate_names', neither a stale reader.
     "estimator",
+    # M-152's old token: `ci` is library-wide LOCAL vocabulary (`ci = ...`
+    # assignments in ~21 source modules) and RDPlot's own confidence-level
+    # parameter, so only the precise lanes may match it. M-151's `pvalue` is
+    # the same shape: the kwarg-lane hits are the independent same-named
+    # fields on RandomizationResult / SpecificationResult.
+    "ci",
+    "pvalue",
 }
 
 
@@ -537,6 +548,13 @@ _RULE1_TIME_SURFACES = (
 )
 
 SURFACE_ALLOWLIST = {
+    # M-152 deprecates LWDiDResults.ci (-> conf_int). RDPlot's `ci` is the
+    # rdplot confidence-level parameter (R rdplot's `ci`), an independent
+    # surface that shares only the word.
+    "RDPlot.__init__[ci]": (
+        "rdplot's confidence-level parameter (R rdplot `ci`), an independent "
+        "surface - not the LWDiD results alias (M-152)"
+    ),
     # M-143 renames a RESULTS field named `estimator`; these four public
     # surfaces share only the word. AggregationResult.estimator holds a CLASS
     # NAME ("StackedDiD"), not a method tag - the very collision M-143 exists
@@ -1005,6 +1023,31 @@ _CS_GROUPS_READER = (
 )
 
 CONSUMER_ALLOWLIST = {
+    # M-151 / M-152: the dying LWDiDResults aliases share their words with
+    # independent surfaces - RDPlot's `ci` attribute and the rdplot `ci`
+    # parameter table in the CCFT-2017 review; RandomizationResult.pvalue and
+    # SpecificationResult.pvalue (their own fields); and lwdid.py's docstring
+    # table mapping lwdid-py's `result.pvalue` onto diff-diff's `p_value`,
+    # which documents the OTHER package, not a reader of the alias.
+    (
+        "ci",
+        "diff_diff/rdplot.py",
+    ): "RDPlot's own `ci` attribute (confidence level), not the LWDiD alias",
+    ("ci", "docs/methodology/papers/calonico-cattaneo-farrell-titiunik-2017-review.md"): (
+        "rdplot `ci` parameter table, not the LWDiD alias"
+    ),
+    (
+        "pvalue",
+        "diff_diff/lwdid_randomization.py",
+    ): "RandomizationResult.pvalue, an independent field",
+    (
+        "pvalue",
+        "diff_diff/lwdid_sensitivity.py",
+    ): "SpecificationResult.pvalue, an independent field",
+    ("pvalue", "diff_diff/lwdid.py"): (
+        "lwdid-py -> diff-diff name-mapping docstring table documents the other package's "
+        "`result.pvalue`; not a reader of the alias"
+    ),
     # M-143's `estimator` token is ordinary vocabulary across the library:
     # report schema keys, an AggregationResult field holding a class name, and
     # a label parameter. None of these reads ChangesInChangesResults' renamed

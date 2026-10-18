@@ -4,13 +4,20 @@ from __future__ import annotations
 
 import datetime
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
+from diff_diff._deprecation import deprecated_field_property
 from diff_diff.aggregation import AggregationMixin, AggregationResult
-from diff_diff.results_base import BaseResults, EventStudyResults, _coverage_pct
+from diff_diff.results_base import (
+    _SUMMARY_ALPHA_MESSAGE,
+    BaseResults,
+    EventStudyResults,
+    _coverage_pct,
+    _require_fit_alpha,
+)
 
 
 # How the overall staggered standard error was obtained. Cohort effects that
@@ -223,15 +230,12 @@ class LWDiDResults(BaseResults, AggregationMixin):
     # ------------------------------------------------------------------ #
     # Properties                                                          #
     # ------------------------------------------------------------------ #
-    @property
-    def pvalue(self) -> float:
-        """Alias for p_value (diff-diff API convention)."""
-        return self.p_value
-
-    @property
-    def ci(self) -> Tuple[float, float]:
-        """Alias for conf_int (diff-diff API convention)."""
-        return self.conf_int
+    # Deprecated 3.10-born aliases for the canonical quintet names (ledger rows
+    # M-151 / M-152): FutureWarning from 4.0, removed at 5.0. Plain class
+    # attributes (no annotation) so they stay descriptors, never dataclass
+    # fields - the ``shimmed`` field-row shape tests/test_v4_matrix.py asserts.
+    pvalue = deprecated_field_property("LWDiDResults", "pvalue", "p_value", removed_in="5.0")
+    ci = deprecated_field_property("LWDiDResults", "ci", "conf_int", removed_in="5.0")
 
     @property
     def is_staggered(self) -> bool:
@@ -388,74 +392,47 @@ class LWDiDResults(BaseResults, AggregationMixin):
     # ------------------------------------------------------------------ #
     # Serialization                                                       #
     # ------------------------------------------------------------------ #
-    def to_dataframe(self) -> pd.DataFrame:
-        """Convert results to a pandas DataFrame.
+    _CONFIG_COLUMNS: ClassVar[Tuple[str, ...]] = ("rolling", "estimation_method", "vcov_type")
+
+    def to_dataframe(self, level: str = "simple") -> pd.DataFrame:
+        """Convert results to a pandas DataFrame at an aggregation ``level``.
+
+        The frame is the post-fit :meth:`aggregate` surface for ``level``
+        (the library-wide aggregation schema: ``level, label, target, att,
+        se, t_stat, p_value, conf_int_lower, conf_int_upper, n, weight, df``;
+        the event-study schema for ``"event_study"``) with LWDiD's three
+        configuration columns ``rolling``, ``estimation_method`` and
+        ``vcov_type`` appended, so an exported frame stays self-describing.
+
+        Parameters
+        ----------
+        level : {"simple", "event_study", "group"}, default "simple"
+            ``"simple"``: one headline ATT row (``label == "overall"``).
+            ``"group"``: one row per cohort ATT(g) - staggered fits only.
+            ``"event_study"``: one row per relative period, with the
+            reference periods marked (``is_reference``).
 
         Returns
         -------
         pd.DataFrame
-            For common timing: a single-row DataFrame.
-            For staggered: one row per cohort plus an "Overall" row.
-        """
-        if not self.is_staggered:
-            rows: List[Dict[str, Any]] = [
-                {
-                    "term": "ATT",
-                    "att": self.att,
-                    "se": self.se,
-                    "t_stat": self.t_stat,
-                    "p_value": self.p_value,
-                    "ci_lower": self.conf_int[0],
-                    "ci_upper": self.conf_int[1],
-                    "n_obs": self.n_obs,
-                    "n_treated": self.n_treated,
-                    "n_control": self.n_control,
-                    "rolling": self.rolling,
-                    "estimation_method": self.estimation_method,
-                    "vcov_type": self.vcov_type,
-                }
-            ]
-            return pd.DataFrame(rows)
 
-        rows_stag: List[Dict[str, Any]] = []
-        for cohort, eff in self.cohort_effects.items():  # type: ignore[union-attr]
-            ci = eff.get("conf_int", (np.nan, np.nan))
-            n_t = eff.get("n_treated", 0)
-            n_c = eff.get("n_control", 0)
-            rows_stag.append(
-                {
-                    "cohort": cohort,
-                    "att": eff.get("att", np.nan),
-                    "se": eff.get("se", np.nan),
-                    "t_stat": eff.get("t_stat", np.nan),
-                    "p_value": eff.get("p_value", np.nan),
-                    "ci_lower": ci[0] if ci else np.nan,
-                    "ci_upper": ci[1] if ci else np.nan,
-                    "n_treated": n_t,
-                    "n_control": n_c,
-                    "rolling": self.rolling,
-                    "estimation_method": self.estimation_method,
-                    "vcov_type": self.vcov_type,
-                }
-            )
-        # Append overall row
-        rows_stag.append(
-            {
-                "cohort": "Overall",
-                "att": self.att,
-                "se": self.se,
-                "t_stat": self.t_stat,
-                "p_value": self.p_value,
-                "ci_lower": self.conf_int[0],
-                "ci_upper": self.conf_int[1],
-                "n_treated": self.n_treated,
-                "n_control": self.n_control,
-                "rolling": self.rolling,
-                "estimation_method": self.estimation_method,
-                "vcov_type": self.vcov_type,
-            }
-        )
-        return pd.DataFrame(rows_stag)
+        Notes
+        -----
+        Changed in 4.0 (ledger row M-153). The 3.10-3.13 frame had no
+        ``level`` selector and a bespoke shape: a ``term``/``cohort`` column
+        (now ``label``), a trailing ``"Overall"`` row on staggered fits (now
+        ``level="simple"``), ``n_treated``/``n_control``/``n_obs`` columns
+        (now the schema's ``n`` = treated units; the counts stay in
+        :meth:`to_dict`), and ``ci_lower``/``ci_upper`` (now
+        ``conf_int_lower``/``conf_int_upper``). :meth:`to_csv` takes the
+        same ``level``.
+        """
+        if level not in self._AGGREGATE_SUPPORTED:
+            raise ValueError(f"Unknown level: {level}. Use 'simple', 'event_study' or 'group'.")
+        frame = self.aggregate(level).to_dataframe()
+        for column in self._CONFIG_COLUMNS:
+            frame[column] = getattr(self, column)
+        return frame
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert results to a JSON-serializable dictionary.
@@ -526,21 +503,32 @@ class LWDiDResults(BaseResults, AggregationMixin):
     # ------------------------------------------------------------------ #
     # Aggregation                                                         #
     # ------------------------------------------------------------------ #
-    def to_csv(self, path: str) -> None:
-        """Export results to CSV file.
+    def to_csv(self, path: str, *, level: str = "simple") -> None:
+        """Export :meth:`to_dataframe` at ``level`` to a CSV file.
 
         Parameters
         ----------
         path : str
             File path for the CSV output.
+        level : {"simple", "event_study", "group"}, default "simple"
+            Aggregation level relayed to :meth:`to_dataframe` (4.0: the
+            former cohort-plus-``Overall`` export is ``level="group"`` plus
+            the default ``"simple"`` row).
         """
-        self.to_dataframe().to_csv(path, index=False)
+        self.to_dataframe(level=level).to_csv(path, index=False)
 
     # ------------------------------------------------------------------ #
     # Text summary                                                        #
     # ------------------------------------------------------------------ #
-    def summary(self) -> str:
+    def summary(self, alpha: Optional[float] = None) -> str:
         """Formatted text summary of results.
+
+        Parameters
+        ----------
+        alpha : float, optional
+            Must equal the fit-time ``alpha`` when given: the stored
+            intervals are never recomputed or relabelled (the family-wide
+            summary-alpha contract, ledger row M-146). Re-fit to change it.
 
         Returns
         -------
@@ -549,7 +537,8 @@ class LWDiDResults(BaseResults, AggregationMixin):
         """
         from diff_diff.results import _format_vcov_label, _get_significance_stars
 
-        ci_pct = _coverage_pct(self.alpha)
+        alpha = _require_fit_alpha(alpha, self.alpha, message=_SUMMARY_ALPHA_MESSAGE)
+        ci_pct = _coverage_pct(alpha)
         width = 88
         bar = "=" * width
         dash = "-" * width
@@ -570,7 +559,7 @@ class LWDiDResults(BaseResults, AggregationMixin):
             f"Control units: {self.n_control}",
             f"Rolling: {self.rolling}    "
             f"Method: {self.estimation_method}    "
-            f"Alpha: {self.alpha}",
+            f"Alpha: {alpha}",
         ]
 
         # Variance label
@@ -639,9 +628,9 @@ class LWDiDResults(BaseResults, AggregationMixin):
         lines.append("Signif. codes: *** p<0.001, ** p<0.01, * p<0.05")
         return "\n".join(lines)
 
-    def print_summary(self) -> None:
-        """Print the formatted summary to stdout."""
-        print(self.summary())
+    def print_summary(self, alpha: Optional[float] = None) -> None:
+        """Print the formatted summary to stdout (``alpha`` as in :meth:`summary`)."""
+        print(self.summary(alpha))
 
     # ================================================================
     # Advanced inference and diagnostics (delegate to standalone modules)

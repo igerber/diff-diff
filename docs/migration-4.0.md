@@ -23,6 +23,7 @@ updated, CI fails.
 | diagnostic-family | Bacon is re-homed out of the estimator roster into the diagnostics family | 1 | §7b |
 | field-flip | Nine results containers rename `overall_att` to the canonical `att` | 9 | §5 |
 | function-wrappers | Eight module-level wrapper functions are removed; call the classes | 8 | §7 |
+| lwdid-results-contract | `LWDiDResults` joins the uniform results contract: the `pvalue`/`ci` alias properties warn in favour of `p_value`/`conf_int` (two rows); `to_dataframe()` is reshaped ([M-153], prose) | 2 | §7b |
 | merge-ddd | `StaggeredTripleDifference` is absorbed by `TripleDifference` | 5 | §2 |
 | merge-mpd | `MultiPeriodDiD` is absorbed by `TwoWayFixedEffects(event_study=True)` | 5 | §2 |
 | merge-qdid | `QDiD` is absorbed by `ChangesInChanges(method="qdid")` | 2 | §2 |
@@ -239,7 +240,8 @@ weights moved to an exact non-negative least squares ([M-148], [M-149]: `Depreca
 at 4.0, removed at 5.0), the `covariates=` constructor-to-`fit()` move, a retired transition warning, the
 Bacon roster re-homing, and the family-wide `anticipation` validation below. The appendix lists
 the ledger-derived removals/flips; [M-144], [M-145], and [M-146] are behavior tightenings,
-and [M-147] is an additive policy. These have no removal/deprecation fields and appear here only.
+[M-147] is an additive policy, and [M-153] is a results-frame reshape. These have no
+removal/deprecation fields and appear here only.
 
 - `WooldridgeDiD(unsupported_period_action="error")` ([M-147]) refuses periods lacking
   comparison support before removing them. The default `"drop"` preserves filtering and
@@ -268,13 +270,25 @@ and [M-147] is an additive policy. These have no removal/deprecation fields and 
 - `summary(alpha=...)` / `print_summary(alpha=...)` on the results classes family-wide
   ([M-146], landing at 4.0; the staggered family first, then the non-staggered summaries -
   DiDResults incl. SpilloverDiDResults, MultiPeriodDiDResults, SyntheticDiDResults,
-  TripleDifferenceResults, TROPResults, ContinuousDiDResults): a value different from the
+  TripleDifferenceResults, TROPResults, ContinuousDiDResults, and LWDiDResults - whose
+  `summary()` previously took no `alpha` at all): a value different from the
   fit-time `alpha` now raises `ValueError` instead of silently relabeling the
   confidence-interval header over fit-time stored intervals; `alpha=0.0`, previously
   swallowed by a falsy-`or` default, raises too. Re-fit at the desired alpha instead.
   `SyntheticControlResults.summary` joins the contract as a carve-out: its `alpha` was a
   dead no-op (it prints no alpha-based interval; the displayed confidence set is keyed on
   its own stored `gamma`), and a non-fit value now raises like the rest of the family.
+
+- `LWDiDResults.to_dataframe()` is reshaped ([M-153], landing at 4.0): it gains the uniform
+  `level=` selector (`"simple"` default, `"group"`, `"event_study"`) and returns the shared
+  aggregation / event-study schema (`level, label, target, att, se, t_stat, p_value,
+  conf_int_lower, conf_int_upper, n, weight, df`) plus LWDiD's `rolling`, `estimation_method`
+  and `vcov_type` columns; `to_csv()` takes the same `level`. What left the 3.10-3.13 frame:
+  the `term` (common timing) / `cohort` (staggered) column is now `label`; the trailing
+  `"Overall"` row of staggered fits is now `level="simple"` (the default returns ONE headline
+  row - the former cohort rows are `level="group"`); `n_treated` is the schema's `n`;
+  `n_obs` and `n_control` are no longer in the frame (read `to_dict()`); `ci_lower`/`ci_upper`
+  are `conf_int_lower`/`conf_int_upper`.
 
 The `DIFF_DIFF_SOLVE_OLS_FASTPATH` environment default was due a go/no-go at 4.0 ([M-008]):
 decided 2026-10-18 as **evaluated, kept off**. No numerics change — the opt-in fast path
@@ -287,10 +301,13 @@ schedule. It therefore carries no appendix row.
 family (`attgt_weights`, `decompose_twfe_weights`, 3.13) were born on the 4.0 vocabulary, so
 none of the renames above touches them. The `df_convention` flip does not touch them either:
 they expose no such knob. `DMLDiDResults` inherits `CallawaySantAnnaResults` storage, so its
-`overall_att` family rides [M-050] with the parent. `LWDiDResults` gains the uniform
-`summary(alpha=None)` and `to_dataframe(level=...)` signatures in the conformance PR that
-precedes the removals, which also schedules the deprecation of its `pvalue`/`ci` alias
-properties (see the ledger rows added there; the aliases are silent today).
+`overall_att` family rides [M-050] with the parent. `LWDiDResults` joined the uniform
+results contract in the cut's conformance PR: `summary(alpha=None)` / `print_summary(alpha=None)`
+under the [M-146] guard, the reshaped `to_dataframe(level=...)` / `to_csv(level=...)` described
+under "Remaining 4.0 changes" ([M-153]), and FutureWarnings on its `pvalue`/`ci` alias
+properties ([M-151], [M-152]: read `.p_value` / `.conf_int`; removed at 5.0). `DurationDiDResults`
+gains `aggregate("simple")` (a verbatim relay of the stored bootstrap inference, `df` NaN) and
+`RDDensityTestResult` gains `to_dict()`.
 
 ## Codemod
 
@@ -349,7 +366,7 @@ but now emit a `FutureWarning`, and they no longer appear in `dir()`/`vars()`.
 
 ## Appendix: every 4.0 change
 
-One row per ledger row that requires action at 4.0 — 111 in total. `Old` and `New` are the
+One row per ledger row that requires action at 4.0 — 113 in total. `Old` and `New` are the
 ledger's own locators. An em dash in `New` means the ledger names no successor **locator**; it
 does not mean no action is required, so read the `Fix` cell.
 
@@ -400,6 +417,8 @@ does not mean no action is required, so read the `Fix` cell.
 | M-075 | function-wrappers | `diff_diff:triple_difference` | — | Call the estimator class directly instead of `triple_difference`. |
 | M-076 | function-wrappers | `diff_diff:bacon_decompose` | — | Call the estimator class directly instead of `bacon_decompose`. |
 | M-077 | function-wrappers | `diff_diff:chaisemartin_dhaultfoeuille` | — | Call the estimator class directly instead of `chaisemartin_dhaultfoeuille`. |
+| M-151 | lwdid-results-contract | `diff_diff:LWDiDResults.pvalue` | `diff_diff:LWDiDResults.p_value` | Read `.p_value`; the alias warns from 4.0 and is removed at 5.0. |
+| M-152 | lwdid-results-contract | `diff_diff:LWDiDResults.ci` | `diff_diff:LWDiDResults.conf_int` | Read `.conf_int`; the alias warns from 4.0 and is removed at 5.0. |
 | M-013 | merge-ddd | `diff_diff:StaggeredTripleDifference` | `diff_diff:TripleDifference.fit[first_treat]` | See the merges section for the worked before/after. |
 | M-014 | merge-ddd | `diff_diff:StaggeredTripleDiffResults` | — | Read the unified `TripleDifference` results shape (a degenerate single-ATT view for 2x2x2) instead of this container. |
 | M-085 | merge-ddd | `diff_diff:TripleDifference.fit[time]` | — | In 2x2x2 mode, `time=` raises - pass `post=` for the 0/1 post dummy. `time=` now means the staggered calendar column only. |

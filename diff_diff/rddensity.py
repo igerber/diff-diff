@@ -771,6 +771,66 @@ class RDDensityTestResult(Diagnostic):
     n_unique_min: int
     report_all: bool
 
+    def to_dict(self) -> Dict[str, Any]:
+        """JSON-serializable dictionary of every stored scalar.
+
+        Floats are cast to built-in ``float`` (NaN passes through as NaN,
+        which the stdlib encoder emits as ``NaN``), the ``*_conventional``
+        block stays ``None`` unless the test ran with ``report_all=True``,
+        and the bandwidth-selection table is nested under ``"bandwidths"``
+        (``{row: {column: value}}``) only when it was estimated (a manual
+        ``h`` leaves it absent).
+        """
+
+        def _f(x: Any) -> Optional[float]:
+            return None if x is None else float(x)
+
+        out: Dict[str, Any] = {
+            "t_stat": _f(self.t_stat),
+            "p_value": _f(self.p_value),
+            "f_left": _f(self.f_left),
+            "f_right": _f(self.f_right),
+            "f_diff": _f(self.f_diff),
+            "se_left": _f(self.se_left),
+            "se_right": _f(self.se_right),
+            "se_diff": _f(self.se_diff),
+            "f_left_conventional": _f(self.f_left_conventional),
+            "f_right_conventional": _f(self.f_right_conventional),
+            "f_diff_conventional": _f(self.f_diff_conventional),
+            "se_left_conventional": _f(self.se_left_conventional),
+            "se_right_conventional": _f(self.se_right_conventional),
+            "se_diff_conventional": _f(self.se_diff_conventional),
+            "t_stat_conventional": _f(self.t_stat_conventional),
+            "p_value_conventional": _f(self.p_value_conventional),
+            "n": int(self.n),
+            "n_left": int(self.n_left),
+            "n_right": int(self.n_right),
+            "n_eff_left": int(self.n_eff_left),
+            "n_eff_right": int(self.n_eff_right),
+            "h_left": float(self.h_left),
+            "h_right": float(self.h_right),
+            "cutoff": float(self.cutoff),
+            "p": int(self.p),
+            "q": int(self.q),
+            "fitselect": str(self.fitselect),
+            "kernel": str(self.kernel),
+            "vcov_type": str(self.vcov_type),
+            "bwselect": str(self.bwselect),
+            "bandwidth_method": str(self.bandwidth_method),
+            "masspoints": str(self.masspoints),
+            "masspoints_adjusted": bool(self.masspoints_adjusted),
+            "regularize": bool(self.regularize),
+            "n_local_min": int(self.n_local_min),
+            "n_unique_min": int(self.n_unique_min),
+            "report_all": bool(self.report_all),
+        }
+        if self.bandwidths is not None:
+            out["bandwidths"] = {
+                str(row): {str(col): float(val) for col, val in cells.items()}
+                for row, cells in self.bandwidths.to_dict(orient="index").items()
+            }
+        return out
+
     def to_dataframe(self) -> pd.DataFrame:
         """Tidy per-side table: rows ``left``/``right``/``diff`` (plus the
         ``*_conventional`` rows when ``report_all=True``); columns

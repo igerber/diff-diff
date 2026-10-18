@@ -124,6 +124,23 @@ class TestDeprecationHelpers:
             assert toy.old_name == 3
         with pytest.raises(AttributeError):
             toy.old_name = 5
+        # default removal version is the 3.9 sweep's 4.0, in both the warning and the docstring
+        with pytest.warns(FutureWarning, match=r"Will be removed in 4\.0\."):
+            toy.old_name
+        assert "(removed in 4.0)" in Toy.old_name.__doc__
+
+    def test_deprecated_field_property_removed_in_override(self):
+        """Aliases deprecated AT 4.0 (M-151/M-152) name their 5.0 removal in both surfaces."""
+
+        @dataclass
+        class Toy:
+            conf_int: int = 7
+            ci = deprecated_field_property("Toy", "ci", "conf_int", removed_in="5.0")
+
+        toy = Toy()
+        with pytest.warns(FutureWarning, match=r"Toy\.ci is deprecated.*Will be removed in 5\.0\."):
+            assert toy.ci == 7
+        assert Toy.ci.__doc__ == "Deprecated alias for :attr:`conf_int` (removed in 5.0)."
 
 
 # ---------------------------------------------------------------------------

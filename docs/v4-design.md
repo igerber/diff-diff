@@ -111,7 +111,7 @@ roster only.)
 | ChangesInChanges | Keep + absorbs QDiD via `method=` [M-015] |
 | QDiD | Removed 4.0 [M-015] |
 | SyntheticDiD, SyntheticControl, TROP, ContinuousDiD, HeterogeneousAdoptionDiD, RegressionDiscontinuity, SpilloverDiD, ChaisemartinDHaultfoeuille | Keep |
-| LWDiD (added 3.10), DMLDiD (added 3.11), DurationDiD (added 3.12) | Keep - born on the 4.0 vocabulary (no rename rows); LWDiD's results-contract gaps are PR-1 work (section 5) |
+| LWDiD (added 3.10), DMLDiD (added 3.11), DurationDiD (added 3.12) | Keep - born on the 4.0 vocabulary (no rename rows); LWDiD's results-contract gaps were closed by the cut's PR 1 [M-151]..[M-153] (section 5) |
 | BaconDecomposition | Keep - moves into the diagnostic family (section 3.5) |
 
 ### 3.2 Final alias table
@@ -474,12 +474,17 @@ ESTIMATOR result class already exposes the full quintet as properties
 (verified 2026-07-18), so 3.9 needs no additive property work. (2026-10-18:
 `LWDiDResults` and `DurationDiDResults` were born with the canonical quintet
 as NATIVE fields - no flip rows; `DMLDiDResults` inherits
-`CallawaySantAnnaResults` storage and rides [M-050]. `LWDiDResults` deviates
-from the uniform signatures - `summary()` lacks `alpha=None`,
-`to_dataframe()` lacks the `level=` selector - and carries `pvalue`/`ci`
-alias properties for `p_value`/`conf_int`; the signatures are added and the
-aliases rowed for deprecation in the cut sequence's PR 1, section 9, on the
-[M-148]/[M-149] same-PR-as-the-shim precedent.) At 4.0 the STORAGE flips [M-050]..[M-058]: the canonical names
+`CallawaySantAnnaResults` storage and rides [M-050]. `LWDiDResults` deviated
+from the uniform signatures - `summary()` lacked `alpha=None`,
+`to_dataframe()` lacked the `level=` selector - and carried `pvalue`/`ci`
+alias properties for `p_value`/`conf_int`; the cut's PR 1 (section 9) added
+the signatures (`summary(alpha=None)` under the [M-146] guard;
+`to_dataframe(level=)` aggregate-backed on the shared schemas plus the
+LWDiD config columns, default `"simple"` - a reshape of the 3.10-born
+bespoke frame, rowed as the behavior row [M-153]) and deprecated the
+aliases [M-151] [M-152] on the [M-148]/[M-149] same-PR-as-the-shim
+precedent, with a 4.0 -> 5.0 window because the names shipped in released
+minors.) At 4.0 the STORAGE flips [M-050]..[M-058]: the canonical names
 become the native dataclass fields; `overall_att` (and sibling `overall_*`
 inference fields, plus ContinuousDiD's deviant `overall_att_*` family
 [M-058]) become FutureWarning properties, removed 5.0. MultiPeriodDiD's
@@ -936,7 +941,7 @@ above; anything only one PR cares about stays in that PR's plan.**
 | 2: contract foundations | 3.9 | (a) results base + unified event-study representation [M-092] + to_dict completion + the Diagnostic marker base on the diagnostic result roster [M-091] (section 3.5); (b) `aggregate()` + fit(aggregate=) shims [M-020..M-027] [M-139] (M-020's shim already shipped; M-139 is the HAD workflow twin, a pre-cut amendment); (c) param renames [M-030..M-047] [M-084] [M-086..M-089] + their results-field mirrors [M-094] [M-095] (section 8 rule 9) + the public-function completeness sweep [M-097..M-113] (section 8 rule 10) + the dCDH results mirror [M-114] + the fourth `robust` site [M-115] + the 2(c)-ii missed-rename amendments [M-136..M-138] (LPDiD `level` value; the two post-dummy diagnostics params) + BaseEstimator mixin + ContinuousDiD covariates move; (d) alias introduction [M-062] (the Spillover introduction is cancelled [M-063]) + the alias-diet `__getattr__` warning shim [M-135] + wrapper deprecations [M-070..M-077] + the two inference-surface policies: `n_bootstrap` semantic unification [M-081] and the wild-cluster-bootstrap roster guard [M-096]; shipped insertions (all done): the aggregate contract [M-122], the ETWFE reference-period family [M-123] [M-124] [M-125], and the variance-consolidation program [M-126] [M-127] |
 | 3: merges | 3.9 | (a) TWFE event-study mode [M-010] + EventStudy warn [M-060] + the fit `time`->`post` rename [M-082] (gates: section 4.1's equivalence/divergence/pooled-parity test triple) (shipped: tests/test_v4_merge_mpd.py; consumer ports incl. HonestDiD/PreTrendsPower calendar routes); (b) TripleDifference facade [M-013] + the SDDD alias [M-064] (shipped: tests/test_v4_merge_ddd.py; the engine relocation into the private shared mixin, the keyword-only staggered fit params, and the pscore_trim tightening [M-142]. The fit-time aggregate=/balance_e= carve-out rows are scheduled REMOVALS and so are cited in the phase-5 cell, not here - their only lifecycle version is removed_in 4.0); (c) CiC method= [M-015] + its results-field mirror [M-143] (shipped: tests/test_v4_merge_cic.py; method= is keyword-only and lowercase-only, the QDiD CLASS is deprecated while the METHOD is not, and ChangesInChangesResults.estimator -> .method carries a dual-key to_dict() window through 3.9) |
 | 4: release + soak | 3.9 cut | Migration guide written (skeleton: section 10); maintainer cuts 3.9; maint/3.8 rule active |
-| 5: enforcement | 4.0 | Removals [M-010..M-015, M-020..M-027, M-139, M-030, M-032..M-047 old names, M-060, M-061, M-064, M-070..M-077, M-084, M-086..M-089, M-001..M-003, M-117, M-118, M-119, M-120, M-140, M-141, M-143] + the alias diet [M-132]..[M-134] + the amendment's old names [M-094] [M-095] [M-097..M-115] [M-136..M-138] [M-150] (incl. their consumer migrations and the `clean_control` serialized reporting key); M-031's old `time` name persists as the merged class's calendar column, so it is deliberately absent from the removal roster (its 4.0 enforcement is the M-085 behavior entry below); property window: [M-016] property-flips at 4.0 (removal at 5.0); storage flips [M-050..M-058]; default policies [M-004..M-006, M-128..M-131, M-080]; merged-class behavior enforcements [M-083] [M-085]; warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; the family-wide anticipation validation [M-144], the family-wide pscore_trim validation [M-145], and the family-wide summary-alpha guard [M-146] (staggered family at the initial cut; extended to the non-staggered summaries post-cut) (behavior tightenings landing at 4.0 - shipped post-3.9-cut, terminal `done`, no removal/deprecation fields); the additive Wooldridge comparison-support policy [M-147] (`unsupported_period_action="drop"` preserves filtering, `"error"` refuses before period removal; same post-cut lifecycle); the inert SyntheticControl inner-budget pair [M-148] [M-149] (warn-and-discard shims at 4.0 once the donor weights moved to an exact NNLS, removal at 5.0); docs/llms.txt/README refresh |
+| 5: enforcement | 4.0 | Removals [M-010..M-015, M-020..M-027, M-139, M-030, M-032..M-047 old names, M-060, M-061, M-064, M-070..M-077, M-084, M-086..M-089, M-001..M-003, M-117, M-118, M-119, M-120, M-140, M-141, M-143] + the alias diet [M-132]..[M-134] + the amendment's old names [M-094] [M-095] [M-097..M-115] [M-136..M-138] [M-150] (incl. their consumer migrations and the `clean_control` serialized reporting key); M-031's old `time` name persists as the merged class's calendar column, so it is deliberately absent from the removal roster (its 4.0 enforcement is the M-085 behavior entry below); property window: [M-016] property-flips at 4.0 (removal at 5.0); storage flips [M-050..M-058]; default policies [M-004..M-006, M-128..M-131, M-080]; merged-class behavior enforcements [M-083] [M-085]; warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; the family-wide anticipation validation [M-144], the family-wide pscore_trim validation [M-145], and the family-wide summary-alpha guard [M-146] (staggered family at the initial cut; extended to the non-staggered summaries post-cut), the LWDiD to_dataframe reshape [M-153] (behavior tightenings landing at 4.0 - shipped post-3.9-cut, terminal `done`, no removal/deprecation fields); the additive Wooldridge comparison-support policy [M-147] (`unsupported_period_action="drop"` preserves filtering, `"error"` refuses before period removal; same post-cut lifecycle); the inert SyntheticControl inner-budget pair [M-148] [M-149] (warn-and-discard shims at 4.0 once the donor weights moved to an exact NNLS, removal at 5.0); the LWDiD result-alias pair [M-151] [M-152] (FutureWarning shims at 4.0, removal at 5.0); docs/llms.txt/README refresh |
 | 6: front door | 4.1 | `event_study(data, outcome, unit, time, first_treat, estimator=...)` comparison entry point over the staggered family (sketch only; specified in its own plan) |
 
 Citation semantic for the table: a cell may cite a row whose current `phase`
@@ -1001,10 +1006,11 @@ its rows terminal and names them in its changelog fragment.
 0. Spec/ledger refresh (the PR that wrote this subsection): the cut-window
    rule, the roster/M-080/M-008 amendments, the [M-150] locator, the id
    snapshot repair, and the `maint/3.13` branch cut.
-1. New-estimator conformance (additive): `LWDiDResults.summary(alpha=None)` /
-   `to_dataframe(level=)`, rows for its `pvalue`/`ci` aliases (lifecycle in
+1. New-estimator conformance - additive signatures plus ONE schema reshape:
+   `LWDiDResults.summary(alpha=None)`, `to_dataframe(level=)` (the reshape,
+   [M-153]), rows for its `pvalue`/`ci` aliases [M-151] [M-152] (lifecycle in
    the rows, on the [M-148]/[M-149] same-PR precedent), DurationDiD
-   `aggregate("simple")`, `RDDensityTestResult.to_dict()`.
+   `aggregate("simple")`, `RDDensityTestResult.to_dict()`. Shipped.
 2. Mechanical shim removals: the rename rows, the wrapper functions, the
    alias diet, the SyntheticDiD params, the legacy-CR1 remap branches named on
    [M-045]/[M-115]; `_deprecation.py` stays (section 8 rule 11 corollary).
@@ -1250,7 +1256,8 @@ forever - a removed symbol resurrecting is a test failure.
   class/function rows
   and alias rows also assert `__all__` membership consistent with their
   status (stale `import *` entries fail). The shipped row ids are a
-  committed snapshot in the enforcement test (132 as of the 4.0-cut framing -
+  committed snapshot in the enforcement test (135 as of the 4.0-cut PR 1,
+  which added M-151..M-153; 132 as of the 4.0-cut framing -
   M-148/M-149 were shipped by #838 without extending the snapshot, so the
   framing PR added them together with M-150; 129 as of the ETWFE
   unsupported-period policy; previously 126 as of the family-wide
@@ -1261,7 +1268,7 @@ forever - a removed symbol resurrecting is a test failure.
   reference-period pair M-123/M-124 + M-125 + M-126 + M-127..M-131 +
   the alias-diet family M-132..M-135 + the 2(c)-ii amendments
   M-136..M-138 + M-139 + the DDD-merge rows M-140..M-142 + the CiC
-  results-field mirror M-143 + the anticipation policy row M-144 + the DML review-follow-ups pair M-145/M-146 + the unsupported-period policy M-147 + the SyntheticControl inner-budget pair M-148/M-149 + the Wooldridge to_dataframe level twin M-150;
+  results-field mirror M-143 + the anticipation policy row M-144 + the DML review-follow-ups pair M-145/M-146 + the unsupported-period policy M-147 + the SyntheticControl inner-budget pair M-148/M-149 + the Wooldridge to_dataframe level twin M-150 + the LWDiD results-contract rows M-151..M-153;
   the snapshot extends by a new id range in the same diff that appends
   rows): ids are never deleted or reused, and the test fails if any
   snapshot id disappears.
