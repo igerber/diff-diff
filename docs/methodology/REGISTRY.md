@@ -2150,6 +2150,11 @@ where `W_it(h) = 1[K_it = h]` are lead indicators, estimated on `Omega_0` only.
 - Bootstrap does not update pre-period SEs (they are from the lead regression)
 - When `balance_e` is set, lead indicators are restricted to balanced cohorts; the full Omega_0 sample (including never-treated) is kept for within-transformation
 - Only affects event study aggregation; overall ATT and group aggregation unchanged
+- **Note:** M-080 position (auto-cluster policy, re-scoped 2026-10-18 - category c2):
+  the default `cluster_var = unit` lives INSIDE the unit-level influence-function
+  variance, so no unclustered variance exists; the uniform 4.0 `cluster=False`
+  off-switch is an accepted explicit no-op (not an error, not a new SE). Roster in
+  `docs/methodology/variance-conventions.md` "Default clustering roster".
 - **Note:** `pretrends=True` with analytical `survey_design` (strata/PSU/FPC) is supported. The lead regression uses survey-weighted demeaning, WLS point estimates, and `compute_survey_vcov()` for design-based VCV. The full survey design is preserved (subpopulation approach): Omega_0 scores are zero-padded back to full-panel length so PSU/strata structure is maintained for variance estimation. The F-test in `pretrend_test()` uses the full-design `df_survey` as denominator df. Replicate-weight survey designs raise `NotImplementedError` with `pretrends=True` because per-replicate lead regression refits are not yet implemented.
 - **Note (pretrends lead-regression tail df, 3.9 / M-127):** the per-lead
   `gamma_h` t/p/CI previously used silent normal-theory z on plain clustered
@@ -2229,6 +2234,10 @@ where `W_it(h) = 1[K_it = h]` are lead indicators, estimated on `Omega_0` only.
 
 **Primary source:** [Gardner, J. (2022). Two-stage differences in differences. arXiv:2207.05943.](https://arxiv.org/abs/2207.05943)
 
+- **Note:** M-080 position (auto-cluster policy, re-scoped 2026-10-18 - category c2):
+  as for ImputationDiD, the default `cluster_var = unit` is internal to the unit-level
+  influence-function machinery, so the uniform 4.0 `cluster=False` off-switch is an
+  accepted explicit no-op. Roster in `docs/methodology/variance-conventions.md`.
 - **Note (rank-guarded TSL-variance bread):** The Stage-2 variance bread `(X_2'WX_2)^{-1}` is inverted by the shared `_rank_guarded_inv` (`diff_diff/linalg.py`) on BOTH the analytical (`two_stage.py`) and multiplier-bootstrap (`two_stage_bootstrap.py`) surfaces. `np.linalg.solve` raised only on an exactly-singular bread (prior fallback: dense `lstsq`); a **near**-singular `X_2'WX_2` would otherwise flow a garbage inverse (~1e13) into the SE. The rank-guard truncates redundant directions → finite SE on the identified subspace (NaN at rank 0) and warns. A dropped (unidentified) Stage-2 coefficient (event-time / group effect) is reported with **NaN** SE on both the analytical and bootstrap surfaces — not the zero-filled `0`. `X_2` is the Stage-2 indicator design (treatment/event-time/group dummies), not user covariates. See the CallawaySantAnna "rank-guarded IF standard errors" Note. Sibling of axis-A finding #17.
 
 **Key implementation requirements:**
@@ -2430,6 +2439,13 @@ The paper text states a stricter bound (T_min + 1) but the R code by the co-auth
 - [x] Anticipation parameter support
 - [x] Never-treated encoding (0 and inf)
 - [x] Survey design support (Phase 3): Q-weights compose multiplicatively with survey weights; TSL vcov on composed weights; survey design columns propagated through sub-experiments. Replicate weights supported via estimator-level refit with Q-weight composition (see Replicate Weight Variance section).
+- **Note:** M-080 position (auto-cluster policy, re-scoped 2026-10-18 - category c3
+  in `docs/methodology/variance-conventions.md` "Default clustering roster"): the
+  stacked regression clusters by construction and `cluster` accepts only `'unit'` /
+  `'unit_subexp'`; the uniform 4.0 `cluster=False` off-switch is therefore REJECTED
+  here with the existing validator message rather than yielding an unclustered SE
+  (no such variance is defined for the stacked design). The spec's "becomes an
+  instance of the general policy" applies to the default resolution only.
 - **Note (intercept SEs excluded from R parity):** for the base StackedDiD `clubSandwich` parity fixture (not the CBWSDID `cbwsdid` fixture below), stacked event-study *interaction* SEs match R at ~2e-13, but the regression *intercept* SE differs from R by a measured ~0.3% — a nuisance-parameter reference-cell/parameterization gap, not machine-precision lockable. Surfacing `se_cr1_intercept`/`se_cr2_intercept` would add an unasserted, R-divergent public field, so intercept SEs are deliberately not exposed and are excluded from the parity lock (`tests/test_methodology_stacked_did.py`; SE-audit C1/(c) decision, 2026-07-09).
 - **Note:** Survey weights compose multiplicatively with Q-weights for StackedDiD; only `weight_type="pweight"` (default) is supported — `fweight` and `aweight` are rejected because Q-weight composition changes weight semantics (non-integer for fweight, non-inverse-variance for aweight)
 
@@ -3068,11 +3084,13 @@ the finite-dimensional `p_0` is handled by the variance correction below.
   `cluster=None` IS the per-unit IF variance by definition (see "IF-based
   variance estimators vs analytical-sandwich estimators"); the inherited
   value is family-consistent and truthful. No vocabulary widening.
-- **Note:** M-080 position (auto-cluster policy) — DMLDiD's per-unit
-  influence-function variance IS unit-level clustering, so the 4.0
-  auto-cluster DEFAULT flip is inert for it — mirroring how CallawaySantAnna
-  is absent from M-080's `code_refs` and how M-010 pre-empted M-080 for the
-  TWFE event-study mode. COARSER-than-unit clustering ships via the CS-style
+- **Note:** M-080 position (auto-cluster policy, re-scoped 2026-10-18 -
+  category b in `docs/methodology/variance-conventions.md` "Default clustering
+  roster") — DMLDiD's per-unit influence-function variance IS unit-level
+  clustering, so the 4.0 auto-cluster DEFAULT flip is inert for it, as for
+  CallawaySantAnna and every other by-construction estimator; by decision it
+  carries no auto-cluster metadata (`cluster_name=None`) and the uniform 4.0
+  `cluster=False` off-switch is an accepted explicit no-op. COARSER-than-unit clustering ships via the CS-style
   `cluster=` constructor parameter (3.11): the synthesized/injected
   `SurveyDesign(psu=...)` drives PSU-cohesive folds, the per-cell CR1 SE,
   the bootstrap draw structure and `df_inference`, while the moment kernels
@@ -6078,7 +6096,9 @@ equivalently `p <= alpha`.
   would be unreachable) and the constant are library choices — the paper
   declines to supply a cutoff (review lines 917-918) — and change no behavior.
 - **Note:** M-080 unit auto-cluster is satisfied by construction: the bootstrap
-  resamples individuals. No `cluster=`, `vcov_type=`, survey design, covariates,
+  resamples individuals (decision recorded 2026-10-18: category d in
+  `docs/methodology/variance-conventions.md` - no `cluster` param and no cluster
+  metadata on the container). No `cluster=`, `vcov_type=`, survey design, covariates,
   staggered adoption, censoring, or repeated cross-sections in this version
   (the review's deferred extensions).
 - **Note:** `DiagnosticReport` and `BusinessReport` reject `DurationDiDResults`
@@ -6841,6 +6861,12 @@ should be a deliberate user choice.
 
 **Note:** This estimator is a **documented synthesis** of ingredients — no single published software package implements the exact recipe. `did2s` (R/Stata, Butts & Gardner 2022) implements the Gardner two-stage residualization but does NOT support ring covariates. The Butts (2021/2023) paper proposes the ring estimator in Equations 5/6/8 (non-staggered) and Section 5 / Table 2 (staggered) but does not ship reference software. The diff-diff implementation combines: (a) Butts (2021) Section 5 / Table 2 identification, (b) Gardner (2022) two-stage residualize-then-fit, (c) Wave A's Conley spatial-HAC vcov.
 
+- **Note:** M-080 position (auto-cluster policy, re-scoped 2026-10-18 - category a):
+  SpilloverDiD is the ONE required-unit estimator still running observation-level HC
+  when `cluster=` is omitted, so its default SE flips to unit clustering at 4.0 with
+  TWFE's carve-outs mirrored (explicit `cluster=` wins; Conley drops the auto-cluster;
+  never injected as a survey PSU). 3.x numbers are reproduced with `cluster=False`.
+  Roster in `docs/methodology/variance-conventions.md` "Default clustering roster".
 - **Note (rank-guarded Wave D bread):** The Wave D variance bread `A_22 = (X_2'WX_2)^{-1}` is inverted by the shared `_rank_guarded_inv` (`diff_diff/linalg.py`) on the already-column-dropped kept submatrix. `np.linalg.solve` raised only on an exactly-singular bread (prior fallback: dense `lstsq`); a **near**-singular kept Gram would otherwise flow a garbage inverse (~1e13) into the SE. The rank-guard truncates redundant directions → finite SE on the identified subspace (NaN at rank 0), re-inflated to (k, k) with NaN at the dropped positions, and warns. See the CallawaySantAnna "rank-guarded IF standard errors" Note. Sibling of axis-A finding #17.
 
 **Identification spec (committed):**

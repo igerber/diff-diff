@@ -20,6 +20,12 @@ The release-cut sweep is AUTOMATED: ``test_due_rows_are_terminal`` fails any
 version bump that reaches a row's scheduled version (``removed_in``, flip
 version, ``decision_due``, or ``introduced_in``) while the row has not flipped
 (spec section 9) - due rows must flip or be re-scheduled in the release PR.
+The ledger header may declare an OPEN CUT WINDOW (``cut_window`` + ``cut_base``,
+spec section 11): rows scheduled at the window version may go terminal EARLY
+(the removals land incrementally while ``__version__`` stays at ``cut_base``),
+any other version bump while early-terminal rows exist is refused, and due
+enforcement itself is unchanged - at the window version every scheduled row
+must be terminal.
 
 Parsing is a purpose-built line scanner (restricted-YAML format contract in the
 ledger header) because the project ships no PyYAML - same precedent as
@@ -132,11 +138,13 @@ _MD_TOKEN_RE = re.compile(r"\[(M-\d{3})\]")
 # + the family-wide anticipation validation row (M-144) = 126; + the DML
 # review-follow-ups pair (M-145 family-wide pscore_trim validation, M-146
 # family-wide summary-alpha guard) = 128; + the ETWFE unsupported-period
-# policy (M-147) = 129.
+# policy (M-147) = 129; + the SyntheticControl inner-budget pair (M-148/M-149,
+# shipped by #838 without extending this floor) = 131; + the Wooldridge
+# to_dataframe level twin (M-150, 4.0-cut framing) = 132.
 # Ids are never reused and terminal rows are never deleted, so the ledger
 # only grows - raise the floor when rows are added; a lower parse count
 # means scanner/format drift or an illegal row deletion.
-ROW_COUNT_FLOOR = 129
+ROW_COUNT_FLOOR = 132
 
 # Committed snapshot of the shipped id set ("ids are never deleted or reused"
 # contract - a delete-one-add-one edit keeps the count above the floor but trips
@@ -193,6 +201,8 @@ _INITIAL_ID_RANGES = [
     (144, 144),
     (145, 146),
     (147, 147),
+    (148, 149),
+    (150, 150),
 ]
 EXPECTED_INITIAL_IDS = frozenset(
     f"M-{n:03d}" for lo, hi in _INITIAL_ID_RANGES for n in range(lo, hi + 1)
@@ -209,6 +219,52 @@ def _parse_scalar(raw):
     if (raw.startswith('"') and raw.endswith('"')) or (raw.startswith("'") and raw.endswith("'")):
         return raw[1:-1]
     return raw
+
+
+_HEADER_RE = re.compile(r"^([a-z_]+):\s*(.*?)\s*$")
+#: Header keys the ledger may declare above ``rows:`` (spec section 11, "Cut window").
+KNOWN_HEADER_KEYS = {"cut_window", "cut_base"}
+
+
+def parse_header(text):
+    """Parse the ledger's pre-``rows:`` header scalars; returns (header, errors).
+
+    Today the header carries the cut-window pair ``cut_window``/``cut_base`` (spec section 11):
+    both must be present together ("half-declared" is an error), each must match the ledger
+    version grammar, and unknown keys are errors - the header is part of the format contract.
+    An absent header is legal and returns ``({}, [])``.
+    """
+    header, errors = {}, []
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped == "rows:":
+            break
+        m = _HEADER_RE.match(line)
+        if not m:
+            errors.append(f"line {lineno}: unparseable header line: {stripped!r}")
+            continue
+        key, raw = m.group(1), m.group(2)
+        if key not in KNOWN_HEADER_KEYS:
+            errors.append(f"line {lineno}: unknown header key '{key}'")
+            continue
+        if key in header:
+            errors.append(f"line {lineno}: duplicate header key '{key}'")
+            continue
+        value = _parse_scalar(raw)
+        if value is None or not _VERSION_RE.match(str(value)):
+            errors.append(f"line {lineno}: header '{key}' must be a version, got {raw!r}")
+            continue
+        header[key] = value
+    declared = {k for k in KNOWN_HEADER_KEYS if k in header}
+    if declared and declared != KNOWN_HEADER_KEYS:
+        missing = sorted(KNOWN_HEADER_KEYS - declared)
+        errors.append(
+            f"half-declared cut window: {sorted(declared)} present but {missing} missing - "
+            "declare both or neither"
+        )
+    return header, errors
 
 
 def parse_matrix(text):
@@ -440,6 +496,12 @@ def _signature_default(locator, rid):
 # ---------------------------------------------------------------------------
 ROWS, _PARSE_ERRORS = parse_matrix(MATRIX.read_text())
 _ROW_IDS = [r.get("id", "?") for r in ROWS]
+_HEADER, _HEADER_ERRORS = parse_header(MATRIX.read_text())
+#: The open cut window (spec section 11). Set ONLY from a header that parsed with zero errors
+#: - a malformed or half-declared header leaves both None and fails
+#: ``test_ledger_header_is_well_formed`` instead of reaching the gate.
+CUT_WINDOW = _HEADER.get("cut_window") if not _HEADER_ERRORS else None
+CUT_BASE = _HEADER.get("cut_base") if not _HEADER_ERRORS else None
 
 
 def test_matrix_parses_cleanly():
@@ -498,7 +560,19 @@ def _version_tuple(version):
     return tuple(parts + [0] * (3 - len(parts)))[:3]
 
 
-def collect_due_problems(rows, current):
+def _scheduled_version(row):
+    """The version a row's TERMINAL transition is scheduled for (spec section 11 release gate):
+    ``removed_in`` for symbol/param-value/alias kinds, the flip version (``deprecated_in``) for
+    default-flip/warning-retirement/behavior rows, ``decision_due`` for env-default rows."""
+    kind = row["kind"]
+    if kind in ("default-flip", "warning-retirement", "behavior"):
+        return row.get("deprecated_in")
+    if kind == "env-default":
+        return row.get("decision_due")
+    return row.get("removed_in")
+
+
+def collect_due_problems(rows, current, cut_window=None, cut_base=None):
     """Pure due-row sweep over parsed rows at version tuple ``current`` (unit-testable).
 
     Rules (spec section 11 release gate):
@@ -514,22 +588,39 @@ def collect_due_problems(rows, current):
     - EARLY-REMOVAL GUARD: a row must NOT be terminal while its scheduled version
       (``removed_in``, or the flip version for non-symbol kinds) is still in the future -
       the shim window is a promise to users, not a suggestion.
+    - CUT WINDOW (spec section 11): when the ledger header declares ``cut_window``/``cut_base``,
+      rows scheduled at exactly ``cut_window`` are exempt from the early guard (the major's
+      removals land incrementally while ``__version__`` stays at ``cut_base``), and the OFF-BASE
+      guard refuses any ``current`` that is neither ``cut_base`` nor ``>= cut_window`` while such
+      early-terminal rows exist (no minor/patch release may ship the removals). Due enforcement
+      below is NOT relaxed by the window.
     """
+    if (cut_window is None) != (cut_base is None):
+        raise ValueError(
+            "cut_window and cut_base must be declared together (half-declared cut window: "
+            f"cut_window={cut_window!r}, cut_base={cut_base!r})"
+        )
+    window = _version_tuple(cut_window) if cut_window is not None else None
+    base = _version_tuple(cut_base) if cut_base is not None else None
     problems = []
     for row in rows:
         rid, kind, status = row["id"], row["kind"], row["status"]
         removed_in = row.get("removed_in")
         if status in ("removed", "done"):
-            early_version = removed_in
-            if kind in ("default-flip", "warning-retirement", "behavior"):
-                early_version = row.get("deprecated_in")
-            elif kind == "env-default":
-                early_version = row.get("decision_due")
+            early_version = _scheduled_version(row)
             if early_version and current < _version_tuple(early_version):
-                problems.append(
-                    f"{rid}: status '{status}' but its scheduled version {early_version} is "
-                    f"still in the future - early removal/flip breaks the shim window promise"
-                )
+                if window is not None and _version_tuple(early_version) == window:
+                    if current != base:
+                        problems.append(
+                            f"{rid}: terminal under open cut window {cut_window} but "
+                            f"__version__ moved off cut_base {cut_base} - release the window "
+                            f"at {cut_window} or revert the bump"
+                        )
+                else:
+                    problems.append(
+                        f"{rid}: status '{status}' but its scheduled version {early_version} is "
+                        f"still in the future - early removal/flip breaks the shim window promise"
+                    )
         if removed_in and current >= _version_tuple(removed_in):
             if kind in LIFECYCLE_KINDS and status != "removed":
                 problems.append(f"{rid}: removed_in {removed_in} is due but status is '{status}'")
@@ -580,7 +671,9 @@ def test_due_rows_are_terminal():
     or was explicitly re-scheduled in the release PR."""
     import diff_diff
 
-    problems = collect_due_problems(ROWS, _version_tuple(diff_diff.__version__))
+    problems = collect_due_problems(
+        ROWS, _version_tuple(diff_diff.__version__), cut_window=CUT_WINDOW, cut_base=CUT_BASE
+    )
     assert not problems, (
         f"rows due at version {diff_diff.__version__} have not flipped "
         "(flip them or re-schedule in the release PR):\n" + "\n".join(problems)
@@ -591,14 +684,16 @@ def test_initial_ids_never_deleted():
     """The shipped id set is immutable: ids are never deleted or reused (spec section 11).
 
     ROW_COUNT_FLOOR alone would let a delete-one-add-one edit pass; this snapshot cannot.
-    Extends as rows ship (129 as of the ETWFE unsupported-period policy:
+    Extends as rows ship (132 as of the 4.0-cut framing:
     Phase 1 + diagnostic-family + M-092/M-093 + M-094..M-096 + the
     M-097..M-115 public-function completeness sweep + M-117..M-120/M-122 +
     M-123/M-124 + M-125 + M-126 + M-127..M-131 + M-132..M-135 +
-    M-136..M-138 + M-139 + M-140..M-142 + M-143 + M-144 + M-145/M-146 + M-147)."""
+    M-136..M-138 + M-139 + M-140..M-142 + M-143 + M-144 + M-145/M-146 + M-147 +
+    M-148/M-149 (shipped by #838 without extending the snapshot; added at the
+    4.0-cut framing) + M-150)."""
     missing = sorted(EXPECTED_INITIAL_IDS - set(_ROW_IDS))
     assert not missing, f"ledger rows deleted (ids are permanent): {missing}"
-    assert len(EXPECTED_INITIAL_IDS) == 129
+    assert len(EXPECTED_INITIAL_IDS) == 132
 
 
 def test_version_tuple_pads_to_three_components():
@@ -749,6 +844,172 @@ def test_due_gate_catches_overdue_rows(row_overrides, current, expected_substrin
         expected_substring in p for p in problems
     ), f"expected a due-gate problem containing {expected_substring!r}, got: {problems}"
     assert not collect_due_problems([row_overrides], clean_at)
+
+
+_WINDOW_ROW = {
+    "id": "M-910",
+    "kind": "param",
+    "old": "diff_diff:SyntheticDiD[lambda_reg]",
+    "new": None,
+    "deprecated_in": "3.9",
+    "removed_in": "4.0",
+    "status": "removed",
+    "phase": 5,
+}
+
+
+@pytest.mark.parametrize(
+    "row, current, cut_window, cut_base, expect_clean, expected_substring",
+    [
+        (dict(_WINDOW_ROW), (3, 13, 0), "4.0", "3.13.0", True, None),
+        (
+            {
+                "id": "M-911",
+                "kind": "behavior",
+                "old": "diff_diff:SpilloverDiD[cluster]",
+                "new": None,
+                "deprecated_in": "4.0",
+                "removed_in": None,
+                "status": "done",
+                "phase": 5,
+            },
+            (3, 13, 0),
+            "4.0",
+            "3.13.0",
+            True,
+            None,
+        ),
+        (
+            {
+                "id": "M-912",
+                "kind": "env-default",
+                "old": "diff_diff.linalg:_resolve_solve_ols_fastpath",
+                "new": None,
+                "deprecated_in": None,
+                "removed_in": None,
+                "decision_due": "4.0",
+                "decided_default": "off",
+                "status": "done",
+                "phase": 5,
+            },
+            (3, 13, 0),
+            "4.0",
+            "3.13.0",
+            True,
+            None,
+        ),
+        (
+            dict(_WINDOW_ROW, removed_in="5.0"),
+            (3, 13, 0),
+            "4.0",
+            "3.13.0",
+            False,
+            "still in the future",
+        ),
+        (dict(_WINDOW_ROW), (3, 13, 0), None, None, False, "still in the future"),
+        (dict(_WINDOW_ROW), (3, 14, 0), "4.0", "3.13.0", False, "moved off cut_base"),
+        (dict(_WINDOW_ROW), (3, 13, 1), "4.0", "3.13.0", False, "moved off cut_base"),
+        (dict(_WINDOW_ROW), (4, 0, 0), "4.0", "3.13.0", True, None),
+        (
+            dict(_WINDOW_ROW, status="shimmed"),
+            (4, 0, 0),
+            "4.0",
+            "3.13.0",
+            False,
+            "removed_in 4.0 is due",
+        ),
+    ],
+    ids=[
+        "early-removal-inside-open-window",
+        "early-flip-behavior-inside-window",
+        "early-env-default-inside-window",
+        "early-removal-outside-window",
+        "no-window-still-guards",
+        "minor-bump-off-base-trips",
+        "patch-bump-off-base-trips",
+        "release-closes-window",
+        "window-does-not-hide-overdue",
+    ],
+)
+def test_cut_window_semantics(row, current, cut_window, cut_base, expect_clean, expected_substring):
+    """The cut window relaxes ONLY the early guard, only for its own version, only while
+    ``current`` sits at ``cut_base`` (or has reached the window); due enforcement is untouched."""
+    problems = collect_due_problems([row], current, cut_window=cut_window, cut_base=cut_base)
+    if expect_clean:
+        assert not problems, problems
+    else:
+        assert any(
+            expected_substring in p for p in problems
+        ), f"expected a problem containing {expected_substring!r}, got: {problems}"
+
+
+def test_collect_due_problems_rejects_half_declared_window():
+    with pytest.raises(ValueError, match="half-declared cut window"):
+        collect_due_problems([dict(_WINDOW_ROW)], (3, 13, 0), cut_window="4.0")
+
+
+@pytest.mark.parametrize(
+    "text, expected_header, n_errors",
+    [
+        ("rows:\n  - id: M-001\n", {}, 0),
+        (
+            'cut_window: "4.0"\ncut_base: "3.13.0"\nrows:\n',
+            {"cut_window": "4.0", "cut_base": "3.13.0"},
+            0,
+        ),
+        (
+            '# comment\ncut_window: "4.0"\n\ncut_base: "3.13.0"\nrows:\n',
+            {"cut_window": "4.0", "cut_base": "3.13.0"},
+            0,
+        ),
+        ('cut_window: "4"\ncut_base: "3.13.0"\nrows:\n', {"cut_base": "3.13.0"}, 2),
+        ('cut_window: "4.0"\nrows:\n', {"cut_window": "4.0"}, 1),
+        (
+            'cut_window: "4.0"\ncut_base: "3.13.0"\nfoo: "1.0"\nrows:\n',
+            {"cut_window": "4.0", "cut_base": "3.13.0"},
+            1,
+        ),
+    ],
+    ids=[
+        "no-header",
+        "both-keys",
+        "comments-and-blanks-ignored",
+        "malformed-version-leaves-half-declared",
+        "half-declared",
+        "unknown-key",
+    ],
+)
+def test_parse_header_cases(text, expected_header, n_errors):
+    """The header parser is exercised on TEXT (not decoded arguments): absent header, the
+    cut-window pair, malformed versions, a half-declared pair and unknown keys."""
+    header, errors = parse_header(text)
+    assert header == expected_header
+    assert len(errors) == n_errors, errors
+
+
+def test_ledger_header_is_well_formed():
+    """The real ledger's header parses with zero errors (a malformed/half-declared header
+    leaves CUT_WINDOW/CUT_BASE None and must fail HERE, never reach the gate silently)."""
+    assert not _HEADER_ERRORS, _HEADER_ERRORS
+
+
+def test_ledger_header_declares_cut_window():
+    """The 4.0 cut window is declared (spec section 11): it names a version some row is
+    scheduled at, and while the window is OPEN (``__version__`` below it) ``cut_base`` must equal
+    the shipped ``__version__`` - the off-base guard's reference point. Once ``__version__``
+    reaches the window the keys are a historical record (rows scheduled past the window, e.g. the
+    5.0 field-alias removals, legitimately stay non-terminal, so nothing is asserted then)."""
+    import diff_diff
+
+    assert CUT_WINDOW == "4.0"
+    assert CUT_BASE is not None
+    scheduled = {_version_tuple(v) for v in (_scheduled_version(r) for r in ROWS) if v is not None}
+    assert _version_tuple(CUT_WINDOW) in scheduled, "cut_window names no scheduled version"
+    if _version_tuple(diff_diff.__version__) < _version_tuple(CUT_WINDOW):
+        assert _version_tuple(CUT_BASE) == _version_tuple(diff_diff.__version__), (
+            f"cut window {CUT_WINDOW} is open but cut_base {CUT_BASE} != "
+            f"__version__ {diff_diff.__version__}"
+        )
 
 
 @pytest.mark.parametrize("row", ROWS, ids=_ROW_IDS)
@@ -1062,7 +1323,7 @@ def _changes_at_4_0(row):
 
     Keyed on the two LIFECYCLE version fields only - a symbol removed at 4.0, or one
     whose deprecation warning starts firing at 4.0 (the ``field-flip`` family, removed
-    at 5.0). 108 of the 129 rows qualify.
+    at 5.0). 111 of the 132 rows qualify.
 
     The 21 that do not, and why (this enumeration is the contract - a reader of the
     guide must be able to trust that nothing 4.0-relevant was dropped):
@@ -1080,12 +1341,12 @@ def _changes_at_4_0(row):
     - ``M-031``, ``M-082``: ``deprecated_in: 3.9`` with ``removed_in: null``, because
       the NAME ``time`` survives with a new meaning. Their 4.0 enforcement rows
       (``M-085`` and ``M-083`` respectively) DO qualify and carry the raise.
-    - ``M-008``: ``decision_due: 4.0`` but ``status: evaluate`` with no
-      ``decided_default``. ``decision_due`` is deliberately NOT part of this predicate:
-      the outcome is unknown and "evaluated, kept off" is a terminal state (spec
-      section 11), so it is documented as a pending go/no-go rather than as a change
-      the reader must act on. ``collect_due_problems`` does gate on ``decision_due`` -
-      that is the release sweep, a different question from "what must a user change".
+    - ``M-008``: ``decision_due: 4.0``, decided at the 4.0-cut framing (``status: done``,
+      ``decided_default: off`` - evaluated, kept off). ``decision_due`` is deliberately NOT
+      part of this predicate: a kept-off decision changes nothing a user must act on, so
+      it is documented in the guide's prose rather than as an appendix row.
+      ``collect_due_problems`` does gate on ``decision_due`` - that is the release sweep,
+      a different question from "what must a user change".
     """
     return _at_4_0(row.get("removed_in")) or _at_4_0(row.get("deprecated_in"))
 

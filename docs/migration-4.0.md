@@ -29,12 +29,12 @@ updated, CI fails.
 | obligation-sdid-params | Two SyntheticDiD constructor params (inert since 3.0.0) are removed | 3 | §7b |
 | obligation-sc-inner-budget | Two SyntheticControl constructor params (inert since the exact NNLS inner solve) warn at 4.0 and are removed at 5.0 | 2 | §7b |
 | obligation-warning-retirements | A transition `FutureWarning` stops being emitted | 1 | §7b |
-| policy-auto-cluster | TwoWayFixedEffects auto-clusters on `unit` unless you pass `cluster=` | 1 | §6 |
+| policy-auto-cluster | SpilloverDiD auto-clusters on `unit` unless you pass `cluster=`; `cluster=False` becomes the uniform explicit off-switch | 1 | §6 |
 | renames-cohort | `cohort=` becomes `first_treat=` | 1 | §3 |
 | renames-col-suffix | The `*_col` suffix is dropped across 27 parameters and one field | 27 | §3 |
 | renames-control-group | `clean_control=` becomes `control_group=` | 2 | §3 |
 | renames-dcdh | dCDH's `group=`/`controls=` become `unit=`/`covariates=` | 4 | §3 |
-| renames-level | Aggregation-level params and their accepted values unify on `level=`/`"event_study"` | 4 | §3 |
+| renames-level | Aggregation-level params and their accepted values unify on `level=`/`"event_study"` | 5 | §3 |
 | renames-post | The post-dummy `time=` becomes `post=` | 3 | §3 |
 | renames-robust-drop | `robust=` is dropped in favour of `vcov_type=` - read §3, the translation is per-estimator | 4 | §3 |
 | results-contract | A legacy sentinel field is retired in favour of the unified event-study surface | 1 | §5 |
@@ -206,12 +206,24 @@ Two changes alter results without changing any call:
 
 - **`df_convention` flips to `"cluster"`** on seven estimators. Pass `df_convention="residual"`
   to reproduce 3.x numbers exactly.
-- **Panel estimators auto-cluster at `unit`** when `cluster=` is omitted. Pass
-  **`cluster=False`** to disable it — `None` and omission both mean "auto-cluster", so
-  `cluster=None` does *not* reproduce unclustered 3.x standard errors. Cross-sectional
-  2x2 estimators stay HC-robust unless you pass `cluster=`. Note the TWFE **event-study**
-  mode has auto-clustered since 3.9 (it shipped that way with the merge), so this flip
-  changes the static and other panel paths, not that one.
+- **`SpilloverDiD` auto-clusters at `unit`** when `cluster=` is omitted — it is the one
+  estimator whose default standard errors move. Pass **`cluster=False`** for the 3.x
+  observation-level HC numbers; `None` and omission both mean "auto-cluster", so
+  `cluster=None` does *not* reproduce them. No other default moves: static and event-study
+  `TwoWayFixedEffects`, `SunAbraham`, `WooldridgeDiD`, `ImputationDiD`, `TwoStageDiD`,
+  `LPDiD` and `StackedDiD` already clustered at `unit` in 3.x, and the influence-function
+  and unit-cross-section estimators (`CallawaySantAnna`, `EfficientDiD`, `DMLDiD`,
+  `ChaisemartinDHaultfoeuille`, `LWDiD`, `HeterogeneousAdoptionDiD`, the staggered
+  `TripleDifference` mode) are unit-level by construction and keep reporting no cluster
+  metadata. Cross-sectional 2x2 estimators stay HC-robust unless you pass `cluster=`.
+  `cluster=False` becomes the explicit off-switch on every estimator whose clustering
+  is a choice (in 3.x it was accepted nowhere): on `SpilloverDiD`, `TwoWayFixedEffects`,
+  `SunAbraham`, `WooldridgeDiD` and `LPDiD` it yields the plain HC sandwich — on the
+  last four that is **new** unclustered behaviour, not a 3.x reproduction; on the
+  by-construction estimators and on `ImputationDiD`/`TwoStageDiD` it is an accepted
+  no-op (their variance is unit-level by construction, so nothing can be switched off);
+  `StackedDiD` keeps rejecting it (its `cluster` accepts only `"unit"`/`"unit_subexp"`,
+  the stacked regression clusters by construction).
 
 ## Removed functions and aliases
 
@@ -264,9 +276,21 @@ and [M-147] is an additive policy. These have no removal/deprecation fields and 
   dead no-op (it prints no alpha-based interval; the displayed confidence set is keyed on
   its own stored `gamma`), and a non-fit value now raises like the rest of the family.
 
-One pending decision: the `DIFF_DIFF_SOLVE_OLS_FASTPATH` environment default has a go/no-go due
-at 4.0 that has not been made. If it lands on, it is a numerics change and will be documented
-then; "evaluated, kept off" is an equally valid outcome, so it carries no appendix row today.
+The `DIFF_DIFF_SOLVE_OLS_FASTPATH` environment default was due a go/no-go at 4.0 ([M-008]):
+decided 2026-10-18 as **evaluated, kept off**. No numerics change — the opt-in fast path
+behaves exactly as in 3.x, and a later flip would be a major-version change on its own
+schedule. It therefore carries no appendix row.
+
+### Estimators added after 3.9
+
+`LWDiD` (3.10), `DMLDiD` (3.11), `DurationDiD` (3.12), `RDDensityTest` and the TWFE weights
+family (`attgt_weights`, `decompose_twfe_weights`, 3.13) were born on the 4.0 vocabulary, so
+none of the renames above touches them. The `df_convention` flip does not touch them either:
+they expose no such knob. `DMLDiDResults` inherits `CallawaySantAnnaResults` storage, so its
+`overall_att` family rides [M-050] with the parent. `LWDiDResults` gains the uniform
+`summary(alpha=None)` and `to_dataframe(level=...)` signatures in the conformance PR that
+precedes the removals, which also schedules the deprecation of its `pvalue`/`ci` alias
+properties (see the ledger rows added there; the aliases are silent today).
 
 ## Codemod
 
@@ -325,7 +349,7 @@ but now emit a `FutureWarning`, and they no longer appear in `dir()`/`vars()`.
 
 ## Appendix: every 4.0 change
 
-One row per ledger row that requires action at 4.0 — 108 in total. `Old` and `New` are the
+One row per ledger row that requires action at 4.0 — 111 in total. `Old` and `New` are the
 ledger's own locators. An em dash in `New` means the ledger names no successor **locator**; it
 does not mean no action is required, so read the `Fix` cell.
 
@@ -394,7 +418,7 @@ does not mean no action is required, so read the `Fix` cell.
 | M-002 | obligation-sdid-params | `diff_diff:SyntheticDiD[zeta]` | — | Drop it. It has been IGNORED since 3.0.0, so 3.x already auto-computes regularization - do NOT copy its value into `zeta_lambda=`, which activates an override that was inert and changes weights, ATT and inference. Set `zeta_lambda=` only as a deliberate new choice. |
 | M-003 | obligation-sdid-params | `diff_diff:SyntheticDiDResults.placebo_effects` | `diff_diff:SyntheticDiDResults.variance_effects` | Read `variance_effects` instead of `placebo_effects`. |
 | M-007 | obligation-warning-retirements | `diff_diff.estimators` | — | The MultiPeriodDiD `e=-1` transition FutureWarning stops being emitted; drop any warning filter that suppressed it. |
-| M-080 | policy-auto-cluster | `diff_diff:TwoWayFixedEffects[cluster]` | — | Panel estimators auto-cluster at `unit` when `cluster=` is omitted; pass `cluster=False` to disable it and keep unclustered 3.x standard errors (`None`/omission means auto-cluster, not off). |
+| M-080 | policy-auto-cluster | `diff_diff:SpilloverDiD[cluster]` | — | `SpilloverDiD` now clusters at `unit` when `cluster=` is omitted; pass `cluster=False` for the 3.x observation-level HC standard errors (`None`/omission means auto-cluster, not off). Every other panel estimator already clustered at unit or is unit-level by construction, so its numbers do not move. `cluster=False` is also newly accepted on `TwoWayFixedEffects`/`SunAbraham`/`WooldridgeDiD`/`LPDiD` (plain HC sandwich - new behaviour) and as a no-op on the by-construction estimators and `ImputationDiD`/`TwoStageDiD`; `StackedDiD` still rejects it. |
 | M-032 | renames-cohort | `diff_diff:WooldridgeDiD.fit[cohort]` | `diff_diff:WooldridgeDiD.fit[first_treat]` | Rename the keyword: `cohort=` becomes `first_treat=`. |
 | M-035 | renames-col-suffix | `diff_diff:HeterogeneousAdoptionDiD.fit[outcome_col]` | `diff_diff:HeterogeneousAdoptionDiD.fit[outcome]` | Rename the keyword: `outcome_col=` becomes `outcome=`. |
 | M-036 | renames-col-suffix | `diff_diff:HeterogeneousAdoptionDiD.fit[dose_col]` | `diff_diff:HeterogeneousAdoptionDiD.fit[dose]` | Rename the keyword: `dose_col=` becomes `dose=`. |
@@ -433,6 +457,7 @@ does not mean no action is required, so read the `Fix` cell.
 | M-086 | renames-level | `diff_diff:WooldridgeDiDResults.aggregate[type]=event` | `diff_diff:WooldridgeDiDResults.aggregate[type]=event_study` | Change the accepted value: `"event"` becomes `"event_study"`. |
 | M-087 | renames-level | `diff_diff:WooldridgeDiDResults.summary[aggregation]` | — | `summary()` unifies to the library-wide `summary(alpha=None)` signature - drop `aggregation=` and select the level on `aggregate()` instead. |
 | M-136 | renames-level | `diff_diff:LPDiDResults.to_dataframe[level]=event` | `diff_diff:LPDiDResults.to_dataframe[level]=event_study` | Change the accepted value: `"event"` becomes `"event_study"`. |
+| M-150 | renames-level | `diff_diff:WooldridgeDiDResults.to_dataframe[level]=event` | `diff_diff:WooldridgeDiDResults.to_dataframe[level]=event_study` | Change the accepted value: `"event"` becomes `"event_study"`. |
 | M-030 | renames-post | `diff_diff:DifferenceInDifferences.fit[time]` | `diff_diff:DifferenceInDifferences.fit[post]` | Rename the keyword: `time=` becomes `post=`. |
 | M-137 | renames-post | `diff_diff:permutation_test[time]` | `diff_diff:permutation_test[post]` | Rename the keyword: `time=` becomes `post=`. |
 | M-138 | renames-post | `diff_diff:leave_one_out_test[time]` | `diff_diff:leave_one_out_test[post]` | Rename the keyword: `time=` becomes `post=`. |

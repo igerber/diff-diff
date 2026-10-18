@@ -178,3 +178,50 @@ locked #663 direction); the resolver is `diff_diff.utils.resolve_tail_df`,
 and the out-of-scope roster (IF-based estimators, TripleDifference/TROP,
 Wooldridge GLM arms) is enumerated in the REGISTRY TwoWayFixedEffects
 deviation note.
+
+## Default clustering roster (decided 2026-10-18, [M-080])
+
+Measured by execution at v3.13.0 for the 4.0-cut framing (50 units x 8 periods,
+`cluster=` omitted vs `cluster="unit"`). The ledger row M-080 was written on the
+premise that static `TwoWayFixedEffects` runs HC-robust by default; it has
+auto-clustered at unit since 2026-01, so the row was re-scoped to this roster
+(spec `docs/v4-design.md` section 7). Categories: **a** default SE moves at
+4.0; **b** unit-level by construction with a `cluster` param; **c1** already
+clusters at unit by a regression-level default; **c2** defaults to unit inside
+unit-level influence-function machinery; **c3** clusters by construction with a
+restricted `cluster` vocabulary; **d** no `cluster` param; **n/a**
+cross-sectional or no clustering support.
+
+| Class | `cluster` param? | Default when omitted (v3.13.0) | `cluster=False` at 4.0 | Category |
+|---|---|---|---|---|
+| SpilloverDiD | yes | observation-level HC1 | plain HC SE (= 3.x default) | **a** - default flips to unit |
+| TwoWayFixedEffects (static) | yes | CR1 at unit (`cluster_name="unit"`, `n_clusters=None` on the analytical path - gap closed at 4.0) | plain HC sandwich (new behaviour) | c1 |
+| TwoWayFixedEffects (event-study) | yes | CR1 at unit since 3.9 (M-010) | plain HC sandwich (new behaviour) | c1 |
+| SunAbraham | yes | CR1 at unit (reports `cluster_name=None`, no `n_clusters` field - gap closed at 4.0) | plain HC sandwich (new behaviour) | c1 |
+| WooldridgeDiD | yes | CR1 at unit (`"unit"`, G) | plain HC sandwich (new behaviour) | c1 |
+| LPDiD | yes | CR1 at unit (`self.cluster or unit`; `False` currently treated as auto-cluster - bug fixed at 4.0) | plain HC sandwich (new behaviour) | c1 |
+| ImputationDiD | yes | `cluster_var = unit` inside the unit-level IF variance (`"unit"`, G) | accepted explicit no-op | c2 |
+| TwoStageDiD | yes | `cluster_var = unit` inside the unit-level IF variance (`"unit"`, G) | accepted explicit no-op | c2 |
+| StackedDiD | yes (`'unit'`/`'unit_subexp'` only) | CR1 at unit (`"unit"`, G) | REJECTED (validator) | c3 |
+| CallawaySantAnna | yes | per-unit influence functions (no G/(G-1)); `cluster_name=None` | accepted explicit no-op | b |
+| EfficientDiD | yes | per-unit EIF (no G/(G-1)); `cluster_name=None` | accepted explicit no-op | b |
+| DMLDiD | yes | per-unit IF (inherits CS); `cluster_name=None` | accepted explicit no-op | b |
+| ChaisemartinDHaultfoeuille | yes (any non-None raises) | group-level IF + multiplier bootstrap; no cluster fields | accepted explicit no-op | b |
+| TripleDifference (staggered mode) | yes (`cluster=` raises; bootstrap required) | per-unit IF; no cluster fields | accepted explicit no-op | b |
+| LWDiD | yes | HC1 on the collapsed unit cross-section (n_obs = n_units); `cluster_name=None` | accepted explicit no-op | b |
+| HeterogeneousAdoptionDiD | yes | HC1/CCT on unit-level first differences; `cluster_name=None` | accepted explicit no-op | b |
+| ContinuousDiD | no | per-unit IF; no cluster fields | - | d |
+| DurationDiD | no | unit-history bootstrap; no cluster fields | - | d |
+| SyntheticDiD, SyntheticControl, TROP, ChangesInChanges | no | native variance methods | - | d |
+| DifferenceInDifferences | yes (`unit` optional) | HC1 (2x2 stays HC-robust by spec) | plain HC (= default) | n/a |
+| TripleDifference (2x2x2 mode) | yes (`unit` not accepted) | HC1 | plain HC (= default) | n/a |
+| RegressionDiscontinuity, RDPlot, RDDensityTest | no | no clustering support | - | n/a |
+
+**Decision (2026-10-18, user):** categories b and d carry NO auto-cluster
+metadata - `cluster_name` stays `None` where the field exists and no field is
+added where it does not. Their SE formulas lack the G/(G-1) factor the explicit
+`cluster="unit"` path applies (verified: CS and EDiD `se(cluster="unit")^2 /
+se(default)^2 = 50/49` on the probe), so labelling them `"unit"` would misstate
+the formula. The 4.0 flip is therefore the SpilloverDiD default, the uniform
+`cluster=False` off-switch on categories a/b/c1/c2, and the metadata gaps named
+in the c1 rows.

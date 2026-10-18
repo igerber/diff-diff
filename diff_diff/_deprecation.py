@@ -2,8 +2,11 @@
 
 This module is a deliberate LEAF: it imports only the standard library, never
 other ``diff_diff`` modules, so every estimator module can import it without
-cycles (the ``_base.py`` precedent). It is private and unexported; the 4.0
-removal PR deletes the shims that use it.
+cycles (the ``_base.py`` precedent). It is private and unexported. The 4.0
+removal PRs delete the 3.9 shims that use it, but the module itself SURVIVES
+4.0: the 4.0 -> 5.0 ``FutureWarning`` property shims of the results-storage
+flip (ledger rows M-016 and M-050..M-058) ride ``deprecated_field_property``
+through the 5.0 window (recorded in M-050's ``code_refs``).
 
 The helpers implement the ledger's shim contract (``docs/v4-deprecations.yaml``,
 groups ``renames-*``; rules in ``docs/v4-design.md`` section 8):
