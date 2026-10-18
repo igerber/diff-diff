@@ -257,9 +257,9 @@ def _resolve(qualname_tail):
     prefix = "diff_diff"
     for part in qualname_tail.split("."):
         prefix = f"{prefix}.{part}"
-        # Prefer the real submodule at this dotted path: a package attribute
-        # can shadow a same-named submodule (diff_diff.trop is a function,
-        # while the diff_diff.trop MODULE is what holds the TROP class).
+        # Prefer the real submodule at this dotted path (the package
+        # attribute is the submodule; diff_diff.trop the MODULE is what holds
+        # the TROP class).
         try:
             obj = importlib.import_module(prefix)
             continue

@@ -17,7 +17,6 @@ from diff_diff.survey import SurveyDesign
 from diff_diff.triple_diff import (
     TripleDifference,
     TripleDifferenceResults,
-    triple_difference,
 )
 
 # Note: The library exports generate_ddd_data in diff_diff.prep, but tests use
@@ -125,7 +124,7 @@ class TestTripleDifferenceBasic:
         """Test default parameter initialization."""
         ddd = TripleDifference()
         assert ddd.estimation_method == "dr"
-        assert ddd.robust is True
+        assert ddd.vcov_type == "hc1"
         assert ddd.cluster is None
         assert ddd.alpha == 0.05
         assert ddd.pscore_trim == 0.01
@@ -135,12 +134,12 @@ class TestTripleDifferenceBasic:
         """Test custom parameter initialization."""
         ddd = TripleDifference(
             estimation_method="reg",
-            robust=False,
+            vcov_type="hc1",
             alpha=0.10,
             pscore_trim=0.05,
         )
         assert ddd.estimation_method == "reg"
-        assert ddd.robust is False
+        assert ddd.vcov_type == "hc1"
         assert ddd.alpha == 0.10
         assert ddd.pscore_trim == 0.05
 
@@ -671,57 +670,6 @@ class TestSklearnCompatibility:
 
 
 # =============================================================================
-# Convenience Function Tests
-# =============================================================================
-
-
-class TestConvenienceFunction:
-    """Test triple_difference convenience function."""
-
-    def test_basic_usage(self, simple_ddd_data):
-        """KEEP (2(d) PR-A, M-075): the deprecated wrapper still works, and warns."""
-        with pytest.warns(FutureWarning, match=r"triple_difference\(\) is deprecated"):
-            results = triple_difference(
-                simple_ddd_data,
-                outcome="outcome",
-                group="group",
-                partition="partition",
-                time="time",
-            )
-
-        assert isinstance(results, TripleDifferenceResults)
-        assert abs(results.att - 2.0) < 0.5
-
-    def test_with_method_specification(self, simple_ddd_data):
-        """KEEP (M-075): wrapper kwarg forwarding (estimation_method)."""
-        with pytest.warns(FutureWarning, match=r"triple_difference\(\) is deprecated"):
-            results = triple_difference(
-                simple_ddd_data,
-                outcome="outcome",
-                group="group",
-                partition="partition",
-                time="time",
-                estimation_method="reg",
-            )
-
-        assert results.estimation_method == "reg"
-
-    def test_with_covariates(self, ddd_data_with_covariates):
-        """KEEP (M-075): wrapper kwarg forwarding (covariates)."""
-        with pytest.warns(FutureWarning, match=r"triple_difference\(\) is deprecated"):
-            results = triple_difference(
-                ddd_data_with_covariates,
-                outcome="outcome",
-                group="group",
-                partition="partition",
-                time="time",
-                covariates=["x1", "x2"],
-            )
-
-        assert results is not None
-
-
-# =============================================================================
 # Edge Case Tests
 # =============================================================================
 
@@ -963,27 +911,6 @@ class TestRankDeficientAction:
         # Should still get valid results
         assert results is not None
         assert results.att is not None
-
-    def test_convenience_function_passes_rank_deficient_action(self, ddd_data_with_covariates):
-        """Test that triple_difference() convenience function passes rank_deficient_action."""
-        from diff_diff import triple_difference
-
-        # Add a covariate that is perfectly collinear with x1
-        ddd_data_with_covariates["x1_dup"] = ddd_data_with_covariates["x1"].copy()
-
-        # Should raise with "error" action (the wrapper warns first)
-        with pytest.warns(FutureWarning, match=r"triple_difference\(\) is deprecated"):
-            with pytest.raises(ValueError, match="[Rr]ank-deficient"):
-                triple_difference(
-                    ddd_data_with_covariates,
-                    outcome="outcome",
-                    group="group",
-                    partition="partition",
-                    time="time",
-                    estimation_method="reg",
-                    covariates=["x1", "x1_dup"],
-                    rank_deficient_action="error",
-                )
 
 
 class TestTripleDifferenceTStatNaN:
@@ -1570,38 +1497,6 @@ class TestTripleDifferenceVcovType:
         assert r1.att == r2.att
         assert r1.se == r2.se
         assert r2.vcov_type == "hc1"
-
-    # -- Convenience function threading ----------------------------------
-
-    def test_triple_difference_convenience_func_rejects_invalid_vcov_type(self):
-        """Invalid vcov_type rejected at the function entry point too."""
-        data = generate_ddd_data(n_per_cell=40, true_att=2.0, seed=59)
-        with pytest.warns(FutureWarning, match=r"triple_difference\(\) is deprecated"):
-            with pytest.raises(ValueError, match="influence-function"):
-                triple_difference(
-                    data,
-                    outcome="outcome",
-                    group="group",
-                    partition="partition",
-                    time="time",
-                    vcov_type="classical",
-                )
-
-    def test_triple_difference_convenience_func_threads_valid_vcov_type(self):
-        """Valid vcov_type='hc1' fits successfully AND lands on Results."""
-        data = generate_ddd_data(n_per_cell=40, true_att=2.0, seed=61)
-        with pytest.warns(FutureWarning, match=r"triple_difference\(\) is deprecated"):
-            res = triple_difference(
-                data,
-                outcome="outcome",
-                group="group",
-                partition="partition",
-                time="time",
-                vcov_type="hc1",
-            )
-        assert res.vcov_type == "hc1"
-        assert np.isfinite(res.att)
-        assert np.isfinite(res.se)
 
 
 class TestSummaryAlphaContract:

@@ -21,3 +21,23 @@
 
 
 
+   .. rubric:: Attributes
+
+   .. autosummary::
+
+      ~TripleDifference.estimation_method
+      ~TripleDifference.control_group
+      ~TripleDifference.alpha
+      ~TripleDifference.anticipation
+      ~TripleDifference.base_period
+      ~TripleDifference.n_bootstrap
+      ~TripleDifference.cband
+      ~TripleDifference.pscore_trim
+      ~TripleDifference.cluster
+      ~TripleDifference.rank_deficient_action
+      ~TripleDifference.epv_threshold
+      ~TripleDifference.pscore_fallback
+      ~TripleDifference.is_fitted_
+      ~TripleDifference.bootstrap_weights
+      ~TripleDifference.seed
+

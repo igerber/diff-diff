@@ -31,7 +31,6 @@ if TYPE_CHECKING:
 import numpy as np
 import pandas as pd
 
-from diff_diff._deprecation import deprecated_field_property
 from diff_diff.aggregation import AggregationMixin, AggregationResult
 from diff_diff.results import _get_significance_stars
 from diff_diff.results_base import (
@@ -331,9 +330,7 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
         filters drop groups — see the ``twfe_weights`` docstring above
         for the sample contract.
     units : list
-        Unit identifiers in the post-filter sample. (The deprecated
-        read-only alias ``groups`` warns and returns this list; removed
-        in 4.0 — row M-114.)
+        Unit identifiers in the post-filter sample.
     time_periods : list
         Time periods in the panel.
     n_obs : int
@@ -690,17 +687,11 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults, AggregationMixin):
     # in the generated __init__ (the constructor signature is public API).
     event_study_df: Optional[float] = field(default=None, repr=False)
 
-    # Deprecated read-only alias for ``units`` (row M-114; removed in 4.0).
-    # No annotation, so it stays a descriptor and never becomes a
-    # __dataclass_fields__ entry.
-    groups = deprecated_field_property("ChaisemartinDHaultfoeuilleResults", "groups", "units")
-
     def __setstate__(self, state: Dict[str, Any]) -> None:
-        """Migrate pickles created before the ``groups`` -> ``units`` rename.
+        """Migrate 3.x pickles created before the ``groups`` -> ``units`` rename.
 
-        Results pickled before row M-114 stored the list under ``groups``;
-        rewriting the key on load keeps both ``units`` and the deprecated
-        ``groups`` alias working on old pickles.
+        Results pickled under the old name stored the list under ``groups``;
+        rewriting the key on load populates ``units`` from old pickles.
         """
         if "groups" in state and "units" not in state:
             state = dict(state)

@@ -107,8 +107,8 @@ def _truncate_inner_solves(monkeypatch):
 
     The solve is exact (one NNLS), so no setting truncates it; reporting
     ``converged=False`` reaches the non-convergence paths it guards.
-    ``diff_diff.synthetic_control`` the attribute is the convenience *function*, so
-    the module is reached via importlib.
+    ``diff_diff.synthetic_control`` the attribute is the submodule; the
+    module is reached via importlib for symmetry with the other helpers.
     """
     import importlib
 
@@ -454,9 +454,9 @@ def test_single_inner_nonconvergence_excluded_from_v_ranking(monkeypatch):
     # small-MSPE fit (mspe_v << penalty), i.e. the truncated candidate did not win.
     import importlib
 
-    # NB: ``diff_diff.synthetic_control`` the attribute is the convenience *function*
-    # (it shadows the submodule, same as ``diff_diff.trop``), so reach the module via
-    # importlib to monkeypatch its module-global _inner_solve_W.
+    # NB: ``diff_diff.synthetic_control`` the attribute is the submodule (same as
+    # ``diff_diff.trop``); reach it via importlib to monkeypatch its module-global
+    # _inner_solve_W.
     sc = importlib.import_module("diff_diff.synthetic_control")
 
     df, _, _ = _make_panel()
@@ -1786,8 +1786,8 @@ def test_get_placebo_df_includes_failed_donors(monkeypatch):
     # fit by monkeypatching the per-donor refit to fail for the first two donors.)
     import importlib
 
-    # diff_diff.synthetic_control the SUBMODULE is shadowed by the re-exported
-    # synthetic_control FUNCTION on the package, so import the module explicitly.
+    # diff_diff.synthetic_control the package attribute is the SUBMODULE; import
+    # it explicitly via importlib for the monkeypatch below.
     sc = importlib.import_module("diff_diff.synthetic_control")
 
     res = _fit_for_placebo(n_donors=4)  # treated fit converges (normal settings)

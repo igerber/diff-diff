@@ -13,7 +13,6 @@ from diff_diff import (
     BaconDecompositionResults,
     Comparison2x2,
     TwoWayFixedEffects,
-    bacon_decompose,
 )
 
 
@@ -30,8 +29,8 @@ def _bacon_fit(
 ):
     """Construct-and-fit via the canonical class API (2(d) PR-A, M-076).
 
-    Migrated from the deprecated ``bacon_decompose()`` wrapper: ``weights``
-    is a constructor kwarg, everything else goes to ``fit()``.
+    Migrated from the ``bacon_decompose()`` wrapper (removed at 4.0):
+    ``weights`` is a constructor kwarg, everything else goes to ``fit()``.
     """
     return BaconDecomposition(weights=weights).fit(
         data,
@@ -322,26 +321,6 @@ class TestTWFEIntegration:
             assert len(staggered_warnings) > 0
 
 
-class TestBaconDecomposeFunction:
-    """Tests for the DEPRECATED bacon_decompose convenience wrapper.
-
-    KEEP (2(d) PR-A, M-076): these stay on the wrapper path - the
-    wrapper survives until 4.0 and only these tests exercise it here -
-    updated for its new deprecation FutureWarning.
-    """
-
-    def test_convenience_function(self):
-        """The deprecated wrapper still works, and warns."""
-        data = generate_staggered_data()
-
-        with pytest.warns(FutureWarning, match="bacon_decompose\\(\\) is deprecated"):
-            results = bacon_decompose(
-                data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
-            )
-
-        assert isinstance(results, BaconDecompositionResults)
-
-
 class TestVisualization:
     """Tests for Bacon decomposition visualization."""
 
@@ -507,23 +486,6 @@ class TestWeightsParameter:
         """Test that invalid weights parameter raises error."""
         with pytest.raises(ValueError, match="weights must be"):
             BaconDecomposition(weights="invalid")
-
-    def test_convenience_function_weights_param(self):
-        """KEEP (M-076): the deprecated wrapper's weights= routing to
-        the constructor - a property only the wrapper path exercises."""
-        data = generate_staggered_data()
-
-        with pytest.warns(FutureWarning, match="bacon_decompose\\(\\) is deprecated"):
-            results = bacon_decompose(
-                data,
-                outcome="outcome",
-                unit="unit",
-                time="time",
-                first_treat="first_treat",
-                weights="exact",
-            )
-
-        assert isinstance(results, BaconDecompositionResults)
 
     def test_twfe_decompose_weights_param(self):
         """Test that TWFE.decompose() accepts weights parameter."""

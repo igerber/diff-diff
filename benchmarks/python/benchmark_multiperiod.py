@@ -102,7 +102,7 @@ def main():
 
     if args.warmup:
         print("Warm-up fit (untimed)...")
-        MultiPeriodDiD(robust=True, cluster=args.cluster).fit(
+        MultiPeriodDiD(cluster=args.cluster).fit(
             data,
             outcome="outcome",
             treatment="treated",
@@ -112,7 +112,7 @@ def main():
             absorb=["unit"],
         )
 
-    did = MultiPeriodDiD(robust=True, cluster=args.cluster)
+    did = MultiPeriodDiD(cluster=args.cluster)
 
     with Timer() as timer:
         results = did.fit(

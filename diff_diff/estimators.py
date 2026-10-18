@@ -20,11 +20,6 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
-from diff_diff._deprecation import (
-    NOT_SUPPLIED,
-    resolve_renamed_kwarg,
-    warn_deprecated_kwarg,
-)
 from diff_diff.linalg import (
     LinearRegression,
     _absorbed_fe_vcov_scale,
@@ -89,20 +84,13 @@ class DifferenceInDifferences(BaseEstimator):
     formula : str, optional
         R-style formula for the model (e.g., "outcome ~ treated * post").
         If provided, overrides column name parameters.
-    robust : bool, optional
-        DEPRECATED legacy alias for ``vcov_type`` (row M-045; warns with
-        ``FutureWarning``, removed in 4.0 - use ``vcov_type=``).
-        ``robust=True`` maps to ``vcov_type="hc1"``; ``robust=False`` maps
-        to ``vcov_type="classical"``. Explicit ``vcov_type`` overrides
-        ``robust`` unless the pair is contradictory (e.g.
-        ``robust=False, vcov_type="hc2"`` raises).
     cluster : str, optional
         Column name for cluster-robust standard errors. Combined with
         ``vcov_type``: with ``"hc1"`` dispatches to CR1 (Liang-Zeger); with
         ``"hc2_bm"`` dispatches to CR2 Bell-McCaffrey (Pustejovsky-Tipton 2018
         symmetric-sqrt + Satterthwaite DOF).
     vcov_type : {"classical", "hc1", "hc2", "hc2_bm", "hc3", "conley"}, optional
-        Variance-covariance family. Defaults to the ``robust`` alias.
+        Variance-covariance family. Defaults to ``"hc1"``.
 
         - ``"classical"``: non-robust OLS SEs, ``sigma_hat^2 * (X'X)^{-1}``.
         - ``"hc1"``: heteroskedasticity-robust HC1 with ``n/(n-k)`` adjustment
@@ -253,7 +241,6 @@ class DifferenceInDifferences(BaseEstimator):
 
     def __init__(
         self,
-        robust: Optional[bool] = None,
         cluster: Optional[str] = None,
         vcov_type: Optional[str] = None,
         alpha: float = 0.05,
@@ -270,8 +257,8 @@ class DifferenceInDifferences(BaseEstimator):
         conley_lag_cutoff: Optional[int] = None,
         df_convention: str = "residual",
     ):
-        # Resolve vcov_type from the legacy `robust` alias via the shared
-        # helper so __init__ and set_params use identical validation logic.
+        # Resolve/validate vcov_type via the shared helper so __init__ and
+        # set_params use identical validation logic.
         from diff_diff.linalg import resolve_vcov_type
 
         validate_df_convention(df_convention)
@@ -283,24 +270,14 @@ class DifferenceInDifferences(BaseEstimator):
         if not isinstance(inference, str) or inference not in _INFERENCE_METHODS:
             raise ValueError(f"inference must be one of {_INFERENCE_METHODS}, got {inference!r}")
 
-        # `robust` is deprecated (rows M-045..M-047; removed in 4.0). None is
-        # the not-supplied sentinel: default constructions and get_params
-        # round-trips stay silent, only an explicit robust= warns. The raw
-        # arg lives at `_robust_arg` (what get_params returns); the PUBLIC
-        # `self.robust` keeps the RESOLVED legacy bool so pre-3.9 attribute
-        # readers keep seeing True/False until the 4.0 removal.
-        if robust is not None:
-            warn_deprecated_kwarg(type(self).__name__, "robust", "use vcov_type= instead")
-        self._robust_arg = robust
-        self.robust = robust if robust is not None else True
         self.cluster = cluster
-        self.vcov_type = resolve_vcov_type(robust, vcov_type)
+        self.vcov_type = resolve_vcov_type(vcov_type)
         # Preserve the raw constructor arg (possibly None) alongside the
         # resolved `vcov_type`. `get_params()` returns the raw arg so
         # sklearn clones preserve the implicit-vs-explicit distinction
-        # (and therefore the backward-compat remap). Set only in __init__
-        # and updated in ``set_params`` so the flag transitions match the
-        # user-visible parameter state.
+        # (read by the TWFE/SA/Wooldridge auto-cluster carve-outs). Set only
+        # in __init__ and updated in ``set_params`` so the flag transitions
+        # match the user-visible parameter state.
         self._vcov_type_arg = vcov_type
         self._vcov_type_explicit = vcov_type is not None
         self.alpha = alpha
@@ -341,14 +318,13 @@ class DifferenceInDifferences(BaseEstimator):
         data: pd.DataFrame,
         outcome: Optional[str] = None,
         treatment: Optional[str] = None,
-        post: Any = NOT_SUPPLIED,
+        post: Optional[str] = None,
         formula: Optional[str] = None,
         covariates: Optional[List[str]] = None,
         fixed_effects: Optional[List[str]] = None,
         absorb: Optional[List[str]] = None,
         survey_design=None,
         unit: Optional[str] = None,
-        time: Any = NOT_SUPPLIED,
     ) -> DiDResults:
         """
         Fit the Difference-in-Differences model.
@@ -419,15 +395,9 @@ class DifferenceInDifferences(BaseEstimator):
 
         >>> did.fit(data, outcome='sales', treatment='treated', post='post',
         ...         absorb=['firm_id'])
-
-        The keyword-only ``time`` parameter is a deprecated alias for
-        ``post`` (row M-030); it warns with ``FutureWarning`` and will be
-        removed in 4.0.
         """
-        post = resolve_renamed_kwarg(
-            f"{type(self).__name__}.fit", "time", time, "post", post, default=None
-        )
-        # Body-local name; the public parameter is post (M-030).
+        # Body-local name for the post-period indicator column; the public
+        # parameter is `post`.
         time = post
         # Per-fit bootstrap state: cleared up front so the result builder
         # labels inference from THIS fit only. Without the reset, a wild fit
@@ -725,13 +695,10 @@ class DifferenceInDifferences(BaseEstimator):
         if _uses_replicate and absorbed_vars:
             _lr_survey = None
 
-        # Remap implicit "classical" + cluster to CR1 for legacy-alias
-        # backward compatibility (see `_resolve_effective_vcov_type`).
-        _fit_vcov_type = (
-            "hc1"
-            if _replicate_vcov_remap
-            else self._resolve_effective_vcov_type(effective_cluster_ids)
-        )
+        # Replicate-weight survey designs replace the analytical sandwich,
+        # so the base fit always uses "hc1" there (see
+        # `_warn_replicate_vcov_ignored`); otherwise the configured family.
+        _fit_vcov_type = "hc1" if _replicate_vcov_remap else self.vcov_type
 
         # Build Conley coord/time/unit arrays when applicable. CRITICAL:
         # read from the ORIGINAL `data` frame, NOT `working_data` — `absorb`
@@ -802,10 +769,8 @@ class DifferenceInDifferences(BaseEstimator):
                         weights=survey_weights,
                     )
 
-        # Don't forward `robust=self.robust` when the vcov_type has been
-        # remapped; `robust=False + vcov_type="hc1"` would otherwise trip
-        # the conflict check inside `LinearRegression.__init__`. The
-        # remapped vcov_type is the single source of truth for this call.
+        # The fit-time vcov_type (possibly remapped to "hc1" under a
+        # replicate-weight design) is the single source of truth for this call.
         reg = LinearRegression(
             include_intercept=False,  # Intercept already in X
             cluster_ids=effective_cluster_ids if self.inference != "wild_bootstrap" else None,
@@ -993,8 +958,8 @@ class DifferenceInDifferences(BaseEstimator):
             p_val_type=p_val_type_used,
             survey_metadata=survey_metadata,
             # Report the family that actually produced the SE, which may be
-            # the remapped "hc1" (CR1) under the legacy alias path, not the
-            # stored `self.vcov_type`.
+            # the remapped "hc1" under a replicate-weight survey design, not
+            # the stored `self.vcov_type`.
             vcov_type=_fit_vcov_type,
             cluster_name=self.cluster,
             conley_lag_cutoff=(self.conley_lag_cutoff if _fit_vcov_type == "conley" else None),
@@ -1281,28 +1246,18 @@ class DifferenceInDifferences(BaseEstimator):
     # get_params/set_params come from BaseEstimator. `vcov_type`'s RAW arg
     # lives at `_vcov_type_arg` (the resolved value at `vcov_type`), and
     # get_params must return the raw one: a clone of
-    # `DifferenceInDifferences(robust=False, cluster="unit")` must behave
-    # the same as the original on a clustered fit, which requires the
-    # clone's `__init__` to see `vcov_type=None` (flagging
-    # `_vcov_type_explicit=False`) rather than the alias-resolved
-    # "classical" (which would mark it explicit and skip the CR1 remap).
-    _PARAM_ATTR_ALIASES = {"vcov_type": "_vcov_type_arg", "robust": "_robust_arg"}
+    # `DifferenceInDifferences(cluster="unit")` must behave the same as the
+    # original, which requires the clone's `__init__` to see
+    # `vcov_type=None` (flagging `_vcov_type_explicit=False`, read by the
+    # TWFE/SA/Wooldridge auto-cluster carve-outs) rather than the resolved
+    # "hc1" (which would mark it explicit). SyntheticDiD's probe re-init
+    # relies on the same alias.
+    _PARAM_ATTR_ALIASES = {"vcov_type": "_vcov_type_arg"}
     _DERIVED_CONFIG_ATTRS = (
         "vcov_type",
         "_vcov_type_arg",
         "_vcov_type_explicit",
-        "robust",
     )
-
-    @classmethod
-    def _normalize_set_params(cls, params: Dict[str, Any]) -> Dict[str, Any]:
-        # `robust=` alone re-derives `vcov_type` from the alias: the merged
-        # probe config must carry vcov_type=None so `resolve_vcov_type`
-        # re-runs on the new `robust` value instead of seeing a conflict
-        # with the previously stored raw vcov_type.
-        if "robust" in params and "vcov_type" not in params:
-            params["vcov_type"] = None
-        return params
 
     def _warn_replicate_vcov_ignored(self, stacklevel: int = 3) -> bool:
         """Warn that an explicit ``vcov_type`` has no effect under a
@@ -1342,45 +1297,6 @@ class DifferenceInDifferences(BaseEstimator):
             stacklevel=stacklevel,
         )
         return True
-
-    def _resolve_effective_vcov_type(self, effective_cluster_ids, stacklevel: int = 3) -> str:
-        """Pick the ``vcov_type`` to use for a given fit given cluster context.
-
-        Returns ``self.vcov_type`` unchanged in nearly every case. The one
-        exception is the legacy-alias path: if the user supplied
-        ``robust=False`` (or nothing) without an explicit ``vcov_type=``,
-        ``resolve_vcov_type`` stored ``"classical"`` at ``__init__``.
-        But ``"classical"`` is one-way only and the linalg validator
-        rejects it with ``cluster_ids`` set, so calls like
-        ``DifferenceInDifferences(robust=False, cluster="unit")`` that
-        previously produced CR1 inference would now fail. To preserve that
-        contract, when the stored vcov_type is implicit ``"classical"``
-        and a cluster structure is present at fit time, remap to ``"hc1"``
-        (which dispatches to CR1 cluster-robust). Emit a UserWarning so
-        the remap is not silent.
-
-        Callers should always route ``vcov_type`` through this method
-        before passing it into ``solve_ols``/``compute_robust_vcov`` so
-        subclasses (and survey-PSU-injected cluster ids) get the same
-        backward-compatible treatment.
-        """
-        if (
-            self.vcov_type == "classical"
-            and not self._vcov_type_explicit
-            and effective_cluster_ids is not None
-        ):
-            warnings.warn(
-                "robust=False with cluster=... (or an auto-injected "
-                "cluster from survey/TWFE) now maps to vcov_type='hc1' "
-                "to preserve the legacy CR1 cluster-robust behavior. "
-                "Pass vcov_type='classical' explicitly to request "
-                "non-robust SEs, or vcov_type='hc1' to silence this "
-                "warning.",
-                UserWarning,
-                stacklevel=stacklevel,
-            )
-            return "hc1"
-        return self.vcov_type
 
     def summary(self) -> str:
         """
@@ -1901,14 +1817,10 @@ class DifferenceInDifferences(BaseEstimator):
         # Determine if survey vcov should be used
         _use_survey_vcov = resolved_survey is not None and resolved_survey.needs_survey_vcov
 
-        # Remap implicit "classical" + cluster to CR1 (legacy backward compat).
-        _fit_vcov_type = (
-            "hc1"
-            if _replicate_vcov_remap_mp
-            else self._resolve_effective_vcov_type(
-                effective_cluster_ids, stacklevel=3 + _frame_offset
-            )
-        )
+        # Replicate-weight survey designs replace the analytical sandwich,
+        # so the base fit always uses "hc1" there; otherwise the configured
+        # family.
+        _fit_vcov_type = "hc1" if _replicate_vcov_remap_mp else self.vcov_type
 
         # Cluster + CR2 Bell-McCaffrey (non-survey, unweighted) shares the SAME
         # expensive CR2 precomputes (per-cluster A_g eigendecompositions, S_W,
@@ -2231,12 +2143,10 @@ class DifferenceInDifferences(BaseEstimator):
             )
             df = None
 
-        # Note: the prior homoskedastic-vcov fallback conditioned on
-        # `not self.robust` has been subsumed by the vcov_type dispatch in
-        # solve_ols above, which routes vcov_type="classical" through
-        # compute_robust_vcov's classical branch (identical math). The
-        # explicit branch is no longer needed; vcov above already matches the
-        # requested variance family.
+        # Note: there is no separate homoskedastic-vcov branch here; the
+        # vcov_type dispatch in solve_ols above routes vcov_type="classical"
+        # through compute_robust_vcov's classical branch (identical math), so
+        # vcov above already matches the requested variance family.
 
         # For hc2_bm with a non-survey fit, compute per-coefficient and
         # per-contrast Bell-McCaffrey Satterthwaite DOF so period-specific
@@ -2455,7 +2365,7 @@ class DifferenceInDifferences(BaseEstimator):
             interaction_indices=interaction_indices,
             survey_metadata=survey_metadata,
             # Report the family that actually produced the SE; may be the
-            # remapped hc1 under the legacy alias path, not self.vcov_type.
+            # remapped hc1 under a replicate-weight survey design.
             vcov_type=_fit_vcov_type,
             cluster_name=cluster_resolved,
             n_clusters=(
@@ -2493,13 +2403,6 @@ class MultiPeriodDiD(DifferenceInDifferences):
 
     Parameters
     ----------
-    robust : bool, optional
-        DEPRECATED legacy alias for ``vcov_type`` (row M-045; warns with
-        ``FutureWarning``, removed in 4.0 - use ``vcov_type=``).
-        ``robust=True`` maps to ``vcov_type="hc1"``; ``robust=False`` maps
-        to ``vcov_type="classical"``. Explicit ``vcov_type`` overrides
-        ``robust`` unless the pair is contradictory (e.g.
-        ``robust=False, vcov_type="hc2"`` raises).
     cluster : str, optional
         Column name for cluster-robust standard errors. With ``vcov_type="hc1"``
         dispatches to CR1 (Liang-Zeger). With ``vcov_type="hc2_bm"`` dispatches
@@ -2510,7 +2413,7 @@ class MultiPeriodDiD(DifferenceInDifferences):
         ``Wald_test(test="HTZ")$df_denom`` at atol=1e-10). Weighted CR2-BM
         (``survey_design=``) is a separate, still-gated path.
     vcov_type : {"classical", "hc1", "hc2", "hc2_bm", "hc3", "conley"}, optional
-        Variance-covariance family. Defaults to the ``robust`` alias.
+        Variance-covariance family. Defaults to ``"hc1"``.
 
         - ``"classical"``: non-robust OLS SEs, ``sigma_hat^2 * (X'X)^{-1}``.
         - ``"hc1"``: heteroskedasticity-robust HC1 with ``n/(n-k)`` adjustment

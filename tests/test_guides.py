@@ -374,7 +374,7 @@ class TestLLMsFullHADCoverage:
         # actual HeterogeneousAdoptionDiD.__init__ signature. Catches
         # the failure mode where the guide invents kwargs that don't
         # exist (h, b, rcond) or omits real ones (d_lower, kernel,
-        # vcov_type, robust, cluster).
+        # vcov_type, cluster).
         import inspect
 
         from diff_diff import HeterogeneousAdoptionDiD
@@ -495,11 +495,11 @@ class TestLLMsFullHADCoverage:
         had_text = text[had_start:had_end]
         # Must mention the mass-point + survey vcov requirement.
         # Accept either explicit "vcov_type" mention near "mass" wording
-        # or the explicit "hc1" / "robust=True" pairing with mass-point.
+        # or the explicit "hc1" pairing with mass-point.
         lower = had_text.lower()
         assert "vcov_type" in lower and ("mass-point" in lower or "mass_point" in lower), (
             "HAD section must document the mass-point + survey vcov "
-            "requirement: passing vcov_type='hc1' (or robust=True) is "
+            "requirement: passing vcov_type='hc1' is "
             "required on design='mass_point' under survey_design= "
             "(per had.py:3646-3658). Without this caveat the documented "
             "weighted fit example can raise NotImplementedError."
@@ -1336,4 +1336,91 @@ class TestLWDiDGuideSection:
             assert "parallel trends" in surface_text, (
                 f"{surface_name} lost 'parallel trends' from its short "
                 f"identifying-assumptions qualifier."
+            )
+
+
+# ---------------------------------------------------------------------------
+# llms-full.txt — 4.0 migration sentences name real surviving parameters
+# ---------------------------------------------------------------------------
+class TestLLMsFullMigrationSentences:
+    """Pin every "removed in 4.0 - use `x=`" sentence to the real fit() API.
+
+    A migration sentence that recommends a keyword the estimator does not
+    accept sends an agent straight into a TypeError (the fuzzy-RD line once
+    said ``treatment=`` where the surviving parameter is ``takeup=``). Each
+    case names the guide section, the fit() owner, and the old -> new pairs
+    the sentence must spell out.
+    """
+
+    import re as _re
+
+    _USE = _re.compile(r"removed in 4\.0 - use (.*?)\.$")
+    _KW = _re.compile(r"`([A-Za-z_]+)=`")
+
+    @staticmethod
+    def _migration_line(section_heading: str) -> str:
+        text = get_llm_guide("full")
+        start = text.index(section_heading)
+        nxt = text.find("\n### ", start + 1)
+        section = text[start : nxt if nxt != -1 else len(text)]
+        lines = [ln for ln in section.splitlines() if "removed in 4.0 - use" in ln]
+        assert len(lines) == 1, (
+            f"expected exactly one 4.0 migration sentence under "
+            f"{section_heading!r}, found {len(lines)}"
+        )
+        return lines[0]
+
+    @pytest.mark.parametrize(
+        "heading, owner_path, expected",
+        [
+            (
+                "### RegressionDiscontinuity",
+                ("RegressionDiscontinuity", "fit"),
+                {"outcome_col": "outcome", "running_col": "running", "treatment_col": "takeup"},
+            ),
+            (
+                "### RDPlot",
+                ("RDPlot", "fit"),
+                {"outcome_col": "outcome", "running_col": "running"},
+            ),
+            (
+                "### WooldridgeDiD",
+                ("WooldridgeDiD", "fit"),
+                {"cohort": "first_treat"},
+            ),
+        ],
+    )
+    def test_replacement_keywords_exist_and_removed_ones_do_not(
+        self, heading, owner_path, expected
+    ):
+        import inspect
+
+        import diff_diff
+
+        cls_name, method = owner_path
+        sig = inspect.signature(getattr(getattr(diff_diff, cls_name), method))
+        real = set(sig.parameters) - {"self"}
+
+        line = self._migration_line(heading)
+        m = self._USE.search(line)
+        assert m is not None, f"malformed migration sentence: {line!r}"
+        recommended = self._KW.findall(m.group(1))
+        removed = self._KW.findall(line[: m.start()])
+
+        assert set(recommended) == set(expected.values()), (
+            f"{heading}: recommended {recommended}, expected " f"{sorted(set(expected.values()))}"
+        )
+        assert set(removed) == set(expected), (
+            f"{heading}: sentence lists removed names {removed}, " f"expected {sorted(expected)}"
+        )
+        for new in recommended:
+            assert new in real, (
+                f"{heading}: the guide recommends `{new}=` but "
+                f"{cls_name}.{method}() has no such parameter "
+                f"({sorted(real)})"
+            )
+        for old in removed:
+            assert old not in real, (
+                f"{heading}: `{old}=` is described as removed but is still in "
+                f"{cls_name}.{method}()'s signature"
             )

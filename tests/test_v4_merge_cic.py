@@ -50,7 +50,6 @@ from ._capture_v4_merge_cic_oracles import make_2x2
 # --------------------------------------------------------------------------
 QDID_DEPRECATION_RE = re.escape("QDiD is deprecated and will be removed in 4.0")
 METHOD_VALUE_RE = re.escape("method must be 'cic' or 'qdid', got ")
-FIELD_DEPRECATION_RE = re.escape("ChangesInChangesResults.estimator is deprecated")
 
 FIT_KW = dict(outcome="y", treatment="treated", time="post")
 
@@ -412,28 +411,26 @@ class TestGateDDeprecation:
 
 
 # ==========================================================================
-# Gate E - the renamed results field (M-143)
+# Gate E - the renamed results field (M-143, alias REMOVED at the 4.0 cut)
 # ==========================================================================
 class TestGateEFieldShim:
     @pytest.mark.parametrize("method", ["cic", "qdid"])
     def test_method_field(self, df, method):
         assert _fit_quiet(ChangesInChanges(n_bootstrap=0, method=method), df).method == method
 
-    def test_old_name_reads_and_warns(self, df):
+    def test_old_name_removed(self, df):
+        """M-143 removal pin: the 3.9 read-only ``estimator`` alias is gone."""
         res = _fit_quiet(ChangesInChanges(n_bootstrap=0), df)
-        with pytest.warns(FutureWarning, match=FIELD_DEPRECATION_RE):
-            assert res.estimator == "cic"
+        assert "estimator" not in ChangesInChangesResults.__dataclass_fields__
+        with pytest.raises(AttributeError):
+            res.estimator
 
     def test_old_name_is_not_a_constructor_keyword(self, df):
-        """Pins the DOCUMENTED scope of M-143's deprecation window.
-
-        The window covers the READ path (the property below) and pickle
-        migration - not construction. `ChangesInChangesResults(estimator=...)`
-        raises immediately rather than warning until 4.0, matching M-094
-        (`treatment_col` -> `takeup`) and M-114 (`groups` -> `units`), neither
-        of which kept a deprecated constructor keyword. Asserted so the
-        REGISTRY note is an enforced contract rather than prose: a later
-        "helpful" constructor shim would have to change this test deliberately.
+        """`ChangesInChangesResults(estimator=...)` raises - it never was a
+        constructor keyword (M-143's 3.9 window covered the READ path and
+        pickle migration only, matching M-094 and M-114), and at 4.0 the
+        read alias is gone too. Asserted so a later "helpful" constructor
+        shim would have to change this test deliberately.
         """
         good = _fit_quiet(ChangesInChanges(n_bootstrap=0), df).to_dict()
         with pytest.raises(TypeError, match="estimator"):
@@ -456,16 +453,11 @@ class TestGateEFieldShim:
                 quantiles=None,
             )
 
-    def test_old_name_is_read_only(self, df):
-        res = _fit_quiet(ChangesInChanges(n_bootstrap=0), df)
-        with pytest.raises(AttributeError):
-            res.estimator = "qdid"
-
-    def test_to_dict_carries_both_keys(self, df):
-        """3.9 dual-key window (the M-094 twin). Both read the SAME attribute."""
+    def test_to_dict_carries_method_only(self, df):
+        """The 3.9 dual-key window (the M-094 twin) closed at 4.0: canonical key only."""
         d = _fit_quiet(ChangesInChanges(n_bootstrap=0, method="qdid"), df).to_dict()
         assert d["method"] == "qdid"
-        assert d["estimator"] == d["method"]
+        assert "estimator" not in d
 
     def test_repr_label_flipped(self, df):
         r = repr(_fit_quiet(ChangesInChanges(n_bootstrap=0), df))
@@ -480,14 +472,16 @@ class TestGateEFieldShim:
         assert_array_equal(np.asarray(clone.att), np.asarray(res.att))
 
     def test_legacy_state_migration(self, df):
+        """``__setstate__`` keeps mapping the pre-M-143 ``estimator`` key (kept at 4.0)."""
         res = _fit_quiet(ChangesInChanges(n_bootstrap=0, method="qdid"), df)
         legacy = dict(res.__dict__)
         legacy["estimator"] = legacy.pop("method")
         revived = ChangesInChangesResults.__new__(ChangesInChangesResults)
         revived.__setstate__(legacy)
         assert revived.method == "qdid"
-        with pytest.warns(FutureWarning, match=FIELD_DEPRECATION_RE):
-            assert revived.estimator == "qdid"
+        assert "estimator" not in revived.__dict__
+        with pytest.raises(AttributeError):
+            revived.estimator
 
     def test_summary_interior_range_branch(self, df):
         """Inspects summary() TEXT, not the field.
@@ -505,11 +499,12 @@ class TestGateEFieldShim:
 
     @pytest.mark.parametrize("method", ["cic", "qdid"])
     def test_canonical_surface_emits_no_deprecation(self, df, method):
-        """The ONLY thing that catches an unmigrated internal ``self.estimator``.
+        """The canonical surface renders without any deprecation noise.
 
-        The shim returns the right value, so behaviour looks correct and every
-        value assertion still passes - while every user gets a FutureWarning on
-        each summary()/repr() call, which the blanket pyproject filter hides.
+        Through 3.13 this was the ONLY thing that caught an unmigrated
+        internal ``self.estimator`` read (the shim returned the right value
+        while warning on every summary()/repr() call); at 4.0 such a read is
+        an AttributeError, and this stays as the family-wide silence pin.
         """
         res = _fit_quiet(ChangesInChanges(n_bootstrap=0, method=method), df)
         with warnings.catch_warnings():
@@ -623,27 +618,3 @@ class TestGateGConsumers:
         with warnings.catch_warnings():
             warnings.simplefilter("error", FutureWarning)
             practitioner_next_steps(res)
-
-    def test_duck_typed_legacy_results_still_route(self):
-        """Exercises the __dict__ fallback in _distributional_kind.
-
-        Cannot use the _mock_cic idiom: ``estimator`` is now a setter-less
-        property, so ``setattr`` on a real ChangesInChangesResults raises.
-        Dispatch keys on type(...).__name__, so a separate class sharing the
-        name is the supported way to build a pre-rename duck type.
-        """
-
-        class ChangesInChangesResults:  # noqa: F811 - deliberate name shadow
-            def __init__(self):
-                self.estimator = "qdid"
-                self.att = 0.5
-                self.covariates = None
-                self.n_bootstrap = 200
-                self.n_bootstrap_valid = 200
-                self.panel = False
-
-        out = _steps(ChangesInChangesResults())
-        assert any("QDiD" in s.get("label", "") + s.get("why", "") for s in out), (
-            "a legacy duck-typed result carrying only `estimator` must still reach the "
-            "QDiD branch - otherwise the __dict__ fallback is dead code"
-        )

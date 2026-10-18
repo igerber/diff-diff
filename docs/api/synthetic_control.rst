@@ -146,11 +146,6 @@ Results container for synthetic control estimation.
       ~SyntheticControlResults.get_gap_df
       ~SyntheticControlResults.get_weights_df
 
-Convenience Function
---------------------
-
-.. autofunction:: diff_diff.synthetic_control
-
 Predictors and V selection
 --------------------------
 
@@ -229,8 +224,7 @@ Basic usage with covariate and special predictors::
     gap_df = results.get_gap_df()        # period, gap, phase
     weights_df = results.get_weights_df()  # unit, weight (descending)
 
-Quick one-call estimation (the ``synthetic_control()`` wrapper is
-deprecated since 3.9 and removed in 4.0)::
+Quick one-call estimation::
 
     from diff_diff import SyntheticControl
 

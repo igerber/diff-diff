@@ -205,8 +205,8 @@ A new parameter is only complete when it is:
   forwards via `super().__init__(*args, **kwargs)` with an import-time
   `__signature__` mirror - so both inherit a new
   `DifferenceInDifferences` constructor parameter automatically;
-  `SyntheticDiD` defines its OWN signature (it forwards only
-  `robust`/`cluster`/`alpha` to `super().__init__`), so a new parent
+  `SyntheticDiD` defines its OWN signature (it forwards only `alpha` to
+  `super().__init__`, pinning `cluster=None`), so a new parent
   parameter must be explicitly mirrored — or explicitly rejected, like its
   `vcov_type`/`conley_*` guards — there, and `BaseEstimator` introspects the
   concrete signature, so an unmirrored parent param simply won't appear in

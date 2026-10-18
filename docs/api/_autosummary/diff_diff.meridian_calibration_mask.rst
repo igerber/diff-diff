@@ -1,5 +1,5 @@
 ﻿diff\_diff.meridian\_calibration\_mask
-=======================================
+======================================
 
 .. currentmodule:: diff_diff
 

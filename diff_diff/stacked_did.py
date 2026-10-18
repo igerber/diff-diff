@@ -25,11 +25,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
-from diff_diff._deprecation import (
-    NOT_SUPPLIED,
-    deprecated_field_property,
-    resolve_renamed_kwarg,
-)
+from diff_diff._deprecation import NOT_SUPPLIED
 from diff_diff.balancing import BalanceError, entropy_balance
 from diff_diff.linalg import effective_cluster_count, solve_ols
 from diff_diff.stacked_did_results import StackedDiDResults  # noqa: F401 (re-export)
@@ -43,7 +39,6 @@ from diff_diff.utils import (
 __all__ = [
     "StackedDiD",
     "StackedDiDResults",
-    "stacked_did",
 ]
 
 
@@ -73,8 +68,6 @@ class StackedDiD(BaseEstimator):
         - "not_yet_treated": Units with A_s > a + kappa_post
         - "strict": Units with A_s > a + kappa_post + kappa_pre
         - "never_treated": Only units with A_s = infinity
-        (``clean_control=`` remains accepted as a deprecated alias, row
-        M-043; FutureWarning, removed in 4.0.)
     cluster : str, default="unit"
         Clustering level for standard errors:
         - "unit": Cluster on original unit identifier
@@ -200,38 +193,12 @@ class StackedDiD(BaseEstimator):
         Difference-in-Differences. NBER Working Paper 32054.
     """
 
-    _PARAM_ATTR_ALIASES = {
-        "control_group": "_control_group_arg",
-        "clean_control": "_clean_control_arg",
-    }
-    _DERIVED_CONFIG_ATTRS = ("control_group",)
-
-    # Deprecated read-only alias for the resolved ``control_group`` config
-    # (row M-043; removed in 4.0). External attribute readers get
-    # warn+value instead of a silent AttributeError.
-    clean_control = deprecated_field_property("StackedDiD", "clean_control", "control_group")
-
-    @classmethod
-    def _normalize_set_params(cls, params: Dict[str, Any]) -> Dict[str, Any]:
-        # During the M-043 shim window `control_group`/`clean_control` are a
-        # renamed pair resolved at __init__. get_params() returns the RAW
-        # sentinel-era args, so a user migrating in place -
-        # StackedDiD(clean_control="strict").set_params(control_group=...) -
-        # would merge two supplied values and trip the both-supplied gate.
-        # Whichever of the pair the user passes wins; the other resets to
-        # its not-supplied sentinel in the merge.
-        if "control_group" in params and "clean_control" not in params:
-            params["clean_control"] = NOT_SUPPLIED
-        elif "clean_control" in params and "control_group" not in params:
-            params["control_group"] = NOT_SUPPLIED
-        return params
-
     def __init__(
         self,
         kappa_pre: int = 1,
         kappa_post: int = 1,
         weighting: str = "aggregate",
-        control_group: Any = NOT_SUPPLIED,
+        control_group: str = "not_yet_treated",
         cluster: str = "unit",
         alpha: float = 0.05,
         anticipation: int = 0,
@@ -239,26 +206,12 @@ class StackedDiD(BaseEstimator):
         vcov_type: str = "hc1",
         balance: str = "none",
         df_convention: str = "residual",
-        clean_control: Any = NOT_SUPPLIED,
     ):
         if weighting not in ("aggregate", "population", "sample_share"):
             raise ValueError(
                 f"weighting must be 'aggregate', 'population', or 'sample_share', "
                 f"got '{weighting}'"
             )
-        # M-043: clean_control= is the deprecated alias for control_group=.
-        # Raw args are stored for get_params (aliases above); the resolved
-        # value lives on self.control_group.
-        _control_group_arg = control_group
-        _clean_control_arg = clean_control
-        control_group = resolve_renamed_kwarg(
-            type(self).__name__,
-            "clean_control",
-            clean_control,
-            "control_group",
-            control_group,
-            default="not_yet_treated",
-        )
         if control_group not in ("not_yet_treated", "strict", "never_treated"):
             raise ValueError(
                 f"control_group must be 'not_yet_treated', 'strict', or "
@@ -280,8 +233,6 @@ class StackedDiD(BaseEstimator):
         self.kappa_pre = kappa_pre
         self.kappa_post = kappa_post
         self.weighting = weighting
-        self._control_group_arg = _control_group_arg
-        self._clean_control_arg = _clean_control_arg
         self.control_group = control_group
         self.cluster = cluster
         self.alpha = alpha
@@ -1698,99 +1649,3 @@ class StackedDiD(BaseEstimator):
     def print_summary(self) -> None:
         """Print summary to stdout."""
         print(self.summary())
-
-
-# =============================================================================
-# Convenience function
-# =============================================================================
-
-
-def stacked_did(
-    data: pd.DataFrame,
-    outcome: str,
-    unit: str,
-    time: str,
-    first_treat: str,
-    kappa_pre: int = 1,
-    kappa_post: int = 1,
-    aggregate: Any = NOT_SUPPLIED,
-    population: Optional[str] = None,
-    survey_design=None,
-    covariates: Optional[List[str]] = None,
-    **kwargs: Any,
-) -> StackedDiDResults:
-    """
-    Convenience function for stacked DiD estimation.
-
-    .. deprecated:: 3.9
-        ``stacked_did()`` is deprecated and will be removed in 4.0
-        (row M-072). Construct the estimator instead:
-        ``StackedDiD(...).fit(data, ...)``.
-
-    This is a shortcut for creating a StackedDiD estimator and calling fit().
-
-    Parameters
-    ----------
-    data : pd.DataFrame
-        Panel data.
-    outcome : str
-        Outcome variable column name.
-    unit : str
-        Unit identifier column name.
-    time : str
-        Time period column name.
-    first_treat : str
-        Column indicating first treatment period (0 or inf for never-treated).
-    kappa_pre : int, default=1
-        Pre-treatment event-time periods.
-    kappa_post : int, default=1
-        Post-treatment event-time periods.
-    aggregate : str, optional
-        DEPRECATED (3.9, removed in 4.0; row M-024) - the event-study
-        surface is always computed; passing this warns and changes
-        nothing. Use ``results.aggregate('event_study')`` /
-        ``results.aggregate('simple')`` post-fit.
-    population : str, optional
-        Population column for weighting="population".
-    survey_design : SurveyDesign, optional
-        Survey design specification for design-based inference.
-    covariates : list of str, optional
-        Covariate columns to balance the clean controls toward the treated
-        cohort (pass ``balance="entropy"`` via ``**kwargs`` to enable). See
-        ``StackedDiD.fit``.
-    **kwargs
-        Additional keyword arguments passed to StackedDiD constructor
-        (e.g. ``balance="entropy"``, ``weighting``, ``cluster``, ``vcov_type``).
-
-    Returns
-    -------
-    StackedDiDResults
-        Estimation results.
-
-    Examples
-    --------
-    >>> from diff_diff import stacked_did, generate_staggered_data
-    >>> data = generate_staggered_data(seed=42)
-    >>> results = stacked_did(data, 'outcome', 'unit', 'period',
-    ...                       'first_treat', kappa_pre=2, kappa_post=2)
-    >>> results.print_summary()
-    >>> es = results.aggregate('event_study')  # post-fit view (M-024)
-    """
-    warnings.warn(
-        "stacked_did() is deprecated and will be removed in 4.0; "
-        "construct the estimator instead: StackedDiD(...).fit(data, ...).",
-        FutureWarning,
-        stacklevel=2,
-    )
-    est = StackedDiD(kappa_pre=kappa_pre, kappa_post=kappa_post, **kwargs)
-    return est.fit(
-        data,
-        outcome=outcome,
-        unit=unit,
-        time=time,
-        first_treat=first_treat,
-        aggregate=aggregate,
-        population=population,
-        survey_design=survey_design,
-        covariates=covariates,
-    )

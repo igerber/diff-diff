@@ -269,7 +269,7 @@ serves a different purpose: R-parity accuracy). They complement it.
 - **Estimator + params.**
   ```python
   ChaisemartinDHaultfoeuille().fit(
-      data, outcome="y", group="group", time="period", treatment="treated",
+      data, outcome="y", unit="group", time="period", treatment="treated",
       L_max=3,
       survey_design=SurveyDesign(weights="pw", strata="stratum", psu="cluster"),
   )

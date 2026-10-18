@@ -63,11 +63,6 @@ Results container for Stacked DiD estimation.
       ~StackedDiDResults.print_summary
       ~StackedDiDResults.to_dataframe
 
-Convenience Function
---------------------
-
-.. autofunction:: diff_diff.stacked_did
-
 Example Usage
 -------------
 

@@ -82,11 +82,6 @@ Bootstrap inference results.
    :undoc-members:
    :show-inheritance:
 
-Convenience Function
---------------------
-
-.. autofunction:: diff_diff.imputation_did
-
 Example Usage
 -------------
 

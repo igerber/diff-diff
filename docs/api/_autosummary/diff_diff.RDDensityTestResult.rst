@@ -14,6 +14,7 @@
       ~RDDensityTestResult.__init__
       ~RDDensityTestResult.summary
       ~RDDensityTestResult.to_dataframe
+      ~RDDensityTestResult.to_dict
 
 
 

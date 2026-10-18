@@ -35,7 +35,6 @@
       ~SyntheticDiDResults.is_significant
       ~SyntheticDiDResults.n_bootstrap
       ~SyntheticDiDResults.noise_level
-      ~SyntheticDiDResults.placebo_effects
       ~SyntheticDiDResults.pre_fit_placebo_pvalue
       ~SyntheticDiDResults.pre_fit_placebo_rmse
       ~SyntheticDiDResults.pre_treatment_fit

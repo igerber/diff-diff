@@ -16,9 +16,9 @@ groups ``renames-*``; rules in ``docs/v4-design.md`` section 8):
   default. ``resolve_renamed_kwarg`` maps old to new with a single
   ``FutureWarning``, rejects both-supplied calls loudly, and returns the
   caller-declared default when neither is passed.
-- Dropped parameter (no successor name, e.g. ``robust``): the parameter keeps
-  its position with a ``None`` sentinel default; the constructor calls
-  ``warn_deprecated_kwarg`` when a value was actually supplied.
+- Dropped parameter (no successor name, e.g. the fit-time ``aggregate=``
+  override): the parameter keeps its position with a sentinel default; the
+  owner calls ``warn_deprecated_kwarg`` when a value was actually supplied.
 - Renamed results field: the dataclass field takes the new name and
   ``deprecated_field_property`` builds the read-only warning alias under the
   old name (a plain class attribute, so it is a descriptor but NOT a
@@ -32,8 +32,9 @@ must be called DIRECTLY from the public method that owns the parameter
 property getter).
 
 All warnings are ``FutureWarning`` (visible to end users by default) per the
-section 2 category rule: new shims warn with ``FutureWarning``; only the
-pre-existing M-001..M-003 sites keep ``DeprecationWarning``.
+section 2 category rule: new shims warn with ``FutureWarning`` (the
+pre-existing M-001..M-003 ``DeprecationWarning`` sites were removed at the
+4.0 cut).
 """
 
 import warnings
@@ -158,9 +159,9 @@ def deprecated_field_property(
 
     Assigned WITHOUT an annotation in the dataclass body, so it stays a
     plain descriptor (never a ``__dataclass_fields__`` entry). Wording
-    follows the ``SyntheticDiDResults`` renamed-field alias precedent
-    (M-003, ``diff_diff/results.py``), with the FutureWarning category the
-    ledger declares for the M-094/M-095/M-114 rows. ``removed_in`` names the
+    follows the 3.x ``SyntheticDiDResults.placebo_effects`` renamed-field
+    alias precedent (M-003, removed at 4.0), with the FutureWarning category
+    the ledger declares for renamed-field rows. ``removed_in`` names the
     release the ledger row schedules the removal for (``"4.0"`` for the 3.9
     rename sweep; ``"5.0"`` for aliases deprecated AT 4.0, e.g. the LWDiD
     ``pvalue``/``ci`` rows M-151/M-152) so the warning and the generated

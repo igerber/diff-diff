@@ -43,10 +43,6 @@ class TwoWayFixedEffects(DifferenceInDifferences):
 
     Parameters
     ----------
-    robust : bool, optional
-        DEPRECATED legacy alias inherited from
-        ``DifferenceInDifferences`` (row M-045; warns with
-        ``FutureWarning``, removed in 4.0 - use ``vcov_type=``).
     cluster : str, optional
         Column name for cluster-robust standard errors.
         If None, automatically clusters at the unit level (the `unit`
@@ -430,16 +426,14 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         # ``cluster_ids + vcov_type in ("classical","hc2")``. When the user
         # EXPLICITLY asks for one of these analytical-one-way families AND
         # does NOT set ``cluster=``, honor that choice by disabling the
-        # auto-cluster.
+        # auto-cluster. The ``_vcov_type_explicit`` flag distinguishes a
+        # user-chosen family from the implicit ``"hc1"`` default (which keeps
+        # the unit auto-cluster and dispatches to CR1 at unit).
         #
-        # When ``"classical"`` is IMPLICIT (from the legacy alias
-        # ``robust=False``), keep the unit auto-cluster so
-        # ``_resolve_effective_vcov_type`` below can remap it to ``"hc1"``
-        # and preserve the historical CR1-at-unit behavior. Wild-bootstrap
-        # inference also keeps the unit auto-cluster regardless of
-        # ``vcov_type`` (bootstrap consumes cluster structure for
-        # resampling, independent of the analytical sandwich). ``hc2_bm``
-        # also keeps the auto-cluster (routes to CR2-BM at unit).
+        # Wild-bootstrap inference also keeps the unit auto-cluster
+        # regardless of ``vcov_type`` (bootstrap consumes cluster structure
+        # for resampling, independent of the analytical sandwich).
+        # ``hc2_bm`` also keeps the auto-cluster (routes to CR2-BM at unit).
         if self.cluster is not None:
             cluster_var: Optional[str] = self.cluster
         elif (
@@ -635,18 +629,12 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         # from computing replicate vcov on already-demeaned data (demeaning depends
         # on weights, so replicate refits must re-demean at the estimator level).
         _lr_survey_twfe = None if _uses_replicate_twfe else resolved_survey
-        # Remap implicit "classical" + cluster to CR1 for legacy-alias
-        # backward compatibility. TWFE auto-clusters at unit when the user
-        # doesn't set cluster, so `robust=False` without an explicit
-        # vcov_type historically produced CR1 at unit; we preserve that.
-        # Don't forward `robust=self.robust` to LinearRegression when the
-        # remapped vcov_type disagrees; the remapped `vcov_type` is the
-        # single source of truth.
-        _fit_vcov_type = (
-            "hc1"
-            if _replicate_vcov_remap_twfe
-            else self._resolve_effective_vcov_type(survey_cluster_ids)
-        )
+        # Replicate-weight survey designs replace the analytical sandwich,
+        # so the base fit always uses "hc1" there (see
+        # `_warn_replicate_vcov_ignored`); otherwise the configured family.
+        # The fit-time `_fit_vcov_type` is the single source of truth for
+        # the LinearRegression call below.
+        _fit_vcov_type = "hc1" if _replicate_vcov_remap_twfe else self.vcov_type
 
         # Phase 2 panel-Conley: build coord array + row-aligned time/unit
         # vectors from the original (un-demeaned) data. FWL composability:

@@ -463,40 +463,6 @@ class TestMassPointSEParity:
         expected = _manual_2sls_sandwich_se(d, dy, 0.5, "hc1", cluster=cluster_ids)
         assert abs(r.se - expected) < 1e-12
 
-    def test_robust_alias_maps_to_hc1(self):
-        d, dy = _dgp_mass_point(500, seed=0)
-        panel = _make_panel(d, dy)
-        with pytest.warns(FutureWarning, match=r"\(robust=\) is deprecated"):
-            r_robust = HeterogeneousAdoptionDiD(design="mass_point", robust=True).fit(
-                panel, "outcome", "dose", "period", "unit"
-            )
-        r_hc1 = HeterogeneousAdoptionDiD(design="mass_point", vcov_type="hc1").fit(
-            panel, "outcome", "dose", "period", "unit"
-        )
-        assert r_robust.se == r_hc1.se
-
-    def test_robust_false_maps_to_classical(self):
-        d, dy = _dgp_mass_point(500, seed=0)
-        panel = _make_panel(d, dy)
-        with pytest.warns(FutureWarning, match=r"\(robust=\) is deprecated"):
-            r_robust = HeterogeneousAdoptionDiD(design="mass_point", robust=False).fit(
-                panel, "outcome", "dose", "period", "unit"
-            )
-        r_classical = HeterogeneousAdoptionDiD(design="mass_point", vcov_type="classical").fit(
-            panel, "outcome", "dose", "period", "unit"
-        )
-        assert r_robust.se == r_classical.se
-
-    def test_vcov_type_explicit_overrides_robust(self):
-        """When vcov_type is explicit, robust is ignored."""
-        d, dy = _dgp_mass_point(500, seed=0)
-        panel = _make_panel(d, dy)
-        with pytest.warns(FutureWarning, match=r"\(robust=\) is deprecated"):
-            r = HeterogeneousAdoptionDiD(
-                design="mass_point", vcov_type="classical", robust=True
-            ).fit(panel, "outcome", "dose", "period", "unit")
-        assert r.vcov_type == "classical"
-
 
 # =============================================================================
 # Criterion 6: hc2 / hc2_bm raise NotImplementedError
@@ -536,37 +502,17 @@ class TestMassPointUnsupportedVcov:
             assert any("ignored" in str(warn.message).lower() for warn in w)
         assert np.isfinite(r.att)
 
-    def test_robust_true_ignored_on_continuous_warns(self):
-        """Review P2 round 9: robust=True on continuous path must warn.
-
-        The continuous designs use the CCT-2014 robust SE unconditionally;
-        robust= is a mass-point-only backward-compat alias for vcov_type.
-        Passing robust=True on a continuous path has no effect on the
-        computed SE, so the user must get a warning that the flag was
-        ignored.
-        """
+    def test_default_vcov_type_silent_on_continuous(self):
+        """The default (unsupplied) vcov_type on a continuous path emits no
+        'ignored' warning - only an explicit mass-point-only knob does."""
         d, dy = _dgp_continuous_at_zero(300, seed=0)
         panel = _make_panel(d, dy)
-        with pytest.warns(FutureWarning, match=r"\(robust=\) is deprecated"):
-            est = HeterogeneousAdoptionDiD(design="continuous_at_zero", robust=True)
+        est = HeterogeneousAdoptionDiD(design="continuous_at_zero")
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             r = est.fit(panel, "outcome", "dose", "period", "unit")
-            robust_warnings = [warn for warn in w if "robust" in str(warn.message).lower()]
-            assert len(robust_warnings) >= 1
-        assert np.isfinite(r.att)
-
-    def test_robust_false_silent_on_continuous(self):
-        """robust=False (the default) on continuous path emits no robust-warn."""
-        d, dy = _dgp_continuous_at_zero(300, seed=0)
-        panel = _make_panel(d, dy)
-        with pytest.warns(FutureWarning, match=r"\(robust=\) is deprecated"):
-            est = HeterogeneousAdoptionDiD(design="continuous_at_zero", robust=False)
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            r = est.fit(panel, "outcome", "dose", "period", "unit")
-            robust_warnings = [warn for warn in w if "robust=True is ignored" in str(warn.message)]
-            assert len(robust_warnings) == 0
+            ignored_warnings = [warn for warn in w if "is ignored" in str(warn.message)]
+            assert len(ignored_warnings) == 0
         assert np.isfinite(r.att)
 
 
@@ -838,7 +784,6 @@ class TestSklearnCompat:
             "kernel": "triangular",
             "alpha": 0.1,
             "vcov_type": "hc1",
-            "robust": None,
             "cluster": "state",
             "n_bootstrap": 500,
             "seed": 42,
@@ -5424,7 +5369,7 @@ class TestEventStudySurveyCband:
     def test_mass_point_default_vcov_survey_rejected_static(self):
         """Review R5 P1: the effective-classical rejection must fire
         even when the user does NOT pass vcov_type explicitly — the
-        default mapping (vcov_type=None, robust=False) resolves to
+        default mapping (vcov_type=None) resolves to
         'classical', and that default must NOT silently slip through
         on the survey_design= mass-point path."""
         from diff_diff.survey import SurveyDesign
@@ -5446,7 +5391,7 @@ class TestEventStudySurveyCband:
         sd = SurveyDesign(weights="w")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
-            # Default vcov_type=None, robust=False → resolves to classical.
+            # Default vcov_type=None → resolves to classical.
             est = HeterogeneousAdoptionDiD(design="mass_point")
             with pytest.raises(NotImplementedError, match="classical"):
                 est.fit(panel, "outcome", "dose", "period", "unit", survey_design=sd)
@@ -5471,7 +5416,7 @@ class TestEventStudySurveyCband:
         panel = pd.DataFrame(rows, columns=["unit", "period", "dose", "outcome"]).assign(w=1.0)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
-            # Default vcov_type=None, robust=False.
+            # Default vcov_type=None.
             est = HeterogeneousAdoptionDiD(design="mass_point", seed=0, n_bootstrap=100)
             with pytest.raises(NotImplementedError, match="classical"):
                 est.fit(
@@ -5584,10 +5529,9 @@ class TestEventStudySurveyCband:
         assert r.cband_method == "multiplier_bootstrap"
         assert np.all(np.isfinite(r.se))
 
-    def test_mass_point_default_vcov_robust_true_survey_allowed(self):
-        """Complement: robust=True on the default path resolves to
-        hc1, so the survey_design= mass-point fit is allowed with no explicit
-        vcov_type."""
+    def test_mass_point_explicit_hc1_survey_allowed(self):
+        """Complement: an explicit vcov_type="hc1" on the mass-point path
+        is allowed with survey_design= (only classical is rejected)."""
         from diff_diff.survey import SurveyDesign
 
         rng = np.random.default_rng(62)
@@ -5607,9 +5551,7 @@ class TestEventStudySurveyCband:
         sd = SurveyDesign(weights="w")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
-            # robust= deliberately exercises the deprecated alias (M-047)
-            warnings.simplefilter("ignore", FutureWarning)
-            est = HeterogeneousAdoptionDiD(design="mass_point", robust=True)
+            est = HeterogeneousAdoptionDiD(design="mass_point", vcov_type="hc1")
             r = est.fit(panel, "outcome", "dose", "period", "unit", survey_design=sd)
         assert r.vcov_type == "hc1"
         assert r.variance_formula == "survey_binder_tsl_2sls"

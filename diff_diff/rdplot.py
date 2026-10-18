@@ -37,7 +37,6 @@ import pandas as pd
 from scipy import stats
 
 from ._base import BaseEstimator
-from ._deprecation import NOT_SUPPLIED, require_arg, resolve_renamed_kwarg
 from ._rdrobust_port import (
     _covs_gamma,
     _normalize_kernel,
@@ -476,11 +475,9 @@ class RDPlot(BaseEstimator):
     def fit(
         self,
         data: pd.DataFrame,
-        outcome: Any = NOT_SUPPLIED,
-        running: Any = NOT_SUPPLIED,
+        outcome: str,
+        running: str,
         covariates: Optional[List[str]] = None,
-        outcome_col: Any = NOT_SUPPLIED,
-        running_col: Any = NOT_SUPPLIED,
     ) -> RDPlotResult:
         """Build the RD plot quantities.
 
@@ -506,36 +503,12 @@ class RDPlot(BaseEstimator):
             same contract as ``RegressionDiscontinuity``). Per-name values
             are identical either way on full-rank covariates.
 
-        outcome_col, running_col : str, optional
-            Deprecated aliases for ``outcome`` / ``running`` (rows
-            M-088/M-089); each warns with ``FutureWarning`` and will be
-            removed in 4.0.
-
         Returns
         -------
         RDPlotResult
         """
-        qualname = "RDPlot.fit"
-        outcome = resolve_renamed_kwarg(
-            qualname,
-            "outcome_col",
-            outcome_col,
-            "outcome",
-            outcome,
-            default=NOT_SUPPLIED,
-        )
-        require_arg(qualname, "outcome", outcome)
-        running = resolve_renamed_kwarg(
-            qualname,
-            "running_col",
-            running_col,
-            "running",
-            running,
-            default=NOT_SUPPLIED,
-        )
-        require_arg(qualname, "running", running)
-        # Body-local names; the public parameters are outcome/running
-        # (M-088/M-089).
+        # Body-local column names feeding the private helpers; the public
+        # parameters are outcome/running.
         outcome_col = outcome
         running_col = running
         if covariates is not None:

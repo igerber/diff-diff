@@ -21,7 +21,6 @@ from diff_diff import (
     ChaisemartinDHaultfoeuille,
     ChaisemartinDHaultfoeuilleResults,
     DCDHBootstrapResults,
-    chaisemartin_dhaultfoeuille,
     twowayfeweights,
 )
 from diff_diff.prep import generate_reversible_did_data
@@ -200,73 +199,6 @@ class TestChaisemartinDHaultfoeuilleBasicAPI:
         est = ChaisemartinDHaultfoeuille()
         with pytest.raises(ValueError, match="Unknown parameter"):
             est.set_params(bogus_param=True)
-
-    def test_convenience_function_matches_class(self):
-        data = generate_reversible_did_data(n_groups=40, n_periods=5, seed=1)
-        results_class = ChaisemartinDHaultfoeuille(seed=1).fit(
-            data,
-            outcome="outcome",
-            unit="group",
-            time="period",
-            treatment="treatment",
-        )
-        with pytest.warns(FutureWarning, match=r"chaisemartin_dhaultfoeuille\(\) is deprecated"):
-            results_fn = chaisemartin_dhaultfoeuille(
-                data,
-                outcome="outcome",
-                group="group",
-                time="period",
-                treatment="treatment",
-                seed=1,
-            )
-        # Same point estimate
-        assert results_class.overall_att == pytest.approx(results_fn.overall_att)
-        assert results_class.overall_se == pytest.approx(results_fn.overall_se)
-
-    def test_convenience_function_routes_paths_of_interest_to_init(self):
-        """`paths_of_interest` is an __init__ kwarg; the convenience helper
-        must split it out of `**kwargs` rather than letting it fall through
-        to fit() (which would raise TypeError). Regression for the
-        signature-derived split."""
-        df = _by_path_three_path_data()
-        results_class = ChaisemartinDHaultfoeuille(
-            drop_larger_lower=False,
-            paths_of_interest=[(0, 1, 1, 1), (0, 1, 0, 0)],
-            twfe_diagnostic=False,
-            seed=42,
-        )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
-            r_class = results_class.fit(
-                df,
-                outcome="outcome",
-                unit="group",
-                time="period",
-                treatment="treatment",
-                L_max=3,
-            )
-            with pytest.warns(
-                FutureWarning, match=r"chaisemartin_dhaultfoeuille\(\) is deprecated"
-            ):
-                r_fn = chaisemartin_dhaultfoeuille(
-                    df,
-                    outcome="outcome",
-                    group="group",
-                    time="period",
-                    treatment="treatment",
-                    drop_larger_lower=False,
-                    paths_of_interest=[(0, 1, 1, 1), (0, 1, 0, 0)],
-                    twfe_diagnostic=False,
-                    seed=42,
-                    L_max=3,
-                )
-        # Both surfaces produce identical per-path effects.
-        assert list(r_fn.path_effects.keys()) == list(r_class.path_effects.keys())
-        for path in r_fn.path_effects:
-            for l_h, vals in r_fn.path_effects[path]["horizons"].items():
-                assert vals["effect"] == pytest.approx(
-                    r_class.path_effects[path]["horizons"][l_h]["effect"]
-                )
 
     def test_minimal_computation_path(self):
         # Disable everything optional; verify still works
@@ -491,20 +423,6 @@ class TestForwardCompatGates:
         est_default = ChaisemartinDHaultfoeuille(cluster=None)
         assert est_default.cluster is None
         assert est_default.get_params()["cluster"] is None
-
-        # The convenience function also rejects (forward-compat gate
-        # propagates through the wrapper at __init__ time; the wrapper
-        # deprecation warning fires first)
-        with pytest.warns(FutureWarning, match=r"chaisemartin_dhaultfoeuille\(\) is deprecated"):
-            with pytest.raises(NotImplementedError, match=pattern):
-                chaisemartin_dhaultfoeuille(
-                    data,
-                    outcome="outcome",
-                    group="group",
-                    time="period",
-                    treatment="treatment",
-                    cluster="state",
-                )
 
     def test_rank_deficient_action_error_raises_on_fitted_twfe(self):
         """
@@ -10247,9 +10165,8 @@ class TestByPathSurveyDesignAnalytical:
 
         from diff_diff.survey import SurveyDesign
 
-        # The top-level `diff_diff` package re-exports
-        # `chaisemartin_dhaultfoeuille` as the convenience function,
-        # shadowing the module of the same name. Use importlib to
+        # The top-level `diff_diff` package attribute
+        # `chaisemartin_dhaultfoeuille` is the submodule. Use importlib to
         # access the module object explicitly so mock.patch.object
         # operates on the correct namespace.
         _cd_mod = importlib.import_module("diff_diff.chaisemartin_dhaultfoeuille")

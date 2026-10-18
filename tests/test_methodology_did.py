@@ -664,7 +664,7 @@ class TestSEVerification:
         data = generate_heteroskedastic_did_data(n_units=200, treatment_effect=3.0, seed=42)
 
         did_hc1 = DifferenceInDifferences()
-        did_classical = DifferenceInDifferences(robust=False)
+        did_classical = DifferenceInDifferences(vcov_type="classical")
 
         results_hc1 = did_hc1.fit(data, outcome="outcome", treatment="treated", post="post")
         results_classical = did_classical.fit(
@@ -1336,7 +1336,7 @@ class TestGetSetParams:
     def test_get_params_returns_all_parameters(self):
         """Test that get_params returns all constructor parameters."""
         did = DifferenceInDifferences(
-            robust=False,
+            vcov_type="hc1",
             cluster="cluster_id",
             alpha=0.10,
             inference="wild_bootstrap",
@@ -1348,7 +1348,7 @@ class TestGetSetParams:
 
         params = did.get_params()
 
-        assert params["robust"] is False
+        assert params["vcov_type"] == "hc1"
         assert params["cluster"] == "cluster_id"
         assert params["alpha"] == 0.10
         assert params["inference"] == "wild_bootstrap"
@@ -1382,16 +1382,16 @@ class TestGetSetParams:
         """Test that changed parameters actually affect estimation."""
         data = generate_heteroskedastic_did_data(n_units=200, seed=42)
 
-        did_default = DifferenceInDifferences()  # robust=True by default
+        did_default = DifferenceInDifferences()  # vcov_type="hc1" by default
         did_classical = DifferenceInDifferences()
-        did_classical.set_params(robust=False)
+        did_classical.set_params(vcov_type="classical")
 
         results_default = did_default.fit(data, outcome="outcome", treatment="treated", post="post")
         results_classical = did_classical.fit(
             data, outcome="outcome", treatment="treated", post="post"
         )
 
-        # VCoV should differ (robust vs classical)
+        # VCoV should differ (HC1 vs classical)
         assert results_default.vcov is not None
         assert results_classical.vcov is not None
         assert not np.allclose(results_default.vcov, results_classical.vcov)

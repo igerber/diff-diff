@@ -1060,10 +1060,10 @@ class TestLinearRegression:
         assert y_pred_new.shape == (10,)
 
     def test_robust_standard_errors(self, simple_data):
-        """Test that robust=True computes HC1 standard errors."""
+        """Test that the default vcov_type="hc1" computes HC1 standard errors."""
         X, y, _ = simple_data
         reg_robust = LinearRegression().fit(X, y)
-        reg_classical = LinearRegression(robust=False).fit(X, y)
+        reg_classical = LinearRegression(vcov_type="classical").fit(X, y)
 
         # SEs should differ
         se_robust = reg_robust.get_se(1)

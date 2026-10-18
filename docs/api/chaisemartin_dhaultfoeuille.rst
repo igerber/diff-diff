@@ -13,7 +13,7 @@ This module implements the methodology from de Chaisemartin & D'Haultfœuille
 ``DID_l`` for ``l = 1..L_max`` via the ``L_max`` parameter, with normalized
 estimator ``DID^n_l``, cost-benefit aggregate ``delta``, dynamic placebos
 ``DID^{pl}_l``, and sup-t simultaneous confidence bands; residualization-style
-covariate adjustment (``controls``); group-specific linear trends
+covariate adjustment (``covariates``); group-specific linear trends
 (``trends_linear``); state-set-specific trends (``trends_nonparam``);
 heterogeneity testing; non-binary treatment; HonestDiD sensitivity
 integration on placebos; survey support via Taylor-series linearization
@@ -172,11 +172,6 @@ Multiplier-bootstrap inference results, populated when ``n_bootstrap > 0``.
    :members:
    :undoc-members:
    :show-inheritance:
-
-Convenience Function
---------------------
-
-.. autofunction:: diff_diff.chaisemartin_dhaultfoeuille
 
 Standalone TWFE Decomposition Diagnostic
 ----------------------------------------

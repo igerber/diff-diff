@@ -126,7 +126,8 @@ mode is the static ATT would make the name carry altered meaning. `SDDD` dies
 with its class [M-013] [M-064]. `QDiDResults` dies with QDiD [M-061].
 **Alias diet (2026-07-31; shipped in 3.9 by 2(d) PR-A):** `CDiD`,
 `Stacked` and `Gardner` are
-retired — [M-132]..[M-134] — deprecated 3.9, removed 4.0. Their target classes
+retired — [M-132]..[M-134] — deprecated 3.9, removed 4.0 (retired at the 4.0
+cut by PR 2 together with the `__getattr__` mechanism [M-135]). Their target classes
 survive, so no parent-class shim can carry the warning; the 3.9 FutureWarning
 rides a module-level `__getattr__` [M-135]. The 3.9 consequence: the three
 names leave module globals (gone from `dir()` and static autocomplete) while
@@ -1011,7 +1012,7 @@ its rows terminal and names them in its changelog fragment.
    [M-153]), rows for its `pvalue`/`ci` aliases [M-151] [M-152] (lifecycle in
    the rows, on the [M-148]/[M-149] same-PR precedent), DurationDiD
    `aggregate("simple")`, `RDDensityTestResult.to_dict()`. Shipped.
-2. Mechanical shim removals: the rename rows, the wrapper functions, the
+2. Mechanical shim removals (SHIPPED, PR 2): the rename rows, the wrapper functions, the
    alias diet, the SyntheticDiD params, the legacy-CR1 remap branches named on
    [M-045]/[M-115]; `_deprecation.py` stays (section 8 rule 11 corollary).
 3. Fit-time `aggregate=`/`balance_e=` removals, plus the runtime messages that
@@ -1202,6 +1203,16 @@ or `evaluate` -> `done`. Terminal rows (`removed`/`done`) keep asserting
 forever - a removed symbol resurrecting is a test failure.
 
 **Assertion semantics (enforced by `tests/test_v4_matrix.py`).**
+- Cut-PR-2 probe clarifications (2026-10-18): at `removed`, a `function`
+  row whose top-level `diff_diff:Name` resolves to a MODULE object counts as
+  absent (four 3.9 wrappers - `trop`, `synthetic_control`, `stacked_did`,
+  `chaisemartin_dhaultfoeuille` - shared their submodule's name, so after the
+  deletion the package attribute is the submodule); and a `param` row whose
+  parameter is absent from the EXPLICIT signature counts as removed even when
+  the callable takes `**kwargs` (`permutation_test`/`leave_one_out_test`) -
+  the `shimmed` state proved explicit presence, so the explicit parameter's
+  disappearance is the observable transition. Both relaxations apply ONLY at
+  `removed`; `planned`/`shimmed` keep the hard failures.
 - `param`/`class`/`function`: `planned` = old resolves AND new does NOT
   resolve; `shimmed` = both resolve + `test_ref` exists; `removed` = old
   absent, new (if non-null) resolves, `test_ref` exists.

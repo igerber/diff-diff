@@ -115,8 +115,8 @@ ChangesInChangesResults
 -----------------------
 
 Results container shared by both estimators (the ``method`` field records
-which produced it - the pre-3.9 name ``estimator`` still reads it with a
-``FutureWarning`` until 4.0; ``QDiDResults`` is an alias of this class).
+which produced it; the pre-3.9 name ``estimator`` was removed in 4.0;
+``QDiDResults`` is an alias of this class).
 
 .. autoclass:: diff_diff.changes_in_changes_results.ChangesInChangesResults
    :no-index:

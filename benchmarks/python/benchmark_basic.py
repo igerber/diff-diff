@@ -94,12 +94,12 @@ def main():
 
     if args.warmup:
         print("Warm-up fit (untimed)...")
-        DifferenceInDifferences(robust=True, cluster=args.cluster).fit(
+        DifferenceInDifferences(cluster=args.cluster).fit(
             data, formula="outcome ~ treated * post"
         )
 
     # Use DifferenceInDifferences with formula to match R's fixest::feols
-    did = DifferenceInDifferences(robust=True, cluster=args.cluster)
+    did = DifferenceInDifferences(cluster=args.cluster)
 
     with Timer() as timer:
         results = did.fit(

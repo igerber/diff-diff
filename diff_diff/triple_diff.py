@@ -29,7 +29,7 @@ Reference:
 
 import warnings
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -39,7 +39,6 @@ from diff_diff._deprecation import (
     NOT_SUPPLIED,
     require_arg,
     resolve_renamed_kwarg,
-    warn_deprecated_kwarg,
 )
 from diff_diff._staggered_triple_diff_engine import _StaggeredTripleDiffEngineMixin
 from diff_diff.linalg import _rank_guarded_inv, solve_logit, solve_ols
@@ -60,10 +59,6 @@ from diff_diff.utils import (
     validate_n_bootstrap,
     validate_pscore_trim,
 )
-
-if TYPE_CHECKING:
-    from diff_diff.survey import SurveyDesign
-
 
 _MIN_CELL_SIZE = 10
 
@@ -429,11 +424,6 @@ class TripleDifference(
           model or propensity score model is correctly specified.
         - "reg": Regression adjustment (outcome regression).
         - "ipw": Inverse probability weighting.
-    robust : bool, optional
-        DEPRECATED (row M-046; warns with ``FutureWarning``, removed in
-        4.0 - use ``vcov_type=``). Influence-function SEs are inherently
-        robust to heteroskedasticity, so the flag never had an effect
-        here; it was retained only for API compatibility.
     cluster : str, optional
         Column name for cluster-robust standard errors. When provided,
         SEs are computed using the Liang-Zeger cluster-robust variance
@@ -605,13 +595,9 @@ class TripleDifference(
     # literal there would misname whichever surface was actually fit.
     _BOOTSTRAP_LABEL: str = "TripleDifference"
 
-    _PARAM_ATTR_ALIASES = {"robust": "_robust_arg"}
-    _DERIVED_CONFIG_ATTRS = ("robust",)
-
     def __init__(
         self,
         estimation_method: str = "dr",
-        robust: Optional[bool] = None,
         cluster: Optional[str] = None,
         vcov_type: str = "hc1",
         alpha: float = 0.05,
@@ -686,12 +672,6 @@ class TripleDifference(
         self._validate_vcov_type(vcov_type)
 
         self.estimation_method = estimation_method
-        # `robust` is deprecated (row M-046; removed in 4.0): None sentinel,
-        # raw arg at `_robust_arg`, resolved legacy bool on the public attr.
-        if robust is not None:
-            warn_deprecated_kwarg(type(self).__name__, "robust", "use vcov_type= instead")
-        self._robust_arg = robust
-        self.robust = robust if robust is not None else True
         self.cluster = cluster
         self.vcov_type = vcov_type
         self.alpha = alpha
@@ -1140,20 +1120,14 @@ class TripleDifference(
             )
 
         # Step 2: the reverse constructor guard, the mirror of the 2x2x2 one.
-        # The two arms have DIFFERENT reachability. `robust=` is constructible
-        # (it only warns), so that arm is reached normally. `vcov_type` is
-        # validated eagerly in __init__ and by set_params' probe re-init, so a
-        # bad value never survives construction - its only live route is direct
-        # attribute mutation, the same bypass __init__'s comment documents. That
-        # makes this arm the staggered mode's direct-mutation guard, not dead
-        # code, and it is why no separate _validate_vcov_type call is needed.
+        # `vcov_type` is validated eagerly in __init__ and by set_params' probe
+        # re-init, so a bad value never survives construction - its only live
+        # route is direct attribute mutation, the same bypass __init__'s
+        # comment documents. That makes this arm the staggered mode's
+        # direct-mutation guard, not dead code, and it is why no separate
+        # _validate_vcov_type call is needed.
         _2x2x2_ctor = [
-            name
-            for name, non_default in (
-                ("robust", self._robust_arg is not None),
-                ("vcov_type", self.vcov_type != "hc1"),
-            )
-            if non_default
+            name for name, non_default in (("vcov_type", self.vcov_type != "hc1"),) if non_default
         ]
         if _2x2x2_ctor:
             raise ValueError(
@@ -2447,127 +2421,3 @@ class TripleDifference(
     def print_summary(self) -> None:
         """Print summary to stdout."""
         print(self.summary())
-
-
-# =============================================================================
-# Convenience function
-# =============================================================================
-
-
-def triple_difference(
-    data: pd.DataFrame,
-    outcome: str,
-    group: str,
-    partition: str,
-    time: str,
-    covariates: Optional[List[str]] = None,
-    estimation_method: str = "dr",
-    robust: Optional[bool] = None,
-    cluster: Optional[str] = None,
-    vcov_type: str = "hc1",
-    alpha: float = 0.05,
-    rank_deficient_action: str = "warn",
-    epv_threshold: float = 10,
-    pscore_fallback: str = "error",
-    survey_design: Optional["SurveyDesign"] = None,
-) -> TripleDifferenceResults:
-    """
-    Estimate Triple Difference (DDD) treatment effect.
-
-    .. deprecated:: 3.9
-        ``triple_difference()`` is deprecated and will be removed in 4.0
-        (row M-075). Construct the estimator instead:
-        ``TripleDifference(...).fit(data, ...)``.
-
-    Convenience function that creates a TripleDifference estimator and
-    fits it to the data in one step.
-
-    Parameters
-    ----------
-    data : pd.DataFrame
-        DataFrame containing all variables.
-    outcome : str
-        Name of the outcome variable column.
-    group : str
-        Name of the group indicator column (0/1).
-        1 = treated group (e.g., states that enacted policy).
-    partition : str
-        Name of the partition/eligibility indicator column (0/1).
-        1 = eligible partition (e.g., women, targeted demographic).
-    time : str
-        Name of the time period indicator column (0/1).
-        1 = post-treatment period.
-    covariates : list of str, optional
-        List of covariate column names to adjust for.
-    estimation_method : str, default="dr"
-        Estimation method: "dr" (doubly robust), "reg" (regression),
-        or "ipw" (inverse probability weighting).
-    robust : bool, optional
-        DEPRECATED (row M-046; warns with ``FutureWarning``, removed in
-        4.0 - use ``vcov_type=``). Influence-function SEs are inherently
-        robust to heteroskedasticity, so the flag never had an effect
-        here; it was retained only for API compatibility.
-    cluster : str, optional
-        Column name for cluster-robust standard errors.
-    vcov_type : str, default="hc1"
-        Variance estimator. Permanently narrow to ``{"hc1"}`` per the
-        IF-based variance decomposition; ``classical``/``hc2``/``hc2_bm``
-        are rejected at ``__init__`` and ``conley`` is deferred. See the
-        ``TripleDifference`` class docstring for the structural taxonomy.
-    alpha : float, default=0.05
-        Significance level for confidence intervals.
-    rank_deficient_action : str, default="warn"
-        Action when design matrix is rank-deficient:
-        - "warn": Issue warning and drop linearly dependent columns (default)
-        - "error": Raise ValueError
-        - "silent": Drop columns silently without warning
-    epv_threshold : float, default=10
-        Events Per Variable threshold for propensity score logit.
-    pscore_fallback : str, default="error"
-        Action when propensity score estimation fails:
-        - "error": Raise (default)
-        - "unconditional": Fall back to unconditional propensity
-
-    Returns
-    -------
-    TripleDifferenceResults
-        Object containing estimation results.
-
-    Examples
-    --------
-    >>> from diff_diff import triple_difference
-    >>> results = triple_difference(
-    ...     data,
-    ...     outcome='earnings',
-    ...     group='policy_state',
-    ...     partition='female',
-    ...     time='post_policy',
-    ...     covariates=['age', 'education']
-    ... )
-    >>> print(f"ATT: {results.att:.3f} (SE: {results.se:.3f})")
-    """
-    warnings.warn(
-        "triple_difference() is deprecated and will be removed in 4.0; "
-        "construct the estimator instead: TripleDifference(...).fit(data, ...).",
-        FutureWarning,
-        stacklevel=2,
-    )
-    estimator = TripleDifference(
-        estimation_method=estimation_method,
-        robust=robust,
-        cluster=cluster,
-        vcov_type=vcov_type,
-        alpha=alpha,
-        rank_deficient_action=rank_deficient_action,
-        epv_threshold=epv_threshold,
-        pscore_fallback=pscore_fallback,
-    )
-    return estimator.fit(
-        data=data,
-        outcome=outcome,
-        group=group,
-        partition=partition,
-        post=time,
-        covariates=covariates,
-        survey_design=survey_design,
-    )

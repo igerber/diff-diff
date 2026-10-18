@@ -452,31 +452,6 @@ class TestImputationDiDSurvey:
             r1.overall_se, r2.overall_se, atol=1e-8
         ), f"SE not scale-invariant (covariates): {r1.overall_se} vs {r2.overall_se}"
 
-    def test_wrapper_imputation_did_with_survey(self, staggered_survey_data):
-        """imputation_did() wrapper forwards survey_design correctly."""
-        from diff_diff import imputation_did
-
-        sd = SurveyDesign(weights="weight")
-        with pytest.warns(FutureWarning, match=r"imputation_did\(\) is deprecated"):
-            r_wrapper = imputation_did(
-                staggered_survey_data,
-                "outcome",
-                "unit",
-                "period",
-                "first_treat",
-                survey_design=sd,
-            )
-        r_direct = ImputationDiD().fit(
-            staggered_survey_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            survey_design=sd,
-        )
-        assert np.isclose(r_wrapper.overall_att, r_direct.overall_att, atol=1e-10)
-        assert r_wrapper.survey_metadata is not None
-
     def test_aggregate_group_with_survey(self, staggered_survey_data, survey_design_weights_only):
         """aggregate='group' works with survey design."""
         result = ImputationDiD().fit(
@@ -666,31 +641,6 @@ class TestTwoStageDiDSurvey:
         summary = result.summary()
         assert "Survey Design" in summary
         assert "pweight" in summary
-
-    def test_wrapper_two_stage_did_with_survey(self, staggered_survey_data):
-        """two_stage_did() wrapper forwards survey_design correctly."""
-        from diff_diff import two_stage_did
-
-        sd = SurveyDesign(weights="weight")
-        with pytest.warns(FutureWarning, match=r"two_stage_did\(\) is deprecated"):
-            r_wrapper = two_stage_did(
-                staggered_survey_data,
-                "outcome",
-                "unit",
-                "period",
-                "first_treat",
-                survey_design=sd,
-            )
-        r_direct = TwoStageDiD().fit(
-            staggered_survey_data,
-            "outcome",
-            "unit",
-            "period",
-            "first_treat",
-            survey_design=sd,
-        )
-        assert np.isclose(r_wrapper.overall_att, r_direct.overall_att, atol=1e-10)
-        assert r_wrapper.survey_metadata is not None
 
     def test_aggregate_group_with_survey(self, staggered_survey_data, survey_design_weights_only):
         """aggregate='group' works with survey design."""

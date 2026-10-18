@@ -23,10 +23,19 @@
 
    .. autosummary::
 
-      ~StaggeredTripleDifference.n_bootstrap
-      ~StaggeredTripleDifference.bootstrap_weights
+      ~StaggeredTripleDifference.estimation_method
+      ~StaggeredTripleDifference.control_group
       ~StaggeredTripleDifference.alpha
-      ~StaggeredTripleDifference.seed
       ~StaggeredTripleDifference.anticipation
       ~StaggeredTripleDifference.base_period
+      ~StaggeredTripleDifference.n_bootstrap
+      ~StaggeredTripleDifference.cband
+      ~StaggeredTripleDifference.pscore_trim
+      ~StaggeredTripleDifference.cluster
+      ~StaggeredTripleDifference.rank_deficient_action
+      ~StaggeredTripleDifference.epv_threshold
+      ~StaggeredTripleDifference.pscore_fallback
+      ~StaggeredTripleDifference.is_fitted_
+      ~StaggeredTripleDifference.bootstrap_weights
+      ~StaggeredTripleDifference.seed
 

@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 from diff_diff import SurveyDesign, SyntheticDiD
-from diff_diff.trop import TROP, trop
+from diff_diff.trop import TROP
 
 # =============================================================================
 # Shared Fixtures
@@ -2075,22 +2075,6 @@ class TestTROPSurvey:
                 time="time",
                 survey_design=SurveyDesign(weights="bad_weight"),
             )
-
-    def test_convenience_function_with_survey(self, trop_survey_data, survey_design_weights):
-        """KEEP (2(d) PR-A, M-073): the deprecated wrapper threads survey_design."""
-        with pytest.warns(FutureWarning, match=r"trop\(\) is deprecated"):
-            result = trop(
-                trop_survey_data,
-                outcome="outcome",
-                treatment="D",
-                unit="unit",
-                time="time",
-                survey_design=survey_design_weights,
-                n_bootstrap=10,
-                seed=42,
-                max_iter=5,
-            )
-        assert result.survey_metadata is not None
 
     def test_to_dict_includes_survey(self, trop_survey_data, survey_design_weights):
         """to_dict() includes survey metadata fields."""

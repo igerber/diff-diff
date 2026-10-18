@@ -1,14 +1,19 @@
-"""Behavioral pins for the 2(c)-ii semantic rename wave (3.9 shims).
+"""Removal pins for the 2(c)-ii semantic rename wave (3.9 shims, removed 4.0).
 
-The dedicated shim test file required by the ledger rows this PR flips
-(``test_ref`` on M-030/M-031, M-043/M-095, M-044/M-086/M-087,
-M-045..M-047/M-115, M-084, and the missed-rename amendments M-136..M-138 in
-``docs/v4-deprecations.yaml``). Per the section 2 per-PR gate, every shimmed
-surface pins: the old spelling's ``FutureWarning`` with the migration
-message, canonical/positional silence, the both-supplied ``ValueError``,
-bit-exact routing parity, the renamed-field trio (dataclass shape + warning
-property + pickle migration + dual serialized keys), and the raw-keep rows'
-probe re-warn counts.
+The dedicated ``test_ref`` file for ledger rows M-030/M-031, M-043/M-095,
+M-044/M-086/M-087, M-045..M-047/M-115, M-084, and the missed-rename
+amendments M-136..M-138 in ``docs/v4-deprecations.yaml``. At the 4.0 cut
+(PR 2) every row but M-031 flipped to ``removed``; per surface this file now
+pins a canonical/positional positive smoke plus the removal evidence:
+``TypeError`` matching ``"unexpected keyword argument '<old>'"`` for renamed
+params, ``AttributeError`` for removed estimator/results attributes,
+``ValueError`` for removed value spellings and ``set_params`` keys, and the
+canonical-only serialized keys. ``__setstate__`` pickle migrations are KEPT
+(spec section 5: 3.x pickles load under 4.0) and stay pinned.
+
+M-031 (``TripleDifference.fit(time=)``) stays shimmed: ``time`` keeps a
+calendar meaning there and its 4.0 enforcement is M-083 (PR 4), so the
+``test_ddd_*`` pins keep the 3.9 shape.
 """
 
 import pickle
@@ -18,12 +23,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from diff_diff._deprecation import _NotSupplied
-
 
 def _assert_no_future_warning(record):
     fw = [w for w in record if issubclass(w.category, FutureWarning)]
     assert fw == [], [str(w.message) for w in fw]
+
+
+def _unexpected(old: str) -> str:
+    return rf"unexpected keyword argument '{old}'"
 
 
 @pytest.fixture(scope="module")
@@ -97,7 +104,8 @@ def etwfe_result():
 
 
 # ---------------------------------------------------------------------------
-# M-030 / M-031: DiD.fit and TripleDifference.fit time= -> post=
+# M-030 (removed): DiD.fit time= -> post=; M-031 (still shimmed):
+# TripleDifference.fit time= -> post=
 # ---------------------------------------------------------------------------
 
 
@@ -113,25 +121,13 @@ class TestTimeToPost:
         _assert_no_future_warning(record)
         assert r_kw.att == r_pos.att == r_form.att
 
-    def test_did_time_warns_and_routes_identically(self, did_2x2):
+    def test_did_time_raises_typeerror(self, did_2x2):
+        """M-030 removal pin: ``time=`` is no longer a ``DiD.fit`` parameter."""
         from diff_diff import DifferenceInDifferences as DiD
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            r_new = DiD().fit(did_2x2, outcome="y", treatment="d", post="p")
-        with pytest.warns(
-            FutureWarning,
-            match=r"DifferenceInDifferences\.fit\(time=\) is deprecated and "
-            r"will be removed in 4\.0; use post= instead\.",
-        ):
-            r_old = DiD().fit(did_2x2, outcome="y", treatment="d", time="p")
-        assert r_old.att == r_new.att
-        assert r_old.se == r_new.se
-
-    def test_did_both_supplied_raises(self, did_2x2):
-        from diff_diff import DifferenceInDifferences as DiD
-
-        with pytest.raises(ValueError, match=r"pass only post="):
+        with pytest.raises(TypeError, match=_unexpected("time")):
+            DiD().fit(did_2x2, outcome="y", treatment="d", time="p")
+        with pytest.raises(TypeError, match=_unexpected("time")):
             DiD().fit(did_2x2, outcome="y", treatment="d", post="p", time="p")
 
     def test_ddd_time_warns_with_calendar_note(self, ddd_2x2x2):
@@ -151,62 +147,55 @@ class TestTimeToPost:
         with pytest.raises(TypeError, match=r"missing required argument: 'post'"):
             TripleDifference().fit(ddd_2x2x2, "y", "g", "q")
 
-    def test_wrapper_forwards_time_without_rename_warning(self, ddd_2x2x2):
-        # Flipped BY DESIGN in the 2(d) PR-A (M-075): the wrapper now
-        # fires its OWN deprecation FutureWarning, but the contract this
-        # test exists for is unchanged and only the wrapper path can
-        # express it - the wrapper's legacy positional `time` argument
-        # maps onto the renamed `post=` fit kwarg WITHOUT tripping
-        # M-031's inner rename warning. So: exactly ONE FutureWarning,
-        # the wrapper's, never the rename shim's.
-        from diff_diff.triple_diff import triple_difference
-
-        with warnings.catch_warnings(record=True) as record:
-            warnings.simplefilter("always")
-            r = triple_difference(ddd_2x2x2, "y", "g", "q", "t")
-        fw = [w for w in record if issubclass(w.category, FutureWarning)]
-        assert len(fw) == 1, [str(w.message) for w in fw]
-        assert "triple_difference() is deprecated" in str(fw[0].message)
-        assert "time=" not in str(fw[0].message)
-        assert np.isfinite(r.att)
-
 
 # ---------------------------------------------------------------------------
-# M-137 / M-138: permutation_test / leave_one_out_test time= -> post=
+# M-137 / M-138 (removed): permutation_test / leave_one_out_test time= -> post=
 # ---------------------------------------------------------------------------
 
 
 class TestDiagnosticsTimeToPost:
-    def test_permutation_rename(self, placebo_panel):
+    """Both functions take ``**estimator_kwargs``, so a stray ``time=`` has
+    two loud failure shapes: without ``post=`` Python's own missing-argument
+    error fires first; with ``post=`` the kwarg reaches
+    ``DifferenceInDifferences(time=...)`` and is rejected there."""
+
+    def test_permutation_canonical_and_positional_silent(self, placebo_panel):
         from diff_diff import permutation_test
 
         with warnings.catch_warnings(record=True) as record:
             warnings.simplefilter("always")
-            r_new = permutation_test(
+            r_kw = permutation_test(
                 placebo_panel, "y", "d", post="p", unit="u", n_permutations=50, seed=1
             )
             r_pos = permutation_test(placebo_panel, "y", "d", "p", "u", n_permutations=50, seed=1)
         _assert_no_future_warning(record)
-        with pytest.warns(FutureWarning, match=r"permutation_test\(time=\) is deprecated"):
-            r_old = permutation_test(
-                placebo_panel, "y", "d", time="p", unit="u", n_permutations=50, seed=1
+        assert r_kw.p_value == r_pos.p_value
+
+    def test_permutation_time_raises_typeerror(self, placebo_panel):
+        from diff_diff import permutation_test
+
+        with pytest.raises(TypeError, match=r"missing 1 required positional argument: 'post'"):
+            permutation_test(placebo_panel, "y", "d", time="p", unit="u", n_permutations=5)
+        with pytest.raises(TypeError, match=_unexpected("time")):
+            permutation_test(
+                placebo_panel, "y", "d", post="p", unit="u", time="p", n_permutations=5
             )
-        assert r_new.p_value == r_old.p_value == r_pos.p_value
-        with pytest.raises(ValueError, match=r"pass only post="):
-            permutation_test(placebo_panel, "y", "d", post="p", unit="u", time="p")
-        with pytest.raises(TypeError, match=r"missing required argument: 'unit'"):
+        with pytest.raises(TypeError, match=r"missing 1 required positional argument: 'unit'"):
             permutation_test(placebo_panel, "y", "d", post="p")
 
-    def test_leave_one_out_rename(self, placebo_panel):
+    def test_leave_one_out_canonical_silent_and_time_raises(self, placebo_panel):
         from diff_diff import leave_one_out_test
 
         with warnings.catch_warnings(record=True) as record:
             warnings.simplefilter("always")
-            l_new = leave_one_out_test(placebo_panel, "y", "d", post="p", unit="u")
+            l_kw = leave_one_out_test(placebo_panel, "y", "d", post="p", unit="u")
+            l_pos = leave_one_out_test(placebo_panel, "y", "d", "p", "u")
         _assert_no_future_warning(record)
-        with pytest.warns(FutureWarning, match=r"leave_one_out_test\(time=\) is deprecated"):
-            l_old = leave_one_out_test(placebo_panel, "y", "d", time="p", unit="u")
-        assert l_new.original_effect == l_old.original_effect
+        assert l_kw.original_effect == l_pos.original_effect
+        with pytest.raises(TypeError, match=r"missing 1 required positional argument: 'post'"):
+            leave_one_out_test(placebo_panel, "y", "d", time="p", unit="u")
+        with pytest.raises(TypeError, match=_unexpected("time")):
+            leave_one_out_test(placebo_panel, "y", "d", post="p", unit="u", time="p")
 
     def test_wrapper_paths_silent_and_no_error_dicts(self, placebo_panel):
         """The run_all_placebo_tests calls sit inside ``except Exception``
@@ -246,104 +235,92 @@ class TestDiagnosticsTimeToPost:
 
 
 # ---------------------------------------------------------------------------
-# M-045..M-047 / M-115: the robust drop
+# M-045..M-047 / M-115 (removed): the robust drop
 # ---------------------------------------------------------------------------
+
+ROBUST_CLASSES = [
+    "DifferenceInDifferences",
+    "TwoWayFixedEffects",
+    "TripleDifference",
+    "HeterogeneousAdoptionDiD",
+    "LinearRegression",
+]
+# LinearRegression does not mix BaseEstimator in (tests/test_base_estimator.py
+# NON_PARTICIPANTS), so it has no get_params() to inspect.
+ROBUST_BASE_ESTIMATORS = ROBUST_CLASSES[:-1]
 
 
 class TestRobustDrop:
-    @pytest.mark.parametrize(
-        "cls_name,legacy_default",
-        [
-            ("DifferenceInDifferences", True),
-            ("TwoWayFixedEffects", True),
-            ("TripleDifference", True),
-            ("HeterogeneousAdoptionDiD", False),
-            ("LinearRegression", True),
-        ],
-    )
-    def test_default_silent_and_resolved_attr(self, cls_name, legacy_default):
+    @pytest.mark.parametrize("cls_name", ROBUST_CLASSES)
+    def test_default_construction_silent(self, cls_name):
         import diff_diff
 
         cls = getattr(diff_diff, cls_name)
         with warnings.catch_warnings(record=True) as record:
             warnings.simplefilter("always")
-            est = cls()
+            cls()
         _assert_no_future_warning(record)
-        # The PUBLIC attr keeps the RESOLVED legacy bool through 3.9 so
-        # pre-rename attribute readers keep working.
-        assert est.robust is legacy_default
-        assert est._robust_arg is None
 
-    @pytest.mark.parametrize(
-        "cls_name", ["DifferenceInDifferences", "TripleDifference", "LinearRegression"]
-    )
-    def test_explicit_robust_warns(self, cls_name):
+    @pytest.mark.parametrize("cls_name", ROBUST_CLASSES)
+    def test_robust_kwarg_raises_typeerror(self, cls_name):
         import diff_diff
 
         cls = getattr(diff_diff, cls_name)
-        with pytest.warns(
-            FutureWarning,
-            match=rf"{cls_name}\(robust=\) is deprecated and will be removed "
-            r"in 4\.0; use vcov_type= instead\.",
-        ):
-            est = cls(robust=False)
-        assert est.robust is False
+        with pytest.raises(TypeError, match=_unexpected("robust")):
+            cls(robust=False)
+        with pytest.raises(TypeError, match=_unexpected("robust")):
+            cls(robust=True)
 
-    def test_did_routing_parity(self, did_2x2):
+    @pytest.mark.parametrize("cls_name", ROBUST_BASE_ESTIMATORS)
+    def test_robust_absent_from_get_params(self, cls_name):
+        import diff_diff
+
+        cls = getattr(diff_diff, cls_name)
+        est = cls()
+        params = est.get_params()
+        assert "robust" not in params
+        assert "vcov_type" in params
+        with pytest.raises(ValueError, match="Unknown parameter"):
+            est.set_params(robust=False)
+
+    def test_vcov_type_canonical_path(self, did_2x2):
         from diff_diff import DifferenceInDifferences as DiD
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            r_old = DiD(robust=False).fit(did_2x2, "y", "d", "p")
+        # On the balanced saturated 2x2 fixture HC1 and classical SEs are
+        # ALGEBRAICALLY identical for ANY residuals (equal cell sizes make
+        # n/(n-k) * sum SSE_c/n_c^2 equal SSE/(n-k) * sum 1/n_c), so a plain
+        # ``!=`` only held by a 1-ULP BLAS roundoff and was bit-equal on CI's
+        # Rust backend. Shrink the treated-post cell (unequal n_c) and scale
+        # its noise so the two SEs differ by construction.
+        df = did_2x2.iloc[:170].copy()  # cell (d=1, p=1) keeps 20 of 50 rows
+        df["y"] = df["y"] * (1.0 + 3.0 * df["d"] * df["p"])
+
         with warnings.catch_warnings(record=True) as record:
             warnings.simplefilter("always")
-            r_new = DiD(vcov_type="classical").fit(did_2x2, "y", "d", "p")
+            r_classical = DiD(vcov_type="classical").fit(df, "y", "d", "p")
+            r_hc1 = DiD(vcov_type="hc1").fit(df, "y", "d", "p")
         _assert_no_future_warning(record)
-        assert r_old.att == r_new.att
-        assert r_old.se == r_new.se
+        np.testing.assert_allclose(r_classical.att, r_hc1.att, rtol=1e-12)
+        assert np.isfinite(r_classical.se) and np.isfinite(r_hc1.se)
+        assert abs(r_classical.se - r_hc1.se) > 1e-3 * r_classical.se, (
+            f"classical SE {r_classical.se!r} and HC1 SE {r_hc1.se!r} should differ "
+            "under cell-dependent variance; vcov_type is not being dispatched"
+        )
 
     def test_get_params_round_trip_silent_on_default(self):
         from diff_diff import DifferenceInDifferences as DiD
 
         est = DiD()
         params = est.get_params()
-        assert params["robust"] is None
+        assert "robust" not in params
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             clone = DiD(**params)
         assert clone.vcov_type == est.vcov_type
 
-    def test_probe_rewarns_on_deprecated_configured_instance(self):
-        """Accepted + documented: a robust=-configured instance re-warns on
-        set_params probe re-init (the config is still deprecated)."""
-        from diff_diff import DifferenceInDifferences as DiD
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            est = DiD(robust=False)
-        with pytest.warns(FutureWarning, match=r"\(robust=\) is deprecated"):
-            est.set_params(alpha=0.10)
-        assert est.vcov_type == "classical"
-
-    def test_set_params_robust_alone_rederives_vcov(self):
-        from diff_diff import DifferenceInDifferences as DiD
-
-        est = DiD(vcov_type="hc1")
-        with pytest.warns(FutureWarning, match=r"\(robust=\) is deprecated"):
-            est.set_params(robust=False)
-        assert est.vcov_type == "classical"
-
-    def test_conflict_still_raises(self):
-        from diff_diff import DifferenceInDifferences as DiD
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            with pytest.raises(ValueError, match="conflicts with vcov_type"):
-                DiD(robust=False, vcov_type="hc1")
-
 
 # ---------------------------------------------------------------------------
-# M-043 / M-095: StackedDiD clean_control= -> control_group=
+# M-043 / M-095 (removed): StackedDiD clean_control= -> control_group=
 # ---------------------------------------------------------------------------
 
 
@@ -359,100 +336,58 @@ class TestCleanControlRename:
         assert s.control_group == "not_yet_treated"
         assert s2.control_group == "strict"
 
-    def test_old_name_warns_and_maps(self):
+    def test_ctor_old_name_raises_typeerror(self):
         from diff_diff import StackedDiD
 
-        with pytest.warns(
-            FutureWarning,
-            match=r"StackedDiD\(clean_control=\) is deprecated and will be "
-            r"removed in 4\.0; use control_group= instead\.",
-        ):
-            s = StackedDiD(clean_control="never_treated")
-        assert s.control_group == "never_treated"
-
-    def test_both_supplied_raises(self):
-        from diff_diff import StackedDiD
-
-        with pytest.raises(ValueError, match=r"pass only control_group="):
+        with pytest.raises(TypeError, match=_unexpected("clean_control")):
+            StackedDiD(clean_control="never_treated")
+        with pytest.raises(TypeError, match=_unexpected("clean_control")):
             StackedDiD(control_group="strict", clean_control="strict")
 
-    def test_estimator_property_alias(self):
+    def test_estimator_attribute_removed(self):
         from diff_diff import StackedDiD
 
         s = StackedDiD(control_group="strict")
-        with pytest.warns(FutureWarning, match=r"StackedDiD\.clean_control is deprecated"):
-            assert s.clean_control == "strict"
         with pytest.raises(AttributeError):
-            s.clean_control = "never_treated"
+            s.clean_control
 
     def test_get_params_round_trip_silent(self):
         from diff_diff import StackedDiD
 
         est = StackedDiD(control_group="strict")
         params = est.get_params()
-        assert isinstance(params["clean_control"], _NotSupplied)
+        assert "clean_control" not in params
+        assert params["control_group"] == "strict"
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             clone = StackedDiD(**params)
         assert clone.control_group == "strict"
 
-    @pytest.mark.parametrize("parameter", ["control_group", "clean_control"])
-    def test_sklearn_clone_preserves_explicit_control_parameter(self, parameter):
+    def test_sklearn_clone_preserves_explicit_control_group(self):
         from diff_diff import StackedDiD
 
         base = pytest.importorskip("sklearn.base")
         with warnings.catch_warnings(record=True) as record:
             warnings.simplefilter("always", FutureWarning)
-            est = StackedDiD(**{parameter: "strict"})
+            est = StackedDiD(control_group="strict")
             cloned = base.clone(est)
         assert cloned is not est
         assert cloned.get_params() == est.get_params()
         assert cloned.control_group == est.control_group == "strict"
-        future_warnings = [w for w in record if issubclass(w.category, FutureWarning)]
-        if parameter == "clean_control":
-            assert len(future_warnings) == 2
-            assert all("clean_control=" in str(w.message) for w in future_warnings)
-        else:
-            assert future_warnings == []
-
-    def test_set_params_migrates_both_directions(self):
-        from diff_diff import StackedDiD
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            s = StackedDiD(clean_control="strict")
-            s.set_params(control_group="never_treated")
-            assert s.control_group == "never_treated"
-        s2 = StackedDiD(control_group="never_treated")
-        with pytest.warns(FutureWarning, match=r"clean_control"):
-            s2.set_params(clean_control="strict")
-        assert s2.control_group == "strict"
-
-    def test_routing_parity(self, stacked_panel):
-        from diff_diff import StackedDiD
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            r_old = StackedDiD(clean_control="not_yet_treated").fit(
-                stacked_panel,
-                outcome="y",
-                unit="unit",
-                time="time",
-                first_treat="first_treat",
-            )
-        with warnings.catch_warnings(record=True) as record:
-            warnings.simplefilter("always")
-            r_new = StackedDiD(control_group="not_yet_treated").fit(
-                stacked_panel,
-                outcome="y",
-                unit="unit",
-                time="time",
-                first_treat="first_treat",
-            )
         _assert_no_future_warning(record)
-        assert r_old.overall_att == r_new.overall_att
 
-    def test_results_field_trio_and_dual_keys(self, stacked_panel):
+    def test_set_params_canonical_works_and_old_name_rejected(self):
+        from diff_diff import StackedDiD
+
+        s = StackedDiD(control_group="strict")
+        s.set_params(control_group="never_treated")
+        assert s.control_group == "never_treated"
+        with pytest.raises(ValueError, match="Unknown parameter"):
+            s.set_params(clean_control="strict")
+        # transactional: the failed call left the instance untouched
+        assert s.control_group == "never_treated"
+
+    def test_results_field_canonical_only(self, stacked_panel):
         from diff_diff import StackedDiD
         from diff_diff.stacked_did_results import StackedDiDResults
 
@@ -472,12 +407,14 @@ class TestCleanControlRename:
             warnings.simplefilter("error", FutureWarning)
             d = res.to_dict()
             s = res.summary()
-        assert d["control_group"] == "not_yet_treated" == d["clean_control"]
+        assert d["control_group"] == "not_yet_treated"
+        assert "clean_control" not in d
         assert "Control group:" in s
-        with pytest.warns(FutureWarning, match=r"StackedDiDResults\.clean_control is deprecated"):
-            assert res.clean_control == "not_yet_treated"
+        with pytest.raises(AttributeError):
+            res.clean_control
 
     def test_pickle_migration(self, stacked_panel):
+        """``__setstate__`` keeps mapping the pre-M-095 ``clean_control`` key (kept at 4.0)."""
         from diff_diff import StackedDiD
 
         with warnings.catch_warnings():
@@ -496,6 +433,8 @@ class TestCleanControlRename:
         old_style = object.__new__(type(res))
         old_style.__setstate__(state)
         assert old_style.control_group == "not_yet_treated"
+        with pytest.raises(AttributeError):
+            old_style.clean_control
 
     def test_power_survey_gate_estimator_scoped(self):
         """Post-M-095 StackedDiD exposes control_group; the survey_config
@@ -531,7 +470,7 @@ class TestCleanControlRename:
 
 
 # ---------------------------------------------------------------------------
-# M-044 / M-086 / M-087 (+ M-136): the Wooldridge triple and LPDiD level
+# M-044 / M-086 / M-087 / M-150 (+ M-136): the Wooldridge triple and LPDiD level
 # ---------------------------------------------------------------------------
 
 
@@ -543,15 +482,14 @@ class TestWooldridgeTriple:
             r.aggregate("event_study")
         _assert_no_future_warning(record)
         assert r.aggregation_weights["event_study"] == "cell"
-        assert r.aggregation_weights["event"] == "cell"  # dual key (3.9)
+        assert "event" not in r.aggregation_weights  # the 3.9 mirror key is gone
 
-    def test_aggregate_event_warns_and_maps(self, etwfe_result):
-        r = etwfe_result
-        with pytest.warns(FutureWarning, match=r"use type='event_study' instead"):
-            r.aggregate("event")
-        assert r.event_study_effects
+    def test_aggregate_event_rejected(self, etwfe_result):
+        """M-086: ``type="event"`` is an unknown aggregation type at 4.0."""
+        with pytest.raises(ValueError, match="type must be one of"):
+            etwfe_result.aggregate("event")
 
-    def test_to_dataframe_level_rename(self, etwfe_result):
+    def test_to_dataframe_level_canonical_and_removed_spellings(self, etwfe_result):
         r = etwfe_result
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -563,46 +501,69 @@ class TestWooldridgeTriple:
             f_gt = r.to_dataframe("gt")
         _assert_no_future_warning(record)
         assert not f_gt.empty
-        with pytest.warns(FutureWarning, match=r"use level= instead"):
-            f_old = r.to_dataframe(aggregation="event_study")
         pd.testing.assert_frame_equal(f_default, f_level)
-        pd.testing.assert_frame_equal(f_default, f_old)
-        with pytest.warns(FutureWarning, match=r"use level='event_study' instead"):
-            f_oldval = r.to_dataframe(level="event")
-        pd.testing.assert_frame_equal(f_default, f_oldval)
-        with pytest.raises(ValueError, match=r"pass only level="):
+        # M-044: the aggregation= parameter is gone
+        with pytest.raises(TypeError, match=_unexpected("aggregation")):
+            r.to_dataframe(aggregation="event_study")
+        with pytest.raises(TypeError, match=_unexpected("aggregation")):
             r.to_dataframe(level="gt", aggregation="gt")
+        # M-150: the "event" level spelling is rejected, as is any unknown level
+        with pytest.raises(ValueError):
+            r.to_dataframe(level="event")
+        with pytest.raises(ValueError):
+            r.to_dataframe(level="bogus")
 
-    def test_summary_alpha_keyword_only(self, etwfe_result):
+    def test_summary_alpha_positional_like_siblings(self, etwfe_result):
         r = etwfe_result
         with warnings.catch_warnings(record=True) as record:
             warnings.simplefilter("always")
             s = r.summary()
             s_same = r.summary(alpha=r.alpha)
+            s_pos = r.summary(r.alpha)
         _assert_no_future_warning(record)
-        assert "95% CI" in s and "95% CI" in s_same
+        assert "95% CI" in s
+        assert s_same == s
+        assert s_pos == s
         # The shared section-5 contract: a DIFFERENT alpha raises rather
         # than silently relabeling stored intervals.
         with pytest.raises(ValueError, match="never recomputes"):
             r.summary(alpha=0.10)
-        with pytest.warns(FutureWarning, match=r"summary\(aggregation=\)"):
+        # M-087: the aggregation= parameter is gone ...
+        with pytest.raises(TypeError, match=_unexpected("aggregation")):
+            r.summary(aggregation="simple")
+        # ... and an old positional aggregation string binds to ``alpha``,
+        # where the family's fit-alpha guard rejects it (a ValueError, not a
+        # TypeError - summary(alpha) is positional like every sibling now).
+        with pytest.raises(ValueError, match="never recomputes"):
             r.summary("simple")
-        with pytest.raises(TypeError, match="KEYWORD-ONLY"):
-            r.summary(0.10)
+        with pytest.raises(ValueError, match="never recomputes"):
+            r.summary("event")
 
     def test_aggregation_weights_pickle_mirror(self, etwfe_result):
+        """``__setstate__`` keeps migrating the pre-M-086 ``"event"`` key (kept at 4.0)."""
         r = etwfe_result
+        # <=3.8 pickle: only the legacy key
         state = dict(r.__dict__)
         state["aggregation_weights"] = {"event": "cell"}
         r2 = object.__new__(type(r))
         r2.__setstate__(state)
         assert r2.aggregation_weights["event_study"] == "cell"
+        assert "event" not in r2.aggregation_weights
+        # 3.9-3.13 pickle: BOTH keys (the to_dict/aggregate mirror wrote the
+        # legacy key alongside the canonical one) - the canonical value wins
+        # and the legacy key is dropped.
+        state = dict(r.__dict__)
+        state["aggregation_weights"] = {"event": "cell", "event_study": "cohort_share"}
+        r3 = object.__new__(type(r))
+        r3.__setstate__(state)
+        assert r3.aggregation_weights["event_study"] == "cohort_share"
+        assert "event" not in r3.aggregation_weights
 
 
 class TestLPDiDLevelValue:
-    """M-136."""
+    """M-136 (removed)."""
 
-    def test_level_value_shim(self):
+    def test_level_event_rejected(self):
         from diff_diff import LPDiD
 
         rng = np.random.default_rng(7)
@@ -623,16 +584,15 @@ class TestLPDiDLevelValue:
             f_new = res.to_dataframe()
             f_canon = res.to_dataframe(level="event_study")
         _assert_no_future_warning(record)
-        with pytest.warns(FutureWarning, match=r"use level='event_study' instead"):
-            f_old = res.to_dataframe(level="event")
         pd.testing.assert_frame_equal(f_new, f_canon)
-        pd.testing.assert_frame_equal(f_new, f_old)
+        with pytest.raises(ValueError, match="event_study"):
+            res.to_dataframe(level="event")
         with pytest.raises(ValueError, match="event_study"):
             res.to_dataframe(level="bogus")
 
 
 # ---------------------------------------------------------------------------
-# M-084: ContinuousDiD covariates move to fit()
+# M-084 (removed): ContinuousDiD covariates live on fit() only
 # ---------------------------------------------------------------------------
 
 
@@ -667,31 +627,16 @@ class TestCovariatesMove:
             r = ContinuousDiD().fit(cdid_panel, "y", "u", "t", "g", "dose", covariates=["x"])
         _assert_no_future_warning(record)
         assert r.covariates == ["x"]
+        assert np.isfinite(r.att)
 
-    def test_ctor_warns_and_routes_identically(self, cdid_panel):
+    def test_ctor_covariates_raises_typeerror(self, cdid_panel):
         from diff_diff import ContinuousDiD
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            r_new = ContinuousDiD().fit(cdid_panel, "y", "u", "t", "g", "dose", covariates=["x"])
-        with pytest.warns(
-            FutureWarning,
-            match=r"ContinuousDiD\(covariates=\) is deprecated and will be "
-            r"removed in 4\.0; pass covariates to fit\(\) instead\.",
-        ):
-            est = ContinuousDiD(covariates=["x"])
-        r_old = est.fit(cdid_panel, "y", "u", "t", "g", "dose")
-        assert r_old.att == r_new.att
-        assert r_old.covariates == r_new.covariates == ["x"]
-
-    def test_both_supplied_raises(self, cdid_panel):
-        from diff_diff import ContinuousDiD
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            est = ContinuousDiD(covariates=["x"])
-        with pytest.raises(ValueError, match=r"fit\(\) only"):
-            est.fit(cdid_panel, "y", "u", "t", "g", "dose", covariates=["x"])
+        with pytest.raises(TypeError, match=_unexpected("covariates")):
+            ContinuousDiD(covariates=["x"])
+        assert "covariates" not in ContinuousDiD().get_params()
+        with pytest.raises(ValueError, match="Unknown parameter"):
+            ContinuousDiD().set_params(covariates=["x"])
 
     def test_lowest_dose_guard_fires_for_fit_level(self, cdid_panel):
         from diff_diff import ContinuousDiD
@@ -700,12 +645,3 @@ class TestCovariatesMove:
             ContinuousDiD(control_group="lowest_dose").fit(
                 cdid_panel, "y", "u", "t", "g", "dose", covariates=["x"]
             )
-
-    def test_probe_rewarns_on_ctor_configured_instance(self):
-        from diff_diff import ContinuousDiD
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            est = ContinuousDiD(covariates=["x"])
-        with pytest.warns(FutureWarning, match=r"\(covariates=\) is deprecated"):
-            est.set_params(alpha=0.10)

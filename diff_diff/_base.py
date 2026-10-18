@@ -45,8 +45,8 @@ Per-class accommodation hooks (declarative; default no-op):
     ``_vcov_type_explicit``).
 ``_normalize_set_params``
     Classmethod rewriting the user-supplied ``params`` dict before the
-    merge (e.g. the ``robust``-alone alias re-derivation on
-    ``DifferenceInDifferences``).
+    merge (default no-op; a hook for subclasses whose parameters are
+    inter-derived and must be re-resolved together).
 """
 
 import inspect

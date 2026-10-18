@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from diff_diff import StackedDiD, StackedDiDResults, stacked_did
+from diff_diff import StackedDiD, StackedDiDResults
 from diff_diff.prep_dgp import generate_staggered_data
 
 # =============================================================================
@@ -728,21 +728,6 @@ class TestSklearnInterface:
         with pytest.raises(ValueError, match="Unknown parameter"):
             est.set_params(nonexistent_param=42)
 
-    def test_convenience_function(self, staggered_data):
-        """KEEP (2(d) PR-A, M-072): the deprecated wrapper still works, and warns."""
-        with pytest.warns(FutureWarning, match=r"stacked_did\(\) is deprecated"):
-            results = stacked_did(
-                staggered_data,
-                outcome="outcome",
-                unit="unit",
-                time="period",
-                first_treat="first_treat",
-                kappa_pre=2,
-                kappa_post=2,
-            )
-        assert isinstance(results, StackedDiDResults)
-        assert np.isfinite(results.overall_att)
-
 
 # =============================================================================
 # TestResultsMethods
@@ -899,14 +884,13 @@ class TestValidation:
         with pytest.raises(ValueError, match="weighting"):
             StackedDiD(weighting="invalid")
 
-    def test_invalid_clean_control(self):
-        """Raises on an invalid control-group value - canonical name and
-        via the deprecated clean_control alias (M-043)."""
+    def test_invalid_control_group_and_removed_clean_control(self):
+        """Raises on an invalid control-group value; the pre-3.9
+        ``clean_control`` spelling is no longer a parameter (M-043, removed 4.0)."""
         with pytest.raises(ValueError, match="control_group"):
             StackedDiD(control_group="invalid")
-        with pytest.warns(FutureWarning, match="clean_control"):
-            with pytest.raises(ValueError, match="control_group"):
-                StackedDiD(clean_control="invalid")
+        with pytest.raises(TypeError, match="unexpected keyword argument 'clean_control'"):
+            StackedDiD(clean_control="invalid")
 
     def test_invalid_cluster(self):
         """Raises on invalid cluster parameter."""
@@ -1902,25 +1886,6 @@ class TestStackedDiDCovariateBalance:
         assert est.get_params()["balance"] == "entropy"
         clone = StackedDiD(**est.get_params())  # round-trip
         assert clone.balance == "entropy"
-
-    def test_convenience_function_threads_covariates(self):
-        """KEEP (M-072): wrapper ctor/fit kwarg threading (balance + covariates)."""
-        df = _balance_panel(seed=9)
-        with pytest.warns(FutureWarning, match=r"stacked_did\(\) is deprecated"):
-            res = stacked_did(
-                df,
-                "y",
-                "unit",
-                "time",
-                "first_treat",
-                kappa_pre=2,
-                kappa_post=2,
-                control_group="never_treated",
-                balance="entropy",
-                covariates=["x"],
-            )
-        assert res.balance == "entropy"
-        assert res.covariates == ["x"]
 
     def test_ragged_event_window_raises(self):
         # balance="entropy" requires balanced event windows: on a ragged panel (a unit

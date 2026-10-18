@@ -29,7 +29,7 @@ print(f"ATT: {results.att:.3f} (SE: {results.se:.3f})")
 - **sklearn-like API**: All estimators use `fit()` method, `get_params()`/`set_params()` for configuration.
 - **Formula interface**: Supports R-style formulas like `"outcome ~ treated * post"`.
 - **Results objects**: Rich dataclass containers with `summary()`, `to_dict()`, `to_dataframe()`.
-- **Estimator aliases**: Short names available (e.g., `DiD`, `CS`, `SA`, `BJS`, `SDiD`, `TWFE`, `DDD`, `EDiD`, `SCM`, `Bacon`). The former `CDiD`/`Gardner`/`Stacked` aliases are deprecated (3.9, removed in 4.0) - use `ContinuousDiD`/`TwoStageDiD`/`StackedDiD`.
+- **Estimator aliases**: Short names available (e.g., `DiD`, `CS`, `SA`, `BJS`, `SDiD`, `TWFE`, `DDD`, `EDiD`, `SCM`, `Bacon`). The former `CDiD`/`Gardner`/`Stacked` aliases were removed in 4.0 - use `ContinuousDiD`/`TwoStageDiD`/`StackedDiD`.
 
 ## Practitioner Workflow (based on Baker et al. 2025)
 
@@ -81,7 +81,7 @@ did.fit(
 ) -> DiDResults
 ```
 
-`time=` remains accepted as a deprecated alias for `post=` (FutureWarning; removed in 4.0), and the `robust=` constructor flag as a deprecated alias for `vcov_type=`.
+The pre-4.0 `time=` alias for `post=` and the `robust=` constructor flag (alias for `vcov_type=`) were removed in 4.0: `fit()` takes `post=` and the constructor takes `vcov_type=` only.
 
 **Usage:**
 
@@ -106,7 +106,6 @@ Two-Way Fixed Effects estimator for panel data. Inherits from DifferenceInDiffer
 
 ```python
 TwoWayFixedEffects(
-    robust: bool = True,
     cluster: str | None = None,   # Auto-clusters at unit level if None
     alpha: float = 0.05,
     df_convention: str = "residual",  # Analytical t/p/CI df: "residual" (default), "cluster" (G-1), or "normal" (z); flips at v4
@@ -162,7 +161,6 @@ period-specific treatment effects. Inherits from DifferenceInDifferences.
 
 ```python
 MultiPeriodDiD(
-    robust: bool = True,
     cluster: str | None = None,
     alpha: float = 0.05,
     df_convention: str = "residual",  # Analytical t/p/CI df: "residual" (default), "cluster" (G-1), or "normal" (z); flips at v4
@@ -499,7 +497,7 @@ TwoStageDiD(
 )
 ```
 
-**Alias:** `Gardner` (deprecated 3.9, removed 4.0 - emits FutureWarning; use `TwoStageDiD`)
+**Alias:** none (the pre-4.0 `Gardner` alias was removed in 4.0; use `TwoStageDiD`)
 
 **fit() parameters:**
 
@@ -755,7 +753,6 @@ ContinuousDiD(
     bootstrap_weights: str = "rademacher",
     seed: int | None = None,
     rank_deficient_action: str = "warn",
-    covariates: list[str] | None = None,      # DEPRECATED here (M-084; removed in 4.0) — pass covariates= to fit() instead
     estimation_method: str = "dr",            # "reg" or "dr" (used only with covariates); "ipw" not
                                               #   supported on the dose curve (raises NotImplementedError)
     pscore_trim: float = 0.01,                # dr propensity trimming
@@ -779,7 +776,7 @@ is the paper's backward finite difference on `{0, d_1, …, d_J}` (`ACRT(d_1) = 
 covariate / survey) and reduces to the per-level 2×2 DiD SE. Multi-cohort fits need a shared dose
 support across cohorts (else `NotImplementedError`); an off-support `dvals` value raises `ValueError`.
 
-**Alias:** `CDiD` (deprecated 3.9, removed 4.0 - emits FutureWarning; use `ContinuousDiD`)
+**Alias:** none (the pre-4.0 `CDiD` alias was removed in 4.0; use `ContinuousDiD`)
 
 **fit() parameters:**
 
@@ -829,7 +826,6 @@ HeterogeneousAdoptionDiD(
     kernel: str = "epanechnikov",      # Local-linear kernel
     alpha: float = 0.05,
     vcov_type: str | None = None,      # Mass-point only: "classical" (default) or "hc1"
-    robust: bool | None = None,        # DEPRECATED alias for vcov_type= (M-047; FutureWarning, removed in 4.0)
     cluster: str | None = None,        # Cluster column for cluster-robust SEs (all designs; event-study adds a cluster-robust sup-t band). cluster= + survey_design= rejected
     n_bootstrap: int = 999,            # Multiplier-bootstrap iterations for sup-t bands (event-study, when weighted/survey OR clustered)
     seed: int | None = None,
@@ -854,7 +850,6 @@ had.fit(
     survey_design: SurveyDesign | None = None, # Survey-design kwarg (weights, strata, PSU, FPC) — the sole weighting entry
     trends_lin: bool = False,                  # Eq 17 linear-trend detrending. Requires a multi-period panel (the event-study mode); needs F>=3 (pre-period depth) for the regression; rejects survey_design= (raises NotImplementedError under trends_lin).
     covariates: Any | None = None,             # NOT IMPLEMENTED — non-None raises NotImplementedError (deferred Appendix B.1 / Theorem 6 covariate-adjusted extension; pre-residualize the outcome on covariates as a workaround)
-    outcome_col: str = ..., dose_col: str = ..., time_col: str = ..., unit_col: str = ..., first_treat_col: str = ...,  # deprecated aliases for the five column params (FutureWarning; removed in 4.0)
 ) -> HeterogeneousAdoptionDiDResults | HeterogeneousAdoptionDiDEventStudyResults
 ```
 
@@ -935,7 +930,7 @@ rd.fit(
 ) -> RegressionDiscontinuityResults
 ```
 
-The 3.8 names `outcome_col=`, `running_col=`, and `treatment_col=` remain accepted as deprecated aliases (FutureWarning; removed in 4.0).
+The 3.8 names `outcome_col=`, `running_col=`, and `treatment_col=` were removed in 4.0 - use `outcome=`, `running=`, `takeup=`.
 
 ```python
 from diff_diff import RegressionDiscontinuity
@@ -1014,7 +1009,7 @@ rp.fit(
 ) -> RDPlotResult
 ```
 
-The 3.8 names `outcome_col=` and `running_col=` remain accepted as deprecated aliases (FutureWarning; removed in 4.0).
+The 3.8 names `outcome_col=` and `running_col=` were removed in 4.0 - use `outcome=` and `running=`.
 
 ```python
 from diff_diff import RDPlot
@@ -1102,7 +1097,6 @@ StackedDiD(
     kappa_post: int = 1,                      # Post-treatment event-time periods
     weighting: str = "aggregate",             # "aggregate", "population", or "sample_share"
     control_group: str = "not_yet_treated",   # "not_yet_treated", "strict", or "never_treated"
-    clean_control: str | None = None,         # DEPRECATED alias for control_group= (M-043; FutureWarning, removed in 4.0)
     cluster: str = "unit",                    # "unit" or "unit_subexp"
     alpha: float = 0.05,
     anticipation: int = 0,  # non-negative integer; bool rejected
@@ -1113,7 +1107,7 @@ StackedDiD(
 )
 ```
 
-**Alias:** `Stacked` (deprecated 3.9, removed 4.0 - emits FutureWarning; use `StackedDiD`)
+**Alias:** none (the pre-4.0 `Stacked` alias was removed in 4.0; use `StackedDiD`)
 
 **fit() parameters:**
 
@@ -1758,7 +1752,7 @@ etwfe.fit(
 ) -> WooldridgeDiDResults
 ```
 
-The 3.8 name `cohort=` remains accepted as a deprecated alias for `first_treat=` (FutureWarning; removed in 4.0).
+The 3.8 name `cohort=` was removed in 4.0 - use `first_treat=`.
 
 **Aggregation types:**
 
@@ -1789,23 +1783,6 @@ results = etwfe_logit.fit(data, outcome='y_bin', unit='id', time='t', first_trea
 # Poisson (count outcomes)
 etwfe_pois = WooldridgeDiD(method='poisson')
 results = etwfe_pois.fit(data, outcome='y_count', unit='id', time='t', first_treat='first_treat')
-```
-
-### Convenience Functions (deprecated 3.9, removed 4.0)
-
-All 8 wrapper functions (`imputation_did`, `two_stage_did`, `stacked_did`, `trop`, `synthetic_control`, `triple_difference`, `bacon_decompose`, `chaisemartin_dhaultfoeuille`) emit a `FutureWarning` since 3.9 and are removed in 4.0 (rows M-070..M-077) - construct the class instead:
-
-```python
-# Canonical class form (what the wrappers did internally)
-from diff_diff import ImputationDiD, TwoStageDiD, TripleDifference, StackedDiD, TROP, BaconDecomposition
-
-results = ImputationDiD().fit(data, outcome='y', unit='id', time='t', first_treat='ft')
-results = TwoStageDiD().fit(data, outcome='y', unit='id', time='t', first_treat='ft')
-results = TripleDifference().fit(data, outcome='y', group='g', partition='p', post='t')
-results = StackedDiD(kappa_pre=2, kappa_post=2).fit(data, outcome='y', unit='id', time='t',
-                                                    first_treat='ft')
-results = TROP().fit(data, 'y', 'd', 'id', 't')
-results = BaconDecomposition().fit(data, outcome='y', unit='id', time='t', first_treat='ft')
 ```
 
 ## Results Objects
@@ -1990,7 +1967,7 @@ Returned by `SyntheticDiD.fit()`.
 | `pre_periods` | `list` | Pre-treatment periods |
 | `post_periods` | `list` | Post-treatment periods |
 | `variance_method` | `str` | "bootstrap", "jackknife", or "placebo" |
-| `variance_effects` | `np.ndarray` | Per-iteration draws (placebo effects, bootstrap ATT draws, or jackknife LOO estimates per `variance_method`); deprecated alias `placebo_effects` (removed v4.0.0) |
+| `variance_effects` | `np.ndarray` | Per-iteration draws (placebo effects, bootstrap ATT draws, or jackknife LOO estimates per `variance_method`); the pre-4.0 alias `placebo_effects` was removed in 4.0 |
 | `noise_level` | `float` | Estimated noise level |
 | `zeta_omega` | `float` | Unit weight regularization |
 | `zeta_lambda` | `float` | Time weight regularization |
@@ -2061,7 +2038,7 @@ Returned by `TripleDifference.fit()`.
 
 ### BaconDecompositionResults
 
-Returned by `BaconDecomposition.fit()` (and the deprecated `bacon_decompose()` wrapper, removed in 4.0).
+Returned by `BaconDecomposition.fit()` (the `bacon_decompose()` wrapper was removed in 4.0).
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
@@ -2272,7 +2249,7 @@ Per-horizon event-study results container for `HeterogeneousAdoptionDiD`'s event
 
 ### ChangesInChangesResults
 
-Results container shared by `ChangesInChanges` and `QDiD` (the `method` field is `"cic"` or `"qdid"`; the pre-3.9 name `estimator` still reads it with a FutureWarning until 4.0; `QDiDResults` is an alias of this class). Flat-native headline fields `att`, `se`, `t_stat`, `p_value`, `conf_int`; `quantile_effects` is a DataFrame with columns `quantile`, `qte`, `se`, `t_stat`, `p_value`, `conf_low`, `conf_high`. `q_lower`/`q_upper` bound the point-identified interior quantile range for unconditional CiC fits (NaN for QDiD and for covariate fits); `sup_t_crit` is the qte sup-t critical value backing `uniform_bands()` (fixed 95% level). Also carries `n_obs`, `cell_sizes`, `n_bootstrap`, `n_bootstrap_valid`, `panel`, `quantiles`, `alpha`, and `covariates` (the covariate columns of a conditional fit, else None). Methods: `summary()`, `print_summary()`, `to_dict()`, `to_dataframe(level="quantiles"|"att")`, `uniform_bands()`. All inference flows through `safe_inference`/`safe_inference_batch` (joint-NaN contract; `n_bootstrap=0` yields NaN inference everywhere).
+Results container shared by `ChangesInChanges` and `QDiD` (the `method` field is `"cic"` or `"qdid"`; the pre-3.9 name `estimator` was removed in 4.0; `QDiDResults` is an alias of this class). Flat-native headline fields `att`, `se`, `t_stat`, `p_value`, `conf_int`; `quantile_effects` is a DataFrame with columns `quantile`, `qte`, `se`, `t_stat`, `p_value`, `conf_low`, `conf_high`. `q_lower`/`q_upper` bound the point-identified interior quantile range for unconditional CiC fits (NaN for QDiD and for covariate fits); `sup_t_crit` is the qte sup-t critical value backing `uniform_bands()` (fixed 95% level). Also carries `n_obs`, `cell_sizes`, `n_bootstrap`, `n_bootstrap_valid`, `panel`, `quantiles`, `alpha`, and `covariates` (the covariate columns of a conditional fit, else None). Methods: `summary()`, `print_summary()`, `to_dict()`, `to_dataframe(level="quantiles"|"att")`, `uniform_bands()`. All inference flows through `safe_inference`/`safe_inference_batch` (joint-NaN contract; `n_bootstrap=0` yields NaN inference everywhere).
 
 ### LWDiDResults
 
@@ -2347,7 +2324,7 @@ permutation_test(data, outcome, treatment, post, unit,
 leave_one_out_test(data, outcome, treatment, post, unit, alpha=0.05)
 ```
 
-`permutation_test` / `leave_one_out_test` accept `time=` as a deprecated alias for `post=` (FutureWarning; removed in 4.0). The `run_placebo_test` / `run_all_placebo_tests` wrappers keep their `time` parameter.
+`permutation_test` / `leave_one_out_test` take `post=` (the pre-4.0 `time=` alias was removed in 4.0). The `run_placebo_test` / `run_all_placebo_tests` wrappers keep their `time` parameter.
 
 All return `PlaceboTestResults` with attributes: `test_type`, `placebo_effect`, `se`, `t_stat`, `p_value`, `conf_int`, `n_obs`, `is_significant`.
 

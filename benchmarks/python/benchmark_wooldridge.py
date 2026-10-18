@@ -74,13 +74,13 @@ def main():
             outcome="lemp",
             unit="countyreal",
             time="year",
-            cohort="first_treat",
+            first_treat="first_treat",
         )
 
     estimation_time = estimation_timer.elapsed
 
     # Compute event study aggregation
-    results.aggregate("event")
+    results.aggregate("event_study")
     total_time = estimation_timer.elapsed
 
     # Store data info

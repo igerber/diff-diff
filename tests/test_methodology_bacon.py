@@ -38,10 +38,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from diff_diff import (
-    BaconDecomposition,
-    bacon_decompose,
-)
+from diff_diff import BaconDecomposition
 
 
 def _bacon_fit(
@@ -57,8 +54,8 @@ def _bacon_fit(
 ):
     """Construct-and-fit via the canonical class API (2(d) PR-A, M-076).
 
-    Migrated from the deprecated ``bacon_decompose()`` wrapper: ``weights``
-    is a constructor kwarg, everything else goes to ``fit()``.
+    Migrated from the ``bacon_decompose()`` wrapper (removed at 4.0):
+    ``weights`` is a constructor kwarg, everything else goes to ``fit()``.
     """
     return BaconDecomposition(weights=weights).fit(
         data,
@@ -1160,26 +1157,6 @@ class TestBaconSurveyDesignNarrowing:
         df, sd = self._time_varying_survey_panel()
         with pytest.raises(ValueError, match="varies within units"):
             BaconDecomposition().fit(df, "y", "unit", "time", "first_treat", survey_design=sd)
-
-    def test_default_bacon_decompose_function_rejects_time_varying_weights(
-        self,
-    ) -> None:
-        """KEEP (2(d) PR-A, M-076): the ``weights="exact"`` default flows
-        through the DEPRECATED ``bacon_decompose(...)`` wrapper (no
-        explicit weights= kwarg) - only the wrapper path exercises that
-        default routing. Same rejection contract, now behind the
-        wrapper-deprecation FutureWarning."""
-        df, sd = self._time_varying_survey_panel()
-        with pytest.warns(FutureWarning, match="bacon_decompose\\(\\) is deprecated"):
-            with pytest.raises(ValueError, match="varies within units"):
-                bacon_decompose(
-                    df,
-                    outcome="y",
-                    unit="unit",
-                    time="time",
-                    first_treat="first_treat",
-                    survey_design=sd,
-                )
 
     def test_explicit_approximate_accepts_time_varying_weights(self) -> None:
         """Users can opt back into the obs-level weighted-means path via

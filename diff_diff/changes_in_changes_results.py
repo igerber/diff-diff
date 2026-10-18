@@ -6,7 +6,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from diff_diff._deprecation import deprecated_field_property
 from diff_diff.results_base import BaseResults, _coverage_pct
 
 _ESTIMATOR_TITLES = {
@@ -116,10 +115,6 @@ class ChangesInChangesResults(BaseResults):
             "n_bootstrap_valid": self.n_bootstrap_valid,
             "panel": self.panel,
             "method": self.method,
-            # Dual-key 3.9 window (row M-143, the M-094/rdd.py twin): the old key
-            # stays until 4.0 so serialized consumers keep working. Both read the
-            # SAME attribute - they can never disagree.
-            "estimator": self.method,
             "alpha": self.alpha,
             "covariates": list(self.covariates) if self.covariates else None,
             "inference_method": "bootstrap" if self.n_bootstrap > 0 else "none",
@@ -234,21 +229,13 @@ class ChangesInChangesResults(BaseResults):
         """Print :meth:`summary` to stdout."""
         print(self.summary())
 
-    # Row M-143: read-only alias for the pre-3.9 ``estimator`` field name. No
-    # annotation, so it stays a descriptor and never becomes a
-    # __dataclass_fields__ entry. Being setter-less is deliberate and load-bearing:
-    # ``setattr(res, "estimator", ...)`` must fail rather than silently write a
-    # shadow attribute the renamed field would not see.
-    estimator = deprecated_field_property("ChangesInChangesResults", "estimator", "method")
-
     def __setstate__(self, state: Dict[str, Any]) -> None:
-        """Migrate pickles created before the ``estimator`` -> ``method`` rename.
+        """Migrate 3.x pickles created before the ``estimator`` -> ``method`` rename.
 
-        Results pickled before row M-143 stored the tag under ``estimator``;
-        rewriting the key on load keeps both ``method`` and the deprecated
-        ``estimator`` alias working on old pickles. Dataclass unpickling routes
-        through here for CURRENT objects too, so this must stay a pass-through
-        in the common case.
+        Results pickled under the old name stored the tag under ``estimator``;
+        rewriting the key on load populates ``method`` from old pickles.
+        Dataclass unpickling routes through here for CURRENT objects too, so
+        this must stay a pass-through in the common case.
         """
         if "estimator" in state and "method" not in state:
             state = dict(state)

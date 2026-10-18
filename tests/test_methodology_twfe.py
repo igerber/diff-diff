@@ -1209,7 +1209,7 @@ class TestTWFEParamsAndResults:
         params = twfe.get_params()
 
         expected_keys = {
-            "robust",
+            "vcov_type",
             "cluster",
             "alpha",
             "inference",
@@ -1225,10 +1225,10 @@ class TestTWFEParamsAndResults:
     def test_set_params_modifies_attributes(self):
         """set_params() modifies estimator attributes."""
         twfe = TwoWayFixedEffects()
-        twfe.set_params(alpha=0.10, robust=False)
+        twfe.set_params(alpha=0.10, vcov_type="classical")
 
         assert twfe.alpha == 0.10
-        assert twfe.robust is False
+        assert twfe.vcov_type == "classical"
 
     def test_summary_contains_key_info(self):
         """summary() output contains ATT."""

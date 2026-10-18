@@ -21,7 +21,6 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
-from diff_diff._deprecation import NOT_SUPPLIED, require_arg, resolve_renamed_kwarg
 from diff_diff.linalg import (
     compute_robust_vcov,
     effective_cluster_count,
@@ -1127,12 +1126,11 @@ class WooldridgeDiD(BaseEstimator):
         outcome: str,
         unit: str,
         time: str,
-        first_treat: Any = NOT_SUPPLIED,
+        first_treat: str,
         exovar: Optional[List[str]] = None,
         xtvar: Optional[List[str]] = None,
         xgvar: Optional[List[str]] = None,
         survey_design=None,
-        cohort: Any = NOT_SUPPLIED,
     ) -> WooldridgeDiDResults:
         """Fit the ETWFE model.  See class docstring for parameter details.
 
@@ -1152,29 +1150,14 @@ class WooldridgeDiD(BaseEstimator):
             stratified, clustered, and weighted designs via Taylor Series
             Linearization (TSL).  Replicate-weight designs raise
             ``NotImplementedError``.
-        cohort : str, optional
-            Deprecated alias for ``first_treat`` (row M-032); warns with
-            ``FutureWarning`` and will be removed in 4.0.
         """
-        first_treat = resolve_renamed_kwarg(
-            "WooldridgeDiD.fit",
-            "cohort",
-            cohort,
-            "first_treat",
-            first_treat,
-            default=NOT_SUPPLIED,
-        )
-        require_arg("WooldridgeDiD.fit", "first_treat", first_treat)
-        # Body-local name; the public parameter is first_treat (M-032).
+        # Body-local name; the public parameter is first_treat.
         cohort = first_treat
 
         # Fit-time re-check: __init__ and set_params validate eagerly, so
         # this only catches DIRECT attribute mutation (est.anticipation = ...)
         # — an out-of-domain value silently changes the ESTIMAND. The
-        # assignment also re-normalizes a mutated numpy scalar to int. Placed
-        # AFTER the cohort→first_treat rename shim so a caller who both
-        # mutated and passed the deprecated kwarg still sees the
-        # FutureWarning before the raise.
+        # assignment also re-normalizes a mutated numpy scalar to int.
         self.anticipation = validate_anticipation(self.anticipation)
         self._validate_unsupported_period_action(self.unsupported_period_action)
 

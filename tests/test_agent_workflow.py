@@ -195,9 +195,10 @@ def test_first_treat_step3_names_non_binary_alternatives(df):
     # agent knows when to switch.
     assert "ContinuousDiD" in script
     assert "HeterogeneousAdoptionDiD" in script
-    # The HAD distinction (first_treat_col vs first_treat) must be named
-    # so the agent doesn't try to pass first_treat= to HAD's event study.
-    assert "first_treat_col" in script
+    # HAD's event study takes first_treat= too (the first_treat_col= spelling
+    # was removed at 4.0), and the commentary must say so by the live name.
+    assert "takes first_treat=" in script
+    assert "first_treat_col" not in script
 
 
 def test_emitted_script_parses_as_python_module(df):

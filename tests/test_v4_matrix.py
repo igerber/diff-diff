@@ -404,11 +404,23 @@ def _import_module_hard(modname, rid):
         pytest.fail(f"{rid}: locator module '{modname}' failed to import ({exc}) - typo'd locator?")
 
 
-def resolve_locator(locator, rid):
+def resolve_locator(locator, rid, *, removed_kind=None):
     """Resolve ``module[:Attr.chain][ [param] ]``; return (resolved: bool, detail: str).
 
     The module part must import (hard failure otherwise). Attribute-chain or parameter absence is
     the legal, assertable signal and returns (False, why).
+
+    ``removed_kind`` (spec section 11, "Assertion semantics", 4.0-cut PR 2) relaxes two probes
+    ONLY for a row whose status is ``removed``:
+
+    - ``"function"``: a top-level ``diff_diff:Name`` that resolves to a MODULE object counts as
+      absent. Four 3.9 wrapper functions (``trop``, ``synthetic_control``, ``stacked_did``,
+      ``chaisemartin_dhaultfoeuille``) shared their submodule's name; once the function is gone
+      the package attribute is the submodule, not a resurrected wrapper.
+    - ``"param"``: a parameter absent from the EXPLICIT signature counts as removed even when the
+      callable takes ``**kwargs``. The ``shimmed`` state proved explicit presence, so the explicit
+      parameter's disappearance is the observable transition; at ``planned``/``shimmed`` the
+      ``**kwargs`` case stays a hard failure (absence would be unprovable there).
     """
     m = _LOCATOR_RE.match(locator)
     if m is None or (m.group("param") and not m.group("attrs")):
@@ -428,6 +440,8 @@ def resolve_locator(locator, rid):
         obj = nxt
     param = m.group("param")
     if param is None:
+        if removed_kind == "function" and inspect.ismodule(obj):
+            return False, f"resolves to the submodule {obj.__name__!r}, not a function - absent"
         return True, "resolved"
     target = obj
     if inspect.isclass(target):
@@ -441,6 +455,8 @@ def resolve_locator(locator, rid):
     if param in sig.parameters:
         return True, "param present"
     if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+        if removed_kind == "param":
+            return False, f"param '{param}' absent from the explicit signature (**kwargs present)"
         pytest.fail(
             f"{rid}: param '{param}' not found but {locator!r} has **kwargs - absence is "
             "unprovable; use a precise locator or a dedicated row kind (spec section 11)"
@@ -850,6 +866,30 @@ def test_due_gate_catches_overdue_rows(row_overrides, current, expected_substrin
     assert not collect_due_problems([row_overrides], clean_at)
 
 
+def test_removed_probe_treats_submodule_as_absent():
+    """A removed wrapper that shared its submodule's name: the package attribute is the module."""
+    import diff_diff
+
+    assert inspect.ismodule(diff_diff.bacon)  # a submodule attribute (never a wrapper's name)
+    resolved, _ = resolve_locator("diff_diff:bacon", "M-9xx")
+    assert resolved  # the default probe sees an attribute
+    resolved, detail = resolve_locator("diff_diff:bacon", "M-9xx", removed_kind="function")
+    assert not resolved and "submodule" in detail
+    # a real function object still counts as a resurrection under the removed probe
+    resolved, _ = resolve_locator("diff_diff:twowayfeweights", "M-9xx", removed_kind="function")
+    assert resolved
+
+
+def test_removed_probe_accepts_explicit_absence_despite_var_kwargs():
+    """`permutation_test` takes **estimator_kwargs: absence is unprovable at planned/shimmed
+    (hard failure) but the explicit parameter's disappearance is assertable at removed."""
+    locator = "diff_diff.diagnostics:permutation_test[definitely_not_a_parameter]"
+    with pytest.raises(pytest.fail.Exception, match="absence is unprovable"):
+        resolve_locator(locator, "M-9xx")
+    resolved, detail = resolve_locator(locator, "M-9xx", removed_kind="param")
+    assert not resolved and "explicit signature" in detail
+
+
 _WINDOW_ROW = {
     "id": "M-910",
     "kind": "param",
@@ -1047,7 +1087,7 @@ def test_row_matches_reality(row, monkeypatch):
                 resolved, detail = resolve_locator(new, rid)
                 assert resolved, f"{rid} shimmed but new {new!r} does not resolve ({detail})"
         elif status == "removed":
-            resolved, _ = resolve_locator(old, rid)
+            resolved, _ = resolve_locator(old, rid, removed_kind=kind)
             assert not resolved, f"{rid} removed but old {old!r} still resolves (resurrection?)"
             if new is not None:
                 resolved, detail = resolve_locator(new, rid)

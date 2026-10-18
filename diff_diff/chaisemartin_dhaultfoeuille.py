@@ -37,12 +37,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
-from diff_diff._deprecation import (
-    NOT_SUPPLIED,
-    require_arg,
-    resolve_renamed_kwarg,
-    warn_deprecated_kwarg,
-)
+from diff_diff._deprecation import NOT_SUPPLIED, warn_deprecated_kwarg
 from diff_diff.chaisemartin_dhaultfoeuille_bootstrap import (
     ChaisemartinDHaultfoeuilleBootstrapMixin,
 )
@@ -55,7 +50,6 @@ from diff_diff.utils import safe_inference, validate_n_bootstrap
 
 __all__ = [
     "ChaisemartinDHaultfoeuille",
-    "chaisemartin_dhaultfoeuille",
     "twowayfeweights",
     "TWFEWeightsResult",
 ]
@@ -880,13 +874,13 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
         self,
         data: pd.DataFrame,
         outcome: str,
-        unit: Any = NOT_SUPPLIED,
-        time: Any = NOT_SUPPLIED,
-        treatment: Any = NOT_SUPPLIED,
+        unit: str,
+        time: str,
+        treatment: str,
         # ---------- forward-compat parameters ----------
         aggregate: Any = NOT_SUPPLIED,
         L_max: Optional[int] = None,
-        covariates: Any = NOT_SUPPLIED,
+        covariates: Optional[List[str]] = None,
         trends_linear: Optional[bool] = None,
         trends_nonparam: Optional[Any] = None,
         honest_did: bool = False,
@@ -895,9 +889,6 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
         design2: bool = False,
         # ---------- deferred (separate effort) ----------
         survey_design: Any = None,
-        # ---------- deprecated aliases (removed in 4.0) ----------
-        group: Any = NOT_SUPPLIED,
-        controls: Any = NOT_SUPPLIED,
     ) -> ChaisemartinDHaultfoeuilleResults:
         """
         Fit the dCDH estimator on individual-level panel data.
@@ -1043,12 +1034,6 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
             closed-form; bootstrap would double-count variance). See
             REGISTRY.md ``ChaisemartinDHaultfoeuille`` Notes for the
             full contract.
-        group : str, optional
-            Deprecated alias for ``unit`` (row M-033); warns with
-            ``FutureWarning`` and will be removed in 4.0.
-        controls : list of str, optional
-            Deprecated alias for ``covariates`` (row M-034); warns with
-            ``FutureWarning`` and will be removed in 4.0.
 
         Returns
         -------
@@ -1063,27 +1048,8 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
             If any forward-compat parameter is set to a non-default
             value, with a clear pointer to the relevant ROADMAP phase.
         """
-        unit = resolve_renamed_kwarg(
-            "ChaisemartinDHaultfoeuille.fit",
-            "group",
-            group,
-            "unit",
-            unit,
-            default=NOT_SUPPLIED,
-        )
-        require_arg("ChaisemartinDHaultfoeuille.fit", "unit", unit)
-        require_arg("ChaisemartinDHaultfoeuille.fit", "time", time)
-        require_arg("ChaisemartinDHaultfoeuille.fit", "treatment", treatment)
-        covariates = resolve_renamed_kwarg(
-            "ChaisemartinDHaultfoeuille.fit",
-            "controls",
-            controls,
-            "covariates",
-            covariates,
-            default=None,
-        )
-        # Body-local names; the public parameters are unit/covariates
-        # (M-033 / M-034).
+        # Body-local names (the paper's "group"/"controls" vocabulary); the
+        # public parameters are unit/covariates.
         group = unit
         controls = covariates
         # ------------------------------------------------------------------
@@ -8726,81 +8692,14 @@ def _compute_twfe_diagnostic(
 # =============================================================================
 
 
-def chaisemartin_dhaultfoeuille(
-    data: pd.DataFrame,
-    outcome: str,
-    group: str,
-    time: str,
-    treatment: str,
-    **kwargs: Any,
-) -> ChaisemartinDHaultfoeuilleResults:
-    """
-    One-shot convenience wrapper around
-    :class:`ChaisemartinDHaultfoeuille`.
-
-    .. deprecated:: 3.9
-        ``chaisemartin_dhaultfoeuille()`` is deprecated and will be
-        removed in 4.0 (row M-077). Construct the estimator instead:
-        ``ChaisemartinDHaultfoeuille(...).fit(data, ...)``.
-
-    Equivalent to::
-
-        ChaisemartinDHaultfoeuille(**init_kwargs).fit(
-            data, outcome=..., group=..., time=..., treatment=...,
-            **fit_kwargs,
-        )
-
-    All keyword arguments are split between ``__init__`` and ``fit`` based
-    on which signature accepts them. Useful for one-line use in scripts.
-
-    Parameters
-    ----------
-    data : pd.DataFrame
-    outcome, group, time, treatment : str
-    **kwargs : Any
-        Forwarded to ``ChaisemartinDHaultfoeuille.__init__`` or
-        ``.fit()`` based on parameter name.
-
-    Returns
-    -------
-    ChaisemartinDHaultfoeuilleResults
-    """
-    import inspect
-
-    warnings.warn(
-        "chaisemartin_dhaultfoeuille() is deprecated and will be removed in 4.0; "
-        "construct the estimator instead: "
-        "ChaisemartinDHaultfoeuille(...).fit(data, ...).",
-        FutureWarning,
-        stacklevel=2,
-    )
-    init_keys = {
-        name
-        for name, p in inspect.signature(ChaisemartinDHaultfoeuille.__init__).parameters.items()
-        if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD) and name != "self"
-    }
-    init_kwargs = {k: v for k, v in kwargs.items() if k in init_keys}
-    fit_kwargs = {k: v for k, v in kwargs.items() if k not in init_keys}
-    est = ChaisemartinDHaultfoeuille(**init_kwargs)
-    return est.fit(
-        data,
-        outcome=outcome,
-        unit=group,
-        time=time,
-        treatment=treatment,
-        **fit_kwargs,
-    )
-
-
 def twowayfeweights(
     data: pd.DataFrame,
     outcome: str,
-    unit: Any = NOT_SUPPLIED,
-    time: Any = NOT_SUPPLIED,
-    treatment: Any = NOT_SUPPLIED,
+    unit: str,
+    time: str,
+    treatment: str,
     rank_deficient_action: str = "warn",
     survey_design: Any = None,
-    group: Any = NOT_SUPPLIED,
 ) -> TWFEWeightsResult:
     """
     Standalone TWFE decomposition diagnostic.
@@ -8832,23 +8731,13 @@ def twowayfeweights(
         (aggregated numbers are identical to
         ``fit(..., survey_design=sd).twfe_*`` under the same input).
 
-    group : str, optional
-        Deprecated alias for ``unit`` (row M-097); warns with
-        ``FutureWarning`` and will be removed in 4.0.
-
     Returns
     -------
     TWFEWeightsResult
         Object with attributes ``weights`` (DataFrame), ``fraction_negative``
         (float), ``sigma_fe`` (float), and ``beta_fe`` (float).
     """
-    unit = resolve_renamed_kwarg(
-        "twowayfeweights", "group", group, "unit", unit, default=NOT_SUPPLIED
-    )
-    require_arg("twowayfeweights", "unit", unit)
-    require_arg("twowayfeweights", "time", time)
-    require_arg("twowayfeweights", "treatment", treatment)
-    # Body-local name; the public parameter is unit (M-097).
+    # Body-local name (the R/Stata "group" vocabulary); the public parameter is unit.
     group = unit
     # Survey resolution (optional): mirrors the fit() path so that the
     # standalone helper produces identical numbers to fit(..., survey_design=sd).

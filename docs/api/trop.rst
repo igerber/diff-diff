@@ -68,11 +68,6 @@ Results container for TROP estimation.
       ~TROPResults.get_unit_effects_df
       ~TROPResults.get_time_effects_df
 
-Convenience Function
---------------------
-
-.. autofunction:: diff_diff.trop
-
 Tuning Parameters
 -----------------
 
@@ -228,8 +223,7 @@ Basic usage::
     )
     results.print_summary()
 
-Quick one-call estimation (the ``trop()`` wrapper is deprecated since
-3.9 and removed in 4.0)::
+Quick one-call estimation::
 
     from diff_diff import TROP
 

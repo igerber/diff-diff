@@ -54,21 +54,12 @@ _ESTIMATOR_NAMES: Dict[str, str] = {
 
 
 def _distributional_kind(results: Any) -> Any:
-    """Read a ChangesInChangesResults' method tag, old field name included.
+    """Read a ChangesInChangesResults' ``method`` tag (``None`` when absent).
 
-    Row M-143 renamed the field ``estimator`` -> ``method``. The fallback is
-    NOT ``getattr(results, "estimator", None)``: on a real results object that
-    name is now a deprecation property, so reading it emits a FutureWarning
-    even when it returns the right value - which turns into an error under the
-    warning-as-error assertions this module's own tests use. Reading the
-    instance ``__dict__`` finds a duck-typed hand-built attribute without ever
-    touching the descriptor. Real results resolve ``method`` first, so the
-    fallback only ever fires for mocks built before the rename.
+    ``method`` is the canonical field name (the pre-3.9 ``estimator`` spelling
+    was retired at 4.0 along with its duck-typed fallback here).
     """
-    kind = getattr(results, "method", None)
-    if kind is not None:
-        return kind
-    return getattr(results, "__dict__", {}).get("estimator")
+    return getattr(results, "method", None)
 
 
 def _estimator_display(type_name: str, results: Any) -> str:
@@ -788,7 +779,7 @@ def _handle_stacked(results: Any):
             ),
             priority="medium",
             # See note on SA handler: DR completes ``sensitivity`` when
-            # HonestDiD runs, which does not replay ``clean_control``
+            # HonestDiD runs, which does not replay ``control_group``
             # variation. Tag separately.
             step_name="specification_comparison",
         ),

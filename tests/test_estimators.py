@@ -145,10 +145,12 @@ class TestDifferenceInDifferences:
         did = DifferenceInDifferences(alpha=0.05)
 
         params = did.get_params()
-        # get_params returns the RAW sentinel-era robust arg (None when not
-        # supplied - row M-045); the resolved legacy bool stays on the attr.
-        assert params["robust"] is None
-        assert did.robust is True
+        # get_params returns the RAW vcov_type arg (None when not supplied);
+        # the resolved family lives on the attr. ``robust=`` is gone at 4.0
+        # (rows M-045..M-047).
+        assert "robust" not in params
+        assert params["vcov_type"] is None
+        assert did.vcov_type == "hc1"
         assert params["alpha"] == 0.05
 
         did.set_params(alpha=0.10)
@@ -2778,26 +2780,22 @@ class TestSyntheticDiD:
         sdid.set_params(variance_method="bootstrap")
         assert sdid.variance_method == "bootstrap"
 
-    def test_deprecated_params(self):
-        """Test that old parameter names emit DeprecationWarning."""
-        import warnings as _warnings
+    def test_removed_params(self):
+        """M-001/M-002 removal pins: the pre-3.5 ``lambda_reg`` / ``zeta``
+        names are rejected by the constructor and by set_params."""
+        with pytest.raises(TypeError, match="unexpected keyword argument 'lambda_reg'"):
+            SyntheticDiD(lambda_reg=1.0)
+        with pytest.raises(TypeError, match="unexpected keyword argument 'zeta'"):
+            SyntheticDiD(zeta=0.5)
 
-        with _warnings.catch_warnings(record=True) as w:
-            _warnings.simplefilter("always")
-            sdid = SyntheticDiD(lambda_reg=1.0, zeta=0.5)
-            dep_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
-            assert len(dep_warnings) == 2
-
-        # Deprecated params are ignored — auto-computed regularization is used
+        sdid = SyntheticDiD()
+        assert "lambda_reg" not in sdid.get_params()
+        assert "zeta" not in sdid.get_params()
+        with pytest.raises(ValueError, match="Unknown parameter"):
+            sdid.set_params(lambda_reg=2.0)
+        # auto-computed regularization is the default
         assert sdid.zeta_omega is None
         assert sdid.zeta_lambda is None
-
-        # set_params with deprecated names also warns
-        with _warnings.catch_warnings(record=True) as w:
-            _warnings.simplefilter("always")
-            sdid.set_params(lambda_reg=2.0)
-            dep_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
-            assert len(dep_warnings) == 1
 
     def test_missing_unit_column(self, sdid_panel_data):
         """Test error when unit column is missing."""
@@ -4035,7 +4033,7 @@ def did_alpha_fitted():
                 }
             )
     data = pd.DataFrame(rows)
-    return DifferenceInDifferences().fit(data, outcome="outcome", treatment="treated", time="post")
+    return DifferenceInDifferences().fit(data, outcome="outcome", treatment="treated", post="post")
 
 
 @pytest.fixture(scope="module")

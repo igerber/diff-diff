@@ -395,7 +395,7 @@ def surfaces():
         wd = WooldridgeDiD(control_group="never_treated").fit(
             mp, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
         )
-        wd.aggregate("event")
+        wd.aggregate("event_study")
         out["WooldridgeDiD"] = (wd, build_event_study_surface(wd))
 
         # 10. StaggeredTripleDifference
@@ -1766,7 +1766,7 @@ def _dcdh_df_panel(seed=8):
 
 
 def _dcdh_kwargs():
-    return dict(outcome="outcome", group="unit", time="time", treatment="treat", L_max=2)
+    return dict(outcome="outcome", unit="unit", time="time", treatment="treat", L_max=2)
 
 
 def test_dcdh_analytic_df_all_nan():

@@ -11,7 +11,6 @@ from typing import Any, ClassVar, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from diff_diff._deprecation import deprecated_field_property
 from diff_diff.aggregation import AggregationMixin, AggregationResult
 from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.results_base import (
@@ -79,9 +78,7 @@ class StackedDiDResults(BaseResults, AggregationMixin):
     weighting : str
         Weighting scheme used.
     control_group : str
-        Control-group (clean-control) definition used. (The deprecated
-        read-only alias ``clean_control`` warns and returns this value;
-        removed in 4.0 - row M-095.)
+        Control-group (clean-control) definition used.
     alpha : float
         Significance level used.
     event_study_vcov : np.ndarray, optional
@@ -176,15 +173,10 @@ class StackedDiDResults(BaseResults, AggregationMixin):
     df_convention: Optional[str] = None
     inference_df: Optional[float] = None
 
-    # Deprecated read-only alias for ``control_group`` (row M-095; removed
-    # in 4.0). No annotation, so it stays a descriptor and never becomes a
-    # __dataclass_fields__ entry.
-    clean_control = deprecated_field_property("StackedDiDResults", "clean_control", "control_group")
-
     def __setstate__(self, state: Dict[str, Any]) -> None:
-        """Migrate pickles created before the ``clean_control`` ->
-        ``control_group`` rename (row M-095): rewrite the key on load so
-        both the new field and the deprecated alias work on old pickles."""
+        """Migrate 3.x pickles created before the ``clean_control`` ->
+        ``control_group`` rename: rewrite the legacy key on load so the
+        field populates under its canonical name."""
         if "clean_control" in state and "control_group" not in state:
             state = dict(state)
             state["control_group"] = state.pop("clean_control")
@@ -527,9 +519,6 @@ class StackedDiDResults(BaseResults, AggregationMixin):
             "kappa_post": self.kappa_post,
             "weighting": self.weighting,
             "control_group": self.control_group,
-            # Deprecated key mirroring ``control_group`` through the 3.9
-            # shim window; dropped in 4.0 (row M-095, section 5 policy).
-            "clean_control": self.control_group,
             "anticipation": self.anticipation,
             "alpha": self.alpha,
             "vcov_type": self.vcov_type,

@@ -324,22 +324,6 @@ class TestStackedDiDSurvey:
         # ATT should differ (non-uniform weights)
         assert r_unw.overall_att != r_w.overall_att
 
-    def test_convenience_function(self, staggered_survey_data):
-        """stacked_did() convenience function threads survey_design."""
-        from diff_diff.stacked_did import stacked_did
-
-        sd = SurveyDesign(weights="weight")
-        with pytest.warns(FutureWarning, match=r"stacked_did\(\) is deprecated"):
-            result = stacked_did(
-                staggered_survey_data,
-                "outcome",
-                "unit",
-                "time",
-                "first_treat",
-                survey_design=sd,
-            )
-        assert result.survey_metadata is not None
-
     def test_summary_includes_survey(self, staggered_survey_data):
         """Summary includes survey design section."""
         from diff_diff import StackedDiD
@@ -482,22 +466,6 @@ class TestBaconDecompositionSurvey:
         diffs = [abs(exact_weights[k] - approx_weights[k]) for k in common_keys]
         assert max(diffs) > 1e-10, "Exact and approximate weights should differ"
 
-    def test_convenience_function(self, staggered_survey_data):
-        """bacon_decompose() convenience function threads survey_design."""
-        from diff_diff.bacon import bacon_decompose
-
-        sd = SurveyDesign(weights="weight")
-        with pytest.warns(FutureWarning, match=r"bacon_decompose\(\) is deprecated"):
-            result = bacon_decompose(
-                staggered_survey_data,
-                "outcome",
-                "unit",
-                "time",
-                "first_treat",
-                survey_design=sd,
-            )
-        assert result.survey_metadata is not None
-
 
 # =============================================================================
 # TripleDifference
@@ -629,23 +597,6 @@ class TestTripleDifferenceSurvey:
         assert result.survey_metadata is not None
         # Survey df should be used for inference
         assert result.survey_metadata.df_survey is not None
-
-    def test_convenience_function(self, ddd_survey_data):
-        """triple_difference() convenience function threads survey_design."""
-        from diff_diff.triple_diff import triple_difference
-
-        sd = SurveyDesign(weights="weight")
-        with pytest.warns(FutureWarning, match=r"triple_difference\(\) is deprecated"):
-            result = triple_difference(
-                ddd_survey_data,
-                "outcome",
-                "group",
-                "partition",
-                "time",
-                estimation_method="reg",
-                survey_design=sd,
-            )
-        assert result.survey_metadata is not None
 
 
 # =============================================================================
