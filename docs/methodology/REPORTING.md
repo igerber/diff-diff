@@ -560,6 +560,13 @@ a library setting.
   anchor tooling on them prematurely; a formal deprecation policy will
   land within two subsequent PRs.
 
+- **Note:** `BUSINESS_REPORT_SCHEMA_VERSION` 2.0 -> 3.0 at the 4.0 cut
+  (PR 2, 2026-10-18): the StackedDiD `assumption` block drops the legacy
+  `clean_control` key that mirrored `control_group` through the 3.9 shim
+  window (ledger row M-095; spec section 5 forbids deprecated names in
+  serialized output from 4.0). A key removal is breaking under the policy
+  above, hence the major bump; `DIAGNOSTIC_REPORT_SCHEMA_VERSION` stays 2.0.
+
 - **Note:** Schema version 2.0 (both BR and DR). The BR/DR gap #6
   target-parameter PR adds the `headline.status` /
   `headline_metric.status` value `"no_scalar_by_design"` (used for

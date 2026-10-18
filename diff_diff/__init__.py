@@ -20,9 +20,6 @@ This library provides sklearn-like estimators for causal inference using
 the difference-in-differences methodology.
 """
 
-import warnings as _warnings
-from typing import Any as _Any
-
 # Import backend detection from dedicated module (avoids circular imports)
 from diff_diff._backend import (
     HAS_RUST_BACKEND,
@@ -41,7 +38,6 @@ from diff_diff.bacon import (
     BaconDecomposition,
     BaconDecompositionResults,
     Comparison2x2,
-    bacon_decompose,
 )
 from diff_diff.business_report import (
     BUSINESS_REPORT_SCHEMA_VERSION,
@@ -51,7 +47,6 @@ from diff_diff.business_report import (
 from diff_diff.chaisemartin_dhaultfoeuille import (
     ChaisemartinDHaultfoeuille,
     TWFEWeightsResult,
-    chaisemartin_dhaultfoeuille,
     twowayfeweights,
 )
 from diff_diff.chaisemartin_dhaultfoeuille_results import (
@@ -144,7 +139,6 @@ from diff_diff.imputation import (
     ImputationBootstrapResults,
     ImputationDiD,
     ImputationDiDResults,
-    imputation_did,
 )
 from diff_diff.linalg import (
     InferenceResult,
@@ -257,7 +251,6 @@ from diff_diff.spillover import (
 from diff_diff.stacked_did import (
     StackedDiD,
     StackedDiDResults,
-    stacked_did,
 )
 from diff_diff.staggered import (
     CallawaySantAnna,
@@ -283,20 +276,15 @@ from diff_diff.survey import (
     compute_deff_diagnostics,
     make_pweight_design,
 )
-from diff_diff.synthetic_control import (
-    SyntheticControl,
-    synthetic_control,
-)
+from diff_diff.synthetic_control import SyntheticControl
 from diff_diff.synthetic_control_results import SyntheticControlResults
 from diff_diff.triple_diff import (
     TripleDifference,
     TripleDifferenceResults,
-    triple_difference,
 )
 from diff_diff.trop import (
     TROP,
     TROPResults,
-    trop,
 )
 from diff_diff.twfe_weights import (
     attgt_weights,
@@ -310,7 +298,6 @@ from diff_diff.two_stage import (
     TwoStageBootstrapResults,
     TwoStageDiD,
     TwoStageDiDResults,
-    two_stage_did,
 )
 from diff_diff.utils import (
     WildBootstrapResults,
@@ -355,33 +342,6 @@ CiC = ChangesInChanges
 RDD = RegressionDiscontinuity
 SCM = SyntheticControl
 
-# Alias diet (rows M-132..M-134, mechanism M-135): CDiD / Gardner /
-# Stacked are deprecated in 3.9 and removed in 4.0. They deliberately
-# do NOT live in module globals — dir()/vars() no longer list them —
-# but stay importable (and in __all__) through 3.9, served by the PEP
-# 562 module __getattr__ below, which emits the FutureWarning naming
-# the surviving class.
-_DEPRECATED_ALIASES = {
-    "CDiD": "ContinuousDiD",
-    "Gardner": "TwoStageDiD",
-    "Stacked": "StackedDiD",
-}
-
-
-def __getattr__(name: str) -> _Any:
-    """PEP 562 warning shim for the dieted aliases (row M-135)."""
-    target = _DEPRECATED_ALIASES.get(name)
-    if target is not None:
-        _warnings.warn(
-            f"diff_diff.{name} is deprecated and will be removed in 4.0; "
-            f"use diff_diff.{target}.",
-            FutureWarning,
-            stacklevel=2,
-        )
-        return globals()[target]
-    raise AttributeError(f"module 'diff_diff' has no attribute {name!r}")
-
-
 __version__ = "3.13.0"
 __all__ = [
     # Estimators
@@ -402,30 +362,24 @@ __all__ = [
     "TROP",
     "SyntheticControl",
     "StackedDiD",
-    # Estimator aliases (short names). CDiD / Gardner / Stacked are
-    # deprecated (M-132..M-134): still importable through 3.9 via the
-    # module __getattr__ (M-135), gone from module globals/dir().
+    # Estimator aliases (short names).
     "DiD",
     "TWFE",
     "EventStudy",
     "SDiD",
     "CS",
-    "CDiD",
     "DCDH",
     "CiC",
     "SA",
     "BJS",
-    "Gardner",
     "DDD",
     "SDDD",
     "SCM",
-    "Stacked",
     "Bacon",
     # Bacon Decomposition
     "BaconDecomposition",
     "BaconDecompositionResults",
     "Comparison2x2",
-    "bacon_decompose",
     # Results
     "DiDResults",
     "MultiPeriodDiDResults",
@@ -442,21 +396,15 @@ __all__ = [
     "SABootstrapResults",
     "ImputationDiDResults",
     "ImputationBootstrapResults",
-    "imputation_did",
     "TwoStageDiDResults",
     "TwoStageBootstrapResults",
-    "two_stage_did",
     "SpilloverDiDResults",
     "TripleDifferenceResults",
-    "triple_difference",
     "StaggeredTripleDifference",
     "StaggeredTripleDiffResults",
     "TROPResults",
-    "trop",
     "SyntheticControlResults",
-    "synthetic_control",
     "StackedDiDResults",
-    "stacked_did",
     # EfficientDiD
     "EfficientDiD",
     "EfficientDiDResults",
@@ -466,7 +414,6 @@ __all__ = [
     "ChaisemartinDHaultfoeuilleResults",
     "DCDHBootstrapResults",
     "TWFEWeightsResult",
-    "chaisemartin_dhaultfoeuille",
     "twowayfeweights",
     # TWFE weight diagnostics (Callaway `twfeweights` port) - distinct from
     # the dCDH `twowayfeweights` surface above: these weight ATT(g,t)

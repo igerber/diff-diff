@@ -4,7 +4,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 
-from diff_diff._deprecation import warn_deprecated_kwarg
 from diff_diff.results_base import BaseResults, _coverage_pct
 
 
@@ -141,17 +140,8 @@ class LPDiDResults(BaseResults):
     # serialization
     # ------------------------------------------------------------------
     def to_dataframe(self, level: str = "event_study") -> pd.DataFrame:
-        # "event_study" is the canonical level spelling library-wide; the
-        # drifted "event" warns and maps through the 3.9 shim window
-        # (missed-rename row, section 8 rule 10 - same unification as
-        # WooldridgeDiDResults.aggregate's M-086).
-        if level == "event":
-            warn_deprecated_kwarg(
-                "LPDiDResults.to_dataframe",
-                "level='event'",
-                "use level='event_study' instead",
-            )
-            level = "event_study"
+        # "event_study" is the canonical level spelling library-wide (the
+        # 3.x "event" spelling was retired at 4.0 and now raises below).
         if level == "event_study":
             if self.event_study is None:
                 raise ValueError("event_study dataframe was not computed")

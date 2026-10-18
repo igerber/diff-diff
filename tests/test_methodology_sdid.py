@@ -2099,14 +2099,14 @@ class TestGetSetParams:
         assert params["zeta_omega"] == 1.0
         assert params["zeta_lambda"] == 0.5
 
-    def test_get_params_old_names_always_none(self):
-        """get_params mirrors the __init__ signature, so the deprecated
-        lambda_reg/zeta appear - but always as None (warn-and-discard is
-        normalized at construction), keeping cls(**get_params()) silent."""
+    def test_get_params_has_no_legacy_names(self):
+        """M-001/M-002 removal pin: get_params mirrors the __init__ signature,
+        so the removed lambda_reg/zeta no longer appear and
+        cls(**get_params()) round-trips silently."""
         sdid = SyntheticDiD()
         params = sdid.get_params()
-        assert params["lambda_reg"] is None
-        assert params["zeta"] is None
+        assert "lambda_reg" not in params
+        assert "zeta" not in params
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             clone = SyntheticDiD(**params)
@@ -2119,14 +2119,15 @@ class TestGetSetParams:
         assert sdid.zeta_omega == 2.0
         assert sdid.zeta_lambda == 0.1
 
-    def test_set_params_deprecated_names_warn(self):
-        """set_params with old names should emit DeprecationWarning."""
+    def test_set_params_removed_names_raise(self):
+        """M-001/M-002 removal pin: set_params rejects the old names as unknown."""
         sdid = SyntheticDiD()
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
+        with pytest.raises(ValueError, match="Unknown parameter"):
             sdid.set_params(lambda_reg=1.0)
-            dep_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
-            assert len(dep_warnings) == 1
+        with pytest.raises(ValueError, match="Unknown parameter"):
+            sdid.set_params(zeta=1.0)
+        assert sdid.zeta_omega is None
+        assert sdid.zeta_lambda is None
 
     def test_set_params_unknown_raises(self):
         """set_params with unknown name should raise ValueError."""
@@ -2175,39 +2176,25 @@ class TestGetSetParams:
         assert sdid.n_bootstrap == 200
 
 
-class TestDeprecatedParams:
-    """Test deprecated parameter handling in __init__."""
+class TestRemovedParams:
+    """M-001/M-002 removal pins: the pre-3.5 ``lambda_reg`` / ``zeta``
+    constructor names (deprecated warn-and-discard shims through 3.13) are
+    gone at 4.0; ``zeta_omega`` / ``zeta_lambda`` are the only spellings."""
 
-    def test_lambda_reg_warns(self):
-        """SyntheticDiD(lambda_reg=...) emits DeprecationWarning."""
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            sdid = SyntheticDiD(lambda_reg=0.1)
-            dep = [x for x in w if issubclass(x.category, DeprecationWarning)]
-            assert len(dep) == 1
-            assert "lambda_reg" in str(dep[0].message)
+    def test_lambda_reg_raises_typeerror(self):
+        with pytest.raises(TypeError, match="unexpected keyword argument 'lambda_reg'"):
+            SyntheticDiD(lambda_reg=0.1)
 
-        # Deprecated param is ignored — auto-computed used
-        assert sdid.zeta_omega is None
+    def test_zeta_raises_typeerror(self):
+        with pytest.raises(TypeError, match="unexpected keyword argument 'zeta'"):
+            SyntheticDiD(zeta=2.0)
 
-    def test_zeta_warns(self):
-        """SyntheticDiD(zeta=...) emits DeprecationWarning."""
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            sdid = SyntheticDiD(zeta=2.0)
-            dep = [x for x in w if issubclass(x.category, DeprecationWarning)]
-            assert len(dep) == 1
-            assert "zeta" in str(dep[0].message)
-
-        assert sdid.zeta_lambda is None
-
-    def test_both_deprecated_params(self):
-        """Both deprecated params at once should emit two warnings."""
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            SyntheticDiD(lambda_reg=0.5, zeta=1.5)
-            dep = [x for x in w if issubclass(x.category, DeprecationWarning)]
-            assert len(dep) == 2
+    def test_canonical_names_silent(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            sdid = SyntheticDiD(zeta_omega=0.1, zeta_lambda=2.0)
+        assert sdid.zeta_omega == 0.1
+        assert sdid.zeta_lambda == 2.0
 
     def test_default_variance_method_is_placebo(self):
         """Default variance_method should be 'placebo' (matching R)."""
@@ -2216,12 +2203,12 @@ class TestDeprecatedParams:
 
 
 class TestVarianceEffectsRename:
-    """`placebo_effects` was renamed to `variance_effects`; the old name is a
-    deprecated read-only alias (removed in v4.0.0)."""
+    """`placebo_effects` was renamed to `variance_effects`; the deprecated
+    read-only alias was removed at 4.0 (M-003)."""
 
-    def test_placebo_effects_deprecated_alias(self):
-        """result.placebo_effects warns and returns the same array as
-        result.variance_effects; the alias is read-only."""
+    def test_placebo_effects_removed(self):
+        """M-003 removal pin: ``result.placebo_effects`` raises AttributeError;
+        the draws live only under ``variance_effects``."""
         df = _make_panel(seed=42)
         res = SyntheticDiD(variance_method="placebo", n_bootstrap=50, seed=1).fit(
             df,
@@ -2231,13 +2218,10 @@ class TestVarianceEffectsRename:
             time="period",
             post_periods=[5, 6, 7],
         )
-        with pytest.warns(DeprecationWarning, match="placebo_effects is deprecated"):
-            aliased = res.placebo_effects
-        # Alias returns the identical object held by the renamed field.
-        assert aliased is res.variance_effects
-        # Read-only: assignment to the deprecated property raises.
+        assert res.variance_effects is not None
+        assert "placebo_effects" not in type(res).__dataclass_fields__
         with pytest.raises(AttributeError):
-            res.placebo_effects = aliased
+            res.placebo_effects
 
     def test_variance_effects_access_emits_no_warning(self):
         """Normal use must not route through the deprecated alias: reading
@@ -3619,8 +3603,9 @@ class TestSyntheticDiDResultsPickle:
     def test_legacy_pickle_state_maps_placebo_effects(self):
         """A result pickled before the placebo_effects → variance_effects
         rename (state carries the old key, no variance_effects) loads with the
-        draws under variance_effects and the deprecated alias still surfaces
-        them."""
+        draws under variance_effects. The ``__setstate__`` migration is KEPT
+        at 4.0 (spec section 5: 3.x pickles load) even though the
+        ``placebo_effects`` alias itself is gone (M-003)."""
         res = self._fit(seed=109)  # jackknife → variance_effects populated
         effects = np.asarray(res.variance_effects)
         assert effects.size > 0
@@ -3631,8 +3616,8 @@ class TestSyntheticDiDResultsPickle:
         restored = type(res).__new__(type(res))
         restored.__setstate__(legacy_state)
         assert np.allclose(np.asarray(restored.variance_effects), effects)
-        with pytest.warns(DeprecationWarning, match="placebo_effects is deprecated"):
-            assert np.allclose(np.asarray(restored.placebo_effects), effects)
+        with pytest.raises(AttributeError):
+            restored.placebo_effects
 
     def test_in_time_placebo_raises_after_pickle(self):
         import pickle

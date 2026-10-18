@@ -99,11 +99,6 @@ Results container for Triple Difference estimation.
       ~TripleDifferenceResults.to_dict
       ~TripleDifferenceResults.to_dataframe
 
-Convenience Function
---------------------
-
-.. autofunction:: diff_diff.triple_difference
-
 Estimation Methods
 ------------------
 
@@ -166,8 +161,7 @@ With covariates::
         covariates=['age', 'education']
     )
 
-Quick one-call estimation (the ``triple_difference()`` wrapper is
-deprecated since 3.9 and removed in 4.0)::
+Quick one-call estimation::
 
     from diff_diff import TripleDifference, generate_ddd_data
 

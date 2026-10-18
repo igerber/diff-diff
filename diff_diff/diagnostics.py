@@ -17,7 +17,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 
-from diff_diff._deprecation import NOT_SUPPLIED, require_arg, resolve_renamed_kwarg
 from diff_diff.estimators import DifferenceInDifferences
 from diff_diff.results import _get_significance_stars
 from diff_diff.results_base import Diagnostic, _coverage_pct
@@ -574,12 +573,11 @@ def permutation_test(
     data: pd.DataFrame,
     outcome: str,
     treatment: str,
-    post: Any = NOT_SUPPLIED,
-    unit: Any = NOT_SUPPLIED,
+    post: str,
+    unit: str,
     n_permutations: int = 1000,
     alpha: float = 0.05,
     seed: Optional[int] = None,
-    time: Any = NOT_SUPPLIED,
     **estimator_kwargs,
 ) -> PlaceboTestResults:
     """
@@ -602,8 +600,7 @@ def permutation_test(
     treatment : str
         Treatment indicator column.
     post : str
-        Post-period indicator column (0/1). (``time`` is a deprecated
-        alias; warns with ``FutureWarning`` and will be removed in 4.0.)
+        Post-period indicator column (0/1).
     unit : str
         Unit identifier column.
     n_permutations : int, default=1000
@@ -638,11 +635,6 @@ def permutation_test(
 
     # First, fit original model
     did = DifferenceInDifferences(**estimator_kwargs)
-    post = resolve_renamed_kwarg(
-        "permutation_test", "time", time, "post", post, default=NOT_SUPPLIED
-    )
-    require_arg("permutation_test", "post", post)
-    require_arg("permutation_test", "unit", unit)
     time = post  # body-local name; the public parameter is post
     original_results = did.fit(data, outcome=outcome, treatment=treatment, post=time)
     original_att = original_results.att
@@ -736,10 +728,9 @@ def leave_one_out_test(
     data: pd.DataFrame,
     outcome: str,
     treatment: str,
-    post: Any = NOT_SUPPLIED,
-    unit: Any = NOT_SUPPLIED,
+    post: str,
+    unit: str,
     alpha: float = 0.05,
-    time: Any = NOT_SUPPLIED,
     **estimator_kwargs,
 ) -> PlaceboTestResults:
     """
@@ -757,8 +748,7 @@ def leave_one_out_test(
     treatment : str
         Treatment indicator column.
     post : str
-        Post-period indicator column (0/1). (``time`` is a deprecated
-        alias; warns with ``FutureWarning`` and will be removed in 4.0.)
+        Post-period indicator column (0/1).
     unit : str
         Unit identifier column.
     alpha : float, default=0.05
@@ -773,11 +763,6 @@ def leave_one_out_test(
     """
     # Fit original model
     did = DifferenceInDifferences(**estimator_kwargs)
-    post = resolve_renamed_kwarg(
-        "leave_one_out_test", "time", time, "post", post, default=NOT_SUPPLIED
-    )
-    require_arg("leave_one_out_test", "post", post)
-    require_arg("leave_one_out_test", "unit", unit)
     time = post  # body-local name; the public parameter is post
     original_results = did.fit(data, outcome=outcome, treatment=treatment, post=time)
     original_att = original_results.att

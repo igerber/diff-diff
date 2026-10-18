@@ -21,9 +21,3 @@
 
 
 
-   .. rubric:: Attributes
-
-   .. autosummary::
-
-      ~StackedDiD.clean_control
-

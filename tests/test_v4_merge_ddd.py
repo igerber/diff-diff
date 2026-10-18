@@ -471,10 +471,10 @@ def _quintet(r):
 class TestGateA2x2x2Unchanged:
     """The rewritten fit prologue/signature/dispatch moved no 2x2x2 numbers.
 
-    There is no surviving in-process pre-merge path to compare against: direct
-    construction and the triple_difference() wrapper both route through the
-    modified class, so a shared regression would be invisible to a
-    self-comparison. Hence the committed literals.
+    There is no surviving in-process pre-merge path to compare against: every
+    route (the former triple_difference() wrapper included, before its 4.0
+    removal) goes through the modified class, so a shared regression would be
+    invisible to a self-comparison. Hence the committed literals.
     """
 
     @pytest.mark.parametrize("method", ["dr", "reg", "ipw"])
@@ -833,12 +833,6 @@ class TestGateCRejectionMatrix:
         with pytest.raises(ValueError, match="applies to the staggered DDD mode only"):
             TripleDifference(**{param: value}).fit(cross, **C_COLS)
 
-    def test_staggered_rejects_robust(self, stag):
-        with pytest.warns(FutureWarning, match="robust"):
-            est = TripleDifference(robust=True)
-        with pytest.raises(ValueError, match="applies to the 2x2x2 mode only"):
-            est.fit(stag, partition="eligibility", **S_NEW)
-
     def test_staggered_rejects_mutated_vcov_type(self, stag):
         """vcov_type is validated eagerly in __init__ and by set_params' probe
         re-init, so its ONLY live route is direct attribute mutation - the
@@ -1005,7 +999,6 @@ class TestGateEDeprecation:
 
 _MERGED_PARAMS = {
     "estimation_method",
-    "robust",
     "cluster",
     "vcov_type",
     "alpha",
@@ -1484,42 +1477,6 @@ class TestGateHConsumers:
             max_steps=2,
             progress=False,
         )
-
-    def test_deprecated_wrapper_stays_2x2x2_only(self, cross):
-        """`triple_difference()` is deliberately NOT extended to the staggered
-        mode. It is itself deprecated (row M-075, removed at 4.0), phase 3(a)
-        extended no wrapper with its new mode, and adding params to a dying
-        surface would mint fresh 4.0 removal obligations. The migration steer -
-        'construct the estimator instead' - is the intended pressure. Pinned so
-        the omission reads as a decision."""
-        import inspect
-
-        from diff_diff import triple_difference
-
-        params = set(inspect.signature(triple_difference).parameters)
-        staggered_only = {
-            "unit",
-            "first_treat",
-            "aggregate",
-            "balance_e",
-            "control_group",
-            "anticipation",
-            "base_period",
-            "n_bootstrap",
-            "bootstrap_weights",
-            "seed",
-            "cband",
-        }
-        assert not (params & staggered_only), (
-            "the deprecated wrapper grew a staggered-mode param; it is slated for "
-            "4.0 removal and must not widen"
-        )
-
-        # ...and the 2x2x2 route it DOES own still works, warning exactly once
-        with pytest.warns(FutureWarning, match="triple_difference.. is deprecated"):
-            r = triple_difference(cross, "outcome", "group", "partition", "time")
-        direct = TripleDifference().fit(cross, **C_COLS)
-        _eq_with_nans(_quintet(r), _quintet(direct))
 
     @pytest.mark.parametrize("fn_name", ["simulate_power", "simulate_mde", "simulate_sample_size"])
     def test_power_accepts_explicit_none_aggregate_and_balance_e(self, cross, fn_name):

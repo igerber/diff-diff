@@ -40,12 +40,12 @@ rows:
     new: null
     deprecated_in: "3.0.0"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: DeprecationWarning
     test_ref: tests/test_methodology_sdid.py
     code_refs: [diff_diff/synthetic_did.py]
-    notes: "Ignored since 3.0.0; use zeta_omega. Removal target bumped v3.1 -> v4.0.0 in 3.1.2 (SemVer)."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Ignored since 3.0.0; use zeta_omega. Removal target bumped v3.1 -> v4.0.0 in 3.1.2 (SemVer)."
   - id: M-002
     kind: param
     group: obligation-sdid-params
@@ -53,12 +53,12 @@ rows:
     new: null
     deprecated_in: "3.0.0"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: DeprecationWarning
     test_ref: tests/test_methodology_sdid.py
     code_refs: [diff_diff/synthetic_did.py]
-    notes: "Ignored since 3.0.0; use zeta_lambda. Also strip the set_params deprecation branch."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Ignored since 3.0.0; use zeta_lambda. Also strip the set_params deprecation branch."
   - id: M-003
     kind: field
     group: obligation-sdid-params
@@ -66,12 +66,12 @@ rows:
     new: "diff_diff:SyntheticDiDResults.variance_effects"
     deprecated_in: "3.5.2"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: DeprecationWarning
     test_ref: tests/test_methodology_sdid.py
     code_refs: [diff_diff/results.py, diff_diff/guides/llms-full.txt]
-    notes: "Alias property; remove together with the results.py docstring notes that reference it."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18); __setstate__ legacy-key migration kept so 3.x pickles still load. Alias property; remove together with the results.py docstring notes that reference it."
   - id: M-004
     kind: default-flip
     group: df-convention-flip
@@ -351,12 +351,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/estimators.py, diff_diff/diagnostics.py, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, docs/methodology/REGISTRY.md, diff_diff/power.py, diff_diff/datasets.py, diff_diff/prep_dgp.py, diff_diff/practitioner.py, diff_diff/agent_workflow.py, README.md, docs/index.rst, docs/quickstart.rst, docs/python_comparison.rst, docs/practitioner_decision_tree.rst, docs/practitioner_getting_started.rst]
-    notes: "2x2 'time' is a 0/1 post dummy - same name as the calendar column everywhere else with a different meaning (the library's worst overload)."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). 2x2 'time' is a 0/1 post dummy - same name as the calendar column everywhere else with a different meaning (the library's worst overload)."
   - id: M-031
     kind: param
     group: renames-post
@@ -379,12 +379,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/wooldridge.py, docs/methodology/REGISTRY.md, docs/methodology/papers/wooldridge-2023-review.md, docs/methodology/papers/wooldridge-2025-review.md, diff_diff/guides/llms-full.txt]
-    notes: "Only estimator using 'cohort' for the first-treatment column; 12 others use first_treat."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Only estimator using 'cohort' for the first-treatment column; 12 others use first_treat."
   - id: M-033
     kind: param
     group: renames-dcdh
@@ -393,12 +393,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/chaisemartin_dhaultfoeuille.py, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, docs/api/chaisemartin_dhaultfoeuille.rst]
-    notes: "'group' here means the unit id (R DIDmultiplegt vocabulary) but means the treated-group 0/1 indicator in TripleDifference - name-carries-altered-meaning violation."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). 'group' here means the unit id (R DIDmultiplegt vocabulary) but means the treated-group 0/1 indicator in TripleDifference - name-carries-altered-meaning violation."
   - id: M-034
     kind: param
     group: renames-dcdh
@@ -407,12 +407,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/chaisemartin_dhaultfoeuille.py, docs/methodology/REGISTRY.md, diff_diff/guides/llms-full.txt]
-    notes: "Majority spelling is covariates."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Majority spelling is covariates."
   - id: M-035
     kind: param
     group: renames-col-suffix
@@ -421,12 +421,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had.py, diff_diff/practitioner.py, diff_diff/guides/llms-full.txt, docs/methodology/REGISTRY.md, docs/methodology/papers/calonico-cattaneo-farrell-titiunik-2019-review.md]
-    notes: "_col suffix used only by HAD and RDD; 22 other estimators use bare names."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). _col suffix used only by HAD and RDD; 22 other estimators use bare names."
   - id: M-036
     kind: param
     group: renames-col-suffix
@@ -435,12 +435,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had.py, diff_diff/practitioner.py, diff_diff/guides/llms-full.txt]
-    notes: "Matches ContinuousDiD's bare 'dose'."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Matches ContinuousDiD's bare 'dose'."
   - id: M-037
     kind: param
     group: renames-col-suffix
@@ -449,12 +449,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had.py, diff_diff/practitioner.py, diff_diff/guides/llms-full.txt]
-    notes: ""
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). "
   - id: M-038
     kind: param
     group: renames-col-suffix
@@ -463,12 +463,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had.py, diff_diff/practitioner.py, diff_diff/guides/llms-full.txt]
-    notes: ""
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). "
   - id: M-039
     kind: param
     group: renames-col-suffix
@@ -477,12 +477,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had.py, diff_diff/practitioner.py, diff_diff/agent_workflow.py, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-autonomous.txt, docs/methodology/REGISTRY.md, docs/methodology/papers/dechaisemartin-2026-review.md]
-    notes: ""
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). "
   - id: M-040
     kind: param
     group: renames-col-suffix
@@ -491,12 +491,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/rdd.py]
-    notes: ""
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). "
   - id: M-041
     kind: param
     group: renames-col-suffix
@@ -505,12 +505,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/rdd.py, diff_diff/guides/llms-full.txt]
-    notes: ""
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). "
   - id: M-042
     kind: param
     group: renames-col-suffix
@@ -519,12 +519,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/rdd.py, docs/methodology/REGISTRY.md, diff_diff/guides/llms-autonomous.txt, diff_diff/guides/llms-full.txt, diff_diff/guides/llms.txt]
-    notes: "Observed take-up column for fuzzy RD. Target RETARGETED from 'treatment' to 'takeup' by the gating-completeness amendment: the column accepts NON-BINARY (dose) take-up, matching R's fuzzy= (REGISTRY 'Estimand and estimator (fuzzy RD)'; the estimand label is data-dependent - complier LATE only when values are in {0,1}, otherwise a bare local Wald ratio). Section 8 rule 7 reserves 'treatment' for a 0/1 indicator and never a treatment level, so 'treatment' would have carried altered meaning here. 'takeup' is already the library's own vocabulary for it (the RD docstring example passes treatment_col='takeup'). No shim had shipped, so the retarget costs nothing."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Observed take-up column for fuzzy RD. Target RETARGETED from 'treatment' to 'takeup' by the gating-completeness amendment: the column accepts NON-BINARY (dose) take-up, matching R's fuzzy= (REGISTRY 'Estimand and estimator (fuzzy RD)'; the estimand label is data-dependent - complier LATE only when values are in {0,1}, otherwise a bare local Wald ratio). Section 8 rule 7 reserves 'treatment' for a 0/1 indicator and never a treatment level, so 'treatment' would have carried altered meaning here. 'takeup' is already the library's own vocabulary for it (the RD docstring example passes treatment_col='takeup'). No shim had shipped, so the retarget costs nothing."
   - id: M-094
     kind: field
     group: renames-col-suffix
@@ -533,12 +533,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/rdd.py]
-    notes: "Results-side mirror of [M-042]: a public dataclass field carrying the fit param's name, emitted by to_dict(). Renaming the param alone would leave the _col spelling on the serialized surface, which spec section 5 forbids from 4.0 (canonical names only). Target is 'takeup', not 'treatment', for the reason recorded on [M-042] (non-binary take-up is accepted, so 'treatment' would violate section 8 rule 7). Flips WITH [M-042] in the same Phase 2c diff."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18); __setstate__ legacy-key migration kept so 3.x pickles still load; serialized dual key dropped (canonical name only, spec section 5). Results-side mirror of [M-042]: a public dataclass field carrying the fit param's name, emitted by to_dict(). Renaming the param alone would leave the _col spelling on the serialized surface, which spec section 5 forbids from 4.0 (canonical names only). Target is 'takeup', not 'treatment', for the reason recorded on [M-042] (non-binary take-up is accepted, so 'treatment' would violate section 8 rule 7). Flips WITH [M-042] in the same Phase 2c diff."
   - id: M-043
     kind: param
     group: renames-control-group
@@ -547,12 +547,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/stacked_did.py, diff_diff/power.py, diff_diff/practitioner.py, diff_diff/guides/llms-practitioner.txt, docs/methodology/REGISTRY.md]
-    notes: "Same concept as control_group elsewhere; underscored value spellings win library-wide (spec section 8). CONSUMER MIGRATION: two sites read the ESTIMATOR attribute via getattr(estimator, 'clean_control', ...) and gate on it - power.py (a 'strict' survey_config rejection and a cross-check against control_group) and practitioner.py (guidance text naming the param). Same getattr-returns-None-after-removal failure mode as [M-095]'s results-side consumers, so both rows migrate their consumers in the shared Phase 2c diff; [M-095] covers results.clean_control readers, this row covers estimator.clean_control readers."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Same concept as control_group elsewhere; underscored value spellings win library-wide (spec section 8). CONSUMER MIGRATION: two sites read the ESTIMATOR attribute via getattr(estimator, 'clean_control', ...) and gate on it - power.py (a 'strict' survey_config rejection and a cross-check against control_group) and practitioner.py (guidance text naming the param). Same getattr-returns-None-after-removal failure mode as [M-095]'s results-side consumers, so both rows migrate their consumers in the shared Phase 2c diff; [M-095] covers results.clean_control readers, this row covers estimator.clean_control readers."
   - id: M-095
     kind: field
     group: renames-control-group
@@ -561,12 +561,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/stacked_did_results.py, diff_diff/_reporting_helpers.py, diff_diff/business_report.py, docs/methodology/REPORTING.md]
-    notes: "Results-side mirror of [M-043]: a public dataclass field carrying the constructor param's name, emitted by to_dict() and rendered by summary() ('Clean control:'). Renaming the param alone would leave the results metadata contradicting the param it reports. The VALUE spellings are already canonical ('not_yet_treated'); only the field name moves. Flips WITH [M-043] in the same Phase 2c diff; the summary() label follows. CONSUMER MIGRATION IS PART OF THIS ROW - two reporting sites read results.clean_control via getattr(..., None) and branch on 'never_treated'/'strict' (_reporting_helpers.py, business_report.py). A getattr default silently returns None after removal, so BOTH would fall through to the default 'not_yet_treated' description and misreport the identifying comparison group - a wrong-answer regression, not a crash. business_report.py also EMITS block['clean_control'] as a serialized reporting key, which section 5's canonical-names-only policy retires at 4.0 (the block keeps 'control_group'). REPORTING.md documents the field and updates with it. Tests must cover a results object exposing ONLY control_group, across all three values."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18); __setstate__ legacy-key migration kept so 3.x pickles still load; serialized dual key dropped (canonical name only, spec section 5). Results-side mirror of [M-043]: a public dataclass field carrying the constructor param's name, emitted by to_dict() and rendered by summary() ('Clean control:'). Renaming the param alone would leave the results metadata contradicting the param it reports. The VALUE spellings are already canonical ('not_yet_treated'); only the field name moves. Flips WITH [M-043] in the same Phase 2c diff; the summary() label follows. CONSUMER MIGRATION IS PART OF THIS ROW - two reporting sites read results.clean_control via getattr(..., None) and branch on 'never_treated'/'strict' (_reporting_helpers.py, business_report.py). A getattr default silently returns None after removal, so BOTH would fall through to the default 'not_yet_treated' description and misreport the identifying comparison group - a wrong-answer regression, not a crash. business_report.py also EMITS block['clean_control'] as a serialized reporting key, which section 5's canonical-names-only policy retires at 4.0 (the block keeps 'control_group'). REPORTING.md documents the field and updates with it. Tests must cover a results object exposing ONLY control_group, across all three values."
   - id: M-044
     kind: param
     group: renames-level
@@ -575,12 +575,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/wooldridge_results.py, docs/methodology/REPORTING.md, diff_diff/guides/llms-autonomous.txt, diff_diff/guides/llms-full.txt]
-    notes: "Every other to_dataframe selector is level=. Covers ONLY the to_dataframe param rename; the 'event' value vocabulary across Wooldridge's aggregation surfaces is [M-086], and the summary(aggregation=) surface is [M-087]."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Every other to_dataframe selector is level=. Covers ONLY the to_dataframe param rename; the 'event' value vocabulary across Wooldridge's aggregation surfaces is [M-086], and the summary(aggregation=) surface is [M-087]."
   - id: M-045
     kind: param
     group: renames-robust-drop
@@ -588,12 +588,12 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/estimators.py, docs/methodology/REGISTRY.md, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, diff_diff/synthetic_did.py]
-    notes: "Redundant with vcov_type; inherited by TwoWayFixedEffects (and MultiPeriodDiD until [M-010]). REMOVAL SCOPE (2026-10-18): the 4.0 removal also deletes the legacy-CR1 remap branch in estimators.py _resolve_effective_vcov_type (reachable only via an explicit robust=False that resolved vcov_type to 'classical'); _vcov_type_explicit itself STAYS - the TWFE/SunAbraham/WooldridgeDiD auto-cluster carve-outs read it."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Redundant with vcov_type; inherited by TwoWayFixedEffects (and MultiPeriodDiD until [M-010]). REMOVAL SCOPE (2026-10-18): the 4.0 removal also deletes the legacy-CR1 remap branch in estimators.py _resolve_effective_vcov_type (reachable only via an explicit robust=False that resolved vcov_type to 'classical'); _vcov_type_explicit itself STAYS - the TWFE/SunAbraham/WooldridgeDiD auto-cluster carve-outs read it."
   - id: M-046
     kind: param
     group: renames-robust-drop
@@ -601,12 +601,12 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/triple_diff.py]
-    notes: ""
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). "
   - id: M-047
     kind: param
     group: renames-robust-drop
@@ -614,12 +614,12 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/had.py]
-    notes: "Only estimator where robust defaults False - a third meaning for the same knob."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Only estimator where robust defaults False - a third meaning for the same knob."
 
   # ---- Results-field storage flips (4.0 native quintet) --------------------
   # Canonical att/se/t_stat/p_value/conf_int already exist as PROPERTIES on
@@ -824,12 +824,12 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     test_ref: tests/test_v4_wrapper_shims.py
     warning: FutureWarning
     code_refs: [diff_diff/imputation.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt, docs/methodology/REGISTRY.md, docs/api/imputation.rst]
-    notes: "Use ImputationDiD. Only 8 of 24 estimators ever had wrappers; the surface is retired rather than completed. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Use ImputationDiD. Only 8 of 24 estimators ever had wrappers; the surface is retired rather than completed. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9."
   - id: M-071
     kind: function
     group: function-wrappers
@@ -837,12 +837,12 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     test_ref: tests/test_v4_wrapper_shims.py
     warning: FutureWarning
     code_refs: [diff_diff/two_stage.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt, docs/methodology/REGISTRY.md, docs/api/two_stage.rst]
-    notes: "Use TwoStageDiD. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Use TwoStageDiD. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9."
   - id: M-072
     kind: function
     group: function-wrappers
@@ -850,12 +850,12 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     test_ref: tests/test_v4_wrapper_shims.py
     warning: FutureWarning
     code_refs: [diff_diff/stacked_did.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt, docs/api/stacked_did.rst]
-    notes: "Use StackedDiD. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Use StackedDiD. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9."
   - id: M-073
     kind: function
     group: function-wrappers
@@ -863,12 +863,12 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     test_ref: tests/test_v4_wrapper_shims.py
     warning: FutureWarning
     code_refs: [diff_diff/trop.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt, docs/api/trop.rst, docs/tutorials/10_trop.ipynb]
-    notes: "Use TROP. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Use TROP. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9."
   - id: M-074
     kind: function
     group: function-wrappers
@@ -876,12 +876,12 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     test_ref: tests/test_v4_wrapper_shims.py
     warning: FutureWarning
     code_refs: [diff_diff/synthetic_control.py, diff_diff/__init__.py, diff_diff/practitioner.py, docs/methodology/REGISTRY.md, diff_diff/guides/llms-full.txt, docs/api/synthetic_control.rst, tests/test_methodology_synthetic_control.py]
-    notes: "Use SyntheticControl. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Use SyntheticControl. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9."
   - id: M-075
     kind: function
     group: function-wrappers
@@ -889,12 +889,12 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     test_ref: tests/test_v4_wrapper_shims.py
     warning: FutureWarning
     code_refs: [diff_diff/triple_diff.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt, docs/api/triple_diff.rst, docs/tutorials/08_triple_diff.ipynb, docs/methodology/REGISTRY.md]
-    notes: "Use TripleDifference. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9. Phase 3(b) DELIBERATELY did not widen it to the merged staggered mode ([M-013]): the wrapper reaches only the 2x2x2 design, because growing a surface that is removed at 4.0 would mint fresh removal obligations for params introduced solely to be deleted, and phase 3(a) set the precedent by extending no wrapper with its new event-study mode. A caller needing staggered DDD migrates to the class - the migration this row exists to produce. Pinned by tests/test_v4_merge_ddd.py::TestGateHConsumers::test_deprecated_wrapper_stays_2x2x2_only and REGISTRY-noted."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Use TripleDifference. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9. Phase 3(b) DELIBERATELY did not widen it to the merged staggered mode ([M-013]): the wrapper reaches only the 2x2x2 design, because growing a surface that is removed at 4.0 would mint fresh removal obligations for params introduced solely to be deleted, and phase 3(a) set the precedent by extending no wrapper with its new event-study mode. A caller needing staggered DDD migrates to the class - the migration this row exists to produce. Pinned by tests/test_v4_merge_ddd.py::TestGateHConsumers::test_deprecated_wrapper_stays_2x2x2_only and REGISTRY-noted."
   - id: M-076
     kind: function
     group: function-wrappers
@@ -902,12 +902,12 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     test_ref: tests/test_v4_wrapper_shims.py
     warning: FutureWarning
     code_refs: [diff_diff/bacon.py, diff_diff/__init__.py, diff_diff/diagnostic_report.py, docs/methodology/REPORTING.md, docs/methodology/REGISTRY.md, diff_diff/guides/llms-autonomous.txt, diff_diff/guides/llms-full.txt, diff_diff/visualization/_diagnostic.py, diff_diff/twfe.py, docs/api/bacon.rst, docs/tutorials/02_staggered_did.ipynb, docs/tutorials/09_real_world_examples.ipynb]
-    notes: "Use BaconDecomposition. twowayfeweights stays - it is a diagnostic function, not a class duplicate. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9. Internal callers migrated to the class (diagnostic_report runner + emitted guidance in twfe/visualization); message uses diagnostic wording (BaconDecompositionResults subclasses the Diagnostic marker)."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Use BaconDecomposition. twowayfeweights stays - it is a diagnostic function, not a class duplicate. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9. Internal callers migrated to the class (diagnostic_report runner + emitted guidance in twfe/visualization); message uses diagnostic wording (BaconDecompositionResults subclasses the Diagnostic marker)."
   - id: M-077
     kind: function
     group: function-wrappers
@@ -915,12 +915,12 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     test_ref: tests/test_v4_wrapper_shims.py
     warning: FutureWarning
     code_refs: [diff_diff/chaisemartin_dhaultfoeuille.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt, docs/api/chaisemartin_dhaultfoeuille.rst]
-    notes: "Use ChaisemartinDHaultfoeuille. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Use ChaisemartinDHaultfoeuille. 3.9 shim shipped (2(d) PR-A): FutureWarning at call + docstring deprecation note; the autofunction API page stays through 3.9."
 
   - id: M-086
     kind: param-value
@@ -930,12 +930,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/wooldridge_results.py, docs/methodology/REGISTRY.md, docs/methodology/papers/wooldridge-2025-review.md]
-    notes: "Wooldridge's EXISTING post-fit aggregate() (emfx-style prior art for spec section 6) accepts the drifted 'event' spelling; unifies to 'event_study' across aggregate/summary/to_dataframe value vocabularies. 'gt' stays as a documented estimator extra (group-time table), like ContinuousDiD's 'dose'."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18); __setstate__ legacy-key migration kept so 3.x pickles still load; serialized dual key dropped (canonical name only, spec section 5). Wooldridge's EXISTING post-fit aggregate() (emfx-style prior art for spec section 6) accepts the drifted 'event' spelling; unifies to 'event_study' across aggregate/summary/to_dataframe value vocabularies. 'gt' stays as a documented estimator extra (group-time table), like ContinuousDiD's 'dose'."
   - id: M-087
     kind: param
     group: renames-level
@@ -944,12 +944,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/wooldridge_results.py]
-    notes: "summary() unifies to the library-wide summary(alpha=None) signature (spec section 5); aggregation selection lives on aggregate(). The alpha param arrives additively in the same PR."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). summary() unifies to the library-wide summary(alpha=None) signature (spec section 5); aggregation selection lives on aggregate(). The alpha param arrives additively in the same PR."
 
   - id: M-088
     kind: param
@@ -959,12 +959,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/rdplot.py]
-    notes: "RDPlot shipped post-ledger-freeze with _col suffixes; the spec section 8 missed-rename clause applies (matches RegressionDiscontinuity [M-040])."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). RDPlot shipped post-ledger-freeze with _col suffixes; the spec section 8 missed-rename clause applies (matches RegressionDiscontinuity [M-040])."
   - id: M-089
     kind: param
     group: renames-col-suffix
@@ -973,12 +973,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/rdplot.py]
-    notes: "Companion to [M-088]; matches [M-041]."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Companion to [M-088]; matches [M-041]."
   - id: M-090
     kind: behavior
     group: diagnostic-family
@@ -1110,12 +1110,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/continuous_did.py]
-    notes: "The one estimator with a design-matrix column in the constructor; moves to fit() per the sklearn split (spec section 7)."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). The one estimator with a design-matrix column in the constructor; moves to fit() per the sklearn split (spec section 7)."
 
   # ---- Completeness sweep (gating-completeness amendment) -------------------
   # The Phase 1 inventory scanned CLASS surfaces only, so module-level public
@@ -1131,12 +1131,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/chaisemartin_dhaultfoeuille.py]
-    notes: "Companion to [M-033] on the RETAINED diagnostic function (spec section 3.3 keeps twowayfeweights past 4.0 - it is not a class duplicate, so no wrapper removal mitigates this). Same meaning as dCDH's fit[group]: a unit identifier, which section 8 rule 3 reserves 'group' against. Unlike the chaisemartin_dhaultfoeuille() wrapper hit, which dies with [M-077]."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Companion to [M-033] on the RETAINED diagnostic function (spec section 3.3 keeps twowayfeweights past 4.0 - it is not a class duplicate, so no wrapper removal mitigates this). Same meaning as dCDH's fit[group]: a unit identifier, which section 8 rule 3 reserves 'group' against. Unlike the chaisemartin_dhaultfoeuille() wrapper hit, which dies with [M-077]."
   - id: M-098
     kind: param
     group: renames-col-suffix
@@ -1145,12 +1145,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
-    notes: "Public retained HAD diagnostic; section 8 rule 5. Mirrors the estimator-side [M-035]. The three exported HAD pretest entry points share one 5-param block ([M-098]..[M-112]) and shim together."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Public retained HAD diagnostic; section 8 rule 5. Mirrors the estimator-side [M-035]. The three exported HAD pretest entry points share one 5-param block ([M-098]..[M-112]) and shim together."
   - id: M-099
     kind: param
     group: renames-col-suffix
@@ -1159,12 +1159,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
-    notes: "Mirrors [M-036]; see [M-098]."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Mirrors [M-036]; see [M-098]."
   - id: M-100
     kind: param
     group: renames-col-suffix
@@ -1173,12 +1173,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
-    notes: "Mirrors [M-037]; see [M-098]."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Mirrors [M-037]; see [M-098]."
   - id: M-101
     kind: param
     group: renames-col-suffix
@@ -1187,12 +1187,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
-    notes: "Mirrors [M-038]; see [M-098]."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Mirrors [M-038]; see [M-098]."
   - id: M-102
     kind: param
     group: renames-col-suffix
@@ -1201,12 +1201,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
-    notes: "Mirrors [M-039]; see [M-098]."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Mirrors [M-039]; see [M-098]."
   - id: M-103
     kind: param
     group: renames-col-suffix
@@ -1215,12 +1215,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
-    notes: "Mirrors [M-035]; see [M-098]."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Mirrors [M-035]; see [M-098]."
   - id: M-104
     kind: param
     group: renames-col-suffix
@@ -1229,12 +1229,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
-    notes: "Mirrors [M-036]; see [M-098]."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Mirrors [M-036]; see [M-098]."
   - id: M-105
     kind: param
     group: renames-col-suffix
@@ -1243,12 +1243,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
-    notes: "Mirrors [M-037]; see [M-098]."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Mirrors [M-037]; see [M-098]."
   - id: M-106
     kind: param
     group: renames-col-suffix
@@ -1257,12 +1257,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
-    notes: "Mirrors [M-038]; see [M-098]."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Mirrors [M-038]; see [M-098]."
   - id: M-107
     kind: param
     group: renames-col-suffix
@@ -1271,12 +1271,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
-    notes: "Mirrors [M-039]; see [M-098]."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Mirrors [M-039]; see [M-098]."
   - id: M-108
     kind: param
     group: renames-col-suffix
@@ -1285,12 +1285,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
-    notes: "Mirrors [M-035]; see [M-098]."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Mirrors [M-035]; see [M-098]."
   - id: M-109
     kind: param
     group: renames-col-suffix
@@ -1299,12 +1299,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
-    notes: "Mirrors [M-036]; see [M-098]."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Mirrors [M-036]; see [M-098]."
   - id: M-110
     kind: param
     group: renames-col-suffix
@@ -1313,12 +1313,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
-    notes: "Mirrors [M-037]; see [M-098]."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Mirrors [M-037]; see [M-098]."
   - id: M-111
     kind: param
     group: renames-col-suffix
@@ -1327,12 +1327,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
-    notes: "Mirrors [M-038]; see [M-098]."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Mirrors [M-038]; see [M-098]."
   - id: M-112
     kind: param
     group: renames-col-suffix
@@ -1341,12 +1341,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/had_pretests.py]
-    notes: "Mirrors [M-039]; see [M-098]."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Mirrors [M-039]; see [M-098]."
   - id: M-113
     kind: param
     group: renames-col-suffix
@@ -1355,12 +1355,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/prep.py]
-    notes: "Public prep helper; section 8 rule 5. Target spelling is 'weights', the established library name for a weight column (5 public class surfaces use it) - NOT bare 'weight'."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Public prep helper; section 8 rule 5. Target spelling is 'weights', the established library name for a weight column (5 public class surfaces use it) - NOT bare 'weight'."
   - id: M-114
     kind: field
     group: renames-dcdh
@@ -1369,12 +1369,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_mechanical.py
     code_refs: [diff_diff/chaisemartin_dhaultfoeuille_results.py, diff_diff/chaisemartin_dhaultfoeuille.py, docs/methodology/REGISTRY.md]
-    notes: "Results-side mirror of [M-033] under section 8 rule 9. dCDH's 'groups' are UNIT identifiers ('Group identifiers in the post-filter sample'), the same column fit[group] renames to unit - distinct from the CS-family 'groups', which are ATT(g,t) cohorts and stay as domain vocabulary. summary()/repr() labels follow; needs __setstate__ pickle migration per spec section 5. The n_groups_dropped_* counters are NOT renamed by this row (they count dropped units but read as diagnostics; re-audit at 4.0 if the vocabulary drifts)."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18); __setstate__ legacy-key migration kept so 3.x pickles still load. Results-side mirror of [M-033] under section 8 rule 9. dCDH's 'groups' are UNIT identifiers ('Group identifiers in the post-filter sample'), the same column fit[group] renames to unit - distinct from the CS-family 'groups', which are ATT(g,t) cohorts and stay as domain vocabulary. summary()/repr() labels follow; needs __setstate__ pickle migration per spec section 5. The n_groups_dropped_* counters are NOT renamed by this row (they count dropped units but read as diagnostics; re-audit at 4.0 if the vocabulary drifts)."
   - id: M-115
     kind: param
     group: renames-robust-drop
@@ -1382,12 +1382,12 @@ rows:
     new: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/linalg.py, diff_diff/sun_abraham.py]
-    notes: "Fourth site of the 'robust' drop - spec section 7 says the flag dies 'everywhere it exists' but [M-045]..[M-047] enumerated only three. LinearRegression is a top-level export with its OWN __init__ (the TWFE/MultiPeriodDiD hits inherit DifferenceInDifferences.__init__ and ride [M-045]). Redundant with vcov_type, same as its siblings. REMOVAL SCOPE (2026-10-18): the 4.0 removal also deletes LinearRegression's legacy-CR1 remap branch in linalg.py (the estimators.py twin named on [M-045]); _vcov_type_explicit STAYS."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Fourth site of the 'robust' drop - spec section 7 says the flag dies 'everywhere it exists' but [M-045]..[M-047] enumerated only three. LinearRegression is a top-level export with its OWN __init__ (the TWFE/MultiPeriodDiD hits inherit DifferenceInDifferences.__init__ and ride [M-045]). Redundant with vcov_type, same as its siblings. REMOVAL SCOPE (2026-10-18): the 4.0 removal also deletes LinearRegression's legacy-CR1 remap branch in linalg.py (the estimators.py twin named on [M-045]); _vcov_type_explicit STAYS."
 
   # ---- Phase 2b PR 1: the post-fit aggregation surface ---------------------
   # Reserved-id pool for the later 2b PRs (drafted with M-117): M-120 was
@@ -1594,10 +1594,11 @@ rows:
     new_target: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
+    status: done
     phase: 5
+    test_ref: tests/test_aliases.py
     code_refs: [diff_diff/__init__.py, docs/api/estimators.rst, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, tests/test_aliases.py]
-    notes: "Alias diet 2026-07-31: not an established literature name and one edit from CiC/DiD/DCDH. Target class survives, so no parent-class shim can carry the warning - the 3.9 FutureWarning rides the module __getattr__ shim ([M-135]); removal at 4.0. code_refs list the known reader surfaces (section 8 rule 11); the 2d/removal PRs also grep repo-wide; 3.9 FutureWarning live via [M-135] since 2(d) PR-A."
+    notes: "RETIRED at the 4.0 cut (PR 2, 2026-10-18): the name is absent from diff_diff and __all__; tests/test_aliases.py pins the absence. Alias diet 2026-07-31: not an established literature name and one edit from CiC/DiD/DCDH. Target class survives, so no parent-class shim can carry the warning - the 3.9 FutureWarning rides the module __getattr__ shim ([M-135]); removal at 4.0. code_refs list the known reader surfaces (section 8 rule 11); the 2d/removal PRs also grep repo-wide; 3.9 FutureWarning live via [M-135] since 2(d) PR-A."
   - id: M-133
     kind: alias
     group: alias-table
@@ -1607,10 +1608,11 @@ rows:
     new_target: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
+    status: done
     phase: 5
+    test_ref: tests/test_aliases.py
     code_refs: [diff_diff/__init__.py, docs/api/estimators.rst, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, diff_diff/guides/llms-autonomous.txt, tests/test_aliases.py, diff_diff/diagnostic_report.py, diff_diff/business_report.py, diff_diff/power.py]
-    notes: "Alias diet 2026-07-31: a vague English adjective saving three characters over StackedDiD, with zero lookup value. Target class survives - the 3.9 FutureWarning rides the module __getattr__ shim ([M-135]); removal at 4.0. code_refs list the known reader surfaces; the 2d/removal PRs also grep repo-wide; 3.9 FutureWarning live via [M-135] since 2(d) PR-A."
+    notes: "RETIRED at the 4.0 cut (PR 2, 2026-10-18): the name is absent from diff_diff and __all__; tests/test_aliases.py pins the absence. Alias diet 2026-07-31: a vague English adjective saving three characters over StackedDiD, with zero lookup value. Target class survives - the 3.9 FutureWarning rides the module __getattr__ shim ([M-135]); removal at 4.0. code_refs list the known reader surfaces; the 2d/removal PRs also grep repo-wide; 3.9 FutureWarning live via [M-135] since 2(d) PR-A."
   - id: M-134
     kind: alias
     group: alias-table
@@ -1620,10 +1622,11 @@ rows:
     new_target: null
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
+    status: done
     phase: 5
+    test_ref: tests/test_aliases.py
     code_refs: [diff_diff/__init__.py, docs/api/estimators.rst, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, diff_diff/guides/llms-autonomous.txt, tests/test_aliases.py, diff_diff/diagnostic_report.py, diff_diff/practitioner.py, diff_diff/business_report.py]
-    notes: "Alias diet 2026-07-31: author surname as a class name; the ecosystem name for the method is did2s and 'Gardner (2022)' prose citations are unaffected. Target class survives - the 3.9 FutureWarning rides the module __getattr__ shim ([M-135]); removal at 4.0. code_refs list the known reader surfaces; the 2d/removal PRs also grep repo-wide; 3.9 FutureWarning live via [M-135] since 2(d) PR-A."
+    notes: "RETIRED at the 4.0 cut (PR 2, 2026-10-18): the name is absent from diff_diff and __all__; tests/test_aliases.py pins the absence. Alias diet 2026-07-31: author surname as a class name; the ecosystem name for the method is did2s and 'Gardner (2022)' prose citations are unaffected. Target class survives - the 3.9 FutureWarning rides the module __getattr__ shim ([M-135]); removal at 4.0. code_refs list the known reader surfaces; the 2d/removal PRs also grep repo-wide; 3.9 FutureWarning live via [M-135] since 2(d) PR-A."
   - id: M-135
     kind: behavior
     group: alias-table
@@ -1636,7 +1639,7 @@ rows:
     phase: 2
     test_ref: tests/test_aliases.py
     code_refs: [diff_diff/__init__.py]
-    notes: "Alias-diet warning mechanism: CDiD/Stacked/Gardner served via a PEP 562 module __getattr__ emitting FutureWarning naming the surviving class. Names stay in __all__ through 3.9 but leave module globals: dir()/vars() shrink symmetrically (test_dir_returns_full_module_namespace unaffected) and star-import fires the alias warnings - SIX recorded under simplefilter('always'), not three: the package import protocol resolves each missing __all__ name twice (_handle_fromlist hasattr-probe, then the IMPORT_STAR getattr), so the test asserts the message SET, not a count - accepted diet behavior, documented in v4-design section 3.2. Shipped in 2(d) PR-A. Removals are [M-132]..[M-134]."
+    notes: "MECHANISM RETIRED at the 4.0 cut (PR 2, 2026-10-18): __getattr__ and _DEPRECATED_ALIASES deleted together with [M-132]..[M-134]; tests/test_aliases.py now pins absence. Alias-diet warning mechanism: CDiD/Stacked/Gardner served via a PEP 562 module __getattr__ emitting FutureWarning naming the surviving class. Names stay in __all__ through 3.9 but leave module globals: dir()/vars() shrink symmetrically (test_dir_returns_full_module_namespace unaffected) and star-import fires the alias warnings - SIX recorded under simplefilter('always'), not three: the package import protocol resolves each missing __all__ name twice (_handle_fromlist hasattr-probe, then the IMPORT_STAR getattr), so the test asserts the message SET, not a count - accepted diet behavior, documented in v4-design section 3.2. Shipped in 2(d) PR-A. Removals are [M-132]..[M-134]."
   - id: M-136
     kind: param-value
     group: renames-level
@@ -1645,12 +1648,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/lpdid_results.py]
-    notes: "Missed-rename amendment (section 8 rule 10, 2026-08-02): LPDiD shipped the drifted 'event' level spelling after the ledger froze; every sibling to_dataframe(level=) uses 'event_study' (two_stage/stacked/staggered/imputation). Same value unification as [M-086]; the default flips to the canonical spelling (identical frame), only an explicit 'event' warns."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Missed-rename amendment (section 8 rule 10, 2026-08-02): LPDiD shipped the drifted 'event' level spelling after the ledger froze; every sibling to_dataframe(level=) uses 'event_study' (two_stage/stacked/staggered/imputation). Same value unification as [M-086]; the default flips to the canonical spelling (identical frame), only an explicit 'event' warns."
   - id: M-137
     kind: param
     group: renames-post
@@ -1659,12 +1662,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/diagnostics.py, docs/api/diagnostics.rst, docs/tutorials/04_parallel_trends.ipynb]
-    notes: "Missed-rename amendment (section 8 rules 1+10, 2026-08-02): the public time param forwards verbatim into DifferenceInDifferences.fit's 0/1 post dummy (validate_binary at the callee) - a rule-1 overload the phase-1 inventory missed because the surface is a diagnostic function. Companion to [M-030]; [M-138] is the leave_one_out_test twin. The run_placebo_test/run_all_placebo_tests WRAPPERS keep their overloaded time (calendar for timing/group tests, post dummy for these two callees) - a rename cannot fix that; redesign tracked in TODO.md."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Missed-rename amendment (section 8 rules 1+10, 2026-08-02): the public time param forwards verbatim into DifferenceInDifferences.fit's 0/1 post dummy (validate_binary at the callee) - a rule-1 overload the phase-1 inventory missed because the surface is a diagnostic function. Companion to [M-030]; [M-138] is the leave_one_out_test twin. The run_placebo_test/run_all_placebo_tests WRAPPERS keep their overloaded time (calendar for timing/group tests, post dummy for these two callees) - a rename cannot fix that; redesign tracked in TODO.md."
   - id: M-138
     kind: param
     group: renames-post
@@ -1673,12 +1676,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/diagnostics.py, docs/api/diagnostics.rst, docs/tutorials/04_parallel_trends.ipynb]
-    notes: "Twin of [M-137] - see its notes for the missed-rename rationale and the wrapper-overload deferral."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Twin of [M-137] - see its notes for the missed-rename rationale and the wrapper-overload deferral."
 
   - id: M-139
     kind: param
@@ -1740,12 +1743,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_merge_cic.py
     code_refs: [diff_diff/changes_in_changes_results.py, diff_diff/changes_in_changes.py, diff_diff/practitioner.py, docs/methodology/REGISTRY.md]
-    notes: "Results-side mirror of [M-015] under section 8 rule 9: the field already held exactly the tag the new method= param sets ('cic'/'qdid'), so leaving it named 'estimator' would ship a param and its echoing field under different names and keep emitting 'estimator' from to_dict() forever. WooldridgeDiDResults.method is the in-repo template (a lowercase method tag selected by a method= constructor param, mirrored into summary()/to_dict()/__repr__). It also resolves a pre-existing cross-class collision: AggregationResult.estimator holds a CLASS NAME while this field holds a method tag. Shim is deprecated_field_property (read-only BY DESIGN - setattr must fail rather than write a shadow attribute the renamed field cannot see) plus a __setstate__ key migration; to_dict() emits BOTH keys through 3.9 per the [M-094] twin and spec section 5, so test_to_dict_keys stays green untouched and the old key drops at 4.0. __repr__'s user-visible label flips to method=. ENFORCEMENT NOTE: adding this row forces 'estimator' into test_naming_guard's _PATTERN_TOKENS (test_predicate_binds_to_ledger_tokens requires every live param/field rename token to satisfy _pattern_hit), which arms Duty A repo-wide - hence the four SURFACE_ALLOWLIST entries for the independent same-named surfaces (AggregationResult.estimator and the estimator= instance param on the three power entry points). 'estimator' is also added to _AMBIGUOUS_TOKENS so Duty C matches through the attr/quoted lanes only: the kwarg lane's remaining hits are the construction site (which becomes method= here) and validate_covariate_names(..., estimator=...), an unrelated parameter. REGISTRY.md is in code_refs because this PR's own REGISTRY subsection names the renamed field and would otherwise be an uncovered Duty C hit in the same diff that writes it. SCOPE OF THE WINDOW (decision, recorded as a REGISTRY Note): the shim covers the READ path, not the CONSTRUCT path - ChangesInChangesResults(..., estimator=...) raises TypeError from 3.9 rather than warning until 4.0, matching [M-094] and [M-114], neither of which preserved a deprecated constructor keyword. The container has one library call site; a constructor shim would add a deprecated surface with no row of its own."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18); __setstate__ legacy-key migration kept so 3.x pickles still load; serialized dual key dropped (canonical name only, spec section 5). Results-side mirror of [M-015] under section 8 rule 9: the field already held exactly the tag the new method= param sets ('cic'/'qdid'), so leaving it named 'estimator' would ship a param and its echoing field under different names and keep emitting 'estimator' from to_dict() forever. WooldridgeDiDResults.method is the in-repo template (a lowercase method tag selected by a method= constructor param, mirrored into summary()/to_dict()/__repr__). It also resolves a pre-existing cross-class collision: AggregationResult.estimator holds a CLASS NAME while this field holds a method tag. Shim is deprecated_field_property (read-only BY DESIGN - setattr must fail rather than write a shadow attribute the renamed field cannot see) plus a __setstate__ key migration; to_dict() emits BOTH keys through 3.9 per the [M-094] twin and spec section 5, so test_to_dict_keys stays green untouched and the old key drops at 4.0. __repr__'s user-visible label flips to method=. ENFORCEMENT NOTE: adding this row forces 'estimator' into test_naming_guard's _PATTERN_TOKENS (test_predicate_binds_to_ledger_tokens requires every live param/field rename token to satisfy _pattern_hit), which arms Duty A repo-wide - hence the four SURFACE_ALLOWLIST entries for the independent same-named surfaces (AggregationResult.estimator and the estimator= instance param on the three power entry points). 'estimator' is also added to _AMBIGUOUS_TOKENS so Duty C matches through the attr/quoted lanes only: the kwarg lane's remaining hits are the construction site (which becomes method= here) and validate_covariate_names(..., estimator=...), an unrelated parameter. REGISTRY.md is in code_refs because this PR's own REGISTRY subsection names the renamed field and would otherwise be an uncovered Duty C hit in the same diff that writes it. SCOPE OF THE WINDOW (decision, recorded as a REGISTRY Note): the shim covers the READ path, not the CONSTRUCT path - ChangesInChangesResults(..., estimator=...) raises TypeError from 3.9 rather than warning until 4.0, matching [M-094] and [M-114], neither of which preserved a deprecated constructor keyword. The container has one library call site; a constructor shim would add a deprecated surface with no row of its own."
   - id: M-144
     kind: behavior
     group: policy-anticipation
@@ -1833,12 +1836,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: shimmed
+    status: removed
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/wooldridge_results.py]
-    notes: "Locator-completeness amendment at the 4.0-cut framing: WooldridgeDiDResults.to_dataframe(level='event') has warned since 3.9 (the [M-044] rename PR), but only [M-086]'s notes recorded it - the matrix had no locator for this third surface of the 'event' -> 'event_study' value unification (aggregate(type=) is [M-086]; summary(aggregation=) is [M-087]). Twin of [M-136] (LPDiD's to_dataframe level value). test_ref: test_to_dataframe_level_rename in tests/test_v4_rename_semantic.py."
+    notes: "REMOVED at the 4.0 cut (PR 2, 2026-10-18). Locator-completeness amendment at the 4.0-cut framing: WooldridgeDiDResults.to_dataframe(level='event') has warned since 3.9 (the [M-044] rename PR), but only [M-086]'s notes recorded it - the matrix had no locator for this third surface of the 'event' -> 'event_study' value unification (aggregate(type=) is [M-086]; summary(aggregation=) is [M-087]). Twin of [M-136] (LPDiD's to_dataframe level value). test_ref: test_to_dataframe_level_rename in tests/test_v4_rename_semantic.py."
   # ---- PR 1: new-estimator conformance (2026-10-18) ---------------------
   - id: M-151
     kind: field

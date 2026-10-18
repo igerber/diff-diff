@@ -3590,7 +3590,7 @@ class TestConleyWooldridge:
         for agg, field in (
             ("group", "group_effects"),
             ("calendar", "calendar_effects"),
-            ("event", "event_study_effects"),
+            ("event_study", "event_study_effects"),
         ):
             # aggregate() mutates in place, so re-fit per aggregation type.
             res = WooldridgeDiD(vcov_type="conley", **ck).fit(_staggered_panel(seed=52), **kw)
@@ -3612,7 +3612,7 @@ class TestConleyWooldridge:
         for agg, field in (
             ("group", "group_effects"),
             ("calendar", "calendar_effects"),
-            ("event", "event_study_effects"),
+            ("event_study", "event_study_effects"),
         ):
             res = WooldridgeDiD(vcov_type="conley", cohort_trends=True, **ck).fit(
                 _staggered_panel(seed=53), **kw

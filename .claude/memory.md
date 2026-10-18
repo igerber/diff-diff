@@ -93,18 +93,23 @@ everywhere; `to_dict()` / `to_dataframe()` on most classes. See
 Target contract: `docs/v4-design.md` section 5; per-surface lifecycle:
 `docs/v4-deprecations.yaml` (CI-enforced by `tests/test_v4_matrix.py`).
 
-### Column Naming — CURRENT (3.x)
-- `unit` unit id (`unit_col` on HAD; `group` on dCDH — both slated for 4.0)
-- `time` calendar period, EXCEPT DifferenceInDifferences / TripleDifference /
-  static TwoWayFixedEffects, where `time` is the 0/1 post dummy (TWFE warns
-  on >2 unique values; 4.0 renames these to `post`, and TWFE's `time`
-  becomes the event-study calendar column)
+### Column Naming — CURRENT (4.0)
+- `unit` unit id everywhere (the 3.x `unit_col` on HAD and `group` on dCDH
+  were removed at 4.0)
+- `time` calendar period everywhere; DifferenceInDifferences /
+  TripleDifference take the 0/1 post dummy as `post` (the 3.x `time=`
+  spelling on DiD was removed at 4.0, M-030; on TripleDifference it is
+  still a warning shim, M-031, because `time` persists as the merged
+  class's staggered calendar column - its 4.0 enforcement is M-085);
+  static TwoWayFixedEffects takes `post` and its `time` is the event-study
+  calendar column (the static `time=` alias on TWFE is the same kind of
+  surviving shim, M-082, enforced by M-083)
 - `treatment` 0/1 treated-group indicator; `first_treat` cohort column
-  (`cohort` on WooldridgeDiD — slated for 4.0)
-- `covariates` covariate list (`controls` on dCDH — slated for 4.0)
+  everywhere (the 3.x `cohort` on WooldridgeDiD was removed at 4.0)
+- `covariates` covariate list everywhere (the 3.x `controls` on dCDH was
+  removed at 4.0)
 
-### Column Naming — 4.0 TARGET (do not write against this pre-4.0)
-Target vocabulary and rules: `docs/v4-design.md` section 8.
+Vocabulary and rules: `docs/v4-design.md` section 8.
 
 ## Session Notes
 

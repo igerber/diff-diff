@@ -196,9 +196,6 @@ class SyntheticDiD(DifferenceInDifferences):
         variance_method: str = "placebo",
         n_bootstrap: int = 200,
         seed: Optional[int] = None,
-        # Deprecated — accepted for backward compat, ignored with warning
-        lambda_reg: Optional[float] = None,
-        zeta: Optional[float] = None,
         # Defensive guard against silently-ignored Conley kwargs. SyntheticDiD
         # inherits __init__ from DifferenceInDifferences but overrides with
         # literal `super().__init__(cluster=None, alpha=alpha)`,
@@ -236,22 +233,6 @@ class SyntheticDiD(DifferenceInDifferences):
                 f"SyntheticDiD's variance is bootstrap/jackknife/placebo "
                 f"based; configure via variance_method=..."
             )
-        if lambda_reg is not None:
-            warnings.warn(
-                "lambda_reg is deprecated and ignored. Regularization is now "
-                "auto-computed from data. Use zeta_omega to override unit weight "
-                "regularization. Will be removed in v4.0.0.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        if zeta is not None:
-            warnings.warn(
-                "zeta is deprecated and ignored. Use zeta_lambda to override "
-                "time weight regularization. Will be removed in v4.0.0.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
         super().__init__(cluster=None, alpha=alpha)
         self.zeta_omega = zeta_omega
         self.zeta_lambda = zeta_lambda
@@ -262,14 +243,9 @@ class SyntheticDiD(DifferenceInDifferences):
         # conley_metric/conley_kernel would otherwise read back the DiD
         # defaults stored by super().__init__ ("haversine"/"bartlett"),
         # poisoning every set_params probe against the non-None TypeError
-        # guard above; both are None in any legal construction. The
-        # deprecated lambda_reg/zeta are warn-and-discard: stored normalized
-        # to None so a probe re-init warns exactly once for the call that
-        # passes them and never again on unrelated set_params/clone calls.
+        # guard above; both are None in any legal construction.
         self.conley_metric = conley_metric
         self.conley_kernel = conley_kernel
-        self.lambda_reg = None
-        self.zeta = None
 
         self._validate_config()
 
@@ -2927,9 +2903,6 @@ class SyntheticDiD(DifferenceInDifferences):
 
     # get_params/set_params come from BaseEstimator (via
     # DifferenceInDifferences). The probe re-init reproduces every guard in
-    # __init__: the conley/vcov_type non-None TypeError, the lambda_reg/zeta
-    # DeprecationWarnings (emitted exactly once per call that passes them -
-    # the raw-arg storage in __init__ normalizes both to None, so unrelated
-    # set_params/clone calls stay silent), and _validate_config. The
-    # inherited vcov_type -> _vcov_type_arg alias makes get_params report
+    # __init__: the conley/vcov_type non-None TypeError and _validate_config.
+    # The inherited vcov_type -> _vcov_type_arg alias makes get_params report
     # the raw (always-None) vcov_type, not the resolved "hc1".

@@ -9,13 +9,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from diff_diff._deprecation import (
-    NOT_SUPPLIED,
-    _NotSupplied,
-    resolve_renamed_kwarg,
-    warn_deprecated_kwarg,
+from diff_diff.results_base import (
+    _SUMMARY_ALPHA_MESSAGE,
+    BaseResults,
+    _coverage_pct,
+    _require_fit_alpha,
 )
-from diff_diff.results_base import BaseResults, _coverage_pct
 from diff_diff.utils import safe_inference
 
 
@@ -30,7 +29,7 @@ class WooldridgeDiDResults(BaseResults):
     cell-count weighting (``weights="cell"``, matches Stata
     ``jwdid_estat``) or the paper W2025 opt-in cohort-share weighting
     (``weights="cohort_share"``, Eqs. 7.4 / 7.6; restricted to
-    ``type ∈ {"simple", "event"}``). ``cohort_trend_coefs`` carries
+    ``type ∈ {"simple", "event_study"}``). ``cohort_trend_coefs`` carries
     Section 8 / Eq. 8.1 estimated ``δ_g`` slopes when the fit was
     produced under ``WooldridgeDiD(cohort_trends=True)``.
     ``aggregation_weights`` is keyed by aggregation type and records
@@ -142,7 +141,7 @@ class WooldridgeDiDResults(BaseResults):
     # aggregation surface so ``summary()`` / ``to_dataframe()`` /
     # ``__repr__()`` can label each surface correctly under mixed-order
     # ``aggregate(weights=...)`` calls. Keys: ``"simple"`` (matches the
-    # ``overall_*`` fields), ``"group"``, ``"calendar"``, ``"event"``.
+    # ``overall_*`` fields), ``"group"``, ``"calendar"``, ``"event_study"``.
     # The fit-time ``overall_*`` is cell-weighted, so ``"simple"`` is
     # initialized to ``"cell"`` and only flips after a successful
     # ``aggregate(type="simple", weights="cohort_share")`` call. The
@@ -251,12 +250,16 @@ class WooldridgeDiDResults(BaseResults):
         if "df_convention" not in self.__dict__:
             self.__dict__["df_convention"] = "residual"
         self.__dict__.setdefault("unsupported_period_action", "drop")
-        # M-086: pickles written before the "event" -> "event_study" value
-        # unification carry only the old aggregation_weights key; mirror it
-        # so both spellings resolve during the 3.9 window.
+        # 3.x pickles written before the "event" -> "event_study" value
+        # unification carry the legacy aggregation_weights key - 3.9-3.13
+        # pickles carry BOTH (the old mirror). Drop the legacy key
+        # unconditionally and seed the canonical one from it only when the
+        # canonical key is absent (an existing canonical value wins).
         aw = self.__dict__.get("aggregation_weights")
-        if isinstance(aw, dict) and "event" in aw and "event_study" not in aw:
-            aw["event_study"] = aw["event"]
+        if isinstance(aw, dict):
+            legacy = aw.pop("event", None)
+            if legacy is not None:
+                aw.setdefault("event_study", legacy)
 
     def aggregate(self, type: str, weights: str = "cell") -> "WooldridgeDiDResults":  # noqa: A002
         """Compute and store one of the four jwdid_estat aggregation types.
@@ -264,8 +267,6 @@ class WooldridgeDiDResults(BaseResults):
         Parameters
         ----------
         type : "simple" | "group" | "calendar" | "event_study"
-            ("event" is a deprecated spelling of "event_study"; warns with
-            ``FutureWarning`` and is rejected in 4.0 - row M-086.)
         weights : "cell" | "cohort_share", default "cell"
             Aggregation weighting scheme. ``"cell"`` (default) uses cell-
             count ``n_{g,t}`` observation counts and matches Stata
@@ -294,15 +295,8 @@ class WooldridgeDiDResults(BaseResults):
         is rebuilt under the active ``weights`` scheme so the BM DOF
         reflects the actual weighting used by ATT + SE.
         """
-        # M-086: "event_study" is the canonical spelling; the drifted
-        # "event" warns and maps through the 3.9 shim window.
-        if type == "event":
-            warn_deprecated_kwarg(
-                "WooldridgeDiDResults.aggregate",
-                "type='event'",
-                "use type='event_study' instead",
-            )
-            type = "event_study"  # noqa: A001
+        # "event_study" is the canonical spelling library-wide; the 3.x
+        # "event" spelling was retired at 4.0 and is rejected below.
         valid = ("simple", "group", "calendar", "event_study")
         if type not in valid:
             raise ValueError(f"type must be one of {valid}, got {type!r}")
@@ -683,58 +677,25 @@ class WooldridgeDiDResults(BaseResults):
                 result[k] = _build_effect(att, se, dofs.get(k))
             self.event_study_effects = result
             self.aggregation_weights["event_study"] = weights
-            # Deprecated key mirroring "event_study" through the 3.9 shim
-            # window; dropped in 4.0 (row M-086, section 5 policy).
-            self.aggregation_weights["event"] = weights
 
         return self
 
-    def summary(self, aggregation: Any = NOT_SUPPLIED, *, alpha: Optional[float] = None) -> str:
-        """Print formatted summary table.
+    def summary(self, alpha: Optional[float] = None) -> str:
+        """Print the formatted headline summary (the simple aggregation row).
+
+        Other aggregations are not rendered here; select them via
+        ``aggregate(...)`` / ``to_dataframe(level=)``.
 
         Parameters
         ----------
-        aggregation : str, optional
-            DEPRECATED (row M-087; retired in 4.0): which aggregation to
-            display ("simple", "group", "calendar", "event_study"). From
-            4.0 ``summary()`` takes the library-uniform ``alpha``-only
-            signature and renders the headline simple row; select other
-            aggregations via ``aggregate(...)`` / ``to_dataframe(level=)``.
-        alpha : float, keyword-only, optional
-            Accepted for signature uniformity (spec section 5). The stored
-            confidence columns were computed at fit time; passing a value
-            different from the stored ``alpha`` raises rather than
-            silently recomputing or mislabeling - refit at the desired
-            level instead. Keyword-only during the 3.9 shim window because
-            ``aggregation`` still holds position 1; it becomes the sole
-            positional parameter in 4.0, matching every other results
-            class.
+        alpha : float, optional
+            Accepted for signature uniformity. The stored intervals were
+            computed at fit time; a value different from the stored
+            ``alpha`` raises ValueError rather than silently recomputing
+            or relabeling. Re-fit at the desired alpha instead.
         """
-        if alpha is not None and alpha != self.alpha:
-            raise ValueError(
-                f"This results object stores intervals computed at "
-                f"alpha={self.alpha}; refit at the desired level to obtain "
-                f"alpha={alpha} intervals (summary() never recomputes "
-                "stored inference)."
-            )
-        if isinstance(aggregation, _NotSupplied):
-            aggregation = "simple"
-        else:
-            if aggregation is None or isinstance(aggregation, float):
-                raise TypeError(
-                    "summary() takes the aggregation selector positionally "
-                    "only through 3.9 (deprecated); alpha= is KEYWORD-ONLY "
-                    "- call summary(alpha=...) instead."
-                )
-            warn_deprecated_kwarg(
-                "WooldridgeDiDResults.summary",
-                "aggregation",
-                "summary() renders the simple row from 4.0; select other "
-                "aggregations via aggregate(...) or to_dataframe(level=)",
-            )
-            if aggregation == "event":
-                aggregation = "event_study"
-        _alpha = self.alpha
+        _alpha = _require_fit_alpha(alpha, self.alpha, message=_SUMMARY_ALPHA_MESSAGE)
+        aggregation = "simple"
         lines = [
             "=" * 70,
             "    Wooldridge Extended Two-Way Fixed Effects (ETWFE) Results",
@@ -791,62 +752,16 @@ class WooldridgeDiDResults(BaseResults):
         lines.append(header)
         lines.append("-" * 70)
 
-        if aggregation == "simple":
-            lines.append(
-                _fmt_row(
-                    "ATT (simple)",
-                    self.overall_att,
-                    self.overall_se,
-                    self.overall_t_stat,
-                    self.overall_p_value,
-                    self.overall_conf_int,
-                )
+        lines.append(
+            _fmt_row(
+                "ATT (simple)",
+                self.overall_att,
+                self.overall_se,
+                self.overall_t_stat,
+                self.overall_p_value,
+                self.overall_conf_int,
             )
-        elif aggregation == "group" and self.group_effects:
-            for g, eff in sorted(self.group_effects.items()):
-                lines.append(
-                    _fmt_row(
-                        f"ATT(g={g})",
-                        eff["att"],
-                        eff["se"],
-                        eff["t_stat"],
-                        eff["p_value"],
-                        eff["conf_int"],
-                    )
-                )
-        elif aggregation == "calendar" and self.calendar_effects:
-            for t, eff in sorted(self.calendar_effects.items()):
-                lines.append(
-                    _fmt_row(
-                        f"ATT(t={t})",
-                        eff["att"],
-                        eff["se"],
-                        eff["t_stat"],
-                        eff["p_value"],
-                        eff["conf_int"],
-                    )
-                )
-        elif aggregation == "event_study" and self.event_study_effects:
-            for k, eff in sorted(self.event_study_effects.items()):
-                if k < -self.anticipation:
-                    suffix = " [pre]"
-                elif k < 0:
-                    suffix = " [antic]"
-                else:
-                    suffix = ""
-                label = f"ATT(k={k})" + suffix
-                lines.append(
-                    _fmt_row(
-                        label,
-                        eff["att"],
-                        eff["se"],
-                        eff["t_stat"],
-                        eff["p_value"],
-                        eff["conf_int"],
-                    )
-                )
-        else:
-            lines.append(f"  (call .aggregate({aggregation!r}) first)")
+        )
 
         lines.append("=" * 70)
         return "\n".join(lines)
@@ -889,37 +804,19 @@ class WooldridgeDiDResults(BaseResults):
             result["df_convention"] = self.df_convention
         return result
 
-    def to_dataframe(
-        self, level: Any = NOT_SUPPLIED, aggregation: Any = NOT_SUPPLIED
-    ) -> pd.DataFrame:
+    def to_dataframe(self, level: str = "event_study") -> pd.DataFrame:
         """Export aggregated effects to a DataFrame.
 
         Parameters
         ----------
         level : "simple" | "group" | "calendar" | "event_study" | "gt"
-            Use "gt" to export raw group-time effects. ("event" is a
-            deprecated spelling of "event_study"; warns and is rejected
-            in 4.0 - row M-150, the to_dataframe twin of M-086.)
-        aggregation : str, optional
-            Deprecated alias for ``level`` (row M-044); warns with
-            ``FutureWarning`` and will be removed in 4.0.
+            Use "gt" to export raw group-time effects. Any other value
+            raises ``ValueError``.
         """
-        level = resolve_renamed_kwarg(
-            "WooldridgeDiDResults.to_dataframe",
-            "aggregation",
-            aggregation,
-            "level",
-            level,
-            default="event_study",
-        )
-        if level == "event":
-            warn_deprecated_kwarg(
-                "WooldridgeDiDResults.to_dataframe",
-                "level='event'",
-                "use level='event_study' instead",
-            )
-            level = "event_study"
-        # Body-local name; the public parameter is level (M-044).
+        valid_levels = ("simple", "group", "calendar", "event_study", "gt")
+        if level not in valid_levels:
+            raise ValueError(f"level must be one of {valid_levels}, got {level!r}")
+        # Body-local name; the public parameter is level.
         aggregation = level
         if aggregation == "gt":
             rows = []

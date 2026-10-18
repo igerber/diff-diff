@@ -1102,7 +1102,7 @@ class TestParamsAndResults:
 
         expected_keys = {
             "estimation_method",
-            "robust",
+            "vcov_type",
             "cluster",
             "alpha",
             "pscore_trim",
@@ -1306,28 +1306,6 @@ class TestParameterFunctionality:
             len(low_count_warnings) > 0
         ), "Expected low observation count warning for n_per_cell=5"
         assert np.isfinite(result.att)
-
-    def test_robust_param_is_noop(self):
-        """robust param has no effect on IF-based SEs."""
-        data = generate_ddd_data(n_per_cell=50, seed=42)
-
-        result_robust = TripleDifference().fit(
-            data,
-            outcome="outcome",
-            group="group",
-            partition="partition",
-            post="time",
-        )
-        result_not_robust = TripleDifference(robust=False).fit(
-            data,
-            outcome="outcome",
-            group="group",
-            partition="partition",
-            post="time",
-        )
-
-        assert result_robust.att == result_not_robust.att
-        assert result_robust.se == result_not_robust.se
 
     def test_cluster_single_cluster_raises(self):
         """Single cluster raises ValueError."""

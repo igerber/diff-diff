@@ -184,9 +184,7 @@ def agent_workflow(
             "  - Binary staggered  : CallawaySantAnna (shown) / SunAbraham / ImputationDiD",
             "  - Continuous dose   : ContinuousDiD (also takes first_treat=)",
             "  - Heterogeneous adoption intensity:",
-            "                        HeterogeneousAdoptionDiD (event study,",
-            "                        takes first_treat=; first_treat_col= is a",
-            "                        deprecated alias slated for 4.0 removal)",
+            "                        HeterogeneousAdoptionDiD (event study, takes first_treat=)",
         ]
     else:
         fit_example_kwargs = _join_kwargs(

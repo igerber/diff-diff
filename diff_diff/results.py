@@ -4,7 +4,6 @@ Results classes for difference-in-differences estimation.
 Provides statsmodels-style output with a more Pythonic interface.
 """
 
-import warnings
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -1147,8 +1146,7 @@ class SyntheticDiDResults(BaseResults):
         (for ``"placebo"``), bootstrap ATT estimates with re-estimated
         weights per draw (for ``"bootstrap"``), or leave-one-out estimates
         (for ``"jackknife"``). The ``variance_method`` field disambiguates
-        the contents. (The deprecated read-only alias ``placebo_effects``
-        returns this array and is removed in v4.0.0.)
+        the contents.
     pre_treatment_fit : float, optional
         Shape-only pre-treatment fit: the RMSE of the pre-period residual
         (treated mean minus synthetic control) after removing its mean. The
@@ -1277,9 +1275,9 @@ class SyntheticDiDResults(BaseResults):
 
         Results pickled before the ``placebo_effects`` → ``variance_effects``
         rename (<= 3.5.x) carry the old key in their state; map it so the
-        stored variance draws survive and remain reachable through both
-        ``variance_effects`` and the deprecated ``placebo_effects`` alias.
-        Remove together with the alias in v4.0.0.
+        stored variance draws survive and remain reachable through
+        ``variance_effects`` (the ``placebo_effects`` alias itself was
+        removed at 4.0; this migration keeps 3.x pickles loadable).
         """
         if "placebo_effects" in state and "variance_effects" not in state:
             state = dict(state)
@@ -1321,25 +1319,6 @@ class SyntheticDiDResults(BaseResults):
         if not np.isfinite(self.att) or self.att == 0:
             return np.nan
         return self.se / abs(self.att)
-
-    @property
-    def placebo_effects(self) -> Optional[np.ndarray]:
-        """Deprecated alias for :attr:`variance_effects` (removed in v4.0.0).
-
-        .. deprecated:: 3.5.2
-            Renamed to ``variance_effects`` because the array's contents are
-            method-specific (placebo effects, bootstrap ATT draws, or
-            leave-one-out estimates depending on ``variance_method``).
-        """
-        warnings.warn(
-            "SyntheticDiDResults.placebo_effects is deprecated; use "
-            "variance_effects instead. The array holds placebo effects, "
-            "bootstrap ATT draws, or leave-one-out estimates depending on "
-            "variance_method. Will be removed in v4.0.0.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.variance_effects
 
     def summary(self, alpha: Optional[float] = None) -> str:
         """

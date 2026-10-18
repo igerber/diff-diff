@@ -1169,7 +1169,7 @@ class TestFixestKExactParity:
         # rank BEYOND the intercept.
         adj = absorbed_fe_rank(d, ["state", "state_year"], has_intercept_col=True) + 1
         dm, _ = demean_by_groups(d.copy(), ["out", "x"], ["state", "state_year"])
-        reg = LinearRegression(include_intercept=False, robust=False).fit(
+        reg = LinearRegression(include_intercept=False, vcov_type="classical").fit(
             dm[["x"]].values, dm["out"].values, df_adjustment=adj
         )
         se = float(np.sqrt(reg.vcov_[0, 0]))

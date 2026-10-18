@@ -25,6 +25,8 @@
       ~CSBootstrapResults.event_study_cis
       ~CSBootstrapResults.event_study_p_values
       ~CSBootstrapResults.event_study_ses
+      ~CSBootstrapResults.event_study_vcov
+      ~CSBootstrapResults.event_study_vcov_index
       ~CSBootstrapResults.group_effect_cis
       ~CSBootstrapResults.group_effect_p_values
       ~CSBootstrapResults.group_effect_ses

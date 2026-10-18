@@ -117,7 +117,7 @@ release:
 
 | estimator | `robust=True` | `robust=False` |
 |---|---|---|
-| `DifferenceInDifferences`, `LinearRegression` | already the `hc1` default — drop it | `vcov_type="classical"` |
+| `DifferenceInDifferences`, `LinearRegression` | already the `hc1` default — drop it | `vcov_type="classical"` on an UNCLUSTERED fit; with `cluster=` (and on `TwoWayFixedEffects`, which always auto-clusters) just drop it — 3.x already remapped `robust=False` + clustering to `hc1`/CR1, and `vcov_type="classical"` with `cluster=` raises |
 | `TripleDifference` | drop it | drop it — only `hc1` is accepted, so `robust=` never changed inference, and `vcov_type="classical"` **raises** |
 | `HeterogeneousAdoptionDiD` | `vcov_type="hc1"` | drop it — non-robust is its legacy default |
 
@@ -289,6 +289,10 @@ removal/deprecation fields and appear here only.
   row - the former cohort rows are `level="group"`); `n_treated` is the schema's `n`;
   `n_obs` and `n_control` are no longer in the frame (read `to_dict()`); `ci_lower`/`ci_upper`
   are `conf_int_lower`/`conf_int_upper`.
+
+- `BusinessReport.to_dict()` schema `2.0` -> `3.0` (landing at 4.0 with the [M-095] removal): the
+  `assumption` block no longer carries the legacy `clean_control` key; read `control_group`.
+  `DiagnosticReport`'s schema stays `2.0`.
 
 The `DIFF_DIFF_SOLVE_OLS_FASTPATH` environment default was due a go/no-go at 4.0 ([M-008]):
 decided 2026-10-18 as **evaluated, kept off**. No numerics change — the opt-in fast path

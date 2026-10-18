@@ -112,12 +112,6 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
-from diff_diff._deprecation import (
-    NOT_SUPPLIED,
-    deprecated_field_property,
-    require_arg,
-    resolve_renamed_kwarg,
-)
 from diff_diff._rdrobust_port import (
     BWSELECT_OPTIONS,
     _fuzzy_identification_stop,
@@ -237,8 +231,6 @@ class RegressionDiscontinuityResults(BaseResults):
     # echo the constructor flags. The estimand label deliberately does NOT
     # change under covariate adjustment: CCFT 2019 covariates target the
     # SAME estimand (precision only) - see ``covariates`` below.
-    # (The deprecated read-only alias ``treatment_col`` warns and returns
-    # ``takeup``; removed in 4.0 - row M-094.)
     estimand: str
     sharpbw: bool
     takeup: Optional[str]
@@ -289,17 +281,10 @@ class RegressionDiscontinuityResults(BaseResults):
     beta_t_p_left: Optional[np.ndarray] = field(repr=False, default=None)
     beta_t_p_right: Optional[np.ndarray] = field(repr=False, default=None)
 
-    # Deprecated read-only alias for ``takeup`` (row M-094; removed in 4.0).
-    # No annotation, so it stays a descriptor and never becomes a
-    # __dataclass_fields__ entry.
-    treatment_col = deprecated_field_property(
-        "RegressionDiscontinuityResults", "treatment_col", "takeup"
-    )
-
     def __setstate__(self, state: Dict[str, Any]) -> None:
-        """Migrate pickles created before the ``treatment_col`` -> ``takeup``
-        rename (row M-094): rewrite the key on load so both the new field
-        and the deprecated alias work on old pickles."""
+        """Migrate 3.x pickles created before the ``treatment_col`` ->
+        ``takeup`` rename: rewrite the legacy key on load so the field
+        populates under its canonical name."""
         if "treatment_col" in state and "takeup" not in state:
             state = dict(state)
             state["takeup"] = state.pop("treatment_col")
@@ -481,9 +466,6 @@ class RegressionDiscontinuityResults(BaseResults):
             "estimand": self.estimand,
             "sharpbw": self.sharpbw,
             "takeup": self.takeup,
-            # Deprecated key mirroring ``takeup`` through the 3.9 shim
-            # window; dropped in 4.0 (row M-094, section 5 policy).
-            "treatment_col": self.takeup,
             "covs_drop": self.covs_drop,
             # List/dict-valued covariate echoes (None on unadjusted fits;
             # the lpdid/continuous_did echo convention).
@@ -729,13 +711,10 @@ class RegressionDiscontinuity(BaseEstimator):
     def fit(
         self,
         data: pd.DataFrame,
-        outcome: Any = NOT_SUPPLIED,
-        running: Any = NOT_SUPPLIED,
-        takeup: Any = NOT_SUPPLIED,
+        outcome: str,
+        running: str,
+        takeup: Optional[str] = None,
         covariates: Optional[List[str]] = None,
-        outcome_col: Any = NOT_SUPPLIED,
-        running_col: Any = NOT_SUPPLIED,
-        treatment_col: Any = NOT_SUPPLIED,
     ) -> RegressionDiscontinuityResults:
         """Estimate the RD effect at the cutoff (sharp or fuzzy, optionally
         covariate-adjusted).
@@ -775,40 +754,9 @@ class RegressionDiscontinuity(BaseEstimator):
             dropped with a warning under ``covs_drop=True``; see the
             ``covariates*`` results fields for the echo and the fitted
             projection coefficients.
-        outcome_col, running_col, treatment_col : str, optional
-            Deprecated aliases for ``outcome`` / ``running`` / ``takeup``
-            (rows M-040..M-042); each warns with ``FutureWarning`` and
-            will be removed in 4.0.
         """
-        qualname = "RegressionDiscontinuity.fit"
-        outcome = resolve_renamed_kwarg(
-            qualname,
-            "outcome_col",
-            outcome_col,
-            "outcome",
-            outcome,
-            default=NOT_SUPPLIED,
-        )
-        require_arg(qualname, "outcome", outcome)
-        running = resolve_renamed_kwarg(
-            qualname,
-            "running_col",
-            running_col,
-            "running",
-            running,
-            default=NOT_SUPPLIED,
-        )
-        require_arg(qualname, "running", running)
-        takeup = resolve_renamed_kwarg(
-            qualname,
-            "treatment_col",
-            treatment_col,
-            "takeup",
-            takeup,
-            default=None,
-        )
-        # Body-local names; the public parameters are outcome/running/takeup
-        # (M-040..M-042).
+        # Body-local column names feeding the private helpers; the public
+        # parameters are outcome/running/takeup.
         outcome_col = outcome
         running_col = running
         treatment_col = takeup

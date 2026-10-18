@@ -45,6 +45,7 @@
       ~DMLDiDResults.control_group
       ~DMLDiDResults.cross_fit_diagnostics
       ~DMLDiDResults.df_inference
+      ~DMLDiDResults.effective_n_folds
       ~DMLDiDResults.epv_diagnostics
       ~DMLDiDResults.epv_threshold
       ~DMLDiDResults.event_study_df
@@ -82,3 +83,4 @@
       ~DMLDiDResults.n_obs
       ~DMLDiDResults.n_treated_units
       ~DMLDiDResults.n_control_units
+

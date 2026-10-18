@@ -84,7 +84,7 @@ def main():
         data_bin = data.copy()
         data_bin["treated_any"] = (data_bin["dose"] > 0).astype(int)
         data_bin["post"] = (data_bin["period"] >= treated_cohort).astype(int)
-        did = DifferenceInDifferences(robust=True)
+        did = DifferenceInDifferences()
         results["binarized"] = did.fit(
             data_bin, outcome="outcome", treatment="treated_any", post="post",
         )

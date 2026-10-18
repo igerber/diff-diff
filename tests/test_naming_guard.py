@@ -615,11 +615,6 @@ SURFACE_ALLOWLIST = {
     "run_all_placebo_tests[time]": (
         "OVERLOADED pass-through, redesign pending (TODO.md) - see " "run_placebo_test[time]"
     ),
-    "StackedDiD.clean_control": (
-        "M-043's deprecated estimator-attribute alias PROPERTY (warns and "
-        "returns control_group; dies with the param at 4.0) - the param row "
-        "covers the __init__ surface, this entry covers the property lane"
-    ),
     **{key: _RULE1_TIME for key in _RULE1_TIME_SURFACES},
     "rank_control_units[lambda_reg]": (
         "prep helper's own independent regularization param (prep.py) - a "
@@ -1023,6 +1018,169 @@ _CS_GROUPS_READER = (
 )
 
 CONSUMER_ALLOWLIST = {
+    # ---- 4.0 cut, PR 2: readers that survive the 59 shim removals on purpose ----
+    # (a) KEPT `__setstate__` legacy-key migrations - a quoted old key is how a
+    # 3.x pickle is recognised; spec section 5 keeps them through 4.0.
+    ("placebo_effects", "diff_diff/results.py"): "__setstate__ legacy-key migration (M-003), kept",
+    ("treatment_col", "diff_diff/rdd.py"): (
+        "__setstate__ legacy-key migration (M-094), kept; plus the body-local `treatment_col` "
+        "alias that feeds the private RD helpers"
+    ),
+    ("clean_control", "diff_diff/stacked_did_results.py"): (
+        "__setstate__ legacy-key migration (M-095), kept"
+    ),
+    ("groups", "diff_diff/chaisemartin_dhaultfoeuille_results.py"): (
+        "__setstate__ legacy-key migration (M-114), kept"
+    ),
+    ("estimator", "diff_diff/changes_in_changes_results.py"): (
+        "__setstate__ legacy-key migration (M-143), kept"
+    ),
+    # (b) body-local `old = new` aliases and private-helper keywords - internal
+    # plumbing the removal PR deliberately kept (plan section A); not public readers.
+    (
+        "outcome_col",
+        "diff_diff/had.py",
+    ): "body-local alias / private-helper keyword, not a public reader",
+    (
+        "dose_col",
+        "diff_diff/had.py",
+    ): "body-local alias / private-helper keyword, not a public reader",
+    (
+        "time_col",
+        "diff_diff/had.py",
+    ): "body-local alias / private-helper keyword, not a public reader",
+    (
+        "unit_col",
+        "diff_diff/had.py",
+    ): "body-local alias / private-helper keyword, not a public reader",
+    ("first_treat_col", "diff_diff/had.py"): (
+        "body-local alias / private-helper keyword, not a public reader"
+    ),
+    ("outcome_col", "diff_diff/had_pretests.py"): (
+        "body-local alias / private-helper keyword, not a public reader"
+    ),
+    ("dose_col", "diff_diff/had_pretests.py"): (
+        "body-local alias / private-helper keyword, not a public reader"
+    ),
+    ("time_col", "diff_diff/had_pretests.py"): (
+        "body-local alias / private-helper keyword, not a public reader"
+    ),
+    ("unit_col", "diff_diff/had_pretests.py"): (
+        "body-local alias / private-helper keyword, not a public reader"
+    ),
+    ("first_treat_col", "diff_diff/had_pretests.py"): (
+        "body-local alias / private-helper keyword, not a public reader"
+    ),
+    ("outcome_col", "diff_diff/rdd.py"): "body-local alias feeding the private RD helpers",
+    ("running_col", "diff_diff/rdd.py"): "body-local alias feeding the private RD helpers",
+    ("outcome_col", "diff_diff/rdplot.py"): "body-local alias feeding the private RD helpers",
+    ("running_col", "diff_diff/rdplot.py"): "body-local alias feeding the private RD helpers",
+    ("weight_col", "diff_diff/prep.py"): (
+        "body-local alias in trim_weights plus an unrelated local `weight_col = ...` variable"
+    ),
+    # (d) docs/guides residue after the migrate-first rewording: historical
+    # "removed in 4.0" migration notes that NAME the old spelling once, and
+    # canonical vocabulary that shares the word (calendar `time`, CS/Wooldridge
+    # `cohort`, the `group` aggregation level, the `aggregation` report-schema key,
+    # the CiC `method` tag's history, variable names in code examples).
+    ("time", "diff_diff/guides/llms-full.txt"): "calendar `time=` column (canonical, rule 1)",
+    (
+        "time",
+        "diff_diff/guides/llms-practitioner.txt",
+    ): "calendar `time=` column (canonical, rule 1)",
+    ("time", "docs/methodology/REGISTRY.md"): "calendar `time` column (canonical, rule 1)",
+    ("cohort", "diff_diff/guides/llms-full.txt"): (
+        "historical 'removed in 4.0' note + the `aux_partition='cohort'` value and the "
+        "LWDiD `to_dataframe(level='cohort')` vocabulary"
+    ),
+    ("cohort", "docs/methodology/REGISTRY.md"): (
+        "CS/Wooldridge cohort vocabulary and the TODO cohort-timing input, not the fit kwarg"
+    ),
+    ("cohort", "docs/methodology/papers/wooldridge-2023-review.md"): (
+        "paper-review narrative of the shipped API (historical)"
+    ),
+    ("cohort", "docs/methodology/papers/wooldridge-2025-review.md"): (
+        "the `cohort` data column in a NaN-coercion Note, not the fit kwarg"
+    ),
+    (
+        "controls",
+        "diff_diff/guides/llms-full.txt",
+    ): "English verb ('controls multi-horizon computation')",
+    (
+        "controls",
+        "docs/methodology/REGISTRY.md",
+    ): "dCDH Notes describing the paper's 'controls' vocabulary",
+    ("group", "diff_diff/guides/llms-full.txt"): (
+        "the `aggregate('group')` level and DDD's treated-group indicator (canonical, rule 3)"
+    ),
+    (
+        "groups",
+        "docs/methodology/REGISTRY.md",
+    ): "CS-notation cohort list on staggered results (rule 8)",
+    (
+        "aggregation",
+        "diff_diff/guides/llms-autonomous.txt",
+    ): "report-schema dispatch key, not the kwarg",
+    ("aggregation", "diff_diff/guides/llms-full.txt"): "report-schema dispatch key, not the kwarg",
+    ("aggregation", "docs/methodology/REPORTING.md"): "report-schema dispatch key, not the kwarg",
+    ("clean_control", "docs/methodology/REPORTING.md"): (
+        "the schema-version Note recording the dropped key (historical)"
+    ),
+    ("estimator", "docs/methodology/REGISTRY.md"): (
+        "CiC Notes recording the M-143 rename history and `scale='auto'` routing prose"
+    ),
+    ("robust", "diff_diff/guides/llms-full.txt"): "historical 'removed in 4.0' migration note",
+    ("robust", "docs/methodology/REGISTRY.md"): "historical notes on the pre-4.0 flag",
+    ("placebo_effects", "diff_diff/guides/llms-full.txt"): (
+        "`variance_effects` field description mentions 'placebo effects' draws"
+    ),
+    ("outcome_col", "diff_diff/guides/llms-full.txt"): "historical 'removed in 4.0' migration note",
+    ("running_col", "diff_diff/guides/llms-full.txt"): "historical 'removed in 4.0' migration note",
+    (
+        "treatment_col",
+        "diff_diff/guides/llms-full.txt",
+    ): "historical 'removed in 4.0' migration note",
+    (
+        "treatment_col",
+        "docs/methodology/REGISTRY.md",
+    ): "CiC Note citing the M-094 precedent (historical)",
+    (
+        "trop",
+        "diff_diff/guides/llms-full.txt",
+    ): "example variable `trop = TROP(...)`, not the removed wrapper",
+    (
+        "bacon_decompose",
+        "diff_diff/guides/llms-full.txt",
+    ): "historical 'removed in 4.0' migration note",
+    (
+        "imputation_did",
+        "docs/methodology/REGISTRY.md",
+    ): "historical 'removed at 4.0' clause in the M-021 Note",
+    (
+        "two_stage_did",
+        "docs/methodology/REGISTRY.md",
+    ): "historical 'removed at 4.0' clause in the M-022 Note",
+    (
+        "triple_difference",
+        "docs/methodology/REGISTRY.md",
+    ): "historical 'removed at 4.0' wrapper Note",
+    # (c) shared vocabulary that merely spells the same word.
+    ("estimator", "diff_diff/practitioner.py"): (
+        "practitioner_next_steps output schema key / class-name label (not the CiC results field)"
+    ),
+    ("clean_control", "diff_diff/_reporting_helpers.py"): (
+        "local variable name holding `results.control_group`, not an attribute read"
+    ),
+    ("clean_control", "diff_diff/business_report.py"): (
+        "fallback label string literal for a non-str control_group value, not a reader"
+    ),
+    ("clean_control", "diff_diff/power.py"): "historical comment on the 3.x default, not a reader",
+    ("placebo_effects", "diff_diff/_deprecation.py"): (
+        "docstring names the M-003 precedent the helper's wording follows; not a reader"
+    ),
+    ("trop", "diff_diff/trop.py"): (
+        "docstring example variable `trop = TROP()` (kwarg-lane noise), not the removed wrapper"
+    ),
     # M-151 / M-152: the dying LWDiDResults aliases share their words with
     # independent surfaces - RDPlot's `ci` attribute and the rdplot `ci`
     # parameter table in the CCFT-2017 review; RandomizationResult.pvalue and
@@ -1702,7 +1860,11 @@ def test_state_read_lane_and_terminal_row_filter():
     # call - without failing.
     assert _safe_family_token(_ROW_INDEX["M-086"]) == "type"
     assert _safe_family_token({"old": None}) is None
-    assert "diff_diff/linalg.py" in _live_family_code_refs("robust")
+    # The four `robust` rows went terminal at the 4.0 cut (PR 2), so their family
+    # has NO live code_refs left - the terminal filter must return the empty set -
+    # while a token with a still-shimmed row (M-082 TWFE `time`) keeps its refs.
+    assert _live_family_code_refs("robust") == set()
+    assert "diff_diff/twfe.py" in _live_family_code_refs("time")
     # Regression: the raw-text bare-call lane honors wrapper spans
     wrapper_src = "def stacked_did(data):\n    return bacon_decompose(data)\n"
     assert bare_call_text_hits("bacon_decompose", wrapper_src)

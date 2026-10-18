@@ -835,7 +835,7 @@ class TestW2025Section7AggregationPaths:
         )
 
     def test_aggregate_event_weights_cohort_share_matches_paper_eq76(self) -> None:
-        """``aggregate("event", weights="cohort_share")`` matches paper Eq. 7.6 hand-calc.
+        """``aggregate("event_study", weights="cohort_share")`` matches paper Eq. 7.6 hand-calc.
 
         Paper Eq. 7.6: ``ω̂_{ge} = N_g / Σ_{g': g'+e ≤ T} N_{g'}``. Per
         event-time ``e``, only cohorts with a cell at event-time ``e``
@@ -934,7 +934,7 @@ class TestW2025Section7AggregationPaths:
             res.aggregate("calendar", weights="cohort_share")
 
     def test_aggregate_event_weights_cohort_share_restricts_to_k_geq_0(self) -> None:
-        """R4 P1 fix: ``aggregate("event", weights="cohort_share")`` filters to ``k >= 0``.
+        """R4 P1 fix: ``aggregate("event_study", weights="cohort_share")`` filters to ``k >= 0``.
 
         Paper W2025 Eq. 7.6 cohort-share-by-exposure weighting is defined
         for post-treatment exposure times only; pre-treatment leads use a
@@ -1023,7 +1023,7 @@ class TestW2025Section7AggregationPaths:
 
         Locks the cross-method contract: under ``method="poisson"``,
         ``aggregate("simple", weights="cohort_share")`` and
-        ``aggregate("event", weights="cohort_share")`` (a) produce
+        ``aggregate("event_study", weights="cohort_share")`` (a) produce
         finite point estimates and conditional-on-shares SEs when
         estimable; (b) fail-close the t-stat / p-value / conf-int
         fields to NaN per the Section 7.5 contract; (c) restrict
@@ -1651,10 +1651,9 @@ class TestW2025Section8HeterogeneousTrends:
 
         Sequence:
         1. fit() → simple weights default "cell"
-        2. aggregate("event", weights="cohort_share") → event flips but
-           simple stays "cell"
-        3. summary("simple") shows "cell"; summary("event") shows
-           "cohort_share"
+        2. aggregate("event_study", weights="cohort_share") → event_study
+           flips but simple stays "cell"
+        3. summary() still shows "cell" (overall_* is fit-time cell-weighted)
         """
         rng = np.random.default_rng(_BASE_SEED_SECTION8 + 21)
         panel = _make_three_cohort_four_period_panel(rng, n_per_cohort=80, sigma=0.05)
@@ -1664,13 +1663,12 @@ class TestW2025Section8HeterogeneousTrends:
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
             res.aggregate("event_study", weights="cohort_share")
-        assert res.aggregation_weights["event"] == "cohort_share"
+        assert res.aggregation_weights["event_study"] == "cohort_share"
         assert res.aggregation_weights["simple"] == "cell", (
             "simple weight must remain 'cell' after event aggregation — "
             "overall_* is still fit-time cell-weighted"
         )
         assert "Aggregation w:   cell" in res.summary()
-        assert "Aggregation w:   cohort_share" in res.summary("event")
 
     def test_aggregation_weights_failed_cohort_share_leaves_metadata_unchanged(
         self,
@@ -1699,7 +1697,7 @@ class TestW2025Section8HeterogeneousTrends:
         """CI R1 P1 fix: ``plot_event_study(weights=...)`` propagates through aggregate().
 
         Before the fix, ``plot_event_study()`` hardcoded
-        ``aggregate("event")`` (cell weights) so the new opt-in
+        ``aggregate("event_study")`` (cell weights) so the new opt-in
         ``weights="cohort_share"`` surface was unreachable from the
         plot wrapper. Verifies the kwarg is plumbed through and that
         the resulting ``event_study_effects`` reflects the requested

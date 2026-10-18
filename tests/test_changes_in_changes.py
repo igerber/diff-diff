@@ -858,7 +858,7 @@ class TestResultsAPI:
     def test_results_types_and_fields(self, cls):
         res = fit_quiet(cls(n_bootstrap=25, seed=1), make_2x2())
         assert isinstance(res, ChangesInChangesResults)
-        assert res.estimator == ("cic" if cls is ChangesInChanges else "qdid")
+        assert res.method == ("cic" if cls is ChangesInChanges else "qdid")
         assert res.cell_sizes == {
             "control_pre": 80,
             "control_post": 80,
@@ -875,7 +875,7 @@ class TestResultsAPI:
 
     def test_to_dict_keys(self, cls):
         d = fit_quiet(cls(n_bootstrap=0), make_2x2()).to_dict()
-        for key in ("att", "se", "conf_int_lower", "conf_int_upper", "estimator", "panel"):
+        for key in ("att", "se", "conf_int_lower", "conf_int_upper", "method", "panel"):
             assert key in d
         assert d["inference_method"] == "none"
 

@@ -46,6 +46,7 @@
       ~WooldridgeDiDResults.se
       ~WooldridgeDiDResults.survey_metadata
       ~WooldridgeDiDResults.t_stat
+      ~WooldridgeDiDResults.unsupported_period_action
       ~WooldridgeDiDResults.vcov_type
       ~WooldridgeDiDResults.group_time_effects
       ~WooldridgeDiDResults.overall_att

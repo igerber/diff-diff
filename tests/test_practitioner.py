@@ -1077,9 +1077,8 @@ class TestHADDispatch:
         # (NotImplementedError). The Step-6 sup-t snippet shows a
         # generic weighted event-study fit; if it uses the default
         # vcov_type a copy/paste on a mass-point panel raises at
-        # fit time. Snippet must either use vcov_type='hc1' /
-        # robust=True OR explicitly note the requirement so agents
-        # can adapt.
+        # fit time. Snippet must either use vcov_type='hc1' OR
+        # explicitly note the requirement so agents can adapt.
         output = practitioner_next_steps(mock_had_event_study_results, verbose=False)
         step_6_steps = [s for s in output["next_steps"] if s["baker_step"] == 6]
         assert len(step_6_steps) >= 1
@@ -1090,19 +1089,18 @@ class TestHADDispatch:
         )
         assert sup_t is not None, "sup-t / cband step not found at baker_step=6"
         snippet = sup_t.get("code", "")
-        # Either the snippet itself uses vcov_type='hc1' / robust=True
-        # OR it documents the requirement inline (so agents adapting
+        # Either the snippet itself uses vcov_type='hc1' OR it
+        # documents the requirement inline (so agents adapting
         # the snippet on a mass-point panel know to add it).
         ok = (
             "vcov_type='hc1'" in snippet
             or 'vcov_type="hc1"' in snippet
-            or "robust=True" in snippet
             or ("mass-point" in snippet and "vcov_type" in snippet)
             or ("mass_point" in snippet and "vcov_type" in snippet)
         )
         assert ok, (
-            "Sup-t / cband snippet must either use vcov_type='hc1' / "
-            "robust=True or surface the mass-point + survey vcov "
+            "Sup-t / cband snippet must either use vcov_type='hc1' "
+            "or surface the mass-point + survey vcov "
             "requirement inline. Per had.py:3646-3658 the default "
             "classical sandwich raises NotImplementedError on the "
             "mass-point + survey path; the example as written would "

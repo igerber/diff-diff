@@ -52,7 +52,7 @@ def main():
 
     results = {}
     fit_kwargs = dict(
-        data=data, outcome="outcome", group="group", time="period",
+        data=data, outcome="outcome", unit="group", time="period",
         treatment="treatment",
     )
     sd = SurveyDesign(

@@ -266,7 +266,7 @@ class TestScaleEquivariance:
 
     def test_did_flips_verdict_across_scales(self, df_log, did):
         did_log = DifferenceInDifferences().fit(
-            df_log, outcome="log_spend", treatment="treated", time="post"
+            df_log, outcome="log_spend", treatment="treated", post="post"
         )
         assert did.p_value > 0.5  # levels: "no effect"
         assert did_log.p_value < 0.005  # logs: "big effect"

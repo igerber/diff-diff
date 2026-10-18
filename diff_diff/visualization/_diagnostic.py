@@ -363,8 +363,7 @@ def plot_bacon(
     Parameters
     ----------
     results : BaconDecompositionResults
-        Results from BaconDecomposition.fit() (or the deprecated
-        bacon_decompose() wrapper, removed in 4.0).
+        Results from BaconDecomposition.fit().
     plot_type : str, default="scatter"
         Type of plot to create:
         - "scatter": Scatter plot with estimates on x-axis, weights on y-axis

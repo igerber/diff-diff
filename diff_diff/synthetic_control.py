@@ -47,7 +47,7 @@ from diff_diff.synthetic_control_results import (
 )
 from diff_diff.utils import _sc_weight_nnls, safe_inference
 
-__all__ = ["SyntheticControl", "synthetic_control"]
+__all__ = ["SyntheticControl"]
 
 # Aggregation operators allowed for predictor / special-predictor rows. Restricted to
 # LINEAR combinations of pre-period values, matching ADH (2010) §2.3
@@ -728,49 +728,6 @@ class SyntheticControl(BaseEstimator):
             )
         # Finiteness / non-negativity already enforced in _validate_config.
         return v / v.sum()
-
-
-def synthetic_control(
-    data: pd.DataFrame,
-    outcome: str,
-    treatment: str,
-    unit: str,
-    time: str,
-    **kwargs,
-) -> SyntheticControlResults:
-    """
-    Convenience function for classic synthetic control estimation.
-
-    .. deprecated:: 3.9
-        ``synthetic_control()`` is deprecated and will be removed in 4.0
-        (row M-074). Construct the estimator instead:
-        ``SyntheticControl(...).fit(data, ...)``.
-
-    Constructor-only keyword arguments (``v_method`` — ``"nested"`` / ``"custom"`` /
-    ``"cv"`` / ``"inverse_variance"`` — ``custom_v``, ``v_cv_t0``, ``n_starts``,
-    ``standardize``, ``alpha``, ``seed``, ``optimizer_options``) and ``fit``
-    keyword arguments
-    (``post_periods``, ``treated_unit``, ``predictors``, ``special_predictors``,
-    ...) may both be passed via ``**kwargs``.
-
-    Examples
-    --------
-    >>> from diff_diff import synthetic_control
-    >>> res = synthetic_control(data, "y", "treated", "unit", "year",
-    ...                         predictors=["x1", "x2"])
-    >>> print(f"ATT: {res.att:.3f}, pre-RMSPE: {res.pre_rmspe:.3f}")
-    """
-    warnings.warn(
-        "synthetic_control() is deprecated and will be removed in 4.0; "
-        "construct the estimator instead: SyntheticControl(...).fit(data, ...).",
-        FutureWarning,
-        stacklevel=2,
-    )
-    ctor_keys = set(SyntheticControl().get_params().keys())
-    ctor_kwargs = {k: v for k, v in kwargs.items() if k in ctor_keys}
-    fit_kwargs = {k: v for k, v in kwargs.items() if k not in ctor_keys}
-    estimator = SyntheticControl(**ctor_kwargs)
-    return estimator.fit(data, outcome, treatment, unit, time, **fit_kwargs)
 
 
 # =============================================================================

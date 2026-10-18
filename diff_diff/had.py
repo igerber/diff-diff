@@ -73,12 +73,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
-from diff_diff._deprecation import (
-    NOT_SUPPLIED,
-    require_arg,
-    resolve_renamed_kwarg,
-    warn_deprecated_kwarg,
-)
+from diff_diff._deprecation import NOT_SUPPLIED
 from diff_diff.aggregation import AggregationMixin, AggregationResult, resolve_inference_df
 from diff_diff.bootstrap_chunking import (
     compute_block_size,
@@ -402,7 +397,7 @@ class HeterogeneousAdoptionDiDResults(BaseResults, AggregationMixin):
     ``"survey_binder_tsl"`` (continuous, Binder 1983 TSL with PSU/strata/FPC
     under ``survey_design=SurveyDesign(...)``) or ``"survey_binder_tsl_2sls"``
     (mass-point, Binder 1983 TSL under ``survey_design=``; requires
-    ``vcov_type="hc1"`` / ``robust=True`` — the mass-point survey path rejects
+    ``vcov_type="hc1"`` — the mass-point survey path rejects
     ``vcov_type="classical"``, and ``cluster=`` + ``survey_design=`` is
     rejected, so PSU clustering is expressed via
     ``SurveyDesign(weights='<weight_col>', psu='<cluster_col>')``).
@@ -542,7 +537,7 @@ class HeterogeneousAdoptionDiDResults(BaseResults, AggregationMixin):
           ``"survey_binder_tsl"`` (continuous, Binder 1983 TSL under
           ``survey_design=``) or ``"survey_binder_tsl_2sls"`` (mass-point,
           Binder 1983 TSL under ``survey_design=``; requires
-          ``vcov_type="hc1"`` / ``robust=True`` — the mass-point survey path
+          ``vcov_type="hc1"`` — the mass-point survey path
           rejects ``vcov_type="classical"``). See the field docstring above
           for the full contract.
         - ``effective_dose_mean``: weighted denominator used by the
@@ -2846,21 +2841,13 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
     alpha : float
         CI level (0.05 for 95% CI).
     vcov_type : {"classical", "hc1"} or None
-        Mass-point-path only. When ``None``, the effective family falls
-        back to the ``robust`` flag: ``robust=True`` -> ``"hc1"``,
-        ``robust=False`` -> ``"classical"`` (the default construction).
-        Explicit ``"hc2"`` and ``"hc2_bm"`` raise ``NotImplementedError``
-        pending a 2SLS-specific leverage derivation. Ignored on the
-        continuous paths (which use the CCT-2014 robust SE from
-        Phase 1c); passing a non-default ``vcov_type`` on a continuous
-        path emits a ``UserWarning`` per fit call.
-    robust : bool, optional
-        DEPRECATED backward-compat alias (row M-047; warns with
-        ``FutureWarning``, removed in 4.0 - use ``vcov_type=``). Used
-        only when ``vcov_type is None``: ``True`` -> ``"hc1"``, ``False``
-        (the historical HAD default) -> ``"classical"``. Explicit
-        ``vcov_type`` takes precedence. Only the mass-point path consumes
-        these; continuous paths ignore both with a warning.
+        Mass-point-path only. When ``None`` (the default construction),
+        the effective family is ``"classical"``. Explicit ``"hc2"`` and
+        ``"hc2_bm"`` raise ``NotImplementedError`` pending a 2SLS-specific
+        leverage derivation. Ignored on the continuous paths (which use
+        the CCT-2014 robust SE from Phase 1c); passing a non-default
+        ``vcov_type`` on a continuous path emits a ``UserWarning`` per fit
+        call.
     cluster : str or None
         Column name for cluster-robust SE. On the mass-point path this is
         the 2SLS CR1 sandwich; on the continuous (``continuous_at_zero`` /
@@ -2965,9 +2952,6 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
     'continuous_at_zero'
     """
 
-    _PARAM_ATTR_ALIASES = {"robust": "_robust_arg"}
-    _DERIVED_CONFIG_ATTRS = ("robust",)
-
     def __init__(
         self,
         design: str = "auto",
@@ -2975,7 +2959,6 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
         kernel: str = "epanechnikov",
         alpha: float = 0.05,
         vcov_type: Optional[str] = None,
-        robust: Optional[bool] = None,
         cluster: Optional[str] = None,
         n_bootstrap: int = 999,
         seed: Optional[int] = None,
@@ -2985,13 +2968,6 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
         self.kernel = kernel
         self.alpha = alpha
         self.vcov_type = vcov_type
-        # `robust` is deprecated (row M-047; removed in 4.0). HAD's historical
-        # default is False (the third meaning of the knob) - the None sentinel
-        # resolves to that legacy default on the public attr.
-        if robust is not None:
-            warn_deprecated_kwarg(type(self).__name__, "robust", "use vcov_type= instead")
-        self._robust_arg = robust
-        self.robust = robust if robust is not None else False
         self.cluster = cluster
         # Event-study sup-t simultaneous-CI support. ``n_bootstrap`` =
         # number of multiplier-bootstrap replicates for the sup-t band;
@@ -3066,22 +3042,17 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
     def fit(
         self,
         data: pd.DataFrame,
-        outcome: Any = NOT_SUPPLIED,
-        dose: Any = NOT_SUPPLIED,
-        time: Any = NOT_SUPPLIED,
-        unit: Any = NOT_SUPPLIED,
-        first_treat: Any = NOT_SUPPLIED,
+        outcome: str,
+        dose: str,
+        time: str,
+        unit: str,
+        first_treat: Optional[str] = None,
         aggregate: Any = NOT_SUPPLIED,
         *,
         cband: bool = True,
         survey_design: Any = None,
         trends_lin: bool = False,
         covariates: Any = None,
-        outcome_col: Any = NOT_SUPPLIED,
-        dose_col: Any = NOT_SUPPLIED,
-        time_col: Any = NOT_SUPPLIED,
-        unit_col: Any = NOT_SUPPLIED,
-        first_treat_col: Any = NOT_SUPPLIED,
     ) -> Union[HeterogeneousAdoptionDiDResults, HeterogeneousAdoptionDiDEventStudyResults]:
         """Fit the HAD estimator.
 
@@ -3229,21 +3200,13 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
         for which a standard DiD may be more appropriate (de Chaisemartin
         et al. 2026, Section 2). The event-study path does not warn: it
         *requires* never-treated units per Appendix B.2.
-
-        The keyword-only ``outcome_col`` / ``dose_col`` / ``time_col`` /
-        ``unit_col`` / ``first_treat_col`` parameters are deprecated
-        aliases for the bare names (rows M-035..M-039); each warns with
-        ``FutureWarning`` and will be removed in 4.0.
         """
-        qualname = "HeterogeneousAdoptionDiD.fit"
         # M-027 deprecation shim: a plain fit() never warns; supplying
         # aggregate= with ANY value (None included) warns once, then the
         # legacy routing below runs unchanged - invalid values still
         # reach the pre-existing _VALID_AGGREGATES ValueError. The
-        # SENTINEL resolves to a panel-inferred mode, but only AFTER the
-        # time/time_col alias reconciliation below (both spellings are
-        # NOT_SUPPLIED twins until then - rows M-035..M-039), at the
-        # _VALID_AGGREGATES check site.
+        # SENTINEL resolves to a panel-inferred mode at the
+        # _VALID_AGGREGATES check site below.
         if aggregate is not NOT_SUPPLIED:
             warnings.warn(
                 "HeterogeneousAdoptionDiD.fit(aggregate=) is deprecated "
@@ -3256,47 +3219,16 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
                 FutureWarning,
                 stacklevel=2,
             )
-        outcome = resolve_renamed_kwarg(
-            qualname,
-            "outcome_col",
-            outcome_col,
-            "outcome",
-            outcome,
-            default=NOT_SUPPLIED,
-        )
-        require_arg(qualname, "outcome", outcome)
-        dose = resolve_renamed_kwarg(
-            qualname, "dose_col", dose_col, "dose", dose, default=NOT_SUPPLIED
-        )
-        require_arg(qualname, "dose", dose)
-        time = resolve_renamed_kwarg(
-            qualname, "time_col", time_col, "time", time, default=NOT_SUPPLIED
-        )
-        require_arg(qualname, "time", time)
-        unit = resolve_renamed_kwarg(
-            qualname, "unit_col", unit_col, "unit", unit, default=NOT_SUPPLIED
-        )
-        require_arg(qualname, "unit", unit)
-        first_treat = resolve_renamed_kwarg(
-            qualname,
-            "first_treat_col",
-            first_treat_col,
-            "first_treat",
-            first_treat,
-            default=None,
-        )
-        # Body-local names; the public parameters are the bare names
-        # (M-035..M-039).
+        # Body-local ``*_col`` names feed the private helpers; the public
+        # parameters are the bare names.
         outcome_col = outcome
         dose_col = dose
         time_col = time
         unit_col = unit
         first_treat_col = first_treat
         # ---- aggregate / survey_design validation ----
-        # Sentinel resolution runs HERE - after the alias reconciliation
-        # above (time_col is now the resolved column name) - so both the
-        # canonical time= and legacy time_col= spellings reach the
-        # inference helper resolved (M-027).
+        # Sentinel resolution (M-027): infer the mode from the panel shape
+        # when aggregate= was not supplied.
         if aggregate is NOT_SUPPLIED:
             aggregate = _infer_aggregate_mode(data, time_col)
         elif aggregate not in _VALID_AGGREGATES:
@@ -3407,7 +3339,6 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
         design_arg = self.design
         d_lower_arg = self.d_lower
         vcov_type_arg = self.vcov_type
-        robust_arg = self.robust
         cluster_arg = self.cluster
 
         # ---- Validate panel contract ----
@@ -3804,16 +3735,6 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
                     UserWarning,
                     stacklevel=2,
                 )
-            if robust_arg:
-                warnings.warn(
-                    f"robust=True is ignored on the '{resolved_design}' "
-                    f"path (the continuous designs use the CCT-2014 "
-                    f"robust SE from Phase 1c unconditionally; the "
-                    f"robust flag is a mass-point-only backward-compat "
-                    f"alias for vcov_type).",
-                    UserWarning,
-                    stacklevel=2,
-                )
             # (cluster= + survey_design= was rejected up front, before cluster
             # extraction — see the guard in the design-resolution block above.)
             # Fit on FULL (unfiltered) arrays so the IF aligns with the
@@ -3863,16 +3784,15 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
                     f"cluster-robust + survey inference is deferred to a "
                     f"follow-up PR."
                 )
-            # Resolve the EFFECTIVE vcov family first (vcov_type_arg,
-            # with default-mapping from robust= when unset). Reject the
+            # Resolve the EFFECTIVE vcov family first (vcov_type_arg, with
+            # HAD's implicit default "classical" when unset). Reject the
             # classical-on-IF-consumption combination against the
             # resolved value, NOT the raw kwarg, so the default
-            # `vcov_type=None, robust=False` case (which maps to
-            # classical) hits the guard too (review R5 P1 — previous
-            # fix only fired on explicit vcov_type='classical').
+            # `vcov_type=None` case (which maps to classical) hits the
+            # guard too (review R5 P1 — previous fix only fired on
+            # explicit vcov_type='classical').
             if vcov_type_arg is None:
-                # Backward-compat: robust=True -> hc1, robust=False -> classical.
-                vcov_requested = "hc1" if robust_arg else "classical"
+                vcov_requested = "classical"
             else:
                 vcov_requested = vcov_type_arg.lower()
             # Review R3 P1 / R5 P1: the weighted mass-point path returns
@@ -3887,14 +3807,13 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
             if vcov_requested == "classical" and resolved_survey_unit_full is not None:
                 raise NotImplementedError(
                     "vcov_type='classical' (resolved — either explicit or "
-                    "from the default robust=False mapping) + survey_design= on "
+                    "from the default vcov_type=None mapping) + survey_design= on "
                     "design='mass_point' is not yet supported: the "
                     "survey path composes Binder-TSL variance via the "
                     "HC1-scale influence function, which targets V_HC1 "
                     "rather than the classical sandwich "
                     "V_cl = σ² · (Z'WX)^{-1}(Z'W²Z)(X'WZ)^{-1}. Use "
-                    "vcov_type='hc1' (or leave vcov_type unset with "
-                    "robust=True) on the weighted path; a classical-"
+                    "vcov_type='hc1' on the weighted path; a classical-"
                     "aligned IF derivation is queued for a follow-up PR."
                 )
             # Phase 4.5 B: accept weights_unit (None on unweighted fits).
@@ -4247,7 +4166,6 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
         design_arg = self.design
         d_lower_arg = self.d_lower
         vcov_type_arg = self.vcov_type
-        robust_arg = self.robust
         cluster_arg = self.cluster
         n_bootstrap_eff = int(self.n_bootstrap)
         seed_eff = None if self.seed is None else int(self.seed)
@@ -4545,12 +4463,6 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
                     UserWarning,
                     stacklevel=3,
                 )
-            if robust_arg:
-                warnings.warn(
-                    f"robust=True is ignored on the '{resolved_design}' " f"path.",
-                    UserWarning,
-                    stacklevel=3,
-                )
             # cluster= is now threaded into the continuous-path CCT SE and the
             # cluster-robust sup-t band (Phase 2b parity with the static path);
             # no "cluster ignored" warning.
@@ -4559,10 +4471,9 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
         if resolved_design == "mass_point":
             # Resolve the EFFECTIVE vcov family first (review R5 P1 —
             # previous fix only fired on explicit vcov_type='classical'
-            # and missed the default vcov_type=None, robust=False →
-            # 'classical' mapping).
+            # and missed the default vcov_type=None → 'classical' mapping).
             if vcov_type_arg is None:
-                vcov_requested = "hc1" if robust_arg else "classical"
+                vcov_requested = "classical"
             else:
                 vcov_requested = vcov_type_arg.lower()
             # Review R3/R5 P1 (event-study arm): reject effective
@@ -4581,7 +4492,7 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
             if vcov_requested == "classical" and _uses_if_matrix:
                 raise NotImplementedError(
                     "vcov_type='classical' (resolved — either explicit "
-                    "or from the default robust=False mapping) + "
+                    "or from the default vcov_type=None mapping) + "
                     "survey_design= on design='mass_point' event-study "
                     "is not yet supported: the per-horizon IF matrix is "
                     "HC1-scale (targets V_HC1 via "
@@ -4590,8 +4501,7 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
                     "override would produce an inconsistent variance "
                     "family. cband=False does not avoid this — the survey "
                     "path consumes the HC1-scaled IF for the analytical SE "
-                    "regardless. Use vcov_type='hc1' (or leave vcov_type "
-                    "unset with robust=True) on the survey_design= "
+                    "regardless. Use vcov_type='hc1' on the survey_design= "
                     "event-study path."
                 )
             inference_method = "analytical_2sls"

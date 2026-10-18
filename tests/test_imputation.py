@@ -12,7 +12,6 @@ from diff_diff.imputation import (
     ImputationBootstrapResults,
     ImputationDiD,
     ImputationDiDResults,
-    imputation_did,
 )
 from diff_diff.survey import SurveyDesign
 
@@ -513,38 +512,6 @@ class TestImputationDiD:
         r = repr(results)
         assert "ImputationDiDResults" in r
         assert "ATT=" in r
-
-    def test_convenience_function(self):
-        """KEEP (2(d) PR-A, M-070): the deprecated wrapper still works, and
-        warns - here BOTH warnings fire (wrapper + forwarded aggregate=)."""
-        data = generate_test_data()
-        with pytest.warns(FutureWarning, match=r"imputation_did\(\) is deprecated"):
-            results = imputation_did(
-                data,
-                "outcome",
-                "unit",
-                "time",
-                "first_treat",
-                aggregate="event_study",
-            )
-
-        assert isinstance(results, ImputationDiDResults)
-        assert results.event_study_effects is not None
-
-    def test_convenience_function_kwargs(self):
-        """KEEP (M-070): wrapper ctor-kwarg forwarding."""
-        data = generate_test_data()
-        with pytest.warns(FutureWarning, match=r"imputation_did\(\) is deprecated"):
-            results = imputation_did(
-                data,
-                "outcome",
-                "unit",
-                "time",
-                "first_treat",
-                alpha=0.10,
-            )
-
-        assert results.alpha == 0.10
 
     def test_unbalanced_panel(self):
         """Test with unbalanced panel (some units missing periods)."""
@@ -2917,32 +2884,6 @@ class TestImputationDiDVcovType:
         )
         assert r1.overall_se == r2.overall_se
         assert r1.vcov_type == r2.vcov_type
-
-    def test_imputation_did_convenience_func_rejects_bad_vcov(self):
-        data = generate_test_data(seed=11)
-        with pytest.warns(FutureWarning, match=r"imputation_did\(\) is deprecated"):
-            with pytest.raises(ValueError, match="influence-function"):
-                imputation_did(
-                    data,
-                    outcome="outcome",
-                    unit="unit",
-                    time="time",
-                    first_treat="first_treat",
-                    vcov_type="classical",
-                )
-
-    def test_imputation_did_convenience_func_threads_vcov_type(self):
-        data = generate_test_data(seed=11)
-        with pytest.warns(FutureWarning, match=r"imputation_did\(\) is deprecated"):
-            r = imputation_did(
-                data,
-                outcome="outcome",
-                unit="unit",
-                time="time",
-                first_treat="first_treat",
-                vcov_type="hc1",
-            )
-        assert r.vcov_type == "hc1"
 
 
 # =============================================================================

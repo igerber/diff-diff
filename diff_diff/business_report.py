@@ -53,7 +53,7 @@ from diff_diff._reporting_helpers import describe_target_parameter
 from diff_diff.diagnostic_report import DiagnosticReport, DiagnosticReportResults
 from diff_diff.results_base import Diagnostic, _coverage_level, _coverage_pct
 
-BUSINESS_REPORT_SCHEMA_VERSION = "2.0"
+BUSINESS_REPORT_SCHEMA_VERSION = "3.0"
 
 __all__ = [
     "BusinessReport",
@@ -794,7 +794,7 @@ class BusinessReport:
         #     path even in dynamic mode.
         #   * Stacked — ``n_control_units`` is "distinct control units
         #     across the trimmed set" (stacked_did_results.py L59-62).
-        #     Under ``clean_control="not_yet_treated"``, the trimmed
+        #     Under ``control_group="not_yet_treated"``, the trimmed
         #     set uses the rule ``A_s > a + kappa_post`` which admits
         #     future-treated controls; it is NOT a never-treated tally
         #     and cannot be relabeled as ``n_never_treated``. Keep
@@ -1143,10 +1143,9 @@ def _control_group_choice(results: Any) -> Optional[str]:
     across estimator-specific attribute names.
 
     Every anticipation-capable estimator now exposes the control-group
-    choice as ``results.control_group`` (``StackedDiDResults`` joined via
-    row M-095; its ``__setstate__`` migrates pre-rename pickles, so no
-    ``clean_control`` fallback is needed - reading the deprecated alias
-    here would fire its FutureWarning on every report build).
+    choice as ``results.control_group`` (``StackedDiDResults`` included;
+    its ``__setstate__`` migrates pre-rename pickles, so no legacy-name
+    fallback is needed here).
     """
     cg = getattr(results, "control_group", None)
     if isinstance(cg, str):
@@ -1480,16 +1479,16 @@ def _describe_assumption(estimator_name: str, results: Any = None) -> Dict[str, 
         # event) inclusion conditions, NOT the generic "group-time ATT
         # parallel trends" clause used for CS / SA / etc. (round-22 P1
         # CI review on PR #318). The active ``control_group`` rule
-        # (pre-M-095 name: ``clean_control``) determines which units
-        # qualify as valid controls for each adoption event. REGISTRY.md
-        # §StackedDiD (identification / clean-control rules).
-        clean_control = getattr(results, "control_group", None)
-        if clean_control == "never_treated":
+        # determines which units qualify as valid controls for each
+        # adoption event. REGISTRY.md §StackedDiD (identification /
+        # clean-control rules).
+        control_group = getattr(results, "control_group", None)
+        if control_group == "never_treated":
             control_clause = (
                 "controls are restricted to units that are never treated "
                 "over the panel (``A_s = infinity``)"
             )
-        elif clean_control == "strict":
+        elif control_group == "strict":
             control_clause = (
                 "controls for event ``a`` are units satisfying the strict "
                 "rule ``A_s > a + kappa_post + kappa_pre`` (strictly "
@@ -1522,11 +1521,8 @@ def _describe_assumption(estimator_name: str, results: Any = None) -> Dict[str, 
                 "anticipation."
             ),
         }
-        if isinstance(clean_control, str):
-            block["control_group"] = clean_control
-            # Deprecated reporting key kept through the 3.9 shim window;
-            # retired at 4.0 (row M-095, section 5 policy).
-            block["clean_control"] = clean_control
+        if isinstance(control_group, str):
+            block["control_group"] = control_group
         return block
     if estimator_name == "ImputationDiDResults":
         # Borusyak, Jaravel & Spiess (2024) — identification is through
@@ -2773,7 +2769,7 @@ def _render_full_report(schema: Dict[str, Any]) -> str:
     # ``n_control`` is only populated for estimators whose control set
     # is a fixed tally. For dynamic modes (CS / ContinuousDiD /
     # StaggeredTripleDiff / EfficientDiD / StackedDiD under
-    # ``clean_control in {"not_yet_treated", "strict"}``) the comparison
+    # ``control_group in {"not_yet_treated", "strict"}``) the comparison
     # group is dynamic per cohort/sub-experiment; report the estimator-
     # specific fixed subset (``n_never_enabled`` for triple-difference;
     # ``n_never_treated`` elsewhere; ``n_distinct_controls_trimmed`` for

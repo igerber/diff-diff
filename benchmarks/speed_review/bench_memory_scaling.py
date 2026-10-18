@@ -135,7 +135,7 @@ def _run_one(cfg):
         from diff_diff.twfe import TwoWayFixedEffects
 
         ncov = cfg.get("ncov", 6)
-        TwoWayFixedEffects(robust=True).fit(
+        TwoWayFixedEffects().fit(
             _twfe_panel(nu, ncov=ncov),
             outcome="outcome",
             treatment="treated",

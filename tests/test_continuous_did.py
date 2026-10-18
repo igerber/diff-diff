@@ -1559,12 +1559,16 @@ def _cov_data(seed=5, n_units=120):
 
 
 class TestCovariateAPI:
-    def test_covariates_and_method_in_params(self):
-        with pytest.warns(FutureWarning, match=r"\(covariates=\) is deprecated"):
-            est = ContinuousDiD(covariates=["x1"], estimation_method="reg")
+    def test_ctor_covariates_removed(self):
+        """``ContinuousDiD(covariates=)`` was removed at 4.0 (M-084):
+        covariates are a ``fit()`` argument only."""
+        with pytest.raises(TypeError, match="unexpected keyword argument 'covariates'"):
+            ContinuousDiD(covariates=["x1"], estimation_method="reg")
+
+    def test_method_in_params_and_no_covariates(self):
+        est = ContinuousDiD(estimation_method="reg")
         p = est.get_params()
-        # raw-keep contract (M-084): the deprecated ctor value round-trips
-        assert p["covariates"] == ["x1"]
+        assert "covariates" not in p
         assert p["estimation_method"] == "reg"
         assert "pscore_trim" in p and "epv_threshold" in p and "pscore_fallback" in p
 
@@ -1801,14 +1805,10 @@ class TestCovariateAPI:
 
     def test_clone_refit_idempotent(self):
         data = _cov_data()
-        with pytest.warns(FutureWarning, match=r"\(covariates=\) is deprecated"):
-            est = ContinuousDiD(covariates=["x1"], estimation_method="dr", seed=1)
-        r1 = est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
-        # raw-keep: the clone re-warns because the config still carries the
-        # deprecated ctor covariates (M-084, documented).
-        with pytest.warns(FutureWarning, match=r"\(covariates=\) is deprecated"):
-            clone = ContinuousDiD(**est.get_params())
-        r2 = clone.fit(data, "outcome", "unit", "period", "first_treat", "dose")
+        est = ContinuousDiD(estimation_method="dr", seed=1)
+        r1 = est.fit(data, "outcome", "unit", "period", "first_treat", "dose", covariates=["x1"])
+        clone = ContinuousDiD(**est.get_params())
+        r2 = clone.fit(data, "outcome", "unit", "period", "first_treat", "dose", covariates=["x1"])
         assert abs(float(r1.overall_att) - float(r2.overall_att)) < 1e-12
         assert abs(float(r1.overall_att_se) - float(r2.overall_att_se)) < 1e-12
 
@@ -1911,12 +1911,12 @@ class TestDiscreteSaturatedAPI:
         differ at all doses."""
         levels = [1.0, 2.0, 4.0]
         df = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, seed=3)
-        reg = ContinuousDiD(
-            treatment_type="discrete", covariates=["x1"], estimation_method="reg", n_bootstrap=0
-        ).fit(df, **_DKW)
-        dr = ContinuousDiD(
-            treatment_type="discrete", covariates=["x1"], estimation_method="dr", n_bootstrap=0
-        ).fit(df, **_DKW)
+        reg = ContinuousDiD(treatment_type="discrete", estimation_method="reg", n_bootstrap=0).fit(
+            df, covariates=["x1"], **_DKW
+        )
+        dr = ContinuousDiD(treatment_type="discrete", estimation_method="dr", n_bootstrap=0).fit(
+            df, covariates=["x1"], **_DKW
+        )
         # j >= 2: ACRT point AND SE identical (constant augmentation cancels in differences).
         assert np.allclose(
             reg.dose_response_acrt.effects[1:], dr.dose_response_acrt.effects[1:], atol=1e-10
@@ -1942,9 +1942,9 @@ class TestDiscreteSaturatedAPI:
         backward-to-zero) matches the multiplier bootstrap -- validates the dr
         influence-function refinement in CI."""
         df = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, n_per=70, n_control=120, seed=21)
-        kw = dict(treatment_type="discrete", covariates=["x1"], estimation_method="dr")
-        an = ContinuousDiD(**kw, n_bootstrap=0).fit(df, **_DKW)
-        bs = ContinuousDiD(**kw, n_bootstrap=800, seed=7).fit(df, **_DKW)
+        kw = dict(treatment_type="discrete", estimation_method="dr")
+        an = ContinuousDiD(**kw, n_bootstrap=0).fit(df, covariates=["x1"], **_DKW)
+        bs = ContinuousDiD(**kw, n_bootstrap=800, seed=7).fit(df, covariates=["x1"], **_DKW)
         assert np.all(np.isfinite(an.dose_response_acrt.se))
         np.testing.assert_allclose(an.dose_response_acrt.se, bs.dose_response_acrt.se, rtol=0.25)
 
@@ -2099,11 +2099,14 @@ class TestLowestDoseAPI:
         with pytest.raises(NotImplementedError, match="multiple treatment cohorts"):
             est.fit(df, **_DKW)
 
-    def test_covariates_raises_at_init(self):
-        """covariates + lowest_dose is deferred -> NotImplementedError (config-level)."""
-        with pytest.warns(FutureWarning, match=r"\(covariates=\) is deprecated"):
-            with pytest.raises(NotImplementedError, match="covariates"):
-                ContinuousDiD(control_group="lowest_dose", covariates=["x1"])
+    def test_covariates_raises_at_fit(self):
+        """covariates + lowest_dose is deferred -> NotImplementedError at fit()
+        (the constructor no longer takes covariates=, M-084)."""
+        df = self._no_d0()
+        df["x1"] = 0.0
+        est = ContinuousDiD(control_group="lowest_dose")
+        with pytest.raises(NotImplementedError, match="covariates"):
+            est.fit(df, covariates=["x1"], **_DKW)
 
     def test_dvals_below_dL_raises(self):
         """User dvals at/below the reference d_L are rejected on both paths."""

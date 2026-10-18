@@ -81,7 +81,7 @@ class TestWooldridgeDiDResults:
     def test_to_dataframe_event(self):
         r = _make_minimal_results()
         r.aggregate("event_study")
-        df = r.to_dataframe("event")
+        df = r.to_dataframe("event_study")
         assert isinstance(df, pd.DataFrame)
         assert "att" in df.columns
 
@@ -388,7 +388,7 @@ class TestAggregations:
 
     def test_to_dataframe_event(self, fitted):
         fitted.aggregate("event_study")
-        df = fitted.to_dataframe("event")
+        df = fitted.to_dataframe("event_study")
         assert "relative_period" in df.columns
         assert "att" in df.columns
 
@@ -1073,9 +1073,12 @@ class TestAnticipationEventLabels:
         est = WooldridgeDiD(anticipation=1)
         r = est.fit(df, outcome="y", unit="unit", time="time", first_treat="cohort")
         r.aggregate("event_study")
-        summary = r.summary("event")
-        # k=-1 should be labeled [antic] (within anticipation window)
-        assert "[antic]" in summary, f"Expected [antic] label in summary, got:\n{summary}"
+        # k=-1 lies inside the anticipation window: the event-study rows must
+        # carry effects for -anticipation <= k < 0 (the 3.x summary("event")
+        # table that labelled them [antic] is gone at 4.0).
+        assert r.anticipation == 1
+        antic_ks = [int(k) for k in r.event_study_effects if -r.anticipation <= int(k) < 0]
+        assert antic_ks == [-1], f"Expected anticipation-window k=-1 row, got {antic_ks}"
 
 
 class TestOutcomeValidation:
@@ -2416,7 +2419,7 @@ class TestWooldridgeVcovType:
         assert np.isfinite(res.overall_p_value)
         # All three aggregations (group/calendar/event) must produce finite
         # inference on identified contrasts under the reduced-design BM path.
-        for agg_type in ("group", "calendar", "event"):
+        for agg_type in ("group", "calendar", "event_study"):
             res.aggregate(agg_type)
         assert res.event_study_effects is not None
         for k, eff in res.event_study_effects.items():
@@ -2470,7 +2473,7 @@ class TestWooldridgeVcovType:
         assert np.isfinite(res.overall_p_value)
         # Group + calendar + event aggregates should all produce finite
         # inference under the reduced-design BM path.
-        for agg_type in ("group", "calendar", "event"):
+        for agg_type in ("group", "calendar", "event_study"):
             res.aggregate(agg_type)
         for g, eff in (res.group_effects or {}).items():
             assert np.isfinite(eff["t_stat"]), f"group g={g} t_stat NaN under rank-deficient exovar"
@@ -4273,7 +4276,7 @@ class TestComparisonSupportFiltering:
         assert not {8, 9} & set(cal_keys)
 
         # event: exposure times of the retained cells only.
-        evt = res.aggregate(type="event")
+        evt = res.aggregate(type="event_study")
         assert sorted(int(k) for k in evt.event_study_effects) == [0, 1, 2, 3, 4]
 
         for agg in (grp, cal, evt):

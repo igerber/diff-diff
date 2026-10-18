@@ -2059,45 +2059,26 @@ def effective_cluster_count(cluster_ids: np.ndarray, weights: Optional[np.ndarra
     return int(np.sum(sums > 0))
 
 
-def resolve_vcov_type(
-    robust: Optional[bool] = None,
-    vcov_type: Optional[str] = None,
-    *,
-    legacy_default: bool = True,
-) -> str:
-    """Resolve the effective ``vcov_type`` from the ``robust``/``vcov_type`` pair.
+def resolve_vcov_type(vcov_type: Optional[str] = None) -> str:
+    """Resolve and validate the effective ``vcov_type``.
 
-    Single source of truth for the alias and conflict rules shared by
-    :class:`LinearRegression` and :class:`~diff_diff.estimators.DifferenceInDifferences`
-    (and any future caller that needs to validate the pair). Keeping the resolution
-    in one place prevents ``__init__``/``set_params`` drift.
+    Single source of truth for the default and the allowed-value check shared
+    by :class:`LinearRegression` and
+    :class:`~diff_diff.estimators.DifferenceInDifferences` (and any future
+    caller). Keeping the resolution in one place prevents
+    ``__init__``/``set_params`` drift.
 
-    Rules (per the Phase 1a plan; ``robust`` is deprecated per rows
-    M-045..M-047/M-115 and dies in 4.0 with this helper's ``robust``
-    handling):
+    Rules:
 
-    - ``robust=None`` (the 3.9 not-supplied sentinel) resolves as the
-      caller's ``legacy_default`` (``True`` everywhere except
-      ``HeterogeneousAdoptionDiD``, whose historical default was
-      ``False``).
-    - If ``vcov_type`` is ``None``: map effective ``robust=True`` to
-      ``"hc1"`` and ``robust=False`` to ``"classical"``.
+    - If ``vcov_type`` is ``None`` (not supplied): resolve to ``"hc1"``.
     - If ``vcov_type`` is supplied: it must be one of the values in the
       module-level ``_VALID_VCOV_TYPES`` set, namely
       ``{"classical", "hc1", "hc2", "hc2_bm", "hc3", "conley"}``.
-    - If ``robust=False`` is supplied together with a non-``"classical"`` ``vcov_type``,
-      raise ``ValueError`` - the combination is ambiguous.
 
     Parameters
     ----------
-    robust : bool, optional
-        Deprecated legacy alias (removed in 4.0). ``True`` == HC1;
-        ``False`` == classical OLS SEs; ``None`` == not supplied.
     vcov_type : str, optional
-        Explicit variance family. Overrides ``robust`` unless the pair is contradictory.
-    legacy_default : bool, keyword-only, default True
-        What ``robust=None`` resolves to - the calling class's historical
-        ``robust`` default.
+        Explicit variance family; ``None`` selects the library default.
 
     Returns
     -------
@@ -2108,22 +2089,13 @@ def resolve_vcov_type(
     Raises
     ------
     ValueError
-        If ``vcov_type`` is not one of the allowed values, or if
-        ``robust=False`` conflicts with an explicit non-classical ``vcov_type``.
+        If ``vcov_type`` is not one of the allowed values.
     """
-    if robust is None:
-        robust = legacy_default
     if vcov_type is None:
-        return "hc1" if robust else "classical"
+        return "hc1"
     if vcov_type not in _VALID_VCOV_TYPES:
         raise ValueError(
             f"vcov_type must be one of {sorted(_VALID_VCOV_TYPES)}; " f"got {vcov_type!r}"
-        )
-    if robust is False and vcov_type != "classical":
-        raise ValueError(
-            f"robust=False conflicts with vcov_type={vcov_type!r}. "
-            "Pass vcov_type='classical' for non-robust SEs, or drop "
-            "`robust=` and rely on vcov_type alone."
         )
     return vcov_type
 
@@ -2157,8 +2129,7 @@ def compute_robust_vcov(
     matrix determined by the ``vcov_type`` dispatch:
 
     - ``"classical"``: non-robust OLS SE. ``vcov = sigma_hat^2 * (X'X)^{-1}``
-      with ``sigma_hat^2 = sum(u_i^2) / (n - k)``. Useful as a baseline and for
-      backward compatibility with ``robust=False``.
+      with ``sigma_hat^2 = sum(u_i^2) / (n - k)``. Useful as a baseline.
     - ``"hc1"`` (default): heteroskedasticity-robust HC1, meat
       ``sum_i (u_i^2) x_i x_i'`` with DOF factor ``n / (n - k)``. With
       ``cluster_ids``, switches to CR1 (Liang-Zeger) cluster-robust.
@@ -4368,14 +4339,9 @@ class LinearRegression:
     ----------
     include_intercept : bool, default True
         Whether to automatically add an intercept column to the design matrix.
-    robust : bool, optional
-        DEPRECATED legacy alias (row M-115; warns with ``FutureWarning``,
-        removed in 4.0 - use ``vcov_type=``). ``True`` (the historical
-        default) -> HC1; ``False`` with no ``cluster_ids`` -> classical
-        OLS standard errors.
     cluster_ids : array-like, optional
-        Cluster identifiers for cluster-robust standard errors.
-        Overrides the `robust` parameter if provided.
+        Cluster identifiers for cluster-robust standard errors. With
+        ``vcov_type="hc1"`` dispatches to CR1 (Liang-Zeger).
     alpha : float, default 0.05
         Significance level for confidence intervals.
     rank_deficient_action : str, default "warn"
@@ -4393,11 +4359,8 @@ class LinearRegression:
         estimation. When provided, weights and weight_type are canonicalized
         from this object.
     vcov_type : {"classical", "hc1", "hc2", "hc2_bm", "hc3", "conley"}, optional
-        Variance-covariance family. Defaults to the ``robust`` alias
-        (``robust=True`` -> ``"hc1"``, ``robust=False`` -> ``"classical"``).
-        Passing an explicit ``vcov_type`` overrides ``robust`` unless the
-        two conflict (e.g. ``robust=False, vcov_type="hc2"``), in which
-        case ``__init__`` raises. See :func:`solve_ols` for the per-family
+        Variance-covariance family. Defaults to ``"hc1"``. See
+        :func:`solve_ols` for the per-family
         semantics and unsupported combinations. For ``"hc2_bm"``: when
         ``cluster_ids`` is provided, dispatches to CR2 Bell-McCaffrey;
         with ``weights`` (one-way or clustered) dispatches to the
@@ -4523,7 +4486,6 @@ class LinearRegression:
     def __init__(
         self,
         include_intercept: bool = True,
-        robust: Optional[bool] = None,
         cluster_ids: Optional[np.ndarray] = None,
         alpha: float = 0.05,
         rank_deficient_action: str = "warn",
@@ -4549,14 +4511,6 @@ class LinearRegression:
                 f"got {df_convention!r}"
             )
         self.include_intercept = include_intercept
-        # `robust` is deprecated (row M-115; removed in 4.0): None sentinel,
-        # raw arg kept alongside the resolved legacy bool (True).
-        if robust is not None:
-            from diff_diff._deprecation import warn_deprecated_kwarg
-
-            warn_deprecated_kwarg(type(self).__name__, "robust", "use vcov_type= instead")
-        self._robust_arg = robust
-        self.robust = robust if robust is not None else True
         self.cluster_ids = cluster_ids
         self.alpha = alpha
         self.rank_deficient_action = rank_deficient_action
@@ -4582,16 +4536,14 @@ class LinearRegression:
         # The default flips to "cluster" at v4 (see REGISTRY clustered-CR1
         # inference-df deviation note).
         self.df_convention = df_convention
-        # Resolve vcov_type from the legacy `robust` alias via the shared helper.
-        self.vcov_type = resolve_vcov_type(robust, vcov_type)
-        # Preserve the raw constructor arg (possibly None) so `fit()` can
-        # distinguish "alias-derived classical" from "explicit classical".
-        # This is the single source of truth for backward-compat remap
-        # decisions (robust=False + cluster -> CR1). `fit()` treats the
-        # configured state as IMMUTABLE and computes all effective fit-
-        # time values as locals, so repeat fits with different cluster
-        # or survey context produce the correct result without state
-        # drift between calls.
+        # Resolve/validate vcov_type via the shared helper.
+        self.vcov_type = resolve_vcov_type(vcov_type)
+        # Preserve the raw constructor arg (possibly None) so callers can
+        # distinguish the implicit default from an explicit choice. `fit()`
+        # treats the configured state as IMMUTABLE and computes all
+        # effective fit-time values as locals, so repeat fits with
+        # different cluster or survey context produce the correct result
+        # without state drift between calls.
         self._vcov_type_arg = vcov_type
         self._vcov_type_explicit = vcov_type is not None
 
@@ -4669,33 +4621,9 @@ class LinearRegression:
         # Use provided cluster_ids or fall back to instance-level
         effective_cluster_ids = cluster_ids if cluster_ids is not None else self.cluster_ids
 
-        # Resolve the effective fit-time vcov_type WITHOUT mutating self.
-        # Legacy-alias backward compat: when the user supplied
-        # ``robust=False`` without an explicit ``vcov_type`` and a cluster
-        # structure is present at fit time, remap the implicit
-        # ``"classical"`` to ``"hc1"`` so the call dispatches to CR1
-        # instead of raising. Per-fit local only; the configured
-        # ``self.vcov_type`` is left untouched so a subsequent unclustered
-        # fit continues to use classical SEs.
+        # Effective fit-time vcov_type as a local (the configured
+        # ``self.vcov_type`` is never mutated by fit()).
         _fit_vcov_type = self.vcov_type
-        if (
-            not self._vcov_type_explicit
-            and _fit_vcov_type == "classical"
-            and effective_cluster_ids is not None
-        ):
-            warnings.warn(
-                "LinearRegression(robust=False) with clustered fit "
-                "(cluster_ids=...) historically produced CR1 cluster-"
-                "robust SEs. To preserve that behavior, vcov_type has "
-                "been remapped from 'classical' to 'hc1' for THIS fit "
-                "only (configured state on `self` is preserved). Pass "
-                "vcov_type='hc1' explicitly to silence this warning, or "
-                "vcov_type='classical' (with cluster_ids=None) for "
-                "non-robust SEs.",
-                UserWarning,
-                stacklevel=2,
-            )
-            _fit_vcov_type = "hc1"
 
         # Determine if survey vcov should be used
         _use_survey_vcov = False

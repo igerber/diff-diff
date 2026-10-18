@@ -79,11 +79,6 @@ Container for an individual 2x2 DiD comparison within the decomposition.
    :show-inheritance:
    :no-index:
 
-Convenience Function
---------------------
-
-.. autofunction:: diff_diff.bacon_decompose
-
 Example Usage
 -------------
 

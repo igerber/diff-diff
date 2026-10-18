@@ -160,7 +160,7 @@ class TestMethodologyWorkedExample:
         assert results.n_groups_dropped_crossers == 0
         assert results.n_groups_dropped_singleton_baseline == 0
         assert results.n_groups_dropped_never_switching == 2
-        assert sorted(results.groups) == [1, 2, 3, 4]
+        assert sorted(results.units) == [1, 2, 3, 4]
 
     def test_placebo_zero_under_constant_trends(self):
         # Constant linear trend, no treatment effect -> placebo should be ~0

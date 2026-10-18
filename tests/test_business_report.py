@@ -1719,7 +1719,7 @@ class TestStackedCleanControlSurfacesInSampleBlock:
         st = StackedDiD(control_group="not_yet_treated").fit(
             sdf, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
         )
-        assert getattr(st, "clean_control", None) == "not_yet_treated"
+        assert st.control_group == "not_yet_treated"
         sample = BusinessReport(st, auto_diagnostics=False).to_dict()["sample"]
         assert sample["control_group"] == "not_yet_treated"
         assert sample["dynamic_control"] is True
@@ -1840,10 +1840,10 @@ class TestStackedDiDAssumptionBlock:
         assert "A_s > a + kappa_post" in desc
         assert "not_yet_treated" not in desc or "``A_s > a + kappa_post``" in desc
         # The active control-group rule is carried on the block explicitly
-        # for consumers that want structured access - under BOTH keys
-        # through the 3.9 shim window (row M-095).
+        # for consumers that want structured access - under the canonical
+        # key only (the ``clean_control`` dual key left at 4.0, row M-095).
         assert a["control_group"] == "not_yet_treated"
-        assert a["clean_control"] == "not_yet_treated"
+        assert "clean_control" not in a
 
     def test_strict_names_strict_rule(self):
         desc = BusinessReport(self._stub("strict"), auto_diagnostics=False).to_dict()["assumption"][

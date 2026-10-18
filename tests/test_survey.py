@@ -1616,7 +1616,7 @@ class TestWeightedRankDeficiency:
         model = LinearRegression(
             weights=pw,
             weight_type="pweight",
-            robust=False,
+            vcov_type="classical",
             include_intercept=False,
             rank_deficient_action="warn",
         )

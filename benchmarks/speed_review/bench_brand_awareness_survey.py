@@ -73,13 +73,13 @@ def make_phases(data, results, rw_cols):
         # accounted for the sampling structure. The SE-inflation story
         # only shows up if this step is as untreated-for-design as
         # practitioners actually start.
-        did = DifferenceInDifferences(robust=True)
+        did = DifferenceInDifferences()
         results["naive"] = did.fit(
             data, outcome="outcome", treatment="treat_unit", post="post",
         )
 
     def tsl_fit():
-        did = DifferenceInDifferences(robust=True)
+        did = DifferenceInDifferences()
         results["tsl"] = did.fit(
             data, outcome="outcome", treatment="treat_unit", post="post",
             survey_design=sd_tsl,
@@ -92,7 +92,7 @@ def make_phases(data, results, rw_cols):
             weights="weight", replicate_weights=rw_cols,
             replicate_method="JK1",
         )
-        did = DifferenceInDifferences(robust=True)
+        did = DifferenceInDifferences()
         results["replicate"] = did.fit(
             data, outcome="outcome", treatment="treat_unit", post="post",
             survey_design=sd,
@@ -101,7 +101,7 @@ def make_phases(data, results, rw_cols):
     def multi_outcome_loop():
         out = {}
         for y in ("outcome", "consideration", "purchase_intent"):
-            did = DifferenceInDifferences(robust=True)
+            did = DifferenceInDifferences()
             out[y] = did.fit(
                 data, outcome=y, treatment="treat_unit", post="post",
                 survey_design=sd_tsl,
@@ -118,10 +118,10 @@ def make_phases(data, results, rw_cols):
     def placebo_refit():
         pre = data[data["period"] < 7].copy()
         pre["placebo_post"] = (pre["period"] >= 4).astype(int)
-        did = DifferenceInDifferences(robust=True)
+        did = DifferenceInDifferences()
         results["placebo"] = did.fit(
             pre, outcome="outcome", treatment="treat_unit",
-            time="placebo_post", survey_design=sd_tsl,
+            post="placebo_post", survey_design=sd_tsl,
         )
 
     def honest_did_grid():

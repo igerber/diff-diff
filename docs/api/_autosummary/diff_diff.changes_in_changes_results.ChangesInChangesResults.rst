@@ -27,7 +27,6 @@
 
       ~ChangesInChangesResults.alpha
       ~ChangesInChangesResults.covariates
-      ~ChangesInChangesResults.estimator
       ~ChangesInChangesResults.is_significant
       ~ChangesInChangesResults.significance_stars
       ~ChangesInChangesResults.att

@@ -292,13 +292,17 @@ def test_sklearn_clone_round_trip_if_available(cls):
 
 
 # ---------------------------------------------------------------------------
-# DiD robust-alone normalization hook (H1) - the one non-identity hook
+# DiD vcov_type set_params keeps the raw-arg / resolved-attr pair in sync
 # ---------------------------------------------------------------------------
 
 
-def test_did_robust_alone_rederives_vcov_type():
+def test_did_set_params_vcov_type_updates_raw_and_resolved():
     est = diff_diff.DifferenceInDifferences(vcov_type="hc2")
-    est.set_params(robust=False)
+    est.set_params(vcov_type="classical")
     assert est.vcov_type == "classical"
+    assert est._vcov_type_arg == "classical"
+    assert est._vcov_type_explicit is True
+    est.set_params(vcov_type=None)
+    assert est.vcov_type == "hc1"
     assert est._vcov_type_arg is None
     assert est._vcov_type_explicit is False

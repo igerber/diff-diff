@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._base import BaseEstimator
-from diff_diff._deprecation import NOT_SUPPLIED, warn_deprecated_kwarg
+from diff_diff._deprecation import NOT_SUPPLIED
 from diff_diff._dr_scores import drdid_panel_inf_func
 from diff_diff.aggregation import AggregationKit
 from diff_diff.bootstrap_utils import (
@@ -202,16 +202,6 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
         Random seed for reproducibility.
     rank_deficient_action : str, default="warn"
         Action for rank-deficient B-spline OLS: ``"warn"``, ``"error"``, or ``"silent"``.
-    covariates : list of str, optional
-        DEPRECATED constructor home (row M-084; warns with
-        ``FutureWarning``, removed in 4.0) - pass ``covariates=`` to
-        ``fit()`` instead (the sklearn hyperparameter/data split).
-        Column names of covariates for **conditional** parallel trends
-        (``E[ΔY(0) | D=d, X] = E[ΔY(0) | D=0, X]``). When ``None`` (default) the
-        estimator uses unconditional parallel trends. Covariates enter through a
-        covariate-adjusted per-cell control counterfactual (see ``estimation_method``).
-        Covariates are read from the base period of each ``(g, t)`` comparison.
-        Not currently composable with ``survey_design=`` (raises ``NotImplementedError``).
     estimation_method : str, default="dr"
         Covariate-adjustment method (only used when ``covariates`` is set):
         ``"reg"`` (outcome regression) or ``"dr"`` (doubly-robust, the default).
@@ -281,7 +271,6 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
         bootstrap_weights: str = "rademacher",
         seed: Optional[int] = None,
         rank_deficient_action: str = "warn",
-        covariates: Optional[List[str]] = None,
         estimation_method: str = "dr",
         pscore_trim: float = 0.01,
         epv_threshold: float = 10.0,
@@ -300,17 +289,6 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
         self.bootstrap_weights = bootstrap_weights
         self.seed = seed
         self.rank_deficient_action = rank_deficient_action
-        # M-084: constructor covariates= is deprecated (removed in 4.0);
-        # the design-matrix column spec moves to fit() per the sklearn
-        # hyperparameter/data split. Raw-keep storage: the value still
-        # routes exactly as before, and get_params round-trips it.
-        if covariates is not None:
-            warn_deprecated_kwarg(
-                type(self).__name__,
-                "covariates",
-                "pass covariates to fit() instead",
-            )
-        self.covariates = covariates
         self.estimation_method = estimation_method
         self.pscore_trim = pscore_trim
         self.epv_threshold = epv_threshold
@@ -357,17 +335,6 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
             raise ValueError(
                 f"Invalid treatment_type: '{self.treatment_type}'. "
                 f"Must be one of {self._VALID_TREATMENT_TYPES}."
-            )
-        if self.control_group == "lowest_dose" and self.covariates is not None:
-            # The covariate estimand under lowest-dose-as-control shifts to
-            # conditional PT *relative to d_L* (E[ΔY(0)|D=d,X] = E[ΔY(0)|d_L,X]).
-            # Deferred (see the TODO.md ContinuousDiD row) rather than silently estimated with the wrong
-            # identifying assumption.
-            raise NotImplementedError(
-                "control_group='lowest_dose' does not yet compose with covariates= "
-                "(the conditional-parallel-trends estimand relative to the lowest "
-                "dose d_L is deferred). Use covariates=None for the unconditional "
-                "lowest-dose fit."
             )
 
     # get_params/set_params come from BaseEstimator.
@@ -422,10 +389,14 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
             variance with strata, PSU, and FPC.
 
         covariates : list of str, optional
-            Covariate column names for the conditional-parallel-trends
-            estimand (the canonical fit-level home - row M-084). The
-            deprecated constructor ``covariates=`` still routes and warns;
-            supplying both raises ``ValueError``.
+            Column names of covariates for **conditional** parallel trends
+            (``E[ΔY(0) | D=d, X] = E[ΔY(0) | D=0, X]``). When ``None``
+            (default) the estimator uses unconditional parallel trends.
+            Covariates enter through a covariate-adjusted per-cell control
+            counterfactual (see ``estimation_method``) and are read from the
+            base period of each ``(g, t)`` comparison. Not currently
+            composable with ``survey_design=`` (raises
+            ``NotImplementedError``) or ``control_group="lowest_dose"``.
 
         Returns
         -------
@@ -482,17 +453,14 @@ class ContinuousDiD(_ContinuousDiDAggregationMixin, BaseEstimator):
 
         # Bootstrap + survey supported via PSU-level multiplier bootstrap.
 
-        # M-084: fit-time covariates= is the canonical home; the deprecated
-        # constructor spec still routes (raw-keep). Supplying both is
-        # ambiguous and fails loudly.
-        if covariates is not None and self.covariates is not None:
-            raise ValueError(
-                "covariates= was supplied both to the constructor "
-                "(deprecated, row M-084) and to fit(); pass it to fit() only."
-            )
-        effective_covariates = covariates if covariates is not None else self.covariates
+        # covariates= is a fit-time (data-side) spec per the sklearn
+        # hyperparameter/data split.
+        effective_covariates = covariates
         if self.control_group == "lowest_dose" and effective_covariates is not None:
-            # Mirror of the constructor-time guard for the fit-level spec.
+            # The covariate estimand under lowest-dose-as-control shifts to
+            # conditional PT *relative to d_L* (E[ΔY(0)|D=d,X] = E[ΔY(0)|d_L,X]).
+            # Deferred (see the TODO.md ContinuousDiD row) rather than silently
+            # estimated with the wrong identifying assumption.
             raise NotImplementedError(
                 "control_group='lowest_dose' does not yet compose with covariates= "
                 "(the conditional-parallel-trends estimand relative to the lowest "

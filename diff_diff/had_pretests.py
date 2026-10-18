@@ -77,7 +77,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from diff_diff._deprecation import NOT_SUPPLIED, require_arg, resolve_renamed_kwarg
+from diff_diff._deprecation import NOT_SUPPLIED
 from diff_diff.bootstrap_utils import (
     apply_stratum_centering,
     generate_survey_multiplier_weights_batch,
@@ -3380,24 +3380,19 @@ def _resolve_pretest_unit_weights(
 
 def joint_pretrends_test(
     data: pd.DataFrame,
-    outcome: Any = NOT_SUPPLIED,
-    dose: Any = NOT_SUPPLIED,
-    time: Any = NOT_SUPPLIED,
-    unit: Any = NOT_SUPPLIED,
-    pre_periods: Any = NOT_SUPPLIED,
-    base_period: Any = NOT_SUPPLIED,
-    first_treat: Any = NOT_SUPPLIED,
+    outcome: str,
+    dose: str,
+    time: str,
+    unit: str,
+    pre_periods: Any,
+    base_period: Any,
+    first_treat: Optional[str] = None,
     *,
     alpha: float = 0.05,
     n_bootstrap: int = 999,
     seed: Optional[int] = None,
     survey_design: Any = None,
     trends_lin: bool = False,
-    outcome_col: Any = NOT_SUPPLIED,
-    dose_col: Any = NOT_SUPPLIED,
-    time_col: Any = NOT_SUPPLIED,
-    unit_col: Any = NOT_SUPPLIED,
-    first_treat_col: Any = NOT_SUPPLIED,
 ) -> StuteJointResult:
     """Joint Stute pre-trends test (paper Section 4.2 step 2).
 
@@ -3467,23 +3462,8 @@ def joint_pretrends_test(
     -------
     StuteJointResult with ``null_form = "mean_independence"``.
     """
-    _q = "joint_pretrends_test"
-    outcome = resolve_renamed_kwarg(
-        _q, "outcome_col", outcome_col, "outcome", outcome, default=NOT_SUPPLIED
-    )
-    require_arg(_q, "outcome", outcome)
-    dose = resolve_renamed_kwarg(_q, "dose_col", dose_col, "dose", dose, default=NOT_SUPPLIED)
-    require_arg(_q, "dose", dose)
-    time = resolve_renamed_kwarg(_q, "time_col", time_col, "time", time, default=NOT_SUPPLIED)
-    require_arg(_q, "time", time)
-    unit = resolve_renamed_kwarg(_q, "unit_col", unit_col, "unit", unit, default=NOT_SUPPLIED)
-    require_arg(_q, "unit", unit)
-    require_arg(_q, "pre_periods", pre_periods)
-    require_arg(_q, "base_period", base_period)
-    first_treat = resolve_renamed_kwarg(
-        _q, "first_treat_col", first_treat_col, "first_treat", first_treat, default=None
-    )
-    # Body-local names; the public parameters are the bare names.
+    # Body-local ``*_col`` names feed the private helpers; the public
+    # parameters are the bare names.
     outcome_col = outcome
     dose_col = dose
     time_col = time
@@ -3793,24 +3773,19 @@ def joint_pretrends_test(
 
 def joint_homogeneity_test(
     data: pd.DataFrame,
-    outcome: Any = NOT_SUPPLIED,
-    dose: Any = NOT_SUPPLIED,
-    time: Any = NOT_SUPPLIED,
-    unit: Any = NOT_SUPPLIED,
-    post_periods: Any = NOT_SUPPLIED,
-    base_period: Any = NOT_SUPPLIED,
-    first_treat: Any = NOT_SUPPLIED,
+    outcome: str,
+    dose: str,
+    time: str,
+    unit: str,
+    post_periods: Any,
+    base_period: Any,
+    first_treat: Optional[str] = None,
     *,
     alpha: float = 0.05,
     n_bootstrap: int = 999,
     seed: Optional[int] = None,
     survey_design: Any = None,
     trends_lin: bool = False,
-    outcome_col: Any = NOT_SUPPLIED,
-    dose_col: Any = NOT_SUPPLIED,
-    time_col: Any = NOT_SUPPLIED,
-    unit_col: Any = NOT_SUPPLIED,
-    first_treat_col: Any = NOT_SUPPLIED,
 ) -> StuteJointResult:
     """Joint Stute homogeneity-linearity test (paper Section 4.3 joint).
 
@@ -3866,23 +3841,8 @@ def joint_homogeneity_test(
     -------
     StuteJointResult with ``null_form = "linearity"``.
     """
-    _q = "joint_homogeneity_test"
-    outcome = resolve_renamed_kwarg(
-        _q, "outcome_col", outcome_col, "outcome", outcome, default=NOT_SUPPLIED
-    )
-    require_arg(_q, "outcome", outcome)
-    dose = resolve_renamed_kwarg(_q, "dose_col", dose_col, "dose", dose, default=NOT_SUPPLIED)
-    require_arg(_q, "dose", dose)
-    time = resolve_renamed_kwarg(_q, "time_col", time_col, "time", time, default=NOT_SUPPLIED)
-    require_arg(_q, "time", time)
-    unit = resolve_renamed_kwarg(_q, "unit_col", unit_col, "unit", unit, default=NOT_SUPPLIED)
-    require_arg(_q, "unit", unit)
-    require_arg(_q, "post_periods", post_periods)
-    require_arg(_q, "base_period", base_period)
-    first_treat = resolve_renamed_kwarg(
-        _q, "first_treat_col", first_treat_col, "first_treat", first_treat, default=None
-    )
-    # Body-local names; the public parameters are the bare names.
+    # Body-local ``*_col`` names feed the private helpers; the public
+    # parameters are the bare names.
     outcome_col = outcome
     dose_col = dose
     time_col = time
@@ -4254,11 +4214,11 @@ def _compose_verdict_event_study_survey(
 
 def did_had_pretest_workflow(
     data: pd.DataFrame,
-    outcome: Any = NOT_SUPPLIED,
-    dose: Any = NOT_SUPPLIED,
-    time: Any = NOT_SUPPLIED,
-    unit: Any = NOT_SUPPLIED,
-    first_treat: Any = NOT_SUPPLIED,
+    outcome: str,
+    dose: str,
+    time: str,
+    unit: str,
+    first_treat: Optional[str] = None,
     alpha: float = 0.05,
     n_bootstrap: int = 999,
     seed: Optional[int] = None,
@@ -4266,11 +4226,6 @@ def did_had_pretest_workflow(
     aggregate: Any = NOT_SUPPLIED,
     survey_design: Any = None,
     trends_lin: bool = False,
-    outcome_col: Any = NOT_SUPPLIED,
-    dose_col: Any = NOT_SUPPLIED,
-    time_col: Any = NOT_SUPPLIED,
-    unit_col: Any = NOT_SUPPLIED,
-    first_treat_col: Any = NOT_SUPPLIED,
 ) -> HADPretestReport:
     """Run the HAD pre-test workflow (paper Section 4.2-4.3).
 
@@ -4450,13 +4405,11 @@ def did_had_pretest_workflow(
     de Chaisemartin et al. (2026), Section 4.2-4.3, Theorem 4, Appendix
     D, Theorem 7.
     """
-    _q = "did_had_pretest_workflow"
     # M-139 deprecation shim (the fit-side twin is row M-027): a plain
     # workflow call never warns; supplying aggregate= with ANY value
     # warns once, then the legacy routing runs unchanged. The SENTINEL
-    # resolves to the same panel-inferred mode fit() uses - AFTER the
-    # time/time_col alias reconciliation below - at the
-    # _VALID_AGGREGATES check site.
+    # resolves to the same panel-inferred mode fit() uses at the
+    # _VALID_AGGREGATES check site below.
     if aggregate is not NOT_SUPPLIED:
         warnings.warn(
             "did_had_pretest_workflow(aggregate=) is deprecated and "
@@ -4468,28 +4421,15 @@ def did_had_pretest_workflow(
             FutureWarning,
             stacklevel=2,
         )
-    outcome = resolve_renamed_kwarg(
-        _q, "outcome_col", outcome_col, "outcome", outcome, default=NOT_SUPPLIED
-    )
-    require_arg(_q, "outcome", outcome)
-    dose = resolve_renamed_kwarg(_q, "dose_col", dose_col, "dose", dose, default=NOT_SUPPLIED)
-    require_arg(_q, "dose", dose)
-    time = resolve_renamed_kwarg(_q, "time_col", time_col, "time", time, default=NOT_SUPPLIED)
-    require_arg(_q, "time", time)
-    unit = resolve_renamed_kwarg(_q, "unit_col", unit_col, "unit", unit, default=NOT_SUPPLIED)
-    require_arg(_q, "unit", unit)
-    first_treat = resolve_renamed_kwarg(
-        _q, "first_treat_col", first_treat_col, "first_treat", first_treat, default=None
-    )
-    # Body-local names; the public parameters are the bare names.
+    # Body-local ``*_col`` names feed the private helpers; the public
+    # parameters are the bare names.
     outcome_col = outcome
     dose_col = dose
     time_col = time
     unit_col = unit
     first_treat_col = first_treat
-    # Sentinel resolution runs HERE - after the alias reconciliation
-    # above, so both time= and legacy time_col= spellings reach the
-    # inference helper resolved (M-139, mirroring fit's M-027 shim).
+    # Sentinel resolution (M-139, mirroring fit's M-027 shim): infer the
+    # mode from the panel shape when aggregate= was not supplied.
     if aggregate is NOT_SUPPLIED:
         aggregate = _infer_aggregate_mode(data, time_col)
     elif aggregate not in _VALID_AGGREGATES:

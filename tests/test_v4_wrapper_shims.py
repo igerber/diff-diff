@@ -1,43 +1,34 @@
-"""Wrapper-deprecation shims (rows M-070..M-077, 2(d) PR-A).
+"""Wrapper removal pins (rows M-070..M-077, removed at the 4.0 cut).
 
-The eight module-level convenience wrappers are deprecated in 3.9 and
-removed in 4.0; classes are the single canonical construction surface.
-This suite is the rows' shared ``test_ref``. Per wrapper it pins:
+The eight module-level convenience wrappers (``imputation_did``,
+``two_stage_did``, ``stacked_did``, ``trop``, ``synthetic_control``,
+``triple_difference``, ``bacon_decompose``, ``chaisemartin_dhaultfoeuille``)
+were deprecated in 3.9 and deleted in 4.0; classes are the single canonical
+construction surface. This suite is the rows' shared ``test_ref``. Per
+wrapper it pins:
 
-1. WARNING: one legacy call emits the uniform FutureWarning, matched on
-   the FULL message via ``re.escape`` (never a bare template - the
-   message is dense in regex metacharacters). ``bacon_decompose`` uses
-   diagnostic wording (``BaconDecompositionResults`` subclasses the
-   ``Diagnostic`` marker).
-2. EQUIVALENCE (THE GATE): the wrapper is a pure construct+fit relay,
-   so its result equals the explicit class path BIT-EXACTLY -
-   ``assert_allclose(rtol=0, atol=0, equal_nan=True)`` over the full
-   inference quintet (att/se/t_stat/p_value/conf_int). NaN-by-design
-   fields compare NaN==NaN (SyntheticControl's quintet is all-NaN
-   beside a finite att; additionally validated via
-   ``assert_nan_inference``). ``BaconDecompositionResults`` has no
-   att/se - its gate compares the enumerated diagnostic field list
-   plus the ``comparisons`` payload via ``to_dataframe()``.
-   Determinism: only TROP and SyntheticControl draw entropy - both
-   sides share an explicit ``seed=`` (TROP additionally runs a
-   CI-scaled ``n_bootstrap`` and a narrowed regularization grid);
-   the other six are deterministic at their defaults.
-3. SENTINEL FORWARDING (imputation_did / two_stage_did / stacked_did):
-   a plain wrapper call fires EXACTLY ONE FutureWarning - the wrapper
-   deprecation - never the fit-time aggregate warning; an explicit
-   ``aggregate=`` fires both (wrapper first). dCDH is safe by
-   construction (``**fit_kwargs`` - a plain call never passes
-   aggregate).
+1. SMOKE: the explicit class path (the wrapper's documented replacement)
+   fits the same shape of call the wrapper used to take.
+2. ABSENCE: the name is not in ``diff_diff.__all__``. For the four names
+   that do NOT collide with a submodule (``imputation_did``,
+   ``two_stage_did``, ``triple_difference``, ``bacon_decompose``)
+   ``from diff_diff import <name>`` raises ``ImportError`` and
+   ``diff_diff.<name>`` raises ``AttributeError``. The other four
+   (``trop``, ``synthetic_control``, ``stacked_did``,
+   ``chaisemartin_dhaultfoeuille``) share their SUBMODULE's name, so the
+   from-import succeeds and yields the module object (as
+   ``diff_diff.bacon`` / ``diff_diff.imputation`` always did); for those
+   the pin is ``inspect.ismodule(diff_diff.<name>)`` - a resurrected
+   function there would fail it.
 """
 
-import re
-import warnings
+import inspect
 
 import numpy as np
 import pandas as pd
 import pytest
-from numpy.testing import assert_allclose
 
+import diff_diff
 from diff_diff import (
     TROP,
     BaconDecomposition,
@@ -47,40 +38,28 @@ from diff_diff import (
     SyntheticControl,
     TripleDifference,
     TwoStageDiD,
-    bacon_decompose,
-    chaisemartin_dhaultfoeuille,
-    imputation_did,
-    stacked_did,
-    synthetic_control,
-    triple_difference,
-    trop,
-    two_stage_did,
 )
 
-from .conftest import assert_nan_inference
-
-QUINTET = ("att", "se", "t_stat", "p_value", "conf_int")
-
-
-def _wrapper_message(name: str, cls: str, kind: str = "estimator") -> str:
-    return (
-        f"{name}() is deprecated and will be removed in 4.0; "
-        f"construct the {kind} instead: {cls}(...).fit(data, ...)."
-    )
+NON_COLLIDING = ("imputation_did", "two_stage_did", "triple_difference", "bacon_decompose")
+MODULE_COLLIDING = ("trop", "synthetic_control", "stacked_did", "chaisemartin_dhaultfoeuille")
 
 
-def _assert_quintet_bit_equal(wrapped, direct):
-    """THE GATE: full inference quintet, zero tolerance, NaN==NaN."""
-    for field in QUINTET:
-        w, d = getattr(wrapped, field), getattr(direct, field)
-        assert_allclose(
-            np.asarray(w, dtype=float),
-            np.asarray(d, dtype=float),
-            rtol=0,
-            atol=0,
-            equal_nan=True,
-            err_msg=f"wrapper/class divergence on {field}",
-        )
+def _assert_removed_non_colliding(name: str) -> None:
+    assert name not in diff_diff.__all__
+    with pytest.raises(AttributeError):
+        getattr(diff_diff, name)
+    with pytest.raises(ImportError):
+        exec(f"from diff_diff import {name}", {})  # noqa: S102
+
+
+def _assert_removed_module_colliding(name: str) -> None:
+    assert name not in diff_diff.__all__
+    obj = getattr(diff_diff, name)
+    assert inspect.ismodule(obj), f"diff_diff.{name} must be the submodule, got {obj!r}"
+    assert obj.__name__ == f"diff_diff.{name}"
+    ns: dict = {}
+    exec(f"from diff_diff import {name}", ns)  # noqa: S102
+    assert ns[name] is obj
 
 
 @pytest.fixture(scope="module")
@@ -147,248 +126,127 @@ def absorbing_panel():
     return pd.DataFrame(rows, columns=["unit", "time", "d", "y"])
 
 
-class TestWrapperWarnings:
-    """Pin 1: the uniform full-message FutureWarning, per wrapper."""
+class TestImputationDidRemoved:
+    """M-070."""
 
-    def test_imputation_did_warns(self, staggered_panel):
-        with pytest.warns(
-            FutureWarning, match=re.escape(_wrapper_message("imputation_did", "ImputationDiD"))
-        ):
-            imputation_did(staggered_panel, "y", "unit", "time", "first_treat")
-
-    def test_two_stage_did_warns(self, staggered_panel):
-        with pytest.warns(
-            FutureWarning, match=re.escape(_wrapper_message("two_stage_did", "TwoStageDiD"))
-        ):
-            two_stage_did(staggered_panel, "y", "unit", "time", "first_treat")
-
-    def test_stacked_did_warns(self, staggered_panel):
-        with pytest.warns(
-            FutureWarning, match=re.escape(_wrapper_message("stacked_did", "StackedDiD"))
-        ):
-            stacked_did(staggered_panel, "y", "unit", "time", "first_treat")
-
-    def test_trop_warns(self, absorbing_panel, ci_params):
-        with pytest.warns(FutureWarning, match=re.escape(_wrapper_message("trop", "TROP"))):
-            trop(
-                absorbing_panel,
-                "y",
-                "d",
-                "unit",
-                "time",
-                n_bootstrap=ci_params.bootstrap(19),
-                lambda_time_grid=[0.1],
-                lambda_unit_grid=[0.1],
-                lambda_nn_grid=[0.1],
-                seed=42,
-            )
-
-    def test_synthetic_control_warns(self, scm_panel):
-        with pytest.warns(
-            FutureWarning,
-            match=re.escape(_wrapper_message("synthetic_control", "SyntheticControl")),
-        ):
-            synthetic_control(scm_panel, "y", "treated", "unit", "time", seed=1)
-
-    def test_triple_difference_warns(self, ddd_panel):
-        with pytest.warns(
-            FutureWarning,
-            match=re.escape(_wrapper_message("triple_difference", "TripleDifference")),
-        ):
-            triple_difference(
-                ddd_panel, outcome="y", group="group", partition="partition", time="post"
-            )
-
-    def test_bacon_decompose_warns_diagnostic_wording(self, staggered_panel):
-        # The Bacon carve-out: BaconDecompositionResults subclasses the
-        # Diagnostic marker, so the message says "diagnostic", not
-        # "estimator".
-        with pytest.warns(
-            FutureWarning,
-            match=re.escape(
-                _wrapper_message("bacon_decompose", "BaconDecomposition", kind="diagnostic")
-            ),
-        ):
-            bacon_decompose(
-                staggered_panel, outcome="y", unit="unit", time="time", first_treat="first_treat"
-            )
-
-    def test_chaisemartin_dhaultfoeuille_warns(self, staggered_panel):
-        with pytest.warns(
-            FutureWarning,
-            match=re.escape(
-                _wrapper_message("chaisemartin_dhaultfoeuille", "ChaisemartinDHaultfoeuille")
-            ),
-        ):
-            chaisemartin_dhaultfoeuille(
-                staggered_panel, outcome="y", group="unit", time="time", treatment="treated"
-            )
-
-
-class TestWrapperEquivalence:
-    """Pin 2 (THE GATE): wrapper == class path, zero tolerance."""
-
-    def _wrapped(self, fn, *args, **kwargs):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            return fn(*args, **kwargs)
-
-    def test_imputation_did_equivalent(self, staggered_panel):
-        wrapped = self._wrapped(imputation_did, staggered_panel, "y", "unit", "time", "first_treat")
-        direct = ImputationDiD().fit(
+    def test_class_path_smoke(self, staggered_panel):
+        res = ImputationDiD().fit(
             staggered_panel, outcome="y", unit="unit", time="time", first_treat="first_treat"
         )
-        _assert_quintet_bit_equal(wrapped, direct)
+        assert np.isfinite(res.att)
 
-    def test_two_stage_did_equivalent(self, staggered_panel):
-        wrapped = self._wrapped(two_stage_did, staggered_panel, "y", "unit", "time", "first_treat")
-        direct = TwoStageDiD().fit(
+    def test_wrapper_absent(self):
+        _assert_removed_non_colliding("imputation_did")
+
+
+class TestTwoStageDidRemoved:
+    """M-071."""
+
+    def test_class_path_smoke(self, staggered_panel):
+        res = TwoStageDiD().fit(
             staggered_panel, outcome="y", unit="unit", time="time", first_treat="first_treat"
         )
-        _assert_quintet_bit_equal(wrapped, direct)
+        assert np.isfinite(res.att)
 
-    def test_stacked_did_equivalent(self, staggered_panel):
-        wrapped = self._wrapped(stacked_did, staggered_panel, "y", "unit", "time", "first_treat")
-        direct = StackedDiD().fit(
+    def test_wrapper_absent(self):
+        _assert_removed_non_colliding("two_stage_did")
+
+
+class TestStackedDidRemoved:
+    """M-072 (name collides with ``diff_diff.stacked_did``, the submodule)."""
+
+    def test_class_path_smoke(self, staggered_panel):
+        res = StackedDiD().fit(
             staggered_panel, outcome="y", unit="unit", time="time", first_treat="first_treat"
         )
-        _assert_quintet_bit_equal(wrapped, direct)
+        assert np.isfinite(res.att)
 
-    @pytest.mark.slow
-    def test_trop_equivalent(self, absorbing_panel, ci_params):
-        # TROP draws bootstrap entropy: identical explicit seed on both
-        # sides, CI-scaled replicate count, and a narrowed
-        # regularization grid (the 200-replicate default over full
-        # grids, run twice, is the trop-heavy-tests hazard).
-        kw = dict(
+    def test_wrapper_absent_name_is_submodule(self):
+        _assert_removed_module_colliding("stacked_did")
+        assert diff_diff.stacked_did.StackedDiD is StackedDiD
+
+
+class TestTropRemoved:
+    """M-073 (name collides with ``diff_diff.trop``, the submodule)."""
+
+    def test_class_path_smoke(self, absorbing_panel, ci_params):
+        # Narrowed regularization grid + CI-scaled replicate count (the
+        # trop-heavy-tests hazard): this is a construction smoke, not a
+        # methodology test.
+        res = TROP(
             n_bootstrap=ci_params.bootstrap(19),
             lambda_time_grid=[0.1],
             lambda_unit_grid=[0.1],
             lambda_nn_grid=[0.1],
             seed=42,
-        )
-        wrapped = self._wrapped(trop, absorbing_panel, "y", "d", "unit", "time", **kw)
-        direct = TROP(**kw).fit(absorbing_panel, "y", "d", "unit", "time")
-        _assert_quintet_bit_equal(wrapped, direct)
+        ).fit(absorbing_panel, "y", "d", "unit", "time")
+        assert np.isfinite(res.att)
 
-    def test_synthetic_control_equivalent(self, scm_panel):
-        # SyntheticControl draws optimizer-start entropy under
-        # seed=None: identical explicit seed on both sides. Its
-        # analytical quintet is all-NaN beside a finite att by design.
-        wrapped = self._wrapped(
-            synthetic_control, scm_panel, "y", "treated", "unit", "time", seed=1
-        )
-        direct = SyntheticControl(seed=1).fit(scm_panel, "y", "treated", "unit", "time")
-        _assert_quintet_bit_equal(wrapped, direct)
-        assert np.isfinite(wrapped.att)
-        assert_nan_inference(
-            {
-                "se": wrapped.se,
-                "t_stat": wrapped.t_stat,
-                "p_value": wrapped.p_value,
-                "conf_int": wrapped.conf_int,
-            }
-        )
+    def test_wrapper_absent_name_is_submodule(self):
+        _assert_removed_module_colliding("trop")
+        assert diff_diff.trop.TROP is TROP
 
-    def test_triple_difference_equivalent(self, ddd_panel):
-        wrapped = self._wrapped(
-            triple_difference,
-            ddd_panel,
-            outcome="y",
-            group="group",
-            partition="partition",
-            time="post",
-        )
-        direct = TripleDifference().fit(
+
+class TestSyntheticControlRemoved:
+    """M-074 (name collides with ``diff_diff.synthetic_control``, the submodule)."""
+
+    def test_class_path_smoke(self, scm_panel):
+        res = SyntheticControl(seed=1).fit(scm_panel, "y", "treated", "unit", "time")
+        assert np.isfinite(res.att)
+
+    def test_wrapper_absent_name_is_submodule(self):
+        _assert_removed_module_colliding("synthetic_control")
+        assert diff_diff.synthetic_control.SyntheticControl is SyntheticControl
+
+
+class TestTripleDifferenceRemoved:
+    """M-075."""
+
+    def test_class_path_smoke(self, ddd_panel):
+        res = TripleDifference().fit(
             data=ddd_panel, outcome="y", group="group", partition="partition", post="post"
         )
-        _assert_quintet_bit_equal(wrapped, direct)
+        assert np.isfinite(res.att)
 
-    def test_bacon_decompose_equivalent(self, staggered_panel):
-        # BaconDecompositionResults is a Diagnostic with NO att/se: the
-        # gate compares the enumerated diagnostic field list, zero
-        # tolerance, plus the comparisons payload via to_dataframe().
-        wrapped = self._wrapped(
-            bacon_decompose,
-            staggered_panel,
-            outcome="y",
-            unit="unit",
-            time="time",
-            first_treat="first_treat",
-        )
-        direct = BaconDecomposition().fit(
+    def test_wrapper_absent(self):
+        _assert_removed_non_colliding("triple_difference")
+
+
+class TestBaconDecomposeRemoved:
+    """M-076."""
+
+    def test_class_path_smoke(self, staggered_panel):
+        res = BaconDecomposition().fit(
             staggered_panel, outcome="y", unit="unit", time="time", first_treat="first_treat"
         )
-        for field in (
-            "twfe_estimate",
-            "total_weight_treated_vs_never",
-            "total_weight_earlier_vs_later",
-            "total_weight_later_vs_earlier",
-            "weighted_avg_treated_vs_never",
-            "weighted_avg_earlier_vs_later",
-            "weighted_avg_later_vs_earlier",
-            "decomposition_error",
-        ):
-            assert_allclose(
-                getattr(wrapped, field),
-                getattr(direct, field),
-                rtol=0,
-                atol=0,
-                equal_nan=True,
-                err_msg=f"wrapper/class divergence on {field}",
-            )
-        for field in ("n_timing_groups", "n_never_treated", "n_obs", "n_always_treated_remapped"):
-            assert getattr(wrapped, field) == getattr(direct, field), field
-        pd.testing.assert_frame_equal(wrapped.to_dataframe(), direct.to_dataframe())
+        assert np.isfinite(res.twfe_estimate)
+        assert not res.to_dataframe().empty
 
-    def test_chaisemartin_dhaultfoeuille_equivalent(self, staggered_panel):
-        wrapped = self._wrapped(
-            chaisemartin_dhaultfoeuille,
-            staggered_panel,
-            outcome="y",
-            group="unit",
-            time="time",
-            treatment="treated",
-        )
-        direct = ChaisemartinDHaultfoeuille().fit(
+    def test_wrapper_absent(self):
+        _assert_removed_non_colliding("bacon_decompose")
+
+
+class TestChaisemartinDhaultfoeuilleRemoved:
+    """M-077 (name collides with ``diff_diff.chaisemartin_dhaultfoeuille``, the submodule)."""
+
+    def test_class_path_smoke(self, staggered_panel):
+        res = ChaisemartinDHaultfoeuille().fit(
             staggered_panel, outcome="y", unit="unit", time="time", treatment="treated"
         )
-        _assert_quintet_bit_equal(wrapped, direct)
+        assert np.isfinite(res.att)
+
+    def test_wrapper_absent_name_is_submodule(self):
+        _assert_removed_module_colliding("chaisemartin_dhaultfoeuille")
+        assert (
+            diff_diff.chaisemartin_dhaultfoeuille.ChaisemartinDHaultfoeuille
+            is ChaisemartinDHaultfoeuille
+        )
 
 
-class TestSentinelForwarding:
-    """Pin 3: the NOT_SUPPLIED forwarding contract on the three wrappers
-    that carry a deprecated ``aggregate`` sentinel (M-021/M-022/M-024).
-    """
+class TestWrapperRosterComplete:
+    """The two absence shapes together cover exactly the eight M-070..M-077 names."""
 
-    @pytest.mark.parametrize(
-        "fn",
-        [imputation_did, two_stage_did, stacked_did],
-        ids=["imputation_did", "two_stage_did", "stacked_did"],
-    )
-    def test_plain_wrapper_call_fires_exactly_one_warning(self, fn, staggered_panel):
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            fn(staggered_panel, "y", "unit", "time", "first_treat")
-        fw = [w for w in caught if issubclass(w.category, FutureWarning)]
-        assert len(fw) == 1, [str(w.message) for w in fw]
-        assert "is deprecated and will be removed in 4.0; construct the" in str(fw[0].message)
-
-    @pytest.mark.parametrize(
-        "fn,inner_match",
-        [
-            (imputation_did, "ImputationDiD.fit"),
-            (two_stage_did, "TwoStageDiD.fit"),
-            (stacked_did, "StackedDiD.fit"),
-        ],
-        ids=["imputation_did", "two_stage_did", "stacked_did"],
-    )
-    def test_explicit_aggregate_fires_both_warnings(self, fn, inner_match, staggered_panel):
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            fn(staggered_panel, "y", "unit", "time", "first_treat", aggregate="event_study")
-        fw = [str(w.message) for w in caught if issubclass(w.category, FutureWarning)]
-        assert len(fw) == 2, fw
-        # Wrapper deprecation first, then the fit-time aggregate shim.
-        assert "construct the" in fw[0]
-        assert inner_match in fw[1]
+    def test_roster(self):
+        assert len(NON_COLLIDING) + len(MODULE_COLLIDING) == 8
+        for name in NON_COLLIDING + MODULE_COLLIDING:
+            assert name not in diff_diff.__all__, name

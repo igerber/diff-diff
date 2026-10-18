@@ -1,11 +1,12 @@
 """Tests for `vcov_type` threading through DifferenceInDifferences.
 
-Covers the Phase 1a commitments in the approved plan:
-- `robust=True` aliases `vcov_type="hc1"`.
-- `robust=False` aliases `vcov_type="classical"` (backward compat for the 7
-  existing test files that pass `robust=False`).
+Covers the Phase 1a commitments in the approved plan, in their 4.0 state
+(the ``robust=`` alias and its implicit-classical + cluster CR1 remap were
+removed at 4.0 - rows M-045..M-047/M-115):
+- An unsupplied `vcov_type` resolves to `"hc1"`; `get_params` round-trips the
+  raw `None` so clones preserve the implicit-vs-explicit distinction.
 - Explicit `vcov_type` values validate against {classical, hc1, hc2, hc2_bm}.
-- `robust=False` + explicit non-classical `vcov_type` raises at `__init__`.
+- `vcov_type="classical"` + `cluster=` raises at fit (one-way only).
 - `MultiPeriodDiD` and `TwoWayFixedEffects` inherit through `get_params`.
 - HC2+BM produces a wider CI than HC1 on the same data (property of the DOF
   correction).
@@ -90,38 +91,23 @@ class TestLeverageOneEstimatorInference:
 
 
 # =============================================================================
-# robust <-> vcov_type alias resolution
+# vcov_type resolution
 # =============================================================================
 
 
-class TestRobustAliasing:
-    def test_robust_true_aliases_hc1(self):
+class TestVcovTypeResolution:
+    def test_default_resolves_to_hc1(self):
         est = DifferenceInDifferences()
         assert est.vcov_type == "hc1"
 
-    def test_robust_false_aliases_classical(self):
-        est = DifferenceInDifferences(robust=False)
+    def test_explicit_classical(self):
+        est = DifferenceInDifferences(vcov_type="classical")
         assert est.vcov_type == "classical"
 
-    def test_explicit_vcov_type_wins_when_robust_default(self):
-        """When `robust` is the default (True) and vcov_type is explicit, vcov_type wins."""
+    def test_explicit_vcov_type_resolves_verbatim(self):
+        """An explicit vcov_type is stored as given (no alias layer in 4.0)."""
         est = DifferenceInDifferences(vcov_type="hc2_bm")
         assert est.vcov_type == "hc2_bm"
-
-    def test_robust_false_and_classical_coexist(self):
-        """robust=False + vcov_type='classical' is redundant but not an error."""
-        est = DifferenceInDifferences(robust=False, vcov_type="classical")
-        assert est.vcov_type == "classical"
-        assert est.robust is False
-
-    def test_robust_false_explicit_hc1_raises(self):
-        """robust=False + vcov_type='hc1' is inconsistent -> ValueError."""
-        with pytest.raises(ValueError, match="robust=False conflicts with vcov_type"):
-            DifferenceInDifferences(robust=False, vcov_type="hc1")
-
-    def test_robust_false_explicit_hc2_raises(self):
-        with pytest.raises(ValueError, match="robust=False conflicts with vcov_type"):
-            DifferenceInDifferences(robust=False, vcov_type="hc2")
 
     def test_unknown_vcov_type_raises(self):
         with pytest.raises(ValueError, match="vcov_type must be one of"):
@@ -161,36 +147,18 @@ class TestParamsRoundTrip:
         est.set_params(vcov_type="hc2")
         assert est.vcov_type == "hc2"
 
-    def test_set_params_rejects_conflict_robust_false_hc2(self):
-        """set_params must re-validate robust/vcov_type consistency."""
-        est = DifferenceInDifferences()
-        with pytest.raises(ValueError, match="robust=False conflicts with vcov_type"):
-            est.set_params(robust=False, vcov_type="hc2")
-
-    def test_set_params_robust_only_rederives_vcov_type(self):
-        """Setting robust= alone after init re-derives vcov_type from the alias.
-
-        When only ``robust`` is passed to ``set_params``, the new ``robust`` value
-        overrides the previously-set ``vcov_type`` via the alias rule:
-        ``robust=False`` -> ``"classical"``. This keeps the pair internally
-        consistent rather than leaving the estimator with ``robust=False,
-        vcov_type="hc2_bm"`` (a state that ``__init__`` forbids).
-        """
-        est = DifferenceInDifferences(vcov_type="hc2_bm")
-        est.set_params(robust=False)
-        assert est.vcov_type == "classical"
-
     def test_set_params_invalid_vcov_type_rejected(self):
         est = DifferenceInDifferences()
         with pytest.raises(ValueError, match="vcov_type must be one of"):
             est.set_params(vcov_type="hc9")
 
-    def test_set_params_robust_true_then_back_to_hc1(self):
-        """robust=True after construction restores hc1 when no explicit vcov_type."""
-        est = DifferenceInDifferences(robust=False)
+    def test_set_params_vcov_type_none_restores_default_hc1(self):
+        """set_params(vcov_type=None) returns to the implicit default (hc1)."""
+        est = DifferenceInDifferences(vcov_type="classical")
         assert est.vcov_type == "classical"
-        est.set_params(robust=True)
+        est.set_params(vcov_type=None)
         assert est.vcov_type == "hc1"
+        assert est._vcov_type_explicit is False
 
     def test_set_params_multi_period_inherits(self):
         est = MultiPeriodDiD(vcov_type="hc2_bm")
@@ -205,27 +173,25 @@ class TestParamsRoundTrip:
         """A rejected set_params() call must leave the estimator unchanged.
 
         Previously `set_params` mutated attributes via `setattr` BEFORE
-        re-validating the robust/vcov_type pair. A failing call left the
-        estimator in exactly the half-configured state the alias/conflict
-        check is supposed to prevent, which defeats callers that catch
-        `ValueError` and try to keep using the object. This test pins the
-        atomic behavior: on failure, no attribute moves.
+        re-validating `vcov_type`. A failing call left the estimator in
+        exactly the half-configured state the validator is supposed to
+        prevent, which defeats callers that catch `ValueError` and try to
+        keep using the object. This test pins the atomic behavior: on
+        failure, no attribute moves.
         """
         est = DifferenceInDifferences(
             vcov_type="hc1",
             cluster=None,
             alpha=0.05,
         )
-        before_robust = est.robust
         before_vcov = est.vcov_type
         before_cluster = est.cluster
         before_alpha = est.alpha
-        with pytest.raises(ValueError, match="robust=False conflicts with"):
-            # Conflict: robust=False + vcov_type="hc2". The side-effect here is
-            # the regression target — set_params must NOT apply cluster=/alpha=
-            # (or anything else in the batch) when validation fails.
-            est.set_params(robust=False, vcov_type="hc2", cluster="unit", alpha=0.1)
-        assert est.robust == before_robust
+        with pytest.raises(ValueError, match="vcov_type must be one of"):
+            # Invalid vcov_type="hc9". The side-effect here is the regression
+            # target — set_params must NOT apply cluster=/alpha= (or anything
+            # else in the batch) when validation fails.
+            est.set_params(vcov_type="hc9", cluster="unit", alpha=0.1)
         assert est.vcov_type == before_vcov
         assert est.cluster == before_cluster
         assert est.alpha == before_alpha
@@ -252,34 +218,9 @@ class TestParamsRoundTrip:
 
 
 class TestFitBehavior:
-    def test_robust_false_with_cluster_preserves_cr1(self):
-        """Legacy alias backward-compat: `robust=False` + `cluster=...` must
-        still produce CR1 cluster-robust SEs, not raise on `classical + cluster`.
-
-        Previously (pre-vcov_type), the cluster structure silently overrode
-        the non-robust flag. The vcov_type threading made `robust=False`
-        eagerly resolve to `"classical"`, which the linalg validator rejects
-        alongside `cluster_ids`. Fix: track `_vcov_type_explicit` and remap
-        implicit `"classical"` + cluster to `"hc1"` (CR1) at fit time with a
-        UserWarning.
-        """
-        data = _make_did_panel(n_units=20)
-        est = DifferenceInDifferences(robust=False, cluster="unit")
-        with pytest.warns(UserWarning, match="robust=False with cluster"):
-            res = est.fit(data, outcome="y", treatment="treated", post="time")
-        assert np.isfinite(res.att)
-        assert np.isfinite(res.se)
-        # The effective vcov_type in the result reflects the remap.
-        assert res.vcov_type == "hc1"
-        # The stored value on the estimator is unchanged (it tracks what the
-        # user configured).
-        assert est.vcov_type == "classical"
-        assert "CR1 cluster-robust at unit" in res.summary()
-
     def test_explicit_classical_with_cluster_still_raises(self):
-        """When the user explicitly asks for `vcov_type="classical"` with a
-        cluster, the validator should still reject. The remap only applies
-        when vcov_type was implicit (alias-derived).
+        """`vcov_type="classical"` with a cluster is rejected: classical SEs
+        are one-way only (the 3.x implicit-classical CR1 remap is gone).
         """
         data = _make_did_panel(n_units=20)
         est = DifferenceInDifferences(vcov_type="classical", cluster="unit")
@@ -287,94 +228,12 @@ class TestFitBehavior:
         with pytest.raises(ValueError, match="classical SEs are one-way only"):
             est.fit(data, outcome="y", treatment="treated", post="time")
 
-    def test_twfe_robust_false_preserves_cr1_via_autocluster(self):
-        """TWFE auto-clusters at unit; `robust=False` on TWFE historically
-        produced CR1 at unit. Same implicit-alias remap must apply.
-        """
-        data = _make_did_panel(n_units=20)
-        est = TwoWayFixedEffects(robust=False)
-        with pytest.warns(UserWarning, match="robust=False with cluster"):
-            res = est.fit(data, outcome="y", treatment="treated", post="time", unit="unit")
-        assert np.isfinite(res.att) and np.isfinite(res.se)
-        assert res.vcov_type == "hc1"
-        assert "CR1 cluster-robust at unit" in res.summary()
-
-    def test_multi_period_robust_false_with_cluster_preserves_cr1(self):
-        """MultiPeriodDiD(robust=False, cluster=...) must also preserve CR1."""
-        rng = np.random.default_rng(20260420)
-        n_units, n_time = 30, 4
-        rows = []
-        for i in range(n_units):
-            treated = int(i >= n_units // 2)
-            for t in range(n_time):
-                y = rng.normal(0.0, 1.0) + 0.3 * treated + 0.5 * treated * (t >= 2)
-                rows.append({"unit": i, "time": t, "treated": treated, "y": y})
-        data = pd.DataFrame(rows)
-
-        est = MultiPeriodDiD(robust=False, cluster="unit")
-        with pytest.warns(UserWarning, match="robust=False with cluster"):
-            res = est.fit(data, outcome="y", treatment="treated", time="time", unit="unit")
-        assert np.isfinite(res.avg_att) and np.isfinite(res.avg_se)
-        assert res.vcov_type == "hc1"
-
-    def test_linear_regression_robust_false_with_cluster_preserves_cr1(self):
-        """Direct LinearRegression API: constructor-time cluster remap
-        produces CR1 inference WITHOUT mutating self.vcov_type.
-
-        Configured state (``self.vcov_type``) is preserved as
-        ``"classical"``; the fit-time effective family is recorded on
-        the fitted attribute ``self._fit_vcov_type_``. This makes
-        repeated fits idempotent on configuration.
-        """
-        from diff_diff.linalg import LinearRegression
-
-        rng = np.random.default_rng(1)
-        n = 100
-        X = rng.normal(size=(n, 1))
-        y = 1.0 + 0.5 * X[:, 0] + rng.normal(scale=0.3, size=n)
-        cluster_ids = np.repeat(np.arange(10), 10)
-
-        with pytest.warns(UserWarning, match="historically produced CR1"):
-            reg = LinearRegression(robust=False, cluster_ids=cluster_ids).fit(X, y)
-        # Configured state unchanged; effective state on fitted attr.
-        assert reg.vcov_type == "classical"
-        assert reg._fit_vcov_type_ == "hc1"
-        assert reg.coefficients_ is not None
-        inf = reg.get_inference(1)
-        assert np.isfinite(inf.se) and inf.se > 0
-
-    def test_linear_regression_robust_false_fit_time_cluster_preserves_cr1(self):
-        """LinearRegression(robust=False).fit(cluster_ids=...) override path.
-
-        Same invariant as the constructor-time test: configured state is
-        preserved; effective vcov_type lands on ``_fit_vcov_type_``.
-        """
-        from diff_diff.linalg import LinearRegression
-
-        rng = np.random.default_rng(2)
-        n = 100
-        X = rng.normal(size=(n, 1))
-        y = 1.0 + 0.5 * X[:, 0] + rng.normal(scale=0.3, size=n)
-        cluster_ids = np.repeat(np.arange(10), 10)
-
-        reg = LinearRegression(robust=False)
-        assert reg.vcov_type == "classical"  # constructor-resolved alias
-
-        with pytest.warns(UserWarning, match="historically produced CR1"):
-            reg.fit(X, y, cluster_ids=cluster_ids)
-        # Configured state unchanged; effective state on fitted attr.
-        assert reg.vcov_type == "classical"
-        assert reg._fit_vcov_type_ == "hc1"
-        assert reg.coefficients_ is not None
-        inf = reg.get_inference(1)
-        assert np.isfinite(inf.se) and inf.se > 0
-
     def test_linear_regression_repeat_fit_clustered_then_unclustered(self):
         """Repeat-fit idempotence regression guard.
 
-        Fit once with cluster_ids (which triggers the legacy remap), then
-        fit again WITHOUT cluster_ids. The second fit must use classical
-        SEs — not silently inherit the remapped hc1 from the first fit.
+        Fit once with cluster_ids, then fit again WITHOUT cluster_ids. The
+        configured ``vcov_type`` must survive both fits unchanged and the
+        per-fit ``_fit_vcov_type_`` must reflect each fit's own family.
         This pins the "fit() does not mutate configured state" invariant.
         """
         from diff_diff.linalg import LinearRegression
@@ -385,50 +244,46 @@ class TestFitBehavior:
         y = 1.0 + 0.5 * X[:, 0] + rng.normal(scale=0.3, size=n)
         cluster_ids = np.repeat(np.arange(10), 10)
 
-        reg = LinearRegression(robust=False)
-        with pytest.warns(UserWarning, match="historically produced CR1"):
-            reg.fit(X, y, cluster_ids=cluster_ids)
+        reg = LinearRegression(vcov_type="hc1")
+        reg.fit(X, y, cluster_ids=cluster_ids)
         assert reg._fit_vcov_type_ == "hc1"
-        assert reg.vcov_type == "classical"  # configured unchanged
+        assert reg.vcov_type == "hc1"  # configured unchanged
 
-        # Second fit WITHOUT cluster: must use classical (not hc1 from prior fit)
+        # Second fit WITHOUT cluster: configured state still untouched.
         reg.fit(X, y)
-        assert reg._fit_vcov_type_ == "classical"
-        assert reg.vcov_type == "classical"
+        assert reg._fit_vcov_type_ == "hc1"
+        assert reg.vcov_type == "hc1"
 
-    def test_robust_false_without_cluster_stays_classical(self):
-        """No remap when no cluster is present: `robust=False` without cluster
-        should still produce classical non-robust SEs."""
+    def test_explicit_classical_without_cluster_stays_classical(self):
+        """`vcov_type="classical"` without a cluster produces classical
+        non-robust SEs and labels them as such."""
         data = _make_did_panel(n_units=20)
-        est = DifferenceInDifferences(robust=False)
+        est = DifferenceInDifferences(vcov_type="classical")
         res = est.fit(data, outcome="y", treatment="treated", post="time")
         assert res.vcov_type == "classical"
         assert "Classical OLS" in res.summary()
 
-    def test_get_params_round_trip_preserves_implicit_classical(self):
+    def test_get_params_round_trip_preserves_implicit_default(self):
         """Clone round-trip regression guard.
 
-        ``DifferenceInDifferences(robust=False, cluster="unit")`` originally
-        has ``_vcov_type_explicit=False`` and remaps to CR1 at fit time.
-        A clone via ``__init__(**orig.get_params())`` must ALSO be implicit
-        and remap the same way. If ``get_params`` serialized the
-        alias-resolved ``"classical"`` instead of the raw ``None``, the
-        clone would mark it explicit and raise on cluster fit. This pins
-        that sklearn-style clone preserves backward-compat behavior.
+        ``DifferenceInDifferences(cluster="unit")`` has
+        ``_vcov_type_explicit=False`` and resolves to CR1 at fit time. A clone
+        via ``__init__(**orig.get_params())`` must ALSO be implicit and fit
+        identically. If ``get_params`` serialized the resolved ``"hc1"``
+        instead of the raw ``None``, the clone would be marked explicit,
+        which the TWFE/SA/Wooldridge auto-cluster carve-outs read.
         """
-        orig = DifferenceInDifferences(robust=False, cluster="unit")
+        orig = DifferenceInDifferences(cluster="unit")
         assert orig._vcov_type_explicit is False
         params = orig.get_params()
-        # get_params must return None for implicit alias path.
+        # get_params must return None for the implicit default path.
         assert params["vcov_type"] is None
         clone = DifferenceInDifferences(**params)
         assert clone._vcov_type_explicit is False
-        # Fit both: should behave identically (CR1 via remap, with warning).
+        # Fit both: should behave identically (CR1 at unit).
         data = _make_did_panel(n_units=20)
-        with pytest.warns(UserWarning, match="robust=False with cluster"):
-            res_orig = orig.fit(data, outcome="y", treatment="treated", post="time")
-        with pytest.warns(UserWarning, match="robust=False with cluster"):
-            res_clone = clone.fit(data, outcome="y", treatment="treated", post="time")
+        res_orig = orig.fit(data, outcome="y", treatment="treated", post="time")
+        res_clone = clone.fit(data, outcome="y", treatment="treated", post="time")
         assert res_orig.vcov_type == res_clone.vcov_type == "hc1"
         # Point estimate and SE identical.
         assert res_orig.att == pytest.approx(res_clone.att, abs=1e-12)
@@ -443,17 +298,6 @@ class TestFitBehavior:
         clone = DifferenceInDifferences(**params)
         assert clone._vcov_type_explicit is True
         assert clone.vcov_type == "hc2_bm"
-
-    def test_set_params_robust_false_then_cluster_preserves_cr1(self):
-        """set_params path: after `est.set_params(robust=False)` the flag is
-        cleared to False, so a subsequent cluster-bearing fit remaps."""
-        data = _make_did_panel(n_units=20)
-        est = DifferenceInDifferences()
-        est.set_params(robust=False, cluster="unit")
-        assert est._vcov_type_explicit is False  # robust= only, no vcov_type
-        with pytest.warns(UserWarning, match="robust=False with cluster"):
-            res = est.fit(data, outcome="y", treatment="treated", post="time")
-        assert res.vcov_type == "hc1"
 
     def test_hc1_fit_and_summary_contain_expected_fields(self):
         data = _make_did_panel()
@@ -486,13 +330,6 @@ class TestFitBehavior:
         assert np.isfinite(r_hc2bm.se)
         assert np.isfinite(r_hc1.conf_int[0]) and np.isfinite(r_hc1.conf_int[1])
         assert np.isfinite(r_hc2bm.conf_int[0]) and np.isfinite(r_hc2bm.conf_int[1])
-
-    def test_classical_via_robust_false(self):
-        data = _make_did_panel()
-        est = DifferenceInDifferences(robust=False)
-        res = est.fit(data, outcome="y", treatment="treated", post="time")
-        assert np.isfinite(res.att)
-        assert np.isfinite(res.se)
 
     def test_classical_via_explicit_vcov_type(self):
         data = _make_did_panel()
@@ -1293,10 +1130,7 @@ class TestFitBehavior:
 
     def test_twfe_explicit_classical_without_autocluster(self):
         """`vcov_type="classical"` EXPLICIT on TWFE disables the auto-cluster
-        (the user is deliberately asking for one-way non-robust SEs). The
-        implicit ``robust=False`` path instead preserves CR1 at unit via the
-        backward-compat remap — covered by
-        ``test_twfe_robust_false_preserves_cr1_via_autocluster``.
+        (the user is deliberately asking for one-way non-robust SEs).
         """
         data = _make_did_panel(n_units=20)
         res = TwoWayFixedEffects(vcov_type="classical").fit(

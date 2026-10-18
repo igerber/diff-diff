@@ -85,11 +85,6 @@ Bootstrap inference results.
    :undoc-members:
    :show-inheritance:
 
-Convenience Function
---------------------
-
-.. autofunction:: diff_diff.two_stage_did
-
 Example Usage
 -------------
 

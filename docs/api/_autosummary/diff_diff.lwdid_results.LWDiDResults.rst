@@ -28,12 +28,12 @@
 
    .. autosummary::
 
+      ~LWDiDResults.att_tau_omega_complete_case
       ~LWDiDResults.bootstrap_pvalue
       ~LWDiDResults.bse
       ~LWDiDResults.cband_crit_value
       ~LWDiDResults.cband_method
       ~LWDiDResults.cband_n_bootstrap
-      ~LWDiDResults.att_tau_omega_complete_case
       ~LWDiDResults.ci
       ~LWDiDResults.cluster_name
       ~LWDiDResults.cohort_effects
@@ -54,8 +54,8 @@
       ~LWDiDResults.pscore_trim
       ~LWDiDResults.psm_config
       ~LWDiDResults.pvalue
-      ~LWDiDResults.seed
       ~LWDiDResults.ri_pvalue
+      ~LWDiDResults.seed
       ~LWDiDResults.vcov
       ~LWDiDResults.att
       ~LWDiDResults.se

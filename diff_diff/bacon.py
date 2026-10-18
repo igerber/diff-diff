@@ -12,7 +12,7 @@ Reference:
 
 import warnings
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -22,9 +22,6 @@ from diff_diff.results import _format_survey_block
 from diff_diff.results_base import Diagnostic
 from diff_diff.utils import pre_demean_norms, snap_absorbed_regressors
 from diff_diff.utils import within_transform as _within_transform_util
-
-if TYPE_CHECKING:
-    from diff_diff.survey import SurveyDesign
 
 
 @dataclass
@@ -1267,141 +1264,3 @@ class BaconDecomposition(BaseEstimator):
     def print_summary(self) -> None:
         """Print summary to stdout."""
         print(self.summary())
-
-
-def bacon_decompose(
-    data: pd.DataFrame,
-    outcome: str,
-    unit: str,
-    time: str,
-    first_treat: str,
-    weights: str = "exact",
-    survey_design: Optional["SurveyDesign"] = None,
-) -> BaconDecompositionResults:
-    """
-    Convenience function for Goodman-Bacon decomposition.
-
-    .. deprecated:: 3.9
-        ``bacon_decompose()`` is deprecated and will be removed in 4.0
-        (row M-076). Construct the diagnostic instead:
-        ``BaconDecomposition(...).fit(data, ...)``.
-
-    Decomposes a TWFE estimate into weighted 2x2 DiD comparisons,
-    showing which comparisons drive the estimate and whether
-    problematic "forbidden comparisons" are involved.
-
-    Parameters
-    ----------
-    data : pd.DataFrame
-        Panel data with unit and time identifiers.
-    outcome : str
-        Name of outcome variable column.
-    unit : str
-        Name of unit identifier column.
-    time : str
-        Name of time period column.
-    first_treat : str
-        Name of column indicating when unit was first treated. The
-        values ``0`` and ``np.inf`` are **reserved as never-treated
-        sentinels**; a real treatment cohort with ``first_treat == 0``
-        would be folded into ``U`` and should be re-labeled to a
-        non-sentinel value before fitting. Units whose ``first_treat``
-        is at or before the first observable period
-        (``first_treat <= min(time)``, excluding the sentinels) are
-        automatically remapped to the ``U`` (untreated) bucket per
-        Goodman-Bacon (2021) footnote 11, with a ``UserWarning``. See
-        ``BaconDecomposition.fit()`` for the full contract and
-        ``BaconDecompositionResults.n_always_treated_remapped`` for the
-        count. The user's original ``first_treat`` column is preserved
-        unchanged.
-    weights : str, default="exact"
-        Weight calculation method:
-
-        - "exact" (default): Variance-based weights from Goodman-Bacon
-          (2021) Theorem 1, Eqs. 7-9 and 10e-g. Paper-faithful.
-        - "approximate": Fast simplified formula. Opt in for
-          speed-sensitive diagnostic loops; numerical output may differ
-          from R ``bacondecomp::bacon()``.
-    survey_design : SurveyDesign, optional
-        Survey design specification for weighted estimation. When provided,
-        cell means, group shares, and within-transform use survey weights.
-        The decomposition remains diagnostic (no survey vcov needed).
-
-        **Default-flip caveat (PR-B, 2026-05-16):** the new
-        ``weights="exact"`` default routes through
-        ``_validate_unit_constant_survey``, which **rejects survey
-        designs whose weights / strata / PSU / FPC columns vary within
-        a unit across periods** (the exact path collapses to per-unit
-        aggregation via ``groupby().first()``). Users whose survey
-        design has time-varying within-unit columns must either (a)
-        collapse the columns to be unit-constant or (b) pass explicit
-        ``weights="approximate"`` to retain the legacy observation-level
-        weighted-means path.
-
-    Returns
-    -------
-    BaconDecompositionResults
-        Object containing decomposition results with:
-
-        - twfe_estimate: The overall TWFE coefficient
-        - comparisons: List of all 2x2 comparisons with estimates and weights
-        - Weight totals by comparison type
-        - Methods for visualization and export
-
-    Examples
-    --------
-    >>> from diff_diff import bacon_decompose
-    >>>
-    >>> # Default: paper-faithful Goodman-Bacon (2021) Theorem 1 weights
-    >>> # (weights="exact"); matches R bacondecomp::bacon() at atol=1e-6 on
-    >>> # the aggregate (TWFE coefficient + weights-sum) across all panels,
-    >>> # and on the per-component breakdown when there are no
-    >>> # always-treated / first-period-treated cohorts (i.e. all
-    >>> # non-sentinel first_treat values are strictly greater than
-    >>> # min(time)). For panels with always-treated units, the
-    >>> # per-component breakdown diverges by convention (Python remaps
-    >>> # to U per paper footnote 11; R emits `Later vs Always Treated`);
-    >>> # see REGISTRY note on R parity convention divergence. Validated
-    >>> # via tests/test_methodology_bacon.py::TestBaconParityR.
-    >>> results = bacon_decompose(
-    ...     data=panel_df,
-    ...     outcome='earnings',
-    ...     unit='state',
-    ...     time='year',
-    ...     first_treat='treatment_year'
-    ... )
-    >>>
-    >>> # Opt-in: simplified-variance fast path for diagnostic loops
-    >>> # (numerical output may differ from R; sum-to-1 still holds).
-    >>> results_approx = bacon_decompose(
-    ...     data=panel_df,
-    ...     outcome='earnings',
-    ...     unit='state',
-    ...     time='year',
-    ...     first_treat='treatment_year',
-    ...     weights='approximate'
-    ... )
-    >>>
-    >>> # View summary
-    >>> results.print_summary()
-    >>>
-    >>> # Check weight on forbidden comparisons
-    >>> print(f"Forbidden weight: {results.total_weight_later_vs_earlier:.1%}")
-    >>>
-    >>> # Convert to DataFrame for analysis
-    >>> df = results.to_dataframe()
-
-    See Also
-    --------
-    BaconDecomposition : Class-based interface with more options
-    plot_bacon : Visualize the decomposition
-    CallawaySantAnna : Robust estimator that avoids forbidden comparisons
-    """
-    warnings.warn(
-        "bacon_decompose() is deprecated and will be removed in 4.0; "
-        "construct the diagnostic instead: BaconDecomposition(...).fit(data, ...).",
-        FutureWarning,
-        stacklevel=2,
-    )
-    decomp = BaconDecomposition(weights=weights)
-    return decomp.fit(data, outcome, unit, time, first_treat, survey_design=survey_design)
