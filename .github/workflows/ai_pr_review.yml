@@ -515,8 +515,9 @@ jobs:
       - name: Run Codex
         id: run_codex
         if: steps.pr.outputs.is_fork == 'false'
-        # Pinned to v1.11: v1.12 hangs after the turn completes
-        # (openai/codex-action#150); re-bump once #151 ships.
+        # v1.12 hung after heavy turns (openai/codex-action#150); the fix
+        # landed CLI-side in Codex 0.150.0, which the codex-version pin
+        # below already exceeds. v1.13 also bounds post-exit output draining.
         uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675 # v1.13
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
