@@ -899,7 +899,7 @@ class WooldridgeDiDResults(BaseResults):
         level : "simple" | "group" | "calendar" | "event_study" | "gt"
             Use "gt" to export raw group-time effects. ("event" is a
             deprecated spelling of "event_study"; warns and is rejected
-            in 4.0 - row M-086.)
+            in 4.0 - row M-150, the to_dataframe twin of M-086.)
         aggregation : str, optional
             Deprecated alias for ``level`` (row M-044); warns with
             ``FutureWarning`` and will be removed in 4.0.

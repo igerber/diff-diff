@@ -11,14 +11,25 @@
 # 3.9/4.0 surface that intentionally does NOT exist at HEAD; the enforcement
 # test asserts their ABSENCE until the owning phase ships.
 #
-# FORMAT CONTRACT (parsed by a purpose-built scanner, no PyYAML): top-level
-# `rows:` list; each row a flat mapping of single-line scalars; `code_refs` as
-# an inline flow list; no anchors, no multi-line strings. Line-leading comments
-# only (a trailing `#` after a value is parsed as part of the value).
+# FORMAT CONTRACT (parsed by a purpose-built scanner, no PyYAML): an optional
+# HEADER of single-line version scalars above `rows:` (today the cut-window
+# pair `cut_window`/`cut_base`, declared together or not at all - spec
+# section 11 "Cut window"); then the top-level `rows:` list; each row a flat
+# mapping of single-line scalars; `code_refs` as an inline flow list; no
+# anchors, no multi-line strings. Line-leading comments only (a trailing `#`
+# after a value is parsed as part of the value).
 #
 # Locator grammar: "diff_diff:Name" (top-level export), "diff_diff:Class[param]"
 # (__init__ param), "diff_diff:Class.method[param]" (method param),
 # "diff_diff:Class.attr" (field/property). Module part must always import.
+
+# CUT WINDOW (declared 2026-10-18 at the 4.0-cut framing): rows scheduled at
+# `cut_window` may flip terminal ahead of the version bump so the removals land
+# over many PRs; `__version__` must stay at `cut_base` until the release PR bumps
+# to `cut_window` (any other bump fails tests/test_v4_matrix.py's off-base
+# guard). The keys stay as a historical record once the window has closed.
+cut_window: "4.0"
+cut_base: "3.13.0"
 
 rows:
   # ---- Pre-existing obligations (repo sweep 2026-07-18) --------------------
@@ -119,12 +130,14 @@ rows:
     new: null
     deprecated_in: null
     removed_in: null
-    status: evaluate
+    status: done
     phase: 5
     env_var: DIFF_DIFF_SOLVE_OLS_FASTPATH
     decision_due: "4.0"
+    decided_default: off
+    test_ref: tests/test_linalg.py
     code_refs: [diff_diff/linalg.py]
-    notes: "DIFF_DIFF_SOLVE_OLS_FASTPATH default-ON is a v4-class change GATED on golden recapture + certification telemetry soak (TODO.md row); record go/no-go at the 4.0 cut either way. SOAK WINDOW = the 3.9 -> 4.0 gap: opt-in telemetry can only accumulate from a release that advertises the env var, so the 3.9 release notes are the last surface that can start it. A short gap is a legitimate outcome - 'evaluated, kept off' is terminal and needs no soak - but that is a scheduling decision to make deliberately, not to discover at the cut."
+    notes: "DECIDED 2026-10-18 (4.0-cut framing, user decision): evaluated, KEPT OFF. No opt-in telemetry was ever collected in the 3.9 -> 3.13 gap and the golden recapture never ran, so there is no evidence base for a flip; 'evaluated, kept off' is the terminal state this row always allowed. The TODO.md fastpath row stays as a 4.x re-evaluation (a later flip is a major-version change on its own schedule). test_ref: the env-resolver convention suite in tests/test_linalg.py asserts _SOLVE_OLS_FASTPATH is False with the env var unset. ORIGINAL NOTE: DIFF_DIFF_SOLVE_OLS_FASTPATH default-ON is a v4-class change GATED on golden recapture + certification telemetry soak (TODO.md row); record go/no-go at the 4.0 cut either way. SOAK WINDOW = the 3.9 -> 4.0 gap: opt-in telemetry can only accumulate from a release that advertises the env var, so the 3.9 release notes are the last surface that can start it. A short gap is a legitimate outcome - 'evaluated, kept off' is terminal and needs no soak - but that is a scheduling decision to make deliberately, not to discover at the cut."
 
   # ---- The three merges + retiring classes ---------------------------------
   - id: M-010
@@ -580,7 +593,7 @@ rows:
     warning: FutureWarning
     test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/estimators.py, docs/methodology/REGISTRY.md, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, diff_diff/synthetic_did.py]
-    notes: "Redundant with vcov_type; inherited by TwoWayFixedEffects (and MultiPeriodDiD until [M-010])."
+    notes: "Redundant with vcov_type; inherited by TwoWayFixedEffects (and MultiPeriodDiD until [M-010]). REMOVAL SCOPE (2026-10-18): the 4.0 removal also deletes the legacy-CR1 remap branch in estimators.py _resolve_effective_vcov_type (reachable only via an explicit robust=False that resolved vcov_type to 'classical'); _vcov_type_explicit itself STAYS - the TWFE/SunAbraham/WooldridgeDiD auto-cluster carve-outs read it."
   - id: M-046
     kind: param
     group: renames-robust-drop
@@ -626,8 +639,8 @@ rows:
     phase: 5
     warning: FutureWarning
     test_ref: null
-    code_refs: [diff_diff/staggered_results.py, diff_diff/staggered.py, diff_diff/staggered_aggregation.py, diff_diff/power.py, diff_diff/practitioner.py, diff_diff/efficient_did.py, diff_diff/wooldridge.py, diff_diff/_reporting_helpers.py, diff_diff/diagnostic_report.py, diff_diff/prep_dgp.py, diff_diff/_staggered_triple_diff_engine.py, diff_diff/staggered_triple_diff_results.py, diff_diff/dml_did.py, diff_diff/dml_did_results.py, diff_diff/guides/llms-autonomous.txt, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, docs/methodology/REGISTRY.md, docs/methodology/REPORTING.md]
-    notes: "Pickle migration via __setstate__ per spec section 5. This row carries the token family's CROSS-CUTTING consumer inventory (reports, guides, methodology docs, DGP helpers, the un-rowed staggered-DDD engine/container) alongside its own producers; per-class producer files live on their own rows. Inventory completed at the 3.9 bump, when the rule-11 Duty C window armed for 4.0-scheduled rows."
+    code_refs: [diff_diff/staggered_results.py, diff_diff/staggered.py, diff_diff/staggered_aggregation.py, diff_diff/power.py, diff_diff/practitioner.py, diff_diff/efficient_did.py, diff_diff/wooldridge.py, diff_diff/_reporting_helpers.py, diff_diff/diagnostic_report.py, diff_diff/prep_dgp.py, diff_diff/_staggered_triple_diff_engine.py, diff_diff/staggered_triple_diff_results.py, diff_diff/dml_did.py, diff_diff/dml_did_results.py, diff_diff/_deprecation.py, diff_diff/guides/llms-autonomous.txt, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, docs/methodology/REGISTRY.md, docs/methodology/REPORTING.md]
+    notes: "diff_diff/_deprecation.py is 5.0-WINDOW INFRASTRUCTURE (added 2026-10-18): this row's FutureWarning properties and [M-016]'s ride its deprecated_field_property helper through the 4.0 -> 5.0 window, so the 4.0 removal PRs delete the shims that USE it but never the module. Pickle migration via __setstate__ per spec section 5. This row carries the token family's CROSS-CUTTING consumer inventory (reports, guides, methodology docs, DGP helpers, the un-rowed staggered-DDD engine/container) alongside its own producers; per-class producer files live on their own rows. Inventory completed at the 3.9 bump, when the rule-11 Duty C window armed for 4.0-scheduled rows."
   - id: M-051
     kind: field
     group: field-flip
@@ -988,8 +1001,8 @@ rows:
     status: done
     phase: 2
     test_ref: tests/test_diagnostic_marker.py
-    code_refs: [diff_diff/results_base.py, diff_diff/bacon.py, diff_diff/rdplot.py, diff_diff/honest_did.py, diff_diff/pretrends.py, diff_diff/power.py, diff_diff/diagnostics.py, diff_diff/had_pretests.py, diff_diff/diagnostic_report.py, diff_diff/business_report.py, diff_diff/practitioner.py, diff_diff/_reporting_helpers.py, diff_diff/__init__.py]
-    notes: "Phase 2 Diagnostic marker base on the RESULT roster (spec section 3.5): BaconDecompositionResults, RDPlotResult, HonestDiDResults + SensitivityResults, PreTrendsPowerResults + PreTrendsPowerCurve, PowerResults + Simulation*Results, PlaceboTestResults, and the HAD pretest containers (QUGTestResults, StuteTestResults, YatchewTestResults, StuteJointResult, HADPretestReport), and DiagnosticReportResults (serialization pair moved from the builder onto the container). Flip to done ALSO requires consumer-propagation tests: BusinessReport rejects marked diagnostics as primary estimator input BY TYPE (not by name); practitioner_next_steps routes marked diagnostics through diagnostic handling (not the unknown-result estimator fallback); and DiagnosticReport routes by the marker - at least one non-Bacon marked result handled as a diagnostic, never via estimator fallback, with Bacon's existing read-out retained and tested. Flip to done requires the dedicated roster test (isinstance + summary/to_dataframe on every member; estimator results NOT marked). Raw-dict functions and TWFEWeightsResult are docs-family only (narrowed, spec section 3.5). introduced_in gates the 3.9 cut: the marker cannot be silently skipped. Marker lives in diff_diff/results_base.py; done in this introducing diff."
+    code_refs: [diff_diff/results_base.py, diff_diff/bacon.py, diff_diff/rdplot.py, diff_diff/honest_did.py, diff_diff/pretrends.py, diff_diff/power.py, diff_diff/diagnostics.py, diff_diff/had_pretests.py, diff_diff/diagnostic_report.py, diff_diff/business_report.py, diff_diff/practitioner.py, diff_diff/_reporting_helpers.py, diff_diff/__init__.py, diff_diff/rddensity.py, diff_diff/duration_did_results.py, diff_diff/twfe_weights_results.py]
+    notes: "ROSTER ADDENDUM 2026-10-18 (4.0-cut framing): four containers born marked after this row went done - RDDensityTestResult (3.13), DurationDiDPretestResults (3.12), ATTGTWeightsResult + TWFEDecompositionResult (3.13) - are enrolled in tests/test_diagnostic_marker.py; recorded here so the roster and code_refs match the tree. Phase 2 Diagnostic marker base on the RESULT roster (spec section 3.5): BaconDecompositionResults, RDPlotResult, HonestDiDResults + SensitivityResults, PreTrendsPowerResults + PreTrendsPowerCurve, PowerResults + Simulation*Results, PlaceboTestResults, and the HAD pretest containers (QUGTestResults, StuteTestResults, YatchewTestResults, StuteJointResult, HADPretestReport), and DiagnosticReportResults (serialization pair moved from the builder onto the container). Flip to done ALSO requires consumer-propagation tests: BusinessReport rejects marked diagnostics as primary estimator input BY TYPE (not by name); practitioner_next_steps routes marked diagnostics through diagnostic handling (not the unknown-result estimator fallback); and DiagnosticReport routes by the marker - at least one non-Bacon marked result handled as a diagnostic, never via estimator fallback, with Bacon's existing read-out retained and tested. Flip to done requires the dedicated roster test (isinstance + summary/to_dataframe on every member; estimator results NOT marked). Raw-dict functions and TWFEWeightsResult are docs-family only (narrowed, spec section 3.5). introduced_in gates the 3.9 cut: the marker cannot be silently skipped. Marker lives in diff_diff/results_base.py; done in this introducing diff."
   - id: M-092
     kind: behavior
     group: results-contract
@@ -1019,14 +1032,14 @@ rows:
   - id: M-080
     kind: behavior
     group: policy-auto-cluster
-    old: "diff_diff:TwoWayFixedEffects[cluster]"
+    old: "diff_diff:SpilloverDiD[cluster]"
     new: null
     deprecated_in: "4.0"
     removed_in: null
     status: planned
     phase: 5
-    code_refs: [diff_diff/estimators.py, diff_diff/twfe.py, diff_diff/stacked_did.py]
-    notes: "ONE auto-cluster policy at 4.0: panel estimators (required unit column) default to clustering at unit with cluster_name/n_clusters metadata; cluster=False disables; 2x2 cross-sectional estimators stay HC-robust. Changes some default SEs - migration guide with [M-004..M-006]. SCOPE NOTE (Phase 3(a), user decision 2026-08-07): the TWFE EVENT-STUDY mode shipped already auto-clustered at 3.9 (new API adopts the end-state immediately, with the static carve-outs mirrored - see [M-010]), so this 4.0 flip does not re-touch it."
+    code_refs: [diff_diff/spillover.py, diff_diff/twfe.py, diff_diff/estimators.py, diff_diff/sun_abraham.py, diff_diff/lpdid.py, diff_diff/stacked_did.py, diff_diff/wooldridge.py, diff_diff/imputation.py, diff_diff/two_stage.py, diff_diff/staggered.py, diff_diff/efficient_did.py, diff_diff/dml_did.py, diff_diff/lwdid.py, diff_diff/had.py, diff_diff/triple_diff.py, diff_diff/staggered_triple_diff.py, diff_diff/_staggered_triple_diff_engine.py, diff_diff/chaisemartin_dhaultfoeuille.py, docs/methodology/variance-conventions.md]
+    notes: "RE-SCOPED 2026-10-18 (4.0-cut framing, user decision; measured roster in docs/methodology/variance-conventions.md and spec section 7). The original premise - static TwoWayFixedEffects runs HC-robust by default - was already false: static TWFE auto-clusters at unit (twfe.py, since 2026-01). Measured categories: (a) SpilloverDiD is the ONE required-unit estimator whose default SE moves (observation-level HC -> unit clustering, mirroring TWFE's carve-outs: explicit cluster= wins, Conley drops it, never injected as survey PSU); (c1) TWFE/SunAbraham/WooldridgeDiD/LPDiD already cluster at unit by regression-level default - cluster=False yields the plain HC sandwich; (c2) ImputationDiD/TwoStageDiD default cluster_var=unit INSIDE unit-level influence-function machinery - no unclustered variance exists, cluster=False is an accepted explicit no-op; (c3) StackedDiD clusters by construction and its validator accepts only unit/unit_subexp - cluster=False is REJECTED (REGISTRY Note); (b) CS/EfficientDiD/DMLDiD/dCDH/staggered-DDD (per-unit IF) and LWDiD/HAD (regression on a unit-level cross-section) are unit-level by construction - cluster=False is an accepted explicit no-op; (d) ContinuousDiD/DurationDiD/SDiD/SC/TROP/CiC have no cluster param; (n/a) cross-sectional DiD/2x2x2 DDD/RDD stay HC-robust or unclustered. Categories b and d carry NO auto-cluster metadata by decision (cluster_name stays None where the field exists; no field is added where it does not). The 4.0 flip therefore = the SpilloverDiD default + the uniform cluster=False off-switch on a/b/c1/c2 (today accepted nowhere: LPDiD's `self.cluster or unit` treats False as auto-cluster, most others look up a column named False, DMLDiD/StackedDiD reject on type, dCDH raises on any non-None) + metadata gaps (TWFE/DiD n_clusters on the analytical path; SunAbraham cluster_name + n_clusters). ORIGINAL NOTE: ONE auto-cluster policy at 4.0: panel estimators (required unit column) default to clustering at unit with cluster_name/n_clusters metadata; cluster=False disables; 2x2 cross-sectional estimators stay HC-robust. Changes some default SEs - migration guide with [M-004..M-006]. SCOPE NOTE (Phase 3(a), user decision 2026-08-07): the TWFE EVENT-STUDY mode shipped already auto-clustered at 3.9 (new API adopts the end-state immediately, with the static carve-outs mirrored - see [M-010]), so this 4.0 flip does not re-touch it."
   - id: M-081
     kind: behavior
     group: policy-n-bootstrap
@@ -1374,7 +1387,7 @@ rows:
     warning: FutureWarning
     test_ref: tests/test_v4_rename_semantic.py
     code_refs: [diff_diff/linalg.py, diff_diff/sun_abraham.py]
-    notes: "Fourth site of the 'robust' drop - spec section 7 says the flag dies 'everywhere it exists' but [M-045]..[M-047] enumerated only three. LinearRegression is a top-level export with its OWN __init__ (the TWFE/MultiPeriodDiD hits inherit DifferenceInDifferences.__init__ and ride [M-045]). Redundant with vcov_type, same as its siblings."
+    notes: "Fourth site of the 'robust' drop - spec section 7 says the flag dies 'everywhere it exists' but [M-045]..[M-047] enumerated only three. LinearRegression is a top-level export with its OWN __init__ (the TWFE/MultiPeriodDiD hits inherit DifferenceInDifferences.__init__ and ride [M-045]). Redundant with vcov_type, same as its siblings. REMOVAL SCOPE (2026-10-18): the 4.0 removal also deletes LinearRegression's legacy-CR1 remap branch in linalg.py (the estimators.py twin named on [M-045]); _vcov_type_explicit STAYS."
 
   # ---- Phase 2b PR 1: the post-fit aggregation surface ---------------------
   # Reserved-id pool for the later 2b PRs (drafted with M-117): M-120 was
@@ -1811,3 +1824,18 @@ rows:
     test_ref: tests/test_methodology_synthetic_control.py
     code_refs: [diff_diff/synthetic_control.py, docs/methodology/REGISTRY.md]
     notes: "Inert since the exact NNLS inner solve (#838 / #842): an exact solve has no stopping tolerance. Same warn-and-discard shim and ladder reasoning as [M-148]."
+  # ---- 4.0-cut framing amendment (2026-10-18) ------------------------------
+  - id: M-150
+    kind: param-value
+    group: renames-level
+    old: "diff_diff:WooldridgeDiDResults.to_dataframe[level]=event"
+    new: "diff_diff:WooldridgeDiDResults.to_dataframe[level]=event_study"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: shimmed
+    phase: 5
+    warning: FutureWarning
+    test_ref: tests/test_v4_rename_semantic.py
+    code_refs: [diff_diff/wooldridge_results.py]
+    notes: "Locator-completeness amendment at the 4.0-cut framing: WooldridgeDiDResults.to_dataframe(level='event') has warned since 3.9 (the [M-044] rename PR), but only [M-086]'s notes recorded it - the matrix had no locator for this third surface of the 'event' -> 'event_study' value unification (aggregate(type=) is [M-086]; summary(aggregation=) is [M-087]). Twin of [M-136] (LPDiD's to_dataframe level value). test_ref: test_to_dataframe_level_rename in tests/test_v4_rename_semantic.py."

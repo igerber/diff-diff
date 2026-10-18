@@ -18,8 +18,10 @@ B. PHASE-TABLE AGREEMENT with the section-9 phase table.
    that is terminal (``done``/``removed`` - exempt both directions) or has P's
    ship-version (phases 2/3/4 -> "3.9", 5 -> "4.0", 6 -> "4.1") among its
    ``introduced_in``/``deprecated_in``/``removed_in`` - or ``decision_due`` for
-   ``env-default`` rows (M-008, scheduled solely via ``decision_due: "4.0"``,
-   is the named positive fixture).
+   ``env-default`` rows (the ``decision_due`` channel is pinned on synthetic
+   rows in ``test_direction2_predicate_on_synthetic_rows``; M-008, the real
+   env-default row, went ``done`` at the 4.0-cut framing and is now the named
+   TERMINAL-EXEMPT fixture).
    Citation grammar is BRACKETED-ONLY, three forms: single tokens
    (``[M-122]``), compound single brackets with ``..`` ranges, comma elements
    and trailing prose (``[M-030, M-032..M-047 old names]``), and
@@ -1261,20 +1263,20 @@ def test_phase_table_direction2_every_citation_has_lifecycle_at_ship_version():
     assert not bad, f"section-9 citations failing direction 2: {bad}"
 
 
-def test_named_fixtures_m008_passes_and_m031_prose_is_not_a_citation():
+def test_named_fixtures_m008_terminal_exempt_and_m031_prose_is_not_a_citation():
     cells = extract_phase_cells(SPEC.read_text())
     phase5_raw = cells[5][1]
     citations = expand_citations(phase5_raw)
-    # Positive fixture: M-008 is scheduled SOLELY via decision_due.
+    # Terminal-exempt fixture: M-008 (env-default, scheduled solely via decision_due)
+    # went `done` at the 4.0-cut framing; it stays cited in the phase-5 cell and the
+    # direction-2 predicate accepts it regardless of kind because terminal rows are exempt
+    # both directions. The decision_due CHANNEL itself is pinned on synthetic non-terminal
+    # rows in test_direction2_predicate_on_synthetic_rows.
     m008 = _ROW_INDEX["M-008"]
     assert m008.get("kind") == "env-default"
+    assert m008.get("status") == "done"
     assert "M-008" in citations
     assert direction2_ok(m008, "4.0")
-    stripped = dict(m008)
-    stripped["kind"] = "param"
-    assert not direction2_ok(
-        stripped, "4.0"
-    ), "M-008 must pass ONLY through the env-default decision_due channel"
     # Negative fixture: bare prose id is not a citation.
     assert "M-031" in phase5_raw, "phase-5 cell should still carve out M-031 in prose"
     assert "M-031" not in citations, "bare prose M-031 must not be tokenized as a citation"
