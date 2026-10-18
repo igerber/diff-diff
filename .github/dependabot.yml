@@ -44,3 +44,23 @@ updates:
         update-types:
           - "minor"
           - "patch"
+
+  # CI-only Node toolchain for the docs search-excerpt smoke test
+  # (.github/scripts/search_excerpt_smoke.mjs). Weekly version updates keep
+  # the transitive pins (undici, source-map-js, ...) from drifting into
+  # advisories; security-fix PRs for open alerts are governed separately by
+  # the repo's "Dependabot security updates" setting.
+  - package-ecosystem: "npm"
+    directory: "/.github/scripts"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "javascript"
+    groups:
+      npm-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
